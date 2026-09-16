@@ -9,6 +9,9 @@ using json = nlohmann::json;
 
 #include "PgSQL_PreparedStatement.h"
 #include "PgSQL_Data_Stream.h"
+#include "PgSQL_Monitor.hpp"
+
+extern PgSQL_Monitor* GloPgMon;
 
 #include <memory>
 #include <pthread.h>
@@ -866,14 +869,17 @@ PgSQL_HostGroups_Manager::PgSQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_PgSQL_SERVERS_INCOMING);
 	mydb->execute(MYHGM_PgSQL_SERVERS_SSL_PARAMS);
 	mydb->execute(MYHGM_PgSQL_REPLICATION_HOSTGROUPS);
+	mydb->execute(MYHGM_PgSQL_AWS_AURORA_HOSTGROUPS);
 	mydb->execute(MYHGM_PgSQL_HOSTGROUP_ATTRIBUTES);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_pgsql_servers_hostname_port ON pgsql_servers (hostname,port)");
 	MyHostGroups=new PtrArray();
 	runtime_pgsql_servers=NULL;
 	incoming_replication_hostgroups=NULL;
+	incoming_aws_aurora_hostgroups=NULL;
 	incoming_hostgroup_attributes = NULL;
 	incoming_pgsql_servers_v2 = NULL;
 	pgsql_servers_to_monitor = NULL;
+	pthread_mutex_init(&AWS_Aurora_Info_mutex, NULL);
 
 	{
 		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -1080,6 +1086,7 @@ void PgSQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 	}
 
 	CUCFT1(myhash,init,"pgsql_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS]);
+	CUCFT1(myhash,init,"pgsql_aws_aurora_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::PgSQL_AWS_AURORA_HOSTGROUPS]);
 	CUCFT1(myhash,init,"pgsql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::PgSQL_HOSTGROUP_ATTRIBUTES]);
 	CUCFT1(myhash,init,"pgsql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS_SSL_PARAMS]);
 }
@@ -1549,6 +1556,14 @@ bool PgSQL_HostGroups_Manager::commit(
 			generate_pgsql_hostgroup_attributes_table();
 		}
 
+		// Aurora PostgreSQL hostgroups
+		if (incoming_aws_aurora_hostgroups) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_aws_aurora_hostgroups\n");
+			mydb->execute("DELETE FROM pgsql_aws_aurora_hostgroups");
+			generate_pgsql_aws_aurora_hostgroups_table();
+			// Note: generate_pgsql_aws_aurora_hostgroups_table() already calls update_aws_aurora_hosts_monitor_resultset()
+		}
+
 		// SSL params
 		if (incoming_pgsql_servers_ssl_params) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_servers_ssl_params\n");
@@ -1874,7 +1889,10 @@ void PgSQL_HostGroups_Manager::update_table_pgsql_servers_for_monitor(bool lock)
 
 SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) {
 	char * query = (char *)"";
-	if (name == "pgsql_replication_hostgroups") {
+	if (name == "pgsql_aws_aurora_hostgroups") {
+		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
+					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment FROM pgsql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
+	} else if (name == "pgsql_replication_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM pgsql_replication_hostgroups";
 	} else if (name == "pgsql_hostgroup_attributes") {
 		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM pgsql_hostgroup_attributes ORDER BY hostgroup_id";
@@ -2960,6 +2978,8 @@ void PgSQL_HostGroups_Manager::save_incoming_pgsql_table(SQLite3_result *s, cons
 	SQLite3_result ** inc = NULL;
 	if (name == "pgsql_replication_hostgroups") {
 		inc = &incoming_replication_hostgroups;
+	} else if (name == "pgsql_aws_aurora_hostgroups") {
+		inc = &incoming_aws_aurora_hostgroups;
 	} else if (name == "pgsql_hostgroup_attributes") {
 		inc = &incoming_hostgroup_attributes;
 	} else if (name == "pgsql_servers_ssl_params") {
@@ -2993,6 +3013,8 @@ void PgSQL_HostGroups_Manager::save_pgsql_servers_v2(SQLite3_result* s) {
 SQLite3_result* PgSQL_HostGroups_Manager::get_current_pgsql_table(const string& name) {
 	if (name == "pgsql_replication_hostgroups") {
 		return this->incoming_replication_hostgroups;
+	} else if (name == "pgsql_aws_aurora_hostgroups") {
+		return this->incoming_aws_aurora_hostgroups;
 	} else if (name == "pgsql_hostgroup_attributes") {
 		return this->incoming_hostgroup_attributes;
 	} else if (name == "cluster_pgsql_servers") {
@@ -4190,9 +4212,10 @@ PgSQL_SrvC* PgSQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const
 
 	PgSQL_HGC* myhgc = nullptr;
 	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
-		myhgc = static_cast<PgSQL_HGC*>(MyHostGroups->index(i));
+		PgSQL_HGC* hgc = static_cast<PgSQL_HGC*>(MyHostGroups->index(i));
 
-		if (myhgc->hid == _hid) {
+		if (hgc->hid == _hid) {
+			myhgc = hgc;
 			break;
 		}
 	}
@@ -4357,4 +4380,691 @@ void PgSQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(PgSQL_SrvC* 
 	proxy_warning("Removed server at address %p, hostgroup %d, address %s port %d. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", (void*)srv, srv->myhgc->hid, srv->address, srv->port);
 	srv->status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
 	srv->ConnectionsFree->drop_all_connections();
+}
+
+// AWS Aurora PostgreSQL implementations
+
+PgSQL_AWS_Aurora_Info::PgSQL_AWS_Aurora_Info(int w, int r, int _port, char *_domain, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
+	writer_hostgroup = w;
+	reader_hostgroup = r;
+	aurora_port = _port;
+	domain_name = _domain ? strdup(_domain) : strdup("");
+	max_lag_ms = maxl;
+	add_lag_ms = al;
+	min_lag_ms = minl;
+	lag_num_checks = lnc;
+	check_interval_ms = ci;
+	check_timeout_ms = ct;
+	active = _a;
+	active_ = true;
+	writer_is_also_reader = wiar;
+	new_reader_weight = nrw;
+	comment = c ? strdup(c) : strdup("");
+}
+
+bool PgSQL_AWS_Aurora_Info::update(int r, int _port, char *_domain, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
+	bool ret = false;
+	active_ = true;
+	if (reader_hostgroup != r) {
+		reader_hostgroup = r;
+		ret = true;
+	}
+	if (aurora_port != _port) {
+		aurora_port = _port;
+		ret = true;
+	}
+	if (strcmp(domain_name, _domain)) {
+		free(domain_name);
+		domain_name = strdup(_domain);
+		ret = true;
+	}
+	if (max_lag_ms != maxl) {
+		max_lag_ms = maxl;
+		ret = true;
+	}
+	if (add_lag_ms != al) {
+		add_lag_ms = al;
+		ret = true;
+	}
+	if (min_lag_ms != minl) {
+		min_lag_ms = minl;
+		ret = true;
+	}
+	if (lag_num_checks != lnc) {
+		lag_num_checks = lnc;
+		ret = true;
+	}
+	if (check_interval_ms != ci) {
+		check_interval_ms = ci;
+		ret = true;
+	}
+	if (check_timeout_ms != ct) {
+		check_timeout_ms = ct;
+		ret = true;
+	}
+	if (active != _a) {
+		active = _a;
+		ret = true;
+	}
+	if (writer_is_also_reader != wiar) {
+		writer_is_also_reader = wiar;
+		ret = true;
+	}
+	if (new_reader_weight != nrw) {
+		new_reader_weight = nrw;
+		ret = true;
+	}
+	if (strcmp(comment, c)) {
+		free(comment);
+		comment = strdup(c);
+		ret = true;
+	}
+	return ret;
+}
+
+PgSQL_AWS_Aurora_Info::~PgSQL_AWS_Aurora_Info() {
+	if (domain_name) free(domain_name);
+	if (comment) free(comment);
+}
+
+void PgSQL_HostGroups_Manager::generate_pgsql_aws_aurora_hostgroups_table() {
+	if (incoming_aws_aurora_hostgroups == nullptr) {
+		return;
+	}
+	int rc;
+	sqlite3_stmt *statement = nullptr;
+	char *query = (char *)"INSERT INTO pgsql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,"
+					    "check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES "
+					    "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+	rc = mydb->prepare_v2(query, &statement);
+	ASSERT_SQLITE_OK(rc, mydb);
+	proxy_info("New pgsql_aws_aurora_hostgroups table\n");
+	pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+	// Mark all existing entries as inactive
+	for (std::map<int, PgSQL_AWS_Aurora_Info *>::iterator it1 = AWS_Aurora_Info_Map.begin(); it1 != AWS_Aurora_Info_Map.end(); ++it1) {
+		PgSQL_AWS_Aurora_Info *info = nullptr;
+		info = it1->second;
+		info->active_ = false;
+	}
+	// Process incoming entries
+	for (std::vector<SQLite3_row *>::iterator it = incoming_aws_aurora_hostgroups->rows.begin(); it != incoming_aws_aurora_hostgroups->rows.end(); ++it) {
+		SQLite3_row *r = *it;
+		int writer_hostgroup = atoi(r->fields[0]);
+		int reader_hostgroup = atoi(r->fields[1]);
+		int active = atoi(r->fields[2]);
+		int aurora_port = atoi(r->fields[3]);
+		int max_lag_ms = atoi(r->fields[5]);
+		int check_interval_ms = atoi(r->fields[6]);
+		int check_timeout_ms = atoi(r->fields[7]);
+		int writer_is_also_reader = atoi(r->fields[8]);
+		int new_reader_weight = atoi(r->fields[9]);
+		int add_lag_ms = atoi(r->fields[10]);
+		int min_lag_ms = atoi(r->fields[11]);
+		int lag_num_checks = atoi(r->fields[12]);
+		// the admin table allows a NULL comment while the in-memory table does
+		// not: normalize it once here so every consumer below sees a string
+		char *comment_fld = r->fields[13] ? r->fields[13] : (char *)"";
+		proxy_info("Loading AWS Aurora PostgreSQL info for (%d,%d,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup, reader_hostgroup, (active ? "on" : "off"), aurora_port,
+				   r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, comment_fld);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 2, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 3, active); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 4, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_text)(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 6, max_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 7, check_interval_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 8, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 9, writer_is_also_reader); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 10, new_reader_weight); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 11, add_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 12, min_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 13, lag_num_checks); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_text)(statement, 14, comment_fld, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
+		std::map<int, PgSQL_AWS_Aurora_Info *>::iterator it2;
+		it2 = AWS_Aurora_Info_Map.find(writer_hostgroup);
+		PgSQL_AWS_Aurora_Info *info = nullptr;
+		if (it2 != AWS_Aurora_Info_Map.end()) {
+			info = it2->second;
+			info->update(reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, (bool)active, writer_is_also_reader, new_reader_weight, comment_fld);
+		} else {
+			info = new PgSQL_AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, (bool)active, writer_is_also_reader, new_reader_weight, comment_fld);
+			AWS_Aurora_Info_Map.insert(AWS_Aurora_Info_Map.begin(), std::pair<int, PgSQL_AWS_Aurora_Info *>(writer_hostgroup, info));
+		}
+	}
+	(*proxy_sqlite3_finalize)(statement);
+	delete incoming_aws_aurora_hostgroups;
+	incoming_aws_aurora_hostgroups = nullptr;
+
+	// Remove inactive entries
+	for (auto it3 = AWS_Aurora_Info_Map.begin(); it3 != AWS_Aurora_Info_Map.end(); ) {
+		PgSQL_AWS_Aurora_Info *info = it3->second;
+		if (info->active_ == false) {
+			delete info;
+			it3 = AWS_Aurora_Info_Map.erase(it3);
+		} else {
+			it3++;
+		}
+	}
+
+	// Update monitor resultset
+	pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
+	update_aws_aurora_hosts_monitor_resultset(false);
+	pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+
+	pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+}
+
+bool PgSQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int _rhid, char *_server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose) {
+	bool ret = false;
+	bool reader_found_in_whg = false;
+	if (is_writer) {
+		ret = false;
+	}
+	unsigned port = 5432;
+	char *domain_name = strdup((char *)"");
+	{
+		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+		std::map<int, PgSQL_AWS_Aurora_Info*>::iterator it2;
+		it2 = AWS_Aurora_Info_Map.find(_whid);
+		PgSQL_AWS_Aurora_Info *info = nullptr;
+		if (it2 != AWS_Aurora_Info_Map.end()) {
+			info = it2->second;
+			if (info->domain_name) {
+				free(domain_name);
+				domain_name = strdup(info->domain_name);
+			}
+			port = info->aurora_port;
+		}
+		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+	}
+	const size_t address_len = strlen(_server_id) + strlen(domain_name) + 1;
+	char *address = (char *)malloc(address_len);
+	snprintf(address, address_len, "%s%s", _server_id, domain_name);
+
+	GloAdmin->pgsql_servers_wrlock();
+	wrlock();
+	int i, j;
+	for (i = 0; i < (int)MyHostGroups->len; i++) {
+		PgSQL_HGC *myhgc = (PgSQL_HGC *)MyHostGroups->index(i);
+		if (_whid != (int)myhgc->hid && _rhid != (int)myhgc->hid) continue;
+		for (j = 0; j < (int)myhgc->mysrvs->cnt(); j++) {
+			PgSQL_SrvC *mysrvc = (PgSQL_SrvC *)myhgc->mysrvs->servers->index(j);
+			if (strcmp(mysrvc->address, address) == 0 && mysrvc->port == (int)port) {
+				// Found the server
+				if (enable == false) {
+					if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
+						if (verbose) {
+							proxy_warning("Aurora PostgreSQL: Shunning server %s:%d from HG %u with replication lag of %f ms\n",
+								address, port, myhgc->hid, current_replication_lag_ms);
+						}
+						mysrvc->status = MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+					}
+				} else {
+					if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+						if (verbose) {
+							proxy_warning("Aurora PostgreSQL: Re-enabling server %s:%d from HG %u with replication lag of %f ms\n",
+								address, port, myhgc->hid, current_replication_lag_ms);
+						}
+						mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+					}
+				}
+				mysrvc->aws_aurora_current_lag_us = current_replication_lag_ms * 1000;
+				if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE || mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+					if (ret) {
+						if (_whid == (int)myhgc->hid && is_writer == false) {
+							// Server should be a reader but is in writer hostgroup
+							ret = false;
+							reader_found_in_whg = true;
+						}
+					} else {
+						if (is_writer == true) {
+							if (_whid == (int)myhgc->hid) {
+								// Server is a writer and found in writer hostgroup
+								ret = true;
+							}
+						} else {
+							if (_rhid == (int)myhgc->hid) {
+								// Server is a reader and found in reader hostgroup
+								ret = true;
+							}
+						}
+					}
+				}
+				if (ret == false)
+					if (is_writer == true)
+						if (enable == true)
+							if (_whid == (int)myhgc->hid)
+								if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+									mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+									proxy_warning("Aurora PostgreSQL: Re-enabling server %s:%d from HG %u because it is a writer\n",
+										address, port, myhgc->hid);
+									ret = true;
+								}
+			}
+		}
+	}
+	wrunlock();
+	GloAdmin->pgsql_servers_wrunlock();
+	if (ret == true) {
+		if (reader_found_in_whg == true) {
+			ret = false;
+		}
+	}
+	free(address);
+	free(domain_name);
+	return ret;
+}
+
+void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid, char *_server_id, bool verbose) {
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result *resultset = nullptr;
+	char *query = nullptr;
+	char *q = nullptr;
+	char *error = nullptr;
+
+	int writer_is_also_reader = 0;
+	int new_reader_weight = 1;
+	bool found_writer = false;
+	bool found_reader = false;
+	int _writer_hostgroup = _whid;
+	int aurora_port = 5432;
+	char *domain_name = strdup((char *)"");
+	int read_HG = -1;
+	{
+		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+		std::map<int, PgSQL_AWS_Aurora_Info*>::iterator it2;
+		it2 = AWS_Aurora_Info_Map.find(_writer_hostgroup);
+		PgSQL_AWS_Aurora_Info *info = nullptr;
+		if (it2 != AWS_Aurora_Info_Map.end()) {
+			info = it2->second;
+			writer_is_also_reader = info->writer_is_also_reader;
+			new_reader_weight = info->new_reader_weight;
+			read_HG = info->reader_hostgroup;
+			if (info->domain_name) {
+				free(domain_name);
+				domain_name = strdup(info->domain_name);
+			}
+			aurora_port = info->aurora_port;
+		}
+		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+	}
+
+	q = (char *)"SELECT hostgroup_id FROM pgsql_servers JOIN pgsql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d, %d)";
+	size_t query_len = strlen(q) + strlen(_server_id) + strlen(domain_name) + 1024;
+	query = (char *)malloc(query_len);
+	snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _whid, _rhid);
+	mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		free(error);
+		error = nullptr;
+	}
+
+	if (resultset) {
+		if (resultset->rows_count) {
+			for (auto it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+				SQLite3_row *r = *it;
+				int hostgroup = atoi(r->fields[0]);
+				if (hostgroup == _writer_hostgroup) {
+					found_writer = true;
+				}
+				if (read_HG >= 0) {
+					if (hostgroup == read_HG) {
+						found_reader = true;
+					}
+				}
+			}
+		}
+
+		if (found_writer) {
+			if (
+				(writer_is_also_reader == 0 && found_reader == false)
+				||
+				(writer_is_also_reader > 0 && found_reader == true)
+			) {
+				delete resultset;
+				resultset = nullptr;
+			}
+		}
+	}
+
+	if (resultset) {
+		if (resultset->rows_count) {
+			GloAdmin->pgsql_servers_wrlock();
+			mydb->execute("DELETE FROM pgsql_servers_incoming");
+			q = (char *)"INSERT INTO pgsql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers WHERE hostgroup_id=%d";
+			snprintf(query, query_len, q, _rhid);
+			mydb->execute(query);
+			q = (char *)"INSERT INTO pgsql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
+			snprintf(query, query_len, q, _writer_hostgroup, _server_id, domain_name, aurora_port);
+			mydb->execute(query);
+			q = (char *)"UPDATE OR IGNORE pgsql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
+			snprintf(query, query_len, q, _writer_hostgroup, _server_id, domain_name, aurora_port, _writer_hostgroup);
+			mydb->execute(query);
+			q = (char *)"DELETE FROM pgsql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
+			snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
+			mydb->execute(query);
+			q = (char *)"UPDATE pgsql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
+			snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
+			mydb->execute(query);
+
+			// Move the old writer into the reader HG
+			q = (char *)"DELETE FROM pgsql_servers_incoming WHERE status=3 AND hostgroup_id=%d";
+			snprintf(query, query_len, q, _rhid);
+			mydb->execute(query);
+			q = (char *)"INSERT OR IGNORE INTO pgsql_servers_incoming SELECT %d, hostname, port, %d, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers WHERE hostgroup_id=%d AND status=0";
+			snprintf(query, query_len, q, _rhid, new_reader_weight, _whid);
+			mydb->execute(query);
+
+			if (writer_is_also_reader && read_HG >= 0) {
+				q = (char *)"INSERT OR IGNORE INTO pgsql_servers_incoming (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM pgsql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
+				snprintf(query, query_len, q, read_HG, _writer_hostgroup, _server_id, domain_name, aurora_port);
+				mydb->execute(query);
+				q = (char *)"UPDATE pgsql_servers_incoming SET weight=%d WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
+				snprintf(query, query_len, q, new_reader_weight, read_HG, _server_id, domain_name, aurora_port);
+				mydb->execute(query);
+			}
+
+			// Calculate checksums to check if update is actually needed
+			uint64_t checksum_current = 0;
+			uint64_t checksum_incoming = 0;
+			{
+				int chk_cols = 0;
+				int chk_affected_rows = 0;
+				SQLite3_result *resultset_servers = nullptr;
+				char *chk_query = nullptr;
+				char *chk_error = nullptr;
+				const char *q1 = "SELECT DISTINCT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, pgsql_servers.comment FROM pgsql_servers JOIN pgsql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				const char *q2 = "SELECT DISTINCT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, pgsql_servers_incoming.comment FROM pgsql_servers_incoming JOIN pgsql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				const size_t chk_query_len = strlen(q2) + 128;
+				chk_query = (char *)malloc(chk_query_len);
+				snprintf(chk_query, chk_query_len, q1, _writer_hostgroup);
+				mydb->execute_statement(chk_query, &chk_error, &chk_cols, &chk_affected_rows, &resultset_servers);
+				if (chk_error == nullptr) {
+					if (resultset_servers) {
+						checksum_current = resultset_servers->raw_checksum();
+					}
+				}
+				if (chk_error) { free(chk_error); chk_error = nullptr; }
+				if (resultset_servers) {
+					delete resultset_servers;
+					resultset_servers = nullptr;
+				}
+				snprintf(chk_query, chk_query_len, q2, _writer_hostgroup);
+				mydb->execute_statement(chk_query, &chk_error, &chk_cols, &chk_affected_rows, &resultset_servers);
+				if (chk_error == nullptr) {
+					if (resultset_servers) {
+						checksum_incoming = resultset_servers->raw_checksum();
+					}
+				}
+				if (chk_error) { free(chk_error); chk_error = nullptr; }
+				if (resultset_servers) {
+					delete resultset_servers;
+					resultset_servers = nullptr;
+				}
+				free(chk_query);
+			}
+
+			if (checksum_incoming != checksum_current) {
+				proxy_warning("Aurora PostgreSQL: setting host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
+				q = (char *)"INSERT INTO pgsql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers WHERE hostgroup_id NOT IN (%d, %d)";
+				snprintf(query, query_len, q, _rhid, _whid);
+				mydb->execute(query);
+				commit();
+				wrlock();
+				q = (char *)"DELETE FROM pgsql_servers WHERE hostgroup_id IN (%d, %d)";
+				snprintf(query, query_len, q, _whid, _rhid);
+				mydb->execute(query);
+				generate_pgsql_servers_table(&_whid);
+				generate_pgsql_servers_table(&_rhid);
+
+				// Because 'commit' is called, we are required to update 'pgsql_servers_for_monitor'.
+				update_table_pgsql_servers_for_monitor(false);
+
+				wrunlock();
+			} else {
+				if (GloPTH->variables.hostgroup_manager_verbose > 1) {
+					proxy_warning("Aurora PostgreSQL: skipping setting node %s%s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _server_id, domain_name, aurora_port, _writer_hostgroup);
+				}
+			}
+			GloAdmin->pgsql_servers_wrunlock();
+		} else {
+			// Auto-discovery: server not found, create new entry (matching MySQL approach)
+			std::string full_hostname = std::string(_server_id) + std::string(domain_name);
+
+			GloAdmin->pgsql_servers_wrlock();
+			wrlock();
+
+			// Use create_new_server_in_hg to create the server in memory
+			PgSQL_srv_info_t srv_info { full_hostname, static_cast<uint16_t>(aurora_port), "Aurora PG" };
+			PgSQL_srv_opts_t wr_srv_opts { -1, -1, -1 };
+
+			int wr_res = create_new_server_in_hg(_writer_hostgroup, srv_info, wr_srv_opts);
+			int rd_res = -1;
+
+			// WRITER can also be placed as READER, or could previously be one
+			if (writer_is_also_reader && read_HG >= 0) {
+				PgSQL_srv_opts_t rd_srv_opts { new_reader_weight, -1, -1 };
+				rd_res = create_new_server_in_hg(read_HG, srv_info, rd_srv_opts);
+			}
+
+			// A new server has been created, or an OFFLINE_HARD brought back as ONLINE
+			if (wr_res == 0 || rd_res == 0) {
+				proxy_info("Aurora PostgreSQL: setting new auto-discovered host %s:%d as writer\n",
+					full_hostname.c_str(), aurora_port);
+
+				purge_pgsql_servers_table();
+
+				// Delete servers from the table before regenerating
+				char del_query[256];
+				snprintf(del_query, sizeof(del_query),
+					"DELETE FROM pgsql_servers WHERE hostgroup_id IN (%d, %d)",
+					_writer_hostgroup, _rhid);
+				mydb->execute(del_query);
+
+				generate_pgsql_servers_table(&_whid);
+				generate_pgsql_servers_table(&_rhid);
+
+				// Update the global checksums after 'pgsql_servers' regeneration
+				{
+					unique_ptr<SQLite3_result> resultset { get_admin_runtime_pgsql_servers(mydb) };
+					string pgsrvs_checksum { get_checksum_from_hash(resultset ? resultset->raw_checksum() : 0) };
+					save_runtime_pgsql_servers(resultset.release());
+					proxy_info("Checksum for table %s is %s\n", "pgsql_servers", pgsrvs_checksum.c_str());
+
+					pthread_mutex_lock(&GloVars.checksum_mutex);
+					update_glovars_pgsql_servers_checksum(pgsrvs_checksum);
+					pthread_mutex_unlock(&GloVars.checksum_mutex);
+				}
+
+				// Because 'commit' isn't called, we are required to update 'pgsql_servers_for_monitor'.
+				update_table_pgsql_servers_for_monitor(false);
+				// Update AWS Aurora resultset used for monitoring
+				update_aws_aurora_hosts_monitor_resultset(true);
+			}
+
+			wrunlock();
+			GloAdmin->pgsql_servers_wrunlock();
+		}
+	}
+	if (resultset) {
+		delete resultset;
+		resultset = nullptr;
+	}
+	if (query) {
+		free(query);
+	}
+	free(domain_name);
+}
+
+void PgSQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid, char *_server_id) {
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result *resultset = nullptr;
+	char *query = nullptr;
+	char *q = nullptr;
+	char *error = nullptr;
+	int _writer_hostgroup = _whid;
+	int aurora_port = 5432;
+	int new_reader_weight = 1;
+	char *domain_name = strdup((char *)"");
+	{
+		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+		std::map<int, PgSQL_AWS_Aurora_Info*>::iterator it2;
+		it2 = AWS_Aurora_Info_Map.find(_writer_hostgroup);
+		PgSQL_AWS_Aurora_Info *info = nullptr;
+		if (it2 != AWS_Aurora_Info_Map.end()) {
+			info = it2->second;
+			if (info->domain_name) {
+				free(domain_name);
+				domain_name = strdup(info->domain_name);
+			}
+			aurora_port = info->aurora_port;
+			new_reader_weight = info->new_reader_weight;
+		}
+		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+	}
+
+	q = (char *)"SELECT hostgroup_id FROM pgsql_servers JOIN pgsql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d,%d)";
+	size_t query_len = strlen(q) + strlen(_server_id) + strlen(domain_name) + 64;
+	query = (char *)malloc(query_len);
+	snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _whid, _rhid);
+	mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		free(error);
+		error = nullptr;
+	}
+	free(query);
+
+	if (resultset) {
+		if (resultset->rows_count) {
+			proxy_warning("Aurora PostgreSQL: setting host %s%s:%d (part of cluster with writer_hostgroup=%d) as a reader, moving from writer_hostgroup %d to reader_hostgroup %d\n",
+				_server_id, domain_name, aurora_port, _whid, _whid, _rhid);
+			GloAdmin->pgsql_servers_wrlock();
+			mydb->execute("DELETE FROM pgsql_servers_incoming");
+			mydb->execute("INSERT INTO pgsql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers");
+			// If server present as WRITER try moving it to reader_hostgroup
+			q = (char *)"UPDATE OR IGNORE pgsql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
+			query_len = strlen(q) + strlen(_server_id) + strlen(domain_name) + 512;
+			query = (char *)malloc(query_len);
+			snprintf(query, query_len, q, _rhid, _server_id, domain_name, aurora_port, _whid);
+			mydb->execute(query);
+			// If server is still in writer_hostgroup, remove it
+			q = (char *)"DELETE FROM pgsql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
+			snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _whid);
+			mydb->execute(query);
+			q = (char *)"UPDATE pgsql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
+			snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _rhid);
+			mydb->execute(query);
+			commit();
+			wrlock();
+
+			q = (char *)"DELETE FROM pgsql_servers WHERE hostgroup_id IN (%d, %d)";
+			snprintf(query, query_len, q, _whid, _rhid);
+			mydb->execute(query);
+			generate_pgsql_servers_table(&_whid);
+			generate_pgsql_servers_table(&_rhid);
+
+			// Because 'commit' is called, we are required to update 'pgsql_servers_for_monitor'.
+			update_table_pgsql_servers_for_monitor(false);
+
+			wrunlock();
+			GloAdmin->pgsql_servers_wrunlock();
+			free(query);
+		} else {
+			// Auto-discovery: server not found, create new entry in reader hostgroup
+			// Following MySQL's pattern using create_new_server_in_hg
+			std::string full_hostname = std::string(_server_id) + std::string(domain_name);
+			GloAdmin->pgsql_servers_wrlock();
+			wrlock();
+
+			PgSQL_srv_info_t srv_info { full_hostname, static_cast<uint16_t>(aurora_port), "Aurora PG" };
+			PgSQL_srv_opts_t srv_opts { new_reader_weight, -1, -1 };
+			int wr_res = create_new_server_in_hg(_rhid, srv_info, srv_opts);
+
+			// A new server has been created, or an OFFLINE_HARD brought back as ONLINE
+			if (wr_res == 0) {
+				purge_pgsql_servers_table();
+
+				char *q1 = (char *)"DELETE FROM pgsql_servers WHERE hostgroup_id IN (%d, %d)";
+				const size_t q2_len = strlen(q1) + 64;
+				char *q2 = (char *)malloc(q2_len);
+				snprintf(q2, q2_len, q1, _whid, _rhid);
+				mydb->execute(q2);
+				free(q2);
+
+				generate_pgsql_servers_table(&_whid);
+				generate_pgsql_servers_table(&_rhid);
+
+				// Update the global checksums after 'pgsql_servers' regeneration
+				{
+					unique_ptr<SQLite3_result> resultset { get_admin_runtime_pgsql_servers(mydb) };
+					string pgsrvs_checksum { get_checksum_from_hash(resultset ? resultset->raw_checksum() : 0) };
+					save_runtime_pgsql_servers(resultset.release());
+					proxy_info("Checksum for table %s is %s\n", "pgsql_servers", pgsrvs_checksum.c_str());
+
+					pthread_mutex_lock(&GloVars.checksum_mutex);
+					update_glovars_pgsql_servers_checksum(pgsrvs_checksum);
+					pthread_mutex_unlock(&GloVars.checksum_mutex);
+				}
+
+				// Because 'commit' isn't called, we are required to update 'pgsql_servers_for_monitor'.
+				update_table_pgsql_servers_for_monitor(false);
+				// Update AWS Aurora resultset used for monitoring
+				update_aws_aurora_hosts_monitor_resultset(true);
+			}
+
+			wrunlock();
+			GloAdmin->pgsql_servers_wrunlock();
+		}
+	}
+	if (resultset) {
+		delete resultset;
+		resultset = nullptr;
+	}
+	free(domain_name);
+}
+
+const char SELECT_PGSQL_AWS_AURORA_SERVERS_FOR_MONITOR[] {
+	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, max_lag_ms, check_interval_ms,"
+		" check_timeout_ms, add_lag_ms, min_lag_ms, lag_num_checks FROM pgsql_servers"
+	" JOIN pgsql_aws_aurora_hostgroups ON"
+		" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3)"
+	" GROUP BY writer_hostgroup, hostname, port"
+};
+
+void PgSQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lock) {
+	if (lock) {
+		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+		pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
+	}
+
+	SQLite3_result* resultset = nullptr;
+	{
+		char* error = nullptr;
+		int cols = 0;
+		int affected_rows = 0;
+		mydb->execute_statement(SELECT_PGSQL_AWS_AURORA_SERVERS_FOR_MONITOR, &error, &cols, &affected_rows, &resultset);
+		if (error) {
+			proxy_error("Aurora PostgreSQL: Error executing monitor query: %s\n", error);
+			free(error);
+		}
+	}
+
+	if (resultset) {
+		if (GloPgMon->AWS_Aurora_Hosts_resultset) {
+			delete GloPgMon->AWS_Aurora_Hosts_resultset;
+		}
+		GloPgMon->AWS_Aurora_Hosts_resultset = resultset;
+		GloPgMon->AWS_Aurora_Hosts_resultset_checksum = resultset->raw_checksum();
+	}
+
+	if (lock) {
+		pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+	}
 }
