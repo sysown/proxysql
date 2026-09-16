@@ -1241,6 +1241,8 @@ bool test_pipeline_with_locked_hostgroup();
 bool test_reset_all_locked_hostgroup_pipeline();
 bool test_discard_all_locked_hostgroup_pipeline();
 bool test_reset_reverts_to_startup_param();
+bool test_set_param_status_extended();
+bool test_reset_param_status_extended();
 
 int main(int argc, char** argv) {
     if (cl.getEnv())
@@ -1325,8 +1327,9 @@ int main(int argc, char** argv) {
         {"SET datestyle = ;", false, "missing value"}
     };
 
-    // Add pipeline tests to the plan (20 total: 16 pipeline + 4 simple query RESET/DISCARD)
-    const int num_pipeline_tests = 20;
+    // Add pipeline tests to the plan (22 total: 16 pipeline + 4 simple query RESET/DISCARD + 2
+    // extended-protocol ParameterStatus)
+    const int num_pipeline_tests = 22;
 
     if (cl.use_noise) {
         plan(tests.size() + num_pipeline_tests + 3);
@@ -1379,6 +1382,10 @@ int main(int argc, char** argv) {
     ok(test_pipeline_with_locked_hostgroup(), "SET/RESET/DISCARD with locked hostgroup in pipeline mode");
     ok(test_reset_all_locked_hostgroup_pipeline(), "RESET ALL with locked hostgroup in pipeline mode");
     ok(test_discard_all_locked_hostgroup_pipeline(), "DISCARD ALL with locked hostgroup in pipeline mode");
+    ok(test_set_param_status_extended(),
+       "SET of a reported GUC over the extended protocol reaches the client via ParameterStatus");
+    ok(test_reset_param_status_extended(),
+       "RESET of a reported GUC over the extended protocol reaches the client via ParameterStatus");
 
     return exit_status();
 }
@@ -2517,4 +2524,66 @@ bool test_discard_all_locked_hostgroup_pipeline() {
     // 2. DISCARD ALL failed with error (as expected)
     // 3. Connection is still usable
     return lock_ok && got_discard_error && conn_ok;
+}
+
+// A client learns a reported GUC changed only from a ParameterStatus message. Over the extended
+// protocol ProxySQL used to drop it: the SET is still forwarded to the backend, but PostgreSQL
+// itself stays silent because ProxySQL already applied the same value on that connection (variable
+// sync, or a startup -c option) -- so nothing there actually changes. PQparameterStatus() is the
+// client's own cached view, exactly what a real driver relies on: a stale one means e.g. pgjdbc
+// mis-parses every string literal against the wrong standard_conforming_strings setting.
+bool test_set_param_status_extended() {
+    diag("=== Test: extended-protocol SET of a reported GUC reaches the client via ParameterStatus ===");
+
+    PGConnPtr conn = createNewConnection(BACKEND);
+    if (!conn) return false;
+
+    const char* before = PQparameterStatus(conn.get(), "standard_conforming_strings");
+    const std::string want = (before && strcmp(before, "off") == 0) ? "on" : "off";
+    diag("standard_conforming_strings before='%s', setting to '%s'", before ? before : "(null)", want.c_str());
+
+    PGresult* res = PQexecParams(conn.get(),
+        ("SET standard_conforming_strings TO " + want).c_str(), 0, NULL, NULL, NULL, NULL, 0);
+    bool cmd_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!cmd_ok) diag("SET failed: %s", PQresultErrorMessage(res));
+    PQclear(res);
+
+    const char* after = PQparameterStatus(conn.get(), "standard_conforming_strings");
+    diag("standard_conforming_strings after='%s'", after ? after : "(null)");
+
+    return cmd_ok && after && want == after;
+}
+
+// Same defect, the other suppression site: RESET <var> in the extended protocol. The SET moves the
+// client's view to a known value; the RESET must move it again (to the startup default) AND report
+// that back -- a client-side view stuck on the SET's value, unchanged by the RESET, is this bug.
+bool test_reset_param_status_extended() {
+    diag("=== Test: extended-protocol RESET of a reported GUC reaches the client via ParameterStatus ===");
+
+    PGConnPtr conn = createNewConnection(BACKEND);
+    if (!conn) return false;
+
+    PGresult* res = PQexecParams(conn.get(), "SET DateStyle TO 'SQL, DMY'", 0, NULL, NULL, NULL, NULL, 0);
+    bool set_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!set_ok) diag("setup SET DateStyle failed: %s", PQresultErrorMessage(res));
+    PQclear(res);
+    if (!set_ok) return false;
+
+    const char* mid_c = PQparameterStatus(conn.get(), "DateStyle");
+    diag("DateStyle after SET: '%s'", mid_c ? mid_c : "(null)");
+    // Copy out now: PQexecParams() below updates this same GUC, and libpq's
+    // pqSaveParameterStatus() frees the old entry and mallocs a new one, so a
+    // raw pointer held across that call can dangle (fe-exec.c).
+    std::string mid = mid_c ? mid_c : "";
+
+    res = PQexecParams(conn.get(), "RESET DateStyle", 0, NULL, NULL, NULL, NULL, 0);
+    bool reset_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!reset_ok) diag("RESET failed: %s", PQresultErrorMessage(res));
+    PQclear(res);
+
+    const char* after_c = PQparameterStatus(conn.get(), "DateStyle");
+    diag("DateStyle after RESET: '%s'", after_c ? after_c : "(null)");
+    std::string after = after_c ? after_c : "";
+
+    return reset_ok && !after.empty() && !mid.empty() && after != mid;
 }
