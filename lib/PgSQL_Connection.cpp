@@ -1200,6 +1200,15 @@ bool pgsql_append_conninfo_credentials(std::ostringstream& conninfo, const char*
 	char* password, bool has_scram_keys, const uint8_t* scram_client_key,
 	const uint8_t* scram_server_key, const char* conn_ctx)
 {
+	// libpq reads PGUSER, then the OS account name, whenever 'user' is missing or empty. Emitting a
+	// real password under that identity is the same fail-open the checks below refuse, so no
+	// username means no connection.
+	if (!username || *username == '\0') {
+		proxy_error("PgSQL backend %s: no username; refusing to connect rather than let libpq fall back to PGUSER or the OS user\n",
+			conn_ctx);
+		return false;
+	}
+
 	if (has_scram_keys) {
 		// Hand libpq the harvested ClientKey + the verifier's ServerKey (base64) and send NO
 		// password — the stored secret is a verifier, which libpq would otherwise wrongly run
@@ -5706,7 +5715,10 @@ PgSQL_Backend_Kill_Args::PgSQL_Backend_Kill_Args(PGconn* conn, const PgSQL_Conne
 		cancel_conn = nullptr;
 	}
 	username = strdup(ui->username);
-	password = strdup(ui->password);
+	// A user with no stored secret is the one case worth carrying instead of crashing here:
+	// pgsql_append_conninfo_credentials() refuses to build a conninfo without a credential, so
+	// the terminate is skipped rather than run as whoever owns the ProxySQL process.
+	password = ui->password ? strdup(ui->password) : nullptr;
 	hostname = strdup(host);
 	dbname = strdup(ui->dbname);
 	// Carry the harvested SCRAM keys, so TERMINATE_CONNECTION can authenticate a verifier-stored
