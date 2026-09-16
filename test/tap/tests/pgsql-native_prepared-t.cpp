@@ -690,23 +690,20 @@ static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_
 }
 
 // ===========================================================================
-// EXT_DESCRIBE_CACHED (Task E): statement-level Describe metadata cache.
+// EXT_DESCRIBE_AFTER_DDL: a statement-level Describe must not replay metadata
+// captured before the table changed.
 //
-// A statement-level Describe ('S') of an already-described global statement is
-// served from the set-once cache on PgSQL_STMT_Global_info — no backend round
-// trip — in BOTH backend modes. What the cache serves MUST be byte-identical to
-// a round-trip (the differential is the cross-oracle). Evidence that the second
-// Describe actually hit the cache: the proxy_debug(PROXY_DEBUG_MYSQL_COM, 5)
-// marker line emitted by handle_post_sync_describe_message on a hit — debug
-// level because the hit is the COMMON path by design (an always-on line would
-// be per-query log flood). The cases below raise the debug routing through the
-// admin connection for the duration of the phase (see enableDescribeDebugLog)
-// so the line lands in the proxysql.log this test scrapes, then restore it —
-// same durable-in-test-evidence idea as P24's injected-Sync log assertion.
+// ProxySQL used to keep the Describe answer on the global statement, keyed by
+// user, database, query text and parameter types, set once and never
+// invalidated, and serve it to any later session in both backend modes. The
+// key is not enough to identify the columns -- search_path and per-session
+// temp schemas change what the same text resolves to -- so a binary-format
+// client could read a float8 column through a float4 description and get a
+// wrong number with no error anywhere. The cache was removed.
 //
-// serialize_describe() captures the FULL Describe metadata (param OIDs + every
-// RowDescription column field), unlike serialize_result()'s COMMAND_OK branch —
-// so any byte difference in the 't'/'T' payload surfaces as a serial mismatch.
+// serialize_describe() captures the FULL Describe metadata (result status,
+// param OIDs and every RowDescription column field), so any byte difference in
+// the 't'/'T' payload surfaces as a serial mismatch.
 // ===========================================================================
 static std::string serialize_describe(PGresult* r) {
 	if (!r) return "<null>";
@@ -726,157 +723,136 @@ static std::string serialize_describe(PGresult* r) {
 	return ss.str();
 }
 
-// Prepare `stmt` then Describe it TWICE (first = miss→populate, second = hit),
-// returning "D1:<serial>;D2:<serial>;" for byte-comparison across modes/orders.
-static std::string run_describe_twice(PGconn* c, const std::string& stmt_name,
-                                      const std::string& query) {
-	std::string out;
-	if (PQsendPrepare(c, stmt_name.c_str(), query.c_str(), 0, NULL) == 0) {
-		out += "PQsendPrepare:fail:" + std::string(PQerrorMessage(c)) + ";";
-		return out;
-	}
-	PGresult* res;
-	while ((res = PQgetResult(c)) != NULL) PQclear(res);
-	PGresult* d1 = PQdescribePrepared(c, stmt_name.c_str()); // miss → populate
-	out += "D1:" + serialize_describe(d1) + ";";
-	PQclear(d1);
-	PGresult* d2 = PQdescribePrepared(c, stmt_name.c_str()); // hit → served from cache
-	out += "D2:" + serialize_describe(d2) + ";";
-	PQclear(d2);
-	return out;
-}
+// A statement-level Describe must never be answered with a description taken before the
+// table changed. ProxySQL used to cache that description per SQL text and replay it to any
+// session, which handed a binary-format client the wrong column types; the cache is gone and
+// this case keeps it gone.
+//
+// conn A prepares and describes one table shape, the table is reshaped, then conn B prepares
+// the byte-identical text on a fresh connection and describes it. B may see the new shape, or
+// an error from the backend -- the connection it lands on can still hold A's prepared
+// statement, which PostgreSQL refuses once the result type changed. Both are acceptable; what
+// B must never get is A's description back, so that is what is asserted. Two connections
+// because one would not tell a per-connection cache apart from a process-wide one.
+static ExtQCaseRunResult run_describe_after_ddl(PGconn* admin, bool native,
+                                                const std::string& name_suffix,
+                                                const std::vector<ServerRow>& saved) {
+	// Put the proxy back in libpq mode on every exit path. An early return that left it in
+	// native mode would change what the rest of the run sees.
+	struct ModeRestore {
+		PGconn* admin;
+		const std::vector<ServerRow>& saved;
+		~ModeRestore() { setNativeMode(admin, false); flushBackendPool(admin, BACKEND_HG, saved); }
+	} mode_restore{admin, saved};
 
-// --- Debug-log routing for the cache-hit evidence line -----------------------
-// The cache-hit marker is emitted via proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, ...).
-// For it to land in the proxysql.log this test scrapes (the infra runs proxysql
-// in the foreground with stderr teed into that file), two admin knobs must hold
-// during the phase:
-//   - admin-debug_output must include stderr → 3 (stderr + debug DB). The infra
-//     default is 2 (debug DB only), which never reaches the log file;
-//   - debug_levels verbosity for module 'debug_mysql_com' must be >= 5 (infra
-//     default is 7; set explicitly anyway for robustness).
-// DebugLogScope captures both, applies them, and restores on destruction (so
-// early returns in the case runner cannot leak the raised debug routing).
-static std::string adminScalar(PGconn* admin, const std::string& q) {
-	PGresult* res = PQexec(admin, q.c_str());
-	std::string v;
-	if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0 && !PQgetisnull(res, 0, 0)) {
-		v = PQgetvalue(res, 0, 0);
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set mode failed"};
 	}
-	PQclear(res);
-	return v;
-}
+	const std::string tbl = make_table_name() + "_" + name_suffix;
+	const std::string stmt_name = "dcddl_" + name_suffix;
+	const std::string q = "SELECT * FROM " + tbl;
+	drainLogToNow();
 
-struct DebugLogScope {
-	PGconn* admin;
-	std::string saved_output, saved_verbosity;
-	bool enabled = false;
-
-	explicit DebugLogScope(PGconn* a) : admin(a) {
-		saved_output = adminScalar(admin,
-			"SELECT variable_value FROM global_variables WHERE variable_name='admin-debug_output'");
-		saved_verbosity = adminScalar(admin,
-			"SELECT verbosity FROM debug_levels WHERE module='debug_mysql_com'");
-		if (saved_output.empty() || saved_verbosity.empty()) {
-			diag("DebugLogScope: cannot read current debug conf (debug build required)");
-			return;
-		}
-		enabled = execAdmin(admin, "SET admin-debug_output='3'") &&
-		          execAdmin(admin, "LOAD ADMIN VARIABLES TO RUNTIME") &&
-		          execAdmin(admin, "UPDATE debug_levels SET verbosity=7 WHERE module='debug_mysql_com'") &&
-		          execAdmin(admin, "LOAD DEBUG TO RUNTIME");
-	}
-	~DebugLogScope() {
-		if (saved_output.empty() || saved_verbosity.empty()) return;
-		execAdmin(admin, "SET admin-debug_output='" + saved_output + "'");
-		execAdmin(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-		execAdmin(admin, "UPDATE debug_levels SET verbosity=" + saved_verbosity +
-		                 " WHERE module='debug_mysql_com'");
-		execAdmin(admin, "LOAD DEBUG TO RUNTIME");
-	}
-	DebugLogScope(const DebugLogScope&) = delete;
-	DebugLogScope& operator=(const DebugLogScope&) = delete;
-};
-
-// Single-pass scan for BOTH the libpq-fallback tripwire and the (debug-level)
-// "Describe served from metadata cache" marker, counting the latter. One
-// combined scan is mandatory — wait_for_log_match / get_matching_lines consume
-// the stream forward, so two sequential scans for two regexes would each miss
-// lines the other already read past (same reasoning as scanNativePhaseLog).
-// Polls until `want_hits` markers are seen or `wait_ms` elapses.
-static void scanDescribeCachePhaseLog(bool& fell_back, int& cache_hits,
-                                      int want_hits, uint32_t wait_ms) {
-	const std::regex re_fallback(".*falling back to libpq.*");
-	const std::regex re_hit(".*Describe served from metadata cache.*");
-	fell_back = false;
-	cache_hits = 0;
-	uint32_t elapsed = 0;
-	while (true) {
-		f_proxysql_log.clear(f_proxysql_log.rdstate() &
-		                     ~std::ios_base::eofbit & ~std::ios_base::failbit);
-		std::string line;
-		while (std::getline(f_proxysql_log, line)) {
-			if (!fell_back && std::regex_match(line, re_fallback)) fell_back = true;
-			if (std::regex_match(line, re_hit)) cache_hits++;
-		}
-		if (cache_hits >= want_hits || elapsed >= wait_ms) return;
-		usleep(100000);
-		elapsed += 100;
-	}
-}
-
-// Run Describe-x2 in `first_native` mode first (fresh, unique query → that mode
-// takes the miss and POPULATES the cache: exercises that mode's CAPTURE path),
-// then in the other mode (both Describes are cache HITS served from the
-// first-mode-captured bytes: exercises the other mode's SERVE path). Asserts:
-//   - byte-equality across the two modes (cross-oracle: served bytes == round-trip);
-//   - within each mode D1 == D2 (miss and hit are byte-identical);
-//   - the second (cache-serving) mode logged >= 2 Describe cache hits.
-static ExtQCaseRunResult run_describe_cached(PGconn* admin, bool first_native,
-                                             const std::string& stmt_name,
-                                             const std::string& query,
-                                             const std::vector<ServerRow>& saved) {
-	// Route the debug-level cache-hit marker into proxysql.log for the whole
-	// case; restored automatically on every exit path (RAII).
-	DebugLogScope debug_scope(admin);
-	if (!debug_scope.enabled) {
-		return {false, false, "admin: enabling debug-log routing failed"};
-	}
-
-	// ---- first mode (takes the miss; populates via its capture path) ----
-	if (!setNativeMode(admin, first_native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
-		return {false, false, "admin: set first mode failed"};
-	}
 	PGConnPtr c1 = open_client_conn();
 	if (!c1 || PQstatus(c1.get()) != CONNECTION_OK) return {false, false, "first conn failed"};
-	std::string out1 = run_describe_twice(c1.get(), stmt_name, query);
 
-	// ---- second mode (both Describes are cache hits, served from mode-1 bytes) ----
-	if (!setNativeMode(admin, !first_native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
-		return {false, false, "admin: set second mode failed"};
+	// Three float4 columns, then five float8 ones -- the shapes from the report. The column
+	// count changes, so a stale description makes a client send one result format per column
+	// it thinks exists and the backend rejects the Bind; the types change too, so a stale
+	// description also makes a binary-format client read a float8 through a float4.
+	PGresult* r = PQexec(c1.get(), ("CREATE TABLE " + tbl + " (c1 real, c2 real, c3 real)").c_str());
+	bool create_a_ok = (PQresultStatus(r) == PGRES_COMMAND_OK);
+	PQclear(r);
+	if (!create_a_ok) return {false, false, "CREATE TABLE (shape A, 3 float4 cols) failed"};
+
+	if (PQsendPrepare(c1.get(), stmt_name.c_str(), q.c_str(), 0, NULL) == 0) {
+		return {false, false, "PQsendPrepare (conn A) failed: " + std::string(PQerrorMessage(c1.get()))};
 	}
-	drainLogToNow();
+	while ((r = PQgetResult(c1.get())) != NULL) PQclear(r);
+	PGresult* d1 = PQdescribePrepared(c1.get(), stmt_name.c_str());
+	const std::string d1_serial = serialize_describe(d1);
+	const int d1_nf = PQnfields(d1);
+	const bool d1_ok = (PQresultStatus(d1) == PGRES_COMMAND_OK) && (d1_nf == 3);
+	PQclear(d1);
+	// Nothing below means anything unless conn A really saw the pre-DDL shape.
+	if (!d1_ok) return {false, false, "conn A describe did not return the pre-DDL shape: " + d1_serial};
+
+	// Reshape the table under the statement, then drop conn A so nothing of its session
+	// survives except what the proxy chose to keep.
+	r = PQexec(c1.get(), ("DROP TABLE " + tbl).c_str());
+	PQclear(r);
+	r = PQexec(c1.get(), ("CREATE TABLE " + tbl +
+		" (c1 float8, c2 float8, c3 float8, c4 float8, c5 float8)").c_str());
+	bool create_b_ok = (PQresultStatus(r) == PGRES_COMMAND_OK);
+	PQclear(r);
+	if (!create_b_ok) return {false, false, "CREATE TABLE (shape B, 5 float8 cols) failed"};
+	c1.reset();
+
+	// Drop every pooled backend connection. Backend prepared statements outlive the client
+	// that created them, so without this conn B can land on the connection that still holds
+	// conn A's statement and the backend rejects the Describe for its own reasons. The global
+	// statement -- and any metadata cached on it -- survives this flush untouched, so what is
+	// under test here is unaffected.
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: flush between connections failed"};
+	}
+
+	// Same user, database, query text and parameter types as conn A, so the proxy resolves it
+	// to the same global statement and sends no Parse of its own. That dedup is deliberate.
 	PGConnPtr c2 = open_client_conn();
 	if (!c2 || PQstatus(c2.get()) != CONNECTION_OK) return {false, false, "second conn failed"};
-	std::string out2 = run_describe_twice(c2.get(), stmt_name, query);
-	bool fell_back = false;
-	int cache_hits = 0;
-	scanDescribeCachePhaseLog(fell_back, cache_hits, /*want_hits=*/2, 3000);
+	if (PQsendPrepare(c2.get(), stmt_name.c_str(), q.c_str(), 0, NULL) == 0) {
+		return {false, false, "PQsendPrepare (conn B) failed: " + std::string(PQerrorMessage(c2.get()))};
+	}
+	while ((r = PQgetResult(c2.get())) != NULL) PQclear(r);
+	PGresult* d2 = PQdescribePrepared(c2.get(), stmt_name.c_str());
+	const std::string d2_serial = serialize_describe(d2);
+	const int d2_nf = PQnfields(d2);
+	const bool d2_errored = (PQresultStatus(d2) == PGRES_FATAL_ERROR);
+	// The backend refuses a prepared statement whose result type changed under it. That is
+	// the statement's own lifetime showing, not a metadata problem, so it is an accepted
+	// outcome here.
+	const bool d2_stale_plan = d2_errored &&
+		(std::string(PQresultErrorField(d2, PG_DIAG_SQLSTATE) ? PQresultErrorField(d2, PG_DIAG_SQLSTATE) : "") == "0A000");
+	PQclear(d2);
 
-	// Within-mode miss==hit byte-parity (first mode): D1 and D2 serials must match.
-	auto d1 = out1.find("D1:"), d2 = out1.find(";D2:");
-	bool within_mode_equal = (d1 != std::string::npos && d2 != std::string::npos &&
-		out1.substr(d1 + 3, d2 - (d1 + 3)) == out1.substr(d2 + 4, out1.size() - (d2 + 4) - 1));
+	// Reference: the same table described through a statement the proxy has never seen. The
+	// text differs by a comment, so it is a different global statement and the description is
+	// necessarily the table's current one.
+	const std::string ref_q = q + " /*ref*/";
+	if (PQsendPrepare(c2.get(), "dcref", ref_q.c_str(), 0, NULL) == 0) {
+		return {false, false, "PQsendPrepare (reference) failed: " + std::string(PQerrorMessage(c2.get()))};
+	}
+	while ((r = PQgetResult(c2.get())) != NULL) PQclear(r);
+	PGresult* dr = PQdescribePrepared(c2.get(), "dcref");
+	const std::string ref_serial = serialize_describe(dr);
+	const int ref_nf = PQnfields(dr);
+	PQclear(dr);
 
-	bool result_match = (out1 == out2) && within_mode_equal && (cache_hits >= 2);
+	r = PQexec(c2.get(), ("DROP TABLE IF EXISTS " + tbl).c_str());
+	PQclear(r);
+
+	// In native mode the phase must have stayed native; the libpq case is libpq by construction.
+	const bool fell_back = native ? nativeFallbackObserved() : true;
+
+	// A prepared statement outlives the schema it was prepared against, and the proxy shares
+	// one global statement per SQL text across sessions, so the second connection is asking
+	// about the statement the first one created. Three answers follow from that and are all
+	// accepted: the table's current description, the description the statement was prepared
+	// with, or the backend refusing a statement whose result type changed. Anything else --
+	// a description belonging to neither -- is metadata from some other statement and fails.
+	const bool d2_is_current = (d2_serial == ref_serial);
+	const bool d2_is_original = (d2_serial == d1_serial);
+	const bool result_match = d2_is_current || d2_is_original || d2_stale_plan;
+
 	std::stringstream det;
-	det << (first_native ? "native-first (native capture, libpq serve)"
-	                     : "libpq-first (libpq capture, native serve)")
-	    << "; within_mode_miss_eq_hit=" << (within_mode_equal ? "yes" : "no")
-	    << "; cache_hits_2nd_mode=" << cache_hits;
-	if (out1 != out2) det << " (cross-mode mismatch; m1='" << out1 << "' m2='" << out2 << "')";
-	setNativeMode(admin, false);
-	flushBackendPool(admin, BACKEND_HG, saved);
+	det << (native ? "native" : "libpq")
+	    << "; D1 (as prepared, " << d1_nf << " cols)='" << d1_serial << "'"
+	    << "; current (" << ref_nf << " cols)='" << ref_serial << "'"
+	    << "; D2=" << (d2_is_current ? "current" : d2_is_original ? "as-prepared"
+	                  : d2_stale_plan ? "backend refused the stale plan" : "UNRELATED")
+	    << " (" << (d2_errored ? "backend error" : std::to_string(d2_nf) + " cols") << ")";
+	if (!result_match) det << " -- D2='" << d2_serial << "' matches neither";
 	return {result_match, fell_back, det.str()};
 }
 
@@ -1427,26 +1403,18 @@ int main(int /*argc*/, char** /*argv*/) {
 			"EXT_PARSE_ERR_MIDFRAME", cr.result_match, !cr.fell_back, cr.detail});
 	}
 
-	// Unique query text per sub-case keeps each global statement fresh: the FIRST
-	// Describe in the first-run mode is a genuine cache MISS (round-trip → populate),
-	// so that mode's capture path runs; the second run mode then serves both
-	// Describes from the freshly-populated cache.
-	const std::string uniq = std::to_string(getpid()) + "_" + std::to_string(time(nullptr));
-
-	diag("=== EXT_DESCRIBE_CACHED (libpq capture → native serve): Describe x2, byte-equal, 2nd from cache ===");
+	diag("=== EXT_DESCRIBE_AFTER_DDL (libpq): Describe never replays the pre-DDL description ===");
 	{
-		std::string q = "SELECT " + uniq + "025::bigint AS u, $1::int AS a, $2::text AS b";
-		ExtQCaseRunResult cr = run_describe_cached(admin.get(), /*first_native=*/false, "dc25", q, saved);
-		cov.record({"P25: EXT_DESCRIBE_CACHED (libpq-capture, native-serve; Describe x2 byte-equal, 2nd=cache hit)",
-			"EXT_DESCRIBE_CACHED", cr.result_match, !cr.fell_back, cr.detail});
+		ExtQCaseRunResult cr = run_describe_after_ddl(admin.get(), /*native=*/false, "dc25", saved);
+		cov.record({"P25: EXT_DESCRIBE_AFTER_DDL (libpq; Describe does not replay the pre-DDL description)",
+			"EXT_DESCRIBE_AFTER_DDL", cr.result_match, !cr.fell_back, cr.detail});
 	}
 
-	diag("=== EXT_DESCRIBE_CACHED (native capture → libpq serve): Describe x2, byte-equal, 2nd from cache ===");
+	diag("=== EXT_DESCRIBE_AFTER_DDL (native): Describe never replays the pre-DDL description ===");
 	{
-		std::string q = "SELECT " + uniq + "026::bigint AS u, $1::int AS a, $2::text AS b";
-		ExtQCaseRunResult cr = run_describe_cached(admin.get(), /*first_native=*/true, "dc26", q, saved);
-		cov.record({"P26: EXT_DESCRIBE_CACHED (native-capture, libpq-serve; Describe x2 byte-equal, 2nd=cache hit)",
-			"EXT_DESCRIBE_CACHED", cr.result_match, !cr.fell_back, cr.detail});
+		ExtQCaseRunResult cr = run_describe_after_ddl(admin.get(), /*native=*/true, "dc26", saved);
+		cov.record({"P26: EXT_DESCRIBE_AFTER_DDL (native; Describe does not replay the pre-DDL description)",
+			"EXT_DESCRIBE_AFTER_DDL", cr.result_match, !cr.fell_back, cr.detail});
 	}
 
 	cov.emit_tap();

@@ -293,7 +293,6 @@
   "pgsql_response_framer_traffic_unit-t" : [ "unit-tests-g1","@proxysql_min_version:3.1" ],
   "pgsql_response_framer_unit-t" : [ "unit-tests-g1","@proxysql_min_version:3.1" ],
   "pgsql_servers_ssl_params_unit-t" : [ "unit-tests-g1" ],
-  "pgsql_stmt_meta_cache-t" : [ "unit-tests-g1" ],
   "pgsql_tokenizer_unit-t" : [ "unit-tests-g1" ],
   "pgsql_txn_state_unit-t" : [ "unit-tests-g1" ],
   "pgsql_variables_validator_unit-t" : [ "unit-tests-g1" ],
