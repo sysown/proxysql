@@ -807,10 +807,18 @@ int PgSQL_Data_Stream::write_to_net() {
 	//VALGRIND_ENABLE_ERROR_REPORTING;
 	if (bytes_io < 0) {
 		if (encrypted == false) {
-			if ((poll_fds_idx < 0) || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) { // in write_to_net_poll() we has remove this safety
-				// so we enforce it here
+#ifdef PROXYSQL31
+			if (poll_fds_idx < 0 || !mypolls) {
+				if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
+					shut_soft();
+			} else if (mypolls->fds[poll_fds_idx].revents & POLLOUT) {
 				shut_soft();
 			}
+#else
+			if (poll_fds_idx < 0 || !mypolls || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
+				shut_soft();
+			}
+#endif
 		}
 		else {
 			int ssl_ret = SSL_get_error(ssl, bytes_io);
@@ -862,12 +870,14 @@ bool PgSQL_Data_Stream::available_data_out() {
 }
 
 void PgSQL_Data_Stream::remove_pollout() {
+	if (!mypolls || poll_fds_idx < 0) return;
 	struct pollfd* _pollfd;
 	_pollfd = &mypolls->fds[poll_fds_idx];
 	_pollfd->events = 0;
 }
 
 void PgSQL_Data_Stream::set_pollout() {
+	if (!mypolls || poll_fds_idx < 0) return;
 	struct pollfd* _pollfd;
 	_pollfd = &mypolls->fds[poll_fds_idx];
 	if (DSS > STATE_MARIADB_BEGIN && DSS < STATE_MARIADB_END) {
@@ -992,10 +1002,14 @@ int PgSQL_Data_Stream::write_to_net_poll() {
 	}
 	if (call_write_to_net) {
 		if (sess->session_type == PROXYSQL_SESSION_PGSQL) {
-			if (poll_fds_idx > -1) { // NOTE: attempt to force writes
-				if (net_failure == false)
-					rc += write_to_net();
+#ifndef PROXYSQL31
+			if (poll_fds_idx > -1) {
+#endif
+			if (net_failure == false)
+				rc += write_to_net();
+#ifndef PROXYSQL31
 			}
+#endif
 		}
 		else {
 			rc += write_to_net();
