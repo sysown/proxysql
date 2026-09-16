@@ -1030,7 +1030,9 @@ handler_again:
 		break;
 
 	case ASYNC_RESYNC_START:
-		if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
+		// PQpipelineStatus(NULL) returns PQ_PIPELINE_OFF, so without this guard native
+		// would take the shortcut below and pool a connection still mid-batch.
+		if (!native_mode && PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
 			proxy_warning("Resync not required - connection already synchronized.\n");
 			NEXT_IMMEDIATE(ASYNC_RESYNC_END);
 		}
@@ -1039,6 +1041,16 @@ handler_again:
 		if (async_exit_status) {
 			next_event(ASYNC_RESYNC_CONT);
 		} else {
+			if (native_mode) {
+				// Sync sent in full (non-blocking, same as ASYNC_STMT_PREPARE_START):
+				// go straight to the drain. A fatal send also lands here with
+				// error_info set, so route that to END instead of an empty drain.
+				if (is_error_present()) {
+					NEXT_IMMEDIATE(ASYNC_RESYNC_END);
+				}
+				set_fetch_result_end_state(ASYNC_RESYNC_END);
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+			}
 			NEXT_IMMEDIATE(ASYNC_RESYNC_END);
 		}
 		break;
@@ -1055,6 +1067,11 @@ handler_again:
 			next_event(ASYNC_RESYNC_CONT);
 			break;
 		} else {
+			// A fatal send here also lands with error_info set, same as ASYNC_RESYNC_START;
+			// resync_failed is libpq-only and native never sets it.
+			if (native_mode && is_error_present()) {
+				NEXT_IMMEDIATE(ASYNC_RESYNC_END);
+			}
 			if (resync_failed == true) {
 				NEXT_IMMEDIATE(ASYNC_RESYNC_END);
 			}
@@ -1066,7 +1083,7 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
 			}
 		}
-		break;		
+		break;
 
 	case ASYNC_RESET_SESSION_START:
 		reset_session_start();
@@ -4162,6 +4179,18 @@ void PgSQL_Connection::resync_start() {
 	PROXY_TRACE();
 	async_exit_status = PG_EVENT_NONE;
 
+	if (native_mode) {
+		// The client was already told this frame succeeded (a trailing message was
+		// answered locally), so the batch is still open on the backend. Sending the
+		// Sync concludes it -- the 'Z' clears native_unsynced_work.
+		native_stmt_reset_step();
+		native_stmt_step = PG_Native_Stmt_Step::RESYNC;
+		native_stmt_sync_terminated = true;
+		pg_build_sync(native_outbuf);
+		native_stmt_send_or_wait();
+		return;
+	}
+
 	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
 
 	if (PQsendPipelineSync(pgsql_conn) == 0) {
@@ -4175,6 +4204,10 @@ void PgSQL_Connection::resync_start() {
 void PgSQL_Connection::resync_cont(short event) {
 	PROXY_TRACE();
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
+	if (native_mode) {
+		native_stmt_flush_cont();
+		return;
+	}
 	async_exit_status = PG_EVENT_NONE;
 	if (event & POLLOUT) {
 		flush(true);
@@ -5220,7 +5253,9 @@ int PgSQL_Connection::async_send_simple_command(short event, char* stmt, unsigne
 int PgSQL_Connection::async_perform_resync(short event) {
 	PROXY_TRACE();
 	PROXY_TRACE2();
-	assert(pgsql_conn);
+	// pgsql_conn is permanently NULL in native_mode; resync_start()/resync_cont() drive
+	// their own native branch instead of the PQsendPipelineSync() calls below.
+	assert(native_mode || pgsql_conn);
 
 	server_status = parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
@@ -5258,7 +5293,13 @@ int PgSQL_Connection::async_perform_resync(short event) {
 			query_result = NULL;
 		}
 		compute_unknown_transaction_status();
-		if (resync_failed) {
+		// resync_failed only covers the two libpq send-phase paths that don't call
+		// set_error() (PQsendPipelineSync/PQflush failures) -- it was never a full signal.
+		// is_error_present() catches native's failures and a drain-phase libpq failure
+		// (PQconsumeInput in fetch_result_cont()) that resync_failed has always missed too;
+		// fetch_result_start() resets error state before this drain runs for both modes,
+		// so it can't be a stale leftover here.
+		if (resync_failed || is_error_present()) {
 			return -1;
 		} else {
 			async_state_machine = ASYNC_IDLE;
