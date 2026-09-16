@@ -56,6 +56,11 @@
  * scenarios, because a pooled connection is not converted when the mode flips and both would
  * otherwise measure the same path.
  *
+ * ONE MORE SCENARIO, the mirror image of the four above: the last message is answered locally
+ * with SUCCESS (a statement Close, 'S') instead of an error. The client is told the frame worked,
+ * so the batch must be CONCLUDED by sending its Sync, not discarded. Before the fix this crashed
+ * the whole proxy in native mode, which is why the first assertion checks it is still alive.
+ *
  * Only LOAD ... TO RUNTIME is used (never SAVE ... TO DISK); the harness reloads config from disk
  * before each test. Any backend session a scenario strands is terminated before the next one runs,
  * because its locks would otherwise change what the next scenario measures.
@@ -140,8 +145,11 @@ static void setNativeMode(PGconn* admin, bool on) {
 	resetPool(admin);
 }
 
-// The backend session this frame stranded, if there is one. Polled rather than read once: the
-// client's error arrives before ProxySQL has necessarily finished with the backend.
+// The backend session this frame stranded, if there is one. Polled until it is GONE, not until it
+// appears: discarding a connection closes its socket, and PostgreSQL needs a few milliseconds to
+// notice, roll back and leave pg_stat_activity, so a session read one round trip after the client's
+// error is still there even when ProxySQL did exactly the right thing. Only one that outlives the
+// deadline is stranded; a real one sits there until the pool reuses or drops the connection.
 static std::string strandedBackendPid(PGconn* be, const std::string& marker) {
 	// Keyed on xact_start, not on the state label. PostgreSQL only moves a session to 'idle' or
 	// 'idle in transaction' when it sends ReadyForQuery -- which is exactly what a batch missing its
@@ -153,8 +161,8 @@ static std::string strandedBackendPid(PGconn* be, const std::string& marker) {
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
 	for (;;) {
 		const std::string pid = execScalar(be, q);
-		if (!pid.empty()) return pid;
-		if (std::chrono::steady_clock::now() >= deadline) return "";
+		if (pid.empty()) return "";
+		if (std::chrono::steady_clock::now() >= deadline) return pid;
 		usleep(100000);
 	}
 }
@@ -253,8 +261,28 @@ static bool insertVisible(PGconn* be_db, const std::string& marker) {
 // A sequence is not rolled back, so one that MOVED across a scenario proves that scenario's Execute
 // really ran on the backend. Without it, "no row" cannot be told apart from "the write never got
 // there". Read as a value, not is_called: that is one-shot and cannot tell two scenarios apart.
-static std::string seqValue(PGconn* be_db) {
-	return execScalar(be_db, "SELECT last_value::text FROM orphsync_seq");
+static std::string seqValue(PGconn* be_db, const char* seq = "orphsync_seq") {
+	return execScalar(be_db, std::string("SELECT last_value::text FROM ") + seq);
+}
+
+// How many times the commit trigger has killed a backend. Counted off is_called as well as
+// last_value, because a sequence's last_value does not move on the FIRST nextval -- reading it
+// alone misses the first firing entirely.
+static long killCount(PGconn* be_db) {
+	const std::string n = execScalar(be_db,
+		"SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM orphsync_kill_seq");
+	return n.empty() ? -1 : atol(n.c_str());
+}
+
+// The client's ReadyForQuery arrives before ProxySQL has necessarily finished with the backend, so
+// the resync -- and the commit that fires the trigger -- lands after the frame, not during it.
+static bool killedWithin(PGconn* be_db, long before, int seconds) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+	for (;;) {
+		if (killCount(be_db) > before) return true;
+		if (std::chrono::steady_clock::now() >= deadline) return false;
+		usleep(100000);
+	}
 }
 
 // Same frame shape as above, but the Execute writes a row instead of selecting a literal.
@@ -537,6 +565,26 @@ static long connectedGauge(PGconn* admin) {
 	return n.empty() ? -1 : atol(n.c_str());
 }
 
+// What the hostgroup is holding: in use plus idle. Server_Connections_connected does NOT answer
+// this -- a connection torn down by a failed resync has already been subtracted from that counter
+// while the object itself is still sitting in ConnFree, waiting to be handed to the next client.
+static long pooledConns(PGconn* admin) {
+	const std::string n = execScalar(admin,
+		"SELECT COALESCE(SUM(ConnUsed+ConnFree),0) FROM stats_pgsql_connection_pool WHERE hostgroup="
+		+ std::to_string(HG));
+	return n.empty() ? -1 : atol(n.c_str());
+}
+
+static long pooledConnsWithin(PGconn* admin, long want, int seconds) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+	long last = -1;
+	for (;;) {
+		last = pooledConns(admin);
+		if (last == want || std::chrono::steady_clock::now() >= deadline) return last;
+		usleep(100000);
+	}
+}
+
 // A destroyed connection subtracts itself a moment after it leaves the pool, so poll rather than
 // read once -- a single read races the reaper and fails for the wrong reason.
 static long connectedGaugeWithin(PGconn* admin, long want, int seconds) {
@@ -630,8 +678,186 @@ static bool runLeakRounds(const std::string& base, PGconn* be_db, bool* reached_
 	return all_rejected;
 }
 
+// Mirror image of the scenarios above: the frame's LAST message (a statement Close) is answered
+// locally with SUCCESS, not an error. pgjdbc's own frame shape (Parse/Bind/Execute/Close/Sync)
+// triggers this: Execute isn't last, so it goes out Flush-terminated with no ReadyForQuery, and
+// the trailing Close is answered locally without reaching the backend -- leaving the batch open
+// when the frame empties. The client was already told the frame SUCCEEDED, so the fix must
+// CONCLUDE the batch by sending the Sync, not discard the connection like the scenarios above.
+struct ResyncProbe {
+	bool proxy_alive = false;   // a second, unrelated admin query still gets an answer
+	bool completed = false;     // this session's own frame ran to ReadyForQuery with no error
+	bool stranded = false;      // backend left mid-batch afterwards
+	bool seq_moved = false;     // the Execute really ran (tripwire)
+	bool row_visible = false;   // the write DID commit -- required, not forbidden, here
+	std::string detail = "not run";
+};
+
+static ResyncProbe runLocallyClosedSyncFrame(PGconn* admin, PGconn* be_db, const std::string& marker) {
+	ResyncProbe r;
+	const std::string seq_before = seqValue(be_db);
+	try {
+		PgConnection c(5000);
+		c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+
+		// Not the last message: goes out Flush-terminated, backend answers it, batch stays open.
+		c.prepareStatement("orphsync_rs",
+			"INSERT INTO orphsync_t (v) VALUES ('" + marker + "' || nextval('orphsync_seq'))", false);
+		c.bindStatement("orphsync_rs", "", {}, {}, false);
+		c.executePortal("", 0, false);
+		// The last message: a statement Close is answered LOCALLY, with success, and never
+		// reaches the backend. It carries the frame's Sync.
+		c.closeStatement("orphsync_rs", false);
+		c.sendSync();
+
+		bool errored = false;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (std::chrono::steady_clock::now() < deadline) {
+			char type = 0;
+			std::vector<uint8_t> buffer;
+			c.readMessage(type, buffer);
+			if (type == PgConnection::ERROR_RESPONSE) { errored = true; continue; }
+			if (type == PgConnection::READY_FOR_QUERY) break;
+		}
+		r.completed = !errored;
+		// Polled, not a single check: the client's ReadyForQuery is sent as part of the local
+		// Close answer before the backend resync round-trip even starts, so the write's commit
+		// lands a little later (still inside the try, so `c`'s session is still alive).
+		const auto row_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (std::chrono::steady_clock::now() < row_deadline) {
+			if (insertVisible(be_db, marker)) { r.row_visible = true; break; }
+			usleep(50000);
+		}
+	} catch (const PgException& e) {
+		r.detail = std::string("frame threw: ") + e.what();
+	}
+	const std::string seq_after = seqValue(be_db);
+	r.seq_moved = (!seq_before.empty() && seq_after != seq_before);
+	r.stranded = !strandedBackendPid(be_db, marker).empty();
+	// A second, unrelated admin query: before the fix this scenario aborts the whole process,
+	// so nothing here would even run.
+	r.proxy_alive = exec(admin, "SELECT 1");
+	if (r.detail == "not run") {
+		r.detail = std::string("completed=") + (r.completed ? "yes" : "no")
+			+ ", row visible=" + (r.row_visible ? "yes" : "no")
+			+ ", sequence moved=" + (r.seq_moved ? "yes" : "no")
+			+ ", stranded=" + (r.stranded ? "yes" : "no");
+	}
+	return r;
+}
+
+// The scenario above ends with a resync that SUCCEEDS. This one makes the resync itself fail:
+// the backend is killed before the trailing Close (still answered locally either way) triggers
+// it, so the Sync the resync tries to send goes to a connection that is already gone. Before
+// this session's fix, `async_perform_resync()`'s ASYNC_RESYNC_END decided success/failure from
+// `resync_failed` alone -- a flag set only on two libpq send paths (PQsendPipelineSync/PQflush
+// failures) that predate native entirely. Neither native's own failures nor a libpq backend
+// dying while the resync waits for its reply ever set that flag, so the resync reported success
+// or a rebuilt native connection got pooled anyway, and `push_MyConn_to_pool()` has no liveness
+// check of its own -- a dead connection would sit in ConnectionsFree until some later client
+// drew it and failed for a completely unrelated reason.
+//
+// The backend cannot be killed from outside at the right moment. ProxySQL forwards nothing until
+// the frame's Sync arrives, so until then there is no backend running this frame to kill; once it
+// does arrive, the whole frame -- Execute, local Close and the resync's own Sync -- goes through in
+// one pass, and the gap to aim at is microseconds wide. So the backend kills itself instead: the
+// row this Execute writes carries a DEFERRABLE INITIALLY DEFERRED constraint trigger, which fires
+// when the implicit transaction commits, and that commit is exactly what ProxySQL's resync Sync
+// asks for. The backend accepts the Sync and dies without replying -- the DRAIN side of
+// `resync_failed || is_error_present()`, deterministic and with no mock backend.
+struct ResyncFailureProbe {
+	bool insert_ran = false;    // the Execute really reached the backend (tripwire)
+	bool kill_fired = false;    // the commit trigger ran, so the resync's Sync DID reach the
+	                             // backend and the backend DID die on it -- without this the
+	                             // whole scenario passes on an ordinary successful frame
+	bool client_ok = false;     // the client's own frame still completes cleanly -- Close is
+	                             // answered locally either way, so the client never sees the
+	                             // backend's death
+	long gauge_baseline = -1;
+	long gauge_after = -1;      // the connected-backend count returns to baseline: nothing was
+	                             // left counted as connected
+	long pool_baseline = -1;
+	long pool_live = -1;        // what the hostgroup holds WHILE THE CLIENT IS STILL CONNECTED: a
+	                             // resync that fails must DESTROY the connection, not leave a dead
+	                             // one in ConnFree for the next client to draw. Read before the
+	                             // client goes away, because closing the session destroys the
+	                             // connection on its own and hides the difference
+	bool bystander_ok = false;  // a fresh client on the same hostgroup gets a healthy connection
+	bool row_visible = false;    // reported, not asserted: the backend died mid-commit, so its
+	                             // write is gone even though the client was told it succeeded
+	std::string detail = "not run";
+};
+
+static ResyncFailureProbe runResyncFailure(PGconn* admin, PGconn* be_db, const std::string& marker) {
+	ResyncFailureProbe r;
+	r.gauge_baseline = connectedGauge(admin);
+	r.pool_baseline = pooledConns(admin);
+	const std::string seq_before = seqValue(be_db);
+	const long kill_before = killCount(be_db);
+	try {
+		PgConnection c(5000);
+		c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+
+		// The marker makes this row the one the commit trigger fires on.
+		c.prepareStatement("resyncfail_rs",
+			"INSERT INTO orphsync_t (v) VALUES ('" + marker + "' || nextval('orphsync_seq'))", false);
+		c.bindStatement("resyncfail_rs", "", {}, {}, false);
+		c.executePortal("", 0, false);
+
+		// The last message: a statement Close, answered LOCALLY regardless of backend state. The
+		// batch is left open, so ProxySQL concludes it with a Sync of its own -- which commits,
+		// which fires the trigger, which kills the backend while the resync waits for the reply.
+		c.closeStatement("resyncfail_rs", false);
+		c.sendSync();
+
+		bool errored = false;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (std::chrono::steady_clock::now() < deadline) {
+			char type = 0;
+			std::vector<uint8_t> buffer;
+			c.readMessage(type, buffer);
+			if (type == PgConnection::ERROR_RESPONSE) { errored = true; continue; }
+			if (type == PgConnection::READY_FOR_QUERY) break;
+		}
+		r.client_ok = !errored;
+		// Still connected here on purpose: once this client disconnects, session teardown drops
+		// the backend connection whether or not the resync disowned it.
+		r.pool_live = pooledConnsWithin(admin, r.pool_baseline, 5);
+	} catch (const PgException& e) {
+		r.detail = std::string("frame threw: ") + e.what();
+	}
+	const std::string seq_after = seqValue(be_db);
+	r.insert_ran = (!seq_before.empty() && seq_after != seq_before);
+	r.kill_fired = killedWithin(be_db, kill_before, 5);
+	r.row_visible = insertVisible(be_db, marker);
+	r.gauge_after = connectedGaugeWithin(admin, r.gauge_baseline, 15);
+
+	// Bystander: a fresh client on the same hostgroup must get a healthy connection, not
+	// whatever the failed resync would have left behind had it been pooled.
+	try {
+		PgConnection bystander(5000);
+		bystander.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+		bystander.execute("SELECT 1");
+		bystander.waitForReady();
+		r.bystander_ok = true;
+	} catch (const PgException&) {
+		r.bystander_ok = false;
+	}
+
+	if (r.detail == "not run") {
+		r.detail = std::string("client_ok=") + (r.client_ok ? "yes" : "no")
+			+ ", insert_ran=" + (r.insert_ran ? "yes" : "no")
+			+ ", kill_fired=" + (r.kill_fired ? "yes" : "no")
+			+ ", row_visible=" + (r.row_visible ? "yes" : "no")
+			+ ", gauge " + std::to_string(r.gauge_baseline) + " -> " + std::to_string(r.gauge_after)
+			+ ", pooled while connected " + std::to_string(r.pool_baseline) + " -> " + std::to_string(r.pool_live)
+			+ ", bystander_ok=" + (r.bystander_ok ? "yes" : "no");
+	}
+	return r;
+}
+
 int main(int, char**) {
-	plan(43);
+	plan(65);
 	if (cl.getEnv()) return exit_status();
 
 	auto admin = adminConn();
@@ -652,9 +878,30 @@ int main(int, char**) {
 
 	exec(be_db.get(), "DROP TABLE IF EXISTS orphsync_t");
 	exec(be_db.get(), "DROP SEQUENCE IF EXISTS orphsync_seq");
+	exec(be_db.get(), "DROP SEQUENCE IF EXISTS orphsync_kill_seq");
 	if (!exec(be_db.get(), "CREATE TABLE orphsync_t (v text)")
-	    || !exec(be_db.get(), "CREATE SEQUENCE orphsync_seq"))
+	    || !exec(be_db.get(), "CREATE SEQUENCE orphsync_seq")
+	    || !exec(be_db.get(), "CREATE SEQUENCE orphsync_kill_seq"))
 		BAIL_OUT("could not create the write probe");
+
+	// The resync-failure scenario needs the backend to die at one exact moment: while ProxySQL is
+	// waiting on the Sync it sent to conclude the batch. That Sync is what commits the implicit
+	// transaction, and a DEFERRABLE INITIALLY DEFERRED constraint trigger runs at commit and
+	// nowhere else -- so the backend kills itself from inside the commit, with no timing to race.
+	// The kill sequence is bumped first because a sequence is not rolled back: it still says the
+	// trigger ran after the aborted transaction has taken everything else with it. SECURITY
+	// DEFINER so the frontend user needs no rights of its own. The WHEN clause keeps every other
+	// scenario's writes out of it.
+	if (!exec(be_db.get(),
+		"CREATE OR REPLACE FUNCTION orphsync_selfkill() RETURNS trigger AS $$ BEGIN "
+		"PERFORM nextval('orphsync_kill_seq'); "
+		"PERFORM pg_terminate_backend(pg_backend_pid()); RETURN NULL; END $$ "
+		"LANGUAGE plpgsql SECURITY DEFINER")
+	    || !exec(be_db.get(),
+		"CREATE CONSTRAINT TRIGGER orphsync_selfkill_trg AFTER INSERT ON orphsync_t "
+		"DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.v LIKE '%_resyncfail_%') "
+		"EXECUTE FUNCTION orphsync_selfkill()"))
+		BAIL_OUT("could not create the resync-failure trigger");
 	exec(be_db.get(), std::string("GRANT ALL ON orphsync_t TO ") + cl.pgsql_username);
 	exec(be_db.get(), std::string("GRANT USAGE ON SEQUENCE orphsync_seq TO ") + cl.pgsql_username);
 
@@ -843,8 +1090,61 @@ int main(int, char**) {
 		   reached ? "yes" : "no");
 	}
 
+	// --- a SUCCEEDED frame whose Sync never reached the backend (PJ1) ----------------------------
+	for (int native = 0; native <= 1; native++) {
+		const char* label = native ? "native" : "libpq";
+		setNativeMode(admin.get(), native != 0);
+		const std::string m = base + "_resync_" + label;
+		const ResyncProbe r = runLocallyClosedSyncFrame(admin.get(), be_db.get(), m);
+		diag("%s locally-closed-Sync frame: %s", label, r.detail.c_str());
+		ok(r.proxy_alive,
+		   "%s: the proxy is still alive after a frame whose trailing Close is answered locally -- "
+		   "before the fix, native's resync path aborted the WHOLE PROCESS here [%s]",
+		   label, r.detail.c_str());
+		ok(r.completed, "%s: the frame itself completes with no error, exactly as the client was told [%s]",
+		   label, r.detail.c_str());
+		ok(!r.stranded, "%s: and no backend session is left mid-batch afterwards [%s]",
+		   label, r.detail.c_str());
+		ok(r.seq_moved, "%s: the Execute really ran on the backend -- without this, the row being "
+		   "present below would prove nothing [%s]", label, r.detail.c_str());
+		ok(r.row_visible,
+		   "%s: the write DOES commit -- the client was already told this frame SUCCEEDED "
+		   "(CommandComplete, CloseComplete, ReadyForQuery), so concluding the batch is what it "
+		   "asked for; discarding the connection instead would roll back a write it believes "
+		   "already went through [%s]", label, r.detail.c_str());
+		clearStranded(be_db.get(), strandedBackendPid(be_db.get(), m));
+	}
+
+	// --- the resync ITSELF fails: the backend is already gone (PJ1 addendum) --------------------
+	for (int native = 0; native <= 1; native++) {
+		const char* label = native ? "native" : "libpq";
+		setNativeMode(admin.get(), native != 0);
+		const std::string m = base + "_resyncfail_" + label;
+		const ResyncFailureProbe r = runResyncFailure(admin.get(), be_db.get(), m);
+		diag("%s resync-failure frame: %s", label, r.detail.c_str());
+		ok(r.client_ok, "%s: the client's own frame still completes cleanly -- the Close is "
+		   "answered locally regardless of the backend's fate [%s]", label, r.detail.c_str());
+		ok(r.insert_ran, "%s: the Execute really ran on the backend before it was killed -- "
+		   "without this the rest of this probe would prove nothing [%s]", label, r.detail.c_str());
+		ok(r.kill_fired, "%s: the resync's Sync reached the backend and killed it -- the commit "
+		   "trigger only runs when the batch is concluded, so without this the whole scenario is "
+		   "an ordinary successful frame [%s]", label, r.detail.c_str());
+		ok(r.gauge_after == r.gauge_baseline,
+		   "%s: the connected-backend count returns to baseline -- a resync that fails must "
+		   "destroy the connection, not report success and leave a dead one counted as pooled "
+		   "[%s]", label, r.detail.c_str());
+		ok(r.pool_live == r.pool_baseline,
+		   "%s: and the hostgroup is left holding no connection while the client is still there -- "
+		   "a resync that fails must destroy it, not leave a dead one in ConnFree for the next "
+		   "client to draw [%s]", label, r.detail.c_str());
+		ok(r.bystander_ok, "%s: and a fresh client on the same hostgroup gets a healthy "
+		   "connection, not whatever a wrongly-pooled dead one would have handed it [%s]",
+		   label, r.detail.c_str());
+	}
+
 	exec(be_db.get(), "DROP TABLE IF EXISTS orphsync_t");
 	exec(be_db.get(), "DROP SEQUENCE IF EXISTS orphsync_seq");
+	exec(be_db.get(), "DROP SEQUENCE IF EXISTS orphsync_kill_seq");
 
 	// A stranded session holds its locks until something closes it, so it would block whatever runs
 	// next. Terminate it here rather than leaving that for the following test to trip over.
