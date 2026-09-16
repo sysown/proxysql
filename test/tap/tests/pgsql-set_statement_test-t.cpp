@@ -927,12 +927,23 @@ bool test_reset_all_failure_pipeline() {
     return got_error && correct_error;
 }
 
-// Test: DISCARD ALL should fail in pipeline mode (not supported)
-bool test_discard_all_failure_pipeline() {
-    diag("=== Test: DISCARD ALL failure in pipeline mode ===");
+// Test: DISCARD ALL, sent alone (nothing else pipelined behind it before Sync -- the
+// ordinary way any real client uses it, e.g. JDBC's plain Statement.executeUpdate),
+// must actually run and reset the session -- not be refused with a fabricated error.
+bool test_discard_all_succeeds_pipeline() {
+    diag("=== Test: DISCARD ALL succeeds when it is the last statement before Sync ===");
 
     PGConnPtr conn = createNewConnection(BACKEND);
     if (!conn) return false;
+
+    // SET a variable to a non-default value first, so a real reset is observable.
+    const std::string initial_value = get_variable_simple(conn.get(), "DateStyle");
+    const std::string test_value = (initial_value.find("ISO") != std::string::npos) ?
+        "Postgres, DMY" : "ISO, MDY";
+    if (!set_variable_simple(conn.get(), "DateStyle", test_value)) {
+        diag("Failed to SET DateStyle");
+        return false;
+    }
 
     // Enter pipeline mode
     if (PQenterPipelineMode(conn.get()) != 1) {
@@ -940,7 +951,7 @@ bool test_discard_all_failure_pipeline() {
         return false;
     }
 
-    // Send DISCARD ALL
+    // Send DISCARD ALL as the only statement before the Sync
     if (PQsendQueryParams(conn.get(), "DISCARD ALL", 0, NULL, NULL, NULL, NULL, 0) != 1) {
         diag("Failed to send DISCARD ALL");
         return false;
@@ -951,6 +962,7 @@ bool test_discard_all_failure_pipeline() {
 
     // Consume results
     int count = 0;
+    bool got_command_ok = false;
     bool got_error = false;
     std::string error_msg;
     int sock = PQsocket(conn.get());
@@ -961,10 +973,12 @@ bool test_discard_all_failure_pipeline() {
 
         while ((res = PQgetResult(conn.get())) != NULL) {
             ExecStatusType status = PQresultStatus(res);
-            if (status == PGRES_FATAL_ERROR) {
+            if (status == PGRES_COMMAND_OK) {
+                got_command_ok = true;
+            } else if (status == PGRES_FATAL_ERROR) {
                 got_error = true;
                 error_msg = PQresultErrorMessage(res);
-                diag("Got expected error: %s", error_msg.c_str());
+                diag("Unexpected error: %s", error_msg.c_str());
             }
             if (status == PGRES_PIPELINE_SYNC) {
                 PQclear(res);
@@ -988,11 +1002,14 @@ bool test_discard_all_failure_pipeline() {
 
     PQexitPipelineMode(conn.get());
 
-    // Verify error message mentions pipeline mode
-    bool correct_error = (error_msg.find("pipeline") != std::string::npos) ||
-                        (error_msg.find("not supported") != std::string::npos);
+    // Connection must still be usable, and the reset must have actually happened
+    // (the value we SET must be gone -- DISCARD ALL wipes session state back to default).
+    std::string after_value = get_variable_simple(conn.get(), "DateStyle");
+    bool discard_took_effect = (after_value.find(test_value) == std::string::npos);
+    diag("DateStyle: set to '%s', after DISCARD ALL: '%s' (reset: %s)",
+         test_value.c_str(), after_value.c_str(), discard_took_effect ? "yes" : "no");
 
-    return got_error && correct_error;
+    return got_command_ok && !got_error && discard_took_effect;
 }
 
 // Test: Verify startup parameters are applied
@@ -1231,7 +1248,7 @@ bool test_set_failure_syntax_error_pipeline();
 bool test_set_failure_multiple_set_one_fails();
 bool test_set_different_values_from_original();
 bool test_reset_all_failure_pipeline();
-bool test_discard_all_failure_pipeline();
+bool test_discard_all_succeeds_pipeline();
 bool test_reset_single_var_pipeline();
 bool test_reset_simple_query();
 bool test_reset_all_simple_query();
@@ -1376,12 +1393,12 @@ int main(int argc, char** argv) {
 
     // Run RESET and DISCARD tests in pipeline mode
     ok(test_reset_all_failure_pipeline(), "RESET ALL fails in pipeline mode");
-    ok(test_discard_all_failure_pipeline(), "DISCARD ALL fails in pipeline mode");
+    ok(test_discard_all_succeeds_pipeline(), "DISCARD ALL succeeds when last before Sync in pipeline mode");
     ok(test_reset_single_var_pipeline(), "RESET single variable works in pipeline mode");
     ok(test_multiple_vars_out_of_sync_pipeline(), "Multiple variables out of sync in pipeline mode");
     ok(test_pipeline_with_locked_hostgroup(), "SET/RESET/DISCARD with locked hostgroup in pipeline mode");
     ok(test_reset_all_locked_hostgroup_pipeline(), "RESET ALL with locked hostgroup in pipeline mode");
-    ok(test_discard_all_locked_hostgroup_pipeline(), "DISCARD ALL with locked hostgroup in pipeline mode");
+    ok(test_discard_all_locked_hostgroup_pipeline(), "DISCARD ALL refused inside a pipelined batch's transaction block");
     ok(test_set_param_status_extended(),
        "SET of a reported GUC over the extended protocol reaches the client via ParameterStatus");
     ok(test_reset_param_status_extended(),
@@ -2438,10 +2455,11 @@ bool test_reset_all_locked_hostgroup_pipeline() {
     return pool_config.restore() && test_ok;
 }
 
-// Test: DISCARD ALL with locked hostgroup in pipeline mode
-// This tests that DISCARD ALL correctly FAILS in pipeline mode even with locked hostgroup
-// DISCARD ALL is more destructive than RESET ALL (resets prepared statements, temp tables, etc.)
-// so it is blocked in pipeline mode regardless of hostgroup lock status
+// Test: DISCARD ALL after another statement in the same pipelined batch.
+// The SET ran first in this batch and reached the backend, so the backend is inside
+// the implicit transaction block a batch opens -- and PostgreSQL refuses DISCARD ALL
+// inside a transaction block. ProxySQL must refuse it the same way (25001) instead of
+// resetting the session, which would roll the SET back after reporting it succeeded.
 bool test_discard_all_locked_hostgroup_pipeline() {
     diag("=== Test: DISCARD ALL with locked hostgroup in pipeline mode ===");
 
@@ -2460,7 +2478,7 @@ bool test_discard_all_locked_hostgroup_pipeline() {
         return false;
     }
 
-    // Step 3: Send DISCARD ALL in pipeline mode with locked hostgroup
+    // Step 3: Send DISCARD ALL in the same pipeline, still as the last statement before Sync
     if (PQsendQueryParams(conn.get(), "DISCARD ALL", 0, NULL, NULL, NULL, NULL, 0) != 1) {
         diag("Failed to send DISCARD ALL");
         return false;
@@ -2471,9 +2489,10 @@ bool test_discard_all_locked_hostgroup_pipeline() {
 
     // Consume results
     int count = 0;
-    bool lock_ok = false;
-    bool got_discard_error = false;
+    int command_ok_count = 0;
+    bool got_txn_block_error = false;
     std::string error_msg;
+    std::string sqlstate;
     int sock = PQsocket(conn.get());
     PGresult* result_res;
 
@@ -2483,15 +2502,13 @@ bool test_discard_all_locked_hostgroup_pipeline() {
         while ((result_res = PQgetResult(conn.get())) != NULL) {
             ExecStatusType status = PQresultStatus(result_res);
             if (status == PGRES_COMMAND_OK) {
-                lock_ok = true;
-                diag("SET lock_var succeeded (hostgroup locked)");
+                command_ok_count++;
             } else if (status == PGRES_FATAL_ERROR) {
-                char* err = PQresultErrorMessage(result_res);
-                if (err && strstr(err, "DISCARD ALL")) {
-                    got_discard_error = true;
-                    error_msg = err;
-                    diag("DISCARD ALL correctly failed in pipeline: %s", err);
-                }
+                got_txn_block_error = true;
+                error_msg = PQresultErrorMessage(result_res);
+                const char* ss = PQresultErrorField(result_res, PG_DIAG_SQLSTATE);
+                sqlstate = ss ? ss : "";
+                diag("DISCARD ALL refused (SQLSTATE %s): %s", sqlstate.c_str(), error_msg.c_str());
             } else if (status == PGRES_PIPELINE_SYNC) {
                 PQclear(result_res);
                 count++;
@@ -2514,16 +2531,19 @@ bool test_discard_all_locked_hostgroup_pipeline() {
 
     PQexitPipelineMode(conn.get());
 
-    // Verify connection still works after expected error
+    diag("SET lock_var + DISCARD ALL: %d command(s) OK, refused=%s", command_ok_count,
+         got_txn_block_error ? "yes" : "no");
+
+    // Verify connection still works afterward
     PGresult* res = PQexec(conn.get(), "SELECT 1");
     bool conn_ok = (PQresultStatus(res) == PGRES_TUPLES_OK);
     PQclear(res);
 
     // Test passes if:
-    // 1. Hostgroup was locked (SET myapp.lock_var succeeded)
-    // 2. DISCARD ALL failed with error (as expected)
-    // 3. Connection is still usable
-    return lock_ok && got_discard_error && conn_ok;
+    // 1. DISCARD ALL was refused because a transaction block is open, with the same
+    //    SQLSTATE PostgreSQL itself returns (25001)
+    // 2. Connection is still usable
+    return got_txn_block_error && sqlstate == "25001" && conn_ok;
 }
 
 // A client learns a reported GUC changed only from a ParameterStatus message. Over the extended
