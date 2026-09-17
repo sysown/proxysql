@@ -6291,6 +6291,22 @@ void PgSQL_Session::Memory_Stats() {
 
 
 void PgSQL_Session::create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds) {
+	// A backend still holding an unfinished extended-query batch must not be reset for reuse. The
+	// reset sends a Sync (libpq) or DISCARD ALL (native), and either one ENDS that batch, which
+	// commits work no client was ever told succeeded. Drop the connection instead; closing it is
+	// what makes PostgreSQL roll the batch back.
+	if (_myds->myconn && _myds->myconn->is_pipeline_active() == true) {
+		// No known route arrives here mid-batch: one that abandons a frame drops the connection
+		// first, and one that finished has taken its ReadyForQuery. Logged every time and not
+		// suppressed, because a route that does reach it has to be visible rather than absorbed.
+		proxy_warning("extq: refusing to reset a backend left mid-batch (%s:%d, %s); "
+			"discarding the connection so its work is rolled back\n",
+			_myds->myconn->parent ? _myds->myconn->parent->address : "?",
+			_myds->myconn->parent ? _myds->myconn->parent->port : 0,
+			_myds->myconn->native_mode ? "native" : "libpq");
+		_myds->destroy_MySQL_Connection_From_Pool(false);
+		return;
+	}
 	PgSQL_Data_Stream* new_myds = NULL;
 	PgSQL_Connection* mc = _myds->myconn;
 	// we remove the connection from the original data stream
