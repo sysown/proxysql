@@ -180,9 +180,14 @@ int main() {
 	std::string second_err;
 	try {
 		c2->prepareStatement("other_name", PGX_QUERY, true);
-		std::string why;
-		// A successful all-text execution must not look like the binary pgx row.
-		text_row_ok = !check_pgx_row(run_bound(c2, "other_name", { 0, 0, 0 }), why);
+		// All-text formats must return every column as text.
+		const auto res = run_bound(c2, "other_name", { 0, 0, 0 });
+		text_row_ok = res && res->rowCount() == 1 && res->columnCount() == 3 &&
+			res->columnFormat(0) == 0 && is_text(res->getValue(0, 0), "42") &&
+			res->columnFormat(1) == 0 && is_text(res->getValue(0, 1), "hello") &&
+			res->columnFormat(2) == 0 && std::holds_alternative<std::string>(res->getValue(0, 2)) &&
+			std::get<std::string>(res->getValue(0, 2)).rfind("2024-01-02", 0) == 0;
+		if (!text_row_ok) text_err = "all-text result is not the expected text row";
 	} catch (const PgException& e) {
 		text_err = e.what();
 	}
@@ -191,7 +196,7 @@ int main() {
 	} catch (const PgException& e) {
 		second_err = e.what();
 	}
-	ok(text_row_ok, "Sanity: all-text formats do not produce the binary row%s%s",
+	ok(text_row_ok, "Sanity: all-text formats return every column as text%s%s",
 		text_err.empty() ? "" : ": ", text_err.c_str());
 	ok(second_ok, "Second client: mixed result formats are honored%s%s",
 		second_err.empty() ? "" : ": ", second_err.c_str());
