@@ -238,17 +238,25 @@ static void test_hashed_userlist_authenticates(PGconn* admin, const CommandLine&
 		md5_upper[i] = std::toupper(static_cast<unsigned char>(md5_upper[i]));
 	}
 
-	char dir_template[] = "/tmp/pgbouncer_hashed_XXXXXX";
+	// A private directory under the working directory, not a shared temp dir.
+	char dir_template[] = "pgbouncer_hashed_XXXXXX";
 	const char* dir = mkdtemp(dir_template);
-	std::string ini_path = std::string(dir ? dir : "/tmp") + "/pgbouncer.ini";
-	std::string userlist_path = std::string(dir ? dir : "/tmp") + "/userlist.txt";
+	if (dir == nullptr) {
+		skip(HASHED_USERLIST_TESTS, "cannot create a directory for the PgBouncer config files");
+		exec_ok(be, std::string("DROP ROLE IF EXISTS ") + SCRAM_USER, "drop scram role");
+		PQfinish(be);
+		return;
+	}
+	std::string ini_path = std::string(dir) + "/pgbouncer.ini";
+	std::string userlist_path = std::string(dir) + "/userlist.txt";
 	{
 		std::ofstream ini(ini_path);
 		ini << "[databases]\n"
 		    << "* = host=" << be_host << " port=" << be_port << "\n"
 		    << "[pgbouncer]\n"
 		    << "auth_type = md5\n"
-		    << "auth_file = " << userlist_path << "\n"
+		    // resolved relative to the directory of pgbouncer.ini
+		    << "auth_file = userlist.txt\n"
 		    << "pool_mode = transaction\n";
 		std::ofstream userlist(userlist_path);
 		userlist << "\"" << MD5_USER << "\" \"" << md5_upper << "\"\n"
@@ -283,7 +291,7 @@ static void test_hashed_userlist_authenticates(PGconn* admin, const CommandLine&
 	// The backend role is dropped by main() once pooled connections are gone.
 	unlink(userlist_path.c_str());
 	unlink(ini_path.c_str());
-	if (dir) rmdir(dir);
+	rmdir(dir);
 	PQfinish(be);
 }
 

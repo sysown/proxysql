@@ -496,6 +496,8 @@ void test_malformed_scram_verifier_is_reported() {
     const char* malformed[] = {
         // keys that do not decode to 32 bytes
         "SCRAM-SHA-256$4096:c2FsdA==$c3Ry:c3Ry",
+        // iteration count out of range for the runtime parser (strtol ERANGE)
+        "SCRAM-SHA-256$999999999999999999999:MDEyMzQ1Njc4OWFiY2RlZg==$cdWal4MCQ0HGW7A3x3U+vsJWZ7JtgZGTWehOdEhE4MQ=:jb79Cqvy9CgOXvdQAp3Ct/A/6kJfqdxvNcBrTeduXUY=",
         // non-numeric iteration count
         "SCRAM-SHA-256$many:MDEyMzQ1Njc4OWFiY2RlZg==$cdWal4MCQ0HGW7A3x3U+vsJWZ7JtgZGTWehOdEhE4MQ=:jb79Cqvy9CgOXvdQAp3Ct/A/6kJfqdxvNcBrTeduXUY=",
         // missing keys
@@ -610,7 +612,7 @@ void test_auth_type_mapping() {
 }
 
 int main() {
-    plan(89);
+    plan(91);
 
     test_minimal_conversion();     // 6
     test_multi_host_conversion();  // 5
