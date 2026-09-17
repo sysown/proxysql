@@ -123,7 +123,7 @@ GuidelineSessionRequest request(uint16_t port, int destination, const std::strin
 } // namespace
 
 int main() {
-	plan(46);
+	plan(49);
 	const ListenerProfile listeners;
 
 	// Shell default guideline.
@@ -287,6 +287,28 @@ int main() {
 	ok(removed.state == "none" && !removed.compiled, "removing the guideline option clears the guideline");
 	auto after_removal = compiler.compile(invalid_desired, effective(), listeners);
 	ok(after_removal.state == "invalid", "after removal an invalid guideline has no previous generation to keep");
+
+	// Destination evaluation errors never publish partial pools (#6211 review).
+	const char* kNetworkGuideline = R"json({"version":"1.1",
+		"destinations":[{"name":"Lan","match":"NETWORK($.server.address, 24) = '10.0.0.0'"}],
+		"routes":[{"name":"lan","match":"TRUE","destinations":[{"classes":["Lan"],"strategy":"round-robin","priority":0}]}]})json";
+	auto ip_topology = topology(kNetworkGuideline);
+	for (auto& instance : ip_topology.instances) instance.classic.host = "10.0.0." + instance.label.substr(instance.label.size() - 1);
+	GuidelineCompiler network_compiler;
+	auto network_ok = network_compiler.compile(ip_topology, effective(), listeners);
+	ok(network_ok.state == "active" && network_ok.compiled && plan(*network_ok.compiled, "lan") &&
+	   plan(*network_ok.compiled, "lan")->all.members.size() == 4,
+	   "NETWORK() destinations classify IPv4 members (%s)", network_ok.error_message.c_str());
+	auto network_error = network_compiler.compile(topology(kNetworkGuideline), effective(), listeners);
+	ok(network_error.state == "stale" && network_error.error_kind == "guideline_evaluation" &&
+	   network_error.compiled && network_error.compiled->fingerprint == network_ok.compiled->fingerprint + "|evaluation-stale" &&
+	   plan(*network_error.compiled, "lan")->all.members.size() == 4,
+	   "an evaluation error keeps the last pools computed without errors (%s)", network_error.error_message.c_str());
+	GuidelineCompiler network_fresh;
+	auto network_invalid = network_fresh.compile(topology(kNetworkGuideline), effective(), listeners);
+	ok(network_invalid.state == "invalid" && !network_invalid.compiled &&
+	   network_invalid.error_kind == "guideline_evaluation",
+	   "an evaluation error without previous pools applies nothing");
 
 	// Configuration append.
 	CompiledMysqlConfig config;

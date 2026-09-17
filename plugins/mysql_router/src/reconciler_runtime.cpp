@@ -492,6 +492,7 @@ public:
 		if (!session_) throw std::runtime_error("metadata session is unavailable for topology publication");
 		const uint64_t published = publish_mysql_router_topology(
 			services_, *session_, snapshot.desired, snapshot.effective, listeners_, generation);
+		commit_guideline();
 		if (!persist_generation(services_, "topology_generation", published)) {
 			throw std::runtime_error("cannot persist the active topology generation");
 		}
@@ -509,6 +510,7 @@ public:
 		}
 		const uint64_t published = publish_mysql_router_users(services_, *session_,
 			current_topology_, *current_effective_, listeners_, snapshot, metadata_user_, generation);
+		commit_guideline();
 		if (!persist_generation(services_, "user_generation", published)) {
 			throw std::runtime_error("cannot persist the active user generation");
 		}
@@ -761,30 +763,47 @@ private:
 		}
 		last_guideline_error_ = outcome.error_kind.empty() ? std::string() : error_signature;
 
+		// Errors are reported as soon as they are seen; the guideline itself becomes
+		// current only once a generation containing it has been published.
+		pending_guideline_ = outcome;
+		pending_guideline_source_ = snapshot.desired.guideline;
 		MysqlRouterContext& context = mysql_router_context();
 		std::lock_guard<std::mutex> guard(context.status_mutex);
-		MysqlRouterGuidelineStatus& status = context.guideline;
-		const std::string previous_state = status.state;
-		const std::string previous_id = status.guideline_id;
-		status.state = outcome.state;
-		status.error_kind = outcome.error_kind;
-		status.last_error = safe_message(outcome.error_message);
-		status.compiled = outcome.compiled;
-		if (outcome.compiled) {
-			status.guideline_id = outcome.compiled->source.guideline_id;
-			status.name = outcome.compiled->source.name;
-			status.version = outcome.compiled->guideline->version();
-		} else if (snapshot.desired.guideline) {
-			status.guideline_id = snapshot.desired.guideline->guideline_id;
-			status.name = snapshot.desired.guideline->name;
-			status.version.clear();
-		} else {
-			status.guideline_id.clear();
-			status.name.clear();
-			status.version.clear();
+		context.guideline.error_kind = outcome.error_kind;
+		context.guideline.last_error = safe_message(outcome.error_message);
+	}
+
+	// Called after a successful publication, which activated the pending guideline
+	// (see publish_generation): expose it and advertise it to MySQL Shell.
+	void commit_guideline() {
+		{
+			MysqlRouterContext& context = mysql_router_context();
+			std::lock_guard<std::mutex> guard(context.status_mutex);
+			MysqlRouterGuidelineStatus& status = context.guideline;
+			const std::string previous_state = status.state;
+			const std::string previous_id = status.guideline_id;
+			status.state = pending_guideline_.state;
+			status.compiled = pending_guideline_.compiled;
+			if (pending_guideline_.compiled) {
+				status.guideline_id = pending_guideline_.compiled->source.guideline_id;
+				status.name = pending_guideline_.compiled->source.name;
+				status.version = pending_guideline_.compiled->guideline->version();
+			} else if (pending_guideline_source_) {
+				status.guideline_id = pending_guideline_source_->guideline_id;
+				status.name = pending_guideline_source_->name;
+				status.version.clear();
+			} else {
+				status.guideline_id.clear();
+				status.name.clear();
+				status.version.clear();
+			}
+			if (previous_state != status.state || previous_id != status.guideline_id) {
+				status.last_update = static_cast<uint64_t>(std::time(nullptr));
+			}
 		}
-		if (previous_state != status.state || previous_id != status.guideline_id) {
-			status.last_update = static_cast<uint64_t>(std::time(nullptr));
+		if (session_ && current_topology_.routing_guidelines_capable) {
+			ReconcileTopologySnapshot ignored;
+			advertise_guideline_support(ignored);
 		}
 	}
 
@@ -901,6 +920,8 @@ private:
 	std::optional<EffectiveTopology> current_effective_;
 	std::unique_ptr<ConnectorCMetadataSession> session_;
 	GuidelineCompiler guideline_compiler_;
+	GuidelineCompileOutcome pending_guideline_;
+	std::optional<RoutingGuidelineSource> pending_guideline_source_;
 	std::string last_guideline_error_;
 	std::string last_guideline_advertised_;
 };

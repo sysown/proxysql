@@ -230,6 +230,7 @@ GuidelineCompileOutcome GuidelineCompiler::compile(const DesiredTopology& desire
 		last_valid_.reset();
 		last_valid_source_ = {};
 		last_errors_.clear();
+		last_good_compiled_.reset();
 		outcome.state = "none";
 		return outcome;
 	}
@@ -278,6 +279,7 @@ GuidelineCompileOutcome GuidelineCompiler::compile(const DesiredTopology& desire
 		outcome.error_message = "routing guideline '" + (source.name.empty() ? source.guideline_id : source.name) +
 			"' rejected: " + message.str();
 		if (!last_valid_) {
+			last_good_compiled_.reset();
 			outcome.state = "invalid";
 			return outcome;
 		}
@@ -315,6 +317,20 @@ GuidelineCompileOutcome GuidelineCompiler::compile(const DesiredTopology& desire
 		outcome.error_message = "routing guideline '" + effective_source.name +
 			"' destination evaluation failed: " + message.str();
 	}
+	if (!evaluation_errors.empty()) {
+		// Partially classified destinations must not be published: keep the last
+		// pools computed without errors, or apply nothing.
+		if (!last_good_compiled_) {
+			outcome.state = "invalid";
+			return outcome;
+		}
+		auto kept = std::make_shared<CompiledGuideline>(*last_good_compiled_);
+		kept->stale = true;
+		kept->fingerprint += "|evaluation-stale";
+		outcome.compiled = kept;
+		outcome.state = "stale";
+		return outcome;
+	}
 
 	std::ostringstream fingerprint;
 	fingerprint << compiled->source.guideline_id << '|' << std::hash<std::string>{}(source.document)
@@ -328,6 +344,7 @@ GuidelineCompileOutcome GuidelineCompiler::compile(const DesiredTopology& desire
 		}
 	}
 	compiled->fingerprint = fingerprint.str();
+	last_good_compiled_ = compiled;
 	outcome.compiled = compiled;
 	outcome.state = stale ? "stale" : "active";
 	return outcome;
