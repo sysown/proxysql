@@ -485,7 +485,9 @@ ProxySQL_PluginRouteHookResult mysql_router_route_hook(const ProxySQL_PluginRout
 			if (attr.key) request.connect_attrs[attr.key] = attr.value ? attr.value : "";
 		}
 	}
-	static thread_local std::mt19937_64 generator {std::random_device{}()};
+	// NOSONAR cpp:S2245: $.session.randomValue only distributes sessions across
+	// routes (MySQL Router uses a non-cryptographic generator too); no security use.
+	static thread_local std::mt19937_64 generator {std::random_device{}()}; // NOSONAR cpp:S2245
 	const double random_value = std::uniform_real_distribution<double>(0.0, 1.0)(generator);
 	GuidelineRouteDecision decision = mysql_router_decide_route(snapshot.get(), request, random_value);
 	result.session_cookie = decision.session_cookie;
