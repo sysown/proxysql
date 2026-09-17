@@ -372,14 +372,34 @@ void test_hba_reject_is_reported() {
 }
 
 // ============================================================
-// Test: hashed auth-file passwords are flagged
+// Tests: hashed userlist.txt credentials (#6134)
 //
-// ProxySQL derives the MD5 challenge response and the SCRAM verifier from the
-// cleartext password in pgsql_users.password, so importing a pre-hashed
-// userlist.txt entry produces a credential that cannot authenticate.
+// pgsql_users.password holds cleartext, an md5 hash or a SCRAM-SHA-256
+// verifier, so every userlist.txt form is imported as-is. What is reported
+// are the combinations that cannot authenticate.
 // ============================================================
-void test_hashed_password_is_flagged() {
+
+// md5("alicesecret" + "alice"), stored with uppercase hex.
+static const char* ALICE_MD5_UPPER = "md5902BCC6DCAF8611722A6846FE97204EC"; // NOSONAR(cpp:S2068): synthetic md5 hash of a fixture password.
+static const char* ALICE_MD5_LOWER = "md5902bcc6dcaf8611722a6846fe97204ec"; // NOSONAR(cpp:S2068): synthetic md5 hash of a fixture password.
+// A well-formed verifier for "bobsecret" (4096 iterations, 16-byte salt).
+static const char* BOB_SCRAM =
+    "SCRAM-SHA-256$4096:MDEyMzQ1Njc4OWFiY2RlZg==$"
+    "cdWal4MCQ0HGW7A3x3U+vsJWZ7JtgZGTWehOdEhE4MQ=:"
+    "jb79Cqvy9CgOXvdQAp3Ct/A/6kJfqdxvNcBrTeduXUY="; // NOSONAR(cpp:S2068): synthetic verifier of a fixture password.
+
+static bool has_note_containing(const PgBouncer::ConversionResult& r,
+                                const std::string& substr) {
+    for (const auto& n : r.notes)
+        if (n.message.find(substr) != std::string::npos) return true;
+    return false;
+}
+
+static PgBouncer::Config config_with_credentials(const char* auth_type,
+                                                 const char* alice_pw,
+                                                 const char* bob_pw) {
     PgBouncer::Config config;
+    config.global.auth_type = auth_type;
     PgBouncer::Database db;
     db.name = "mydb";
     db.host = "10.0.0.1";
@@ -387,33 +407,116 @@ void test_hashed_password_is_flagged() {
 
     PgBouncer::AuthFileEntry md5e;
     md5e.username = "alice";
-    md5e.password = "md5d41d8cd98f00b204e9800998ecf8427"; // NOSONAR(cpp:S2068): md5 of the empty string, used to assert the MD5 verifier is reported as unusable.
+    md5e.password = alice_pw;
     md5e.type = PgBouncer::AuthType::MD5;
     config.auth_entries.push_back(md5e);
 
     PgBouncer::AuthFileEntry scram;
     scram.username = "bob";
-    scram.password = "SCRAM-SHA-256$4096:c2FsdA==$c3Ry:c3Ry"; // NOSONAR(cpp:S2068): structurally-valid but meaningless verifier ("salt"/"str" base64), used to assert SCRAM is reported as unusable.
+    scram.password = bob_pw;
     scram.type = PgBouncer::AuthType::SCRAM;
     config.auth_entries.push_back(scram);
 
     PgBouncer::AuthFileEntry plain;
     plain.username = "carol";
-    plain.password = "secret"; // NOSONAR(cpp:S2068): synthetic fixture value; the control case that must NOT be reported.
+    plain.password = "secret"; // NOSONAR(cpp:S2068): synthetic fixture value.
     plain.type = PgBouncer::AuthType::PLAIN;
     config.auth_entries.push_back(plain);
 
-    PgBouncer::ConfigConverter converter;
-    PgBouncer::ConversionResult result = converter.convert(config, false);
+    return config;
+}
 
-    CHECK(has_issue_containing(result, "alice"), "MD5 verifier for alice is flagged");
-    CHECK(has_issue_containing(result, "bob"), "SCRAM verifier for bob is flagged");
-    CHECK(!has_issue_containing(result, "carol"), "cleartext password for carol is not flagged");
-    CHECK(has_sql_containing(result, "'carol'"), "carol is still imported");
+void test_hashed_passwords_are_imported() {
+    PgBouncer::Config config = config_with_credentials("md5", ALICE_MD5_LOWER, BOB_SCRAM);
+
+    PgBouncer::ConfigConverter converter;
+    PgBouncer::ConversionResult r = converter.convert(config, true);
+
+    CHECK(r.success, "hashed passwords import in strict mode under auth_type=md5");
+    CHECK(!has_issue_containing(r, "alice"), "md5 hash for alice is not reported as an issue");
+    CHECK(!has_issue_containing(r, "bob"), "SCRAM verifier for bob is not reported as an issue");
+    CHECK(has_sql_containing(r, std::string("'alice', '") + ALICE_MD5_LOWER + "'"),
+          "md5 hash for alice is imported verbatim");
+    CHECK(has_sql_containing(r, std::string("'bob', '") + BOB_SCRAM + "'"),
+          "SCRAM verifier for bob is imported verbatim");
+    CHECK(has_sql_containing(r, "'carol', 'secret'"), "cleartext password for carol is imported");
+    CHECK_INT(r.user_count, 3, "all three users are imported");
+
+    CHECK(has_note_containing(r, "'alice'") && has_note_containing(r, "md5 method"),
+          "backend md5 constraint is noted for alice");
+    CHECK(has_note_containing(r, "'bob'") && has_note_containing(r, "byte-identical"),
+          "backend SCRAM verifier constraint is noted for bob");
+    CHECK(!has_note_containing(r, "carol"), "no note for the cleartext user");
+
+    std::string output = PgBouncer::ConfigConverter::format_dry_run(r, "pgbouncer.ini", true);
+    CHECK(output.find("-- NOTE: ") != std::string::npos, "dry-run output lists the notes");
+}
+
+void test_md5_hash_is_lowercased() {
+    PgBouncer::Config config = config_with_credentials("md5", ALICE_MD5_UPPER, BOB_SCRAM);
+
+    PgBouncer::ConfigConverter converter;
+    PgBouncer::ConversionResult r = converter.convert(config, true);
+
+    CHECK(has_sql_containing(r, std::string("'alice', '") + ALICE_MD5_LOWER + "'"),
+          "uppercase md5 hex is imported lowercased, the only form ProxySQL recognises");
+    CHECK(!has_sql_containing(r, ALICE_MD5_UPPER + 3), "uppercase md5 hex is not imported");
+}
+
+void test_md5_under_scram_method_is_reported() {
+    PgBouncer::Config config = config_with_credentials("scram-sha-256", ALICE_MD5_LOWER, BOB_SCRAM);
+
+    PgBouncer::ConfigConverter converter;
+    PgBouncer::ConversionResult r = converter.convert(config, false);
+    CHECK(has_issue_containing(r, "'alice'") && has_issue_containing(r, "pgsql-authentication_method=3"),
+          "md5 hash under auth_type=scram-sha-256 is reported");
+    CHECK(!has_issue_containing(r, "'bob'"), "SCRAM verifier under auth_type=scram-sha-256 is not reported");
 
     PgBouncer::ConfigConverter strict_conv;
     PgBouncer::ConversionResult strict = strict_conv.convert(config, true);
-    CHECK(!strict.success, "hashed passwords fail the import in strict mode");
+    CHECK(!strict.success, "md5 hash under auth_type=scram-sha-256 fails the import in strict mode");
+
+    // Cleartext frontend authentication accepts an md5-stored user.
+    PgBouncer::ConfigConverter plain_conv;
+    PgBouncer::ConversionResult plain = plain_conv.convert(
+        config_with_credentials("plain", ALICE_MD5_LOWER, BOB_SCRAM), true);
+    CHECK(plain.success, "md5 hash under auth_type=plain imports in strict mode");
+}
+
+void test_md5_without_mapped_method_is_noted() {
+    PgBouncer::Config config = config_with_credentials("trust", ALICE_MD5_LOWER, BOB_SCRAM);
+
+    PgBouncer::ConfigConverter converter;
+    PgBouncer::ConversionResult r = converter.convert(config, false);
+    CHECK(has_note_containing(r, "pgsql-authentication_method 1 or 2"),
+          "md5 hash with no mapped authentication method is noted");
+}
+
+void test_malformed_scram_verifier_is_reported() {
+    const char* malformed[] = {
+        // keys that do not decode to 32 bytes
+        "SCRAM-SHA-256$4096:c2FsdA==$c3Ry:c3Ry",
+        // non-numeric iteration count
+        "SCRAM-SHA-256$many:MDEyMzQ1Njc4OWFiY2RlZg==$cdWal4MCQ0HGW7A3x3U+vsJWZ7JtgZGTWehOdEhE4MQ=:jb79Cqvy9CgOXvdQAp3Ct/A/6kJfqdxvNcBrTeduXUY=",
+        // missing keys
+        "SCRAM-SHA-256$4096:MDEyMzQ1Njc4OWFiY2RlZg==",
+        // invalid base64 in the salt
+        "SCRAM-SHA-256$4096:not*base64$cdWal4MCQ0HGW7A3x3U+vsJWZ7JtgZGTWehOdEhE4MQ=:jb79Cqvy9CgOXvdQAp3Ct/A/6kJfqdxvNcBrTeduXUY=",
+    }; // NOSONAR(cpp:S2068): deliberately malformed synthetic verifiers.
+
+    for (const char* v : malformed) {
+        PgBouncer::Config config = config_with_credentials("md5", ALICE_MD5_LOWER, v);
+
+        PgBouncer::ConfigConverter converter;
+        PgBouncer::ConversionResult r = converter.convert(config, false);
+        std::string msg = std::string("malformed verifier is reported: ") + v;
+        CHECK(has_issue_containing(r, "'bob'") && has_issue_containing(r, "malformed"), msg.c_str());
+
+        PgBouncer::ConfigConverter strict_conv;
+        PgBouncer::ConversionResult strict = strict_conv.convert(config, true);
+        std::string smsg = std::string("malformed verifier fails the import in strict mode: ") + v;
+        CHECK(!strict.success, smsg.c_str());
+    }
 }
 
 // ============================================================
@@ -507,7 +610,7 @@ void test_auth_type_mapping() {
 }
 
 int main() {
-    plan(68);
+    plan(89);
 
     test_minimal_conversion();     // 6
     test_multi_host_conversion();  // 5
@@ -522,7 +625,11 @@ int main() {
     test_query_rule_column_names();
     test_firewall_rule_columns();
     test_hba_reject_is_reported();
-    test_hashed_password_is_flagged();
+    test_hashed_passwords_are_imported();
+    test_md5_hash_is_lowercased();
+    test_md5_under_scram_method_is_reported();
+    test_md5_without_mapped_method_is_noted();
+    test_malformed_scram_verifier_is_reported();
     test_dbname_alias_is_reported();
     test_auth_type_mapping();
 

@@ -35,6 +35,15 @@ void ConfigConverter::add_issue(ConversionResult& result, bool strict,
 }
 
 // ---------------------------------------------------------------------------
+// add_note: informational, never fatal
+// ---------------------------------------------------------------------------
+void ConfigConverter::add_note(ConversionResult& result, const std::string& msg) {
+    ParseMessage pm;
+    pm.message = msg;
+    result.notes.push_back(pm);
+}
+
+// ---------------------------------------------------------------------------
 // convert  (top-level entry point)
 // ---------------------------------------------------------------------------
 ConversionResult ConfigConverter::convert(const Config& config, bool strict) {
@@ -70,6 +79,83 @@ static std::vector<std::string> split(const std::string& s, char delim) {
             parts.push_back(token.substr(start, end - start + 1));
     }
     return parts;
+}
+
+// ---------------------------------------------------------------------------
+// Map a PgBouncer auth_type to pgsql-authentication_method:
+// 1 = cleartext, 2 = md5, 3 = scram-sha-256. Returns 0 when there is no
+// equivalent, in which case no variable is emitted.
+// ---------------------------------------------------------------------------
+static int map_auth_type(const std::string& auth_type) {
+    std::string at = auth_type;
+    std::transform(at.begin(), at.end(), at.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if (at == "plain" || at == "password") return 1;
+    if (at == "md5") return 2;
+    if (at == "scram-sha-256") return 3;
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Length of the data encoded by a padded base64 string, or -1 if invalid.
+// ---------------------------------------------------------------------------
+static int base64_decoded_len(const std::string& s) {
+    if (s.empty() || s.size() % 4 != 0) return -1;
+    size_t pad = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        unsigned char c = s[i];
+        if (c == '=') {
+            // padding only in the last two positions
+            if (i < s.size() - 2) return -1;
+            pad++;
+        } else if (pad > 0 || !(std::isalnum(c) || c == '+' || c == '/')) {
+            return -1;
+        }
+    }
+    return static_cast<int>(s.size() / 4 * 3 - pad);
+}
+
+// ---------------------------------------------------------------------------
+// Structural check of a SCRAM-SHA-256 verifier, matching what ProxySQL accepts
+// when loading pgsql_users (a malformed verifier is skipped there):
+//   SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>
+// ---------------------------------------------------------------------------
+static bool is_valid_scram_verifier(const std::string& v) {
+    static const std::string scheme = "SCRAM-SHA-256$";
+    static const int SCRAM_KEY_LEN = 32;
+    if (v.compare(0, scheme.size(), scheme) != 0) return false;
+
+    const std::string rest = v.substr(scheme.size());
+    const size_t dollar = rest.find('$');
+    if (dollar == std::string::npos) return false;
+    const std::string iter_salt = rest.substr(0, dollar);
+    const std::string keys = rest.substr(dollar + 1);
+
+    const size_t colon1 = iter_salt.find(':');
+    const size_t colon2 = keys.find(':');
+    if (colon1 == std::string::npos || colon2 == std::string::npos) return false;
+
+    const std::string iterations = iter_salt.substr(0, colon1);
+    if (iterations.empty() ||
+        iterations.find_first_not_of("0123456789") != std::string::npos) {
+        return false;
+    }
+    if (base64_decoded_len(iter_salt.substr(colon1 + 1)) <= 0) return false;
+    if (base64_decoded_len(keys.substr(0, colon2)) != SCRAM_KEY_LEN) return false;
+    if (base64_decoded_len(keys.substr(colon2 + 1)) != SCRAM_KEY_LEN) return false;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Join user names for a message: 'a', 'b', 'c'
+// ---------------------------------------------------------------------------
+static std::string quote_join(const std::vector<std::string>& names) {
+    std::string out;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (i) out += ", ";
+        out += "'" + names[i] + "'";
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,10 +260,10 @@ void ConfigConverter::convert_databases(const Config& config,
 void ConfigConverter::convert_users(const Config& config,
                                      ConversionResult& result, bool strict) {
     // Build a password lookup from auth_entries, keeping the detected type.
-    // The type matters: ProxySQL derives both the MD5 challenge response and
-    // the SCRAM verifier from the *cleartext* password in pgsql_users.password
-    // (see PgSQL_Protocol.cpp), so a pre-hashed userlist.txt entry cannot be
-    // imported as a working credential.
+    // pgsql_users.password holds cleartext, an md5 hash or a SCRAM-SHA-256
+    // verifier, auto-detected by prefix -- the same three forms userlist.txt
+    // stores -- so every entry is imported as-is. The hashed forms constrain
+    // the frontend and backend authentication methods; see the checks below.
     std::map<std::string, const AuthFileEntry*> passwords;
     for (const auto& ae : config.auth_entries) {
         passwords[ae.username] = &ae;
@@ -206,6 +292,9 @@ void ConfigConverter::convert_users(const Config& config,
     });
 
     int default_hg = (wildcard_hostgroup_ >= 0) ? wildcard_hostgroup_ : 0;
+    const int auth_method = map_auth_type(config.global.auth_type);
+    std::vector<std::string> md5_users;
+    std::vector<std::string> scram_users;
 
     for (const auto& u : user_list) {
         // Resolve password from auth_entries
@@ -213,15 +302,29 @@ void ConfigConverter::convert_users(const Config& config,
         auto it = passwords.find(u.name);
         if (it != passwords.end()) {
             password = it->second->password;
-            if (it->second->type != AuthType::PLAIN) {
-                const char* kind =
-                    (it->second->type == AuthType::MD5) ? "MD5" : "SCRAM-SHA-256";
-                add_issue(result, strict,
-                    "user '" + u.name + "' has a " + kind + " verifier in the "
-                    "auth file; ProxySQL needs the cleartext password in "
-                    "pgsql_users.password to answer PostgreSQL authentication, "
-                    "so this credential is imported verbatim but will not "
-                    "authenticate until it is replaced with the cleartext value");
+            if (it->second->type == AuthType::MD5) {
+                // ProxySQL only recognises lowercase hex; anything else would
+                // be taken for a cleartext password.
+                std::transform(password.begin() + 3, password.end(), password.begin() + 3,
+                               [](unsigned char c) { return std::tolower(c); });
+                md5_users.push_back(u.name);
+                if (auth_method == 3) {
+                    add_issue(result, strict,
+                        "user '" + u.name + "' has an md5 hash in the auth file, but "
+                        "auth_type=scram-sha-256 maps to pgsql-authentication_method=3, "
+                        "which rejects md5-stored credentials; this user will fail to "
+                        "authenticate unless the method is lowered to 2 or the entry "
+                        "is replaced with a SCRAM-SHA-256 verifier or the cleartext password");
+                }
+            } else if (it->second->type == AuthType::SCRAM) {
+                if (!is_valid_scram_verifier(password)) {
+                    add_issue(result, strict,
+                        "user '" + u.name + "' has a malformed SCRAM-SHA-256 verifier in "
+                        "the auth file; ProxySQL skips it when loading pgsql_users to "
+                        "runtime, so this user will not be able to log in");
+                } else {
+                    scram_users.push_back(u.name);
+                }
             }
         }
 
@@ -260,6 +363,28 @@ void ConfigConverter::convert_users(const Config& config,
 
         result.entries.push_back({sql.str(), comment});
         result.user_count++;
+    }
+
+    if (!md5_users.empty()) {
+        if (auth_method == 0) {
+            add_note(result,
+                "md5-stored users (" + quote_join(md5_users) + ") need "
+                "pgsql-authentication_method 1 or 2, but auth_type=" +
+                config.global.auth_type + " sets no method; the ProxySQL "
+                "default (3, scram-sha-256) rejects them");
+        }
+        add_note(result,
+            "md5-stored users (" + quote_join(md5_users) + ") authenticate to the "
+            "backend only with the md5 method: the backend pg_hba.conf must select "
+            "md5 for them and their rolpassword must be the same md5 hash");
+    }
+    if (!scram_users.empty()) {
+        add_note(result,
+            "SCRAM-verifier-stored users (" + quote_join(scram_users) + ") authenticate "
+            "to the backend only with scram-sha-256, and the verifier must be "
+            "byte-identical to the backend rolpassword (same salt and iterations). "
+            "This holds when userlist.txt was copied from the backend, but not across "
+            "independently created or logically replicated servers in one hostgroup");
     }
 }
 
@@ -303,33 +428,40 @@ void ConfigConverter::convert_globals(const Config& config,
         std::transform(at.begin(), at.end(), at.begin(),
                        [](unsigned char c) { return std::tolower(c); });
 
-        if (at == "plain" || at == "password") {
+        switch (map_auth_type(g.auth_type)) {
+        case 1:
             emit_set_int("pgsql-authentication_method", 1,
                          "PgBouncer auth_type=" + g.auth_type +
                          " -> ProxySQL cleartext authentication");
-        } else if (at == "md5") {
+            break;
+        case 2:
             emit_set_int("pgsql-authentication_method", 2,
                          "PgBouncer auth_type=md5 -> ProxySQL md5 authentication");
-        } else if (at == "scram-sha-256") {
+            break;
+        case 3:
             emit_set_int("pgsql-authentication_method", 3,
                          "PgBouncer auth_type=scram-sha-256 -> ProxySQL SCRAM authentication");
-        } else if (at == "trust") {
-            add_issue(result, strict,
-                      "auth_type=trust has no ProxySQL equivalent; ProxySQL always "
-                      "authenticates clients against pgsql_users and cannot accept "
-                      "unauthenticated connections");
-        } else if (at == "hba") {
-            add_issue(result, strict,
-                      "auth_type=hba has no ProxySQL equivalent; the per-rule methods "
-                      "in pg_hba.conf cannot select the frontend authentication method, "
-                      "which is global (pgsql-authentication_method)");
-        } else if (at == "any") {
-            add_issue(result, strict,
-                      "auth_type=any has no ProxySQL equivalent; ProxySQL always "
-                      "verifies the username against pgsql_users");
-        } else if (!at.empty()) {
-            add_issue(result, strict,
-                      "auth_type=" + g.auth_type + " has no ProxySQL equivalent");
+            break;
+        default:
+            if (at == "trust") {
+                add_issue(result, strict,
+                          "auth_type=trust has no ProxySQL equivalent; ProxySQL always "
+                          "authenticates clients against pgsql_users and cannot accept "
+                          "unauthenticated connections");
+            } else if (at == "hba") {
+                add_issue(result, strict,
+                          "auth_type=hba has no ProxySQL equivalent; the per-rule methods "
+                          "in pg_hba.conf cannot select the frontend authentication method, "
+                          "which is global (pgsql-authentication_method)");
+            } else if (at == "any") {
+                add_issue(result, strict,
+                          "auth_type=any has no ProxySQL equivalent; ProxySQL always "
+                          "verifies the username against pgsql_users");
+            } else if (!at.empty()) {
+                add_issue(result, strict,
+                          "auth_type=" + g.auth_type + " has no ProxySQL equivalent");
+            }
+            break;
         }
     }
 
@@ -705,6 +837,17 @@ std::string ConfigConverter::format_dry_run(const ConversionResult& result,
         out << "\n";
     }
 
+    // Notes
+    if (!result.notes.empty()) {
+        out << "-- ==========================================================================\n";
+        out << "-- NOTES (" << result.notes.size() << ")\n";
+        out << "-- ==========================================================================\n";
+        for (const auto& n : result.notes) {
+            out << "-- NOTE: " << n.message << "\n";
+        }
+        out << "\n";
+    }
+
     // Errors
     if (!result.errors.empty()) {
         out << "-- ==========================================================================\n";
@@ -725,6 +868,7 @@ std::string ConfigConverter::format_dry_run(const ConversionResult& result,
     out << "-- Rules:     " << result.rule_count << "\n";
     out << "-- Variables: " << result.variable_count << "\n";
     out << "-- Warnings:  " << result.warnings.size() << "\n";
+    out << "-- Notes:     " << result.notes.size() << "\n";
     out << "-- Errors:    " << result.errors.size() << "\n";
     out << "-- Result:    " << (result.success ? "SUCCESS" : "FAILED") << "\n";
     out << "-- ==========================================================================\n";
