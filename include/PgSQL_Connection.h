@@ -940,6 +940,12 @@ public:
 	// down, so the connection is classified non-reusable instead of being pooled.
 	// See the definition in PgSQL_Connection.cpp for why the teardown is required.
 	void native_result_fatal(const char* code, const char* message);
+	// End the result cycle on a protocol violation ProxySQL itself detected, telling the CLIENT
+	// why. Unlike native_result_fatal() this leaves the socket open so the session takes the
+	// branch that reports an error rather than the one for a connection that merely died, and it
+	// finishes the result first -- the client-facing path aborts the proxy on a half-built one.
+	// The connection is marked so it is destroyed afterwards rather than pooled.
+	void native_result_protocol_violation(const char* message);
 	// Parse an ErrorResponse ('E') payload into error_info.
 	void native_fill_error_from_E(const unsigned char* payload, uint32_t len);
 

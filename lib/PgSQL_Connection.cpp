@@ -1581,6 +1581,30 @@ static inline uint32_t pg_read_be32(const unsigned char* p) {
 	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+// The message types a query reply is allowed to carry:
+//   1 ParseComplete  2 BindComplete  3 CloseComplete  n NoData  s PortalSuspended
+//   t ParameterDescription  T RowDescription  D DataRow  C CommandComplete
+//   I EmptyQueryResponse  E ErrorResponse  N NoticeResponse  S ParameterStatus
+//   H CopyOutResponse  d CopyData  c CopyDone  Z ReadyForQuery  A NotificationResponse
+// Everything else belongs to the startup phase or to no phase at all. The native
+// path copies backend bytes to the client verbatim, so without this check a
+// backend could put an AuthenticationRequest ('R') in the middle of a result set
+// and the client would prompt its user for a password -- and the whole byte
+// stream, injected message included, is eligible for the query cache and would be
+// replayed to later clients. 'G'/'W' are deliberately absent: the CopyInResponse
+// safety net answers those earlier, so one arriving here means the stream is out
+// of step and the connection should go.
+static inline bool pg_native_type_legal_in_result(char t) {
+	switch (t) {
+		case '1': case '2': case '3': case 'n': case 's': case 't':
+		case 'T': case 'D': case 'C': case 'I': case 'E': case 'N':
+		case 'S': case 'H': case 'd': case 'c': case 'Z': case 'A':
+			return true;
+		default:
+			return false;
+	}
+}
+
 // Flush native_outbuf via non-blocking send(). Consumes the bytes that were
 // written; on EAGAIN leaves the remainder buffered and returns true (caller must
 // keep waiting for writable). Returns false on a fatal socket error.
@@ -1701,6 +1725,28 @@ bool PgSQL_Connection::native_flush_outbuf() {
 void PgSQL_Connection::native_result_fatal(const char* code, const char* message) {
 	set_error(code, message, false);
 	native_teardown();
+}
+
+void PgSQL_Connection::native_result_protocol_violation(const char* message) {
+	set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, message, false);
+	reusable = false;
+	healthy = false;
+	if (myds && myds->sess) {
+		myds->sess->set_unhealthy();
+	}
+	// Finish the result before handing it back. Rows already framed are flushed first so the
+	// error lands behind them rather than in front, and the ReadyForQuery closes the cycle.
+	// Report a failed transaction block if the client had one open, because the batch it was
+	// in is over.
+	if (query_result) {
+		query_result->buffer_to_PSarrayOut();
+		query_result->add_error(NULL);
+		query_result->add_ready_status(
+			(native_txn_status == 'T' || native_txn_status == 'E')
+				? PQTRANS_INERROR : PQTRANS_IDLE);
+	}
+	// The backend owes us nothing further: the cycle is over as far as this connection goes.
+	native_unsynced_work = false;
 }
 
 void PgSQL_Connection::native_teardown() {
@@ -3242,6 +3288,25 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				continue;   // do NOT forward 'G'/'W' to the client
 			}
 
+			// Check the type before any of it is copied towards the client. Every
+			// add_native_backend_message() call below is reached through here, so this
+			// is the one place that has to hold. Nothing is forwarded and the
+			// connection is dropped, because a backend sending a type that cannot
+			// appear in a result stream is either hostile or desynchronized, and in
+			// both cases its remaining bytes are worthless.
+			if (!pg_native_type_legal_in_result(msg.type)) {
+				proxy_error("native backend protocol: illegal message type '0x%02X' in result stream on fd=%d; discarding connection\n",
+					(unsigned char)msg.type, fd);
+				// Record the reason and stop reading, but leave the socket open for now.
+				// Closing it here would make the session treat this as a connection that
+				// merely died, and the client would be told only that -- never what
+				// ProxySQL refused. Ending the cycle instead lets the session report the
+				// error, while the flags below make sure the connection is destroyed
+				// rather than returned to the pool.
+				native_result_protocol_violation("illegal backend message type in result stream");
+				return;
+			}
+
 			// --- Extended-query (prepared-statement) drain (Task C) ---
 			// When driving a Parse/Describe/Execute step, apply the per-step
 			// ack-filtering + terminator rules. native_stmt_step == NONE means a plain
@@ -3412,7 +3477,10 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 			return;
 		}
 		// FRAME_ERROR: malformed backend message length.
-		native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during result fetch");
+		// Same class as the illegal-type guard above: ProxySQL decided this stream is not
+		// the protocol, so the client is told why rather than being left to infer it from a
+		// dropped connection.
+		native_result_protocol_violation("malformed backend message during result fetch");
 		return;
 	}
 }
