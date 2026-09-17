@@ -61,7 +61,8 @@ echo ">>> Preparing ProxySQL data directory: ${PROXY_DATA_DIR}"
 mkdir -p "${PROXY_DATA_DIR}"
 # Skip sockets (e.g. the shared PostgreSQL socket): Docker Desktop file sharing
 # rejects chmod on them with EINVAL, which aborts this script on a re-run.
-docker_fs_exec "find . ! -type s -exec chmod 777 {} +" "${INFRA_LOGS_PATH}/${INFRA_ID}"
+# Skip symlinks too: chmod follows them, while the former chmod -R did not.
+docker_fs_exec "find . ! -type s ! -type l -exec chmod 777 {} +" "${INFRA_LOGS_PATH}/${INFRA_ID}"
 docker_fs_exec "rm -f proxysql/proxysql.db proxysql/*.pem" "${INFRA_LOGS_PATH}/${INFRA_ID}"
 
 docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
