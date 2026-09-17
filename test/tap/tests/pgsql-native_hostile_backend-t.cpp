@@ -624,6 +624,7 @@ int main(int, char**) {
             step_send(pgmb_simple_result("c", "1", 1)),
             step_sleep(300)
         };
+        resetMockPool(admin, g_mock_ip, g_mock_port);
         mock.set_script(s);
         mock.reset_stats();
         std::string err;
@@ -648,6 +649,10 @@ int main(int, char**) {
             step_send(pgmb_simple_result("c", "1", 1)),
             step_sleep(300)
         };
+        // A8 just authenticated successfully and left its connection in the pool. Without
+        // this flush the proxy serves A9 from it, the forged-signature script never runs,
+        // and the assertion reports an impersonation that was never attempted.
+        resetMockPool(admin, g_mock_ip, g_mock_port);
         mock.set_script(s);
         mock.reset_stats();
         std::string err;
@@ -667,6 +672,7 @@ int main(int, char**) {
             step_sleep(300),
             step_close()
         };
+        resetMockPool(admin, g_mock_ip, g_mock_port);
         mock.set_script(s);
         mock.reset_stats();
         std::string err;
