@@ -505,6 +505,7 @@
   "test_mysql_query_digests_stages-t" : [ "legacy-g8","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g8","mysql90-g3","mysql95-g3" ],
   "test_mysql_query_rules_fast_routing-t" : [ "legacy-g8","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g8","mysql90-g3","mysql95-g3" ],
   "test_mysql_router_innodb_cluster-t" : [ "mysql-router-ic-g1" ],
+  "test_mysql_router_routing_guidelines-t" : [ "mysql-router-ic-rg-g1" ],
   "test_mysqlsh-t" : [ "legacy-g8","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g8","mysql90-g3","mysql95-g3" ],
   "test_mysqlx_admin_tables-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "test_mysqlx_e2e_handshake-t" : [ "mysqlx-e2e-g1","@proxysql_min_version:4.0" ],
