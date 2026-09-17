@@ -139,7 +139,19 @@ int main(int, char**) {
 		"SELECT hostname FROM pgsql_servers WHERE hostgroup_id<>" + hg + " ORDER BY hostgroup_id LIMIT 1");
 	const std::string port = query_value(admin,
 		"SELECT port FROM pgsql_servers WHERE hostgroup_id<>" + hg + " ORDER BY hostgroup_id LIMIT 1");
-	const std::string s2 = s1.empty() ? "" : resolve_ipv4(s1);
+	// S2 must be a second pgsql_servers entry for the same backend. With a hostname,
+	// use its IPv4 address; with an IPv4 address (e.g. 127.0.0.1), use a hostname
+	// resolving to it.
+	std::string s2 = s1.empty() ? "" : resolve_ipv4(s1);
+	if (!s1.empty() && s2 == s1) {
+		s2.clear();
+		for (const char* alias : {"localhost", "localhost.localdomain", "ip6-localhost"}) {
+			if (resolve_ipv4(alias) == s1) {
+				s2 = alias;
+				break;
+			}
+		}
+	}
 	if (s1.empty() || port.empty() || s2.empty() || s1 == s2) {
 		BAIL_OUT("cannot derive two distinct server entries for the backend (hostname='%s', ip='%s')",
 			s1.c_str(), s2.c_str());
@@ -222,8 +234,10 @@ int main(int, char**) {
 		iterations, successes, collisions, other_errors, retries);
 	ok(iterations > 0, "Ran %d iterations", iterations);
 	ok(retries > 0, "The offline-during-query retry path was exercised (%ld queries counted on S2)", retries);
-	ok(collisions == 0, "No backend prepared statement name collision (%d collisions, first: '%s')",
-		collisions, first_collision.c_str());
+	ok(successes > 0 && other_errors == 0 && collisions == 0,
+		"Retried statements succeed without backend prepared statement name collisions "
+		"(%d successes, %d other errors, %d collisions, first: '%s')",
+		successes, other_errors, collisions, first_collision.c_str());
 
 	// Scenario 2: a backend connection kept attached between requests
 	// (pgsql-multiplexing=false; also connection_delay_multiplex_ms) widens the window to
