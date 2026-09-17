@@ -5,7 +5,7 @@ ARG PSYCOPG_VERSION=3.2.13
 # orchestrator-client is published per architecture (amd64/arm64 .deb); the
 # matching package is picked from dpkg at build time so the image builds on
 # both x86_64 and arm64 hosts (e.g. Apple Silicon). See GH issue #6200.
-ARG ORCHESTRATOR_CLIENT_VERSION=4.31.1
+ARG ORCHESTRATOR_CLIENT_VERSION=4.32.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
