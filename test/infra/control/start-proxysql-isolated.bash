@@ -310,7 +310,7 @@ done
 if [ $COUNT -ge $MAX_WAIT ]; then echo " TIMEOUT"; exit 1; fi
 
 # Wait for cluster nodes
-for i in $(seq 1 "${NUM_NODES}"); do
+for ((i = 1; i <= NUM_NODES; i++)); do
     ADMIN_PORT=$((6032 + i * 10))
     echo -n "Waiting for proxy-node${i} (port ${ADMIN_PORT}) "
     COUNT=0
@@ -340,7 +340,7 @@ if [ "${NUM_NODES}" -gt 0 ]; then
     # the primary must be in the list, otherwise the node drops its monitor thread
     # for the primary and never detects checksum changes again.
     PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',6032,0,'primary');"
-    for i in $(seq 1 "${CORE_NODES}"); do
+    for ((i = 1; i <= CORE_NODES; i++)); do
         PORT=$((6032 + i * 10))
         PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',${PORT},0,'core-node${i}');"
     done
@@ -362,7 +362,7 @@ SAVE PROXYSQL SERVERS TO DISK;
 SQL
 
     # Configure each node
-    for i in $(seq 1 "${NUM_NODES}"); do
+    for ((i = 1; i <= NUM_NODES; i++)); do
         ADMIN_PORT=$((6032 + i * 10))
         RESTAPI_PORT=$((7070 + i))
         echo ">>> Configuring proxy-node${i} (port ${ADMIN_PORT})"
@@ -396,7 +396,7 @@ SAVE SCHEDULER TO DISK;
 SQL
 
     # Install on core nodes
-    for i in $(seq 1 "${CORE_NODES}"); do
+    for ((i = 1; i <= CORE_NODES; i++)); do
         ADMIN_PORT=$((6032 + i * 10))
         ${MYSQL_CMD} -P${ADMIN_PORT} <<SQL
 INSERT OR REPLACE INTO scheduler (interval_ms, filename) VALUES (12000, '/tmp/check_all_nodes.bash');

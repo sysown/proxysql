@@ -33,7 +33,7 @@ if command -v docker &> /dev/null; then
     # Ensure network exists
     docker network inspect "${NETWORK_NAME}" >/dev/null 2>&1 || docker network create "${NETWORK_NAME}"
 
-    for i in $(seq 1 "${NUM_NODES}"); do
+    for ((i = 1; i <= NUM_NODES; i++)); do
         NODE_NAME="proxy-node${i}"
         CONTAINER_NAME="${NODE_NAME}.${INFRA_ID}"
         NODE_DIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/${NODE_NAME}"
@@ -52,7 +52,7 @@ if command -v docker &> /dev/null; then
     done
 fi
 
-for i in $(seq 1 "${NUM_NODES}"); do
+for ((i = 1; i <= NUM_NODES; i++)); do
     NODE_NAME="proxy-node${i}"
     CONTAINER_NAME="${NODE_NAME}.${INFRA_ID}"
     echo -n "Waiting for ${NODE_NAME} ..."
