@@ -1009,6 +1009,11 @@ bool test_discard_all_succeeds_pipeline() {
     diag("DateStyle: set to '%s', after DISCARD ALL: '%s' (reset: %s)",
          test_value.c_str(), after_value.c_str(), discard_took_effect ? "yes" : "no");
 
+    // Put the value back before leaving. DISCARD ALL has normally reset it already, so this is
+    // usually a no-op -- it matters on the failure path, where the value would otherwise ride a
+    // pooled connection into the next test and fail that one instead of this one.
+    set_variable_simple(conn.get(), "DateStyle", initial_value);
+
     return got_command_ok && !got_error && discard_took_effect;
 }
 
