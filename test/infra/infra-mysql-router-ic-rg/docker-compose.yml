@@ -1,0 +1,26 @@
+services:
+  dbdeployer1:
+    image: proxysql/ci-infra:mysql-router-ic-rg
+    container_name: ${COMPOSE_PROJECT}-dbdeployer1-1
+    hostname: dbdeployer1.${INFRA}
+    environment:
+      ROOT_PASSWORD: ${ROOT_PASSWORD}
+      INFRA: ${INFRA}
+      REPORT_HOST: dbdeployer1.infra-mysql-router-ic-rg
+      MYSQL_SHELL_QUEUE_DIR: /var/lib/mysqlsh-queue
+      MYSQL_ROUTER_IC_HOST: dbdeployer1.infra-mysql-router-ic-rg
+    volumes:
+      - ${WORKSPACE}:${WORKSPACE}:ro
+      # MySQL Shell request queue shared with the TAP test runner, which sees
+      # it at ${WORKSPACE}/ci_infra_logs/${INFRA_ID}/mysql-router/shell-queue.
+      - ${MYSQL_SHELL_QUEUE_HOST_DIR}:/var/lib/mysqlsh-queue
+    networks:
+      backend:
+        aliases:
+          - dbdeployer1.${INFRA}
+          - dbdeployer1.infra-mysql-router-ic-rg
+
+networks:
+  backend:
+    name: "${INFRA_ID}_backend"
+    external: true
