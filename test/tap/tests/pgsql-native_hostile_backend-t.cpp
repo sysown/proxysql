@@ -502,10 +502,10 @@ static void harness_selftest() {
 int main(int, char**) {
     // 6 harness self-test cases (the mock, judged by libpq)
     // + 18 auth cases (A1-A18; A8 and A17 are positive controls)
-    // + 24 result cases (R1-R26, minus R17 and R23) + R18's recorded-row-count check
+    // + 25 result cases (R1-R27, minus R17 and R23) + R18's recorded-row-count check
     // + 1 final pool-cleanliness assertion
     // + R23 (F5), which runs LAST -- see the comment on it.
-    plan(51);
+    plan(52);
 
     if (cl.getEnv()) return exit_status();
 
@@ -1098,6 +1098,63 @@ int main(int, char**) {
                     pgmb_command_complete("SELECT 1") +
                     pgmb_ready_for_query('I')),
           step_sleep(300) });
+
+    // R27: the injection is caught AFTER rows have already gone to the client.
+    //
+    // ProxySQL collects a result in memory and only begins pushing it to the client once it
+    // grows past 8 x pgsql-threshold_resultset_size. Below that -- which is every other case in
+    // this file -- nothing has reached the client when an injection is caught, so the whole
+    // result can be dropped and replaced with an error. Past it the client already holds rows
+    // that cannot be recalled, and the error has to land behind them instead of instead of them.
+    //
+    // That is the one shape the refusal path had never been run against. It is also the shape
+    // that aborted the proxy once before, when the result was handed onward half-built, so the
+    // assertion is as much about surviving as about the error text.
+    //
+    // The threshold is lowered to its 1024-byte minimum so a 64KB result crosses it, rather than
+    // the 32MB the default would need. It is read back from runtime and asserted: if the variable
+    // did not take, this is just R24 with a bigger payload and it would pass while proving
+    // nothing. It is restored afterwards because later cases run in the same process.
+    {
+        resetMockPool(admin, g_mock_ip, g_mock_port);
+        setVar(admin, "pgsql-threshold_resultset_size", "1024");
+        const std::string thr = adminScalar(admin,
+            "SELECT variable_value FROM runtime_global_variables "
+            "WHERE variable_name='pgsql-threshold_resultset_size'");
+
+        std::string rows;
+        for (int i = 0; i < 700; i++)
+            rows += pgmb_data_row_1col(std::string(80, 'x'));   // ~64KB total
+
+        mock.set_script({ step_expect_startup(), step_send(acceptedHandshake()), step_expect_query(),
+                          step_send(pgmb_row_description_1col("c", 25) + rows),
+                          step_send(pgmb_auth_cleartext()),   // injected once streaming is under way
+                          step_sleep(300), step_close() });
+        mock.reset_stats();
+
+        std::string err;
+        const bool served = queryThroughProxy(err);
+        const bool refused = err.find("illegal backend message type") != std::string::npos;
+        const std::string broke = checkInvariants(admin, adminOwner);
+        int drain_ms = 0;
+        const int stranded = mockPoolConns(admin, &drain_ms);
+
+        ok(thr == "1024" && !served && refused && broke.empty() && stranded == 0,
+           "R27: an injection caught after rows were already streamed is still refused, and the "
+           "error still reaches the client behind them (threshold=%s, served=%s, error=%s; "
+           "rows=%zuB; pool leftover=%d; drain=%dms)%s%s",
+           thr.empty() ? "(unset)" : thr.c_str(),
+           served ? "YES (BAD)" : "no",
+           err.empty() ? "(none)" : err.substr(0, err.find('\n')).c_str(),
+           rows.size(), stranded, drain_ms,
+           broke.empty() ? "" : " -- BROKE: ", broke.c_str());
+        if (thr != "1024")
+            diag("R27: pgsql-threshold_resultset_size did not take (runtime says '%s'), so the "
+                 "result never crossed the streaming threshold and this case tested the buffered "
+                 "path again, not the streamed one.", thr.c_str());
+
+        setVar(admin, "pgsql-threshold_resultset_size", "4194304");   // back to the default
+    }
 
     // R26: the backend errors a Flush-terminated step and then goes SILENT.
     //
