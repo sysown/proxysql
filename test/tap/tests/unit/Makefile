@@ -228,7 +228,7 @@ MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -luuid \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a \
 		  $(LIBUSUAL_LDIR)/libusual.a $(CURL_STATIC_DEPS) \
-		  -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl \
+		  $(ZSTD_LDIR)/libzstd.a -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl \
 		  -Wl,--allow-multiple-definition \
 		  $(LWGCOV)
 endif
