@@ -47,10 +47,8 @@ void create_runtime_tables(SQLite3DB& db) {
 		" comment VARCHAR DEFAULT '',"
 		" PRIMARY KEY (hostname, mysql_port))"
 	);
-	db.execute(
-		"CREATE TABLE mysqlx_variables ("
-		" variable_name VARCHAR PRIMARY KEY, variable_value VARCHAR DEFAULT '')"
-	);
+	db.execute(ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	db.execute(ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES);
 }
 
 } // namespace

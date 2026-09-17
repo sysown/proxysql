@@ -1,0 +1,47 @@
+# Per-group ProxySQL config for the duckdb-e2e TAP group (and duckdb-e2e-g1).
+# Identical to test/infra/control/proxysql-ci.cnf except for the
+# `plugins=("...")` line that asks the chassis to load the duckdb plugin
+# at Phase A. The plugin .so is bind-mounted into the ProxySQL container
+# at /usr/lib/proxysql/ProxySQL_DuckDB_Plugin.so by
+# start-proxysql-isolated.bash when PROXYSQL_LOAD_DUCKDB_PLUGIN=1.
+#
+# The duckdb plugin needs no backend database -- it owns an embedded
+# DuckDB instance and answers queries itself -- so this group has no
+# infras.lst and brings up no backend containers (see
+# test/infra/control/ensure-infras.bash's "No infras.lst or INFRA_TYPE
+# for group ...; continuing with no backend infrastructure." path).
+#
+# The plugin's own MySQL (6031) and PgSQL (6034) listeners are opened by
+# DuckDBListener::start() using DuckDBConfigStore's compiled-in defaults
+# (plugins/duckdb/src/duckdb_config.cpp) once the chassis starts the
+# plugin -- no plugin-specific admin SQL is required here for the
+# listener to come up.
+
+admin_variables=
+{
+    admin_credentials="admin:admin;radmin:radmin"
+    mysql_ifaces="0.0.0.0:6032"
+}
+
+mysql_variables=
+{
+    threads=4
+    max_connections=2048
+    interfaces="0.0.0.0:6033"
+    monitor_username="monitor"
+    monitor_password="monitor"
+}
+
+pgsql_variables=
+{
+    interfaces="0.0.0.0:6133"
+}
+
+sqliteserver_variables=
+{
+    mysql_ifaces="0.0.0.0:6030"
+}
+
+plugins=(
+    "/usr/lib/proxysql/ProxySQL_DuckDB_Plugin.so"
+)

@@ -947,14 +947,30 @@ void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 		return;
 	}
 
-	ctx.mcp->mcp_server = new ProxySQL_MCP_Server(port, ctx.mcp);
-	if (ctx.mcp->mcp_server != nullptr) {
-		ctx.mcp->mcp_server->start();
-		genai_log(6, "genai plugin: MCP listener started on port %d (ssl=%s)\n",
-		        port, use_ssl ? "true" : "false");
-	} else {
-		genai_log(6, "genai plugin: failed to allocate ProxySQL_MCP_Server\n");
+	auto server = std::make_unique<ProxySQL_MCP_Server>(port, ctx.mcp);
+	ctx.mcp->mcp_server = server.get();
+	// The constructor creates Query_Tool_Handler and its Discovery_Schema.
+	// Populate that catalog before start() exposes the HTTP listener. This
+	// path is also used when mcp-enabled changes from false to true later.
+	bool rules_loaded = false;
+	try {
+		rules_loaded = mcp_load_query_rules_to_runtime(ctx);
+	} catch (...) {
+		ctx.mcp->mcp_server = nullptr;
+		throw;
 	}
+	ctx.mcp->mcp_server = nullptr;
+	if (!rules_loaded) {
+		genai_log(6, "genai plugin: failed to load MCP query rules; listener not started\n");
+		return;
+	}
+	if (!server->start()) {
+		genai_log(6, "genai plugin: failed to start MCP listener on port %d\n", port);
+		return;
+	}
+	ctx.mcp->mcp_server = server.release();
+	genai_log(6, "genai plugin: MCP listener started on port %d (ssl=%s)\n",
+	        port, use_ssl ? "true" : "false");
 }
 
 /**
@@ -1000,7 +1016,25 @@ bool genai_start() {
 		return false;
 	}
 
+	// main.mcp_{auth,target}_profiles and main.mcp_query_rules have been
+	// repopulated from disk by Admin's bootstrap before this phase runs
+	// (see __insert_or_replace_maintable_select_disktable, issue #6167),
+	// so installing from admindb here is what makes a SAVE ... TO DISK
+	// survive a restart. Profile installation remains best-effort; query-rule
+	// installation fails closed inside the listener helper so an unreadable
+	// policy table cannot expose an unfiltered endpoint.
+	//
+	// Order matters:
+	//   * profiles BEFORE the listener -- ProxySQL_MCP_Server's
+	//     construction path initializes the Query_Tool_Handler connection
+	//     pools from the target registry, so the snapshot has to be in
+	//     place first or the pools come up empty.
+	//   * query rules first populate MCP_Threads_Handler even when the listener
+	//     is disabled, so SAVE and runtime projection retain the persisted
+	//     snapshot. During listener construction they are loaded again after
+	//     the server creates Discovery_Schema and before start() exposes it.
 	(void)mcp_load_target_auth_map_from_admindb(ctx);
+	(void)mcp_load_query_rules_to_runtime(ctx);
 	mcp_start_listener_if_enabled(ctx);
 
 	return true;

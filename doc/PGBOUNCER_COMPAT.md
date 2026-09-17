@@ -123,6 +123,35 @@ Each user becomes a `pgsql_users` row. `pool_mode` maps as:
 | `transaction` | `transaction_persistent=1` |
 | `statement` | neither flag |
 
+#### Credentials
+
+`pgsql_users.password` holds a cleartext password, an `md5…` hash or a
+`SCRAM-SHA-256$…` verifier, detected by prefix — the same three forms
+`userlist.txt` stores — so each entry is imported as-is and a `userlist.txt`
+holding hashes works without the cleartext passwords. An md5 hash written with
+uppercase hex is lowercased, the only form ProxySQL recognises.
+
+Hashed credentials constrain authentication, and the converter reports the
+constraints at import time instead of leaving them to the first login:
+
+| Stored form | Frontend (`pgsql-authentication_method`) | Backend |
+|---|---|---|
+| cleartext | any | any method |
+| `md5…` | 1 or 2 only; **3 rejects it** | `md5` only |
+| `SCRAM-SHA-256$…` | any (always challenged with SCRAM) | `scram-sha-256` only, verifier byte-identical to the backend `rolpassword` |
+
+- **md5 hash under `auth_type=scram-sha-256`** (which maps to method 3) is an
+  issue — fatal in strict mode — because those users cannot log in. With an
+  `auth_type` that has no equivalent, no method is emitted and a note points
+  out that the ProxySQL default (3) rejects md5-stored users.
+- **A malformed SCRAM verifier** is an issue: ProxySQL skips it when loading
+  `pgsql_users` to runtime.
+- **Backend constraints** are informational notes (the `NOTES` section of the
+  dry-run output). The verifier requirement holds when `userlist.txt` was copied
+  from the backend, which is how PgBouncer is normally set up, but not across
+  independently created or logically replicated servers in one hostgroup, since
+  each has its own salt.
+
 ### `pg_hba.conf`
 
 `host`/`hostssl` records with `trust`, `md5`, `scram-sha-256` or `password`
@@ -143,21 +172,6 @@ authenticates from `pgsql_users` (or LDAP), not by querying the backend.
 verifies the user against `pgsql_users` and cannot accept an unauthenticated
 connection), `hba` (`pgsql-authentication_method` is global, so per-rule methods
 from `pg_hba.conf` cannot select the frontend method), and `cert`/`pam`.
-
-**Pre-hashed passwords.** A `userlist.txt` entry holding an MD5 or SCRAM verifier
-is imported verbatim but **will not authenticate**. ProxySQL derives both the MD5
-challenge response and the SCRAM verifier from the *cleartext* password stored in
-`pgsql_users.password`, so a pre-hashed value cannot be used. Replace those
-entries with the cleartext password after importing.
-
-> Tracked in #6134. This limitation is expected to lift with PR #5865 / issue #5863, which teaches
-> `pgsql_users.password` to hold a SCRAM verifier or an `md5…` hash directly —
-> exactly the formats `userlist.txt` already stores. When that lands, this
-> section and the strict-mode error in `convert_users()` should be revisited so a
-> `userlist.txt` imports as-is. Note the constraints that come with it: an
-> md5-stored user needs an md5 backend, a verifier-stored user needs a
-> `scram-sha-256` backend, and the verifier must be byte-identical to the
-> backend's `rolpassword` (same salt and iterations).
 
 **`dbname=` aliases.** PgBouncer's `dbname=` connects to a backend database under
 a different name than the client asked for. ProxySQL routes to a hostgroup but
@@ -223,9 +237,9 @@ other `SHOW`.
 | Test | Covers |
 |---|---|
 | `test/tap/tests/unit/pgbouncer_config_parser_unit-t` | INI / userlist / HBA parsing, quoting, includes, malformed input |
-| `test/tap/tests/unit/pgbouncer_converter_unit-t` | mapping rules, strict vs relaxed, generated column names |
+| `test/tap/tests/unit/pgbouncer_converter_unit-t` | mapping rules, strict vs relaxed, generated column names, hashed credential checks |
 | `test/tap/tests/unit/pgbouncer_show_commands_unit-t` | `SHOW` translation and rejection |
-| `test/tap/tests/pgsql-pgbouncer_compat-t` | **executes** every `SHOW` and every generated statement against a live admin port |
+| `test/tap/tests/pgsql-pgbouncer_compat-t` | **executes** every `SHOW` and every generated statement against a live admin port; imports a hashed `userlist.txt` and logs in with an md5-stored and a SCRAM-verifier-stored user |
 
 The integration test matters disproportionately here. The unit tests compare
 generated strings, which cannot catch a wrong column name — and three such

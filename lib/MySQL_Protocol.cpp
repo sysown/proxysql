@@ -1263,27 +1263,47 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 
 bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *_thread_id, bool deprecate_eof_active) {
 	int use_plugin_id = mysql_thread___default_authentication_plugin_int;
+	const char* server_version = mysql_thread___server_version;
+#ifdef PROXYSQL31
+	if ((*myds) != nullptr && !(*myds)->frontend_server_version().empty()) {
+		server_version = (*myds)->frontend_server_version().c_str();
+	}
+#endif
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
 	assert(use_plugin_id == 0 || use_plugin_id == 2 ); // mysql_native_password or caching_sha2_password
+	constexpr size_t max_packet_payload_length = 0xFFFFFF;
+	const size_t server_version_length = strlen(server_version);
+	const size_t auth_plugin_length = strlen(plugins[use_plugin_id]);
+	const size_t payload_length_without_strings =
+		sizeof(protocol_version)
+		+ 1  // server_version terminator
+		+ sizeof(uint32_t)  // thread_id
+		+ 8  // scramble1
+		+ 1  // 0x00
+		+ sizeof(mysql_thread___server_capabilities) / 2
+		+ sizeof(uint8_t)  // charset in handshake is 1 byte
+		+ sizeof(server_status)
+		+ 3  // upper capabilities and auth-plugin-data length
+		+ 10  // filler
+		+ 12  // scramble2
+		+ 1  // 0x00
+		+ 1;  // auth plugin terminator
+	const size_t available_for_strings =
+		max_packet_payload_length - payload_length_without_strings;
+	if (auth_plugin_length > available_for_strings ||
+		server_version_length > available_for_strings - auth_plugin_length) {
+		proxy_error(
+			"Cannot generate initial handshake: server version length %zu exceeds "
+			"the MySQL packet payload limit\n",
+			server_version_length
+		);
+		return false;
+	}
+	const size_t payload_length = payload_length_without_strings
+		+ server_version_length + auth_plugin_length;
   mysql_hdr myhdr;
   myhdr.pkt_id=0;
-  myhdr.pkt_length=sizeof(protocol_version)
-    + (strlen(mysql_thread___server_version)+1)
-    + sizeof(uint32_t)  // thread_id
-    + 8  // scramble1
-    + 1  // 0x00
-    //+ sizeof(glovars.server_capabilities)
-    //+ sizeof(glovars.server_language)
-    //+ sizeof(glovars.server_status)
-    + sizeof(mysql_thread___server_capabilities)/2
-    + sizeof(uint8_t) // charset in handshake is 1 byte
-    + sizeof(server_status)
-    + 3 // unknown stuff
-    + 10 // filler
-    + 12 // scramble2
-    + 1  // 0x00
-//    + (strlen("mysql_native_password")+1);
-    + (strlen(plugins[use_plugin_id])+1);
+	myhdr.pkt_length = static_cast<unsigned int>(payload_length);
 	sent_auth_plugin_id = (enum proxysql_auth_plugins)use_plugin_id;
 
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
@@ -1317,7 +1337,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	(*myds)->myconn->scramble_buff[sizeof(scramble)] = '\0';
 
   memcpy(_ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
-  memcpy(_ptr+l, mysql_thread___server_version, strlen(mysql_thread___server_version)); l+=strlen(mysql_thread___server_version)+1;
+	memcpy(_ptr+l, server_version, server_version_length); l+=server_version_length+1;
   memcpy(_ptr+l, &thread_id, sizeof(uint32_t)); l+=sizeof(uint32_t);
 
   int i;
@@ -1411,7 +1431,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+8, 12); l+=12;
   l+=1; //0x00
   //memcpy(_ptr+l,"mysql_native_password",strlen("mysql_native_password"));
-  memcpy(_ptr+l,plugins[use_plugin_id],strlen(plugins[use_plugin_id]));
+	memcpy(_ptr+l, plugins[use_plugin_id], auth_plugin_length);
 
 	if (send==true) {
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
@@ -4279,7 +4299,8 @@ void * MySQL_Protocol::Query_String_to_packet(uint8_t sid, std::string *s, unsig
 // returns stmt_meta, or a new one
 // See https://dev.mysql.com/doc/internals/en/com-stmt-execute.html for reference
 stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
-	PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta
+	PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta,
+	const unsigned char *effective_types
 ) {
 	stmt_execute_metadata_t *ret=NULL; //return NULL in case of failure
 	if (pkt.size < 14) {
@@ -4296,9 +4317,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 	} else { // this is the first time that this PS is executed
 		ret= new stmt_execute_metadata_t();
 	}
-	if (*stmt_meta==NULL) {
-		memcpy(&ret->stmt_id,p,4); // stmt-id
-	}
+	memcpy(&ret->stmt_id,p,4); // Client handle can differ from the last execution.
 	p+=4; // stmt-id
 	memcpy(&ret->flags,p,1); p+=1; // flags
 	p+=4; // iteration-count
@@ -4356,7 +4375,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 				// Otherwise we will assume a value to be 'NULL' when the
 				// binding type could have actually been changed from the
 				// previous 'MYSQL_TYPE_NULL'. For more context see #3603.
-				if (binds[i].buffer_type == MYSQL_TYPE_NULL)
+				if ((effective_types ? effective_types[2*i] : binds[i].buffer_type) == MYSQL_TYPE_NULL)
 					is_null = 1;
 			}
 			is_nulls[i]=is_null;
@@ -4364,7 +4383,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			// set length, defaults to 0
 			// for parameters with not fixed length, that will be assigned later
 			// we moved this initialization here due to #3585
-			binds[i].is_unsigned=0;
 			lengths[i]=0;
 			binds[i].length=&lengths[i];
 			// NOTE: We nullify buffers here to reflect that memory wasn't
@@ -4373,13 +4391,13 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 		}
 		free(null_bitmap); // we are done with it
 
-		if (new_params_bound_flag) {
+		if (new_params_bound_flag || effective_types) {
 			// the client is rebinding the parameters
 			// the client is sending again the type of each parameter
 			for (i=0;i<num_params;i++) {
 				// set buffer_type and is_unsigned
 				uint16_t buffer_type=0;
-				memcpy(&buffer_type,p,2);
+				memcpy(&buffer_type, effective_types ? effective_types + 2*i : (unsigned char *)p, 2);
 				binds[i].is_unsigned=0;
 				if (buffer_type >= 32768) { // is_unsigned bit
 					buffer_type-=32768;
@@ -4392,7 +4410,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 					is_nulls[i]= 1;
 				}
 
-				p+=2;
+				if (new_params_bound_flag) p+=2;
 
 			}
 		}

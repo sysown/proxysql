@@ -87,6 +87,9 @@ class MySQL_Data_Stream
 	void generate_compressed_packet();
 	enum sslstatus do_ssl_handshake();
 	void queue_encrypted_bytes(const char *buf, size_t len);
+#ifdef PROXYSQL31
+	std::string frontend_server_version_;
+#endif
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
@@ -230,6 +233,15 @@ class MySQL_Data_Stream
 	void setDSS(enum mysql_data_stream_status dss) {
 		DSS=dss;
 	}
+
+#ifdef PROXYSQL31
+	void pin_frontend_server_version(const std::string& version) {
+		frontend_server_version_ = version;
+	}
+	const std::string& frontend_server_version() const {
+		return frontend_server_version_;
+	}
+#endif
 
 	int read_pkts();
 	int write_pkts();

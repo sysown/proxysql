@@ -1,0 +1,71 @@
+name: CI-macos-unit-smoke
+run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/CI-macos-unit-smoke.yml'
+      - 'Makefile'
+      - 'deps/**'
+      - 'include/**'
+      - 'lib/**'
+      - 'src/**'
+      - 'test/tap/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-unit-smoke:
+    runs-on: macos-14
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Keep this bounded: fetching every branch fails on macOS because the
+          # repository has refs whose names differ only by letter case.
+          fetch-depth: 1000
+          fetch-tags: true
+          lfs: true
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: brew install automake bzip2 cmake gpatch gnutls libevent libtool icu4c pkg-config libiconv zlib
+
+      - name: Select GNU patch
+        run: echo "$(brew --prefix gpatch)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Build ProxySQL
+        run: make -j"$(sysctl -n hw.ncpu)"
+
+      - name: Build macOS unit smoke tests
+        run: |
+          make -C test/tap/tests/unit -j"$(sysctl -n hw.ncpu)" \
+            smoke_test-t query_processor_unit-t
+
+      - name: Run macOS unit smoke tests
+        run: |
+          test/tap/tests/unit/smoke_test-t
+          test/tap/tests/unit/query_processor_unit-t
+
+      - name: Verify static ProxySQL linkage on macOS
+        run: |
+          set -euo pipefail
+          test ! -e test/tap/tap/libproxysql.so
+          for binary in \
+            test/tap/tests/unit/smoke_test-t \
+            test/tap/tests/unit/query_processor_unit-t; do
+            file "$binary" | grep -q 'Mach-O'
+            if otool -L "$binary" | tail -n +2 | grep -q 'libproxysql'; then
+              echo "Unexpected shared ProxySQL dependency in $binary" >&2
+              otool -L "$binary" >&2
+              exit 1
+            fi
+          done

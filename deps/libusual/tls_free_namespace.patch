@@ -1,0 +1,12 @@
+--- a/usual/tls/tls.h
++++ b/usual/tls/tls.h
+@@ -119,6 +119,9 @@
+ struct tls *tls_server(void);
+ int tls_configure(struct tls *_ctx, struct tls_config *_config);
+ void tls_reset(struct tls *_ctx);
++/* Avoid OpenSSL 3.5's internal tls_free when both archives are linked.
++ * Keep the source API while giving libusual its own linker symbol. */
++#define tls_free proxysql_libusual_tls_free
+ void tls_free(struct tls *_ctx);
+ 
+ int tls_accept_fds(struct tls *_ctx, struct tls **_cctx, int _fd_read,

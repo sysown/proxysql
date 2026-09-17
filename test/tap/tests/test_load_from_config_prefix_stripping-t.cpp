@@ -21,6 +21,16 @@
 using std::string;
 using std::fstream;
 
+int admin_query_int(MYSQL* admin, const string& query) {
+    if (mysql_query(admin, query.c_str()) != 0) return -1;
+    MYSQL_RES* result = mysql_store_result(admin);
+    if (!result) return -1;
+    MYSQL_ROW row = mysql_fetch_row(result);
+    const int value = row && row[0] ? atoi(row[0]) : -1;
+    mysql_free_result(result);
+    return value;
+}
+
 void create_config_with_prefixed_variables(const string& config_file_path) {
     string config_content = R"(
         datadir="/tmp"
@@ -79,6 +89,11 @@ void create_config_with_prefixed_variables(const string& config_file_path) {
             pgsql-connect_retries_on_failure=5
         }
 
+        mcp_variables=
+        {
+            timeout_ms=12345
+        }
+
         mysql_servers=
         (
         )
@@ -106,7 +121,11 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    plan(12); // 4 tests for each module: prefixed and non-prefixed variables
+#ifdef PROXYSQL40
+    plan(14); // Existing 12 checks plus MCP main/runtime application
+#else
+    plan(12); // 4 tests for each core module: prefixed and non-prefixed variables
+#endif
 
     MYSQL* admin = mysql_init(NULL);
     if (!admin) {
@@ -213,6 +232,36 @@ int main(int argc, char** argv) {
         ok(strcmp(row[0], "2000") == 0, "admin-refresh_interval value is '2000'");
     }
     mysql_free_result(result);
+
+#ifdef PROXYSQL40
+    // PROXYSQL40 means the chassis supports plugins; it does not mean the
+    // GenAI plugin is loaded. Its MCP admin table is materialized in Phase B,
+    // alongside registration of the MCP commands exercised below.
+    const bool mcp_plugin_loaded = admin_query_int(admin,
+        "SELECT COUNT(*) FROM sqlite_master"
+        " WHERE type='table' AND name='mcp_query_rules'") == 1;
+    if (!mcp_plugin_loaded) {
+        skip(2, "GenAI plugin is not loaded");
+    } else {
+        // LOAD MCP VARIABLES FROM CONFIG must both stage the parsed value in main
+        // and apply it to the handler/runtime snapshot in the same command.
+        MYSQL_QUERY_T(admin, "SET mcp-timeout_ms=54321");
+        MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES TO RUNTIME");
+        MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES FROM CONFIG");
+
+        ok(admin_query_int(admin,
+            "SELECT COUNT(*) FROM global_variables"
+            " WHERE variable_name='mcp-timeout_ms' AND variable_value='12345'") == 1,
+           "LOAD MCP VARIABLES FROM CONFIG updates main.global_variables");
+        ok(admin_query_int(admin,
+            "SELECT COUNT(*) FROM runtime_global_variables"
+            " WHERE variable_name='mcp-timeout_ms' AND variable_value='12345'") == 1,
+           "LOAD MCP VARIABLES FROM CONFIG applies the parsed value to runtime");
+
+        MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES FROM DISK");
+        MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES TO RUNTIME");
+    }
+#endif
 
     unlink(config_file.c_str());
     mysql_close(admin);

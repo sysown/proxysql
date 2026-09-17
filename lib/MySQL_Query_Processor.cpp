@@ -750,6 +750,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 	newQR->sticky_conn = sticky_conn;
 	newQR->multiplex = multiplex;
 	newQR->gtid_from_hostgroup = gtid_from_hostgroup;
+	newQR->switch_to_fast_forward = false;
 	newQR->apply = apply;
 	newQR->attributes = (attributes ? strdup(attributes) : NULL);
 	newQR->comment = (comment ? strdup(comment) : NULL); // see issue #643
@@ -794,6 +795,15 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 	if (newQR->attributes != NULL) {
 		if (strlen(newQR->attributes)) {
 			nlohmann::json j_attributes = nlohmann::json::parse(newQR->attributes);
+			auto ff = j_attributes.find("switch_to_fast_forward");
+			if (ff != j_attributes.end()) {
+				if (!ff->is_boolean()) {
+					proxy_error("Invalid switch_to_fast_forward value in attributes for MySQL query rule %d: expected JSON Boolean\n", newQR->rule_id);
+				}
+				else {
+					newQR->switch_to_fast_forward = ff->get<bool>();
+				}
+			}
 			if (j_attributes.find("flagOUTs") != j_attributes.end()) {
 				newQR->flagOUT_ids = new vector<int>;
 				newQR->flagOUT_weights = new vector<int>;
@@ -886,6 +896,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 	newQR->sticky_conn = mqr->sticky_conn;
 	newQR->multiplex = mqr->multiplex;
 	newQR->gtid_from_hostgroup = mqr->gtid_from_hostgroup;
+	newQR->switch_to_fast_forward = mqr->switch_to_fast_forward;
 	newQR->apply = mqr->apply;
 	newQR->attributes = (mqr->attributes ? strdup(mqr->attributes) : NULL);
 	newQR->comment = (mqr->comment ? strdup(mqr->comment) : NULL); // see issue #643

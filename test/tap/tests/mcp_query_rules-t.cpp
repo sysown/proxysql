@@ -42,7 +42,10 @@ bool configure_mcp_for_rules_test(MYSQL* admin, const CommandLine& cl) {
 	run_q(admin, "SET mcp-use_ssl=false");
 	run_q(admin, ("SET mcp-config_endpoint_auth='" + auth_token + "'").c_str());
 	run_q(admin, ("SET mcp-query_endpoint_auth='" + auth_token + "'").c_str());
-	run_q(admin, "SET mcp-enabled=true");
+	// Force a disabled -> enabled transition even if another TAP left the MCP
+	// listener running. That is the runtime path this regression exercises.
+	run_q(admin, "SET mcp-enabled=false");
+	run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
 
 	// Clean up existing test data
 	run_q(admin, "DELETE FROM mcp_query_rules WHERE rule_id >= 1000");
@@ -62,11 +65,33 @@ bool configure_mcp_for_rules_test(MYSQL* admin, const CommandLine& cl) {
 		+ std::string(k_target_id) + "', 'mysql', 0, '" + std::string(k_auth_profile_id) + "')";
 	run_q(admin, q_target.c_str());
 
-	run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
+	// The listener is currently down. This rule must be installed into its
+	// catalog before LOAD MCP VARIABLES TO RUNTIME exposes the endpoint.
+	run_q(admin, "INSERT INTO mcp_query_rules (rule_id, active, match_pattern, error_msg, apply) "
+	             "VALUES (1004, 1, 'AUTOSTART_BLOCKME', 'Rule 1004: Startup Blocked', 1)");
+
+	// Install the target snapshot while MCP is still disabled so listener
+	// construction can initialize its connection pool from that profile.
 	run_q(admin, "LOAD MCP PROFILES TO RUNTIME");
+	run_q(admin, "SET mcp-enabled=true");
+	run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
 
 	sleep(1);
 	return true;
+}
+
+void test_rules_loaded_before_listener_start(MCPClient& mcp) {
+	json args = {{"sql", "SELECT 1 FROM AUTOSTART_BLOCKME"}, {"target_id", k_target_id}};
+	MCPResponse resp = mcp.call_tool("query", "run_sql_readonly", args);
+	const bool blocked = resp.is_mcp_error() &&
+		resp.get_error_message().find("Rule 1004: Startup Blocked") != std::string::npos;
+	if (!blocked) {
+		diag("unexpected startup response: type=%d code=%d message='%s'",
+		     static_cast<int>(resp.get_error_type()), resp.get_error_code(),
+		     resp.get_error_message().c_str());
+	}
+	ok(blocked,
+	   "listener starts with persisted MCP query rules already active");
 }
 
 // ============================================================================
@@ -192,7 +217,7 @@ void test_rules_evaluation(MYSQL* admin, MCPClient& mcp) {
 // ============================================================================
 
 int main(int argc, char** argv) {
-	plan(11);
+	plan(12);
 
 	CommandLine cl;
 	if (cl.getEnv()) {
@@ -224,14 +249,21 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	test_rules_loaded_before_listener_start(mcp);
 	test_rules_crud(admin);
 	test_rules_evaluation(admin, mcp);
 
 	diag("Final cleanup");
 	run_q(admin, "DELETE FROM mcp_query_rules WHERE rule_id >= 1000");
 	run_q(admin, "LOAD MCP QUERY RULES TO RUNTIME");
-	run_q(admin, "LOAD MCP VARIABLES FROM DISK");
-	ok(true, "Cleanup completed");
+	bool variables_restored = run_q(admin, "LOAD MCP VARIABLES FROM DISK") == 0;
+	if (!variables_restored) {
+		diag("Failed to restore MCP variables from disk: %s", mysql_error(admin));
+	} else if (run_q(admin, "LOAD MCP VARIABLES TO RUNTIME") != 0) {
+		diag("Failed to apply restored MCP variables: %s", mysql_error(admin));
+		variables_restored = false;
+	}
+	ok(variables_restored, "Cleanup completed");
 
 	mysql_close(admin);
 	return exit_status();

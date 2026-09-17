@@ -144,6 +144,23 @@ public:
     inline int getSocket() const { return sock_; }
     inline int getLastAuthType() const { return last_auth_type_; }
 
+    // ---- Stepwise SCRAM for mid-handshake tests (#5865 review ask 2) ----
+    // Unlike connect(), which drives the whole SASL exchange atomically, these split it so a
+    // test can mutate runtime credentials BETWEEN server-first and client-final.
+    // rawConnectStartup(): open the socket + send the startup packet; do NOT read/drive auth.
+    void rawConnectStartup(const std::string& host, int port,
+                           const std::string& dbname, const std::string& user);
+    // saslBegin(): read AuthenticationSASL(10), send client-first (SASLInitialResponse),
+    // read AuthenticationSASLContinue(11); return the server-first-message string.
+    std::string saslBegin(const std::string& user, const std::string& password);
+    // saslFinish(): build the client-final from the state saslBegin() left, send it, and read the
+    // result. Returns 0 on AuthenticationOk, SASL_FINISH_REJECTED on a clean ErrorResponse from the
+    // server; any genuine IO/timeout/protocol error propagates as PgException.
+    int saslFinish();
+    static const int SASL_FINISH_REJECTED = -1;
+    // Human-readable server error captured when saslFinish() returns SASL_FINISH_REJECTED.
+    inline const std::string& getLastError() const { return last_error_; }
+
     void execute(const std::string& query);
     void executeParams(
         const std::string& stmtName,
@@ -209,7 +226,23 @@ private:
     std::string user_;
     std::string dbname_;
     int last_auth_type_ = 0;
-    
+
+    // Persisted stepwise-SASL state between saslBegin() and saslFinish() (see the two-phase
+    // methods above). Pointers are forward-declared (struct defs live in scram.h, .cpp only).
+    struct ScramState* sasl_st_ = nullptr;
+    std::string sasl_password_;        // to rebuild PgCredentials for the client-final proof
+    char* sasl_client_first_ = nullptr; // owned by us; freed in saslFinish()/destructor
+    // OWNED copy of the server nonce. read_server_first_message() returns a pointer INTO the buffer
+    // it was handed (read_attr_value() returns `*input`), not into sasl_st_ -- so the value must be
+    // copied out before saslBegin()'s local server-first string dies, or saslFinish() reads freed
+    // memory when it builds the client-final proof.
+    std::string sasl_server_nonce_;
+    char* sasl_salt_ = nullptr;         // owned by us (read_server_first_message malloc'd it)
+    int sasl_saltlen_ = 0;
+    int sasl_iterations_ = 0;
+    std::string last_error_;            // last server error message (set by saslFinish())
+    void freeSaslState();               // release stepwise-SASL resources idempotently
+
     void sendStartupPacket();
     void handleAuthentication(const std::string& password);
     void sendPassword(const std::string& password);
