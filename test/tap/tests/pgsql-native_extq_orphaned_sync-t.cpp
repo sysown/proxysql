@@ -974,7 +974,7 @@ static ResyncFailureProbe runResyncFailure(PGconn* admin, PGconn* be_db, const s
 }
 
 int main(int, char**) {
-	plan(75);
+	plan(87);
 	if (cl.getEnv()) return exit_status();
 
 	auto admin = adminConn();
@@ -1223,9 +1223,16 @@ int main(int, char**) {
 	// away: that path calls finishQuery() on the spot, and finishQuery dereferences the backend
 	// connection the discard has just destroyed. Without this scenario that is a crash nothing here
 	// would see.
+	// Each entry is a different statement ProxySQL refuses on its own, inside a frame whose earlier
+	// Execute has already run on the backend. They leave by different exits -- some through
+	// finishQuery() on the spot, some through RequestEnd with no data stream -- and the point of
+	// listing them is that the outcome has to be the same however they leave: the write the client
+	// was told failed must not survive.
 	const Route routes[] = {
-		{ "discard", "DISCARD ALL" },
-		{ "copy",    "COPY orphsync_t (v) FROM STDIN" },
+		{ "discard",  "DISCARD ALL" },
+		{ "copy",     "COPY orphsync_t (v) FROM STDIN" },
+		{ "resetall", "RESET ALL" },
+		{ "badparam", "SET DateStyle TO 'INVALID_STYLE'" },
 	};
 	for (const Route& r : routes) {
 		for (int native = 0; native <= 1; native++) {
