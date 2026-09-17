@@ -2,24 +2,29 @@
  * @file test_mysql_router_routing_guidelines-t.cpp
  * @brief Routing Guidelines E2E for proxysql_mysql_router.so (issue #6145).
  *
- * SKELETON: currently only verifies the mysql-router-ic-rg-g1 fixture that the
- * routing assertions will build on:
- *  - the InnoDB Cluster and the Routing Guidelines were created by an
- *    unmodified MySQL Shell 9.x (>= 9.2),
- *  - metadata schema_version >= 2.3,
- *  - Shell-created guidelines 'rg_default' and 'rg_custom' exist and none is
- *    active,
- *  - one instance carries the 'region'='eu' tag,
- *  - the MySQL Shell request queue executes AdminAPI scripts for the test.
+ * Real InnoDB Cluster, Routing Guidelines created and managed by an unmodified
+ * MySQL Shell 9.x (metadata >= 2.3), the production plugin, real client traffic:
+ *  1. fixture provenance (Shell 9.x, metadata >= 2.3, Shell-created guidelines);
+ *  2. the plugin advertises SupportedRoutingGuidelinesVersion so Shell activates
+ *     a guideline for it;
+ *  3. activation of rg_custom: explain views, CurrentRoutingGuideline, traffic
+ *     matching routes by user, connect attribute and source network, the rw route,
+ *     a session matching no route, operator rules unchanged and not remapped;
+ *  4. modification through the AdminAPI (disable a route) converges;
+ *  5. an invalid document keeps the last valid generation and is reported in
+ *     stats_mysql_router_errors, then recovers;
+ *  6. removal restores baseline routing and releases the route hostgroups.
  *
- * Running Shell commands from the test: the isolated test runner has no Docker
- * socket, so the backend container serves a file queue (mysqlsh-queue.sh) at
- * ${WORKSPACE}/ci_infra_logs/${INFRA_ID}/mysql-router/shell-queue. Scripts run
- * through rg-shell.sh with `session` and `cluster` pre-bound, e.g.
- *   run_mysqlsh(queue, "cluster.setRoutingOption('guideline', 'rg_custom')");
+ * Shell commands run through the backend container's file queue
+ * (${WORKSPACE}/ci_infra_logs/${INFRA_ID}/mysql-router/shell-queue), with
+ * `session` and `cluster` pre-bound.
  */
 
+#include <algorithm>
 #include <cerrno>
+#include <functional>
+#include <map>
+#include <set>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -170,10 +175,85 @@ bool has_named(const json& list, const std::string& name) {
 	return false;
 }
 
+MysqlPtr connect_router(const char* host, unsigned port, const char* user,
+        const std::map<std::string, std::string>& attrs = {}) {
+	MysqlPtr connection(mysql_init(nullptr), &mysql_close);
+	unsigned timeout = 5;
+	mysql_options(connection.get(), MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+	for (const auto& attr : attrs) {
+		mysql_options4(connection.get(), MYSQL_OPT_CONNECT_ATTR_ADD, attr.first.c_str(), attr.second.c_str());
+	}
+	if (!mysql_real_connect(connection.get(), host, user, "router-app-password", "router_e2e",
+			port, nullptr, 0)) {
+		diag("connect %s:%u as %s failed: %s", host, port, user, mysql_error(connection.get()));
+		return MysqlPtr(nullptr, &mysql_close);
+	}
+	return connection;
+}
+
+/** Server UUID answering a fresh session, or "ERROR: <message>". */
+std::string route_uuid(const char* host, unsigned port, const char* user,
+        const std::map<std::string, std::string>& attrs = {}) {
+	auto connection = connect_router(host, port, user, attrs);
+	if (!connection) return "ERROR: connect";
+	if (mysql_query(connection.get(), "SELECT @@server_uuid") != 0) {
+		return std::string("ERROR: ") + mysql_error(connection.get());
+	}
+	MYSQL_RES* result = mysql_store_result(connection.get());
+	MYSQL_ROW row = result ? mysql_fetch_row(result) : nullptr;
+	std::string value = row && row[0] ? row[0] : "ERROR: empty";
+	if (result) mysql_free_result(result);
+	return value;
+}
+
+std::set<std::string> route_uuids(int sessions, const char* host, unsigned port, const char* user,
+        const std::map<std::string, std::string>& attrs = {}) {
+	std::set<std::string> result;
+	for (int i = 0; i < sessions; ++i) result.insert(route_uuid(host, port, user, attrs));
+	return result;
+}
+
+bool wait_until(const std::function<bool()>& condition, int seconds) {
+	for (int i = 0; i < seconds * 2; ++i) {
+		if (condition()) return true;
+		std::this_thread::sleep_for(std::chrono::milliseconds(500));
+	}
+	return condition();
+}
+
+bool subset(const std::set<std::string>& values, const std::set<std::string>& allowed) {
+	return !values.empty() && std::all_of(values.begin(), values.end(),
+		[&](const std::string& value) { return allowed.count(value) == 1; });
+}
+
+std::string join(const std::set<std::string>& values) {
+	std::string result;
+	for (const auto& value : values) result += (result.empty() ? "" : ",") + value;
+	return result;
+}
+
+/** Forces a reconcile and waits for the runtime guideline state. */
+bool wait_guideline_state(MYSQL* admin, const std::string& state, const std::string& name, int seconds = 40) {
+	return wait_until([&] {
+		(void)scalar(admin, "MYSQL ROUTER RECONCILE");
+		const std::string current = scalar(admin,
+			"SELECT state||'|'||name FROM runtime_mysql_router_guideline");
+		return current == state + "|" + name;
+	}, seconds);
+}
+
+std::string operator_rules(MYSQL* admin, const char* table) {
+	return scalar(admin, std::string("SELECT group_concat(value,';') FROM (SELECT json_array(rule_id,active,") +
+		"username,schemaname,flagIN,client_addr,proxy_addr,proxy_port,digest,match_digest,match_pattern," +
+		"negate_match_pattern,re_modifiers,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,error_msg," +
+		"OK_msg,multiplex,apply,attributes,comment) value FROM " + table +
+		" WHERE comment NOT LIKE 'mysql_router:%' ORDER BY rule_id)");
+}
+
 } // namespace
 
 int main() {
-	plan(14);
+	plan(53);
 
 	const char* workspace = std::getenv("WORKSPACE");
 	const char* infra_id = std::getenv("INFRA_ID");
@@ -263,6 +343,173 @@ int main() {
 	ok(scalar_int(backend.get(),
 		"SELECT COUNT(*) FROM mysql.user WHERE user IN ('rg_reporting','rg_batch')") == 2,
 		"the guideline route accounts exist on the cluster");
+
+	const char* proxy_host = std::getenv("TAP_ADMINHOST");
+	if (!proxy_host) proxy_host = "proxysql";
+	const char* admin_user = std::getenv("TAP_ADMINUSERNAME");
+	if (!admin_user) admin_user = "radmin";
+	const char* admin_password = std::getenv("TAP_ADMINPASSWORD");
+	if (!admin_password) admin_password = "radmin"; // NOSONAR: public isolated-test default, not a secret.
+	auto admin = connect_mysql(proxy_host, 6032, admin_user, admin_password);
+	ok(admin != nullptr && bootstrap.value("bootstrap_rc", -1) == 0,
+		"the production plugin bootstrapped against metadata %s", schema_version.c_str());
+	if (!admin) BAIL_OUT("Routing Guidelines E2E requires ProxySQL Admin");
+
+	// Topology from the plugin's own view: uuid -> endpoint, roles.
+	const std::string primary_uuid = fixture.value("primary_uuid", "");
+	std::string eu_uuid, replica_uuid;
+	std::set<std::string> secondaries, readers;
+	for (const auto& instance : fixture["instances"]) {
+		const std::string uuid = instance.value("server_uuid", "");
+		const std::string endpoint = scalar(admin.get(),
+			"SELECT endpoint FROM runtime_mysql_router_topology WHERE instance_uuid='" + uuid + "'");
+		if (instance.value("instance_type", "") == "read-replica") replica_uuid = uuid;
+		else if (uuid != primary_uuid) secondaries.insert(uuid);
+		if (uuid != primary_uuid) readers.insert(uuid);
+		if (endpoint.size() > 5 && endpoint.compare(endpoint.size() - 5, 5, ":3307") == 0) eu_uuid = uuid;
+	}
+	ok(!primary_uuid.empty() && secondaries.size() == 2 && !replica_uuid.empty() && secondaries.count(eu_uuid),
+		"the plugin topology maps the primary, two secondaries (3307 tagged eu) and the read replica");
+
+	const std::string operator_main_before = operator_rules(admin.get(), "main.mysql_query_rules");
+	const std::string operator_runtime_before = operator_rules(admin.get(), "runtime_mysql_query_rules");
+
+	// 2. Router contract used by Shell.
+	ok(wait_until([&] {
+		(void)scalar(admin.get(), "MYSQL ROUTER RECONCILE");
+		return scalar(backend.get(), "SELECT attributes->>'$.SupportedRoutingGuidelinesVersion' FROM "
+			"mysql_innodb_cluster_metadata.v2_routers WHERE router_name='proxysql-e2e'") == "1.1";
+	}, 30), "the plugin advertises SupportedRoutingGuidelinesVersion 1.1 in v2_routers");
+	ok(scalar(admin.get(), "SELECT state FROM runtime_mysql_router_guideline") == "none",
+		"no guideline is active in the plugin before activation");
+
+	// 3. Activation with the unmodified Shell.
+	const ShellResult activate = run_mysqlsh(queue_dir, "cluster.setRoutingOption('guideline', 'rg_custom');");
+	ok(activate.rc == 0, "Shell setRoutingOption('guideline','rg_custom') accepts the ProxySQL Router (rc=%d)", activate.rc);
+	if (activate.rc != 0) diag("Shell output: %s", activate.output.c_str());
+	ok(wait_guideline_state(admin.get(), "active", "rg_custom"), "the plugin activates rg_custom (%s)",
+		scalar(admin.get(), "SELECT state||'|'||name||'|'||last_error FROM runtime_mysql_router_guideline").c_str());
+	ok(scalar(admin.get(), "SELECT version FROM runtime_mysql_router_guideline") == "1.1",
+		"the explain view reports document version 1.1");
+	ok(scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_router_guideline_routes") == 15 &&
+	   scalar_int(admin.get(), "SELECT COUNT(DISTINCT route_name) FROM runtime_mysql_router_guideline_routes") == 5,
+		"every enabled route is explained with its three pools");
+	ok(scalar(admin.get(), "SELECT members FROM runtime_mysql_router_guideline_routes "
+		"WHERE route_name='eu_reporting' AND pool='all'").find(":3307(weight=10000000)") != std::string::npos,
+		"eu_reporting resolves to the eu-tagged member with first-available weights");
+	ok(scalar(admin.get(), "SELECT classes FROM runtime_mysql_router_guideline_destinations WHERE server_uuid='" +
+		eu_uuid + "'") == "Secondary,EUServers", "the destinations view classifies the tagged secondary");
+	ok(scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_router_hostgroups WHERE role LIKE 'rg:%'") == 15 &&
+	   scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_servers WHERE comment LIKE "
+		"'%guideline=rg_custom;route=eu_reporting;pool=all;%'") == 1,
+		"route hostgroups and servers are published to runtime");
+	ok(wait_until([&] {
+		(void)scalar(admin.get(), "MYSQL ROUTER RECONCILE");
+		return scalar(backend.get(), "SELECT attributes->>'$.CurrentRoutingGuideline' FROM "
+			"mysql_innodb_cluster_metadata.v2_routers WHERE router_name='proxysql-e2e'") == "rg_custom";
+	}, 30), "v2_routers reports CurrentRoutingGuideline=rg_custom");
+	const ShellResult routers = run_mysqlsh(queue_dir,
+		"println('ROUTERS=' + JSON.stringify(cluster.listRouters()));");
+	ok(routers.rc == 0 && shell_value(routers, "ROUTERS").dump().find("rg_custom") != std::string::npos,
+		"Shell listRouters shows the ProxySQL Router using rg_custom");
+
+	const auto reporting = route_uuids(5, proxy_host, 6447, "rg_reporting");
+	ok(reporting == std::set<std::string>{eu_uuid},
+		"route eu_reporting ($.session.user) sends rg_reporting to the eu member only [%s]", join(reporting).c_str());
+	const auto batch = route_uuids(5, proxy_host, 6447, "rg_batch", {{"program_name", "rg_batch"}});
+	ok(batch == std::set<std::string>{replica_uuid},
+		"route batch_program ($.session.connectAttrs) sends rg_batch to the read replica [%s]", join(batch).c_str());
+	const auto network_readers = route_uuids(12, proxy_host, 6447, "app_reader");
+	ok(subset(network_readers, readers),
+		"route backend_network_readers (NETWORK($.session.sourceIP)) uses secondaries/read replica [%s]",
+		join(network_readers).c_str());
+	const auto writers = route_uuids(5, proxy_host, 6446, "app_writer");
+	ok(writers == std::set<std::string>{primary_uuid}, "route rw sends app_writer on 6446 to the primary [%s]",
+		join(writers).c_str());
+	const auto ro = route_uuids(12, proxy_host, 6447, "app_writer");
+	ok(subset(ro, secondaries), "route ro sends app_writer on 6447 to the secondaries [%s]", join(ro).c_str());
+	const std::string no_route = route_uuid(proxy_host, 6450, "app_writer");
+	ok(no_route.find("no Routing Guideline route matches") != std::string::npos,
+		"a session matching no route is rejected with an explicit error (%s)", no_route.c_str());
+	const std::string split_write = [&] {
+		auto connection = connect_router(proxy_host, 6450, "app_reader");
+		if (!connection) return std::string("ERROR: connect");
+		if (mysql_query(connection.get(), "CREATE TABLE IF NOT EXISTS router_e2e.rg_probe(id INT PRIMARY KEY)") != 0) {
+			return std::string("ERROR: ") + mysql_error(connection.get());
+		}
+		return std::string("OK");
+	}();
+	ok(split_write.find("no available PRIMARY destinations") != std::string::npos,
+		"rw_split writes on a route without PRIMARY classes are rejected (%s)", split_write.c_str());
+	const auto split_reads = route_uuids(6, proxy_host, 6450, "app_reader");
+	ok(subset(split_reads, readers), "rw_split reads on backend_network_readers use its read-only pool [%s]",
+		join(split_reads).c_str());
+	const std::string operator_route = route_uuid(proxy_host, 6446, "operator_user");
+	ok(operator_route.rfind("ERROR", 0) != 0,
+		"an operator rule destination is not remapped by the guideline (%s)", operator_route.c_str());
+
+	// 4. Modification through the AdminAPI.
+	const ShellResult disable = run_mysqlsh(queue_dir,
+		"cluster.getRoutingGuideline('rg_custom').setRouteOption('eu_reporting', 'enabled', false);");
+	ok(disable.rc == 0, "Shell disables route eu_reporting (rc=%d)", disable.rc);
+	ok(wait_until([&] {
+		(void)scalar(admin.get(), "MYSQL ROUTER RECONCILE");
+		return scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_router_guideline_routes "
+			"WHERE route_name='eu_reporting'") == 0;
+	}, 40), "the plugin converges on the modified guideline");
+	const auto reporting_after = route_uuids(12, proxy_host, 6447, "rg_reporting");
+	ok(subset(reporting_after, secondaries),
+		"rg_reporting now follows route ro to the secondaries [%s]", join(reporting_after).c_str());
+	ok(scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_router_hostgroups WHERE role LIKE 'rg:%'") == 12,
+		"the hostgroups of the disabled route are released");
+
+	// 5. Invalid document: last valid generation is kept.
+	const std::string valid_document = scalar(backend.get(), "SELECT CAST(guideline AS CHAR) FROM "
+		"mysql_innodb_cluster_metadata.routing_guidelines WHERE name='rg_custom'");
+	ok(scalar(backend.get(), "UPDATE mysql_innodb_cluster_metadata.routing_guidelines SET guideline="
+		"JSON_SET(guideline,'$.destinations[0].match','$.server.unknownVariable = 1') WHERE name='rg_custom'").empty() &&
+	   mysql_affected_rows(backend.get()) == 1, "the guideline document is corrupted in the metadata");
+	ok(wait_guideline_state(admin.get(), "stale", "rg_custom"), "an invalid document leaves the guideline stale");
+	ok(scalar_int(admin.get(), "SELECT COUNT(*) FROM stats_mysql_router_errors WHERE kind='guideline_parse' "
+		"AND message LIKE '%unknownVariable%'") >= 1, "the parse error is exposed in stats_mysql_router_errors");
+	const auto stale_writers = route_uuids(3, proxy_host, 6446, "app_writer");
+	ok(stale_writers == std::set<std::string>{primary_uuid} &&
+	   route_uuid(proxy_host, 6450, "app_writer").find("no Routing Guideline route") != std::string::npos,
+		"traffic keeps using the last valid generation [%s]", join(stale_writers).c_str());
+	std::string restore = "UPDATE mysql_innodb_cluster_metadata.routing_guidelines SET guideline='";
+	for (char c : valid_document) {
+		if (c == '\'' || c == '\\') restore.push_back('\\');
+		restore.push_back(c);
+	}
+	restore += "' WHERE name='rg_custom'";
+	(void)scalar(backend.get(), restore);
+	ok(wait_guideline_state(admin.get(), "active", "rg_custom"), "restoring the document reactivates the guideline");
+
+	// 6. Removal.
+	const ShellResult remove = run_mysqlsh(queue_dir, "cluster.setRoutingOption('guideline', null);");
+	ok(remove.rc == 0, "Shell unsets the guideline option (rc=%d)", remove.rc);
+	ok(wait_guideline_state(admin.get(), "none", ""), "the plugin deactivates the guideline");
+	ok(wait_until([&] {
+		return scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_router_hostgroups WHERE role LIKE 'rg:%'") == 0 &&
+			scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_servers WHERE comment LIKE '%;guideline=%'") == 0;
+	}, 20), "route hostgroups and servers are released");
+	ok(wait_until([&] {
+		(void)scalar(admin.get(), "MYSQL ROUTER RECONCILE");
+		return scalar(backend.get(), "SELECT COALESCE(attributes->>'$.CurrentRoutingGuideline','null') FROM "
+			"mysql_innodb_cluster_metadata.v2_routers WHERE router_name='proxysql-e2e'") == "null";
+	}, 30), "v2_routers reports no current guideline");
+	const std::string split_baseline = route_uuid(proxy_host, 6450, "app_writer");
+	ok(split_baseline.rfind("ERROR", 0) != 0, "baseline rw_split routing is restored (%s)", split_baseline.c_str());
+	const auto baseline_writers = route_uuids(3, proxy_host, 6446, "app_writer");
+	ok(baseline_writers == std::set<std::string>{primary_uuid}, "baseline rw routing is restored");
+	const ShellResult removed = run_mysqlsh(queue_dir,
+		"println('ROUTERS=' + JSON.stringify(cluster.listRouters()));");
+	ok(removed.rc == 0 && shell_value(removed, "ROUTERS").dump().find("rg_custom") == std::string::npos,
+		"Shell no longer reports a current guideline for the ProxySQL Router");
+
+	ok(operator_rules(admin.get(), "main.mysql_query_rules") == operator_main_before &&
+	   operator_rules(admin.get(), "runtime_mysql_query_rules") == operator_runtime_before &&
+	   !operator_main_before.empty(), "operator-owned query rules are unchanged by every reconciliation");
 
 	return exit_status();
 }
