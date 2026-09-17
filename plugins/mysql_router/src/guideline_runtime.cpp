@@ -242,11 +242,12 @@ GuidelineCompileOutcome GuidelineCompiler::compile(const DesiredTopology& desire
 		error_kind = "guideline_validation";
 		parse_errors.push_back({"", "routing guideline '" + source.guideline_id +
 			"' referenced by the router options does not exist"});
+	} else if (source.document == last_document_ && !last_errors_.empty()) {
+		// Same rejected document as the previous refresh: keep reporting it.
+		parse_errors = last_errors_;
+		error_kind = last_error_kind_;
 	} else if (last_valid_ && source.document == last_document_) {
 		parsed = last_valid_;
-	} else if (source.document == last_document_ && !last_errors_.empty()) {
-		parse_errors = last_errors_;
-		error_kind = "guideline_parse";
 	} else {
 		parsed = rg::Guideline::parse(source.document, parse_errors);
 		last_document_ = source.document;
@@ -254,6 +255,7 @@ GuidelineCompileOutcome GuidelineCompiler::compile(const DesiredTopology& desire
 			parsed.reset();
 			error_kind = "guideline_parse";
 			last_errors_ = parse_errors;
+			last_error_kind_ = error_kind;
 		} else {
 			last_errors_.clear();
 			if (parsed->uses_router_route_name_in_destinations()) {
@@ -262,6 +264,7 @@ GuidelineCompileOutcome GuidelineCompiler::compile(const DesiredTopology& desire
 				parse_errors.push_back({"destinations", "$.router.routeName is not supported in destinations "
 					"by ProxySQL: destinations are evaluated once for all listeners"});
 				last_errors_ = parse_errors;
+				last_error_kind_ = error_kind;
 			}
 		}
 	}
@@ -333,7 +336,9 @@ GuidelineCompileOutcome GuidelineCompiler::compile(const DesiredTopology& desire
 	}
 
 	std::ostringstream fingerprint;
-	fingerprint << compiled->source.guideline_id << '|' << std::hash<std::string>{}(source.document)
+	// Hash the document actually routing (the last valid one when stale), so edits
+	// of a rejected document do not trigger republication.
+	fingerprint << compiled->source.guideline_id << '|' << std::hash<std::string>{}(effective_source.document)
 		<< '|' << stale;
 	for (const auto& plan : compiled->routes) {
 		fingerprint << '|' << plan.name;

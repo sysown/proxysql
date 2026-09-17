@@ -169,7 +169,7 @@ Every difference is shown in `runtime_mysql_router_guideline_routes.notes`.
 
 ## 6. Components and interfaces
 
-### 6.1 Engine (`plugins/mysql_router/src/routing_guidelines*.cpp`, `include/mysql_router_routing_guidelines.h`)
+### 6.1 Engine (`plugins/mysql_router/src/routing_guidelines*.cpp`, `plugins/mysql_router/include/mysql_router_routing_guidelines.h`)
 
 Pure C++17, depends only on nlohmann json and `<regex>`; no ProxySQL headers, so it is unit
 tested in isolation.
@@ -229,9 +229,10 @@ using proxysql_plugin_route_hook_cb = ProxySQL_PluginRouteHookResult (*)(const P
 bool (*register_mysql_route_hook)(proxysql_plugin_route_hook_cb);  // init phase only, one hook
 ```
 
-`MySQL_Session` calls it right after `process_mysql_query()` in the COM_QUERY and
-COM_STMT_PREPARE paths (the existing `TODO(plugin-query-hook)` sites), when a hook is
-registered (lock-free atomic fast path). `set_hostgroup` overwrites
+`MySQL_Session` calls it right after the query processor in the COM_QUERY,
+COM_STMT_PREPARE and COM_STMT_EXECUTE paths, when a hook is registered (lock-free atomic
+fast path). The session cookie is reset to 0 on COM_CHANGE_USER and COM_RESET_CONNECTION,
+so the route is selected again for the new identity. `set_hostgroup` overwrites
 `qpo->destination_hostgroup`; `deny` returns an error to the client for that statement.
 The session stores the returned cookie.
 

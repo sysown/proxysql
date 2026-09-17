@@ -364,7 +364,11 @@ public:
 			apply_guideline(snapshot);
 			if (snapshot.desired.routing_guidelines_capable) advertise_guideline_support(snapshot);
 			if (snapshot.complete) {
-				persist_cached_topology(services_, snapshot.desired);
+				// Cache the guideline that is actually routing (the last valid document
+				// when the current one is rejected), for restarts during an outage.
+				DesiredTopology cached = snapshot.desired;
+				if (pending_guideline_.compiled) cached.guideline = pending_guideline_.compiled->source;
+				persist_cached_topology(services_, cached);
 				current_topology_ = snapshot.desired;
 				current_effective_ = snapshot.effective;
 				update_observability(snapshot.desired, health, snapshot.effective, true);

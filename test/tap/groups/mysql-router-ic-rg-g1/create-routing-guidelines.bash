@@ -10,12 +10,14 @@ set -euo pipefail
 # route can match $.session.sourceIP with NETWORK().
 SUBNET=$(docker network inspect "${INFRA_ID}_backend" \
     --format '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' | grep -m1 -E '^[0-9]+\.' || true)
+if [[ -z "${SUBNET}" ]]; then
+    # The NETWORK($.session.sourceIP, ...) route could not match any client: fail
+    # the fixture instead of creating a guideline the test cannot exercise.
+    echo "ERROR: cannot determine the IPv4 subnet of network ${INFRA_ID}_backend" >&2
+    exit 1
+fi
 CLIENT_NETWORK=${SUBNET%/*}
 CLIENT_MASK=${SUBNET#*/}
-if [[ -z "${SUBNET}" ]]; then
-    CLIENT_NETWORK=10.0.0.0
-    CLIENT_MASK=8
-fi
 
 LOG="${RESULT_DIR}/routing_guidelines_setup.log"
 docker exec \

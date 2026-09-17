@@ -261,15 +261,16 @@ int main() {
 	   "negative stats update frequency is rejected");
 	auto null_frequency = valid_session();
 	null_frequency.expected[4].result.rows[0]["router_options"] =
-		"{\"stats_updates_frequency\":null}";
+		"{\"stats_updates_frequency\":null,\"guideline\":\"rg-main\"}";
 	bool null_frequency_disabled = false;
 	try {
 		auto disabled_stats = MetadataV2_2::read_innodb_cluster(
 			null_frequency, "cluster-1", 42);
-		null_frequency_disabled = !disabled_stats.options.stats_updates_frequency.has_value();
+		null_frequency_disabled = !disabled_stats.options.stats_updates_frequency.has_value() &&
+			disabled_stats.options.guideline_id == std::optional<std::string>("rg-main");
 	} catch (const std::exception&) {}
 	ok(null_frequency_disabled,
-	   "a null stats update frequency disables metadata check-ins");
+	   "a null stats update frequency disables metadata check-ins and later options are still parsed");
 	auto missing_capability = valid_session();
 	missing_capability.expected[1].result.rows[0]["instances_endpoint"] = "0";
 	ok(read_throws(std::move(missing_capability), "required metadata"),

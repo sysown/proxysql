@@ -332,11 +332,12 @@ using proxysql_plugin_register_query_hook_cb =
 
 // ABI-10 MySQL session route hook.
 //
-// Called by MySQL_Session for every COM_QUERY and COM_STMT_PREPARE after the
+// Called by MySQL_Session for every COM_QUERY, COM_STMT_PREPARE and COM_STMT_EXECUTE after the
 // query processor has chosen a destination (i.e. after mysql_query_rules), when
 // a plugin registered the hook. It lets a plugin select the destination
 // hostgroup from session attributes (e.g. MySQL Router Routing Guidelines),
-// or reject the statement.
+// or reject the statement. The session cookie is reset to 0 on COM_CHANGE_USER
+// and COM_RESET_CONNECTION.
 //
 // All pointers in the payload are owned by core and valid only for the duration
 // of the callback. Strings are NUL-terminated and never NULL (possibly empty).

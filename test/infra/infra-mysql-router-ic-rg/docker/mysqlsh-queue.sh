@@ -14,6 +14,16 @@ set -uo pipefail
 QUEUE_DIR="${MYSQL_SHELL_QUEUE_DIR:?MYSQL_SHELL_QUEUE_DIR must be set}"
 mkdir -p "${QUEUE_DIR}"
 chmod 777 "${QUEUE_DIR}" 2>/dev/null || true
+# One server per queue directory, so requests stay sequential.
+exec 9>"${QUEUE_DIR}/.server.lock"
+if ! flock -n 9; then
+    echo "mysqlsh-queue: another server already serves ${QUEUE_DIR}" >&2
+    exit 0
+fi
+# The directory is a host bind mount that survives destroy/re-init: drop
+# requests and results left by a previous container.
+rm -f "${QUEUE_DIR}"/*.js "${QUEUE_DIR}"/*.js.tmp "${QUEUE_DIR}"/*.running \
+    "${QUEUE_DIR}"/*.out "${QUEUE_DIR}"/*.out.tmp "${QUEUE_DIR}"/*.rc "${QUEUE_DIR}"/*.rc.tmp
 touch "${QUEUE_DIR}/.server-ready"
 
 shopt -s nullglob
@@ -29,6 +39,7 @@ while true; do
         printf '%s\n' "${rc}" > "${QUEUE_DIR}/${id}.rc.tmp"
         chmod 666 "${QUEUE_DIR}/${id}.rc.tmp" 2>/dev/null || true
         mv -f "${QUEUE_DIR}/${id}.rc.tmp" "${QUEUE_DIR}/${id}.rc"
+        rm -f "${running}"
     done
     sleep 0.2
 done

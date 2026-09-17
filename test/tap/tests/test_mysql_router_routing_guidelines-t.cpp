@@ -489,6 +489,10 @@ int main() {
 	}
 	restore += "' WHERE name='rg_custom'";
 	(void)scalar(backend.get(), restore);
+	if (mysql_errno(backend.get()) != 0 || mysql_affected_rows(backend.get()) != 1) {
+		diag("restoring rg_custom failed: errno=%u affected=%llu error=%s", mysql_errno(backend.get()),
+			static_cast<unsigned long long>(mysql_affected_rows(backend.get())), mysql_error(backend.get()));
+	}
 	ok(wait_guideline_state(admin.get(), "active", "rg_custom"), "restoring the document reactivates the guideline");
 
 	// 6. Removal.

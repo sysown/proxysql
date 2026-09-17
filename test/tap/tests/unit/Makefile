@@ -839,8 +839,11 @@ mysql_router_registration_unit-t: mysql_router_registration_unit-t.cpp \
 		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
 
+MYSQL_ROUTER_ROUTING_GUIDELINES_SRCS := \
+	$(PROXYSQL_PATH)/plugins/mysql_router/src/routing_guidelines.cpp \
+	$(PROXYSQL_PATH)/plugins/mysql_router/src/routing_guidelines_expr.cpp
 MYSQL_ROUTER_GUIDELINE_SRCS := $(PROXYSQL_PATH)/plugins/mysql_router/src/guideline_runtime.cpp \
-	$(wildcard $(PROXYSQL_PATH)/plugins/mysql_router/src/routing_guidelines*.cpp)
+	$(MYSQL_ROUTER_ROUTING_GUIDELINES_SRCS)
 
 mysql_router_bootstrap_unit-t: mysql_router_bootstrap_unit-t.cpp $(MYSQL_ROUTER_GUIDELINE_SRCS) \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap.cpp \
@@ -896,10 +899,6 @@ mysql_router_reconciler_unit-t: mysql_router_reconciler_unit-t.cpp \
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/reconciler.cpp \
 		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
-
-MYSQL_ROUTER_ROUTING_GUIDELINES_SRCS := \
-	$(PROXYSQL_PATH)/plugins/mysql_router/src/routing_guidelines.cpp \
-	$(PROXYSQL_PATH)/plugins/mysql_router/src/routing_guidelines_expr.cpp
 
 mysql_router_routing_guidelines_unit-t: mysql_router_routing_guidelines_unit-t.cpp \
 		$(MYSQL_ROUTER_ROUTING_GUIDELINES_SRCS) \

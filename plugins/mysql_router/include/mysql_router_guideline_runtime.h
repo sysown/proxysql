@@ -93,6 +93,7 @@ private:
 	RoutingGuidelineSource last_valid_source_;
 	std::shared_ptr<const mysql_router::rg::Guideline> last_valid_;
 	std::vector<mysql_router::rg::Error> last_errors_;
+	std::string last_error_kind_;
 	// Last pools computed without errors; kept when destination evaluation fails.
 	std::shared_ptr<const CompiledGuideline> last_good_compiled_;
 };

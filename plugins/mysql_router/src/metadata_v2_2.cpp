@@ -110,10 +110,8 @@ RouterOptions parse_options(const std::string& value) {
 		else if (mode == "all") options.quorum_traffic = QuorumTraffic::all;
 		else throw std::runtime_error("invalid quorum traffic policy");
 	}
-	if (json.contains("stats_updates_frequency")) {
-		if (json["stats_updates_frequency"].is_null()) {
-			return options;
-		}
+	// null disables check-ins; the remaining options are still parsed.
+	if (json.contains("stats_updates_frequency") && !json["stats_updates_frequency"].is_null()) {
 		if (!json["stats_updates_frequency"].is_number_integer()) {
 			throw std::runtime_error("invalid stats update frequency");
 		}
@@ -216,26 +214,27 @@ DesiredTopology MetadataV2_2::read_innodb_cluster(
 		}
 	}
 
-	if (topology.options.guideline_id) {
-		if (!capabilities.routing_guidelines) {
-			topology.options.routing_guideline_unsupported = true;
-		} else {
-			QueryResult guideline = session.query(kRoutingGuideline, {router_id});
-			if (guideline.rows.size() > 1) throw std::runtime_error("duplicate routing guideline rows");
-			if (guideline.rows.size() == 1) {
-				RoutingGuidelineSource source;
-				source.guideline_id = required(guideline.rows[0], "guideline_id");
-				source.name = required(guideline.rows[0], "name");
-				source.document = optional_value(guideline.rows[0], "guideline").value_or("");
-				topology.guideline = std::move(source);
-			} else {
-				// The option references a guideline that does not exist: keep the id so
-				// the runtime reports it instead of silently ignoring the option.
-				RoutingGuidelineSource source;
-				source.guideline_id = *topology.options.guideline_id;
-				topology.guideline = std::move(source);
-			}
-		}
+	if (!capabilities.routing_guidelines) {
+		if (topology.options.guideline_id) topology.options.routing_guideline_unsupported = true;
+		return topology;
+	}
+	// The selection query resolves the router, ClusterSet and Cluster scopes itself,
+	// so it does not depend on how v2_router_options merges them.
+	QueryResult guideline = session.query(kRoutingGuideline, {router_id});
+	if (guideline.rows.size() > 1) throw std::runtime_error("duplicate routing guideline rows");
+	if (guideline.rows.size() == 1) {
+		RoutingGuidelineSource source;
+		source.guideline_id = required(guideline.rows[0], "guideline_id");
+		source.name = required(guideline.rows[0], "name");
+		source.document = optional_value(guideline.rows[0], "guideline").value_or("");
+		topology.options.guideline_id = source.guideline_id;
+		topology.guideline = std::move(source);
+	} else if (topology.options.guideline_id) {
+		// The option references a guideline that does not exist: keep the id so
+		// the runtime reports it instead of silently ignoring the option.
+		RoutingGuidelineSource source;
+		source.guideline_id = *topology.options.guideline_id;
+		topology.guideline = std::move(source);
 	}
 	return topology;
 }

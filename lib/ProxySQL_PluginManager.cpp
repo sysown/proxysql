@@ -1331,8 +1331,10 @@ bool proxysql_dispatch_configured_plugin_route_hook(
 }
 
 bool proxysql_has_configured_plugin_route_hook() {
-	return g_active_plugin_manager_ready.load(std::memory_order_acquire) &&
-		g_active_mysql_route_hook.load(std::memory_order_acquire);
+	// The route-hook flag is only set while the manager is ready, so without a hook
+	// this is a single load; readiness is re-checked under the lock by dispatch.
+	return g_active_mysql_route_hook.load(std::memory_order_acquire) &&
+		g_active_plugin_manager_ready.load(std::memory_order_acquire);
 }
 
 bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {

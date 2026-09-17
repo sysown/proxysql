@@ -123,7 +123,7 @@ GuidelineSessionRequest request(uint16_t port, int destination, const std::strin
 } // namespace
 
 int main() {
-	plan(49);
+	plan(50);
 	const ListenerProfile listeners;
 
 	// Shell default guideline.
@@ -268,6 +268,10 @@ int main() {
 	   "the parse error is reported: %s", stale.error_message.c_str());
 	ok(stale.compiled && stale.compiled->source.name == "rg" && plan(*stale.compiled, "rw"),
 	   "the stale generation still routes with the previous document");
+	auto stale_again = compiler.compile(invalid_desired, effective(), listeners);
+	ok(stale_again.state == "stale" && stale_again.error_kind == "guideline_parse" &&
+	   stale_again.compiled && stale_again.compiled->fingerprint == stale.compiled->fingerprint,
+	   "the same rejected document stays stale on the next refresh (%s)", stale_again.state.c_str());
 	GuidelineCompiler fresh;
 	auto invalid = fresh.compile(invalid_desired, effective(), listeners);
 	ok(invalid.state == "invalid" && !invalid.compiled, "an invalid first guideline is not applied");

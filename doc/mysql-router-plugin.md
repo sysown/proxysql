@@ -125,7 +125,9 @@ How a guideline is applied:
   session's first statement is routed. The hook only remaps the plugin's own
   `route_writer`/`route_reader` destinations on the Router listeners; any other
   destination selected by operator-owned `mysql_query_rules` is left unchanged,
-  and operator rules are never modified.
+  and operator rules are never modified. The `route_writer`/`route_reader`
+  hostgroups are Router-managed: an operator rule that explicitly targets one of
+  them opts into Router routing, and is remapped like the plugin's own rules.
 - A session that matches no route, or whose route has no available destination,
   gets an error for the statement (the connection stays open).
 
