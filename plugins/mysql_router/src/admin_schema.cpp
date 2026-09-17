@@ -148,13 +148,39 @@ void refresh_hostgroups(SQLite3DB* db, void*) {
 		std::lock_guard<std::mutex> guard(context.status_mutex);
 		generation = context.status.topology_generation;
 	}
+	std::string topology_uuid;
+	{
+		std::lock_guard<std::mutex> guard(context.status_mutex);
+		topology_uuid = context.status.topology_uuid;
+	}
 	const std::string insertion = "INSERT INTO runtime_mysql_router_hostgroups"
 		"(role,scope_uuid,hostgroup_id,server_count,generation) "
 		"SELECT role,scope_uuid,hostgroup_id,(SELECT COUNT(*) FROM mysql_servers s "
 		"WHERE s.hostgroup_id=h.hostgroup_id)," + std::to_string(generation) +
-		" FROM mysql_router_hostgroups h";
-	if (!db->execute("DELETE FROM runtime_mysql_router_hostgroups") ||
-		!db->execute(insertion.c_str()) || !db->execute("COMMIT")) db->execute("ROLLBACK");
+		" FROM mysql_router_hostgroups h WHERE role NOT LIKE 'rg:%'";
+	bool ok = db->execute("DELETE FROM runtime_mysql_router_hostgroups") && db->execute(insertion.c_str());
+	// Routing Guideline route hostgroups live in the plugin config DB; project the
+	// ones used by the data plane from the published snapshot.
+	const auto snapshot = mysql_router_guideline_snapshot();
+	if (snapshot && snapshot->compiled) {
+		for (size_t index = 0; index < snapshot->hostgroups.size(); ++index) {
+			if (!snapshot->hostgroups[index] || !snapshot->plan_index[index]) continue;
+			const GuidelineRoutePlan& plan = snapshot->compiled->routes[*snapshot->plan_index[index]];
+			const GuidelineRouteHostgroups& hostgroups = *snapshot->hostgroups[index];
+			const std::pair<const char*, int> pools[] {
+				{"all", hostgroups.all}, {"writer", hostgroups.writer}, {"reader", hostgroups.reader}};
+			for (const auto& [pool, hostgroup] : pools) {
+				const std::string row = "INSERT OR REPLACE INTO runtime_mysql_router_hostgroups"
+					"(role,scope_uuid,hostgroup_id,server_count,generation) VALUES(" +
+					sqlite_quote(mysql_router_guideline_hostgroup_role(plan.name, pool)) + "," +
+					sqlite_quote(topology_uuid) + "," + std::to_string(hostgroup) +
+					",(SELECT COUNT(*) FROM mysql_servers s WHERE s.hostgroup_id=" + std::to_string(hostgroup) + ")," +
+					std::to_string(generation) + ")";
+				ok = ok && db->execute(row.c_str());
+			}
+		}
+	}
+	if (!ok || !db->execute("COMMIT")) db->execute("ROLLBACK");
 }
 
 void refresh_users(SQLite3DB* db, void*) {

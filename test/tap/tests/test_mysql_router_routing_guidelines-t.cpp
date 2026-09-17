@@ -176,14 +176,14 @@ bool has_named(const json& list, const std::string& name) {
 }
 
 MysqlPtr connect_router(const char* host, unsigned port, const char* user,
-        const std::map<std::string, std::string>& attrs = {}) {
+        const std::map<std::string, std::string>& attrs = {}, const char* password = "router-app-password") {
 	MysqlPtr connection(mysql_init(nullptr), &mysql_close);
 	unsigned timeout = 5;
 	mysql_options(connection.get(), MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 	for (const auto& attr : attrs) {
 		mysql_options4(connection.get(), MYSQL_OPT_CONNECT_ATTR_ADD, attr.first.c_str(), attr.second.c_str());
 	}
-	if (!mysql_real_connect(connection.get(), host, user, "router-app-password", "router_e2e",
+	if (!mysql_real_connect(connection.get(), host, user, password, nullptr,
 			port, nullptr, 0)) {
 		diag("connect %s:%u as %s failed: %s", host, port, user, mysql_error(connection.get()));
 		return MysqlPtr(nullptr, &mysql_close);
@@ -193,8 +193,8 @@ MysqlPtr connect_router(const char* host, unsigned port, const char* user,
 
 /** Server UUID answering a fresh session, or "ERROR: <message>". */
 std::string route_uuid(const char* host, unsigned port, const char* user,
-        const std::map<std::string, std::string>& attrs = {}) {
-	auto connection = connect_router(host, port, user, attrs);
+        const std::map<std::string, std::string>& attrs = {}, const char* password = "router-app-password") {
+	auto connection = connect_router(host, port, user, attrs, password);
 	if (!connection) return "ERROR: connect";
 	if (mysql_query(connection.get(), "SELECT @@server_uuid") != 0) {
 		return std::string("ERROR: ") + mysql_error(connection.get());
@@ -431,20 +431,26 @@ int main() {
 	const std::string no_route = route_uuid(proxy_host, 6450, "app_writer");
 	ok(no_route.find("no Routing Guideline route matches") != std::string::npos,
 		"a session matching no route is rejected with an explicit error (%s)", no_route.c_str());
+	// backend_network_readers lists Primary only in its priority 1 group: on the
+	// rw_split port, statements that need the writer use that PRIMARY pool.
 	const std::string split_write = [&] {
 		auto connection = connect_router(proxy_host, 6450, "app_reader");
 		if (!connection) return std::string("ERROR: connect");
-		if (mysql_query(connection.get(), "CREATE TABLE IF NOT EXISTS router_e2e.rg_probe(id INT PRIMARY KEY)") != 0) {
+		if (mysql_query(connection.get(), "SELECT @@server_uuid FOR UPDATE") != 0) {
 			return std::string("ERROR: ") + mysql_error(connection.get());
 		}
-		return std::string("OK");
+		MYSQL_RES* result = mysql_store_result(connection.get());
+		MYSQL_ROW row = result ? mysql_fetch_row(result) : nullptr;
+		std::string value = row && row[0] ? row[0] : "ERROR: empty";
+		if (result) mysql_free_result(result);
+		return value;
 	}();
-	ok(split_write.find("no available PRIMARY destinations") != std::string::npos,
-		"rw_split writes on a route without PRIMARY classes are rejected (%s)", split_write.c_str());
+	ok(split_write == primary_uuid,
+		"rw_split locking reads use the route's PRIMARY group (%s)", split_write.c_str());
 	const auto split_reads = route_uuids(6, proxy_host, 6450, "app_reader");
 	ok(subset(split_reads, readers), "rw_split reads on backend_network_readers use its read-only pool [%s]",
 		join(split_reads).c_str());
-	const std::string operator_route = route_uuid(proxy_host, 6446, "operator_user");
+	const std::string operator_route = route_uuid(proxy_host, 6446, "operator_user", {}, "operator-password");
 	ok(operator_route.rfind("ERROR", 0) != 0,
 		"an operator rule destination is not remapped by the guideline (%s)", operator_route.c_str());
 
