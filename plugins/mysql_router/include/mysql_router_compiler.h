@@ -48,6 +48,11 @@ class HostgroupAllocator {
 public:
 	static ManagedHostgroups load_or_allocate(SQLite3DB& configdb,
 		std::string_view scope_uuid, const HostgroupAllocationInput& input);
+	// Routing Guideline route hostgroups (#6145): keeps existing "rg:" roles that
+	// are still requested, releases the others and allocates the missing ones.
+	static ManagedHostgroups load_or_allocate_guideline(SQLite3DB& configdb,
+		std::string_view scope_uuid, const std::set<std::string>& roles,
+		const HostgroupAllocationInput& input);
 };
 
 struct CompiledServer {

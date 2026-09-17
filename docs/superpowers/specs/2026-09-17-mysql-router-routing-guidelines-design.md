@@ -147,7 +147,7 @@ master; 9.2.0 introduced the feature, document versions `"1.0"` and `"1.1"` (lat
 | `round-robin` | all pool members weight 1 (ProxySQL weighted random load balancing) |
 | `first-available` | members weighted in candidate order: first 10000000, then decreasing by powers of 100 (min 1); ProxySQL selects the first online member practically always and falls back immediately when it is shunned |
 | route selection per backend connect | route selected once per client session (first statement), cached in the session; re-selected if the guideline generation changes |
-| no route matches | the statement fails with `ERROR 9006 (HY000): MySQL Router plugin: no Routing Guideline route matches this session` (ProxySQL cannot fail at handshake time) |
+| no route matches | the statement fails through the query-rule `error_msg` path (`ERROR 1148 (42000): MySQL Router plugin: no Routing Guideline route matches this session`); the session stays open (ProxySQL cannot fail at handshake time) |
 | empty pool | statement fails with `... route '<name>' has no available destinations` |
 | `connectionSharingAllowed` | reported in explain view; ProxySQL multiplexing rules unchanged |
 | rw_split port pool | writer hostgroup = PRIMARY members of the first group containing an online PRIMARY; reader hostgroup = non-PRIMARY members of the first group containing one, else the writer members |

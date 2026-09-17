@@ -49,6 +49,7 @@ std::atomic<bool> g_active_plugin_manager_ready { false };
 #ifdef PROXYSQL40
 std::atomic<bool> g_active_mysql_query_hook { false };
 std::atomic<bool> g_active_pgsql_query_hook { false };
+std::atomic<bool> g_active_mysql_route_hook { false };
 #endif
 ProxySQL_PluginManager* g_registry_target = nullptr;
 // Guards swaps of g_active_plugin_manager. Readers (dispatch_admin_command,
@@ -241,6 +242,19 @@ bool register_query_hook_service(ProxySQL_PluginProtocol proto,
 	return true;
 }
 
+bool register_mysql_route_hook_service(proxysql_plugin_route_hook_cb cb) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Plugin route hook registration attempted outside init phase\n");
+		return false;
+	}
+	if (!g_registry_target->register_mysql_route_hook(cb)) {
+		note_registration_failure("plugin route hook", "mysql");
+		proxy_warning("Plugin route hook registration failed for mysql\n");
+		return false;
+	}
+	return true;
+}
+
 bool register_runtime_view_service(const ProxySQL_PluginRuntimeView& view) {
 	if (g_registry_target == nullptr) {
 		proxy_warning("Plugin runtime-view registration attempted outside init/register_schemas phase\n");
@@ -286,6 +300,11 @@ SQLite3DB* get_statsdb_phase_b_stub()  { return nullptr; }
 bool register_query_hook_phase_b_stub(ProxySQL_PluginProtocol,
                                       proxysql_plugin_query_hook_cb) {
 	proxy_warning("Plugin query hook registration attempted during register_schemas phase -- do this in init() instead\n");
+	return false;
+}
+
+bool register_mysql_route_hook_phase_b_stub(proxysql_plugin_route_hook_cb) {
+	proxy_warning("Plugin route hook registration attempted during register_schemas phase -- do this in init() instead\n");
 	return false;
 }
 
@@ -444,6 +463,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.set_listener_gate = &set_listener_gate_service;
 	services_.apply_mysql_config = &proxysql_plugin_apply_mysql_config;
 	services_.apply_mysql_config_v2 = &proxysql_plugin_apply_mysql_config_v2;
+	services_.register_mysql_route_hook = &register_mysql_route_hook_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -475,6 +495,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_phase_b_.set_listener_gate = &set_listener_gate_not_available;
 	services_phase_b_.apply_mysql_config = &apply_mysql_config_not_available;
 	services_phase_b_.apply_mysql_config_v2 = &apply_mysql_config_v2_not_available;
+	services_phase_b_.register_mysql_route_hook = &register_mysql_route_hook_phase_b_stub;
 #endif /* PROXYSQL40 */
 }
 
@@ -545,7 +566,7 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	// safe via the tail-append pattern -- fields the plugin didn't define
 	// are never dereferenced (see handling of register_schemas below).
 	//
-	// abi_version carries the ABI 1..9 layout-version number in its low
+	// abi_version carries the ABI 1..10 layout-version number in its low
 	// bits and PROXYSQL_PLUGIN_ABI_DEBUG_BIT as a separate, independent
 	// tag (see the long comment on PROXYSQL_PLUGIN_ABI_DEBUG_BIT in
 	// ProxySQL_Plugin.h for the dump_pkt/DSS-offset-shift mechanism this
@@ -650,7 +671,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		//
 		// abi_version must be masked before this comparison: it carries
 		// PROXYSQL_PLUGIN_ABI_DEBUG_BIT in a high bit orthogonal to the
-		// ABI 1..9 layout-version number (see the contract comment next
+		// ABI 1..10 layout-version number (see the contract comment next
 		// to PROXYSQL_PLUGIN_ABI_DEBUG_BIT in ProxySQL_Plugin.h). A
 		// DEBUG-tagged ABI-1 descriptor has abi_version == 0x40000001,
 		// which satisfies a raw ">= 2u" and would wrongly dereference
@@ -1044,6 +1065,27 @@ bool ProxySQL_PluginManager::dispatch_query_hook(ProxySQL_PluginProtocol proto,
 	return true;
 }
 
+bool ProxySQL_PluginManager::register_mysql_route_hook(proxysql_plugin_route_hook_cb cb) {
+	if (cb == nullptr || mysql_route_hook_ != nullptr) {
+		return false;
+	}
+	mysql_route_hook_ = cb;
+	return true;
+}
+
+bool ProxySQL_PluginManager::has_mysql_route_hook() const {
+	return mysql_route_hook_ != nullptr;
+}
+
+bool ProxySQL_PluginManager::dispatch_mysql_route_hook(const ProxySQL_PluginRouteHookPayload& payload,
+                                                       ProxySQL_PluginRouteHookResult& result) const {
+	if (mysql_route_hook_ == nullptr) {
+		return false;
+	}
+	result = mysql_route_hook_(payload);
+	return true;
+}
+
 bool ProxySQL_PluginManager::register_runtime_view(const ProxySQL_PluginRuntimeView& view) {
 	if (view.table_name == nullptr || *view.table_name == '\0' || view.refresh == nullptr) {
 		return false;
@@ -1270,6 +1312,29 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 	return mgr->dispatch_query_hook(proto, payload, result);
 }
 
+bool proxysql_dispatch_configured_plugin_route_hook(
+	const ProxySQL_PluginRouteHookPayload& payload,
+	ProxySQL_PluginRouteHookResult& result
+) {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return false;
+	}
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return false;
+	}
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
+	if (mgr == nullptr) {
+		return false;
+	}
+	return mgr->dispatch_mysql_route_hook(payload, result);
+}
+
+bool proxysql_has_configured_plugin_route_hook() {
+	return g_active_plugin_manager_ready.load(std::memory_order_acquire) &&
+		g_active_mysql_route_hook.load(std::memory_order_acquire);
+}
+
 bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {
 	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
 		return false;
@@ -1349,6 +1414,7 @@ bool proxysql_discover_configured_plugins(
 #ifdef PROXYSQL40
 	g_active_mysql_query_hook.store(false, std::memory_order_release);
 	g_active_pgsql_query_hook.store(false, std::memory_order_release);
+	g_active_mysql_route_hook.store(false, std::memory_order_release);
 #endif
 	{
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
@@ -1439,6 +1505,7 @@ bool proxysql_init_configured_plugins(
 	g_active_plugin_manager_ready.store(false, std::memory_order_release);
 	g_active_mysql_query_hook.store(false, std::memory_order_release);
 	g_active_pgsql_query_hook.store(false, std::memory_order_release);
+	g_active_mysql_route_hook.store(false, std::memory_order_release);
 	err.clear();
 	if (manager == nullptr) {
 		return true;
@@ -1457,6 +1524,7 @@ bool proxysql_start_configured_plugins(
 #ifdef PROXYSQL40
 	g_active_mysql_query_hook.store(false, std::memory_order_release);
 	g_active_pgsql_query_hook.store(false, std::memory_order_release);
+	g_active_mysql_route_hook.store(false, std::memory_order_release);
 #endif
 	err.clear();
 	if (manager == nullptr) {
@@ -1471,6 +1539,7 @@ bool proxysql_start_configured_plugins(
 		manager->has_query_hook(ProxySQL_PluginProtocol::mysql), std::memory_order_release);
 	g_active_pgsql_query_hook.store(
 		manager->has_query_hook(ProxySQL_PluginProtocol::pgsql), std::memory_order_release);
+	g_active_mysql_route_hook.store(manager->has_mysql_route_hook(), std::memory_order_release);
 #endif
 	g_active_plugin_manager_ready.store(true, std::memory_order_release);
 	return true;
@@ -1497,6 +1566,7 @@ bool proxysql_stop_configured_plugins(
 #ifdef PROXYSQL40
 	g_active_mysql_query_hook.store(false, std::memory_order_release);
 	g_active_pgsql_query_hook.store(false, std::memory_order_release);
+	g_active_mysql_route_hook.store(false, std::memory_order_release);
 #endif
 	{
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);

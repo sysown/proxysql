@@ -1,4 +1,5 @@
 #include "mysql_router_admin.h"
+#include "mysql_router_guideline_runtime.h"
 #include "mysql_router_plugin.h"
 
 #include "sqlite3db.h"
@@ -29,6 +30,7 @@ const TableDefinition kPersistentTables[] {
 	{"mysql_router_hostgroups", "CREATE TABLE mysql_router_hostgroups (role TEXT NOT NULL,scope_uuid TEXT NOT NULL,hostgroup_id INTEGER NOT NULL UNIQUE,PRIMARY KEY(role,scope_uuid))"},
 	{"mysql_router_users", "CREATE TABLE mysql_router_users (username TEXT PRIMARY KEY,source_fingerprint TEXT NOT NULL,auth_plugin TEXT NOT NULL,state TEXT NOT NULL,last_error TEXT NOT NULL DEFAULT '',generation INTEGER NOT NULL)"},
 	{"mysql_router_topology_cache", "CREATE TABLE mysql_router_topology_cache (instance_uuid TEXT PRIMARY KEY,topology_uuid TEXT NOT NULL,topology_name TEXT NOT NULL,group_name TEXT NOT NULL,metadata_major INTEGER NOT NULL,metadata_minor INTEGER NOT NULL,metadata_patch INTEGER NOT NULL,label TEXT NOT NULL,endpoint_host TEXT NOT NULL,endpoint_port INTEGER NOT NULL,instance_kind INTEGER NOT NULL,attributes TEXT NOT NULL,read_only_targets INTEGER NOT NULL,quorum_traffic INTEGER NOT NULL,stats_updates_frequency INTEGER,routing_guideline_unsupported INTEGER NOT NULL)"},
+	{"mysql_router_guideline_cache", "CREATE TABLE mysql_router_guideline_cache (topology_uuid TEXT PRIMARY KEY,guideline_id TEXT NOT NULL,name TEXT NOT NULL,document TEXT NOT NULL,router_hostname TEXT NOT NULL,router_name TEXT NOT NULL,router_local_cluster TEXT NOT NULL,router_tags TEXT NOT NULL)"},
 	{"mysql_router_bootstrap_journal", "CREATE TABLE mysql_router_bootstrap_journal (topology_uuid TEXT PRIMARY KEY,router_name TEXT NOT NULL,phase TEXT NOT NULL,router_id INTEGER,metadata_user TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL,last_error TEXT NOT NULL DEFAULT '')"},
 };
 
@@ -37,6 +39,9 @@ const TableDefinition kRuntimeTables[] {
 	{"runtime_mysql_router_topology", "CREATE TABLE runtime_mysql_router_topology (topology_generation INTEGER NOT NULL,cluster_uuid TEXT NOT NULL,instance_uuid TEXT NOT NULL,endpoint TEXT NOT NULL,instance_kind TEXT NOT NULL,desired_role TEXT NOT NULL,observed_state TEXT NOT NULL,effective_role TEXT NOT NULL,last_observed_at INTEGER NOT NULL,PRIMARY KEY(instance_uuid,endpoint))"},
 	{"runtime_mysql_router_hostgroups", "CREATE TABLE runtime_mysql_router_hostgroups (role TEXT NOT NULL,scope_uuid TEXT NOT NULL,hostgroup_id INTEGER NOT NULL,server_count INTEGER NOT NULL,generation INTEGER NOT NULL,PRIMARY KEY(role,scope_uuid))"},
 	{"runtime_mysql_router_users", "CREATE TABLE runtime_mysql_router_users (username TEXT PRIMARY KEY,state TEXT NOT NULL,auth_plugin TEXT NOT NULL,last_error TEXT NOT NULL,generation INTEGER NOT NULL)"},
+	{"runtime_mysql_router_guideline", "CREATE TABLE runtime_mysql_router_guideline (guideline_id TEXT NOT NULL,name TEXT NOT NULL,version TEXT NOT NULL,state TEXT NOT NULL,error_kind TEXT NOT NULL,last_error TEXT NOT NULL,last_update INTEGER NOT NULL)"},
+	{"runtime_mysql_router_guideline_routes", "CREATE TABLE runtime_mysql_router_guideline_routes (route_order INTEGER NOT NULL,route_name TEXT NOT NULL,match TEXT NOT NULL,pool TEXT NOT NULL,hostgroup_id INTEGER NOT NULL,priority INTEGER,classes TEXT NOT NULL,strategy TEXT NOT NULL,members TEXT NOT NULL,connection_sharing_allowed TEXT NOT NULL,notes TEXT NOT NULL,PRIMARY KEY(route_name,pool))"},
+	{"runtime_mysql_router_guideline_destinations", "CREATE TABLE runtime_mysql_router_guideline_destinations (server_uuid TEXT PRIMARY KEY,endpoint TEXT NOT NULL,member_role TEXT NOT NULL,classes TEXT NOT NULL)"},
 };
 
 const TableDefinition kStatsTables[] {
@@ -162,6 +167,89 @@ void refresh_users(SQLite3DB* db, void*) {
 		!db->execute("COMMIT")) db->execute("ROLLBACK");
 }
 
+void refresh_guideline(SQLite3DB* db, void*) {
+	MysqlRouterContext& context = mysql_router_context();
+	std::lock_guard<std::mutex> projection_guard(context.projection_mutex);
+	if (db == nullptr || !db->execute("BEGIN")) return;
+	MysqlRouterGuidelineStatus status;
+	{
+		std::lock_guard<std::mutex> guard(context.status_mutex);
+		status = context.guideline;
+	}
+	bool ok = db->execute("DELETE FROM runtime_mysql_router_guideline");
+	const std::string insertion = "INSERT INTO runtime_mysql_router_guideline"
+		"(guideline_id,name,version,state,error_kind,last_error,last_update) VALUES(" +
+		sqlite_quote(status.guideline_id) + "," + sqlite_quote(status.name) + "," +
+		sqlite_quote(status.version) + "," + sqlite_quote(status.state) + "," +
+		sqlite_quote(status.error_kind) + "," + sqlite_quote(status.last_error) + "," +
+		std::to_string(status.last_update) + ")";
+	ok = ok && db->execute(insertion.c_str());
+	if (!ok || !db->execute("COMMIT")) db->execute("ROLLBACK");
+}
+
+// Explain view: what every enabled route resolves to in ProxySQL. Hostgroups come
+// from the published snapshot, so they reflect what the data plane uses.
+void refresh_guideline_routes(SQLite3DB* db, void*) {
+	MysqlRouterContext& context = mysql_router_context();
+	std::lock_guard<std::mutex> projection_guard(context.projection_mutex);
+	if (db == nullptr || !db->execute("BEGIN")) return;
+	bool ok = db->execute("DELETE FROM runtime_mysql_router_guideline_routes");
+	const auto snapshot = mysql_router_guideline_snapshot();
+	if (snapshot && snapshot->compiled) {
+		for (size_t index = 0; index < snapshot->hostgroups.size(); ++index) {
+			if (!snapshot->hostgroups[index] || !snapshot->plan_index[index]) continue;
+			const GuidelineRoutePlan& plan = snapshot->compiled->routes[*snapshot->plan_index[index]];
+			const GuidelineRouteHostgroups& hostgroups = *snapshot->hostgroups[index];
+			const std::pair<const char*, std::pair<const GuidelinePool*, int>> pools[] {
+				{"all", {&plan.all, hostgroups.all}},
+				{"writer", {&plan.writer, hostgroups.writer}},
+				{"reader", {&plan.reader, hostgroups.reader}}};
+			for (const auto& [pool_name, pool] : pools) {
+				std::string classes, members;
+				for (size_t i = 0; i < pool.first->classes.size(); ++i) {
+					if (i) classes += ",";
+					classes += pool.first->classes[i];
+				}
+				for (size_t i = 0; i < pool.first->members.size(); ++i) {
+					if (i) members += ",";
+					members += pool.first->members[i].host + ":" + std::to_string(pool.first->members[i].port) +
+						"(weight=" + std::to_string(pool.first->members[i].weight) + ")";
+				}
+				const std::string sharing = plan.connection_sharing_allowed
+					? (*plan.connection_sharing_allowed ? "true" : "false") : "";
+				const std::string insertion = "INSERT INTO runtime_mysql_router_guideline_routes"
+					"(route_order,route_name,match,pool,hostgroup_id,priority,classes,strategy,members,"
+					"connection_sharing_allowed,notes) VALUES(" + std::to_string(index) + "," +
+					sqlite_quote(plan.name) + "," + sqlite_quote(plan.match) + "," + sqlite_quote(pool_name) + "," +
+					std::to_string(pool.second) + "," +
+					(pool.first->priority ? std::to_string(*pool.first->priority) : std::string("NULL")) + "," +
+					sqlite_quote(classes) + "," + sqlite_quote(pool.first->strategy) + "," +
+					sqlite_quote(members) + "," + sqlite_quote(sharing) + "," + sqlite_quote(plan.notes) + ")";
+				ok = ok && db->execute(insertion.c_str());
+			}
+		}
+	}
+	if (!ok || !db->execute("COMMIT")) db->execute("ROLLBACK");
+}
+
+void refresh_guideline_destinations(SQLite3DB* db, void*) {
+	MysqlRouterContext& context = mysql_router_context();
+	std::lock_guard<std::mutex> projection_guard(context.projection_mutex);
+	if (db == nullptr || !db->execute("BEGIN")) return;
+	bool ok = db->execute("DELETE FROM runtime_mysql_router_guideline_destinations");
+	const auto snapshot = mysql_router_guideline_snapshot();
+	if (snapshot && snapshot->compiled) {
+		for (const auto& row : snapshot->compiled->destinations) {
+			const std::string insertion = "INSERT INTO runtime_mysql_router_guideline_destinations"
+				"(server_uuid,endpoint,member_role,classes) VALUES(" + sqlite_quote(row.server_uuid) + "," +
+				sqlite_quote(row.endpoint) + "," + sqlite_quote(row.member_role) + "," +
+				sqlite_quote(row.classes) + ")";
+			ok = ok && db->execute(insertion.c_str());
+		}
+	}
+	if (!ok || !db->execute("COMMIT")) db->execute("ROLLBACK");
+}
+
 ProxySQL_PluginCommandResult load_config(
 		const ProxySQL_PluginCommandContext&, const char*) {
 	return {1, 0, "LOAD MYSQL ROUTER CONFIG TO RUNTIME is not implemented"};
@@ -206,7 +294,13 @@ bool mysql_router_register_admin_schema(ProxySQL_PluginServices& services) {
 		!services.register_runtime_view({"runtime_mysql_router_hostgroups", &refresh_hostgroups,
 			nullptr, ProxySQL_PluginDBKind::admin_db}) ||
 		!services.register_runtime_view({"runtime_mysql_router_users", &refresh_users,
-			nullptr, ProxySQL_PluginDBKind::admin_db})) {
+			nullptr, ProxySQL_PluginDBKind::admin_db}) ||
+		!services.register_runtime_view({"runtime_mysql_router_guideline", &refresh_guideline,
+			nullptr, ProxySQL_PluginDBKind::admin_db}) ||
+		!services.register_runtime_view({"runtime_mysql_router_guideline_routes", &refresh_guideline_routes,
+			nullptr, ProxySQL_PluginDBKind::admin_db}) ||
+		!services.register_runtime_view({"runtime_mysql_router_guideline_destinations",
+			&refresh_guideline_destinations, nullptr, ProxySQL_PluginDBKind::admin_db})) {
 		return false;
 	}
 

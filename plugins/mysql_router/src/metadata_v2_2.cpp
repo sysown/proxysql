@@ -20,6 +20,28 @@ constexpr const char* kInstances =
 constexpr const char* kRouterOptions =
 	"SELECT router_options FROM mysql_innodb_cluster_metadata.v2_router_options "
 	"WHERE router_id=?";
+// Same selection as MySQL Router (metadata_cache cluster_metadata.h): the router
+// option wins over the ClusterSet option, which wins over the Cluster option.
+constexpr const char* kRoutingGuideline =
+	"SELECT RG.guideline_id AS guideline_id, RG.name AS name, RG.guideline AS guideline "
+	"FROM mysql_innodb_cluster_metadata.routing_guidelines RG WHERE RG.guideline_id = ("
+	"SELECT COALESCE(RO.router_options->>'$.guideline', CS.router_options->>'$.guideline', "
+	"CL.router_options->>'$.guideline') "
+	"FROM mysql_innodb_cluster_metadata.v2_router_options RO "
+	"LEFT JOIN mysql_innodb_cluster_metadata.clustersets CS ON RO.clusterset_id = CS.clusterset_id "
+	"LEFT JOIN mysql_innodb_cluster_metadata.clusters CL ON RO.cluster_id = CL.cluster_id "
+	"WHERE RO.router_id = ?)";
+constexpr const char* kRouterInfo =
+	"SELECT address, router_name, attributes->>'$.LocalCluster' AS local_cluster "
+	"FROM mysql_innodb_cluster_metadata.v2_routers WHERE router_id=?";
+constexpr const char* kRouterTags =
+	"SELECT options->'$.tags' AS tags FROM mysql_innodb_cluster_metadata.v2_routers WHERE router_id=?";
+
+std::optional<std::string> optional_value(const QueryRow& row, const char* column) {
+	auto it = row.find(column);
+	if (it == row.end() || !it->second) return std::nullopt;
+	return *it->second;
+}
 
 const std::string& required(const QueryRow& row, const char* column) {
 	auto it = row.find(column);
@@ -99,10 +121,12 @@ RouterOptions parse_options(const std::string& value) {
 		if (frequency < 0) throw std::runtime_error("invalid stats update frequency");
 		options.stats_updates_frequency = static_cast<uint64_t>(frequency);
 	}
-	for (const char* key : {"guideline", "routing_guideline"}) {
-		if (json.contains(key) && !json[key].is_null()) {
-			options.routing_guideline_unsupported = true;
-		}
+	if (json.contains("guideline") && !json["guideline"].is_null()) {
+		if (!json["guideline"].is_string()) throw std::runtime_error("invalid guideline router option");
+		options.guideline_id = json["guideline"].get<std::string>();
+	}
+	if (json.contains("routing_guideline") && !json["routing_guideline"].is_null()) {
+		options.routing_guideline_unsupported = true;
 	}
 	return options;
 }
@@ -112,7 +136,9 @@ RouterOptions parse_options(const std::string& value) {
 DesiredTopology MetadataV2_2::read_innodb_cluster(
 	IMetadataSession& session, std::string_view cluster_uuid, int64_t router_id) {
 	DesiredTopology topology;
-	topology.metadata_version = probe_metadata(session).version;
+	const MetadataCapabilities capabilities = probe_metadata(session);
+	topology.metadata_version = capabilities.version;
+	topology.routing_guidelines_capable = capabilities.routing_guidelines;
 	QueryResult current = session.query(kThisInstance, {});
 	if (current.rows.size() != 1) throw std::runtime_error("metadata this_instance row is missing");
 	const QueryRow& this_instance = current.rows[0];
@@ -166,5 +192,50 @@ DesiredTopology MetadataV2_2::read_innodb_cluster(
 	QueryResult options = session.query(kRouterOptions, {router_id});
 	if (options.rows.size() > 1) throw std::runtime_error("duplicate router_options rows");
 	if (!options.rows.empty()) topology.options = parse_options(required(options.rows[0], "router_options"));
+
+	QueryResult router = session.query(kRouterInfo, {router_id});
+	if (router.rows.size() == 1) {
+		topology.router.hostname = optional_value(router.rows[0], "address").value_or("");
+		topology.router.name = optional_value(router.rows[0], "router_name").value_or("");
+		topology.router.local_cluster = optional_value(router.rows[0], "local_cluster").value_or("");
+	}
+	if (capabilities.routers_options) {
+		QueryResult tags = session.query(kRouterTags, {router_id});
+		if (tags.rows.size() == 1) {
+			const auto text = optional_value(tags.rows[0], "tags");
+			if (text && !text->empty()) {
+				nlohmann::json json;
+				try { json = nlohmann::json::parse(*text); }
+				catch (const std::exception&) { throw std::runtime_error("invalid router tags JSON"); }
+				if (json.is_object()) {
+					for (auto it = json.begin(); it != json.end(); ++it) {
+						topology.router.tags.emplace(it.key(), it.value().dump());
+					}
+				}
+			}
+		}
+	}
+
+	if (topology.options.guideline_id) {
+		if (!capabilities.routing_guidelines) {
+			topology.options.routing_guideline_unsupported = true;
+		} else {
+			QueryResult guideline = session.query(kRoutingGuideline, {router_id});
+			if (guideline.rows.size() > 1) throw std::runtime_error("duplicate routing guideline rows");
+			if (guideline.rows.size() == 1) {
+				RoutingGuidelineSource source;
+				source.guideline_id = required(guideline.rows[0], "guideline_id");
+				source.name = required(guideline.rows[0], "name");
+				source.document = optional_value(guideline.rows[0], "guideline").value_or("");
+				topology.guideline = std::move(source);
+			} else {
+				// The option references a guideline that does not exist: keep the id so
+				// the runtime reports it instead of silently ignoring the option.
+				RoutingGuidelineSource source;
+				source.guideline_id = *topology.options.guideline_id;
+				topology.guideline = std::move(source);
+			}
+		}
+	}
 	return topology;
 }

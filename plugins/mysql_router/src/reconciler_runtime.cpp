@@ -3,11 +3,14 @@
 #include "mysql_router_bootstrap.h"
 #include "mysql_router_config.h"
 #include "mysql_router_compiler.h"
+#include "mysql_router_guideline_runtime.h"
 #include "mysql_router_metadata.h"
 #include "mysql_router_plugin.h"
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 #include "sqlite3db.h"
+
+#include <json.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -148,6 +151,29 @@ DesiredTopology load_cached_topology(SQLite3DB& db, std::string_view topology_uu
 		instance.attributes = row->fields[11] ? row->fields[11] : "";
 		topology.instances.push_back(std::move(instance));
 	}
+	if (!topology.instances.empty()) {
+		auto guideline = query(db,
+			"SELECT guideline_id,name,document,router_hostname,router_name,router_local_cluster,router_tags "
+			"FROM mysql_router_guideline_cache WHERE topology_uuid=" + quote(topology_uuid));
+		if (guideline->rows.size() == 1) {
+			auto* row = guideline->rows[0];
+			auto text = [&](int index) { return std::string(row->fields[index] ? row->fields[index] : ""); };
+			topology.routing_guidelines_capable = true;
+			if (!text(0).empty()) {
+				topology.options.guideline_id = text(0);
+				topology.guideline = RoutingGuidelineSource{text(0), text(1), text(2)};
+			}
+			topology.router.hostname = text(3);
+			topology.router.name = text(4);
+			topology.router.local_cluster = text(5);
+			try {
+				const nlohmann::json tags = nlohmann::json::parse(text(6).empty() ? "{}" : text(6));
+				for (auto it = tags.begin(); it != tags.end(); ++it) {
+					topology.router.tags.emplace(it.key(), it.value().get<std::string>());
+				}
+			} catch (const std::exception&) {}
+		}
+	}
 	return topology;
 }
 
@@ -158,7 +184,23 @@ void persist_cached_topology(ProxySQL_PluginServices& services,
 		throw std::runtime_error("cannot begin Router topology-cache transaction");
 	}
 	bool ok = db->execute("DELETE FROM main.mysql_router_topology_cache") &&
-		db->execute("DELETE FROM disk.mysql_router_topology_cache");
+		db->execute("DELETE FROM disk.mysql_router_topology_cache") &&
+		db->execute("DELETE FROM main.mysql_router_guideline_cache") &&
+		db->execute("DELETE FROM disk.mysql_router_guideline_cache");
+	if (topology.routing_guidelines_capable) {
+		nlohmann::json tags = nlohmann::json::object();
+		for (const auto& tag : topology.router.tags) tags[tag.first] = tag.second;
+		const RoutingGuidelineSource source = topology.guideline ? *topology.guideline : RoutingGuidelineSource{};
+		const std::string values = quote(topology.topology_uuid) + "," + quote(source.guideline_id) + "," +
+			quote(source.name) + "," + quote(source.document) + "," + quote(topology.router.hostname) + "," +
+			quote(topology.router.name) + "," + quote(topology.router.local_cluster) + "," + quote(tags.dump());
+		for (const char* schema : {"main", "disk"}) {
+			const std::string sql = "INSERT INTO " + std::string(schema) +
+				".mysql_router_guideline_cache(topology_uuid,guideline_id,name,document,router_hostname,"
+				"router_name,router_local_cluster,router_tags) VALUES(" + values + ")";
+			ok = ok && db->execute(sql.c_str());
+		}
+	}
 	for (const auto& instance : topology.instances) {
 		const std::string frequency = topology.options.stats_updates_frequency
 			? std::to_string(*topology.options.stats_updates_frequency) : "NULL";
@@ -248,7 +290,7 @@ public:
 		password_ = SecureBytes(std::move(password));
 		auto hostgroups = query(*db_,
 			"SELECT role,hostgroup_id FROM mysql_router_hostgroups WHERE scope_uuid=" +
-			quote(topology_uuid_) + " ORDER BY role");
+			quote(topology_uuid_) + " AND role NOT LIKE 'rg:%' ORDER BY role");
 		MysqlRouterContext& context = mysql_router_context();
 		std::lock_guard<std::mutex> guard(context.status_mutex);
 		context.status.topology_uuid = topology_uuid_;
@@ -319,6 +361,8 @@ public:
 			snapshot.has_metadata_endpoint = !snapshot.desired.instances.empty();
 			snapshot.complete = snapshot.identity_valid && snapshot.has_metadata_endpoint;
 			snapshot.fingerprint = topology_fingerprint(snapshot.desired, snapshot.effective);
+			apply_guideline(snapshot);
+			if (snapshot.desired.routing_guidelines_capable) advertise_guideline_support(snapshot);
 			if (snapshot.complete) {
 				persist_cached_topology(services_, snapshot.desired);
 				current_topology_ = snapshot.desired;
@@ -423,6 +467,7 @@ public:
 					snapshot.effective = evaluate_innodb_cluster(current_topology_, health);
 					current_effective_ = snapshot.effective;
 					snapshot.fingerprint = topology_fingerprint(snapshot.desired, snapshot.effective);
+					apply_guideline(snapshot);
 					update_observability(snapshot.desired, health, snapshot.effective, false);
 					{
 						MysqlRouterContext& context = mysql_router_context();
@@ -684,6 +729,113 @@ public:
 	uint64_t initial_user_generation() const override { return user_generation_; }
 
 private:
+	// Compiles the active Routing Guideline for the snapshot, stages it for the next
+	// publication and records state changes/errors (#6145).
+	void apply_guideline(ReconcileTopologySnapshot& snapshot) {
+		GuidelineCompileOutcome outcome;
+		try {
+			outcome = guideline_compiler_.compile(snapshot.desired, snapshot.effective, listeners_);
+		} catch (const std::exception& error) {
+			outcome = {};
+			outcome.state = "invalid";
+			outcome.error_kind = "guideline_evaluation";
+			outcome.error_message = error.what();
+		}
+		if (snapshot.desired.options.routing_guideline_unsupported && outcome.error_kind.empty()) {
+			outcome.error_kind = "guideline_validation";
+			outcome.error_message = "a routing guideline is configured but the metadata schema " +
+				metadata_version(snapshot.desired.metadata_version) + " does not provide Routing Guidelines (2.3 required)";
+			if (outcome.state == "none") outcome.state = "invalid";
+		}
+		snapshot.guideline_state = outcome.state;
+		snapshot.fingerprint += "|rg=" + outcome.state + ":" +
+			(outcome.compiled ? outcome.compiled->fingerprint : std::string());
+		mysql_router_set_pending_guideline(outcome.compiled);
+
+		const std::string error_signature = outcome.error_kind + "|" + outcome.error_message;
+		if (!outcome.error_kind.empty() && error_signature != last_guideline_error_) {
+			record_error_row(outcome.error_kind, outcome.state, outcome.error_message);
+			if (services_.log_message != nullptr) {
+				services_.log_message(2, safe_message("mysql_router: " + outcome.error_message).c_str());
+			}
+		}
+		last_guideline_error_ = outcome.error_kind.empty() ? std::string() : error_signature;
+
+		MysqlRouterContext& context = mysql_router_context();
+		std::lock_guard<std::mutex> guard(context.status_mutex);
+		MysqlRouterGuidelineStatus& status = context.guideline;
+		const std::string previous_state = status.state;
+		const std::string previous_id = status.guideline_id;
+		status.state = outcome.state;
+		status.error_kind = outcome.error_kind;
+		status.last_error = safe_message(outcome.error_message);
+		status.compiled = outcome.compiled;
+		if (outcome.compiled) {
+			status.guideline_id = outcome.compiled->source.guideline_id;
+			status.name = outcome.compiled->source.name;
+			status.version = outcome.compiled->guideline->version();
+		} else if (snapshot.desired.guideline) {
+			status.guideline_id = snapshot.desired.guideline->guideline_id;
+			status.name = snapshot.desired.guideline->name;
+			status.version.clear();
+		} else {
+			status.guideline_id.clear();
+			status.name.clear();
+			status.version.clear();
+		}
+		if (previous_state != status.state || previous_id != status.guideline_id) {
+			status.last_update = static_cast<uint64_t>(std::time(nullptr));
+		}
+	}
+
+	// Router contract used by MySQL Shell: SupportedRoutingGuidelinesVersion gates
+	// setRoutingOption('guideline'), CurrentRoutingGuideline reports the active one.
+	void advertise_guideline_support(ReconcileTopologySnapshot& snapshot) {
+		std::string current;
+		{
+			MysqlRouterContext& context = mysql_router_context();
+			std::lock_guard<std::mutex> guard(context.status_mutex);
+			if (context.guideline.compiled && context.guideline.state != "invalid") current = context.guideline.name;
+		}
+		const std::string advertised = std::string(mysql_router::rg::kSupportedVersion) + "|" + current;
+		if (advertised == last_guideline_advertised_) return;
+		ExecResult result = current.empty()
+			? session_->execute("UPDATE mysql_innodb_cluster_metadata.v2_routers SET "
+				"attributes=JSON_SET(COALESCE(attributes,JSON_OBJECT()),'$.SupportedRoutingGuidelinesVersion',?,"
+				"'$.CurrentRoutingGuideline',NULL) WHERE router_id=?",
+				{std::string(mysql_router::rg::kSupportedVersion), static_cast<int64_t>(router_id_)})
+			: session_->execute("UPDATE mysql_innodb_cluster_metadata.v2_routers SET "
+				"attributes=JSON_SET(COALESCE(attributes,JSON_OBJECT()),'$.SupportedRoutingGuidelinesVersion',?,"
+				"'$.CurrentRoutingGuideline',?) WHERE router_id=?",
+				{std::string(mysql_router::rg::kSupportedVersion), current, static_cast<int64_t>(router_id_)});
+		if (result.ok) {
+			last_guideline_advertised_ = advertised;
+		} else if (snapshot.warning_code.empty()) {
+			snapshot.warning_kind = "registration";
+			snapshot.warning_code = "guideline_check_in_failed";
+			snapshot.warning_message = result.error;
+		}
+	}
+
+	void record_error_row(std::string_view kind, std::string_view code, std::string_view message) {
+		SQLite3DB* stats = services_.get_statsdb ? services_.get_statsdb() : nullptr;
+		if (stats == nullptr) return;
+		const std::string safe = safe_message(message);
+		const int64_t now = static_cast<int64_t>(std::time(nullptr));
+		const std::string identity = "kind=" + quote(kind) + " AND code=" + quote(code) +
+			" AND message=" + quote(safe);
+		const std::string update = "UPDATE stats_mysql_router_errors SET occurrence_count="
+			"occurrence_count+1,last_seen=" + std::to_string(now) + " WHERE " + identity;
+		const std::string insert = "INSERT INTO stats_mysql_router_errors"
+			"(kind,code,message,occurrence_count,first_seen,last_seen) SELECT " +
+			quote(kind) + "," + quote(code) + "," + quote(safe) + ",1," +
+			std::to_string(now) + "," + std::to_string(now) + " WHERE changes()=0";
+		if (stats->execute("BEGIN IMMEDIATE")) {
+			if (!stats->execute(update.c_str()) || !stats->execute(insert.c_str()) ||
+				!stats->execute("COMMIT")) stats->execute("ROLLBACK");
+		}
+	}
+
 	void update_observability(const DesiredTopology& desired, const ObservedHealth& health,
 		const EffectiveTopology& effective, bool metadata_available) {
 		const uint64_t observed_at = static_cast<uint64_t>(std::time(nullptr));
@@ -748,6 +900,9 @@ private:
 	DesiredTopology current_topology_;
 	std::optional<EffectiveTopology> current_effective_;
 	std::unique_ptr<ConnectorCMetadataSession> session_;
+	GuidelineCompiler guideline_compiler_;
+	std::string last_guideline_error_;
+	std::string last_guideline_advertised_;
 };
 
 } // namespace
