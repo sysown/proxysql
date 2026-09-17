@@ -2,6 +2,8 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cstdlib>
 #include <ctime>
 
 namespace PgBouncer {
@@ -140,6 +142,10 @@ static bool is_valid_scram_verifier(const std::string& v) {
         iterations.find_first_not_of("0123456789") != std::string::npos) {
         return false;
     }
+    // Same range semantics as the runtime parser, which rejects on ERANGE.
+    errno = 0;
+    std::strtol(iterations.c_str(), nullptr, 10);
+    if (errno != 0) return false;
     if (base64_decoded_len(iter_salt.substr(colon1 + 1)) <= 0) return false;
     if (base64_decoded_len(keys.substr(0, colon2)) != SCRAM_KEY_LEN) return false;
     if (base64_decoded_len(keys.substr(colon2 + 1)) != SCRAM_KEY_LEN) return false;
