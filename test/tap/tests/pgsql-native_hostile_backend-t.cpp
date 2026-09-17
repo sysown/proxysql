@@ -236,6 +236,70 @@ static bool queryThroughProxyBounded(std::string& err, const char* setup, const 
     return good;
 }
 
+// Send an extended-query frame and wait a bounded time for the answer.
+//
+// PQexec sends a simple query, which never makes ProxySQL drive a Parse of its own. PQsendQueryParams
+// does: ProxySQL prepares the statement on the client's behalf and Flush-terminates that Parse, which
+// is the only shape that reaches the injected-Sync recovery.
+//
+// The warm-up PQexec first is what makes the fixture reliable. ProxySQL may send housekeeping of its
+// own on a fresh backend connection, and a bare step_expect_message() would eat that instead of the
+// Parse. Letting step_expect_query() absorb the warm-up leaves the connection warm, so the next
+// frontend message the mock sees really is the Parse.
+//
+// The wait loop is a copy of queryThroughProxyBounded()'s rather than a shared helper: that function
+// is what keeps R23 from hanging the whole run, and it is not worth perturbing for eighteen lines.
+static bool paramsQueryThroughProxyBounded(std::string& err, const char* query,
+                                           int timeout_ms, bool& timed_out) {
+    timed_out = false;
+    auto c = openConn(cl.pgsql_host, cl.pgsql_port, MOCK_USER, MOCK_PASS, "postgres");
+    if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+        err = c ? PQerrorMessage(c.get()) : "null conn";
+        return false;
+    }
+    {   // warm-up: absorbed by the script's step_expect_query()
+        PGresult* r = PQexec(c.get(), "SELECT 1");
+        const ExecStatusType st = PQresultStatus(r);
+        PQclear(r);
+        if (st != PGRES_TUPLES_OK && st != PGRES_COMMAND_OK) {
+            err = std::string("warm-up query failed: ") + PQerrorMessage(c.get());
+            return false;
+        }
+    }
+    const char* vals[1] = { "1" };
+    if (!PQsendQueryParams(c.get(), query, 1, nullptr, vals, nullptr, nullptr, 0)) {
+        err = PQerrorMessage(c.get());
+        return false;
+    }
+    const int fd = PQsocket(c.get());
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        if (!PQconsumeInput(c.get())) { err = PQerrorMessage(c.get()); break; }
+        if (!PQisBusy(c.get())) break;
+        if (fd < 0) { err = "no socket"; break; }   // FD_SET(-1) is undefined behaviour
+        fd_set rf;
+        FD_ZERO(&rf);
+        FD_SET(fd, &rf);
+        struct timeval tv = { 0, 200000 };
+        select(fd + 1, &rf, nullptr, nullptr, &tv);
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        const long ms = (now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+        if (ms >= timeout_ms) {
+            timed_out = true;
+            err = "ProxySQL never answered";
+            return false;
+        }
+    }
+    PGresult* r = PQgetResult(c.get());
+    const ExecStatusType st = r ? PQresultStatus(r) : PGRES_FATAL_ERROR;
+    const bool good = (st == PGRES_TUPLES_OK || st == PGRES_COMMAND_OK);
+    if (!good) err = PQerrorMessage(c.get());
+    PQclear(r);
+    return good;
+}
+
 // The three post-case invariants. Returns "" when healthy, else what broke.
 static std::string checkInvariants(PGconn*& adminRef, PGConnPtr& adminOwner) {
     // 1. ProxySQL alive / admin answering. Reconnect once: a crashed proxy
@@ -438,10 +502,10 @@ static void harness_selftest() {
 int main(int, char**) {
     // 6 harness self-test cases (the mock, judged by libpq)
     // + 18 auth cases (A1-A18; A8 and A17 are positive controls)
-    // + 21 result cases (R1-R22, minus R17) + R18's recorded-row-count check
+    // + 24 result cases (R1-R26, minus R17 and R23) + R18's recorded-row-count check
     // + 1 final pool-cleanliness assertion
     // + R23 (F5), which runs LAST -- see the comment on it.
-    plan(48);
+    plan(51);
 
     if (cl.getEnv()) return exit_status();
 
@@ -785,11 +849,32 @@ int main(int, char**) {
           step_sleep(6000), step_close() });
 
     // R5: declared length below the 4-byte minimum, mid-result.
-    runCase(admin, adminOwner, mock, "R5 malformed frame (declared length 2) mid-result",
-        { step_expect_startup(), step_send(acceptedHandshake()), step_expect_query(),
-          step_send(pgmb_row_description_1col("c", 25) +
-                    std::string("D") + pgmb_be32(2)),
-          step_sleep(300), step_close() });
+    //
+    // Same class as R6 and R24: ProxySQL decided the stream is not the protocol, so the client
+    // is told why rather than being left to infer it from a dropped connection. Asserting the
+    // text is what separates "ProxySQL refused and said so" from "the connection just died",
+    // which look identical to a client.
+    {
+        resetMockPool(admin, g_mock_ip, g_mock_port);
+        mock.set_script({ step_expect_startup(), step_send(acceptedHandshake()), step_expect_query(),
+                          step_send(pgmb_row_description_1col("c", 25) +
+                                    std::string("D") + pgmb_be32(2)),
+                          step_sleep(300), step_close() });
+        mock.reset_stats();
+        std::string err;
+        const bool served = queryThroughProxy(err);
+        const bool told = err.find("malformed backend message") != std::string::npos;
+        const std::string broke = checkInvariants(admin, adminOwner);
+        int drain_ms = 0;
+        const int stranded = mockPoolConns(admin, &drain_ms);
+        ok(!served && told && broke.empty() && stranded == 0,
+           "R5 malformed frame (declared length 2) mid-result: refused and the client is told why "
+           "(served=%s, error=%s; pool leftover=%d; drain=%dms)%s%s",
+           served ? "YES (BAD)" : "no",
+           err.empty() ? "(none)" : err.substr(0, err.find('\n')).c_str(),
+           stranded, drain_ms,
+           broke.empty() ? "" : " -- BROKE: ", broke.c_str());
+    }
 
     // R6: a message type with no backend-direction meaning, mid-result.
     runCase(admin, adminOwner, mock, "R6 unrecognised message type mid-result",
@@ -968,6 +1053,94 @@ int main(int, char**) {
            served ? "YES (BAD)" : "no",
            err.empty() ? "(none -- an error emitted after the ReadyForQuery is discarded)"
                        : err.substr(0, err.find('\n')).c_str());
+    }
+
+    // R24 (SECURITY): an AuthenticationCleartextPassword in the middle of a
+    // result set. The native path copies backend bytes to the client verbatim,
+    // so relaying this makes a psql/libpq client prompt its user for a password
+    // in the middle of an ordinary query -- and the same bytes are eligible for
+    // the query cache, where one injection is replayed to every later client.
+    //
+    // Surviving is not the verdict. The client must be told ProxySQL refused,
+    // which is only possible if ProxySQL never forwarded the message: a client
+    // cannot both receive the injected 'R' inside a served result and receive
+    // ProxySQL's own protocol-violation error. Matching the text is what
+    // separates "refused" from "relayed, and libpq happened to complain".
+    {
+        resetMockPool(admin, g_mock_ip, g_mock_port);
+        mock.set_script({ step_expect_startup(), step_send(acceptedHandshake()), step_expect_query(),
+                          step_send(pgmb_row_description_1col("c", 25) +
+                                    pgmb_data_row_1col("1") +
+                                    pgmb_auth_cleartext() +                 // the injection
+                                    pgmb_command_complete("SELECT 1") +
+                                    pgmb_ready_for_query('I')),
+                          step_sleep(300) });
+        mock.reset_stats();
+        std::string err;
+        const bool served = queryThroughProxy(err);
+        const bool refused = err.find("illegal backend message type") != std::string::npos;
+        ok(!served && refused,
+           "R24 SECURITY: AuthenticationRequest injected mid-result must be REFUSED, not relayed "
+           "(served=%s, error=%s)",
+           served ? "YES (BAD -- the client was handed a password prompt)" : "no",
+           err.empty() ? "(none)" : err.substr(0, err.find('\n')).c_str());
+    }
+
+    // R25 (control for R24): NotificationResponse is legal at any time, so it
+    // must still go through. Without this, R24 would also pass on code that
+    // refuses every type it does not expressly handle, which would break
+    // LISTEN/NOTIFY.
+    runCase(admin, adminOwner, mock, "R25 control: NotificationResponse mid-result is still relayed",
+        { step_expect_startup(), step_send(acceptedHandshake()), step_expect_query(),
+          step_send(pgmb_row_description_1col("c", 25) +
+                    pgmb_data_row_1col("1") +
+                    pgmb_notification_response(4242, "chan", "payload") +
+                    pgmb_command_complete("SELECT 1") +
+                    pgmb_ready_for_query('I')),
+          step_sleep(300) });
+
+    // R26: the backend errors a Flush-terminated step and then goes SILENT.
+    //
+    // After an error on a Flush-terminated message PostgreSQL sends no ReadyForQuery until it
+    // sees a Sync, so ProxySQL injects one to get the connection back in step. This backend
+    // never answers it. Nothing can arrive to end the cycle, which leaves the query timeout as
+    // the only thing that can free the session -- so this is what says whether the recovery is
+    // bounded or whether a silent backend can park a worker thread indefinitely.
+    //
+    // The timeout is lowered to 5s so the case takes seconds rather than the default. It is
+    // deliberately not restored: the harness reloads every config table from disk before each
+    // test, which is what keeps it from leaking into anything else.
+    {
+        resetMockPool(admin, g_mock_ip, g_mock_port);
+        setVar(admin, "pgsql-default_query_timeout", "5000");
+        mock.set_script({ step_expect_startup(), step_send(acceptedHandshake()),
+                          step_expect_query(),                       // absorbs the warm-up query
+                          step_send(pgmb_simple_result("c", "1", 1)),
+                          step_expect_message(),                     // the Parse ProxySQL drives itself
+                          step_send(pgmb_error_response("42P01", "relation \"nope\" does not exist")),
+                          step_sleep(30000) });                      // and then nothing, ever
+        mock.reset_stats();
+
+        std::string err;
+        bool timed_out = false;
+        const bool served = paramsQueryThroughProxyBounded(err, "SELECT $1::int", 20000, timed_out);
+        const std::string first_line = err.substr(0, err.find('\n'));
+
+        const std::string broke = checkInvariants(admin, adminOwner);
+        int drain_ms = 0;
+        const int stranded = mockPoolConns(admin, &drain_ms);
+
+        ok(!timed_out && broke.empty() && stranded == 0,
+           "R26: a backend that never answers the injected Sync is bounded by the query timeout, "
+           "not waited on forever (client %s: %s; mock conns=%d; pool leftover=%d; drain=%dms)%s%s",
+           timed_out ? "GOT NOTHING (unbounded wait)" : (served ? "served" : "errored"),
+           first_line.empty() ? "-" : first_line.c_str(),
+           mock.connections_accepted(), stranded, drain_ms,
+           broke.empty() ? "" : " -- BROKE: ", broke.c_str());
+        if (timed_out)
+            diag("R26: ProxySQL never answered within 20s while pgsql-default_query_timeout was 5s -- "
+                 "the injected-Sync recovery has no bound of its own and is relying on a timeout that "
+                 "did not fire. Check the drain loop's exit conditions, not the test.");
     }
 
     // ---- final pool cleanliness -------------------------------------------
