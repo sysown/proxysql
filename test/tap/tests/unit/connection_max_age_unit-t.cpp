@@ -98,6 +98,11 @@ static void test_reset_preserves_creation_time() {
 	mysql_conn.creation_time = 123456789ULL;
 	mysql_conn.reset();
 	ok(mysql_conn.creation_time == 123456789ULL, "MySQL reset() does not restart creation_time");
+	// NOTE: no PgSQL reset() case here: PgSQL_Connection::reset() assumes a
+	// fully connected session (startup_parameters_hash, session variables)
+	// and asserts on a bare object, so it cannot be unit-tested standalone.
+	// The PgSQL fix is the same one-line removal of the creation_time
+	// restamp, covered by review and by test_pgsql_is_expired() above.
 }
 
 static void test_destroy_does_not_recycle_expired() {

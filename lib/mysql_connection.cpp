@@ -2230,6 +2230,7 @@ int MySQL_Connection::async_connect(short event) {
 			compute_unknown_transaction_status();
 			async_state_machine=ASYNC_IDLE;
 			myds->wait_until=0;
+			creation_time = monotonic_time();
 			return 0;
 			break;
 		case ASYNC_CONNECT_FAILED:

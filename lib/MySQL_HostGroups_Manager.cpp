@@ -131,6 +131,19 @@ T j_get_srv_default_int_val(
 
 
 //static void * HGCU_thread_run() {
+// HGCU worker threads have no per-thread variable sync, so the
+// thread-local mysql_thread___connection_max_age_ms is always 0 here.
+// Expiry checks in this worker must read the live global instead.
+static bool MyConn_expired_by_max_age(MySQL_Connection *c) {
+	if (GloMTH == NULL) {
+		return false;
+	}
+	unsigned long long max_age_ms = __sync_fetch_and_add(&GloMTH->variables.connection_max_age_ms, 0);
+	if (max_age_ms == 0) {
+		return false;
+	}
+	return monotonic_time() > c->creation_time + max_age_ms * 1000ULL;
+}
 static void * HGCU_thread_run() {
 	PtrArray *conn_array=new PtrArray();
 	set_thread_name("MyHGCU", GloVars.set_thread_name);
@@ -160,6 +173,12 @@ static void * HGCU_thread_run() {
 			myconn->reset();
 			MyHGM->increase_reset_counter();
 			myconn=(MySQL_Connection *)conn_array->index(i);
+			if (MyConn_expired_by_max_age(myconn)) {
+				// Aged out while waiting in the reset queue: skip the
+				// COM_CHANGE_USER and let the sweep below destroy it.
+				statuses[i]=0; ret[i]=1;
+				continue;
+			}
 			if (myconn->mysql->net.pvio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
 				MySQL_Connection_userinfo *userinfo = myconn->userinfo;
 				char *auth_password = NULL;
@@ -189,7 +208,13 @@ static void * HGCU_thread_run() {
 			if (statuses[i]==0) {
 				myconn=(MySQL_Connection *)conn_array->remove_index_fast(i);
 				if (!ret[i]) {
-					MyHGM->push_MyConn_to_pool(myconn);
+					if (MyConn_expired_by_max_age(myconn)) {
+						// Aged out during the reset: destroy instead of pooling.
+						myconn->send_quit=false;
+						MyHGM->destroy_MyConn_from_pool(myconn);
+					} else {
+						MyHGM->push_MyConn_to_pool(myconn);
+					}
 				} else {
 					myconn->send_quit=false;
 					MyHGM->destroy_MyConn_from_pool(myconn);
@@ -224,8 +249,14 @@ static void * HGCU_thread_run() {
 				if (statuses[i]==0) {
 					myconn=(MySQL_Connection *)conn_array->remove_index_fast(i);
 					if (!ret[i]) {
-						myconn->reset();
-						MyHGM->push_MyConn_to_pool(myconn);
+						if (MyConn_expired_by_max_age(myconn)) {
+							// Aged out during the async reset: destroy instead of pooling.
+							myconn->send_quit=false;
+							MyHGM->destroy_MyConn_from_pool(myconn);
+						} else {
+							myconn->reset();
+							MyHGM->push_MyConn_to_pool(myconn);
+						}
 					} else {
 						myconn->send_quit=false;
 						MyHGM->destroy_MyConn_from_pool(myconn);
