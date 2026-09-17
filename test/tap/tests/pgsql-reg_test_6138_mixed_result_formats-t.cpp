@@ -174,18 +174,25 @@ int main() {
 	}
 	ok(repeated_ok == 5, "Repeated executions with mixed formats succeed (%d/5) %s", repeated_ok, repeated_err.c_str());
 
-	bool text_row_matches = true;
+	bool text_row_ok = false;
 	bool second_ok = false;
+	std::string text_err;
 	std::string second_err;
 	try {
 		c2->prepareStatement("other_name", PGX_QUERY, true);
-		text_row_matches = check_pgx_row(run_bound(c2, "other_name", { 0, 0, 0 }), second_err);
-		second_err.clear();
+		std::string why;
+		// A successful all-text execution must not look like the binary pgx row.
+		text_row_ok = !check_pgx_row(run_bound(c2, "other_name", { 0, 0, 0 }), why);
+	} catch (const PgException& e) {
+		text_err = e.what();
+	}
+	try {
 		second_ok = check_pgx_row(run_bound(c2, "other_name", pgx_formats), second_err);
 	} catch (const PgException& e) {
 		second_err = e.what();
 	}
-	ok(text_row_matches == false, "Sanity: all-text formats do not produce the binary row");
+	ok(text_row_ok, "Sanity: all-text formats do not produce the binary row%s%s",
+		text_err.empty() ? "" : ": ", text_err.c_str());
 	ok(second_ok, "Second client: mixed result formats are honored%s%s",
 		second_err.empty() ? "" : ": ", second_err.c_str());
 
@@ -198,7 +205,9 @@ int main() {
 	}
 	diag("Mismatched format count error: %s", mismatch_err.c_str());
 	ok(mismatch_err.empty() == false, "A result format count that does not match the columns is rejected");
-	ok(mismatch_err.find("per-column result formats are not supported") == std::string::npos,
+	// PostgreSQL's exec_bind_message() wording (SQLSTATE 08P01); ProxySQL never generates this
+	// message, so it proves the Bind reached the backend with the four format codes.
+	ok(mismatch_err.find("bind message has 4 result formats but query has 3 columns") != std::string::npos,
 		"The rejection comes from PostgreSQL, not from a ProxySQL format restriction");
 
 	try {
