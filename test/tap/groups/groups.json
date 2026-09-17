@@ -281,6 +281,7 @@
   "pgsql_conninfo_credentials_unit-t" : [ "unit-tests-g1" ],
   "pgsql_error_classifier_unit-t" : [ "unit-tests-g1" ],
   "pgsql_error_helper_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_midbatch_reset_refused_unit-t" : [ "unit-tests-g1" ],
   "pgsql_monitor_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_params_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_read_burst_unit-t" : [ "unit-tests-g1" ],
