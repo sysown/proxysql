@@ -43,7 +43,9 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <iterator>
 #include <map>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -199,14 +201,23 @@ struct RestoreState {
 	string datadir;
 	string base_filename;
 
-	~RestoreState() {
-		if (!original.empty() && !apply_variables(original)) {
-			diag("WARNING: failed to restore the original PgSQL global variables");
-		}
-		if (!datadir.empty() && !base_filename.empty()) {
-			for (const string& path : list_log_files(datadir, base_filename)) {
-				unlink(path.c_str());
+	RestoreState() = default;
+	RestoreState(const RestoreState&) = delete;
+	RestoreState& operator=(const RestoreState&) = delete;
+
+	// Best-effort cleanup: nothing may escape a destructor.
+	~RestoreState() noexcept {
+		try {
+			if (!original.empty() && !apply_variables(original)) {
+				diag("WARNING: failed to restore the original PgSQL global variables");
 			}
+			if (!datadir.empty() && !base_filename.empty()) {
+				for (const string& path : list_log_files(datadir, base_filename)) {
+					unlink(path.c_str());
+				}
+			}
+		} catch (...) {
+			diag("WARNING: exception while restoring the test environment");
 		}
 	}
 };
@@ -259,7 +270,9 @@ static bool poison_transaction(PGconn* cli, const string& marker) {
 		}
 		killed.store(terminate_backend(pid));
 	});
-	string query = "SELECT pg_sleep(5), '" + marker + "'";
+	// The sleep must outlast the killer's 6s search for the backend. A kill that
+	// lands promptly interrupts it, so the long value costs nothing on success.
+	string query = "SELECT pg_sleep(30), '" + marker + "'";
 	PGresult* r = PQexec(cli, query.c_str());
 	killer.join();
 
@@ -385,7 +398,7 @@ int main() {
 		{ "case_A_rollback", "ROLLBACK", "", -1, false },
 		{ "case_B_commit", "COMMIT", "", -1, false },
 	};
-	const int n_cases = sizeof(cases) / sizeof(cases[0]);
+	const int n_cases = (int)std::size(cases);
 	plan(n_cases * ASSERTIONS_PER_CASE);
 
 	if (cl.getEnv()) {
@@ -398,9 +411,10 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
-	srand((unsigned)time(nullptr) ^ (unsigned)getpid());
+	// Only needs to be unique per run (file name, statement markers).
+	std::random_device rd;
 	const string nonce = std::to_string((long)time(nullptr)) + "_" + std::to_string(getpid())
-		+ "_" + std::to_string(rand());
+		+ "_" + std::to_string(rd());
 
 	RestoreState restore;
 	if (!read_variables(restore.original)) {
