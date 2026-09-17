@@ -136,9 +136,21 @@ for INFRA_NAME in ${INFRAS}; do
         echo ">>> '${INFRA_NAME}' is already running."
         if [ -f "${INFRA_DIR}/bin/docker-proxy-post.bash" ]; then
             echo ">>> Ensuring ProxySQL configuration for '${INFRA_NAME}'..."
-            cd "${INFRA_DIR}"
-            ./bin/docker-proxy-post.bash
-            cd - >/dev/null
+            # docker-proxy-post.bash expects the environment that
+            # docker-compose-init.bash exports before calling it. Without
+            # INFRA/COMPOSE_PROJECT it addresses a container named '-pgdb1-1'
+            # and registers backends under an empty infra name.
+            (
+                cd "${INFRA_DIR}"
+                SAVED_INFRA_ID="${INFRA_ID}"
+                set -a; . ./.env; set +a
+                export INFRA_ID="${SAVED_INFRA_ID}"
+                export ROOT_PASSWORD=$(echo -n "${INFRA_ID}" | sha256sum | head -c 10)
+                export INFRA="${INFRA_NAME}"
+                export COMPOSE_PROJECT
+                export INFRA_LOGS_PATH="${INFRA_LOGS_PATH:-${WORKSPACE}/ci_infra_logs}"
+                ./bin/docker-proxy-post.bash
+            )
         fi
     fi
 done
