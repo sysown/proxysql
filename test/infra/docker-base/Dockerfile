@@ -2,6 +2,10 @@ FROM ubuntu:24.04
 
 ARG MYSQL_CONNECTOR_PYTHON_VERSION=9.7.0
 ARG PSYCOPG_VERSION=3.2.13
+# orchestrator-client is published per architecture (amd64/arm64 .deb); the
+# matching package is picked from dpkg at build time so the image builds on
+# both x86_64 and arm64 hosts (e.g. Apple Silicon). See GH issue #6200.
+ARG ORCHESTRATOR_CLIENT_VERSION=4.31.1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -44,7 +48,9 @@ RUN apt-get update -qq && \
         "mysql-connector-python==${MYSQL_CONNECTOR_PYTHON_VERSION}" \
         "mysqlx-connector-python==${MYSQL_CONNECTOR_PYTHON_VERSION}" \
     && python3 -c "import psycopg; assert psycopg.__version__ == '${PSYCOPG_VERSION}'" \
-    && wget https://github.com/proxysql/orchestrator/releases/download/v4.31.1/orchestrator-client_4.31.1_amd64.deb -O /tmp/orc.deb \
+    && ORC_ARCH="$(dpkg --print-architecture)" \
+    && case "${ORC_ARCH}" in amd64|arm64) ;; *) echo "orchestrator-client: unsupported architecture ${ORC_ARCH}" >&2; exit 1 ;; esac \
+    && wget "https://github.com/proxysql/orchestrator/releases/download/v${ORCHESTRATOR_CLIENT_VERSION}/orchestrator-client_${ORCHESTRATOR_CLIENT_VERSION}_${ORC_ARCH}.deb" -O /tmp/orc.deb \
     && apt-get install -y /tmp/orc.deb \
     && rm -rf /var/lib/apt/lists/* /tmp/orc.deb
 
