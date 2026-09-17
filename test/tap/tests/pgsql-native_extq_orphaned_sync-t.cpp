@@ -526,6 +526,123 @@ static bool bystanderUnaffected(PGconn* be_db, const std::string& marker, std::s
 // the batch is finished -- which means the connection is safe to finish and keep. This is the half of
 // the rule that says a Sync is only dangerous when ProxySQL swallowed the error, and without it
 // nothing here could tell a correct implementation from one that discards on every failed query.
+// The SQLSTATE out of an ErrorResponse payload: a run of (field code, NUL-terminated value) pairs
+// ended by a zero byte, where field 'C' is the code. Returns "" when it is not there. Used to tell
+// an error PostgreSQL raised from one ProxySQL raised on its own behalf, which look identical to a
+// client but mean opposite things for everything below.
+static std::string errorSqlstate(const std::vector<uint8_t>& payload) {
+	size_t i = 0;
+	while (i < payload.size() && payload[i] != 0) {
+		const char code = (char)payload[i++];
+		const size_t start = i;
+		while (i < payload.size() && payload[i] != 0) i++;
+		if (code == 'C') return std::string((const char*)payload.data() + start, i - start);
+		if (i < payload.size()) i++;   // step over the value's NUL
+	}
+	return "";
+}
+
+// Run one simple query on the raw connection and say whether it succeeded, with the SQLSTATE when it
+// did not. PgConnection::execute() throws on failure, and here a failure is an expected outcome that
+// has to be inspected rather than escaped from.
+static bool rawSimple(PgConnection& c, const std::string& sql, std::string& sqlstate) {
+	sqlstate.clear();
+	c.sendQuery(sql);
+	bool err = false;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (std::chrono::steady_clock::now() < deadline) {
+		char t = 0; std::vector<uint8_t> b;
+		c.readMessage(t, b);
+		if (t == PgConnection::ERROR_RESPONSE) { err = true; sqlstate = errorSqlstate(b); continue; }
+		if (t == PgConnection::READY_FOR_QUERY) return !err;
+	}
+	return false;
+}
+
+struct FlushResyncProbe {
+	bool errored = false;            // the client saw an ErrorResponse
+	std::string sqlstate;            // and this is whose error it was
+	bool got_ready = false;          // a ReadyForQuery arrived -- see the scenario comment
+	char rfq_status = '?';           // its transaction-status byte
+	bool followup_ok = false;        // a further query on the SAME connection succeeded
+	std::string followup_sqlstate;   // or why it did not
+	bool rollback_ok = false;        // explicit-transaction runs only
+	bool after_rollback_ok = false;
+	std::string detail = "not run";
+};
+
+// A frame whose PARSE fails on the backend, with Bind/Execute/Sync still queued behind it.
+//
+// That shape is the whole point. ProxySQL puts the Sync on the frame's LAST message only, so a Parse
+// with messages after it goes out Flush-terminated -- and PostgreSQL, after an error on a
+// Flush-terminated message, discards everything until it sees a Sync and sends NO ReadyForQuery of
+// its own. Somebody has to produce that Sync or the connection is stuck waiting on a message that
+// will never come.
+//
+// Contrast with runBackendErrorFrame() above, which fails on 1/0: that is only discovered while
+// EXECUTING, and the Execute is the last message, so it carries the client's Sync and PostgreSQL
+// answers by itself. Nothing is recovered there, which is why it cannot stand in for this.
+static FlushResyncProbe runFlushTerminatedParseError(PGconn* be_db, const std::string& marker,
+                                                bool explicit_txn) {
+	FlushResyncProbe p;
+	try {
+		PgConnection c(5000);
+		c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+
+		std::string scratch;
+		if (explicit_txn && !rawSimple(c, "BEGIN", scratch)) {
+			p.detail = "BEGIN failed before the frame could run";
+			return p;
+		}
+
+		// The table does not exist, so this fails while the backend is still analysing the Parse --
+		// before any Bind or Execute. The marker rides in the query text so the backend session can
+		// be found afterwards.
+		const std::string sql = "SELECT '" + marker + "'::text FROM " + marker + "_missing";
+		c.prepareStatement("orphsync_resync", sql, false);
+		c.bindStatement("orphsync_resync", "", {}, {}, false);
+		c.executePortal("", 0, false);
+		c.sendSync();
+
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (std::chrono::steady_clock::now() < deadline) {
+			char t = 0; std::vector<uint8_t> b;
+			c.readMessage(t, b);
+			if (t == PgConnection::ERROR_RESPONSE) {
+				p.errored = true;
+				if (p.sqlstate.empty()) p.sqlstate = errorSqlstate(b);
+				continue;
+			}
+			if (t == PgConnection::READY_FOR_QUERY) {
+				p.got_ready = true;
+				if (!b.empty()) p.rfq_status = (char)b[0];
+				break;
+			}
+		}
+
+		if (p.got_ready) {
+			p.followup_ok = rawSimple(c, "SELECT 42", p.followup_sqlstate);
+			if (explicit_txn) {
+				p.rollback_ok = rawSimple(c, "ROLLBACK", scratch);
+				p.after_rollback_ok = rawSimple(c, "SELECT 42", scratch);
+			}
+		}
+
+		p.detail = std::string("errored=") + (p.errored ? "yes" : "no")
+			+ " sqlstate=" + (p.sqlstate.empty() ? "-" : p.sqlstate)
+			+ " ready=" + (p.got_ready ? "yes" : "NO")
+			+ " rfq_status=" + std::string(1, p.rfq_status)
+			+ " followup=" + (p.followup_ok ? "ok"
+				: ("failed/" + (p.followup_sqlstate.empty() ? std::string("-") : p.followup_sqlstate)))
+			+ (explicit_txn ? (std::string(" rollback=") + (p.rollback_ok ? "ok" : "failed")
+				+ " after_rollback=" + (p.after_rollback_ok ? "ok" : "failed")) : std::string())
+			+ ", backend sessions: " + backendSightings(be_db, marker);
+	} catch (const PgException& e) {
+		p.detail = std::string("resync frame threw: ") + e.what();
+	}
+	return p;
+}
+
 static HealthyProbe runBackendErrorFrame(PGconn* be_db, const std::string& marker) {
 	HealthyProbe h;
 	try {
@@ -857,7 +974,7 @@ static ResyncFailureProbe runResyncFailure(PGconn* admin, PGconn* be_db, const s
 }
 
 int main(int, char**) {
-	plan(65);
+	plan(75);
 	if (cl.getEnv()) return exit_status();
 
 	auto admin = adminConn();
@@ -1038,6 +1155,66 @@ int main(int, char**) {
 		   "%s: and its connection is KEPT, not discarded -- PostgreSQL already poisoned that batch, "
 		   "so finishing it rolls back and the connection is still good. Discarding here would throw "
 		   "one away on every failed query [%s]", label, h.detail.c_str());
+	}
+
+	// --- a backend error on a FLUSH-terminated step: the injected Sync ----------------------------
+	// The block above fails on 1/0, which PostgreSQL only discovers while EXECUTING -- and the
+	// Execute is the frame's last message, so it carries the client's Sync and the backend answers
+	// with ReadyForQuery by itself. Nothing there has to be recovered.
+	//
+	// Fail the PARSE instead and the picture changes. Bind and Execute still follow it, so the Parse
+	// goes out Flush-terminated, and after an error on a Flush-terminated message PostgreSQL sends no
+	// ReadyForQuery at all until it sees a Sync. ProxySQL has to manufacture one.
+	//
+	// That is why `ready` is the assertion that matters here: on this frame a ReadyForQuery can only
+	// exist because ProxySQL injected the Sync that produced it. Both paths are run because the
+	// libpq path reaches the same place by a different route, and a difference between them is worth
+	// knowing about.
+	for (int native = 0; native <= 1; native++) {
+		const char* label = native ? "native" : "libpq";
+		setNativeMode(admin.get(), native != 0);
+		const std::string m = base + "_resync_" + label;
+		const FlushResyncProbe p = runFlushTerminatedParseError(be_db.get(), m, false);
+		diag("%s flush-terminated parse error: %s", label, p.detail.c_str());
+		ok(p.errored && p.sqlstate == "42P01",
+		   "%s: the Parse fails on the BACKEND (SQLSTATE 42P01) -- an error raised inside ProxySQL "
+		   "would never put the backend in the aborted-until-Sync state this scenario is about, and "
+		   "the rest of it would prove nothing [%s]", label, p.detail.c_str());
+		ok(p.got_ready,
+		   "%s: a ReadyForQuery still reaches the client -- PostgreSQL sends none of its own after an "
+		   "error on a Flush-terminated message, so this one exists only because ProxySQL injected a "
+		   "Sync. Without it the client waits for the query timeout [%s]", label, p.detail.c_str());
+		ok(p.followup_ok,
+		   "%s: and the SAME connection serves the next query -- resynchronising is only worth doing "
+		   "if the connection is usable afterwards, not merely if the client was told something [%s]",
+		   label, p.detail.c_str());
+	}
+
+	// --- the same error inside an explicit transaction --------------------------------------------
+	// Sync concludes the batch; it does NOT close a transaction the client opened with BEGIN.
+	// PostgreSQL's protocol documentation says so outright and points at the ReadyForQuery status
+	// byte as the way to tell. So the connection comes back synchronised but still inside a
+	// transaction, and that transaction is aborted. ProxySQL has to notice: a connection in that
+	// state belongs to this client until it ends the transaction, and must never go back to the pool
+	// for somebody else to draw.
+	{
+		setNativeMode(admin.get(), true);
+		const std::string m = base + "_resync_tx";
+		const FlushResyncProbe p = runFlushTerminatedParseError(be_db.get(), m, true);
+		diag("native flush-terminated parse error inside BEGIN: %s", p.detail.c_str());
+		ok(p.errored && p.sqlstate == "42P01",
+		   "native/txn: the Parse fails on the backend inside the transaction [%s]", p.detail.c_str());
+		ok(p.got_ready && p.rfq_status == 'E',
+		   "native/txn: the injected Sync's ReadyForQuery reports a FAILED transaction block ('E') "
+		   "rather than idle -- the Sync ended the batch but left the BEGIN open, and that status "
+		   "byte is the only thing that says so [%s]", p.detail.c_str());
+		ok(!p.followup_ok && p.followup_sqlstate == "25P02",
+		   "native/txn: the next statement is refused with 25P02 -- proof the aborted transaction is "
+		   "still there and the connection was not quietly reset, nor handed to anyone else [%s]",
+		   p.detail.c_str());
+		ok(p.rollback_ok && p.after_rollback_ok,
+		   "native/txn: ROLLBACK ends it and the connection returns to normal service [%s]",
+		   p.detail.c_str());
 	}
 
 	// --- the same discard, reached by two other routes -------------------------------------------
