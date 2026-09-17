@@ -67,7 +67,7 @@ bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
 // chars plus a terminating NUL (33 bytes total).
 static void md5_hex(const unsigned char* in, size_t inlen, char out_hex[33]) {
     unsigned char digest[MD5_DIGEST_LENGTH];
-    MD5(in, inlen, digest);
+    MD5(in, inlen, digest);   // NOSONAR cpp:S4790 -- AuthenticationMD5Password is fixed by the wire protocol
     static const char hexd[] = "0123456789abcdef";
     for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
         out_hex[i * 2]     = hexd[(digest[i] >> 4) & 0xf];
@@ -97,10 +97,10 @@ void pg_build_md5(char out[36], const char* user, const char* password, const un
     // intermediate NUL-terminated copy by passing each part length explicitly.
     unsigned char digest[MD5_DIGEST_LENGTH];
     MD5_CTX ctx;
-    MD5_Init(&ctx);
+    MD5_Init(&ctx);   // NOSONAR cpp:S4790
     MD5_Update(&ctx, password, strlen(password));
     MD5_Update(&ctx, user, strlen(user));
-    MD5_Final(digest, &ctx);
+    MD5_Final(digest, &ctx);   // NOSONAR cpp:S4790
 
     static const char hexd[] = "0123456789abcdef";
     char inner_hex[MD5_DIGEST_LENGTH * 2];

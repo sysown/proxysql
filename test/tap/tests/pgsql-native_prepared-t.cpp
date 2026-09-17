@@ -742,7 +742,13 @@ static ExtQCaseRunResult run_describe_after_ddl(PGconn* admin, bool native,
 	struct ModeRestore {
 		PGconn* admin;
 		const std::vector<ServerRow>& saved;
-		~ModeRestore() { setNativeMode(admin, false); flushBackendPool(admin, BACKEND_HG, saved); }
+		// Both helpers can throw; an exception leaving a destructor calls std::terminate.
+		~ModeRestore() {
+			try {
+				setNativeMode(admin, false);
+				flushBackendPool(admin, BACKEND_HG, saved);
+			} catch (...) {}
+		}
 	} mode_restore{admin, saved};
 
 	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {

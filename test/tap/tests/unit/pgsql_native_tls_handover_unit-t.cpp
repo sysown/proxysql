@@ -56,7 +56,7 @@ static void dropNativeBorrow(PgSQL_Data_Stream* ds) {
 	ds->ssl = NULL;
 	ds->encrypted = false;
 	if (ds->myconn) { ds->myconn->myds = NULL; ds->myconn = NULL; }
-	delete ds;
+	delete ds;   // NOSONAR -- freed members are NULLed above, the destructor frees none of them
 }
 
 int main() {
