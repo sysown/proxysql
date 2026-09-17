@@ -16,6 +16,7 @@ struct ConversionResult {
     std::vector<ConversionEntry> entries;
     std::vector<ParseMessage> warnings;   // Non-fatal mapping issues
     std::vector<ParseMessage> errors;     // Unmappable parameters (strict mode)
+    std::vector<ParseMessage> notes;      // Informational constraints; never fatal
     bool success = true;
 
     // Summary counts
@@ -54,6 +55,9 @@ private:
     // Helper to add error or warning based on strict mode
     void add_issue(ConversionResult& result, bool strict,
                    const std::string& msg);
+
+    // Helper to add an informational note
+    static void add_note(ConversionResult& result, const std::string& msg);
 
     // SQL escaping for string values
     static std::string sql_escape(const std::string& s);

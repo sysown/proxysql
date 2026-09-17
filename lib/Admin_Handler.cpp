@@ -5632,6 +5632,9 @@ __end_show_commands:
 			if (!result.warnings.empty()) {
 				ok_msg += " (" + std::to_string(result.warnings.size()) + " warnings)";
 			}
+			if (!result.notes.empty()) {
+				ok_msg += " (" + std::to_string(result.notes.size()) + " notes, see DRY RUN)";
+			}
 			SPA->send_ok_msg_to_client(sess, (char *)ok_msg.c_str(), 0, query_no_space);
 		}
 		run_query = false;
