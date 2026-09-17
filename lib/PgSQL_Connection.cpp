@@ -1754,7 +1754,8 @@ void PgSQL_Connection::native_teardown() {
 		pg_scram_free(native_scram);
 		native_scram = nullptr;
 	}
-	native_unsynced_work = false;
+	// Not cleared here. The backend never sent the ReadyForQuery that ends the batch, so its
+	// outcome is unknown; clearing it would let the retry check replay work already committed.
 	if (fd >= 0) {
 		::close(fd);
 		fd = -1;
@@ -1901,6 +1902,8 @@ void PgSQL_Connection::native_connect_start() {
 	native_outbuf.clear();
 	native_ssl_outbuf.clear();
 	native_connected = false;
+	// Cleared here rather than in teardown, so a reconnect on this object starts clean.
+	native_unsynced_work = false;
 
 	// Decide whether this backend wants TLS, and with which verification policy.
 	// The SSL param source is the SAME as the libpq path (get_Server_SSL_Params /
