@@ -13,7 +13,7 @@
 
 namespace {
 
-const char* kDefaultGuideline = R"({
+const char* kDefaultGuideline = R"json({
  "name":"default","version":"1.1",
  "destinations":[
   {"name":"Primary","match":"$.server.memberRole = PRIMARY"},
@@ -26,9 +26,9 @@ const char* kDefaultGuideline = R"({
   {"name":"ro","enabled":true,"connectionSharingAllowed":true,
    "match":"$.session.targetPort = $.router.port.ro",
    "destinations":[{"classes":["Secondary"],"strategy":"round-robin","priority":0},
-                   {"classes":["Primary"],"strategy":"round-robin","priority":1}]}]})";
+                   {"classes":["Primary"],"strategy":"round-robin","priority":1}]}]})json";
 
-const char* kCustomGuideline = R"({
+const char* kCustomGuideline = R"json({
  "name":"custom","version":"1.1",
  "destinations":[
   {"name":"Primary","match":"$.server.memberRole = PRIMARY"},
@@ -44,7 +44,7 @@ const char* kCustomGuideline = R"({
   {"name":"split","match":"$.session.targetPort = $.router.port.rw_split",
    "destinations":[{"classes":["Any"],"strategy":"round-robin","priority":0}]},
   {"name":"office","match":"NETWORK($.session.sourceIP, 24) = '10.1.2.0'",
-   "destinations":[{"classes":["EU"],"strategy":"first-available","priority":0}]}]})";
+   "destinations":[{"classes":["EU"],"strategy":"first-available","priority":0}]}]})json";
 
 DesiredTopology topology(const std::string& document) {
 	DesiredTopology desired;
@@ -123,7 +123,7 @@ GuidelineSessionRequest request(uint16_t port, int destination, const std::strin
 } // namespace
 
 int main() {
-	plan(45);
+	plan(46);
 	const ListenerProfile listeners;
 
 	// Shell default guideline.
@@ -260,7 +260,7 @@ int main() {
 	   "clearing the snapshot disables the hook and resets the cookie");
 
 	// Invalid updates keep the last valid generation; removal clears it.
-	auto invalid_desired = topology(R"({"version":"1.1","destinations":[{"name":"A","match":"$.server.nope = 1"}],"routes":[]})");
+	auto invalid_desired = topology(R"json({"version":"1.1","destinations":[{"name":"A","match":"$.server.nope = 1"}],"routes":[]})json");
 	auto stale = compiler.compile(invalid_desired, effective(), listeners);
 	ok(stale.state == "stale" && stale.compiled && stale.compiled->stale,
 	   "an invalid update keeps the last valid guideline (%s)", stale.state.c_str());
@@ -275,8 +275,8 @@ int main() {
 	auto missing = fresh.compile(missing_desired, effective(), listeners);
 	ok(missing.state == "invalid" && missing.error_kind == "guideline_validation",
 	   "an option referencing a missing guideline is reported");
-	auto route_name_desired = topology(R"({"version":"1.1","destinations":[{"name":"A","match":"$.router.routeName = 'x'"}],
-		"routes":[{"name":"r","match":"TRUE","destinations":[{"classes":["A"],"strategy":"round-robin","priority":0}]}]})");
+	auto route_name_desired = topology(R"json({"version":"1.1","destinations":[{"name":"A","match":"$.router.routeName = 'x'"}],
+		"routes":[{"name":"r","match":"TRUE","destinations":[{"classes":["A"],"strategy":"round-robin","priority":0}]}]})json");
 	auto route_name = fresh.compile(route_name_desired, effective(), listeners);
 	ok(route_name.state == "invalid" && route_name.error_message.find("routeName") != std::string::npos,
 	   "$.router.routeName in destinations fails closed");
