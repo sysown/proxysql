@@ -148,6 +148,7 @@
   "mysql_router_metadata_v2_2_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysql_router_plugin_load_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysql_router_reconciler_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
+  "mysql_router_routing_guidelines_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysql_router_registration_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysql_router_user_sync_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysql_server_version_by_interface_unit-t" : [ "unit-tests-g1","@proxysql_min_version:3.1" ],
