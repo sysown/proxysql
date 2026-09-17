@@ -615,17 +615,20 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 				ASSERT_SQLITE_OK(rc, db);
 			}
 		}
-		GloMTH->wrunlock();
-
 		{
-			// NOTE: 'GloMTH->wrunlock()' should have been called before this point to avoid possible
-			// deadlocks. See issue #3847.
+			// Publish the committed runtime rows and their checksum atomically while
+			// retaining the canonical GloMTH-before-checksum lock order.  Calling the
+			// unlocked helper is safe because this function still owns GloMTH.
 			pthread_mutex_lock(&GloVars.checksum_mutex);
+			admindb->execute("BEGIN");
+			flush_mysql_variables___runtime_to_database_unlocked(
+				admindb, false, false, false, true);
+			admindb->execute("COMMIT");
 			// generate checksum for cluster
-			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
 			flush_GENERIC_variables__checksum__database_to_runtime("mysql", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
+		GloMTH->wrunlock();
 
 		/**
 		 * @brief Check and warn if TCP keepalive is disabled for MySQL connections.
@@ -1096,6 +1099,26 @@ FlushVariableStats ProxySQL_Admin::flush_pgsql_variables___database_to_runtime(S
 
 
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime, bool use_lock) {
+	if (!use_lock) {
+		flush_mysql_variables___runtime_to_database_unlocked(db, replace, del, onlyifempty, runtime);
+		return;
+	}
+
+	// Both the runtime projection and plugin publication use this order.
+	// checksum_mutex also serializes this shared Admin DB projection with the
+	// other variable namespaces refreshed by GenericRefreshStatistics().
+	GloMTH->wrlock();
+	pthread_mutex_lock(&GloVars.checksum_mutex);
+	db->execute("BEGIN");
+	flush_mysql_variables___runtime_to_database_unlocked(db, replace, del, onlyifempty, runtime);
+	db->execute("COMMIT");
+	pthread_mutex_unlock(&GloVars.checksum_mutex);
+	GloMTH->wrunlock();
+}
+
+void ProxySQL_Admin::flush_mysql_variables___runtime_to_database_unlocked(
+	SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime
+) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
 	if (onlyifempty) {
 		char *error=NULL;
@@ -1149,10 +1172,6 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		statement2 = statement2_unique.get();
 		ASSERT_SQLITE_OK(rc, db);
 	}
-	if (use_lock) {
-		GloMTH->wrlock();
-		db->execute("BEGIN");
-	}
 	char **varnames=GloMTH->get_variables_list();
 	for (int i=0; varnames[i]; i++) {
 		char *val=GloMTH->get_variable(varnames[i]);
@@ -1174,10 +1193,6 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		if (val)
 			free(val);
 		free(qualified_name);
-	}
-	if (use_lock) {
-		db->execute("COMMIT");
-		GloMTH->wrunlock();
 	}
 	for (int i=0; varnames[i]; i++) {
 		free(varnames[i]);

@@ -40,6 +40,8 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_PluginConfig.h"
+#include "ProxySQL_PluginSecrets.h"
 #endif /* PROXYSQL40 */
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
@@ -214,6 +216,7 @@ extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 
 extern void * (*child_func[3]) (void *arg);
 
+#ifndef PROXYSQL40
 bootstrap_info_t::~bootstrap_info_t() {
 	if (servers != nullptr) {
 		mysql_free_result(servers);
@@ -222,6 +225,7 @@ bootstrap_info_t::~bootstrap_info_t() {
 		mysql_free_result(users);
 	}
 }
+#endif /* !PROXYSQL40 */
 
 #include "Admin_ifaces.h"
 extern admin_main_loop_listeners S_amll;
@@ -232,6 +236,7 @@ static void flush_logs_handler() {
 
 extern void * admin_main_loop(void *arg);
 
+#ifndef PROXYSQL40
 struct boot_srv_info_t {
 	string member_id;
 	string member_host;
@@ -250,14 +255,6 @@ struct BOOT_SRV_INFO_T {
 		MEMBER_ROLE,
 		MEMBER_VERSION
 	};
-};
-
-struct boot_user_info_t {
-	string user;
-	string ssl_type;
-	string auth_string;
-	string auth_plugin;
-	bool password_expired;
 };
 
 struct BOOT_USER_INFO_T {
@@ -329,47 +326,117 @@ string build_boot_servers_insert(const vector<boot_srv_cnf_t>& srvs_info_defs) {
 	return servers_insert;
 }
 
-string build_boot_users_insert(MYSQL_RES* users) {
-	vector<boot_user_info_t> users_info {};
+/** Formats the current SQLite error with bootstrap import context. */
+static string bootstrap_users_sqlite_error(SQLite3DB* db, const char* operation) {
+	return cstr_format("%s: %s", operation, (*proxy_sqlite3_errmsg)(db->get_db())).str;
+}
 
+/** Rolls back a bootstrap user import while preserving its original error. */
+static void rollback_bootstrap_users(SQLite3DB* db, string& error) {
+	if (!db->execute("ROLLBACK")) {
+		error += "; rollback failed";
+	}
+}
+
+/** Binds and inserts one bootstrap user without interpreting credential bytes. */
+static bool insert_bootstrap_user(
+	SQLite3DB* db, sqlite3_stmt* stmt, MYSQL_ROW row, unsigned long* lengths, string& error
+) {
+	if (lengths == nullptr || row[BOOT_USER_INFO_T::USER] == nullptr) {
+		error = "Bootstrap user row is missing its username or field lengths";
+		return false;
+	}
+
+	const unsigned long username_len = lengths[BOOT_USER_INFO_T::USER];
+	const unsigned long auth_string_len = lengths[BOOT_USER_INFO_T::AUTH_STRING];
+	if (username_len > static_cast<unsigned long>(std::numeric_limits<int>::max()) ||
+		auth_string_len > static_cast<unsigned long>(std::numeric_limits<int>::max())) {
+		error = "Bootstrap username or password exceeds SQLite's binding limit";
+		return false;
+	}
+
+	int rc = (*proxy_sqlite3_bind_text)(
+		stmt, 1, row[BOOT_USER_INFO_T::USER], static_cast<int>(username_len), SQLITE_TRANSIENT
+	);
+	if (rc == SQLITE_OK && row[BOOT_USER_INFO_T::AUTH_STRING] == nullptr) {
+		rc = (*proxy_sqlite3_bind_null)(stmt, 2);
+	} else if (rc == SQLITE_OK) {
+		rc = (*proxy_sqlite3_bind_text)(
+			stmt, 2, row[BOOT_USER_INFO_T::AUTH_STRING],
+			static_cast<int>(auth_string_len), SQLITE_TRANSIENT
+		);
+	}
+	if (rc == SQLITE_OK) {
+		const int use_ssl = row[BOOT_USER_INFO_T::SSL_TYPE] != nullptr &&
+			lengths[BOOT_USER_INFO_T::SSL_TYPE] != 0;
+		rc = (*proxy_sqlite3_bind_int)(stmt, 3, use_ssl);
+	}
+	if (rc != SQLITE_OK) {
+		error = bootstrap_users_sqlite_error(db, "Failed to bind bootstrap user");
+		return false;
+	}
+
+	SAFE_SQLITE3_STEP2(stmt);
+	if (rc != SQLITE_DONE) {
+		error = bootstrap_users_sqlite_error(db, "Failed to insert bootstrap user");
+		return false;
+	}
+
+	rc = (*proxy_sqlite3_reset)(stmt);
+	if (rc == SQLITE_OK) {
+		rc = (*proxy_sqlite3_clear_bindings)(stmt);
+	}
+	if (rc != SQLITE_OK) {
+		error = bootstrap_users_sqlite_error(db, "Failed to reset mysql_users import statement");
+		return false;
+	}
+
+	return true;
+}
+
+bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
+	error.clear();
+
+	if (db == nullptr || users == nullptr) {
+		error = "Invalid bootstrap user import arguments";
+		return false;
+	}
+
+	if (!db->execute("BEGIN IMMEDIATE")) {
+		error = bootstrap_users_sqlite_error(db, "Failed to begin mysql_users import");
+		return false;
+	}
+
+	auto [rc, stmt] = db->prepare_v2(
+		"INSERT INTO mysql_users (username,password,active,use_ssl) VALUES (?1,?2,1,?3)"
+	);
+	if (rc != SQLITE_OK) {
+		error = bootstrap_users_sqlite_error(db, "Failed to prepare mysql_users import");
+		rollback_bootstrap_users(db, error);
+		return false;
+	}
+
+	if (!db->execute("DELETE FROM mysql_users")) {
+		error = bootstrap_users_sqlite_error(db, "Failed to clear mysql_users");
+		rollback_bootstrap_users(db, error);
+		return false;
+	}
+
+	mysql_data_seek(users, 0);
 	while (MYSQL_ROW row = mysql_fetch_row(users)) {
-		users_info.push_back({
-			string { row[BOOT_USER_INFO_T::USER] },
-			string { row[BOOT_USER_INFO_T::SSL_TYPE] },
-			string { row[BOOT_USER_INFO_T::AUTH_STRING] },
-			string { row[BOOT_USER_INFO_T::AUTH_PLUGIN] },
-			static_cast<bool>(atoi(row[BOOT_USER_INFO_T::PASSWORD_EXPIRED]))
-		});
-	}
-
-	// MySQL Users
-	const string t_users_insert {
-		"INSERT INTO mysql_users (username,password,active,use_ssl) VALUES "
-	};
-	string t_users_values {};
-
-	for (const boot_user_info_t& user : users_info) {
-		uint32_t use_ssl = user.ssl_type.empty() ? 0 : 1;
-		const char t_values[] { "(\"%s\", \"%s\", %d, %d)" };
-
-		string srv_values = cstr_format(
-			t_values,
-			user.user.c_str(),        // USERNAME
-			user.auth_string.c_str(), // HOSTNAME
-			1,                        // ACTIVE: Always ON
-			use_ssl                   // USE_SSL: Dependent on backend user
-		).str;
-
-		if (&user != &users_info.back()) {
-			srv_values += ",";
+		if (!insert_bootstrap_user(db, stmt.get(), row, mysql_fetch_lengths(users), error)) {
+			rollback_bootstrap_users(db, error);
+			return false;
 		}
-
-		t_users_values += srv_values;
 	}
 
-	const string users_insert { t_users_insert + t_users_values };
+	if (!db->execute("COMMIT")) {
+		error = bootstrap_users_sqlite_error(db, "Failed to commit mysql_users import");
+		rollback_bootstrap_users(db, error);
+		return false;
+	}
 
-	return users_insert;
+	return true;
 }
 
 map<uint64_t,srv_defs_t> get_cur_hg_attrs(SQLite3DB* admindb) {
@@ -493,6 +560,7 @@ int check_if_user_config(SQLite3DB* admindb, const char* query) {
  *   executions.
  */
 #define ADMIN_SQLITE_TABLE_BOOTSTRAP_VARIABLES "CREATE TABLE IF NOT EXISTS bootstrap_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+#endif /* !PROXYSQL40 */
 
 
 extern void *child_mysql(void *arg);
@@ -519,7 +587,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	child_func[0]=child_mysql;
 	child_func[1]=child_telnet;
 	child_func[2]=child_postgres;
-	main_shutdown=0;
+	__atomic_store_n(&main_shutdown, 0, __ATOMIC_RELEASE);
 	main_poll_nfds=0;
 	main_poll_fds=NULL;
 	main_callback_func=NULL;
@@ -761,8 +829,15 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+#ifdef PROXYSQL40
+	insert_into_tables_defs(tables_defs_admin, "proxysql_plugin_owned_objects",
+		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL);
+	insert_into_tables_defs(tables_defs_admin, "proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL);
+#endif
 	insert_into_tables_defs(tables_defs_admin,"runtime_global_variables", ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
+	insert_into_tables_defs(tables_defs_admin,"ssl_ciphers", ADMIN_SQLITE_TABLE_SSL_CIPHERS);
 	insert_into_tables_defs(tables_defs_admin,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
 	insert_into_tables_defs(tables_defs_admin,"runtime_scheduler", ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER);
 	insert_into_tables_defs(tables_defs_admin,"mysql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS);
@@ -842,6 +917,12 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+#ifdef PROXYSQL40
+	insert_into_tables_defs(tables_defs_config, "proxysql_plugin_owned_objects",
+		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL);
+	insert_into_tables_defs(tables_defs_config, "proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL);
+#endif
 	insert_into_tables_defs(tables_defs_config,"global_settings", ADMIN_SQLITE_TABLE_GLOBAL_SETTINGS);
 	// the table is not required to be present on disk. Removing it due to #1055
 	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
@@ -850,6 +931,13 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
 	insert_into_tables_defs(tables_defs_config, "restapi_routes", ADMIN_SQLITE_TABLE_RESTAPI_ROUTES);
+#ifdef PROXYSQL40
+	// Core-owned encrypted plugin secrets must exist before Phase D exposes
+	// live secret services.  This uses the same configdb definition path as
+	// every other persistent Admin table, not a plugin-provided schema.
+	insert_into_tables_defs(tables_defs_config, "proxysql_plugin_secrets",
+		proxysql_plugin_secrets_table_definition());
+#endif /* PROXYSQL40 */
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 	insert_into_tables_defs(tables_defs_config,"debug_filters", ADMIN_SQLITE_TABLE_DEBUG_FILTERS);
@@ -866,6 +954,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_processlist", STATS_SQLITE_TABLE_MYSQL_PROCESSLIST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_connection_pool", STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_connection_pool_reset", STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL_RESET);
+#ifdef PROXYSQL31
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_hostgroup_connection_pool", STATS_SQLITE_TABLE_MYSQL_HOSTGROUP_CONNECTION_POOL);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_hostgroup_connection_pool_reset", STATS_SQLITE_TABLE_MYSQL_HOSTGROUP_CONNECTION_POOL_RESET);
+#endif
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_free_connections", STATS_SQLITE_TABLE_MYSQL_FREE_CONNECTIONS);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest_reset", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET);
@@ -888,6 +980,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_global", STATS_SQLITE_TABLE_PGSQL_GLOBAL);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_connection_pool", STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_connection_pool_reset", STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL_RESET);
+#ifdef PROXYSQL31
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_hostgroup_connection_pool", STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_hostgroup_connection_pool_reset", STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL_RESET);
+#endif
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_free_connections", STATS_SQLITE_TABLE_PGSQL_FREE_CONNECTIONS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_users", STATS_SQLITE_TABLE_PGSQL_USERS);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_processlist", STATS_SQLITE_TABLE_PGSQL_PROCESSLIST);
@@ -970,11 +1066,20 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	// upgrade pgsql_replication_hostgroups if needed (upgrade from previous version)
 	disk_upgrade_pgsql_replication_hostgroups();
 
-	check_and_build_standard_tables(admindb, tables_defs_admin);
-	check_and_build_standard_tables(configdb, tables_defs_config);
-	check_and_build_standard_tables(statsdb, tables_defs_stats);
+	if (!check_and_build_standard_tables(admindb, tables_defs_admin) ||
+		!check_and_build_standard_tables(configdb, tables_defs_config) ||
+		!check_and_build_standard_tables(statsdb, tables_defs_stats)) {
+		proxy_error("Failed to materialize Admin database schemas\n");
+		return false;
+	}
 
 	__attach_db(admindb, configdb, (char *)"disk");
+#ifdef PROXYSQL40
+	if (!restore_plugin_config_runtime_state()) {
+		proxy_error("Failed to restore persistent plugin ownership state\n");
+		return false;
+	}
+#endif
 	__attach_db(admindb, statsdb, (char *)"stats");
 	__attach_db(admindb, monitordb, (char *)"monitor");
 	__attach_db(statsdb, monitordb, (char *)"monitor");
@@ -982,6 +1087,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	__attach_db(statsdb, statsdb_disk, (char *)"stats_history");
 
 	dump_mysql_collations();
+	dump_ssl_ciphers();
 
 #ifdef DEBUG
 	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
@@ -1080,6 +1186,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		proxy_info("NOTE: Changes to %s will be ignored while the config DB exists. For more information, refer: https://proxysql.com/documentation/configuring-proxysql\n", GloVars.config_file);
 	}
 
+	#ifndef PROXYSQL40
 	/**
 	 * @brief Inserts a default 'mysql_group_replication_hostgroup'.
 	 * @details Uses the following defaults:
@@ -1161,9 +1268,11 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		admindb->execute("DELETE FROM mysql_servers");
 		admindb->execute(servers_insert.c_str());
 
-		const string users_insert { build_boot_users_insert(bootstrap_info.users) };
-		admindb->execute("DELETE FROM mysql_users");
-		admindb->execute(users_insert.c_str());
+		string users_import_error {};
+		if (!import_bootstrap_users(admindb, bootstrap_info.users, users_import_error)) {
+			proxy_error("Bootstrap failed while importing MySQL users: %s\n", users_import_error.c_str());
+			return false;
+		}
 
 		// Make the configuration persistent
 		flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
@@ -1175,8 +1284,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		// TODO-NOTE: This MUST go away; 'admin-hash_passwords' will be deprecated
 		admindb->execute("UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords'");
 	}
+	#endif /* !PROXYSQL40 */
 	flush_admin_variables___database_to_runtime(admindb,true);
 
+	#ifndef PROXYSQL40
 	if (GloVars.global.gr_bootstrap_mode) {
 		flush_admin_variables___runtime_to_database(configdb, false, true, false);
 	}
@@ -1270,10 +1381,13 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 			configdb->execute(insert_bootstrap_pass.c_str());
 		}
 	}
+	#endif /* !PROXYSQL40 */
 	flush_mysql_variables___database_to_runtime(admindb,true);
+	#ifndef PROXYSQL40
 	if (GloVars.global.gr_bootstrap_mode) {
 		flush_mysql_variables___runtime_to_database(configdb, false, true, false);
 	}
+	#endif /* !PROXYSQL40 */
 	flush_pgsql_variables___database_to_runtime(admindb, true);
 #ifdef PROXYSQLCLICKHOUSE
 	flush_clickhouse_variables___database_to_runtime(admindb,true);

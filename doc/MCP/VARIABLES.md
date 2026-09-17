@@ -154,7 +154,9 @@ The Query Tool Handler provides LLM-based tools for MySQL database exploration a
 Query tools use a logical `target_id` routing model with server-managed credentials:
 
 - Use `list_targets` to retrieve discoverable backend targets.
-- Active targets come from `runtime_mcp_target_profiles` joined with `runtime_mcp_auth_profiles`.
+- Active targets come from the module's in-memory joined target/auth map, installed
+  from `main.mcp_target_profiles` and `main.mcp_auth_profiles` by
+  `LOAD MCP PROFILES TO RUNTIME`.
 - The MCP server maps `target_id -> auth_profile_id` and applies backend credentials internally.
 - MCP clients must never send backend credentials in tool arguments.
 - Clients should pass `target_id` to query tools instead of host/protocol details.
@@ -166,7 +168,10 @@ Backend credentials are defined in MCP tables, not in client requests:
 - `mcp_auth_profiles` / `runtime_mcp_auth_profiles`
 - `mcp_target_profiles` / `runtime_mcp_target_profiles`
 
-The in-memory target/auth map is loaded by `MCP_Threads_Handler` from runtime tables and used by the query executor connection pools.
+`MCP_Threads_Handler` installs the editable `main.mcp_auth_profiles` and
+`main.mcp_target_profiles` tables into its in-memory target/auth map, which the
+query executor connection pools use. The `runtime_` tables are read-only
+projections of that module snapshot for inspection.
 
 ### Catalog Configuration
 
@@ -251,6 +256,65 @@ LOAD MCP VARIABLES TO RUNTIME   → Memory to Runtime
 SAVE MCP VARIABLES TO DISK      → Memory to Disk
 SAVE MCP VARIABLES FROM RUNTIME → Runtime to Memory
 ```
+
+## Profile and Query Rule Persistence
+
+`mcp_auth_profiles`, `mcp_target_profiles` and `mcp_query_rules` follow the same
+three-layer model, and are restored automatically on restart:
+
+```
+SAVE MCP PROFILES TO DISK       → Memory to Disk
+SAVE MCP QUERY RULES TO DISK    → Memory to Disk
+(restart)                       → Disk to Memory, then Memory to Runtime
+```
+
+At startup Admin copies the on-disk copies back into `main` before the genai
+plugin's start phase runs, and the plugin installs them into the runtime from
+there. No post-restart `LOAD MCP PROFILES FROM DISK` is required.
+
+`LOAD MCP <X> FROM DISK` (and its `TO MEMORY` alias) moves disk → memory and
+nothing else, so you can stage an on-disk configuration and review or edit it
+in `main.` before committing to it. Within this disk/memory/runtime workflow,
+`LOAD MCP <X> TO RUNTIME` is the step that applies configuration and may start
+or restart the MCP listener (`LOAD MCP VARIABLES FROM CONFIG` is a separate
+config-file workflow that also applies variables and reevaluates the listener):
+
+```sql
+LOAD MCP PROFILES FROM DISK;                 -- stage: disk -> main, runtime untouched
+SELECT * FROM mcp_target_profiles;           -- review / edit
+LOAD MCP PROFILES TO RUNTIME;                -- apply
+```
+
+> **Note:** in releases before this behaviour was added, only `mcp-*` variables
+> came back after a restart (they live in `global_variables`); profiles and
+> query rules came back empty, so the MCP listener started with no targets. On
+> those releases, run `LOAD MCP PROFILES FROM DISK;` and
+> `LOAD MCP QUERY RULES FROM DISK;` after every start.
+
+## Which target profiles are actually usable
+
+`SELECT * FROM runtime_mcp_target_profiles` lists every target in the runtime
+snapshot, including ones the MCP query endpoint cannot use. Two derived columns
+distinguish them:
+
+| Column | Meaning |
+|--------|---------|
+| `effective` | `1` if the target is usable by the query endpoint, `0` if it was excluded |
+| `skip_reason` | empty when `effective=1`; otherwise `inactive` or `auth_profile_id not found` |
+
+```sql
+-- targets the MCP query endpoint will NOT see, and why
+SELECT target_id, active, auth_profile_id, skip_reason
+  FROM runtime_mcp_target_profiles
+ WHERE effective = 0;
+```
+
+`LOAD MCP PROFILES TO RUNTIME` also reports the counts in its reply, and each
+excluded row is logged as a warning in the ProxySQL error log.
+
+A target with `effective=1` may still fail at request time if its hostgroup has
+no ONLINE backend or its auth profile has an empty `db_username`; the tool error
+message describes that case separately.
 
 ## Status Variables
 

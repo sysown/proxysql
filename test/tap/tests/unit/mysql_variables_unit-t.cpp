@@ -8,6 +8,7 @@
 #include "sqlite3db.h"
 #ifdef PROXYSQL31
 #include "MySQL_Caching_Sha2_RSA.h"
+#include "MySQL_Server_Version_By_Interface.h"
 #endif
 
 #include <cstring>
@@ -51,6 +52,9 @@ static bool has_all_rejected_rsa_variables(const std::vector<std::string>& varia
 
 #ifdef PROXYSQL31
 static void test_caching_sha2_rsa_rejection_restores_database_values(MySQL_Threads_Handler& handler);
+static void test_server_version_by_interface_rejection_restores_database_values(
+	MySQL_Threads_Handler& handler
+);
 #endif
 
 static void test_mysql_integer_variables_are_registered() {
@@ -79,6 +83,16 @@ static void test_mysql_integer_variables_are_registered() {
 		"user_variable_tracking rejects values above its supported range");
 
 #ifdef PROXYSQL31
+	ok(contains_variable(variables, "server_version_by_interface") &&
+		handler.has_variable("server_version_by_interface"),
+		"server_version_by_interface is registered in 3.1");
+	mf_unique_ptr<char> server_version_by_interface {
+		handler.get_variable("server_version_by_interface")
+	};
+	ok(server_version_by_interface != nullptr &&
+		strcmp(server_version_by_interface.get(), "{}") == 0,
+		"server_version_by_interface defaults to an empty JSON object");
+
 	ok(contains_variable(variables, "caching_sha2_password_auto_generate_rsa_keys"),
 		"caching_sha2 RSA auto-generation variable is registered in 3.1");
 	ok(contains_variable(variables, "caching_sha2_password_private_key_path"),
@@ -98,11 +112,17 @@ static void test_mysql_integer_variables_are_registered() {
 		"caching_sha2 RSA private-key path has the compiled default");
 	ok(public_path != nullptr && strcmp(public_path.get(), "proxysql-caching-sha2-public-key.pem") == 0,
 		"caching_sha2 RSA public-key path has the compiled default");
+#else
+	ok(!contains_variable(variables, "server_version_by_interface"),
+		"server_version_by_interface is absent from the stable variable list");
+	ok(!handler.has_variable("server_version_by_interface"),
+		"server_version_by_interface is not a stable-tier variable");
 #endif
 
 	free_variables_list(variables);
 #ifdef PROXYSQL31
 	test_caching_sha2_rsa_rejection_restores_database_values(handler);
+	test_server_version_by_interface_rejection_restores_database_values(handler);
 #endif
 	test_globals_cleanup();
 }
@@ -125,6 +145,71 @@ static void test_mysql_integer_boolean_aliases() {
 }
 
 #ifdef PROXYSQL31
+static void disable_rsa_for_catalog_commits(MySQL_Threads_Handler& handler) {
+	char auto_name[] = "caching_sha2_password_auto_generate_rsa_keys";
+	char private_name[] = "caching_sha2_password_private_key_path";
+	char public_name[] = "caching_sha2_password_public_key_path";
+	handler.set_variable(auto_name, "false");
+	handler.set_variable(private_name, "");
+	handler.set_variable(public_name, "");
+	(void)handler.commit();
+}
+
+static void test_server_version_by_interface_commit_is_atomic() {
+	test_globals_init();
+	MySQL_Threads_Handler handler;
+	free_variables_list(handler.get_variables_list());
+	disable_rsa_for_catalog_commits(handler);
+
+	char variable_name[] = "server_version_by_interface";
+	const char* original_json =
+		"{  \"127.0.0.1:6033\" : \"8.0.30-a\", \"/tmp/proxysql.sock\" : \"8.4.1-socket\"  }";
+	const bool original_staged = handler.set_variable(variable_name, original_json);
+	const MySQLThreadsCommitResult original_commit = handler.commit();
+	ok(original_staged && original_commit.rejected_variables.empty(),
+		"commit accepts a valid loose interface-version catalog");
+	mf_unique_ptr<char> original_raw { handler.get_variable(variable_name) };
+	ok(original_raw != nullptr && strcmp(original_raw.get(), original_json) == 0,
+		"the accepted JSON round-trips byte-for-byte through the getter");
+	const auto original_snapshot = handler.server_version_by_interface_snapshot();
+	ok(original_snapshot != nullptr && original_snapshot->size() == 2 &&
+		original_snapshot->at("127.0.0.1:6033") == "8.0.30-a" &&
+		original_snapshot->at("/tmp/proxysql.sock") == "8.4.1-socket",
+		"a valid loose catalog publishes every configured mapping");
+
+	const char* replacement_json = "{\"127.0.0.1:6033\":\"8.0.31-b\"}";
+	handler.set_variable(variable_name, replacement_json);
+	const MySQLThreadsCommitResult replacement_commit = handler.commit();
+	const auto replacement_snapshot = handler.server_version_by_interface_snapshot();
+	ok(replacement_commit.rejected_variables.empty() &&
+		replacement_snapshot != original_snapshot && replacement_snapshot->size() == 1 &&
+		replacement_snapshot->at("127.0.0.1:6033") == "8.0.31-b",
+		"replacing the catalog atomically publishes a new immutable snapshot");
+	ok(original_snapshot->size() == 2 &&
+		original_snapshot->at("127.0.0.1:6033") == "8.0.30-a",
+		"a retained snapshot continues to expose the previously accepted catalog");
+
+	handler.set_variable(variable_name, "{}");
+	const MySQLThreadsCommitResult clear_commit = handler.commit();
+	const auto empty_snapshot = handler.server_version_by_interface_snapshot();
+	ok(clear_commit.rejected_variables.empty() && empty_snapshot != nullptr &&
+		empty_snapshot->empty(),
+		"committing an empty JSON object clears the published catalog");
+
+	handler.set_variable(variable_name, "{");
+	const MySQLThreadsCommitResult malformed_commit = handler.commit();
+	ok(malformed_commit.rejected_variables ==
+		std::vector<std::string> { "server_version_by_interface" },
+		"malformed JSON reports exactly server_version_by_interface as rejected");
+	mf_unique_ptr<char> restored_raw { handler.get_variable(variable_name) };
+	ok(restored_raw != nullptr && strcmp(restored_raw.get(), "{}") == 0,
+		"a rejected catalog restores the previously accepted raw JSON");
+	ok(handler.server_version_by_interface_snapshot() == empty_snapshot,
+		"a rejected catalog preserves the previously published snapshot");
+
+	test_globals_cleanup();
+}
+
 static void test_caching_sha2_rsa_commit_is_atomic() {
 	test_globals_init();
 	char path_template[] = "/tmp/proxysql-mth-caching-sha2-rsa-XXXXXX"; // NOSONAR: mkdtemp creates this test directory atomically with owner-only permissions.
@@ -322,17 +407,78 @@ static void test_caching_sha2_rsa_rejection_restores_database_values(MySQL_Threa
 	proxy_stats.reset();
 	GloVars.statsdb_disk = previous_statsdb_path;
 }
+
+static void test_server_version_by_interface_rejection_restores_database_values(
+	MySQL_Threads_Handler& handler
+) {
+	GloMTH = &handler;
+	disable_rsa_for_catalog_commits(handler);
+	char variable_name[] = "server_version_by_interface";
+	const char* accepted_json = "{ \"unused:9999\" : \"8.0.30-accepted\" }";
+	handler.set_variable(variable_name, accepted_json);
+	(void)handler.commit();
+	const auto accepted_snapshot = handler.server_version_by_interface_snapshot();
+
+	char* previous_statsdb_path = GloVars.statsdb_disk;
+	mf_unique_ptr<char> in_memory_statsdb { strdup(":memory:") };
+	GloVars.statsdb_disk = in_memory_statsdb.get();
+	auto proxy_stats = std::make_unique<ProxySQL_Statistics>();
+	GloProxyStats = proxy_stats.get();
+	GloProxyStats->init();
+	ProxySQL_Admin* admin = new ProxySQL_Admin(); // NOSONAR: process-scoped partial fixture cannot invoke the production shutdown destructor.
+	auto admin_db = std::make_unique<SQLite3DB>();
+	admin->admindb = admin_db.get();
+	char in_memory_admin_db[] = ":memory:";
+	admin->admindb->open(
+		in_memory_admin_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+	);
+	admin->admindb->execute(
+		"CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY, variable_value VARCHAR NOT NULL)"
+	);
+	admin->admindb->execute(
+		"CREATE TABLE runtime_global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY, variable_value VARCHAR NOT NULL)"
+	);
+	admin->admindb->execute(
+		"INSERT INTO global_variables VALUES ('mysql-server_version_by_interface', '{')"
+	);
+	GloAdmin = admin;
+
+	const FlushVariableStats stats = admin->load_mysql_variables_to_runtime();
+	ok(stats.records == 1 && stats.updated == 0 && stats.rejected == 1,
+		"Admin LOAD counts malformed server_version_by_interface JSON as rejected");
+	mf_unique_ptr<char> restored_raw { handler.get_variable(variable_name) };
+	ok(restored_raw != nullptr && strcmp(restored_raw.get(), accepted_json) == 0 &&
+		handler.server_version_by_interface_snapshot() == accepted_snapshot,
+		"Admin LOAD restores the accepted raw JSON and immutable snapshot");
+	ok(query_variable(
+		admin->admindb, "global_variables", "mysql-server_version_by_interface"
+	) == accepted_json,
+		"Admin LOAD rewrites global_variables with the accepted JSON");
+	ok(query_variable(
+		admin->admindb, "runtime_global_variables", "mysql-server_version_by_interface"
+	) == accepted_json,
+		"Admin LOAD rewrites runtime_global_variables with the accepted JSON");
+
+	GloAdmin = nullptr;
+	GloMTH = nullptr;
+	admin->admindb = nullptr;
+	admin_db.reset();
+	GloProxyStats = nullptr;
+	proxy_stats.reset();
+	GloVars.statsdb_disk = previous_statsdb_path;
+}
 #endif
 
 int main() {
 #ifdef PROXYSQL31
-	plan(35);
+	plan(50);
 #else
-	plan(9);
+	plan(11);
 #endif
 	test_mysql_integer_variables_are_registered();
 	test_mysql_integer_boolean_aliases();
 #ifdef PROXYSQL31
+	test_server_version_by_interface_commit_is_atomic();
 	test_caching_sha2_rsa_commit_is_atomic();
 #endif
 	return exit_status();

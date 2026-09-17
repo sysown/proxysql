@@ -31,6 +31,7 @@
 
 #include <cstring>
 #include <climits>
+#include <string>
 
 mf_unique_ptr<const char> get_masked_pass(const char* pass);
 
@@ -221,6 +222,27 @@ static void test_mysql_hdr() {
 	hdr.pkt_length = 0xFFFFFF;
 	ok(hdr.pkt_length == 0xFFFFFF,
 		"mysql_hdr: max pkt_length (16MB-1)");
+}
+
+static void test_initial_handshake_rejects_oversized_payload() {
+	std::string oversized_server_version(0xFFFFFF, 'v');
+	char* const previous_server_version = mysql_thread___server_version;
+	const int previous_auth_plugin = mysql_thread___default_authentication_plugin_int;
+	mysql_thread___server_version = const_cast<char*>(oversized_server_version.c_str());
+	mysql_thread___default_authentication_plugin_int = 0;
+
+	MySQL_Data_Stream* null_stream = nullptr;
+	MySQL_Protocol protocol;
+	protocol.myds = &null_stream;
+	uint32_t thread_id = 0;
+	const bool generated = protocol.generate_pkt_initial_handshake(
+		false, nullptr, nullptr, &thread_id, false
+	);
+
+	mysql_thread___server_version = previous_server_version;
+	mysql_thread___default_authentication_plugin_int = previous_auth_plugin;
+	ok(!generated,
+		"initial handshake rejects a payload larger than the 24-bit packet limit");
 }
 
 #ifdef PROXYSQL31
@@ -525,9 +547,9 @@ static void test_wildcard_matching() {
 
 int main() {
 #ifdef PROXYSQL31
-	plan(56);
+	plan(57);
 #else
-	plan(45);
+	plan(46);
 #endif
 
 	test_init_minimal();
@@ -542,6 +564,7 @@ int main() {
 
 	// Packet header
 	test_mysql_hdr();                        // 3 tests
+	test_initial_handshake_rejects_oversized_payload(); // 1 test
 #ifdef PROXYSQL31
 	test_auth_more_data_packet();            // 5 tests
 	test_caching_sha2_stage5_payload_validation(); // 5 tests

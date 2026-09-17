@@ -14,6 +14,15 @@ echo -e "==> C compiler: ${CC} -> $(readlink -e $(type -p ${CC}))\n$(${CC} --ver
 echo -e "==> C++ compiler: ${CXX} -> $(readlink -e $(type -p ${CXX}))\n$(${CXX} --version)"
 #echo -e "==> linker version:\n$ ${LD} -> $(readlink -e $(type -p ${LD}))\n$(${LD} --version)"
 
+if ! perl -MTime::Piece -e 1 >/dev/null 2>&1; then
+	echo "==> Installing perl-Time-Piece (OpenSSL 3.5)"
+	if command -v dnf >/dev/null 2>&1; then
+		dnf install -y perl-Time-Piece
+	else
+		yum install -y perl-Time-Piece
+	fi
+fi
+
 echo "==> Cleaning"
 # Delete package if exists
 rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.rpm || true

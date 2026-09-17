@@ -16,6 +16,7 @@
 #include <ctime>
 #include <sys/select.h>
 #include "libpq-fe.h"
+#include <mysql.h>
 #include "command_line.h"
 #include "noise_utils.h"
 #include "tap.h"
@@ -75,6 +76,204 @@ struct TestCase {
 
 std::fstream f_proxysql_log{};
 PGConnPtr admin_conn{nullptr, &PQfinish};
+
+static bool pgsql_admin_exec(MYSQL* admin, const char* query) {
+    if (mysql_query(admin, query)) {
+        diag("Admin query failed: '%s': %s", query, mysql_error(admin));
+        return false;
+    }
+    MYSQL_RES* result = mysql_store_result(admin);
+    if (result) mysql_free_result(result);
+    return true;
+}
+
+static std::string pgsql_admin_scalar(MYSQL* admin, const char* query) {
+    if (mysql_query(admin, query)) {
+        diag("Admin query failed: '%s': %s", query, mysql_error(admin));
+        return "";
+    }
+
+    std::string value;
+    MYSQL_RES* result = mysql_store_result(admin);
+    if (result) {
+        MYSQL_ROW row = mysql_fetch_row(result);
+        if (row && row[0]) value = row[0];
+        mysql_free_result(result);
+    }
+    return value;
+}
+
+using AdminRows = std::vector<std::vector<std::string>>;
+
+static AdminRows pgsql_admin_rows(MYSQL* admin, const char* query) {
+    AdminRows rows;
+    if (mysql_query(admin, query)) {
+        diag("Admin query failed: '%s': %s", query, mysql_error(admin));
+        return rows;
+    }
+
+    MYSQL_RES* result = mysql_store_result(admin);
+    if (result) {
+        MYSQL_ROW row;
+        const unsigned int fields = mysql_num_fields(result);
+        while ((row = mysql_fetch_row(result))) {
+            std::vector<std::string> values;
+            values.reserve(fields);
+            for (unsigned int i = 0; i < fields; ++i) {
+                values.emplace_back(row[i] ? row[i] : "");
+            }
+            rows.push_back(std::move(values));
+        }
+        mysql_free_result(result);
+    }
+    return rows;
+}
+
+static std::string pgsql_admin_quote(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char character : value) {
+        if (character == '\'') escaped += "''";
+        else escaped += character;
+    }
+    return "'" + escaped + "'";
+}
+
+class PgsqlPoolRuntimeGuard {
+public:
+    bool initialize() {
+        admin_ = mysql_init(NULL);
+        if (!admin_ || !mysql_real_connect(admin_, cl.admin_host, cl.admin_username, cl.admin_password,
+                                           NULL, cl.admin_port, NULL, 0)) {
+            diag("Unable to connect to ProxySQL admin: %s", admin_ ? mysql_error(admin_) : "mysql_init failed");
+            return false;
+        }
+
+        original_main_servers_ = pgsql_admin_rows(admin_, pgsql_servers_select("pgsql_servers").c_str());
+        original_runtime_servers_ = pgsql_admin_rows(admin_, pgsql_servers_select("runtime_pgsql_servers").c_str());
+        original_main_variables_ = pgsql_admin_rows(admin_,
+            "SELECT variable_name, variable_value FROM global_variables "
+            "WHERE variable_name LIKE 'pgsql-%' ORDER BY variable_name");
+        original_runtime_variables_ = pgsql_admin_rows(admin_,
+            "SELECT variable_name, variable_value FROM runtime_global_variables "
+            "WHERE variable_name LIKE 'pgsql-%' ORDER BY variable_name");
+        if (original_main_servers_.empty() || original_runtime_servers_.empty() ||
+            original_main_variables_.empty() || original_runtime_variables_.empty()) {
+            diag("Unable to snapshot PostgreSQL main and runtime configuration");
+            return false;
+        }
+
+        initialized_ = true;
+        if (!replace_main_servers(original_runtime_servers_) ||
+            !replace_main_variables(original_runtime_variables_) ||
+            !pgsql_admin_exec(admin_, "UPDATE pgsql_servers SET max_connections=1") ||
+            !load_pool_configuration()) {
+            return false;
+        }
+        return true;
+    }
+
+    bool set_free_connections_pct(const char* value) {
+        const std::string query = std::string("SET pgsql-free_connections_pct=") + value;
+        return pgsql_admin_exec(admin_, query.c_str()) &&
+               pgsql_admin_exec(admin_, "LOAD PGSQL VARIABLES TO RUNTIME");
+    }
+
+    bool wait_for_free_connections(const char* expected) {
+        for (int i = 0; i < 150; ++i) {
+            const std::string free_connections = pgsql_admin_scalar(admin_,
+                "SELECT IFNULL(SUM(ConnFree),0) FROM stats_pgsql_connection_pool");
+            if (free_connections == expected) return true;
+            usleep(100 * 1000);
+        }
+        diag("Timed out waiting for %s free PostgreSQL backend connection(s)", expected);
+        return false;
+    }
+
+    bool restore() {
+        if (!initialized_ || restored_) return true;
+
+        bool restored = true;
+        if (!set_free_connections_pct("0") || !wait_for_free_connections("0")) {
+            diag("Failed to drain PostgreSQL free connections before restoring pool configuration");
+            restored = false;
+        }
+        if (!replace_main_servers(original_runtime_servers_) ||
+            !replace_main_variables(original_runtime_variables_) ||
+            !load_pool_configuration()) {
+            diag("Failed to restore PostgreSQL pool runtime configuration");
+            restored = false;
+        }
+        if (!replace_main_servers(original_main_servers_) ||
+            !replace_main_variables(original_main_variables_)) {
+            diag("Failed to restore PostgreSQL main configuration after pool test");
+            restored = false;
+        }
+        restored_ = restored;
+        return restored;
+    }
+
+    ~PgsqlPoolRuntimeGuard() {
+        restore();
+        if (admin_) mysql_close(admin_);
+    }
+
+private:
+    static std::string pgsql_servers_select(const char* table) {
+        return std::string("SELECT hostgroup_id, hostname, port, status, weight, compression, ") +
+               "max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM " +
+               table + " ORDER BY hostgroup_id, hostname, port";
+    }
+
+    bool replace_main_servers(const AdminRows& servers) {
+        if (!pgsql_admin_exec(admin_, "DELETE FROM pgsql_servers")) return false;
+
+        for (const auto& server : servers) {
+            if (server.size() != 11) {
+                diag("Unexpected pgsql_servers row width while restoring configuration");
+                return false;
+            }
+            std::string query = "INSERT INTO pgsql_servers (hostgroup_id, hostname, port, status, weight, "
+                                "compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, "
+                                "comment) VALUES (";
+            for (size_t i = 0; i < server.size(); ++i) {
+                if (i) query += ", ";
+                query += pgsql_admin_quote(server[i]);
+            }
+            query += ")";
+            if (!pgsql_admin_exec(admin_, query.c_str())) return false;
+        }
+        return true;
+    }
+
+    bool replace_main_variables(const AdminRows& variables) {
+        for (const auto& variable : variables) {
+            if (variable.size() != 2) {
+                diag("Unexpected pgsql variable row width while restoring configuration");
+                return false;
+            }
+            const std::string query = "INSERT OR REPLACE INTO global_variables "
+                                      "(variable_name, variable_value) VALUES (" +
+                                      pgsql_admin_quote(variable[0]) + ", " +
+                                      pgsql_admin_quote(variable[1]) + ")";
+            if (!pgsql_admin_exec(admin_, query.c_str())) return false;
+        }
+        return true;
+    }
+
+    bool load_pool_configuration() {
+        return pgsql_admin_exec(admin_, "LOAD PGSQL SERVERS TO RUNTIME") &&
+               pgsql_admin_exec(admin_, "LOAD PGSQL VARIABLES TO RUNTIME");
+    }
+
+    MYSQL* admin_{nullptr};
+    bool initialized_{false};
+    bool restored_{false};
+    AdminRows original_main_servers_;
+    AdminRows original_runtime_servers_;
+    AdminRows original_main_variables_;
+    AdminRows original_runtime_variables_;
+};
 
 bool check_logs_for_command(const std::string& command_regex) {
     // Issue #5788: log-scrape race. PROXYSQL FLUSH LOGS over a persistent
@@ -2114,10 +2313,47 @@ bool test_pipeline_with_locked_hostgroup() {
 bool test_reset_all_locked_hostgroup_pipeline() {
     diag("=== Test: RESET ALL with locked hostgroup when startup values match ===");
 
-    // Note: In this test, we rely on the fact that a fresh connection has
-    // matching startup values between client and backend (both use defaults)
+    // A new frontend can reuse a backend that was created for another client's
+    // startup options. Build that stale-backend state explicitly: it is the
+    // pool state that made this test fail in CI.
+    PgsqlPoolRuntimeGuard pool_config;
+    if (!pool_config.initialize() ||
+        !pool_config.set_free_connections_pct("0") ||
+        !pool_config.wait_for_free_connections("0") ||
+        !pool_config.set_free_connections_pct("100")) {
+        return false;
+    }
+
+    {
+        const std::string startup_value = "SQL,\\\\ DMY";
+        PGConnPtr stale_conn = createNewConnection(BACKEND, "-c DateStyle=" + startup_value);
+        if (!stale_conn) return false;
+
+        const std::string stale_datestyle = get_variable_simple(stale_conn.get(), "DateStyle");
+        if (stale_datestyle != "SQL, DMY") {
+            diag("Expected stale backend startup DateStyle 'SQL, DMY', got '%s'", stale_datestyle.c_str());
+            return false;
+        }
+    }
+
+    if (!pool_config.wait_for_free_connections("1")) return false;
+
+    // The test's success path requires matching startup values. Remove the
+    // deliberately stale backend before creating the default client, so that
+    // its physical backend is created with the same startup values.
+    if (!pool_config.set_free_connections_pct("0") ||
+        !pool_config.wait_for_free_connections("0")) {
+        return false;
+    }
+
     PGConnPtr conn = createNewConnection(BACKEND);
     if (!conn) return false;
+
+    const std::string current_datestyle = get_variable_simple(conn.get(), "DateStyle");
+    if (current_datestyle != "ISO, MDY") {
+        diag("Expected default client DateStyle 'ISO, MDY', got '%s'", current_datestyle.c_str());
+        return false;
+    }
 
     // Step 1: Enter pipeline mode (fresh connection, startup values match)
     if (PQenterPipelineMode(conn.get()) != 1) {
@@ -2190,7 +2426,9 @@ bool test_reset_all_locked_hostgroup_pipeline() {
     bool conn_ok = (PQresultStatus(res) == PGRES_TUPLES_OK);
     PQclear(res);
 
-    return lock_ok && reset_ok && conn_ok;
+    const bool test_ok = lock_ok && reset_ok && conn_ok;
+    conn.reset();
+    return pool_config.restore() && test_ok;
 }
 
 // Test: DISCARD ALL with locked hostgroup in pipeline mode

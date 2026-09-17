@@ -32,7 +32,7 @@
 // session state machine.
 //
 // Inputs:
-//   * mode -- mysqlx_tls_backend_mode runtime variable, parsed by
+//   * mode -- mysqlx-tls_backend_mode runtime variable, parsed by
 //     MysqlxConfigStore. Drives the four documented modes.
 //   * endpoint_use_ssl_override -- mysqlx_backend_endpoints.use_ssl=1
 //     for the resolved endpoint (target_use_ssl_ at the call site).
@@ -1638,6 +1638,11 @@ void MysqlxSession::handler_session_closing() {
 // transitions are encoded by which intermediate fields are populated
 // (backend_conn_ presence, connecting state, pending bytes).
 void MysqlxSession::handler_passthrough_backend_connecting() {
+	const MysqlxConfigStore* config_store =
+		thread_ptr_ ? thread_ptr_->get_config_store() : nullptr;
+	const uint64_t connect_timeout =
+		config_store ? config_store->get_connect_timeout() : 10000;
+
 	// Step 1: ensure backend_conn_ exists with a TCP connect in
 	// flight. We pull from the cache only when the cache key would
 	// match — a passthrough connection is single-use anyway, so for
@@ -1647,7 +1652,7 @@ void MysqlxSession::handler_passthrough_backend_connecting() {
 	if (!backend_conn_) {
 		backend_conn_ = new MysqlxConnection();
 		backend_conn_->set_hostgroup(target_hostgroup_);
-		backend_conn_->set_connect_timeout(10000);
+		backend_conn_->set_connect_timeout(connect_timeout);
 		// Mark non-reusable up front: passthrough connections never
 		// re-enter the pool (the proxy did not see plaintext past
 		// CapabilitiesSet, so it has no idea what session state
@@ -2240,7 +2245,8 @@ void MysqlxSession::handler_connecting_server() {
 		backend_conn_->set_hostgroup(target_hostgroup_);
 		backend_conn_->set_user(username_.c_str());
 		backend_conn_->set_schema(schema_.c_str());
-		backend_conn_->set_connect_timeout(10000);
+		backend_conn_->set_connect_timeout(
+			cs_for_tls ? cs_for_tls->get_connect_timeout() : 10000);
 
 		int rc = backend_conn_->start_connect(target_address_.c_str(), target_port_);
 		if (rc == -1) {
@@ -2288,7 +2294,7 @@ void MysqlxSession::handler_connecting_server() {
 
 		// Backend TLS posture is resolved once at the top of
 		// handler_connecting_server() (search for "desired_backend_tls"
-		// above) using mysqlx_tls_backend_mode + per-endpoint
+		// above) using mysqlx-tls_backend_mode + per-endpoint
 		// use_ssl override + frontend TLS state. Replicate the decision
 		// here onto the freshly-allocated MysqlxConnection.
 		//

@@ -45,6 +45,7 @@ EXPECTED_G1 = {
     "nl2sql_integration-t",
     "nl2sql_internal-t",
     "test_tsdb_api-t",
+    "test_load_from_config_prefix_stripping-t",
     "vector_features-t",
 }
 
@@ -112,7 +113,7 @@ class AiGroupShardTest(unittest.TestCase):
 
         self.assertSetEqual(g1, EXPECTED_G1)
         self.assertSetEqual(g2, EXPECTED_G2)
-        self.assertEqual(len(g1), 22)
+        self.assertEqual(len(g1), 23)
         self.assertEqual(len(g2), 22)
         self.assertSetEqual(g1 & g2, set())
 

@@ -258,8 +258,10 @@ int test_globals_init() {
 	GloVars.global.clickhouse_server = false;
 #endif
 	GloVars.global.ssl_keylog_enabled = false;
+	#ifndef PROXYSQL40
 	GloVars.global.gr_bootstrap_mode = 0;
 	GloVars.global.gr_bootstrap_uri = nullptr;
+	#endif /* !PROXYSQL40 */
 	GloVars.global.data_packets_history_size = 0;
 
 	// SSL pointers — nullptr means no SSL

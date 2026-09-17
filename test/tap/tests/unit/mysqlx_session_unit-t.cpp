@@ -2,6 +2,8 @@
 #include "mysqlx_protocol.h"
 #include "mysqlx_thread.h"
 #include "mysqlx_config_store.h"
+#include "ProxySQL_Admin_Tables_Definitions.h"
+#include "sqlite3db.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -1281,6 +1283,20 @@ static MysqlxConfigStore& fix_c_config_store(int passthrough_port) {
 	return store;
 }
 
+static bool configure_connect_timeout(MysqlxConfigStore& store, int timeout_ms) {
+	SQLite3DB db;
+	db.open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	if (!db.execute(ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES) ||
+	    !db.execute(ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES)) {
+		return false;
+	}
+	std::string sql =
+		"INSERT INTO global_variables (variable_name, variable_value) VALUES "
+		"('mysqlx-connect_timeout', '" + std::to_string(timeout_ms) + "')";
+	std::string err;
+	return db.execute(sql.c_str()) && store.install_variables_from_global(db, err) && err.empty();
+}
+
 // effective_route_tls_mode() lookup correctness: with the listener's
 // route name set on the session and the thread's config store
 // populated, the per-route tls_mode round-trips through
@@ -1379,6 +1395,49 @@ static void test_capabilities_set_tls_refused_on_disabled_route() {
 	close(fds[1]);
 }
 
+static void test_regular_backend_uses_configured_connect_timeout() {
+	diag(">>> %s", __func__);
+	int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = 0;
+	inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+	bool setup_ok = listen_fd >= 0 &&
+		bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) == 0 &&
+		listen(listen_fd, 1) == 0;
+	socklen_t alen = sizeof(addr);
+	if (setup_ok) setup_ok = getsockname(listen_fd, (struct sockaddr*)&addr, &alen) == 0;
+
+	Mysqlx_Thread thr;
+	thr.init(0);
+	MysqlxConfigStore& store = fix_c_config_store(ntohs(addr.sin_port));
+	setup_ok = setup_ok && configure_connect_timeout(store, 4321);
+	thr.set_config_store(&store);
+
+	int client_fds[2] {-1, -1};
+	setup_ok = setup_ok && socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds) == 0;
+	MysqlxSession sess;
+	if (setup_ok) {
+		sess.init(client_fds[0], &thr);
+		MysqlxResolvedIdentity identity {};
+		identity.username = "timeout_user";
+		identity.default_route = "route_pt";
+		sess.inject_identity_for_test(identity);
+		setup_ok = sess.resolve_backend_target_for_test() == 0;
+		sess.set_status(MysqlxSession::CONNECTING_SERVER);
+		sess.to_process = true;
+		sess.handler();
+	}
+	ok(setup_ok && sess.backend_conn() != nullptr &&
+	   sess.backend_conn()->get_connect_timeout() == 4321,
+	   "regular backend connection uses mysqlx-connect_timeout");
+
+	if (listen_fd >= 0) close(listen_fd);
+	if (client_fds[0] >= 0) close(client_fds[0]);
+	if (client_fds[1] >= 0) close(client_fds[1]);
+}
+
 // End-to-end passthrough entry: the client sends CapabilitiesGet ->
 // CapabilitiesSet(tls=true) on a tls_mode='passthrough' route. The
 // session must:
@@ -1427,6 +1486,7 @@ static void test_route_passthrough_full_entry_path() {
 	Mysqlx_Thread thr;
 	thr.init(0);
 	MysqlxConfigStore& store = fix_c_config_store(listener_port);
+	bool timeout_configured = configure_connect_timeout(store, 6789);
 	thr.set_config_store(&store);
 
 	int client_fds[2];
@@ -1471,10 +1531,17 @@ static void test_route_passthrough_full_entry_path() {
 	              serialized.size());
 	sess.to_process = true;
 	sess.handler();
+	if (sess.backend_conn() == nullptr) {
+		sess.to_process = true;
+		sess.handler();
+	}
 
 	ok(sess.get_status() == MysqlxSession::X_PASSTHROUGH_BACKEND_CONNECTING ||
 	   sess.get_status() == MysqlxSession::X_PASSTHROUGH_FORWARD,
 	   "session entered passthrough setup after CapabilitiesSet(tls=true) on passthrough route");
+	ok(timeout_configured && sess.backend_conn() != nullptr &&
+	   sess.backend_conn()->get_connect_timeout() == 6789,
+	   "passthrough backend connection uses mysqlx-connect_timeout");
 
 	// Accept the proxy's incoming connect on the loopback listener.
 	int backend_fd = -1;
@@ -1543,12 +1610,9 @@ static void test_route_passthrough_full_entry_path() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	// 87 (pre-existing) + 11 (Fix B EAGAIN backlog tests:
-	// drains_across_ticks contributes 5 ok()s; backlog_cap_kills
-	// contributes 6 ok()s) + 11 (Fix C per-route tls_mode tests:
-	// disabled_advertise=2; tls_refused_on_disabled=2;
-	// passthrough_full_entry_path=7)
-	plan(112);
+	// Includes two regression assertions proving mysqlx-connect_timeout is
+	// applied to regular and TLS-passthrough backend connections.
+	plan(114);
 	diag("=== mysqlx_session_unit-t starting ===");
 
 	test_session_init();
@@ -1588,6 +1652,7 @@ int main() {
 	// Fix C: per-route tls_mode wiring through entry path (#5710).
 	test_route_tls_mode_disabled_no_tls_in_advertise();
 	test_capabilities_set_tls_refused_on_disabled_route();
+	test_regular_backend_uses_configured_connect_timeout();
 	test_route_passthrough_full_entry_path();
 
 	return exit_status();

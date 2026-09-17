@@ -105,6 +105,10 @@ class MySQL_Authentication {
 	bool set_clear_text_password(char* username, enum cred_username_type usertype, const char* clear_text_password, PASSWORD_TYPE::E passtype);
 	unsigned int memory_usage();
 	uint64_t get_runtime_checksum();
+#ifdef PROXYSQL40
+	/** Build replacement credential groups off-lock, then swap both groups atomically. */
+	bool replace_mysql_users_atomically(const SQLite3_result& users, std::string& error);
+#endif
 	/**
 	 * @brief Computes the checksum for the 'mysql_users' table contained in the supplied resultset.
 	 *  It's UNSAFE to call this function with another resultset than the specified in @param doc.

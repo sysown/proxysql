@@ -31,7 +31,7 @@ IDIRS := $(PLUGIN_IDIRS) -I$(PROXYSQL_IDIR) -I$(PROMETHEUS_IDIR) \
          -I$(EV_IDIR) -I$(LIBSCRAM_IDIR) -I$(LIBUSUAL_IDIR) \
          -I$(POSTGRESQL_IDIR) -I$(SSL_IDIR) -I$(JEMALLOC_IDIR) \
          -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) \
-         -I$(CURL_IDIR) -I$(RE2_IDIR) -I$(PCRE_IDIR) -I$(ZSTD_IDIR)
+         -I$(CURL_IDIR) -I$(RE2_IDIR) -I$(PCRE2_IDIR) -I$(ZSTD_IDIR)
 
 OPTZ ?= -O2 -ggdb
 
@@ -121,6 +121,8 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
 	@mkdir -p $(dir $@)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
+# The executable force-loads and exports vendored libcurl. Keep curl unresolved
+# here so the process has one libcurl owner and one OpenSSL owner.
 $(PLUGIN_SO): $(OBJS)
 	$(CXX) -shared -o $@ $^ $(CXXFLAGS) $(PLUGIN_LDFLAGS)
 

@@ -265,7 +265,7 @@ static void test_backend_auth_error_on_set_caps_reject() {
 }
 
 // preferred-mode TLS fallback (issue #5693).
-// When mysqlx_tls_backend_mode=preferred, the proxy sends
+// When mysqlx-tls_backend_mode=preferred, the proxy sends
 // CapabilitiesSet(tls=true). If the backend rejects with a
 // Mysqlx::Error (e.g. it has no TLS configured), the connection
 // must silently downgrade to plaintext authentication on the same
@@ -475,7 +475,7 @@ static void test_backend_auth_preferred_mode_codeless_error_no_fallback() {
 
 // required-mode TLS hard-fail (issue #5693).
 // Counterpart to the preferred-mode test: same Error injection, but
-// fallback_allowed=false (matches mysqlx_tls_backend_mode=required and
+// fallback_allowed=false (matches mysqlx-tls_backend_mode=required and
 // AsClient + frontend-TLS combinations). Expect the connection to
 // fail with rc=-1 and BACKEND_AUTH_ERROR — NOT to silently downgrade.
 static void test_backend_auth_required_mode_no_fallback_on_error() {

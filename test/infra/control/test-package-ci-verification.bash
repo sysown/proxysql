@@ -24,4 +24,16 @@ if grep -Fq "$VERIFY_COMMAND" <<<"$tarball_output"; then
     exit 1
 fi
 
+asan_output=$(GITHUB_ACTIONS=true WITHASAN=1 make -n -C "$ROOT_DIR" ubuntu24-tap)
+if grep -Fq "$VERIFY_COMMAND" <<<"$asan_output"; then
+    echo "ASAN test builds must not run the clean-install verification hook" >&2
+    exit 1
+fi
+
+tsan_output=$(GITHUB_ACTIONS=true WITHTSAN=1 make -n -C "$ROOT_DIR" ubuntu24-tap)
+if grep -Fq "$VERIFY_COMMAND" <<<"$tsan_output"; then
+    echo "TSAN test builds must not run the clean-install verification hook" >&2
+    exit 1
+fi
+
 echo 'package CI verification hook test: PASS'

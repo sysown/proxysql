@@ -323,7 +323,7 @@ int main(int argc, char** argv) {
     // Verify DateStyle is actually set
     // This will be verified separately after connection
 
-    const int num_tests = tests.size() + 4; // +4 for verification tests
+    const int num_tests = tests.size() + 6; // +4 verification tests, +2 conninfo-quoting tests
     plan(num_tests);
 
     int pass_count = 0;
@@ -461,6 +461,54 @@ int main(int argc, char** argv) {
         } else {
             diag("Connection failed: %s", error.c_str());
             ok(false, "search_path with escaped space applied");
+        }
+    }
+
+    // Test 5: an option VALUE containing an apostrophe must survive to the backend.
+    //
+    // ProxySQL forwards client options by embedding them in a libpq conninfo as
+    // options='<value>' (PgSQL_Connection.cpp). Values are escaped for the PostgreSQL
+    // startup wire format (backslash before space/backslash) but NOT for the conninfo
+    // quoting layer, so an apostrophe closes the quoted value early and everything after
+    // it is parsed by libpq as further conninfo KEYWORDS. Round-tripping the literal is
+    // the proof that the value stayed inside the options string.
+    //
+    // Escaping note: this test's own conninfo is also options='...', so the apostrophe is
+    // written \' here; libpq strips that backslash and ProxySQL receives a bare "a'b".
+    {
+        diag("\n--- Verifying an apostrophe in an option value round-trips ---");
+        std::string error;
+        PGConnPtr conn = createConnection("-c myapp.tag=a\\'b", error);
+        if (conn) {
+            std::string val = getVar(conn.get(), "myapp.tag");
+            diag("Expected: a'b");
+            diag("Got: %s", val.c_str());
+            ok(val == "a'b", "apostrophe in an option value reaches the backend intact");
+        } else {
+            diag("Connection failed: %s", error.c_str());
+            ok(false, "apostrophe in an option value reaches the backend intact (connect failed)");
+        }
+    }
+
+    // Test 6 (SECURITY): an apostrophe followed by what looks like a conninfo keyword must
+    // NOT be interpreted as one. If the quoting is correct the whole thing arrives at the
+    // backend as one literal GUC value; if it breaks out, libpq would parse host='127.0.0.99'
+    // and the backend connection would go somewhere else (or fail outright).
+    // The embedded space is wire-escaped (\\ ) so PostgreSQL's options parser keeps it as a
+    // single token.
+    {
+        diag("\n--- Verifying no conninfo keyword injection via an option value ---");
+        std::string error;
+        PGConnPtr conn = createConnection("-c myapp.tag=x\\'\\\\ host=\\'127.0.0.99", error);
+        if (conn) {
+            std::string val = getVar(conn.get(), "myapp.tag");
+            diag("Expected: x' host='127.0.0.99");
+            diag("Got: %s", val.c_str());
+            ok(val == "x' host='127.0.0.99",
+               "quote+keyword in an option value stays a literal (no conninfo injection)");
+        } else {
+            diag("Connection failed: %s", error.c_str());
+            ok(false, "quote+keyword in an option value stays a literal (connect failed)");
         }
     }
 

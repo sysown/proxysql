@@ -8,17 +8,21 @@
 class Command_Counter;
 typedef struct _MySQL_Query_processor_Rule_t : public QP_rule_t {
 	int gtid_from_hostgroup;
+	bool switch_to_fast_forward { false };
 } MySQL_Query_Processor_Rule_t;
 
 class MySQL_Query_Processor_Output : public Query_Processor_Output {
 public:
-MySQL_Query_Processor_Output() : Query_Processor_Output(), min_gtid(nullptr), gtid_from_hostgroup(-1) {}
+	MySQL_Query_Processor_Output()
+		: Query_Processor_Output(), min_gtid(nullptr),
+		  gtid_from_hostgroup(-1), switch_to_fast_forward(false) {}
 	~MySQL_Query_Processor_Output() = default;
 
 	void init() {
 		Query_Processor_Output::init();
-		min_gtid = NULL;
+		min_gtid = nullptr;
 		gtid_from_hostgroup = -1;
+		switch_to_fast_forward = false;
 	}
 	void destroy() {
 		Query_Processor_Output::destroy();
@@ -30,6 +34,7 @@ MySQL_Query_Processor_Output() : Query_Processor_Output(), min_gtid(nullptr), gt
 
 	char* min_gtid;
 	int gtid_from_hostgroup;
+	bool switch_to_fast_forward;
 };
 
 class MySQL_Rule_Text : public QP_rule_text {
@@ -69,6 +74,9 @@ private:
 			// Note: negative gtid_from_hostgroup means this rule doesn't change the gtid_from_hostgroup
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set gtid from hostgroup: %d. A new session will be created\n", mqr->rule_id, mqr->gtid_from_hostgroup);
 			ret->gtid_from_hostgroup = mqr->gtid_from_hostgroup;
+		}
+		if (mqr->switch_to_fast_forward) {
+			ret->switch_to_fast_forward = true;
 		}
 	}
 

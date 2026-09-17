@@ -1763,10 +1763,10 @@ pair<size_t,vector<line_match_t>> get_matching_lines(
 		re2::StringPiece match;
 
 		if (get_matches && RE2::PartialMatch(next_line, regex, &match)) {
-			found_matches.push_back({ f_stream.tellg(), next_line, match.ToString() });
+			found_matches.push_back({ f_stream.tellg(), next_line, string { match } });
 		}
 		if (!get_matches && RE2::PartialMatch(next_line, regex)) {
-			found_matches.push_back({ f_stream.tellg(), next_line, match.ToString() });
+			found_matches.push_back({ f_stream.tellg(), next_line, string { match } });
 		}
 	}
 
