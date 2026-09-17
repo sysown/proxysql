@@ -530,16 +530,19 @@ static bool bystanderUnaffected(PGconn* be_db, const std::string& marker, std::s
 // ended by a zero byte, where field 'C' is the code. Returns "" when it is not there. Used to tell
 // an error PostgreSQL raised from one ProxySQL raised on its own behalf, which look identical to a
 // client but mean opposite things for everything below.
-static std::string errorSqlstate(const std::vector<uint8_t>& payload) {
+static std::string errorField(const std::vector<uint8_t>& payload, char want) {
 	size_t i = 0;
 	while (i < payload.size() && payload[i] != 0) {
 		const char code = (char)payload[i++];
 		const size_t start = i;
 		while (i < payload.size() && payload[i] != 0) i++;
-		if (code == 'C') return std::string((const char*)payload.data() + start, i - start);
+		if (code == want) return std::string((const char*)payload.data() + start, i - start);
 		if (i < payload.size()) i++;   // step over the value's NUL
 	}
 	return "";
+}
+static std::string errorSqlstate(const std::vector<uint8_t>& payload) {
+	return errorField(payload, 'C');
 }
 
 // Run one simple query on the raw connection and say whether it succeeded, with the SQLSTATE when it
@@ -765,6 +768,116 @@ static WriteProbe runRefusedStatementScenario(PGconn* admin, PGconn* be_db, cons
 	return w;
 }
 
+struct LockedResetProbe {
+	bool right_route = false;    // the refusal came from the startup-mismatch route, not another one
+	bool reached = false;        // the Execute before it really ran on the backend
+	bool visible_live = false;
+	bool visible_after = false;
+	std::string detail = "not run";
+};
+
+// The fifth route that throws an extended-query frame away, and the only one needing a fixture:
+// a RESET sent inside the frame while the session is locked to a hostgroup AND the backend it is
+// locked to was started with different startup parameters than this client asked for. ProxySQL
+// refuses the RESET because it cannot honour it on a connection whose startup values are not the
+// client's.
+//
+// Two things have to be arranged. A backend connection with a foreign startup DateStyle, made by a
+// client that then goes away and leaves it pooled; and max_connections=1 on the server, so the
+// client under test cannot open a fresh matching connection and has to take that one. The same
+// fixture, inverted, is what pgsql-set_statement_test-t builds for its matching-values case.
+//
+// The refusal TEXT is what is checked, not merely that a refusal happened: without the lock this
+// very RESET ALL is refused by a different route -- the one routes[] above already covers -- and
+// the two are indistinguishable to a client. A text that is not the startup-mismatch one means the
+// fixture did not hold, and the case fails rather than passing while exercising the wrong route.
+static LockedResetProbe runLockedResetScenario(PGconn* admin, PGconn* be_db,
+                                               const std::string& marker, bool native,
+                                               const char* label) {
+	LockedResetProbe r;
+	setNativeMode(admin, native);          // also drains the pool
+
+	const std::string hg = std::to_string(HG);
+	const std::string saved_max = execScalar(admin,
+		"SELECT max_connections FROM pgsql_servers WHERE hostgroup_id=" + hg + " LIMIT 1");
+	if (saved_max.empty()) { r.detail = "could not read max_connections"; return r; }
+	if (!exec(admin, "UPDATE pgsql_servers SET max_connections=1 WHERE hostgroup_id=" + hg)
+	    || !exec(admin, "LOAD PGSQL SERVERS TO RUNTIME")) {
+		r.detail = "could not pin the pool to one backend connection";
+		return r;
+	}
+	// Put the pool back however this case ends, including the throwing paths below.
+	struct Restore {
+		PGconn* a; std::string hg, mx;
+		~Restore() {
+			exec(a, "UPDATE pgsql_servers SET max_connections=" + mx + " WHERE hostgroup_id=" + hg);
+			exec(a, "LOAD PGSQL SERVERS TO RUNTIME");
+		}
+	} restore{admin, hg, saved_max};
+
+	{
+		std::stringstream ss;
+		ss << "host=" << cl.pgsql_host << " port=" << cl.pgsql_port
+		   << " user=" << cl.pgsql_username << " password=" << cl.pgsql_password
+		   << " dbname=" << cl.pgsql_username
+		   << " sslmode=disable options='-c DateStyle=SQL,DMY'";
+		PGConnPtr stale(PQconnectdb(ss.str().c_str()), &PQfinish);
+		if (PQstatus(stale.get()) != CONNECTION_OK || execScalar(stale.get(), "SELECT 1") != "1") {
+			r.detail = "could not create the stale backend connection";
+			return r;
+		}
+	}
+	// Wait for it to land in the pool; taken up again by the client below.
+	pooledConnsWithin(admin, 1, 10);
+
+	const std::string seq_before = seqValue(be_db);
+	std::string seq_live = seq_before;
+	try {
+		PgConnection c(5000);
+		c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+		// ProxySQL cannot parse this SET, so it locks the session to the hostgroup it is on. That
+		// lock is the route's precondition, and it is why the client keeps the stale connection.
+		std::string sqlstate;
+		if (!rawSimple(c, "SET myapp.orphsync_lock = '1'", sqlstate))
+			diag("%s: the locking SET was refused (sqlstate %s)", label, sqlstate.c_str());
+
+		// Real work first, so the backend is genuinely mid-batch when the frame is thrown away.
+		c.prepareStatement("orphsync_lr",
+			"INSERT INTO orphsync_t (v) VALUES ('" + marker + "' || nextval('orphsync_seq'))", false);
+		c.bindStatement("orphsync_lr", "", {}, {}, false);
+		c.executePortal("", 0, false);
+		// The message that is refused, and it carries the frame's Sync with it.
+		c.prepareStatement("orphsync_lr2", "RESET ALL", false);
+		c.bindStatement("orphsync_lr2", "", {}, {}, false);
+		c.executePortal("", 0, false);
+		c.sendSync();
+
+		std::string errtext;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (std::chrono::steady_clock::now() < deadline) {
+			char type = 0; std::vector<uint8_t> buffer;
+			c.readMessage(type, buffer);
+			if (type == PgConnection::ERROR_RESPONSE) {
+				if (errtext.empty()) errtext = errorField(buffer, 'M');
+				if (errorField(buffer, 'M').find("startup") != std::string::npos) r.right_route = true;
+				continue;
+			}
+			if (type == PgConnection::READY_FOR_QUERY) break;
+		}
+		// Read while the client is still connected, for the reason given on runAbandonedWriteFrame.
+		seq_live = seqValue(be_db);
+		r.visible_live = insertVisible(be_db, marker);
+		r.detail = "error=\"" + (errtext.empty() ? std::string("none") : errtext) + "\"";
+	} catch (const PgException& e) {
+		r.detail = std::string("locked-RESET frame threw: ") + e.what();
+	}
+	r.reached = (seq_live != seq_before);
+	r.visible_after = insertVisible(be_db, marker);
+	diag("%s locked-RESET frame: %s, sequence %s -> %s (moved = its Execute ran)",
+	     label, r.detail.c_str(), seq_before.c_str(), seq_live.c_str());
+	return r;
+}
+
 // Refused frames destroy their backend connection. Destroying on a path that runs per query is how
 // pool slots leak, and nothing else here would notice: every other assertion is about one frame, and
 // a leak only shows up as a number that never comes back down. Several frames in a row, so a leak of
@@ -974,7 +1087,7 @@ static ResyncFailureProbe runResyncFailure(PGconn* admin, PGconn* be_db, const s
 }
 
 int main(int, char**) {
-	plan(87);
+	plan(93);
 	if (cl.getEnv()) return exit_status();
 
 	auto admin = adminConn();
@@ -1253,6 +1366,25 @@ int main(int, char**) {
 			   label, r.name, w.visible_live ? "YES" : "no", w.visible_after ? "YES" : "no");
 			clearStranded(be.get(), strandedBackendPid(be_db.get(), m));
 		}
+	}
+
+	// --- the refusal route that needs a locked hostgroup and a mismatched backend ----------------
+	for (int native = 0; native <= 1; native++) {
+		const char* label = native ? "native" : "libpq";
+		const std::string m = base + "_lockedreset_" + label;
+		const LockedResetProbe lr = runLockedResetScenario(admin.get(), be_db.get(), m, native != 0, label);
+		ok(lr.right_route,
+		   "%s: the RESET is refused BY THE STARTUP-MISMATCH ROUTE -- without this the case proves "
+		   "nothing, because an unlocked session refuses the same statement elsewhere [%s]",
+		   label, lr.detail.c_str());
+		ok(lr.reached,
+		   "%s: and the frame's Execute DID run on the backend, so the row being absent below means "
+		   "something [sequence moved=%s]", label, lr.reached ? "YES" : "no");
+		ok(!lr.visible_live && !lr.visible_after,
+		   "%s: the locked-RESET frame's write is NOT committed -- the last of the five routes that "
+		   "throw a frame away reaches the same outcome as the other four [visible live=%s, after=%s]",
+		   label, lr.visible_live ? "YES" : "no", lr.visible_after ? "YES" : "no");
+		clearStranded(be_db.get(), strandedBackendPid(be_db.get(), m));
 	}
 
 	// --- refusing frames must not leak pool slots ------------------------------------------------
