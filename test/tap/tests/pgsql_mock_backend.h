@@ -39,9 +39,15 @@
  * ----------------
  * Not a PostgreSQL implementation. It answers a startup packet and can drive a
  * real SCRAM-SHA-256 server side far enough to test ProxySQL's client side, but
- * it does not execute SQL. Every result it returns is canned bytes. It is
- * plaintext only — TLS backends are covered against the real server by
- * pgsql-native_tls-t.
+ * it does not execute SQL. Every result it returns is canned bytes.
+ *
+ * TLS
+ * ---
+ * A script that answers the SSLRequest with 'S' and then runs TLS_ACCEPT speaks real
+ * TLS from there on, with a self-signed certificate made in memory. TLS record
+ * boundaries have nothing to do with message boundaries, so the malformed-framing
+ * cases behave differently once they arrive through SSL_read. The happy path against
+ * the real server stays in pgsql-native_tls-t.
  */
 #ifndef PGSQL_MOCK_BACKEND_H
 #define PGSQL_MOCK_BACKEND_H
@@ -131,6 +137,12 @@ struct Step {
         EXPECT_STARTUP,    // read the startup packet (no type byte, length-prefixed)
         CLOSE,             // close the connection immediately (FIN)
         SLEEP_MS,          // pause, e.g. to let ProxySQL park the connection
+        // TLS handshake, server side; everything after it is encrypted. Goes after the
+        // 'S' answer, and the real StartupMessage then needs its own EXPECT_STARTUP.
+        TLS_ACCEPT,
+        // A TLS 1.3 key update mid-stream: the only way to make ProxySQL's reader
+        // need to WRITE before it can decrypt any more.
+        TLS_KEY_UPDATE,
         SCRAM_SERVER_FIRST,// read SASLInitialResponse, reply with a real server-first
         SCRAM_SERVER_FINAL // read SASLResponse, reply with server-final (see forge_signature)
     };
@@ -168,6 +180,8 @@ Step step_expect_message();
 Step step_expect_query(bool stop_at_housekeeping = false);
 Step step_close();
 Step step_sleep(int ms);
+Step step_tls_accept();
+Step step_tls_key_update();
 Step step_scram_server_first(bool bad_nonce = false);
 Step step_scram_server_final(bool forge_signature = false);
 

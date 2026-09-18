@@ -27,6 +27,11 @@
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509v3.h>
+
+#include <mutex>
 
 // ------------------------------------------------------------- byte builders
 
@@ -214,6 +219,8 @@ Step step_expect_query(bool stop_at_housekeeping)
                            { Step s; s.kind = Step::EXPECT_QUERY; s.stop_at_housekeeping = stop_at_housekeeping; return s; }
 Step step_close()          { Step s; s.kind = Step::CLOSE; return s; }
 Step step_sleep(int ms)    { Step s; s.kind = Step::SLEEP_MS; s.ms = ms; return s; }
+Step step_tls_accept()     { Step s; s.kind = Step::TLS_ACCEPT; return s; }
+Step step_tls_key_update() { Step s; s.kind = Step::TLS_KEY_UPDATE; return s; }
 Step step_scram_server_first(bool bad_nonce) {
     Step s; s.kind = Step::SCRAM_SERVER_FIRST; s.bad_nonce = bad_nonce; return s;
 }
@@ -274,10 +281,59 @@ static std::string scram_attr(const std::string& msg, char key) {
     return "";
 }
 
+// ------------------------------------------------------------------ mock TLS
+//
+// After a TLS_ACCEPT step the connection speaks TLS, and only write_all()/read_exact()
+// need to know because every byte already goes through them. Each connection has its
+// own handler thread, so a thread_local carries the SSL there rather than a new
+// argument through twenty call sites.
+static thread_local SSL* t_ssl = nullptr;
+
+// One self-signed cert for the process, made in memory on first use. ProxySQL's
+// native TLS is REQUIRE -- encrypt, do not verify, the same as libpq for use_ssl=1 --
+// so a self-signed cert is accepted.
+static SSL_CTX* mock_tls_ctx() {
+    static std::mutex m;
+    static SSL_CTX* ctx = nullptr;
+    std::lock_guard<std::mutex> g(m);
+    if (ctx) return ctx;
+
+    EVP_PKEY* pkey = EVP_RSA_gen(2048);
+    if (!pkey) return nullptr;
+    X509* x = X509_new();
+    if (!x) { EVP_PKEY_free(pkey); return nullptr; }
+    ASN1_INTEGER_set(X509_get_serialNumber(x), 1);
+    X509_gmtime_adj(X509_getm_notBefore(x), 0);
+    X509_gmtime_adj(X509_getm_notAfter(x), 60L * 60 * 24);
+    X509_set_pubkey(x, pkey);
+    X509_NAME* name = X509_get_subject_name(x);
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                               (const unsigned char*)"pgsql-mock-backend", -1, -1, 0);
+    X509_set_issuer_name(x, name);
+    if (!X509_sign(x, pkey, EVP_sha256())) { X509_free(x); EVP_PKEY_free(pkey); return nullptr; }
+
+    SSL_CTX* c = SSL_CTX_new(TLS_server_method());
+    if (!c) { X509_free(x); EVP_PKEY_free(pkey); return nullptr; }
+    if (SSL_CTX_use_certificate(c, x) != 1 || SSL_CTX_use_PrivateKey(c, pkey) != 1) {
+        SSL_CTX_free(c); X509_free(x); EVP_PKEY_free(pkey); return nullptr;
+    }
+    X509_free(x);
+    EVP_PKEY_free(pkey);
+    ctx = c;
+    return ctx;
+}
+
 // --------------------------------------------------------------- socket I/O
 
 static bool write_all(int fd, const char* p, size_t n) {
     while (n > 0) {
+        if (t_ssl) {
+            const int w = SSL_write(t_ssl, p, (int)(n > INT32_MAX ? INT32_MAX : n));
+            if (w > 0) { p += w; n -= (size_t)w; continue; }
+            const int e = SSL_get_error(t_ssl, w);
+            if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) continue;
+            return false;
+        }
         ssize_t w = ::send(fd, p, n, MSG_NOSIGNAL);
         if (w > 0) { p += w; n -= (size_t)w; continue; }
         if (w < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
@@ -288,6 +344,13 @@ static bool write_all(int fd, const char* p, size_t n) {
 
 static bool read_exact(int fd, char* p, size_t n) {
     while (n > 0) {
+        if (t_ssl) {
+            const int r = SSL_read(t_ssl, p, (int)(n > INT32_MAX ? INT32_MAX : n));
+            if (r > 0) { p += r; n -= (size_t)r; continue; }
+            const int e = SSL_get_error(t_ssl, r);
+            if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) continue;
+            return false;   // clean close or error
+        }
         ssize_t r = ::recv(fd, p, n, 0);
         if (r > 0) { p += r; n -= (size_t)r; continue; }
         if (r < 0 && errno == EINTR) continue;
@@ -547,6 +610,31 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
             usleep((useconds_t)s.ms * 1000);
             break;
 
+        case Step::TLS_ACCEPT: {
+            SSL_CTX* ctx = mock_tls_ctx();
+            if (!ctx) { fail("could not build the mock TLS context"); goto done; }
+            SSL* ssl = SSL_new(ctx);
+            if (!ssl) { fail("SSL_new failed"); goto done; }
+            SSL_set_fd(ssl, fd);
+            if (SSL_accept(ssl) != 1) {   // proxy walked away, or refused the cert
+                SSL_free(ssl);
+                fail("SSL_accept failed");
+                goto done;
+            }
+            t_ssl = ssl;   // every later step now reads and writes encrypted
+            break;
+        }
+
+        case Step::TLS_KEY_UPDATE: {
+            if (!t_ssl) { fail("key update asked for on a plaintext connection"); goto done; }
+            if (SSL_key_update(t_ssl, SSL_KEY_UPDATE_REQUESTED) != 1) {
+                fail("SSL_key_update failed"); goto done;
+            }
+            // The update only reaches the wire on the next record write; push it now.
+            if (SSL_do_handshake(t_ssl) != 1) { fail("key update flush failed"); goto done; }
+            break;
+        }
+
         case Step::SCRAM_SERVER_FIRST: {
             // SASLInitialResponse: mechanism\0 | int32 len | client-first-message
             char type = 0; std::string payload;
@@ -611,6 +699,12 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
     usleep(200000);
 
 done:
+    // The SSL wraps this fd, so it goes first. Clear the thread_local too: a leftover
+    // pointer would send a reused thread's plaintext steps through freed memory.
+    if (t_ssl) {
+        SSL_free(t_ssl);
+        t_ssl = nullptr;
+    }
     // Deregister BEFORE closing: once this fd is closed the OS can hand the same
     // number to a new socket, and stop() would then ::shutdown() an unrelated
     // connection belonging to the test process.
