@@ -61,11 +61,12 @@ static inline char is_normal_char(char c) {
 }
 */
 
-static const std::array<std::string,7> pgsql_critical_variables = {
+static const std::array<std::string,8> pgsql_critical_variables = {
 	"client_encoding",
 	"names",
 	"datestyle",
 	"intervalstyle",
+	"search_path",
 	"standard_conforming_strings",
 	"timezone",
 	"time zone"
@@ -84,7 +85,6 @@ static const std::set<std::string> pgsql_other_variables = {
 	"escape_string_warning",
 	"extra_float_digits",
 	"maintenance_work_mem",
-	"search_path",
 	"synchronous_commit"
 };
 
