@@ -26,11 +26,11 @@
  * ============================================================================================
  * WHY A UNIT TEST AND NOT A TAP TEST
  * ============================================================================================
- * The two fail-closed branches are unreachable end to end. A normal frontend SCRAM login always
- * harvests the ClientKey (PgSQL_Protocol.cpp), and a successful login always stores a password on
- * the userinfo, so no client-driven sequence can produce either state. Driving the function
- * directly is the only way to hold the postcondition down; an infrastructure test could only
- * re-confirm the paths that already work.
+ * The fail-closed branches are unreachable end to end. A normal frontend SCRAM login always
+ * harvests the ClientKey (PgSQL_Protocol.cpp), and a successful login always stores a username and
+ * a password on the userinfo, so no client-driven sequence can produce any of those states.
+ * Driving the function directly is the only way to hold the postcondition down; an infrastructure
+ * test could only re-confirm the paths that already work.
  *
  * The prototype is declared locally rather than pulled from a header — C++ mangling depends only
  * on the parameter types, so this binds to the definition in libproxysql.a. Same arrangement as
@@ -102,7 +102,7 @@ static bool has_no_credential(const std::string& s) {
 }
 
 int main() {
-	plan(16);
+	plan(18);
 
 	if (test_init_minimal() != 0)
 		BAIL_OUT("test_init_minimal() failed");
@@ -212,6 +212,27 @@ int main() {
 
 		ok(r == false, "no stored secret -> returns false (fail closed)");
 		ok(has_no_credential(s), "no stored secret -> emits NO credential parameter [%s]", s.c_str());
+	}
+
+	// -----------------------------------------------------------------------------------------
+	// 5b. No username. libpq resolves a missing or empty 'user' from PGUSER and then from the OS
+	//     account name, so a conninfo carrying a real password under no username authenticates the
+	//     backend leg as whoever runs ProxySQL — the same fallback the cases above refuse.
+	// -----------------------------------------------------------------------------------------
+	{
+		std::ostringstream c;
+		char pw[] = "s3cret";
+		const bool r = pgsql_append_conninfo_credentials(c, nullptr, pw, false, nullptr, nullptr, "unit");
+		ok(r == false && has_no_credential(c.str()),
+		   "NULL username -> returns false and emits NO credential parameter [%s]", c.str().c_str());
+	}
+	{
+		std::ostringstream c;
+		char pw[] = "s3cret";
+		const bool r = pgsql_append_conninfo_credentials(c, "", pw, true, ck, sk, "unit");
+		ok(r == false && has_no_credential(c.str()),
+		   "empty username -> returns false and emits NO credential parameter, keys included [%s]",
+		   c.str().c_str());
 	}
 
 	// -----------------------------------------------------------------------------------------

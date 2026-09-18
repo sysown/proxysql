@@ -927,12 +927,23 @@ bool test_reset_all_failure_pipeline() {
     return got_error && correct_error;
 }
 
-// Test: DISCARD ALL should fail in pipeline mode (not supported)
-bool test_discard_all_failure_pipeline() {
-    diag("=== Test: DISCARD ALL failure in pipeline mode ===");
+// Test: DISCARD ALL, sent alone (nothing else pipelined behind it before Sync -- the
+// ordinary way any real client uses it, e.g. JDBC's plain Statement.executeUpdate),
+// must actually run and reset the session -- not be refused with a fabricated error.
+bool test_discard_all_succeeds_pipeline() {
+    diag("=== Test: DISCARD ALL succeeds when it is the last statement before Sync ===");
 
     PGConnPtr conn = createNewConnection(BACKEND);
     if (!conn) return false;
+
+    // SET a variable to a non-default value first, so a real reset is observable.
+    const std::string initial_value = get_variable_simple(conn.get(), "DateStyle");
+    const std::string test_value = (initial_value.find("ISO") != std::string::npos) ?
+        "Postgres, DMY" : "ISO, MDY";
+    if (!set_variable_simple(conn.get(), "DateStyle", test_value)) {
+        diag("Failed to SET DateStyle");
+        return false;
+    }
 
     // Enter pipeline mode
     if (PQenterPipelineMode(conn.get()) != 1) {
@@ -940,7 +951,7 @@ bool test_discard_all_failure_pipeline() {
         return false;
     }
 
-    // Send DISCARD ALL
+    // Send DISCARD ALL as the only statement before the Sync
     if (PQsendQueryParams(conn.get(), "DISCARD ALL", 0, NULL, NULL, NULL, NULL, 0) != 1) {
         diag("Failed to send DISCARD ALL");
         return false;
@@ -951,6 +962,7 @@ bool test_discard_all_failure_pipeline() {
 
     // Consume results
     int count = 0;
+    bool got_command_ok = false;
     bool got_error = false;
     std::string error_msg;
     int sock = PQsocket(conn.get());
@@ -961,10 +973,12 @@ bool test_discard_all_failure_pipeline() {
 
         while ((res = PQgetResult(conn.get())) != NULL) {
             ExecStatusType status = PQresultStatus(res);
-            if (status == PGRES_FATAL_ERROR) {
+            if (status == PGRES_COMMAND_OK) {
+                got_command_ok = true;
+            } else if (status == PGRES_FATAL_ERROR) {
                 got_error = true;
                 error_msg = PQresultErrorMessage(res);
-                diag("Got expected error: %s", error_msg.c_str());
+                diag("Unexpected error: %s", error_msg.c_str());
             }
             if (status == PGRES_PIPELINE_SYNC) {
                 PQclear(res);
@@ -988,11 +1002,19 @@ bool test_discard_all_failure_pipeline() {
 
     PQexitPipelineMode(conn.get());
 
-    // Verify error message mentions pipeline mode
-    bool correct_error = (error_msg.find("pipeline") != std::string::npos) ||
-                        (error_msg.find("not supported") != std::string::npos);
+    // Connection must still be usable, and the reset must have actually happened
+    // (the value we SET must be gone -- DISCARD ALL wipes session state back to default).
+    std::string after_value = get_variable_simple(conn.get(), "DateStyle");
+    bool discard_took_effect = (after_value.find(test_value) == std::string::npos);
+    diag("DateStyle: set to '%s', after DISCARD ALL: '%s' (reset: %s)",
+         test_value.c_str(), after_value.c_str(), discard_took_effect ? "yes" : "no");
 
-    return got_error && correct_error;
+    // Put the value back before leaving. DISCARD ALL has normally reset it already, so this is
+    // usually a no-op -- it matters on the failure path, where the value would otherwise ride a
+    // pooled connection into the next test and fail that one instead of this one.
+    set_variable_simple(conn.get(), "DateStyle", initial_value);
+
+    return got_command_ok && !got_error && discard_took_effect;
 }
 
 // Test: Verify startup parameters are applied
@@ -1231,7 +1253,7 @@ bool test_set_failure_syntax_error_pipeline();
 bool test_set_failure_multiple_set_one_fails();
 bool test_set_different_values_from_original();
 bool test_reset_all_failure_pipeline();
-bool test_discard_all_failure_pipeline();
+bool test_discard_all_succeeds_pipeline();
 bool test_reset_single_var_pipeline();
 bool test_reset_simple_query();
 bool test_reset_all_simple_query();
@@ -1241,6 +1263,13 @@ bool test_pipeline_with_locked_hostgroup();
 bool test_reset_all_locked_hostgroup_pipeline();
 bool test_discard_all_locked_hostgroup_pipeline();
 bool test_reset_reverts_to_startup_param();
+bool test_set_param_status_extended();
+bool test_reset_param_status_extended();
+bool test_set_to_default_extended();
+bool test_set_to_default_keeps_transaction();
+bool test_search_path_param_status_on_change();
+bool test_reset_search_path();
+bool test_search_path_not_inherited_across_clients();
 
 int main(int argc, char** argv) {
     if (cl.getEnv())
@@ -1325,8 +1354,8 @@ int main(int argc, char** argv) {
         {"SET datestyle = ;", false, "missing value"}
     };
 
-    // Add pipeline tests to the plan (20 total: 16 pipeline + 4 simple query RESET/DISCARD)
-    const int num_pipeline_tests = 20;
+    // Pipeline, RESET/DISCARD, ParameterStatus, TO DEFAULT and the search_path cases below.
+    const int num_pipeline_tests = 27;
 
     if (cl.use_noise) {
         plan(tests.size() + num_pipeline_tests + 3);
@@ -1373,12 +1402,26 @@ int main(int argc, char** argv) {
 
     // Run RESET and DISCARD tests in pipeline mode
     ok(test_reset_all_failure_pipeline(), "RESET ALL fails in pipeline mode");
-    ok(test_discard_all_failure_pipeline(), "DISCARD ALL fails in pipeline mode");
+    ok(test_discard_all_succeeds_pipeline(), "DISCARD ALL succeeds when last before Sync in pipeline mode");
     ok(test_reset_single_var_pipeline(), "RESET single variable works in pipeline mode");
     ok(test_multiple_vars_out_of_sync_pipeline(), "Multiple variables out of sync in pipeline mode");
     ok(test_pipeline_with_locked_hostgroup(), "SET/RESET/DISCARD with locked hostgroup in pipeline mode");
     ok(test_reset_all_locked_hostgroup_pipeline(), "RESET ALL with locked hostgroup in pipeline mode");
-    ok(test_discard_all_locked_hostgroup_pipeline(), "DISCARD ALL with locked hostgroup in pipeline mode");
+    ok(test_discard_all_locked_hostgroup_pipeline(), "DISCARD ALL refused inside a pipelined batch's transaction block");
+    ok(test_set_param_status_extended(),
+       "SET of a reported GUC over the extended protocol reaches the client via ParameterStatus");
+    ok(test_reset_param_status_extended(),
+       "RESET of a reported GUC over the extended protocol reaches the client via ParameterStatus");
+    ok(test_set_to_default_extended(),
+       "SET <var> TO DEFAULT over the extended protocol restores the default, for a variable the client never sent at startup");
+    ok(test_set_to_default_keeps_transaction(),
+       "SET <var> TO DEFAULT in simple query mode keeps the open transaction on its own backend");
+    ok(test_search_path_not_inherited_across_clients(),
+       "search_path does not leak from one client connection to the next");
+    ok(test_search_path_param_status_on_change(),
+       "changing search_path reports the new value to the client via ParameterStatus");
+    ok(test_reset_search_path(),
+       "RESET search_path returns to the default");
 
     return exit_status();
 }
@@ -2431,10 +2474,11 @@ bool test_reset_all_locked_hostgroup_pipeline() {
     return pool_config.restore() && test_ok;
 }
 
-// Test: DISCARD ALL with locked hostgroup in pipeline mode
-// This tests that DISCARD ALL correctly FAILS in pipeline mode even with locked hostgroup
-// DISCARD ALL is more destructive than RESET ALL (resets prepared statements, temp tables, etc.)
-// so it is blocked in pipeline mode regardless of hostgroup lock status
+// Test: DISCARD ALL after another statement in the same pipelined batch.
+// The SET ran first in this batch and reached the backend, so the backend is inside
+// the implicit transaction block a batch opens -- and PostgreSQL refuses DISCARD ALL
+// inside a transaction block. ProxySQL must refuse it the same way (25001) instead of
+// resetting the session, which would roll the SET back after reporting it succeeded.
 bool test_discard_all_locked_hostgroup_pipeline() {
     diag("=== Test: DISCARD ALL with locked hostgroup in pipeline mode ===");
 
@@ -2453,7 +2497,7 @@ bool test_discard_all_locked_hostgroup_pipeline() {
         return false;
     }
 
-    // Step 3: Send DISCARD ALL in pipeline mode with locked hostgroup
+    // Step 3: Send DISCARD ALL in the same pipeline, still as the last statement before Sync
     if (PQsendQueryParams(conn.get(), "DISCARD ALL", 0, NULL, NULL, NULL, NULL, 0) != 1) {
         diag("Failed to send DISCARD ALL");
         return false;
@@ -2464,9 +2508,10 @@ bool test_discard_all_locked_hostgroup_pipeline() {
 
     // Consume results
     int count = 0;
-    bool lock_ok = false;
-    bool got_discard_error = false;
+    int command_ok_count = 0;
+    bool got_txn_block_error = false;
     std::string error_msg;
+    std::string sqlstate;
     int sock = PQsocket(conn.get());
     PGresult* result_res;
 
@@ -2476,15 +2521,13 @@ bool test_discard_all_locked_hostgroup_pipeline() {
         while ((result_res = PQgetResult(conn.get())) != NULL) {
             ExecStatusType status = PQresultStatus(result_res);
             if (status == PGRES_COMMAND_OK) {
-                lock_ok = true;
-                diag("SET lock_var succeeded (hostgroup locked)");
+                command_ok_count++;
             } else if (status == PGRES_FATAL_ERROR) {
-                char* err = PQresultErrorMessage(result_res);
-                if (err && strstr(err, "DISCARD ALL")) {
-                    got_discard_error = true;
-                    error_msg = err;
-                    diag("DISCARD ALL correctly failed in pipeline: %s", err);
-                }
+                got_txn_block_error = true;
+                error_msg = PQresultErrorMessage(result_res);
+                const char* ss = PQresultErrorField(result_res, PG_DIAG_SQLSTATE);
+                sqlstate = ss ? ss : "";
+                diag("DISCARD ALL refused (SQLSTATE %s): %s", sqlstate.c_str(), error_msg.c_str());
             } else if (status == PGRES_PIPELINE_SYNC) {
                 PQclear(result_res);
                 count++;
@@ -2507,14 +2550,353 @@ bool test_discard_all_locked_hostgroup_pipeline() {
 
     PQexitPipelineMode(conn.get());
 
-    // Verify connection still works after expected error
+    diag("SET lock_var + DISCARD ALL: %d command(s) OK, refused=%s", command_ok_count,
+         got_txn_block_error ? "yes" : "no");
+
+    // Verify connection still works afterward
     PGresult* res = PQexec(conn.get(), "SELECT 1");
     bool conn_ok = (PQresultStatus(res) == PGRES_TUPLES_OK);
     PQclear(res);
 
     // Test passes if:
-    // 1. Hostgroup was locked (SET myapp.lock_var succeeded)
-    // 2. DISCARD ALL failed with error (as expected)
-    // 3. Connection is still usable
-    return lock_ok && got_discard_error && conn_ok;
+    // 1. DISCARD ALL was refused because a transaction block is open, with the same
+    //    SQLSTATE PostgreSQL itself returns (25001)
+    // 2. Connection is still usable
+    return got_txn_block_error && sqlstate == "25001" && conn_ok;
+}
+
+// A client learns a reported GUC changed only from a ParameterStatus message. Over the extended
+// protocol ProxySQL used to drop it: the SET is still forwarded to the backend, but PostgreSQL
+// itself stays silent because ProxySQL already applied the same value on that connection (variable
+// sync, or a startup -c option) -- so nothing there actually changes. PQparameterStatus() is the
+// client's own cached view, exactly what a real driver relies on: a stale one means e.g. pgjdbc
+// mis-parses every string literal against the wrong standard_conforming_strings setting.
+bool test_set_param_status_extended() {
+    diag("=== Test: extended-protocol SET of a reported GUC reaches the client via ParameterStatus ===");
+
+    PGConnPtr conn = createNewConnection(BACKEND);
+    if (!conn) return false;
+
+    const char* before = PQparameterStatus(conn.get(), "standard_conforming_strings");
+    const std::string want = (before && strcmp(before, "off") == 0) ? "on" : "off";
+    diag("standard_conforming_strings before='%s', setting to '%s'", before ? before : "(null)", want.c_str());
+
+    PGresult* res = PQexecParams(conn.get(),
+        ("SET standard_conforming_strings TO " + want).c_str(), 0, NULL, NULL, NULL, NULL, 0);
+    bool cmd_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!cmd_ok) diag("SET failed: %s", PQresultErrorMessage(res));
+    PQclear(res);
+
+    const char* after = PQparameterStatus(conn.get(), "standard_conforming_strings");
+    diag("standard_conforming_strings after='%s'", after ? after : "(null)");
+
+    return cmd_ok && after && want == after;
+}
+
+// Same defect, the other suppression site: RESET <var> in the extended protocol. The SET moves the
+// client's view to a known value; the RESET must move it again (to the startup default) AND report
+// that back -- a client-side view stuck on the SET's value, unchanged by the RESET, is this bug.
+bool test_reset_param_status_extended() {
+    diag("=== Test: extended-protocol RESET of a reported GUC reaches the client via ParameterStatus ===");
+
+    PGConnPtr conn = createNewConnection(BACKEND);
+    if (!conn) return false;
+
+    PGresult* res = PQexecParams(conn.get(), "SET DateStyle TO 'SQL, DMY'", 0, NULL, NULL, NULL, NULL, 0);
+    bool set_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!set_ok) diag("setup SET DateStyle failed: %s", PQresultErrorMessage(res));
+    PQclear(res);
+    if (!set_ok) return false;
+
+    const char* mid_c = PQparameterStatus(conn.get(), "DateStyle");
+    diag("DateStyle after SET: '%s'", mid_c ? mid_c : "(null)");
+    // Copy out now: PQexecParams() below updates this same GUC, and libpq's
+    // pqSaveParameterStatus() frees the old entry and mallocs a new one, so a
+    // raw pointer held across that call can dangle (fe-exec.c).
+    std::string mid = mid_c ? mid_c : "";
+
+    res = PQexecParams(conn.get(), "RESET DateStyle", 0, NULL, NULL, NULL, NULL, 0);
+    bool reset_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!reset_ok) diag("RESET failed: %s", PQresultErrorMessage(res));
+    PQclear(res);
+
+    const char* after_c = PQparameterStatus(conn.get(), "DateStyle");
+    diag("DateStyle after RESET: '%s'", after_c ? after_c : "(null)");
+    std::string after = after_c ? after_c : "";
+
+    return reset_ok && !after.empty() && !mid.empty() && after != mid;
+}
+
+// SET <var> TO DEFAULT for a variable the client never sent when it connected. ProxySQL has to
+// fall back to its own configured default; an empty value instead breaks the statement.
+bool test_set_to_default_extended() {
+    diag("=== Test: extended-protocol SET <var> TO DEFAULT for a non-startup variable ===");
+
+    // Only search_path. The other settings keep this defect by decision, so asserting on one of
+    // them would be a permanently red test.
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        { "search_path",    "'pg_catalog'" },
+    };
+
+    bool all_ok = true;
+
+    for (const auto& c : cases) {
+        const std::string& var = c.first;
+        const std::string& probe_value = c.second;
+
+        // What a brand new session gets is what DEFAULT has to restore. Read it per case so a
+        // failing case cannot leave a value behind that the next one then passes against.
+        PGConnPtr baseline_conn = createNewConnection(BACKEND);
+        if (!baseline_conn) return false;
+        const std::string baseline = get_variable_simple(baseline_conn.get(), var);
+        diag("%s: a fresh session reports '%s'", var.c_str(), baseline.c_str());
+        if (baseline.empty()) {
+            diag("%s: could not read the baseline", var.c_str());
+            return false;
+        }
+
+        PGConnPtr conn = createNewConnection(BACKEND);
+        if (!conn) return false;
+
+        PGresult* res = PQexecParams(conn.get(), ("SET " + var + " TO " + probe_value).c_str(),
+            0, NULL, NULL, NULL, NULL, 0);
+        const bool set_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+        if (!set_ok) diag("%s: setup SET failed: %s", var.c_str(), PQresultErrorMessage(res));
+        PQclear(res);
+        if (!set_ok) { all_ok = false; continue; }
+
+        const std::string after_set = get_variable_simple(conn.get(), var);
+        diag("%s: after SET TO %s -> '%s'", var.c_str(), probe_value.c_str(), after_set.c_str());
+        if (after_set == baseline) {
+            // The probe value has to differ from the default or the assertion below proves nothing.
+            diag("%s: the probe value did not change anything, the case is vacuous", var.c_str());
+            all_ok = false;
+            continue;
+        }
+
+        res = PQexecParams(conn.get(), ("SET " + var + " TO DEFAULT").c_str(),
+            0, NULL, NULL, NULL, NULL, 0);
+        const bool default_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+        if (!default_ok) diag("%s: SET TO DEFAULT failed: %s", var.c_str(), PQresultErrorMessage(res));
+        PQclear(res);
+        if (!default_ok) { all_ok = false; continue; }
+
+        const std::string after_default = get_variable_simple(conn.get(), var);
+        diag("%s: after SET TO DEFAULT -> '%s' (want '%s')", var.c_str(),
+            after_default.c_str(), baseline.c_str());
+        if (after_default != baseline) all_ok = false;
+    }
+
+    return all_ok;
+}
+
+// In simple query mode this branch answered the client itself instead of going to the backend, and
+// an open transaction could carry on against a different connection. Work it had already done was
+// stranded, so COMMIT reported success over changes that were rolled back. A temporary table
+// vanishing is that switch, visible from one connection.
+bool test_set_to_default_keeps_transaction() {
+    diag("=== Test: simple-query SET <var> TO DEFAULT keeps the transaction's backend ===");
+
+    PGConnPtr conn = createNewConnection(BACKEND);
+    if (!conn) return false;
+
+    struct Step { const char* sql; ExecStatusType want; };
+    const std::vector<Step> steps = {
+        { "BEGIN",                                     PGRES_COMMAND_OK },
+        { "CREATE TEMP TABLE set_default_probe(i int)", PGRES_COMMAND_OK },
+        { "SET search_path TO 'pg_catalog'",           PGRES_COMMAND_OK },
+        // Forces ProxySQL to push the variable to the backend. Without a query in between the
+        // variable is only recorded client-side and the defect does not reproduce.
+        { "SELECT count(*) FROM pg_class",             PGRES_TUPLES_OK  },
+        { "SET search_path TO DEFAULT",                PGRES_COMMAND_OK },
+        // Still the same backend? Only that connection can see its own temporary table.
+        { "SELECT count(*) FROM pg_temp.set_default_probe", PGRES_TUPLES_OK },
+        { "COMMIT",                                    PGRES_COMMAND_OK },
+    };
+
+    for (const auto& s : steps) {
+        PGresult* res = PQexec(conn.get(), s.sql);
+        const ExecStatusType got = PQresultStatus(res);
+        const bool step_ok = (got == s.want);
+        if (!step_ok) {
+            diag("'%s' returned %s: %s", s.sql, PQresStatus(got), PQresultErrorMessage(res));
+        }
+        PQclear(res);
+        if (!step_ok) return false;
+    }
+
+    return true;
+}
+
+static std::string search_path_list(const std::string& v) {
+    std::string out;
+    for (size_t i = 0; i < v.size(); i++) {
+        if (v[i] == ' ' && !out.empty() && out.back() == ',') continue;
+        out.push_back(v[i]);
+    }
+    return out;
+}
+
+// A client that never mentions search_path must not inherit the previous client's value from a
+// pooled backend. What enforces that changed when search_path became a connect-time setting, so
+// this has to hold either way.
+bool test_search_path_not_inherited_across_clients() {
+    diag("=== Test: search_path does not leak from one client to the next ===");
+
+    const std::string probe = "pg_catalog";
+    std::string baseline;
+
+    {
+        PGConnPtr conn = createNewConnection(BACKEND);
+        if (!conn) return false;
+        baseline = get_variable_simple(conn.get(), "search_path");
+        diag("a fresh session reports '%s'", baseline.c_str());
+        if (baseline.empty() || baseline == probe) {
+            diag("baseline is unusable: empty, or equal to the probe value");
+            return false;
+        }
+    }
+
+    {
+        PGConnPtr setter = createNewConnection(BACKEND);
+        if (!setter) return false;
+        PGresult* res = PQexec(setter.get(), ("SET search_path TO '" + probe + "'").c_str());
+        const bool set_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+        if (!set_ok) diag("setup SET failed: %s", PQresultErrorMessage(res));
+        PQclear(res);
+        if (!set_ok) return false;
+
+        const std::string after = get_variable_simple(setter.get(), "search_path");
+        diag("setter now sees '%s'", after.c_str());
+        if (after != probe) {
+            diag("the setter did not take the probe value, the case is vacuous");
+            return false;
+        }
+    }   // setter disconnects here, its backend returns to the pool carrying search_path=pg_catalog
+
+    // ProxySQL's count of backend connections it has opened. If it does not move across a reader,
+    // that reader got a pooled backend rather than a fresh one -- proof this run exercised the path
+    // the test guards instead of passing because everyone got a new connection.
+    MYSQL* admin = mysql_init(NULL);
+    if (!admin || !mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password,
+                                       NULL, cl.admin_port, NULL, 0)) {
+        diag("Unable to connect to ProxySQL admin: %s", admin ? mysql_error(admin) : "mysql_init failed");
+        if (admin) mysql_close(admin);
+        return false;
+    }
+
+    std::string conn_ok =
+        pgsql_admin_scalar(admin, "SELECT IFNULL(SUM(ConnOK),0) FROM stats_pgsql_connection_pool");
+    diag("ConnOK right after the setter disconnected: '%s'", conn_ok.c_str());
+    if (conn_ok.empty()) {
+        // An empty reading means the admin query failed, not that nothing changed. Keep it out of
+        // the comparison below, where an empty string would match itself and fake the proof.
+        diag("could not read the ConnOK baseline from the admin interface");
+        mysql_close(admin);
+        return false;
+    }
+
+    // Several fresh clients, none of which mentions search_path. One of them is very likely to be
+    // handed the backend the setter just released.
+    bool all_ok = true;
+    bool reused = false;
+    for (int i = 1; i <= 5; i++) {
+        PGConnPtr reader = createNewConnection(BACKEND);
+        if (!reader) { mysql_close(admin); return false; }
+        const std::string seen = get_variable_simple(reader.get(), "search_path");
+        diag("reader %d sees '%s'", i, seen.c_str());
+        if (search_path_list(seen) != search_path_list(baseline)) all_ok = false;
+
+        const std::string conn_ok_after =
+            pgsql_admin_scalar(admin, "SELECT IFNULL(SUM(ConnOK),0) FROM stats_pgsql_connection_pool");
+        if (conn_ok_after.empty()) {
+            diag("reader %d: could not read ConnOK from the admin interface", i);
+            mysql_close(admin);
+            return false;
+        }
+        const bool this_reader_reused = (conn_ok_after == conn_ok);
+        diag("reader %d: ConnOK '%s' -> '%s' (%s)", i, conn_ok.c_str(), conn_ok_after.c_str(),
+             this_reader_reused ? "reused a pooled backend" : "opened a new backend");
+        if (this_reader_reused) reused = true;
+        conn_ok = conn_ok_after;
+    }
+
+    mysql_close(admin);
+
+    if (!reused) diag("no reader reused a pooled backend; this run never exercised the leak path");
+
+    return all_ok && reused;
+}
+
+// A client that changes search_path must be told the new value, not just at connect but on every
+// change. The two tests above cover the same thing for other settings.
+bool test_search_path_param_status_on_change() {
+    diag("=== Test: setting search_path reports the new value back via ParameterStatus ===");
+
+    PGConnPtr conn = createNewConnection(BACKEND);
+    if (!conn) return false;
+
+    const char* before_c = PQparameterStatus(conn.get(), "search_path");
+    diag("search_path at connect: '%s'", before_c ? before_c : "(absent)");
+    if (before_c == nullptr) {
+        diag("no search_path ParameterStatus at connect");
+        return false;
+    }
+    // Copy out now: the SET below updates this same GUC, and libpq frees the old entry when it
+    // stores the new one, so a raw pointer held across that call can dangle.
+    const std::string before = before_c;
+
+    // Unquoted on purpose. ProxySQL reports the value as the client wrote it, so a quoted SET
+    // comes back with its quotes; that divergence is known and not what this test is about.
+    const std::string want = (before == "pg_catalog") ? "public" : "pg_catalog";
+    PGresult* res = PQexecParams(conn.get(), ("SET search_path TO " + want).c_str(),
+        0, NULL, NULL, NULL, NULL, 0);
+    const bool set_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!set_ok) diag("SET failed: %s", PQresultErrorMessage(res));
+    PQclear(res);
+    if (!set_ok) return false;
+
+    const char* after_c = PQparameterStatus(conn.get(), "search_path");
+    const std::string after = after_c ? after_c : "";
+    diag("search_path after SET: '%s' (want '%s')", after.c_str(), want.c_str());
+
+    return after == want && after != before;
+}
+
+// RESET runs through a different handler from SET ... TO DEFAULT, so it needs its own case even
+// though the expected outcome is the same.
+bool test_reset_search_path() {
+    diag("=== Test: RESET search_path ===");
+
+    PGConnPtr conn = createNewConnection(BACKEND);
+    if (!conn) return false;
+
+    const std::string baseline = get_variable_simple(conn.get(), "search_path");
+    diag("baseline '%s'", baseline.c_str());
+    if (baseline.empty() || baseline == "pg_catalog") {
+        diag("baseline unusable for this comparison");
+        return false;
+    }
+
+    if (!set_variable_simple(conn.get(), "search_path", "pg_catalog")) {
+        diag("setup SET failed");
+        return false;
+    }
+    const std::string moved = get_variable_simple(conn.get(), "search_path");
+    diag("after SET '%s'", moved.c_str());
+    if (moved == baseline) {
+        diag("the setup SET did not change anything, the case is vacuous");
+        return false;
+    }
+
+    PGresult* res = PQexec(conn.get(), "RESET search_path");
+    const bool reset_ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!reset_ok) diag("RESET failed: %s", PQresultErrorMessage(res));
+    PQclear(res);
+    if (!reset_ok) return false;
+
+    const std::string after = get_variable_simple(conn.get(), "search_path");
+    diag("after RESET '%s' (want the baseline '%s')", after.c_str(), baseline.c_str());
+
+    return after == baseline;
 }

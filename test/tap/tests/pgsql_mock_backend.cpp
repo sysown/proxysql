@@ -1,6 +1,6 @@
 /**
  * @file pgsql_mock_backend.cpp
- * @brief Implementation of the scriptable fake PostgreSQL backend.
+ * @brief Implementation of the scriptable hostile PostgreSQL backend.
  *
  * See pgsql_mock_backend.h for the rationale and usage.
  *
@@ -23,6 +23,16 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509v3.h>
+
+#include <mutex>
+
 // ------------------------------------------------------------- byte builders
 
 std::string pgmb_be32(uint32_t v) {
@@ -43,17 +53,42 @@ std::string pgmb_be16(uint16_t v) {
 
 void pgmb_append_msg(std::string& out, char type, const std::string& payload) {
     out.push_back(type);
-    out += pgmb_be32((uint32_t)payload.size() + 4);
+    out += pgmb_be32((uint32_t)(payload.size() + 4));
     out += payload;
 }
 
-// ------------------------------------------------------ backend-side messages
+void pgmb_append_msg_raw_len(std::string& out, char type, uint32_t declared_len,
+                             const std::string& payload) {
+    out.push_back(type);
+    out += pgmb_be32(declared_len);
+    out += payload;
+}
 
-std::string pgmb_auth_ok() {
+// ------------------------------------------------------------ auth messages
+
+std::string pgmb_auth_raw(uint32_t auth_type, const std::string& rest) {
     std::string out;
-    pgmb_append_msg(out, 'R', pgmb_be32(0));
+    pgmb_append_msg(out, 'R', pgmb_be32(auth_type) + rest);
     return out;
 }
+std::string pgmb_auth_ok()        { return pgmb_auth_raw(0, ""); }
+std::string pgmb_auth_cleartext() { return pgmb_auth_raw(3, ""); }
+
+std::string pgmb_auth_md5(const unsigned char salt[4]) {
+    return pgmb_auth_raw(5, std::string((const char*)salt, 4));
+}
+
+std::string pgmb_auth_sasl(const std::vector<std::string>& mechanisms) {
+    std::string body;
+    for (const auto& m : mechanisms) { body += m; body.push_back('\0'); }
+    body.push_back('\0');                       // terminating empty name
+    return pgmb_auth_raw(10, body);
+}
+
+std::string pgmb_auth_sasl_continue(const std::string& body) { return pgmb_auth_raw(11, body); }
+std::string pgmb_auth_sasl_final(const std::string& body)    { return pgmb_auth_raw(12, body); }
+
+// ------------------------------------------------------- steady-state messages
 
 std::string pgmb_parameter_status(const std::string& name, const std::string& value) {
     std::string payload = name;
@@ -74,6 +109,31 @@ std::string pgmb_backend_key_data(int32_t pid, int32_t secret) {
 std::string pgmb_ready_for_query(char txn_state) {
     std::string out;
     pgmb_append_msg(out, 'Z', std::string(1, txn_state));
+    return out;
+}
+
+std::string pgmb_error_response(const std::string& sqlstate, const std::string& message) {
+    std::string payload;
+    payload.push_back('S'); payload += "ERROR";  payload.push_back('\0');
+    payload.push_back('V'); payload += "ERROR";  payload.push_back('\0');
+    payload.push_back('C'); payload += sqlstate; payload.push_back('\0');
+    payload.push_back('M'); payload += message;  payload.push_back('\0');
+    payload.push_back('\0');                     // field-list terminator
+    std::string out;
+    pgmb_append_msg(out, 'E', payload);
+    return out;
+}
+
+std::string pgmb_error_response_unterminated(const std::string& sqlstate) {
+    // Last field value runs to the end of the payload with no NUL and no
+    // field-list terminator. A parser that scans for NUL without bounding on
+    // payload_len walks off the end here.
+    std::string payload;
+    payload.push_back('S'); payload += "FATAL"; payload.push_back('\0');
+    payload.push_back('C'); payload += sqlstate; payload.push_back('\0');
+    payload.push_back('M'); payload += "unterminated message value";  // no NUL, no terminator
+    std::string out;
+    pgmb_append_msg(out, 'E', payload);
     return out;
 }
 
@@ -108,19 +168,13 @@ std::string pgmb_command_complete(const std::string& tag) {
     return out;
 }
 
-std::string pgmb_copy_out_response(int ncols) {
-    std::string payload;
-    payload.push_back('\0');                      // overall format: 0 = text
-    payload += pgmb_be16((uint16_t)ncols);
-    for (int i = 0; i < ncols; i++) payload += pgmb_be16(0);   // per-column: text
+std::string pgmb_notification_response(int32_t pid, const std::string& channel,
+                                       const std::string& payload_text) {
+    std::string payload = pgmb_be32((uint32_t)pid);
+    payload += channel; payload.push_back('\0');
+    payload += payload_text; payload.push_back('\0');
     std::string out;
-    pgmb_append_msg(out, 'H', payload);
-    return out;
-}
-
-std::string pgmb_copy_data(const std::string& payload) {
-    std::string out;
-    pgmb_append_msg(out, 'd', payload);
+    pgmb_append_msg(out, 'A', payload);
     return out;
 }
 
@@ -132,21 +186,154 @@ std::string pgmb_simple_result(const std::string& colname, const std::string& va
     return out;
 }
 
+bool pgmb_result_of_exact_size(std::string& out, size_t target_bytes) {
+    // Fixed parts, then a single DataRow sized to absorb the remainder exactly.
+    const std::string rd  = pgmb_row_description_1col("c", 25);
+    const std::string cc  = pgmb_command_complete("SELECT 1");
+    const std::string rfq = pgmb_ready_for_query('I');
+    // DataRow overhead: 1 type + 4 length + 2 ncols + 4 value-length.
+    const size_t row_overhead = 11;
+    const size_t fixed = rd.size() + cc.size() + rfq.size() + row_overhead;
+    if (target_bytes < fixed) return false;
+    const size_t vallen = target_bytes - fixed;
+
+    out.clear();
+    out.reserve(target_bytes);
+    out += rd;
+    out += pgmb_data_row_1col(std::string(vallen, 'x'));
+    out += cc;
+    out += rfq;
+    return out.size() == target_bytes;
+}
+
 // ------------------------------------------------------------------- steps
 
-Step step_send(const std::string& data) {
+Step step_send(const std::string& data, size_t chunk_bytes, int chunk_delay_us) {
     Step s; s.kind = Step::SEND; s.data = data;
+    s.chunk_bytes = chunk_bytes; s.chunk_delay_us = chunk_delay_us;
     return s;
 }
 Step step_expect_startup() { Step s; s.kind = Step::EXPECT_STARTUP; return s; }
-Step step_expect_query()   { Step s; s.kind = Step::EXPECT_QUERY; return s; }
+Step step_expect_message() { Step s; s.kind = Step::EXPECT_MESSAGE; return s; }
+Step step_expect_query(bool stop_at_housekeeping)
+                           { Step s; s.kind = Step::EXPECT_QUERY; s.stop_at_housekeeping = stop_at_housekeeping; return s; }
 Step step_close()          { Step s; s.kind = Step::CLOSE; return s; }
 Step step_sleep(int ms)    { Step s; s.kind = Step::SLEEP_MS; s.ms = ms; return s; }
+Step step_tls_accept()     { Step s; s.kind = Step::TLS_ACCEPT; return s; }
+Step step_tls_key_update() { Step s; s.kind = Step::TLS_KEY_UPDATE; return s; }
+Step step_scram_server_first(bool bad_nonce) {
+    Step s; s.kind = Step::SCRAM_SERVER_FIRST; s.bad_nonce = bad_nonce; return s;
+}
+Step step_scram_server_final(bool forge_signature) {
+    Step s; s.kind = Step::SCRAM_SERVER_FINAL; s.forge_signature = forge_signature; return s;
+}
+
+std::vector<Step> pgmb_script_accept_trust() {
+    std::string post_auth =
+        pgmb_auth_ok() +
+        pgmb_parameter_status("server_version", "16.2") +
+        pgmb_parameter_status("client_encoding", "UTF8") +
+        pgmb_backend_key_data(4242, 987654321) +
+        pgmb_ready_for_query('I');
+    return { step_expect_startup(), step_send(post_auth) };
+}
+
+// ---------------------------------------------------------------- crypto bits
+
+static std::string b64_encode(const std::string& in) {
+    if (in.empty()) return "";
+    std::string out((((in.size() + 2) / 3) * 4) + 1, '\0');
+    int n = EVP_EncodeBlock((unsigned char*)&out[0], (const unsigned char*)in.data(),
+                            (int)in.size());
+    if (n < 0) return "";
+    out.resize((size_t)n);
+    return out;
+}
+
+static std::string hmac_sha256(const std::string& key, const std::string& data) {
+    unsigned char md[EVP_MAX_MD_SIZE];
+    unsigned int mdlen = 0;
+    HMAC(EVP_sha256(), key.data(), (int)key.size(),
+         (const unsigned char*)data.data(), data.size(), md, &mdlen);
+    return std::string((const char*)md, mdlen);
+}
+
+// SCRAM-SHA-256 server-side key derivation (RFC 5802 / RFC 7677).
+static std::string scram_server_key(const std::string& password, const std::string& salt,
+                                    int iterations) {
+    unsigned char salted[32];
+    PKCS5_PBKDF2_HMAC(password.data(), (int)password.size(),
+                      (const unsigned char*)salt.data(), (int)salt.size(),
+                      iterations, EVP_sha256(), sizeof(salted), salted);
+    return hmac_sha256(std::string((const char*)salted, sizeof(salted)), "Server Key");
+}
+
+// Extract the value of `key=` from a comma-separated SCRAM attribute list.
+static std::string scram_attr(const std::string& msg, char key) {
+    size_t i = 0;
+    while (i < msg.size()) {
+        size_t end = msg.find(',', i);
+        if (end == std::string::npos) end = msg.size();
+        if (end - i >= 2 && msg[i] == key && msg[i + 1] == '=')
+            return msg.substr(i + 2, end - i - 2);
+        i = end + 1;
+    }
+    return "";
+}
+
+// ------------------------------------------------------------------ mock TLS
+//
+// After a TLS_ACCEPT step the connection speaks TLS, and only write_all()/read_exact()
+// need to know because every byte already goes through them. Each connection has its
+// own handler thread, so a thread_local carries the SSL there rather than a new
+// argument through twenty call sites.
+static thread_local SSL* t_ssl = nullptr;
+
+// One self-signed cert for the process, made in memory on first use. ProxySQL's
+// native TLS is REQUIRE -- encrypt, do not verify, the same as libpq for use_ssl=1 --
+// so a self-signed cert is accepted.
+static SSL_CTX* mock_tls_ctx() {
+    static std::mutex m;
+    static SSL_CTX* ctx = nullptr;
+    std::lock_guard<std::mutex> g(m);
+    if (ctx) return ctx;
+
+    EVP_PKEY* pkey = EVP_RSA_gen(2048);
+    if (!pkey) return nullptr;
+    X509* x = X509_new();
+    if (!x) { EVP_PKEY_free(pkey); return nullptr; }
+    ASN1_INTEGER_set(X509_get_serialNumber(x), 1);
+    X509_gmtime_adj(X509_getm_notBefore(x), 0);
+    X509_gmtime_adj(X509_getm_notAfter(x), 60L * 60 * 24);
+    X509_set_pubkey(x, pkey);
+    X509_NAME* name = X509_get_subject_name(x);
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                               (const unsigned char*)"pgsql-mock-backend", -1, -1, 0);
+    X509_set_issuer_name(x, name);
+    if (!X509_sign(x, pkey, EVP_sha256())) { X509_free(x); EVP_PKEY_free(pkey); return nullptr; }
+
+    SSL_CTX* c = SSL_CTX_new(TLS_server_method());
+    if (!c) { X509_free(x); EVP_PKEY_free(pkey); return nullptr; }
+    if (SSL_CTX_use_certificate(c, x) != 1 || SSL_CTX_use_PrivateKey(c, pkey) != 1) {
+        SSL_CTX_free(c); X509_free(x); EVP_PKEY_free(pkey); return nullptr;
+    }
+    X509_free(x);
+    EVP_PKEY_free(pkey);
+    ctx = c;
+    return ctx;
+}
 
 // --------------------------------------------------------------- socket I/O
 
 static bool write_all(int fd, const char* p, size_t n) {
     while (n > 0) {
+        if (t_ssl) {
+            const int w = SSL_write(t_ssl, p, (int)(n > INT32_MAX ? INT32_MAX : n));
+            if (w > 0) { p += w; n -= (size_t)w; continue; }
+            const int e = SSL_get_error(t_ssl, w);
+            if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) continue;
+            return false;
+        }
         ssize_t w = ::send(fd, p, n, MSG_NOSIGNAL);
         if (w > 0) { p += w; n -= (size_t)w; continue; }
         if (w < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
@@ -157,6 +344,13 @@ static bool write_all(int fd, const char* p, size_t n) {
 
 static bool read_exact(int fd, char* p, size_t n) {
     while (n > 0) {
+        if (t_ssl) {
+            const int r = SSL_read(t_ssl, p, (int)(n > INT32_MAX ? INT32_MAX : n));
+            if (r > 0) { p += r; n -= (size_t)r; continue; }
+            const int e = SSL_get_error(t_ssl, r);
+            if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) continue;
+            return false;   // clean close or error
+        }
         ssize_t r = ::recv(fd, p, n, 0);
         if (r > 0) { p += r; n -= (size_t)r; continue; }
         if (r < 0 && errno == EINTR) continue;
@@ -235,6 +429,11 @@ void PgSQL_Mock_Backend::set_script(const std::vector<Step>& steps) {
     script_ = steps;
 }
 
+void PgSQL_Mock_Backend::set_scram_password(const std::string& pw) {
+    std::lock_guard<std::mutex> g(script_mtx_);
+    scram_password_ = pw;
+}
+
 std::string PgSQL_Mock_Backend::last_error() {
     std::lock_guard<std::mutex> g(err_mtx_);
     return last_error_;
@@ -269,22 +468,32 @@ bool PgSQL_Mock_Backend::start() {
 
 void PgSQL_Mock_Backend::stop() {
     if (!running_.exchange(false)) return;
-    // shutdown() wakes the acceptor out of accept(); the fd is closed only after that
-    // thread has been joined. Closing first would let the acceptor call accept() on a
-    // descriptor number another thread could already have reused.
-    if (listen_fd_ >= 0) ::shutdown(listen_fd_, SHUT_RDWR);
-    if (acceptor_.joinable()) acceptor_.join();
-    if (listen_fd_ >= 0) { ::close(listen_fd_); listen_fd_ = -1; }
-    // A worker can be blocked in recv() waiting for a startup packet or a query that
-    // a wedged proxy will never send. Joining it in that state hangs the run instead
-    // of letting the test report a failure, so wake them first. The fd is still open:
-    // handle_conn() removes itself from this list before closing, under the same lock.
+    if (listen_fd_ >= 0) { ::shutdown(listen_fd_, SHUT_RDWR); ::close(listen_fd_); listen_fd_ = -1; }
+    // Unblock workers parked in recv() on a proxy that never sent a query, so the
+    // join below cannot hang the whole run.
     {
         std::lock_guard<std::mutex> g(conns_mtx_);
         for (int cfd : client_fds_) ::shutdown(cfd, SHUT_RDWR);
     }
+    if (acceptor_.joinable()) acceptor_.join();
     for (auto& t : workers_) if (t.joinable()) t.join();
     workers_.clear();
+}
+
+std::string pgmb_copy_out_response(int ncols) {
+    std::string payload;
+    payload.push_back('\0');                      // overall format: 0 = text
+    payload += pgmb_be16((uint16_t)ncols);
+    for (int i = 0; i < ncols; i++) payload += pgmb_be16(0);   // per-column: text
+    std::string out;
+    pgmb_append_msg(out, 'H', payload);
+    return out;
+}
+
+std::string pgmb_copy_data(const std::string& payload) {
+    std::string out;
+    pgmb_append_msg(out, 'd', payload);
+    return out;
 }
 
 void PgSQL_Mock_Backend::accept_loop() {
@@ -297,10 +506,6 @@ void PgSQL_Mock_Backend::accept_loop() {
         int one = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         conns_accepted_.fetch_add(1);
-        {
-            std::lock_guard<std::mutex> g(conns_mtx_);
-            client_fds_.push_back(fd);
-        }
         std::vector<Step> script;
         {
             std::lock_guard<std::mutex> g(script_mtx_);
@@ -311,6 +516,20 @@ void PgSQL_Mock_Backend::accept_loop() {
 }
 
 void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
+    {
+        std::lock_guard<std::mutex> g(conns_mtx_);
+        client_fds_.push_back(fd);
+    }
+    std::string password;
+    {
+        std::lock_guard<std::mutex> g(script_mtx_);
+        password = scram_password_;
+    }
+
+    // SCRAM exchange state, carried across the two SCRAM steps.
+    std::string client_first_bare, server_first, salt;
+    const int iterations = 4096;
+
     auto fail = [&](const char* what) {
         std::lock_guard<std::mutex> g(err_mtx_);
         last_error_ = what;
@@ -319,12 +538,27 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
     for (const Step& s : script) {
         switch (s.kind) {
         case Step::SEND: {
-            if (!write_all(fd, s.data.data(), s.data.size())) { fail("write failed"); goto done; }
+            if (s.chunk_bytes == 0) {
+                if (!write_all(fd, s.data.data(), s.data.size())) { fail("write failed"); goto done; }
+            } else {
+                size_t off = 0;
+                while (off < s.data.size()) {
+                    const size_t n = std::min(s.chunk_bytes, s.data.size() - off);
+                    if (!write_all(fd, s.data.data() + off, n)) { fail("chunked write failed"); goto done; }
+                    off += n;
+                    if (s.chunk_delay_us > 0) usleep((useconds_t)s.chunk_delay_us);
+                }
+            }
             break;
         }
         case Step::EXPECT_STARTUP: {
             std::string payload;
             if (!read_startup(fd, payload)) { fail("startup read failed"); goto done; }
+            break;
+        }
+        case Step::EXPECT_MESSAGE: {
+            char type = 0; std::string payload;
+            if (!read_frontend_msg(fd, &type, payload)) { fail("frontend message read failed"); goto done; }
             break;
         }
         case Step::EXPECT_QUERY: {
@@ -336,8 +570,9 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
             // transaction control) arrives as a simple Query too, so stopping
             // at the first 'Q' is not enough — the caller's canned RESULTSET
             // would then answer a proxy SET. That is not a harmless mismatch:
-            // it drives ProxySQL into an unbounded error loop. Housekeeping is
-            // acknowledged with a COMMAND response and skipped.
+            // it drives ProxySQL into an unbounded error loop (see the
+            // async_send_simple_command finding). Housekeeping is acknowledged
+            // with a COMMAND response and skipped.
             for (;;) {
                 char type = 0; std::string payload;
                 if (!read_frontend_msg(fd, &type, payload)) { fail("query read failed"); goto done; }
@@ -358,6 +593,7 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
                         queries_observed_.fetch_add(1);
                         break;
                     }
+                    if (s.stop_at_housekeeping) break;   // leave it for the next step to answer
                     const std::string ack =
                         pgmb_command_complete("SET") + pgmb_ready_for_query('I');
                     if (!write_all(fd, ack.data(), ack.size())) { fail("housekeeping ack failed"); goto done; }
@@ -371,13 +607,89 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
         case Step::CLOSE:
             goto done;
         case Step::SLEEP_MS:
-            // Slept in slices, watching running_, so a script that deliberately holds
-            // a socket open for seconds does not make stop() -- which joins these
-            // threads -- block for the remainder of it.
-            for (int slept = 0; slept < s.ms && running_.load(); slept += 100) {
-                usleep(100000);
-            }
+            usleep((useconds_t)s.ms * 1000);
             break;
+
+        case Step::TLS_ACCEPT: {
+            SSL_CTX* ctx = mock_tls_ctx();
+            if (!ctx) { fail("could not build the mock TLS context"); goto done; }
+            SSL* ssl = SSL_new(ctx);
+            if (!ssl) { fail("SSL_new failed"); goto done; }
+            SSL_set_fd(ssl, fd);
+            if (SSL_accept(ssl) != 1) {   // proxy walked away, or refused the cert
+                SSL_free(ssl);
+                fail("SSL_accept failed");
+                goto done;
+            }
+            t_ssl = ssl;   // every later step now reads and writes encrypted
+            break;
+        }
+
+        case Step::TLS_KEY_UPDATE: {
+            if (!t_ssl) { fail("key update asked for on a plaintext connection"); goto done; }
+            if (SSL_key_update(t_ssl, SSL_KEY_UPDATE_REQUESTED) != 1) {
+                fail("SSL_key_update failed"); goto done;
+            }
+            // The update only reaches the wire on the next record write; push it now.
+            if (SSL_do_handshake(t_ssl) != 1) { fail("key update flush failed"); goto done; }
+            break;
+        }
+
+        case Step::SCRAM_SERVER_FIRST: {
+            // SASLInitialResponse: mechanism\0 | int32 len | client-first-message
+            char type = 0; std::string payload;
+            if (!read_frontend_msg(fd, &type, payload)) { fail("SASLInitialResponse read failed"); goto done; }
+            size_t z = payload.find('\0');
+            if (z == std::string::npos || payload.size() < z + 5) { fail("malformed SASLInitialResponse"); goto done; }
+            const std::string client_first = payload.substr(z + 5);
+            // client-first-bare is everything after the gs2 header ("n,," / "y,," / "p=...,,").
+            size_t bare = client_first.find(",,");
+            client_first_bare = (bare == std::string::npos) ? client_first : client_first.substr(bare + 2);
+            const std::string client_nonce = scram_attr(client_first_bare, 'r');
+
+            unsigned char rnd[18];
+            RAND_bytes(rnd, sizeof(rnd));
+            const std::string server_nonce_part = b64_encode(std::string((const char*)rnd, sizeof(rnd)));
+            unsigned char saltb[16];
+            RAND_bytes(saltb, sizeof(saltb));
+            salt.assign((const char*)saltb, sizeof(saltb));
+
+            // RFC 5802: the server nonce MUST begin with the client nonce. With
+            // bad_nonce we deliberately violate that, which a correct client
+            // must detect and abort on.
+            const std::string combined_nonce = s.bad_nonce
+                ? server_nonce_part
+                : client_nonce + server_nonce_part;
+
+            server_first = "r=" + combined_nonce + ",s=" + b64_encode(salt) +
+                           ",i=" + std::to_string(iterations);
+            const std::string msg = pgmb_auth_sasl_continue(server_first);
+            if (!write_all(fd, msg.data(), msg.size())) { fail("server-first write failed"); goto done; }
+            break;
+        }
+
+        case Step::SCRAM_SERVER_FINAL: {
+            char type = 0; std::string client_final;
+            if (!read_frontend_msg(fd, &type, client_final)) { fail("SASLResponse read failed"); goto done; }
+            // client-final-without-proof is everything before ",p=".
+            const size_t ppos = client_final.rfind(",p=");
+            const std::string cf_without_proof = (ppos == std::string::npos)
+                ? client_final : client_final.substr(0, ppos);
+
+            const std::string auth_message =
+                client_first_bare + "," + server_first + "," + cf_without_proof;
+            std::string sig = hmac_sha256(scram_server_key(password, salt, iterations), auth_message);
+
+            if (s.forge_signature) {
+                // Flip every bit. A client that verifies the server signature
+                // rejects this; a client that skips verification accepts a
+                // server that cannot prove it knows the secret.
+                for (char& c : sig) c = (char)(~(unsigned char)c);
+            }
+            const std::string msg = pgmb_auth_sasl_final("v=" + b64_encode(sig));
+            if (!write_all(fd, msg.data(), msg.size())) { fail("server-final write failed"); goto done; }
+            break;
+        }
         }
     }
 
@@ -387,6 +699,15 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
     usleep(200000);
 
 done:
+    // The SSL wraps this fd, so it goes first. Clear the thread_local too: a leftover
+    // pointer would send a reused thread's plaintext steps through freed memory.
+    if (t_ssl) {
+        SSL_free(t_ssl);
+        t_ssl = nullptr;
+    }
+    // Deregister BEFORE closing: once this fd is closed the OS can hand the same
+    // number to a new socket, and stop() would then ::shutdown() an unrelated
+    // connection belonging to the test process.
     {
         std::lock_guard<std::mutex> g(conns_mtx_);
         auto it = std::find(client_fds_.begin(), client_fds_.end(), fd);
