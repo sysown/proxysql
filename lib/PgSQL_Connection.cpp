@@ -1790,6 +1790,10 @@ void PgSQL_Connection::native_teardown() {
 		SSL_CTX_free(native_ssl_ctx);
 		native_ssl_ctx = nullptr;
 	}
+	// The connect handshake must not resume: its steps read what was just freed, and the TLS
+	// step dereferences the BIOs that went with the SSL. connect_cont() does get called again
+	// on a connection the session is still holding, when the connect timeout expires.
+	native_st = PG_Native_Conn_St::FAILED;
 }
 
 // Defined out-of-line (not in the header) because PgSQL_Data_Stream is an incomplete
