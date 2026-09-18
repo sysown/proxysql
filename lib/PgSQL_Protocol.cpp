@@ -1685,6 +1685,11 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 		switch ((*myds)->DSS) {
 		case STATE_SERVER_HANDSHAKE:
 		case STATE_CLIENT_HANDSHAKE:
+		// A TLS client is still in STATE_SSL_INIT when its startup packet arrives, because nothing
+		// moves the state on until that packet has been accepted. Every error raised while reading
+		// it is reported from here, so leaving this state out aborted the whole proxy on anything
+		// an encrypted client got wrong in its first packet.
+		case STATE_SSL_INIT:
 		case STATE_QUERY_SENT_DS:
 		case STATE_QUERY_SENT_NET:
 		case STATE_ERR:
