@@ -18,13 +18,15 @@
 
 #include <cstring>
 
-// The five settings that travel in the startup packet, with plausible values.
+// The settings that travel in the startup packet, one per slot and in the same order as
+// pgsql_tracked_variables[]. A missing entry leaves a null that opened() below copies, and crashes.
 static const char* CRITICAL[PGSQL_NAME_LAST_LOW_WM] = {
-	"UTF8",      // client_encoding
-	"ISO, MDY",  // DateStyle
-	"postgres",  // IntervalStyle
-	"on",        // standard_conforming_strings
-	"UTC",       // TimeZone
+	"UTF8",             // client_encoding
+	"ISO, MDY",         // DateStyle
+	"postgres",         // IntervalStyle
+	"on",               // standard_conforming_strings
+	"UTC",              // TimeZone
+	"\"$user\", public",  // search_path
 };
 
 // A hash per slot. Only equality is ever tested, so any non-zero value will do.
