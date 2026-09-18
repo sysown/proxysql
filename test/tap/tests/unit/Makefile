@@ -585,6 +585,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_native_scram_order_unit-t \
 	pgsql_native_startup_params_reset_unit-t \
 	pgsql_native_teardown_state_unit-t \
+	pgsql_named_portal_teardown_unit-t \
 	pgsql_native_tls_verify_modes_unit-t \
 	pgsql_native_tls_handover_unit-t \
 	charset_find_unit-t \
