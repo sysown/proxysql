@@ -37,7 +37,9 @@
  * bugs; they are bugs in the native protocol path that this test is the
  * first to surface systematically.
  *
- * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256, no TLS).
+ * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256). The corpus runs once
+ * per transport: plaintext, then TLS on both the client and backend legs
+ * (see pgsql-native_transport.h).
  */
 
 #include <string>
@@ -51,6 +53,7 @@
 #include "tap.h"
 #include "utils.h"
 #include "pgsql-native_tracking.h"
+#include "pgsql-native_transport.h"
 
 CommandLine cl;
 
@@ -63,8 +66,8 @@ using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 
 // Unique-per-run table name suffix.
 static std::string make_table_name() {
-	return "pgsql_native_txn_" + std::to_string(getpid()) + "_" +
-	       std::to_string(time(nullptr));
+	return "pgsql_native_txn_" + std::string(native_transport_name()) + "_" +
+	       std::to_string(getpid()) + "_" + std::to_string(time(nullptr));
 }
 
 static PGConnPtr open_admin_conn() {
@@ -83,7 +86,7 @@ static PGConnPtr open_client_conn() {
 	   << " user=" << cl.pgsql_username
 	   << " password=" << cl.pgsql_password
 	   << " dbname=" << cl.pgsql_username
-	   << " sslmode=disable";
+	   << " sslmode=" << native_client_sslmode();
 	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
 }
 
@@ -128,10 +131,10 @@ static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>
 	if (!execAdmin(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg))) return false;
 	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
 	for (const auto& r : saved) {
-		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,comment) VALUES ("
+		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment) VALUES ("
 			+ std::to_string(hg) + ",'" + r.hostname + "'," + r.port + ","
 			+ (r.max_connections.empty() ? std::string("1000") : r.max_connections)
-			+ ",'" + r.comment + "')";
+			+ "," + std::to_string(native_backend_use_ssl()) + ",'" + r.comment + "')";
 		if (!execAdmin(admin, ins)) return false;
 	}
 	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
@@ -529,8 +532,8 @@ static std::vector<RawCase> build_cases() {
 int main(int /*argc*/, char** /*argv*/) {
 	auto cases = build_cases();
 	int n_cases = (int)cases.size();
-	// n_cases per-case ok lines + 1 coverage summary = n_cases + 1.
-	plan(n_cases + 1);
+	// Per transport: n_cases per-case ok lines + 1 coverage summary + the transport check.
+	plan((int)NATIVE_TRANSPORT_COUNT * (n_cases + 1 + NATIVE_TRANSPORT_CHECKS));
 	if (cl.getEnv()) return exit_status();
 
 	std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
@@ -553,19 +556,31 @@ int main(int /*argc*/, char** /*argv*/) {
 	diag("Backend under test (hg %d): %s:%s", BACKEND_HG,
 	     saved[0].hostname.c_str(), saved[0].port.c_str());
 
-	CoverageRecorder cov;
-	for (const auto& raw : cases) {
-		TxnCase tc;
-		tc.label = raw.label;
-		tc.kind = raw.kind;
-		tc.setup = raw.setup;       // run_case substitutes {T}
-		tc.queries = raw.queries;  // run_case substitutes {T}
-		tc.expected_states = raw.exp_states;
-		tc.verify = raw.verify;     // run_case substitutes {T}
-		tc.mode = raw.mode;
-		CaseResult cr = run_case(admin.get(), tc, saved);
-		cov.record({tc.label, tc.kind, cr.result_match, !cr.fell_back, cr.detail});
+	// The whole corpus runs once per transport (plain, then TLS on both legs).
+	for (size_t transport = 0; transport < NATIVE_TRANSPORT_COUNT; transport++) {
+		native_transport_select(transport);
+		ok_native_transport(admin.get(), BACKEND_HG,
+			[&] { return setNativeMode(admin.get(), true) && flushBackendPool(admin.get(), BACKEND_HG, saved); },
+			[] { return open_client_conn(); }, /*check_client*/ true);
+
+		CoverageRecorder cov;
+		for (const auto& raw : cases) {
+			TxnCase tc;
+			tc.label = raw.label;
+			tc.kind = raw.kind;
+			tc.setup = raw.setup;       // run_case substitutes {T}
+			tc.queries = raw.queries;  // run_case substitutes {T}
+			tc.expected_states = raw.exp_states;
+			tc.verify = raw.verify;     // run_case substitutes {T}
+			tc.mode = raw.mode;
+			CaseResult cr = run_case(admin.get(), tc, saved);
+			cov.record({native_transport_label(tc.label), tc.kind, cr.result_match, !cr.fell_back, cr.detail});
+		}
+		cov.emit_tap();
 	}
-	cov.emit_tap();
+
+	native_transport_select(0);
+	setNativeMode(admin.get(), false);
+	flushBackendPool(admin.get(), BACKEND_HG, saved);
 	return exit_status();
 }
