@@ -186,6 +186,10 @@ struct PgSQL_Portal_Entry {
 	std::shared_ptr<const PgSQL_STMT_Global_info> stmt_info;
 	bool bound_on_backend = false;   // real backend Bind completed
 	bool suspended = false;          // last Execute ended with PortalSuspended
+	// The backend connection the portal was bound on, recorded at BindComplete. Compared
+	// for identity only, never dereferenced: it says which connection's teardown takes
+	// this entry down with it.
+	const PgSQL_Connection* bound_conn = nullptr;
 };
 
 class PgSQL_Query_Info {
@@ -278,6 +282,11 @@ private:
 	// cleared when a completed cycle's ReadyForQuery carried txn-state 'I' (backend
 	// destroyed all portals at txn end / implicit-txn Sync), and in reset()/destructor.
 	std::map<std::string, PgSQL_Portal_Entry> named_portals;
+	// Portals whose backend connection was taken away before the registry could be
+	// freed. The entries own the Bind bytes that CurrentQuery -- and the event logger
+	// reading it in RequestEnd() -- still points at, so they are parked here instead of
+	// destroyed, and released at the end of RequestEnd() once that read is done.
+	std::map<std::string, PgSQL_Portal_Entry> detached_portals;
 	// In-flight named Bind: holds the released Bind message + resolved global stmt
 	// while PROCESSING_STMT_BIND dispatches to the backend. Committed into
 	// named_portals only on a successful BindComplete (rc0), so a Bind that the
@@ -519,6 +528,11 @@ private:
 public:
 	void handle_transaction_state();
 
+	// Called when a backend connection is severed from this session. Named portals live
+	// on one specific connection, so the registry must stop describing the ones bound
+	// on this one.
+	void backend_connection_detached(const PgSQL_Connection* conn);
+
 	inline bool is_extended_query_frame_empty() const {
 		return extended_query_frame.empty();
 	}
@@ -730,6 +744,8 @@ private:
 	void send_parameter_error_response(const char* error_message, PGSQL_ERROR_CODES code = PGSQL_ERROR_CODES::ERRCODE_INVALID_TEXT_REPRESENTATION);
 	bool handle_kill_success(int32_t pid, int tki, const char* digest_text, PgSQL_Connection* mc, PtrSize_t* pkt);
 	bool handle_literal_kill_query(PtrSize_t* pkt, PgSQL_Connection* mc);
+
+	friend class PgSQL_Session_PortalTeardownTest;  // test/tap/tests/unit/pgsql_named_portal_teardown_unit-t.cpp
 
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>

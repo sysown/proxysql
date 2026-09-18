@@ -256,6 +256,9 @@ public:
 		// Give the TLS back while we still hold the connection, fast forward flag or
 		// not: a COPY clears that flag before the connection is pooled.
 		release_backend_tls();
+		// The session's named portals lived on this connection; they died with it. Done
+		// before myconn is cleared, because the session matches them by that pointer.
+		if (sess) sess->backend_connection_detached(myconn);
 		myconn->myds = NULL;
 		myconn = NULL;
 	}

@@ -391,6 +391,7 @@ void PgSQL_Session::reset() {
 	// Drop any named portals + in-flight named Bind (Task P1): a session reset is
 	// well past the scope of any open portal.
 	clear_named_portals();
+	detached_portals.clear();
 	pending_named_bind.bind_msg.reset();
 	pending_named_bind.stmt_info.reset();
 	pending_named_bind.portal_name.clear();
@@ -6305,6 +6306,18 @@ __cleanup:
 			CurrentQuery.end();
 		}
 	}
+	// Portals parked by backend_connection_detached(): LogQuery() above has read the
+	// statement name out of the Bind bytes they own, so the bytes can go now. Every
+	// pointer aimed at them is dropped first -- CurrentQuery.end() above already does it
+	// on the normal path, but it is skipped for a fast-forward session and for one with no
+	// client stream, and freeing the bytes under a live pointer is the whole hazard here.
+	if (detached_portals.empty() == false) {
+		CurrentQuery.extended_query_info.bind_msg = nullptr;
+		CurrentQuery.extended_query_info.stmt_client_name = nullptr;
+		CurrentQuery.extended_query_info.stmt_client_portal_name = nullptr;
+		CurrentQuery.extended_query_info.stmt_info = nullptr;
+		detached_portals.clear();
+	}
 	//started_sending_data_to_client = false;
 	previous_hostgroup = current_hostgroup;
 }
@@ -8047,6 +8060,36 @@ void PgSQL_Session::clear_named_portals() {
 	named_portals.clear();
 }
 
+// A named portal only exists on the one backend connection that bound it, so when that
+// connection is severed -- returned to the pool, destroyed, or handed off to be reset --
+// the registry has to stop describing it. Left behind, a later Execute finds the entry,
+// skips the Bind and asks a different connection for a portal it never bound.
+// The entries are parked rather than freed: each owns the raw Bind packet that
+// CurrentQuery's stmt/portal name pointers point into, and the event logger reads those
+// in RequestEnd(), which on several teardown paths runs after the connection is gone.
+// detached_portals is emptied at the end of RequestEnd(), past that read.
+void PgSQL_Session::backend_connection_detached(const PgSQL_Connection* conn) {
+	if (named_portals.empty() || conn == NULL) return;
+	unsigned long moved = 0;
+	for (auto it = named_portals.begin(); it != named_portals.end(); ) {
+		auto next = it;
+		++next;
+		if (it->second.bound_conn == conn) {
+			// The whole node moves, key included. An in-flight Execute/Describe points
+			// stmt_client_portal_name at the map KEY itself, so erasing here and copying
+			// the name into the other map would free the bytes that pointer is aimed at.
+			detached_portals.erase(it->first);
+			detached_portals.insert(named_portals.extract(it));
+			moved++;
+		}
+		it = next;
+	}
+	if (moved) {
+		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session=%p client_myds=%p. Backend %p detached, discarding %lu named portal(s)\n",
+			this, client_myds, conn, moved);
+	}
+}
+
 // Commit the in-flight named Bind into the registry after a successful BindComplete.
 // Replaces any prior entry for the same portal name only now (on success), so a
 // backend-rejected Bind leaves the existing entry intact.
@@ -8057,6 +8100,9 @@ void PgSQL_Session::commit_pending_named_bind() {
 	entry.stmt_info = std::move(pending_named_bind.stmt_info);
 	entry.bound_on_backend = true;
 	entry.suspended = false;
+	// Remember which connection now holds the portal, so its teardown can take the
+	// entry down with it and leave any other connection's portals alone.
+	entry.bound_conn = (mybe && mybe->server_myds) ? mybe->server_myds->myconn : nullptr;
 	named_portals[pending_named_bind.portal_name] = std::move(entry);
 	pending_named_bind.portal_name.clear();
 	pending_named_bind.active = false;
