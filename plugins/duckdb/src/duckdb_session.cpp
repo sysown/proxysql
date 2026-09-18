@@ -892,7 +892,7 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		switch (hdr.type) {
 		case 'Q':
 			break;
-		case PG_PKT_STARTUP_V2:
+		case PG_PKT_STARTUP_UNSUPPORTED:
 		case PG_PKT_STARTUP:
 		case PG_PKT_CANCEL:
 		case PG_PKT_SSLREQ:

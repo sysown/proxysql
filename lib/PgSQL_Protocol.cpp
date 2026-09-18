@@ -500,6 +500,7 @@ bool PgSQL_Protocol::get_header(unsigned char* pkt, unsigned int pkt_len, pgsql_
 	uint16_t len16;
 	uint8_t type8;
 	uint32_t code;
+	uint32_t version = 0;
 	//const uint8_t* ptr;
 
 	unsigned int read_pos = 0;
@@ -586,15 +587,23 @@ bool PgSQL_Protocol::get_header(unsigned char* pkt, unsigned int pkt_len, pgsql_
 		else if (code == PG_PKT_GSSENCREQ) {
 			type = PG_PKT_GSSENCREQ;
 		}
-		else if ((code >> 16) == 3 && (code & 0xFFFF) < 2) {
+		else if ((code >> 16) == (PG_PROTOCOL_LATEST >> 16)) {
+			// Every minor version of the major we speak is accepted here, including ones we do
+			// not implement. The minor version is a negotiable number in this protocol, so
+			// refusing it at this point would close the socket on a client that only needs to be
+			// told which version we speak. process_startup_packet() answers it. Deriving the
+			// major from PG_PROTOCOL_LATEST keeps this gate and the version we advertise in
+			// agreement.
 			type = PG_PKT_STARTUP;
-		}
-		else if (code == PG_PKT_STARTUP_V2) {
-			type = PG_PKT_STARTUP_V2;
+			version = code;
 		}
 		else {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "unknown special pkt: len=%u code=%u\n", len, code);
-			return false;
+			// Every other code in this position is a protocol version, which is how PostgreSQL
+			// reads it too; version 2 lands here as well. Carrying it through instead of failing
+			// here lets the startup handler say which version was asked for.
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "unsupported startup pkt: len=%u code=%u\n", len, code);
+			type = PG_PKT_STARTUP_UNSUPPORTED;
+			version = code;
 		}
 		got = OLD_HEADER_LEN;
 	}
@@ -606,6 +615,7 @@ bool PgSQL_Protocol::get_header(unsigned char* pkt, unsigned int pkt_len, pgsql_
 	/* store pkt info */
 	hdr->type = type;
 	hdr->len = len;
+	hdr->version = version;
 
 	/* fill pkt with only data for this packet */
 	if (len > pkt_len - read_pos) {
@@ -683,6 +693,11 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 	ssl_request = false;
 	pgsql_hdr hdr{};
 	if (!get_header(pkt, len, &hdr)) {
+		// The caller closes the connection on false. Without a message the client sees nothing but
+		// a dropped socket and can only report a generic connection failure.
+		proxy_error("Malformed startup packet received from client %s:%d\n", (*myds)->addr.addr, (*myds)->addr.port);
+		generate_error_packet(true, false, "invalid startup packet",
+			PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 		return false;
 	}
 
@@ -695,6 +710,19 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		(*myds)->encrypted = have_ssl;
 		ssl_request = true;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. SSL_REQUEST:'%c'\n", (*myds)->sess, (*myds), have_ssl ? 'S' : 'N');
+		return true;
+	}
+
+	if (hdr.type == PG_PKT_GSSENCREQ) {
+		// We do not speak GSSAPI encryption. PostgreSQL answers 'N' and lets the client fall back
+		// to SSL or plaintext on the same connection; closing instead strands a client that only
+		// offered it. Reusing ssl_request here means "reply sent, wait for the real startup packet".
+		char* gss_supported = (char*)malloc(1);
+		*gss_supported = 'N';
+		(*myds)->PSarrayOUT->add((void*)gss_supported, 1);
+		(*myds)->sess->writeout();
+		ssl_request = true;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. GSSENC_REQUEST:'N'\n", (*myds)->sess, (*myds));
 		return true;
 	}
 
@@ -754,9 +782,13 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		return false;
 	}
 
-	//PG_PKT_STARTUP_V2 not supported
 	if (hdr.type != PG_PKT_STARTUP) {
-		proxy_error("Unsupported packet type '%u' received from client %s:%d\n", hdr.type, (*myds)->addr.addr, (*myds)->addr.port);
+		char errmsg[128];
+		snprintf(errmsg, sizeof(errmsg), "unsupported frontend protocol %u.%u: server supports %u.0 to %u.%u",
+			hdr.version >> 16, hdr.version & 0xFFFF,
+			PG_PROTOCOL_LATEST >> 16, PG_PROTOCOL_LATEST >> 16, PG_PROTOCOL_LATEST & 0xFFFF);
+		proxy_error("%s. Client %s:%d\n", errmsg, (*myds)->addr.addr, (*myds)->addr.port);
+		generate_error_packet(true, false, errmsg, PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, true);
 		return false;
 	}
 
@@ -774,6 +806,33 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		generate_error_packet(true, false, "no PostgreSQL user name specified in startup packet", 
 			PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION, true);
 		return false;
+	}
+
+	// A minor version we do not implement, and any protocol extension the client asked for, are
+	// answered with NegotiateProtocolVersion: we name the version we do speak and the client
+	// continues at it. Only the major version is fatal. This message has to be queued before the
+	// authentication request the caller generates next, which is the order PostgreSQL sends them in.
+	std::vector<std::string> unsupported_options;
+	auto& params = (*myds)->myconn->conn_params.connection_parameters;
+	for (auto it = params.begin(); it != params.end(); ) {
+		if (strncmp(it->first.c_str(), "_pq_.", 5) == 0) {
+			unsupported_options.push_back(it->first);
+			// Dropped as well as reported: a leftover _pq_. key is not a setting, and would
+			// otherwise be forwarded to the backend as one and rejected there.
+			it = params.erase(it);
+		} else {
+			++it;
+		}
+	}
+
+	if ((hdr.version & 0xFFFF) > (PG_PROTOCOL_LATEST & 0xFFFF) || unsupported_options.empty() == false) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. Negotiating protocol %u.%u down to %u.%u, %lu unsupported option(s)\n",
+			(*myds)->sess, (*myds), hdr.version >> 16, hdr.version & 0xFFFF,
+			PG_PROTOCOL_LATEST >> 16, PG_PROTOCOL_LATEST & 0xFFFF, unsupported_options.size());
+		PG_pkt pgpkt{};
+		pgpkt.write_NegotiateProtocolVersion(PG_PROTOCOL_LATEST, unsupported_options);
+		auto buff = pgpkt.detach();
+		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
 	}
 
 	(*myds)->DSS = STATE_SERVER_HANDSHAKE;
