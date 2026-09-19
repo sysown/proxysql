@@ -37,5 +37,5 @@ echo ">>> Log permissions cleanup"
 INFRA_LOGS_PATH="${WORKSPACE}/ci_infra_logs"
 if [ -d "${INFRA_LOGS_PATH}/${INFRA_ID}" ]; then
     chmod -R 777 "${INFRA_LOGS_PATH}/${INFRA_ID}" 2>/dev/null || \
-    docker_fs_exec "chmod -R 777 ." "${INFRA_LOGS_PATH}/${INFRA_ID}" >/dev/null 2>&1 || true
+    docker_fs_exec "find . ! -type s ! -type l -exec chmod 777 {} +" "${INFRA_LOGS_PATH}/${INFRA_ID}" >/dev/null 2>&1 || true
 fi
