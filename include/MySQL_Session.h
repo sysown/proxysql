@@ -204,6 +204,11 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set);
+#ifdef PROXYSQL40
+	// ABI-10 plugin route hook: lets a plugin override qpo->destination_hostgroup
+	// or reject the statement through qpo->error_msg. No-op without a hook.
+	void apply_plugin_route_hook();
+#endif /* PROXYSQL40 */
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
@@ -528,6 +533,10 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	//bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
 #endif // 0
+#ifdef PROXYSQL40
+	// Opaque per-session state of the ABI-10 plugin route hook (0 = none).
+	uint64_t plugin_route_cookie {0};
+#endif /* PROXYSQL40 */
 	int warning_in_hg;
 	int autocommit_on_hostgroup;
 	/**

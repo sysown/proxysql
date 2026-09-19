@@ -1,3 +1,4 @@
+#include "mysql_router_guideline_runtime.h"
 #include "mysql_router_admin.h"
 #include "mysql_router_bootstrap.h"
 #include "mysql_router_config.h"
@@ -97,6 +98,14 @@ bool init(ProxySQL_PluginServices* services) {
 		}
 		mark_initialization_failed(context, error.what());
 		return false;
+	}
+	// ABI-10 route hook: applies Routing Guidelines to client sessions (#6145).
+	if (services->register_mysql_route_hook == nullptr ||
+		!services->register_mysql_route_hook(&mysql_router_route_hook)) {
+		if (services->log_message != nullptr) {
+			services->log_message(2, "mysql_router: MySQL route hook is unavailable; "
+				"Routing Guidelines will not be applied to client sessions");
+		}
 	}
 	context.initialized.store(true);
 	{

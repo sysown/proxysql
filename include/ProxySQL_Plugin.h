@@ -74,7 +74,7 @@ namespace prometheus { class Registry; }
 // A plugin built without -DDEBUG, loaded into a core built with
 // -DDEBUG (or vice versa), silently disagrees with the core about these
 // offsets while still reporting a numerically "compatible" abi_version
-// under the plain ABI 1..9 scheme above (e.g. a release plugin's
+// under the plain ABI 1..10 scheme above (e.g. a release plugin's
 // abi_version=9 is <= a debug core's max=9, so the ordinary
 // forward-compatibility range check does not catch it).
 //
@@ -117,23 +117,23 @@ namespace prometheus { class Registry; }
 //
 // PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
 // (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
-// in a numeric space (bit 30) the plain layout-version numbers (1..9,
+// in a numeric space (bit 30) the plain layout-version numbers (1..10,
 // and unlikely to reach 2^30 for a long time) never touch, so a
 // DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
 // "compatible" via ordinary integer range comparison -- the loader
 // checks this bit for an EXACT match, as a step separate from (and in
-// addition to) the ABI 1..9 forward-compatibility range check below.
+// addition to) the ABI 1..10 forward-compatibility range check below.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
 
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 9u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 9u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 10u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 10u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 #else
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
 #endif
-// Layout-only ceiling used for the ABI 1..9 range check. Callers must mask
+// Layout-only ceiling used for the ABI 1..10 range check. Callers must mask
 // off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
 // against this constant -- see lib/ProxySQL_PluginManager.cpp.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
@@ -330,6 +330,65 @@ using proxysql_plugin_query_hook_cb =
 using proxysql_plugin_register_query_hook_cb =
 	bool (*)(ProxySQL_PluginProtocol, proxysql_plugin_query_hook_cb);
 
+// ABI-10 MySQL session route hook.
+//
+// Called by MySQL_Session for every COM_QUERY, COM_STMT_PREPARE and COM_STMT_EXECUTE after the
+// query processor has chosen a destination (i.e. after mysql_query_rules), when
+// a plugin registered the hook. It lets a plugin select the destination
+// hostgroup from session attributes (e.g. MySQL Router Routing Guidelines),
+// or reject the statement. The session cookie is reset to 0 on COM_CHANGE_USER
+// and COM_RESET_CONNECTION.
+//
+// All pointers in the payload are owned by core and valid only for the duration
+// of the callback. Strings are NUL-terminated and never NULL (possibly empty).
+struct ProxySQL_PluginConnectAttr {
+	const char *key;
+	const char *value;
+};
+
+struct ProxySQL_PluginRouteHookPayload {
+	const char *user;
+	const char *schema;
+	const char *client_ip;
+	int client_port;
+	// Listener the client connected to.
+	const char *proxy_ip;
+	int proxy_port;
+	const ProxySQL_PluginConnectAttr *connect_attrs;
+	size_t connect_attrs_count;
+	// Destination selected by the query processor, or the session default
+	// hostgroup when no rule set one.
+	int destination_hostgroup;
+	// Opaque per-session state owned by the plugin: 0 for a new session, then
+	// whatever the hook returned last for this session.
+	uint64_t session_cookie;
+};
+
+// unchanged: keep destination_hostgroup. set_hostgroup: route the statement to
+// `hostgroup`. deny: fail the statement with `message`.
+enum class ProxySQL_PluginRouteHookAction : uint8_t {
+	unchanged = 0,
+	set_hostgroup = 1,
+	deny = 2
+};
+
+// session_cookie is stored by core for the session regardless of the action.
+// NOTE: same std::string ABI coupling caveat as ProxySQL_PluginCommandResult.
+struct ProxySQL_PluginRouteHookResult {
+	ProxySQL_PluginRouteHookAction action;
+	int hostgroup;
+	uint64_t session_cookie;
+	std::string message;
+};
+
+using proxysql_plugin_route_hook_cb =
+	ProxySQL_PluginRouteHookResult (*)(const ProxySQL_PluginRouteHookPayload &);
+
+// register_mysql_route_hook(cb). Returns false if a hook is already registered
+// or cb is nullptr. Valid only during init().
+using proxysql_plugin_register_route_hook_cb =
+	bool (*)(proxysql_plugin_route_hook_cb);
+
 // Returns the prometheus::Registry* that core uses for its own metrics.
 // Plugins register their counters / gauges / histograms against this
 // shared registry using prometheus-cpp directly; their metrics then
@@ -475,6 +534,10 @@ struct ProxySQL_PluginServices {
 	// prefix and continue publishing through apply_mysql_config.
 	ProxySQL_PluginMysqlConfigResult (*apply_mysql_config_v2)(
 		const ProxySQL_PluginMysqlConfigPlanV2& plan);
+
+	// ABI-10 final tail: MySQL session route hook, see
+	// ProxySQL_PluginRouteHookPayload. Phase B gets a rejecting stub.
+	proxysql_plugin_register_route_hook_cb register_mysql_route_hook;
 #endif /* PROXYSQL40 */
 };
 

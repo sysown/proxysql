@@ -13,7 +13,10 @@ constexpr const char* kCapabilityColumns =
 	"SUM(TABLE_NAME='v2_gr_clusters' AND COLUMN_NAME='group_name') AS gr_clusters_group_name, "
 	"SUM(TABLE_NAME='v2_instances' AND COLUMN_NAME='mysql_server_uuid') AS instances_server_uuid, "
 	"SUM(TABLE_NAME='v2_instances' AND COLUMN_NAME='endpoint') AS instances_endpoint, "
-	"SUM(TABLE_NAME='v2_router_options' AND COLUMN_NAME='router_options') AS router_options "
+	"SUM(TABLE_NAME='v2_router_options' AND COLUMN_NAME='router_options') AS router_options, "
+	"SUM(TABLE_NAME='routing_guidelines' AND COLUMN_NAME='guideline') AS routing_guidelines, "
+	"SUM(TABLE_NAME='v2_routers' AND COLUMN_NAME='options') AS routers_options, "
+	"SUM(TABLE_NAME='router_stats') AS router_stats "
 	"FROM information_schema.columns WHERE TABLE_SCHEMA='mysql_innodb_cluster_metadata'";
 
 const std::string& required(const QueryRow& row, const char* column) {
@@ -53,8 +56,11 @@ MetadataCapabilities probe_metadata(IMetadataSession& session) {
 		parse_int(result.rows[0], "minor"),
 		parse_int(result.rows[0], "patch")
 	};
-	if (capabilities.version.major != 2 || capabilities.version.minor != 2) {
-		throw std::runtime_error("only MySQL InnoDB Cluster metadata 2.2 is supported");
+	// 2.3 adds routing_guidelines (#6145), 2.4 adds router_stats; the views read
+	// by the plugin are unchanged across 2.2-2.4.
+	if (capabilities.version.major != 2 || capabilities.version.minor < 2 ||
+		capabilities.version.minor > 4) {
+		throw std::runtime_error("only MySQL InnoDB Cluster metadata 2.2 to 2.4 is supported");
 	}
 	QueryResult columns = session.query(kCapabilityColumns, {});
 	if (columns.rows.size() != 1) {
@@ -65,6 +71,15 @@ MetadataCapabilities probe_metadata(IMetadataSession& session) {
 		require_capability(columns.rows[0], column);
 	}
 	capabilities.router_options_view = true;
+	auto optional_capability = [&](const char* column) {
+		auto it = columns.rows[0].find(column);
+		return it != columns.rows[0].end() && it->second && !it->second->empty() &&
+			parse_int(columns.rows[0], column) > 0;
+	};
+	capabilities.routing_guidelines = capabilities.version.minor >= 3 &&
+		optional_capability("routing_guidelines");
+	capabilities.router_stats = optional_capability("router_stats");
+	capabilities.routers_options = optional_capability("routers_options");
 	return capabilities;
 }
 

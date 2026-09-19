@@ -4,9 +4,18 @@ set -euo pipefail
 : "${INFRA_ID:?INFRA_ID must be set}"
 : "${WORKSPACE:?WORKSPACE must be set}"
 
+# Shared by mysql-router-ic-g1 and mysql-router-ic-rg-g1. Callers may set:
+#   MYSQL_ROUTER_IC_INFRA            infra name (default infra-mysql-router-ic)
+#   MYSQL_ROUTER_IC_FIXTURE_HOOK     executable run after the InnoDB Cluster
+#                                    fixture exists and before bootstrap
+#   MYSQL_ROUTER_BOOTSTRAP_OPTIONAL  1 = record a failed ProxySQL bootstrap in
+#                                    bootstrap-status.json and continue
+MYSQL_ROUTER_IC_INFRA=${MYSQL_ROUTER_IC_INFRA:-infra-mysql-router-ic}
+MYSQL_ROUTER_BOOTSTRAP_OPTIONAL=${MYSQL_ROUTER_BOOTSTRAP_OPTIONAL:-0}
+export MYSQL_ROUTER_IC_INFRA
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
-BACKEND_CONTAINER="infra-mysql-router-ic-${INFRA_ID}-dbdeployer1-1"
-BACKEND_HOST="dbdeployer1.infra-mysql-router-ic"
+BACKEND_CONTAINER="${MYSQL_ROUTER_IC_INFRA}-${INFRA_ID}-dbdeployer1-1"
+BACKEND_HOST="dbdeployer1.${MYSQL_ROUTER_IC_INFRA}"
 ROOT_PASSWORD=${ROOT_PASSWORD:-$(printf '%s' "${INFRA_ID}" | sha256sum | head -c 10)}
 RESULT_DIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/mysql-router"
 PROXY_DATA_DIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/proxysql"
@@ -56,6 +65,12 @@ grep '^MYSQL_ROUTER_FIXTURE=' "${SETUP_OUTPUT}" | tail -1 \
     | sed 's/^MYSQL_ROUTER_FIXTURE=//' > "${RESULT_DIR}/fixture.json"
 [[ -s "${RESULT_DIR}/fixture.json" ]]
 
+if [[ -n "${MYSQL_ROUTER_IC_FIXTURE_HOOK:-}" ]]; then
+    BACKEND_CONTAINER="${BACKEND_CONTAINER}" BACKEND_HOST="${BACKEND_HOST}" \
+        RESULT_DIR="${RESULT_DIR}" ROOT_PASSWORD="${ROOT_PASSWORD}" \
+        "${MYSQL_ROUTER_IC_FIXTURE_HOOK}"
+fi
+
 docker exec -i "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 <<SQL
 INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment)
 VALUES
@@ -90,11 +105,12 @@ docker run --rm \
     -v "${CONFIG}:/etc/proxysql.cnf:ro" \
     -v "${PROXY_DATA_DIR}:/var/lib/proxysql" \
     -v "${PASSFILE}:/run/secrets/bootstrap_password:ro" \
+    -e MYSQL_ROUTER_BOOTSTRAP_TARGET="root@${BACKEND_HOST}:3306" \
     proxysql-ci-base:latest /bin/bash -c '
         exec 9</run/secrets/bootstrap_password
         /usr/bin/proxysql --idle-threads -f -c /etc/proxysql.cnf -D /var/lib/proxysql \
             --plugin-dir=/usr/lib/proxysql/plugins --load-plugin=mysql_router \
-            --bootstrap root@dbdeployer1.infra-mysql-router-ic:3306 \
+            --bootstrap "${MYSQL_ROUTER_BOOTSTRAP_TARGET}" \
             --bootstrap-password-fd 9 --router-name proxysql-e2e \
             --ssl-mode=DISABLED &
         pid=$!
@@ -104,13 +120,18 @@ docker run --rm \
 BOOTSTRAP_RC=$?
 set -e
 rm -f "${PASSFILE}"
+printf '{"bootstrap_rc":%d}\n' "${BOOTSTRAP_RC}" > "${RESULT_DIR}/bootstrap-status.json"
+chmod 644 "${RESULT_DIR}/bootstrap-status.json"
 if [[ "${BOOTSTRAP_RC}" -ne 0 ]]; then
     if grep -Fq "${ROOT_PASSWORD}" "${BOOTSTRAP_LOG}" "${PROXY_DATA_DIR}/bootstrap.cmdline"; then
         echo "ERROR: bootstrap credential appeared in captured bootstrap output" >&2
         exit 1
     fi
     cat "${BOOTSTRAP_LOG}" >&2
-    exit "${BOOTSTRAP_RC}"
+    if [[ "${MYSQL_ROUTER_BOOTSTRAP_OPTIONAL}" != "1" ]]; then
+        exit "${BOOTSTRAP_RC}"
+    fi
+    echo "WARNING: ProxySQL Router bootstrap failed (rc=${BOOTSTRAP_RC}); continuing because MYSQL_ROUTER_BOOTSTRAP_OPTIONAL=1" >&2
 fi
 if grep -Fq "${ROOT_PASSWORD}" "${BOOTSTRAP_LOG}" "${PROXY_DATA_DIR}/bootstrap.cmdline"; then
     echo "ERROR: bootstrap credential leaked to output or process arguments" >&2
@@ -129,6 +150,11 @@ for attempt in $(seq 1 60); do
     fi
     sleep 1
 done
+
+if [[ "${BOOTSTRAP_RC}" -ne 0 ]]; then
+    SETUP_COMPLETE=1
+    exit 0
+fi
 
 for port in 6446 6447 6450; do
     for attempt in $(seq 1 60); do

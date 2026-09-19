@@ -652,6 +652,8 @@ UNIT_TESTS += \
 	mysql_router_config_compiler_unit-t \
 	mysql_router_user_sync_unit-t \
 	mysql_router_reconciler_unit-t \
+	mysql_router_guideline_runtime_unit-t \
+	mysql_router_routing_guidelines_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_duckdb_plugin_load-t \
 	duckdb_config_unit-t \
@@ -837,7 +839,13 @@ mysql_router_registration_unit-t: mysql_router_registration_unit-t.cpp \
 		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
 
-mysql_router_bootstrap_unit-t: mysql_router_bootstrap_unit-t.cpp \
+MYSQL_ROUTER_ROUTING_GUIDELINES_SRCS := \
+	$(PROXYSQL_PATH)/plugins/mysql_router/src/routing_guidelines.cpp \
+	$(PROXYSQL_PATH)/plugins/mysql_router/src/routing_guidelines_expr.cpp
+MYSQL_ROUTER_GUIDELINE_SRCS := $(PROXYSQL_PATH)/plugins/mysql_router/src/guideline_runtime.cpp \
+	$(MYSQL_ROUTER_ROUTING_GUIDELINES_SRCS)
+
+mysql_router_bootstrap_unit-t: mysql_router_bootstrap_unit-t.cpp $(MYSQL_ROUTER_GUIDELINE_SRCS) \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/config_compiler.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/gr_health.cpp \
@@ -845,7 +853,7 @@ mysql_router_bootstrap_unit-t: mysql_router_bootstrap_unit-t.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/user_sync.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/router_registration.cpp \
 		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap.cpp \
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap.cpp $(MYSQL_ROUTER_GUIDELINE_SRCS) \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/config_compiler.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/gr_health.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/hostgroup_allocator.cpp \
@@ -878,12 +886,28 @@ mysql_router_user_sync_unit-t: mysql_router_user_sync_unit-t.cpp \
 		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lcrypto -lpthread -o $@
 
+mysql_router_guideline_runtime_unit-t: mysql_router_guideline_runtime_unit-t.cpp $(MYSQL_ROUTER_GUIDELINE_SRCS) \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/config_compiler.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(MYSQL_ROUTER_GUIDELINE_SRCS) $(PROXYSQL_PATH)/plugins/mysql_router/src/config_compiler.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o -DPROXYSQL40 \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
+
 mysql_router_reconciler_unit-t: mysql_router_reconciler_unit-t.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/reconciler.cpp \
 		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/reconciler.cpp \
 		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
+
+mysql_router_routing_guidelines_unit-t: mysql_router_routing_guidelines_unit-t.cpp \
+		$(MYSQL_ROUTER_ROUTING_GUIDELINES_SRCS) \
+		$(PROXYSQL_PATH)/plugins/mysql_router/include/mysql_router_routing_guidelines.h \
+		$(PROXYSQL_PATH)/plugins/mysql_router/include/mysql_router_routing_guidelines_detail.h \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(MYSQL_ROUTER_ROUTING_GUIDELINES_SRCS) \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -Wall -Wextra -lpthread -o $@
 
 test_mysqlx_plugin_load-t: ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysqlx_plugin_build $(STAGED_LIBPROXYSQLSO)
 	$(CXX) ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
