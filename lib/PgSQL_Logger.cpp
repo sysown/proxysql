@@ -1013,6 +1013,9 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	}
 	cl=strlen(ca);
 	PGSQL_LOG_EVENT_TYPE let = PGSQL_LOG_EVENT_TYPE::SIMPLE_QUERY; // default
+	// Named-portal Close (PROCESSING_STMT_CLOSE) has no query text; when true the query
+	// branch below logs an empty query instead of a stale CurrentQuery.QueryPointer.
+	bool c_stmt_close_no_query = false;
 	switch (sess->status) {
 		case PROCESSING_STMT_EXECUTE:
 			let = PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE;
@@ -1022,6 +1025,24 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 			break;
 		case PROCESSING_STMT_DESCRIBE:
 			let = PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE;
+			break;
+		case PROCESSING_STMT_BIND:
+			// Named-portal Bind took the backend round-trip path (Task P1/P2). There is
+			// no dedicated BIND eventslog type; classify it as STMT_EXECUTE so the digest
+			// and query text are sourced from the RESOLVED global statement
+			// (extended_query_info.stmt_info, always valid for a Bind) exactly like
+			// DESCRIBE/EXECUTE — NOT from the stale CurrentQuery.QueryPointer left over
+			// on the statement-reuse path (a Bind carries no query text of its own; the
+			// old SIMPLE_QUERY default read that stale/garbage pointer, a UAF risk).
+			let = PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE;
+			break;
+		case PROCESSING_STMT_CLOSE:
+			// Named-portal Close round-trip (Task P2): a Close carries no query text and
+			// its extended_query_info.stmt_info may be null in some paths — keep the
+			// SIMPLE_QUERY default but log an empty query (guarded below) rather than a
+			// stale QueryPointer. Do NOT classify as STMT_EXECUTE (that path dereferences
+			// stmt_info unconditionally).
+			c_stmt_close_no_query = true;
 			break;
 		case WAITING_CLIENT_DATA:
 		case PROCESSING_EXTENDED_QUERY_SYNC:
@@ -1071,8 +1092,8 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 			break;
 		case PGSQL_LOG_EVENT_TYPE::STMT_PREPARE:
 		default:
-			c = (char *)sess->CurrentQuery.QueryPointer;
-			ql = sess->CurrentQuery.QueryLength;
+			c = c_stmt_close_no_query ? NULL : (char *)sess->CurrentQuery.QueryPointer;
+			ql = c_stmt_close_no_query ? 0 : sess->CurrentQuery.QueryLength;
 			// NOTE: This needs to be located in the 'default' case because otherwise will miss state
 			// 'WAITING_CLIENT_DATA'. This state is possible when the prepared statement is found in the
 			// global cache and due to that we immediately reply to the client and session doesn't reach

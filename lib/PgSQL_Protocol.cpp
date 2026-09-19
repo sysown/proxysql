@@ -9,6 +9,7 @@
 #include "PgSQL_Authentication.h"
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Protocol.h"
+#include "PgSQL_PreparedStatement.h"
 extern "C" {
 #include "usual/time.h"
 }
@@ -1909,6 +1910,42 @@ bool PgSQL_Protocol::generate_no_data_packet(bool send, PtrSize_t* _ptr) {
 	return true;
 }
 
+bool PgSQL_Protocol::generate_describe_from_cache(bool send, bool ready, char trx_state,
+	const PgSQL_Describe_Cache* cache, PtrSize_t* _ptr) {
+	// to avoid memory leak
+	assert(send == true || _ptr);
+	assert(cache);
+
+	// Re-frame each stored raw body as a full wire message: type + be32(len+4) +
+	// payload. write_generic('t'/'T', "b", body, len) writes exactly that (finish_packet
+	// fills the be32 length = body_len + 4). This reproduces, byte-for-byte, the
+	// statement-level Describe response a backend round-trip would deliver:
+	//   ParameterDescription 't', then RowDescription 'T' (or NoData 'n'),
+	//   then — when `ready` — ReadyForQuery 'Z'.
+	PG_pkt pgpkt(64);
+	pgpkt.set_multi_pkt_mode(true);
+	pgpkt.write_generic('t', "b", (const uint8_t*)cache->param_desc_payload.data(),
+		(int)cache->param_desc_payload.size());
+	if (cache->no_data) {
+		pgpkt.write_generic('n', "");
+	} else {
+		pgpkt.write_generic('T', "b", (const uint8_t*)cache->row_desc_payload.data(),
+			(int)cache->row_desc_payload.size());
+	}
+	if (ready == true) {
+		pgpkt.write_generic('Z', "c", trx_state);
+	}
+
+	auto buff = pgpkt.detach();
+	if (send == true) {
+		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
+	} else {
+		_ptr->ptr = buff.first;
+		_ptr->size = buff.second;
+	}
+	return true;
+}
+
 bool PgSQL_Protocol::generate_parse_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
@@ -2538,8 +2575,8 @@ unsigned int PgSQL_Protocol::copy_parse_completion_to_PgSQL_Query_Result(bool se
 	return size;
 }
 
-unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, 
-	const PGresult* result, uint8_t stmt_type) {
+unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result,
+	const PGresult* result, uint8_t stmt_type, const PgSQL_STMT_Global_info* stmt_info_for_cache) {
 	assert(pg_query_result);
 	assert(result);
 
@@ -2630,9 +2667,34 @@ unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool
 		pgpkt.put_uint32(4); // size of the packet, including the type byte
 	}
 
+	// --- Statement-level Describe metadata capture (set-once) ------------------
+	// For a statement-level Describe ('S'), copy the just-built ParameterDescription
+	// and RowDescription/NoData bodies into a cache candidate and publish it on the
+	// global statement (first writer wins; losers are freed by publish). The bodies
+	// are sliced verbatim from the buffer we just wrote, so what a later cache hit
+	// serves is byte-identical to what this round-trip delivers to the client.
+	// Portal Describes ('P') are never cached (they depend on bound result formats).
+	// Guarded on get_describe_cache() to avoid pointless allocations once populated.
+	if (stmt_type == 'S' && stmt_info_for_cache != nullptr &&
+		stmt_info_for_cache->get_describe_cache() == nullptr) {
+		auto* cand = new PgSQL_Describe_Cache();
+		// 't' packet occupies [0, param_desc_size); its body starts after the 1-byte
+		// type + 4-byte length header.
+		cand->param_desc_payload.assign((const char*)(_ptr + 5), param_desc_size - 5);
+		if (column_count > 0) {
+			// 'T' packet follows at offset param_desc_size; body starts 5 bytes in.
+			cand->row_desc_payload.assign((const char*)(_ptr + param_desc_size + 5),
+				total_size - param_desc_size - 5);
+			cand->no_data = false;
+		} else {
+			cand->no_data = true;
+		}
+		stmt_info_for_cache->publish_describe_cache(cand);
+	}
+
 	if (send == true) {
 		// not supported
-		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size);
 	}
 	pg_query_result->resultset_size += total_size;
 	if (alloced_new_buffer) {
@@ -2782,6 +2844,172 @@ unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_st
 	return bytes;
 }
 
+unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len) {
+	// Reconstruct the raw client-wire message: type(1) + be32 length(4) + payload.
+	// The length field is (payload_len + 4) per the PostgreSQL wire protocol (it
+	// counts itself but not the type byte).
+	const unsigned int size = 1 + 4 + payload_len;
+	const uint32_t wire_len = (uint32_t)(payload_len + 4);
+
+	bool alloced_new_buffer = false;
+	unsigned char* _ptr = buffer_reserve_space(size);
+	if (_ptr == NULL) {
+		// buffer too small for this message (already flushed to PSarrayOUT inside
+		// buffer_reserve_space); allocate a standalone packet, same as the libpq
+		// copy_* helpers do.
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
+	}
+
+	// Write header (type + big-endian length) then the payload bytes verbatim.
+	_ptr[0] = (unsigned char)type;
+	_ptr[1] = (unsigned char)((wire_len >> 24) & 0xff);
+	_ptr[2] = (unsigned char)((wire_len >> 16) & 0xff);
+	_ptr[3] = (unsigned char)((wire_len >> 8) & 0xff);
+	_ptr[4] = (unsigned char)(wire_len & 0xff);
+	if (payload_len) {
+		memcpy(_ptr + 5, payload, payload_len);
+	}
+
+	resultset_size += size;
+	if (alloced_new_buffer) {
+		PSarrayOUT.add(_ptr, size);
+	}
+	pkt_count++;
+
+	// Per-message-type side effects / flags. These mirror what the libpq add_*
+	// helpers set, but derive everything from the raw payload instead of a PGresult.
+	switch (type) {
+	case '1': // ParseComplete: bare ack, no payload. See PGSQL_QUERY_RESULT_ACK.
+	case '2': // BindComplete: bare ack, no payload. Only reaches here (i.e. is not
+	          // suppressed) for a named-portal Bind (native BIND step), whose real
+	          // BindComplete is forwarded to the client rather than synthesized. For
+	          // every other step the drain suppresses '2' before this call. Marking it
+	          // ACK keeps a Flush-terminated named Bind's sole message a non-empty
+	          // result so PgSQL_Result_to_PgSQL_wire streams it (mirrors '1'/'n'/'s').
+	case '3': // CloseComplete: bare ack, no payload. Only reaches here for a named-
+	          // portal Close (native CLOSE_P step), whose real CloseComplete is forwarded
+	          // to the client rather than synthesized (unnamed Close is synthesized in the
+	          // session and never reaches the backend). Marking it ACK keeps a Flush-
+	          // terminated named Close's sole message a non-empty result so
+	          // PgSQL_Result_to_PgSQL_wire streams it (mirrors '1'/'2'/'n'/'s'). Task P2.
+	case 'n': // NoData (Describe response when the statement returns no rows/columns)
+	case 's': // PortalSuspended (Execute response when max_rows cut the result short)
+		result_packet_type |= PGSQL_QUERY_RESULT_ACK;
+		break;
+	case 'T': // RowDescription
+		result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+		if (payload_len >= 2) {
+			num_fields = ((unsigned int)payload[0] << 8) | (unsigned int)payload[1];
+		}
+		break;
+	case 'D': // DataRow
+		result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+		num_rows++;
+		break;
+	case 'C': { // CommandComplete: payload is a NUL-terminated command tag.
+		// Only extract affected rows for a pure command (no tuple data). This
+		// mirrors the libpq path, which calls add_command_completion(result, false)
+		// — i.e. extract_affected_rows=false — for row-returning results (SELECT,
+		// or any query that already emitted RowDescription/DataRow). For those, the
+		// trailing number in "SELECT <rows>" is a returned-row count, not affected
+		// rows, so we leave affected_rows at its sentinel (-1).
+		const bool had_tuple = (result_packet_type & PGSQL_QUERY_RESULT_TUPLE) != 0;
+		result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
+		// Parse the trailing integer of the tag for affected rows. For INSERT the
+		// tag is "INSERT <oid> <rows>" (rows is the 2nd/last number); for UPDATE/
+		// DELETE/MOVE/FETCH/COPY it is "<verb> <rows>" (rows is the last number).
+		if (!had_tuple && payload_len > 0) {
+			// Find tag length up to the NUL terminator (defensive: bound by payload_len).
+			uint32_t taglen = 0;
+			while (taglen < payload_len && payload[taglen] != '\0') taglen++;
+			if (taglen > 0) {
+				// Scan back over the trailing run of digits.
+				uint32_t end = taglen;
+				uint32_t start = end;
+				while (start > 0 && payload[start - 1] >= '0' && payload[start - 1] <= '9') start--;
+				if (start < end) {
+					// We have a trailing number; this is the affected-rows count.
+					affected_rows = strtoull((const char*)(payload + start), NULL, 10);
+				}
+			}
+		}
+		break;
+	}
+	case 'I': // EmptyQueryResponse
+		result_packet_type |= PGSQL_QUERY_RESULT_EMPTY;
+		break;
+	case 'E': // ErrorResponse
+		result_packet_type |= PGSQL_QUERY_RESULT_ERROR;
+		if (conn) {
+			conn->native_fill_error_from_E(payload, payload_len);
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql,
+				conn->parent->myhgc->hid, conn->parent->address, conn->parent->port, 1907);
+		}
+		break;
+	case 'N': // NoticeResponse
+		result_packet_type |= PGSQL_QUERY_RESULT_NOTICE;
+		break;
+	case 'S': { // ParameterStatus: two C-strings (name\0value\0). Track it.
+		if (conn && payload_len > 0) {
+			uint32_t i = 0;
+			const unsigned char* name = payload;
+			while (i < payload_len && payload[i] != '\0') i++;
+			if (i < payload_len) {
+				std::string pname((const char*)name, (size_t)i);
+				i++; // skip NUL
+				const unsigned char* value = payload + i;
+				uint32_t vstart = i;
+				while (i < payload_len && payload[i] != '\0') i++;
+				std::string pvalue((const char*)value, (size_t)(i - vstart));
+				conn->native_params[pname] = pvalue;
+			}
+		}
+		break;
+	}
+	case 'H': // CopyOutResponse: bytes forwarded verbatim (stream-through)
+		result_packet_type |= PGSQL_QUERY_RESULT_COPY_OUT;
+		break;
+	case 'd': // CopyData: count as a row for stats parity with the libpq path (add_copy_out_row also increments num_rows)
+		num_rows++;
+		break;
+	case 'c': // CopyDone: no side effect; CommandComplete follows
+		break;
+	case 'Z': // ReadyForQuery: final message; records txn status and finalizes buffer.
+		if (conn && payload_len >= 1) {
+			conn->native_txn_status = (char)payload[0];
+		}
+		result_packet_type |= PGSQL_QUERY_RESULT_READY;
+		// Mirror add_ready_status(): flush the in-line buffer into PSarrayOUT so the
+		// completed result is wholly in PSarrayOUT (get_resultset asserts buffer_used==0).
+		buffer_to_PSarrayOut();
+		// NOTE: the session's PgSQL_ExplicitTxnStateMgr (BEGIN/COMMIT/ROLLBACK/
+		// SAVEPOINT state) is fed EXACTLY ONCE per query by PgSQL_Session::handler()'s
+		// post-RunQuery epilogue (the shared PROCESSING_QUERY / PROCESSING_STMT_EXECUTE
+		// rc0 case calls handle_transaction_state()) — for BOTH the libpq and the native
+		// path, since native result completion returns through that same handler switch.
+		// A call was previously made HERE too (commit e9428cbda, when native completion
+		// bypassed the shared handler epilogue). After the native extended-query
+		// stmt-pipeline refactor routed native completion back through handler(), this
+		// call became a SECOND invocation: the first correctly registered/cleared the
+		// txn, the second re-ran start_transaction()/commit() on the now-updated state
+		// and tripped its "already/no transaction in progress" warning branch — once per
+		// transaction, for simple AND extended-protocol BEGIN/COMMIT alike (the
+		// extended case surfaced as pgbench -M prepared's per-COMMIT warning storm).
+		// Do NOT call handle_transaction_state() here; handler() owns it.
+		break;
+	default:
+		// 'A' NotificationResponse and any other unrecognized message type are
+		// streamed through verbatim with no extra side effects. 'G'/'W'
+		// (CopyInResponse/CopyBothResponse) never reach this function — they are
+		// intercepted and answered with CopyFail by native_fetch_result_cont()'s
+		// safety net before add_native_backend_message() is called.
+		break;
+	}
+
+	return size;
+}
+
 bool PgSQL_Query_Result::get_resultset(PtrSizeArray* PSarrayFinal) {
 	transfer_started = true;
 	// Ready packet confirms that the result is complete
@@ -2857,8 +3085,10 @@ unsigned int PgSQL_Query_Result::add_parse_completion() {
 	return bytes;
 }
 
-unsigned int PgSQL_Query_Result::add_describe_completion(const PGresult* result, uint8_t stmt_type) {
-	const unsigned int bytes = proto->copy_describe_completion_to_PgSQL_Query_Result(false, this, result, stmt_type);
+unsigned int PgSQL_Query_Result::add_describe_completion(const PGresult* result, uint8_t stmt_type,
+	const PgSQL_STMT_Global_info* stmt_info_for_cache) {
+	const unsigned int bytes = proto->copy_describe_completion_to_PgSQL_Query_Result(false, this, result, stmt_type,
+		stmt_info_for_cache);
 	result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
 	return bytes;
 }
