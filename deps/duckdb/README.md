@@ -2,10 +2,10 @@
 
 DuckDB source is vendored under this directory and built from source as a
 static library (`libduckdb_static.a`) for the `PROXYSQL40` plugin-chassis
-tier. It is the first dependency in this repository to combine a Git LFS
-source archive, a committed SHA-256 sidecar, and a `verify-source.bash`
-preflight. The verifier fails fast and legibly if the archive is an unfetched
-LFS pointer or has been corrupted or tampered with.
+tier. The release archive is committed directly to git (like every other
+dependency under `deps/`), alongside a committed SHA-256 sidecar and a
+`verify-source.bash` preflight. The verifier fails fast and legibly if the
+archive is missing, corrupted, or tampered with.
 
 ## Pinned version
 
@@ -21,41 +21,13 @@ v1.4.5 was chosen (over the latest v1.5.5) because it is DuckDB's LTS line
 and targets an older toolchain floor, matching the AlmaLinux 8 floor in this
 project's package build matrix (`.github/workflows/CI-package-*almalinux8*.yml`).
 
-## The archive is stored via git LFS
+## The archive is vendored directly in git
 
-`deps/duckdb/duckdb-1.4.5.tar.gz` is tracked by git LFS (see the
-`.gitattributes` entry: `deps/duckdb/duckdb-1.4.5.tar.gz filter=lfs diff=lfs
-merge=lfs -text`). A plain `git clone`/`git checkout` without LFS support
-leaves an LFS *pointer* file (a few dozen bytes of text) in place of the
-98 MB archive. `deps/duckdb/verify-source.bash` detects this case
-specifically (by checking the first line for the `version
-https://git-lfs.github.com/spec/v1` marker) and prints fetch instructions
-instead of failing with a confusing "not a gzip file" / `tar` error.
-
-To fetch it locally:
-
-```bash
-git lfs install
-git lfs pull --include "deps/duckdb/duckdb-1.4.5.tar.gz"
-```
-
-In CI, the `actions/checkout` step of any workflow that references
-`PROXYSQL40` **must** set `lfs: true`, e.g.:
-
-```yaml
-- name: Checkout repository
-  uses: actions/checkout@...
-  with:
-    lfs: true
-    repository: ${{ github.repository }}
-    ref: ${{ github.sha }}
-```
-
-Without it, `actions/checkout` fetches the pointer file, not the archive,
-and the `duckdb` deps target fails at the `verify-source.bash` step with the
-git-lfs error above. All existing `.github/workflows/*.yml` files that
-reference `PROXYSQL40` have `lfs: true` on every `actions/checkout` step as
-of this vendoring; **any new `PROXYSQL40` workflow must add it too.**
+`deps/duckdb/duckdb-1.4.5.tar.gz` is a regular git blob — no Git LFS, no
+extra fetch step. A plain `git clone` contains the full 98 MB archive, so
+`deps/duckdb/verify-source.bash` only has to guard against corruption or
+tampering (SHA-256 + archive-root checks), and no workflow needs any
+LFS-related `actions/checkout` setting.
 
 ## Building
 
@@ -98,35 +70,30 @@ of its on-demand build rule.
    - `archive` default path -> `duckdb-<new-version>.tar.gz`
    - `required_root` -> the root printed by `tar -tzf ... | head -1` (usually
      `duckdb-<new-version>`, but verify — do not assume)
-   - `lfs_path` -> `deps/duckdb/duckdb-<new-version>.tar.gz`
 3. If the archive root pattern changed (unlikely — it has always been
    `duckdb-<version>/`), update the `tar -zxf duckdb-*.tar.gz && mv
    duckdb-*/ duckdb` glob in `deps/Makefile`'s `duckdb` recipe accordingly.
-4. Update `.gitattributes` to reference the new archive filename, and
-   `git add` the new archive so it goes through the LFS filter (see the
-   "Put the archive under LFS" step below).
-5. Remove the old archive and checksum file (`git rm
+4. Commit the new archive and checksum file directly (`git add
+   deps/duckdb/duckdb-<new-version>.tar.gz
+   deps/duckdb/duckdb-<new-version>.tar.gz.sha256`) — no Git LFS.
+   Remove the old archive and checksum file (`git rm
    deps/duckdb/duckdb-<old-version>.tar.gz
-   deps/duckdb/duckdb-<old-version>.tar.gz.sha256`), and remove the old
-   `.gitattributes` line.
-6. Put the new archive under LFS:
-   ```bash
-   git lfs install
-   git add .gitattributes
-   git add deps/duckdb/duckdb-<new-version>.tar.gz
-   git lfs ls-files | grep duckdb   # must list the new archive
-   ```
-7. Re-run the verifier test:
+   deps/duckdb/duckdb-<old-version>.tar.gz.sha256`).
+   Note: GitHub blocks individual files over 100 MB in regular git; if a
+   future DuckDB archive exceeds that, the vendoring strategy must be
+   revisited (e.g. download-on-demand at build time) instead of LFS —
+   LFS bandwidth is metered and was the reason LFS was removed.
+5. Re-run the verifier test:
    ```bash
    bash test/infra/control/test-vendored-duckdb-source.bash
    ```
-8. Rebuild and re-check the result-API shape (see below) in case it changed:
+6. Rebuild and re-check the result-API shape (see below) in case it changed:
    ```bash
    make -C deps PROXYSQL40=1 duckdb
    grep -c "duckdb_value_varchar\|duckdb_row_count\|duckdb_value_is_null" \
      deps/duckdb/duckdb/src/include/duckdb.h
    ```
-9. Update this README's "Pinned version" and "Result-API shape" sections.
+7. Update this README's "Pinned version" and "Result-API shape" sections.
 
 ## Build cost
 
