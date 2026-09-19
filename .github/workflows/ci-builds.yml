@@ -199,28 +199,8 @@ jobs:
           exit 1
         fi
 
-    # Vendored dependencies are hydrated after checkout, before the Docker
-    # build container starts. Keep this guard on the self-hosted pool:
-    # GitHub-hosted images already provide git-lfs, while ci-vm-1 does not.
-    - name: Install Git LFS when absent (self-hosted)
-      if: ${{ inputs.trusted && runner.environment == 'self-hosted' }}
-      run: |
-        set -euo pipefail
-        if command -v git-lfs >/dev/null 2>&1; then
-          git-lfs --version
-          exit 0
-        fi
-        sudo -n apt-get update
-        sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install --yes git-lfs
-        git-lfs --version
-
     - name: Checkout repository
       if: ${{ success() }}
-      env:
-        # The self-hosted workspaces are persistent. Hydrating after the
-        # target commit is checked out avoids git-lfs scanning the previous
-        # checkout while actions/checkout is still changing refs.
-        GIT_LFS_SKIP_SMUDGE: "1"
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
@@ -228,51 +208,17 @@ jobs:
         fetch-depth: 0
         path: 'proxysql'
 
-    # Checkout above sets GIT_LFS_SKIP_SMUDGE (see the comment on that step),
-    # so every LFS-tracked file -- vendored source tarballs -- currently sits
-    # in the "proxysql" checkout as a pointer stub. Hydrate them here, driven
-    # entirely by what the checked-out branch's .gitattributes declares.
-    #
-    # This is deliberately generic rather than a per-archive step, because
-    # this file is shared by ALL branches (every CI-*.yml caller on every
-    # branch pins `ci-builds.yml@GH-Actions`): a hardcoded archive name/
-    # version can only ever be correct for one branch at a time, and a
-    # version bump would require an atomic-impossible cross-branch edit
-    # (workflow here, archive on the target branch). The concrete proof this
-    # already bit us: this step used to hardcode
-    # "deps/libssl/openssl-3.5.7.tar.gz", a path that does not exist on v3.0
-    # at all -- so it silently hydrated nothing on every v3.0 build, saved
-    # only by its own `-f` guard. PR #6133 then added a second vendored
-    # archive (deps/duckdb/duckdb-1.4.5.tar.gz) and hit the same wall: no
-    # amount of hardcoding one archive name generalizes to two, let alone to
-    # whatever the next branch vendors.
-    #
-    # `git lfs pull` with no --include fetches every LFS object the checked-
-    # out branch's .gitattributes tracks -- so a version bump, or a brand
-    # new vendored dep, needs no change here at all. The tradeoff: it also
-    # fetches LFS objects a given build tier won't use (e.g. DuckDB's 98MB
-    # on a build that never touches PROXYSQL40). That's accepted deliberately
-    # for correctness and zero per-dep maintenance; if LFS bandwidth becomes
-    # a real problem, this is the place to add filtering back -- but note
-    # any such filter reintroduces per-dep knowledge here and its own
-    # staleness risk (exactly the bug being fixed now).
-    #
-    # Each vendored dep may ship its own verify-source.bash (today only
-    # deps/libssl/ has one); run whichever exist. The glob is guarded so a
-    # branch with no verifier scripts (or no LFS files at all) still
-    # succeeds. `git lfs pull` itself fails when the branch has no LFS
-    # attributes, so enumerate tracked paths first; enable nullglob so a
-    # missing verifier expands to no loop iterations rather than a literal
-    # non-executable pattern that would fail under `set -e`.
-    - name: Hydrate vendored source archives
+    # Vendored dependency archives are committed directly to git (no Git LFS),
+    # so a plain checkout already contains the real archives. Just run each
+    # dep's verifier before the Docker build container starts. The glob is
+    # guarded so a branch with no verifier scripts still succeeds; enable
+    # nullglob so a missing verifier expands to no loop iterations rather
+    # than a literal non-executable pattern that would fail under `set -e`.
+    - name: Verify vendored source archives
       if: ${{ inputs.trusted && success() }}
       working-directory: proxysql
       run: |
         set -euo pipefail
-        lfs_files="$(git lfs ls-files --name-only)"
-        if [ -n "${lfs_files}" ]; then
-          git lfs pull --include="" --exclude=""
-        fi
         shopt -s nullglob
         for v in deps/*/verify-source.bash; do
           "$v"
