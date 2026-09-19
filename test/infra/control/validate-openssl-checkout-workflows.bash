@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
-workflow_dir=${OPENSSL_LFS_WORKFLOW_DIR:-${repo_root}/.github/workflows}
+workflow_dir=${OPENSSL_WORKFLOW_DIR:-${repo_root}/.github/workflows}
 
 errors=0
 checked_build_jobs=0
@@ -80,7 +80,7 @@ checkout_steps_have_required_settings() {
 		function finish_step() {
 			if (is_checkout) {
 				checkout_count++
-				if (!has_lfs) missing_lfs++
+				if (has_lfs) has_forbidden_lfs++
 				if (!has_no_persisted_credentials) missing_no_persisted_credentials++
 			}
 		}
@@ -112,17 +112,17 @@ checkout_steps_have_required_settings() {
 				is_checkout = 1
 				next
 			}
-			if (in_with && indent == with_indent + 2 && line ~ /^lfs:[[:space:]]*true[[:space:]]*$/) has_lfs = 1
+			if (in_with && indent == with_indent + 2 && line ~ /^lfs:/) has_lfs = 1
 			if (in_with && indent == with_indent + 2 && line ~ /^persist-credentials:[[:space:]]*false[[:space:]]*$/) has_no_persisted_credentials = 1
 		}
 		END {
 			finish_step()
-			exit(checkout_count > 0 && missing_lfs == 0 && missing_no_persisted_credentials == 0 ? 0 : 1)
+			exit(checkout_count > 0 && has_forbidden_lfs == 0 && missing_no_persisted_credentials == 0 ? 0 : 1)
 		}
 	' <<< "${body}"
 }
 
-validate_lfs_job() {
+validate_build_job() {
 	local workflow=$1
 	local job=$2
 	local relative_workflow=${workflow#"${repo_root}/"}
@@ -136,7 +136,7 @@ validate_lfs_job() {
 	checked_jobs["${workflow}:${job}"]=1
 	((checked_build_jobs += 1))
 	if ! checkout_steps_have_required_settings "${body}"; then
-		report_error "${relative_workflow}: job '${job}' must set lfs: true and persist-credentials: false on every checkout"
+		report_error "${relative_workflow}: job '${job}' must set persist-credentials: false on every checkout and must not use LFS (no lfs: key)"
 	fi
 }
 
@@ -151,8 +151,8 @@ validate_no_lfs_job() {
 		return
 	fi
 
-	if rg -q '^[[:space:]]+lfs:[[:space:]]*true[[:space:]]*$' <<< "${body}"; then
-		report_error "${relative_workflow}: non-build job '${job}' must not hydrate LFS"
+	if rg -q '^[[:space:]]+lfs:' <<< "${body}"; then
+		report_error "${relative_workflow}: non-build job '${job}' must not use LFS (no lfs: key)"
 	fi
 }
 
@@ -172,17 +172,17 @@ amd64_package_workflows=("${workflow_dir}"/CI-package-amd64-*.yml)
 arm64_package_workflows=("${workflow_dir}"/CI-package-arm64-*.yml)
 macos_workflows=("${workflow_dir}"/CI-build-macos-*.yml)
 
-validate_workflow_count 'amd64 package' 127 "${amd64_package_workflows[@]}"
-validate_workflow_count 'arm64 package' 43 "${arm64_package_workflows[@]}"
+validate_workflow_count 'amd64 package' 118 "${amd64_package_workflows[@]}"
+validate_workflow_count 'arm64 package' 40 "${arm64_package_workflows[@]}"
 validate_workflow_count 'macOS build' 6 "${macos_workflows[@]}"
 
 for workflow in "${amd64_package_workflows[@]}" "${arm64_package_workflows[@]}"; do
-	validate_lfs_job "${workflow}" build
+	validate_build_job "${workflow}" build
 	validate_no_lfs_job "${workflow}" init_release
 done
 
 for workflow in "${macos_workflows[@]}"; do
-	validate_lfs_job "${workflow}" build
+	validate_build_job "${workflow}" build
 	validate_no_lfs_job "${workflow}" init_release
 
 	build_body=$(job_body "${workflow}" build)
@@ -195,7 +195,7 @@ for workflow in "${macos_workflows[@]}"; do
 done
 
 cluster_workflow=${workflow_dir}/CI-cluster-simulator.yml
-validate_lfs_job "${cluster_workflow}" build
+validate_build_job "${cluster_workflow}" build
 validate_no_lfs_job "${cluster_workflow}" test
 
 mapfile -t direct_workflows < <(rg --files "${workflow_dir}" -g '*.yml' | sort)
@@ -204,13 +204,13 @@ for workflow in "${direct_workflows[@]}"; do
 	while IFS= read -r job; do
 		body=$(job_body "${workflow}" "${job}")
 		job_invokes_build "${body}" || continue
-		[[ -n ${checked_jobs["${workflow}:${job}"]+set} ]] || validate_lfs_job "${workflow}" "${job}"
+		[[ -n ${checked_jobs["${workflow}:${job}"]+set} ]] || validate_build_job "${workflow}" "${job}"
 	done < <(job_names "${workflow}")
 done
 
 if ((errors > 0)); then
-	echo "OpenSSL LFS workflow validation failed: ${errors} error(s)" >&2
+	echo "OpenSSL checkout workflow validation failed: ${errors} error(s)" >&2
 	exit 1
 fi
 
-echo "OpenSSL LFS workflow validation passed: ${checked_build_jobs} build job(s)"
+echo "OpenSSL checkout workflow validation passed: ${checked_build_jobs} build job(s)"
