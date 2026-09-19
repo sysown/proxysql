@@ -3492,6 +3492,12 @@ handler_again:
 					}
 					if (status == PROCESSING_STMT_DESCRIBE || status == PROCESSING_STMT_EXECUTE) {
 						uint32_t backend_stmt_id = myconn->local_stmts->find_backend_stmt_id_from_global_id(CurrentQuery.extended_query_info.stmt_global_id);
+						// Backend statement ids are local to a backend connection. Always take the id
+						// from 'myconn', including 0: a stale id left by a previous backend connection
+						// (e.g. after a query retry) must not be reused by the implicit prepare below,
+						// or 'proxysql_ps_<id>' can collide with a statement that already exists on
+						// this connection (42P05). See issue #6197.
+						CurrentQuery.extended_query_info.stmt_backend_id = backend_stmt_id;
 						if (backend_stmt_id == 0) {
 							// the connection doesn't have the prepared statements prepared
 							// we try to create it now
@@ -3521,7 +3527,6 @@ handler_again:
 							previous_status.push(status);
 							NEXT_IMMEDIATE(PROCESSING_STMT_PREPARE);
 						}
-						CurrentQuery.extended_query_info.stmt_backend_id = backend_stmt_id;
 					}
 				}
 			}
@@ -6540,6 +6545,12 @@ bool PgSQL_Session::is_in_transaction() const {
  * error.)
  */
 void PgSQL_Session::set_previous_status_mode3(bool allow_execute) {
+	// Leaving PROCESSING_* to (re)acquire or reset the backend connection: any
+	// backend statement id obtained so far belongs to a connection that is being
+	// replaced (retry) or whose statements are being discarded (reset). Clear it so
+	// that the id is regenerated/looked up on the connection actually used, instead
+	// of sending 'proxysql_ps_<stale id>' to a different backend. See issue #6197.
+	CurrentQuery.extended_query_info.stmt_backend_id = 0;
 	switch (status) {
 	case PROCESSING_QUERY:
 	case PROCESSING_STMT_PREPARE:
