@@ -511,6 +511,7 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-reg_test_5899_bind_zero_param_formats-t \
 	pgsql-reg_test_5300_threshold_resultset_deadlock-t \
 	pgsql-reg_test_5866_result_format-t \
+	pgsql-reg_test_6138_mixed_result_formats-t \
 	pgsql-auth_method_matrix-t \
 	pgsql-scram_reload_midhandshake-t \
 	pgsql-scram_user_removed_midhandshake-t \
