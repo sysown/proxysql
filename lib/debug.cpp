@@ -596,3 +596,6 @@ void proxysql_set_admin_debug_output(unsigned int _do) {
 }
 
 #endif /* DEBUG */
+
+// CI probe: validates the post-LFS-removal checkout/build cascade.
+// This branch is abandoned after green; do not merge.
