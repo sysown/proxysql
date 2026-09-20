@@ -7813,8 +7813,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			}
 			int rc;
 			string nq=string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-			RE2::GlobalReplace(&nq,re_versioned_set_comment,(char *)"SET\\1");
-			RE2::GlobalReplace(&nq,re_inline_comment,(char *)"");
+			RE2::GlobalReplace(&nq,re_versioned_set_comment,"SET\\1");
+			RE2::GlobalReplace(&nq,re_inline_comment,"");
 			// remove trailing space and semicolon if present. See issue#4380
 			size_t pos = nq.find_last_not_of(" ;");
 			if (pos != nq.npos) {
@@ -8383,10 +8383,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 					string nq1 = string(query_no_space);
 					free(query_no_space);
-					RE2::GlobalReplace(&nq1,re_session_dot_upper,(char *)"");
-					RE2::GlobalReplace(&nq1,re_session_space_upper,(char *)"");
-					RE2::GlobalReplace(&nq1,re_session_dot_lower,(char *)"");
-					RE2::GlobalReplace(&nq1,re_session_space_lower,(char *)"");
+					RE2::GlobalReplace(&nq1,re_session_dot_upper,"");
+					RE2::GlobalReplace(&nq1,re_session_space_upper,"");
+					RE2::GlobalReplace(&nq1,re_session_dot_lower,"");
+					RE2::GlobalReplace(&nq1,re_session_space_lower,"");
 					//fprintf(stderr,"%s\n",nq1.c_str());
 					re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 					opt2->set_case_sensitive(false);
