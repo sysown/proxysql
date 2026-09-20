@@ -88,6 +88,13 @@ static const std::set<std::string> pgsql_other_variables = {
 	"synchronous_commit"
 };
 
+static const RE2 re_inline_comment("(?U)/\\*.*\\*/");
+static const RE2 re_versioned_set_comment("^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/");
+static const RE2 re_reset_keyword("(?i)\\bRESET\\b");
+static const RE2 re_discard_keyword("(?i)\\bDISCARD\\b");
+static const RE2 re_deallocate_keyword("(?i)\\bDEALLOCATE\\b(\\s+PREPARE)?");
+static const RE2 re_non_word_chars("[^\\w]*");
+
 #include "proxysql_find_charset.h"
 
 // --- tx-poisoned helpers ---------------------------------------------------
@@ -4342,7 +4349,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (session_type == PROXYSQL_SESSION_PGSQL) {
 		//__sync_fetch_and_add(&PgHGM->status.frontend_use_db, 1);
 		string nq = string((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
-		RE2::GlobalReplace(&nq, (char*)"(?U)/\\*.*\\*/", (char*)" ");
+		RE2::GlobalReplace(&nq, re_inline_comment, " ");
 		char* sn_tmp = (char*)nq.c_str();
 		while (sn_tmp < (nq.c_str() + nq.length() - 4) && *sn_tmp == ' ')
 			sn_tmp++;
@@ -4553,8 +4560,8 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	// this code is executed only if locked_on_hostgroup is not set yet
 	// if locked_on_hostgroup is set, we do not try to parse the SET statement
 	std::string nq = std::string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
-	RE2::GlobalReplace(&nq, "^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/", "SET\\1");
-	RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
+	RE2::GlobalReplace(&nq, re_versioned_set_comment, "SET\\1");
+	RE2::GlobalReplace(&nq, re_inline_comment, "");
 	// remove trailing space and semicolon if present. See issue#4380
 	nq.erase(nq.find_last_not_of(" ;") + 1);
 	if (
@@ -4789,9 +4796,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_RESET_command(const char* dig, bool* lock_hostgroup) {
 	std::string nq = std::string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 
-	RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
-	RE2::GlobalReplace(&nq, "(?i)\\bRESET\\b", "");
-	RE2::GlobalReplace(&nq, "[^\\w]*", "");
+	RE2::GlobalReplace(&nq, re_inline_comment, "");
+	RE2::GlobalReplace(&nq, re_reset_keyword, "");
+	RE2::GlobalReplace(&nq, re_non_word_chars, "");
 
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing RESET command %s\n", nq.c_str());
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing RESET command = %s\n", nq.c_str());
@@ -4911,9 +4918,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 	std::string nq = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 
-	RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
-	RE2::GlobalReplace(&nq, "(?i)\\bDISCARD\\b", "");
-	RE2::GlobalReplace(&nq, "[^\\w]*", "");
+	RE2::GlobalReplace(&nq, re_inline_comment, "");
+	RE2::GlobalReplace(&nq, re_discard_keyword, "");
+	RE2::GlobalReplace(&nq, re_non_word_chars, "");
 
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing DISCARD command %s\n", nq.c_str());
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing DISCARD command = %s\n", nq.c_str());
@@ -4976,9 +4983,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	
 	std::string nq = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 
-	RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
-	RE2::GlobalReplace(&nq, "(?i)\\bDEALLOCATE\\b(\\s+PREPARE)?", "");
-	RE2::GlobalReplace(&nq, "[^\\w]*", "");
+	RE2::GlobalReplace(&nq, re_inline_comment, "");
+	RE2::GlobalReplace(&nq, re_deallocate_keyword, "");
+	RE2::GlobalReplace(&nq, re_non_word_chars, "");
 
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing DEALLOCATE command %s\n", nq.c_str());
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing DEALLOCATE command = %s\n", nq.c_str());
@@ -5045,9 +5052,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 				// Only do expensive parsing if we're going to block the command
 				std::string nq = std::string(dig);
-				RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
-				RE2::GlobalReplace(&nq, "(?i)\\bRESET\\b", "");
-				RE2::GlobalReplace(&nq, "[^\\w]*", "");
+				RE2::GlobalReplace(&nq, re_inline_comment, "");
+				RE2::GlobalReplace(&nq, re_reset_keyword, "");
+				RE2::GlobalReplace(&nq, re_non_word_chars, "");
 
 				bool is_reset_all = (strncasecmp(nq.c_str(), "ALL", 3) == 0);
 				client_myds->DSS = STATE_QUERY_SENT_NET;
