@@ -1270,13 +1270,15 @@ void add_task(
 }
 
 void rm_task_fast(task_poll_t& task_poll, size_t idx) {
-	if (idx > task_poll.size || idx < 0) {
-		proxy_error("Receveid invalid task index   idx=%lu", idx);
+	if (idx >= task_poll.size) {
+		proxy_error("Received invalid task index   idx=%zu\n", idx);
 		assert(0);
 	}
 
-	task_poll.fds[idx] = task_poll.fds[task_poll.size - 1];
-	task_poll.tasks[idx] = std::move(task_poll.tasks[task_poll.size - 1]);
+	if (idx != task_poll.size - 1) {
+		task_poll.fds[idx] = task_poll.fds[task_poll.size - 1];
+		task_poll.tasks[idx] = std::move(task_poll.tasks[task_poll.size - 1]);
+	}
 	task_poll.size--;
 }
 
