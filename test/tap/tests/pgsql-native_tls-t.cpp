@@ -13,7 +13,14 @@
  *      boundaries, so this is precisely where partial-message framing bugs live.
  *      Plaintext testing cannot reach it.
  *
- *   2. SCRAM-SHA-256-PLUS channel binding. PostgreSQL 16 advertises both
+ *   2. fast_forward over a TLS backend. A relaying session needs the backend's
+ *      TLS on the data stream; adopt_backend_tls() lends the native connection's
+ *      own memory buffers instead of installing a new pair. Until that landed the
+ *      connect path quietly diverted these sessions to libpq, and no test noticed,
+ *      because the queries worked either way. Covered here by checking the backend
+ *      leg is encrypted and no fallback was logged, not just that rows came back.
+ *
+ *   3. SCRAM-SHA-256-PLUS channel binding. PostgreSQL 16 advertises both
  *      SCRAM-SHA-256 and SCRAM-SHA-256-PLUS; over TLS the mechanism selection at
  *      lib/PgSQL_Connection.cpp:2345 takes -PLUS and derives the binding from
  *      pg_tls_server_end_point(). Those helpers have unit tests at the crypto
@@ -214,33 +221,51 @@ static std::vector<std::pair<std::string, std::string>> corpus() {
     };
 }
 
-static std::fstream f_proxysql_log{};
-static bool nativeFallbackObserved() {
-    const std::string regex =
-        ".*(native_mode requested but unimplemented at this stage; falling back to libpq"
-        "|native backend auth capability gap .* falling back to libpq).*";
-    return wait_for_log_match(f_proxysql_log, regex, 1000, 100);
-}
-static void drainLogToNow() {
-    get_matching_lines(f_proxysql_log, "__no_such_marker_line__");
+// Positive proof the pooled backend connections for this hostgroup ran native,
+// read from ProxySQL's own record rather than inferred. Aggregates every row: with
+// LIMIT 1 a native row could sit in front of a libpq one and hide it. Polls, because
+// a loaded runner can take longer than any constant to return a connection to the
+// pool, and an empty result would otherwise read as a failure.
+// Returns "true" only when at least one row was found and every row is native.
+static std::string poolNativeMode(PGconn* admin) {
+    std::stringstream q;
+    q << "SELECT pgsql_info FROM stats_pgsql_free_connections WHERE hostgroup=" << BACKEND_HG;
+    for (int waited = 0; waited <= 5000; waited += 100) {
+        PGresult* r = PQexec(admin, q.str().c_str());
+        const int n = (PQresultStatus(r) == PGRES_TUPLES_OK) ? PQntuples(r) : 0;
+        if (n > 0) {
+            int native = 0, libpq = 0, unparsed = 0;
+            for (int i = 0; i < n; i++) {
+                const std::string info = PQgetvalue(r, i, 0);
+                if (info.find("\"native_mode\":true") != std::string::npos) native++;
+                else if (info.find("\"native_mode\":false") != std::string::npos) libpq++;
+                else unparsed++;
+            }
+            PQclear(r);
+            std::stringstream m;
+            if (unparsed) { m << "unparsed rows=" << unparsed; return m.str(); }
+            if (libpq)    { m << "false (native=" << native << " libpq=" << libpq << ")"; return m.str(); }
+            return "true";
+        }
+        PQclear(r);
+        usleep(100000);
+    }
+    return "";   // nothing ever appeared
 }
 
 // Unique enough to find in pg_stat_activity, stable enough to write into a LIKE.
 static const char* MARKER_CORPUS = "native_tls_marker_corpus";
 static const char* MARKER_POOL_1 = "native_tls_marker_pool_first";
 static const char* MARKER_POOL_2 = "native_tls_marker_pool_second";
+static const char* MARKER_FF     = "native_tls_marker_fast_forward";
 
 int main(int, char**) {
     // one per corpus entry + backend-is-really-encrypted + pooled-reuse +
-    // no-fallback + fast_forward capability gap.
+    // no-fallback + four for fast_forward over TLS.
     const auto C = corpus();
-    plan((int)C.size() + 4);
+    plan((int)C.size() + 7);
 
     if (cl.getEnv()) return exit_status();
-
-    const std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
-    if (open_file_and_seek_end(log_path, f_proxysql_log) != EXIT_SUCCESS)
-        BAIL_OUT("could not open the ProxySQL log at '%s'", log_path.c_str());
 
     auto adminOwner = createAdminConn();
     if (!adminOwner || PQstatus(adminOwner.get()) != CONNECTION_OK)
@@ -312,7 +337,6 @@ int main(int, char**) {
     // Evict the libpq-phase connections so the native phase must establish its
     // own TLS connection rather than inheriting one built by libpq.
     flushPool();
-    drainLogToNow();
 
     std::vector<Fingerprint> candidate;
     std::string native_backend_pid;
@@ -421,52 +445,105 @@ int main(int, char**) {
            reused ? "" : "  <-- not the same backend connection, so reuse was never tested");
     }
 
-    // ---- no silent fallback to libpq ---------------------------------------
+    // ---- the pooled connections really are native --------------------------
+    // Results alone cannot show this: libpq over TLS produces identical ones.
     {
-        const bool fell_back = nativeFallbackObserved();
-        ok(!fell_back, "native TLS path used throughout (no libpq fallback warning in the proxy log)");
+        const std::string mode = poolNativeMode(admin);
+        ok(mode == "true",
+           "every pooled backend connection for this hostgroup reports native_mode (%s)",
+           mode.empty() ? "no free connection was ever recorded" : mode.c_str());
     }
 
-    // ---- fast_forward + native TLS takes the documented way out -------------
-    // A fast_forward session wants the backend's TLS on the data stream, which the
-    // native path cannot lend: handing over its two memory buffers means installing new
-    // ones, freeing the pair still in use. ProxySQL routes the session to libpq instead.
-    // The combination works on neither path, so what is asserted is the safe exit, not a
-    // served query. Runs last: it puts a fallback line in the log the check above
-    // requires to be absent.
+    // ---- fast_forward over a TLS backend stays native ----------------------
+    // A fast_forward session relays raw bytes, so it needs the backend's TLS on the data
+    // stream. adopt_backend_tls() lends the native connection its own memory buffers
+    // rather than installing a new pair, so nothing still in use is freed. Before that
+    // existed the connect path sent these sessions to libpq instead, and nothing noticed:
+    // the queries still worked, just on the other protocol. Hence the encryption and
+    // no-fallback checks below -- serving a correct result proves neither.
     {
+        const size_t LARGE = C.size() - 1;   // "large-10k": many TLS records per result
+
         execAdmin(admin, "UPDATE pgsql_users SET fast_forward=1");
         execAdmin(admin, "LOAD PGSQL USERS TO RUNTIME");
-        // The guard sits on the connect path, so a NEW connection is needed to meet it.
-        // From the pool the session takes attach_connection()'s borrow instead: also
-        // safe, but a different route, and no log line.
+        // The handover happens while the backend connection is being established, so the
+        // session has to build a new one to reach it; a pooled connection takes a
+        // different route and would leave this untested.
         flushPool();
-        drainLogToNow();
 
+        std::string ff_answer;
+        Fingerprint ff_large;
+        bool encrypted = false;
+        std::string detail;
         {
             auto c = createClientConn();
-            if (c && PQstatus(c.get()) == CONNECTION_OK) scalar(c.get(), "SELECT 1");
+            if (c && PQstatus(c.get()) == CONNECTION_OK) {
+                ff_answer = scalar(c.get(), "SELECT 7");
+                ff_large  = fingerprint(c.get(), C[LARGE].second);
+                // Last query on this connection: pg_stat_activity keeps only the most
+                // recent one, so an earlier marker would be overwritten by the corpus.
+                scalar(c.get(), "SELECT '" + std::string(MARKER_FF) + "' AS marker");
+
+                // Probed while the client is still connected. A fast_forward backend
+                // connection is not pooled -- it closes with the client -- so once this
+                // scope ends the row is gone from pg_stat_activity within milliseconds.
+                auto direct = createDirectBackendConn();
+                if (direct && PQstatus(direct.get()) == CONNECTION_OK) {
+                    const std::string pid = backendPidForMarker(direct.get(), MARKER_FF);
+                    if (pid.empty()) {
+                        detail = "no backend found carrying the marker query";
+                    } else if (pid == native_backend_pid) {
+                        detail = "same backend as the corpus phase (pid " + pid +
+                                 "), so no fresh connect was exercised";
+                    } else {
+                        const std::string ssl_used = sslInUseForPid(direct.get(), pid);
+                        encrypted = (ssl_used == "t" || ssl_used == "true");
+                        detail = "pg_stat_ssl.ssl=" +
+                                 (ssl_used.empty() ? std::string("<absent>") : ssl_used) +
+                                 " for pid " + pid;
+                    }
+                } else {
+                    detail = "no direct backend connection to consult pg_stat_ssl";
+                }
+            } else {
+                detail = "fast_forward client connection failed";
+            }
         }
-        const bool fell_back = nativeFallbackObserved();
+        ok(ff_answer == "7",
+           "fast_forward over a TLS backend serves a query (got '%s')",
+           ff_answer.empty() ? "-" : ff_answer.c_str());
+
+        // Same query the libpq oracle ran above. A relay that drops or mangles a TLS
+        // record comes back as a short or altered result, not as an error.
+        ok(sameFingerprint(oracle[LARGE], ff_large),
+           "fast_forward over a TLS backend relays a 10k-row result intact "
+           "(oracle rows=%d sum=%llu, fast_forward rows=%d sum=%llu)",
+           oracle[LARGE].nrows, oracle[LARGE].checksum, ff_large.nrows, ff_large.checksum);
+
+        // The session being native is structural -- native_mode is set once at connect
+        // from pgsql-use_native_backend_protocol and never reassigned, and the check
+        // above confirms this hostgroup's connections are native. What needs asserting
+        // is that the borrowed transport really is encrypted: a relay that quietly lost
+        // the TLS would serve the same rows over a plaintext socket.
+        ok(encrypted,
+           "fast_forward over a TLS backend relays over a genuinely encrypted connection (%s)",
+           detail.c_str());
 
         execAdmin(admin, "UPDATE pgsql_users SET fast_forward=0");
         execAdmin(admin, "LOAD PGSQL USERS TO RUNTIME");
 
+        // A handover that freed buffers the connection still points at surfaces on the
+        // NEXT session rather than in the one that did it.
         const bool alive = (scalar(admin, "SELECT 1") == "1");
         bool still_serving = false;
-        {   // a half-handed-over transport shows up here as a backend that can no
-            // longer be talked to
+        {
             auto c = createClientConn();
             if (c && PQstatus(c.get()) == CONNECTION_OK)
                 still_serving = (scalar(c.get(), "SELECT 7") == "7");
         }
-        // The capability-gap line is diagnostic, never the verdict: its warning fires
-        // once per worker thread for the life of the process, so a proxy that already
-        // logged one stays silent here however it handles this session.
         ok(alive && still_serving,
-           "a fast_forward session over a TLS backend leaves the proxy working "
-           "(alive=%d, next session served=%d, capability-gap line seen=%d)",
-           (int)alive, (int)still_serving, (int)fell_back);
+           "the proxy still serves after a fast_forward TLS session "
+           "(alive=%d, next session served=%d)", (int)alive, (int)still_serving);
     }
 
     restore();
