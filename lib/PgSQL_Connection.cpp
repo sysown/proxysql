@@ -432,27 +432,10 @@ handler_again:
 			assert(0); // shouldn't ever reach here, we have messed up the state machine
 		
 		if (get_pg_ssl_in_use()) {
-			if (native_mode && myds && myds->sess && myds->sess->session_fast_forward) {
-				// fast_forward relays raw bytes and wants the backend SSL on the data
-				// stream. Handing it ours is not fatal -- detach_connection() nulls
-				// myds->ssl for fast_forward without freeing it (a deliberate
-				// borrowed-pointer design), so there is no double free -- but the
-				// block below calls SSL_set_bio(), which REPLACES and frees the BIOs
-				// this connection still holds pointers to, leaving native_rbio /
-				// native_wbio dangling.
-				//
-				// MEASURED: with this guard disabled, 10 native fast_forward TLS
-				// sessions produced no crash, no assert and no double free; the
-				// queries failed either way. fast_forward + backend TLS is broken for
-				// BOTH the native and libpq paths (verified: libpq fails identically),
-				// so this guard changes no user-visible outcome. It is kept only so
-				// the connection is never left holding freed BIO pointers; the
-				// fallback also routes the session to libpq, which is the path that
-				// owns this combination.
-				native_capability_gap("fast_forward with native TLS");
-				return async_state_machine;
-			}
 			if (myds && myds->sess && myds->sess->session_fast_forward) {
+				// Native connections come through here too. adopt_backend_tls() shares this
+				// connection's own memory BIOs with the stream instead of installing a new
+				// pair, so nothing the connection still uses gets freed underneath it.
 				assert(myds->ssl == NULL);
 				if (myds->adopt_backend_tls() == false) {
 					// This connection would relay in the clear, so fail the connect
@@ -1809,33 +1792,6 @@ SSL* PgSQL_Connection::get_pg_ssl_object() {
 	return (SSL*)PQsslStruct(pgsql_conn, "OpenSSL");
 }
 
-// Capability gap (GSSAPI/SSPI/SCRAM-SHA-256-PLUS-only/unhandled auth): we cannot
-// complete this handshake natively. Tear down the native socket, disable
-// native_mode, log once per backend, and restart the connect via libpq by
-// re-entering connect_start() (now that native_mode==false it takes the libpq
-// branch and builds a fresh pgsql_conn). We then advance the connect/auth state
-// machine as if libpq's connect_start() had just run.
-void PgSQL_Connection::native_capability_gap(const char* mechanism) {
-	static thread_local bool warned = false;
-	if (!warned) {
-		proxy_warning("native backend auth capability gap (%s) for hg %u %s:%d; falling back to libpq\n",
-			mechanism ? mechanism : "unknown", parent->myhgc->hid, parent->address, parent->port);
-		warned = true;
-	}
-	native_teardown();
-	native_mode = false;
-	// Re-initiate the libpq connect. connect_start() asserts pgsql_conn==NULL,
-	// which still holds (native mode never created one). It sets async_exit_status
-	// for the libpq path; we mirror handler()'s ASYNC_CONNECT_START dispatch so
-	// the next event continues the libpq handshake.
-	connect_start();
-	if (async_exit_status) {
-		async_state_machine = ASYNC_CONNECT_CONT;
-	} else {
-		async_state_machine = ASYNC_CONNECT_END;
-	}
-}
-
 void PgSQL_Connection::native_connect_start() {
 	// Resolve the backend address. Prefer the DNS cache (non-blocking); fall back
 	// to the literal parent->address (which may itself be an IP literal).
@@ -2707,19 +2663,28 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			// Mechanism selection (mirror of design §4):
 			//   plain-only     -> plain
 			//   plus-only, TLS -> PLUS  (set cbind below)
-			//   plus-only, !TLS-> capability gap (cbind makes no sense over plaintext)
+			//   plus-only, !TLS-> fail (cbind makes no sense over plaintext)
 			//   both,    TLS   -> PLUS  (set cbind below)   <-- the upgrade
 			//   both,    !TLS  -> plain
-			//   neither        -> capability gap
+			//   neither        -> fail
 			const bool tls_in_use = (native_ssl != nullptr);
 			bool use_scram_plus = false;
 			if (has_scram_plus && tls_in_use) {
 				use_scram_plus = true;
 			} else if (has_scram_plus && !tls_in_use && !has_scram) {
-				native_capability_gap("SCRAM-SHA-256-PLUS only, no TLS");
+				// Channel binding hashes the server certificate, and a plaintext connection has
+				// none to hash. Retrying through libpq cannot help: both paths read the same
+				// use_ssl column, so libpq would connect in the clear as well and fail here too.
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+					"backend requires SCRAM-SHA-256-PLUS channel binding, which needs an encrypted connection to this server; set use_ssl=1 on its pgsql_servers row", false);
+				native_teardown();
 				return;
 			} else if (!has_scram && !has_scram_plus) {
-				native_capability_gap("no supported SASL mechanism");
+				// The libpq we bundle recognises these same two mechanism names and nothing else,
+				// so handing the connection to it would repeat this failure one connect later.
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_FEATURE_NOT_SUPPORTED),
+					"backend offers no SASL mechanism ProxySQL supports; only SCRAM-SHA-256 and SCRAM-SHA-256-PLUS are implemented", false);
+				native_teardown();
 				return;
 			}
 			// Remaining cases (has_scram && !use_scram_plus) -> plain.
@@ -2777,12 +2742,15 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 				unsigned char digest[EVP_MAX_MD_SIZE];
 				size_t digest_len = 0;
 				if (pg_tls_server_end_point(native_ssl, digest, &digest_len) < 0) {
-					// Digest failed: degrade to plain if also offered, else
-					// capability gap. Log once via the capability-gap path.
+					// Digest failed: degrade to plain if the backend also offered it.
 					if (has_scram) {
 						use_scram_plus = false;
 					} else {
-						native_capability_gap("SCRAM-SHA-256-PLUS cert digest failed");
+						// pg_tls_server_end_point() mirrors libpq's own fingerprint code step for
+						// step, so a certificate ours cannot digest defeats libpq's as well.
+						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							"could not compute this backend certificate's fingerprint for SCRAM-SHA-256-PLUS channel binding, and the backend offered no other mechanism", false);
+						native_teardown();
 						return;
 					}
 				} else {
@@ -2886,11 +2854,25 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 		case 7:  // GSSAPI
 		case 8:  // GSSAPI continue
 		case 9:  // SSPI
-			native_capability_gap("GSSAPI/SSPI");
+			// Not supported. The libpq we bundle is built without GSSAPI (pg_config.h leaves
+			// ENABLE_GSS undefined), so handing the connection over would fail too, one
+			// connect attempt later and with a vaguer message.
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_FEATURE_NOT_SUPPORTED),
+				"backend requested GSSAPI/SSPI authentication, which ProxySQL does not support", false);
+			proxy_error("Native connect: backend %s:%d requested GSSAPI/SSPI authentication, which is not supported\n",
+				parent->address, parent->port);
+			native_teardown();
 			return;
 
 		default:
-			native_capability_gap("unhandled AuthenticationRequest");
+			// We implement the same authentication types as the libpq we bundle (trust, cleartext,
+			// md5, SCRAM), so anything else fails on both paths alike. The type number only fits
+			// in the log, which is why the client message stays generic.
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_FEATURE_NOT_SUPPORTED),
+				"backend requested an authentication method ProxySQL does not support", false);
+			proxy_error("Native connect: backend %s:%d requested unsupported AuthenticationRequest %u\n",
+				parent->address, parent->port, auth_type);
+			native_teardown();
 			return;
 		}
 		// Loop to process further already-buffered messages (e.g. AuthenticationOk

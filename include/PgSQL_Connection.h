@@ -935,7 +935,6 @@ public:
 	// buffered), 0 = EAGAIN (caller should wait for READ), -1 = EOF/fatal.
 	int native_recv_into_framer();
 	void native_teardown();                          // close fd, free scram (capability gap / failure)
-	void native_capability_gap(const char* mechanism); // tear down native, restart via libpq
 	// Fatal error during the RESULT phase: records the error AND tears the socket
 	// down, so the connection is classified non-reusable instead of being pooled.
 	// See the definition in PgSQL_Connection.cpp for why the teardown is required.
