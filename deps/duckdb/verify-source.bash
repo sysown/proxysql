@@ -5,7 +5,6 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 archive=${1:-"${script_dir}/duckdb-1.4.5.tar.gz"}
 checksum_file=${2:-"${archive}.sha256"}
 required_root=duckdb-1.4.5
-lfs_path=deps/duckdb/duckdb-1.4.5.tar.gz
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -17,22 +16,6 @@ sha256_file() {
 }
 
 [[ -f "${archive}" ]] || fail "DuckDB source archive is missing: ${archive}"
-
-first_line=
-IFS= read -r first_line < "${archive}" || true
-if [[ "${first_line}" == 'version https://git-lfs.github.com/spec/v1' ]]; then
-	cat >&2 <<EOF
-ERROR: ${archive} is an unfetched git LFS pointer, not the source archive.
-
-This tree stores the DuckDB source via git LFS. Install git-lfs and fetch it:
-
-    git lfs install
-    git lfs pull --include "${lfs_path}"
-
-In CI, add 'lfs: true' to the actions/checkout step of the workflow.
-EOF
-	exit 1
-fi
 
 [[ -f "${checksum_file}" ]] || fail "checksum file is missing: ${checksum_file}"
 expected=$(awk '{print $1; exit}' "${checksum_file}")
