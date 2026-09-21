@@ -439,6 +439,11 @@ std::string PgSQL_Mock_Backend::last_error() {
     return last_error_;
 }
 
+std::string PgSQL_Mock_Backend::selected_mechanism() {
+    std::lock_guard<std::mutex> l(mech_mtx_);
+    return selected_mechanism_;
+}
+
 bool PgSQL_Mock_Backend::start() {
     listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) return false;
@@ -641,6 +646,10 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
             if (!read_frontend_msg(fd, &type, payload)) { fail("SASLInitialResponse read failed"); goto done; }
             size_t z = payload.find('\0');
             if (z == std::string::npos || payload.size() < z + 5) { fail("malformed SASLInitialResponse"); goto done; }
+            {   // Record what the client asked for before anything else can fail.
+                std::lock_guard<std::mutex> l(mech_mtx_);
+                selected_mechanism_ = payload.substr(0, z);
+            }
             const std::string client_first = payload.substr(z + 5);
             // client-first-bare is everything after the gs2 header ("n,," / "y,," / "p=...,,").
             size_t bare = client_first.find(",,");

@@ -231,10 +231,21 @@ public:
     // here", which otherwise look identical from the client side.
     int queries_observed() const { return queries_observed_.load(); }
 
-    void reset_stats() { conns_accepted_.store(0); queries_observed_.store(0); }
+    void reset_stats() {
+        conns_accepted_.store(0);
+        queries_observed_.store(0);
+        std::lock_guard<std::mutex> l(mech_mtx_);
+        selected_mechanism_.clear();
+    }
 
     // Diagnostics from the most recent connection handler, for failure output.
     std::string last_error();
+
+    // The SASL mechanism name the client put in its SASLInitialResponse, as sent.
+    // Empty until a SCRAM_SERVER_FIRST step has read one. This is the only way to
+    // observe which mechanism ProxySQL picked: a login succeeds whether it chose
+    // SCRAM-SHA-256 or SCRAM-SHA-256-PLUS, so the outcome alone cannot tell them apart.
+    std::string selected_mechanism();
 
 private:
     void accept_loop();
@@ -258,6 +269,8 @@ private:
     std::string scram_password_ = "mockpw";
     std::mutex err_mtx_;
     std::string last_error_;
+    std::mutex mech_mtx_;
+    std::string selected_mechanism_;
 };
 
 // Best-effort discovery of this container's IP on the shared Docker network:
