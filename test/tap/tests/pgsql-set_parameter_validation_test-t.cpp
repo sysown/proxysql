@@ -326,8 +326,8 @@ std::vector<SetTestCase> test_cases = {
     }},
     { "search_path", {
         // Valid values
-        {"SET search_path TO \"$user\", public", true, "\"$user\",public", "\"$user\", public"},
-        {"SET search_path TO \"$user\",public", true, "\"$user\",public", "\"$user\", public"},
+        {"SET search_path TO \"$user\", public", true, "\"$user\", public"},
+        {"SET search_path TO \"$user\",public", true, "\"$user\", public"},
         // Algorithm-dependent: under algo 0/1/2 proxysql's remove_spaces()
         // destructively collapses internal whitespace inside the string
         // literal before sending to PG, so PG sees `'"$user" , public'` and

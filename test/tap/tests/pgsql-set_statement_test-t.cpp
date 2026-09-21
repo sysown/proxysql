@@ -2728,15 +2728,6 @@ bool test_set_to_default_keeps_transaction() {
     return true;
 }
 
-static std::string search_path_list(const std::string& v) {
-    std::string out;
-    for (size_t i = 0; i < v.size(); i++) {
-        if (v[i] == ' ' && !out.empty() && out.back() == ',') continue;
-        out.push_back(v[i]);
-    }
-    return out;
-}
-
 // A client that never mentions search_path must not inherit the previous client's value from a
 // pooled backend. What enforces that changed when search_path became a connect-time setting, so
 // this has to hold either way.
@@ -2805,7 +2796,7 @@ bool test_search_path_not_inherited_across_clients() {
         if (!reader) { mysql_close(admin); return false; }
         const std::string seen = get_variable_simple(reader.get(), "search_path");
         diag("reader %d sees '%s'", i, seen.c_str());
-        if (search_path_list(seen) != search_path_list(baseline)) all_ok = false;
+        if (seen != baseline) all_ok = false;
 
         const std::string conn_ok_after =
             pgsql_admin_scalar(admin, "SELECT IFNULL(SUM(ConnOK),0) FROM stats_pgsql_connection_pool");
