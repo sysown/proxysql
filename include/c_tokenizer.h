@@ -50,6 +50,12 @@ char* mysql_query_digest_and_first_comment(const char* const q, int q_len, char*
 char* pgsql_query_strip_comments(char* s, int len, bool lowercase);
 char* pgsql_query_digest_and_first_comment(const char* const q, int q_len, char** const fst_cmnt, char* const buf, const options* opts);
 
+// True when `text` begins with `keyword` as a complete SQL keyword. Meant for query digest
+// text, where comments and leading whitespace are already gone.
+// The character after the keyword only has to be a non-identifier one, so a quoted name
+// abutting it still matches, while a longer word starting with the keyword does not.
+bool pgsql_stmt_first_keyword_is(const char* text, const char* keyword);
+
 // For TAP Test
 char* mysql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
 char* mysql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);

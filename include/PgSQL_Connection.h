@@ -31,7 +31,8 @@ class PgSQL_Backend_Protocol;
 #define STATUS_PGSQL_CONNECTION_ADVISORY_XACT_LOCK   0x00000200
 #define STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG      0x00000400
 #define STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
-//#define STATUS_PGSQL_CONNECTION_HAS_WARNINGS         0x00001000
+// This bit belonged to STATUS_PGSQL_CONNECTION_HAS_WARNINGS, which was never implemented.
+#define STATUS_PGSQL_CONNECTION_LISTEN               0x00001000
 
 
 enum PgSQL_Param_Name {
@@ -845,6 +846,11 @@ public:
 	// True for an implicit Parse (IMPLICIT_PREPARE detour): the client never issued a
 	// Parse, so the backend's ParseComplete '1' must be suppressed (never forwarded).
 	bool native_suppress_parse_complete = false;
+	// True when the result just streamed to the client carried a NotificationResponse.
+	// The query cache stores the client-wire bytes verbatim, so such a result must not be
+	// admitted: the notification would be replayed to every later client that hits the
+	// entry. Set while forwarding, cleared at the start of each query.
+	bool native_result_had_notification = false;
 	// Set true once native_fetch_result_cont() has injected a Sync to recover from an
 	// ErrorResponse mid-frame on a Flush-terminated step. After 'E' the backend is in
 	// the aborted-until-Sync state and emits no 'Z' on its own; the injected Sync
@@ -869,7 +875,9 @@ public:
 		native_stmt_sync_terminated = false;
 		native_suppress_parse_complete = false;
 		native_stmt_error_resync = false;
-		native_framer.reset();
+		// See query_start(): resetting while a partially received asynchronous message is
+		// buffered would truncate it and desynchronise the stream.
+		if (native_framer.empty()) native_framer.reset();
 		native_outbuf.clear();
 	}
 	// Drive the native result fetch: recv backend bytes, frame them, and stream each
@@ -934,6 +942,12 @@ public:
 	// Non-blocking recv() into the framer. Returns: 1 = got bytes (or already had
 	// buffered), 0 = EAGAIN (caller should wait for READ), -1 = EOF/fatal.
 	int native_recv_into_framer();
+	// Drain messages that arrived on an IDLE connection pinned by LISTEN. There is no
+	// query in flight and so no query_result to stream into; a NotificationResponse is
+	// rebuilt onto `out` as client-wire bytes and everything else an idle backend may
+	// legally send is absorbed. Returns the number of notifications relayed, or -1 when
+	// the connection is gone and the caller should destroy it.
+	int native_relay_async_messages(PtrSizeArray* out);
 	void native_teardown();                          // close fd, free scram (capability gap / failure)
 	// Fatal error during the RESULT phase: records the error AND tears the socket
 	// down, so the connection is classified non-reusable instead of being pooled.

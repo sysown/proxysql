@@ -500,6 +500,15 @@ private:
 	void handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt);
 	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t* pkt);
 	void handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t* pkt);
+	void handler_refuse_listen(PtrSize_t* pkt);
+	bool listen_can_be_supported();
+	// Set when a LISTEN was allowed past the gate. The gate can only inspect a backend
+	// connection this session already holds; when it acquires one afterwards, that
+	// connection has to be re-checked before the LISTEN runs on it.
+	// Both gates assign it for every statement they see, so one that ends before the
+	// re-check -- served from the cache, refused by a rule -- leaves it set no longer
+	// than until the next statement arrives.
+	bool listen_pending = false;
 	void handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t* pkt);
 
 	/**

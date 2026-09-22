@@ -824,6 +824,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 				j["backends"][i]["conn"]["status"]["user_variable"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_USER_VARIABLE);
 				j["backends"][i]["conn"]["status"]["no_multiplex"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_NO_MULTIPLEX);
 				j["backends"][i]["conn"]["status"]["no_multiplex_HG"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG);
+				j["backends"][i]["conn"]["status"]["listen"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_LISTEN);
 				j["backends"][i]["conn"]["status"]["has_sequences"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_HAS_SEQUENCES);
 				//j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_COMPRESSION);
 				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_PREPARED_STATEMENT);
@@ -881,21 +882,6 @@ bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt, bool* lock_hostgroup
 	// rules, digests, routing, mirror, SQLi detection, etc.
 	if (tx_poisoned) {
 		return handler_poisoned_simple_query(pkt);
-	}
-
-	if ((pkt->size >= 7 + 5) && (strncasecmp("LISTEN ", (const char*)pkt->ptr + 5, 7) == 0)) {
-		client_myds->DSS = STATE_QUERY_SENT_NET;
-		proxy_warning("LISTEN command is not supported\n");
-		client_myds->myprot.generate_error_packet(true, true, "LISTEN is not supported",
-			PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
-		if (mirror == false) {
-			RequestEnd(NULL, true);
-		} else {
-			client_myds->DSS = STATE_SLEEP;
-			status = WAITING_CLIENT_DATA;
-		}
-		l_free(pkt->size, pkt->ptr);
-		return true;
 	}
 
 	if (pkt->size > (5 + 18) && strncasecmp((char*)"PROXYSQL INTERNAL ", (char*)pkt->ptr + 5, 18) == 0) {
@@ -1673,6 +1659,28 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 		}
 		enum session_status st = status;
 		if (mybe->server_myds->myconn->async_state_machine == ASYNC_IDLE) {
+			// A connection adopted from the pool arrives here already connected. It keeps
+			// the backend protocol it was opened with, so it can still be a libpq
+			// connection while the native protocol is enabled. LISTEN cannot work on one:
+			// libpq never surfaces a NotificationResponse, so the subscription would be
+			// accepted and then deliver nothing. Refuse through the error exit below
+			// rather than let the client believe it is subscribed.
+			if (listen_pending && myconn->native_mode == false) {
+				listen_pending = false;
+				client_myds->myprot.generate_error_packet(true, true,
+					"LISTEN is not supported on this connection: it uses the libpq backend protocol",
+					PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+				if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
+					RequestEnd(myds, true);
+				}
+				while (previous_status.size()) {
+					st = previous_status.top();
+					previous_status.pop();
+				}
+				myds->destroy_MySQL_Connection_From_Pool(true);
+				myds->max_connect_time = 0;
+				NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+			}
 			st = previous_status.top();
 			previous_status.pop();
 			NEXT_IMMEDIATE_NEW(st);
@@ -2475,6 +2483,23 @@ __implicit_sync:
 								// integration that needs to land.
 								assert(qpo);	// GloPgQPro->process_mysql_query() should always return a qpo
 								// ===================================================
+								// Refused here rather than in handler_special_queries(), which runs
+								// before the query is parsed and would have to recognise every
+								// spelling of LISTEN in the raw bytes. The digest exists now.
+								// Recomputed per statement: left set, it would refuse an unrelated
+								// query that later lands on a libpq connection.
+								const char* listen_dg = CurrentQuery.get_digest_text();
+								listen_pending = pgsql_stmt_first_keyword_is(
+									(listen_dg && *listen_dg) ? listen_dg : query_ptr, "LISTEN");
+								if (listen_pending && listen_can_be_supported() == false) {
+									listen_pending = false;
+									handler_refuse_listen(&pkt);
+									if (mirror == false) {
+										break;
+									}
+									handler_ret = -1;
+									return handler_ret;
+								}
 								if (qpo->max_lag_ms >= 0) {
 									thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 								}
@@ -4701,6 +4726,36 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t* pkt) {
 	l_free(pkt->size, pkt->ptr);
 }
 
+// LISTEN needs the native backend protocol. On the libpq path a NotificationResponse
+// never surfaces to ProxySQL at all, so the subscription would be accepted and then
+// deliver nothing, which is the one outcome worth avoiding.
+// A connection already attached to this session settles the question; otherwise a new one
+// will be opened with the setting in force now.
+bool PgSQL_Session::listen_can_be_supported() {
+	if (pgsql_thread___use_native_backend_protocol == false) return false;
+	if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
+		return mybe->server_myds->myconn->native_mode;
+	}
+	return true;
+}
+
+// LISTEN is refused because ProxySQL cannot deliver the notifications it would produce:
+// the subscription belongs to the backend connection, which is handed to other clients.
+// Runs after the query processor so it can read the digest rather than the raw bytes.
+void PgSQL_Session::handler_refuse_listen(PtrSize_t* pkt) {
+	client_myds->DSS = STATE_QUERY_SENT_NET;
+	proxy_warning("LISTEN command is not supported\n");
+	client_myds->myprot.generate_error_packet(true, true, "LISTEN is not supported",
+		PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+	if (mirror == false) {
+		RequestEnd(NULL, true);
+	} else {
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+	}
+	l_free(pkt->size, pkt->ptr);
+}
+
 // this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo
 void PgSQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t* pkt) {
 	client_myds->DSS = STATE_QUERY_SENT_NET;
@@ -6012,7 +6067,13 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
 		if (status == PROCESSING_QUERY && transfer_started == false && 
 			_conn->processing_multi_statement == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
-			if (qpo && qpo->cache_ttl > 0 && is_tuple == true) { // the resultset should be cached
+			// A result that carried a NotificationResponse must not be stored: the cache
+			// keeps the client-wire bytes as they are, so the notification would be handed
+			// to every later client hitting this entry for the whole TTL. Unlike the
+			// extended-query cache above, this path does not test MultiplexDisabled(), so
+			// being on a LISTEN-pinned connection does not by itself keep it out.
+			if (qpo && qpo->cache_ttl > 0 && is_tuple == true &&
+				_conn->native_result_had_notification == false) { // the resultset should be cached
 				
 				if (_conn->is_error_present() == false &&
 					(/* check warnings count here*/ true ||
@@ -7049,14 +7110,6 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 	// parse_msg memory will be freed in pgsql_real_query.end(), if message is sent to backend server
 	// CurrentQuery.stmt_client_name may briefly become a dangling pointer until CurrentQuery.end() is invoked
 
-	// check for LISTEN command
-	const char* query_to_check = (CurrentQuery.get_digest_text() ? CurrentQuery.get_digest_text() : parse_data.query_string);
-	if (query_to_check && (strncasecmp("LISTEN ", query_to_check, 7) == 0)) {
-		proxy_warning("LISTEN command is not supported\n");
-		handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "LISTEN is not supported", false);
-		return 2;
-	}
-
 	extended_query_info.stmt_client_name = parse_data.stmt_name;
 
 	timespec begint;
@@ -7072,6 +7125,19 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 			(begint.tv_sec * 1000000000 + begint.tv_nsec);
 	}
 	assert(qpo);	// GloPgQPro->process_mysql_query() should always return a qpo
+
+	// Same check and the same reason as the simple-query path: after the query processor,
+	// so the digest is what gets inspected rather than the bytes the client sent.
+	// Recomputed per statement; see the simple-query path.
+	const char* listen_dg = CurrentQuery.get_digest_text();
+	listen_pending = pgsql_stmt_first_keyword_is(
+		(listen_dg && *listen_dg) ? listen_dg : parse_data.query_string, "LISTEN");
+	if (listen_pending && listen_can_be_supported() == false) {
+		listen_pending = false;
+		proxy_warning("LISTEN command is not supported\n");
+		handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "LISTEN is not supported", false);
+		return 2;
+	}
 
 	if (parse_data.num_param_types > 0) {
 		Parse_Param_Types parse_param_type;

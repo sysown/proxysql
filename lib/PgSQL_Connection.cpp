@@ -22,6 +22,7 @@
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
+#include "c_tokenizer.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Monitor.hpp"
 #include "proxysql.h"
@@ -1577,6 +1578,9 @@ static inline uint32_t pg_read_be32(const unsigned char* p) {
 // replayed to later clients. 'G'/'W' are deliberately absent: the CopyInResponse
 // safety net answers those earlier, so one arriving here means the stream is out
 // of step and the connection should go.
+// 'A' stays legal here because a NotificationResponse is a real message, not a sign of a
+// hostile backend. The drain loop discards it a few lines further on, so a connection
+// that carries one is kept instead of being thrown away as a protocol violation.
 static inline bool pg_native_type_legal_in_result(char t) {
 	switch (t) {
 		case '1': case '2': case '3': case 'n': case 's': case 't':
@@ -2490,6 +2494,61 @@ int PgSQL_Connection::native_recv_into_framer() {
 	return got ? 1 : 0;
 }
 
+int PgSQL_Connection::native_relay_async_messages(PtrSizeArray* out) {
+	int r = native_recv_into_framer();
+	if (r < 0) return -1;   // EOF or fatal: the backend really is gone
+	if (r == 0) return 0;   // readable but nothing arrived yet
+	int relayed = 0;
+	for (;;) {
+		PgSQL_Backend_Msg msg;
+		PgSQL_Frame_Result fr = native_framer.next(msg);
+		if (fr == FRAME_NEED_MORE) break;   // partial tail stays buffered for the next read
+		if (fr == FRAME_ERROR) {
+			proxy_error("native: malformed message on idle backend %s:%d\n",
+				parent ? parent->address : "?", parent ? parent->port : 0);
+			return -1;
+		}
+		switch (msg.type) {
+			case 'A': {
+				// Rebuilt rather than reinterpreted: ProxySQL has no business parsing the
+				// channel and payload, it only has to hand the same bytes to the client.
+				const unsigned int size = 5 + msg.payload_len;
+				unsigned char* p = (unsigned char*)l_alloc(size);
+				const uint32_t wire_len = msg.payload_len + 4;
+				p[0] = 'A';
+				p[1] = (wire_len >> 24) & 0xff;
+				p[2] = (wire_len >> 16) & 0xff;
+				p[3] = (wire_len >> 8) & 0xff;
+				p[4] = wire_len & 0xff;
+				if (msg.payload_len) memcpy(p + 5, msg.payload, msg.payload_len);
+				out->add(p, size);
+				relayed++;
+				break;
+			}
+			case 'S':
+				// A reported setting changed under us, e.g. after a server config reload.
+				native_track_parameter_status(msg.payload, msg.payload_len);
+				break;
+			case 'N':
+				// The libpq path logs notices and does not forward them; match that rather
+				// than pushing one at a client sitting at ReadyForQuery.
+				proxy_info("native: notice on idle backend %s:%d, dropped\n",
+					parent ? parent->address : "?", parent ? parent->port : 0);
+				break;
+			case 'E':
+				// FATAL: idle_session_timeout, pg_terminate_backend, server shutdown.
+				// Record it so the log says why, then let the caller tear the session down.
+				native_fill_error_from_E(msg.payload, msg.payload_len);
+				return -1;
+			default:
+				proxy_error("native: unexpected message type '0x%02X' on idle backend %s:%d\n",
+					(unsigned char)msg.type, parent ? parent->address : "?", parent ? parent->port : 0);
+				return -1;
+		}
+	}
+	return relayed;
+}
+
 void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, uint32_t len) {
 	// ErrorResponse: series of (field-type-byte, NUL-terminated value), terminated
 	// by a zero field-type byte. Extract Severity('S'), SQLSTATE('C'), Message('M').
@@ -2975,9 +3034,12 @@ void PgSQL_Connection::query_start() {
 		native_stmt_sync_terminated = false;
 		native_suppress_parse_complete = false;
 		native_stmt_error_resync = false;
-		// Reset the framer so any stray connect-phase bytes (there should be none
-		// after a clean ReadyForQuery) cannot leak into this query's result parse.
-		native_framer.reset();
+		native_result_had_notification = false;
+		// A connection pinned by LISTEN can be holding the front of an asynchronous
+		// message that arrived between queries; resetting here would drop those bytes and
+		// the rest would then be read as a new message header. Empty is the normal case
+		// for every other connection, so this still clears a stale framer.
+		if (native_framer.empty()) native_framer.reset();
 		native_outbuf.clear();
 		// Body for the 'Q' (Query) message is the SQL text followed by EXACTLY ONE
 		// NUL terminator, matching PQsendQuery() semantics. Callers are inconsistent
@@ -3294,6 +3356,23 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				// rather than returned to the pool.
 				native_result_protocol_violation("illegal backend message type in result stream");
 				return;
+			}
+
+			// A NotificationResponse answers a LISTEN, which belongs to the connection and
+			// not necessarily to the client currently holding it. PostgreSQL flushes pending
+			// notifications just before ReadyForQuery, so one legitimately arrives mid-reply;
+			// the question is who it is for. When this connection carries the subscription it
+			// is this client's, and forwarding it is the whole point -- a driver reading
+			// notifications synchronously gets them out of the query reply. Otherwise it
+			// belongs to nobody reachable, and handing it over would leak a channel and
+			// payload to an unrelated client, so it goes the way libpq sends it: nowhere.
+			if (msg.type == 'A') {
+				if (!get_status(STATUS_PGSQL_CONNECTION_LISTEN)) {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5,
+						"Discarded asynchronous NotificationResponse in result stream on fd=%d\n", fd);
+					continue;
+				}
+				native_result_had_notification = true;
 			}
 
 			// --- Extended-query (prepared-statement) drain (Task C) ---
@@ -5144,9 +5223,36 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 		if (!strncasecmp(query_digest_text, "SELECT pg_advisory_lock", sizeof("SELECT pg_advisory_lock")-1)) {
 			set_status(true, STATUS_PGSQL_CONNECTION_ADVISORY_LOCK);
 		}
-	} else { 
+	} else {
 		if (!strncasecmp(query_digest_text, "SELECT pg_advisory_unlock_all", sizeof("SELECT pg_advisory_unlock_all") - 1)) {
 			set_status(false, STATUS_PGSQL_CONNECTION_ADVISORY_LOCK);
+		}
+	}
+
+	// LISTEN registers a subscription on the backend connection, so the connection must
+	// stay with this session: notifications can only be delivered to the client that asked
+	// for them, and a pooled connection would hand them to whoever holds it next. This flag
+	// is also what stops such a connection returning to the pool still subscribed.
+	// Individual channels are not tracked, so only UNLISTEN * clears it -- after
+	// UNLISTEN <channel> ProxySQL cannot know whether any subscription remains, and
+	// unpinning while one does sends the next notification to the wrong client.
+	// DISCARD ALL is the other way out, and it clears every flag through reset().
+	// A subscription lives on this connection, so the connection has to stay with the
+	// session that made it: pooled, it would hand notifications to whoever holds it next.
+	// Only UNLISTEN * clears the flag, since individual channels are not tracked and
+	// unpinning while one remains sends the next notification to the wrong client.
+	// DISCARD ALL is the other way out, through reset().
+	if (get_status(STATUS_PGSQL_CONNECTION_LISTEN) == false) {
+		if (pgsql_stmt_first_keyword_is(query_digest_text, "LISTEN")) {
+			set_status(true, STATUS_PGSQL_CONNECTION_LISTEN);
+		}
+	} else {
+		// The star may abut the keyword: UNLISTEN* is valid and the digest keeps it joined,
+		// so a compare against "UNLISTEN " would leave the connection pinned for good.
+		if (pgsql_stmt_first_keyword_is(query_digest_text, "UNLISTEN")) {
+			const char* p = query_digest_text + sizeof("UNLISTEN") - 1;
+			while (*p == ' ') p++;
+			if (*p == '*') set_status(false, STATUS_PGSQL_CONNECTION_LISTEN);
 		}
 	}
 
@@ -5431,8 +5537,8 @@ bool PgSQL_Connection::MultiplexDisabled(bool check_delay_token) {
 	if (status_flags & (STATUS_PGSQL_CONNECTION_USER_VARIABLE | STATUS_PGSQL_CONNECTION_PREPARED_STATEMENT |
 		STATUS_PGSQL_CONNECTION_LOCK_TABLES | STATUS_PGSQL_CONNECTION_TEMPORARY_TABLE | STATUS_PGSQL_CONNECTION_ADVISORY_LOCK | 
 		STATUS_PGSQL_CONNECTION_NO_MULTIPLEX | STATUS_PGSQL_CONNECTION_HAS_SEQUENCES | STATUS_PGSQL_CONNECTION_ADVISORY_XACT_LOCK | 
-		STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG | STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT 
-		/*| STATUS_PGSQL_CONNECTION_HAS_WARNINGS*/ )) {
+		STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG | STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT |
+		STATUS_PGSQL_CONNECTION_LISTEN )) {
 		ret = true;
 	}
 	if (check_delay_token && auto_increment_delay_token) return true;

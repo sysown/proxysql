@@ -3060,11 +3060,10 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		// Do NOT call handle_transaction_state() here; handler() owns it.
 		break;
 	default:
-		// 'A' NotificationResponse and any other unrecognized message type are
-		// streamed through verbatim with no extra side effects. 'G'/'W'
-		// (CopyInResponse/CopyBothResponse) never reach this function — they are
-		// intercepted and answered with CopyFail by native_fetch_result_cont()'s
-		// safety net before add_native_backend_message() is called.
+		// Unrecognized message types are streamed through verbatim with no extra side
+		// effects. 'A' (NotificationResponse) and 'G'/'W' (CopyInResponse/CopyBothResponse)
+		// never reach this function: native_fetch_result_cont() deals with both before
+		// calling it, discarding 'A' and answering 'G'/'W' with CopyFail.
 		break;
 	}
 

@@ -32,6 +32,10 @@ class PgSQL_Backend_Msg_Framer {
     void feed(const unsigned char* data, size_t len);
     PgSQL_Frame_Result next(PgSQL_Backend_Msg& out);
     void reset();
+    // True when every fed byte has been framed out. reset() throws away whatever is
+    // left, so callers that reset between queries must not do so while a partially
+    // received message is still buffered.
+    bool empty() const { return pos == len; }
     private:
     unsigned char* buf = nullptr;
     size_t len = 0, cap = 0, pos = 0;
