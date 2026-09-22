@@ -151,11 +151,27 @@ the APIs coexist in the same executable. It is a post-build check, not a
 dependency-free lint check.
 
 The MariaDB check builds the patched connector in a temporary directory and
-tests CA isolation, file rotation, failed-load retries, cache hits, CRL-option
-isolation, and repeated thread cleanup. To additionally instrument the connector
-and cache fixture with AddressSanitizer:
+tests explicit and default CA isolation, file rotation, failed-load retries,
+cache hits, CRL-option isolation, and repeated thread cleanup using generated
+certificate fixtures. To additionally exercise the real connector with the
+host's installed default CA bundle, set `CA_CACHE_TEST_SYSTEM_DEFAULTS=1`:
 
 ```bash
+CA_CACHE_TEST_SYSTEM_DEFAULTS=1 \
+  test/infra/control/test-mariadb-default-trust-store.bash
+```
+
+This mode requires a readable system bundle at one of the supported discovery
+paths. It checks store reuse across connections, CRL-option isolation, and live
+store lifetime after thread-cache cleanup. The `CI-macos-unit-smoke` pull-request
+workflow enables it after building ProxySQL and also runs when the MariaDB test
+script or fixtures change.
+
+The integration mode can be combined with AddressSanitizer instrumentation of
+the connector and test fixtures:
+
+```bash
+CA_CACHE_TEST_SYSTEM_DEFAULTS=1 \
 CA_CACHE_SANITIZER_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
   test/infra/control/test-mariadb-default-trust-store.bash
 ```
