@@ -103,6 +103,7 @@ cp "${fixture_dir}/one.pem" "${fixture_dir}/explicit-capath/one.pem"
 "${openssl_root}/apps/openssl" rehash "${fixture_dir}/explicit-capath" >/dev/null
 
 ${CC:-cc} -std=c99 -Wall -Wextra -Werror -pedantic \
+	${CA_CACHE_SANITIZER_FLAGS:-} \
 	-I"${source_dir}/libmariadb/secure" \
 	-I"${openssl_root}/include" \
 	"${script_dir}/fixtures/mariadb-default-trust-store.c" \
@@ -143,7 +144,12 @@ ${CC:-cc} -std=gnu99 -Wall -Wextra -Werror \
 	"${openssl_root}/libssl.a" "${openssl_root}/libcrypto.a" \
 	-pthread -ldl -lz -o "${tmp_dir}/mariadb-ca-cache"
 cache_status=0
-for mode in isolation capath rotation retry new-retry lifecycle hit crl; do
+cache_modes=(isolation capath rotation retry new-retry lifecycle hit crl)
+# Optional integration check against the host's installed default CA bundle.
+if [[ ${CA_CACHE_TEST_SYSTEM_DEFAULTS:-0} == 1 ]]; then
+	cache_modes+=(default)
+fi
+for mode in "${cache_modes[@]}"; do
 	"${tmp_dir}/mariadb-ca-cache" "$mode" \
 		"${fixture_dir}/one.pem" "${fixture_dir}/two.pem" \
 		"${fixture_dir}/corrupt.pem" "${fixture_dir}/mutable.pem" \

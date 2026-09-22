@@ -37,15 +37,6 @@ index 916024a8..79564a10 100644
  #if defined(_WIN32) && !defined(_OPENSSL_Applink) && defined(HAVE_OPENSSL_APPLINK_C)
  #include <openssl/applink.c>
  #endif
-@@ -70,6 +76,8 @@
- extern my_bool ma_tls_initialized;
- extern unsigned int mariadb_deinitialize_ssl;
- 
-+#include "proxysql_ca_cache.h"
-+
- #define MAX_SSL_ERR_LEN 100
- char tls_library_version[TLS_VERSION_LENGTH];
- 
 @@ -331,7 +420,7 @@
         *keyfile= mysql->options.ssl_key;
    char *pw= (mysql->options.extension) ?
@@ -55,20 +46,15 @@ index 916024a8..79564a10 100644
    /* add cipher */
    if ((mysql->options.ssl_cipher &&
          mysql->options.ssl_cipher[0] != 0))
-@@ -340,13 +429,17 @@
+@@ -340,13 +429,12 @@
    /* ca_file and ca_path */
 -  if (!SSL_CTX_load_verify_locations(ctx,
-+  /* CRL options mutate a store; never attach a shared cached store there.
-+   * Directory and default trust remain connection-local as well. */
-+  if (mysql->options.ssl_ca != NULL && mysql->options.ssl_capath == NULL &&
++  /* CRL options mutate a store; keep those connections out of the cache. */
++  ssl_rc = proxysql_ssl_load_verify_locations(
++      ctx, mysql->options.ssl_ca, mysql->options.ssl_capath,
++      proxysql_default_ca_files,
 +      !(mysql->options.extension &&
-+        (mysql->options.extension->ssl_crl || mysql->options.extension->ssl_crlpath))) {
-+    ssl_rc = proxysql_ssl_load_cached_ca(ctx, mysql->options.ssl_ca);
-+  } else {
-+    ssl_rc = proxysql_ssl_load_verify_locations(
-+        ctx, mysql->options.ssl_ca, mysql->options.ssl_capath,
-+        proxysql_default_ca_files);
-+  }
++        (mysql->options.extension->ssl_crl || mysql->options.extension->ssl_crlpath)));
 +  if (ssl_rc == 0)
 +    goto error;
 -                                    mysql->options.ssl_ca,
@@ -87,7 +73,7 @@ new file mode 100644
 index 00000000..4cb3bb94
 --- /dev/null
 +++ libmariadb/secure/proxysql_default_ca.h
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,63 @@
 +#ifndef PROXYSQL_DEFAULT_CA_H
 +#define PROXYSQL_DEFAULT_CA_H
 +
@@ -95,6 +81,7 @@ index 00000000..4cb3bb94
 +#include <stdlib.h>
 +#include <sys/stat.h>
 +#include <unistd.h>
++#include "proxysql_ca_cache.h"
 +
 +static const char *const proxysql_default_ca_files[]= {
 +  "/etc/ssl/certs/ca-certificates.crt",
@@ -122,9 +109,13 @@ index 00000000..4cb3bb94
 +    SSL_CTX *context,
 +    const char *connector_ca_file,
 +    const char *connector_ca_directory,
-+    const char *const *default_ca_files)
++    const char *const *default_ca_files,
++    int allow_cache)
 +{
 +  size_t index;
++
++  if (allow_cache && connector_ca_file != NULL && connector_ca_directory == NULL)
++    return proxysql_ssl_load_cached_ca(context, connector_ca_file);
 +
 +  if (connector_ca_file != NULL || connector_ca_directory != NULL)
 +    return SSL_CTX_load_verify_locations(context, connector_ca_file,
@@ -136,6 +127,8 @@ index 00000000..4cb3bb94
 +  for (index= 0; default_ca_files[index] != NULL; index++) {
 +    if (!proxysql_ssl_is_readable_file(default_ca_files[index]))
 +      continue;
++    if (allow_cache)
++      return proxysql_ssl_load_cached_ca(context, default_ca_files[index]);
 +    return SSL_CTX_load_verify_locations(context, default_ca_files[index],
 +                                         NULL);
 +  }
@@ -148,10 +141,11 @@ diff --git libmariadb/secure/proxysql_ca_cache.h libmariadb/secure/proxysql_ca_c
 new file mode 100644
 --- /dev/null
 +++ libmariadb/secure/proxysql_ca_cache.h
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,112 @@
 +#ifndef PROXYSQL_CA_CACHE_H
 +#define PROXYSQL_CA_CACHE_H
 +
++#include <openssl/err.h>
 +#include <openssl/buffer.h>
 +#include <openssl/pem.h>
 +
@@ -173,7 +167,7 @@ new file mode 100644
 +
 +static int proxysql_ssl_load_cached_ca(SSL_CTX *ctx, const char *path)
 +{
-+  FILE *file= NULL;
++  BIO *file= NULL;
 +  BIO *snapshot= NULL;
 +  BUF_MEM *contents= NULL;
 +  STACK_OF(X509_INFO) *certificates= NULL;
@@ -182,22 +176,24 @@ new file mode 100644
 +  unsigned char digest[EVP_MAX_MD_SIZE];
 +  unsigned int digest_len= 0;
 +  char buffer[8192];
-+  size_t count;
-+  int i, loaded= 0, result= 0;
++  int count, i, loaded= 0, result= 0;
 +
-+  file= fopen(path, "rb");
++  file= BIO_new_file(path, "rb");
 +  snapshot= BIO_new(BIO_s_mem());
 +  if (file == NULL || snapshot == NULL)
 +    goto done;
-+  while ((count= fread(buffer, 1, sizeof(buffer), file)) != 0) {
-+    if (BIO_write(snapshot, buffer, (int)count) != (int)count)
++  while ((count= BIO_read(file, buffer, sizeof(buffer))) > 0) {
++    if (BIO_write(snapshot, buffer, count) != count)
 +      goto done;
 +  }
-+  if (ferror(file))
++  if (count < 0)
 +    goto done;
 +  BIO_get_mem_ptr(snapshot, &contents);
-+  if (contents == NULL || contents->length == 0 ||
-+      EVP_Digest(contents->data, contents->length, digest, &digest_len,
++  if (contents == NULL || contents->length == 0) {
++    ERR_raise(ERR_LIB_X509, X509_R_NO_CERTIFICATE_OR_CRL_FOUND);
++    goto done;
++  }
++  if (EVP_Digest(contents->data, contents->length, digest, &digest_len,
 +                 EVP_sha256(), NULL) != 1)
 +    goto done;
 +
@@ -212,7 +208,7 @@ new file mode 100644
 +
 +  /* Parse the very bytes we hashed, not a second read of a changing file.
 +   * Never publish metadata or mutate the old store until all loading succeeds. */
-+  certificates= PEM_X509_INFO_read_bio(snapshot, NULL, NULL, NULL);
++  certificates= PEM_X509_INFO_read_bio(snapshot, NULL, NULL, "");
 +  replacement= SSL_CTX_new(TLS_client_method());
 +  filename= strdup(path);
 +  if (certificates == NULL || replacement == NULL || filename == NULL)
@@ -231,8 +227,10 @@ new file mode 100644
 +      ++loaded;
 +    }
 +  }
-+  if (loaded == 0)
++  if (loaded == 0) {
++    ERR_raise(ERR_LIB_X509, X509_R_NO_CERTIFICATE_OR_CRL_FOUND);
 +    goto done;
++  }
 +
 +  proxysql_ssl_ca_cache_clear();
 +  proxysql_ca_context= replacement;
@@ -245,8 +243,7 @@ new file mode 100644
 +  result= 1;
 +
 +done:
-+  if (file != NULL)
-+    fclose(file);
++  BIO_free(file);
 +  BIO_free(snapshot);
 +  sk_X509_INFO_pop_free(certificates, X509_INFO_free);
 +  SSL_CTX_free(replacement);
