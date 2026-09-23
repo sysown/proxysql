@@ -359,6 +359,10 @@ static bool parse_mysql_gtid(const char* s, ParsedGTID& out) {
 		return false;
 	}
 
+	if (!std::isdigit(static_cast<unsigned char>(colon[1]))) {
+		return false;
+	}
+
 	errno = 0;
 	char* end = nullptr;
 	unsigned long long parsed = strtoull(colon + 1, &end, 10);
@@ -499,6 +503,9 @@ bool parse_gtid_set(const char* encoded, GTID_Set* out) {
 			break;
 		}
 		p = comma + 1;
+		if (*p == '\0') {
+			return false;
+		}
 	}
 
 	*out = tmp;

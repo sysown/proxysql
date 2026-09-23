@@ -2,7 +2,7 @@
 #include "proxysql_gtid.h"
 
 int main() {
-	plan(14);
+	plan(16);
 	ParsedGTID p;
 
 	ok(parse_gtid("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42", &p)
@@ -37,5 +37,7 @@ int main() {
 	ok(!parse_gtid_set("", &set), "reject empty");
 	ok(!parse_gtid(" 0-1-100 ", &p), "reject surrounding whitespace");
 	ok(!parse_gtid("0-1-100", nullptr), "reject null out");
+	ok(!parse_gtid_set("0-1-270,", &set), "reject trailing comma");
+	ok(!parse_gtid("aaaaaaaa000011112222aaaaaaaaaaaa: 42", &p), "reject whitespace after colon");
 	return exit_status();
 }
