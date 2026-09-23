@@ -111,8 +111,10 @@ void PgSQL_ExplicitTxnStateMgr::rollback(bool rollback_and_chain) {
             uint32_t client_hash = pgsql_variables.client_get_hash(session, idx);
             uint32_t server_hash = pgsql_variables.server_get_hash(session, idx);
 
-            assert(client_hash == server_hash);
-            if (hash == client_hash)
+            // The two can differ here: a connection reset is put off while a transaction is
+            // open. ROLLBACK puts the backend back to its value at BEGIN, which is the snapshot,
+            // so both take it.
+            if (hash == client_hash && hash == server_hash)
                 continue;
 
             pgsql_variables.client_set_hash_and_value(session, idx, var_snapshot.var_value[idx], hash);
@@ -182,8 +184,8 @@ bool PgSQL_ExplicitTxnStateMgr::rollback_to_savepoint(std::string_view name) {
 		if (hash != 0) {
 			uint32_t client_hash = pgsql_variables.client_get_hash(session, idx);
 			uint32_t server_hash = pgsql_variables.server_get_hash(session, idx);
-			assert(client_hash == server_hash);
-			if (hash == client_hash)
+			// Can differ while a connection reset is put off; see rollback().
+			if (hash == client_hash && hash == server_hash)
 				continue;
 			pgsql_variables.client_set_hash_and_value(session, idx, var_snapshot.var_value[idx], hash);
 			pgsql_variables.server_set_hash_and_value(session, idx, var_snapshot.var_value[idx], hash);
