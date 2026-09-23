@@ -541,7 +541,8 @@ PGSQL_MOCK_BACKEND_TESTS := \
 	pgsql-reg_test_6110_invalid_reply_sequence-t \
 	pgsql-backend_death_query_retry-t \
 	pgsql-native_hostile_backend-t \
-	pgsql-native_scram_mechanism-t
+	pgsql-native_scram_mechanism-t \
+	pgsql-native_notify-t
 
 $(PGSQL_MOCK_BACKEND_TESTS): %: %.cpp pgsql_mock_backend.cpp pgsql_mock_backend.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< pgsql_mock_backend.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@

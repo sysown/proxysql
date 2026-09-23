@@ -46,6 +46,7 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "pgsql_mock_backend.h"
 
 CommandLine cl;
 static const int BACKEND_HG = 0;
@@ -797,12 +798,14 @@ static void scenario_copy_on_pinned(PGconn* admin, const std::vector<ServerRow>&
 static void scenario_multi_statement_listen_not_tracked(PGconn* admin, const std::vector<ServerRow>& saved) {
 	if (!setVar(admin, "pgsql-multiplexing", "true") || !flushBackendPool(admin, BACKEND_HG, saved)) {
 		ok(false, "multi-statement LISTEN setup failed");
+		ok(false, "multi-statement LISTEN setup failed");
 		return;
 	}
 	const std::string ch = chan("multi");
 	PGConnPtr listener = open_client_conn();
 	if (!listener || PQstatus(listener.get()) != CONNECTION_OK ||
 	    !subscribe(listener.get(), ch)) {          // sends "SELECT 1; LISTEN <chan>"
+		ok(false, "multi-statement LISTEN could not subscribe");
 		ok(false, "multi-statement LISTEN could not subscribe");
 		return;
 	}
@@ -811,6 +814,26 @@ static void scenario_multi_statement_listen_not_tracked(PGconn* admin, const std
 	const long v = waitConnUsed(admin, 0, 5000);
 	ok(v == 0, "a LISTEN written behind another statement is deliberately not tracked,"
 	           " so the connection is not pinned (ConnUsed=%ld)", v);
+
+	// Held by a temp table instead, the untracked subscription still receives notifications,
+	// and ProxySQL treats bytes on a held connection it does not know is subscribed as a dead
+	// backend: the first notification ends the session.
+	PGConnPtr held = open_client_conn();
+	PGConnPtr notifier = open_client_conn();
+	const std::string sch = chan("stray");
+	const bool ready = held && PQstatus(held.get()) == CONNECTION_OK &&
+	                   notifier && PQstatus(notifier.get()) == CONNECTION_OK &&
+	                   execSQL(held.get(), "CREATE TEMP TABLE stray_t(i int)") && subscribe(held.get(), sch);
+	if (ready) {
+		drainLogToNow();
+		notifyChannel(notifier.get(), sch, "stray");
+	}
+	const bool dropped = ready && sawBrokenIdleWarning();
+	std::string r;
+	const QRes rc = ready ? query_with_deadline(held.get(), "SELECT 42", 5000, &r) : Q_OK;
+	ok(dropped && rc != Q_OK,
+	   "a notification for that untracked LISTEN, on a connection held by a temp table, ends the session (%s)",
+	   qres_name(rc));
 }
 
 // PostgreSQL cannot splice a notification into a result it is already sending, so it
@@ -1081,12 +1104,134 @@ static void scenario_second_hostgroup(PGconn* admin, PGconn* be, const std::vect
 	flushBackendPool(admin, OTHER_HG, saved_other);
 }
 
+// ---------------------------------------------------------------------------
+// Messages a real PostgreSQL never sends to an idle connection, from a scripted fake backend.
+// An unknown message and garbage end the session; a parameter update and a notice do not.
+// ---------------------------------------------------------------------------
+static const int MOCK_HG = 48;
+static const char* MOCK_USER = "notify_mock_user";
+static const char* MOCK_PASS = "notify_mock_pw";
+
+static std::string mockHandshake() {
+	return pgmb_auth_ok() + pgmb_parameter_status("server_version", "16.2") +
+	       pgmb_parameter_status("client_encoding", "UTF8") +
+	       pgmb_backend_key_data(4242, 987654321) + pgmb_ready_for_query('I');
+}
+
+static std::string mockNotice(const std::string& text) {
+	std::string p;
+	p.push_back('S'); p += "NOTICE"; p.push_back('\0');
+	p.push_back('V'); p += "NOTICE"; p.push_back('\0');
+	p.push_back('C'); p += "00000";  p.push_back('\0');
+	p.push_back('M'); p += text;     p.push_back('\0');
+	p.push_back('\0');
+	std::string out;
+	pgmb_append_msg(out, 'N', p);
+	return out;
+}
+
+static PGConnPtr open_mock_client() {
+	std::stringstream ss;
+	ss << "host=" << cl.pgsql_host << " port=" << cl.pgsql_port
+	   << " user=" << MOCK_USER << " password=" << MOCK_PASS
+	   << " dbname=" << MOCK_USER << " sslmode=disable";
+	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
+}
+
+// Re-registering the row drops any pooled connection to the mock, so the next client gets a
+// fresh one and with it the script just set.
+static bool resetMockServer(PGconn* admin, const std::string& ip, unsigned port) {
+	return execSQL(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(MOCK_HG)) &&
+	       execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME") &&
+	       execSQL(admin, "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment)"
+	                      " VALUES (" + std::to_string(MOCK_HG) + ",'" + ip + "'," + std::to_string(port) +
+	                      ",4,0,'notify mock backend')") &&
+	       execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+}
+
+// Every case holds its connection with LISTEN: that is the only held connection whose idle
+// messages ProxySQL reads; on any other, the first byte ends the session.
+static void scenario_idle_messages_mock(PGconn* admin) {
+	// The monitor would connect to the mock and use up the scripts meant for the client; every
+	// other mock-backed test in this group turns it off for the same reason.
+	PgSQL_Mock_Backend mock;
+	const std::string ip = pgmb_local_ip_towards(cl.pgsql_host, cl.pgsql_port);
+	if (!setVar(admin, "pgsql-monitor_enabled", "false") || !mock.start() || ip.empty() ||
+	    !resetMockServer(admin, ip, mock.port()) ||
+	    !execSQL(admin, std::string("INSERT OR REPLACE INTO pgsql_users (username,password,active,default_hostgroup)"
+	                                " VALUES ('") + MOCK_USER + "','" + MOCK_PASS + "',1," + std::to_string(MOCK_HG) + ")") ||
+	    !execSQL(admin, "LOAD PGSQL USERS TO RUNTIME")) {
+		for (int i = 0; i < 3; i++) ok(false, "mock backend setup failed");
+		return;
+	}
+	diag("mock backend on %s:%u (hostgroup %d)", ip.c_str(), mock.port(), MOCK_HG);
+	const std::string listen_ok = pgmb_command_complete("LISTEN") + pgmb_ready_for_query('I');
+
+	// An unknown message type while idle.
+	{
+		resetMockServer(admin, ip, mock.port());
+		std::string junk;
+		pgmb_append_msg(junk, 'q', "junk");
+		mock.set_script({ step_expect_startup(), step_send(mockHandshake()),
+		                  step_expect_query(), step_send(listen_ok),
+		                  step_sleep(500), step_send(junk), step_sleep(300), step_close() });
+		PGConnPtr c = open_mock_client();
+		bool ready = false;
+		if (c && PQstatus(c.get()) == CONNECTION_OK) { drainLogToNow(); ready = execSQL(c.get(), "LISTEN mockchan"); }
+		ok(ready && wait_for_log_match(f_proxysql_log, ".*unexpected message type '0x71' on idle backend.*", 3000, 100) &&
+		   sawBrokenIdleWarning(),
+		   "an unknown message on an idle LISTEN connection ends it");
+	}
+	// A frame whose declared length cannot be valid.
+	{
+		resetMockServer(admin, ip, mock.port());
+		std::string bad;
+		pgmb_append_msg_raw_len(bad, 'D', 2, "");
+		mock.set_script({ step_expect_startup(), step_send(mockHandshake()),
+		                  step_expect_query(), step_send(listen_ok),
+		                  step_sleep(500), step_send(bad), step_sleep(300), step_close() });
+		PGConnPtr c = open_mock_client();
+		bool ready = false;
+		if (c && PQstatus(c.get()) == CONNECTION_OK) { drainLogToNow(); ready = execSQL(c.get(), "LISTEN mockchan"); }
+		ok(ready && wait_for_log_match(f_proxysql_log, ".*malformed message on idle backend.*", 3000, 100) &&
+		   sawBrokenIdleWarning(),
+		   "garbage on an idle LISTEN connection ends it");
+	}
+	// A parameter update and a notice while a LISTEN subscriber is idle: neither is a close, and
+	// the session has to carry on. PostgreSQL itself never sends these to an idle connection.
+	{
+		resetMockServer(admin, ip, mock.port());
+		mock.set_script({ step_expect_startup(), step_send(mockHandshake()),
+		                  step_expect_query(), step_send(listen_ok),
+		                  step_sleep(300),
+		                  step_send(pgmb_parameter_status("application_name", "renamed_by_mock") +
+		                            mockNotice("hello from an idle backend")),
+		                  step_expect_query(), step_send(pgmb_simple_result("alive", "1", 1)),
+		                  step_sleep(3000), step_close() });
+		PGConnPtr c = open_mock_client();
+		std::string v;
+		QRes rc = Q_FAILED;
+		if (c && PQstatus(c.get()) == CONNECTION_OK && execSQL(c.get(), "LISTEN mockchan")) {
+			usleep(800000);   // let the update and the notice arrive while the session is idle
+			rc = query_with_deadline(c.get(), "SELECT 1 AS alive", 5000, &v);
+		}
+		ok(rc == Q_OK && v == "1",
+		   "a parameter update and a notice on an idle LISTEN connection are absorbed (%s)", qres_name(rc));
+	}
+
+	mock.stop();
+	execSQL(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(MOCK_HG));
+	execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	execSQL(admin, std::string("DELETE FROM pgsql_users WHERE username='") + MOCK_USER + "'");
+	execSQL(admin, "LOAD PGSQL USERS TO RUNTIME");
+}
+
 int main(int, char**) {
 	// delivery: scenario A 2 x 2 modes, scenario B 1 x 2 modes plus cached 2 x 2 modes.
 	const int DELIVERY_ASSERTIONS = 4 + 2 + 4;
 	// pin lifecycle, buffered, disconnect, backend killed, TLS, many listeners, COPY,
-	// multi-statement LISTEN, notification during a query, second hostgroup
-	const int LIFECYCLE_ASSERTIONS = 6 + 2 + 4 + 2 + 2 + 2 + 1 + 1 + 2 + 2 + 2 + 3;
+	// multi-statement LISTEN, notification during a query, second hostgroup, mock backend
+	const int LIFECYCLE_ASSERTIONS = 6 + 2 + 4 + 2 + 2 + 2 + 1 + 2 + 2 + 2 + 2 + 3 + 3;
 	plan(DELIVERY_ASSERTIONS + LIFECYCLE_ASSERTIONS);
 	if (cl.getEnv()) return exit_status();
 	// The proxy closes the client socket when a backend is killed under a pinned
@@ -1141,6 +1286,8 @@ int main(int, char**) {
 		scenario_extended_protocol_listen(admin.get(), saved);
 		scenario_listen_on_pooled_libpq_conn(admin.get(), saved);
 		scenario_second_hostgroup(admin.get(), be.get(), saved);
+		// Last: it turns the monitor off, which cannot be turned back on.
+		scenario_idle_messages_mock(admin.get());
 	} else {
 		for (int i = 0; i < LIFECYCLE_ASSERTIONS; i++) ok(false, "cannot switch to the native backend protocol");
 	}
