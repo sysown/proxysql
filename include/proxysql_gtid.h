@@ -2,6 +2,7 @@
 #define PROXYSQL_GTID
 // highly inspired by libslave
 // https://github.com/vozbu/libslave/
+#include <cstdint>
 #include <list>
 #include <string>
 #include <unordered_map>
@@ -53,5 +54,15 @@ class GTID_Set {
 		const bool has_gtid(const std::string& uuid, const trxid_t trxid);
 		const std::string to_string(void);
 };
+
+struct ParsedGTID {
+	std::string id;
+	trxid_t trxid;
+	uint32_t server_id;
+	bool mariadb;
+};
+
+bool parse_gtid(const char* s, ParsedGTID* out);
+bool parse_gtid_set(const char* encoded, GTID_Set* out);
 
 #endif /* PROXYSQL_GTID */
