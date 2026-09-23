@@ -288,13 +288,30 @@ int main(int, char**) {
     // that were established while it was off. A surviving PLAINTEXT connection
     // would serve the native phase perfectly well, the corpus would match, and
     // the pg_stat_ssl check below would then report ssl=false — blaming the
-    // native TLS path for a stale-pool artefact. OFFLINE_HARD forces the drop.
+    // native TLS path for a stale-pool artefact.
+    //
+    // OFFLINE_HARD alone drops nothing: it only marks the server, and idle connections
+    // go on the next idle sweep (every pgsql-ping_interval_server_msec) or when the pool
+    // stats are read. Put back ONLINE before that, the server keeps them. So wait, while
+    // it is OFFLINE_HARD, until the pool reports no connection left.
     auto flushPool = [&]() {
-        std::stringstream off, on;
+        std::stringstream off, on, left_q;
         off << "UPDATE pgsql_servers SET status='OFFLINE_HARD' WHERE hostgroup_id=" << BACKEND_HG;
         on  << "UPDATE pgsql_servers SET status='ONLINE' WHERE hostgroup_id=" << BACKEND_HG;
+        left_q << "SELECT COALESCE(SUM(ConnUsed + ConnFree), 0) FROM stats_pgsql_connection_pool "
+                  "WHERE hostgroup=" << BACKEND_HG;
         bool good = execAdmin(admin, off.str()) && execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME");
-        usleep(300000);
+        std::string left;
+        for (int waited = 0; good && waited <= 15000; waited += 100) {
+            left = scalar(admin, left_q.str());
+            if (left == "0") break;
+            usleep(100000);
+        }
+        if (good && left != "0") {
+            diag("flushPool: hostgroup %d still holds %s connection(s) after OFFLINE_HARD",
+                 BACKEND_HG, left.empty() ? "?" : left.c_str());
+            good = false;
+        }
         good = good && execAdmin(admin, on.str()) && execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME");
         usleep(300000);
         return good;
