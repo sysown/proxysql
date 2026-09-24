@@ -9087,26 +9087,13 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 
-			char *sep_pos = NULL;
 			if (gtid_uuid != NULL) {
-				sep_pos = index(gtid_uuid,':');
-				if (sep_pos == NULL) {
+				if (!parse_gtid_for_routing(gtid_uuid, uuid, sizeof(uuid), &trxid)) {
 					gtid_uuid = NULL; // gtid is invalid
 				}
 			}
 
 			if (gtid_uuid != NULL) {
-				int l = sep_pos - gtid_uuid;
-				trxid = strtoull(sep_pos+1, NULL, 10);
-				int m;
-				int n=0;
-				for (m=0; m<l; m++) {
-					if (gtid_uuid[m] != '-') {
-						uuid[n]=gtid_uuid[m];
-						n++;
-					}
-				}
-				uuid[n]='\0';
 #ifndef STRESSTEST_POOL
 				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1);
 #endif // STRESSTEST_POOL

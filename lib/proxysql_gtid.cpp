@@ -481,6 +481,22 @@ bool parse_gtid(const char* s, ParsedGTID* out) {
 	return true;
 }
 
+bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
+                            uint64_t* trxid) {
+	if (gtid == nullptr || id_buf == nullptr || id_buf_len == 0 || trxid == nullptr) {
+		return false;
+	}
+
+	ParsedGTID parsed;
+	if (!parse_gtid(gtid, &parsed) || parsed.id.size() >= id_buf_len) {
+		return false;
+	}
+
+	memcpy(id_buf, parsed.id.c_str(), parsed.id.size() + 1);
+	*trxid = static_cast<uint64_t>(parsed.trxid);
+	return true;
+}
+
 static bool add_mysql_gtid_token(GTID_Set& set, const char* token, size_t len) {
 	if (token == nullptr || len == 0) {
 		return false;

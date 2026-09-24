@@ -2,7 +2,7 @@
 #include "proxysql_gtid.h"
 
 int main() {
-	plan(16);
+	plan(19);
 	ParsedGTID p;
 
 	ok(parse_gtid("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42", &p)
@@ -39,5 +39,16 @@ int main() {
 	ok(!parse_gtid("0-1-100", nullptr), "reject null out");
 	ok(!parse_gtid_set("0-1-270,", &set), "reject trailing comma");
 	ok(!parse_gtid("aaaaaaaa000011112222aaaaaaaaaaaa: 42", &p), "reject whitespace after colon");
+
+	char id[64];
+	uint64_t trx = 0;
+	ok(parse_gtid_for_routing("0-1-100", id, sizeof(id), &trx)
+	       && std::string(id) == "0" && trx == 100,
+	   "routing parse MariaDB");
+	ok(parse_gtid_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:9",
+	                          id, sizeof(id), &trx)
+	       && std::string(id) == "aaaaaaaa000011112222aaaaaaaaaaaa" && trx == 9,
+	   "routing parse MySQL");
+	ok(!parse_gtid_for_routing("nope", id, sizeof(id), &trx), "routing reject");
 	return exit_status();
 }

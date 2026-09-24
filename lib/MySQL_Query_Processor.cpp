@@ -12,6 +12,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Query_Processor.h"
 #include "Query_Processor_ParserSQL.h"
+#include "proxysql_gtid.h"
 
 extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Admin *GloAdmin;
@@ -566,22 +567,9 @@ __exit__query_parser_command_type:
 	return ret;
 }
 
-bool MySQL_Query_Processor::_is_valid_gtid(const char* gtid, size_t gtid_len) {
-	if (gtid_len < 3) {
-		return false;
-	}
-	const char* sep_pos = index(gtid, ':');
-	if (sep_pos == NULL) {
-		return false;
-	}
-	size_t uuid_len = sep_pos - gtid;
-	if (uuid_len < 1) {
-		return false;
-	}
-	if (gtid_len < uuid_len + 2) {
-		return false;
-	}
-	return true;
+bool MySQL_Query_Processor::_is_valid_gtid(const char* gtid, size_t) {
+	ParsedGTID parsed;
+	return parse_gtid(gtid, &parsed);
 }
 
 void MySQL_Query_Processor::update_query_processor_stats() {
