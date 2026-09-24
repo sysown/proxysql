@@ -15,6 +15,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Variables.h"
+#include "proxysql_gtid.h"
 #include "mysqld_error.h"
 #include <atomic>
 #include <mutex>
@@ -3348,22 +3349,22 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	if (mysql) {
 		if (mysql->net.last_errno==0) { // only if there is no error
 			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
-				const char *data;
-				size_t length;
-				if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
-					if (length >= (sizeof(gtid_uuid) - 1)) {
-						length = sizeof(gtid_uuid) - 1;
-					}
-					if (memcmp(gtid_uuid,data,length)) {
-						// copy to local buffer in MySQL_Connection
-						memcpy(gtid_uuid,data,length);
-						gtid_uuid[length]=0;
-						// copy to external buffer in MySQL_Backend
-						memcpy(buff,data,length);
-						buff[length]=0;
-						__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
-						ret = true;
-					}
+				const char *gtids = nullptr;
+				size_t gtids_len = 0;
+				if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &gtids, &gtids_len) == 0
+						&& gtids_len == 0) {
+					gtids = nullptr;
+				}
+				std::unordered_map<std::string, std::string> variables;
+				if (gtids == nullptr) {
+					get_variables(variables);
+				}
+				if (select_session_gtid(gtids, gtids_len, variables,
+				                        gtid_uuid, sizeof(gtid_uuid))) {
+					size_t length = strlen(gtid_uuid) + 1;
+					memcpy(buff, gtid_uuid, length);
+					__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
+					ret = true;
 				}
 			}
 		}

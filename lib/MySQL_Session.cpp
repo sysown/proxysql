@@ -2513,6 +2513,12 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 		return ret;
 	}
 
+	const char *server_version = mybe->server_myds->myconn->mysql->server_version;
+	const bool is_mariadb = server_version != nullptr && strstr(server_version, "MariaDB") != nullptr;
+	if (is_mariadb && mybe->server_myds->myconn->options.session_track_gtids_sent) {
+		return ret;
+	}
+
 	uint32_t b_int = mybe->server_myds->myconn->options.session_track_gtids_int;
 	uint32_t f_int = client_myds->myconn->options.session_track_gtids_int;
 
@@ -2536,6 +2542,15 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 	}
 
 	if (ret) {
+		if (is_mariadb) {
+			mybe->server_myds->myconn->options.session_track_gtids_sent = true;
+			if (mysql_thread___session_track_variables == session_track_variables::DISABLED) {
+				mybe->server_myds->myconn->options.session_track_variables_sent = true;
+				set_previous_status_mode3();
+				NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_VARIABLES);
+			}
+			return ret;
+		}
 		// we deprecated handler_again___verify_backend__generic_variable
 		// and moved the logic here
 		if (mybe->server_myds->myconn->options.session_track_gtids) { // reset current value
@@ -3500,7 +3515,13 @@ bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc)
 bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_VARIABLES(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"session_track_system_variables", "*", false);
+	const char *server_version = mybe->server_myds->myconn->mysql->server_version;
+	const bool is_mariadb = server_version != nullptr && strstr(server_version, "MariaDB") != nullptr;
+	const char *tracked_variables = "*";
+	if (is_mariadb && mysql_thread___session_track_variables == session_track_variables::DISABLED) {
+		tracked_variables = "IF(FIND_IN_SET('gtid_binlog_pos', @@session_track_system_variables) > 0, @@session_track_system_variables, IF(@@session_track_system_variables = '*', '*', CONCAT_WS(',', NULLIF(@@session_track_system_variables, ''), 'gtid_binlog_pos')))";
+	}
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"session_track_system_variables", tracked_variables, true);
 	return ret;
 }
 

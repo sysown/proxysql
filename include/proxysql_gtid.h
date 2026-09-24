@@ -71,6 +71,10 @@ bool parse_gtid(const char* s, ParsedGTID* out);
 bool parse_gtid(const char* s, size_t len, ParsedGTID* out);
 bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
                             uint64_t* trxid);
+bool select_session_gtid(
+	const char* session_track_gtids, size_t gtids_len,
+	const std::unordered_map<std::string, std::string>& sysvars,
+	char* buf, size_t buf_len);
 bool parse_gtid_set(const char* encoded, GTID_Set* out);
 
 #endif /* PROXYSQL_GTID */

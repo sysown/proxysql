@@ -3,7 +3,7 @@
 #include <cstring>
 
 int main() {
-	plan(24);
+	plan(29);
 	ParsedGTID p;
 
 	ok(parse_gtid("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42", &p)
@@ -82,5 +82,42 @@ int main() {
 	const char bounded_gtid[] = "0-1-100junk";
 	ok(parse_gtid(bounded_gtid, 7, &p) && p.id == "0" && p.trxid == 100,
 	   "bounded parser accepts exactly supplied length");
+
+	std::unordered_map<std::string, std::string> sysvars;
+	char session_gtid[128] = {0};
+	const char mysql_gtid[] = "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42";
+	ok(select_session_gtid(mysql_gtid, strlen(mysql_gtid), sysvars,
+	                       session_gtid, sizeof(session_gtid))
+	       && strcmp(session_gtid, mysql_gtid) == 0,
+	   "select session GTID copies MySQL payload");
+
+	memset(session_gtid, 0, sizeof(session_gtid));
+	sysvars["gtid_binlog_pos"] = "0-1-100";
+	ok(select_session_gtid(nullptr, 0, sysvars,
+	                       session_gtid, sizeof(session_gtid))
+	       && strcmp(session_gtid, "0-1-100") == 0,
+	   "select session GTID copies MariaDB binlog position");
+
+	memset(session_gtid, 0, sizeof(session_gtid));
+	sysvars["gtid_current_pos"] = "0-1-99";
+	ok(select_session_gtid(nullptr, 0, sysvars,
+	                       session_gtid, sizeof(session_gtid))
+	       && strcmp(session_gtid, "0-1-100") == 0,
+	   "select session GTID prefers binlog position");
+
+	strcpy(session_gtid, "0-1-100");
+	ok(!select_session_gtid(nullptr, 0, sysvars,
+	                        session_gtid, sizeof(session_gtid)),
+	   "select session GTID rejects unchanged value");
+
+	char unchanged[sizeof(session_gtid)];
+	memset(unchanged, 0x5a, sizeof(unchanged));
+	char unchanged_before[sizeof(unchanged)];
+	memcpy(unchanged_before, unchanged, sizeof(unchanged));
+	sysvars.clear();
+	ok(!select_session_gtid(nullptr, 0, sysvars,
+	                        unchanged, sizeof(unchanged))
+	       && memcmp(unchanged, unchanged_before, sizeof(unchanged)) == 0,
+	   "select session GTID leaves buffer unchanged without a value");
 	return exit_status();
 }

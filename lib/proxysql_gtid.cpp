@@ -509,6 +509,44 @@ bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
 	return true;
 }
 
+bool select_session_gtid(
+	const char* session_track_gtids, size_t gtids_len,
+	const std::unordered_map<std::string, std::string>& sysvars,
+	char* buf, size_t buf_len) {
+	if (buf == nullptr || buf_len == 0) {
+		return false;
+	}
+
+	std::string selected;
+	if (gtids_len > 0) {
+		if (session_track_gtids == nullptr) {
+			return false;
+		}
+		selected.assign(session_track_gtids, gtids_len);
+	} else {
+		auto binlog_pos = sysvars.find("gtid_binlog_pos");
+		if (binlog_pos != sysvars.end() && !binlog_pos->second.empty()) {
+			selected = binlog_pos->second;
+		} else {
+			auto current_pos = sysvars.find("gtid_current_pos");
+			if (current_pos != sysvars.end() && !current_pos->second.empty()) {
+				selected = current_pos->second;
+			}
+		}
+	}
+
+	if (selected.empty() || selected.size() >= buf_len) {
+		return false;
+	}
+	if (strncmp(selected.c_str(), buf, selected.size()) == 0
+			&& buf[selected.size()] == '\0') {
+		return false;
+	}
+
+	memcpy(buf, selected.c_str(), selected.size() + 1);
+	return true;
+}
+
 static bool add_mysql_gtid_token(GTID_Set& set, const char* token, size_t len) {
 	if (token == nullptr || len == 0) {
 		return false;
