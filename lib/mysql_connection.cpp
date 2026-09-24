@@ -3346,6 +3346,9 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	if (buff==NULL || trx_id == NULL) {
 		return ret;
 	}
+	if (!mysql_thread___update_gtid_from_ok && !mysql_thread___client_session_track_gtid) {
+		return ret;
+	}
 	if (mysql) {
 		if (mysql->net.last_errno==0) { // only if there is no error
 			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
@@ -3367,18 +3370,31 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 					ret = true;
 				}
 			}
-			if (!ret && mysql->server_version != nullptr && strstr(mysql->server_version, "MariaDB") != nullptr
-					&& mysql_query(mysql, "SELECT @@gtid_binlog_pos") == 0) {
-				MYSQL_RES *result = mysql_store_result(mysql);
-				if (result != nullptr) {
-					MYSQL_ROW row = mysql_fetch_row(result);
-					if (row != nullptr && row[0] != nullptr
-							&& select_mariadb_binlog_position(row[0], buff, sizeof(gtid_uuid))) {
-						__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
-						ret = true;
+			if (!ret && mysql->server_version != nullptr && strstr(mysql->server_version, "MariaDB") != nullptr) {
+				const auto saved_affected_rows = mysql->affected_rows;
+				const auto saved_insert_id = mysql->insert_id;
+				const auto saved_server_status = mysql->server_status;
+				const auto saved_warning_count = mysql->warning_count;
+				const auto saved_last_errno = mysql->net.last_errno;
+				if (mysql_query(mysql, "SELECT @@gtid_binlog_pos") == 0) {
+					MYSQL_RES *result = mysql_store_result(mysql);
+					if (result != nullptr) {
+						MYSQL_ROW row = mysql_fetch_row(result);
+						if (row != nullptr && row[0] != nullptr
+								&& select_mariadb_binlog_position(row[0], gtid_uuid, sizeof(gtid_uuid))) {
+							size_t length = strlen(gtid_uuid) + 1;
+							memcpy(buff, gtid_uuid, length);
+							__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
+							ret = true;
+						}
+						mysql_free_result(result);
 					}
-					mysql_free_result(result);
 				}
+				mysql->affected_rows = saved_affected_rows;
+				mysql->insert_id = saved_insert_id;
+				mysql->server_status = saved_server_status;
+				mysql->warning_count = saved_warning_count;
+				mysql->net.last_errno = saved_last_errno;
 			}
 		}
 	}
