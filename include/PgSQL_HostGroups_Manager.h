@@ -313,6 +313,7 @@ struct PgSQL_p_hg_dyn_counter {
 		hostgroup_pool_acquisitions,
 		hostgroup_pool_waits,
 		hostgroup_pool_wait_time,
+		hostgroup_backup_server_selected,
 #endif
 		SIZE_
 	};
@@ -668,6 +669,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_acquisitions_map {};
 		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_waits_map {};
 		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_wait_time_map {};
+		std::map<std::string, prometheus::Counter*> p_hostgroup_backup_server_selected_map {};
 		std::map<std::string, prometheus::Gauge*> p_hostgroup_pool_waiters_map {};
 #endif
 

@@ -197,12 +197,103 @@ static void test_mixed_eligibility() {
 		"mixed: only eligible server selected 100/100 times");
 }
 
+static void test_backup_threshold_noop() {
+	ServerCandidate candidates[2];
+	candidates[0] = make_candidate(0, 100);
+	candidates[1] = make_candidate(1, 1);
+	int n0 = 0;
+	for (int seed = 0; seed < 200; seed++) {
+		if (select_server_from_candidates(candidates, 2, seed, 0) == 0) n0++;
+	}
+	ok(n0 > 0 && n0 < 200, "T=0: low-weight server still selected sometimes");
+}
+
+static void test_backup_not_used_when_primary_up() {
+	ServerCandidate candidates[2];
+	candidates[0] = make_candidate(0, 100);
+	candidates[1] = make_candidate(1, 1);
+	int pass = 0;
+	for (int seed = 0; seed < 200; seed++) {
+		if (select_server_from_candidates(candidates, 2, seed, 10) == 0) pass++;
+	}
+	ok(pass == 200, "T=10: never select weight=1 while primary eligible");
+}
+
+static void test_backup_used_when_primary_down() {
+	ServerCandidate candidates[2];
+	candidates[0] = make_candidate(0, 100);
+	candidates[0].status = SERVER_SHUNNED;
+	candidates[1] = make_candidate(1, 1);
+	int pass = 0;
+	for (int seed = 0; seed < 100; seed++) {
+		if (select_server_from_candidates(candidates, 2, seed, 10) == 1) pass++;
+	}
+	ok(pass == 100, "T=10: backup selected when primary not ONLINE");
+}
+
+static void test_weight_zero_never_backup() {
+	ServerCandidate candidates[2];
+	candidates[0] = make_candidate(0, 100);
+	candidates[0].status = SERVER_SHUNNED;
+	candidates[1] = make_candidate(1, 0);
+	ok(select_server_from_candidates(candidates, 2, 1, 10) == -1,
+		"weight=0 is never a backup");
+}
+
+static void test_all_below_threshold_used() {
+	ServerCandidate candidates[2];
+	candidates[0] = make_candidate(0, 1);
+	candidates[1] = make_candidate(1, 2);
+	int r = select_server_from_candidates(candidates, 2, 1, 10);
+	ok(r == 0 || r == 1, "all below T: backups used (no deadlock)");
+}
+
+static void test_availability_status_busy_primary() {
+	ServerCandidate candidates[2];
+	candidates[0] = make_candidate(0, 100, 10);
+	candidates[0].current_connections = 10;
+	candidates[1] = make_candidate(1, 1);
+	ok(select_server_from_candidates(candidates, 2, 1, 10, BACKUP_AVAIL_STATUS) == -1,
+		"status: ONLINE primary at max_conn does not open backups");
+	ok(select_server_from_candidates(candidates, 2, 1, 10, BACKUP_AVAIL_SELECTABLE) == 1,
+		"selectable: primary ineligible → backup");
+	ok(select_server_from_candidates(candidates, 2, 1, 10, BACKUP_AVAIL_CAPACITY) == 1,
+		"capacity: primary at max_conn → backup");
+}
+
+static void test_availability_latency_does_not_open_capacity() {
+	ServerCandidate candidates[2];
+	candidates[0] = make_candidate(0, 100);
+	candidates[0].max_latency_us = 1000;
+	candidates[0].current_latency_us = 5000;
+	candidates[1] = make_candidate(1, 1);
+	ok(select_server_from_candidates(candidates, 2, 1, 10, BACKUP_AVAIL_CAPACITY) == -1,
+		"capacity: high-latency ONLINE primary with free slots does not open backups");
+	ok(select_server_from_candidates(candidates, 2, 1, 10, BACKUP_AVAIL_SELECTABLE) == 1,
+		"selectable: high latency → backup");
+}
+
+static void test_backup_weighted_among_backups() {
+	ServerCandidate candidates[3];
+	candidates[0] = make_candidate(0, 100);
+	candidates[0].status = SERVER_SHUNNED;
+	candidates[1] = make_candidate(1, 3);
+	candidates[2] = make_candidate(2, 1);
+	int c1 = 0;
+	const int N = 4000;
+	for (int seed = 0; seed < N; seed++) {
+		if (select_server_from_candidates(candidates, 3, seed, 10) == 1) c1++;
+	}
+	double pct = (double)c1 / N * 100;
+	ok(pct > 60 && pct < 90, "backups 3:1: idx 1 selected %.1f%% (expect ~75%%)", pct);
+}
+
 // ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(21);
+	plan(21 + 11);
 
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
@@ -216,7 +307,15 @@ int main() {
 	test_weighted_distribution();        // 1
 	test_determinism();                  // 1
 	test_mixed_eligibility();            // 1
-	// Total: 1+12+1+1+1+1+1+1+1+1 = 21
+	test_backup_threshold_noop();                 // 1
+	test_backup_not_used_when_primary_up();       // 1
+	test_backup_used_when_primary_down();         // 1
+	test_weight_zero_never_backup();              // 1
+	test_all_below_threshold_used();              // 1
+	test_availability_status_busy_primary();      // 3
+	test_availability_latency_does_not_open_capacity(); // 2
+	test_backup_weighted_among_backups();         // 1
+	// Total: 21 + 11 = 32
 
 	test_cleanup_minimal();
 	return exit_status();

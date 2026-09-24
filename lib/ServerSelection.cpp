@@ -24,46 +24,96 @@ bool is_candidate_eligible(const ServerCandidate &c) {
 	return true;
 }
 
-int select_server_from_candidates(
+static bool weight_is_primary(int64_t weight, int64_t T) {
+	return weight > 0 && weight >= T;
+}
+
+static bool weight_is_backup(int64_t weight, int64_t T) {
+	return weight > 0 && weight < T;
+}
+
+static bool primary_present(
 	const ServerCandidate *candidates,
 	int count,
-	unsigned int random_seed)
+	int64_t T,
+	BackupAvailability mode)
 {
-	if (candidates == nullptr || count <= 0) {
-		return -1;
+	for (int i = 0; i < count; i++) {
+		const ServerCandidate &c = candidates[i];
+		if (!weight_is_primary(c.weight, T)) {
+			continue;
+		}
+		if (mode == BACKUP_AVAIL_SELECTABLE) {
+			if (is_candidate_eligible(c)) {
+				return true;
+			}
+		} else if (mode == BACKUP_AVAIL_STATUS) {
+			if (c.status == SERVER_ONLINE) {
+				return true;
+			}
+		} else if (mode == BACKUP_AVAIL_CAPACITY) {
+			if (c.status == SERVER_ONLINE && c.current_connections < c.max_connections) {
+				return true;
+			}
+		}
 	}
+	return false;
+}
 
-	// First pass: compute total weight of eligible candidates
+static int select_eligible_in_tier(
+	const ServerCandidate *candidates,
+	int count,
+	unsigned int random_seed,
+	int64_t T,
+	bool backups)
+{
 	int64_t total_weight = 0;
 	for (int i = 0; i < count; i++) {
-		if (is_candidate_eligible(candidates[i]) && candidates[i].weight > 0) {
+		const bool in_tier = backups ? weight_is_backup(candidates[i].weight, T)
+					     : weight_is_primary(candidates[i].weight, T);
+		if (in_tier && is_candidate_eligible(candidates[i])) {
 			total_weight += candidates[i].weight;
 		}
 	}
-
 	if (total_weight == 0) {
-		return -1;  // no eligible candidates
+		return -1;
 	}
-
-	// Seeded random selection
-	// Use a simple LCG to avoid polluting global srand() state
-	// LCG: next = (a * seed + c) mod m  (Numerical Recipes parameters)
 	unsigned int rng_state = random_seed;
 	rng_state = rng_state * 1664525u + 1013904223u;
-	// Use 64-bit modulo to avoid truncation when total_weight > UINT_MAX
 	int64_t target = (int64_t)(rng_state % (uint64_t)total_weight) + 1;
-
-	// Second pass: weighted selection
 	int64_t cumulative = 0;
 	for (int i = 0; i < count; i++) {
-		if (is_candidate_eligible(candidates[i]) && candidates[i].weight > 0) {
+		const bool in_tier = backups ? weight_is_backup(candidates[i].weight, T)
+					     : weight_is_primary(candidates[i].weight, T);
+		if (in_tier && is_candidate_eligible(candidates[i])) {
 			cumulative += candidates[i].weight;
 			if (cumulative >= target) {
 				return candidates[i].index;
 			}
 		}
 	}
+	return -1;
+}
 
-	// Should not reach here if total_weight > 0, but safety fallback
+int select_server_from_candidates(
+	const ServerCandidate *candidates,
+	int count,
+	unsigned int random_seed,
+	int64_t backup_weight_threshold,
+	BackupAvailability backup_availability)
+{
+	if (candidates == nullptr || count <= 0) {
+		return -1;
+	}
+	if (backup_weight_threshold <= 0) {
+		return select_eligible_in_tier(candidates, count, random_seed, 0, false);
+	}
+	int idx = select_eligible_in_tier(candidates, count, random_seed, backup_weight_threshold, false);
+	if (idx >= 0) {
+		return idx;
+	}
+	if (!primary_present(candidates, count, backup_weight_threshold, backup_availability)) {
+		return select_eligible_in_tier(candidates, count, random_seed, backup_weight_threshold, true);
+	}
 	return -1;
 }

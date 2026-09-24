@@ -11,6 +11,89 @@ static unsigned long long array_mysrvc_cands = 0;
 
 extern MySQL_Threads_Handler *GloMTH;
 
+#ifdef PROXYSQL31
+namespace {
+
+bool mysql_weight_is_primary(int weight, int64_t T) {
+	return weight > 0 && static_cast<int64_t>(weight) >= T;
+}
+
+bool mysql_primary_present(MyHGC *hgc, int64_t T, int8_t mode) {
+	const unsigned int n = hgc->mysrvs->cnt();
+	for (unsigned int i = 0; i < n; i++) {
+		MySrvC *s = hgc->mysrvs->idx(i);
+		if (!mysql_weight_is_primary(s->weight, T)) {
+			continue;
+		}
+		if (mode == 0) { // selectable: handled via candidate list
+			continue;
+		} else if (mode == 1) { // status
+			if (s->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
+				return true;
+			}
+		} else if (mode == 2) { // capacity
+			if (s->get_status() == MYSQL_SERVER_STATUS_ONLINE &&
+				s->ConnectionsUsed->conns_length() < s->max_connections) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+void mysql_compact_candidates(
+	MySrvC **cands, unsigned int &num, unsigned int &sum, unsigned int &used,
+	int64_t T, bool backups)
+{
+	unsigned int w = 0, u = 0, n = 0;
+	for (unsigned int i = 0; i < num; i++) {
+		MySrvC *s = cands[i];
+		const bool keep = backups
+			? (s->weight > 0 && static_cast<int64_t>(s->weight) < T)
+			: mysql_weight_is_primary(s->weight, T);
+		if (keep) {
+			cands[n++] = s;
+			w += s->weight;
+			u += s->ConnectionsUsed->conns_length();
+		}
+	}
+	num = n;
+	sum = w;
+	used = u;
+}
+
+void mysql_apply_backup_weight_threshold(
+	MyHGC *hgc, MySrvC **cands, unsigned int &num, unsigned int &sum, unsigned int &used,
+	bool &used_backup)
+{
+	used_backup = false;
+	const int64_t T = hgc->attributes.backup_weight_threshold;
+	if (T <= 0) {
+		return;
+	}
+	unsigned int pri_sum = 0;
+	for (unsigned int i = 0; i < num; i++) {
+		if (mysql_weight_is_primary(cands[i]->weight, T)) {
+			pri_sum += cands[i]->weight;
+		}
+	}
+	if (pri_sum > 0) {
+		mysql_compact_candidates(cands, num, sum, used, T, false);
+		return;
+	}
+	const int8_t mode = hgc->attributes.backup_availability;
+	bool present = (mode == 0) ? false : mysql_primary_present(hgc, T, mode);
+	if (!present) {
+		mysql_compact_candidates(cands, num, sum, used, T, true);
+		used_backup = (num > 0);
+		return;
+	}
+	mysql_compact_candidates(cands, num, sum, used, T, false);
+}
+
+}
+#endif
+
 MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
@@ -30,6 +113,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	MySrvC *mysrvcCandidates_static[32];
 	MySrvC **mysrvcCandidates = mysrvcCandidates_static;
 	unsigned int num_candidates = 0;
+	bool used_backup = false;
 	bool max_connections_reached = false;
 	if (l>32) {
 		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
@@ -183,6 +267,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 			}
 		}
+#ifdef PROXYSQL31
+		mysql_apply_backup_weight_threshold(this, mysrvcCandidates, num_candidates, sum, TotalUsedConn, used_backup);
+#endif
 		if (sum==0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
@@ -338,6 +425,18 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			New_sum+=mysrvc->weight;
 			if (k<=New_sum) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+#ifdef PROXYSQL31
+				if (used_backup) {
+					backup_servers_selected.fetch_add(1, std::memory_order_relaxed);
+					static time_t last_backup_log = 0;
+					time_t now = time(NULL);
+					if (now - last_backup_log > 1) {
+						last_backup_log = now;
+						proxy_warning("Hostgroup %u: selecting backup-weight server %s:%d\n",
+							hid, mysrvc->address, mysrvc->port);
+					}
+				}
+#endif
 				if (l>32) {
 					free(mysrvcCandidates);
 				}

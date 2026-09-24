@@ -69,6 +69,15 @@ Phase 1 limitations (documented in code + spec):
 - Cluster sync of variables works via the standard `mysql_variables`
   path; metric counters are per-node
 
+#### New Features (3.1)
+
+- `hostgroup_settings.backup_weight_threshold` / `backup_availability`: servers with
+  `0 < weight < T` are selected only when no primary (`weight >= T`) is available
+  in the same hostgroup (MySQL and PostgreSQL). Default `T=0` is a no-op.
+  `weight=0` remains never selected. PROXYSQL31 only.
+  Prometheus: `proxysql_mysql_hostgroup_backup_server_selected_total`,
+  `proxysql_pgsql_hostgroup_backup_server_selected_total`.
+
 ### v3.0.2 (2025-08-06)
 #### PostgreSQL Enhancements
 - Improved error processing and reporting format for backend connections using libpq (#4947)

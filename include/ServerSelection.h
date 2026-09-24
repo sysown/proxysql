@@ -47,6 +47,12 @@ struct ServerCandidate {
 	unsigned int max_repl_lag;         ///< Maximum allowed lag (0 = no limit).
 };
 
+enum BackupAvailability : int8_t {
+	BACKUP_AVAIL_SELECTABLE = 0,
+	BACKUP_AVAIL_STATUS = 1,
+	BACKUP_AVAIL_CAPACITY = 2
+};
+
 /**
  * @brief Check if a server candidate is eligible for selection.
  *
@@ -74,12 +80,18 @@ bool is_candidate_eligible(const ServerCandidate &candidate);
  * @param candidates Array of server candidates.
  * @param count      Number of candidates in the array.
  * @param random_seed Seed for deterministic random selection.
+ * @param backup_weight_threshold T. T = 0 preserves today's behaviour.
+ *        weight = 0 is never selected.
+ * @param backup_availability How a primary is considered present. Pass 2
+ *        (0 < weight < T) runs only when no primary is present under this mode.
  * @return Index field of the selected candidate, or -1 if none eligible.
  */
 int select_server_from_candidates(
 	const ServerCandidate *candidates,
 	int count,
-	unsigned int random_seed
+	unsigned int random_seed,
+	int64_t backup_weight_threshold = 0,
+	BackupAvailability backup_availability = BACKUP_AVAIL_SELECTABLE
 );
 
 #endif // SERVER_SELECTION_H
