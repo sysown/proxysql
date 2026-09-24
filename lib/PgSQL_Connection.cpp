@@ -551,6 +551,14 @@ handler_again:
 				NEXT_IMMEDIATE(fetch_result_end_st);
 			}
 			init_query_result();
+			if (native_mode) {
+				// The request was flushed a moment ago and the backend has not had time to
+				// answer, so reading now returns EAGAIN almost every time. Let poll() report
+				// the reply instead; if it is already there, poll() returns at once.
+				async_exit_status = PG_EVENT_READ;
+				next_event(ASYNC_USE_RESULT_CONT);
+				break;
+			}
 			NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 		} else {
 			assert(0); // shouldn't ever reach here
