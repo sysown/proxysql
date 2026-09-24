@@ -1,9 +1,45 @@
 #include "tap.h"
+#include "test_globals.h"
+#include "test_init.h"
 #include "proxysql_gtid.h"
+#include "cpp.h"
+#include "mysql_connection.h"
 #include <cstring>
 
+static void test_session_tracking_reset() {
+	{
+		MySQL_Connection connection;
+		connection.options.session_track_gtids = strdup("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42");
+		connection.options.session_track_gtids_int = 42;
+		connection.options.session_track_gtids_sent = true;
+		connection.options.session_track_variables_sent = true;
+		connection.options.session_track_state_sent = true;
+		connection.reset();
+		ok(connection.options.session_track_gtids == nullptr
+		       && connection.options.session_track_gtids_int == 0
+		       && !connection.options.session_track_gtids_sent
+		       && !connection.options.session_track_variables_sent
+		       && !connection.options.session_track_state_sent,
+		   "reset clears tracking state and frees the GTID payload");
+	}
+	{
+		MySQL_Connection connection;
+		connection.options.session_track_gtids_int = 42;
+		connection.options.session_track_gtids_sent = true;
+		connection.options.session_track_variables_sent = true;
+		connection.options.session_track_state_sent = true;
+		connection.reset();
+		ok(connection.options.session_track_gtids_int == 0
+		       && !connection.options.session_track_gtids_sent
+		       && !connection.options.session_track_variables_sent
+		       && !connection.options.session_track_state_sent,
+		   "reset clears tracking sent flags without a GTID payload");
+	}
+}
+
 int main() {
-	plan(29);
+	plan(32);
+	ok(test_init_minimal() == 0, "test_init_minimal() succeeds");
 	ParsedGTID p;
 
 	ok(parse_gtid("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42", &p)
@@ -119,5 +155,8 @@ int main() {
 	                        unchanged, sizeof(unchanged))
 	       && memcmp(unchanged, unchanged_before, sizeof(unchanged)) == 0,
 	   "select session GTID leaves buffer unchanged without a value");
+
+	test_session_tracking_reset();
+	test_cleanup_minimal();
 	return exit_status();
 }

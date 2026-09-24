@@ -3334,8 +3334,8 @@ void MySQL_Connection::reset() {
 	if (options.session_track_gtids) {
 		free (options.session_track_gtids);
 		options.session_track_gtids = NULL;
-		options.session_track_gtids_sent = false;
 	}
+	options.session_track_gtids_sent = false;
 	options.session_track_variables_sent = false;
 	options.session_track_state_sent = false;
 }

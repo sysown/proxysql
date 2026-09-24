@@ -3521,7 +3521,8 @@ bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_VARIABLES(int *
 	if (is_mariadb && mysql_thread___session_track_variables == session_track_variables::DISABLED) {
 		tracked_variables = "IF(FIND_IN_SET('gtid_binlog_pos', @@session_track_system_variables) > 0, @@session_track_system_variables, IF(@@session_track_system_variables = '*', '*', CONCAT_WS(',', NULLIF(@@session_track_system_variables, ''), 'gtid_binlog_pos')))";
 	}
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"session_track_system_variables", tracked_variables, true);
+	const bool no_quote = strcmp(tracked_variables, "*") != 0;
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"session_track_system_variables", tracked_variables, no_quote);
 	return ret;
 }
 
