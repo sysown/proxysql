@@ -179,12 +179,14 @@ GTID_Set::GTID_Set() {}
 GTID_Set GTID_Set::copy() {
 	GTID_Set cp;
 	cp.map = map;
+	cp.last_server_id = last_server_id;
 	return cp;
 }
 
 // Clears all GTID set entries.
 void GTID_Set::clear() {
 	map.clear();
+	last_server_id.clear();
 }
 
 // Adds a new trxid interval for a given UUID. Returns true if the set was modified, false otherwise.
@@ -277,6 +279,18 @@ const bool GTID_Set::has_gtid(const std::string& uuid, const trxid_t trxid) {
 	return false;
 }
 
+void GTID_Set::set_server_id(const std::string& id, uint32_t server_id) {
+	last_server_id[id] = server_id;
+}
+
+uint32_t GTID_Set::get_server_id(const std::string& id) {
+	auto it = last_server_id.find(id);
+	if (it == last_server_id.end()) {
+		return 0;
+	}
+	return it->second;
+}
+
 // Yields a string representation for a GTID set.
 const std::string GTID_Set::to_string(void) {
 	std::stringstream out;
@@ -286,15 +300,49 @@ const std::string GTID_Set::to_string(void) {
 			out << ",";
 		}
 		std::string uuid = it->first;
-		uuid.insert(8,"-");
-		uuid.insert(13,"-");
-		uuid.insert(18,"-");
-		uuid.insert(23,"-");
+		if (uuid.size() == 32) {
+			uuid.insert(8,"-");
+			uuid.insert(13,"-");
+			uuid.insert(18,"-");
+			uuid.insert(23,"-");
+		}
 		out << uuid;
 		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
 			out << ":" << itr->to_string();
 		}
 		first_uuid = false;
+	}
+
+	return out.str();
+}
+
+const std::string GTID_Set::to_display_string(void) {
+	std::stringstream out;
+	bool first = true;
+	for (auto it = map.begin(); it != map.end(); ++it) {
+		if (!first) {
+			out << ",";
+		}
+		std::string uuid = it->first;
+		if (uuid.size() == 32) {
+			uuid.insert(8,"-");
+			uuid.insert(13,"-");
+			uuid.insert(18,"-");
+			uuid.insert(23,"-");
+			out << uuid;
+			for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
+				out << ":" << itr->to_string();
+			}
+		} else {
+			trxid_t max_end = 0;
+			for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
+				if (itr->end > max_end) {
+					max_end = itr->end;
+				}
+			}
+			out << uuid << "-" << get_server_id(uuid) << "-" << max_end;
+		}
+		first = false;
 	}
 
 	return out.str();
@@ -498,6 +546,7 @@ bool parse_gtid_set(const char* encoded, GTID_Set* out) {
 				return false;
 			}
 			tmp.add(parsed.id, trxid_t(1), parsed.trxid);
+			tmp.set_server_id(parsed.id, parsed.server_id);
 		}
 		if (comma == nullptr) {
 			break;
