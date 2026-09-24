@@ -567,9 +567,9 @@ __exit__query_parser_command_type:
 	return ret;
 }
 
-bool MySQL_Query_Processor::_is_valid_gtid(const char* gtid, size_t) {
+bool MySQL_Query_Processor::_is_valid_gtid(const char* gtid, size_t gtid_len) {
 	ParsedGTID parsed;
-	return parse_gtid(gtid, &parsed);
+	return parse_gtid(gtid, gtid_len, &parsed);
 }
 
 void MySQL_Query_Processor::update_query_processor_stats() {

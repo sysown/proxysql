@@ -481,6 +481,18 @@ bool parse_gtid(const char* s, ParsedGTID* out) {
 	return true;
 }
 
+bool parse_gtid(const char* s, size_t len, ParsedGTID* out) {
+	if (s == nullptr || out == nullptr || len == 0) {
+		return false;
+	}
+
+	std::string bounded(s, len);
+	if (bounded.find('\0') != std::string::npos) {
+		return false;
+	}
+	return parse_gtid(bounded.c_str(), out);
+}
+
 bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
                             uint64_t* trxid) {
 	if (gtid == nullptr || id_buf == nullptr || id_buf_len == 0 || trxid == nullptr) {

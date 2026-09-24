@@ -68,6 +68,7 @@ struct ParsedGTID {
 };
 
 bool parse_gtid(const char* s, ParsedGTID* out);
+bool parse_gtid(const char* s, size_t len, ParsedGTID* out);
 bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
                             uint64_t* trxid);
 bool parse_gtid_set(const char* encoded, GTID_Set* out);

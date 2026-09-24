@@ -1,8 +1,9 @@
 #include "tap.h"
 #include "proxysql_gtid.h"
+#include <cstring>
 
 int main() {
-	plan(19);
+	plan(24);
 	ParsedGTID p;
 
 	ok(parse_gtid("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42", &p)
@@ -50,5 +51,34 @@ int main() {
 	       && std::string(id) == "aaaaaaaa000011112222aaaaaaaaaaaa" && trx == 9,
 	   "routing parse MySQL");
 	ok(!parse_gtid_for_routing("nope", id, sizeof(id), &trx), "routing reject");
+
+	char id_sentinel[sizeof(id)];
+	memset(id_sentinel, 0x5a, sizeof(id_sentinel));
+	memset(id, 0x5a, sizeof(id));
+	trx = 0xfeedfacecafebeefULL;
+	ok(!parse_gtid_for_routing(nullptr, id, sizeof(id), &trx)
+	       && trx == 0xfeedfacecafebeefULL && memcmp(id, id_sentinel, sizeof(id)) == 0,
+	   "routing rejects null gtid without changing outputs");
+	memset(id, 0x5a, sizeof(id));
+	trx = 0xfeedfacecafebeefULL;
+	ok(!parse_gtid_for_routing("0-1-100", nullptr, sizeof(id), &trx)
+	       && trx == 0xfeedfacecafebeefULL && memcmp(id, id_sentinel, sizeof(id)) == 0,
+	   "routing rejects null id buffer without changing outputs");
+	memset(id, 0x5a, sizeof(id));
+	trx = 0xfeedfacecafebeefULL;
+	ok(!parse_gtid_for_routing("0-1-100", id, 0, &trx)
+	       && trx == 0xfeedfacecafebeefULL && memcmp(id, id_sentinel, sizeof(id)) == 0,
+	   "routing rejects zero id buffer length without changing outputs");
+	memset(id, 0x5a, sizeof(id));
+	trx = 0xfeedfacecafebeefULL;
+	char small_id[1] = { 0x5a };
+	char small_guard = 0x5a;
+	ok(!parse_gtid_for_routing("0-1-100", small_id, sizeof(small_id), &trx)
+	       && trx == 0xfeedfacecafebeefULL && small_id[0] == 0x5a && small_guard == 0x5a,
+	   "routing rejects a too-small id buffer without overflow");
+
+	const char bounded_gtid[] = "0-1-100junk";
+	ok(parse_gtid(bounded_gtid, 7, &p) && p.id == "0" && p.trxid == 100,
+	   "bounded parser accepts exactly supplied length");
 	return exit_status();
 }
