@@ -71,10 +71,12 @@ int main() {
 	   "routing rejects zero id buffer length without changing outputs");
 	memset(id, 0x5a, sizeof(id));
 	trx = 0xfeedfacecafebeefULL;
-	char small_id[1] = { 0x5a };
-	char small_guard = 0x5a;
-	ok(!parse_gtid_for_routing("0-1-100", small_id, sizeof(small_id), &trx)
-	       && trx == 0xfeedfacecafebeefULL && small_id[0] == 0x5a && small_guard == 0x5a,
+	struct {
+		char id[1];
+		char guard;
+	} small = { { 0x5a }, 0x5a };
+	ok(!parse_gtid_for_routing("0-1-100", small.id, sizeof(small.id), &trx)
+	       && trx == 0xfeedfacecafebeefULL && small.id[0] == 0x5a && small.guard == 0x5a,
 	   "routing rejects a too-small id buffer without overflow");
 
 	const char bounded_gtid[] = "0-1-100junk";
