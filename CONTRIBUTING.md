@@ -27,7 +27,31 @@ Two variants exist in the same document:
 
 ## Development Setup
 
-ProxySQL provides Docker build images for development. The required packages for building are listed in the Dockerfiles at: https://github.com/ProxySQL/docker-images/tree/main/build-images
+### Using Dev Container (Recommended)
+
+The easiest way to set up a development environment is using the included [dev container](https://containers.dev/):
+
+**With a compatible IDE:**
+
+Many IDEs support dev containers natively or via extensions. Simply open the repository and follow your IDE's prompts to reopen in the container.
+
+**With Docker Compose:**
+```bash
+# Start the dev container and MariaDB
+docker compose -f .devcontainer/docker-compose.yaml up -d
+
+# Go into dev container shell
+docker compose -f .devcontainer/docker-compose.yaml exec dev bash
+
+# Build ProxySQL
+make
+```
+
+The MariaDB service is available at hostname `mariadb` for testing.
+
+### Manual Setup
+
+If you prefer to set up your environment manually, the required packages for building are listed in the Dockerfiles at: https://github.com/ProxySQL/docker-images/tree/main/build-images
 
 For example, to see packages needed for Ubuntu 24.04, check: https://github.com/ProxySQL/docker-images/blob/main/build-images/build-ubuntu24/Dockerfile
 
