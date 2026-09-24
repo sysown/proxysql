@@ -3367,6 +3367,19 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 					ret = true;
 				}
 			}
+			if (!ret && mysql->server_version != nullptr && strstr(mysql->server_version, "MariaDB") != nullptr
+					&& mysql_query(mysql, "SELECT @@gtid_binlog_pos") == 0) {
+				MYSQL_RES *result = mysql_store_result(mysql);
+				if (result != nullptr) {
+					MYSQL_ROW row = mysql_fetch_row(result);
+					if (row != nullptr && row[0] != nullptr
+							&& select_mariadb_binlog_position(row[0], buff, sizeof(gtid_uuid))) {
+						__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
+						ret = true;
+					}
+					mysql_free_result(result);
+				}
+			}
 		}
 	}
 	return ret;

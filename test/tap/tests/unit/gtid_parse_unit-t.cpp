@@ -6,6 +6,27 @@
 #include "mysql_connection.h"
 #include <cstring>
 
+static void test_mariadb_binlog_position_selection() {
+	char position[16] = {0};
+	ok(select_mariadb_binlog_position("0-1-100", position, sizeof(position))
+	       && strcmp(position, "0-1-100") == 0,
+	   "select MariaDB position copies the native value");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!select_mariadb_binlog_position("", position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "select MariaDB position rejects an empty value without changing the buffer");
+
+	strcpy(position, "0-1-100");
+	ok(!select_mariadb_binlog_position("0-1-100", position, sizeof(position)),
+	   "select MariaDB position rejects an unchanged value");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!select_mariadb_binlog_position("0-1-100", position, 4)
+	       && memcmp(position, "\x5a\x5a\x5a\x5a", 4) == 0,
+	   "select MariaDB position rejects an oversized value without changing the buffer");
+}
+
 static void test_session_tracking_reset() {
 	{
 		MySQL_Connection connection;
@@ -38,7 +59,7 @@ static void test_session_tracking_reset() {
 }
 
 int main() {
-	plan(32);
+	plan(36);
 	ok(test_init_minimal() == 0, "test_init_minimal() succeeds");
 	ParsedGTID p;
 
@@ -156,6 +177,7 @@ int main() {
 	       && memcmp(unchanged, unchanged_before, sizeof(unchanged)) == 0,
 	   "select session GTID leaves buffer unchanged without a value");
 
+	test_mariadb_binlog_position_selection();
 	test_session_tracking_reset();
 	test_cleanup_minimal();
 	return exit_status();

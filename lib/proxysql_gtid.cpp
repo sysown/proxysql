@@ -547,6 +547,16 @@ bool select_session_gtid(
 	return true;
 }
 
+bool select_mariadb_binlog_position(const char* position, char* buf, size_t buf_len) {
+	if (position == nullptr || buf == nullptr || buf_len == 0 || *position == '\0') {
+		return false;
+	}
+
+	std::unordered_map<std::string, std::string> variables;
+	variables["gtid_binlog_pos"] = position;
+	return select_session_gtid(nullptr, 0, variables, buf, buf_len);
+}
+
 static bool add_mysql_gtid_token(GTID_Set& set, const char* token, size_t len) {
 	if (token == nullptr || len == 0) {
 		return false;

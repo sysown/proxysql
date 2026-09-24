@@ -75,6 +75,7 @@ bool select_session_gtid(
 	const char* session_track_gtids, size_t gtids_len,
 	const std::unordered_map<std::string, std::string>& sysvars,
 	char* buf, size_t buf_len);
+bool select_mariadb_binlog_position(const char* position, char* buf, size_t buf_len);
 bool parse_gtid_set(const char* encoded, GTID_Set* out);
 
 #endif /* PROXYSQL_GTID */
