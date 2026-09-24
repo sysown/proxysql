@@ -186,6 +186,10 @@ struct PgSQL_Portal_Entry {
 	std::shared_ptr<const PgSQL_STMT_Global_info> stmt_info;
 	bool bound_on_backend = false;   // real backend Bind completed
 	bool suspended = false;          // last Execute ended with PortalSuspended
+	// The backend connection the portal was bound on, recorded at BindComplete. Compared
+	// for identity only, never dereferenced: it says which connection's teardown takes
+	// this entry down with it.
+	const PgSQL_Connection* bound_conn = nullptr;
 };
 
 class PgSQL_Query_Info {
@@ -258,6 +262,11 @@ private:
 		std::unique_ptr<PgSQL_Close_Message>, std::unique_ptr<PgSQL_Bind_Message>, std::unique_ptr<PgSQL_Execute_Message>>;
 
 	bool extended_query_exec_qp { false };
+	// Whether a statement in the current unsynced batch has already run on the backend,
+	// which is when PostgreSQL opens the batch's implicit transaction block. Cleared
+	// everywhere extended_query_phase goes back to IDLE: miss one and the next batch's
+	// lone DISCARD ALL is refused for work an already-finished batch did.
+	bool extq_backend_used { false };
 #ifdef PROXYSQL31
 	// Candidate frame: Bind, optional Describe(portal), Execute, client Sync.
 	uint8_t extended_cache_frame_stage { 0 };
@@ -273,6 +282,11 @@ private:
 	// cleared when a completed cycle's ReadyForQuery carried txn-state 'I' (backend
 	// destroyed all portals at txn end / implicit-txn Sync), and in reset()/destructor.
 	std::map<std::string, PgSQL_Portal_Entry> named_portals;
+	// Portals whose backend connection was taken away before the registry could be
+	// freed. The entries own the Bind bytes that CurrentQuery -- and the event logger
+	// reading it in RequestEnd() -- still points at, so they are parked here instead of
+	// destroyed, and released at the end of RequestEnd() once that read is done.
+	std::map<std::string, PgSQL_Portal_Entry> detached_portals;
 	// In-flight named Bind: holds the released Bind message + resolved global stmt
 	// while PROCESSING_STMT_BIND dispatches to the backend. Committed into
 	// named_portals only on a successful BindComplete (rc0), so a Bind that the
@@ -363,7 +377,7 @@ private:
 	int handle_post_sync_execute_message(PgSQL_Execute_Message* execute_msg);
 	void handle_post_sync_error(PGSQL_ERROR_CODES errcode, const char* errmsg, bool fatal);
 	void handle_post_sync_locked_on_hostgroup_error(const char* query, int query_len);
-	void reset_extended_query_frame();
+	void reset_extended_query_frame(bool backend_saw_error = false);
 
 
 	//void return_proxysql_internal(PtrSize_t*);
@@ -450,6 +464,9 @@ private:
 	// these functions have code that used to be inline, and split into functions for readibility
 	int handler_ProcessingQueryError_CheckBackendConnectionStatus(PgSQL_Data_Stream* myds);
 	void SetQueryTimeout();
+	// Whether the statement whose backend connection just failed may be run again on
+	// a fresh one. Shared by every path that offers a retry so they cannot drift.
+	bool query_retry_allowed(PgSQL_Data_Stream* myds);
 	bool handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds);
 	// Synthesize ErrorResponse(25P02) + NoticeResponse(backend text, no 57P01) +
 	// ReadyForQuery('E') to the client, destroy the backend pool connection, set
@@ -483,6 +500,15 @@ private:
 	void handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt);
 	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t* pkt);
 	void handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t* pkt);
+	void handler_refuse_listen(PtrSize_t* pkt);
+	bool listen_can_be_supported();
+	// Set when a LISTEN was allowed past the gate. The gate can only inspect a backend
+	// connection this session already holds; when it acquires one afterwards, that
+	// connection has to be re-checked before the LISTEN runs on it.
+	// Both gates assign it for every statement they see, so one that ends before the
+	// re-check -- served from the cache, refused by a rule -- leaves it set no longer
+	// than until the next statement arrives.
+	bool listen_pending = false;
 	void handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t* pkt);
 
 	/**
@@ -510,6 +536,11 @@ private:
 
 public:
 	void handle_transaction_state();
+
+	// Called when a backend connection is severed from this session. Named portals live
+	// on one specific connection, so the registry must stop describing the ones bound
+	// on this one.
+	void backend_connection_detached(const PgSQL_Connection* conn);
 
 	inline bool is_extended_query_frame_empty() const {
 		return extended_query_frame.empty();
@@ -722,6 +753,8 @@ private:
 	void send_parameter_error_response(const char* error_message, PGSQL_ERROR_CODES code = PGSQL_ERROR_CODES::ERRCODE_INVALID_TEXT_REPRESENTATION);
 	bool handle_kill_success(int32_t pid, int tki, const char* digest_text, PgSQL_Connection* mc, PtrSize_t* pkt);
 	bool handle_literal_kill_query(PtrSize_t* pkt, PgSQL_Connection* mc);
+
+	friend class PgSQL_Session_PortalTeardownTest;  // test/tap/tests/unit/pgsql_named_portal_teardown_unit-t.cpp
 
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>

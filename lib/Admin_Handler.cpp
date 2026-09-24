@@ -3102,7 +3102,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 
 		switch (hdr.type) {
-		case PG_PKT_STARTUP_V2:
+		case PG_PKT_STARTUP_UNSUPPORTED:
 		case PG_PKT_STARTUP:
 		case PG_PKT_CANCEL:
 		case PG_PKT_SSLREQ:

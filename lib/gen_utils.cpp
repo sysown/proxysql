@@ -321,46 +321,30 @@ char* escape_string_single_quotes_and_backslashes(char* input, bool free_it) {
 	return output;
 }
 
-/**
- * Escapes spaces in the input string by prepending "\\".
- * If no spaces are present, the original input is returned.
- * If spaces are escaped, a new string is returned, and the caller
- * is responsible for freeing it.
- *
- * @param input The input string to process.
- * @return A new string with spaces escaped, or the original input string if no escaping is needed.
- */
-const char* escape_string_backslash_spaces(const char* input) {
-	const char* c;
-	int input_len = 0;
-	int escape_count = 0;
 
-	for (c = input; *c != '\0'; c++) {
-		if ((*c == ' ')) {
-			escape_count += 3;
-		} else if ((*c == '\\')) {
-			escape_count += 2;
-		}
-		input_len++;
+void pg_append_escaped_option_value(std::string& out, const char* input) {
+	// Scan for the first character that needs escaping. Values like "on", "GMT" or
+	// "postgres" have none, and are appended with a single copy: one pass over the input,
+	// no strlen(), no temporary and no allocation of its own.
+	const char* p = input;
+	while (*p != '\0' && *p != ' ' && *p != '\\') p++;
+	if (*p == '\0') {
+		out.append(input, static_cast<size_t>(p - input));
+		return;
 	}
-
-	if (escape_count == 0)
-		return input;
-
-	char* output = (char*)malloc(input_len + escape_count + 1);
-	char* p = output;
-
-	for (c = input; *c != '\0'; c++) {
-		if ((*c == ' ')) {
-			memcpy(p, "\\\\", 2);
-			p += 2;
-		} else if (*c == '\\') {
-			*(p++) = '\\';
+	// Something does need escaping. Size the destination once for the worst case, then
+	// copy the runs between escapes in bulk instead of a character at a time.
+	const size_t len = static_cast<size_t>(p - input) + strlen(p);
+	out.reserve(out.size() + len * 2);
+	const char* run = input;
+	for (const char* c = p; *c != '\0'; c++) {
+		if (*c == ' ' || *c == '\\') {
+			out.append(run, static_cast<size_t>(c - run));
+			out += '\\';
+			run = c;
 		}
-		*(p++) = *c;
 	}
-	*(p++) = '\0';
-	return output;
+	out.append(run, static_cast<size_t>(input + len - run));
 }
 
 /**

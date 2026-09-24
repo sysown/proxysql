@@ -3768,6 +3768,18 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 			// this can happen, for example, with a low wait_timeout and running transaction
 			if (myds->sess->status == WAITING_CLIENT_DATA) {
 				if (myds->myconn->async_state_machine == ASYNC_IDLE) {
+					// The rule below is MySQL's: that server never speaks first, so readable
+					// bytes on an idle backend mean it died. A connection subscribed by
+					// LISTEN is the one case where PostgreSQL does speak first, and the
+					// client holding it is the one that asked for those notifications.
+					// Only that case is treated differently; every other connection keeps
+					// the old behaviour exactly.
+					if (myds->myconn->get_status(STATUS_PGSQL_CONNECTION_LISTEN) &&
+						myds->myconn->native_mode && myds->sess->client_myds) {
+						if (myds->myconn->native_relay_async_messages(myds->sess->client_myds->PSarrayOUT) >= 0) {
+							return true;
+						}
+					}
 					proxy_warning("Detected broken idle connection on %s:%d\n", myds->myconn->parent->address, myds->myconn->parent->port);
 					myds->destroy_MySQL_Connection_From_Pool(false);
 					myds->sess->set_unhealthy();

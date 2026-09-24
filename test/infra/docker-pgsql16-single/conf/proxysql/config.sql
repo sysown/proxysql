@@ -8,6 +8,20 @@ SAVE PGSQL SERVERS TO DISK;
 DELETE FROM pgsql_users;
 INSERT INTO pgsql_users (username,password,active) values ('postgres','postgres',1);
 INSERT INTO pgsql_users (username,password,active) values ('testuser','testuser',1);
+-- Per-auth-method users, paired with the PostgreSQL roles created in
+-- bin/docker-pgsql-post.bash and the username-scoped pg_hba.conf rules that bind
+-- each one to a single method (trust / password / reject / scram-sha-256 / md5).
+-- Seeded here so tests can simply USE them: a PostgreSQL role alone is not enough
+-- to reach a backend, the client must also authenticate to ProxySQL, which needs
+-- a pgsql_users row. Password == username throughout, matching every other role.
+-- 'authtrust' is the exception: pg_hba grants it `trust`, so the backend never
+-- checks the password and a deliberately wrong one still connects -- which is how
+-- a test proves no credential was exchanged.
+INSERT INTO pgsql_users (username,password,active) values ('authtrust','authtrust',1);
+INSERT INTO pgsql_users (username,password,active) values ('authpw','authpw',1);
+INSERT INTO pgsql_users (username,password,active) values ('authreject','authreject',1);
+INSERT INTO pgsql_users (username,password,active) values ('authscram','authscram',1);
+INSERT INTO pgsql_users (username,password,active) values ('md5user','md5user',1);
 
 LOAD PGSQL USERS TO RUNTIME;
 SAVE PGSQL USERS TO DISK; 
