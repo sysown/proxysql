@@ -44,10 +44,14 @@ MySQL (unchanged):
 MariaDB:
 
 - Single: `domain-server-sequence` with three unsigned decimal fields and no
-  `:`. Example: `0-1-270`.
+  `:`. Example: `0-1-270`. This is the OK-packet form: the payload carries the
+  real `server_id`, so the middle field is populated.
 - Set: comma-separated singles, one GTID per domain, as in
   `@@gtid_binlog_pos` / `@@gtid_current_pos`. Example: `0-1-270,1-2-50`.
 - No interval syntax. Sequence `0` is invalid.
+- `0-1-270` is an OK-packet example only. The reader never emits a
+  `server_id` — its wire lines carry `domain:sequence` — so a reader-fed domain
+  displays `0-0-<end>`.
 
 Detection is per token, not per process:
 
@@ -73,6 +77,13 @@ after snapshot `0-1-270`, `has_gtid("0", 100)` is true.
 
 `GTID_Set` stores last-seen `server_id` per MariaDB domain for display only.
 Matching never uses `server_id`. Missing `server_id` serializes as `0`.
+
+The `server_id` is knowable from exactly one source: the `domain-server-sequence`
+form an OK packet carries. The reader wire protocol carries no `server_id`, so
+a domain bootstrapped from the reader renders as the sentinel `0-0-<end>` until
+an OK-packet observation supplies a real `server_id` for that domain, after
+which it renders as `0-1-<end>`. The sentinel is display-only; membership,
+`min_gtid` comparison, and the `ST=`/`I*` payload are unaffected.
 
 `to_string()`:
 
@@ -109,10 +120,12 @@ Snapshot:
 
 1. `SHOW BINARY LOG STATUS` or `SHOW MASTER STATUS` for File and Position
    (two columns are enough; do not require MySQL's fifth column).
-2. If a fifth column is present and non-empty, it must parse as a MySQL GTID
-   set or snapshot fails. Do not fall through to MariaDB on a malformed MySQL
-   executed set.
-3. If the fifth column is missing or empty, `SELECT @@GLOBAL.gtid_binlog_pos`
+2. If a fifth column is present, parse it with the auto-detecting helper: both
+   a MySQL `uuid:interval` set and a MariaDB `domain-server-sequence` set are
+   accepted, because MariaDB 11 exposes `Executed_Gtid_Set` in its native form.
+   A malformed value fails the snapshot; it never falls through to the
+   `@@gtid_binlog_pos` fallback. An empty value is an empty set.
+3. If the fifth column is missing entirely, `SELECT @@GLOBAL.gtid_binlog_pos`
    and parse as MariaDB. Empty or invalid fails startup.
 
 Stream:
@@ -184,6 +197,8 @@ ProxySQL (this repo):
   `[1, seq]`; `0-2-105` satisfies `0-1-100`.
 - Unit: `add_gtid_from_ok` MariaDB; `GTID_Server_Data` `ST=`/`I1=` with `0:100`
   (no dash-stripping).
+- Unit: `ST=0:1-270` renders as the sentinel `0-0-270`, and an OK packet for the
+  same domain replaces it with the real `server_id`.
 - Unit: `_is_valid_gtid` accepts `0-1-100` and still rejects junk.
 - Unit: `select_session_gtid` and MariaDB position selection are bounded and
   deduplicated; auxiliary lookup helpers preserve response metadata.

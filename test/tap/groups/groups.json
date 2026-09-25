@@ -65,6 +65,7 @@
   "genai_stats_parsing_unit-t" : [ "ai-g2","@proxysql_min_version:4.0" ],
   "genai_thread_unit-t" : [ "ai-g2","@proxysql_min_version:4.0" ],
   "glovars_unit-t" : [ "unit-tests-g1" ],
+  "gtid_parse_unit-t" : [ "unit-tests-g1" ],
   "gtid_server_data_unit-t" : [ "unit-tests-g1" ],
   "gtid_set_unit-t" : [ "unit-tests-g1" ],
   "gtid_trxid_interval_unit-t" : [ "unit-tests-g1" ],

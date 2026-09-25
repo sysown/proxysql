@@ -568,8 +568,29 @@ static void test_wire_mariadb_domain() {
 	ok(sd.gtid_exists(domain, 271), "I1=0:271 appended");
 }
 
+/**
+ * @brief Reader-fed domains display a 0 server_id sentinel.
+ *
+ * The wire protocol carries domain and sequence only, so a reader snapshot has
+ * no server_id to remember. The stats rendering therefore shows 0-0-<end>
+ * until an OK-packet observation supplies a real server_id for the domain.
+ */
+static void test_wire_mariadb_display_uses_server_id_sentinel() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	stuff_buffer(sd, std::string("ST=0:1-270\n"));
+	ok(sd.read_next_gtid() == true, "sentinel display: ST= domain bootstrap is parsed");
+
+	ok(sd.gtid_executed_to_string() == "0-0-270",
+		"sentinel display: reader-fed domain renders as 0-0-270");
+
+	ok(sd.add_gtid_from_ok("0-1-271"),
+		"sentinel display: OK packet advances the reader-fed domain");
+	ok(sd.gtid_executed_to_string() == "0-1-271",
+		"sentinel display: OK-packet ingestion replaces the sentinel with server_id 1");
+}
+
 int main() {
-	plan(119);
+	plan(123);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -595,6 +616,7 @@ int main() {
 	test_gtid_snapshot_is_coherent_during_binlog_updates();
 	test_ok_mariadb_gtid();
 	test_wire_mariadb_domain();
+	test_wire_mariadb_display_uses_server_id_sentinel();
 
 	return exit_status();
 }

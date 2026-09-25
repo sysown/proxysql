@@ -3458,10 +3458,13 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 					ret = true;
 				}
 			}
-			if (!ret && mysql->server_version != nullptr && strstr(mysql->server_version, "MariaDB") != nullptr) {
+			if (!ret && mysql->field_count == 0
+					&& mysql->server_version != nullptr && strstr(mysql->server_version, "MariaDB") != nullptr) {
 				// MariaDB has no SESSION_TRACK_GTIDS. The position is read on a dedicated
 				// connection: a query on 'mysql' would consume the pending response, so
-				// 'mysql->info' and the session tracking state would be lost.
+				// 'mysql->info' and the session tracking state would be lost. Only writes
+				// and DDL are looked up ('field_count' is 0 when no result set is
+				// pending), so SELECT traffic does not pay for the extra round trip.
 				bool lookup_executed = false;
 				if (connect_gtid_lookup_connection()) {
 					if (mysql_query(gtid_lookup_mysql, "SELECT @@gtid_binlog_pos") == 0) {

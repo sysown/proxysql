@@ -310,10 +310,21 @@ git commit -m "feat: accept MariaDB min_gtid in query routing"
 ### Task 5: Collect MariaDB write GTIDs from OK packets
 
 **Files:**
-- Modify: `lib/mysql_connection.cpp` (`get_gtid`)
+- Modify: `lib/mysql_connection.cpp` (`get_gtid`, auxiliary connection lifecycle)
+- Modify: `include/mysql_connection.h`
 - Modify: `lib/MySQL_Session.cpp` (`handler_again___verify_backend_session_track_gtids`)
+- Modify: `lib/proxysql_gtid.cpp` / `include/proxysql_gtid.h` (`select_session_gtid`,
+  `select_mariadb_binlog_position`)
 
-MariaDB has no `SESSION_TRACK_GTIDS`. Track `gtid_binlog_pos` in `session_track_system_variables`.
+MariaDB has no `SESSION_TRACK_GTIDS`, and the abandoned attempt to track
+`gtid_binlog_pos` through `session_track_system_variables` does not work:
+MariaDB 10.11 accepts the `SET` but never emits
+`SERVER_SESSION_STATE_CHANGED` with a payload, so nothing reaches ProxySQL.
+Do not send that `SET`; `MySQL_Session` only skips `SESSION_TRACK_GTIDS` for
+MariaDB backends.
+
+The supported fallback is an auxiliary MariaDB connection that runs
+`SELECT @@gtid_binlog_pos`.
 
 Detect MariaDB: `mysql->server_version` contains `"MariaDB"`.
 
@@ -335,17 +346,38 @@ Tests in `gtid_parse_unit-t.cpp`:
 
 `get_gtid` calls this helper after reading `SESSION_TRACK_GTIDS` and/or system variables.
 
+- [ ] **Step 1b: Unit-test `select_mariadb_binlog_position`**
+
+Bounded copy of the `@@gtid_binlog_pos` value into the connection's `gtid_uuid`
+buffer; rejects empty, oversized, and unchanged values without touching the
+buffer. Covered in `gtid_parse_unit-t.cpp`.
+
 - [ ] **Step 2: Run — FAIL**
 
 - [ ] **Step 3: Implement**
 
-`get_gtid`: keep `SESSION_TRACK_GTIDS` first. If that fails, iterate `SESSION_TRACK_SYSTEM_VARIABLES` like `get_variables()` and look for `gtid_binlog_pos` then `gtid_current_pos`. Copy native string into `gtid_uuid` / `buff`. Leave `*trx_id` unused as today (caller parses later).
+`get_gtid` keeps `SESSION_TRACK_GTIDS` first. When it yields nothing and the
+backend is MariaDB with no result set pending (`mysql->field_count == 0`, so
+only writes and DDL qualify), run `SELECT @@gtid_binlog_pos` on the auxiliary
+connection and copy the native string into `gtid_uuid` / `buff`. Leave
+`*trx_id` unused as today (caller parses later).
 
-`handler_again___verify_backend_session_track_gtids`: if backend `server_version` contains `MariaDB`, do not `SET SESSION_TRACK_GTIDS=OWN_GTID`. Instead, if client/default wants GTIDs, set status to set
+The auxiliary connection is created lazily, reused for the life of the
+pooled connection, released by `release_gtid_lookup_connection()` when the
+session returns it to the pool, and closed on reset/destruction. It reuses
+`parent`/`userinfo`, mirrors SSL parameters, caps connect at one second and
+I/O at `mysql-connect_timeout_server`, and is accounted in
+`server_connections_connected`. A connect or query failure is best-effort: log,
+close the connection, set a one-second negative retry window, and leave the
+live response untouched. Because the query never runs on `mysql`, `mysql->info`
+and session tracking state of the live response stay intact.
 
-`session_track_system_variables` to include `gtid_binlog_pos`.
-
-Reuse `handler_again___status_SETTING_GENERIC_VARIABLE` with name `session_track_system_variables`. If the connection already has a non-empty list, append `,gtid_binlog_pos` when missing. If MariaDB rejects `SESSION_TRACK_GTIDS`, never send it.
+`handler_again___verify_backend_session_track_gtids`: if backend
+`server_version` contains `MariaDB`, mark `session_track_gtids_sent` and
+return, so `SET SESSION_TRACK_GTIDS=OWN_GTID` is never sent to a server that
+does not have the variable. No `session_track_system_variables` override is
+sent for MariaDB; `handler_again___status_SETTING_SESSION_TRACK_VARIABLES`
+keeps its plain `'*'` value for every flavor.
 
 Keep MySQL path unchanged.
 
@@ -357,7 +389,7 @@ Existing `test_gtid_from_ok-t` / `test_gtid_forwarding-t` are MySQL TAP; do not 
 
 ```bash
 git add include/proxysql_gtid.h lib/proxysql_gtid.cpp \
-  lib/mysql_connection.cpp lib/MySQL_Session.cpp \
+  lib/mysql_connection.cpp include/mysql_connection.h lib/MySQL_Session.cpp \
   test/tap/tests/unit/gtid_parse_unit-t.cpp
 git commit -m "feat: collect MariaDB gtid_binlog_pos from OK packets"
 ```
@@ -367,19 +399,24 @@ git commit -m "feat: collect MariaDB gtid_binlog_pos from OK packets"
 ### Task 6: MariaDB TAP for min_gtid (only if `mariadb10-galera` can run it)
 
 **Files:**
-- Create: `test/tap/tests/test_mariadb_min_gtid-t.cpp` only if session tracking exposes `gtid_binlog_pos` on that infra
+- Create: `test/tap/tests/test_mariadb_min_gtid-t.cpp` only if the auxiliary
+  `@@gtid_binlog_pos` lookup is observable on that infra
 - Modify: `test/tap/groups/groups.json` — register on `mariadb10-galera-g1` (or the group that has a writer)
 
-This task is skipped if a probe `SELECT @@session_track_system_variables` / enabling `gtid_binlog_pos` fails on that image. Do not invent a MariaDB-binlog TAP group.
+The session-tracking probe below is already known to fail on MariaDB 10.11: the
+`SET` is accepted but no `SERVER_SESSION_STATE_CHANGED` payload follows, so
+there is nothing to probe for. Probe the auxiliary lookup instead — a plain
+`SELECT @@gtid_binlog_pos` — and only build this TAP if
+`GTID_session_collected` advances with `mysql-update_gtid_from_ok` enabled. Do
+not invent a MariaDB-binlog TAP group.
 
 Probe first:
 
 ```sql
-SET SESSION session_track_system_variables = 'gtid_binlog_pos';
-INSERT INTO test.t VALUES (1);
+SELECT @@gtid_binlog_pos;
 ```
 
-If the OK packet has no tracked GTID, skip this task and rely on unit tests. Note the skip in the commit message of Task 5; do not leave a failing TAP.
+If `GET GTID`/OK-packet ingestion does not surface that position, skip this task and rely on unit tests. Note the skip in the commit message of Task 5; do not leave a failing TAP.
 
 If the probe works, clone `test_gtid_from_ok-t.cpp` structure:
 
@@ -416,12 +453,12 @@ Do not claim TAP integration pass without running `run-tests-isolated.bash`.
 | Auto-detect formats | 1 |
 | Domain-keyed compare / watermark | 1, 3 |
 | `to_string` no UUID dashes on domain keys | 2 |
-| Display `domain-server-seq` | 2, 3 |
+| Display `domain-server-seq`, reader sentinel `0-0-seq` | 2, 3 |
 | `add_gtid_from_ok` MariaDB | 3 |
 | Wire `ST=0:1-270` / `I1=0:271` | 3 |
 | `_is_valid_gtid` / `min_gtid` | 4 |
 | Session routing parse | 4 |
-| `SESSION_TRACK_GTIDS` + `gtid_binlog_pos` | 5 |
+| `SESSION_TRACK_GTIDS` (MySQL) + auxiliary `@@gtid_binlog_pos` (MariaDB) | 5 |
 | Mixed flavors on one endpoint rejected | 1 |
 | No new MariaDB-binlog TAP group | 6 |
 | MySQL causal-read tests unchanged | 7 |
