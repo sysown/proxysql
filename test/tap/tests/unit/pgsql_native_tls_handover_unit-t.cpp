@@ -22,6 +22,7 @@
 #include "cpp.h"
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
 
 #include <openssl/ssl.h>
 #include <openssl/bio.h>
@@ -31,7 +32,6 @@
 // A stream holding a native connection whose TLS it has borrowed. Nothing is displaced,
 // so backend_tls_adopted stays false and the SSL is only ever tested for NULL here.
 static PgSQL_Data_Stream* makeNativeBorrow(PgSQL_Connection* c) {
-	c->native_mode = true;
 	c->reusable = true;
 	c->healthy = true;
 	PgSQL_Data_Stream* ds = new PgSQL_Data_Stream();
@@ -65,7 +65,7 @@ int main() {
 	// The relay encrypts into a buffer and then pushes it to the socket. A socket that
 	// cannot take it all leaves bytes here that the connection's writer never sends.
 	{
-		PgSQL_Connection* c = new PgSQL_Connection(false);
+		PgSQL_Connection* c = new PgSQL_Connection_Native();
 		PgSQL_Data_Stream* ds = makeNativeBorrow(c);
 		ds->ssl_write_buf = (char*)malloc(13);
 		memcpy(ds->ssl_write_buf, "half a record", 13);
@@ -87,7 +87,7 @@ int main() {
 	// Control: a clean handover must change nothing, or every relayed connection
 	// would be thrown away and the pool would churn on each fast forward.
 	{
-		PgSQL_Connection* c = new PgSQL_Connection(false);
+		PgSQL_Connection* c = new PgSQL_Connection_Native();
 		PgSQL_Data_Stream* ds = makeNativeBorrow(c);
 		ds->release_backend_tls();
 		ok(c->reusable == true && c->healthy == true,
@@ -100,7 +100,7 @@ int main() {
 	// own, and its next flush drains the whole of it before anything new. Giving the
 	// connection up over that would churn the pool on every relayed COPY.
 	{
-		PgSQL_Connection* c = new PgSQL_Connection(false);
+		PgSQL_Connection* c = new PgSQL_Connection_Native();
 		PgSQL_Data_Stream* ds = makeNativeBorrow(c);
 		BIO_write(ds->wbio_ssl, "whole records", 13);
 		ds->release_backend_tls();
@@ -113,7 +113,7 @@ int main() {
 
 	// Likewise bytes waiting to be read: that is the backend's next reply.
 	{
-		PgSQL_Connection* c = new PgSQL_Connection(false);
+		PgSQL_Connection* c = new PgSQL_Connection_Native();
 		PgSQL_Data_Stream* ds = makeNativeBorrow(c);
 		BIO_write(ds->rbio_ssl, "the next reply", 14);
 		ds->release_backend_tls();

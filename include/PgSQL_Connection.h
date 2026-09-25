@@ -258,9 +258,19 @@ class PgSQL_Connection_userinfo {
 };
 
 class PgSQL_Connection {
+protected:
+	// Transport-choice base constructor. Connections are only built through the
+	// three leaves (PgSQL_Connection_LibPQ / PgSQL_Connection_Native /
+	// PgSQL_Client_Connection) or the create_backend() factory. native_mode is
+	// const, so the transport is fixed for the whole lifetime of the object
+	// instead of drifting with a runtime flag.
+	PgSQL_Connection(bool is_client_conn, bool native);
+
 public:
-	explicit PgSQL_Connection(bool is_client_conn);
-	~PgSQL_Connection();
+	PgSQL_Connection(const PgSQL_Connection&) = delete;
+	PgSQL_Connection& operator=(const PgSQL_Connection&) = delete;
+
+	virtual ~PgSQL_Connection();
 
 	// Backend factory: the single place a backend connection is created and its
 	// transport chosen. Reads the per-thread runtime flag
@@ -729,7 +739,7 @@ public:
 	PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
 	PGconn* pgsql_conn;
-	bool native_mode = false;          // true → native wire protocol, false → libpq
+	const bool native_mode = false;       // true → native wire protocol, false → libpq
 
 	// --- Native backend connect/auth handshake state (Task 1.6a, plaintext only) ---
 	// All of the following members are only meaningful when native_mode == true.

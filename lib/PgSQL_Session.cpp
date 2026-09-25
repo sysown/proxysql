@@ -13,6 +13,7 @@ using json = nlohmann::json;
 #include "mysqld_error.h"
 
 #include "PgSQL_Data_Stream.h"
+#include "PgSQL_Client_Connection.h"
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Query_Processor.h"
 #include "PgSQL_PreparedStatement.h"
@@ -1023,7 +1024,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				newsess->thread_session_id = __sync_fetch_and_add(&glovars.thread_id, 1);
 			}
 			newsess->status = WAITING_CLIENT_DATA;
-			PgSQL_Connection* myconn = new PgSQL_Connection(true);
+			PgSQL_Connection* myconn = new PgSQL_Client_Connection();
 			newsess->client_myds->attach_connection(myconn);
 			newsess->client_myds->myprot.init(&newsess->client_myds, newsess->client_myds->myconn->userinfo, newsess);
 			newsess->mirror = true;

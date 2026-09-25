@@ -17,12 +17,12 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
 
 // A native connection parked at a connect step. A fresh one has no socket and no TLS
 // objects, which is what a torn-down one is left holding.
 static PgSQL_Connection* parked_at(PgSQL_Connection::PG_Native_Conn_St st) {
-	PgSQL_Connection* c = new PgSQL_Connection(false);
-	c->native_mode = true;
+	PgSQL_Connection* c = new PgSQL_Connection_Native();
 	c->native_st = st;
 	return c;
 }

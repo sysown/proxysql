@@ -26,6 +26,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
 
 #include <sys/socket.h>
 #include <fcntl.h>
@@ -112,9 +113,8 @@ int main(int, char**) {
 	                    : "  <-- this host's socket buffer (net.core.wmem_max) is too small to hold "
 	                      "a burst plus a message; there is nothing here to test the bound against");
 
-	PgSQL_Connection* conn = new PgSQL_Connection(false);
+	PgSQL_Connection* conn = new PgSQL_Connection_Native();
 	conn->fd = sv[0];
-	conn->native_mode = true;
 
 	// ---------------------------------------------------------- one pass only
 	const int r1 = conn->native_recv_into_framer();
@@ -199,9 +199,8 @@ int main(int, char**) {
 		   "queued exactly one %zu-byte read (%zu bytes in %zu messages), then closed",
 		   READBUF, w, MSGS);
 
-		PgSQL_Connection* c2 = new PgSQL_Connection(false);
+		PgSQL_Connection* c2 = new PgSQL_Connection_Native();
 		c2->fd = sv2[0];
-		c2->native_mode = true;
 
 		const int r = c2->native_recv_into_framer();
 		bool intact2 = true;

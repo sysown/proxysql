@@ -32,6 +32,8 @@ using json = nlohmann::json;
 #include "PgSQL_Query_Processor.h"
 #include "PgSQL_Variables.h"
 #include "PgSQL_Extended_Query_Message.h"
+#include "PgSQL_Connection_LibPQ.h"
+#include "PgSQL_Connection_Native.h"
 
 #include "proxysql_find_charset.h"
 
@@ -165,12 +167,13 @@ bool PgSQL_Connection_userinfo::set_dbname(const char* db) {
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
 PgSQL_Connection* PgSQL_Connection::create_backend() {
-	PgSQL_Connection* conn = new PgSQL_Connection(false);
-	conn->native_mode = pgsql_thread___use_native_backend_protocol;
-	return conn;
+	if (pgsql_thread___use_native_backend_protocol) {
+		return new PgSQL_Connection_Native();
+	}
+	return new PgSQL_Connection_LibPQ();
 }
 
-PgSQL_Connection::PgSQL_Connection(bool is_client_conn) {
+PgSQL_Connection::PgSQL_Connection(bool is_client_conn, bool native) : native_mode(native) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new PgSQL_Connection %p\n", this);
 	is_client_connection = is_client_conn;
 	pgsql_conn = NULL;

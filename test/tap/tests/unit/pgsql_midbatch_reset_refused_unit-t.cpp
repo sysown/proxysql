@@ -29,6 +29,7 @@
 #include "PgSQL_Session.h"
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
 #include "PgSQL_Backend.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Thread.h"
@@ -58,9 +59,8 @@ static Fixture build_backend(bool mid_batch) {
 	f.srv = new PgSQL_SrvC((char*)"127.0.0.1", 5432, 1, MYSQL_SERVER_STATUS_ONLINE, 0,
 	                       100, 0, 0, 0, (char*)"midbatch unit fixture");
 
-	f.conn = new PgSQL_Connection(false); // false = backend, not client
+	f.conn = new PgSQL_Connection_Native(); // native backend, not client
 	f.conn->parent = f.srv;
-	f.conn->native_mode = true;
 	// The whole condition under test: the backend still owes a ReadyForQuery.
 	f.conn->native_unsynced_work = mid_batch;
 	// destroy_MyConn_from_pool() removes the connection from this list and asserts it is

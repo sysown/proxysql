@@ -13,6 +13,8 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
+#include "PgSQL_Connection_LibPQ.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -26,8 +28,7 @@ static int open_dummy_fd() {
 // A connection in the state a healthy pooled one is in: open socket, login done,
 // backend last said it was idle.
 static PgSQL_Connection* make_live_native_conn() {
-	PgSQL_Connection* c = new PgSQL_Connection(false);
-	c->native_mode = true;
+	PgSQL_Connection* c = new PgSQL_Connection_Native();
 	c->fd = open_dummy_fd();
 	c->native_st = PgSQL_Connection::PG_Native_Conn_St::DONE;
 	// native_connected is what marks the connection usable; native_st is set to
@@ -129,8 +130,7 @@ static void test_libpq_control() {
 	// and PQtransactionStatus(NULL) is already PQTRANS_UNKNOWN, so a dead libpq conn
 	// gave these answers before the change too. Checking it here means a future edit
 	// to the gate cannot quietly alter the shipped path.
-	PgSQL_Connection* c = new PgSQL_Connection(false);
-	c->native_mode = false;
+	PgSQL_Connection* c = new PgSQL_Connection_LibPQ();
 	// pgsql_conn stays NULL -- the constructor sets it so.
 	ok(c->is_connected() == false && c->get_pg_connection_status() == CONNECTION_BAD &&
 	   c->get_pg_transaction_status() == PQTRANS_UNKNOWN,

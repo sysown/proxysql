@@ -14,6 +14,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
 #include "PgSQL_Backend_Protocol.h"
 
 #include <sys/socket.h>
@@ -39,9 +40,8 @@ static PgSQL_Connection* armed(const std::string& msg, int sv[2]) {
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) BAIL_OUT("socketpair failed");
 	fcntl(sv[0], F_SETFL, fcntl(sv[0], F_GETFL, 0) | O_NONBLOCK);
 	if (::send(sv[1], msg.data(), msg.size(), 0) != (ssize_t)msg.size()) BAIL_OUT("send failed");
-	PgSQL_Connection* c = new PgSQL_Connection(false);
+	PgSQL_Connection* c = new PgSQL_Connection_Native();
 	c->fd = sv[0];
-	c->native_mode = true;
 	c->native_st = PgSQL_Connection::PG_Native_Conn_St::AUTH;
 	return c;
 }

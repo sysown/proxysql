@@ -34,6 +34,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
 
 // A connection in the state a completed native handshake leaves behind, minus the socket:
 // native_mode set, native_params carrying what the backend announced. The accessors under
@@ -41,23 +42,20 @@
 // native_connected false and fd -1, so it only frees userinfo and local_stmts.
 // Passing announced == nullptr models the parameter never arriving.
 static int version_for(const char* announced) {
-	PgSQL_Connection c(false);
-	c.native_mode = true;
+	PgSQL_Connection_Native c;
 	if (announced) c.native_params["server_version"] = announced;
 	return c.get_pg_server_version();
 }
 
 static std::string version_str_for(const char* announced) {
-	PgSQL_Connection c(false);
-	c.native_mode = true;
+	PgSQL_Connection_Native c;
 	if (announced) c.native_params["server_version"] = announced;
 	char buf[64];
 	return std::string(c.get_pg_server_version_str(buf, sizeof(buf)));
 }
 
 static int encoding_for(const char* announced) {
-	PgSQL_Connection c(false);
-	c.native_mode = true;
+	PgSQL_Connection_Native c;
 	if (announced) c.native_params["client_encoding"] = announced;
 	return c.get_pg_client_encoding();
 }

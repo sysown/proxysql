@@ -16,6 +16,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
 #include "PgSQL_HostGroups_Manager.h"
 
 #include <openssl/ssl.h>
@@ -32,8 +33,7 @@
 static PgSQL_Connection* conn_for(PgSQL_Connection::PG_Native_SSL_Mode mode) {
 	char addr[] = "127.0.0.1";
 	char comment[] = "";
-	PgSQL_Connection* c = new PgSQL_Connection(false);
-	c->native_mode = true;
+	PgSQL_Connection* c = new PgSQL_Connection_Native();
 	c->parent = new PgSQL_SrvC(addr, 5432, 1, MYSQL_SERVER_STATUS_ONLINE, 0, 100, 0, 1, 0, comment);
 	if (c->userinfo->username == NULL) c->userinfo->username = strdup("tlsuser");
 	c->native_ssl_mode = mode;

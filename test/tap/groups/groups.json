@@ -285,6 +285,7 @@
   "pgsql_backend_auth-t" : [ "unit-tests-g1" ],
   "pgsql_backend_extq-t" : [ "unit-tests-g1" ],
   "pgsql_backend_framing-t" : [ "unit-tests-g1" ],
+  "pgsql_client_connection_unit-t" : [ "unit-tests-g1" ],
   "pgsql_command_complete_unit-t" : [ "unit-tests-g1" ],
   "pgsql_conn_liveness_unit-t" : [ "unit-tests-g1" ],
   "pgsql_conninfo_credentials_unit-t" : [ "unit-tests-g1" ],

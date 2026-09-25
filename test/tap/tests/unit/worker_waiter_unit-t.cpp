@@ -19,6 +19,8 @@
 #undef private
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Data_Stream.h"
+#include "PgSQL_Connection_LibPQ.h"
+#include "PgSQL_Client_Connection.h"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
 
@@ -195,7 +197,7 @@ void test_processlist(const char *name, Manager *manager, Slot *&slots, unsigned
 	int peer;
 	auto *sess = new_waiter<Worker, Session, Stream>(worker, peer);
 	if constexpr (std::is_same<Connection, PgSQL_Connection>::value)
-		sess->client_myds->myconn = new Connection(true);
+		sess->client_myds->myconn = new PgSQL_Client_Connection();
 	else
 		sess->client_myds->myconn = new Connection();
 	sess->client_myds->client_addr = static_cast<sockaddr*>(calloc(1, sizeof(sockaddr)));
@@ -292,7 +294,7 @@ static void test_pgsql_cache() {
 	PgHGM->wrunlock();
 	if (rc || !hg || hg->mysrvs->cnt() != 1) BAIL_OUT("server init failed");
 	auto *server = hg->mysrvs->idx(0);
-	auto *conn = new PgSQL_Connection(false);
+	auto *conn = new PgSQL_Connection_LibPQ();
 	conn->parent = server;
 	conn->async_state_machine = ASYNC_IDLE;
 	conn->reusable = true;
@@ -346,7 +348,7 @@ static void test_stable_tier() {
 		PgHGM->wrunlock();
 		if (rc || !hg || hg->mysrvs->cnt() != 1) BAIL_OUT("server init failed");
 		auto *server = hg->mysrvs->idx(0);
-		auto *conn = new PgSQL_Connection(false);
+		auto *conn = new PgSQL_Connection_LibPQ();
 		conn->parent = server;
 		conn->async_state_machine = ASYNC_IDLE;
 		conn->reusable = true;
