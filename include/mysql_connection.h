@@ -305,6 +305,14 @@ class MySQL_Connection {
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
 	/**
+	 * @brief Close the auxiliary connection used to read the MariaDB GTID position.
+	 *
+	 * Must be called whenever the owning MySQL_Connection is no longer used by
+	 * the current session, so that the auxiliary connection is never left open
+	 * on an idle pooled connection.
+	 */
+	void release_gtid_lookup_connection();
+	/**
 	 * @brief Extract session variable changes from MySQL's session tracking system.
 	 *
 	 * === PR 5166: Backend Variable Extraction ===

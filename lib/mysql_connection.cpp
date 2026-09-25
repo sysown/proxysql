@@ -3407,10 +3407,13 @@ bool MySQL_Connection::connect_gtid_lookup_connection() {
 	gtid_lookup_mysql=lookup_mysql;
 	gtid_lookup_retry_after=0;
 	if (MyHGM != NULL) {
-		__sync_fetch_and_add(&MyHGM->status.server_connections_created,1);
 		__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 	}
 	return true;
+}
+
+void MySQL_Connection::release_gtid_lookup_connection() {
+	close_gtid_lookup_connection();
 }
 
 void MySQL_Connection::close_gtid_lookup_connection() {
