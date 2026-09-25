@@ -445,6 +445,7 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 MySQL_Connection::MySQL_Connection() {
 	mysql=NULL;
 	gtid_lookup_mysql=NULL;
+	gtid_lookup_retry_after=0;
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
 	send_quit=true;
@@ -3350,17 +3351,24 @@ bool MySQL_Connection::connect_gtid_lookup_connection() {
 	if (parent == NULL || userinfo == NULL) {
 		return false;
 	}
+	if (gtid_lookup_retry_after != 0 && time(nullptr) < gtid_lookup_retry_after) {
+		return false;
+	}
 	MYSQL *lookup_mysql = mysql_init(NULL);
 	if (lookup_mysql == NULL) {
 		return false;
 	}
-	unsigned int timeout = mysql_thread___connect_timeout_server / 1000;
-	if (timeout == 0) {
-		timeout = 1;
+	if (mysql != NULL && mysql->charset != NULL) {
+		lookup_mysql->charset = mysql->charset;
 	}
+	unsigned int timeout = 1;
 	mysql_options(lookup_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-	mysql_options(lookup_mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
-	mysql_options(lookup_mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+	unsigned int io_timeout = mysql_thread___connect_timeout_server / 1000;
+	if (io_timeout == 0) {
+		io_timeout = 1;
+	}
+	mysql_options(lookup_mysql, MYSQL_OPT_READ_TIMEOUT, &io_timeout);
+	mysql_options(lookup_mysql, MYSQL_OPT_WRITE_TIMEOUT, &io_timeout);
 	std::unique_ptr<MySQLServers_SslParams> lookup_ssl_params;
 	if (parent->use_ssl) {
 		lookup_ssl_params.reset(MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username));
@@ -3384,16 +3392,24 @@ bool MySQL_Connection::connect_gtid_lookup_connection() {
 		ret_mysql_lookup = mysql_real_connect(lookup_mysql, "localhost", userinfo->username, auth_password, NULL, 0, parent->address, 0);
 	}
 	if (ret_mysql_lookup == NULL) {
+		unsigned int myerr = mysql_errno(lookup_mysql);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup connection to %s:%d failed: %u: %s\n",
+				parent->address, parent->port, myerr, mysql_error(lookup_mysql));
 		if (lookup_ssl_params != NULL) {
-			unsigned int myerr = mysql_errno(lookup_mysql);
 			if (myerr >= 2000 && myerr < 3000) {
 				ERR_clear_error();
 			}
 		}
 		mysql_close_no_command(lookup_mysql);
+		gtid_lookup_retry_after = time(nullptr) + 1;
 		return false;
 	}
 	gtid_lookup_mysql=lookup_mysql;
+	gtid_lookup_retry_after=0;
+	if (MyHGM != NULL) {
+		__sync_fetch_and_add(&MyHGM->status.server_connections_created,1);
+		__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
+	}
 	return true;
 }
 
@@ -3404,6 +3420,9 @@ void MySQL_Connection::close_gtid_lookup_connection() {
 	proxy_mysql_send_com_quit(gtid_lookup_mysql);
 	mysql_close_no_command(gtid_lookup_mysql);
 	gtid_lookup_mysql=NULL;
+	if (MyHGM != NULL) {
+		__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
+	}
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
@@ -3456,9 +3475,13 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 							}
 							mysql_free_result(result);
 						}
+					} else {
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup query to %s:%d failed: %u: %s\n",
+								parent->address, parent->port, mysql_errno(gtid_lookup_mysql), mysql_error(gtid_lookup_mysql));
 					}
 				}
 				if (!lookup_executed) {
+					gtid_lookup_retry_after = time(nullptr) + 1;
 					close_gtid_lookup_connection();
 				}
 			}

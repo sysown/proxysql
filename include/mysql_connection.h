@@ -101,6 +101,7 @@ class MySQL_Connection {
 	void ProcessQueryAndSetStatusFlags_Savepoint(char *);
 	void ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
 	MYSQL *gtid_lookup_mysql;
+	time_t gtid_lookup_retry_after;
 	bool connect_gtid_lookup_connection();
 	void close_gtid_lookup_connection();
 	public:
