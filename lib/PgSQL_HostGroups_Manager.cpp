@@ -2436,7 +2436,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 						}
 
 						// we must create a new connection
-						conn = new PgSQL_Connection(false);
+						conn = PgSQL_Connection::create_backend();
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 						conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG);
@@ -2448,7 +2448,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 					// we may consider creating a new connection
 					{
 					if (decision.create_new_connection) {
-						conn = new PgSQL_Connection(false);
+						conn = PgSQL_Connection::create_backend();
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 						conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG);
@@ -2493,7 +2493,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 			__sync_fetch_and_add(&PgHGM->status.server_connections_delayed, 1);
 			return NULL;
 		} else {
-			conn = new PgSQL_Connection(false);
+			conn = PgSQL_Connection::create_backend();
 			conn->parent=mysrvc;
 			// if attributes.multiplex == true , STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 			conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG);

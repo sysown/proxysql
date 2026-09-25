@@ -262,6 +262,14 @@ public:
 	explicit PgSQL_Connection(bool is_client_conn);
 	~PgSQL_Connection();
 
+	// Backend factory: the single place a backend connection is created and its
+	// transport chosen. Reads the per-thread runtime flag
+	// pgsql_thread___use_native_backend_protocol once, at creation time, instead
+	// of on the first handler() pass, so the mode is fixed for the lifetime of
+	// the connection object. Called from PgSQL_HostGroups_Manager on the
+	// session's worker thread.
+	static PgSQL_Connection* create_backend();
+
 	PG_ASYNC_ST handler(short event);
 	void connect_start();
 	// Builds the session settings a backend StartupMessage must carry: the

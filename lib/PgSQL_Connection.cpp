@@ -164,6 +164,12 @@ bool PgSQL_Connection_userinfo::set_dbname(const char* db) {
 
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
+PgSQL_Connection* PgSQL_Connection::create_backend() {
+	PgSQL_Connection* conn = new PgSQL_Connection(false);
+	conn->native_mode = pgsql_thread___use_native_backend_protocol;
+	return conn;
+}
+
 PgSQL_Connection::PgSQL_Connection(bool is_client_conn) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new PgSQL_Connection %p\n", this);
 	is_client_connection = is_client_conn;
@@ -354,7 +360,6 @@ PG_ASYNC_ST PgSQL_Connection::handler(short event) {
 		// on every event. The flag works identically for both paths.
 		handler_first_call = false;
 		async_state_machine = ASYNC_CONNECT_START;
-		native_mode = pgsql_thread___use_native_backend_protocol;
 		myds->wait_until = myds->sess->thread->curtime + pgsql_thread___connect_timeout_server * 1000;
 		if (myds->max_connect_time) {
 			if (myds->wait_until > myds->max_connect_time) {
