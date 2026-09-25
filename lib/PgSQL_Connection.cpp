@@ -33,8 +33,6 @@ using json = nlohmann::json;
 #include "PgSQL_Variables.h"
 #include "PgSQL_Extended_Query_Message.h"
 
-extern char * binary_sha1;
-
 #include "proxysql_find_charset.h"
 
 void PgSQL_Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
@@ -164,8 +162,6 @@ bool PgSQL_Connection_userinfo::set_dbname(const char* db) {
 	return false;
 }
 
-void print_backtrace(void);
-
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
 PgSQL_Connection::PgSQL_Connection(bool is_client_conn) {
@@ -214,7 +210,6 @@ PgSQL_Connection::PgSQL_Connection(bool is_client_conn) {
 	exit_pipeline_mode = false;
 	resync_failed = false;
 	reset_error();
-	memset(&connected_host_details, 0, sizeof(connected_host_details));
 }
 
 PgSQL_Connection::~PgSQL_Connection() {
@@ -299,15 +294,6 @@ PgSQL_Connection::~PgSQL_Connection() {
 		delete stmt_metadata_result;
 		stmt_metadata_result = NULL;
 	}*/
-
-	if (connected_host_details.hostname) {
-		free(connected_host_details.hostname);
-		connected_host_details.hostname = NULL;
-	}
-	if (connected_host_details.ip) {
-		free(connected_host_details.ip);
-		connected_host_details.hostname = NULL;
-	}
 
 	if (options.init_connect) free(options.init_connect);
 
@@ -1466,8 +1452,7 @@ void PgSQL_Connection::connect_cont(short event) {
 	if (native_mode) {
 		// Native (non-libpq) backend connect + auth driver. Drives the
 		// native_st sub-state machine and returns to the event loop; it never
-		// falls through to the libpq path below (unless a capability gap forces
-		// a libpq restart, which is handled inside native_connect_cont()).
+		// falls through to the libpq path below.
 		native_connect_cont(event);
 		return;
 	}
@@ -4934,26 +4919,6 @@ unsigned int PgSQL_Connection::get_memory_usage() const {
 	// TODO: need to create new function in libpq
 	unsigned int memory_bytes = (16 * 1024) * 2; //PSgetMemoryUsage(pgsql_conn);
 	return /*sizeof(PGconn) +*/ memory_bytes;
-}
-
-char PgSQL_Connection::get_transaction_status_char() {
-	char txn_status;
-	switch (get_pg_transaction_status()) {
-	case PQTRANS_IDLE:
-		txn_status = 'I';
-		break;
-	case PQTRANS_ACTIVE:
-	case PQTRANS_INTRANS:
-		txn_status = 'T';
-		break;
-	case PQTRANS_INERROR:
-		txn_status = 'E';
-		break;
-	case PQTRANS_UNKNOWN:
-	default:
-		txn_status = 'U';
-	}
-	return txn_status;
 }
 
 bool PgSQL_Connection::suspend_resultset_fetch(uint64_t processed_bytes) const {

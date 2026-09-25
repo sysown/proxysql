@@ -3701,7 +3701,7 @@ handler_again:
 					assert(myconn != NULL);
 					// In libpq mode the backend PGconn is authoritative and must be
 					// live here; in native mode pgsql_conn is PERMANENTLY NULL (the
-					// wire is driven by myconn->bp, txn-state lives in
+					// wire is driven natively, txn-state lives in
 					// native_txn_status), so the libpq-only assert must not run —
 					// it would abort on every native op under a hostgroup lock
 					// (bug #3549 follow-up). The autocommit copy itself is

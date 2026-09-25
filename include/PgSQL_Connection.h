@@ -18,7 +18,6 @@ class PgSQL_Query_Result;
 class PgSQL_STMT_Local;
 //class PgSQL_Describe_Prepared_Info;
 class PgSQL_Bind_Info;
-class PgSQL_Backend_Protocol;
 //#define STATUS_PGSQL_CONNECTION_SEQUENCE			 0x00000001
 #define STATUS_PGSQL_CONNECTION_COMPRESSION          0x00000002
 #define STATUS_PGSQL_CONNECTION_USER_VARIABLE        0x00000004
@@ -428,14 +427,6 @@ public:
 	 */
 	void set_error_from_PQerrorMessage();
 
-	int get_server_version() {
-		return PQserverVersion(pgsql_conn);
-	}
-
-	int get_protocol_version() {
-		return PQprotocolVersion(pgsql_conn);
-	}
-
 	inline
 	bool is_error_present() const {
 		if (error_info.severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL ||
@@ -541,9 +532,6 @@ public:
 	inline const char* get_pg_options() { return native_mode ? native_options.c_str() : PQoptions(pgsql_conn); }
 	inline int get_pg_socket_fd() { return native_mode ? fd : PQsocket(pgsql_conn); }
 	inline int get_pg_backend_pid() { return native_mode ? native_backend_pid : PQbackendPID(pgsql_conn); }
-	inline int get_pg_connection_needs_password() { return PQconnectionNeedsPassword(pgsql_conn); }
-	inline int get_pg_connection_used_password() { return PQconnectionUsedPassword(pgsql_conn); }
-	inline int get_pg_connection_used_gssapi() { return PQconnectionUsedGSSAPI(pgsql_conn); }
 	inline int get_pg_client_encoding() {
 		if (native_mode) {
 			constexpr int SQL_ASCII = 0;   // PG_SQL_ASCII; mb/pg_wchar.h is not included here
@@ -605,7 +593,6 @@ public:
 		return (async_exit_status & PG_EVENT_WRITE) != 0;
 	}
 	inline int get_pg_is_nonblocking() { return native_mode ? 1 : PQisnonblocking(pgsql_conn); }
-	inline int get_pg_is_threadsafe() { return PQisthreadsafe(); }
 	inline const char* get_pg_error_message() {
 		return native_mode ? (error_info.message.empty() ? "" : error_info.message.c_str()) : PQerrorMessage(pgsql_conn);
 	}
@@ -623,7 +610,6 @@ public:
 	const char* get_pg_connection_status_str();
 	const char* get_pg_transaction_status_str();
 	unsigned int get_memory_usage() const;
-	char get_transaction_status_char();
 	inline int get_backend_pid() { return native_mode ? native_backend_pid : ((pgsql_conn) ? get_pg_backend_pid() : -1); }
 	// Whether the backend has not finished with this connection; callers use it to decide if the
 	// connection is safe to pool, reuse or retry on. Native has no libpq to ask and pgsql_conn is
@@ -708,11 +694,6 @@ public:
 		bool init_connect_sent;
 	} options;
 
-	struct {
-		char* hostname;
-		char* ip;
-	} connected_host_details;
-
 	bytes_stats_t bytes_info; // bytes statistics
 	struct {
 		unsigned long long questions;
@@ -741,13 +722,11 @@ public:
 	PgSQL_ErrorInfo error_info;
 	PGconn* pgsql_conn;
 	bool native_mode = false;          // true → native wire protocol, false → libpq
-	class PgSQL_Backend_Protocol* bp = NULL;  // owned in native mode only; NULL in libpq mode
 
 	// --- Native backend connect/auth handshake state (Task 1.6a, plaintext only) ---
 	// All of the following members are only meaningful when native_mode == true.
 	enum class PG_Native_Conn_St {
 		TCP_CONNECTING,   // non-blocking connect() in flight, waiting for writable
-		SSL_SEND_REQUEST, // socket connected, SSLRequest (8 bytes) to flush (TLS only)
 		SSL_READ_REPLY,   // waiting for the single-byte 'S'/'N' SSLRequest reply
 		SSL_HANDSHAKE,    // driving the OpenSSL client handshake over the raw fd
 		SEND_STARTUP,     // socket connected, StartupMessage (and pending bytes) to flush
@@ -904,7 +883,7 @@ public:
 	// --- Native backend TLS (Task 1.6b) ---
 	// native_ssl_requested is set in native_connect_start() when SSL is wanted for
 	// this backend (parent->use_ssl). When true the handshake takes the
-	// SSL_SEND_REQUEST -> SSL_READ_REPLY -> SSL_HANDSHAKE path before SEND_STARTUP,
+	// SSLRequest -> SSL_READ_REPLY -> SSL_HANDSHAKE path before SEND_STARTUP,
 	// and all subsequent native I/O is funneled through SSL_read/SSL_write against
 	// myds->ssl (BIO-mem model, pumped to/from `fd` by native_send_or_buffer /
 	// native_recv_into_framer). When false the plaintext 1.6a path is used verbatim.
@@ -988,7 +967,6 @@ public:
 	PgSQL_Query_Result* query_result_reuse;
 	unsigned long long creation_time;
 	unsigned long long last_time_used;
-	unsigned long long timeout;
 	int auto_increment_delay_token;
 	PG_ASYNC_ST async_state_machine;	// Async state machine
 	short wait_events;
