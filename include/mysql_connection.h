@@ -100,6 +100,9 @@ class MySQL_Connection {
 	void ProcessQueryAndSetStatusFlags_UserVariables(char *, int);
 	void ProcessQueryAndSetStatusFlags_Savepoint(char *);
 	void ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
+	MYSQL *gtid_lookup_mysql;
+	bool connect_gtid_lookup_connection();
+	void close_gtid_lookup_connection();
 	public:
 	struct {
 		char *server_version;
