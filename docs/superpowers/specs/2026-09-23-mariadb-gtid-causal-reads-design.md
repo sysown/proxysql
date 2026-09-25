@@ -139,10 +139,20 @@ Shared parse helper used by:
 Write-path GTID collection:
 
 - Keep `SESSION_TRACK_GTIDS` for MySQL.
-- On MariaDB backends (version comment contains `MariaDB`), also ensure
-  `gtid_binlog_pos` is in `session_track_system_variables`.
-- `MySQL_Connection::get_gtid()` tries `SESSION_TRACK_GTIDS` first, then
-  `SESSION_TRACK_SYSTEM_VARIABLES` for `gtid_binlog_pos` / `gtid_current_pos`.
+- On MariaDB backends (version comment contains `MariaDB`), the server may
+  accept `gtid_binlog_pos` in `session_track_system_variables` but still not
+  return a session-state payload. `MySQL_Connection::get_gtid()` therefore uses
+  a dedicated auxiliary MariaDB connection to run `SELECT @@gtid_binlog_pos`;
+  it never queries the live connection, whose response buffer, `mysql->info`,
+  and session state must remain intact.
+- The auxiliary connection is created lazily, reused while the session is
+  active, released when the pooled connection is returned, and closed on
+  reset/destruction. Connect is capped at one second with a one-second negative
+  retry window. The connected gauge includes the auxiliary connection;
+  `server_connections_created` remains a pool-connection counter.
+- `MySQL_Connection::get_gtid()` still tries MySQL session tracking first and
+  only performs the MariaDB lookup when `mysql-update_gtid_from_ok` or
+  `mysql-client_session_track_gtid` is enabled.
 - Store the native string on the backend (`0-1-100` or `uuid:seq`). If tracking
   is off, the string stays empty and `gtid_from_hostgroup` skips GTID routing
   (same as today).
@@ -158,6 +168,9 @@ Write-path GTID collection:
   message; reader disconnects as today.
 - MariaDB snapshot with neither a MySQL executed set nor `@@gtid_binlog_pos`:
   reader refuses to start.
+- MariaDB auxiliary lookup connect/query failure is best-effort: close the
+  auxiliary connection, leave the live response untouched, and retry no more
+  than once per second.
 - Non-GTID binlog events stay ignored.
 - Invalid `ST=` / `I*` still sets `active = false` and disconnects.
 
@@ -172,9 +185,12 @@ ProxySQL (this repo):
 - Unit: `add_gtid_from_ok` MariaDB; `GTID_Server_Data` `ST=`/`I1=` with `0:100`
   (no dash-stripping).
 - Unit: `_is_valid_gtid` accepts `0-1-100` and still rejects junk.
+- Unit: `select_session_gtid` and MariaDB position selection are bounded and
+  deduplicated; auxiliary lookup helpers preserve response metadata.
 - Existing MySQL causal-read TAP stays green.
-- TAP on `mariadb10-galera` for native `min_gtid` and OK-packet ingestion when
-  session tracking exposes `gtid_binlog_pos`. No new MariaDB-binlog TAP group.
+- Live MariaDB 10.11 probe: client OK-packet metadata is identical with GTID
+  lookup gate off/on; `GTID_session_collected` advances with the gate on; the
+  auxiliary connection is released when the session returns to the pool.
 
 Binlog reader (sibling repo):
 
@@ -184,7 +200,8 @@ Binlog reader (sibling repo):
 
 ## Verification
 
-- ProxySQL: debug build, GTID unit binaries, `mariadb10-galera` TAP for the
-  new session/`min_gtid` case, existing MySQL GTID TAP unchanged.
+- ProxySQL: clean `PROXYSQL31=1 make debug`, 36/36 `gtid_parse_unit-t`,
+  73/73 `gtid_set_unit-t`, 119/119 `gtid_server_data_unit-t`, and the live
+  MariaDB metadata/pool-release probes. Existing MySQL GTID TAP unchanged.
 - Reader: TAP build, parser unit binary, MariaDB live TAP, existing MySQL TAP
   unchanged.
