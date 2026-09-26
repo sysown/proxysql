@@ -211,6 +211,13 @@ static const std::set<std::string> mysql_variables_strings = {
 	"wsrep_trx_fragment_unit",
 };
 
+static const RE2 re_inline_comment("(?U)/\\*.*\\*/");
+static const RE2 re_versioned_set_comment("^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/");
+static const RE2 re_session_dot_upper("SESSION.");
+static const RE2 re_session_space_upper("SESSION ");
+static const RE2 re_session_dot_lower("session.");
+static const RE2 re_session_space_lower("session ");
+
 #include "proxysql_find_charset.h"
 
 extern MySQL_Authentication *GloMyAuth;
@@ -7806,8 +7813,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			}
 			int rc;
 			string nq=string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-			RE2::GlobalReplace(&nq,(char *)"^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/",(char *)"SET\\1");
-			RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
+			RE2::GlobalReplace(&nq,re_versioned_set_comment,"SET\\1");
+			RE2::GlobalReplace(&nq,re_inline_comment,"");
 			// remove trailing space and semicolon if present. See issue#4380
 			size_t pos = nq.find_last_not_of(" ;");
 			if (pos != nq.npos) {
@@ -8376,10 +8383,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 					string nq1 = string(query_no_space);
 					free(query_no_space);
-					RE2::GlobalReplace(&nq1,(char *)"SESSION.",(char *)"");
-					RE2::GlobalReplace(&nq1,(char *)"SESSION ",(char *)"");
-					RE2::GlobalReplace(&nq1,(char *)"session.",(char *)"");
-					RE2::GlobalReplace(&nq1,(char *)"session ",(char *)"");
+					RE2::GlobalReplace(&nq1,re_session_dot_upper,"");
+					RE2::GlobalReplace(&nq1,re_session_space_upper,"");
+					RE2::GlobalReplace(&nq1,re_session_dot_lower,"");
+					RE2::GlobalReplace(&nq1,re_session_space_lower,"");
 					//fprintf(stderr,"%s\n",nq1.c_str());
 					re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 					opt2->set_case_sensitive(false);
