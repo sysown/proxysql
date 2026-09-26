@@ -2141,9 +2141,14 @@ void PgSQL_Connection::stmt_execute_start() {
 	// libpq represents this case by passing paramFormats = nullptr.
 	const int* param_formats_data = (param_formats.empty() == false ? param_formats.data() : nullptr);
 
-	if (PQsendQueryPrepared(pgsql_conn, query.backend_stmt_name, param_values.size(),
+	// Forward the client's result format codes unchanged: 0 codes (all text), 1 code
+	// (applies to all columns) or one code per result column, possibly mixed text and
+	// binary (issue #6138). PQsendQueryPrepared() can only express a single code for all
+	// columns, so the vendored libpq provides PQsendQueryPreparedWithResultFormats().
+	// PostgreSQL itself validates the number of codes against the result columns.
+	if (PQsendQueryPreparedWithResultFormats(pgsql_conn, query.backend_stmt_name, param_values.size(),
 		param_values.data(), param_lengths.data(), param_formats_data,
-		(result_formats.size() > 0) ? result_formats[0] : 0) == 0) {
+		result_formats.size(), (result_formats.empty() == false ? result_formats.data() : nullptr)) == 0) {
 		set_error_from_PQerrorMessage();
 		proxy_error("Failed to send execute prepared statement. %s\n", get_error_code_with_message().c_str());
 		return;
