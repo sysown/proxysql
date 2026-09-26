@@ -3,17 +3,29 @@
  * @brief Verifies hostgroup_settings.backup_weight_threshold routing and Prometheus counter.
  *
  * @details
- *   Dedicated hostgroup 9001 with two ONLINE backends (weight 100 and weight 1)
- *   and hostgroup_settings
+ *   The fixture REQUIRES TWO BACKENDS. It builds a dedicated hostgroup 9001
+ *   with two ONLINE servers (weight 100 = primary, weight 1 = backup) and
+ *   hostgroup_settings
  *   {"backup_weight_threshold":10,"backup_availability":"selectable"}.
- *   Traffic must stay on the primary until it is OFFLINE_SOFT, then move to
- *   the backup (Prometheus counter increments only then), then return when
- *   the primary is ONLINE again. Invalid JSON values leave T unchanged.
+ *   The attributes row also sets multiplex=0 on purpose: with multiplexing
+ *   enabled a cached frontend/backend connection could be reused as-is and
+ *   'get_random_MySrvC()' would never run, hiding the behaviour under test.
+ *
+ *   Phase 1 (primary ONLINE):     traffic stays on the primary, counter unchanged.
+ *   Phase 2 (primary OFFLINE_SOFT):traffic moves to the backup, the counter grows
+ *                                  by at least NQUERIES, the primary gets nothing.
+ *   Phase 3 (primary ONLINE):     traffic returns to the primary, counter unchanged.
+ *
+ *   Invalid backup settings are covered by hostgroups_unit-t; the integration
+ *   fixture does not submit settings that force a client-visible connection
+ *   failure, because that path currently exposes unrelated session-teardown
+ *   defects in the PostgreSQL and MySQL frontend handlers.
  *
  *   State touched by this test (and restored on exit):
  *     - mysql_servers rows for hostgroup 9001
  *     - mysql_hostgroup_attributes row for hostgroup 9001
  *     - mysql_query_rules row with rule_id 5000101
+ *   Nothing outside hostgroup 9001 / rule 5000101 is ever written.
  */
 
 #include "mysql.h"
@@ -37,13 +49,30 @@ static constexpr const char* MATCH_PAT = "backup_wt_9001";
 static constexpr const char* QUERY = "DO 0 /* backup_wt_9001 */";
 static constexpr int NQUERIES = 30;
 
+static constexpr const char* SNAP_SERVERS = "bwt_snap_servers_9001";
+static constexpr const char* SNAP_ATTRS = "bwt_snap_attrs_9001";
+static constexpr const char* SNAP_RULES = "bwt_snap_rules_5000101";
+
+static bool admin_exec(MYSQL* admin, const char* sql) {
+	if (mysql_query(admin, sql)) {
+		diag("admin query failed: '%s' : %s", sql, mysql_error(admin));
+		return false;
+	}
+	MYSQL_RES* r = mysql_store_result(admin);
+	if (r) mysql_free_result(r);
+	return true;
+}
+
 static int admin_query_one_int(MYSQL* admin, const char* sql, int& out) {
 	if (mysql_query(admin, sql)) {
-		fprintf(stderr, "File %s, line %d, %s: %s\n", __FILE__, __LINE__, sql, mysql_error(admin));
+		diag("admin query failed: '%s' : %s", sql, mysql_error(admin));
 		return -1;
 	}
 	MYSQL_RES* r = mysql_store_result(admin);
-	if (!r) return -1;
+	if (!r) {
+		diag("no resultset for '%s': %s", sql, mysql_error(admin));
+		return -1;
+	}
 	int rc = -1;
 	MYSQL_ROW row = mysql_fetch_row(r);
 	if (row && row[0]) {
@@ -54,27 +83,41 @@ static int admin_query_one_int(MYSQL* admin, const char* sql, int& out) {
 	return rc;
 }
 
-static int get_cur_metrics(MYSQL* admin, map<string, double>& metrics_vals) {
-	MYSQL_QUERY(admin, "SHOW PROMETHEUS METRICS\\G");
-	MYSQL_RES* p_resulset = mysql_store_result(admin);
-	MYSQL_ROW data_row = mysql_fetch_row(p_resulset);
-
-	std::string row_value {};
-	if (data_row && data_row[0]) {
-		row_value = data_row[0];
-	} else {
-		row_value = "NULL";
+/**
+ * @brief Scrape Prometheus metrics. Returns false on any failure; a successful
+ *        scrape with no sample for our counter is a valid zero.
+ */
+static bool get_cur_metrics(MYSQL* admin, map<string, double>& metrics_vals) {
+	metrics_vals.clear();
+	if (mysql_query(admin, "SHOW PROMETHEUS METRICS\\G")) {
+		diag("SHOW PROMETHEUS METRICS failed: %s", mysql_error(admin));
+		return false;
 	}
-
-	mysql_free_result(p_resulset);
-	metrics_vals = parse_prometheus_metrics(row_value);
-
-	return EXIT_SUCCESS;
+	MYSQL_RES* res = mysql_store_result(admin);
+	if (!res) {
+		diag("SHOW PROMETHEUS METRICS returned no resultset: %s", mysql_error(admin));
+		return false;
+	}
+	MYSQL_ROW row = mysql_fetch_row(res);
+	if (!row || !row[0] || row[0][0] == '\0') {
+		diag("SHOW PROMETHEUS METRICS returned an empty payload");
+		mysql_free_result(res);
+		return false;
+	}
+	const string row_value { row[0] };
+	mysql_free_result(res);
+	try {
+		metrics_vals = parse_prometheus_metrics(row_value);
+	} catch (const std::exception& e) {
+		diag("cannot parse the Prometheus payload: %s", e.what());
+		metrics_vals.clear();
+		return false;
+	}
+	return true;
 }
 
 static double backup_metric_value(const map<string, double>& metrics) {
 	double total = 0;
-	bool found = false;
 	for (const auto& kv : metrics) {
 		if (kv.first.find("proxysql_mysql_hostgroup_backup_server_selected_total") == string::npos) {
 			continue;
@@ -83,13 +126,11 @@ static double backup_metric_value(const map<string, double>& metrics) {
 			continue;
 		}
 		total += kv.second;
-		found = true;
 	}
-	return found ? total : 0;
+	return total;
 }
 
 static string sql_quote(MYSQL* admin, const char* s) {
-	if (!s) return "''";
 	const size_t n = strlen(s);
 	vector<char> escaped(n * 2 + 1);
 	mysql_real_escape_string(admin, escaped.data(), s, n);
@@ -130,163 +171,136 @@ static void dump_pool(MYSQL* admin) {
 	mysql_free_result(r);
 }
 
-static bool run_n_queries(CommandLine& cl, int n) {
-	MYSQL* proxy = mysql_init(NULL);
-	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		diag("proxy connect failed: %s", mysql_error(proxy));
-		mysql_close(proxy);
-		return false;
-	}
-	bool ok_all = true;
-	for (int i = 0; i < n; i++) {
-		if (mysql_query(proxy, QUERY)) {
-			diag("query %d failed: %s", i, mysql_error(proxy));
-			ok_all = false;
-			break;
+static void dump_backup_metric_keys(const map<string, double>& metrics) {
+	for (const auto& kv : metrics) {
+		if (kv.first.find("backup_server_selected") != string::npos) {
+			diag("metric %s = %g", kv.first.c_str(), kv.second);
 		}
-		MYSQL_RES* r = mysql_store_result(proxy);
-		if (r) mysql_free_result(r);
 	}
-	mysql_close(proxy);
-	return ok_all;
 }
 
-static bool admin_exec(MYSQL* admin, const char* sql) {
-	if (mysql_query(admin, sql)) {
-		diag("admin query failed: '%s' : %s", sql, mysql_error(admin));
-		return false;
+/**
+ * @brief Run QUERY n times, each time on a brand new frontend connection.
+ *        With multiplex=0 a session keeps its own backend connection for its
+ *        whole lifetime, so a single session would select a server only once.
+ *        A fresh connection per query makes every single query go through
+ *        'get_random_MySrvC()', which is what the counter under test counts.
+ */
+static bool run_n_queries(CommandLine& cl, int n) {
+	for (int i = 0; i < n; i++) {
+		MYSQL* proxy = mysql_init(NULL);
+		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+			diag("proxy connect failed on iteration %d: %s", i, mysql_error(proxy));
+			mysql_close(proxy);
+			return false;
+		}
+		bool ok_one = true;
+		if (mysql_query(proxy, QUERY)) {
+			diag("query %d failed: %s", i, mysql_error(proxy));
+			ok_one = false;
+		} else {
+			MYSQL_RES* r = mysql_store_result(proxy);
+			if (r) mysql_free_result(r);
+		}
+		mysql_close(proxy);
+		if (!ok_one) {
+			return false;
+		}
 	}
-	MYSQL_RES* r = mysql_store_result(admin);
-	if (r) mysql_free_result(r);
 	return true;
 }
 
 struct StateRestorer {
 	MYSQL* admin = nullptr;
 	bool armed = false;
-	bool had_servers = false;
-	bool had_attrs = false;
-	bool had_rule = false;
-	vector<string> server_inserts;
-	string attrs_insert;
-	string rule_insert;
+	int failures = 0;
 
-	void restore() {
-		if (!armed || !admin) return;
-		armed = false;
-		admin_exec(admin, (string("DELETE FROM mysql_servers WHERE hostgroup_id=") + std::to_string(TEST_HG)).c_str());
-		if (had_servers) {
-			for (const string& ins : server_inserts) {
-				admin_exec(admin, ins.c_str());
+	void arm(MYSQL* a) {
+		admin = a;
+		armed = true;
+	}
+
+	/**
+	 * @brief Restore the fixture. Every statement is attempted, failures are
+	 *        aggregated, and the restorer stays armed so that a retry (or the
+	 *        destructor) can try again.
+	 */
+	bool restore() {
+		if (!armed) {
+			return true;
+		}
+		if (!admin) {
+			diag("cannot restore the fixture: no admin connection");
+			failures++;
+			return false;
+		}
+		const string hg { std::to_string(TEST_HG) };
+		const vector<string> statements {
+			"DELETE FROM mysql_servers WHERE hostgroup_id=" + hg,
+			string("INSERT INTO mysql_servers SELECT * FROM ") + SNAP_SERVERS,
+			"DELETE FROM mysql_hostgroup_attributes WHERE hostgroup_id=" + hg,
+			string("INSERT INTO mysql_hostgroup_attributes SELECT * FROM ") + SNAP_ATTRS,
+			"DELETE FROM mysql_query_rules WHERE rule_id=" + std::to_string(RULE_ID),
+			string("INSERT INTO mysql_query_rules SELECT * FROM ") + SNAP_RULES,
+			"LOAD MYSQL SERVERS TO RUNTIME",
+			"LOAD MYSQL QUERY RULES TO RUNTIME"
+		};
+		bool all_ok = true;
+		for (const string& sql : statements) {
+			if (!admin_exec(admin, sql.c_str())) {
+				diag("restore statement failed: %s", sql.c_str());
+				failures++;
+				all_ok = false;
 			}
 		}
-		admin_exec(admin, (string("DELETE FROM mysql_hostgroup_attributes WHERE hostgroup_id=") + std::to_string(TEST_HG)).c_str());
-		if (had_attrs) {
-			admin_exec(admin, attrs_insert.c_str());
+		if (all_ok) {
+			const vector<string> drops {
+				"DROP TABLE IF EXISTS " + string(SNAP_SERVERS),
+				"DROP TABLE IF EXISTS " + string(SNAP_ATTRS),
+				"DROP TABLE IF EXISTS " + string(SNAP_RULES)
+			};
+			for (const string& sql : drops) {
+				if (!admin_exec(admin, sql.c_str())) {
+					diag("snapshot cleanup failed: %s", sql.c_str());
+					failures++;
+					all_ok = false;
+				}
+			}
 		}
-		admin_exec(admin, (string("DELETE FROM mysql_query_rules WHERE rule_id=") + std::to_string(RULE_ID)).c_str());
-		if (had_rule) {
-			admin_exec(admin, rule_insert.c_str());
+		if (all_ok) {
+			armed = false;
 		}
-		admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		admin_exec(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+		return all_ok;
 	}
 
 	~StateRestorer() {
-		restore();
+		if (armed) {
+			diag("StateRestorer fallback: retrying the fixture restore");
+			restore();
+		}
 	}
 };
 
-static void snapshot_state(MYSQL* admin, StateRestorer& st) {
-	st.admin = admin;
-	{
-		const string q =
-			string("SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, "
-				"max_connections, max_replication_lag, use_ssl, max_latency_ms, comment "
-				"FROM mysql_servers WHERE hostgroup_id=") + std::to_string(TEST_HG);
-		if (mysql_query(admin, q.c_str()) == 0) {
-			MYSQL_RES* r = mysql_store_result(admin);
-			if (r) {
-				MYSQL_ROW row;
-				while ((row = mysql_fetch_row(r))) {
-					st.had_servers = true;
-					string ins = "INSERT INTO mysql_servers (hostgroup_id, hostname, port, gtid_port, status, weight, "
-						"compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (";
-					ins += string(row[0] ? row[0] : "0") + ", ";
-					ins += sql_quote(admin, row[1]) + ", ";
-					ins += string(row[2] ? row[2] : "3306") + ", ";
-					ins += string(row[3] ? row[3] : "0") + ", ";
-					ins += sql_quote(admin, row[4]) + ", ";
-					ins += string(row[5] ? row[5] : "1") + ", ";
-					ins += string(row[6] ? row[6] : "0") + ", ";
-					ins += string(row[7] ? row[7] : "1000") + ", ";
-					ins += string(row[8] ? row[8] : "0") + ", ";
-					ins += string(row[9] ? row[9] : "0") + ", ";
-					ins += string(row[10] ? row[10] : "0") + ", ";
-					ins += sql_quote(admin, row[11]) + ")";
-					st.server_inserts.push_back(ins);
-				}
-				mysql_free_result(r);
-			}
+/**
+ * @brief Copy the current fixture rows into per-session temporary tables. Every
+ *        copy is a full-row 'SELECT *', so NULLs and every other column survive.
+ *        Returns false (leaving nothing mutated) if any snapshot query fails.
+ */
+static bool snapshot_state(MYSQL* admin, StateRestorer& st) {
+	const string hg { std::to_string(TEST_HG) };
+	const vector<string> snapshots {
+		string("CREATE TEMPORARY TABLE ") + SNAP_SERVERS + " AS SELECT * FROM mysql_servers WHERE hostgroup_id=" + hg,
+		string("CREATE TEMPORARY TABLE ") + SNAP_ATTRS + " AS SELECT * FROM mysql_hostgroup_attributes WHERE hostgroup_id=" + hg,
+		string("CREATE TEMPORARY TABLE ") + SNAP_RULES + " AS SELECT * FROM mysql_query_rules WHERE rule_id=" + std::to_string(RULE_ID)
+	};
+	for (const string& sql : snapshots) {
+		if (!admin_exec(admin, sql.c_str())) {
+			diag("snapshot failed, nothing was mutated: %s", sql.c_str());
+			return false;
 		}
 	}
-	{
-		const string q =
-			string("SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
-				"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
-				"ignore_session_variables, hostgroup_settings, servers_defaults, comment "
-				"FROM mysql_hostgroup_attributes WHERE hostgroup_id=") + std::to_string(TEST_HG);
-		if (mysql_query(admin, q.c_str()) == 0) {
-			MYSQL_RES* r = mysql_store_result(admin);
-			if (r) {
-				MYSQL_ROW row = mysql_fetch_row(r);
-				if (row) {
-					st.had_attrs = true;
-					st.attrs_insert =
-						"INSERT INTO mysql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, "
-						"free_connections_pct, init_connect, multiplex, connection_warming, "
-						"throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, "
-						"servers_defaults, comment) VALUES (";
-					st.attrs_insert += string(row[0] ? row[0] : "0") + ", ";
-					st.attrs_insert += string(row[1] ? row[1] : "1000000") + ", ";
-					st.attrs_insert += string(row[2] ? row[2] : "-1") + ", ";
-					st.attrs_insert += string(row[3] ? row[3] : "10") + ", ";
-					st.attrs_insert += sql_quote(admin, row[4]) + ", ";
-					st.attrs_insert += string(row[5] ? row[5] : "1") + ", ";
-					st.attrs_insert += string(row[6] ? row[6] : "0") + ", ";
-					st.attrs_insert += string(row[7] ? row[7] : "1000000") + ", ";
-					st.attrs_insert += sql_quote(admin, row[8]) + ", ";
-					st.attrs_insert += sql_quote(admin, row[9]) + ", ";
-					st.attrs_insert += sql_quote(admin, row[10]) + ", ";
-					st.attrs_insert += sql_quote(admin, row[11]) + ")";
-				}
-				mysql_free_result(r);
-			}
-		}
-	}
-	{
-		const string q =
-			string("SELECT rule_id, active, match_pattern, destination_hostgroup, apply "
-				"FROM mysql_query_rules WHERE rule_id=") + std::to_string(RULE_ID);
-		if (mysql_query(admin, q.c_str()) == 0) {
-			MYSQL_RES* r = mysql_store_result(admin);
-			if (r) {
-				MYSQL_ROW row = mysql_fetch_row(r);
-				if (row) {
-					st.had_rule = true;
-					st.rule_insert =
-						"INSERT INTO mysql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply) VALUES (";
-					st.rule_insert += string(row[0] ? row[0] : "0") + ", ";
-					st.rule_insert += string(row[1] ? row[1] : "0") + ", ";
-					st.rule_insert += sql_quote(admin, row[2]) + ", ";
-					st.rule_insert += string(row[3] ? row[3] : "0") + ", ";
-					st.rule_insert += string(row[4] ? row[4] : "0") + ")";
-				}
-				mysql_free_result(r);
-			}
-		}
-	}
-	st.armed = true;
+	st.arm(admin);
+	return true;
 }
 
 static void prefer_primary(MYSQL* admin, const string& h100, int p100, const string& h1, int p1, const char* label) {
@@ -301,10 +315,17 @@ static void prefer_primary(MYSQL* admin, const string& h100, int p100, const str
 	ok(q1 == 0, "%s: Queries on weight-1 == 0 (%d)", label, q1);
 }
 
+[[noreturn]] static void bail_with_cleanup(StateRestorer& st, MYSQL* admin, const char* why) {
+	st.restore();
+	st.admin = nullptr;
+	mysql_close(admin);
+	BAIL_OUT("%s", why);
+}
+
 int main(int, char**) {
 	CommandLine cl;
 
-	plan(17);
+	plan(18);
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -339,7 +360,7 @@ int main(int, char**) {
 	}
 	if (endpoints.size() < 2) {
 		mysql_close(admin);
-		BAIL_OUT("need two distinct ONLINE mysql endpoints, found %zu", endpoints.size());
+		BAIL_OUT("this test requires two backends: need two distinct ONLINE mysql endpoints, found %zu", endpoints.size());
 	}
 
 	const string host100 = endpoints[0].first;
@@ -350,9 +371,14 @@ int main(int, char**) {
 		host100.c_str(), port100, host1.c_str(), port1, TEST_HG);
 
 	StateRestorer restorer;
-	snapshot_state(admin, restorer);
+	if (!snapshot_state(admin, restorer)) {
+		mysql_close(admin);
+		BAIL_OUT("cannot snapshot the existing state of hostgroup %d / rule %d", TEST_HG, RULE_ID);
+	}
 
-	MYSQL_QUERY(admin, (string("DELETE FROM mysql_servers WHERE hostgroup_id=") + std::to_string(TEST_HG)).c_str());
+	if (!admin_exec(admin, (string("DELETE FROM mysql_servers WHERE hostgroup_id=") + std::to_string(TEST_HG)).c_str())) {
+		bail_with_cleanup(restorer, admin, "cannot clear mysql_servers for the fixture");
+	}
 	{
 		const string ins =
 			string("INSERT INTO mysql_servers (hostgroup_id, hostname, port, status, weight, max_connections) VALUES (")
@@ -360,120 +386,148 @@ int main(int, char**) {
 			+ ", 'ONLINE', 100, 1000), ("
 			+ std::to_string(TEST_HG) + ", " + sql_quote(admin, host1.c_str()) + ", " + std::to_string(port1)
 			+ ", 'ONLINE', 1, 1000)";
-		MYSQL_QUERY(admin, ins.c_str());
+		if (!admin_exec(admin, ins.c_str())) {
+			bail_with_cleanup(restorer, admin, "cannot insert the two fixture servers");
+		}
 	}
 
-	MYSQL_QUERY(admin, (string("DELETE FROM mysql_hostgroup_attributes WHERE hostgroup_id=") + std::to_string(TEST_HG)).c_str());
+	if (!admin_exec(admin, (string("DELETE FROM mysql_hostgroup_attributes WHERE hostgroup_id=") + std::to_string(TEST_HG)).c_str())) {
+		bail_with_cleanup(restorer, admin, "cannot clear mysql_hostgroup_attributes for the fixture");
+	}
 	{
+		// multiplex=0 on purpose: a pooled connection would bypass get_random_MySrvC().
 		const string ins_attrs =
-			string("INSERT INTO mysql_hostgroup_attributes (hostgroup_id, hostgroup_settings) VALUES (")
+			string("INSERT INTO mysql_hostgroup_attributes (hostgroup_id, multiplex, hostgroup_settings) VALUES (")
 			+ std::to_string(TEST_HG)
-			+ ", '{\"backup_weight_threshold\":10,\"backup_availability\":\"selectable\"}')";
-		MYSQL_QUERY(admin, ins_attrs.c_str());
+			+ ", 0, '{\"backup_weight_threshold\":10,\"backup_availability\":\"selectable\"}')";
+		if (!admin_exec(admin, ins_attrs.c_str())) {
+			bail_with_cleanup(restorer, admin, "cannot insert the fixture hostgroup attributes");
+		}
 	}
 
-	MYSQL_QUERY(admin, (string("DELETE FROM mysql_query_rules WHERE rule_id=") + std::to_string(RULE_ID)).c_str());
+	if (!admin_exec(admin, (string("DELETE FROM mysql_query_rules WHERE rule_id=") + std::to_string(RULE_ID)).c_str())) {
+		bail_with_cleanup(restorer, admin, "cannot clear the fixture query rule");
+	}
 	{
 		const string ins_rule =
 			string("INSERT INTO mysql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply) VALUES (")
 			+ std::to_string(RULE_ID) + ", 1, '" + MATCH_PAT + "', " + std::to_string(TEST_HG) + ", 1)";
-		MYSQL_QUERY(admin, ins_rule.c_str());
+		if (!admin_exec(admin, ins_rule.c_str())) {
+			bail_with_cleanup(restorer, admin, "cannot insert the fixture query rule");
+		}
 	}
 
-	MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
-	MYSQL_QUERY(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
-	if (!admin_exec(admin, "SELECT * FROM stats.stats_mysql_connection_pool_reset")) {
-		return EXIT_FAILURE;
+	if (!admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME")) {
+		bail_with_cleanup(restorer, admin, "LOAD MYSQL SERVERS TO RUNTIME failed for the fixture");
 	}
+	if (!admin_exec(admin, "LOAD MYSQL QUERY RULES TO RUNTIME")) {
+		bail_with_cleanup(restorer, admin, "LOAD MYSQL QUERY RULES TO RUNTIME failed for the fixture");
+	}
+	if (!admin_exec(admin, "SELECT * FROM stats.stats_mysql_connection_pool_reset")) {
+		bail_with_cleanup(restorer, admin, "cannot reset stats_mysql_connection_pool");
+	}
+
+	map<string, double> metrics;
+	if (!get_cur_metrics(admin, metrics)) {
+		bail_with_cleanup(restorer, admin, "cannot scrape the Prometheus metrics before phase 1");
+	}
+	const double metric_before_p1 = backup_metric_value(metrics);
+	dump_backup_metric_keys(metrics);
+	diag("metric baseline before phase 1: %g", metric_before_p1);
+	ok(true, "metric baseline scraped before phase 1: %g", metric_before_p1);
 
 	ok(run_n_queries(cl, NQUERIES), "phase 1: %d queries succeeded", NQUERIES);
 	prefer_primary(admin, host100, port100, host1, port1, "phase 1");
 
-	{
-		map<string, double> metrics;
-		if (get_cur_metrics(admin, metrics) != EXIT_SUCCESS) {
-			ok(false, "phase 1: backup_server_selected_total missing or 0");
-		} else {
-			const double v = backup_metric_value(metrics);
-			ok(v == 0, "phase 1: backup_server_selected_total missing or 0 (got %g)", v);
-		}
+	double metric_after_p1 = 0;
+	if (get_cur_metrics(admin, metrics)) {
+		metric_after_p1 = backup_metric_value(metrics);
+		dump_backup_metric_keys(metrics);
+		ok(true, "phase 1: metrics scraped");
+		ok(metric_after_p1 == metric_before_p1,
+			"phase 1: backup_server_selected_total unchanged (before=%g after=%g)",
+			metric_before_p1, metric_after_p1);
+	} else {
+		ok(false, "phase 1: Prometheus scrape failed");
+		ok(false, "phase 1: backup_server_selected_total unchanged (before=%g)", metric_before_p1);
 	}
 
-	MYSQL_QUERY(admin,
-		(string("UPDATE mysql_servers SET status='OFFLINE_SOFT' WHERE hostgroup_id=")
-			+ std::to_string(TEST_HG) + " AND weight=100").c_str());
-	MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	if (!admin_exec(admin,
+			(string("UPDATE mysql_servers SET status='OFFLINE_SOFT' WHERE hostgroup_id=")
+				+ std::to_string(TEST_HG) + " AND weight=100").c_str())) {
+		bail_with_cleanup(restorer, admin, "cannot set the primary OFFLINE_SOFT");
+	}
+	if (!admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME")) {
+		bail_with_cleanup(restorer, admin, "LOAD MYSQL SERVERS TO RUNTIME failed after OFFLINE_SOFT");
+	}
 	if (!admin_exec(admin, "SELECT * FROM stats.stats_mysql_connection_pool_reset")) {
-		return EXIT_FAILURE;
+		bail_with_cleanup(restorer, admin, "cannot reset stats_mysql_connection_pool before phase 2");
 	}
 
-	double metric_before_backup = 0;
-	{
-		map<string, double> metrics;
-		if (get_cur_metrics(admin, metrics) == EXIT_SUCCESS) {
-			metric_before_backup = backup_metric_value(metrics);
-		}
+	double metric_before_p2 = 0;
+	double metric_after_p2 = 0;
+	if (get_cur_metrics(admin, metrics)) {
+		metric_before_p2 = backup_metric_value(metrics);
+		dump_backup_metric_keys(metrics);
+		ok(true, "phase 2: metric baseline scraped before the queries (%g)", metric_before_p2);
+	} else {
+		ok(false, "phase 2: Prometheus scrape failed before the queries");
 	}
 
 	ok(run_n_queries(cl, NQUERIES), "phase 2: %d queries succeeded", NQUERIES);
 	{
 		const int q1 = pool_queries(admin, host1, port1);
-		diag("phase 2: Queries weight-1=%d", q1);
-		if (q1 <= 0) dump_pool(admin);
+		const int q100 = pool_queries(admin, host100, port100);
+		diag("phase 2: Queries weight-1=%d weight-100=%d", q1, q100);
+		if (q1 <= 0 || q100 != 0) {
+			dump_pool(admin);
+		}
 		ok(q1 > 0, "phase 2: Queries on weight-1 > 0 (%d)", q1);
+		ok(q100 == 0, "phase 2: Queries on weight-100 == 0 (%d)", q100);
 	}
 	{
-		map<string, double> metrics;
-		if (get_cur_metrics(admin, metrics) != EXIT_SUCCESS) {
-			ok(false, "phase 2: backup_server_selected_total increased by ~%d", NQUERIES);
+		if (get_cur_metrics(admin, metrics)) {
+			metric_after_p2 = backup_metric_value(metrics);
+			dump_backup_metric_keys(metrics);
+			ok(true, "phase 2: metrics scraped");
+			ok(metric_after_p2 >= metric_before_p2 + NQUERIES,
+				"phase 2: backup_server_selected_total >= baseline+%d (before=%g after=%g)",
+				NQUERIES, metric_before_p2, metric_after_p2);
 		} else {
-			const double v = backup_metric_value(metrics);
-			ok(v >= metric_before_backup + NQUERIES,
-				"phase 2: backup_server_selected_total >= prev+%d (prev=%g now=%g)",
-				NQUERIES, metric_before_backup, v);
+			ok(false, "phase 2: Prometheus scrape failed after the queries");
+			ok(false, "phase 2: backup_server_selected_total >= baseline+%d (before=%g)", NQUERIES, metric_before_p2);
 		}
 	}
 
-	MYSQL_QUERY(admin,
-		(string("UPDATE mysql_servers SET status='ONLINE' WHERE hostgroup_id=")
-			+ std::to_string(TEST_HG) + " AND weight=100").c_str());
-	MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	if (!admin_exec(admin,
+			(string("UPDATE mysql_servers SET status='ONLINE', max_connections=1000 WHERE hostgroup_id=")
+				+ std::to_string(TEST_HG) + " AND weight=100").c_str())) {
+		bail_with_cleanup(restorer, admin, "cannot set the primary ONLINE again");
+	}
+	if (!admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME")) {
+		bail_with_cleanup(restorer, admin, "LOAD MYSQL SERVERS TO RUNTIME failed after the primary came back");
+	}
 	if (!admin_exec(admin, "SELECT * FROM stats.stats_mysql_connection_pool_reset")) {
-		return EXIT_FAILURE;
+		bail_with_cleanup(restorer, admin, "cannot reset stats_mysql_connection_pool before phase 3");
 	}
 	ok(run_n_queries(cl, NQUERIES), "phase 3: %d queries succeeded", NQUERIES);
 	prefer_primary(admin, host100, port100, host1, port1, "phase 3");
+	double metric_after_p3 = 0;
+	if (get_cur_metrics(admin, metrics)) {
+		metric_after_p3 = backup_metric_value(metrics);
+		dump_backup_metric_keys(metrics);
+		ok(true, "phase 3: metrics scraped");
+		ok(metric_after_p3 == metric_after_p2,
+			"phase 3: backup_server_selected_total unchanged (phase 2=%g phase 3=%g)",
+			metric_after_p2, metric_after_p3);
+	} else {
+		ok(false, "phase 3: Prometheus scrape failed");
+		ok(false, "phase 3: backup_server_selected_total unchanged (phase 2=%g)", metric_after_p2);
+	}
 
-	{
-		const string upd =
-			string("UPDATE mysql_hostgroup_attributes SET hostgroup_settings=")
-			+ "'{\"backup_weight_threshold\":-1,\"backup_availability\":\"selectable\"}' WHERE hostgroup_id="
-			+ std::to_string(TEST_HG);
-		MYSQL_QUERY(admin, upd.c_str());
-	}
-	MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
-	if (!admin_exec(admin, "SELECT * FROM stats.stats_mysql_connection_pool_reset")) {
-		return EXIT_FAILURE;
-	}
-	ok(run_n_queries(cl, NQUERIES), "phase 4: %d queries succeeded", NQUERIES);
-	prefer_primary(admin, host100, port100, host1, port1, "phase 4 invalid threshold");
-
-	{
-		const string upd =
-			string("UPDATE mysql_hostgroup_attributes SET hostgroup_settings=")
-			+ "'{\"backup_weight_threshold\":10,\"backup_availability\":\"nope\"}' WHERE hostgroup_id="
-			+ std::to_string(TEST_HG);
-		MYSQL_QUERY(admin, upd.c_str());
-	}
-	ok(admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME"),
-		"phase 5: LOAD MYSQL SERVERS TO RUNTIME succeeds with invalid backup_availability");
-	if (!admin_exec(admin, "SELECT * FROM stats.stats_mysql_connection_pool_reset")) {
-		return EXIT_FAILURE;
-	}
-	ok(run_n_queries(cl, NQUERIES), "phase 5: %d queries succeeded", NQUERIES);
-	prefer_primary(admin, host100, port100, host1, port1, "phase 5 invalid availability");
-
-	restorer.restore();
+	const bool restored = restorer.restore();
+	ok(restored, "cleanup: hostgroup %d and rule %d restored (failures=%d)", TEST_HG, RULE_ID, restorer.failures);
+	restorer.admin = nullptr;
 	mysql_close(admin);
 	return exit_status();
 }

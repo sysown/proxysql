@@ -53,7 +53,7 @@ Let `T = backup_weight_threshold`.
 | Server weight | Role |
 |---|---|
 | `weight = 0` | Never selected, including when the primary set is empty |
-| `weight >= T` | Primary |
+| `weight > 0 && weight >= T` | Primary |
 | `0 < weight < T` | Backup |
 
 `T = 0`: no weight is `< 0`, pass 2 is empty, behaviour identical to today (early-out).
@@ -72,11 +72,11 @@ If every server has `0 < weight < T`, the primary set is empty and backups are u
 
 Gated with `#ifdef PROXYSQL31`. `T == 0` takes the existing path.
 
-1. Pass 1: existing filters, keep `weight >= T` (and `weight > 0`). If non-empty, weighted random among them.
+1. Pass 1: existing filters, keep `weight > 0 && weight >= T`. If non-empty, weighted random among them.
 2. If pass 1 is empty **and** `T > 0` **and** the availability mode says no primary is present: pass 2, same existing filters, keep `0 < weight < T`. If non-empty, weighted random among them.
-3. If still empty: today’s desperate unshun, then stop. An ONLINE backup is preferred over unshunning a recently failed primary.
+3. If still empty: today’s desperate unshun, then **re-apply the tier/availability filter** to the recovered candidates so a recovered backup cannot bypass `status`/`capacity` closure. Only then stop. An ONLINE backup is preferred over unshunning a recently failed primary.
 
-MySQL GTID and Aurora lag stay inside the existing filters (`selectable`). PgSQL has the same two-pass; it simply has fewer extra filters.
+MySQL GTID and Aurora lag stay inside the existing filters (`selectable`). PgSQL has the same two-pass; it simply has fewer extra filters. Under `PROXYSQL31`, recovered candidates from desperate unshun also re-check `max_connections` and the hostgroup online-count limit.
 
 ### Unchanged surrounding behaviour
 
@@ -121,16 +121,24 @@ Extend `server_selection_unit-t.cpp` (and `ServerSelection.cpp` as needed):
 - all `weight = 0` → none
 - all below `T` → backups used
 - `backup_availability` `selectable` / `status` / `capacity` (max_conn, latency, lag)
+- large primary weights do not overflow selection totals
+
+Extend `hostgroups_unit-t.cpp` with real manager tests (PROXYSQL31 only):
+
+- desperate-unshun does not bypass `status`/`capacity` closure (both protocols)
+- primary presence survives a `2^32` unsigned weight sum (both protocols)
+- parser: omitted keys and empty `hostgroup_settings` reset to `0`/`selectable`; invalid values and malformed JSON retain previous values (both protocols)
 
 ### TAP (`PROXYSQL31=1` debug build, isolated harness)
 
-One MySQL and one PgSQL test, registered with `@proxysql_min_version:3.1`:
+One MySQL test on `mysql84-g1` and one PgSQL test on the two-node `pgsql17-repl-g4`, registered with `@proxysql_min_version:3.1`:
 
 - High-weight ONLINE → 0% of queries on low-weight servers
-- Shun high-weight → traffic moves to low-weight; Prometheus counter increments only then
-- Unshun high-weight → traffic returns to primaries
+- Set the high-weight primary `OFFLINE_SOFT` → traffic moves to low-weight; Prometheus counter increases by at least the query count
+- Restore the primary ONLINE → traffic returns to primaries; counter unchanged
 - `LOAD MYSQL SERVERS TO RUNTIME` / `LOAD PGSQL SERVERS TO RUNTIME` applies JSON without restart
-- Invalid `backup_weight_threshold` / `backup_availability` values are logged and left at previous/default; valid sibling keys in the same JSON still apply
+- The fixture uses `multiplex=0` and one frontend connection per query so every query goes through `get_random_MySrvC`
+- Invalid `backup_weight_threshold` / `backup_availability` values are covered by the hostgroup unit tests; the integration fixture does not submit settings that force a client-visible connection failure because that path currently exposes unrelated session-teardown defects in the frontend handlers
 
 No new schema, cluster-sync, or online-upgrade tests.
 

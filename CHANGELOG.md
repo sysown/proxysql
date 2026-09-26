@@ -74,7 +74,10 @@ Phase 1 limitations (documented in code + spec):
 - `hostgroup_settings.backup_weight_threshold` / `backup_availability`: servers with
   `0 < weight < T` are selected only when no primary (`weight >= T`) is available
   in the same hostgroup (MySQL and PostgreSQL). Default `T=0` is a no-op.
-  `weight=0` remains never selected. PROXYSQL31 only.
+  `weight=0` remains never selected. `backup_availability` selects when the backup
+  set opens: `selectable` (default) follows the normal candidate filters,
+  `status` requires no ONLINE primary, and `capacity` requires no ONLINE primary
+  with a free connection slot. PROXYSQL31 only.
   Prometheus: `proxysql_mysql_hostgroup_backup_server_selected_total`,
   `proxysql_pgsql_hostgroup_backup_server_selected_total`.
 

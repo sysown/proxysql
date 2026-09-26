@@ -43,6 +43,7 @@
 
 **Files:**
 - Modify: `include/ServerSelection.h`
+- Modify: `lib/ServerSelection.cpp` (update the definition signature in the same step so the 3-argument default-argument calls still link)
 - Modify: `test/tap/tests/unit/server_selection_unit-t.cpp`
 
 - [ ] **Step 1: Extend the extracted API with defaults so existing tests keep compiling**
@@ -171,7 +172,7 @@ static void test_backup_weighted_among_backups() {
 Update `main()`:
 
 ```cpp
-	plan(21 + 9);
+	plan(21 + 11);
 
 	// existing 21 assertions (including test_init_minimal)
 	test_backup_threshold_noop();                 // 1
@@ -184,7 +185,7 @@ Update `main()`:
 	test_backup_weighted_among_backups();         // 1
 ```
 
-`21 + 9 = 30`. Existing tests still call the 3-arg overload (`T=0`).
+`21 + 11 = 32`. Existing tests still call the 3-arg overload (`T=0`).
 
 - [ ] **Step 3: Build and run — new tests must fail**
 
@@ -401,7 +402,7 @@ Extend the function `@details` list with the two keys and their ranges.
 
 Mirror the same block in PgSQL `init_myhgc_hostgroup_settings`, using `PgSQL_j_get_srv_default_int_val` and the `pgsql_hostgroup_attributes...` error strings.
 
-Invalid sibling keys must not prevent a valid `backup_weight_threshold` in the same object from applying (parse independently, same as `handle_warnings`).
+Invalid sibling keys must not prevent a valid `backup_weight_threshold` in the same object from applying (parse independently, same as `handle_warnings`). Omitted keys and an empty `hostgroup_settings` reset the two fields to `0`/`selectable`; invalid supplied values and malformed JSON retain the previous values.
 
 - [ ] **Step 3: Compile lib**
 
@@ -554,7 +555,7 @@ When returning a server (~line 347), if `used_backup`:
 #endif
 ```
 
-Do not run the tier filter again after desperate unshun.
+Re-apply the tier/availability filter after the desperate-unshun recovery loop, before the final `sum==0` return, so a recovered backup cannot bypass `status`/`capacity` closure and `used_backup` reflects the final selection. Under `PROXYSQL31`, recovered candidates also re-check `max_connections` and the hostgroup online-count limit.
 
 - [ ] **Step 3: Compile**
 
@@ -584,7 +585,7 @@ In an anonymous namespace in this file (`#ifdef PROXYSQL31`), add `pgsql_weight_
 - `s->get_status()` → `s->status`
 - `MYSQL_SERVER_STATUS_ONLINE` stays (PgSQL uses the same enum)
 
-In `PgSQL_HGC::get_random_MySrvC`: `bool used_backup = false;`. After the candidate-building loop and before `if (sum==0)` desperate unshun, call `pgsql_apply_backup_weight_threshold(this, mysrvcCandidates, num_candidates, sum, TotalUsedConn, used_backup);`. On the successful return of a server, if `used_backup`, `backup_servers_selected.fetch_add(1)` and the same 1-second `proxy_warning`.
+In `PgSQL_HGC::get_random_MySrvC`: `bool used_backup = false;`. After the candidate-building loop and before `if (sum==0)` desperate unshun, call `pgsql_apply_backup_weight_threshold(this, mysrvcCandidates, num_candidates, sum, TotalUsedConn, used_backup);`. Re-apply the filter after the recovery loop for the same reason as MySQL. On the successful return of a server, if `used_backup`, `backup_servers_selected.fetch_add(1)` and the same 1-second `proxy_warning`.
 
 `BaseHGC` already has the atomic from Task 4.
 
@@ -673,17 +674,15 @@ Pattern: `test/tap/tests/test_hostgroup_default_query_timeout-t.cpp` (discover b
 
 - [ ] **Step 1: Write the test**
 
-Dedicated hostgroup `9001`. Unique query `SELECT 1 /*backup_wt_9001*/`. Two distinct `(hostname,port)` from `runtime_mysql_servers`. Weights 100 and 1. JSON `{"backup_weight_threshold":10,"backup_availability":"selectable"}`. Query rule `destination_hostgroup=9001`. Restore servers, rules, attributes in a destructor/cleanup.
+Dedicated hostgroup `9001`. Unique non-`SELECT` query so infra `^SELECT` rules cannot pre-empt routing. Two distinct `(hostname,port)` from `runtime_mysql_servers`. Weights 100 and 1. JSON `{"backup_weight_threshold":10,"backup_availability":"selectable"}` with `multiplex=0`. Query rule `destination_hostgroup=9001`. Full-row temporary-table snapshot/restore of servers, attributes, and the rule; restore is retryable and its result is asserted.
 
 Assertions:
 
-1. After `SELECT * FROM stats.stats_mysql_connection_pool_reset` and 30 queries: Queries on weight-100 `> 0`, Queries on weight-1 `== 0`.
-2. Prometheus `proxysql_mysql_hostgroup_backup_server_selected_total{hostgroup="9001"}` is missing or `0`.
-3. `UPDATE mysql_servers SET status='OFFLINE_SOFT'` on the weight-100 row; `LOAD MYSQL SERVERS TO RUNTIME`; 30 more queries: Queries on weight-1 increase; Prometheus counter `>= 30`.
-4. Set weight-100 back `ONLINE`; `LOAD`; 30 more queries: new Queries go to weight-100, not weight-1.
-5. Invalid JSON: `hostgroup_settings='{"backup_weight_threshold":-1,"backup_availability":"selectable"}'` then `LOAD MYSQL SERVERS TO RUNTIME` — runtime still has previous threshold (traffic still prefers weight 100). Then `{"backup_weight_threshold":10,"backup_availability":"nope"}` — availability stays `selectable` (busy-primary behaviour not required here; just confirm LOAD succeeds and threshold 10 still applies).
-
-If fewer than two backends exist, `BAIL_OUT`.
+1. Scrape a Prometheus baseline, reset `stats_mysql_connection_pool`, and run 30 queries (a new frontend connection per query): Queries on weight-100 `> 0`, weight-1 `== 0`, counter unchanged from baseline.
+2. `UPDATE mysql_servers SET status='OFFLINE_SOFT'` on the weight-100 row; `LOAD`; 30 more queries: weight-1 `> 0`, weight-100 `== 0`, counter `>= baseline + 30`.
+3. Set weight-100 back `ONLINE`; `LOAD`; 30 more queries: traffic returns to weight-100 and the counter is unchanged.
+4. Cleanup restores the fixture; a failed restore fails the test.
+5. Invalid `backup_weight_threshold` / `backup_availability` values and parser default resets are covered by `hostgroups_unit-t`, not this integration test (the failure path would depend on unrelated frontend session-teardown defects).
 
 - [ ] **Step 2: Register**
 
@@ -723,16 +722,16 @@ git commit -m "test: MySQL TAP for backup_weight_threshold"
 - Create: `test/tap/tests/pgsql-backup_weight_threshold-t.cpp`
 - Modify: `test/tap/groups/groups.json`
 
-Same scenario on PostgreSQL: `pgsql_servers`, `pgsql_hostgroup_attributes`, `pgsql_query_rules`, `stats_pgsql_connection_pool`, metric `proxysql_pgsql_hostgroup_backup_server_selected_total`. Follow `pgsql-hostgroup_default_query_timeout-t.cpp` for admin/pgsql connections.
+Same scenario on PostgreSQL: `pgsql_servers`, `pgsql_hostgroup_attributes`, `pgsql_query_rules`, `stats_pgsql_connection_pool`, metric `proxysql_pgsql_hostgroup_backup_server_selected_total`. Follow `pgsql-hostgroup_default_query_timeout-t.cpp` for admin/pgsql connections. Require two distinct ONLINE backends; use the `postgres` role because the `pgsql17-repl` replica has no `testuser`.
 
 ```json
-  "pgsql-backup_weight_threshold-t" : [ "legacy-g4","@proxysql_min_version:3.1" ],
+  "pgsql-backup_weight_threshold-t" : [ "pgsql17-repl-g4","@proxysql_min_version:3.1" ],
 ```
 
 ```bash
 PROXYSQL31=1 make -C test/tap/tests -j"$(nproc)" pgsql-backup_weight_threshold-t
-WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g4 \
-  TEST_PY_TAP_INCL="pgsql-backup_weight_threshold-t" \
+WORKSPACE=$(pwd) INFRA_ID=dev-$USER INFRA_TYPE=infra-pgsql17-repl ROOT_PASSWORD=$(printf '%s' "$INFRA_ID" | sha256sum | cut -c1-10) \
+  TAP_GROUP=pgsql17-repl-g4 TEST_PY_TAP_INCL="pgsql-backup_weight_threshold-t" \
   test/infra/control/run-tests-isolated.bash
 ```
 
@@ -781,7 +780,7 @@ git commit -m "docs: backup_weight_threshold hostgroup_settings"
 |---|---|
 | JSON keys, no table alter | 3 |
 | `T=0` no-op, `weight=0` never | 1, 2, 4, 5, 7, 8 |
-| Two-pass, backups before desperate unshun | 4, 5 |
+| Two-pass, backups after desperate unshun re-filter | 4, 5 |
 | `selectable` / `status` / `capacity` | 1, 2, 4, 5 |
 | Both protocols | 3–8 |
 | `PROXYSQL31` only | 3–6, TAP min version |
