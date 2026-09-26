@@ -542,8 +542,55 @@ static void test_gtid_snapshot_is_coherent_during_binlog_updates() {
 		"GTID snapshot: final state contains all %llu binlog events", event_count);
 }
 
+static void test_ok_mariadb_gtid() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	ok(sd.add_gtid_from_ok("0-1-100"), "OK MariaDB GTID accepted");
+	char domain[] = "0";
+	ok(sd.gtid_exists(domain, 1) && sd.gtid_exists(domain, 100)
+	       && !sd.gtid_exists(domain, 101),
+	   "OK MariaDB GTID is watermark [1, seq]");
+	ok(sd.gtid_executed_to_string() == "0-1-100",
+	   "stats display is native MariaDB");
+	ok(!sd.add_gtid_from_ok("0-1-50"),
+	   "lower watermark is not an update");
+	ok(sd.add_gtid_from_ok("0-2-105"), "failover server_id still updates seq");
+	ok(sd.gtid_exists(domain, 105), "domain match ignores server_id");
+}
+
+static void test_wire_mariadb_domain() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	stuff_buffer(sd, std::string("ST=0:1-270\n"));
+	ok(sd.read_next_gtid() == true && sd.active == true, "ST= domain bootstrap");
+	char domain[] = "0";
+	ok(sd.gtid_exists(domain, 100), "ST=0:1-270 contains 100");
+	stuff_buffer(sd, std::string("I1=0:271\n"));
+	ok(sd.read_next_gtid() == true, "I1= domain");
+	ok(sd.gtid_exists(domain, 271), "I1=0:271 appended");
+}
+
+/**
+ * @brief Reader-fed domains display a 0 server_id sentinel.
+ *
+ * The wire protocol carries domain and sequence only, so a reader snapshot has
+ * no server_id to remember. The stats rendering therefore shows 0-0-<end>
+ * until an OK-packet observation supplies a real server_id for the domain.
+ */
+static void test_wire_mariadb_display_uses_server_id_sentinel() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	stuff_buffer(sd, std::string("ST=0:1-270\n"));
+	ok(sd.read_next_gtid() == true, "sentinel display: ST= domain bootstrap is parsed");
+
+	ok(sd.gtid_executed_to_string() == "0-0-270",
+		"sentinel display: reader-fed domain renders as 0-0-270");
+
+	ok(sd.add_gtid_from_ok("0-1-271"),
+		"sentinel display: OK packet advances the reader-fed domain");
+	ok(sd.gtid_executed_to_string() == "0-1-271",
+		"sentinel display: OK-packet ingestion replaces the sentinel with server_id 1");
+}
+
 int main() {
-	plan(109);
+	plan(123);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -567,6 +614,9 @@ int main() {
 	test_manager_gtid_lookup_survives_inactive_reader();
 	test_connect_watcher_closes_socket_on_resolution_failure();
 	test_gtid_snapshot_is_coherent_during_binlog_updates();
+	test_ok_mariadb_gtid();
+	test_wire_mariadb_domain();
+	test_wire_mariadb_display_uses_server_id_sentinel();
 
 	return exit_status();
 }

@@ -100,6 +100,10 @@ class MySQL_Connection {
 	void ProcessQueryAndSetStatusFlags_UserVariables(char *, int);
 	void ProcessQueryAndSetStatusFlags_Savepoint(char *);
 	void ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
+	MYSQL *gtid_lookup_mysql;
+	time_t gtid_lookup_retry_after;
+	bool connect_gtid_lookup_connection();
+	void close_gtid_lookup_connection();
 	public:
 	struct {
 		char *server_version;
@@ -300,6 +304,14 @@ class MySQL_Connection {
 	void reset();
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
+	/**
+	 * @brief Close the auxiliary connection used to read the MariaDB GTID position.
+	 *
+	 * Must be called whenever the owning MySQL_Connection is no longer used by
+	 * the current session, so that the auxiliary connection is never left open
+	 * on an idle pooled connection.
+	 */
+	void release_gtid_lookup_connection();
 	/**
 	 * @brief Extract session variable changes from MySQL's session tracking system.
 	 *

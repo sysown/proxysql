@@ -15,6 +15,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Variables.h"
+#include "proxysql_gtid.h"
 #include "mysqld_error.h"
 #include <atomic>
 #include <mutex>
@@ -443,6 +444,8 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
  */
 MySQL_Connection::MySQL_Connection() {
 	mysql=NULL;
+	gtid_lookup_mysql=NULL;
+	gtid_lookup_retry_after=0;
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
 	send_quit=true;
@@ -517,6 +520,7 @@ MySQL_Connection::MySQL_Connection() {
 
 MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
+	close_gtid_lookup_connection();
 	if (options.server_version) free(options.server_version);
 	if (options.init_connect) free(options.init_connect);
 	if (options.ldap_user_variable) free(options.ldap_user_variable);
@@ -3290,6 +3294,7 @@ int MySQL_Connection::async_send_simple_command(
 }
 
 void MySQL_Connection::reset() {
+	close_gtid_lookup_connection();
 	bool old_no_multiplex_hg = get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 	bool old_compress = get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
 	status_flags=0;
@@ -3333,10 +3338,94 @@ void MySQL_Connection::reset() {
 	if (options.session_track_gtids) {
 		free (options.session_track_gtids);
 		options.session_track_gtids = NULL;
-		options.session_track_gtids_sent = false;
 	}
+	options.session_track_gtids_sent = false;
 	options.session_track_variables_sent = false;
 	options.session_track_state_sent = false;
+}
+
+bool MySQL_Connection::connect_gtid_lookup_connection() {
+	if (gtid_lookup_mysql != NULL) {
+		return true;
+	}
+	if (parent == NULL || userinfo == NULL) {
+		return false;
+	}
+	if (gtid_lookup_retry_after != 0 && time(nullptr) < gtid_lookup_retry_after) {
+		return false;
+	}
+	MYSQL *lookup_mysql = mysql_init(NULL);
+	if (lookup_mysql == NULL) {
+		return false;
+	}
+	if (mysql != NULL && mysql->charset != NULL) {
+		lookup_mysql->charset = mysql->charset;
+	}
+	unsigned int timeout = 1;
+	mysql_options(lookup_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+	unsigned int io_timeout = mysql_thread___connect_timeout_server / 1000;
+	if (io_timeout == 0) {
+		io_timeout = 1;
+	}
+	mysql_options(lookup_mysql, MYSQL_OPT_READ_TIMEOUT, &io_timeout);
+	mysql_options(lookup_mysql, MYSQL_OPT_WRITE_TIMEOUT, &io_timeout);
+	std::unique_ptr<MySQLServers_SslParams> lookup_ssl_params;
+	if (parent->use_ssl) {
+		lookup_ssl_params.reset(MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username));
+		MySQL_Connection::set_ssl_params(lookup_mysql, lookup_ssl_params.get());
+		mysql_options(lookup_mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+	}
+	char *auth_password=NULL;
+	if (userinfo->password) {
+		if (userinfo->password[0]=='*') {
+			auth_password=userinfo->sha1_pass;
+		} else {
+			auth_password=userinfo->password;
+		}
+	}
+	MYSQL *ret_mysql_lookup=NULL;
+	if (parent->port) {
+		const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
+		const char *host_ip = res_ip.empty() ? parent->address : res_ip.c_str();
+		ret_mysql_lookup = mysql_real_connect(lookup_mysql, host_ip, userinfo->username, auth_password, NULL, parent->port, NULL, 0);
+	} else {
+		ret_mysql_lookup = mysql_real_connect(lookup_mysql, "localhost", userinfo->username, auth_password, NULL, 0, parent->address, 0);
+	}
+	if (ret_mysql_lookup == NULL) {
+		unsigned int myerr = mysql_errno(lookup_mysql);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup connection to %s:%d failed: %u: %s\n",
+				parent->address, parent->port, myerr, mysql_error(lookup_mysql));
+		if (lookup_ssl_params != NULL) {
+			if (myerr >= 2000 && myerr < 3000) {
+				ERR_clear_error();
+			}
+		}
+		mysql_close_no_command(lookup_mysql);
+		gtid_lookup_retry_after = time(nullptr) + 1;
+		return false;
+	}
+	gtid_lookup_mysql=lookup_mysql;
+	gtid_lookup_retry_after=0;
+	if (MyHGM != NULL) {
+		__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
+	}
+	return true;
+}
+
+void MySQL_Connection::release_gtid_lookup_connection() {
+	close_gtid_lookup_connection();
+}
+
+void MySQL_Connection::close_gtid_lookup_connection() {
+	if (gtid_lookup_mysql == NULL) {
+		return;
+	}
+	proxy_mysql_send_com_quit(gtid_lookup_mysql);
+	mysql_close_no_command(gtid_lookup_mysql);
+	gtid_lookup_mysql=NULL;
+	if (MyHGM != NULL) {
+		__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
+	}
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
@@ -3345,25 +3434,61 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	if (buff==NULL || trx_id == NULL) {
 		return ret;
 	}
+	if (!mysql_thread___update_gtid_from_ok && !mysql_thread___client_session_track_gtid) {
+		return ret;
+	}
 	if (mysql) {
 		if (mysql->net.last_errno==0) { // only if there is no error
 			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
-				const char *data;
-				size_t length;
-				if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
-					if (length >= (sizeof(gtid_uuid) - 1)) {
-						length = sizeof(gtid_uuid) - 1;
+				const char *gtids = nullptr;
+				size_t gtids_len = 0;
+				if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &gtids, &gtids_len) == 0
+						&& gtids_len == 0) {
+					gtids = nullptr;
+				}
+				std::unordered_map<std::string, std::string> variables;
+				if (gtids == nullptr) {
+					get_variables(variables);
+				}
+				if (select_session_gtid(gtids, gtids_len, variables,
+				                        gtid_uuid, sizeof(gtid_uuid))) {
+					size_t length = strlen(gtid_uuid) + 1;
+					memcpy(buff, gtid_uuid, length);
+					__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
+					ret = true;
+				}
+			}
+			if (!ret && mysql->field_count == 0
+					&& mysql->server_version != nullptr && strstr(mysql->server_version, "MariaDB") != nullptr) {
+				// MariaDB has no SESSION_TRACK_GTIDS. The position is read on a dedicated
+				// connection: a query on 'mysql' would consume the pending response, so
+				// 'mysql->info' and the session tracking state would be lost. Only writes
+				// and DDL are looked up ('field_count' is 0 when no result set is
+				// pending), so SELECT traffic does not pay for the extra round trip.
+				bool lookup_executed = false;
+				if (connect_gtid_lookup_connection()) {
+					if (mysql_query(gtid_lookup_mysql, "SELECT @@gtid_binlog_pos") == 0) {
+						lookup_executed = true;
+						MYSQL_RES *result = mysql_store_result(gtid_lookup_mysql);
+						if (result != nullptr) {
+							MYSQL_ROW row = mysql_fetch_row(result);
+							if (row != nullptr && row[0] != nullptr
+									&& select_mariadb_binlog_position(row[0], gtid_uuid, sizeof(gtid_uuid))) {
+								size_t length = strlen(gtid_uuid) + 1;
+								memcpy(buff, gtid_uuid, length);
+								__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
+								ret = true;
+							}
+							mysql_free_result(result);
+						}
+					} else {
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup query to %s:%d failed: %u: %s\n",
+								parent->address, parent->port, mysql_errno(gtid_lookup_mysql), mysql_error(gtid_lookup_mysql));
 					}
-					if (memcmp(gtid_uuid,data,length)) {
-						// copy to local buffer in MySQL_Connection
-						memcpy(gtid_uuid,data,length);
-						gtid_uuid[length]=0;
-						// copy to external buffer in MySQL_Backend
-						memcpy(buff,data,length);
-						buff[length]=0;
-						__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
-						ret = true;
-					}
+				}
+				if (!lookup_executed) {
+					gtid_lookup_retry_after = time(nullptr) + 1;
+					close_gtid_lookup_connection();
 				}
 			}
 		}

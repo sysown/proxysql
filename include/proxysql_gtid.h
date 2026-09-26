@@ -2,6 +2,7 @@
 #define PROXYSQL_GTID
 // highly inspired by libslave
 // https://github.com/vozbu/libslave/
+#include <cstdint>
 #include <list>
 #include <string>
 #include <unordered_map>
@@ -37,6 +38,7 @@ bool operator!=(const TrxId_Interval& other) const;
 class GTID_Set {
 	public:
 		std::unordered_map<std::string, std::list<TrxId_Interval>> map;
+		std::unordered_map<std::string, uint32_t> last_server_id;
 
 	public:
 		GTID_Set();
@@ -50,8 +52,30 @@ class GTID_Set {
 		bool add(const std::string& uuid, const char *s);
 		bool add(const std::string& uuid, const std::string &s);
 
+		void set_server_id(const std::string& id, uint32_t server_id);
+		uint32_t get_server_id(const std::string& id);
+
 		const bool has_gtid(const std::string& uuid, const trxid_t trxid);
 		const std::string to_string(void);
+		const std::string to_display_string(void);
 };
+
+struct ParsedGTID {
+	std::string id;
+	trxid_t trxid;
+	uint32_t server_id;
+	bool mariadb;
+};
+
+bool parse_gtid(const char* s, ParsedGTID* out);
+bool parse_gtid(const char* s, size_t len, ParsedGTID* out);
+bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
+                            uint64_t* trxid);
+bool select_session_gtid(
+	const char* session_track_gtids, size_t gtids_len,
+	const std::unordered_map<std::string, std::string>& sysvars,
+	char* buf, size_t buf_len);
+bool select_mariadb_binlog_position(const char* position, char* buf, size_t buf_len);
+bool parse_gtid_set(const char* encoded, GTID_Set* out);
 
 #endif /* PROXYSQL_GTID */

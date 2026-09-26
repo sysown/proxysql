@@ -290,34 +290,19 @@ bool GTID_Server_Data::add_gtid_from_ok(const char* gtid) {
 		return false;
 	}
 
-	const char* sep = strrchr(gtid, ':');
-	if (sep == nullptr || sep == gtid || sep[1] == '\0') {
-		return false;
-	}
-
-	std::string uuid(gtid, static_cast<size_t>(sep - gtid));
-	uuid.erase(std::remove(uuid.begin(), uuid.end(), '-'), uuid.end());
-	if (uuid.size() != 32 || !std::all_of(uuid.begin(), uuid.end(), [](unsigned char c) {
-			return (c >= '0' && c <= '9') ||
-				(c >= 'a' && c <= 'f') ||
-				(c >= 'A' && c <= 'F');
-		})) {
-		return false;
-	}
-	std::transform(uuid.begin(), uuid.end(), uuid.begin(), [](char c) {
-		return c >= 'A' && c <= 'F' ? static_cast<char>(c + ('a' - 'A')) : c;
-	});
-
-	errno = 0;
-	char* end = nullptr;
-	unsigned long long parsed = strtoull(sep + 1, &end, 10);
-	if (errno == ERANGE || end == sep + 1 || *end != '\0' || parsed == 0 ||
-			parsed > static_cast<unsigned long long>(LLONG_MAX)) {
+	ParsedGTID parsed;
+	if (!parse_gtid(gtid, &parsed)) {
 		return false;
 	}
 
 	pthread_rwlock_wrlock(&executed_rwlock);
-	bool updated = gtid_executed.add(uuid, static_cast<trxid_t>(parsed));
+	bool updated;
+	if (parsed.mariadb) {
+		updated = gtid_executed.add(parsed.id, trxid_t(1), parsed.trxid);
+		gtid_executed.set_server_id(parsed.id, parsed.server_id);
+	} else {
+		updated = gtid_executed.add(parsed.id, parsed.trxid);
+	}
 	pthread_rwlock_unlock(&executed_rwlock);
 	return updated;
 }
@@ -328,7 +313,7 @@ std::string GTID_Server_Data::gtid_executed_to_string() {
 
 GTID_Executed_Snapshot GTID_Server_Data::get_gtid_executed_snapshot() {
 	pthread_rwlock_rdlock(&executed_rwlock);
-	GTID_Executed_Snapshot snapshot { gtid_executed.to_string(), events_read };
+	GTID_Executed_Snapshot snapshot { gtid_executed.to_display_string(), events_read };
 	pthread_rwlock_unlock(&executed_rwlock);
 	return snapshot;
 }
@@ -419,18 +404,29 @@ bool GTID_Server_Data::read_next_gtid() {
 				j++;
 				if (j%2 == 1) { // we are reading the uuid
 					size_t uuid_len = 0;
-					for (const char *uuid_char = subtoken; *uuid_char; ++uuid_char) {
-						if (*uuid_char == '-') {
-							continue;
-						}
+					if (*subtoken != '\0' && std::all_of(subtoken, subtoken + strlen(subtoken), [](unsigned char c) {
+							return c >= '0' && c <= '9';
+						})) {
+						uuid_len = strlen(subtoken);
 						if (uuid_len + 1 >= sizeof(uuid_server)) {
 							invalid_msg = true;
 							break;
 						}
-						uuid_server[uuid_len++] = *uuid_char;
-					}
-					if (invalid_msg) {
-						break;
+						memcpy(uuid_server, subtoken, uuid_len);
+					} else {
+						for (const char *uuid_char = subtoken; *uuid_char; ++uuid_char) {
+							if (*uuid_char == '-') {
+								continue;
+							}
+							if (uuid_len + 1 >= sizeof(uuid_server)) {
+								invalid_msg = true;
+								break;
+							}
+							uuid_server[uuid_len++] = *uuid_char;
+						}
+						if (invalid_msg) {
+							break;
+						}
 					}
 					uuid_server[uuid_len] = '\0';
 				} else { // we are reading the trxid or trxid range
