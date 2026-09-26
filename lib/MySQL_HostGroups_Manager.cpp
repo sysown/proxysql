@@ -99,7 +99,8 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
  */
 template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
 T j_get_srv_default_int_val(
-	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
+	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check,
+	const char *section = "servers_defaults"
 ) {
 	if (j.find(key) != j.end()) {
 		const json::value_t val_type = j[key].type();
@@ -112,16 +113,16 @@ T j_get_srv_default_int_val(
 				return val;
 			} else {
 				proxy_error(
-					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.%s.%s' for hostgroup %d."
 						" Value NOT UPDATED.\n",
-					static_cast<int64_t>(val), key.c_str(), hid
+					static_cast<int64_t>(val), section, key.c_str(), hid
 				);
 			}
 		} else {
 			proxy_error(
-				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.%s.%s' for hostgroup %d."
 					" Value NOT UPDATED.\n",
-				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
+				type_name, static_cast<std::uint8_t>(val_type), section, key.c_str(), hid
 			);
 		}
 	}
@@ -6261,53 +6262,67 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
 void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc) {
 	const uint32_t hid = myhgc->hid;
 
+#ifdef PROXYSQL31
+	if (hostgroup_settings[0] == '\0') {
+		myhgc->attributes.backup_weight_threshold = 0;
+		myhgc->attributes.backup_availability = 0;
+		return;
+	}
+#endif
+
 	if (hostgroup_settings[0] != '\0') {
 		try {
 			nlohmann::json j = nlohmann::json::parse(hostgroup_settings);
 
 			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
-			const int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
+			const int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check, "hostgroup_settings");
 			myhgc->attributes.handle_warnings = handle_warnings;
 
 			const auto monitor_slave_lag_when_null_check = [](int32_t monitor_slave_lag_when_null) -> bool 
 				{ return (monitor_slave_lag_when_null >= 0 && monitor_slave_lag_when_null <= 604800); };
-			const int32_t monitor_slave_lag_when_null = j_get_srv_default_int_val<int32_t>(j, hid, "monitor_slave_lag_when_null", monitor_slave_lag_when_null_check);
+			const int32_t monitor_slave_lag_when_null = j_get_srv_default_int_val<int32_t>(j, hid, "monitor_slave_lag_when_null", monitor_slave_lag_when_null_check, "hostgroup_settings");
 			myhgc->attributes.monitor_slave_lag_when_null = monitor_slave_lag_when_null;
 
 			const auto default_query_timeout_check = [](int32_t default_query_timeout) -> bool
 				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
-			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check);
+			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check, "hostgroup_settings");
 			myhgc->attributes.default_query_timeout = default_query_timeout;
 
 #ifdef PROXYSQL31
 			const auto backup_weight_threshold_check = [](int64_t v) -> bool {
 				return v >= 0 && v <= 10000000;
 			};
-			const int64_t backup_weight_threshold = j_get_srv_default_int_val<int64_t>(
-				j, hid, "backup_weight_threshold", backup_weight_threshold_check);
-			if (backup_weight_threshold != static_cast<int64_t>(-1)) {
-				myhgc->attributes.backup_weight_threshold = backup_weight_threshold;
+			const auto backup_weight_threshold_it = j.find("backup_weight_threshold");
+			if (backup_weight_threshold_it == j.end()) {
+				myhgc->attributes.backup_weight_threshold = 0;
+			} else {
+				const int64_t backup_weight_threshold = j_get_srv_default_int_val<int64_t>(
+					j, hid, "backup_weight_threshold", backup_weight_threshold_check, "hostgroup_settings");
+				if (backup_weight_threshold != static_cast<int64_t>(-1)) {
+					myhgc->attributes.backup_weight_threshold = backup_weight_threshold;
+				}
 			}
 
-			if (j.find("backup_availability") != j.end()) {
-				if (j["backup_availability"].type() == json::value_t::string) {
-					const std::string mode = j["backup_availability"].get<std::string>();
-					if (mode == "selectable") {
-						myhgc->attributes.backup_availability = 0;
-					} else if (mode == "status") {
-						myhgc->attributes.backup_availability = 1;
-					} else if (mode == "capacity") {
-						myhgc->attributes.backup_availability = 2;
-					} else {
-						proxy_error(
-							"Invalid value '%s' supplied for 'mysql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
-							mode.c_str(), hid);
-					}
+			const auto backup_availability_it = j.find("backup_availability");
+			if (backup_availability_it == j.end()) {
+				myhgc->attributes.backup_availability = 0;
+			} else if (backup_availability_it->type() == json::value_t::string) {
+				const std::string mode = backup_availability_it->get<std::string>();
+				if (mode == "selectable") {
+					myhgc->attributes.backup_availability = 0;
+				} else if (mode == "status") {
+					myhgc->attributes.backup_availability = 1;
+				} else if (mode == "capacity") {
+					myhgc->attributes.backup_availability = 2;
 				} else {
 					proxy_error(
-						"Invalid type supplied for 'mysql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
-						hid);
+						"Invalid value '%s' supplied for 'mysql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
+						mode.c_str(), hid);
 				}
+			} else {
+				proxy_error(
+					"Invalid type supplied for 'mysql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
+					hid);
 			}
 #endif
 		}

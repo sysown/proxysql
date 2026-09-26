@@ -43,11 +43,7 @@ static bool primary_present(
 		if (!weight_is_primary(c.weight, T)) {
 			continue;
 		}
-		if (mode == BACKUP_AVAIL_SELECTABLE) {
-			if (is_candidate_eligible(c)) {
-				return true;
-			}
-		} else if (mode == BACKUP_AVAIL_STATUS) {
+		if (mode == BACKUP_AVAIL_STATUS) {
 			if (c.status == SERVER_ONLINE) {
 				return true;
 			}
@@ -67,7 +63,7 @@ static int select_eligible_in_tier(
 	int64_t T,
 	bool backups)
 {
-	int64_t total_weight = 0;
+	uint64_t total_weight = 0;
 	for (int i = 0; i < count; i++) {
 		const bool in_tier = backups ? weight_is_backup(candidates[i].weight, T)
 					     : weight_is_primary(candidates[i].weight, T);
@@ -80,14 +76,14 @@ static int select_eligible_in_tier(
 	}
 	unsigned int rng_state = random_seed;
 	rng_state = rng_state * 1664525u + 1013904223u;
-	int64_t target = (int64_t)(rng_state % (uint64_t)total_weight) + 1;
-	int64_t cumulative = 0;
+	uint64_t target = static_cast<uint64_t>(rng_state) % total_weight;
+	uint64_t cumulative = 0;
 	for (int i = 0; i < count; i++) {
 		const bool in_tier = backups ? weight_is_backup(candidates[i].weight, T)
 					     : weight_is_primary(candidates[i].weight, T);
 		if (in_tier && is_candidate_eligible(candidates[i])) {
 			cumulative += candidates[i].weight;
-			if (cumulative >= target) {
+			if (cumulative > target) {
 				return candidates[i].index;
 			}
 		}

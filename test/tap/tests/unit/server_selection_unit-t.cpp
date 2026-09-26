@@ -16,6 +16,8 @@
 #include "proxysql.h"
 #include "ServerSelection.h"
 
+#include <limits>
+
 // ============================================================================
 // Helper: create a default ONLINE server candidate
 // ============================================================================
@@ -288,12 +290,22 @@ static void test_backup_weighted_among_backups() {
 	ok(pct > 60 && pct < 90, "backups 3:1: idx 1 selected %.1f%% (expect ~75%%)", pct);
 }
 
+static void test_large_primary_weight_total() {
+	ServerCandidate candidates[3];
+	const int64_t max_weight = std::numeric_limits<int64_t>::max();
+	candidates[0] = make_candidate(0, 10);
+	candidates[1] = make_candidate(1, max_weight);
+	candidates[2] = make_candidate(2, 1);
+	int selected = select_server_from_candidates(candidates, 3, 1, 10);
+	ok(selected == 0 || selected == 1, "large primary weights do not overflow selection totals");
+}
+
 // ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(21 + 11);
+	plan(21 + 12);
 
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
@@ -315,7 +327,8 @@ int main() {
 	test_availability_status_busy_primary();      // 3
 	test_availability_latency_does_not_open_capacity(); // 2
 	test_backup_weighted_among_backups();         // 1
-	// Total: 21 + 11 = 32
+	test_large_primary_weight_total();            // 1
+	// Total: 21 + 12 = 33
 
 	test_cleanup_minimal();
 	return exit_status();

@@ -137,7 +137,8 @@ char * proxysql_version = NULL;
 
 template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
 T j_get_srv_default_int_val(
-const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check);
+const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check,
+const char *section = "servers_defaults");
 
 
 static const vector<string> mysql_servers_tablenames = {
