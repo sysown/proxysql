@@ -52,6 +52,9 @@ BaseHGC<HGC>::BaseHGC(int _hid) {
 	servers_defaults.max_connections = -1;
 	servers_defaults.use_ssl = -1;
 	num_online_servers.store(0, std::memory_order_relaxed);;
+#ifdef PROXYSQL31
+	backup_servers_selected.store(0, std::memory_order_relaxed);
+#endif
 	last_log_time_num_online_servers = 0;
 }
 
@@ -72,6 +75,10 @@ void BaseHGC<HGC>::reset_attributes() {
 	attributes.handle_warnings = -1;
 	attributes.monitor_slave_lag_when_null = -1;
 	attributes.default_query_timeout = -1;
+#ifdef PROXYSQL31
+	attributes.backup_weight_threshold = 0;
+	attributes.backup_availability = 0; // selectable
+#endif
 	attributes.multiplex = true;
 	attributes.connection_warming = false;
 	free(attributes.init_connect);

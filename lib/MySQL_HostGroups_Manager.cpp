@@ -99,7 +99,8 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
  */
 template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
 T j_get_srv_default_int_val(
-	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
+	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check,
+	const char *section = "servers_defaults"
 ) {
 	if (j.find(key) != j.end()) {
 		const json::value_t val_type = j[key].type();
@@ -112,16 +113,16 @@ T j_get_srv_default_int_val(
 				return val;
 			} else {
 				proxy_error(
-					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.%s.%s' for hostgroup %d."
 						" Value NOT UPDATED.\n",
-					static_cast<int64_t>(val), key.c_str(), hid
+					static_cast<int64_t>(val), section, key.c_str(), hid
 				);
 			}
 		} else {
 			proxy_error(
-				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.%s.%s' for hostgroup %d."
 					" Value NOT UPDATED.\n",
-				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
+				type_name, static_cast<std::uint8_t>(val_type), section, key.c_str(), hid
 			);
 		}
 	}
@@ -647,6 +648,12 @@ hg_metrics_map = std::make_tuple(
 			p_hg_dyn_counter::hostgroup_pool_wait_time,
 			"proxysql_connpool_wait_time_seconds_total",
 			"Cumulative duration of completed backend connection acquisition waits.",
+			metric_tags {{ "protocol", "mysql" }}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_backup_server_selected,
+			"proxysql_mysql_hostgroup_backup_server_selected_total",
+			"Times a backup-weight server was selected because no primary was available.",
 			metric_tags {{ "protocol", "mysql" }}
 		)
 #endif
@@ -3498,6 +3505,9 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 		p_update_map_counter(status.p_hostgroup_pool_wait_time_map,
 			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_pool_wait_time],
 			hostgroup_id, labels, snapshot.wait_time_us_total / 1000000.0);
+		p_update_map_counter(status.p_hostgroup_backup_server_selected_map,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_backup_server_selected],
+			hostgroup_id, labels, myhgc->backup_servers_selected.load(std::memory_order_relaxed));
 		p_update_map_gauge(status.p_hostgroup_pool_waiters_map,
 			status.p_dyn_gauge_array[p_hg_dyn_gauge::hostgroup_pool_waiters],
 			hostgroup_id, labels, snapshot.waiters);
@@ -6240,6 +6250,8 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
  *   - default_query_timeout: Value must be in [1000, 20*24*3600*1000]; takes precedence over
  *     'mysql-default_query_timeout' for queries that resolve to this hostgroup. Range mirrors
  *     the global 'mysql-default_query_timeout' bounds.
+ *   - backup_weight_threshold: Value must be in [0, 10000000].
+ *   - backup_availability: One of "selectable", "status", or "capacity".
  *
  *  In case input verification fails for a field, supplied 'MyHGC' is NOT updated for that field. An error
  *  message is logged specifying the source of the error.
@@ -6250,23 +6262,69 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
 void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc) {
 	const uint32_t hid = myhgc->hid;
 
+#ifdef PROXYSQL31
+	if (hostgroup_settings[0] == '\0') {
+		myhgc->attributes.backup_weight_threshold = 0;
+		myhgc->attributes.backup_availability = 0;
+		return;
+	}
+#endif
+
 	if (hostgroup_settings[0] != '\0') {
 		try {
 			nlohmann::json j = nlohmann::json::parse(hostgroup_settings);
 
 			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
-			const int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
+			const int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check, "hostgroup_settings");
 			myhgc->attributes.handle_warnings = handle_warnings;
 
 			const auto monitor_slave_lag_when_null_check = [](int32_t monitor_slave_lag_when_null) -> bool 
 				{ return (monitor_slave_lag_when_null >= 0 && monitor_slave_lag_when_null <= 604800); };
-			const int32_t monitor_slave_lag_when_null = j_get_srv_default_int_val<int32_t>(j, hid, "monitor_slave_lag_when_null", monitor_slave_lag_when_null_check);
+			const int32_t monitor_slave_lag_when_null = j_get_srv_default_int_val<int32_t>(j, hid, "monitor_slave_lag_when_null", monitor_slave_lag_when_null_check, "hostgroup_settings");
 			myhgc->attributes.monitor_slave_lag_when_null = monitor_slave_lag_when_null;
 
 			const auto default_query_timeout_check = [](int32_t default_query_timeout) -> bool
 				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
-			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check);
+			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check, "hostgroup_settings");
 			myhgc->attributes.default_query_timeout = default_query_timeout;
+
+#ifdef PROXYSQL31
+			const auto backup_weight_threshold_check = [](int64_t v) -> bool {
+				return v >= 0 && v <= 10000000;
+			};
+			const auto backup_weight_threshold_it = j.find("backup_weight_threshold");
+			if (backup_weight_threshold_it == j.end()) {
+				myhgc->attributes.backup_weight_threshold = 0;
+			} else {
+				const int64_t backup_weight_threshold = j_get_srv_default_int_val<int64_t>(
+					j, hid, "backup_weight_threshold", backup_weight_threshold_check, "hostgroup_settings");
+				if (backup_weight_threshold != static_cast<int64_t>(-1)) {
+					myhgc->attributes.backup_weight_threshold = backup_weight_threshold;
+				}
+			}
+
+			const auto backup_availability_it = j.find("backup_availability");
+			if (backup_availability_it == j.end()) {
+				myhgc->attributes.backup_availability = 0;
+			} else if (backup_availability_it->type() == json::value_t::string) {
+				const std::string mode = backup_availability_it->get<std::string>();
+				if (mode == "selectable") {
+					myhgc->attributes.backup_availability = 0;
+				} else if (mode == "status") {
+					myhgc->attributes.backup_availability = 1;
+				} else if (mode == "capacity") {
+					myhgc->attributes.backup_availability = 2;
+				} else {
+					proxy_error(
+						"Invalid value '%s' supplied for 'mysql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
+						mode.c_str(), hid);
+				}
+			} else {
+				proxy_error(
+					"Invalid type supplied for 'mysql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
+					hid);
+			}
+#endif
 		}
 		catch (const json::exception& e) {
 			proxy_error(

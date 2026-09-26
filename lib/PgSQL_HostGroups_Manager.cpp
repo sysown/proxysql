@@ -54,6 +54,95 @@ extern ProxySQL_Admin *GloAdmin;
 extern PgSQL_Threads_Handler *GloPTH;
 extern MySQL_Monitor *GloMyMon;
 
+#ifdef PROXYSQL31
+namespace {
+
+bool pgsql_weight_is_primary(int64_t weight, int64_t T) {
+	return weight > 0 && weight >= T;
+}
+
+bool pgsql_primary_present(PgSQL_HGC *hgc, int64_t T, int8_t mode) {
+	const unsigned int n = hgc->mysrvs->cnt();
+	for (unsigned int i = 0; i < n; i++) {
+		PgSQL_SrvC *s = hgc->mysrvs->idx(i);
+		if (!pgsql_weight_is_primary(s->weight, T)) {
+			continue;
+		}
+		if (mode == 0) { // selectable: handled via candidate list
+			continue;
+		} else if (mode == 1) { // status
+			if (s->status == MYSQL_SERVER_STATUS_ONLINE) {
+				return true;
+			}
+		} else if (mode == 2) { // capacity
+			if (s->status == MYSQL_SERVER_STATUS_ONLINE &&
+				s->ConnectionsUsed->conns_length() < s->max_connections) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool pgsql_recovered_candidate_eligible(PgSQL_SrvC *server) {
+	return server->ConnectionsUsed->conns_length() < server->max_connections;
+}
+
+void pgsql_compact_candidates(
+	PgSQL_SrvC **cands, unsigned int &num, uint64_t &sum, uint64_t &used,
+	int64_t T, bool backups)
+{
+	uint64_t w = 0, u = 0;
+	unsigned int n = 0;
+	for (unsigned int i = 0; i < num; i++) {
+		PgSQL_SrvC *s = cands[i];
+		const bool keep = backups
+			? (s->weight > 0 && s->weight < T)
+			: pgsql_weight_is_primary(s->weight, T);
+		if (keep) {
+			cands[n++] = s;
+			w += static_cast<uint64_t>(s->weight);
+			u += s->ConnectionsUsed->conns_length();
+		}
+	}
+	num = n;
+	sum = w;
+	used = u;
+}
+
+void pgsql_apply_backup_weight_threshold(
+	PgSQL_HGC *hgc, PgSQL_SrvC **cands, unsigned int &num, uint64_t &sum, uint64_t &used,
+	bool &used_backup)
+{
+	used_backup = false;
+	const int64_t T = hgc->attributes.backup_weight_threshold;
+	if (T <= 0) {
+		return;
+	}
+	bool primary_candidate_present = false;
+	for (unsigned int i = 0; i < num; i++) {
+		if (pgsql_weight_is_primary(cands[i]->weight, T)) {
+			primary_candidate_present = true;
+			break;
+		}
+	}
+	if (primary_candidate_present) {
+		pgsql_compact_candidates(cands, num, sum, used, T, false);
+		return;
+	}
+	const int8_t mode = hgc->attributes.backup_availability;
+	const bool present = (mode == 0) ? false : pgsql_primary_present(hgc, T, mode);
+	if (!present) {
+		pgsql_compact_candidates(cands, num, sum, used, T, true);
+		used_backup = (num > 0);
+		return;
+	}
+	pgsql_compact_candidates(cands, num, sum, used, T, false);
+}
+
+}
+#endif
+
 class PgSQL_SrvConnList;
 class PgSQL_SrvC;
 class PgSQL_SrvList;
@@ -74,7 +163,8 @@ const int PgSQL_ERRORS_STATS_FIELD_NUM = 11;
  */
 template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
 T PgSQL_j_get_srv_default_int_val(
-	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
+	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check,
+	const char *section = "servers_defaults"
 ) {
 	if (j.find(key) != j.end()) {
 		const json::value_t val_type = j[key].type();
@@ -87,16 +177,16 @@ T PgSQL_j_get_srv_default_int_val(
 				return val;
 			} else {
 				proxy_error(
-					"Invalid value %ld supplied for 'pgsql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+					"Invalid value %ld supplied for 'pgsql_hostgroup_attributes.%s.%s' for hostgroup %d."
 						" Value NOT UPDATED.\n",
-					static_cast<int64_t>(val), key.c_str(), hid
+					static_cast<int64_t>(val), section, key.c_str(), hid
 				);
 			}
 		} else {
 			proxy_error(
-				"Invalid type '%s'(%hhu) supplied for 'pgsql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+				"Invalid type '%s'(%hhu) supplied for 'pgsql_hostgroup_attributes.%s.%s' for hostgroup %d."
 					" Value NOT UPDATED.\n",
-				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
+				type_name, static_cast<std::uint8_t>(val_type), section, key.c_str(), hid
 			);
 		}
 	}
@@ -765,6 +855,12 @@ hg_metrics_map = std::make_tuple(
 			PgSQL_p_hg_dyn_counter::hostgroup_pool_wait_time,
 			"proxysql_connpool_wait_time_seconds_total",
 			"Cumulative duration of completed backend connection acquisition waits.",
+			metric_tags {{ "protocol", "pgsql" }}
+		),
+		std::make_tuple (
+			PgSQL_p_hg_dyn_counter::hostgroup_backup_server_selected,
+			"proxysql_pgsql_hostgroup_backup_server_selected_total",
+			"Times a backup-weight server was selected because no primary was available.",
 			metric_tags {{ "protocol", "pgsql" }}
 		)
 #endif
@@ -1966,8 +2062,8 @@ void PgSQL_HostGroups_Manager::push_MyConn_to_pool_array(PgSQL_Connection **ca, 
 PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, PgSQL_Session *sess) {
 	PgSQL_SrvC *mysrvc=NULL;
 	unsigned int j;
-	unsigned int sum=0;
-	unsigned int TotalUsedConn=0;
+	uint64_t sum=0;
+	uint64_t TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
 	static time_t last_hg_log = 0;
 #ifdef TEST_AURORA
@@ -1981,6 +2077,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 	PgSQL_SrvC *mysrvcCandidates_static[32];
 	PgSQL_SrvC **mysrvcCandidates = mysrvcCandidates_static;
 	unsigned int num_candidates = 0;
+	bool used_backup = false;
 	bool max_connections_reached = false;
 	if (l>32) {
 		mysrvcCandidates = (PgSQL_SrvC **)malloc(sizeof(PgSQL_SrvC *)*l);
@@ -2061,7 +2158,11 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 									PgHGM->unshun_server_all_hostgroups(mysrvc->address, mysrvc->port, t, max_wait_sec, &mysrvc->myhgc->hid);
 								}
 								// if a server is taken back online, consider it immediately
+#ifdef PROXYSQL31
+								if ( pgsql_recovered_candidate_eligible(mysrvc) && mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
+#else
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
+#endif
 									if (gtid_trxid) {
 #if 0
 										if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
@@ -2119,6 +2220,9 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 				}
 			}
 		}
+#ifdef PROXYSQL31
+		pgsql_apply_backup_weight_threshold(this, mysrvcCandidates, num_candidates, sum, TotalUsedConn, used_backup);
+#endif
 		if (sum==0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
@@ -2148,7 +2252,11 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 						mysrvc->connect_ERR_at_time_last_detected_error=0;
 						mysrvc->time_last_detected_error=0;
 						// if a server is taken back online, consider it immediately
+#ifdef PROXYSQL31
+						if ( pgsql_recovered_candidate_eligible(mysrvc) && mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
+#else
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
+#endif
 							if (gtid_trxid) {
 #if 0
 								if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
@@ -2178,6 +2286,9 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 				}
 			}
 		}
+#ifdef PROXYSQL31
+		pgsql_apply_backup_weight_threshold(this, mysrvcCandidates, num_candidates, sum, TotalUsedConn, used_backup);
+#endif
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PgSQL_SrvC NULL because no backend ONLINE or with weight\n");
 			if (l>32) {
@@ -2211,7 +2322,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 		}
 */
 
-		unsigned int New_sum=sum;
+		uint64_t New_sum=sum;
 
 		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PgSQL_SrvC NULL because no backend ONLINE or with weight\n");
@@ -2266,13 +2377,17 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 		}
 
 
-		unsigned int k;
+		uint64_t k;
 		//if (New_sum > 32768) {
 		//	k=rand()%New_sum;
 		//} else {
 		//	k=fastrand()%New_sum;
 		//}
-		k = rand_fast() % New_sum;
+		// rand_fast() yields 32 bits only: combine two draws so the lottery covers
+		// the whole 64-bit weight range. With a single 32-bit draw a candidate whose
+		// weight alone reaches 2^32 would always win, because the draw can never
+		// reach past the first cumulative interval.
+		k = ((static_cast<uint64_t>(rand_fast()) << 32) | rand_fast()) % New_sum;
 		k++;
 		New_sum=0;
 
@@ -2281,6 +2396,18 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 			New_sum+=mysrvc->weight;
 			if (k<=New_sum) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PgSQL_SrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+#ifdef PROXYSQL31
+				if (used_backup) {
+					backup_servers_selected.fetch_add(1, std::memory_order_relaxed);
+					static time_t last_backup_log = 0;
+					time_t now = time(NULL);
+					if (now - last_backup_log > 1) {
+						last_backup_log = now;
+						proxy_warning("Hostgroup %u: selecting backup-weight server %s:%d\n",
+							hid, mysrvc->address, mysrvc->port);
+					}
+				}
+#endif
 				if (l>32) {
 					free(mysrvcCandidates);
 				}
@@ -3243,6 +3370,9 @@ void PgSQL_HostGroups_Manager::p_update_connection_pool() {
 		p_update_map_counter(status.p_hostgroup_pool_wait_time_map,
 			status.p_dyn_counter_array[PgSQL_p_hg_dyn_counter::hostgroup_pool_wait_time],
 			hostgroup_id, labels, snapshot.wait_time_us_total / 1000000.0);
+		p_update_map_counter(status.p_hostgroup_backup_server_selected_map,
+			status.p_dyn_counter_array[PgSQL_p_hg_dyn_counter::hostgroup_backup_server_selected],
+			hostgroup_id, labels, myhgc->backup_servers_selected.load(std::memory_order_relaxed));
 		p_update_map_gauge(status.p_hostgroup_pool_waiters_map,
 			status.p_dyn_gauge_array[PgSQL_p_hg_dyn_gauge::hostgroup_pool_waiters],
 			hostgroup_id, labels, snapshot.waiters);
@@ -3839,6 +3969,8 @@ std::unique_ptr<SQLite3_result> PgSQL_HostGroups_Manager::get_pgsql_errors(bool 
  *   - default_query_timeout: Value must be in [1000, 20*24*3600*1000]; takes precedence over
  *     'pgsql-default_query_timeout' for queries that resolve to this hostgroup. Range mirrors
  *     the global 'pgsql-default_query_timeout' bounds.
+ *   - backup_weight_threshold: Value must be in [0, 10000000].
+ *   - backup_availability: One of "selectable", "status", or "capacity".
  *
  *  In case input verification fails for a field, supplied 'PgSQL_HGC' is NOT updated for that field. An error
  *  message is logged specifying the source of the error.
@@ -3849,18 +3981,64 @@ std::unique_ptr<SQLite3_result> PgSQL_HostGroups_Manager::get_pgsql_errors(bool 
 void init_myhgc_hostgroup_settings(const char* hostgroup_settings, PgSQL_HGC* myhgc) {
 	const uint32_t hid = myhgc->hid;
 
+#ifdef PROXYSQL31
+	if (hostgroup_settings[0] == '\0') {
+		myhgc->attributes.backup_weight_threshold = 0;
+		myhgc->attributes.backup_availability = 0;
+		return;
+	}
+#endif
+
 	if (hostgroup_settings[0] != '\0') {
 		try {
 			nlohmann::json j = nlohmann::json::parse(hostgroup_settings);
 
 			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
-			int8_t handle_warnings = PgSQL_j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
+			int8_t handle_warnings = PgSQL_j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check, "hostgroup_settings");
 			myhgc->attributes.handle_warnings = handle_warnings;
 
 			const auto default_query_timeout_check = [](int32_t default_query_timeout) -> bool
 				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
-			const int32_t default_query_timeout = PgSQL_j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check);
+			const int32_t default_query_timeout = PgSQL_j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check, "hostgroup_settings");
 			myhgc->attributes.default_query_timeout = default_query_timeout;
+
+#ifdef PROXYSQL31
+			const auto backup_weight_threshold_check = [](int64_t v) -> bool {
+				return v >= 0 && v <= 10000000;
+			};
+			const auto backup_weight_threshold_it = j.find("backup_weight_threshold");
+			if (backup_weight_threshold_it == j.end()) {
+				myhgc->attributes.backup_weight_threshold = 0;
+			} else {
+				const int64_t backup_weight_threshold = PgSQL_j_get_srv_default_int_val<int64_t>(
+					j, hid, "backup_weight_threshold", backup_weight_threshold_check, "hostgroup_settings");
+				if (backup_weight_threshold != static_cast<int64_t>(-1)) {
+					myhgc->attributes.backup_weight_threshold = backup_weight_threshold;
+				}
+			}
+
+			const auto backup_availability_it = j.find("backup_availability");
+			if (backup_availability_it == j.end()) {
+				myhgc->attributes.backup_availability = 0;
+			} else if (backup_availability_it->type() == json::value_t::string) {
+				const std::string mode = backup_availability_it->get<std::string>();
+				if (mode == "selectable") {
+					myhgc->attributes.backup_availability = 0;
+				} else if (mode == "status") {
+					myhgc->attributes.backup_availability = 1;
+				} else if (mode == "capacity") {
+					myhgc->attributes.backup_availability = 2;
+				} else {
+					proxy_error(
+						"Invalid value '%s' supplied for 'pgsql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
+						mode.c_str(), hid);
+				}
+			} else {
+				proxy_error(
+					"Invalid type supplied for 'pgsql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
+					hid);
+			}
+#endif
 		}
 		catch (const json::exception& e) {
 			proxy_error(
