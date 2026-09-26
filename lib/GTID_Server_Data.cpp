@@ -374,11 +374,11 @@ bool GTID_Server_Data::writeout() {
 // neither a 32 hex digit MySQL UUID nor a canonical decimal MariaDB domain id.
 //
 // A 32 character dash-free id is a UUID even when every one of its characters
-// is a decimal digit: MariaDB domain ids are uint32 and therefore at most 10
-// digits, so the two spellings cannot collide. The shape must be tested before
-// the decimal spelling, because the reader sends a UUID dashed in ST= and
-// stripped in I1/I3, and taking the stripped all-decimal form for a domain
-// would make the same endpoint a UUID at ST= and a domain at I1=.
+// is a decimal digit: a MariaDB domain id is a canonical uint32, so it spans
+// 0..UINT32_MAX and any longer decimal spelling is out of range. The shape must
+// be tested before the decimal spelling, because the reader sends a UUID dashed
+// in ST= and stripped in I1/I3, and taking the stripped all-decimal form for a
+// domain would make the same endpoint a UUID at ST= and a domain at I1=.
 static int detect_id_flavor(const char *id, size_t len) {
 	if (id == nullptr || len == 0) {
 		return GTID_ID_FLAVOR_UNKNOWN;

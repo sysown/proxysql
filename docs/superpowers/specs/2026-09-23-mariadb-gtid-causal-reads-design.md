@@ -281,8 +281,8 @@ Binlog reader (sibling repo):
 
 ## Verification
 
-- ProxySQL: clean `PROXYSQL31=1 make debug`, 57/57 `gtid_parse_unit-t`,
-  73/73 `gtid_set_unit-t`, 152/152 `gtid_server_data_unit-t`, and the live
+- ProxySQL: clean `PROXYSQL31=1 make debug`, 59/59 `gtid_parse_unit-t`,
+  73/73 `gtid_set_unit-t`, 170/170 `gtid_server_data_unit-t`, and the live
   MariaDB metadata/pool-release probes (with `mysql-update_gtid_from_ok=true`).
   Existing MySQL GTID TAP unchanged.
 - Reader: TAP build, parser unit binary, MariaDB live TAP, existing MySQL TAP
