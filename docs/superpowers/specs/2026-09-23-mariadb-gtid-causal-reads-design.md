@@ -120,11 +120,11 @@ Snapshot:
 
 1. `SHOW BINARY LOG STATUS` or `SHOW MASTER STATUS` for File and Position
    (two columns are enough; do not require MySQL's fifth column).
-2. If a fifth column is present, parse it with the auto-detecting helper: both
-   a MySQL `uuid:interval` set and a MariaDB `domain-server-sequence` set are
-   accepted, because MariaDB 11 exposes `Executed_Gtid_Set` in its native form.
-   A malformed value fails the snapshot; it never falls through to the
-   `@@gtid_binlog_pos` fallback. An empty value is an empty set.
+2. If a fifth column is present and non-empty, parse it with the
+   auto-detecting helper: both a MySQL `uuid:interval` set and a MariaDB-native
+   `domain-server-sequence` set are accepted. A malformed value fails the
+   snapshot; it never falls through to the `@@gtid_binlog_pos` fallback. An
+   empty value is an empty set.
 3. If the fifth column is missing entirely, `SELECT @@GLOBAL.gtid_binlog_pos`
    and parse as MariaDB. Empty or invalid fails startup.
 

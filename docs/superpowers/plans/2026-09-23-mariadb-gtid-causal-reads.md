@@ -4,7 +4,7 @@
 
 **Goal:** ProxySQL causal reads accept MariaDB `domain-server-seq` as well as MySQL `uuid:seq`, matching on domain sequence watermarks.
 
-**Architecture:** Auto-detect per string. Reuse `GTID_Set` with MariaDB key = decimal `domain_id`. Snapshot/OK-packet MariaDB positions insert `[1, seq]`. Wire `ST=`/`I1=` already works if the id has no dashes (`I1=0:271`); `to_string()` must not UUID-dash short keys. Write GTID collection keeps `SESSION_TRACK_GTIDS` and, on MariaDB, `gtid_binlog_pos` via `session_track_system_variables`.
+**Architecture:** Auto-detect per string. Reuse `GTID_Set` with MariaDB key = decimal `domain_id`. Snapshot/OK-packet MariaDB positions insert `[1, seq]`. Wire `ST=`/`I1=` already works if the id has no dashes (`I1=0:271`); `to_string()` must not UUID-dash short keys. MySQL keeps `SESSION_TRACK_GTIDS`; MariaDB uses a bounded auxiliary connection for `SELECT @@gtid_binlog_pos` because MariaDB does not deliver session-track payloads.
 
 **Tech Stack:** C++17, existing TAP unit harness (`test/tap/tests/unit`), `libproxysql.a`.
 
@@ -26,8 +26,8 @@
 - Modify: `test/tap/tests/unit/gtid_server_data_unit-t.cpp`
 - Modify: `lib/MySQL_Query_Processor.cpp` — `_is_valid_gtid`
 - Modify: `lib/MySQL_Session.cpp` — routing parse
-- Modify: `lib/mysql_connection.cpp` — `get_gtid` MariaDB fallback
-- Modify: `lib/MySQL_Session.cpp` — MariaDB session_track_system_variables
+- Modify: `lib/mysql_connection.cpp` — `get_gtid` MariaDB auxiliary lookup
+- Modify: `lib/MySQL_Session.cpp` — MariaDB tracking configuration and pool release
 
 ---
 
