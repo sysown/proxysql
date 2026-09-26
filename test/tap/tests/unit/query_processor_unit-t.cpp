@@ -839,6 +839,35 @@ static void test_pgsql_client_addr_wildcard() {
 		"PgSQL QP: malformed CIDR parses no prefixes");
 	free(r5->client_addr);
 	free(r5);
+
+	// A bare '_' used to be compared literally and so never matched anything.
+	// It has to select wildcard matching, otherwise the path this change fixes
+	// silently regresses.
+	auto *r6 = PgSQL_Query_Processor::new_query_rule(
+		6, true, nullptr, nullptr, 0,
+		"10.0.1_.5",            // bare '_', no '%'
+		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
+		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+	ok(r6->client_addr_pred.match == QP_ADDR_MATCH_WILDCARD,
+		"PgSQL QP: bare '_' selects wildcard matching");
+	free(r6->client_addr);
+	free(r6);
+
+	// A Unix socket path is how a socket listener spells itself in proxy_addr.
+	// It must stay on the exact-match path rather than being mistaken for a
+	// malformed prefix merely because it contains '/'.
+	auto *r7 = PgSQL_Query_Processor::new_query_rule(
+		7, true, nullptr, nullptr, 0,
+		nullptr,                // no client_addr
+		"/tmp/proxysql.sock",   // Unix listener path
+		0, nullptr, nullptr, nullptr, false, nullptr,
+		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+	ok(r7->proxy_addr_pred.match == QP_ADDR_MATCH_EXACT,
+		"PgSQL QP: Unix socket path in proxy_addr stays exact, not CIDR");
+	free(r7->proxy_addr);
+	free(r7);
 }
 
 // ============================================================================
@@ -1654,7 +1683,7 @@ static void test_pgsql_memory_tracking() {
 // ============================================================================
 
 int main() {
-	plan(281);
+	plan(283);
 
 	test_init_minimal();
 	test_init_query_processor();
@@ -1679,7 +1708,7 @@ int main() {
 
 	// PgSQL tests — new
 	test_pgsql_rule_creation_all_fields();   // 36 tests
-	test_pgsql_client_addr_wildcard();       // 4 tests
+	test_pgsql_client_addr_wildcard();       // 11 tests
 	test_pgsql_rule_attributes_flagouts();   // 7 tests
 	test_pgsql_stats_commands_counters();    // 4 tests
 	test_pgsql_stats_query_rules();          // 3 tests

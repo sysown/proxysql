@@ -80,7 +80,8 @@ static struct sockaddr_storage make_sa(const char *addr) {
 static bool match_client_addr(const QP_rule_t *r, const char *client_addr,
 	const struct sockaddr *client_sa) {
 	return rule_matches_query(r, 0, "u", "d", client_addr, client_sa,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2);
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2);
 }
 
 // ============================================================================
@@ -91,7 +92,8 @@ static void test_match_all() {
 	QP_rule_t r = make_rule();
 	ok(rule_matches_query(&r, 0, "anyuser", "anydb", "10.0.0.1",
 		nullptr,
-		"127.0.0.1", 6033, 42, "digest", "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 42, "digest", "SELECT 1", nullptr, 2),
 		"rule with no criteria matches everything");
 }
 
@@ -100,11 +102,13 @@ static void test_flagIN() {
 	r.flagIN = 3;
 	ok(rule_matches_query(&r, 3, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"flagIN=3 matches current_flagIN=3");
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"flagIN=3 does not match current_flagIN=0");
 }
 
@@ -113,15 +117,18 @@ static void test_username() {
 	r.username = const_cast<char *>("appuser");
 	ok(rule_matches_query(&r, 0, "appuser", "db", "10.0.0.1",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"username matches exactly");
 	ok(!rule_matches_query(&r, 0, "other", "db", "10.0.0.1",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"username mismatch rejects");
 	ok(!rule_matches_query(&r, 0, nullptr, "db", "10.0.0.1",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"username rule rejects null session username");
 }
 
@@ -130,11 +137,13 @@ static void test_schemaname() {
 	r.schemaname = const_cast<char *>("analytics");
 	ok(rule_matches_query(&r, 0, "u", "analytics", "10.0.0.1",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"schemaname matches");
 	ok(!rule_matches_query(&r, 0, "u", "other_db", "10.0.0.1",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"schemaname mismatch rejects");
 }
 
@@ -145,11 +154,13 @@ static void test_client_addr_wildcard() {
 	ok(r.client_addr_pred.match == QP_ADDR_MATCH_WILDCARD, "trailing % selects wildcard mode");
 	ok(rule_matches_query(&r, 0, "u", "d", "192.168.55.19",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"client_addr wildcard matches");
 	ok(!rule_matches_query(&r, 0, "u", "d", "10.0.0.1",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"client_addr wildcard rejects non-match");
 }
 
@@ -354,6 +365,51 @@ static void test_addr_predicate_mode_selection() {
 	// proxy_addr has never supported wildcards and must keep its strcmp.
 	ok(qp_addr_predicate_init(&pred, "10.0.0.%", false), "proxy_addr wildcard-shaped value resolves");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "proxy_addr stays exact even with a % in the value");
+
+	// A Unix socket path is how a socket listener spells itself in proxy_addr,
+	// so a leading '/' must not be read as the start of a malformed prefix.
+	ok(ip_cidr_spec_looks_like_prefix("/tmp/proxysql.sock") == false,
+		"a leading '/' is a path, not a prefix");
+	ok(ip_cidr_spec_looks_like_prefix("10.0.0.0/8") == true, "addr/len is a prefix");
+	ok(ip_cidr_spec_looks_like_prefix("2001:db8::/32") == true, "IPv6 addr/len is a prefix");
+	ok(ip_cidr_spec_looks_like_prefix("10.0.0.1") == false, "a bare address is not a prefix");
+	ok(ip_cidr_spec_looks_like_prefix("") == false, "an empty value is not a prefix");
+	ok(ip_cidr_spec_looks_like_prefix(NULL) == false, "a null value is not a prefix");
+
+	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", false), "Unix socket path resolves");
+	ok(pred.match == QP_ADDR_MATCH_EXACT, "Unix socket path stays on the exact-match path");
+	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", true), "Unix socket path resolves for client_addr");
+	ok(pred.match == QP_ADDR_MATCH_EXACT, "Unix socket path in client_addr stays exact too");
+}
+
+// An IPv6 literal may embed a dotted quad, which makes the longest legal token
+// 49 bytes -- address plus "/128" -- past INET6_ADDRSTRLEN. Such a prefix is
+// valid and must be accepted.
+static void test_cidr_ipv6_embedded_dotted_quad() {
+	qp_addr_predicate_t pred;
+	ok(qp_addr_predicate_init(&pred, "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128", true),
+		"an IPv6 literal embedding a dotted quad is accepted");
+	ok(pred.match == QP_ADDR_MATCH_CIDR, "it selects CIDR mode");
+	ok(pred.cidr_count == 1, "one prefix parsed");
+	ok(ip_cidr_list_is_valid("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128"),
+		"the validator accepts it too");
+
+	QP_rule_t r = make_rule();
+	r.client_addr = const_cast<char *>("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, true), "rule predicate resolves");
+	// The embedded dotted quad is the last 32 bits, so this prefix is the
+	// all-ones address -- not ::ffff:255.255.255.255, which has ten leading
+	// zero bytes and is a different 128-bit value.
+	struct sockaddr_storage lo = make_sa("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff");
+	struct sockaddr_storage other = make_sa("ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe");
+	ok(match_client_addr(&r, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", (struct sockaddr *)&lo),
+		"the /128 matches its own address");
+	ok(!match_client_addr(&r, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe", (struct sockaddr *)&other),
+		"the /128 rejects a neighbour");
+	// The IPv4-mapped address is genuinely outside this prefix.
+	struct sockaddr_storage mapped = make_sa("::ffff:255.255.255.255");
+	ok(!match_client_addr(&r, "::ffff:255.255.255.255", (struct sockaddr *)&mapped),
+		"the all-ones /128 does not match the IPv4-mapped address");
 }
 
 // A bare '_' used to be compared literally and so could never match. Now that
@@ -369,11 +425,13 @@ static void test_bare_underscore_wildcard_matches() {
 	ok(r.client_addr_pred.match == QP_ADDR_MATCH_WILDCARD, "bare '_' selects wildcard mode");
 	ok(rule_matches_query(&r, 0, "u", "d", "10.0.13.5",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"bare '_' substitutes the single character it stands for");
 	ok(!rule_matches_query(&r, 0, "u", "d", "10.0.23.5",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"bare '_' wildcard rejects a non-match");
 
 	// '_' consumes one character, so it cannot stand in for a variable tail.
@@ -382,7 +440,8 @@ static void test_bare_underscore_wildcard_matches() {
 	ok(qp_addr_predicate_init(&rs.client_addr_pred, rs.client_addr, true), "trailing bare '_' resolves");
 	ok(!rule_matches_query(&rs, 0, "u", "d", "10.0.130.1",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"'_' matches exactly one character, not a variable tail");
 
 	// The documented form pairs '_' with a trailing '%' to absorb the tail.
@@ -391,11 +450,13 @@ static void test_bare_underscore_wildcard_matches() {
 	ok(qp_addr_predicate_init(&rp.client_addr_pred, rp.client_addr, true), "'_.' with trailing % resolves");
 	ok(rule_matches_query(&rp, 0, "u", "d", "10.0.135.7",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"'10.0.13_.%' matches 10.0.135.7");
 	ok(!rule_matches_query(&rp, 0, "u", "d", "10.0.145.7",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"'10.0.13_.%' rejects 10.0.145.7");
 }
 
@@ -403,6 +464,7 @@ static void test_bare_underscore_wildcard_matches() {
 // than being loaded in a state where they can never match.
 static void test_cidr_rejects_malformed() {
 	qp_addr_predicate_t pred;
+	IP_CIDR_t scratch {};
 
 	ok(qp_addr_predicate_init(&pred, "10.0.0.0/33", true) == false, "IPv4 /33 rejected");
 	ok(pred.match == QP_ADDR_MATCH_NONE, "rejected value leaves no criterion");
@@ -411,7 +473,12 @@ static void test_cidr_rejects_malformed() {
 	ok(qp_addr_predicate_init(&pred, "10.0.0.0/-1", true) == false, "negative prefix rejected");
 	ok(qp_addr_predicate_init(&pred, "10.0.0.0/8x", true) == false, "trailing junk after prefix rejected");
 	ok(qp_addr_predicate_init(&pred, "10.0.0.0/8/8", true) == false, "second '/' rejected");
-	ok(qp_addr_predicate_init(&pred, "/8", true) == false, "missing address rejected");
+	// A value with a leading '/' is a filesystem path, not a prefix, so it is
+	// deliberately not treated as a malformed one. It lands on the exact-match
+	// path and, like any other literal that matches nothing, simply never fires.
+	ok(qp_addr_predicate_init(&pred, "/8", true) == true, "a leading '/' is a path, not a rejected prefix");
+	ok(pred.match == QP_ADDR_MATCH_EXACT, "'/8' is compared literally");
+	ok(ip_cidr_parse("/8", &scratch) == false, "but /8 is still not a parseable prefix");
 	ok(qp_addr_predicate_init(&pred, "10.0.0.0/", true) == false, "missing prefix length rejected");
 	ok(qp_addr_predicate_init(&pred, "not_an_address/24", true) == false, "invalid address rejected");
 	ok(qp_addr_predicate_init(&pred, "10.0.256.0/24", true) == false, "out-of-range octet rejected");
@@ -441,30 +508,46 @@ static void test_proxy_addr_cidr() {
 	ok(qp_addr_predicate_init(&r.proxy_addr_pred, r.proxy_addr, false), "proxy_addr CIDR resolves");
 	ok(r.proxy_addr_pred.match == QP_ADDR_MATCH_CIDR, "proxy_addr accepts a CIDR prefix");
 
+	// process_query() converts the proxy address once and hands the sockaddr in,
+	// so the test supplies the same parsed form for each candidate.
+	struct sockaddr_storage in = make_sa("10.0.135.7");
+	struct sockaddr_storage out = make_sa("10.0.150.7");
+	struct sockaddr_storage v6 = make_sa("2001:db8::1");
+
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"10.0.135.7", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"10.0.135.7",
+		(struct sockaddr *)&in, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"proxy_addr CIDR matches inside the prefix");
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"10.0.150.7", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"10.0.150.7",
+		(struct sockaddr *)&out, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"proxy_addr CIDR rejects outside the prefix");
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"2001:db8::1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"2001:db8::1",
+		(struct sockaddr *)&v6, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"proxy_addr IPv4 CIDR does not match an IPv6 proxy");
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"10.0.135.7",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"proxy_addr CIDR fails closed without a parsed proxy address");
 
-	// An exact proxy_addr is unaffected.
+	// An exact proxy_addr is unaffected and does not need a sockaddr.
 	QP_rule_t rex = make_rule();
 	rex.proxy_addr = const_cast<char *>("10.0.0.5");
 	ok(qp_addr_predicate_init(&rex.proxy_addr_pred, rex.proxy_addr, false), "exact proxy_addr resolves");
 	ok(rule_matches_query(&rex, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"10.0.0.5", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"10.0.0.5",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"exact proxy_addr still matches");
 	ok(!rule_matches_query(&rex, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"10.0.0.6", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"10.0.0.6",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"exact proxy_addr still rejects a mismatch");
 }
 
@@ -518,11 +601,13 @@ static void test_proxy_addr_port() {
 	r.proxy_port = 6033;
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"10.0.0.5", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"10.0.0.5",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"proxy_addr + proxy_port match");
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"10.0.0.5", 6034, 0, nullptr, "SELECT 1", nullptr, 2),
+		"10.0.0.5",
+		nullptr, 6034, 0, nullptr, "SELECT 1", nullptr, 2),
 		"proxy_port mismatch rejects");
 }
 
@@ -531,11 +616,13 @@ static void test_digest() {
 	r.digest = 123456789ULL;
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 123456789ULL, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 123456789ULL, nullptr, "SELECT 1", nullptr, 2),
 		"digest matches");
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 999ULL, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 999ULL, nullptr, "SELECT 1", nullptr, 2),
 		"digest mismatch rejects");
 }
 
@@ -548,7 +635,8 @@ static void test_match_digest_re2() {
 	r.match_digest = const_cast<char *>("^SELECT .* FROM users$");
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, "SELECT name FROM users",
+		"127.0.0.1",
+		nullptr, 6033, 0, "SELECT name FROM users",
 		"SELECT name FROM users WHERE id=1", nullptr, 2),
 		"match_digest regex matches with RE2");
 }
@@ -558,7 +646,8 @@ static void test_match_digest_pcre() {
 	r.match_digest = const_cast<char *>("^SELECT .* FROM users$");
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, "SELECT email FROM users",
+		"127.0.0.1",
+		nullptr, 6033, 0, "SELECT email FROM users",
 		"SELECT email FROM users WHERE id=1", nullptr, 1),
 		"match_digest regex matches with PCRE");
 }
@@ -568,7 +657,8 @@ static void test_match_digest_pcre2() {
 	r.match_digest = const_cast<char *>("(?<=A{1,2})B");
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, "AAB", "SELECT 1", nullptr, 1),
+		"127.0.0.1",
+		nullptr, 6033, 0, "AAB", "SELECT 1", nullptr, 1),
 		"PCRE-compatible mode accepts PCRE2 variable-length lookbehind");
 }
 
@@ -577,7 +667,8 @@ static void test_match_digest_pcre2_lookaround_reset_start() {
 	r.match_digest = const_cast<char *>("(?=a\\K)a");
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, "a", "SELECT 1", nullptr, 1),
+		"127.0.0.1",
+		nullptr, 6033, 0, "a", "SELECT 1", nullptr, 1),
 		"PCRE-compatible mode accepts legacy \\K inside positive lookahead");
 }
 
@@ -586,7 +677,8 @@ static void test_invalid_pcre2_pattern() {
 	r.match_pattern = const_cast<char *>("(");
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
 		"invalid PCRE2 pattern safely returns no match");
 }
 
@@ -596,7 +688,8 @@ static void test_invalid_negated_pcre2_pattern() {
 	r.negate_match_pattern = true;
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
 		"invalid PCRE2 pattern does not match a negated rule");
 }
 
@@ -605,7 +698,8 @@ static void test_match_pattern() {
 	r.match_pattern = const_cast<char *>("SELECT .* FROM orders");
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr,
 		"SELECT id FROM orders WHERE id=10", nullptr, 2),
 		"match_pattern regex matches query text");
 }
@@ -616,11 +710,13 @@ static void test_negate_match_pattern() {
 	r.negate_match_pattern = true;
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"negate_match_pattern inverts result");
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
 		"PCRE-compatible negate_match_pattern inverts result");
 }
 
@@ -630,7 +726,8 @@ static void test_caseless_modifier() {
 	r.re_modifiers = QP_RE_MOD_CASELESS;
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr,
 		"SELECT SKU FROM INVENTORY", nullptr, 2),
 		"CASELESS modifier makes regex case-insensitive");
 }
@@ -640,7 +737,8 @@ static void test_rewritten_query() {
 	r.match_pattern = const_cast<char *>("SELECT .* FROM rewritten_table");
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr,
 		"SELECT * FROM original_table",
 		"SELECT * FROM rewritten_table", 2),
 		"rewritten query used for match_pattern when present");
@@ -707,11 +805,13 @@ static void test_combined_criteria() {
 	r.match_pattern = const_cast<char *>("SELECT");
 	ok(rule_matches_query(&r, 0, "appuser", "analytics", "1.2.3.4",
 		nullptr,
-		"10.0.0.9", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"10.0.0.9",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"multiple criteria use AND logic — all match");
 	ok(!rule_matches_query(&r, 0, "other", "analytics", "1.2.3.4",
 		nullptr,
-		"10.0.0.9", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"10.0.0.9",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"multiple criteria AND logic — username mismatch rejects");
 }
 
@@ -722,7 +822,8 @@ static void test_combined_criteria() {
 static void test_null_rule() {
 	ok(!rule_matches_query(nullptr, 0, "u", "d", "1.2.3.4",
 		nullptr,
-		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"null rule returns false");
 }
 
@@ -732,51 +833,47 @@ static void test_null_rule() {
 
 int main() {
 #ifdef DEBUG
-	plan(167);
+	plan(188);
 #else
-	plan(160);
+	plan(181);
 #endif
 
 	test_init_minimal();
 
-	test_match_all();               // 1
-	test_flagIN();                  // 2
-	test_username();                // 3
-	test_schemaname();              // 2
-	test_client_addr_wildcard();    // 4
-	test_cidr_ipv4_boundaries();     // 8
-	test_cidr_ipv4_prefix_lengths(); // 16
-	test_cidr_host_bits_are_masked();// 3
-	test_cidr_ipv6();                // 9
-	test_cidr_mixed_families();      // 8
-	test_cidr_requires_parsed_address(); // 2
-	test_addr_predicate_mode_selection(); // 17
-	test_bare_underscore_wildcard_matches(); // 3
-	test_cidr_rejects_malformed();   // 19
-	test_proxy_addr_cidr();          // 10
-	test_cidr_parse_primitives();    // 18
-	test_proxy_addr_port();         // 2
-	test_digest();                  // 2
-	test_match_digest_re2();        // 1
-	test_match_digest_pcre();       // 1
-	test_match_digest_pcre2();      // 1
-	test_match_digest_pcre2_lookaround_reset_start(); // 1
-	test_invalid_pcre2_pattern();   // 1
-	test_invalid_negated_pcre2_pattern(); // 1
-	test_match_pattern();           // 1
-	test_negate_match_pattern();    // 2
-	test_caseless_modifier();       // 1
-	test_rewritten_query();         // 1
+	test_match_all();
+	test_flagIN();
+	test_username();
+	test_schemaname();
+	test_client_addr_wildcard();
+	test_cidr_ipv4_boundaries();
+	test_cidr_ipv4_prefix_lengths();
+	test_cidr_host_bits_are_masked();
+	test_cidr_ipv6();
+	test_cidr_mixed_families();
+	test_cidr_requires_parsed_address();
+	test_addr_predicate_mode_selection();
+	test_cidr_ipv6_embedded_dotted_quad();
+	test_bare_underscore_wildcard_matches();
+	test_cidr_rejects_malformed();
+	test_proxy_addr_cidr();
+	test_cidr_parse_primitives();
+	test_proxy_addr_port();
+	test_digest();
+	test_match_digest_re2();
+	test_match_digest_pcre();
+	test_match_digest_pcre2();
+	test_match_digest_pcre2_lookaround_reset_start();
+	test_invalid_pcre2_pattern();
+	test_invalid_negated_pcre2_pattern();
+	test_match_pattern();
+	test_negate_match_pattern();
+	test_caseless_modifier();
+	test_rewritten_query();
 #ifdef DEBUG
-	test_pcre2_rewrites();          // 7
+	test_pcre2_rewrites();
 #endif
-	test_combined_criteria();       // 2
-	test_null_rule();               // 1
-#ifdef DEBUG
-	// Total: 167
-#else
-	// Total: 160
-#endif
+	test_combined_criteria();
+	test_null_rule();
 
 	test_cleanup_minimal();
 	return exit_status();

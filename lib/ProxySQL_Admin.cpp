@@ -9190,10 +9190,16 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
  *  - a textual wildcard ('%' or '_'), where '%' may only be the last character;
  *  - a comma-separated list of CIDR prefixes, matched numerically.
  *
- * The presence of '/' selects the CIDR form, which is unambiguous because '/'
- * cannot appear in a rendered address. A malformed prefix is rejected here so
- * the rule is never installed in a state where it can only ever fail to match
- * -- previously such a value loaded cleanly and then silently matched nothing.
+ * Which one applies is decided by ip_cidr_spec_looks_like_prefix(), which also
+ * keeps a Unix socket path such as "/tmp/proxysql.sock" on the literal path:
+ * proxy_addr is how a Unix listener identifies itself, and those rules have
+ * always worked. A malformed prefix is rejected here so the rule is never
+ * installed in a state where it can only ever fail to match -- previously such
+ * a value loaded cleanly and then silently matched nothing.
+ *
+ * The length cap and the '%'-position rule are the pre-existing client_addr
+ * checks and apply to every field, since a value that cannot be a rendered
+ * address is equally meaningless in either one.
  *
  * @param rule_id    Rule id, for the error message.
  * @param field_name "client_addr" or "proxy_addr", for the error message.
@@ -9204,21 +9210,22 @@ static bool validate_qp_addr_value(const char *rule_id, const char *field_name, 
 	if (value == NULL || *value == '\0') {
 		return true;
 	}
-	if (strchr(value, '/') != NULL) {
-		if (strlen(value) > MAX_CIDR_LIST_VALUE_LEN || ip_cidr_list_is_valid(value) == false) {
+	if (ip_cidr_spec_looks_like_prefix(value) == true) {
+		if (strnlen(value, MAX_CIDR_LIST_VALUE_LEN + 1) > MAX_CIDR_LIST_VALUE_LEN ||
+			ip_cidr_list_is_valid(value) == false) {
 			proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
 			return false;
 		}
 		return true;
 	}
-	if (strlen(value) >= INET6_ADDRSTRLEN) {
+	if (strnlen(value, INET6_ADDRSTRLEN) >= INET6_ADDRSTRLEN) {
 		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
 		return false;
 	}
 	// mywildcmp() would honour a '%' anywhere in the pattern, but a '%' in the
 	// middle of an address is far more likely a typo than an intent.
 	const char *pct = strchr(value, '%');
-	if (pct != NULL && strlen(pct) != 1) {
+	if (pct != NULL && pct[1] != '\0') {
 		proxy_error("Query rule with rule_id=%s has a wildcard that is not at the end of %s: %s\n",
 			rule_id, field_name, value);
 		return false;

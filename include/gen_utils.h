@@ -522,16 +522,26 @@ bool mywildcmp(const char *p, const char *str);
  * time, so the parsed form is held inline in the rule. The cap keeps QP_rule_t
  * trivially copyable and bounds the per-query matching cost.
  */
-#define MAX_CIDR_PREFIXES_PER_RULE 8
+static constexpr int MAX_CIDR_PREFIXES_PER_RULE = 8;
+
+/**
+ * @brief Longest single "address/prefix_len" token, terminator included.
+ *
+ * The address alone is capped at INET6_ADDRSTRLEN-1 bytes, and the longest
+ * prefix is "/128". An IPv6 literal may itself embed a dotted quad, so
+ * "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128" is 49 bytes and must be
+ * accepted.
+ */
+static constexpr size_t MAX_CIDR_TOKEN_LEN = INET6_ADDRSTRLEN + 4;
 
 /**
  * @brief Longest accepted address value when it is a CIDR list.
  *
- * A single rendered address is capped at INET6_ADDRSTRLEN-1 bytes, but a list
- * is legitimately longer. Bounding it here keeps an absurd value from being
- * scanned token by token on every load.
+ * A list is legitimately longer than a single address. Bounding it keeps an
+ * absurd value from being scanned token by token on every load.
  */
-#define MAX_CIDR_LIST_VALUE_LEN  (MAX_CIDR_PREFIXES_PER_RULE * INET6_ADDRSTRLEN)
+static constexpr size_t MAX_CIDR_LIST_VALUE_LEN =
+	(MAX_CIDR_PREFIXES_PER_RULE * MAX_CIDR_TOKEN_LEN) + MAX_CIDR_PREFIXES_PER_RULE;
 
 /**
  * @brief A single CIDR prefix, pre-computed for numeric address matching.
@@ -548,6 +558,20 @@ typedef struct _IP_CIDR_t {
 	/// An IPv4 address occupies the first 4 bytes.
 	unsigned char addr[16];
 } IP_CIDR_t;
+
+/**
+ * @brief Does @p value use the CIDR form, as opposed to being a plain address?
+ *
+ * '/' on its own is not enough to decide. A query rule's proxy_addr is also how
+ * a Unix listener identifies itself -- MySQL_Thread.cpp copies ifi->address
+ * straight into proxy_addr.addr, and for a socket listener that is the socket
+ * path, e.g. "/tmp/proxysql.sock". Those values are compared literally and must
+ * keep working, so a value that begins with '/' is a path rather than a prefix.
+ *
+ * Every other value containing '/' can only be a prefix list, since '/' cannot
+ * occur in a rendered address.
+ */
+bool ip_cidr_spec_looks_like_prefix(const char *value);
 
 /**
  * @brief Parse one "address/prefix_len" token into @p out.

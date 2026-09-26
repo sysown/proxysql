@@ -174,6 +174,19 @@ static void cidr_mask_in_place(unsigned char *raw, int bytes, int bits) {
 	}
 }
 
+bool ip_cidr_spec_looks_like_prefix(const char *value) {
+	if (value == NULL || *value == '\0') {
+		return false;
+	}
+	// A leading '/' can only be a filesystem path: a prefix always starts with
+	// the address, so "/tmp/proxysql.sock" is a Unix listener path and not a
+	// malformed prefix.
+	if (*value == '/') {
+		return false;
+	}
+	return strchr(value, '/') != NULL;
+}
+
 bool ip_cidr_parse(const char *token, IP_CIDR_t *out) {
 	if (out == NULL) {
 		return false;
@@ -198,10 +211,10 @@ bool ip_cidr_parse(const char *token, IP_CIDR_t *out) {
 	if (end == start) {
 		return false;
 	}
-	char token_buf[INET6_ADDRSTRLEN];
+	char token_buf[MAX_CIDR_TOKEN_LEN];
 	size_t token_len = (size_t)(end - start);
-	// A numeric address literal plus "/128" cannot exceed INET6_ADDRSTRLEN,
-	// so a longer token is malformed rather than merely unsupported.
+	// The longest legal token is an IPv6 literal that embeds a dotted quad plus
+	// "/128"; anything beyond MAX_CIDR_TOKEN_LEN cannot be one.
 	if (token_len >= sizeof(token_buf)) {
 		return false;
 	}
@@ -272,15 +285,15 @@ bool ip_cidr_parse_list(const char *spec, IP_CIDR_t *out, int max, int *count) {
 		const char *comma = strchr(cursor, ',');
 		size_t token_len = comma != NULL ? (size_t)(comma - cursor) : strlen(cursor);
 
-		// Reuse a bounded stack buffer: a numeric address literal is at most
-		// INET6_ADDRSTRLEN-1 bytes, so anything longer cannot be valid.
-		if (token_len == 0 || token_len >= INET6_ADDRSTRLEN) {
+		// Reuse a bounded stack buffer: a token is at most MAX_CIDR_TOKEN_LEN-1
+		// bytes, so anything longer cannot be a valid prefix.
+		if (token_len == 0 || token_len >= MAX_CIDR_TOKEN_LEN) {
 			return false;
 		}
 		if (parsed >= max) {
 			return false;
 		}
-		char token[INET6_ADDRSTRLEN];
+		char token[MAX_CIDR_TOKEN_LEN];
 		memcpy(token, cursor, token_len);
 		token[token_len] = '\0';
 

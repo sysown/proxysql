@@ -371,7 +371,9 @@ void __reset_rules(std::vector<QP_rule_t*>* qrs);
  * @param client_addr Client address, as rendered text.
  * @param client_sa Client address, as a parsed sockaddr. Required for rules
  *        whose client_addr is a CIDR prefix; may be NULL otherwise.
- * @param proxy_addr Proxy listener address.
+ * @param proxy_addr Proxy listener address, as rendered text.
+ * @param proxy_sa Proxy listener address, as a parsed sockaddr. Required for
+ *        rules whose proxy_addr is a CIDR prefix; may be NULL otherwise.
  * @param proxy_port Proxy listener port.
  * @param digest Parsed query digest.
  * @param digest_text Parsed digest text.
@@ -388,6 +390,7 @@ bool rule_matches_query(
 	const char* client_addr,
 	const struct sockaddr* client_sa,
 	const char* proxy_addr,
+	const struct sockaddr* proxy_sa,
 	int proxy_port,
 	uint64_t digest,
 	const char* digest_text,
