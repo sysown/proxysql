@@ -237,6 +237,14 @@ Replace `add_gtid_from_ok` body with `parse_gtid`. If MariaDB: `gtid_executed.ad
 
 `read_next_gtid` ST= dash-stripping: if the uuid token is all digits, copy as-is (no dash strip). `I1=0:271` already copies as-is.
 
+**Amended after review.** Deciding the flavor on "all digits" alone is ambiguous:
+a MySQL UUID made only of decimal digits is valid, and the reader sends it
+dashed in `ST=` but stripped in `I1`/`I3`, so such an endpoint was accepted at
+`ST=` and then disconnected at `I1=`. The final rule classifies a 32 character
+dash-free id as a UUID first (a MariaDB domain is a uint32, so at most 10
+digits), and accepts a decimal id as a domain only when it is canonical, so `0`
+and `00` cannot record one domain under two different keys.
+
 - [ ] **Step 4: Run — PASS, existing 109 MySQL assertions still pass**
 
 - [ ] **Step 5: Commit**
@@ -349,11 +357,16 @@ Tests in `gtid_parse_unit-t.cpp`:
 - [ ] **Step 1b: Unit-test `select_mariadb_binlog_position` / `render_mariadb_domain_position`**
 
 Bounded copy of the `@@gtid_binlog_pos` value into the connection's `gtid_uuid`
-buffer. The value may list several domains, so the helper takes the session's
-`@@gtid_domain_id` and renders only that domain as one `domain-server-seq`.
-Rejects empty, oversized, and unchanged values without touching the buffer, and
-fails closed when the domain is unknown and the position is multi-domain.
-Covered in `gtid_parse_unit-t.cpp`.
+buffer. The value may list several domains, so the helper takes the auxiliary
+connection's own default `@@gtid_domain_id` and renders only that domain as one
+`domain-server-seq`. Rejects empty, oversized, and unchanged values without
+touching the buffer, and fails closed when the domain is unknown and the
+position is multi-domain. Covered in `gtid_parse_unit-t.cpp`.
+
+The domain is the auxiliary connection's default, not the client session's: a
+client session that issued `SET @@gtid_domain_id=1` is still attributed to the
+server's default domain, because the live connection is never read. Recorded as
+a known multi-domain selection limitation in the design doc.
 
 - [ ] **Step 2: Run — FAIL**
 

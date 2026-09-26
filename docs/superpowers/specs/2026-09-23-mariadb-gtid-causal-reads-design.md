@@ -158,7 +158,15 @@ Shared parse helper used by:
   `0-1-100`.
 - `GTID_Server_Data::add_gtid_from_ok`: MariaDB path inserts `[1, seq]` under
   the domain key and records `server_id`.
-- `GTID_Server_Data::read_next_gtid`: decimal ids are domains.
+- `GTID_Server_Data::read_next_gtid`: an id is either a 32 hex digit UUID or a
+  canonical decimal MariaDB domain id, and the two must not be confused. A
+  32 character dash-free id is a UUID even when all of its characters are
+  decimal digits, because a MariaDB domain is a uint32 and so at most 10
+  digits; the shape is tested before the decimal spelling, since the reader
+  sends a UUID dashed in `ST=` and stripped in `I1`/`I3`. A decimal id is only
+  a domain when it is canonical, so `0` and `00` cannot record the same domain
+  under two different keys. The first id-bearing message fixes the flavor and
+  any later change of it disconnects the reader.
 
 Write-path GTID collection:
 
@@ -170,12 +178,22 @@ Write-path GTID collection:
   `SELECT @@gtid_domain_id, @@gtid_binlog_pos`; it never queries the live
   connection, whose response buffer, `mysql->info`, and session state must
   remain intact.
-- `@@gtid_binlog_pos` can list several domains (`0-1-270,1-2-50`). Only the
-  token belonging to the session's own `@@gtid_domain_id` is a GTID this
-  session can own, so the stored value is that single domain rendered as
-  `domain-server-seq`. If the domain is unknown and the position carries more
-  than one domain, the lookup fails closed rather than storing an ambiguous
-  string.
+- `@@gtid_binlog_pos` can list several domains (`0-1-270,1-2-50`). The lookup
+  keeps only the token belonging to the domain it actually asked for — the
+  auxiliary connection's own `@@gtid_domain_id`, not the client session's — and
+  stores it as `domain-server-seq`. If the domain is unknown and the position
+  carries more than one domain, the lookup fails closed rather than storing an
+  ambiguous string.
+
+  **Known limitation (multi-domain selection):** the domain selected is whatever
+  a freshly connected auxiliary session reports, i.e. the server's default
+  `gtid_domain_id`. A client session that issues `SET @@gtid_domain_id=1` is
+  attributed to the default domain instead of its own, because ProxySQL never
+  runs that `SET` and never reads the live connection. The stored GTID is
+  therefore the default domain's position, not necessarily the position the
+  client session actually advanced. Choosing the client's own domain would
+  require reading it from the live connection, which this design explicitly
+  avoids; it is left to a follow-up.
 - The auxiliary connection is created lazily, reused while the session is
   active, released when the pooled connection is returned, and closed on
   reset/destruction. Connect is capped at one second with a one-second negative

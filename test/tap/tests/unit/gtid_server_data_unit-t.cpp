@@ -32,6 +32,10 @@ static const char *UUID_A = "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa";
 static char UUID_A_STRIPPED[] = "aaaaaaaa000011112222aaaaaaaaaaaa";
 static const char *UUID_B = "bbbbbbbb-3333-4444-5555-bbbbbbbbbbbb";
 static char UUID_B_STRIPPED[] = "bbbbbbbb333344445555bbbbbbbbbbbb";
+// A valid MySQL UUID whose 32 hex digits happen to all be decimal digits. The
+// reader sends it dashed in ST= and stripped in I1/I3.
+static const char *UUID_DECIMAL = "12345678-1234-1234-1234-123456789012";
+static char UUID_DECIMAL_STRIPPED[] = "12345678123412341234123456789012";
 static char LOOPBACK_ADDRESS[] = "127.0.0.1";
 static char EMPTY_COMMENT[] = "";
 
@@ -704,8 +708,73 @@ static void test_reuse_without_established_id_disconnects() {
 	   "orphan I4: no GTID is recorded under an empty id");
 }
 
+/**
+ * @brief A 32 hex digit UUID made only of decimal digits is still a UUID.
+ *
+ * MariaDB domain ids are uint32 and therefore at most 10 digits, so a 32
+ * character dash-free id is unambiguously a UUID. The reader sends it dashed
+ * in ST= and stripped in I1/I3, and both spellings must be accepted: if the
+ * all-decimal UUID were taken for a domain, the same endpoint would be
+ * accepted at ST= and disconnected at I1=.
+ */
+static void test_all_decimal_uuid_is_not_a_domain() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, std::string("ST=") + UUID_DECIMAL + ":100\n");
+	ok(sd.read_next_gtid() == true && sd.active == true,
+	   "decimal UUID: dashed ST= bootstrap is parsed");
+	ok(sd.gtid_flavor == GTID_ID_FLAVOR_UUID,
+	   "decimal UUID: dashed ST= bootstrap establishes the UUID flavor");
+	ok(sd.gtid_exists(UUID_DECIMAL_STRIPPED, 100) == true,
+	   "decimal UUID: dashed ST= bootstrap records the stripped id");
+
+	stuff_buffer(sd, std::string("I1=") + UUID_DECIMAL_STRIPPED + ":101\n");
+	ok(sd.read_next_gtid() == true && sd.active == true,
+	   "decimal UUID: stripped I1 is parsed");
+	ok(sd.gtid_flavor == GTID_ID_FLAVOR_UUID,
+	   "decimal UUID: stripped I1 keeps the UUID flavor");
+	ok(sd.gtid_exists(UUID_DECIMAL_STRIPPED, 101) == true,
+	   "decimal UUID: stripped I1 is applied under the same id");
+
+	stuff_buffer(sd, std::string("I3=") + UUID_DECIMAL_STRIPPED + ":102-110\n");
+	ok(sd.read_next_gtid() == true && sd.active == true,
+	   "decimal UUID: stripped I3 is parsed");
+	ok(sd.gtid_exists(UUID_DECIMAL_STRIPPED, 110) == true,
+	   "decimal UUID: stripped I3 is applied under the same id");
+	ok(sd.events_read == 3, "decimal UUID: all three messages counted");
+}
+
+/**
+ * @brief A non-canonical decimal domain id is not a domain id.
+ *
+ * `0` and `00` name the same MariaDB domain, so accepting both would let
+ * ST=0 and I1=00 record the watermark under two different map keys.
+ */
+static void test_noncanonical_domain_id_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, "ST=00:1-270\n");
+	ok(sd.read_next_gtid() == false, "non-canonical domain: ST=00 returns false");
+	ok(sd.active == false, "non-canonical domain: ST=00 disconnects");
+	ok(sd.events_read == 0, "non-canonical domain: ST=00 is not counted");
+
+	GTID_Server_Data sd2(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	stuff_buffer(sd2, "ST=0:1-270\n");
+	ok(sd2.read_next_gtid() == true && sd2.gtid_flavor == GTID_ID_FLAVOR_DOMAIN,
+	   "non-canonical domain: ST=0 establishes the domain flavor");
+
+	stuff_buffer(sd2, "I1=00:271\n");
+	ok(sd2.read_next_gtid() == false, "non-canonical domain: I1=00 returns false");
+	ok(sd2.active == false, "non-canonical domain: I1=00 disconnects");
+	ok(sd2.events_read == 1, "non-canonical domain: I1=00 is not counted");
+	ok(sd2.gtid_exists((char *)"00", 271) == false,
+	   "non-canonical domain: I1=00 does not fork the watermark");
+	ok(sd2.gtid_exists((char *)"0", 271) == false,
+	   "non-canonical domain: I1=00 is not applied under the canonical id either");
+}
+
 int main() {
-	plan(152);
+	plan(170);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -739,6 +808,8 @@ int main() {
 	test_domain_i1_after_uuid_bootstrap_disconnects();
 	test_domain_i3_after_uuid_bootstrap_disconnects();
 	test_reuse_without_established_id_disconnects();
+	test_all_decimal_uuid_is_not_a_domain();
+	test_noncanonical_domain_id_disconnects();
 
 	return exit_status();
 }
