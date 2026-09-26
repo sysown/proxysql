@@ -1352,10 +1352,13 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	const bool expired = mc->is_expired(mc->last_time_used);
 	// NOTE: If the current session if in 'PINGING_SERVER' status, there is
 	// no need to reset the session. The destruction and creation of a new
-	// session in case this session has exceeded the time specified by
-	// 'connection_max_age_ms' will be deferred to the next time the session
-	// is used outside 'PINGING_SERVER' operation. For more context see #3502.
-	if (sess->status != PINGING_SERVER && expired) {
+	// session in case this session has too many prepared statements will be
+	// deferred to the next time the session is used outside 'PINGING_SERVER'
+	// operation. For more context see #3502. A connection that already
+	// exceeded 'connection_max_age_ms' is destroyed regardless of the session
+	// status, otherwise the exemption would keep an aged connection in the
+	// pool for as long as the session keeps pinging.
+	if (expired) {
 		destroy_MySQL_Connection_From_Pool(true);
 	} else if (sess->status != PINGING_SERVER && too_many_stmts) {
 		sess->create_new_session_and_reset_connection(this);

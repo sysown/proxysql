@@ -84,6 +84,18 @@ static bool select1(MYSQL* c) {
 	return good;
 }
 
+// Puts the three variables this test overrides back to the values read before
+// the SET/LOAD block. Every path that runs after that block goes through here,
+// so a failure can never leave the runtime configuration changed for the rest
+// of the group.
+static bool restore_variables(MYSQL* a, const std::string& max_age, const std::string& reset_algo,
+                              const std::string& multiplexing) {
+	return admin_exec(a, ("SET mysql-connection_max_age_ms=" + max_age).c_str()) &&
+	       admin_exec(a, ("SET mysql-reset_connection_algorithm=" + reset_algo).c_str()) &&
+	       admin_exec(a, ("SET mysql-multiplexing=" + multiplexing).c_str()) &&
+	       admin_exec(a, "LOAD MYSQL VARIABLES TO RUNTIME");
+}
+
 int main(int argc, char** argv) {
 	plan(5);
 	if (cl.getEnv()) return exit_status();
@@ -98,24 +110,45 @@ int main(int argc, char** argv) {
 	const std::string prev_reset_algo = admin_var(admin, "mysql-reset_connection_algorithm");
 	const std::string prev_multiplexing = admin_var(admin, "mysql-multiplexing");
 	if (prev_max_age.empty() || prev_reset_algo.empty() || prev_multiplexing.empty()) {
+		mysql_close(admin);
 		BAIL_OUT("failed to read prior mysql variables");
 	}
 
+	// Reach the backend before touching any runtime variable: a failure here
+	// happens while the runtime is still untouched, so it needs no restore.
+	// The frontend connect only schedules the backend connect, so the warmup
+	// query is also what keeps the first Server_Connections_created out of
+	// the measured window below.
+	MYSQL* c = mk();
+	if (!c) {
+		mysql_close(admin);
+		BAIL_OUT("failed to connect to ProxySQL");
+	}
+	if (!select1(c)) {
+		diag("warmup SELECT 1 failed: %s", mysql_error(c));
+		mysql_close(c);
+		mysql_close(admin);
+		BAIL_OUT("warmup SELECT 1 failed");
+	}
+
+	// From here on every exit path restores the variables first: a partial SET
+	// or a failed LOAD still has to put the prior values back.
 	if (!admin_exec(admin, "SET mysql-connection_max_age_ms=1000") ||
 		!admin_exec(admin, "SET mysql-reset_connection_algorithm=2") ||
 		!admin_exec(admin, "SET mysql-multiplexing=true") ||
 		!admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME")) {
+		diag("failed to configure connection_max_age_ms");
+		if (!restore_variables(admin, prev_max_age, prev_reset_algo, prev_multiplexing)) {
+			diag("failed to restore prior mysql variables");
+		}
+		mysql_close(c);
+		mysql_close(admin);
 		BAIL_OUT("failed to configure connection_max_age_ms");
 	}
 
 	const long long created0 = admin_stat(admin, "Server_Connections_created");
 	const long long change0 = admin_stat(admin, "Com_backend_change_user");
 	ok(created0 >= 0 && change0 >= 0, "read baseline pool stats");
-
-	MYSQL* c = mk();
-	if (!c) {
-		BAIL_OUT("failed to connect to ProxySQL");
-	}
 
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3500);
 	int queries = 0;
@@ -144,11 +177,7 @@ int main(int argc, char** argv) {
 	// are destroyed, not CHANGE_USER-recycled) rather than global quietness.
 	ok(change1 - change0 <= 5, "Com_backend_change_user stays bounded (%lld -> %lld)", change0, change1);
 
-	bool restored =
-		admin_exec(admin, ("SET mysql-connection_max_age_ms=" + prev_max_age).c_str()) &&
-		admin_exec(admin, ("SET mysql-reset_connection_algorithm=" + prev_reset_algo).c_str()) &&
-		admin_exec(admin, ("SET mysql-multiplexing=" + prev_multiplexing).c_str()) &&
-		admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	bool restored = restore_variables(admin, prev_max_age, prev_reset_algo, prev_multiplexing);
 	if (!restored) {
 		diag("failed to restore prior mysql variables");
 	}

@@ -133,12 +133,15 @@ T j_get_srv_default_int_val(
 //static void * HGCU_thread_run() {
 // HGCU worker threads have no per-thread variable sync, so the
 // thread-local mysql_thread___connection_max_age_ms is always 0 here.
-// Expiry checks in this worker must read the live global instead.
+// Expiry checks in this worker must read the live global instead, under
+// the handler lock that guards it against a concurrent variable update.
 static bool MyConn_expired_by_max_age(MySQL_Connection *c) {
 	if (GloMTH == NULL) {
 		return false;
 	}
-	unsigned long long max_age_ms = __sync_fetch_and_add(&GloMTH->variables.connection_max_age_ms, 0);
+	GloMTH->rdlock();
+	unsigned long long max_age_ms = GloMTH->variables.connection_max_age_ms;
+	GloMTH->rdunlock();
 	if (max_age_ms == 0) {
 		return false;
 	}
