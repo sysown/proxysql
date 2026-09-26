@@ -84,7 +84,31 @@ int main(int argc, char **argv)
   mode= argv[1]; one= argv[2]; two= argv[3]; corrupt= argv[4];
   mutable= argv[5]; capath= argv[6];
   require(mysql_thread_init() == 0, "thread init");
-  if (strcmp(mode, "hit") == 0) {
+  if (strcmp(mode, "default") == 0) {
+    SSL *with_crl;
+    X509_STORE *store;
+    require(unsetenv("SSL_CERT_FILE") == 0 && unsetenv("SSL_CERT_DIR") == 0,
+            "clear default trust environment");
+    first= connect_tls(NULL, NULL);
+    second= connect_tls(NULL, NULL);
+    require(first != NULL && second != NULL, "default CA loads");
+    store= SSL_CTX_get_cert_store(SSL_get_SSL_CTX(first));
+    require(sk_X509_OBJECT_num(X509_STORE_get0_objects(store)) > 0,
+            "default CA fixture requires an installed system bundle");
+    require(store == SSL_CTX_get_cert_store(SSL_get_SSL_CTX(second)),
+            "connector did not cache default bundle");
+    with_crl= connect_tls_options(NULL, NULL, capath);
+    require(with_crl != NULL, "default CA with CRL options loads");
+    require(store != SSL_CTX_get_cert_store(SSL_get_SSL_CTX(with_crl)),
+            "default CA with CRL options reused cache");
+    require((X509_VERIFY_PARAM_get_flags(X509_STORE_get0_param(store)) &
+              (X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL)) == 0,
+            "default CA CRL flags contaminated cached store");
+    close_tls(with_crl);
+    mysql_thread_end();
+    require(sk_X509_OBJECT_num(X509_STORE_get0_objects(store)) > 0,
+            "thread cleanup invalidated live default trust");
+  } else if (strcmp(mode, "hit") == 0) {
     first= connect_tls(one, NULL);
     second= connect_tls(one, NULL);
     require(first != NULL && second != NULL, "unchanged CA loads");

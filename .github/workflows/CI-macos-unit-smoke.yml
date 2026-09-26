@@ -11,6 +11,8 @@ on:
       - 'lib/**'
       - 'src/**'
       - 'test/tap/**'
+      - 'test/infra/control/test-mariadb-default-trust-store.bash'
+      - 'test/infra/control/fixtures/mariadb-*.c'
   workflow_dispatch:
 
 permissions:
@@ -43,6 +45,11 @@ jobs:
 
     - name: Build ProxySQL
       run: make -j"$(sysctl -n hw.ncpu)"
+
+    - name: Verify MariaDB default CA caching and trust isolation
+      env:
+        CA_CACHE_TEST_SYSTEM_DEFAULTS: '1'
+      run: test/infra/control/test-mariadb-default-trust-store.bash
 
     - name: Build macOS unit smoke tests
       run: |
