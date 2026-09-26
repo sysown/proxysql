@@ -6,6 +6,14 @@
 #include "pg_lite_client.h"
 #include <netdb.h>
 #include <fcntl.h>
+#ifdef PG_LITE_CLIENT_SCRAM
+// SCRAM-SHA-256 client support for direct-to-backend connections (pg_hba
+// scram-sha-256). Enabled only by test rules that pass -DPG_LITE_CLIENT_SCRAM
+// and link -lscram -lusual; other tests that share pg_lite_client.cpp compile
+// this file without the flag and never pull the pg_scram_* symbols from
+// libproxysql.a, so their link lines need no scram libraries.
+#include "PgSQL_Backend_Protocol.h"
+#endif
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
@@ -315,6 +323,17 @@ static int32_t readAuthType(const std::vector<uint8_t>& buffer) {
 void PgConnection::handleAuthentication(const std::string& password) {
     char type;
     std::vector<uint8_t> buffer;
+
+#ifdef PG_LITE_CLIENT_SCRAM
+    // The SCRAM state persists across the multi-round SASL handshake (10 -> 11 ->
+    // 12 -> 0). RAII-freed on every exit path (throw or return) so a mid-handshake
+    // failure cannot leak the libscram state.
+    PgSQL_Scram_State* scram = nullptr;
+    struct ScramGuard {
+        PgSQL_Scram_State** s;
+        ~ScramGuard() { if (*s) pg_scram_free(*s); }
+    } scram_guard{&scram};
+#endif
 
     while (true) {
         readMessage(type, buffer);
