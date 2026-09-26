@@ -4155,7 +4155,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			}
 			char *err=NULL;
 			SQLite3_result *resultset=SPA->generate_show_table_status(strA, &err);
-			admin_send_resultset(sess, resultset, err, 0);
+			// Pass the normalized statement so PostgreSQL clients get a 'SHOW' CommandComplete tag.
+			admin_send_resultset(sess, resultset, err, 0, query_no_space);
 			if (resultset) delete resultset;
 			if (err) free(err);
 			run_query=false;
@@ -4176,7 +4177,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			}
 			char *err=NULL;
 			SQLite3_result *resultset=SPA->generate_show_fields_from(strA, &err);
-			admin_send_resultset(sess, resultset, err, 0);
+			admin_send_resultset(sess, resultset, err, 0, query_no_space);
 			if (resultset) delete resultset;
 			if (err) free(err);
 			run_query=false;
@@ -5169,7 +5170,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			resultset->add_row(pta);
 		}
 
-		admin_send_resultset(sess, resultset, error, affected_rows);
+		admin_send_resultset(sess, resultset, error, affected_rows, query_no_space);
 		delete resultset;
 		run_query = false;
 

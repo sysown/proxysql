@@ -9,6 +9,9 @@
  *
  * The test also checks, on both admin interfaces, that 'SELECT CONFIG INTO OUTFILE'
  *   with an empty file name sends a single error reply, leaving the connection in sync.
+ *
+ * Finally, it checks the CommandComplete tag: the three entries answered by a dedicated
+ *   SHOW handler must report 'SHOW', not the 'SELECT <nrows>' tag of the generic path.
  */
 
 #include <string>
@@ -48,6 +51,14 @@ const vector<string> resultset_queries {
 	"SHOW TABLE STATUS LIKE 'pgsql_servers'",
 	"SHOW FIELDS FROM pgsql_servers",
 };
+
+// The dedicated SHOW handlers ('SHOW TABLE STATUS', 'SHOW FIELDS FROM',
+// 'SHOW PROMETHEUS METRICS') build their resultset outside the generic
+// dispatcher, so they must report 'SHOW' as CommandComplete tag too. Every other
+// query here is answered as a SELECT, hence carries a 'SELECT <nrows>' tag.
+bool expects_show_tag(const string& query) {
+	return query.size() > 5 && query.compare(0, 5, "SHOW ") == 0;
+}
 
 PGconn* connect_pgsql_admin(const CommandLine& cl) {
 	std::stringstream cs;
@@ -107,10 +118,14 @@ int main(int argc, char** argv) {
 	for (const string& query : resultset_queries) {
 		PGresult* res = PQexec(conn, query.c_str());
 		ExecStatusType status = PQresultStatus(res);
-		ok(status == PGRES_TUPLES_OK,
-			"PostgreSQL admin returns a resultset for '%.60s...' - status='%s' tag='%s' rows=%d error='%s'",
-			query.c_str(), PQresStatus(status), PQcmdStatus(res), PQntuples(res),
-			status == PGRES_TUPLES_OK ? "" : PQerrorMessage(conn));
+		const char* tag = PQcmdStatus(res);
+		// 'SHOW' for the three dedicated SHOW handlers, 'SELECT ...' for the rest
+		bool tag_ok = expects_show_tag(query) ? strcmp(tag, "SHOW") == 0
+			: strncmp(tag, "SELECT", sizeof("SELECT") - 1) == 0;
+		ok(status == PGRES_TUPLES_OK && tag_ok,
+			"PostgreSQL admin returns a resultset for '%.60s...' with the expected CommandComplete tag - expected='%s' status='%s' tag='%s' rows=%d error='%s'",
+			query.c_str(), expects_show_tag(query) ? "SHOW" : "SELECT ...", PQresStatus(status),
+			tag, PQntuples(res), status == PGRES_TUPLES_OK ? "" : PQerrorMessage(conn));
 		PQclear(res);
 
 		if (PQstatus(conn) != CONNECTION_OK) {
