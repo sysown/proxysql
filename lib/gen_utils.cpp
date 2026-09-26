@@ -283,7 +283,20 @@ bool ip_cidr_parse_list(const char *spec, IP_CIDR_t *out, int max, int *count) {
 	const char *cursor = spec;
 	while (1) {
 		const char *comma = strchr(cursor, ',');
-		size_t token_len = comma != NULL ? (size_t)(comma - cursor) : strlen(cursor);
+		const char *stop = comma != NULL ? comma : cursor + strlen(cursor);
+
+		// ip_cidr_parse() trims surrounding spaces, so the limit has to be
+		// applied to the trimmed token. Measuring the raw slice instead would
+		// reject a maximum-length prefix that is merely padded, e.g. the 49-byte
+		// "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128 " with one trailing
+		// space.
+		while (cursor < stop && (*cursor == ' ' || *cursor == '\t')) {
+			cursor++;
+		}
+		while (stop > cursor && (stop[-1] == ' ' || stop[-1] == '\t')) {
+			stop--;
+		}
+		size_t token_len = (size_t)(stop - cursor);
 
 		// Reuse a bounded stack buffer: a token is at most MAX_CIDR_TOKEN_LEN-1
 		// bytes, so anything longer cannot be a valid prefix.

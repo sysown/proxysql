@@ -759,7 +759,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 	newQR->hits = 0;
 
 	newQR->client_addr = (client_addr ? strdup(client_addr) : NULL);
-	if (qp_addr_predicate_init(&newQR->client_addr_pred, newQR->client_addr, true) == false) {
+	if (qp_addr_predicate_init(&newQR->client_addr_pred, newQR->client_addr, QP_ADDR_FIELD_CLIENT) == false) {
 		// Admin rejects a malformed value before we get here, so this only
 		// fires on a rule that bypassed validation. Keep the address but leave
 		// the predicate inert rather than matching on a partial parse.
@@ -767,7 +767,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (proxy_addr ? strdup(proxy_addr) : NULL);
-	qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, false);
+	qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY);
 	newQR->proxy_port = proxy_port;
 	newQR->log = log;
 	newQR->digest = 0;
@@ -896,12 +896,12 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 	newQR->hits = 0;
 
 	newQR->client_addr = (mqr->client_addr ? strdup(mqr->client_addr) : NULL);
-	if (qp_addr_predicate_init(&newQR->client_addr_pred, newQR->client_addr, true) == false) {
+	if (qp_addr_predicate_init(&newQR->client_addr_pred, newQR->client_addr, QP_ADDR_FIELD_CLIENT) == false) {
 		proxy_error("Query rule with rule_id %d has an invalid client_addr, address matching disabled: %s\n",
 			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (mqr->proxy_addr ? strdup(mqr->proxy_addr) : NULL);
-	qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, false);
+	qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY);
 	newQR->proxy_port = mqr->proxy_port;
 	newQR->log = mqr->log;
 	newQR->digest = 0;

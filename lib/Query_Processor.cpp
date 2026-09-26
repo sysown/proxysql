@@ -298,7 +298,7 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 	return s;
 }
 
-bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, bool allow_wildcard) {
+bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, qp_addr_field_t field) {
 	if (pred == NULL) {
 		return false;
 	}
@@ -309,10 +309,15 @@ bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, bool a
 		return true;
 	}
 
-	// '/' can only mean a CIDR prefix: it is not valid anywhere in a rendered
-	// address, so there is no ambiguity with the other two forms. A leading '/'
-	// is excluded because that is how a Unix listener spells its socket path in
-	// proxy_addr, and such values are compared literally.
+	const bool allow_path = (field == QP_ADDR_FIELD_PROXY);
+
+	// A leading '/' is a filesystem path rather than a prefix, but only
+	// proxy_addr can legitimately hold one. On client_addr it is a mistake, and
+	// the admin layer rejects it rather than letting it become a criterion that
+	// can never match.
+	if (allow_path == false && *value == '/') {
+		return false;
+	}
 	if (ip_cidr_spec_looks_like_prefix(value) == true) {
 		if (ip_cidr_parse_list(value, pred->cidrs, MAX_CIDR_PREFIXES_PER_RULE, &pred->cidr_count) == false) {
 			// Leave the predicate inert so a rule that somehow reaches the
@@ -325,7 +330,8 @@ bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, bool a
 		return true;
 	}
 
-	if (allow_wildcard && (strchr(value, '%') != NULL || strchr(value, '_') != NULL)) {
+	if (field == QP_ADDR_FIELD_CLIENT &&
+		(strchr(value, '%') != NULL || strchr(value, '_') != NULL)) {
 		pred->match = QP_ADDR_MATCH_WILDCARD;
 		return true;
 	}

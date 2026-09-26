@@ -9193,23 +9193,30 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
  * Which one applies is decided by ip_cidr_spec_looks_like_prefix(), which also
  * keeps a Unix socket path such as "/tmp/proxysql.sock" on the literal path:
  * proxy_addr is how a Unix listener identifies itself, and those rules have
- * always worked. A malformed prefix is rejected here so the rule is never
- * installed in a state where it can only ever fail to match -- previously such
- * a value loaded cleanly and then silently matched nothing.
+ * always worked.
  *
- * The length cap and the '%'-position rule are the pre-existing client_addr
- * checks and apply to every field, since a value that cannot be a rendered
- * address is equally meaningless in either one.
+ * The length cap and the '%'-position rule constrain a *rendered address*, so
+ * they are applied to client_addr only. A listener path is neither: a socket
+ * path may legitimately exceed INET6_ADDRSTRLEN or contain a '%', and capping
+ * it would skip a rule the listener can still satisfy. client_addr cannot be a
+ * path, so a leading '/' there is rejected instead of being quietly installed
+ * as a criterion that could never match.
+ *
+ * A malformed prefix is rejected on both fields so a rule is never installed in
+ * a state where it can only ever fail to match -- previously such a value loaded
+ * cleanly and then silently matched nothing.
  *
  * @param rule_id    Rule id, for the error message.
- * @param field_name "client_addr" or "proxy_addr", for the error message.
+ * @param field      Which field @p value came from, see qp_addr_field_t.
  * @param value      Configured value; NULL and "" both mean "no criterion".
  * @return true when the value is usable.
  */
-static bool validate_qp_addr_value(const char *rule_id, const char *field_name, const char *value) {
+static bool validate_qp_addr_value(const char *rule_id, const qp_addr_field_t field, const char *value) {
 	if (value == NULL || *value == '\0') {
 		return true;
 	}
+	const char *field_name = (field == QP_ADDR_FIELD_PROXY) ? "proxy_addr" : "client_addr";
+
 	if (ip_cidr_spec_looks_like_prefix(value) == true) {
 		if (strnlen(value, MAX_CIDR_LIST_VALUE_LEN + 1) > MAX_CIDR_LIST_VALUE_LEN ||
 			ip_cidr_list_is_valid(value) == false) {
@@ -9217,6 +9224,15 @@ static bool validate_qp_addr_value(const char *rule_id, const char *field_name, 
 			return false;
 		}
 		return true;
+	}
+	if (field == QP_ADDR_FIELD_PROXY) {
+		// A listener path or a plain address: nothing here constrains its
+		// length or its characters.
+		return true;
+	}
+	if (*value == '/') {
+		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+		return false;
 	}
 	if (strnlen(value, INET6_ADDRSTRLEN) >= INET6_ADDRSTRLEN) {
 		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
@@ -9336,8 +9352,8 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 		QP_rule_t * nqpr;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			if (validate_qp_addr_value(r->fields[0], "client_addr", r->fields[4]) == false ||
-				validate_qp_addr_value(r->fields[0], "proxy_addr", r->fields[5]) == false) {
+			if (validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_CLIENT, r->fields[4]) == false ||
+				validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_PROXY, r->fields[5]) == false) {
 				continue;
 			}
 			nqpr=GloMyQPro->new_query_rule(
@@ -9544,8 +9560,8 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			QP_rule_t* nqpr;
 			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 				SQLite3_row* r = *it;
-				if (validate_qp_addr_value(r->fields[0], "client_addr", r->fields[4]) == false ||
-					validate_qp_addr_value(r->fields[0], "proxy_addr", r->fields[5]) == false) {
+				if (validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_CLIENT, r->fields[4]) == false ||
+					validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_PROXY, r->fields[5]) == false) {
 					continue;
 				}
 				nqpr = GloPgQPro->new_query_rule(

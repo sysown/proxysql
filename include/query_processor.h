@@ -187,21 +187,38 @@ typedef struct _qp_addr_predicate_t {
 } qp_addr_predicate_t;
 
 /**
+ * @brief Which query rule field an address value belongs to.
+ *
+ * The two fields accept deliberately disjoint sets of forms, so one selector
+ * settles both questions at once:
+ *
+ *  - client_addr is the client's TCP peer, always a rendered address. It accepts
+ *    '%' and '_' wildcards, and it can never be a filesystem path -- a leading
+ *    '/' is always a mistake there.
+ *  - proxy_addr is the listener's own identity. For a Unix listener that is a
+ *    socket path such as "/tmp/proxysql.sock", which is compared literally and
+ *    must not be read as a prefix; it has never accepted wildcards.
+ */
+enum qp_addr_field_t {
+	QP_ADDR_FIELD_CLIENT = 0,
+	QP_ADDR_FIELD_PROXY
+};
+
+/**
  * @brief Resolve @p value into @p pred, deciding the comparison mode.
  *
- * A value containing '/' is a comma-separated CIDR list; one containing '%' or
- * (when @p allow_wildcard) '_' is a textual wildcard; anything else is an exact
- * address. A NULL or empty value leaves the predicate in QP_ADDR_MATCH_NONE.
+ * A value holding a '/' is a comma-separated CIDR list when it does not start
+ * with one; a NULL or empty value leaves the predicate in QP_ADDR_MATCH_NONE.
+ * A value containing '%' or '_' is a textual wildcard, for client_addr only.
+ * Anything else is compared exactly.
  *
- * @param pred           Predicate to fill. Left in QP_ADDR_MATCH_NONE on failure.
- * @param value          The configured client_addr / proxy_addr value.
- * @param allow_wildcard Whether '%' and '_' select the textual wildcard mode.
- *                       client_addr allows it; proxy_addr has never supported
- *                       wildcards and keeps its exact strcmp behaviour.
+ * @param pred  Predicate to fill. Left in QP_ADDR_MATCH_NONE on failure.
+ * @param value The configured client_addr / proxy_addr value.
+ * @param field Which field @p value came from, see qp_addr_field_t.
  * @return true when @p value is well formed. On false the caller is expected to
  *         report the rule as rejected rather than load it.
  */
-bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, bool allow_wildcard);
+bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, qp_addr_field_t field);
 
 typedef struct _Query_Processor_rule_t {
 	int rule_id;

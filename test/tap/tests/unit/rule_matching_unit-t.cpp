@@ -39,8 +39,8 @@ static QP_rule_t make_rule() {
 	QP_rule_t rule {};
 	rule.flagIN = 0;
 	rule.proxy_port = -1;
-	qp_addr_predicate_init(&rule.client_addr_pred, NULL, true);
-	qp_addr_predicate_init(&rule.proxy_addr_pred, NULL, false);
+	qp_addr_predicate_init(&rule.client_addr_pred, NULL, QP_ADDR_FIELD_CLIENT);
+	qp_addr_predicate_init(&rule.proxy_addr_pred, NULL, QP_ADDR_FIELD_PROXY);
 	return rule;
 }
 
@@ -150,7 +150,7 @@ static void test_schemaname() {
 static void test_client_addr_wildcard() {
 	QP_rule_t r = make_rule();
 	r.client_addr = const_cast<char *>("192.168.%");
-	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, true), "wildcard predicate resolves");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "wildcard predicate resolves");
 	ok(r.client_addr_pred.match == QP_ADDR_MATCH_WILDCARD, "trailing % selects wildcard mode");
 	ok(rule_matches_query(&r, 0, "u", "d", "192.168.55.19",
 		nullptr,
@@ -172,7 +172,7 @@ static void test_client_addr_wildcard() {
 static void test_cidr_ipv4_boundaries() {
 	QP_rule_t r = make_rule();
 	r.client_addr = const_cast<char *>("10.0.128.0/20");
-	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, true), "/20 predicate resolves");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "/20 predicate resolves");
 	ok(r.client_addr_pred.match == QP_ADDR_MATCH_CIDR, "'/' selects CIDR mode");
 	ok(r.client_addr_pred.cidr_count == 1, "single prefix parsed");
 
@@ -195,7 +195,7 @@ static void test_cidr_ipv4_boundaries() {
 static void test_cidr_ipv4_prefix_lengths() {
 	QP_rule_t r = make_rule();
 	r.client_addr = const_cast<char *>("0.0.0.0/0");
-	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, true), "/0 predicate resolves");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "/0 predicate resolves");
 	struct sockaddr_storage any = make_sa("203.0.113.9");
 	struct sockaddr_storage lo = make_sa("0.0.0.0");
 	struct sockaddr_storage bcast = make_sa("255.255.255.255");
@@ -206,7 +206,7 @@ static void test_cidr_ipv4_prefix_lengths() {
 	// 10.0.0.0/8 leaves a partial byte, exercising the remaining-bits path.
 	QP_rule_t r8 = make_rule();
 	r8.client_addr = const_cast<char *>("10.0.0.0/8");
-	ok(qp_addr_predicate_init(&r8.client_addr_pred, r8.client_addr, true), "/8 predicate resolves");
+	ok(qp_addr_predicate_init(&r8.client_addr_pred, r8.client_addr, QP_ADDR_FIELD_CLIENT), "/8 predicate resolves");
 	struct sockaddr_storage in8 = make_sa("10.255.255.255");
 	struct sockaddr_storage out8 = make_sa("11.0.0.0");
 	ok(match_client_addr(&r8, "10.255.255.255", (struct sockaddr *)&in8), "10.0.0.0/8 matches 10.255.255.255");
@@ -215,7 +215,7 @@ static void test_cidr_ipv4_prefix_lengths() {
 	// 192.168.4.0/22 straddles a nibble, so it needs the partial-byte compare.
 	QP_rule_t r22 = make_rule();
 	r22.client_addr = const_cast<char *>("192.168.4.0/22");
-	ok(qp_addr_predicate_init(&r22.client_addr_pred, r22.client_addr, true), "/22 predicate resolves");
+	ok(qp_addr_predicate_init(&r22.client_addr_pred, r22.client_addr, QP_ADDR_FIELD_CLIENT), "/22 predicate resolves");
 	struct sockaddr_storage in22 = make_sa("192.168.7.255");
 	struct sockaddr_storage out22 = make_sa("192.168.8.0");
 	ok(match_client_addr(&r22, "192.168.7.255", (struct sockaddr *)&in22), "192.168.4.0/22 matches 192.168.7.255");
@@ -224,7 +224,7 @@ static void test_cidr_ipv4_prefix_lengths() {
 	// A /32 is an exact address; a /31 admits only the even host bit.
 	QP_rule_t r32 = make_rule();
 	r32.client_addr = const_cast<char *>("10.0.0.7/32");
-	ok(qp_addr_predicate_init(&r32.client_addr_pred, r32.client_addr, true), "/32 predicate resolves");
+	ok(qp_addr_predicate_init(&r32.client_addr_pred, r32.client_addr, QP_ADDR_FIELD_CLIENT), "/32 predicate resolves");
 	struct sockaddr_storage exact = make_sa("10.0.0.7");
 	struct sockaddr_storage near = make_sa("10.0.0.8");
 	ok(match_client_addr(&r32, "10.0.0.7", (struct sockaddr *)&exact), "/32 matches its own address");
@@ -232,7 +232,7 @@ static void test_cidr_ipv4_prefix_lengths() {
 
 	QP_rule_t r31 = make_rule();
 	r31.client_addr = const_cast<char *>("10.0.0.6/31");
-	ok(qp_addr_predicate_init(&r31.client_addr_pred, r31.client_addr, true), "/31 predicate resolves");
+	ok(qp_addr_predicate_init(&r31.client_addr_pred, r31.client_addr, QP_ADDR_FIELD_CLIENT), "/31 predicate resolves");
 	struct sockaddr_storage even = make_sa("10.0.0.6");
 	struct sockaddr_storage odd = make_sa("10.0.0.7");
 	ok(match_client_addr(&r31, "10.0.0.6", (struct sockaddr *)&even), "/31 matches the even address");
@@ -245,7 +245,7 @@ static void test_cidr_ipv4_prefix_lengths() {
 static void test_cidr_host_bits_are_masked() {
 	QP_rule_t r = make_rule();
 	r.client_addr = const_cast<char *>("10.0.128.5/20");
-	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, true), "host bits still resolve");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "host bits still resolve");
 	struct sockaddr_storage in = make_sa("10.0.130.1");
 	struct sockaddr_storage out = make_sa("10.0.150.1");
 	ok(match_client_addr(&r, "10.0.130.1", (struct sockaddr *)&in), "10.0.128.5/20 is treated as 10.0.128.0/20");
@@ -257,7 +257,7 @@ static void test_cidr_host_bits_are_masked() {
 static void test_cidr_ipv6() {
 	QP_rule_t r = make_rule();
 	r.client_addr = const_cast<char *>("2001:db8::/32");
-	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, true), "IPv6 /32 predicate resolves");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "IPv6 /32 predicate resolves");
 	ok(r.client_addr_pred.match == QP_ADDR_MATCH_CIDR, "IPv6 prefix selects CIDR mode");
 
 	struct sockaddr_storage compressed = make_sa("2001:db8::1");
@@ -274,7 +274,7 @@ static void test_cidr_ipv6() {
 	// A /64 leaves six whole bytes plus a partial one.
 	QP_rule_t r64 = make_rule();
 	r64.client_addr = const_cast<char *>("2001:db8:0:1::/64");
-	ok(qp_addr_predicate_init(&r64.client_addr_pred, r64.client_addr, true), "IPv6 /64 predicate resolves");
+	ok(qp_addr_predicate_init(&r64.client_addr_pred, r64.client_addr, QP_ADDR_FIELD_CLIENT), "IPv6 /64 predicate resolves");
 	struct sockaddr_storage in64 = make_sa("2001:db8:0:1:ffff::1");
 	struct sockaddr_storage out64 = make_sa("2001:db8:0:2::1");
 	ok(match_client_addr(&r64, "2001:db8:0:1:ffff::1", (struct sockaddr *)&in64), "/64 matches inside the subnet");
@@ -283,14 +283,14 @@ static void test_cidr_ipv6() {
 	// ::/0 must match every IPv6 client.
 	QP_rule_t r0 = make_rule();
 	r0.client_addr = const_cast<char *>("::/0");
-	ok(qp_addr_predicate_init(&r0.client_addr_pred, r0.client_addr, true), "::/0 predicate resolves");
+	ok(qp_addr_predicate_init(&r0.client_addr_pred, r0.client_addr, QP_ADDR_FIELD_CLIENT), "::/0 predicate resolves");
 	struct sockaddr_storage any6 = make_sa("fe80::1234");
 	ok(match_client_addr(&r0, "fe80::1234", (struct sockaddr *)&any6), "::/0 matches any IPv6 address");
 
 	// A /128 is a single address.
 	QP_rule_t r128 = make_rule();
 	r128.client_addr = const_cast<char *>("2001:db8::1/128");
-	ok(qp_addr_predicate_init(&r128.client_addr_pred, r128.client_addr, true), "IPv6 /128 predicate resolves");
+	ok(qp_addr_predicate_init(&r128.client_addr_pred, r128.client_addr, QP_ADDR_FIELD_CLIENT), "IPv6 /128 predicate resolves");
 	struct sockaddr_storage one = make_sa("2001:db8::1");
 	struct sockaddr_storage two = make_sa("2001:db8::2");
 	ok(match_client_addr(&r128, "2001:db8::1", (struct sockaddr *)&one), "/128 matches its own address");
@@ -302,7 +302,7 @@ static void test_cidr_ipv6() {
 static void test_cidr_mixed_families() {
 	QP_rule_t r = make_rule();
 	r.client_addr = const_cast<char *>("10.0.0.0/8,2001:db8::/32");
-	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, true), "mixed list resolves");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "mixed list resolves");
 	ok(r.client_addr_pred.cidr_count == 2, "both prefixes parsed");
 
 	struct sockaddr_storage v4in = make_sa("10.1.2.3");
@@ -318,12 +318,12 @@ static void test_cidr_mixed_families() {
 	// An IPv4-only rule must ignore an IPv6 client, and the reverse.
 	QP_rule_t r4 = make_rule();
 	r4.client_addr = const_cast<char *>("0.0.0.0/0");
-	ok(qp_addr_predicate_init(&r4.client_addr_pred, r4.client_addr, true), "IPv4 /0 resolves");
+	ok(qp_addr_predicate_init(&r4.client_addr_pred, r4.client_addr, QP_ADDR_FIELD_CLIENT), "IPv4 /0 resolves");
 	ok(!match_client_addr(&r4, "2001:db8::1", (struct sockaddr *)&v6in), "IPv4 /0 does not match an IPv6 client");
 
 	QP_rule_t r6 = make_rule();
 	r6.client_addr = const_cast<char *>("::/0");
-	ok(qp_addr_predicate_init(&r6.client_addr_pred, r6.client_addr, true), "IPv6 /0 resolves");
+	ok(qp_addr_predicate_init(&r6.client_addr_pred, r6.client_addr, QP_ADDR_FIELD_CLIENT), "IPv6 /0 resolves");
 	ok(!match_client_addr(&r6, "10.1.2.3", (struct sockaddr *)&v4in), "IPv6 /0 does not match an IPv4 client");
 }
 
@@ -332,7 +332,7 @@ static void test_cidr_mixed_families() {
 static void test_cidr_requires_parsed_address() {
 	QP_rule_t r = make_rule();
 	r.client_addr = const_cast<char *>("0.0.0.0/0");
-	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, true), "/0 resolves");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "/0 resolves");
 	ok(!match_client_addr(&r, "10.1.2.3", nullptr), "CIDR criterion rejects a null sockaddr");
 }
 
@@ -341,30 +341,33 @@ static void test_cidr_requires_parsed_address() {
 static void test_addr_predicate_mode_selection() {
 	qp_addr_predicate_t pred;
 
-	ok(qp_addr_predicate_init(&pred, NULL, true), "NULL value resolves");
+	ok(qp_addr_predicate_init(&pred, NULL, QP_ADDR_FIELD_CLIENT), "NULL value resolves");
 	ok(pred.match == QP_ADDR_MATCH_NONE, "NULL selects no criterion");
 
-	ok(qp_addr_predicate_init(&pred, "", true), "empty value resolves");
+	ok(qp_addr_predicate_init(&pred, "", QP_ADDR_FIELD_CLIENT), "empty value resolves");
 	ok(pred.match == QP_ADDR_MATCH_NONE, "empty string selects no criterion");
 
-	ok(qp_addr_predicate_init(&pred, "10.0.0.1", true), "literal resolves");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.1", QP_ADDR_FIELD_CLIENT), "literal resolves");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "literal selects exact mode");
 
-	ok(qp_addr_predicate_init(&pred, "10.0.0.1", false), "literal resolves for proxy_addr");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.1", QP_ADDR_FIELD_PROXY), "literal resolves for proxy_addr");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "proxy_addr literal stays exact");
 
-	ok(qp_addr_predicate_init(&pred, "%", true), "catch-all resolves");
+	ok(qp_addr_predicate_init(&pred, "%", QP_ADDR_FIELD_CLIENT), "catch-all resolves");
 	ok(pred.match == QP_ADDR_MATCH_WILDCARD, "'%' selects wildcard mode");
 
-	ok(qp_addr_predicate_init(&pred, "10.0.128.%", true), "suffix wildcard resolves");
+	ok(qp_addr_predicate_init(&pred, "10.0.128.%", QP_ADDR_FIELD_CLIENT), "suffix wildcard resolves");
 	ok(pred.match == QP_ADDR_MATCH_WILDCARD, "trailing % selects wildcard mode");
 
-	ok(qp_addr_predicate_init(&pred, "10.0.13_", true), "single-char wildcard resolves");
+	ok(qp_addr_predicate_init(&pred, "10.0.13_", QP_ADDR_FIELD_CLIENT), "single-char wildcard resolves");
 	ok(pred.match == QP_ADDR_MATCH_WILDCARD, "bare '_' selects wildcard mode, not exact");
 
 	// proxy_addr has never supported wildcards and must keep its strcmp.
-	ok(qp_addr_predicate_init(&pred, "10.0.0.%", false), "proxy_addr wildcard-shaped value resolves");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.%", QP_ADDR_FIELD_PROXY), "proxy_addr wildcard-shaped value resolves");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "proxy_addr stays exact even with a % in the value");
+	// The same value on client_addr does select wildcard matching.
+	ok(qp_addr_predicate_init(&pred, "10.0.0.%", QP_ADDR_FIELD_CLIENT), "client_addr wildcard-shaped value resolves");
+	ok(pred.match == QP_ADDR_MATCH_WILDCARD, "client_addr selects wildcard for the same value");
 
 	// A Unix socket path is how a socket listener spells itself in proxy_addr,
 	// so a leading '/' must not be read as the start of a malformed prefix.
@@ -376,10 +379,21 @@ static void test_addr_predicate_mode_selection() {
 	ok(ip_cidr_spec_looks_like_prefix("") == false, "an empty value is not a prefix");
 	ok(ip_cidr_spec_looks_like_prefix(NULL) == false, "a null value is not a prefix");
 
-	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", false), "Unix socket path resolves");
+	// The path exception is reserved for proxy_addr, which is the field a Unix
+	// listener writes its socket path into.
+	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", QP_ADDR_FIELD_PROXY), "Unix socket path resolves on proxy_addr");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "Unix socket path stays on the exact-match path");
-	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", true), "Unix socket path resolves for client_addr");
-	ok(pred.match == QP_ADDR_MATCH_EXACT, "Unix socket path in client_addr stays exact too");
+	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", QP_ADDR_FIELD_CLIENT) == false,
+		"a socket path is refused on client_addr");
+
+	// A listener path is not a rendered address, so neither the length cap nor
+	// the '%'-position rule may be applied to it.
+	ok(qp_addr_predicate_init(&pred, "/tmp/a-very-long-socket-path-that-exceeds-inet6-addrstrlen-by-a-way.sock",
+		QP_ADDR_FIELD_PROXY), "an over-long socket path is accepted on proxy_addr");
+	ok(pred.match == QP_ADDR_MATCH_EXACT, "an over-long socket path stays exact");
+	ok(qp_addr_predicate_init(&pred, "/tmp/a%b.sock", QP_ADDR_FIELD_PROXY),
+		"a socket path containing '%' is accepted on proxy_addr");
+	ok(pred.match == QP_ADDR_MATCH_EXACT, "a socket path containing '%' stays exact");
 }
 
 // An IPv6 literal may embed a dotted quad, which makes the longest legal token
@@ -387,16 +401,31 @@ static void test_addr_predicate_mode_selection() {
 // valid and must be accepted.
 static void test_cidr_ipv6_embedded_dotted_quad() {
 	qp_addr_predicate_t pred;
-	ok(qp_addr_predicate_init(&pred, "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128", true),
+	ok(qp_addr_predicate_init(&pred, "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128", QP_ADDR_FIELD_CLIENT),
 		"an IPv6 literal embedding a dotted quad is accepted");
 	ok(pred.match == QP_ADDR_MATCH_CIDR, "it selects CIDR mode");
 	ok(pred.cidr_count == 1, "one prefix parsed");
 	ok(ip_cidr_list_is_valid("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128"),
 		"the validator accepts it too");
 
+	// The limit has to be applied to the trimmed token, since ip_cidr_parse()
+	// tolerates padding. A 49-byte prefix plus one trailing space must still
+	// load rather than tripping the raw-slice length check.
+	ok(ip_cidr_list_is_valid("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128 "),
+		"a padded maximum-length token is accepted");
+	ok(ip_cidr_list_is_valid(" ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128 "),
+		"a maximum-length token padded on both sides is accepted");
+	ok(ip_cidr_list_is_valid("10.0.0.0/8 , 192.168.0.0/16 "),
+		"a padded list is accepted");
+	ok(ip_cidr_list_is_valid("10.0.0.0/8, ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128"),
+		"a padded maximum-length entry inside a list is accepted");
+	ok(ip_cidr_list_is_valid("10.0.0.0/8,10.0.0.0/8,10.0.0.0/8,10.0.0.0/8,10.0.0.0/8,"
+	                         "10.0.0.0/8,10.0.0.0/8,10.0.0.0/8 ,  ") == false,
+		"a list of empty trailing tokens is still rejected");
+
 	QP_rule_t r = make_rule();
 	r.client_addr = const_cast<char *>("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128");
-	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, true), "rule predicate resolves");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "rule predicate resolves");
 	// The embedded dotted quad is the last 32 bits, so this prefix is the
 	// all-ones address -- not ::ffff:255.255.255.255, which has ten leading
 	// zero bytes and is a different 128-bit value.
@@ -421,7 +450,7 @@ static void test_cidr_ipv6_embedded_dotted_quad() {
 static void test_bare_underscore_wildcard_matches() {
 	QP_rule_t r = make_rule();
 	r.client_addr = const_cast<char *>("10.0.1_.5");
-	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, true), "bare '_' resolves");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "bare '_' resolves");
 	ok(r.client_addr_pred.match == QP_ADDR_MATCH_WILDCARD, "bare '_' selects wildcard mode");
 	ok(rule_matches_query(&r, 0, "u", "d", "10.0.13.5",
 		nullptr,
@@ -437,7 +466,7 @@ static void test_bare_underscore_wildcard_matches() {
 	// '_' consumes one character, so it cannot stand in for a variable tail.
 	QP_rule_t rs = make_rule();
 	rs.client_addr = const_cast<char *>("10.0.13_");
-	ok(qp_addr_predicate_init(&rs.client_addr_pred, rs.client_addr, true), "trailing bare '_' resolves");
+	ok(qp_addr_predicate_init(&rs.client_addr_pred, rs.client_addr, QP_ADDR_FIELD_CLIENT), "trailing bare '_' resolves");
 	ok(!rule_matches_query(&rs, 0, "u", "d", "10.0.130.1",
 		nullptr,
 		"127.0.0.1",
@@ -447,7 +476,7 @@ static void test_bare_underscore_wildcard_matches() {
 	// The documented form pairs '_' with a trailing '%' to absorb the tail.
 	QP_rule_t rp = make_rule();
 	rp.client_addr = const_cast<char *>("10.0.13_.%");
-	ok(qp_addr_predicate_init(&rp.client_addr_pred, rp.client_addr, true), "'_.' with trailing % resolves");
+	ok(qp_addr_predicate_init(&rp.client_addr_pred, rp.client_addr, QP_ADDR_FIELD_CLIENT), "'_.' with trailing % resolves");
 	ok(rule_matches_query(&rp, 0, "u", "d", "10.0.135.7",
 		nullptr,
 		"127.0.0.1",
@@ -466,27 +495,32 @@ static void test_cidr_rejects_malformed() {
 	qp_addr_predicate_t pred;
 	IP_CIDR_t scratch {};
 
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0/33", true) == false, "IPv4 /33 rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/33", QP_ADDR_FIELD_CLIENT) == false, "IPv4 /33 rejected");
 	ok(pred.match == QP_ADDR_MATCH_NONE, "rejected value leaves no criterion");
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0/99", true) == false, "IPv4 /99 rejected");
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0/not_a_mask", true) == false, "non-numeric prefix rejected");
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0/-1", true) == false, "negative prefix rejected");
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0/8x", true) == false, "trailing junk after prefix rejected");
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0/8/8", true) == false, "second '/' rejected");
-	// A value with a leading '/' is a filesystem path, not a prefix, so it is
-	// deliberately not treated as a malformed one. It lands on the exact-match
-	// path and, like any other literal that matches nothing, simply never fires.
-	ok(qp_addr_predicate_init(&pred, "/8", true) == true, "a leading '/' is a path, not a rejected prefix");
-	ok(pred.match == QP_ADDR_MATCH_EXACT, "'/8' is compared literally");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/99", QP_ADDR_FIELD_CLIENT) == false, "IPv4 /99 rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/not_a_mask", QP_ADDR_FIELD_CLIENT) == false, "non-numeric prefix rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/-1", QP_ADDR_FIELD_CLIENT) == false, "negative prefix rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/8x", QP_ADDR_FIELD_CLIENT) == false, "trailing junk after prefix rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/8/8", QP_ADDR_FIELD_CLIENT) == false, "second '/' rejected");
+	// A leading '/' is a filesystem path. Only proxy_addr can hold one -- a
+	// Unix listener's socket path -- so on client_addr it is a mistake and is
+	// rejected rather than becoming a criterion that could never match.
+	ok(qp_addr_predicate_init(&pred, "/8", QP_ADDR_FIELD_CLIENT) == false,
+		"a leading '/' is rejected on client_addr");
+	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", QP_ADDR_FIELD_CLIENT) == false,
+		"a socket path is rejected on client_addr");
+	ok(qp_addr_predicate_init(&pred, "/8", QP_ADDR_FIELD_PROXY) == true,
+		"a leading '/' is accepted on proxy_addr");
+	ok(pred.match == QP_ADDR_MATCH_EXACT, "'/8' is compared literally on proxy_addr");
 	ok(ip_cidr_parse("/8", &scratch) == false, "but /8 is still not a parseable prefix");
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0/", true) == false, "missing prefix length rejected");
-	ok(qp_addr_predicate_init(&pred, "not_an_address/24", true) == false, "invalid address rejected");
-	ok(qp_addr_predicate_init(&pred, "10.0.256.0/24", true) == false, "out-of-range octet rejected");
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0.1/24", true) == false, "five octets rejected");
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0/24,", true) == false, "trailing empty token rejected");
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0/24,,10.0.0.0/8", true) == false, "empty middle token rejected");
-	ok(qp_addr_predicate_init(&pred, "2001:db8::/129", true) == false, "IPv6 /129 rejected");
-	ok(qp_addr_predicate_init(&pred, "10.0.0.0/8,10.0.0.0/33", true) == false, "one bad token fails the whole list");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/", QP_ADDR_FIELD_CLIENT) == false, "missing prefix length rejected");
+	ok(qp_addr_predicate_init(&pred, "not_an_address/24", QP_ADDR_FIELD_CLIENT) == false, "invalid address rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.256.0/24", QP_ADDR_FIELD_CLIENT) == false, "out-of-range octet rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0.1/24", QP_ADDR_FIELD_CLIENT) == false, "five octets rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/24,", QP_ADDR_FIELD_CLIENT) == false, "trailing empty token rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/24,,10.0.0.0/8", QP_ADDR_FIELD_CLIENT) == false, "empty middle token rejected");
+	ok(qp_addr_predicate_init(&pred, "2001:db8::/129", QP_ADDR_FIELD_CLIENT) == false, "IPv6 /129 rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/8,10.0.0.0/33", QP_ADDR_FIELD_CLIENT) == false, "one bad token fails the whole list");
 	ok(ip_cidr_list_is_valid("10.0.0.0/24,10.0.0.0/33") == false, "validator rejects a list with one bad token");
 
 	// A list longer than a rule can hold must fail rather than be truncated.
@@ -497,7 +531,7 @@ static void test_cidr_rejects_malformed() {
 		}
 		too_many += "10.0.0.0/8";
 	}
-	ok(qp_addr_predicate_init(&pred, too_many.c_str(), true) == false, "list longer than the cap rejected");
+	ok(qp_addr_predicate_init(&pred, too_many.c_str(), QP_ADDR_FIELD_CLIENT) == false, "list longer than the cap rejected");
 	ok(ip_cidr_list_is_valid(too_many.c_str()) == false, "validator rejects an over-long list");
 }
 
@@ -505,7 +539,7 @@ static void test_cidr_rejects_malformed() {
 static void test_proxy_addr_cidr() {
 	QP_rule_t r = make_rule();
 	r.proxy_addr = const_cast<char *>("10.0.128.0/20");
-	ok(qp_addr_predicate_init(&r.proxy_addr_pred, r.proxy_addr, false), "proxy_addr CIDR resolves");
+	ok(qp_addr_predicate_init(&r.proxy_addr_pred, r.proxy_addr, QP_ADDR_FIELD_PROXY), "proxy_addr CIDR resolves");
 	ok(r.proxy_addr_pred.match == QP_ADDR_MATCH_CIDR, "proxy_addr accepts a CIDR prefix");
 
 	// process_query() converts the proxy address once and hands the sockaddr in,
@@ -538,7 +572,7 @@ static void test_proxy_addr_cidr() {
 	// An exact proxy_addr is unaffected and does not need a sockaddr.
 	QP_rule_t rex = make_rule();
 	rex.proxy_addr = const_cast<char *>("10.0.0.5");
-	ok(qp_addr_predicate_init(&rex.proxy_addr_pred, rex.proxy_addr, false), "exact proxy_addr resolves");
+	ok(qp_addr_predicate_init(&rex.proxy_addr_pred, rex.proxy_addr, QP_ADDR_FIELD_PROXY), "exact proxy_addr resolves");
 	ok(rule_matches_query(&rex, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"10.0.0.5",
@@ -833,9 +867,9 @@ static void test_null_rule() {
 
 int main() {
 #ifdef DEBUG
-	plan(188);
+	plan(200);
 #else
-	plan(181);
+	plan(193);
 #endif
 
 	test_init_minimal();
