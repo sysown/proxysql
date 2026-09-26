@@ -225,10 +225,19 @@ static void test_mysql_primary_presence_weight_overflow() {
 	}
 	hgc->attributes.backup_weight_threshold = 10;
 	hgc->attributes.backup_availability = 0;
+	// Mirror the post-unshun tests: get_random_MySrvC() is a production entry
+	// point, so it must be called under the HGM write lock and with
+	// session_track_variables pinned to DISABLED (ENFORCED dereferences
+	// sess->thread, and these calls pass sess == nullptr).
 	const int old_default_max_latency_ms = mysql_thread___default_max_latency_ms;
+	const int old_session_track_variables = mysql_thread___session_track_variables;
 	mysql_thread___default_max_latency_ms = 1000;
+	mysql_thread___session_track_variables = session_track_variables::DISABLED;
+	MyHGM->wrlock();
 	MySrvC *selected = hgc->get_random_MySrvC(nullptr, 0, -1, nullptr);
+	MyHGM->wrunlock();
 	mysql_thread___default_max_latency_ms = old_default_max_latency_ms;
+	mysql_thread___session_track_variables = old_session_track_variables;
 	ok(selected == first || selected == second,
 		"MySQL HGM: primary presence survives a 2^32 unsigned weight sum");
 }
@@ -253,9 +262,15 @@ static void test_pgsql_primary_presence_weight_overflow() {
 	}
 	hgc->attributes.backup_weight_threshold = 10;
 	hgc->attributes.backup_availability = 0;
+	// Mirror the MySQL overflow test: get_random_MySrvC() is a production entry
+	// point, so it must be called under the HGM write lock. (PgSQL has no
+	// mysql_thread___session_track_variables equivalent, so there is nothing to
+	// pin here.)
 	const int old_default_max_latency_ms = pgsql_thread___default_max_latency_ms;
 	pgsql_thread___default_max_latency_ms = 1000;
+	PgHGM->wrlock();
 	PgSQL_SrvC *selected = hgc->get_random_MySrvC(nullptr, 0, -1, nullptr);
+	PgHGM->wrunlock();
 	pgsql_thread___default_max_latency_ms = old_default_max_latency_ms;
 	ok(selected == first || selected == second,
 		"PgSQL HGM: primary presence survives a 2^32 unsigned weight sum");

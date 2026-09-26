@@ -76,7 +76,7 @@ Gated with `#ifdef PROXYSQL31`. `T == 0` takes the existing path.
 2. If pass 1 is empty **and** `T > 0` **and** the availability mode says no primary is present: pass 2, same existing filters, keep `0 < weight < T`. If non-empty, weighted random among them.
 3. If still empty: today’s desperate unshun, then **re-apply the tier/availability filter** to the recovered candidates so a recovered backup cannot bypass `status`/`capacity` closure. Only then stop. An ONLINE backup is preferred over unshunning a recently failed primary.
 
-MySQL GTID and Aurora lag stay inside the existing filters (`selectable`). PgSQL has the same two-pass; it simply has fewer extra filters. Under `PROXYSQL31`, recovered candidates from desperate unshun also re-check `max_connections` and the hostgroup online-count limit.
+MySQL GTID and Aurora lag stay inside the existing filters (`selectable`). PgSQL has the same two-pass; it simply has fewer extra filters. Under `PROXYSQL31`, recovered candidates from desperate unshun re-check `max_connections` in both managers; MySQL additionally re-checks the hostgroup online-count limit, because only the MySQL selection loop applies that circuit breaker.
 
 ### Unchanged surrounding behaviour
 
@@ -121,7 +121,7 @@ Extend `server_selection_unit-t.cpp` (and `ServerSelection.cpp` as needed):
 - all `weight = 0` → none
 - all below `T` → backups used
 - `backup_availability` `selectable` / `status` / `capacity` (max_conn, latency, lag)
-- large primary weights do not overflow selection totals
+- large primary weights do not overflow selection totals, and the lottery draw spans the full 64-bit range (a 32-bit draw makes a 2^32-weight server unreachable)
 
 Extend `hostgroups_unit-t.cpp` with real manager tests (PROXYSQL31 only):
 

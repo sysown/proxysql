@@ -77,6 +77,14 @@ static PGConnPtr connect_admin(CommandLine& cl) {
 }
 
 static PGConnPtr connect_backend(CommandLine& cl) {
+	// NOTE: this is the *ProxySQL frontend* endpoint, not a backend server.
+	// The isolated harness points TAP_PGSQLROOT_HOST/PORT at proxysql:6133
+	// (see test/infra/control/env-isolated.bash), and the direct backend is
+	// reachable as TAP_PGSQLSERVER_HOST. Workload queries MUST go through the
+	// frontend: connecting straight to a backend would skip the query rule and
+	// never call get_random_MySrvC(), so stats_pgsql_connection_pool would stay
+	// empty and the counter under test would never move.
+	//
 	// The replica of the pgsql17-repl fixture only has the 'postgres' role:
 	// 'testuser' is provisioned on the primary alone, so connecting as
 	// testuser would fail authentication on the backup node. Both nodes do
@@ -89,7 +97,7 @@ static PGConnPtr connect_backend(CommandLine& cl) {
 	   << " sslmode=disable";
 	PGconn* c = PQconnectdb(ss.str().c_str());
 	if (PQstatus(c) != CONNECTION_OK) {
-		diag("backend connect failed: %s", PQerrorMessage(c));
+		diag("ProxySQL frontend connect failed: %s", PQerrorMessage(c));
 	}
 	return PGConnPtr(c, &PQfinish);
 }
@@ -249,6 +257,12 @@ struct StateRestorer {
 	bool armed = false;
 	int failures = 0;
 
+	// The restorer owns the use of an admin connection, so a copy would give two
+	// objects the same handle: copy and assignment are not allowed.
+	StateRestorer() = default;
+	StateRestorer(const StateRestorer&) = delete;
+	StateRestorer& operator=(const StateRestorer&) = delete;
+
 	void arm(PGconn* a) {
 		admin = a;
 		armed = true;
@@ -307,10 +321,20 @@ struct StateRestorer {
 		return all_ok;
 	}
 
-	~StateRestorer() {
+	/**
+	 * @brief Last-resort retry. 'restore()' builds std::strings, which can throw
+	 *        (bad_alloc), and an exception escaping a destructor terminates the
+	 *        process: swallow it here so a failed cleanup degrades to a logged
+	 *        failure instead of std::terminate.
+	 */
+	~StateRestorer() noexcept {
 		if (armed) {
 			diag("StateRestorer fallback: retrying the fixture restore");
-			restore();
+			try {
+				restore();
+			} catch (...) {
+				diag("StateRestorer fallback: restore threw; giving up");
+			}
 		}
 	}
 };
@@ -350,9 +374,15 @@ static void prefer_primary(PGconn* admin, const string& h100, int p100, const st
 }
 
 [[noreturn]] static void bail_with_cleanup(StateRestorer& st, PGConnPtr& admin_holder, MYSQL* admin_mysql, const char* why) {
-	st.restore();
-	st.admin = nullptr;
-	// 'admin_holder' owns the connection: never PQfinish() it twice.
+	// Retry while the connection is still guaranteed alive: the destructor's own
+	// retry cannot help once the handle is released, and a half-restored fixture
+	// would silently corrupt the next test's baseline.
+	if (!st.restore()) {
+		diag("%s: restore incomplete (failures=%d), retrying once", why, st.failures);
+		st.restore();
+	}
+	st.armed = false;
+	// 'admin_holder' owns the PG connection: never PQfinish() it twice.
 	admin_holder.reset();
 	mysql_close(admin_mysql);
 	BAIL_OUT("%s", why);
@@ -378,7 +408,8 @@ int main(int, char**) {
 	if (!mysql_real_connect(admin_mysql, cl.admin_host, cl.admin_username, cl.admin_password,
 			NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin_mysql));
-		PQfinish(admin);
+		// 'admin' belongs to 'admin_holder': it is released by the holder's
+		// destructor, never by an explicit PQfinish() here.
 		mysql_close(admin_mysql);
 		return EXIT_FAILURE;
 	}
@@ -570,10 +601,16 @@ int main(int, char**) {
 		ok(false, "phase 3: backup_server_selected_total unchanged (phase 2=%g)", metric_after_p2);
 	}
 
-	const bool restored = restorer.restore();
+	bool restored = restorer.restore();
+	if (!restored) {
+		diag("cleanup incomplete (failures=%d): retrying while the connection is open", restorer.failures);
+		restored = restorer.restore();
+	}
 	ok(restored, "cleanup: hostgroup %d and rule %d restored (failures=%d)", TEST_HG, RULE_ID, restorer.failures);
+	// Disarm only after the restore attempts above: an armed restorer must never
+	// see a released connection, and there is nothing left for it to retry.
+	restorer.armed = false;
 	restorer.admin = nullptr;
-	// 'admin_holder' owns 'admin': never PQfinish() it twice.
 	admin_holder.reset();
 	mysql_close(admin_mysql);
 	return exit_status();

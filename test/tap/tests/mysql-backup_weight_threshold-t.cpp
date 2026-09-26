@@ -215,6 +215,12 @@ struct StateRestorer {
 	bool armed = false;
 	int failures = 0;
 
+	// The restorer owns the use of an admin connection, so a copy would give two
+	// objects the same handle: copy and assignment are not allowed.
+	StateRestorer() = default;
+	StateRestorer(const StateRestorer&) = delete;
+	StateRestorer& operator=(const StateRestorer&) = delete;
+
 	void arm(MYSQL* a) {
 		admin = a;
 		armed = true;
@@ -273,10 +279,20 @@ struct StateRestorer {
 		return all_ok;
 	}
 
-	~StateRestorer() {
+	/**
+	 * @brief Last-resort retry. 'restore()' builds std::strings, which can throw
+	 *        (bad_alloc), and an exception escaping a destructor terminates the
+	 *        process: swallow it here so a failed cleanup degrades to a logged
+	 *        failure instead of std::terminate.
+	 */
+	~StateRestorer() noexcept {
 		if (armed) {
 			diag("StateRestorer fallback: retrying the fixture restore");
-			restore();
+			try {
+				restore();
+			} catch (...) {
+				diag("StateRestorer fallback: restore threw; giving up");
+			}
 		}
 	}
 };
@@ -316,8 +332,14 @@ static void prefer_primary(MYSQL* admin, const string& h100, int p100, const str
 }
 
 [[noreturn]] static void bail_with_cleanup(StateRestorer& st, MYSQL* admin, const char* why) {
-	st.restore();
-	st.admin = nullptr;
+	// Retry while the connection is still guaranteed alive: the destructor's own
+	// retry cannot help once the handle is released, and a half-restored fixture
+	// would silently corrupt the next test's baseline.
+	if (!st.restore()) {
+		diag("%s: restore incomplete (failures=%d), retrying once", why, st.failures);
+		st.restore();
+	}
+	st.armed = false;
 	mysql_close(admin);
 	BAIL_OUT("%s", why);
 }
@@ -525,8 +547,15 @@ int main(int, char**) {
 		ok(false, "phase 3: backup_server_selected_total unchanged (phase 2=%g)", metric_after_p2);
 	}
 
-	const bool restored = restorer.restore();
+	bool restored = restorer.restore();
+	if (!restored) {
+		diag("cleanup incomplete (failures=%d): retrying while the connection is open", restorer.failures);
+		restored = restorer.restore();
+	}
 	ok(restored, "cleanup: hostgroup %d and rule %d restored (failures=%d)", TEST_HG, RULE_ID, restorer.failures);
+	// Disarm only after the restore attempts above: an armed restorer must never
+	// see a closed connection, and there is nothing left for it to retry.
+	restorer.armed = false;
 	restorer.admin = nullptr;
 	mysql_close(admin);
 	return exit_status();
