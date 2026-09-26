@@ -292,6 +292,69 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 	return s;
 }
 
+bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, bool allow_wildcard) {
+	if (pred == NULL) {
+		return false;
+	}
+	memset(pred, 0, sizeof(*pred));
+	pred->match = QP_ADDR_MATCH_NONE;
+
+	if (value == NULL || *value == '\0') {
+		return true;
+	}
+
+	// '/' can only mean a CIDR prefix: it is not valid anywhere in a rendered
+	// address, so there is no ambiguity with the other two forms.
+	if (strchr(value, '/') != NULL) {
+		if (ip_cidr_parse_list(value, pred->cidrs, MAX_CIDR_PREFIXES_PER_RULE, &pred->cidr_count) == false) {
+			// Leave the predicate inert so a rule that somehow reaches the
+			// runtime unvalidated can never match on a half-parsed prefix list.
+			pred->match = QP_ADDR_MATCH_NONE;
+			pred->cidr_count = 0;
+			return false;
+		}
+		pred->match = QP_ADDR_MATCH_CIDR;
+		return true;
+	}
+
+	if (allow_wildcard && (strchr(value, '%') != NULL || strchr(value, '_') != NULL)) {
+		pred->match = QP_ADDR_MATCH_WILDCARD;
+		return true;
+	}
+
+	pred->match = QP_ADDR_MATCH_EXACT;
+	return true;
+}
+
+/**
+ * @brief Render a textual address into a sockaddr for CIDR comparison.
+ *
+ * Both address values a rule can be matched against reach rule evaluation as
+ * text. The proxy address has no sockaddr at all
+ * (MySQL_Client_Connection::proxy_addr holds only addr/port), and the client
+ * address deliberately keeps its real-TCP-peer sockaddr even after an accepted
+ * PROXY protocol header, so parsing the authoritative string is what keeps
+ * every criterion form agreeing on who the client is.
+ *
+ * Called once per query for the client address, and only by rules that actually
+ * carry a proxy_addr CIDR for the proxy address, so neither conversion is on a
+ * path taken by rules that do not use the feature.
+ */
+static bool addr_string_to_sockaddr(const char *addr_str, struct sockaddr_storage *ss) {
+	if (addr_str == NULL || *addr_str == '\0') {
+		return false;
+	}
+	memset(ss, 0, sizeof(*ss));
+	if (strchr(addr_str, ':') != NULL) {
+		struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)ss;
+		sin6->sin6_family = AF_INET6;
+		return inet_pton(AF_INET6, addr_str, &sin6->sin6_addr) == 1;
+	}
+	struct sockaddr_in *sin = (struct sockaddr_in *)ss;
+	sin->sin_family = AF_INET;
+	return inet_pton(AF_INET, addr_str, &sin->sin_addr) == 1;
+}
+
 /**
  * @brief Lightweight candidate wrapper used by in-memory query digest Top-K.
  */
@@ -537,6 +600,7 @@ bool rule_matches_query(
 	const char* username,
 	const char* schemaname,
 	const char* client_addr,
+	const struct sockaddr* client_sa,
 	const char* proxy_addr,
 	int proxy_port,
 	uint64_t digest,
@@ -565,19 +629,45 @@ bool rule_matches_query(
 
 	if (qr->client_addr && strlen(qr->client_addr)) {
 		if (client_addr) {
-			if (qr->client_addr_wildcard_position == -1) {
+			switch (qr->client_addr_pred.match) {
+			case QP_ADDR_MATCH_CIDR:
+				// A prefix is a numeric test, so it needs the parsed address.
+				// Without one (a session with no resolved client address) the
+				// criterion cannot be satisfied.
+				if (client_sa == NULL ||
+					ip_cidr_list_contains(qr->client_addr_pred.cidrs, qr->client_addr_pred.cidr_count, client_sa) == false) {
+					return false;
+				}
+				break;
+			case QP_ADDR_MATCH_WILDCARD:
+				if (mywildcmp(qr->client_addr, client_addr) == false) {
+					return false;
+				}
+				break;
+			case QP_ADDR_MATCH_NONE:
+			case QP_ADDR_MATCH_EXACT:
+			default:
 				if (strcmp(qr->client_addr, client_addr) != 0) {
 					return false;
 				}
-			} else if (mywildcmp(qr->client_addr, client_addr) == false) {
-				return false;
+				break;
 			}
 		}
 	}
 
 	if (qr->proxy_addr && strlen(qr->proxy_addr)) {
 		if (proxy_addr) {
-			if (strcmp(qr->proxy_addr, proxy_addr) != 0) {
+			bool matched = false;
+			if (qr->proxy_addr_pred.match == QP_ADDR_MATCH_CIDR) {
+				struct sockaddr_storage proxy_sa;
+				if (addr_string_to_sockaddr(proxy_addr, &proxy_sa) == true) {
+					matched = ip_cidr_list_contains(qr->proxy_addr_pred.cidrs, qr->proxy_addr_pred.cidr_count,
+						(const struct sockaddr *)&proxy_sa);
+				}
+			} else {
+				matched = (strcmp(qr->proxy_addr, proxy_addr) == 0);
+			}
+			if (!matched) {
 				return false;
 			}
 		}
@@ -2213,6 +2303,23 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		}
 	}
 	bool iterate_rules = !((sess->mirror == true) && (sess->mirror_flagOUT == -1));
+
+	// A CIDR criterion is a numeric test, so it needs the client address in
+	// parsed form. Derive it from client_myds->addr.addr -- the very string the
+	// textual criteria read -- rather than from client_myds->client_addr: once
+	// a PROXY protocol header is accepted, the string holds the declared source
+	// while the sockaddr still points at the real TCP peer, and the two must
+	// not be allowed to disagree about who the client is.
+	//
+	// Resolved once per query rather than once per rule, so a rule set with
+	// many CIDR criteria still pays for a single conversion. A value that will
+	// not parse leaves this NULL, which fails the criterion closed.
+	struct sockaddr_storage client_sa;
+	const struct sockaddr *client_sa_ptr = NULL;
+	if (addr_string_to_sockaddr(sess->client_myds->addr.addr, &client_sa) == true) {
+		client_sa_ptr = (const struct sockaddr *)&client_sa;
+	}
+
 	while (iterate_rules) {
 		iterate_rules = false;
 		for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
@@ -2223,6 +2330,7 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 				sess->client_myds->myconn->userinfo->username,
 				sess->client_myds->myconn->userinfo->schemaname,
 				sess->client_myds->addr.addr,
+				client_sa_ptr,
 				sess->client_myds->proxy_addr.addr,
 				sess->client_myds->proxy_addr.port,
 				(qp ? qp->digest : 0),

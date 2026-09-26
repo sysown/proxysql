@@ -513,6 +513,88 @@ int remove_spaces(const char *);
 char *trim_spaces_in_place(char *str);
 char *trim_spaces_and_quotes_in_place(char *str);
 bool mywildcmp(const char *p, const char *str);
+
+/**
+ * @brief Maximum number of CIDR prefixes a single address value (query rule
+ *        client_addr / proxy_addr) may contain.
+ *
+ * Address values live in a VARCHAR column and are parsed once at rule load
+ * time, so the parsed form is held inline in the rule. The cap keeps QP_rule_t
+ * trivially copyable and bounds the per-query matching cost.
+ */
+#define MAX_CIDR_PREFIXES_PER_RULE 8
+
+/**
+ * @brief Longest accepted address value when it is a CIDR list.
+ *
+ * A single rendered address is capped at INET6_ADDRSTRLEN-1 bytes, but a list
+ * is legitimately longer. Bounding it here keeps an absurd value from being
+ * scanned token by token on every load.
+ */
+#define MAX_CIDR_LIST_VALUE_LEN  (MAX_CIDR_PREFIXES_PER_RULE * INET6_ADDRSTRLEN)
+
+/**
+ * @brief A single CIDR prefix, pre-computed for numeric address matching.
+ *
+ * Query rules are evaluated once per rule per query, so the prefix is parsed
+ * and masked when the rule is loaded and matching is a byte comparison.
+ */
+typedef struct _IP_CIDR_t {
+	/// AF_INET, AF_INET6, or 0 when the slot is unused.
+	int family;
+	/// Number of significant bits: 0..32 for IPv4, 0..128 for IPv6.
+	int prefix_len;
+	/// Network address in network byte order, already masked to prefix_len.
+	/// An IPv4 address occupies the first 4 bytes.
+	unsigned char addr[16];
+} IP_CIDR_t;
+
+/**
+ * @brief Parse one "address/prefix_len" token into @p out.
+ *
+ * The address must be a numeric IPv4 or IPv6 literal (no hostnames, no
+ * shorthand forms) and prefix_len must be within range for the family. Host
+ * bits are masked off rather than rejected, so "10.0.128.5/20" is accepted and
+ * normalised to 10.0.128.0/20. Surrounding ASCII spaces are ignored.
+ *
+ * @return true on success; @p out is left zeroed on failure.
+ */
+bool ip_cidr_parse(const char *token, IP_CIDR_t *out);
+
+/**
+ * @brief Parse a comma-separated list of CIDR prefixes.
+ *
+ * @param spec    Comma-separated list, e.g. "10.0.0.0/8,2001:db8::/32".
+ * @param out     Array of at least @p max entries.
+ * @param max     Capacity of @p out.
+ * @param count   Receives the number of prefixes parsed. May be NULL.
+ * @return true when every token parsed and no more than @p max were found.
+ */
+bool ip_cidr_parse_list(const char *spec, IP_CIDR_t *out, int max, int *count);
+
+/**
+ * @brief Validate a comma-separated CIDR list without keeping the result.
+ *
+ * @return true when every token is a well-formed prefix and the list is not
+ *         empty and holds no more than MAX_CIDR_PREFIXES_PER_RULE entries.
+ */
+bool ip_cidr_list_is_valid(const char *spec);
+
+/**
+ * @brief Numeric containment test: is @p sa inside @p cidr ?
+ *
+ * A prefix never matches an address of the other family, so an IPv4 rule
+ * cannot match an IPv6 client and vice versa.
+ */
+bool ip_cidr_contains(const IP_CIDR_t *cidr, const struct sockaddr *sa);
+
+/**
+ * @brief Containment test against a parsed prefix list.
+ *
+ * @return true when at least one of the @p count prefixes contains @p sa.
+ */
+bool ip_cidr_list_contains(const IP_CIDR_t *list, int count, const struct sockaddr *sa);
+
 std::string trim(const std::string& s);
 char* escape_string_single_quotes_and_backslashes(char* input, bool free_it);
 const char* escape_string_backslash_spaces(const char* input);

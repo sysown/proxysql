@@ -23,6 +23,7 @@
 KHASH_MAP_INIT_STR(khStrInt, int)
 
 #include "proxysql_typedefs.h"
+#include "gen_utils.h"
 
 #define WUS_NOT_FOUND   0	// couldn't find any filter
 #define WUS_OFF         1	// allow the query
@@ -153,6 +154,55 @@ class QP_query_digest_stats {
 	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp);
 };
 
+/**
+ * @brief How an address value on a query rule is to be compared.
+ *
+ * This replaces the former `client_addr_wildcard_position`, which overloaded a
+ * single int with two meanings ("no wildcard" vs "wildcard present") and
+ * silently reduced a value to a literal strcmp whenever it contained no '%'.
+ * That made both a bare '_' and a CIDR prefix load cleanly and then never
+ * match anything.
+ */
+enum qp_addr_match_t {
+	/// No address criterion on the rule.
+	QP_ADDR_MATCH_NONE = 0,
+	/// Byte-exact comparison against the rendered address text.
+	QP_ADDR_MATCH_EXACT,
+	/// mywildcmp() against the rendered address text ('%' and '_').
+	QP_ADDR_MATCH_WILDCARD,
+	/// Numeric containment against the parsed CIDR prefixes.
+	QP_ADDR_MATCH_CIDR
+};
+
+/**
+ * @brief A parsed address criterion, resolved once when the rule is loaded.
+ *
+ * The parsed prefixes are held inline so QP_rule_t stays trivially copyable and
+ * rule evaluation never parses or allocates.
+ */
+typedef struct _qp_addr_predicate_t {
+	int match;
+	int cidr_count;
+	IP_CIDR_t cidrs[MAX_CIDR_PREFIXES_PER_RULE];
+} qp_addr_predicate_t;
+
+/**
+ * @brief Resolve @p value into @p pred, deciding the comparison mode.
+ *
+ * A value containing '/' is a comma-separated CIDR list; one containing '%' or
+ * (when @p allow_wildcard) '_' is a textual wildcard; anything else is an exact
+ * address. A NULL or empty value leaves the predicate in QP_ADDR_MATCH_NONE.
+ *
+ * @param pred           Predicate to fill. Left in QP_ADDR_MATCH_NONE on failure.
+ * @param value          The configured client_addr / proxy_addr value.
+ * @param allow_wildcard Whether '%' and '_' select the textual wildcard mode.
+ *                       client_addr allows it; proxy_addr has never supported
+ *                       wildcards and keeps its exact strcmp behaviour.
+ * @return true when @p value is well formed. On false the caller is expected to
+ *         report the rule as rejected rather than load it.
+ */
+bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, bool allow_wildcard);
+
 typedef struct _Query_Processor_rule_t {
 	int rule_id;
 	bool active;
@@ -160,8 +210,9 @@ typedef struct _Query_Processor_rule_t {
 	char *schemaname;
 	int flagIN;
 	char *client_addr;
-	int client_addr_wildcard_position;
+	qp_addr_predicate_t client_addr_pred;
 	char *proxy_addr;
+	qp_addr_predicate_t proxy_addr_pred;
 	int proxy_port;
 	uint64_t digest;
 	char *match_digest;
@@ -317,7 +368,9 @@ void __reset_rules(std::vector<QP_rule_t*>* qrs);
  * @param current_flagIN Current query flag.
  * @param username Session username.
  * @param schemaname Session schema name.
- * @param client_addr Client address.
+ * @param client_addr Client address, as rendered text.
+ * @param client_sa Client address, as a parsed sockaddr. Required for rules
+ *        whose client_addr is a CIDR prefix; may be NULL otherwise.
  * @param proxy_addr Proxy listener address.
  * @param proxy_port Proxy listener port.
  * @param digest Parsed query digest.
@@ -333,6 +386,7 @@ bool rule_matches_query(
 	const char* username,
 	const char* schemaname,
 	const char* client_addr,
+	const struct sockaddr* client_sa,
 	const char* proxy_addr,
 	int proxy_port,
 	uint64_t digest,
