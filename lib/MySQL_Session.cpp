@@ -218,6 +218,17 @@ static const RE2 re_session_space_upper("SESSION ");
 static const RE2 re_session_dot_lower("session.");
 static const RE2 re_session_space_lower("session ");
 
+// quiet + case insensitive, shared by the patterns below that need it
+static const re2::RE2::Options re_ci_quiet_options = [] {
+	re2::RE2::Options o(RE2::Quiet);
+	o.set_case_sensitive(false);
+	return o;
+}();
+// case listed in #1373, tried only when parseSetCommand() found nothing
+static const RE2 re_issue_1373_sql_mode("^SET @@SQL_MODE *(?:|:)= *(?:'||\")(.*)(?:'||\") *, *@@sql_auto_is_null *(?:|:)= *(?:(?:\\w|\\d)*) *, @@wait_timeout *(?:|:)= *(?:\\d*)$",
+	re_ci_quiet_options);
+static const RE2 re_kill_command("^KILL\\s+(CONNECTION |QUERY |)\\s*(\\d+)\\s*$", re_ci_quiet_options);
+
 #include "proxysql_find_charset.h"
 
 extern MySQL_Authentication *GloMyAuth;
@@ -8388,14 +8399,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					RE2::GlobalReplace(&nq1,re_session_dot_lower,"");
 					RE2::GlobalReplace(&nq1,re_session_space_lower,"");
 					//fprintf(stderr,"%s\n",nq1.c_str());
-					re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
-					opt2->set_case_sensitive(false);
-					char *pattern=(char *)"^SET @@SQL_MODE *(?:|:)= *(?:'||\")(.*)(?:'||\") *, *@@sql_auto_is_null *(?:|:)= *(?:(?:\\w|\\d)*) *, @@wait_timeout *(?:|:)= *(?:\\d*)$";
-					re2::RE2 *re=new RE2(pattern, *opt2);
 					string s1;
-					rc=RE2::FullMatch(nq1, *re, &s1);
-					delete re;
-					delete opt2;
+					rc=RE2::FullMatch(nq1, re_issue_1373_sql_mode, &s1);
 					if (rc) {
 						uint32_t sql_mode_int=SpookyHash::Hash32(s1.c_str(),s1.length(),10);
 						if (mysql_variables.client_get_hash(this, SQL_SQL_MODE) != sql_mode_int) {
@@ -9772,15 +9777,9 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 							return false;
 						}
 						string nq=string(qu,strlen(qu));
-						re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
-						opt2->set_case_sensitive(false);
-						char *pattern=(char *)"^KILL\\s+(CONNECTION |QUERY |)\\s*(\\d+)\\s*$";
-						re2::RE2 *re=new RE2(pattern, *opt2);
 						int id=0;
 						string tk;
-						RE2::FullMatch(nq, *re, &tk, &id);
-						delete re;
-						delete opt2;
+						RE2::FullMatch(nq, re_kill_command, &tk, &id);
 						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 2, "filtered query= \"%s\"\n", qu);
 						free(qu);
 						if (id) {
