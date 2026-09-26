@@ -27,20 +27,17 @@ check_fails() {
 # 1. The committed archive verifies.
 check "committed archive passes verification" bash "${verifier}"
 
-# 2. An unfetched LFS pointer is detected as such, not as a corrupt archive.
-printf 'version https://git-lfs.github.com/spec/v1\noid sha256:deadbeef\nsize 1\n' \
-	> "${tmp}/pointer.tar.gz"
-echo "0000000000000000000000000000000000000000000000000000000000000000  pointer.tar.gz" \
-	> "${tmp}/pointer.tar.gz.sha256"
-check_fails "LFS pointer file is rejected" bash "${verifier}" "${tmp}/pointer.tar.gz"
-# Captured (not piped) so pipefail can't surface the verifier's intentional
-# non-zero exit as the check's own failure regardless of what grep finds.
-pointer_output=$(bash "${verifier}" "${tmp}/pointer.tar.gz" 2>&1 || true)
-if echo "${pointer_output}" | grep -qi "git lfs"; then
-	echo "ok - pointer rejection mentions git lfs"
+# 2. A small text file with a matching checksum is rejected as corrupt, not
+# silently accepted.
+printf 'not a gzip archive\n' > "${tmp}/text.tar.gz"
+if command -v sha256sum >/dev/null 2>&1; then
+	sha256sum "${tmp}/text.tar.gz" | awk '{print $1"  text.tar.gz"}' \
+		> "${tmp}/text.tar.gz.sha256"
 else
-	echo "not ok - pointer rejection must name git lfs"; fail=1
+	shasum -a 256 "${tmp}/text.tar.gz" | awk '{print $1"  text.tar.gz"}' \
+		> "${tmp}/text.tar.gz.sha256"
 fi
+check_fails "non-archive file is rejected" bash "${verifier}" "${tmp}/text.tar.gz"
 
 # 3. A checksum mismatch is rejected.
 head -c 1024 /dev/urandom > "${tmp}/bad.tar.gz"

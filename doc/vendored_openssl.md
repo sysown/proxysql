@@ -23,34 +23,18 @@ The focused version test verifies three separate contracts for this pin:
 2. the runtime version string has the prefix `OpenSSL 3.5.7`; and
 3. the runtime numeric version encodes major/minor/patch `3/5/7`.
 
-## Hydrate and verify a checkout
+## Verify a checkout
 
-Install Git LFS before cloning, or install it and hydrate an existing checkout:
-
-```bash
-git lfs install
-git lfs pull --include=deps/libssl/openssl-3.5.7.tar.gz
-deps/libssl/verify-source.bash
-```
-
-`verify-source.bash` rejects an unhydrated LFS pointer, a checksum mismatch,
-invalid gzip data, unsafe paths, and an unexpected archive layout before the
-build extracts anything. If a generated GitHub source archive is used instead
-of a Git checkout, it must also contain the hydrated OpenSSL archive; repository
-archives must have **Include Git LFS objects in archives** enabled.
-
-The source archive is the official OpenSSL release asset. Its expected SHA-256
-is recorded in `deps/libssl/openssl-3.5.7.tar.gz.sha256`. Verify the checked-in
-object and LFS metadata with:
+The OpenSSL source archive is vendored directly in git — no Git LFS, no
+extra fetch step. A plain `git clone` contains the full archive. Verify it
+before building:
 
 ```bash
 deps/libssl/verify-source.bash
-git lfs ls-files --name-only | grep -Fx deps/libssl/openssl-3.5.7.tar.gz
-git check-attr filter diff merge text -- deps/libssl/openssl-3.5.7.tar.gz
 ```
 
-The attributes must report `filter=lfs`, `diff=lfs`, `merge=lfs`, and
-`text=unset`.
+`verify-source.bash` rejects a checksum mismatch, invalid gzip data, unsafe
+paths, and an unexpected archive layout before the build extracts anything.
 
 ## Authenticate a proposed patch release
 
@@ -103,21 +87,20 @@ required to exercise the upstream test suite.
 
 Make all version-dependent changes in one commit:
 
-1. Replace `deps/libssl/openssl-<old>.tar.gz` with the authenticated archive and
-   ensure the new archive is stored by Git LFS.
+1. Replace `deps/libssl/openssl-<old>.tar.gz` with the authenticated archive,
+   committed directly to git (no Git LFS — LFS bandwidth is metered and
+   was the reason LFS was removed).
 2. Replace the checksum file with `openssl-<new>.tar.gz.sha256`; retain the
    official digest and archive basename.
 3. Change `deps/libssl/openssl` to point to the new versioned directory.
 4. Change `OPENSSL_VERSION` in `common_mk/openssl_flags.mk`.
-5. Replace the exact old archive rule in `.gitattributes` with the exact new
-   path. Do not add a wildcard rule or retain the old path.
-6. Update the version, archive path, expected archive root, and recovery command
+5. Update the version, archive path, and expected archive root
    in `deps/libssl/verify-source.bash`.
-7. Update version-specific expectations and fixtures in
+6. Update version-specific expectations and fixtures in
    `test/infra/control/test-vendored-openssl-source.bash`,
    `test/infra/control/test-vendored-openssl-build-contract.bash`, and
    `test/tap/tests/unit/vendored_openssl_version_unit-t.cpp`.
-8. Update the current version and digest in this guide,
+7. Update the current version and digest in this guide,
    `deps/libssl/README.md`, and the top-level `README.md`.
 
 Search for stale references before committing:
@@ -125,17 +108,12 @@ Search for stale references before committing:
 ```bash
 old_version=3.5.7
 rg -n "$old_version|openssl-$old_version" \
-  .gitattributes README.md common_mk deps doc test
-git lfs ls-files
-git check-attr filter diff merge text -- \
-  "deps/libssl/openssl-${new_version}.tar.gz"
+  README.md common_mk deps doc test
 deps/libssl/verify-source.bash
 ```
 
-Review `git diff --cached` and commit the archive pointer, digest, pin, symlink,
-verifier, tests, LFS rule, and documentation together. Never merge a version
-update whose source object can only be found in one maintainer's local LFS
-store.
+Review `git diff --cached` and commit the archive, digest, pin, symlink,
+verifier, tests, and documentation together.
 
 ## ProxySQL acceptance checks
 
@@ -149,7 +127,7 @@ test/infra/control/test-openssl-linkage-check.bash
 test/infra/control/test-no-system-openssl-links.bash
 test/infra/control/test-no-system-openssl-links-regressions.bash
 test/infra/control/test-openssl-package-contract.bash
-test/infra/control/validate-openssl-lfs-workflows.bash
+test/infra/control/validate-openssl-checkout-workflows.bash
 test/infra/control/test-re2-platform-link.bash
 test/infra/control/test-libusual-incremental.bash
 ```
@@ -199,8 +177,7 @@ and OpenSSL error-queue TAP groups. The release matrix must cover:
 Inspect each produced executable and plugin with the linkage checker or the
 platform-equivalent `readelf`, `ldd`, or `otool` evidence. Install packages in
 clean representative containers and verify that they run without a system
-OpenSSL runtime. Finally run `git lfs fsck` and verify a GitHub-generated source
-archive for the candidate commit with `deps/libssl/verify-source.bash`.
+OpenSSL runtime.
 
 ## FIPS boundary
 
