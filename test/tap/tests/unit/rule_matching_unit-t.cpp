@@ -47,9 +47,9 @@ static QP_rule_t make_rule() {
 /**
  * @brief Build a sockaddr from a literal address, for the CIDR criteria.
  *
- * Deliberately not an ok() assertion: the addresses are fixed literals in this
- * file, so a bad one is a bug in the test rather than a finding, and keeping
- * it out of the assertion stream keeps plan() equal to the ok() call count.
+ * Deliberately not an assertion: the addresses are fixed literals in this file,
+ * so a bad one is a bug in the test rather than a finding, and keeping it out of
+ * the assertion stream is what lets plan() equal the assertion call count.
  */
 static struct sockaddr_storage make_sa(const char *addr) {
 	struct sockaddr_storage ss {};

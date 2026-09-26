@@ -767,7 +767,12 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (proxy_addr ? strdup(proxy_addr) : NULL);
-	qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY);
+	if (qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY) == false) {
+		// Same reasoning as the client_addr case above: the predicate is left
+		// inert and the failure is reported, not silently ignored.
+		proxy_error("Query rule with rule_id %d has an invalid proxy_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->proxy_addr);
+	}
 	newQR->proxy_port = proxy_port;
 	newQR->log = log;
 	newQR->digest = 0;
@@ -901,7 +906,10 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (mqr->proxy_addr ? strdup(mqr->proxy_addr) : NULL);
-	qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY);
+	if (qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY) == false) {
+		proxy_error("Query rule with rule_id %d has an invalid proxy_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->proxy_addr);
+	}
 	newQR->proxy_port = mqr->proxy_port;
 	newQR->log = mqr->log;
 	newQR->digest = 0;

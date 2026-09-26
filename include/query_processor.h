@@ -192,9 +192,10 @@ typedef struct _qp_addr_predicate_t {
  * The two fields accept deliberately disjoint sets of forms, so one selector
  * settles both questions at once:
  *
- *  - client_addr is the client's TCP peer, always a rendered address. It accepts
- *    '%' and '_' wildcards, and it can never be a filesystem path -- a leading
- *    '/' is always a mistake there.
+ *  - client_addr is the client identity as ProxySQL renders it, which is the
+ *    real TCP peer unless a PROXY protocol header supplied one. It is always a
+ *    rendered address: it accepts '%' and '_' wildcards, and it can never be a
+ *    filesystem path -- a leading '/' is always a mistake there.
  *  - proxy_addr is the listener's own identity. For a Unix listener that is a
  *    socket path such as "/tmp/proxysql.sock", which is compared literally and
  *    must not be read as a prefix; it has never accepted wildcards.
@@ -385,9 +386,12 @@ void __reset_rules(std::vector<QP_rule_t*>* qrs);
  * @param current_flagIN Current query flag.
  * @param username Session username.
  * @param schemaname Session schema name.
- * @param client_addr Client address, as rendered text.
+ * @param client_addr Client identity, as rendered text. This is the real TCP
+ *        peer unless a PROXY protocol header supplied one.
  * @param client_sa Client address, as a parsed sockaddr. Required for rules
- *        whose client_addr is a CIDR prefix; may be NULL otherwise.
+ *        whose client_addr is a CIDR prefix; may be NULL otherwise. Derived
+ *        from @p client_addr, never from the transport peer, so that a prefix
+ *        rule and its textual equivalent cannot disagree.
  * @param proxy_addr Proxy listener address, as rendered text.
  * @param proxy_sa Proxy listener address, as a parsed sockaddr. Required for
  *        rules whose proxy_addr is a CIDR prefix; may be NULL otherwise.

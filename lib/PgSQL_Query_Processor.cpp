@@ -384,7 +384,12 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(int rule_id,
 			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (proxy_addr ? strdup(proxy_addr) : NULL);
-	qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY);
+	if (qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY) == false) {
+		// Same reasoning as the client_addr case above: the predicate is left
+		// inert and the failure is reported, not silently ignored.
+		proxy_error("Query rule with rule_id %d has an invalid proxy_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->proxy_addr);
+	}
 	newQR->proxy_port = proxy_port;
 	newQR->log = log;
 	newQR->digest = 0;
@@ -507,7 +512,10 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (pqr->proxy_addr ? strdup(pqr->proxy_addr) : NULL);
-	qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY);
+	if (qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY) == false) {
+		proxy_error("Query rule with rule_id %d has an invalid proxy_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->proxy_addr);
+	}
 	newQR->proxy_port = pqr->proxy_port;
 	newQR->log = pqr->log;
 	newQR->digest = 0;
