@@ -1332,6 +1332,18 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloPgAuth shutdown in ";
 #endif
 	}
+	// NOTE: MyHGM MUST be stopped BEFORE GloMTH is deleted. The HGCU worker
+	// thread reads the live GloMTH->variables.connection_max_age_ms while
+	// recycling connections, so a still-running HGCU would touch a freed
+	// GloMTH. shutdown() joins that worker (and the GTID syncer) and is not
+	// idempotent, so the later MyHGM block only deletes the manager.
+	if (MyHGM) {
+		cpu_timer t;
+		MyHGM->shutdown();
+#ifdef DEBUG
+		std::cerr << "MyHGM shutdown in ";
+#endif
+	}
 	if (GloMTH) {
 		cpu_timer t;
 		pthread_mutex_lock(&GloVars.global.ext_glomth_mutex);
@@ -1396,7 +1408,8 @@ void ProxySQL_Main_shutdown_all_modules() {
 	if (MyHGM)
 	{
 		cpu_timer t;
-		MyHGM->shutdown();
+		// shutdown() already ran above, before GloMTH was deleted, so that
+		// no HGCU worker outlives the variables it reads.
 		delete MyHGM;
 #ifdef DEBUG
 		std::cerr << "GloMyHGM shutdown in ";

@@ -866,6 +866,8 @@ class MySQL_Threads_Handler
 	unsigned int get_global_version();
 	void wrlock();
  	void wrunlock();
+	void rdlock();
+	void rdunlock();
 	/** @brief Commit staged variables and report grouped variables that retained prior values. */
 	MySQLThreadsCommitResult commit();
 	/**

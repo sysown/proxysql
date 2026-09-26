@@ -2824,9 +2824,7 @@ void PgSQL_HostGroups_Manager::drop_all_idle_connections() {
 				int i=0;
 				for (i=0; i<(int)mscl->conns_length() ; i++) {
 					PgSQL_Connection *mc=mscl->index(i);
-					unsigned long long intv = pgsql_thread___connection_max_age_ms;
-					intv *= 1000;
-					if (curtime > mc->creation_time + intv) {
+					if (mc->is_expired(curtime)) {
 						mc=mscl->remove(i);
 						delete mc;
 						i--;

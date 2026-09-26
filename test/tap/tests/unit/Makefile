@@ -589,6 +589,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	connection_unhealthy_unit-t \
+	connection_max_age_unit-t \
 	cluster_sync_unit-t \
 	parsersql_unit-t \
 	pgsql_query_processor_unit-t \

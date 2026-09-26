@@ -1,0 +1,187 @@
+#include <chrono>
+#include <cstdlib>
+#include <string>
+#include <unistd.h>
+
+#include <mysql.h>
+#include "command_line.h"
+#include "tap.h"
+
+CommandLine cl;
+
+static MYSQL* admin_connect() {
+	MYSQL* conn = mysql_init(NULL);
+	if (!mysql_real_connect(conn, cl.admin_host, cl.admin_username, cl.admin_password,
+	                        NULL, cl.admin_port, NULL, 0)) {
+		diag("admin connect failed: %s", mysql_error(conn));
+		mysql_close(conn);
+		return NULL;
+	}
+	return conn;
+}
+
+static bool admin_exec(MYSQL* a, const char* q) {
+	if (mysql_query(a, q)) {
+		diag("admin query failed: '%s' : %s", q, mysql_error(a));
+		return false;
+	}
+	MYSQL_RES* r = mysql_store_result(a);
+	if (r) mysql_free_result(r);
+	return true;
+}
+
+static long long admin_stat(MYSQL* a, const char* name) {
+	std::string q = std::string("SELECT variable_value FROM stats.stats_mysql_global WHERE variable_name='") + name + "'";
+	if (mysql_query(a, q.c_str())) {
+		diag("stats query failed: '%s' : %s", q.c_str(), mysql_error(a));
+		return -1;
+	}
+	MYSQL_RES* r = mysql_store_result(a);
+	long long v = -1;
+	if (r) {
+		MYSQL_ROW row = mysql_fetch_row(r);
+		if (row && row[0]) v = strtoll(row[0], NULL, 10);
+		mysql_free_result(r);
+	}
+	return v;
+}
+
+static std::string admin_var(MYSQL* a, const char* name) {
+	std::string q = std::string("SELECT variable_value FROM global_variables WHERE variable_name='") + name + "'";
+	if (mysql_query(a, q.c_str())) {
+		diag("global_variables query failed: '%s' : %s", q.c_str(), mysql_error(a));
+		return "";
+	}
+	MYSQL_RES* r = mysql_store_result(a);
+	std::string v;
+	if (r) {
+		MYSQL_ROW row = mysql_fetch_row(r);
+		if (row && row[0]) v = row[0];
+		mysql_free_result(r);
+	}
+	return v;
+}
+
+static MYSQL* mk() {
+	MYSQL* c = mysql_init(NULL);
+	unsigned t = 20;
+	mysql_options(c, MYSQL_OPT_CONNECT_TIMEOUT, &t);
+	mysql_options(c, MYSQL_OPT_READ_TIMEOUT, &t);
+	mysql_options(c, MYSQL_OPT_WRITE_TIMEOUT, &t);
+	if (!mysql_real_connect(c, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		diag("mysql connect failed: %s", mysql_error(c));
+		mysql_close(c);
+		return NULL;
+	}
+	return c;
+}
+
+static bool select1(MYSQL* c) {
+	if (mysql_query(c, "SELECT 1")) return false;
+	MYSQL_RES* r = mysql_store_result(c);
+	const bool good = r && mysql_num_rows(r) == 1;
+	if (r) mysql_free_result(r);
+	return good;
+}
+
+// Puts the three variables this test overrides back to the values read before
+// the SET/LOAD block. Every path that runs after that block goes through here,
+// so a failure can never leave the runtime configuration changed for the rest
+// of the group.
+static bool restore_variables(MYSQL* a, const std::string& max_age, const std::string& reset_algo,
+                              const std::string& multiplexing) {
+	return admin_exec(a, ("SET mysql-connection_max_age_ms=" + max_age).c_str()) &&
+	       admin_exec(a, ("SET mysql-reset_connection_algorithm=" + reset_algo).c_str()) &&
+	       admin_exec(a, ("SET mysql-multiplexing=" + multiplexing).c_str()) &&
+	       admin_exec(a, "LOAD MYSQL VARIABLES TO RUNTIME");
+}
+
+int main(int argc, char** argv) {
+	plan(5);
+	if (cl.getEnv()) return exit_status();
+
+	MYSQL* admin = admin_connect();
+	if (!admin) {
+		BAIL_OUT("failed to connect to admin");
+	}
+
+	// Capture prior values so teardown restores everything this test changes.
+	const std::string prev_max_age = admin_var(admin, "mysql-connection_max_age_ms");
+	const std::string prev_reset_algo = admin_var(admin, "mysql-reset_connection_algorithm");
+	const std::string prev_multiplexing = admin_var(admin, "mysql-multiplexing");
+	if (prev_max_age.empty() || prev_reset_algo.empty() || prev_multiplexing.empty()) {
+		mysql_close(admin);
+		BAIL_OUT("failed to read prior mysql variables");
+	}
+
+	// Reach the backend before touching any runtime variable: a failure here
+	// happens while the runtime is still untouched, so it needs no restore.
+	// The frontend connect only schedules the backend connect, so the warmup
+	// query is also what keeps the first Server_Connections_created out of
+	// the measured window below.
+	MYSQL* c = mk();
+	if (!c) {
+		mysql_close(admin);
+		BAIL_OUT("failed to connect to ProxySQL");
+	}
+	if (!select1(c)) {
+		diag("warmup SELECT 1 failed: %s", mysql_error(c));
+		mysql_close(c);
+		mysql_close(admin);
+		BAIL_OUT("warmup SELECT 1 failed");
+	}
+
+	// From here on every exit path restores the variables first: a partial SET
+	// or a failed LOAD still has to put the prior values back.
+	if (!admin_exec(admin, "SET mysql-connection_max_age_ms=1000") ||
+		!admin_exec(admin, "SET mysql-reset_connection_algorithm=2") ||
+		!admin_exec(admin, "SET mysql-multiplexing=true") ||
+		!admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME")) {
+		diag("failed to configure connection_max_age_ms");
+		if (!restore_variables(admin, prev_max_age, prev_reset_algo, prev_multiplexing)) {
+			diag("failed to restore prior mysql variables");
+		}
+		mysql_close(c);
+		mysql_close(admin);
+		BAIL_OUT("failed to configure connection_max_age_ms");
+	}
+
+	const long long created0 = admin_stat(admin, "Server_Connections_created");
+	const long long change0 = admin_stat(admin, "Com_backend_change_user");
+	ok(created0 >= 0 && change0 >= 0, "read baseline pool stats");
+
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3500);
+	int queries = 0;
+	bool queries_ok = true;
+	do {
+		if (!select1(c)) {
+			queries_ok = false;
+			diag("SELECT 1 failed: %s", mysql_error(c));
+			break;
+		}
+		queries++;
+		usleep(50 * 1000);
+	} while (std::chrono::steady_clock::now() < deadline);
+	mysql_close(c);
+
+	ok(queries_ok && queries > 10, "issued multiplexed queries for longer than max age (n=%d)", queries);
+
+	const long long created1 = admin_stat(admin, "Server_Connections_created");
+	const long long change1 = admin_stat(admin, "Com_backend_change_user");
+	ok(created1 > created0, "Server_Connections_created grows after connections age out (%lld -> %lld)", created0, created1);
+	// NOTE: both counters are proxy-wide, so unrelated activity on a shared
+	// instance (e.g. Monitor reconnects, other multiplexed sessions issuing
+	// COM_CHANGE_USER under reset_connection_algorithm=2) can move them. The
+	// isolated harness runs this test alone, but keep a small slack instead
+	// of a strict zero bound so the assertion checks the fix (expired conns
+	// are destroyed, not CHANGE_USER-recycled) rather than global quietness.
+	ok(change1 - change0 <= 5, "Com_backend_change_user stays bounded (%lld -> %lld)", change0, change1);
+
+	bool restored = restore_variables(admin, prev_max_age, prev_reset_algo, prev_multiplexing);
+	if (!restored) {
+		diag("failed to restore prior mysql variables");
+	}
+	ok(restored, "restored prior mysql variables");
+	mysql_close(admin);
+	return exit_status();
+}
