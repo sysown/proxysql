@@ -21,6 +21,7 @@ const TableMap kPersistentTables {
 	{"mysql_router_hostgroups", "CREATE TABLE mysql_router_hostgroups (role TEXT NOT NULL,scope_uuid TEXT NOT NULL,hostgroup_id INTEGER NOT NULL UNIQUE,PRIMARY KEY(role,scope_uuid))"},
 	{"mysql_router_users", "CREATE TABLE mysql_router_users (username TEXT PRIMARY KEY,source_fingerprint TEXT NOT NULL,auth_plugin TEXT NOT NULL,state TEXT NOT NULL,last_error TEXT NOT NULL DEFAULT '',generation INTEGER NOT NULL)"},
 	{"mysql_router_topology_cache", "CREATE TABLE mysql_router_topology_cache (instance_uuid TEXT PRIMARY KEY,topology_uuid TEXT NOT NULL,topology_name TEXT NOT NULL,group_name TEXT NOT NULL,metadata_major INTEGER NOT NULL,metadata_minor INTEGER NOT NULL,metadata_patch INTEGER NOT NULL,label TEXT NOT NULL,endpoint_host TEXT NOT NULL,endpoint_port INTEGER NOT NULL,instance_kind INTEGER NOT NULL,attributes TEXT NOT NULL,read_only_targets INTEGER NOT NULL,quorum_traffic INTEGER NOT NULL,stats_updates_frequency INTEGER,routing_guideline_unsupported INTEGER NOT NULL)"},
+	{"mysql_router_guideline_cache", "CREATE TABLE mysql_router_guideline_cache (topology_uuid TEXT PRIMARY KEY,guideline_id TEXT NOT NULL,name TEXT NOT NULL,document TEXT NOT NULL,router_hostname TEXT NOT NULL,router_name TEXT NOT NULL,router_local_cluster TEXT NOT NULL,router_tags TEXT NOT NULL)"},
 	{"mysql_router_bootstrap_journal", "CREATE TABLE mysql_router_bootstrap_journal (topology_uuid TEXT PRIMARY KEY,router_name TEXT NOT NULL,phase TEXT NOT NULL,router_id INTEGER,metadata_user TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL,last_error TEXT NOT NULL DEFAULT '')"},
 };
 
@@ -29,6 +30,9 @@ const TableMap kRuntimeTables {
 	{"runtime_mysql_router_topology", "CREATE TABLE runtime_mysql_router_topology (topology_generation INTEGER NOT NULL,cluster_uuid TEXT NOT NULL,instance_uuid TEXT NOT NULL,endpoint TEXT NOT NULL,instance_kind TEXT NOT NULL,desired_role TEXT NOT NULL,observed_state TEXT NOT NULL,effective_role TEXT NOT NULL,last_observed_at INTEGER NOT NULL,PRIMARY KEY(instance_uuid,endpoint))"},
 	{"runtime_mysql_router_hostgroups", "CREATE TABLE runtime_mysql_router_hostgroups (role TEXT NOT NULL,scope_uuid TEXT NOT NULL,hostgroup_id INTEGER NOT NULL,server_count INTEGER NOT NULL,generation INTEGER NOT NULL,PRIMARY KEY(role,scope_uuid))"},
 	{"runtime_mysql_router_users", "CREATE TABLE runtime_mysql_router_users (username TEXT PRIMARY KEY,state TEXT NOT NULL,auth_plugin TEXT NOT NULL,last_error TEXT NOT NULL,generation INTEGER NOT NULL)"},
+	{"runtime_mysql_router_guideline", "CREATE TABLE runtime_mysql_router_guideline (guideline_id TEXT NOT NULL,name TEXT NOT NULL,version TEXT NOT NULL,state TEXT NOT NULL,error_kind TEXT NOT NULL,last_error TEXT NOT NULL,last_update INTEGER NOT NULL)"},
+	{"runtime_mysql_router_guideline_routes", "CREATE TABLE runtime_mysql_router_guideline_routes (route_order INTEGER NOT NULL,route_name TEXT NOT NULL,match TEXT NOT NULL,pool TEXT NOT NULL,hostgroup_id INTEGER NOT NULL,priority INTEGER,classes TEXT NOT NULL,strategy TEXT NOT NULL,members TEXT NOT NULL,connection_sharing_allowed TEXT NOT NULL,notes TEXT NOT NULL,PRIMARY KEY(route_name,pool))"},
+	{"runtime_mysql_router_guideline_destinations", "CREATE TABLE runtime_mysql_router_guideline_destinations (server_uuid TEXT PRIMARY KEY,endpoint TEXT NOT NULL,member_role TEXT NOT NULL,classes TEXT NOT NULL)"},
 };
 
 const TableMap kStatsTables {
@@ -64,9 +68,9 @@ int main() {
 	TableMap expected_admin = kPersistentTables;
 	expected_admin.insert(kRuntimeTables.begin(), kRuntimeTables.end());
 	ok(has_exact_tables(manager.tables(ProxySQL_PluginDBKind::admin_db), expected_admin),
-	   "Admin DB contains the six exact persistent and four exact runtime tables");
+	   "Admin DB contains the seven exact persistent and seven exact runtime tables");
 	ok(has_exact_tables(manager.tables(ProxySQL_PluginDBKind::config_db), kPersistentTables),
-	   "config DB contains the six exact persistent Router tables");
+	   "config DB contains the seven exact persistent Router tables");
 	ok(has_exact_tables(manager.tables(ProxySQL_PluginDBKind::stats_db), kStatsTables),
 	   "stats DB contains the three exact Router history tables");
 

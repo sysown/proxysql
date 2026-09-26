@@ -25,6 +25,8 @@ struct ReconcileTopologySnapshot {
 	std::string warning_message;
 	DesiredTopology desired;
 	EffectiveTopology effective;
+	// Routing Guideline state ("none", "active", "stale", "invalid"), see #6145.
+	std::string guideline_state {"none"};
 };
 
 struct ReconcileSchedule {

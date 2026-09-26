@@ -4182,6 +4182,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		// "STATUS (chassis ABI 2 — initial baseline)" comment for
 		// the full scope. Same injection pattern needed at line ~5398
 		// (this same source file) and the PgSQL COM_QUERY entry.
+#ifdef PROXYSQL40
+		apply_plugin_route_hook();
+#endif /* PROXYSQL40 */
 		// setting 'prepared' to prevent fetching results from the cache if the digest matches
 		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, ps_type_prepare_stmt);
 		if (rc_break==true) {
@@ -4415,6 +4418,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			}
 		}
 
+#ifdef PROXYSQL40
+		apply_plugin_route_hook();
+#endif /* PROXYSQL40 */
 		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, ps_type_execute_stmt);
 		if (rc_break==true) {
 			SLDH->reset(client_stmt_id);
@@ -5413,6 +5419,9 @@ __get_pkts_from_client:
 									if (qpo->max_lag_ms >= 0) {
 										thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 									}
+#ifdef PROXYSQL40
+									apply_plugin_route_hook();
+#endif /* PROXYSQL40 */
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
 									if (mirror==false && rc_break==false) {
 										if (mysql_thread___automatic_detect_sqli) {
@@ -7524,6 +7533,56 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt) {
  *
  * @param[in,out] pkt Pointer to the packet data structure containing the original packet.
  */
+#ifdef PROXYSQL40
+void MySQL_Session::apply_plugin_route_hook() {
+	if (!proxysql_has_configured_plugin_route_hook() || qpo == nullptr || mirror) {
+		return;
+	}
+	if (qpo->error_msg || qpo->OK_msg || client_myds == nullptr || client_myds->myconn == nullptr) {
+		return;
+	}
+	const char* user = "";
+	const char* schema = "";
+	if (client_myds->myconn->userinfo) {
+		if (client_myds->myconn->userinfo->username) user = client_myds->myconn->userinfo->username;
+		if (client_myds->myconn->userinfo->schemaname) schema = client_myds->myconn->userinfo->schemaname;
+	}
+	std::vector<ProxySQL_PluginConnectAttr> attrs;
+	attrs.reserve(client_myds->client_connect_attrs.size());
+	for (const auto& attr : client_myds->client_connect_attrs) {
+		attrs.push_back({attr.first.c_str(), attr.second.c_str()});
+	}
+	const ProxySQL_PluginRouteHookPayload payload {
+		user, schema,
+		client_myds->addr.addr ? client_myds->addr.addr : "", client_myds->addr.port,
+		client_myds->proxy_addr.addr ? client_myds->proxy_addr.addr : "", client_myds->proxy_addr.port,
+		attrs.empty() ? nullptr : attrs.data(), attrs.size(),
+		qpo->destination_hostgroup >= 0 ? qpo->destination_hostgroup : default_hostgroup,
+		plugin_route_cookie
+	};
+	ProxySQL_PluginRouteHookResult result {
+		ProxySQL_PluginRouteHookAction::unchanged, -1, plugin_route_cookie, std::string()
+	};
+	if (!proxysql_dispatch_configured_plugin_route_hook(payload, result)) {
+		return;
+	}
+	plugin_route_cookie = result.session_cookie;
+	switch (result.action) {
+	case ProxySQL_PluginRouteHookAction::set_hostgroup:
+		if (result.hostgroup >= 0) {
+			qpo->destination_hostgroup = result.hostgroup;
+		}
+		break;
+	case ProxySQL_PluginRouteHookAction::deny:
+		// Reuse the query-rule error_msg path: the statement fails, the session stays open.
+		qpo->error_msg = strdup(result.message.empty() ? "Query blocked by plugin route hook" : result.message.c_str());
+		break;
+	case ProxySQL_PluginRouteHookAction::unchanged:
+		break;
+	}
+}
+#endif /* PROXYSQL40 */
+
 void MySQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt) {
 	client_myds->DSS=STATE_QUERY_SENT_NET;
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",qpo->error_msg);
@@ -8918,6 +8977,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 }
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *pkt, bool *wrong_pass) {
+#ifdef PROXYSQL40
+	// The plugin route decision depends on the session identity: select it again.
+	plugin_route_cookie = 0;
+#endif /* PROXYSQL40 */
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_CHANGE_USER packet\n");
 	//if (session_type == PROXYSQL_SESSION_MYSQL) {
@@ -9006,6 +9069,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 }
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt) {
+#ifdef PROXYSQL40
+	// The plugin route decision depends on the session identity: select it again.
+	plugin_route_cookie = 0;
+#endif /* PROXYSQL40 */
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got MYSQL_COM_RESET_CONNECTION packet\n");
 
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {

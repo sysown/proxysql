@@ -69,6 +69,7 @@ struct MetadataCapabilities {
 	bool router_options_view {false};
 	bool router_stats {false};
 	bool routing_guidelines {false};
+	bool routers_options {false};
 };
 
 MetadataCapabilities probe_metadata(IMetadataSession& session);
