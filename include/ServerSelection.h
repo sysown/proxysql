@@ -79,7 +79,9 @@ bool is_candidate_eligible(const ServerCandidate &candidate);
  *
  * @param candidates Array of server candidates.
  * @param count      Number of candidates in the array.
- * @param random_seed Seed for deterministic random selection.
+ * @param random_seed Seed for deterministic random selection. 64-bit: the
+ *        weight totals are 64-bit, and a 32-bit seed could not address the
+ *        whole range once a hostgroup's total weight exceeds 2^32.
  * @param backup_weight_threshold T. T = 0 preserves today's behaviour.
  *        weight = 0 is never selected.
  * @param backup_availability How a primary is considered present. Pass 2
@@ -89,7 +91,7 @@ bool is_candidate_eligible(const ServerCandidate &candidate);
 int select_server_from_candidates(
 	const ServerCandidate *candidates,
 	int count,
-	unsigned int random_seed,
+	uint64_t random_seed,
 	int64_t backup_weight_threshold = 0,
 	BackupAvailability backup_availability = BACKUP_AVAIL_SELECTABLE
 );

@@ -56,10 +56,25 @@ static bool primary_present(
 	return false;
 }
 
+/**
+ * @brief splitmix64 finalizer: expands a 64-bit seed into a well-distributed
+ *        64-bit value. A 32-bit LCG multiplier cannot be used here: shifting a
+ *        32-bit-derived state left by 32 leaves the seed's high bits out of the
+ *        draw entirely, so the draw would carry only 32 bits of entropy even
+ *        though the weight totals are 64-bit.
+ */
+static uint64_t splitmix64(uint64_t &state) {
+	state += 0x9E3779B97F4A7C15ULL;
+	uint64_t z = state;
+	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+	z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+	return z ^ (z >> 31);
+}
+
 static int select_eligible_in_tier(
 	const ServerCandidate *candidates,
 	int count,
-	unsigned int random_seed,
+	uint64_t random_seed,
 	int64_t T,
 	bool backups)
 {
@@ -74,14 +89,11 @@ static int select_eligible_in_tier(
 	if (total_weight == 0) {
 		return -1;
 	}
-	// Two LCG steps fill a 64-bit draw: the weight totals are 64-bit, so a
-	// single 32-bit draw could never reach past the first cumulative interval
-	// once a candidate's weight reaches 2^32.
+	// The weight totals are 64-bit, so the draw has to be too: a single 32-bit
+	// draw could never reach past the first cumulative interval once a
+	// candidate's weight reaches 2^32.
 	uint64_t rng_state = random_seed;
-	rng_state = rng_state * 1664525u + 1013904223u;
-	uint64_t draw = rng_state;
-	rng_state = rng_state * 1664525u + 1013904223u;
-	draw = (draw << 32) | (rng_state & 0xffffffffULL);
+	uint64_t draw = splitmix64(rng_state);
 	uint64_t target = draw % total_weight;
 	uint64_t cumulative = 0;
 	for (int i = 0; i < count; i++) {
@@ -100,7 +112,7 @@ static int select_eligible_in_tier(
 int select_server_from_candidates(
 	const ServerCandidate *candidates,
 	int count,
-	unsigned int random_seed,
+	uint64_t random_seed,
 	int64_t backup_weight_threshold,
 	BackupAvailability backup_availability)
 {

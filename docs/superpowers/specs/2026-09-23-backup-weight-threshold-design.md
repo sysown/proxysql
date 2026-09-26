@@ -121,7 +121,7 @@ Extend `server_selection_unit-t.cpp` (and `ServerSelection.cpp` as needed):
 - all `weight = 0` → none
 - all below `T` → backups used
 - `backup_availability` `selectable` / `status` / `capacity` (max_conn, latency, lag)
-- large primary weights do not overflow selection totals, and the lottery draw spans the full 64-bit range (a 32-bit draw makes a 2^32-weight server unreachable)
+- large primary weights do not overflow selection totals, and the lottery draw spans the full 64-bit range (with a 32-bit draw, every candidate after the first 2^32 of cumulative weight is unreachable)
 
 Extend `hostgroups_unit-t.cpp` with real manager tests (PROXYSQL31 only):
 

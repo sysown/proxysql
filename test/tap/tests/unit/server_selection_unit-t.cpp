@@ -322,12 +322,32 @@ static void test_draw_spans_full_weight_range() {
 		hits[0], hits[1], N);
 }
 
+/**
+ * @brief The draw must depend on the whole 64-bit seed. With a 32-bit seed the
+ *        two sweeps below (0..199 and 2^32..2^32+199) collapse onto the same
+ *        selection sequence, so the high half of the seed is ignored.
+ */
+static void test_draw_uses_full_seed_width() {
+	ServerCandidate candidates[2];
+	candidates[0] = make_candidate(0, 1LL << 32);
+	candidates[1] = make_candidate(1, 1LL << 32);
+	bool identical = true;
+	for (int i = 0; i < 200 && identical; i++) {
+		const int low = select_server_from_candidates(candidates, 2, (uint64_t)i, 1);
+		const int high = select_server_from_candidates(candidates, 2, (uint64_t)i + (1ULL << 32), 1);
+		if (low != high) {
+			identical = false;
+		}
+	}
+	ok(!identical, "selection responds to the high 32 bits of the 64-bit seed");
+}
+
 // ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(21 + 13);
+	plan(21 + 14);
 
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
@@ -351,7 +371,8 @@ int main() {
 	test_backup_weighted_among_backups();         // 1
 	test_large_primary_weight_total();            // 1
 	test_draw_spans_full_weight_range();         // 1
-	// Total: 21 + 13 = 34
+	test_draw_uses_full_seed_width();             // 1
+	// Total: 21 + 14 = 35
 
 	test_cleanup_minimal();
 	return exit_status();
