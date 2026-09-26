@@ -714,8 +714,8 @@ static void test_pgsql_rule_creation_all_fields() {
 	ok(rule->flagIN == 0, "PgSQL QP: flagIN stored correctly");
 	ok(rule->client_addr != nullptr && strcmp(rule->client_addr, "10.0.0.%") == 0,
 		"PgSQL QP: client_addr stored correctly");
-	ok(rule->client_addr_wildcard_position == 7,
-		"PgSQL QP: client_addr wildcard position computed correctly");
+	ok(rule->client_addr_pred.match == QP_ADDR_MATCH_WILDCARD,
+		"PgSQL QP: client_addr '10.0.0.%' selects wildcard matching");
 	ok(rule->proxy_addr != nullptr && strcmp(rule->proxy_addr, "127.0.0.1") == 0,
 		"PgSQL QP: proxy_addr stored correctly");
 	ok(rule->proxy_port == 6432, "PgSQL QP: proxy_port stored correctly");
@@ -766,11 +766,11 @@ static void test_pgsql_rule_creation_all_fields() {
 }
 
 // ============================================================================
-// 11. PgSQL: client_addr wildcard at position 0 (catch-all '%')
+// 11. PgSQL: client_addr address-form selection
 // ============================================================================
 
 /**
- * @brief Test client_addr wildcard position computation edge cases.
+ * @brief Test that each client_addr form selects the right matching mode.
  */
 static void test_pgsql_client_addr_wildcard() {
 	// Catch-all: client_addr = "%"
@@ -780,8 +780,8 @@ static void test_pgsql_client_addr_wildcard() {
 		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
 		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
-	ok(r1->client_addr_wildcard_position == 0,
-		"PgSQL QP: client_addr catch-all sets wildcard position to 0");
+	ok(r1->client_addr_pred.match == QP_ADDR_MATCH_WILDCARD,
+		"PgSQL QP: client_addr catch-all '%' selects wildcard matching");
 	free(r1->client_addr);
 	free(r1);
 
@@ -792,8 +792,8 @@ static void test_pgsql_client_addr_wildcard() {
 		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
 		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
-	ok(r2->client_addr_wildcard_position == -1,
-		"PgSQL QP: client_addr without wildcard has position -1");
+	ok(r2->client_addr_pred.match == QP_ADDR_MATCH_EXACT,
+		"PgSQL QP: client_addr without a wildcard is matched exactly");
 	free(r2->client_addr);
 	free(r2);
 
@@ -806,9 +806,68 @@ static void test_pgsql_client_addr_wildcard() {
 		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
 	ok(r3->client_addr == nullptr,
 		"PgSQL QP: null client_addr is stored as null");
-	ok(r3->client_addr_wildcard_position == -1,
-		"PgSQL QP: null client_addr has wildcard position -1");
+	ok(r3->client_addr_pred.match == QP_ADDR_MATCH_NONE,
+		"PgSQL QP: null client_addr sets no address criterion");
 	free(r3);
+
+	// CIDR prefix
+	auto *r4 = PgSQL_Query_Processor::new_query_rule(
+		4, true, nullptr, nullptr, 0,
+		"10.0.128.0/20",        // client_addr = CIDR
+		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
+		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+	ok(r4->client_addr_pred.match == QP_ADDR_MATCH_CIDR,
+		"PgSQL QP: client_addr with a CIDR prefix selects CIDR matching");
+	ok(r4->client_addr_pred.cidr_count == 1,
+		"PgSQL QP: one CIDR prefix parsed");
+	ok(r4->client_addr_pred.cidrs[0].prefix_len == 20,
+		"PgSQL QP: CIDR prefix length parsed");
+	free(r4->client_addr);
+	free(r4);
+
+	// A malformed CIDR must not be installed in a state where it could match.
+	auto *r5 = PgSQL_Query_Processor::new_query_rule(
+		5, true, nullptr, nullptr, 0,
+		"10.0.0.0/33",          // prefix length out of range for IPv4
+		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
+		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+	ok(r5->client_addr_pred.match == QP_ADDR_MATCH_NONE,
+		"PgSQL QP: malformed CIDR leaves the address criterion inert");
+	ok(r5->client_addr_pred.cidr_count == 0,
+		"PgSQL QP: malformed CIDR parses no prefixes");
+	free(r5->client_addr);
+	free(r5);
+
+	// A bare '_' used to be compared literally and so never matched anything.
+	// It has to select wildcard matching, otherwise the path this change fixes
+	// silently regresses.
+	auto *r6 = PgSQL_Query_Processor::new_query_rule(
+		6, true, nullptr, nullptr, 0,
+		"10.0.1_.5",            // bare '_', no '%'
+		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
+		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+	ok(r6->client_addr_pred.match == QP_ADDR_MATCH_WILDCARD,
+		"PgSQL QP: bare '_' selects wildcard matching");
+	free(r6->client_addr);
+	free(r6);
+
+	// A Unix socket path is how a socket listener spells itself in proxy_addr.
+	// It must stay on the exact-match path rather than being mistaken for a
+	// malformed prefix merely because it contains '/'.
+	auto *r7 = PgSQL_Query_Processor::new_query_rule(
+		7, true, nullptr, nullptr, 0,
+		nullptr,                // no client_addr
+		"/tmp/proxysql.sock",   // Unix listener path
+		0, nullptr, nullptr, nullptr, false, nullptr,
+		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+	ok(r7->proxy_addr_pred.match == QP_ADDR_MATCH_EXACT,
+		"PgSQL QP: Unix socket path in proxy_addr stays exact, not CIDR");
+	free(r7->proxy_addr);
+	free(r7);
 }
 
 // ============================================================================
@@ -1624,7 +1683,7 @@ static void test_pgsql_memory_tracking() {
 // ============================================================================
 
 int main() {
-	plan(276);
+	plan(283);
 
 	test_init_minimal();
 	test_init_query_processor();
@@ -1649,7 +1708,7 @@ int main() {
 
 	// PgSQL tests — new
 	test_pgsql_rule_creation_all_fields();   // 36 tests
-	test_pgsql_client_addr_wildcard();       // 4 tests
+	test_pgsql_client_addr_wildcard();       // 11 tests
 	test_pgsql_rule_attributes_flagouts();   // 7 tests
 	test_pgsql_stats_commands_counters();    // 4 tests
 	test_pgsql_stats_query_rules();          // 3 tests

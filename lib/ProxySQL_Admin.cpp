@@ -9182,6 +9182,73 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 //   NULL on success, error message string on failure (caller must free)
 //
 
+/**
+ * @brief Validate a query rule address value before it is installed to runtime.
+ *
+ * Three forms are accepted:
+ *  - an exact address, compared byte for byte against the rendered text;
+ *  - a textual wildcard ('%' or '_'), where '%' may only be the last character;
+ *  - a comma-separated list of CIDR prefixes, matched numerically.
+ *
+ * Which one applies is decided by ip_cidr_spec_looks_like_prefix(), which also
+ * keeps a Unix socket path such as "/tmp/proxysql.sock" on the literal path:
+ * proxy_addr is how a Unix listener identifies itself, and those rules have
+ * always worked.
+ *
+ * The length cap and the '%'-position rule constrain a *rendered address*, so
+ * they are applied to client_addr only. A listener path is neither: a socket
+ * path may legitimately exceed INET6_ADDRSTRLEN or contain a '%', and capping
+ * it would skip a rule the listener can still satisfy. client_addr cannot be a
+ * path, so a leading '/' there is rejected instead of being quietly installed
+ * as a criterion that could never match.
+ *
+ * A malformed prefix is rejected on both fields so a rule is never installed in
+ * a state where it can only ever fail to match -- previously such a value loaded
+ * cleanly and then silently matched nothing.
+ *
+ * @param rule_id    Rule id, for the error message.
+ * @param field      Which field @p value came from, see qp_addr_field_t.
+ * @param value      Configured value; NULL and "" both mean "no criterion".
+ * @return true when the value is usable.
+ */
+static bool validate_qp_addr_value(const char *rule_id, const qp_addr_field_t field, const char *value) {
+	if (value == NULL || *value == '\0') {
+		return true;
+	}
+	const char *field_name = (field == QP_ADDR_FIELD_PROXY) ? "proxy_addr" : "client_addr";
+
+	if (ip_cidr_spec_looks_like_prefix(value) == true) {
+		if (strnlen(value, MAX_CIDR_LIST_VALUE_LEN + 1) > MAX_CIDR_LIST_VALUE_LEN ||
+			ip_cidr_list_is_valid(value) == false) {
+			proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+			return false;
+		}
+		return true;
+	}
+	if (field == QP_ADDR_FIELD_PROXY) {
+		// A listener path or a plain address: nothing here constrains its
+		// length or its characters.
+		return true;
+	}
+	if (*value == '/') {
+		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+		return false;
+	}
+	if (strnlen(value, INET6_ADDRSTRLEN) >= INET6_ADDRSTRLEN) {
+		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+		return false;
+	}
+	// mywildcmp() would honour a '%' anywhere in the pattern, but a '%' in the
+	// middle of an address is far more likely a typo than an intent.
+	const char *pct = strchr(value, '%');
+	if (pct != NULL && pct[1] != '\0') {
+		proxy_error("Query rule with rule_id=%s has a wildcard that is not at the end of %s: %s\n",
+			rule_id, field_name, value);
+		return false;
+	}
+	return true;
+}
+
 char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch, bool acquire_lock) {
 	// About the queries used here, see notes about CLUSTER_QUERY_MYSQL_QUERY_RULES and
 	// CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING in ProxySQL_Cluster.hpp
@@ -9285,21 +9352,9 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 		QP_rule_t * nqpr;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			if (r->fields[4]) {
-				char *pct = NULL;
-				if (strlen(r->fields[4]) >= INET6_ADDRSTRLEN) {
-					proxy_error("Query rule with rule_id=%s has an invalid client_addr: %s\n", r->fields[0], r->fields[4]);
-					continue;
-				}
-				pct = strchr(r->fields[4],'%');
-				if (pct) { // there is a wildcard
-					if (strlen(pct) == 1) {
-						// % is at the end of the string, good
-					} else {
-						proxy_error("Query rule with rule_id=%s has a wildcard that is not at the end of client_addr: %s\n", r->fields[0], r->fields[4]);
-						continue;
-					}
-				}
+			if (validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_CLIENT, r->fields[4]) == false ||
+				validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_PROXY, r->fields[5]) == false) {
+				continue;
 			}
 			nqpr=GloMyQPro->new_query_rule(
 				atoi(r->fields[0]), // rule_id
@@ -9505,22 +9560,9 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			QP_rule_t* nqpr;
 			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 				SQLite3_row* r = *it;
-				if (r->fields[4]) {
-					char* pct = NULL;
-					if (strlen(r->fields[4]) >= INET6_ADDRSTRLEN) {
-						proxy_error("Query rule with rule_id=%s has an invalid client_addr: %s\n", r->fields[0], r->fields[4]);
-						continue;
-					}
-					pct = strchr(r->fields[4], '%');
-					if (pct) { // there is a wildcard
-						if (strlen(pct) == 1) {
-							// % is at the end of the string, good
-						}
-						else {
-							proxy_error("Query rule with rule_id=%s has a wildcard that is not at the end of client_addr: %s\n", r->fields[0], r->fields[4]);
-							continue;
-						}
-					}
+				if (validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_CLIENT, r->fields[4]) == false ||
+					validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_PROXY, r->fields[5]) == false) {
+					continue;
 				}
 				nqpr = GloPgQPro->new_query_rule(
 					atoi(r->fields[0]), // rule_id
