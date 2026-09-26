@@ -547,17 +547,20 @@ bool select_session_gtid(
 	return true;
 }
 
-// Accepts only the canonical decimal spelling of a MariaDB domain id, so that
-// `0` and `00` cannot be confused for the same domain.
-static bool is_canonical_domain_id(const char* domain_id, size_t len) {
-	if (domain_id == nullptr || len == 0) {
+bool is_canonical_mariadb_domain_id(const char* id, size_t len) {
+	if (id == nullptr || len == 0) {
 		return false;
 	}
-	if (domain_id[0] == '0') {
+	if (id[0] == '0') {
 		return len == 1;
 	}
+	unsigned long long value = 0;
 	for (size_t i = 0; i < len; i++) {
-		if (!std::isdigit(static_cast<unsigned char>(domain_id[i]))) {
+		if (!std::isdigit(static_cast<unsigned char>(id[i]))) {
+			return false;
+		}
+		value = value * 10 + static_cast<unsigned long long>(id[i] - '0');
+		if (value > UINT32_MAX) {
 			return false;
 		}
 	}
@@ -572,7 +575,7 @@ bool render_mariadb_domain_position(const GTID_Set& set, const char* domain_id,
 
 	std::string domain;
 	if (domain_id != nullptr && domain_id[0] != '\0') {
-		if (!is_canonical_domain_id(domain_id, strlen(domain_id))) {
+		if (!is_canonical_mariadb_domain_id(domain_id, strlen(domain_id))) {
 			return false;
 		}
 		domain.assign(domain_id);

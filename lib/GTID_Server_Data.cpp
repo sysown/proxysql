@@ -370,24 +370,6 @@ bool GTID_Server_Data::writeout() {
  * the message is invalid and the reader is disconnected.
  */
 
-// Accepts only the canonical decimal spelling of a MariaDB domain id, so that
-// `0` and `00` cannot be confused for the same domain. Mirrors the check
-// applied when a domain id is rendered into a `domain-server-seq` position.
-static bool is_canonical_domain_id(const char *id, size_t len) {
-	if (id == nullptr || len == 0) {
-		return false;
-	}
-	if (id[0] == '0') {
-		return len == 1;
-	}
-	for (size_t i = 0; i < len; i++) {
-		if (!std::isdigit(static_cast<unsigned char>(id[i]))) {
-			return false;
-		}
-	}
-	return true;
-}
-
 // Classifies an id field. Returns GTID_ID_FLAVOR_UNKNOWN for anything that is
 // neither a 32 hex digit MySQL UUID nor a canonical decimal MariaDB domain id.
 //
@@ -423,7 +405,7 @@ static int detect_id_flavor(const char *id, size_t len) {
 	if (hex_digits == 32) {
 		return GTID_ID_FLAVOR_UUID;
 	}
-	if (only_digits && len <= 10 && is_canonical_domain_id(id, len)) {
+	if (only_digits && is_canonical_mariadb_domain_id(id, len)) {
 		return GTID_ID_FLAVOR_DOMAIN;
 	}
 	return GTID_ID_FLAVOR_UNKNOWN;

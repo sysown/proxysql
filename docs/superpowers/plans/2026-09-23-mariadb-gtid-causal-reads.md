@@ -462,7 +462,7 @@ git commit -m "test: MariaDB min_gtid causal read TAP"
 ### Task 7: Verification
 
 - [ ] `PROXYSQL31=1 make -C test/tap/tests/unit gtid_parse_unit-t gtid_set_unit-t gtid_server_data_unit-t`
-- [ ] Run the three binaries — all PASS. Expected counts: 57/57 `gtid_parse_unit-t`, 73/73 `gtid_set_unit-t`, 152/152 `gtid_server_data_unit-t`
+- [ ] Run the three binaries — all PASS. Expected counts: 57/57 `gtid_parse_unit-t`, 73/73 `gtid_set_unit-t`, 170/170 `gtid_server_data_unit-t`
 - [ ] `PROXYSQL31=1 make build_lib` — compiles
 - [ ] `python3 test/tap/groups/check_groups.py --source` — all source tests registered
 - [ ] Existing MySQL GTID unit counts remain green (`gtid_set_unit-t` original cases, `gtid_server_data_unit-t` original cases)

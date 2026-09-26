@@ -3481,8 +3481,9 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 						if (result != nullptr) {
 							MYSQL_ROW row = mysql_fetch_row(result);
 							// @@gtid_binlog_pos may list several domains. Only the token
-							// belonging to the session's own domain is a valid GTID; a NULL
-							// domain is tolerated only for single-domain positions.
+							// belonging to the auxiliary connection's own default
+							// @@gtid_domain_id is a valid GTID; a NULL domain is
+							// tolerated only for single-domain positions.
 							if (row != nullptr && row[1] != nullptr
 									&& select_mariadb_binlog_position(row[1], row[0], gtid_uuid, sizeof(gtid_uuid))) {
 								size_t length = strlen(gtid_uuid) + 1;

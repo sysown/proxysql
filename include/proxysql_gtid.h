@@ -75,6 +75,10 @@ bool select_session_gtid(
 	const char* session_track_gtids, size_t gtids_len,
 	const std::unordered_map<std::string, std::string>& sysvars,
 	char* buf, size_t buf_len);
+// Accepts only the canonical decimal spelling of a MariaDB domain id: digits
+// only, no leading zero unless the id is exactly "0" (so that `0` and `00`
+// cannot name the same domain), and a value representable as a uint32.
+bool is_canonical_mariadb_domain_id(const char* id, size_t len);
 // Renders the native MariaDB `domain-server-seq` position of a single domain.
 // `domain_id` selects the domain; when it is NULL or empty the set must hold
 // exactly one domain, otherwise the call fails closed. `buf` is left untouched
