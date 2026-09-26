@@ -8,7 +8,7 @@ The behavior of the TSDB subsystem is controlled by the following global variabl
 |---|---|---:|---|---|
 | `tsdb-enabled` | int | `0` | `0/1` | Master switch |
 | `tsdb-sample_interval` | int | `5` | `1..3600` | Prometheus sampling interval (seconds) |
-| `tsdb-retention_days` | int | `7` | `1..3650` | Raw/probe retention in days |
+| `tsdb-retention_days` | int | `2` | `1..3650` | Raw/probe retention in days |
 | `tsdb-monitor_enabled` | int | `0` | `0/1` | Backend probe switch |
 | `tsdb-monitor_interval` | int | `10` | `1..3600` | Probe interval (seconds) |
 
