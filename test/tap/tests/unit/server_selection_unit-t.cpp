@@ -300,12 +300,34 @@ static void test_large_primary_weight_total() {
 	ok(selected == 0 || selected == 1, "large primary weights do not overflow selection totals");
 }
 
+/**
+ * @brief Two primaries that each weigh 2^32. The total is 2^33, so a 32-bit
+ *        lottery draw can never leave the first cumulative interval and the
+ *        second server becomes unreachable. Both must come out across seeds.
+ */
+static void test_draw_spans_full_weight_range() {
+	ServerCandidate candidates[2];
+	candidates[0] = make_candidate(0, 1LL << 32);
+	candidates[1] = make_candidate(1, 1LL << 32);
+	int hits[2] = { 0, 0 };
+	const int N = 200;
+	for (int seed = 0; seed < N; seed++) {
+		const int picked = select_server_from_candidates(candidates, 2, seed, 1);
+		if (picked == 0 || picked == 1) {
+			hits[picked]++;
+		}
+	}
+	ok(hits[0] > 0 && hits[1] > 0,
+		"64-bit draw reaches both 2^32-weight primaries (idx 0: %d, idx 1: %d of %d)",
+		hits[0], hits[1], N);
+}
+
 // ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(21 + 12);
+	plan(21 + 13);
 
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
@@ -328,7 +350,8 @@ int main() {
 	test_availability_latency_does_not_open_capacity(); // 2
 	test_backup_weighted_among_backups();         // 1
 	test_large_primary_weight_total();            // 1
-	// Total: 21 + 12 = 33
+	test_draw_spans_full_weight_range();         // 1
+	// Total: 21 + 13 = 34
 
 	test_cleanup_minimal();
 	return exit_status();

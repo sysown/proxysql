@@ -74,9 +74,15 @@ static int select_eligible_in_tier(
 	if (total_weight == 0) {
 		return -1;
 	}
-	unsigned int rng_state = random_seed;
+	// Two LCG steps fill a 64-bit draw: the weight totals are 64-bit, so a
+	// single 32-bit draw could never reach past the first cumulative interval
+	// once a candidate's weight reaches 2^32.
+	uint64_t rng_state = random_seed;
 	rng_state = rng_state * 1664525u + 1013904223u;
-	uint64_t target = static_cast<uint64_t>(rng_state) % total_weight;
+	uint64_t draw = rng_state;
+	rng_state = rng_state * 1664525u + 1013904223u;
+	draw = (draw << 32) | (rng_state & 0xffffffffULL);
+	uint64_t target = draw % total_weight;
 	uint64_t cumulative = 0;
 	for (int i = 0; i < count; i++) {
 		const bool in_tier = backups ? weight_is_backup(candidates[i].weight, T)

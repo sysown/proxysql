@@ -435,7 +435,11 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 
 		uint64_t k;
-		k=rand_fast()%New_sum;
+		// rand_fast() yields 32 bits only: combine two draws so the lottery covers
+		// the whole 64-bit weight range. With a single 32-bit draw a candidate whose
+		// weight alone reaches 2^32 would always win, because the draw can never
+		// reach past the first cumulative interval.
+		k = ((static_cast<uint64_t>(rand_fast()) << 32) | rand_fast()) % New_sum;
 		k++;
 		New_sum=0;
 
