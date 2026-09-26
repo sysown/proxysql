@@ -428,11 +428,16 @@ static bool parse_mysql_gtid(const char* s, ParsedGTID& out) {
 
 static bool parse_mariadb_gtid(const char* s, ParsedGTID& out) {
 	const char* p = s;
+	const char* domain_start = p;
 	unsigned long long domain = 0;
 	unsigned long long server = 0;
 	unsigned long long seq = 0;
 
 	if (!parse_uint_no_leading_zeros(p, domain)) {
+		return false;
+	}
+	if (!is_canonical_mariadb_domain_id(domain_start,
+	                                    static_cast<size_t>(p - domain_start))) {
 		return false;
 	}
 	if (*p != '-') {

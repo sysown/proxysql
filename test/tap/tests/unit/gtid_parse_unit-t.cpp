@@ -155,7 +155,7 @@ static void test_session_tracking_reset() {
 }
 
 int main() {
-	plan(57);
+	plan(59);
 	ok(test_init_minimal() == 0, "test_init_minimal() succeeds");
 	ParsedGTID p;
 
@@ -172,6 +172,10 @@ int main() {
 	ok(!parse_gtid("0-1", &p), "reject two-field");
 	ok(!parse_gtid("0-1-0", &p), "reject seq 0");
 	ok(!parse_gtid("00-1-1", &p), "reject leading zeros");
+	ok(parse_gtid("4294967295-1-1", &p) && p.mariadb
+	       && p.id == "4294967295" && p.trxid == 1 && p.server_id == 1,
+	   "MariaDB domain at UINT32_MAX");
+	ok(!parse_gtid("4294967296-1-1", &p), "reject domain above UINT32_MAX");
 	ok(!parse_gtid("not-a-gtid", &p), "reject junk");
 	ok(!parse_gtid(nullptr, &p), "reject null");
 

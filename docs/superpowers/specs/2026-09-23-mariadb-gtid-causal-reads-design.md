@@ -161,8 +161,8 @@ Shared parse helper used by:
 - `GTID_Server_Data::read_next_gtid`: an id is either a 32 hex digit UUID or a
   canonical decimal MariaDB domain id, and the two must not be confused. A
   32 character dash-free id is a UUID even when all of its characters are
-  decimal digits, because a MariaDB domain is a uint32 and so at most 10
-  digits; the shape is tested before the decimal spelling, since the reader
+  decimal digits, because a MariaDB domain is a canonical uint32 (0..UINT32_MAX)
+  and so never that long; the shape is tested before the decimal spelling, since the reader
   sends a UUID dashed in `ST=` and stripped in `I1`/`I3`. A decimal id is only
   a domain when it is canonical, so `0` and `00` cannot record the same domain
   under two different keys. The first id-bearing message fixes the flavor and

@@ -118,7 +118,7 @@ bool parse_gtid_set(const char* encoded, GTID_Set* out);
 
 `lib/proxysql_gtid.cpp`:
 
-- `parse_gtid`: null checks. If `strchr(s, ':')`: MySQL — split on last `:`, strip dashes from UUID, require 32 hex, `strtoull` seq `> 0`, no trailing junk. Else MariaDB — scan `domain-server-seq` with `strtoul`/`strtoull`, no leading zeros, exactly two dashes, seq `> 0`, end of string.
+- `parse_gtid`: null checks. If `strchr(s, ':')`: MySQL — split on last `:`, strip dashes from UUID, require 32 hex, `strtoull` seq `> 0`, no trailing junk. Else MariaDB — scan `domain-server-seq` with `strtoul`/`strtoull`, no leading zeros, domain bounded to a canonical uint32 (0..UINT32_MAX) by `is_canonical_mariadb_domain_id`, server_id bounded to UINT32_MAX, exactly two dashes, seq `> 0`, end of string.
 - `parse_gtid_set`: if any token contains `:`, every token must be MySQL (existing interval grammar). If none contain `:`, every token is MariaDB; `add(id, 1, seq)` and `set_server_id`. Mixed → false.
 
 - [ ] **Step 4: Run — PASS (14 assertions)**
@@ -241,8 +241,9 @@ Replace `add_gtid_from_ok` body with `parse_gtid`. If MariaDB: `gtid_executed.ad
 a MySQL UUID made only of decimal digits is valid, and the reader sends it
 dashed in `ST=` but stripped in `I1`/`I3`, so such an endpoint was accepted at
 `ST=` and then disconnected at `I1=`. The final rule classifies a 32 character
-dash-free id as a UUID first (a MariaDB domain is a uint32, so at most 10
-digits), and accepts a decimal id as a domain only when it is canonical, so `0`
+dash-free id as a UUID first (a MariaDB domain is a canonical uint32,
+0..UINT32_MAX, so never 32 digits), and accepts a decimal id as a domain only
+when it is canonical, so `0`
 and `00` cannot record one domain under two different keys.
 
 - [ ] **Step 4: Run — PASS, existing 109 MySQL assertions still pass**
