@@ -3363,8 +3363,11 @@ bool MySQL_Connection::connect_gtid_lookup_connection() {
 	}
 	unsigned int timeout = 1;
 	mysql_options(lookup_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+	// The auxiliary lookup runs synchronously on the worker event loop, so its
+	// I/O waits are capped at one second even when connect_timeout_server is
+	// larger. Anything longer would stall the whole worker.
 	unsigned int io_timeout = mysql_thread___connect_timeout_server / 1000;
-	if (io_timeout == 0) {
+	if (io_timeout == 0 || io_timeout > 1) {
 		io_timeout = 1;
 	}
 	mysql_options(lookup_mysql, MYSQL_OPT_READ_TIMEOUT, &io_timeout);
@@ -3459,25 +3462,36 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 				}
 			}
 			if (!ret && mysql->field_count == 0
+					&& mysql_thread___update_gtid_from_ok
 					&& mysql->server_version != nullptr && strstr(mysql->server_version, "MariaDB") != nullptr) {
 				// MariaDB has no SESSION_TRACK_GTIDS. The position is read on a dedicated
 				// connection: a query on 'mysql' would consume the pending response, so
 				// 'mysql->info' and the session tracking state would be lost. Only writes
 				// and DDL are looked up ('field_count' is 0 when no result set is
 				// pending), so SELECT traffic does not pay for the extra round trip.
+				// The lookup is a blocking connect+query on the worker event loop, hence
+				// it is opt-in: only 'mysql-update_gtid_from_ok' (the flag that consumes
+				// the collected GTID) enables it. client_session_track_gtid alone is not
+				// enough. This is not yet async - see the design doc.
 				bool lookup_executed = false;
 				if (connect_gtid_lookup_connection()) {
-					if (mysql_query(gtid_lookup_mysql, "SELECT @@gtid_binlog_pos") == 0) {
+					if (mysql_query(gtid_lookup_mysql, "SELECT @@gtid_domain_id, @@gtid_binlog_pos") == 0) {
 						lookup_executed = true;
 						MYSQL_RES *result = mysql_store_result(gtid_lookup_mysql);
 						if (result != nullptr) {
 							MYSQL_ROW row = mysql_fetch_row(result);
-							if (row != nullptr && row[0] != nullptr
-									&& select_mariadb_binlog_position(row[0], gtid_uuid, sizeof(gtid_uuid))) {
+							// @@gtid_binlog_pos may list several domains. Only the token
+							// belonging to the session's own domain is a valid GTID; a NULL
+							// domain is tolerated only for single-domain positions.
+							if (row != nullptr && row[1] != nullptr
+									&& select_mariadb_binlog_position(row[1], row[0], gtid_uuid, sizeof(gtid_uuid))) {
 								size_t length = strlen(gtid_uuid) + 1;
 								memcpy(buff, gtid_uuid, length);
 								__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
 								ret = true;
+							} else {
+								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup on %s:%d did not yield an unambiguous position\n",
+										parent->address, parent->port);
 							}
 							mysql_free_result(result);
 						}

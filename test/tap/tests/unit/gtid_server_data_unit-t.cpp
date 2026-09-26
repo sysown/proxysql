@@ -589,8 +589,123 @@ static void test_wire_mariadb_display_uses_server_id_sentinel() {
 		"sentinel display: OK-packet ingestion replaces the sentinel with server_id 1");
 }
 
+/**
+ * @brief A bootstrap mixing a domain id and a UUID is an invalid message.
+ */
+static void test_mixed_flavors_in_bootstrap_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	std::string msg = "ST=0:1-270," + std::string(UUID_A) + ":1\n";
+	stuff_buffer(sd, msg);
+
+	ok(sd.read_next_gtid() == false, "mixed bootstrap: returns false");
+	ok(sd.active == false, "mixed bootstrap: active set to false (disconnect)");
+	ok(sd.events_read == 0, "mixed bootstrap: events_read NOT incremented");
+}
+
+/**
+ * @brief A syntactically invalid id inside an otherwise valid bootstrap.
+ */
+static void test_invalid_bootstrap_id_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, "ST=0:1-270,uuid:1\n");
+
+	ok(sd.read_next_gtid() == false, "invalid bootstrap id: returns false");
+	ok(sd.active == false, "invalid bootstrap id: active set to false (disconnect)");
+	ok(sd.events_read == 0, "invalid bootstrap id: events_read NOT incremented");
+}
+
+/**
+ * @brief An endpoint fixes its id flavor on the first id-bearing message.
+ */
+static void test_flavor_is_established_once() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	ok(sd.gtid_flavor == GTID_ID_FLAVOR_UNKNOWN, "flavor: starts unknown");
+
+	stuff_buffer(sd, "ST=0:1-270\n");
+	ok(sd.read_next_gtid() == true && sd.gtid_flavor == GTID_ID_FLAVOR_DOMAIN,
+	   "flavor: a decimal bootstrap id establishes the domain flavor");
+
+	stuff_buffer(sd, "I1=0:271\n");
+	ok(sd.read_next_gtid() == true && sd.gtid_flavor == GTID_ID_FLAVOR_DOMAIN,
+	   "flavor: a matching I1 keeps the domain flavor");
+	ok(sd.active == true, "flavor: a matching I1 keeps the endpoint active");
+}
+
+/**
+ * @brief A UUID I1 after a domain bootstrap is a flavor change.
+ */
+static void test_uuid_i1_after_domain_bootstrap_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, "ST=0:1-270\n");
+	ok(sd.read_next_gtid() == true && sd.active == true,
+	   "flavor change: domain bootstrap is parsed");
+
+	stuff_buffer(sd, std::string("I1=") + UUID_A_STRIPPED + ":42\n");
+	ok(sd.read_next_gtid() == false, "flavor change: UUID I1 after domain ST returns false");
+	ok(sd.active == false, "flavor change: UUID I1 after domain ST disconnects");
+	ok(sd.events_read == 1, "flavor change: UUID I1 after domain ST is not counted");
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 42) == false,
+	   "flavor change: UUID I1 after domain ST is not applied");
+}
+
+/**
+ * @brief A domain I1 after a UUID bootstrap is a flavor change.
+ */
+static void test_domain_i1_after_uuid_bootstrap_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, std::string("ST=") + UUID_A + ":1-270\n");
+	ok(sd.read_next_gtid() == true && sd.active == true,
+	   "flavor change: UUID bootstrap is parsed");
+	ok(sd.gtid_flavor == GTID_ID_FLAVOR_UUID,
+	   "flavor change: UUID bootstrap establishes the UUID flavor");
+
+	stuff_buffer(sd, "I1=0:271\n");
+	ok(sd.read_next_gtid() == false, "flavor change: domain I1 after UUID ST returns false");
+	ok(sd.active == false, "flavor change: domain I1 after UUID ST disconnects");
+	ok(sd.events_read == 1, "flavor change: domain I1 after UUID ST is not counted");
+}
+
+/**
+ * @brief The same holds for the range message I3.
+ */
+static void test_domain_i3_after_uuid_bootstrap_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, std::string("ST=") + UUID_A + ":1-270\n");
+	sd.read_next_gtid();
+
+	stuff_buffer(sd, "I3=0:300-400\n");
+	ok(sd.read_next_gtid() == false, "flavor change: domain I3 after UUID ST returns false");
+	ok(sd.active == false, "flavor change: domain I3 after UUID ST disconnects");
+}
+
+/**
+ * @brief I2/I4 have no id to reuse before any id-bearing message was seen.
+ */
+static void test_reuse_without_established_id_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, "I2=20\n");
+	ok(sd.read_next_gtid() == false, "orphan I2: returns false");
+	ok(sd.active == false, "orphan I2: disconnects");
+	ok(sd.events_read == 0, "orphan I2: not counted");
+	ok(sd.gtid_executed_to_string().empty(),
+	   "orphan I2: no GTID is recorded under an empty id");
+
+	GTID_Server_Data sd4(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	stuff_buffer(sd4, "I4=30-40\n");
+	ok(sd4.read_next_gtid() == false, "orphan I4: returns false");
+	ok(sd4.active == false, "orphan I4: disconnects");
+	ok(sd4.gtid_executed_to_string().empty(),
+	   "orphan I4: no GTID is recorded under an empty id");
+}
+
 int main() {
-	plan(123);
+	plan(152);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -617,6 +732,13 @@ int main() {
 	test_ok_mariadb_gtid();
 	test_wire_mariadb_domain();
 	test_wire_mariadb_display_uses_server_id_sentinel();
+	test_mixed_flavors_in_bootstrap_disconnects();
+	test_invalid_bootstrap_id_disconnects();
+	test_flavor_is_established_once();
+	test_uuid_i1_after_domain_bootstrap_disconnects();
+	test_domain_i1_after_uuid_bootstrap_disconnects();
+	test_domain_i3_after_uuid_bootstrap_disconnects();
+	test_reuse_without_established_id_disconnects();
 
 	return exit_status();
 }

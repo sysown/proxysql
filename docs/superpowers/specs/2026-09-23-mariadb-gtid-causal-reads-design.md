@@ -85,12 +85,16 @@ an OK-packet observation supplies a real `server_id` for that domain, after
 which it renders as `0-1-<end>`. The sentinel is display-only; membership,
 `min_gtid` comparison, and the `ST=`/`I*` payload are unaffected.
 
-`to_string()`:
+Serialization, two distinct renderings:
 
-- 32-hex key → existing MySQL UUID form with dashes and `:` intervals.
-- Decimal domain key → one `domain-server-end` per domain, using the highest
-  interval end and last-seen `server_id`. This matches MariaDB
-  `gtid_current_pos` (a point, not a range).
+- `to_string()` is the **wire** form. 32-hex key → existing MySQL UUID form
+  with dashes and `:` intervals. Decimal domain key → `domain:interval`, e.g.
+  `0:1-270`. This is what the `ST=` bootstrap line carries.
+- `to_display_string()` is the **display** form. A 32-hex key is rendered as in
+  `to_string()`. A decimal domain key → one `domain-server-end` per domain,
+  using the highest interval end and the last-seen `server_id`, e.g.
+  `0-1-270`. This matches MariaDB `gtid_current_pos` (a point, not a range) and
+  is what `stats_mysql_gtid_executed` shows.
 
 ## Wire protocol
 
@@ -113,6 +117,13 @@ I2=272
 `ST=` / `I1=` / `I3=` parsers must treat a decimal id as a domain. Current
 `ST=` dash-stripping (`0-1` → `01`) is MySQL-only and must not run on domain
 ids.
+
+An endpoint speaks exactly one id flavor. The first id-bearing message fixes it
+(a 32 hex digit UUID, dashes optional, or a decimal domain id) and every later
+id must match. A mixed `ST=` line, a flavor change between messages, or an id
+that is neither shape is an invalid message: `active = false` and disconnect.
+`I2=` / `I4=` have no id of their own, so they are invalid until an
+id-bearing message has established both the flavor and `uuid_server`.
 
 ## Binlog reader (`proxysql_mysqlbinlog`)
 
@@ -155,17 +166,41 @@ Write-path GTID collection:
 - On MariaDB backends (version comment contains `MariaDB`), the server may
   accept `gtid_binlog_pos` in `session_track_system_variables` but still not
   return a session-state payload. `MySQL_Connection::get_gtid()` therefore uses
-  a dedicated auxiliary MariaDB connection to run `SELECT @@gtid_binlog_pos`;
-  it never queries the live connection, whose response buffer, `mysql->info`,
-  and session state must remain intact.
+  a dedicated auxiliary MariaDB connection to run
+  `SELECT @@gtid_domain_id, @@gtid_binlog_pos`; it never queries the live
+  connection, whose response buffer, `mysql->info`, and session state must
+  remain intact.
+- `@@gtid_binlog_pos` can list several domains (`0-1-270,1-2-50`). Only the
+  token belonging to the session's own `@@gtid_domain_id` is a GTID this
+  session can own, so the stored value is that single domain rendered as
+  `domain-server-seq`. If the domain is unknown and the position carries more
+  than one domain, the lookup fails closed rather than storing an ambiguous
+  string.
 - The auxiliary connection is created lazily, reused while the session is
   active, released when the pooled connection is returned, and closed on
   reset/destruction. Connect is capped at one second with a one-second negative
-  retry window. The connected gauge includes the auxiliary connection;
-  `server_connections_created` remains a pool-connection counter.
-- `MySQL_Connection::get_gtid()` still tries MySQL session tracking first and
-  only performs the MariaDB lookup when `mysql-update_gtid_from_ok` or
-  `mysql-client_session_track_gtid` is enabled.
+  retry window. Read and write timeouts are also capped at one second, even
+  when `mysql-connect_timeout_server` is larger. The connected gauge includes
+  the auxiliary connection; `server_connections_created` remains a
+  pool-connection counter.
+- `MySQL_Connection::get_gtid()` still tries MySQL session tracking first.
+  The MariaDB auxiliary lookup is **opt-in**: it runs only when
+  `mysql-update_gtid_from_ok` is enabled, because that is the flag that
+  consumes the collected GTID. `mysql-client_session_track_gtid` alone does not
+  enable it, even though it defaults to on.
+
+  **Consequence: MariaDB `gtid_from_hostgroup` requires
+  `mysql-update_gtid_from_ok=true`.** With the default configuration no MariaDB
+  GTID is collected and `gtid_from_hostgroup` skips GTID routing for MariaDB
+  backends, as it does today.
+
+  **Known limitation (P1, follow-up):** the auxiliary lookup is a blocking
+  connect plus query issued on the worker event loop. Opting in and capping the
+  timeouts bounds the stall to about one second per failing backend, it does
+  not remove it. A full async sub-state machine (non-blocking connect, timer,
+  and a state that suspends the write path until the position arrives) is a
+  follow-up, not something this change delivers. Do not describe this path as
+  async.
 - Store the native string on the backend (`0-1-100` or `uuid:seq`). If tracking
   is off, the string stays empty and `gtid_from_hostgroup` skips GTID routing
   (same as today).
@@ -177,13 +212,17 @@ Write-path GTID collection:
 
 - Malformed GTID: reject. `min_gtid` warns and ignores; `add_gtid_from_ok`
   returns false; reader snapshot fails closed.
+- A MySQL set token with a trailing colon (`uuid:1:`) is malformed, not a
+  shorter valid set: the preceding interval is not accepted on its own.
 - Mixed UUID and domain tokens on one endpoint or in one `ST=` line: invalid
-  message; reader disconnects as today.
+  message; reader disconnects as today. The same applies to a UUID id in a
+  domain endpoint and vice versa.
 - MariaDB snapshot with neither a MySQL executed set nor `@@gtid_binlog_pos`:
   reader refuses to start.
 - MariaDB auxiliary lookup connect/query failure is best-effort: close the
   auxiliary connection, leave the live response untouched, and retry no more
-  than once per second.
+  than once per second. A position that does not resolve to a single
+  `domain-server-seq` is treated the same way — nothing is stored.
 - Non-GTID binlog events stay ignored.
 - Invalid `ST=` / `I*` still sets `active = false` and disconnects.
 
@@ -192,20 +231,29 @@ Write-path GTID collection:
 ProxySQL (this repo):
 
 - Unit: parser (MySQL UUID±dashes, MariaDB singles and sets, whitespace,
-  rejects).
-- Unit: `GTID_Set::to_string` and `has_gtid` for domain keys; watermark
-  `[1, seq]`; `0-2-105` satisfies `0-1-100`.
+  rejects, including a MySQL token with a trailing colon).
+- Unit: `GTID_Set::to_string` (wire `0:1-270`) and `to_display_string`
+  (`0-1-270`) for domain keys; `has_gtid`; watermark `[1, seq]`; `0-2-105`
+  satisfies `0-1-100`.
 - Unit: `add_gtid_from_ok` MariaDB; `GTID_Server_Data` `ST=`/`I1=` with `0:100`
   (no dash-stripping).
 - Unit: `ST=0:1-270` renders as the sentinel `0-0-270`, and an OK packet for the
   same domain replaces it with the real `server_id`.
+- Unit: reader flavor tracking — a mixed `ST=` line, a UUID `I1=` after a
+  domain `ST=`, a domain `I1=`/`I3=` after a UUID `ST=`, and `I2=`/`I4=` with
+  no id established yet all disconnect with `active = false`.
+- Unit: `render_mariadb_domain_position` picks the requested domain of a
+  multi-domain set, fails closed without a domain on a multi-domain set, on an
+  unknown domain, and on a non-canonical domain id, and leaves the buffer
+  untouched on every failure.
 - Unit: `_is_valid_gtid` accepts `0-1-100` and still rejects junk.
 - Unit: `select_session_gtid` and MariaDB position selection are bounded and
   deduplicated; auxiliary lookup helpers preserve response metadata.
 - Existing MySQL causal-read TAP stays green.
-- Live MariaDB 10.11 probe: client OK-packet metadata is identical with GTID
-  lookup gate off/on; `GTID_session_collected` advances with the gate on; the
-  auxiliary connection is released when the session returns to the pool.
+- Live MariaDB 10.11 probe (requires `mysql-update_gtid_from_ok=true`): client
+  OK-packet metadata is identical with GTID lookup gate off/on;
+  `GTID_session_collected` advances with the gate on; the auxiliary connection
+  is released when the session returns to the pool.
 
 Binlog reader (sibling repo):
 
@@ -215,8 +263,12 @@ Binlog reader (sibling repo):
 
 ## Verification
 
-- ProxySQL: clean `PROXYSQL31=1 make debug`, 36/36 `gtid_parse_unit-t`,
-  73/73 `gtid_set_unit-t`, 119/119 `gtid_server_data_unit-t`, and the live
-  MariaDB metadata/pool-release probes. Existing MySQL GTID TAP unchanged.
+- ProxySQL: clean `PROXYSQL31=1 make debug`, 57/57 `gtid_parse_unit-t`,
+  73/73 `gtid_set_unit-t`, 152/152 `gtid_server_data_unit-t`, and the live
+  MariaDB metadata/pool-release probes (with `mysql-update_gtid_from_ok=true`).
+  Existing MySQL GTID TAP unchanged.
 - Reader: TAP build, parser unit binary, MariaDB live TAP, existing MySQL TAP
   unchanged.
+
+Not yet verified: an async auxiliary lookup. The lookup is still synchronous on
+the worker event loop; see the P1 limitation above.

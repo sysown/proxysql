@@ -4,7 +4,7 @@
 
 **Goal:** ProxySQL causal reads accept MariaDB `domain-server-seq` as well as MySQL `uuid:seq`, matching on domain sequence watermarks.
 
-**Architecture:** Auto-detect per string. Reuse `GTID_Set` with MariaDB key = decimal `domain_id`. Snapshot/OK-packet MariaDB positions insert `[1, seq]`. Wire `ST=`/`I1=` already works if the id has no dashes (`I1=0:271`); `to_string()` must not UUID-dash short keys. MySQL keeps `SESSION_TRACK_GTIDS`; MariaDB uses a bounded auxiliary connection for `SELECT @@gtid_binlog_pos` because MariaDB does not deliver session-track payloads.
+**Architecture:** Auto-detect per string. Reuse `GTID_Set` with MariaDB key = decimal `domain_id`. Snapshot/OK-packet MariaDB positions insert `[1, seq]`. Wire `ST=`/`I1=` already works if the id has no dashes (`I1=0:271`); `to_string()` must not UUID-dash short keys. MySQL keeps `SESSION_TRACK_GTIDS`; MariaDB uses a bounded auxiliary connection for `SELECT @@gtid_domain_id, @@gtid_binlog_pos` because MariaDB does not deliver session-track payloads. That auxiliary lookup is opt-in (`mysql-update_gtid_from_ok`) and still synchronous on the worker event loop — see the P1 limitation recorded in the design doc.
 
 **Tech Stack:** C++17, existing TAP unit harness (`test/tap/tests/unit`), `libproxysql.a`.
 
@@ -139,7 +139,7 @@ git commit -m "feat: parse MySQL and MariaDB GTID strings"
 - Modify: `include/proxysql_gtid.h`, `lib/proxysql_gtid.cpp`
 - Modify: `test/tap/tests/unit/gtid_set_unit-t.cpp`
 
-`stats_mysql_gtid_executed` uses `to_string()`. Reader wire also uses `to_string()`. UUID dash-insert at index 8 throws for key `"0"`.
+`stats_mysql_gtid_executed` uses `to_display_string()`. Reader wire uses `to_string()`. UUID dash-insert at index 8 throws for key `"0"`.
 
 - `to_string()` = wire: 32-hex → dashed UUID + `:` intervals; domain → `0:1-270`
 - `to_display_string()` = domain → `0-1-270` (last_server_id or 0); 32-hex unchanged from `to_string()`
@@ -346,11 +346,14 @@ Tests in `gtid_parse_unit-t.cpp`:
 
 `get_gtid` calls this helper after reading `SESSION_TRACK_GTIDS` and/or system variables.
 
-- [ ] **Step 1b: Unit-test `select_mariadb_binlog_position`**
+- [ ] **Step 1b: Unit-test `select_mariadb_binlog_position` / `render_mariadb_domain_position`**
 
 Bounded copy of the `@@gtid_binlog_pos` value into the connection's `gtid_uuid`
-buffer; rejects empty, oversized, and unchanged values without touching the
-buffer. Covered in `gtid_parse_unit-t.cpp`.
+buffer. The value may list several domains, so the helper takes the session's
+`@@gtid_domain_id` and renders only that domain as one `domain-server-seq`.
+Rejects empty, oversized, and unchanged values without touching the buffer, and
+fails closed when the domain is unknown and the position is multi-domain.
+Covered in `gtid_parse_unit-t.cpp`.
 
 - [ ] **Step 2: Run — FAIL**
 
@@ -358,9 +361,17 @@ buffer. Covered in `gtid_parse_unit-t.cpp`.
 
 `get_gtid` keeps `SESSION_TRACK_GTIDS` first. When it yields nothing and the
 backend is MariaDB with no result set pending (`mysql->field_count == 0`, so
-only writes and DDL qualify), run `SELECT @@gtid_binlog_pos` on the auxiliary
-connection and copy the native string into `gtid_uuid` / `buff`. Leave
+only writes and DDL qualify) **and `mysql-update_gtid_from_ok` is enabled**, run
+`SELECT @@gtid_domain_id, @@gtid_binlog_pos` on the auxiliary connection and
+copy the single-domain native string into `gtid_uuid` / `buff`. Leave
 `*trx_id` unused as today (caller parses later).
+
+The lookup is a blocking connect plus query on the worker event loop, so it is
+opt-in behind `mysql-update_gtid_from_ok` — the flag that consumes the
+collected GTID — and its read/write timeouts are capped at one second even when
+`mysql-connect_timeout_server` is larger. Consequence: MariaDB
+`gtid_from_hostgroup` requires `mysql-update_gtid_from_ok=true`. A full async
+sub-state is a follow-up.
 
 The auxiliary connection is created lazily, reused for the life of the
 pooled connection, released by `release_gtid_lookup_connection()` when the
@@ -438,11 +449,16 @@ git commit -m "test: MariaDB min_gtid causal read TAP"
 ### Task 7: Verification
 
 - [ ] `PROXYSQL31=1 make -C test/tap/tests/unit gtid_parse_unit-t gtid_set_unit-t gtid_server_data_unit-t`
-- [ ] Run the three binaries — all PASS
+- [ ] Run the three binaries — all PASS. Expected counts: 57/57 `gtid_parse_unit-t`, 73/73 `gtid_set_unit-t`, 152/152 `gtid_server_data_unit-t`
 - [ ] `PROXYSQL31=1 make build_lib` — compiles
+- [ ] `python3 test/tap/groups/check_groups.py --source` — all source tests registered
 - [ ] Existing MySQL GTID unit counts remain green (`gtid_set_unit-t` original cases, `gtid_server_data_unit-t` original cases)
 
 Do not claim TAP integration pass without running `run-tests-isolated.bash`.
+
+Open item, not closed by this branch: the MariaDB auxiliary lookup is
+synchronous on the worker event loop and gated behind
+`mysql-update_gtid_from_ok`. An async sub-state remains follow-up work.
 
 ---
 

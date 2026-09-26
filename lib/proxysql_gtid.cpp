@@ -283,7 +283,7 @@ void GTID_Set::set_server_id(const std::string& id, uint32_t server_id) {
 	last_server_id[id] = server_id;
 }
 
-uint32_t GTID_Set::get_server_id(const std::string& id) {
+uint32_t GTID_Set::get_server_id(const std::string& id) const {
 	auto it = last_server_id.find(id);
 	if (it == last_server_id.end()) {
 		return 0;
@@ -547,14 +547,83 @@ bool select_session_gtid(
 	return true;
 }
 
-bool select_mariadb_binlog_position(const char* position, char* buf, size_t buf_len) {
-	if (position == nullptr || buf == nullptr || buf_len == 0 || *position == '\0') {
+// Accepts only the canonical decimal spelling of a MariaDB domain id, so that
+// `0` and `00` cannot be confused for the same domain.
+static bool is_canonical_domain_id(const char* domain_id, size_t len) {
+	if (domain_id == nullptr || len == 0) {
+		return false;
+	}
+	if (domain_id[0] == '0') {
+		return len == 1;
+	}
+	for (size_t i = 0; i < len; i++) {
+		if (!std::isdigit(static_cast<unsigned char>(domain_id[i]))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool render_mariadb_domain_position(const GTID_Set& set, const char* domain_id,
+                                    char* buf, size_t buf_len) {
+	if (buf == nullptr || buf_len == 0 || set.map.empty()) {
 		return false;
 	}
 
-	std::unordered_map<std::string, std::string> variables;
-	variables["gtid_binlog_pos"] = position;
-	return select_session_gtid(nullptr, 0, variables, buf, buf_len);
+	std::string domain;
+	if (domain_id != nullptr && domain_id[0] != '\0') {
+		if (!is_canonical_domain_id(domain_id, strlen(domain_id))) {
+			return false;
+		}
+		domain.assign(domain_id);
+	} else if (set.map.size() == 1) {
+		// No domain was reported: a single-domain position is unambiguous,
+		// anything else must not be guessed.
+		domain = set.map.begin()->first;
+	} else {
+		return false;
+	}
+
+	auto entry = set.map.find(domain);
+	if (entry == set.map.end() || entry->second.empty()) {
+		return false;
+	}
+
+	trxid_t max_end = entry->second.front().end;
+	for (const auto& iv : entry->second) {
+		if (iv.end > max_end) {
+			max_end = iv.end;
+		}
+	}
+	if (max_end <= 0) {
+		return false;
+	}
+
+	std::string rendered = domain + "-" + std::to_string(set.get_server_id(domain)) + "-" +
+	                       std::to_string(max_end);
+	if (rendered.size() >= buf_len) {
+		return false;
+	}
+	if (strncmp(rendered.c_str(), buf, rendered.size()) == 0 &&
+			buf[rendered.size()] == '\0') {
+		return false;
+	}
+
+	memcpy(buf, rendered.c_str(), rendered.size() + 1);
+	return true;
+}
+
+bool select_mariadb_binlog_position(const char* position, const char* domain_id,
+                                    char* buf, size_t buf_len) {
+	if (position == nullptr || *position == '\0') {
+		return false;
+	}
+
+	GTID_Set set;
+	if (!parse_gtid_set(position, &set)) {
+		return false;
+	}
+	return render_mariadb_domain_position(set, domain_id, buf, buf_len);
 }
 
 static bool add_mysql_gtid_token(GTID_Set& set, const char* token, size_t len) {
@@ -575,10 +644,11 @@ static bool add_mysql_gtid_token(GTID_Set& set, const char* token, size_t len) {
 	const char* p = colon + 1;
 	const char* end = token + len;
 	bool any = false;
-	while (p < end) {
-		const char* next = static_cast<const char*>(memchr(p, ':', static_cast<size_t>(end - p)));
+	for (;;) {
+		const char* next = p < end ? static_cast<const char*>(memchr(p, ':', static_cast<size_t>(end - p))) : nullptr;
 		const char* iv_end = next ? next : end;
 		if (iv_end == p) {
+			// empty interval, including the empty one left by a trailing colon
 			return false;
 		}
 		std::string ivs(p, static_cast<size_t>(iv_end - p));

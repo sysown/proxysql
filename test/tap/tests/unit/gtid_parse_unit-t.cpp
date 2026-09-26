@@ -7,24 +7,120 @@
 #include <cstring>
 
 static void test_mariadb_binlog_position_selection() {
-	char position[16] = {0};
-	ok(select_mariadb_binlog_position("0-1-100", position, sizeof(position))
+	char position[32] = {0};
+	ok(select_mariadb_binlog_position("0-1-100", "0", position, sizeof(position))
 	       && strcmp(position, "0-1-100") == 0,
 	   "select MariaDB position copies the native value");
 
 	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("", position, sizeof(position))
+	ok(!select_mariadb_binlog_position("", "0", position, sizeof(position))
 	       && position[0] == static_cast<char>(0x5a),
 	   "select MariaDB position rejects an empty value without changing the buffer");
 
-	strcpy(position, "0-1-100");
-	ok(!select_mariadb_binlog_position("0-1-100", position, sizeof(position)),
+	memset(position, 0x5a, sizeof(position));
+	ok(!select_mariadb_binlog_position(nullptr, "0", position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "select MariaDB position rejects a null value without changing the buffer");
+
+	snprintf(position, sizeof(position), "%s", "0-1-100");
+	ok(!select_mariadb_binlog_position("0-1-100", "0", position, sizeof(position)),
 	   "select MariaDB position rejects an unchanged value");
 
 	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("0-1-100", position, 4)
+	ok(!select_mariadb_binlog_position("0-1-100", "0", position, 4)
 	       && memcmp(position, "\x5a\x5a\x5a\x5a", 4) == 0,
 	   "select MariaDB position rejects an oversized value without changing the buffer");
+
+	memset(position, 0, sizeof(position));
+	ok(select_mariadb_binlog_position("0-1-270,1-2-50", "1", position, sizeof(position))
+	       && strcmp(position, "1-2-50") == 0,
+	   "select MariaDB position extracts the requested domain of a multi-domain value");
+
+	memset(position, 0, sizeof(position));
+	ok(select_mariadb_binlog_position("0-1-270,1-2-50", "0", position, sizeof(position))
+	       && strcmp(position, "0-1-270") == 0,
+	   "select MariaDB position extracts the other requested domain of a multi-domain value");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!select_mariadb_binlog_position("0-1-270,1-2-50", nullptr, position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "select MariaDB position fails closed on multiple domains without a domain id");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!select_mariadb_binlog_position("0-1-270,1-2-50", "", position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "select MariaDB position fails closed on multiple domains with an empty domain id");
+
+	memset(position, 0, sizeof(position));
+	ok(select_mariadb_binlog_position("0-1-270", nullptr, position, sizeof(position))
+	       && strcmp(position, "0-1-270") == 0,
+	   "select MariaDB position accepts a single-domain value without a domain id");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!select_mariadb_binlog_position("0-1-270", "7", position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "select MariaDB position fails closed when the domain is absent from the value");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!select_mariadb_binlog_position("0-1-270", "00", position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "select MariaDB position rejects a non-canonical domain id");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!select_mariadb_binlog_position("0-1-270,aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1",
+	                                    "0", position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "select MariaDB position rejects mixed GTID flavors");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!select_mariadb_binlog_position("0-1-270,", "0", position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "select MariaDB position rejects a malformed position");
+}
+
+static void test_render_mariadb_domain_position() {
+	GTID_Set set;
+	ok(!render_mariadb_domain_position(set, "0", nullptr, 0),
+	   "render MariaDB position rejects a missing buffer");
+
+	char position[32];
+	memset(position, 0x5a, sizeof(position));
+	ok(!render_mariadb_domain_position(set, "0", position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "render MariaDB position rejects an empty set without changing the buffer");
+
+	set.add("0", trxid_t(1), trxid_t(270));
+	set.set_server_id("0", 5);
+	set.add("1", trxid_t(1), trxid_t(50));
+	set.set_server_id("1", 6);
+
+	memset(position, 0, sizeof(position));
+	ok(render_mariadb_domain_position(set, "1", position, sizeof(position))
+	       && strcmp(position, "1-6-50") == 0,
+	   "render MariaDB position uses the domain server id and highest end");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!render_mariadb_domain_position(set, "2", position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "render MariaDB position fails closed on an unknown domain");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!render_mariadb_domain_position(set, nullptr, position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "render MariaDB position fails closed on a multi-domain set without a domain id");
+
+	memset(position, 0x5a, sizeof(position));
+	ok(!render_mariadb_domain_position(set, "0", position, 0)
+	       && position[0] == static_cast<char>(0x5a),
+	   "render MariaDB position rejects a zero-length buffer");
+
+	GTID_Set single;
+	single.add("3", trxid_t(1), trxid_t(9));
+	single.set_server_id("3", 7);
+	memset(position, 0, sizeof(position));
+	ok(render_mariadb_domain_position(single, nullptr, position, sizeof(position))
+	       && strcmp(position, "3-7-9") == 0,
+	   "render MariaDB position accepts a single-domain set without a domain id");
 }
 
 static void test_session_tracking_reset() {
@@ -59,7 +155,7 @@ static void test_session_tracking_reset() {
 }
 
 int main() {
-	plan(36);
+	plan(57);
 	ok(test_init_minimal() == 0, "test_init_minimal() succeeds");
 	ParsedGTID p;
 
@@ -92,6 +188,15 @@ int main() {
 	   "MySQL set keeps sparse intervals");
 	ok(!parse_gtid_set("0-1-270,aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1", &set),
 	   "reject mixed flavors in one set");
+	ok(!parse_gtid_set("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1:", &set),
+	   "reject a MySQL token with a trailing colon");
+	ok(!parse_gtid_set("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1:2:", &set),
+	   "reject a MySQL token with a trailing colon after several intervals");
+	ok(!parse_gtid_set("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:", &set),
+	   "reject a MySQL token with no interval");
+	ok(parse_gtid_set("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1:2:5", &set)
+	       && set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 2),
+	   "accept a MySQL token with several intervals");
 	ok(!parse_gtid_set("", &set), "reject empty");
 	ok(!parse_gtid(" 0-1-100 ", &p), "reject surrounding whitespace");
 	ok(!parse_gtid("0-1-100", nullptr), "reject null out");
@@ -162,7 +267,7 @@ int main() {
 	       && strcmp(session_gtid, "0-1-100") == 0,
 	   "select session GTID prefers binlog position");
 
-	strcpy(session_gtid, "0-1-100");
+	snprintf(session_gtid, sizeof(session_gtid), "%s", "0-1-100");
 	ok(!select_session_gtid(nullptr, 0, sysvars,
 	                        session_gtid, sizeof(session_gtid)),
 	   "select session GTID rejects unchanged value");
@@ -178,6 +283,7 @@ int main() {
 	   "select session GTID leaves buffer unchanged without a value");
 
 	test_mariadb_binlog_position_selection();
+	test_render_mariadb_domain_position();
 	test_session_tracking_reset();
 	test_cleanup_minimal();
 	return exit_status();

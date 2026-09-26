@@ -53,7 +53,7 @@ class GTID_Set {
 		bool add(const std::string& uuid, const std::string &s);
 
 		void set_server_id(const std::string& id, uint32_t server_id);
-		uint32_t get_server_id(const std::string& id);
+		uint32_t get_server_id(const std::string& id) const;
 
 		const bool has_gtid(const std::string& uuid, const trxid_t trxid);
 		const std::string to_string(void);
@@ -75,7 +75,16 @@ bool select_session_gtid(
 	const char* session_track_gtids, size_t gtids_len,
 	const std::unordered_map<std::string, std::string>& sysvars,
 	char* buf, size_t buf_len);
-bool select_mariadb_binlog_position(const char* position, char* buf, size_t buf_len);
+// Renders the native MariaDB `domain-server-seq` position of a single domain.
+// `domain_id` selects the domain; when it is NULL or empty the set must hold
+// exactly one domain, otherwise the call fails closed. `buf` is left untouched
+// on failure, and also when the rendered value already matches its contents.
+bool render_mariadb_domain_position(const GTID_Set& set, const char* domain_id,
+                                    char* buf, size_t buf_len);
+// Parses a MariaDB `@@gtid_binlog_pos` value and renders the `domain_id`
+// portion of it. Multi-domain positions must name the domain explicitly.
+bool select_mariadb_binlog_position(const char* position, const char* domain_id,
+                                    char* buf, size_t buf_len);
 bool parse_gtid_set(const char* encoded, GTID_Set* out);
 
 #endif /* PROXYSQL_GTID */
