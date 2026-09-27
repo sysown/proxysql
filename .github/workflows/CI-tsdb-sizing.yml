@@ -1,0 +1,193 @@
+name: CI-tsdb-sizing
+
+# Nightly measurement job for the TSDB sizing lab (test/tsdb-lab/). This is
+# NOT a per-PR gate: it builds ProxySQL, expands the committed real-metric
+# fixture into a realistically sized proxysql_stats.db (raw + rollups + a
+# 3-node cluster tier), measures storage/query characteristics with
+# measure.py, and uploads the printed report as a job artifact. The job
+# goes red only when measure.py detects drift beyond baseline.json's
+# +/-25% default threshold on EITHER of two different-purpose gates:
+# bytes/row (guards fixture/tooling consistency -- it is fixture-text
+# derived and does NOT see product-side label/metric growth until a human
+# re-runs capture.bash and commits a refreshed fixture, see
+# test/tsdb-lab/README.md's "Maintenance" section) and the whole-file
+# overhead ratio (guards schema/index bloat -- sensitive to a new column or
+# index even when payload bytes don't change). Total DB size and query
+# latency are reported only, never gated. That two-gate split is the whole
+# point of running it nightly on a schedule instead of on every push.
+#
+# IMPORTANT: this workflow only starts running once merged to the default
+# branch (schedule/workflow_dispatch don't fire off a branch) -- see
+# test/tsdb-lab/README.md's "After merge: first-run validation checklist"
+# for the owner actions that are still outstanding as of this commit
+# (manual dispatch, confirming the 4h/7d profile, replacing the analogy-
+# derived build-time term below, confirming runner disk headroom).
+#
+# Profile sizing (2026-08-13 measurement, see
+# docs/superpowers/specs/2026-08-13-tsdb-sizing-lab-design.md "Measured
+# results"): the originally planned CI profile (--raw-window 24h --span 14d
+# --nodes 3) was actually run once against a local release (PROXYSQL31)
+# build to check disk feasibility. It produced ~28.7M rows and a 6.0 GB
+# proxysql_stats.db in 113s -- on top of the >1.4 GB the repo build itself
+# consumes, that is too tight a margin for a standard GitHub-hosted runner's
+# disk. bytes/row was confirmed scale-invariant (0.0% drift vs the
+# small-profile baseline.json), so a much smaller profile below gives the
+# same sizing signal -- and still exercises multi-hour rollup catch-up and
+# the 3-node cluster leader cost -- at a projected ~1 GB DB / ~20-30s
+# expand time (linearly scaled from the measured 24h/14d/3-node rate:
+# 7,144,960 raw rows/24h/node, 10,008 hourly rows/day, same rate for the
+# cluster tier per source node). IMPORTANT: this 4h/7d/3-node profile has
+# NOT itself been run end-to-end -- only the 24h/14d/3-node profile above
+# was actually executed. The ~1 GB / ~20-30s figures are a projection, not
+# a measurement of this exact profile; the first nightly/dispatched run of
+# this workflow is that validation -- check its printed report against the
+# projection above.
+#
+# Security note: every 'run:' step below uses only static, repo-controlled
+# values (no untrusted user input is interpolated into a shell command).
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 03:22 UTC daily -- off the top-of-hour to avoid the scheduled-workflow
+    # stampede on GitHub's infrastructure.
+    - cron: '22 3 * * *'
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    # The lab-step terms below are grounded in this session's measurements:
+    # rollup wait is hard-bounded at 10 min in that step's own poll loop,
+    # and expand/measure/checkout/apt/artifact overhead is measured (small
+    # profile) or linearly projected (see the profile-sizing comment above)
+    # at under ~4 min total. The build term (120 min) is NOT a measurement
+    # of this job's build step -- it's taken by analogy from comparable
+    # from-scratch full builds elsewhere in this repo (CI-package-*-v31.yml,
+    # build+package, same order of magnitude of work minus packaging). A
+    # local `PROXYSQL31=1 make clean && make` this session ran in ~55s, but
+    # `make clean` doesn't clean deps/ (only `make cleanall` does) and
+    # deps/ was already built beforehand, so that only timed a lib+src
+    # recompile, not a from-scratch build of the 25+ vendored dependencies
+    # -- the dominant, slow part of a real CI build -- so it isn't usable
+    # as the build-time term. 120 (build, analogy) + 10 (rollup, bounded) +
+    # ~4 (everything else, measured/projected) = ~134 min; 150 keeps a
+    # deliberate margin over that without carrying forward the previous
+    # unexamined 180-minute guess -- but the build term itself should be
+    # replaced with a real measurement after this workflow's first run.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install build dependencies
+        # Package list per INSTALL.md's "Debian / Ubuntu based" from-source
+        # build section.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            automake bzip2 cmake make g++ gcc git openssl libssl-dev \
+            libgnutls28-dev libmysqlclient-dev libunwind8 libunwind-dev \
+            uuid-dev libncurses-dev libicu-dev libevent-dev libtirpc-dev
+
+      - name: Build ProxySQL (PROXYSQL31)
+        # Release build: the TSDB sizing lab only issues normal admin SQL
+        # (PROXYSQL SHUTDOWN, SET tsdb-*, LOAD TSDB VARIABLES TO RUNTIME),
+        # none of which requires a debug-only admin command.
+        run: PROXYSQL31=1 make -j$(nproc)
+
+      - name: Create TSDB schema (start once, then stop)
+        run: |
+          mkdir -p /tmp/tsdb-lab-ci
+          cat > /tmp/tsdb-lab-ci/n.cnf <<'EOF'
+          datadir="/tmp/tsdb-lab-ci"
+          admin_variables = { admin_credentials="admin:admin"; mysql_ifaces="0.0.0.0:16392" }
+          mysql_variables = { threads=2; interfaces="0.0.0.0:16393" }
+          EOF
+          src/proxysql --initial -f -c /tmp/tsdb-lab-ci/n.cnf -D /tmp/tsdb-lab-ci &
+          echo "started pid $!"
+          for i in $(seq 1 30); do
+            mysql -uadmin -padmin -h127.0.0.1 -P16392 -e "SELECT 1" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          mysql -uadmin -padmin -h127.0.0.1 -P16392 -e "PROXYSQL SHUTDOWN"
+          sleep 2
+          test -f /tmp/tsdb-lab-ci/proxysql_stats.db
+
+      - name: Expand fixture into raw/hourly/cluster tiers
+        # CI profile, sized to fit a standard GitHub-hosted runner's disk
+        # (see the top-of-file comment and the design spec's "Measured
+        # results" section): 4h of raw (5s) metrics, 7d total retention,
+        # 3-node cluster tier. Projected ~1 GB DB / ~20-30s expand time,
+        # scaled from the measured 24h/14d/3-node run (28.7M rows, 6.0 GB,
+        # 113s) using the confirmed-scale-invariant bytes/row.
+        run: |
+          python3 test/tsdb-lab/expand.py \
+            --db /tmp/tsdb-lab-ci/proxysql_stats.db \
+            --raw-window 4h --span 7d --nodes 3
+
+      - name: Start ProxySQL and wait for hourly rollup catch-up
+        # tsdb_downsample_metrics() fires once immediately after
+        # tsdb-enabled is switched on (its internal timer starts at 0), then
+        # not again for an hour -- so tsdb_metrics_hour grows exactly once
+        # here as it catches up the raw window we just wrote via expand.py,
+        # then goes flat. Poll stats_history.tsdb_metrics_hour's row count
+        # until it holds steady across 3 consecutive samples, bounded so a
+        # stuck rollup can't hang the job forever.
+        run: |
+          src/proxysql -f -c /tmp/tsdb-lab-ci/n.cnf -D /tmp/tsdb-lab-ci &
+          echo "started pid $!"
+          for i in $(seq 1 30); do
+            mysql -uadmin -padmin -h127.0.0.1 -P16392 -e "SELECT 1" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          mysql -uadmin -padmin -h127.0.0.1 -P16392 -e \
+            "SET tsdb-enabled='1'; LOAD TSDB VARIABLES TO RUNTIME;"
+
+          wait_start=$(date +%s)
+          prev=-1
+          stable=0
+          max_iterations=120   # bounded wait: up to 120 * 5s = 10 minutes
+          iter=0
+          for iter in $(seq 1 "$max_iterations"); do
+            cur=$(mysql -uadmin -padmin -h127.0.0.1 -P16392 -N -B \
+              -e "SELECT COUNT(*) FROM stats_history.tsdb_metrics_hour" 2>/dev/null || echo "")
+            if [ "$cur" = "$prev" ] && [ -n "$cur" ]; then
+              stable=$((stable + 1))
+            else
+              stable=0
+            fi
+            prev="$cur"
+            if [ "$stable" -ge 3 ]; then
+              break
+            fi
+            sleep 5
+          done
+          wait_end=$(date +%s)
+          echo "rollup catch-up: $((wait_end - wait_start))s wall time, " \
+               "tsdb_metrics_hour final row count=${prev} " \
+               "(stable=${stable}/3, iterations=${iter}/${max_iterations})" \
+            | tee /tmp/tsdb-lab-ci/rollup-catchup.log
+
+          mysql -uadmin -padmin -h127.0.0.1 -P16392 -e "PROXYSQL SHUTDOWN"
+          sleep 2
+
+      - name: Measure
+        run: |
+          python3 test/tsdb-lab/measure.py \
+            --db /tmp/tsdb-lab-ci/proxysql_stats.db \
+            --baseline test/tsdb-lab/baseline.json \
+            | tee /tmp/tsdb-lab-ci/report.txt
+
+      - name: Assemble report artifact
+        if: always()
+        run: |
+          mkdir -p /tmp/tsdb-lab-ci/artifact
+          cp /tmp/tsdb-lab-ci/report.txt /tmp/tsdb-lab-ci/artifact/ 2>/dev/null || true
+          cp /tmp/tsdb-lab-ci/rollup-catchup.log /tmp/tsdb-lab-ci/artifact/ 2>/dev/null || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tsdb-sizing-report-${{ github.run_id }}
+          path: /tmp/tsdb-lab-ci/artifact/
+          if-no-files-found: warn

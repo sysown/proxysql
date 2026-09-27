@@ -45,6 +45,6 @@ REST API endpoints are available under `/api/tsdb/` for external integrations.
 
 ## Retention
 
-- Raw metrics (`tsdb_metrics`): `tsdb-retention_days`
+- Raw metrics (`tsdb_metrics`): `tsdb-retention_days` (default 2 days)
 - Backend probes (`tsdb_backend_health`): `tsdb-retention_days`
-- Hourly rollups (`tsdb_metrics_hour`): fixed 365 days
+- Hourly rollups (`tsdb_metrics_hour`): `tsdb-hourly_retention_days` (default 365 days)

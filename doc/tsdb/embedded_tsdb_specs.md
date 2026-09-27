@@ -30,9 +30,9 @@ Embedded time-series storage in SQLite for ProxySQL runtime metrics and backend 
 
 ## Retention
 
-- Raw metrics retention: `tsdb-retention_days`
+- Raw metrics retention: `tsdb-retention_days` (default 2 days)
 - Backend probe retention: `tsdb-retention_days`
-- Hourly rollup retention: 365 days
+- Hourly rollup retention: `tsdb-hourly_retention_days` (default 365 days)
 
 ## Variable Semantics
 
