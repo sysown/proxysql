@@ -120,6 +120,7 @@ static void check_pgsql_pool_state(PgSQL_SrvC *server, unsigned int exp_used, un
 static void test_mysql_is_expired() {
 	MySQL_Connection connection;
 	connection.creation_time = 1 * 1000 * 1000;
+	const unsigned int saved_max_age = mysql_thread___connection_max_age_ms;
 
 	mysql_thread___connection_max_age_ms = 0;
 	ok(connection.is_expired(10 * 1000 * 1000) == false, "MySQL is_expired is false when connection_max_age_ms is 0");
@@ -129,11 +130,14 @@ static void test_mysql_is_expired() {
 		"MySQL is_expired is false at exactly max age");
 	ok(connection.is_expired(connection.creation_time + 1000 * 1000ULL + 1) == true,
 		"MySQL is_expired is true past max age");
+
+	mysql_thread___connection_max_age_ms = saved_max_age;
 }
 
 static void test_pgsql_is_expired() {
 	PgSQL_Connection connection(false);
 	connection.creation_time = 1 * 1000 * 1000;
+	const unsigned int saved_max_age = pgsql_thread___connection_max_age_ms;
 
 	pgsql_thread___connection_max_age_ms = 0;
 	ok(connection.is_expired(10 * 1000 * 1000) == false, "PgSQL is_expired is false when connection_max_age_ms is 0");
@@ -143,6 +147,8 @@ static void test_pgsql_is_expired() {
 		"PgSQL is_expired is false at exactly max age");
 	ok(connection.is_expired(connection.creation_time + 1000 * 1000ULL + 1) == true,
 		"PgSQL is_expired is true past max age");
+
+	pgsql_thread___connection_max_age_ms = saved_max_age;
 }
 
 static void test_reset_preserves_creation_time() {
@@ -161,17 +167,26 @@ static void test_destroy_does_not_recycle_expired() {
 	MySrvC *server = create_server(201, "max-age-destroy");
 	MySQL_Connection *connection = create_used_connection(server);
 	connection->creation_time = 1;
+	// Every override here is process-global: save and restore each one so a
+	// later test in this binary cannot silently inherit it.
+	const unsigned int saved_max_age = mysql_thread___connection_max_age_ms;
+	const unsigned int saved_queue_length = GloMTH->variables.connpoll_reset_queue_length;
 	mysql_thread___connection_max_age_ms = 1;
 	GloMTH->variables.connpoll_reset_queue_length = 50;
 
 	MyHGM->destroy_MyConn_from_pool(connection);
 	check_pool_state(server, 0, 0, "expired healthy connection is destroyed instead of reset-queued");
+
+	mysql_thread___connection_max_age_ms = saved_max_age;
+	GloMTH->variables.connpoll_reset_queue_length = saved_queue_length;
 }
 
 static void test_idle_purge_drops_expired() {
 	MySrvC *server = create_server(202, "max-age-idle");
 	MySQL_Connection *connection = create_used_connection(server);
 	connection->creation_time = 1;
+	const unsigned int saved_max_age = mysql_thread___connection_max_age_ms;
+	const unsigned int saved_free_pct = mysql_thread___free_connections_pct;
 	mysql_thread___connection_max_age_ms = 1;
 	mysql_thread___free_connections_pct = 100;
 
@@ -182,6 +197,9 @@ static void test_idle_purge_drops_expired() {
 	MyHGM->drop_all_idle_connections();
 	MyHGM->wrunlock();
 	check_pool_state(server, 0, 0, "idle purge deletes expired free-pool connections");
+
+	mysql_thread___connection_max_age_ms = saved_max_age;
+	mysql_thread___free_connections_pct = saved_free_pct;
 }
 
 struct ReadLockProbe {
@@ -232,62 +250,93 @@ static void test_glomth_read_lock_accessors() {
 	GloMTH->wrunlock();
 }
 
-static void test_mysql_pinging_still_destroys_expired(MySQL_Thread &worker) {
+// ~MySQL_Thread walks mypolls and dereferences every data stream still
+// registered there, so a data stream handed to a poll array must outlive the
+// thread that owns the array. These fixtures are therefore declared before the
+// worker in main(): the block then destroys the worker first and the session
+// and data stream last.
+struct MySQL_Pinging_Poll {
+	MySQL_Session session;
+	MySQL_Data_Stream myds;
+};
+
+struct PgSQL_Pinging_Poll {
+	PgSQL_Session session;
+	PgSQL_Data_Stream myds;
+};
+
+static void register_poll(MySQL_Thread &worker, MySQL_Pinging_Poll &poll) {
+	poll.session.thread = &worker;
+	poll.session.status = PINGING_SERVER;
+	poll.session.connections_handler = true;
+	poll.myds.sess = &poll.session;
+	worker.mypolls.add(POLLIN, -1, &poll.myds, worker.curtime);
+}
+
+static void register_poll(PgSQL_Thread &worker, PgSQL_Pinging_Poll &poll) {
+	poll.session.thread = &worker;
+	poll.session.status = PINGING_SERVER;
+	poll.session.connections_handler = true;
+	poll.myds.sess = &poll.session;
+	worker.mypolls.add(POLLIN, -1, &poll.myds, worker.curtime);
+}
+
+static void test_mysql_pinging_still_destroys_expired(MySQL_Thread &worker, MySQL_Pinging_Poll &poll) {
 	MySrvC *server = create_server(203, "max-age-pinging");
 	MySQL_Connection *connection = create_used_connection(server);
 	connection->creation_time = 1;
+	const unsigned int saved_max_age = mysql_thread___connection_max_age_ms;
 	mysql_thread___connection_max_age_ms = 1;
 
-	MySQL_Session session;
-	session.thread = &worker;
-	session.status = PINGING_SERVER;
-	session.connections_handler = true;
+	poll.myds.myconn = connection;
+	register_poll(worker, poll);
 
-	MySQL_Data_Stream myds;
-	myds.sess = &session;
-	myds.myconn = connection;
-	worker.mypolls.add(POLLIN, -1, &myds, worker.curtime);
-
-	myds.return_MySQL_Connection_To_Pool();
+	poll.myds.return_MySQL_Connection_To_Pool();
+	// Unregister again: the poll array must not keep pointing at the fixture
+	// once the case that needed the registration is done.
+	worker.mypolls.remove_index_fast(worker.mypolls.len - 1);
 
 	check_pool_state(server, 0, 0, "MySQL PINGING_SERVER session still destroys an expired connection");
+
+	mysql_thread___connection_max_age_ms = saved_max_age;
 }
 
-static void test_mysql_pinging_keeps_stmts_exemption(MySQL_Thread &worker) {
+static void test_mysql_pinging_keeps_stmts_exemption(MySQL_Thread &worker, MySQL_Pinging_Poll &poll) {
 	MySrvC *server = create_server(204, "max-age-pinging-stmts");
 	MySQL_Connection *connection = create_used_connection(server);
 	connection->creation_time = monotonic_time();
+	// Every override here is process-global: save and restore each one so a
+	// later test in this binary cannot silently inherit it.
+	const unsigned int saved_max_age = mysql_thread___connection_max_age_ms;
+	const unsigned int saved_reset_algo = mysql_thread___reset_connection_algorithm;
+	const unsigned int saved_queue_length = GloMTH->variables.connpoll_reset_queue_length;
+	const unsigned int saved_max_stmts = GloMTH->variables.max_stmts_per_connection;
 	mysql_thread___connection_max_age_ms = 0;
 	mysql_thread___reset_connection_algorithm = 0;
 	// Keep the reset queue out of the picture, so a connection that lost the
-	// PINGING_SERVER exemption would be destroyed rather than re-queued. Both
-	// overrides are process-global: restore the values the earlier cases left
-	// behind instead of leaking them into the rest of the run.
-	const unsigned int saved_queue_length = GloMTH->variables.connpoll_reset_queue_length;
-	const unsigned int saved_max_stmts = GloMTH->variables.max_stmts_per_connection;
+	// PINGING_SERVER exemption would be destroyed rather than re-queued.
 	GloMTH->variables.connpoll_reset_queue_length = 0;
 	GloMTH->variables.max_stmts_per_connection = 0;
 	connection->local_stmts->backend_stmt_to_global_ids[1] = 2;
 
-	MySQL_Session session;
-	session.thread = &worker;
-	session.status = PINGING_SERVER;
-	session.connections_handler = true;
+	poll.myds.myconn = connection;
+	register_poll(worker, poll);
 
-	MySQL_Data_Stream myds;
-	myds.sess = &session;
-	myds.myconn = connection;
-	worker.mypolls.add(POLLIN, -1, &myds, worker.curtime);
-
-	myds.return_MySQL_Connection_To_Pool();
+	poll.myds.return_MySQL_Connection_To_Pool();
+	worker.mypolls.remove_index_fast(worker.mypolls.len - 1);
 	check_pool_state(server, 1, 0, "MySQL PINGING_SERVER session keeps a too_many_stmts connection in the pool");
 	worker.return_local_connections();
 
+	mysql_thread___connection_max_age_ms = saved_max_age;
+	mysql_thread___reset_connection_algorithm = saved_reset_algo;
 	GloMTH->variables.connpoll_reset_queue_length = saved_queue_length;
 	GloMTH->variables.max_stmts_per_connection = saved_max_stmts;
 }
 
 static void test_pgsql_pinging_still_destroys_expired() {
+	// Same ordering requirement as the MySQL cases: ~PgSQL_Thread walks
+	// mypolls, so the fixture is declared before the worker on purpose.
+	PgSQL_Pinging_Poll poll;
 	PgSQL_Thread worker;
 	if (!worker.init()) {
 		BAIL_OUT("PgSQL_Thread::init() failed");
@@ -297,21 +346,18 @@ static void test_pgsql_pinging_still_destroys_expired() {
 	PgSQL_SrvC *server = create_pgsql_server(211, "max-age-pinging-pg");
 	PgSQL_Connection *connection = create_used_pgsql_connection(server);
 	connection->creation_time = 1;
+	const unsigned int saved_max_age = pgsql_thread___connection_max_age_ms;
 	pgsql_thread___connection_max_age_ms = 1;
 
-	PgSQL_Session session;
-	session.thread = &worker;
-	session.status = PINGING_SERVER;
-	session.connections_handler = true;
+	poll.myds.myconn = connection;
+	register_poll(worker, poll);
 
-	PgSQL_Data_Stream myds;
-	myds.sess = &session;
-	myds.myconn = connection;
-	worker.mypolls.add(POLLIN, -1, &myds, worker.curtime);
-
-	myds.return_MySQL_Connection_To_Pool();
+	poll.myds.return_MySQL_Connection_To_Pool();
+	worker.mypolls.remove_index_fast(worker.mypolls.len - 1);
 
 	check_pgsql_pool_state(server, 0, 0, "PgSQL PINGING_SERVER session still destroys an expired connection");
+
+	pgsql_thread___connection_max_age_ms = saved_max_age;
 }
 
 int main() {
@@ -336,14 +382,19 @@ int main() {
 	test_idle_purge_drops_expired();
 	test_glomth_read_lock_accessors();
 	{
+		// The fixture is declared before the worker on purpose: the block
+		// destroys the worker first, and ~MySQL_Thread only then walks
+		// mypolls, so the session and data stream it points at are still
+		// alive at that point.
+		MySQL_Pinging_Poll poll;
 		MySQL_Thread worker;
 		if (!worker.init()) {
 			BAIL_OUT("MySQL_Thread::init() failed");
 		}
 		worker.curtime = monotonic_time();
 
-		test_mysql_pinging_still_destroys_expired(worker);
-		test_mysql_pinging_keeps_stmts_exemption(worker);
+		test_mysql_pinging_still_destroys_expired(worker, poll);
+		test_mysql_pinging_keeps_stmts_exemption(worker, poll);
 	}
 	test_pgsql_pinging_still_destroys_expired();
 

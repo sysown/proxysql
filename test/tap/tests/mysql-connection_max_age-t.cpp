@@ -90,10 +90,16 @@ static bool select1(MYSQL* c) {
 // of the group.
 static bool restore_variables(MYSQL* a, const std::string& max_age, const std::string& reset_algo,
                               const std::string& multiplexing) {
-	return admin_exec(a, ("SET mysql-connection_max_age_ms=" + max_age).c_str()) &&
-	       admin_exec(a, ("SET mysql-reset_connection_algorithm=" + reset_algo).c_str()) &&
-	       admin_exec(a, ("SET mysql-multiplexing=" + multiplexing).c_str()) &&
-	       admin_exec(a, "LOAD MYSQL VARIABLES TO RUNTIME");
+	// Each statement is attempted even when an earlier one fails: chaining
+	// them with && would skip the remaining SETs and the LOAD, leaving the
+	// runtime configuration changed for later tests in the group. &= does not
+	// short-circuit, so all four run and the verdict is reported afterwards.
+	bool restored = true;
+	restored &= admin_exec(a, ("SET mysql-connection_max_age_ms=" + max_age).c_str());
+	restored &= admin_exec(a, ("SET mysql-reset_connection_algorithm=" + reset_algo).c_str());
+	restored &= admin_exec(a, ("SET mysql-multiplexing=" + multiplexing).c_str());
+	restored &= admin_exec(a, "LOAD MYSQL VARIABLES TO RUNTIME");
+	return restored;
 }
 
 int main(int argc, char** argv) {

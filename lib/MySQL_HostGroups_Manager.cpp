@@ -135,13 +135,21 @@ T j_get_srv_default_int_val(
 // thread-local mysql_thread___connection_max_age_ms is always 0 here.
 // Expiry checks in this worker must read the live global instead, under
 // the handler lock that guards it against a concurrent variable update.
-static bool MyConn_expired_by_max_age(MySQL_Connection *c) {
+// The read is done once per reset batch: taking the lock per connection
+// would let a concurrent variable flush stall recycling of the whole
+// pool, and a batch is short enough that one snapshot per batch is
+// equivalent for expiry purposes.
+static unsigned long long MyHGM_current_max_age_ms() {
 	if (GloMTH == NULL) {
-		return false;
+		return 0;
 	}
 	GloMTH->rdlock();
 	unsigned long long max_age_ms = GloMTH->variables.connection_max_age_ms;
 	GloMTH->rdunlock();
+	return max_age_ms;
+}
+
+static bool MyConn_expired_by_max_age(MySQL_Connection *c, unsigned long long max_age_ms) {
 	if (max_age_ms == 0) {
 		return false;
 	}
@@ -172,11 +180,15 @@ static void * HGCU_thread_run() {
 		int *statuses=(int *)malloc(sizeof(int)*l);
 		my_bool *ret=(my_bool *)malloc(sizeof(my_bool)*l);
 		int i;
+		// One snapshot for the whole batch: the handler lock is taken once
+		// here instead of once per pooled connection, and every connection
+		// in the batch is judged against the same max age.
+		const unsigned long long max_age_ms = MyHGM_current_max_age_ms();
 		for (i=0;i<(int)l;i++) {
 			myconn->reset();
 			MyHGM->increase_reset_counter();
 			myconn=(MySQL_Connection *)conn_array->index(i);
-			if (MyConn_expired_by_max_age(myconn)) {
+			if (MyConn_expired_by_max_age(myconn, max_age_ms)) {
 				// Aged out while waiting in the reset queue: skip the
 				// COM_CHANGE_USER and let the sweep below destroy it.
 				statuses[i]=0; ret[i]=1;
@@ -211,7 +223,7 @@ static void * HGCU_thread_run() {
 			if (statuses[i]==0) {
 				myconn=(MySQL_Connection *)conn_array->remove_index_fast(i);
 				if (!ret[i]) {
-					if (MyConn_expired_by_max_age(myconn)) {
+					if (MyConn_expired_by_max_age(myconn, max_age_ms)) {
 						// Aged out during the reset: destroy instead of pooling.
 						myconn->send_quit=false;
 						MyHGM->destroy_MyConn_from_pool(myconn);
@@ -230,6 +242,11 @@ static void * HGCU_thread_run() {
 		unsigned long long now=monotonic_time();
 		while (conn_array->len && ((monotonic_time() - now) < 1000000)) {
 			usleep(50);
+			// Re-read once per polling round rather than once per connection:
+			// this loop can spin for up to a second, so the snapshot taken
+			// with the batch would already be stale by the time a connection
+			// completes its async CHANGE_USER.
+			const unsigned long long round_max_age_ms = MyHGM_current_max_age_ms();
 			for (i=0;i<(int)conn_array->len;i++) {
 				myconn=(MySQL_Connection *)conn_array->index(i);
 				if (myconn->mysql->net.pvio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
@@ -252,7 +269,7 @@ static void * HGCU_thread_run() {
 				if (statuses[i]==0) {
 					myconn=(MySQL_Connection *)conn_array->remove_index_fast(i);
 					if (!ret[i]) {
-						if (MyConn_expired_by_max_age(myconn)) {
+						if (MyConn_expired_by_max_age(myconn, round_max_age_ms)) {
 							// Aged out during the async reset: destroy instead of pooling.
 							myconn->send_quit=false;
 							MyHGM->destroy_MyConn_from_pool(myconn);
