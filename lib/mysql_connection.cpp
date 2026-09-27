@@ -3344,6 +3344,33 @@ void MySQL_Connection::reset() {
 	options.session_track_state_sent = false;
 }
 
+// Picks the credential to authenticate the auxiliary lookup with: a stored
+// sha1 hash is used as-is, a plaintext password is sent as sent.
+static char *gtid_lookup_auth_password(MySQL_Connection_userinfo *userinfo) {
+	if (userinfo->password == nullptr) {
+		return NULL;
+	}
+	if (userinfo->password[0] == '*') {
+		return userinfo->sha1_pass;
+	}
+	return userinfo->password;
+}
+
+// Connects the auxiliary lookup, resolving the server address the same way the
+// regular connection does: a named server is reached over TCP, while port 0
+// means a local socket.
+static MYSQL *gtid_lookup_real_connect(MYSQL *lookup_mysql, MySrvC *parent,
+                                       MySQL_Connection_userinfo *userinfo, char *auth_password) {
+	if (parent->port) {
+		const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
+		const char *host_ip = res_ip.empty() ? parent->address : res_ip.c_str();
+		return mysql_real_connect(lookup_mysql, host_ip, userinfo->username, auth_password, NULL,
+		                          parent->port, NULL, 0);
+	}
+	return mysql_real_connect(lookup_mysql, "localhost", userinfo->username, auth_password, NULL,
+	                          0, parent->address, 0);
+}
+
 // MariaDB has no SESSION_TRACK_GTIDS, so the GTID watermark is read from a
 // second connection to the same server. The connect and the query both run
 // synchronously on the worker event loop, so the waits are capped at one second
@@ -3379,22 +3406,8 @@ bool MySQL_Connection::connect_gtid_lookup_connection() {
 		MySQL_Connection::set_ssl_params(lookup_mysql, lookup_ssl_params.get());
 		mysql_options(lookup_mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)&proxysql_keylog_write_line_callback);
 	}
-	char *auth_password=NULL;
-	if (userinfo->password) {
-		if (userinfo->password[0]=='*') {
-			auth_password=userinfo->sha1_pass;
-		} else {
-			auth_password=userinfo->password;
-		}
-	}
-	MYSQL *ret_mysql_lookup=NULL;
-	if (parent->port) {
-		const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
-		const char *host_ip = res_ip.empty() ? parent->address : res_ip.c_str();
-		ret_mysql_lookup = mysql_real_connect(lookup_mysql, host_ip, userinfo->username, auth_password, NULL, parent->port, NULL, 0);
-	} else {
-		ret_mysql_lookup = mysql_real_connect(lookup_mysql, "localhost", userinfo->username, auth_password, NULL, 0, parent->address, 0);
-	}
+	char *auth_password = gtid_lookup_auth_password(userinfo);
+	MYSQL *ret_mysql_lookup = gtid_lookup_real_connect(lookup_mysql, parent, userinfo, auth_password);
 	if (ret_mysql_lookup == NULL) {
 		unsigned int myerr = mysql_errno(lookup_mysql);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup connection to %s:%d failed: %u: %s\n",
