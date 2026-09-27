@@ -49,7 +49,10 @@ builds = reusable.fetch('jobs').fetch('builds')
 runs_on = builds.fetch('runs-on')
 assert(runs_on.match?(/\A\$\{\{\s*inputs\.trusted\s*&&\s*\(/) && runs_on.match?(/\)\s*\|\|\s*'ubuntu-24\.04'\s*\}\}\z/), 'untrusted mode does not force ubuntu-24.04')
 actual_matrix = builds.fetch('strategy').fetch('matrix').fetch('include').map { |entry| [entry.fetch('dist'), entry.fetch('type')] }.sort
-expected_matrix = [['debian12', '-dbg'], ['ubuntu22', '-tap'], ['ubuntu22', '-tap-mysqlx'], ['ubuntu24', '-tap-genai-gcov']].sort
+# Snapshot of the matrix as of the callee SHA pinned by CI-builds-fork.yml.
+# Refresh this together with that pin. It was four entries until
+# 64b1465a9 / 308c14d67 (2026-09-06) retired the duplicate legs.
+expected_matrix = [['ubuntu24', '-tap-genai-gcov']].sort
 assert(actual_matrix == expected_matrix, "unexpected build matrix: #{actual_matrix.inspect}")
 
 privileged_steps = reusable.fetch('jobs').values.flat_map { |job| job.fetch('steps', []) }.select do |step|
@@ -59,9 +62,34 @@ privileged_steps = reusable.fetch('jobs').values.flat_map { |job| job.fetch('ste
     step.fetch('name', '').match?(/Pack (bin|test) cache|Pack src \+ matrix for handoff|Upload handoff|Archive artifacts/)
 end
 assert(!privileged_steps.empty?, 'no privileged steps discovered')
+
+# A privileged step is safe when its gate cannot be satisfied without
+# inputs.trusted. The dangerous shape is a TOP-LEVEL `||`, as in
+# `inputs.trusted && a || b` or `(inputs.trusted && a) || b`, where the
+# right operand can be true on its own and bypass the guard. A `||`
+# nested inside parentheses is already covered by the leading
+# `inputs.trusted &&` prefix -- e.g. the `Archive artifacts` gate
+# `inputs.trusted && failure() && !cancelled() && (a || b)` -- so only a
+# `||` at paren depth 0 counts against the step.
+def top_level_disjunction?(condition)
+  depth = 0
+  index = 0
+  while index < condition.length
+    case condition[index]
+    when '(' then depth += 1
+    when ')' then depth -= 1
+    when '|'
+      return true if condition[index + 1] == '|' && depth.zero?
+      index += 1
+    end
+    index += 1
+  end
+  false
+end
+
 privileged_steps.each do |step|
   condition = step.fetch('if', '')
-  assert(condition.match?(/\A\$\{\{\s*inputs\.trusted\s*&&/) && !condition.include?('||'), "privileged step is not trusted-gated: #{step['name'] || step['uses']}")
+  assert(condition.match?(/\A\$\{\{\s*inputs\.trusted\s*&&/) && !top_level_disjunction?(condition), "privileged step is not trusted-gated: #{step['name'] || step['uses']}")
 end
 
 def contains_unsafe_checkout?(value)

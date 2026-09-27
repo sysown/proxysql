@@ -12,6 +12,19 @@ permissions:
 jobs:
   run:
     if: ${{ github.event.pull_request.head.repo.fork }}
-    uses: sysown/proxysql/.github/workflows/ci-builds.yml@44ff88ee4c6949bdab5315e952b859e2f06f757b
+    # Bump, don't unpin. The pin is part of the fork isolation contract --
+    # validate-fork-pr-builds.bash asserts a full 40-char SHA, so the callee
+    # must stay immutable. 44ff88ee4c69 (2026-08-09) was the youngest callee
+    # that could start under `contents: read`, and it was never moved, so
+    # every fork PR has been building against a month-old definition. Since
+    # then the reusable workflow changed in two ways that matter here:
+    #   * 2026-08-19 35366926d dropped the libpq.so.5 staging (#6115 links
+    #     libpq.a; deps/Makefile never built the shared object)
+    #   * 2026-09-06 64b1465a9 / 308c14d67 retired the duplicate legs, so
+    #     the matrix is now the single ubuntu24/-tap-genai-gcov entry
+    # The stale pin still carried `-tap-mysqlx`, whose staging block ran on
+    # every fork PR and failed with
+    #   ERROR: cannot stage libpq.so.5 -- no file matching ...
+    uses: sysown/proxysql/.github/workflows/ci-builds.yml@2a1c226e5d458a24ded79a15ff82d89840270a74
     with:
       trusted: false
