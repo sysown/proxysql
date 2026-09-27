@@ -63,7 +63,7 @@ POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 
 MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -luuid
 MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
-MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl $(EXTRALINK)
+MYLIBS_LAST_PART := $(ZSTD_LDIR)/libzstd.a -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 MYLIBS := -Wl,-Bdynamic -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
 	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
 	$(MYLIBS_LAST_PART)

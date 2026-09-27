@@ -2,6 +2,7 @@
 #include "MySQL_HostGroups_Manager.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <climits>
 #include <cstring>
@@ -204,6 +205,7 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 
 GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port) {
 	active = true;
+	gtid_flavor = GTID_ID_FLAVOR_UNKNOWN;
 	w = _w;
 	size = 1024; // 1KB buffer
 	data = (char *)malloc(size);
@@ -290,34 +292,19 @@ bool GTID_Server_Data::add_gtid_from_ok(const char* gtid) {
 		return false;
 	}
 
-	const char* sep = strrchr(gtid, ':');
-	if (sep == nullptr || sep == gtid || sep[1] == '\0') {
-		return false;
-	}
-
-	std::string uuid(gtid, static_cast<size_t>(sep - gtid));
-	uuid.erase(std::remove(uuid.begin(), uuid.end(), '-'), uuid.end());
-	if (uuid.size() != 32 || !std::all_of(uuid.begin(), uuid.end(), [](unsigned char c) {
-			return (c >= '0' && c <= '9') ||
-				(c >= 'a' && c <= 'f') ||
-				(c >= 'A' && c <= 'F');
-		})) {
-		return false;
-	}
-	std::transform(uuid.begin(), uuid.end(), uuid.begin(), [](char c) {
-		return c >= 'A' && c <= 'F' ? static_cast<char>(c + ('a' - 'A')) : c;
-	});
-
-	errno = 0;
-	char* end = nullptr;
-	unsigned long long parsed = strtoull(sep + 1, &end, 10);
-	if (errno == ERANGE || end == sep + 1 || *end != '\0' || parsed == 0 ||
-			parsed > static_cast<unsigned long long>(LLONG_MAX)) {
+	ParsedGTID parsed;
+	if (!parse_gtid(gtid, &parsed)) {
 		return false;
 	}
 
 	pthread_rwlock_wrlock(&executed_rwlock);
-	bool updated = gtid_executed.add(uuid, static_cast<trxid_t>(parsed));
+	bool updated;
+	if (parsed.mariadb) {
+		updated = gtid_executed.add(parsed.id, trxid_t(1), parsed.trxid);
+		gtid_executed.set_server_id(parsed.id, parsed.server_id);
+	} else {
+		updated = gtid_executed.add(parsed.id, parsed.trxid);
+	}
 	pthread_rwlock_unlock(&executed_rwlock);
 	return updated;
 }
@@ -328,7 +315,7 @@ std::string GTID_Server_Data::gtid_executed_to_string() {
 
 GTID_Executed_Snapshot GTID_Server_Data::get_gtid_executed_snapshot() {
 	pthread_rwlock_rdlock(&executed_rwlock);
-	GTID_Executed_Snapshot snapshot { gtid_executed.to_string(), events_read };
+	GTID_Executed_Snapshot snapshot { gtid_executed.to_display_string(), events_read };
 	pthread_rwlock_unlock(&executed_rwlock);
 	return snapshot;
 }
@@ -376,7 +363,102 @@ bool GTID_Server_Data::writeout() {
  * I2=<trxid>                                                   : Latest seen single trxid, reusing UUID from previous I1/I3 message.
  * I3=<uuid>:<trxid_start>-<trxid_end>                         : Latest seen trxid range for a given UUID.
  * I4=<trxid_start>-<trxid_end>                                : Latest seen trxid range, reusing UUID from previous I1/I3 message.
+ *
+ * The id field is either a MySQL UUID (32 hexadecimal digits, dashes optional)
+ * or a MariaDB domain id (decimal). An endpoint uses one flavor only: the
+ * first id-bearing message fixes it and every later id must match, otherwise
+ * the message is invalid and the reader is disconnected.
  */
+
+// Classifies an id field. Returns GTID_ID_FLAVOR_UNKNOWN for anything that is
+// neither a 32 hex digit MySQL UUID nor a canonical decimal MariaDB domain id.
+//
+// A 32 character dash-free id is a UUID even when every one of its characters
+// is a decimal digit: a MariaDB domain id is a canonical uint32, so it spans
+// 0..UINT32_MAX and any longer decimal spelling is out of range. The shape must
+// be tested before the decimal spelling, because the reader sends a UUID dashed
+// in ST= and stripped in I1/I3, and taking the stripped all-decimal form for a
+// domain would make the same endpoint a UUID at ST= and a domain at I1=.
+static int detect_id_flavor(const char *id, size_t len) {
+	if (id == nullptr || len == 0) {
+		return GTID_ID_FLAVOR_UNKNOWN;
+	}
+
+	bool only_digits = true;
+	size_t hex_digits = 0;
+	for (size_t i = 0; i < len; i++) {
+		unsigned char c = static_cast<unsigned char>(id[i]);
+		if (c >= '0' && c <= '9') {
+			hex_digits++;
+			continue;
+		}
+		only_digits = false;
+		if (c == '-') {
+			continue;
+		}
+		if (!gtid_is_hex_digit(c)) {
+			return GTID_ID_FLAVOR_UNKNOWN;
+		}
+		hex_digits++;
+	}
+
+	if (hex_digits == 32) {
+		return GTID_ID_FLAVOR_UUID;
+	}
+	if (only_digits && is_canonical_mariadb_domain_id(id, len)) {
+		return GTID_ID_FLAVOR_DOMAIN;
+	}
+	return GTID_ID_FLAVOR_UNKNOWN;
+}
+
+// Copies a reader id field into `uuid_server`: a canonical MariaDB domain id is
+// kept verbatim, while the dashes of a MySQL UUID are stripped. Returns the
+// number of bytes written, or -1 when the field does not fit.
+static long copy_gtid_reader_id(const char *subtoken, size_t subtoken_len, char *uuid_server,
+                                size_t uuid_server_size) {
+	if (subtoken_len == 0) {
+		uuid_server[0] = '\0';
+		return 0;
+	}
+
+	size_t written = 0;
+	const bool all_digits = std::all_of(subtoken, subtoken + subtoken_len, [](unsigned char c) {
+		return c >= '0' && c <= '9';
+	});
+	if (all_digits) {
+		if (subtoken_len + 1 >= uuid_server_size) {
+			return -1;
+		}
+		memcpy(uuid_server, subtoken, subtoken_len);
+		written = subtoken_len;
+	} else {
+		for (size_t i = 0; i < subtoken_len; i++) {
+			if (subtoken[i] == '-') {
+				continue;
+			}
+			if (written + 1 >= uuid_server_size) {
+				return -1;
+			}
+			uuid_server[written++] = subtoken[i];
+		}
+	}
+	uuid_server[written] = '\0';
+	return static_cast<long>(written);
+}
+
+// Records the flavor of an id field, rejecting unknown ids and any change of
+// flavor on an endpoint that already established one.
+static bool accept_id_flavor(int &current, int candidate) {
+	if (candidate == GTID_ID_FLAVOR_UNKNOWN) {
+		return false;
+	}
+	if (current == GTID_ID_FLAVOR_UNKNOWN) {
+		current = candidate;
+		return true;
+	}
+	return current == candidate;
+}
+
 bool GTID_Server_Data::read_next_gtid() {
 	pthread_rwlock_wrlock(&executed_rwlock);
 	if (len==0) {
@@ -418,21 +500,18 @@ bool GTID_Server_Data::read_next_gtid() {
 					}
 				j++;
 				if (j%2 == 1) { // we are reading the uuid
-					size_t uuid_len = 0;
-					for (const char *uuid_char = subtoken; *uuid_char; ++uuid_char) {
-						if (*uuid_char == '-') {
-							continue;
-						}
-						if (uuid_len + 1 >= sizeof(uuid_server)) {
-							invalid_msg = true;
-							break;
-						}
-						uuid_server[uuid_len++] = *uuid_char;
-					}
-					if (invalid_msg) {
+					const size_t subtoken_len = strlen(subtoken); // NOSONAR(cpp:S5813): strtok_r() returns a NUL-terminated token inside the NUL-terminated `bs` copy of the record.
+					if (!accept_id_flavor(gtid_flavor,
+					                      detect_id_flavor(subtoken, subtoken_len))) {
+						// unknown id, or a flavor change within one bootstrap line
+						invalid_msg = true;
 						break;
 					}
-					uuid_server[uuid_len] = '\0';
+					if (copy_gtid_reader_id(subtoken, subtoken_len, uuid_server,
+					                         sizeof(uuid_server)) < 0) {
+						invalid_msg = true;
+						break;
+					}
 				} else { // we are reading the trxid or trxid range
 					TrxId_Interval iv(trxid_t(0));
 					if (!TrxId_Interval::parse(subtoken, &iv)) {
@@ -492,7 +571,9 @@ bool GTID_Server_Data::read_next_gtid() {
 		switch (rec_msg[1]) {
 		case '1': // single trxid with UUID
 			a = strchr(rec_msg+3,':');
-			if (a == NULL || !copy_uuid(a)) {
+			if (a == NULL || !accept_id_flavor(gtid_flavor,
+			                                 detect_id_flavor(rec_msg+3, (size_t)(a - (rec_msg+3))))
+					|| !copy_uuid(a)) {
 				invalid_msg = true;
 				break;
 			}
@@ -500,12 +581,19 @@ bool GTID_Server_Data::read_next_gtid() {
 			events_read++;
 			break;
 		case '2': // single trxid, reuse last UUID
+			if (gtid_flavor == GTID_ID_FLAVOR_UNKNOWN) {
+				// no id-bearing message was seen yet, nothing to reuse
+				invalid_msg = true;
+				break;
+			}
 			gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(rec_msg+3));
 			events_read++;
 			break;
 		case '3': { // trxid range with UUID
 			a = strchr(rec_msg+3,':');
-			if (a == NULL || !copy_uuid(a)) {
+			if (a == NULL || !accept_id_flavor(gtid_flavor,
+			                                 detect_id_flavor(rec_msg+3, (size_t)(a - (rec_msg+3))))
+					|| !copy_uuid(a)) {
 				invalid_msg = true;
 				break;
 			}
@@ -519,6 +607,10 @@ bool GTID_Server_Data::read_next_gtid() {
 			break;
 		}
 		case '4': { // trxid range, reuse last UUID
+			if (gtid_flavor == GTID_ID_FLAVOR_UNKNOWN) {
+				invalid_msg = true;
+				break;
+			}
 			TrxId_Interval iv(trxid_t(0));
 			if (!TrxId_Interval::parse(rec_msg+3, &iv)) {
 				invalid_msg = true;

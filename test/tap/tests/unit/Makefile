@@ -228,7 +228,7 @@ MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -luuid \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a \
 		  $(LIBUSUAL_LDIR)/libusual.a $(CURL_STATIC_DEPS) \
-		  -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl \
+		  $(ZSTD_LDIR)/libzstd.a -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl \
 		  -Wl,--allow-multiple-definition \
 		  $(LWGCOV)
 endif
@@ -583,6 +583,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	ezoption_parser_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
+	gtid_parse_unit-t \
 	gtid_server_data_unit-t \
 	admin_bootstrap_users_unit-t \
 	admin_disk_upgrade_unit-t \

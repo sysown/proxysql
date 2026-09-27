@@ -69,7 +69,7 @@ fi
 CLUSTER_NODES=""
 if [ "${NUM_CLUSTER_NODES}" -gt 0 ]; then
     CLUSTER_NODES="proxysql:6032,"
-    for i in $(seq 1 ${NUM_CLUSTER_NODES}); do
+    for ((i = 1; i <= NUM_CLUSTER_NODES; i++)); do
         PORT=$((6032 + i * 10))
         CLUSTER_NODES="${CLUSTER_NODES}proxysql:${PORT},"
     done
