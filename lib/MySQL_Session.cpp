@@ -2513,6 +2513,16 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 		return ret;
 	}
 
+	const char *server_version = mybe->server_myds->myconn->mysql->server_version;
+	if (server_version != nullptr && strstr(server_version, "MariaDB") != nullptr) {
+		// MariaDB has no SESSION_TRACK_GTIDS. Never send the variable, and never
+		// try again for this backend connection. The GTID is read from
+		// @@gtid_binlog_pos on a dedicated connection instead, see
+		// MySQL_Connection::get_gtid().
+		mybe->server_myds->myconn->options.session_track_gtids_sent = true;
+		return ret;
+	}
+
 	uint32_t b_int = mybe->server_myds->myconn->options.session_track_gtids_int;
 	uint32_t f_int = client_myds->myconn->options.session_track_gtids_int;
 
@@ -9087,26 +9097,13 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 
-			char *sep_pos = NULL;
 			if (gtid_uuid != NULL) {
-				sep_pos = index(gtid_uuid,':');
-				if (sep_pos == NULL) {
+				if (!parse_gtid_for_routing(gtid_uuid, uuid, sizeof(uuid), &trxid)) {
 					gtid_uuid = NULL; // gtid is invalid
 				}
 			}
 
 			if (gtid_uuid != NULL) {
-				int l = sep_pos - gtid_uuid;
-				trxid = strtoull(sep_pos+1, NULL, 10);
-				int m;
-				int n=0;
-				for (m=0; m<l; m++) {
-					if (gtid_uuid[m] != '-') {
-						uuid[n]=gtid_uuid[m];
-						n++;
-					}
-				}
-				uuid[n]='\0';
 #ifndef STRESSTEST_POOL
 				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1);
 #endif // STRESSTEST_POOL

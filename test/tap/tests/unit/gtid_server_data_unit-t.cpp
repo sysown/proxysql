@@ -32,6 +32,10 @@ static const char *UUID_A = "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa";
 static char UUID_A_STRIPPED[] = "aaaaaaaa000011112222aaaaaaaaaaaa";
 static const char *UUID_B = "bbbbbbbb-3333-4444-5555-bbbbbbbbbbbb";
 static char UUID_B_STRIPPED[] = "bbbbbbbb333344445555bbbbbbbbbbbb";
+// A valid MySQL UUID whose 32 hex digits happen to all be decimal digits. The
+// reader sends it dashed in ST= and stripped in I1/I3.
+static const char *UUID_DECIMAL = "12345678-1234-1234-1234-123456789012";
+static char UUID_DECIMAL_STRIPPED[] = "12345678123412341234123456789012";
 static char LOOPBACK_ADDRESS[] = "127.0.0.1";
 static char EMPTY_COMMENT[] = "";
 
@@ -542,8 +546,237 @@ static void test_gtid_snapshot_is_coherent_during_binlog_updates() {
 		"GTID snapshot: final state contains all %llu binlog events", event_count);
 }
 
+static void test_ok_mariadb_gtid() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	ok(sd.add_gtid_from_ok("0-1-100"), "OK MariaDB GTID accepted");
+	char domain[] = "0";
+	ok(sd.gtid_exists(domain, 1) && sd.gtid_exists(domain, 100)
+	       && !sd.gtid_exists(domain, 101),
+	   "OK MariaDB GTID is watermark [1, seq]");
+	ok(sd.gtid_executed_to_string() == "0-1-100",
+	   "stats display is native MariaDB");
+	ok(!sd.add_gtid_from_ok("0-1-50"),
+	   "lower watermark is not an update");
+	ok(sd.add_gtid_from_ok("0-2-105"), "failover server_id still updates seq");
+	ok(sd.gtid_exists(domain, 105), "domain match ignores server_id");
+}
+
+static void test_wire_mariadb_domain() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	stuff_buffer(sd, std::string("ST=0:1-270\n"));
+	ok(sd.read_next_gtid() == true && sd.active == true, "ST= domain bootstrap");
+	char domain[] = "0";
+	ok(sd.gtid_exists(domain, 100), "ST=0:1-270 contains 100");
+	stuff_buffer(sd, std::string("I1=0:271\n"));
+	ok(sd.read_next_gtid() == true, "I1= domain");
+	ok(sd.gtid_exists(domain, 271), "I1=0:271 appended");
+}
+
+/**
+ * @brief Reader-fed domains display a 0 server_id sentinel.
+ *
+ * The wire protocol carries domain and sequence only, so a reader snapshot has
+ * no server_id to remember. The stats rendering therefore shows 0-0-<end>
+ * until an OK-packet observation supplies a real server_id for the domain.
+ */
+static void test_wire_mariadb_display_uses_server_id_sentinel() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	stuff_buffer(sd, std::string("ST=0:1-270\n"));
+	ok(sd.read_next_gtid() == true, "sentinel display: ST= domain bootstrap is parsed");
+
+	ok(sd.gtid_executed_to_string() == "0-0-270",
+		"sentinel display: reader-fed domain renders as 0-0-270");
+
+	ok(sd.add_gtid_from_ok("0-1-271"),
+		"sentinel display: OK packet advances the reader-fed domain");
+	ok(sd.gtid_executed_to_string() == "0-1-271",
+		"sentinel display: OK-packet ingestion replaces the sentinel with server_id 1");
+}
+
+/**
+ * @brief A bootstrap mixing a domain id and a UUID is an invalid message.
+ */
+static void test_mixed_flavors_in_bootstrap_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	std::string msg = "ST=0:1-270," + std::string(UUID_A) + ":1\n";
+	stuff_buffer(sd, msg);
+
+	ok(sd.read_next_gtid() == false, "mixed bootstrap: returns false");
+	ok(sd.active == false, "mixed bootstrap: active set to false (disconnect)");
+	ok(sd.events_read == 0, "mixed bootstrap: events_read NOT incremented");
+}
+
+/**
+ * @brief A syntactically invalid id inside an otherwise valid bootstrap.
+ */
+static void test_invalid_bootstrap_id_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, "ST=0:1-270,uuid:1\n");
+
+	ok(sd.read_next_gtid() == false, "invalid bootstrap id: returns false");
+	ok(sd.active == false, "invalid bootstrap id: active set to false (disconnect)");
+	ok(sd.events_read == 0, "invalid bootstrap id: events_read NOT incremented");
+}
+
+/**
+ * @brief An endpoint fixes its id flavor on the first id-bearing message.
+ */
+static void test_flavor_is_established_once() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	ok(sd.gtid_flavor == GTID_ID_FLAVOR_UNKNOWN, "flavor: starts unknown");
+
+	stuff_buffer(sd, "ST=0:1-270\n");
+	ok(sd.read_next_gtid() == true && sd.gtid_flavor == GTID_ID_FLAVOR_DOMAIN,
+	   "flavor: a decimal bootstrap id establishes the domain flavor");
+
+	stuff_buffer(sd, "I1=0:271\n");
+	ok(sd.read_next_gtid() == true && sd.gtid_flavor == GTID_ID_FLAVOR_DOMAIN,
+	   "flavor: a matching I1 keeps the domain flavor");
+	ok(sd.active == true, "flavor: a matching I1 keeps the endpoint active");
+}
+
+/**
+ * @brief A UUID I1 after a domain bootstrap is a flavor change.
+ */
+static void test_uuid_i1_after_domain_bootstrap_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, "ST=0:1-270\n");
+	ok(sd.read_next_gtid() == true && sd.active == true,
+	   "flavor change: domain bootstrap is parsed");
+
+	stuff_buffer(sd, std::string("I1=") + UUID_A_STRIPPED + ":42\n");
+	ok(sd.read_next_gtid() == false, "flavor change: UUID I1 after domain ST returns false");
+	ok(sd.active == false, "flavor change: UUID I1 after domain ST disconnects");
+	ok(sd.events_read == 1, "flavor change: UUID I1 after domain ST is not counted");
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 42) == false,
+	   "flavor change: UUID I1 after domain ST is not applied");
+}
+
+/**
+ * @brief A domain I1 after a UUID bootstrap is a flavor change.
+ */
+static void test_domain_i1_after_uuid_bootstrap_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, std::string("ST=") + UUID_A + ":1-270\n");
+	ok(sd.read_next_gtid() == true && sd.active == true,
+	   "flavor change: UUID bootstrap is parsed");
+	ok(sd.gtid_flavor == GTID_ID_FLAVOR_UUID,
+	   "flavor change: UUID bootstrap establishes the UUID flavor");
+
+	stuff_buffer(sd, "I1=0:271\n");
+	ok(sd.read_next_gtid() == false, "flavor change: domain I1 after UUID ST returns false");
+	ok(sd.active == false, "flavor change: domain I1 after UUID ST disconnects");
+	ok(sd.events_read == 1, "flavor change: domain I1 after UUID ST is not counted");
+}
+
+/**
+ * @brief The same holds for the range message I3.
+ */
+static void test_domain_i3_after_uuid_bootstrap_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, std::string("ST=") + UUID_A + ":1-270\n");
+	sd.read_next_gtid();
+
+	stuff_buffer(sd, "I3=0:300-400\n");
+	ok(sd.read_next_gtid() == false, "flavor change: domain I3 after UUID ST returns false");
+	ok(sd.active == false, "flavor change: domain I3 after UUID ST disconnects");
+}
+
+/**
+ * @brief I2/I4 have no id to reuse before any id-bearing message was seen.
+ */
+static void test_reuse_without_established_id_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, "I2=20\n");
+	ok(sd.read_next_gtid() == false, "orphan I2: returns false");
+	ok(sd.active == false, "orphan I2: disconnects");
+	ok(sd.events_read == 0, "orphan I2: not counted");
+	ok(sd.gtid_executed_to_string().empty(),
+	   "orphan I2: no GTID is recorded under an empty id");
+
+	GTID_Server_Data sd4(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	stuff_buffer(sd4, "I4=30-40\n");
+	ok(sd4.read_next_gtid() == false, "orphan I4: returns false");
+	ok(sd4.active == false, "orphan I4: disconnects");
+	ok(sd4.gtid_executed_to_string().empty(),
+	   "orphan I4: no GTID is recorded under an empty id");
+}
+
+/**
+ * @brief A 32 hex digit UUID made only of decimal digits is still a UUID.
+ *
+ * MariaDB domain ids are uint32 and therefore at most 10 digits, so a 32
+ * character dash-free id is unambiguously a UUID. The reader sends it dashed
+ * in ST= and stripped in I1/I3, and both spellings must be accepted: if the
+ * all-decimal UUID were taken for a domain, the same endpoint would be
+ * accepted at ST= and disconnected at I1=.
+ */
+static void test_all_decimal_uuid_is_not_a_domain() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, std::string("ST=") + UUID_DECIMAL + ":100\n");
+	ok(sd.read_next_gtid() == true && sd.active == true,
+	   "decimal UUID: dashed ST= bootstrap is parsed");
+	ok(sd.gtid_flavor == GTID_ID_FLAVOR_UUID,
+	   "decimal UUID: dashed ST= bootstrap establishes the UUID flavor");
+	ok(sd.gtid_exists(UUID_DECIMAL_STRIPPED, 100) == true,
+	   "decimal UUID: dashed ST= bootstrap records the stripped id");
+
+	stuff_buffer(sd, std::string("I1=") + UUID_DECIMAL_STRIPPED + ":101\n");
+	ok(sd.read_next_gtid() == true && sd.active == true,
+	   "decimal UUID: stripped I1 is parsed");
+	ok(sd.gtid_flavor == GTID_ID_FLAVOR_UUID,
+	   "decimal UUID: stripped I1 keeps the UUID flavor");
+	ok(sd.gtid_exists(UUID_DECIMAL_STRIPPED, 101) == true,
+	   "decimal UUID: stripped I1 is applied under the same id");
+
+	stuff_buffer(sd, std::string("I3=") + UUID_DECIMAL_STRIPPED + ":102-110\n");
+	ok(sd.read_next_gtid() == true && sd.active == true,
+	   "decimal UUID: stripped I3 is parsed");
+	ok(sd.gtid_exists(UUID_DECIMAL_STRIPPED, 110) == true,
+	   "decimal UUID: stripped I3 is applied under the same id");
+	ok(sd.events_read == 3, "decimal UUID: all three messages counted");
+}
+
+/**
+ * @brief A non-canonical decimal domain id is not a domain id.
+ *
+ * `0` and `00` name the same MariaDB domain, so accepting both would let
+ * ST=0 and I1=00 record the watermark under two different map keys.
+ */
+static void test_noncanonical_domain_id_disconnects() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	stuff_buffer(sd, "ST=00:1-270\n");
+	ok(sd.read_next_gtid() == false, "non-canonical domain: ST=00 returns false");
+	ok(sd.active == false, "non-canonical domain: ST=00 disconnects");
+	ok(sd.events_read == 0, "non-canonical domain: ST=00 is not counted");
+
+	GTID_Server_Data sd2(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	stuff_buffer(sd2, "ST=0:1-270\n");
+	ok(sd2.read_next_gtid() == true && sd2.gtid_flavor == GTID_ID_FLAVOR_DOMAIN,
+	   "non-canonical domain: ST=0 establishes the domain flavor");
+
+	stuff_buffer(sd2, "I1=00:271\n");
+	ok(sd2.read_next_gtid() == false, "non-canonical domain: I1=00 returns false");
+	ok(sd2.active == false, "non-canonical domain: I1=00 disconnects");
+	ok(sd2.events_read == 1, "non-canonical domain: I1=00 is not counted");
+	char domain_00[] = "00";
+	char domain_0[] = "0";
+	ok(sd2.gtid_exists(domain_00, 271) == false,
+	   "non-canonical domain: I1=00 does not fork the watermark");
+	ok(sd2.gtid_exists(domain_0, 271) == false,
+	   "non-canonical domain: I1=00 is not applied under the canonical id either");
+}
+
 int main() {
-	plan(109);
+	plan(170);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -567,6 +800,18 @@ int main() {
 	test_manager_gtid_lookup_survives_inactive_reader();
 	test_connect_watcher_closes_socket_on_resolution_failure();
 	test_gtid_snapshot_is_coherent_during_binlog_updates();
+	test_ok_mariadb_gtid();
+	test_wire_mariadb_domain();
+	test_wire_mariadb_display_uses_server_id_sentinel();
+	test_mixed_flavors_in_bootstrap_disconnects();
+	test_invalid_bootstrap_id_disconnects();
+	test_flavor_is_established_once();
+	test_uuid_i1_after_domain_bootstrap_disconnects();
+	test_domain_i1_after_uuid_bootstrap_disconnects();
+	test_domain_i3_after_uuid_bootstrap_disconnects();
+	test_reuse_without_established_id_disconnects();
+	test_all_decimal_uuid_is_not_a_domain();
+	test_noncanonical_domain_id_disconnects();
 
 	return exit_status();
 }

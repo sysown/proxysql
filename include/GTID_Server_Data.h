@@ -12,6 +12,16 @@ struct GTID_Executed_Snapshot {
 	unsigned long long events_read;
 };
 
+// Flavor of the id field carried by the binlog reader wire messages. A single
+// endpoint speaks exactly one flavor: a 32 hex digit MySQL UUID or a decimal
+// MariaDB domain id. Anything else, and any change across messages, is a
+// protocol violation.
+enum GTID_Id_Flavor {
+	GTID_ID_FLAVOR_UNKNOWN = 0,
+	GTID_ID_FLAVOR_UUID = 1,
+	GTID_ID_FLAVOR_DOMAIN = 2
+};
+
 class GTID_Server_Data {
 	public:
 	char *address;
@@ -26,6 +36,7 @@ class GTID_Server_Data {
 	unsigned long long events_read;
 	GTID_Set gtid_executed;
 	bool active;
+	int gtid_flavor;
 	GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port);
 	void resize(size_t _s);
 	~GTID_Server_Data();
