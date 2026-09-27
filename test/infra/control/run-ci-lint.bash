@@ -53,6 +53,18 @@ run_check "Check libusual incremental patch dependency" \
 	test/infra/control/test-libusual-incremental.bash
 run_check "Check vendored OpenSSL consumer flags" \
 	test/infra/control/test-vendored-openssl-consumers.bash
+# The fork isolation contract spans CI-builds.yml and CI-builds-fork.yml on this
+# ref plus ci-builds.yml on GH-Actions, so it needs both refs fetched. The
+# workflow fetches GH-Actions with a tolerated failure, so skip rather than fail
+# the whole lint suite when it is momentarily unavailable.
+if git rev-parse --verify --quiet origin/GH-Actions >/dev/null; then
+	run_check "Check fork PR build isolation contract" \
+		python3 test/infra/control/validate_fork_pr_builds.py HEAD origin/GH-Actions
+	run_check "Test fork PR build isolation validator" \
+		python3 -m unittest discover -s test/infra/control -p test_validate_fork_pr_builds.py
+else
+	echo ">>> Check fork PR build isolation contract: SKIPPED (origin/GH-Actions not fetched)"
+fi
 run_check "Check group infra/workflow coverage (warn-only)" \
 	python3 test/tap/groups/lint_group_coverage.py
 
