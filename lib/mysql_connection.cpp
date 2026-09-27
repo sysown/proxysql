@@ -3344,6 +3344,10 @@ void MySQL_Connection::reset() {
 	options.session_track_state_sent = false;
 }
 
+// MariaDB has no SESSION_TRACK_GTIDS, so the GTID watermark is read from a
+// second connection to the same server. The connect and the query both run
+// synchronously on the worker event loop, so the waits are capped at one second
+// and failures are rate limited by gtid_lookup_retry_after.
 bool MySQL_Connection::connect_gtid_lookup_connection() {
 	if (gtid_lookup_mysql != NULL) {
 		return true;
@@ -3363,9 +3367,6 @@ bool MySQL_Connection::connect_gtid_lookup_connection() {
 	}
 	unsigned int timeout = 1;
 	mysql_options(lookup_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-	// The auxiliary lookup runs synchronously on the worker event loop, so its
-	// I/O waits are capped at one second even when connect_timeout_server is
-	// larger. Anything longer would stall the whole worker.
 	unsigned int io_timeout = mysql_thread___connect_timeout_server / 1000;
 	if (io_timeout == 0 || io_timeout > 1) {
 		io_timeout = 1;
@@ -3376,7 +3377,7 @@ bool MySQL_Connection::connect_gtid_lookup_connection() {
 	if (parent->use_ssl) {
 		lookup_ssl_params.reset(MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username));
 		MySQL_Connection::set_ssl_params(lookup_mysql, lookup_ssl_params.get());
-		mysql_options(lookup_mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+		mysql_options(lookup_mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)&proxysql_keylog_write_line_callback);
 	}
 	char *auth_password=NULL;
 	if (userinfo->password) {
@@ -3431,85 +3432,98 @@ void MySQL_Connection::close_gtid_lookup_connection() {
 	}
 }
 
+bool MySQL_Connection::collect_gtid_to_buff(char *buff) {
+	// gtid_uuid is a fixed-size member that is only ever filled by the bounded
+	// select_* helpers, so the length is taken within the member's own bounds.
+	const size_t length = strnlen(gtid_uuid, sizeof(gtid_uuid)) + 1;
+	memcpy(buff, gtid_uuid, length);
+	__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected], 1);
+	return true;
+}
+
+bool MySQL_Connection::get_gtid_from_session_tracking(char *buff) {
+	const char *gtids = nullptr;
+	size_t gtids_len = 0;
+	if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &gtids, &gtids_len) == 0
+			&& gtids_len == 0) {
+		gtids = nullptr;
+	}
+	std::unordered_map<std::string, std::string> variables;
+	if (gtids == nullptr) {
+		get_variables(variables);
+	}
+	if (!select_session_gtid(gtids, gtids_len, variables, gtid_uuid, sizeof(gtid_uuid))) {
+		return false;
+	}
+	return collect_gtid_to_buff(buff);
+}
+
+// MariaDB has no SESSION_TRACK_GTIDS. The position is read on a dedicated
+// connection: a query on 'mysql' would consume the pending response, so
+// 'mysql->info' and the session tracking state would be lost. Only writes
+// and DDL are looked up ('field_count' is 0 when no result set is pending), so
+// SELECT traffic does not pay for the extra round trip.
+// The lookup is a blocking connect+query on the worker event loop, hence it is
+// opt-in: only 'mysql-update_gtid_from_ok' (the flag that consumes the
+// collected GTID) enables it. client_session_track_gtid alone is not enough.
+// This is not yet async - see the design doc.
+bool MySQL_Connection::get_gtid_from_mariadb_lookup(char *buff) {
+	if (mysql->field_count != 0 || !mysql_thread___update_gtid_from_ok) {
+		return false;
+	}
+	if (mysql->server_version == nullptr || strstr(mysql->server_version, "MariaDB") == nullptr) {
+		return false;
+	}
+
+	if (!connect_gtid_lookup_connection()) {
+		gtid_lookup_retry_after = time(nullptr) + 1;
+		close_gtid_lookup_connection();
+		return false;
+	}
+	if (mysql_query(gtid_lookup_mysql, "SELECT @@gtid_binlog_pos") != 0) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup query to %s:%d failed: %u: %s\n",
+				parent->address, parent->port, mysql_errno(gtid_lookup_mysql), mysql_error(gtid_lookup_mysql));
+		gtid_lookup_retry_after = time(nullptr) + 1;
+		close_gtid_lookup_connection();
+		return false;
+	}
+
+	// Only the position is selected: @@gtid_domain_id of a fresh auxiliary
+	// connection is the server default, not the domain the client session may
+	// have set, so attributing the watermark to it would be a guess. Without a
+	// domain a single-domain position is accepted and a multi-domain one fails
+	// closed.
+	bool collected = false;
+	MYSQL_RES *result = mysql_store_result(gtid_lookup_mysql);
+	if (result != nullptr) {
+		MYSQL_ROW row = mysql_fetch_row(result);
+		if (row != nullptr && row[0] != nullptr
+				&& select_mariadb_binlog_position(row[0], nullptr, gtid_uuid, sizeof(gtid_uuid))) {
+			collected = collect_gtid_to_buff(buff);
+		} else {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup on %s:%d did not yield an unambiguous position\n",
+					parent->address, parent->port);
+		}
+		mysql_free_result(result);
+	}
+	return collected;
+}
+
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	// note: current implementation for for OWN GTID only!
-	bool ret = false;
-	if (buff==NULL || trx_id == NULL) {
-		return ret;
+	if (buff == NULL || trx_id == NULL) {
+		return false;
 	}
 	if (!mysql_thread___update_gtid_from_ok && !mysql_thread___client_session_track_gtid) {
-		return ret;
+		return false;
 	}
-	if (mysql) {
-		if (mysql->net.last_errno==0) { // only if there is no error
-			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
-				const char *gtids = nullptr;
-				size_t gtids_len = 0;
-				if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &gtids, &gtids_len) == 0
-						&& gtids_len == 0) {
-					gtids = nullptr;
-				}
-				std::unordered_map<std::string, std::string> variables;
-				if (gtids == nullptr) {
-					get_variables(variables);
-				}
-				if (select_session_gtid(gtids, gtids_len, variables,
-				                        gtid_uuid, sizeof(gtid_uuid))) {
-					size_t length = strlen(gtid_uuid) + 1;
-					memcpy(buff, gtid_uuid, length);
-					__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
-					ret = true;
-				}
-			}
-			if (!ret && mysql->field_count == 0
-					&& mysql_thread___update_gtid_from_ok
-					&& mysql->server_version != nullptr && strstr(mysql->server_version, "MariaDB") != nullptr) {
-				// MariaDB has no SESSION_TRACK_GTIDS. The position is read on a dedicated
-				// connection: a query on 'mysql' would consume the pending response, so
-				// 'mysql->info' and the session tracking state would be lost. Only writes
-				// and DDL are looked up ('field_count' is 0 when no result set is
-				// pending), so SELECT traffic does not pay for the extra round trip.
-				// The lookup is a blocking connect+query on the worker event loop, hence
-				// it is opt-in: only 'mysql-update_gtid_from_ok' (the flag that consumes
-				// the collected GTID) enables it. client_session_track_gtid alone is not
-				// enough. This is not yet async - see the design doc.
-				bool lookup_executed = false;
-				if (connect_gtid_lookup_connection()) {
-					// Only the position is selected: @@gtid_domain_id of a fresh
-					// auxiliary connection is the server default, not the domain the
-					// client session may have set, so attributing the watermark to it
-					// would be a guess. Without a domain a single-domain position is
-					// accepted and a multi-domain one fails closed.
-					if (mysql_query(gtid_lookup_mysql, "SELECT @@gtid_binlog_pos") == 0) {
-						lookup_executed = true;
-						MYSQL_RES *result = mysql_store_result(gtid_lookup_mysql);
-						if (result != nullptr) {
-							MYSQL_ROW row = mysql_fetch_row(result);
-							if (row != nullptr && row[0] != nullptr
-									&& select_mariadb_binlog_position(row[0], nullptr, gtid_uuid, sizeof(gtid_uuid))) {
-								size_t length = strlen(gtid_uuid) + 1;
-								memcpy(buff, gtid_uuid, length);
-								__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
-								ret = true;
-							} else {
-								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup on %s:%d did not yield an unambiguous position\n",
-										parent->address, parent->port);
-							}
-							mysql_free_result(result);
-						}
-					} else {
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup query to %s:%d failed: %u: %s\n",
-								parent->address, parent->port, mysql_errno(gtid_lookup_mysql), mysql_error(gtid_lookup_mysql));
-					}
-				}
-				if (!lookup_executed) {
-					gtid_lookup_retry_after = time(nullptr) + 1;
-					close_gtid_lookup_connection();
-				}
-			}
-		}
+	if (mysql == NULL || mysql->net.last_errno != 0) { // only if there is no error
+		return false;
 	}
-	return ret;
+	if ((mysql->server_status & SERVER_SESSION_STATE_CHANGED) == 0) { // only if status changed
+		return false;
+	}
+	return get_gtid_from_session_tracking(buff) || get_gtid_from_mariadb_lookup(buff);
 }
 
 bool MySQL_Connection::get_variables(std::unordered_map<string, string>& variables) {

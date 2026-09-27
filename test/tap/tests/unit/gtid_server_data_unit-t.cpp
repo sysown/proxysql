@@ -767,9 +767,11 @@ static void test_noncanonical_domain_id_disconnects() {
 	ok(sd2.read_next_gtid() == false, "non-canonical domain: I1=00 returns false");
 	ok(sd2.active == false, "non-canonical domain: I1=00 disconnects");
 	ok(sd2.events_read == 1, "non-canonical domain: I1=00 is not counted");
-	ok(sd2.gtid_exists((char *)"00", 271) == false,
+	char domain_00[] = "00";
+	char domain_0[] = "0";
+	ok(sd2.gtid_exists(domain_00, 271) == false,
 	   "non-canonical domain: I1=00 does not fork the watermark");
-	ok(sd2.gtid_exists((char *)"0", 271) == false,
+	ok(sd2.gtid_exists(domain_0, 271) == false,
 	   "non-canonical domain: I1=00 is not applied under the canonical id either");
 }
 

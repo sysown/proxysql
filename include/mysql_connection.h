@@ -104,6 +104,12 @@ class MySQL_Connection {
 	time_t gtid_lookup_retry_after;
 	bool connect_gtid_lookup_connection();
 	void close_gtid_lookup_connection();
+	// GTID collection steps, split out of get_gtid() to keep each one within the
+	// nesting and complexity budgets. They all assume get_gtid()'s preconditions
+	// (a live connection with no error and a changed session state) hold.
+	bool collect_gtid_to_buff(char *buff);
+	bool get_gtid_from_session_tracking(char *buff);
+	bool get_gtid_from_mariadb_lookup(char *buff);
 	public:
 	struct {
 		char *server_version;

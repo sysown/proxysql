@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cerrno>
 #include <cctype>
 #include <climits>
@@ -335,10 +336,8 @@ const std::string GTID_Set::to_display_string(void) {
 			}
 		} else {
 			trxid_t max_end = 0;
-			for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-				if (itr->end > max_end) {
-					max_end = itr->end;
-				}
+			for (const auto& interval : it->second) {
+				max_end = std::max(max_end, interval.end);
 			}
 			out << uuid << "-" << get_server_id(uuid) << "-" << max_end;
 		}
@@ -349,10 +348,10 @@ const std::string GTID_Set::to_display_string(void) {
 }
 
 static bool parse_uint_no_leading_zeros(const char*& p, unsigned long long& out) {
-	if (p == nullptr || !std::isdigit(static_cast<unsigned char>(*p))) {
+	if (p == nullptr || !gtid_is_digit(static_cast<unsigned char>(*p))) {
 		return false;
 	}
-	if (*p == '0' && std::isdigit(static_cast<unsigned char>(p[1]))) {
+	if (*p == '0' && gtid_is_digit(static_cast<unsigned char>(p[1]))) {
 		return false;
 	}
 
@@ -380,7 +379,7 @@ static bool normalize_mysql_uuid(const char* start, size_t len, std::string& id)
 		if (c == '-') {
 			continue;
 		}
-		if (!std::isxdigit(c)) {
+		if (!gtid_is_hex_digit(c)) {
 			return false;
 		}
 		if (c >= 'A' && c <= 'F') {
@@ -407,7 +406,7 @@ static bool parse_mysql_gtid(const char* s, ParsedGTID& out) {
 		return false;
 	}
 
-	if (!std::isdigit(static_cast<unsigned char>(colon[1]))) {
+	if (!gtid_is_digit(static_cast<unsigned char>(colon[1]))) {
 		return false;
 	}
 
@@ -561,7 +560,7 @@ bool is_canonical_mariadb_domain_id(const char* id, size_t len) {
 	}
 	unsigned long long value = 0;
 	for (size_t i = 0; i < len; i++) {
-		if (!std::isdigit(static_cast<unsigned char>(id[i]))) {
+		if (!gtid_is_digit(static_cast<unsigned char>(id[i]))) {
 			return false;
 		}
 		value = value * 10 + static_cast<unsigned long long>(id[i] - '0');
@@ -580,7 +579,14 @@ bool render_mariadb_domain_position(const GTID_Set& set, const char* domain_id,
 
 	std::string domain;
 	if (domain_id != nullptr && domain_id[0] != '\0') {
-		if (!is_canonical_mariadb_domain_id(domain_id, strlen(domain_id))) {
+		// A canonical MariaDB domain id spans at most 10 decimal digits, so the
+		// NUL is looked for within that bound instead of walking an unbounded
+		// caller-supplied C string. A longer spelling is rejected either way,
+		// because is_canonical_mariadb_domain_id() stops at UINT32_MAX.
+		const char* const domain_end =
+			static_cast<const char*>(memchr(domain_id, '\0', MARIADB_DOMAIN_ID_MAX_DIGITS + 1));
+		if (domain_end == nullptr ||
+				!is_canonical_mariadb_domain_id(domain_id, static_cast<size_t>(domain_end - domain_id))) {
 			return false;
 		}
 		domain.assign(domain_id);
@@ -687,10 +693,12 @@ bool parse_gtid_set(const char* encoded, GTID_Set* out) {
 
 	const bool mysql = strchr(encoded, ':') != nullptr;
 	GTID_Set tmp;
+	const char* const encoded_end = encoded + strlen(encoded); // NOSONAR(cpp:S5813): `encoded` is a NUL-terminated C string by contract, and this single scan replaces a per-token strlen.
 	const char* p = encoded;
 	while (*p) {
 		const char* comma = strchr(p, ',');
-		size_t len = comma ? static_cast<size_t>(comma - p) : strlen(p);
+		size_t len = comma ? static_cast<size_t>(comma - p)
+		                   : static_cast<size_t>(encoded_end - p);
 		if (len == 0) {
 			return false;
 		}

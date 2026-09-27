@@ -396,7 +396,7 @@ static int detect_id_flavor(const char *id, size_t len) {
 		if (c == '-') {
 			continue;
 		}
-		if (!std::isxdigit(c)) {
+		if (!gtid_is_hex_digit(c)) {
 			return GTID_ID_FLAVOR_UNKNOWN;
 		}
 		hex_digits++;
@@ -409,6 +409,41 @@ static int detect_id_flavor(const char *id, size_t len) {
 		return GTID_ID_FLAVOR_DOMAIN;
 	}
 	return GTID_ID_FLAVOR_UNKNOWN;
+}
+
+// Copies a reader id field into `uuid_server`: a canonical MariaDB domain id is
+// kept verbatim, while the dashes of a MySQL UUID are stripped. Returns the
+// number of bytes written, or -1 when the field does not fit.
+static long copy_gtid_reader_id(const char *subtoken, size_t subtoken_len, char *uuid_server,
+                                size_t uuid_server_size) {
+	if (subtoken_len == 0) {
+		uuid_server[0] = '\0';
+		return 0;
+	}
+
+	size_t written = 0;
+	const bool all_digits = std::all_of(subtoken, subtoken + subtoken_len, [](unsigned char c) {
+		return c >= '0' && c <= '9';
+	});
+	if (all_digits) {
+		if (subtoken_len + 1 >= uuid_server_size) {
+			return -1;
+		}
+		memcpy(uuid_server, subtoken, subtoken_len);
+		written = subtoken_len;
+	} else {
+		for (size_t i = 0; i < subtoken_len; i++) {
+			if (subtoken[i] == '-') {
+				continue;
+			}
+			if (written + 1 >= uuid_server_size) {
+				return -1;
+			}
+			uuid_server[written++] = subtoken[i];
+		}
+	}
+	uuid_server[written] = '\0';
+	return static_cast<long>(written);
 }
 
 // Records the flavor of an id field, rejecting unknown ids and any change of
@@ -465,38 +500,18 @@ bool GTID_Server_Data::read_next_gtid() {
 					}
 				j++;
 				if (j%2 == 1) { // we are reading the uuid
+					const size_t subtoken_len = strlen(subtoken); // NOSONAR(cpp:S5813): strtok_r() returns a NUL-terminated token inside the NUL-terminated `bs` copy of the record.
 					if (!accept_id_flavor(gtid_flavor,
-					                      detect_id_flavor(subtoken, strlen(subtoken)))) {
+					                      detect_id_flavor(subtoken, subtoken_len))) {
 						// unknown id, or a flavor change within one bootstrap line
 						invalid_msg = true;
 						break;
 					}
-					size_t uuid_len = 0;
-					if (*subtoken != '\0' && std::all_of(subtoken, subtoken + strlen(subtoken), [](unsigned char c) {
-							return c >= '0' && c <= '9';
-						})) {
-						uuid_len = strlen(subtoken);
-						if (uuid_len + 1 >= sizeof(uuid_server)) {
-							invalid_msg = true;
-							break;
-						}
-						memcpy(uuid_server, subtoken, uuid_len);
-					} else {
-						for (const char *uuid_char = subtoken; *uuid_char; ++uuid_char) {
-							if (*uuid_char == '-') {
-								continue;
-							}
-							if (uuid_len + 1 >= sizeof(uuid_server)) {
-								invalid_msg = true;
-								break;
-							}
-							uuid_server[uuid_len++] = *uuid_char;
-						}
-						if (invalid_msg) {
-							break;
-						}
+					if (copy_gtid_reader_id(subtoken, subtoken_len, uuid_server,
+					                         sizeof(uuid_server)) < 0) {
+						invalid_msg = true;
+						break;
 					}
-					uuid_server[uuid_len] = '\0';
 				} else { // we are reading the trxid or trxid range
 					TrxId_Interval iv(trxid_t(0));
 					if (!TrxId_Interval::parse(subtoken, &iv)) {

@@ -358,13 +358,18 @@ Tests in `gtid_parse_unit-t.cpp`:
 - [ ] **Step 1b: Unit-test `select_mariadb_binlog_position` / `render_mariadb_domain_position`**
 
 Bounded copy of the `@@gtid_binlog_pos` value into the connection's `gtid_uuid`
-buffer. The value may list several domains, so no domain is requested at all:
-the helper renders the position as one `domain-server-seq` only when it carries
-exactly one domain and that domain's key is a canonical MariaDB domain id.
-Rejects empty, oversized, and unchanged values without touching the buffer, and
-fails closed when the position is multi-domain, when the requested domain is
-absent, and when a single non-canonical key (a MySQL UUID, for instance) would
-otherwise be rendered as `uuid-server-seq`. Covered in `gtid_parse_unit-t.cpp`.
+buffer. `render_mariadb_domain_position` has two distinct modes, both covered in
+`gtid_parse_unit-t.cpp`:
+
+- With a requested domain id: the id itself must be a canonical MariaDB domain
+  id, and the position must contain that domain. The position is rendered as one
+  `domain-server-seq`; empty, oversized, and unchanged values, an absent domain,
+  and a non-canonical requested id are all rejected without touching the buffer.
+- With no requested domain (the auxiliary-connection mode below): the position
+  is accepted only when it carries exactly one domain and that domain's key is a
+  canonical MariaDB domain id. A multi-domain position fails closed, and so does
+  a single non-canonical key (a MySQL UUID, for instance) that would otherwise be
+  rendered as `uuid-server-seq`.
 
 No domain is inferred from the auxiliary connection either: its
 `@@gtid_domain_id` is the server default, while a client session that issued
@@ -468,7 +473,7 @@ git commit -m "test: MariaDB min_gtid causal read TAP"
 ### Task 7: Verification
 
 - [ ] `PROXYSQL31=1 make -C test/tap/tests/unit gtid_parse_unit-t gtid_set_unit-t gtid_server_data_unit-t`
-- [ ] Run the three binaries — all PASS. Expected counts: 61/61 `gtid_parse_unit-t`, 73/73 `gtid_set_unit-t`, 170/170 `gtid_server_data_unit-t`
+- [ ] Run the three binaries — all PASS. Expected counts: 62/62 `gtid_parse_unit-t`, 73/73 `gtid_set_unit-t`, 170/170 `gtid_server_data_unit-t`
 - [ ] `PROXYSQL31=1 make build_lib` — compiles
 - [ ] `python3 test/tap/groups/check_groups.py --source` — all source tests registered
 - [ ] Existing MySQL GTID unit counts remain green (`gtid_set_unit-t` original cases, `gtid_server_data_unit-t` original cases)

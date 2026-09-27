@@ -59,7 +59,7 @@ static void test_mariadb_binlog_position_selection() {
 	memset(position, 0x5a, sizeof(position));
 	ok(!select_mariadb_binlog_position("00-1-270", nullptr, position, sizeof(position))
 	       && position[0] == static_cast<char>(0x5a),
-	   "select MariaDB position rejects a non-canonical domain in the value without a domain id");
+	   "select MariaDB position rejects a value whose domain is not canonical");
 
 	// A roomy buffer: the single MySQL UUID key must be rejected on its shape,
 	// not merely because the rendered string would not fit.
@@ -135,6 +135,17 @@ static void test_render_mariadb_domain_position() {
 	ok(render_mariadb_domain_position(single, nullptr, position, sizeof(position))
 	       && strcmp(position, "3-7-9") == 0,
 	   "render MariaDB position accepts a single-domain set without a domain id");
+
+	// A non-canonical single key cannot be produced by the parser, so the set is
+	// built directly: the guard has to reject the key on its own shape, so that
+	// `00-1-270` is never rendered as a position.
+	GTID_Set noncanonical;
+	noncanonical.add("00", trxid_t(1), trxid_t(270));
+	noncanonical.set_server_id("00", 5);
+	memset(position, 0x5a, sizeof(position));
+	ok(!render_mariadb_domain_position(noncanonical, nullptr, position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "render MariaDB position fails closed on a non-canonical single key without a domain id");
 }
 
 static void test_session_tracking_reset() {
@@ -169,7 +180,7 @@ static void test_session_tracking_reset() {
 }
 
 int main() {
-	plan(61);
+	plan(62);
 	ok(test_init_minimal() == 0, "test_init_minimal() succeeds");
 	ParsedGTID p;
 
@@ -249,7 +260,8 @@ int main() {
 	ok(!parse_gtid_for_routing("0-1-100", id, 0, &trx)
 	       && trx == 0xfeedfacecafebeefULL && memcmp(id, id_sentinel, sizeof(id)) == 0,
 	   "routing rejects zero id buffer length without changing outputs");
-	memset(id, 0x5a, sizeof(id));
+	// The too-small buffer case uses its own `small` struct, so `id` is not
+	// touched here; the guard byte after `small.id` is what proves no overflow.
 	trx = 0xfeedfacecafebeefULL;
 	struct {
 		char id[1];
@@ -266,7 +278,7 @@ int main() {
 	std::unordered_map<std::string, std::string> sysvars;
 	char session_gtid[128] = {0};
 	const char mysql_gtid[] = "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42";
-	ok(select_session_gtid(mysql_gtid, strlen(mysql_gtid), sysvars,
+	ok(select_session_gtid(mysql_gtid, sizeof(mysql_gtid) - 1, sysvars,
 	                       session_gtid, sizeof(session_gtid))
 	       && strcmp(session_gtid, mysql_gtid) == 0,
 	   "select session GTID copies MySQL payload");
