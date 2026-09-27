@@ -3066,6 +3066,27 @@ static SQLite3_result* transform_pragma_table_info_to_pg_attribute(SQLite3_resul
 	return new_result;
 }
 
+/**
+ * @brief Sends a SQLite3 resultset (or an error) to the admin client using the
+ *   wire protocol matching the session type.
+ *
+ * 'SQLite3_to_MySQL' must never be used for 'PgSQL_Session': its protocol object
+ * is a 'PgSQL_Protocol', and serializing MySQL packets through it crashes (#6136).
+ *
+ * @param query_type For PostgreSQL clients, the statement whose first word is used
+ *   as the CommandComplete tag. Ignored for MySQL clients.
+ */
+template<typename S>
+void admin_send_resultset(S* sess, SQLite3_result* resultset, char* error, int affected_rows, const char* query_type = "SELECT") {
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+	} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+		SQLite3_to_Postgres(sess->client_myds->PSarrayOUT, resultset, error, affected_rows, query_type);
+	} else {
+		assert(0);
+	}
+}
+
 template<typename S>
 void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
@@ -3365,13 +3386,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				}
 
 				if (resultset) {
-					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					admin_send_resultset(sess, resultset, error, affected_rows);
 					delete resultset;
 					run_query=false;
 					goto __run_query;
 				}
 			} else {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				admin_send_resultset(sess, resultset, error, affected_rows);
 				run_query=false;
 				goto __run_query;
 			}
@@ -3419,13 +3440,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				}
 
 				if (resultset) {
-					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					admin_send_resultset(sess, resultset, error, affected_rows);
 					delete resultset;
 					run_query = false;
 					goto __run_query;
 				}
 			} else {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				admin_send_resultset(sess, resultset, error, affected_rows);
 				run_query = false;
 				goto __run_query;
 			}
@@ -3438,7 +3459,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			resultset = GloMyAuth->get_current_mysql_users();
 			pthread_mutex_unlock(&users_mutex);
 			if (resultset != nullptr) {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				admin_send_resultset(sess, resultset, error, affected_rows);
 				run_query=false;
 				goto __run_query;
 			}
@@ -3451,7 +3472,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			resultset = GloPgAuth->get_current_pgsql_users();
 			pthread_mutex_unlock(&users_mutex);
 			if (resultset != nullptr) {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				admin_send_resultset(sess, resultset, error, affected_rows);
 				run_query = false;
 				goto __run_query;
 			}
@@ -3466,13 +3487,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				GloMyQPro->wrunlock(); // unlock first
 				resultset = GloMyQPro->get_current_query_rules();
 				if (resultset) {
-					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					admin_send_resultset(sess, resultset, error, affected_rows);
 					delete resultset;
 					run_query=false;
 					goto __run_query;
 				}
 			} else {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				admin_send_resultset(sess, resultset, error, affected_rows);
 				//delete resultset; // DO NOT DELETE . This is the inner resultset of Query_Processor
 				GloMyQPro->wrunlock();
 				run_query=false;
@@ -3486,13 +3507,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				GloMyQPro->wrunlock(); // unlock first
 				resultset = GloMyQPro->get_current_query_rules_fast_routing();
 				if (resultset) {
-					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					admin_send_resultset(sess, resultset, error, affected_rows);
 					delete resultset;
 					run_query=false;
 					goto __run_query;
 				}
 			} else {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				admin_send_resultset(sess, resultset, error, affected_rows);
 				//delete resultset; // DO NOT DELETE . This is the inner resultset of Query_Processor
 				GloMyQPro->wrunlock();
 				run_query=false;
@@ -3509,7 +3530,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				GloPgQPro->wrunlock(); // unlock first
 				resultset = GloPgQPro->get_current_query_rules();
 				if (resultset) {
-					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					admin_send_resultset(sess, resultset, error, affected_rows);
 					delete resultset;
 					run_query = false;
 					goto __run_query;
@@ -3518,7 +3539,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 						"get_current_query_rules() returned NULL for pgsql query rules\n");
 				}
 			} else {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				admin_send_resultset(sess, resultset, error, affected_rows);
 				// DO NOT DELETE: this is the inner resultset of Query_Processor
 				GloPgQPro->wrunlock();
 				run_query = false;
@@ -3532,7 +3553,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				GloPgQPro->wrunlock(); // unlock first
 				resultset = GloPgQPro->get_current_query_rules_fast_routing();
 				if (resultset) {
-					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					admin_send_resultset(sess, resultset, error, affected_rows);
 					delete resultset;
 					run_query = false;
 					goto __run_query;
@@ -3541,7 +3562,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 						"get_current_query_rules_fast_routing() returned NULL for pgsql fast routing\n");
 				}
 			} else {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				admin_send_resultset(sess, resultset, error, affected_rows);
 				// DO NOT DELETE: this is the inner resultset of Query_Processor
 				GloPgQPro->wrunlock();
 				run_query = false;
@@ -4134,7 +4155,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			}
 			char *err=NULL;
 			SQLite3_result *resultset=SPA->generate_show_table_status(strA, &err);
-			sess->SQLite3_to_MySQL(resultset, err, 0, &sess->client_myds->myprot);
+			// Pass the normalized statement so PostgreSQL clients get a 'SHOW' CommandComplete tag.
+			admin_send_resultset(sess, resultset, err, 0, query_no_space);
 			if (resultset) delete resultset;
 			if (err) free(err);
 			run_query=false;
@@ -4155,7 +4177,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			}
 			char *err=NULL;
 			SQLite3_result *resultset=SPA->generate_show_fields_from(strA, &err);
-			sess->SQLite3_to_MySQL(resultset, err, 0, &sess->client_myds->myprot);
+			admin_send_resultset(sess, resultset, err, 0, query_no_space);
 			if (resultset) delete resultset;
 			if (err) free(err);
 			run_query=false;
@@ -4683,7 +4705,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		if (fileName.size() == 0) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: empty file name";
-			sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+			admin_send_resultset(sess, resultset, (char*)ss.str().c_str(), affected_rows);
+			run_query = false;
+			goto __run_query;
 		}
 		std::string data;
 		data.reserve(100000);
@@ -4705,7 +4729,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		if (rc) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: Cannot extract configuration";
-			sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+			admin_send_resultset(sess, resultset, (char*)ss.str().c_str(), affected_rows);
 		} else {
 			std::ofstream out;
 			out.open(fileName);
@@ -4715,7 +4739,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				if (!out) {
 					std::stringstream ss;
 					ss << "ProxySQL Admin Error: Error writing file " << fileName;
-					sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+					admin_send_resultset(sess, resultset, (char*)ss.str().c_str(), affected_rows);
 				} else {
 					std::stringstream ss;
 					ss << "File " << fileName << " is saved.";
@@ -4724,7 +4748,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			} else {
 				std::stringstream ss;
 				ss << "ProxySQL Admin Error: Cannot open file " << fileName;
-				sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+				admin_send_resultset(sess, resultset, (char*)ss.str().c_str(), affected_rows);
 			}
 		}
 		run_query = false;
@@ -4752,7 +4776,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		if (rc) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: Cannot write proxysql.cnf";
-			sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+			admin_send_resultset(sess, resultset, (char*)ss.str().c_str(), affected_rows);
 		} else {
 			char *pta[1];
 			pta[0]=NULL;
@@ -4760,7 +4784,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			SQLite3_result* resultset = new SQLite3_result(1);
 			resultset->add_column_definition(SQLITE_TEXT,"Data");
 			resultset->add_row(pta);
-			sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+			admin_send_resultset(sess, resultset, error, affected_rows);
 			delete resultset;
 		}
 		run_query = false;
@@ -5146,7 +5170,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			resultset->add_row(pta);
 		}
 
-		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		admin_send_resultset(sess, resultset, error, affected_rows, query_no_space);
 		delete resultset;
 		run_query = false;
 
@@ -5538,25 +5562,13 @@ __run_query:
 				}
 			}
 
-			if constexpr (std::is_same_v<S, MySQL_Session>) {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-			} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
-				SQLite3_to_Postgres(sess->client_myds->PSarrayOUT, resultset, error, affected_rows, query);
-			} else {
-				assert(0);
-			}
+			admin_send_resultset(sess, resultset, error, affected_rows, query);
 		} else {
 			char *a = (char *)"ProxySQL Admin Error: ";
 			char *new_msg = (char *)malloc(strlen(error)+strlen(a)+1);
 			sprintf(new_msg, "%s%s", a, error);
 
-			if constexpr (std::is_same_v<S, MySQL_Session>) {
-				sess->SQLite3_to_MySQL(resultset, new_msg, affected_rows, &sess->client_myds->myprot);
-			} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
-				SQLite3_to_Postgres(sess->client_myds->PSarrayOUT, resultset, new_msg, affected_rows, query);
-			} else {
-				assert(0);
-			}
+			admin_send_resultset(sess, resultset, new_msg, affected_rows, query);
 
 			free(new_msg);
 			free(error);
