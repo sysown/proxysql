@@ -3815,7 +3815,7 @@ handler_again:
 					if (pn && pn[0] != '\0') {
 						auto it = named_portals.find(pn);
 						if (it != named_portals.end()) {
-							it->second.suspended = myconn->native_last_execute_suspended;
+							it->second.suspended = myconn->last_execute_suspended();
 						}
 					}
 				}
@@ -6074,7 +6074,7 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			// extended-query cache above, this path does not test MultiplexDisabled(), so
 			// being on a LISTEN-pinned connection does not by itself keep it out.
 			if (qpo && qpo->cache_ttl > 0 && is_tuple == true &&
-				_conn->native_result_had_notification == false) { // the resultset should be cached
+				_conn->result_had_notification() == false) { // the resultset should be cached
 				
 				if (_conn->is_error_present() == false &&
 					(/* check warnings count here*/ true ||

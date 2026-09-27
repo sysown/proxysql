@@ -267,6 +267,12 @@ protected:
 	PgSQL_Connection(bool is_client_conn, bool native);
 
 public:
+	// The transport leaves need full private access while the transport state
+	// still lives on the base (it moves into the leaves in a later step).
+	friend class PgSQL_Connection_LibPQ;
+	friend class PgSQL_Connection_Native;
+	friend class PgSQL_Client_Connection;
+
 	PgSQL_Connection(const PgSQL_Connection&) = delete;
 	PgSQL_Connection& operator=(const PgSQL_Connection&) = delete;
 
@@ -281,7 +287,7 @@ public:
 	static PgSQL_Connection* create_backend();
 
 	PG_ASYNC_ST handler(short event);
-	void connect_start();
+	virtual void connect_start() = 0;
 	// Builds the session settings a backend StartupMessage must carry: the
 	// client_encoding value and the "-c name=value ..." options string (tracked
 	// variables followed by the client's own untracked options). Also records what is
@@ -297,16 +303,16 @@ public:
 	bool build_and_record_startup_session_params(std::string& client_encoding_out,
 	                                             std::string& options_out,
 	                                             StartupParamEscape escape_mode);
-	void connect_cont(short event);
+	virtual void connect_cont(short event) = 0;
 	// Consults PgSQL_Monitor::dns_lookup; returns the cached IP on a hit,
 	// empty std::string on a miss.  Used by connect_start() to set
 	// `hostaddr=<ip>` in the libpq conninfo so PQconnectStart skips
 	// getaddrinfo and doesn't block the worker thread on DNS.
 	std::string connect_start_DNS_lookup();
-	void query_start();
-	void query_cont(short event);
+	virtual void query_start() = 0;
+	virtual void query_cont(short event) = 0;
 	void fetch_result_start();
-	void fetch_result_cont(short event);
+	virtual void fetch_result_cont(short event) = 0;
 
     /**
      * @brief Initiates the asynchronous preparation of a SQL statement.
@@ -316,7 +322,7 @@ public:
      * The actual continuation and completion of the statement preparation is handled
      * by stmt_prepare_cont(short event).
      */
-    void stmt_prepare_start();
+    virtual void stmt_prepare_start() = 0;
 
     /**
      * @brief Continues the asynchronous preparation of a SQL statement.
@@ -326,7 +332,7 @@ public:
      *
      * @param event The event flag indicating the current I/O event.
      */
-    void stmt_prepare_cont(short event);
+    virtual void stmt_prepare_cont(short event) = 0;
 
     /**
      * @brief Initiates the asynchronous description of a prepared SQL statement.
@@ -335,7 +341,7 @@ public:
      * on the PostgreSQL backend.
 	 * 
      */
-    void stmt_describe_start();
+    virtual void stmt_describe_start() = 0;
 
     /**
      * @brief Continues the asynchronous description of a prepared SQL statement.
@@ -345,7 +351,7 @@ public:
      *
      * @param event The event flag indicating the current I/O event.
      */
-    void stmt_describe_cont(short event);
+    virtual void stmt_describe_cont(short event) = 0;
 
     /**
      * @brief Initiates the asynchronous execution of a prepared SQL statement.
@@ -355,7 +361,7 @@ public:
      * and transitions the connection's state machine to handle the subsequent response.
 	 * 
      */
-    void stmt_execute_start();
+    virtual void stmt_execute_start() = 0;
 
     /**
      * @brief Continues the asynchronous execution of a prepared SQL statement.
@@ -365,7 +371,7 @@ public:
      *
      * @param returned The event flag indicating the current I/O event.
      */
-    void stmt_execute_cont(short event);
+    virtual void stmt_execute_cont(short event) = 0;
 
     /**
      * @brief Initiates the asynchronous reset of the PostgreSQL connection.
@@ -374,7 +380,7 @@ public:
      * reusable state so it can safely re-enter the multiplexing pool.
      *
      */
-    void reset_session_start();
+    virtual void reset_session_start() = 0;
 
     /**
      * @brief Continues the asynchronous reset of the PostgreSQL session.
@@ -384,7 +390,7 @@ public:
      *
      * @param event The event flag indicating the current I/O event.
      */
-    void reset_session_cont(short event);
+    virtual void reset_session_cont(short event) = 0;
 
     /**
      * @brief Start a resynchronization attempt for the current backend connection.
@@ -393,30 +399,37 @@ public:
      * ReadyForQuery) and transition the connection into the resynchronizing state.
      *
      */
-    void resync_start();
+    virtual void resync_start() = 0;
 
     /**
 	 * @brief Continue a previously started resynchronization in response to an event.
 	 *
 	 * @param event The event flag indicating the current I/O event.
 	 */
-    void resync_cont(short event);
+    virtual void resync_cont(short event) = 0;
 	
 	int async_connect(short event);
 	int async_query(short event, const char* stmt, unsigned long length, const char* backend_stmt_name = nullptr, 
 		PgSQL_Extended_Query_Type type = PGSQL_EXTENDED_QUERY_TYPE_NOT_SET, const PgSQL_Extended_Query_Info* extended_query_info = nullptr);
-	int async_ping(short event);
+	virtual int async_ping(short event) = 0;
 	int async_reset_session(short event);
 	int async_send_simple_command(short event, char* stmt, unsigned long length); // no result set expected
 	int async_perform_resync(short event);
 
 	void next_event(PG_ASYNC_ST new_st);
 	bool is_connected() const;
-	void compute_unknown_transaction_status();
+	// NOT pure, unlike the other libpq-driven members above: ~PgSQL_Connection()
+	// calls async_free_result(), which calls this, and a base destructor may not
+	// dispatch to a pure virtual (the vtable is already the base's by then, so the
+	// call aborts the process with "pure virtual method called"). The whole body
+	// sits behind `if (pgsql_conn)`, which is false for the native and client
+	// leaves, so one concrete implementation serves all three and no leaf needs to
+	// override it. is_connected() and is_error_present() are likewise non-virtual.
+	virtual void compute_unknown_transaction_status();
 	void async_free_result();
 	void flush(bool is_resync = false);
 	bool IsActiveTransaction();
-	bool IsKnownActiveTransaction();
+	virtual bool IsKnownActiveTransaction() = 0;
 	bool IsServerOffline();
 	void set_is_client(); // used for local_stmts
 	bool is_connection_in_reusable_state() const;
@@ -522,71 +535,43 @@ public:
 	void ProcessQueryAndSetStatusFlags(const char* query_digest_text, int savepoint_count);
 
 	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
-	inline int get_pg_server_version() {
-		if (native_mode) {
-			auto it = native_params.find("server_version");
-			if (it == native_params.end()) return 0;
-			// PostgreSQL changed the numeric version encoding at 10: major*10000 + minor
-			// from 10 onwards, major*10000 + minor*100 + revision before it.
-			int vmaj = 0, vmin = 0, vrev = 0;
-			const int cnt = sscanf(it->second.c_str(), "%d.%d.%d", &vmaj, &vmin, &vrev);
-			// The backend controls this string; the multiplies below overflow int for
-			// absurd values, so anything implausible is reported as unknown.
-			if (vmaj < 0 || vmaj > 9999 || vmin < 0 || vmin > 9999 || vrev < 0 || vrev > 9999) return 0;
-			if (cnt == 3) return (100 * vmaj + vmin) * 100 + vrev;
-			if (cnt == 2) return (vmaj >= 10) ? (100 * 100 * vmaj + vmin) : ((100 * vmaj + vmin) * 100);
-			if (cnt == 1) return 100 * 100 * vmaj;
-			return 0;
-		}
-		return PQserverVersion(pgsql_conn);
-	}
-	inline int get_pg_protocol_version() { return native_mode ? 3 : PQprotocolVersion(pgsql_conn); }
-	inline const char* get_pg_host() { return native_mode ? native_host.c_str() : PQhost(pgsql_conn); }
-	inline const char* get_pg_hostaddr() { return native_mode ? native_hostaddr.c_str() : PQhostaddr(pgsql_conn); }
-	inline const char* get_pg_port() { return native_mode ? native_port.c_str() : PQport(pgsql_conn); }
-	inline const char* get_pg_dbname() { return native_mode ? (userinfo ? userinfo->dbname : "") : PQdb(pgsql_conn); }
-	inline const char* get_pg_user() { return native_mode ? (userinfo ? userinfo->username : "") : PQuser(pgsql_conn); }
-	inline const char* get_pg_password() { return native_mode ? (userinfo && userinfo->password ? userinfo->password : "") : PQpass(pgsql_conn); }
-	inline const char* get_pg_options() { return native_mode ? native_options.c_str() : PQoptions(pgsql_conn); }
-	inline int get_pg_socket_fd() { return native_mode ? fd : PQsocket(pgsql_conn); }
-	inline int get_pg_backend_pid() { return native_mode ? native_backend_pid : PQbackendPID(pgsql_conn); }
-	inline int get_pg_client_encoding() {
-		if (native_mode) {
-			constexpr int SQL_ASCII = 0;   // PG_SQL_ASCII; mb/pg_wchar.h is not included here
-			auto it = native_params.find("client_encoding");
-			if (it == native_params.end()) return SQL_ASCII;
-			const int enc = char_to_encoding(it->second.c_str());
-			return (enc < 0) ? SQL_ASCII : enc;
-		}
-		return PQclientEncoding(pgsql_conn);
-	}
+
+	// --- Transport-dependent accessors ---
+	// Each leaf answers from its own transport (libpq PGconn, native members, or
+	// the fixed client-side values). Declared pure virtual because the answer
+	// depends on the transport chosen at construction time.
+	virtual int get_pg_server_version() = 0;
+	virtual int get_pg_protocol_version() = 0;
+	virtual const char* get_pg_host() = 0;
+	virtual const char* get_pg_hostaddr() = 0;
+	virtual const char* get_pg_port() = 0;
+	virtual const char* get_pg_dbname() = 0;
+	virtual const char* get_pg_user() = 0;
+	virtual const char* get_pg_password() = 0;
+	virtual const char* get_pg_options() = 0;
+	virtual int get_pg_socket_fd() = 0;
+	virtual int get_pg_backend_pid() = 0;
+	virtual int get_pg_client_encoding() = 0;
 	// Native TLS (1.6b): SSL is in use once the handshake handed the SSL* to myds.
-	// Out-of-line in PgSQL_Connection.cpp because PgSQL_Data_Stream is incomplete here.
-	int get_pg_ssl_in_use();
-	inline ConnStatusType get_pg_connection_status() const {
-		// Only the native side needs the check. libpq already reports a connection
-		// that is still being set up, and those must not be reported as bad.
-		if (native_mode) return backend_is_live() ? CONNECTION_OK : CONNECTION_BAD;
-		return PQstatus(pgsql_conn);
-	}
+	// Out-of-line in the leaf .cpp files because PgSQL_Data_Stream is incomplete
+	// at these declarations.
+	virtual int get_pg_ssl_in_use() = 0;
+	// Only the native side needs the liveness check; libpq already reports a
+	// connection that is still being set up, so it trusts PQstatus().
+	virtual ConnStatusType get_pg_connection_status() const = 0;
+	// Says whether the connection can be reused. Use
+	// last_ready_for_query_status() if you want what the backend actually said.
 	inline PGTransactionStatusType get_pg_transaction_status() const {
-		// Says whether the connection can be reused. Use
-		// last_ready_for_query_status() if you want what the backend actually said.
+		// Shared across transports: a connection that is not live cannot have a
+		// transaction state, so report UNKNOWN before asking the transport.
 		if (!backend_is_live()) return PQTRANS_UNKNOWN;
-		if (native_mode) {
-			switch (native_txn_status) {
-				case 'I': return PQTRANS_IDLE;
-				case 'T': return PQTRANS_INTRANS;
-				case 'E': return PQTRANS_INERROR;
-				default:  return PQTRANS_UNKNOWN;
-			}
-		}
-		return PQtransactionStatus(pgsql_conn);
+		return transport_transaction_status();
 	}
 	// The transaction letter the backend sent with its last reply. It says nothing
 	// about whether the connection is still usable -- callers that need that ask
-	// get_pg_transaction_status() instead.
-	inline char last_ready_for_query_status() const { return native_txn_status; }
+	// get_pg_transaction_status() instead. Only the native transport learns this
+	// letter from the wire; the libpq leaf returns the field's initial value 'I'.
+	virtual char last_ready_for_query_status() const = 0;
 	// PostgreSQL reports only 'I', 'T' or 'E' here. Anything else means the peer is not speaking
 	// the protocol: the status is kept as sent, so the connection reads as unusable and is never
 	// handed to another session, and the error gives that refusal a reason -- without one the
@@ -606,37 +591,40 @@ public:
 	// bit it has to decide. When TLS is blocked on a direction of its own, that wins: arming
 	// writable for a read the socket already satisfies spins the worker thread, and arming only
 	// readable when SSL owes the peer a record waits for bytes that will never come.
-	inline bool needs_pollout() const {
-		if (native_mode && native_ssl_block_dir) return native_ssl_block_dir == PG_EVENT_WRITE;
-		return (async_exit_status & PG_EVENT_WRITE) != 0;
-	}
-	inline int get_pg_is_nonblocking() { return native_mode ? 1 : PQisnonblocking(pgsql_conn); }
-	inline const char* get_pg_error_message() {
-		return native_mode ? (error_info.message.empty() ? "" : error_info.message.c_str()) : PQerrorMessage(pgsql_conn);
-	}
-	// Out-of-line in PgSQL_Connection.cpp (PgSQL_Data_Stream incomplete here).
-	SSL* get_pg_ssl_object();
-	inline const char* get_pg_parameter_status(const char* param) {
-		if (native_mode) {
-			if (param == nullptr) return nullptr;
-			auto it = native_params.find(param);
-			return it == native_params.end() ? nullptr : it->second.c_str();
-		}
-		return PQparameterStatus(pgsql_conn, param);
-	}
+	virtual bool needs_pollout() const = 0;
+	virtual int get_pg_is_nonblocking() = 0;
+	virtual const char* get_pg_error_message() = 0;
+	// Out-of-line in the leaf .cpp files (PgSQL_Data_Stream incomplete here).
+	virtual SSL* get_pg_ssl_object() = 0;
+	virtual const char* get_pg_parameter_status(const char* param) = 0;
+	// Transport part of get_pg_transaction_status(); only asked once the base's
+	// shared liveness check above has passed.
+	virtual PGTransactionStatusType transport_transaction_status() const = 0;
 	const char* get_pg_server_version_str(char* buff, int buff_size);
 	const char* get_pg_connection_status_str();
 	const char* get_pg_transaction_status_str();
 	unsigned int get_memory_usage() const;
-	inline int get_backend_pid() { return native_mode ? native_backend_pid : ((pgsql_conn) ? get_pg_backend_pid() : -1); }
+	virtual int get_backend_pid() = 0;
 	// Whether the backend has not finished with this connection; callers use it to decide if the
 	// connection is safe to pool, reuse or retry on. Native has no libpq to ask and pgsql_conn is
 	// always NULL there, so without this branch every one of those guards was dead.
-	bool is_pipeline_active() {
-		if (native_mode) return native_unsynced_work;
-		return (PQpipelineStatus(pgsql_conn) != PQ_PIPELINE_OFF);
-	}
-	const char* get_pg_backend_state() const;
+	virtual bool is_pipeline_active() = 0;
+	// Backend state snapshot for diagnostics. The native leaf reports
+	// "disconnected" (a native snapshot is a follow-up, not done here).
+	virtual const char* get_pg_backend_state() const = 0;
+	// Whether this transport alone makes the connection unusable. Called by the
+	// shared is_connection_in_reusable_state() before it consults the transaction
+	// status. libpq deliberately has no such check (a dead libpq connection with
+	// no recorded error must still trip the reuse check the way it always did).
+	virtual bool transport_blocks_reuse() const = 0;
+	// Native-only execution state the session reads on every connection. The
+	// libpq leaf answers the fixed initial values those fields would have.
+	virtual bool last_execute_suspended() const = 0;
+	virtual bool result_had_notification() const = 0;
+	// Relay backend async messages (NotificationResponse) to the client output
+	// array. The libpq transport hides such messages in libpq's own buffers, so
+	// it has nothing to relay.
+	virtual int relay_async_messages(PtrSizeArray* out) = 0;
 
 	static int char_to_encoding(const char* name) {
 		return pg_char_to_encoding(name);
@@ -823,13 +811,15 @@ public:
 	// Bind (PGSQL_EXTENDED_QUERY_TYPE_BIND), so stmt_execute_start() emits a Bind-only
 	// frame (no Execute) and the drain forwards the real BindComplete. Set per-dispatch
 	// in async_query(); read once at stmt_execute_start(). Task P1.
-	bool native_bind_only = false;
+	// These describe what the session asked for, not transport state, so they live
+	// on the base and both stmt_execute_start() leaf arms read them.
+	bool bind_only = false;
 	// True when the current ASYNC_STMT_EXECUTE_* dispatch is actually a named-portal
 	// Close (PGSQL_EXTENDED_QUERY_TYPE_CLOSE), so stmt_execute_start() emits a
 	// Close('P', portal)-only frame (no Bind/Execute) and the drain forwards the real
 	// CloseComplete '3'. Set per-dispatch in async_query(); read once at
 	// stmt_execute_start(). Task P2.
-	bool native_close_only = false;
+	bool close_only = false;
 	// Set by the drain when a native EXECUTE step's terminator was 's' (PortalSuspended
 	// — max_rows cut the result short); cleared when it was 'C'/'I' (the portal ran to
 	// completion). Read once by the session epilogue to mark/clear a NAMED portal's
@@ -1035,11 +1025,20 @@ public:
 	int async_exit_status; // exit status of Non blocking API
 	bool unknown_transaction_status;
 
-private:
+protected:
 	// The one place that decides whether this connection can still be used. Every
-	// answer about the connection's health is built on it.
+	// answer about the connection's health is built on it. Transport-specific:
+	// libpq asks PQstatus(); native uses the socket and the login-finished flag.
+	//
+	// NOT pure, for the same reason as compute_unknown_transaction_status(): the base
+	// destructor reaches it ( ~PgSQL_Connection() -> async_free_result() ->
+	// compute_unknown_transaction_status() -> is_connected() -> here), and a base
+	// destructor may not dispatch to a pure virtual. `native_mode` is const and set
+	// by the leaf's constructor -- true only for PgSQL_Connection_Native -- so this
+	// one body is the same answer each leaf gave on its own.
 	bool backend_is_live() const;
 
+private:
 	// True once this connection has been added to the global count of connected
 	// backends. Both subtractions check it, so a connection that was never added is
 	// never subtracted and the count cannot wrap.

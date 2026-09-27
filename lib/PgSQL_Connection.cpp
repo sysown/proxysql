@@ -935,7 +935,7 @@ handler_again:
 	case ASYNC_STMT_EXECUTE_START:
 		stmt_execute_start();
 		__sync_fetch_and_add(&parent->queries_sent, 1);
-		// bind_msg is NULL for a named-portal Close (native_close_only) — it carries no
+		// bind_msg is NULL for a named-portal Close (close_only) — it carries no
 		// Bind bytes — so guard the bytes-sent accounting (Task P2). EXECUTE and BIND
 		// always carry a bind_msg.
 		if (query.extended_query_info->bind_msg) {
@@ -1156,7 +1156,7 @@ handler_again:
 // keys into the conninfo string. Does not NUL-terminate; returns the encoded length.
 extern "C" int pg_b64_encode(const char *src, int len, char *dst, int dstlen);
 
-static void append_conninfo_param(std::ostringstream& conninfo, const char* key, char* val) {
+void append_conninfo_param(std::ostringstream& conninfo, const char* key, char* val) {
 	if (!val) return;
 	char* escaped_str = escape_string_single_quotes_and_backslashes(val, false);
 	conninfo << key << "='" << escaped_str << "' ";
@@ -1330,206 +1330,6 @@ bool PgSQL_Connection::build_and_record_startup_session_params(std::string& clie
 	return true;
 }
 
-void PgSQL_Connection::connect_start() {
-	PROXY_TRACE();
-	assert(pgsql_conn == NULL); // already there is a connection
-	reset_error();
-	async_exit_status = PG_EVENT_NONE;
-
-	if (native_mode) {
-		native_connect_start();
-		return;
-	}
-
-	std::ostringstream conninfo;
-	append_conninfo_param(conninfo, "user", userinfo->username); // username
-	if (pgsql_append_conninfo_credentials(conninfo, userinfo->username, userinfo->password,
-		userinfo->has_scram_keys, userinfo->scram_client_key, userinfo->scram_server_key, "connect") == false) {
-		// Fail closed. Leaving pgsql_conn NULL and async_exit_status at PG_EVENT_NONE routes
-		// handler() to ASYNC_CONNECT_END -> ASYNC_CONNECT_FAILED, the same path a PQconnectStart()
-		// failure below already takes, so the client gets a clean error instead of a wrong login.
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
-			"no usable backend credential for this user", false);
-		return;
-	}
-	append_conninfo_param(conninfo, "dbname", userinfo->dbname); // dbname
-	append_conninfo_param(conninfo, "host", parent->address); // backend address
-	// If the DNS cache has resolved this hostname already, also pass
-	// hostaddr=<ip>.  libpq documents this combo specifically to skip name
-	// resolution while keeping the hostname for TLS verification and error
-	// messages.  Empty IP -> cache miss / IP literal / disabled, leave as-is.
-	{
-		const std::string ip = connect_start_DNS_lookup();
-		if (!ip.empty() && ip != std::string(parent->address)) {
-		append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
-		}
-	}
-	// port=0 means hostname is a Unix-domain socket path; libpq rejects
-	// "port=0" with "invalid port number: \"0\"".
-	if (parent->port != 0) {
-		conninfo << "port=" << parent->port << " ";
-	}
-	conninfo << "application_name=proxysql "; // application name
-	//conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
-	if (parent->use_ssl) {
-		conninfo << "sslmode='require' "; // SSL required
-		std::unique_ptr<PgSQLServers_SslParams> ssl_params {
-			PgHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username)
-		};
-		if (ssl_params != nullptr) {
-			// Use per-server SSL params
-			if (ssl_params->ssl_key.length() > 0)
-				append_conninfo_param(conninfo, "sslkey", (char*)ssl_params->ssl_key.c_str());
-			if (ssl_params->ssl_cert.length() > 0)
-				append_conninfo_param(conninfo, "sslcert", (char*)ssl_params->ssl_cert.c_str());
-			if (ssl_params->ssl_ca.length() > 0)
-				append_conninfo_param(conninfo, "sslrootcert", (char*)ssl_params->ssl_ca.c_str());
-			if (ssl_params->ssl_crl.length() > 0)
-				append_conninfo_param(conninfo, "sslcrl", (char*)ssl_params->ssl_crl.c_str());
-			if (ssl_params->ssl_crlpath.length() > 0)
-				append_conninfo_param(conninfo, "sslcrldir", (char*)ssl_params->ssl_crlpath.c_str());
-			// ssl_protocol_version_range was pre-parsed at PgSQLServers_SslParams
-			// construction time (see parse_tls_version()). Empty min/max means
-			// either unset or malformed — in both cases libpq defaults apply.
-			if (ssl_params->ssl_min_protocol_version.length() > 0)
-				append_conninfo_param(conninfo, "ssl_min_protocol_version", (char*)ssl_params->ssl_min_protocol_version.c_str());
-			if (ssl_params->ssl_max_protocol_version.length() > 0)
-				append_conninfo_param(conninfo, "ssl_max_protocol_version", (char*)ssl_params->ssl_max_protocol_version.c_str());
-		} else {
-			// Fall back to global SSL settings
-			append_conninfo_param(conninfo, "sslkey", pgsql_thread___ssl_p2s_key);
-			append_conninfo_param(conninfo, "sslcert", pgsql_thread___ssl_p2s_cert);
-			append_conninfo_param(conninfo, "sslrootcert", pgsql_thread___ssl_p2s_ca);
-			append_conninfo_param(conninfo, "sslcrl", pgsql_thread___ssl_p2s_crl);
-			append_conninfo_param(conninfo, "sslcrldir", pgsql_thread___ssl_p2s_crlpath);
-		}
-	} else {
-		conninfo << "sslmode='disable' "; // not supporting SSL
-	}
-
-	{
-		std::string startup_encoding, startup_options;
-		if (build_and_record_startup_session_params(startup_encoding, startup_options,
-		                                           StartupParamEscape::Conninfo)) {
-			conninfo << "client_encoding='" << startup_encoding << "' ";
-			// Join the "-c key=value" tokens with a leading separator so the options value
-			// has no trailing space before the closing quote. PgBouncer rejects a startup
-			// packet whose options value ends in whitespace (#5801).
-			conninfo << "options='" << startup_options << "'";
-		}
-	}
-
-	/*conninfo << "postgres://";
-	 conninfo << userinfo->username << ":" << userinfo->password; // username and password
-	 conninfo << "@";
-	 conninfo << parent->address << ":" << parent->port; // backend address and port
-	 conninfo << "/";
-	 conninfo << userinfo->schemaname; // currently schemaname consists of datasename (have to improve this in future). In PostgreSQL database and schema are NOT the same.
-	 conninfo << "?";
-	 //conninfo << "require_auth=" << AUTHENTICATION_METHOD_STR[pgsql_thread___authentication_method]; // authentication method
-	 conninfo << "application_name=proxysql";
-	*/
-
-	const std::string& conninfo_str = conninfo.str();
-	pgsql_conn = PQconnectStart(conninfo_str.c_str());
-
-	// introduced a new, formatted error verbosity type.
-	PQsetErrorVerbosity(pgsql_conn, PSERRORS_FORMATTED_DEFAULT);
-	//PQsetErrorContextVisibility(pgsql_conn, PQSHOW_CONTEXT_ERRORS);
-
-	if (pgsql_conn == NULL || PQstatus(pgsql_conn) == CONNECTION_BAD) {
-		if (pgsql_conn) {
-			set_error_from_PQerrorMessage();
-		} else {
-			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_OUT_OF_MEMORY), "Out of memory", false);
-		}
-		proxy_error("Connect failed. %s\n", get_error_code_with_message().c_str());
-		return;
-	}
-	if (PQsetnonblocking(pgsql_conn, 1) != 0) {
-		set_error_from_PQerrorMessage();
-		proxy_error("Failed to set non-blocking mode: %s\n", get_error_code_with_message().c_str());
-		return;
-	}
-	fd = PQsocket(pgsql_conn);
-	async_exit_status = PG_EVENT_WRITE;
-}
-
-void PgSQL_Connection::connect_cont(short event) {
-	PROXY_TRACE();
-	if (native_mode) {
-		// Native (non-libpq) backend connect + auth driver. Drives the
-		// native_st sub-state machine and returns to the event loop; it never
-		// falls through to the libpq path below.
-		native_connect_cont(event);
-		return;
-	}
-	assert(pgsql_conn);
-	reset_error();
-	async_exit_status = PG_EVENT_NONE;
-
-// For troubleshooting connection issue
-#if 0
-	const char* message = nullptr;
-	switch (PQstatus(pgsql_conn))
-	{
-	case CONNECTION_STARTED:
-		message = "Connecting...";
-		break;
-
-	case CONNECTION_MADE:
-		message = "Connected to server (waiting to send) ...";
-		break;
-
-	case CONNECTION_AWAITING_RESPONSE:
-		message = "Waiting for a response from the server...";
-		break;
-
-	case CONNECTION_AUTH_OK:
-		message = "Received authentication; waiting for backend start - up to finish...";
-		break;
-
-	case CONNECTION_SSL_STARTUP:
-		message = "Negotiating SSL encryption...";
-		break;
-	
-	case CONNECTION_SETENV:
-		message = "Negotiating environment-driven parameter settings...";
-		break;
-
-	default:
-		message = "Connecting...";
-	}
-
-	proxy_info("Connection status: %d %s\n", PQsocket(pgsql_conn), message);
-#endif
-
-	PostgresPollingStatusType poll_res = PQconnectPoll(pgsql_conn);
-	switch (poll_res) {
-	case PGRES_POLLING_WRITING:
-		async_exit_status = PG_EVENT_WRITE;
-		break;
-	case PGRES_POLLING_ACTIVE: // Not used
-	case PGRES_POLLING_READING:
-		async_exit_status = PG_EVENT_READ;
-		break;
-	case PGRES_POLLING_OK:
-		async_exit_status = PG_EVENT_NONE;
-		break;
-	//case PGRES_POLLING_FAILED:
-	default:
-		set_error_from_PQerrorMessage();
-		proxy_error("Connect failed. %s\n", get_error_code_with_message().c_str());
-	}
-	int current_fd = PQsocket(pgsql_conn);
-	if (current_fd != fd) {
-		proxy_warning("PgSQL Connection FD has been changed by PQconnectPoll(). oldFD:%d newFD:%d\n", fd, current_fd);
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "PgSQL Connection FD has been changed by PQconnectPoll()"
-			"Session=%p, Conn=%p, myds=%p, oldFD=%d, newFD=%d\n", myds->sess, this, myds, fd, current_fd);
-		fd = current_fd;
-	}
-}
-
 // ===========================================================================
 // Native (non-libpq) backend connect + authentication (Task 1.6a, PLAINTEXT)
 // ===========================================================================
@@ -1550,7 +1350,7 @@ void PgSQL_Connection::connect_cont(short event) {
 
 // Build a one-byte-typed frontend message ('p' PasswordMessage / SASL response)
 // into native_outbuf: type byte, int32 big-endian length (= 4 + bodylen), body.
-static void pg_append_typed_msg(std::string& out, char type, const unsigned char* body, size_t bodylen) {
+void pg_append_typed_msg(std::string& out, char type, const unsigned char* body, size_t bodylen) {
 	uint32_t len = (uint32_t)(4 + bodylen);
 	unsigned char hdr[5];
 	hdr[0] = (unsigned char)type;
@@ -1782,19 +1582,6 @@ void PgSQL_Connection::native_teardown() {
 	// step dereferences the BIOs that went with the SSL. connect_cont() does get called again
 	// on a connection the session is still holding, when the connect timeout expires.
 	native_st = PG_Native_Conn_St::FAILED;
-}
-
-// Defined out-of-line (not in the header) because PgSQL_Data_Stream is an incomplete
-// type at the header's accessor declarations. Native TLS reports SSL-in-use once the
-// handshake handed the SSL* to myds; the libpq path defers to PQsslInUse().
-int PgSQL_Connection::get_pg_ssl_in_use() {
-	if (native_mode) return (native_ssl != nullptr) ? 1 : 0;
-	return PQsslInUse(pgsql_conn);
-}
-
-SSL* PgSQL_Connection::get_pg_ssl_object() {
-	if (native_mode) return native_ssl;
-	return (SSL*)PQsslStruct(pgsql_conn, "OpenSSL");
 }
 
 void PgSQL_Connection::native_connect_start() {
@@ -3013,105 +2800,6 @@ void PgSQL_Connection::native_drive_startup_tail(short /*event*/) {
 	}
 }
 
-void PgSQL_Connection::query_start() {
-	PROXY_TRACE();
-	reset_error();
-	processing_multi_statement = false;
-	async_exit_status = PG_EVENT_NONE;
-
-	if (native_mode) {
-		// Native simple-query path (Task 1.6c). Build a 'Q' (Query) message and
-		// flush it non-blocking. The Query body is the SQL string INCLUDING a
-		// trailing NUL terminator. The libpq path relies on query.ptr being
-		// NUL-terminated (PQsendQuery reads to NUL); we build the body
-		// defensively from query.length bytes + an explicit NUL so we never
-		// depend on / read past the caller's terminator.
-		native_result_complete = false;
-		native_copy_intercepted = false;
-		// A simple query is not an extended-query step: clear any stmt-step state left
-		// on a pooled connection by a prior Parse/Describe/Execute so the native result
-		// drain takes the plain 'Z'-terminated path, not the per-step path.
-		native_stmt_step = PG_Native_Stmt_Step::NONE;
-		native_stmt_sync_terminated = false;
-		native_suppress_parse_complete = false;
-		native_stmt_error_resync = false;
-		native_result_had_notification = false;
-		// A connection pinned by LISTEN can be holding the front of an asynchronous
-		// message that arrived between queries; resetting here would drop those bytes and
-		// the rest would then be read as a new message header. Empty is the normal case
-		// for every other connection, so this still clears a stale framer.
-		if (native_framer.empty()) native_framer.reset();
-		native_outbuf.clear();
-		// Body for the 'Q' (Query) message is the SQL text followed by EXACTLY ONE
-		// NUL terminator, matching PQsendQuery() semantics. Callers are inconsistent
-		// about whether query.length includes the terminator: the extended/simple
-		// client-query path (async_query with pgsql_real_query.QuerySize) passes a
-		// length that INCLUDES the trailing NUL, while async_send_simple_command
-		// (e.g. init_connect via strlen()) does NOT. Emitting query.length bytes and
-		// then appending a NUL therefore produces a malformed double-NUL body for
-		// client queries, which the backend rejects with 08P01 "invalid message
-		// format". Normalize by taking the SQL up to the first NUL (bounded by
-		// query.length) and appending a single terminator.
-		size_t sql_len = 0;
-		if (query.ptr) { while (sql_len < query.length && query.ptr[sql_len] != '\0') sql_len++; }
-		std::string qbody;
-		if (sql_len) qbody.assign(query.ptr, sql_len);
-		qbody.push_back('\0');
-		pg_append_typed_msg(native_outbuf, 'Q', (const unsigned char*)qbody.data(), qbody.size());
-		if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
-			// native_send_or_buffer drives native_st for the connect handshake; in
-			// the query path we only care about the flush result. A false return
-			// means a fatal send error.
-			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Query) failed", false);
-			async_exit_status = PG_EVENT_NONE;
-			return;
-		}
-		// If bytes remain buffered (plaintext native_outbuf or pending ciphertext),
-		// we must wait for the socket to become writable before fetching the result.
-		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
-			async_exit_status = PG_EVENT_WRITE;
-		} else {
-			async_exit_status = PG_EVENT_NONE;
-		}
-		return;
-	}
-
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
-
-	if (PQsendQuery(pgsql_conn, query.ptr) == 0) {
-		set_error_from_PQerrorMessage();
-		proxy_error("Failed to send query. %s\n", get_error_code_with_message().c_str());
-		return;
-	}
-	flush();
-}
-
-void PgSQL_Connection::query_cont(short event) {
-	PROXY_TRACE();
-	if (native_mode) {
-		// Native simple-query path (Task 1.6c): finish flushing the Query message.
-		async_exit_status = PG_EVENT_NONE;
-		if (!native_flush_outbuf()) {
-			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Query) failed", false);
-			return;
-		}
-		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
-			// Still bytes pending → keep waiting for writable.
-			async_exit_status = PG_EVENT_WRITE;
-		} else {
-			// Fully sent → proceed to fetch the result (handler advances to
-			// ASYNC_USE_RESULT_START with async_exit_status == PG_EVENT_NONE).
-			async_exit_status = PG_EVENT_NONE;
-		}
-		return;
-	}
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
-	async_exit_status = PG_EVENT_NONE;
-	if (event & POLLOUT) {
-		flush();
-	}
-}
-
 void PgSQL_Connection::fetch_result_start() {
 	PROXY_TRACE();
 	reset_error();
@@ -3123,85 +2811,6 @@ void PgSQL_Connection::fetch_result_start() {
 	ps_result.id = 0;
 	ps_result.len = 0;
 	ps_result.data = NULL;
-}
-
-void PgSQL_Connection::fetch_result_cont(short event) {
-	PROXY_TRACE();
-	if (native_mode) {
-		// Native result fetch is handled directly in the handler()
-		// ASYNC_USE_RESULT_CONT case (via native_fetch_result_cont), which never
-		// falls through to this libpq routine. Route here defensively so no
-		// PQ*/PGresult code ever runs in native mode.
-		native_fetch_result_cont(event);
-		return;
-	}
-	async_exit_status = PG_EVENT_NONE;
-
-	// Avoid fetching a new result if one is already available.
-	// This situation can happen when a multi-statement query has been executed.
-	// result_type must be set: fetch_result_start() zeroed it for this cycle, so
-	// without this the caller would dispatch on 0 instead of the pending result.
-	if (pgsql_result) {
-		result_type = 1;
-		return;
-	}
-
-	if (is_copy_out == false) {
-		switch (PShandleRowData(pgsql_conn, new_result, &ps_result)) {
-		case 0:
-			result_type = 2;
-			return;
-		case 1:
-			// we already have data available in buffer
-			if (PQisBusy(pgsql_conn) == 0) {
-				result_type = 1;
-				pgsql_result = PQgetResult(pgsql_conn);
-
-				if (!pgsql_result &&
-					query.extended_query_info &&
-					(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) != 0) {
-					pgsql_result = PQgetResult(pgsql_conn);
-				}
-				return;
-			}
-			break;
-		}
-	}
-
-	if (PQconsumeInput(pgsql_conn) == 0) {
-		/* We will only set the error if we didn't capture error in last call. If is_error_present is true,
-		 * it indicates that an error was already captured during a previous PQconsumeInput call,
-		 * and we do not want to overwrite that information.
-		 */
-		if (is_error_present() == false) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to consume input. %s\n", get_error_code_with_message().c_str());
-		}
-		return;
-	}
-
-	switch (PShandleRowData(pgsql_conn, new_result, &ps_result)) {
-	case 0:
-		result_type = 2;
-		return;
-	case 1:
-		if (PQisBusy(pgsql_conn)) {
-			async_exit_status = PG_EVENT_READ;
-			return;
-		}
-		break;
-	default:
-		async_exit_status = PG_EVENT_READ;
-		return;
-	}
-	result_type = 1;
-	pgsql_result = PQgetResult(pgsql_conn);
-
-	if (!pgsql_result &&
-		query.extended_query_info &&
-		(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) != 0) {
-		pgsql_result = PQgetResult(pgsql_conn);
-	}
 }
 
 void PgSQL_Connection::native_stmt_send_or_wait() {
@@ -3612,6 +3221,10 @@ int PgSQL_Connection::async_connect(short event) {
 }
 
 bool PgSQL_Connection::backend_is_live() const {
+	// Concrete in the base, not pure -- see the declaration in the header for why.
+	// native_mode is const and set by the leaf constructor, so this picks the same
+	// branch each leaf used to hardcode: PgSQL_Connection_Native passes true, and
+	// LibPQ and Client pass false. Client has no PGconn, so it lands on false.
 	if (native_mode) {
 		// Usable means the socket is still open and login finished. Do not use
 		// native_st here: it moves back to a sending state whenever a large query
@@ -3629,7 +3242,10 @@ bool PgSQL_Connection::is_connected() const {
 }
 
 void PgSQL_Connection::compute_unknown_transaction_status() {
-	
+	// Concrete in the base, not pure -- see the declaration in the header for why.
+	// The `if (pgsql_conn)` guard is what makes this correct for all three leaves:
+	// only the libpq leaf ever holds a PGconn, so for the native and client leaves
+	// this is a no-op, exactly as it was before the split.
 	if (pgsql_conn) {
 		// make sure we have not missed even a single error
 		if (is_error_present() == false) {
@@ -3753,8 +3369,8 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 		if (!extended_query_info) {
 			async_state_machine = ASYNC_QUERY_START;
 		} else {
-			native_bind_only = false;
-			native_close_only = false;
+			bind_only = false;
+			close_only = false;
 			if (type == PGSQL_EXTENDED_QUERY_TYPE_PARSE) {
 				async_state_machine = ASYNC_STMT_PREPARE_START;
 			} else if (type == PGSQL_EXTENDED_QUERY_TYPE_DESCRIBE) {
@@ -3763,17 +3379,17 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 				async_state_machine = ASYNC_STMT_EXECUTE_START;
 			} else if (type == PGSQL_EXTENDED_QUERY_TYPE_BIND) {
 				// Named-portal Bind reuses the EXECUTE state chain (CONT/END/return
-				// path all handle it unchanged); native_bind_only + native_stmt_step
+				// path all handle it unchanged); bind_only + native_stmt_step
 				// BIND distinguish the wire drive and the drain terminator. Task P1.
 				async_state_machine = ASYNC_STMT_EXECUTE_START;
-				native_bind_only = true;
+				bind_only = true;
 			} else if (type == PGSQL_EXTENDED_QUERY_TYPE_CLOSE) {
 				// Named-portal Close reuses the EXECUTE state chain the same way BIND
-				// does; native_close_only + native_stmt_step CLOSE_P distinguish the
+				// does; close_only + native_stmt_step CLOSE_P distinguish the
 				// wire drive (Close('P', portal) only) and the drain terminator '3'
 				// (CloseComplete). Task P2.
 				async_state_machine = ASYNC_STMT_EXECUTE_START;
-				native_close_only = true;
+				close_only = true;
 			} else {
 				assert(0); // should never reach here
 			}
@@ -3895,87 +3511,6 @@ int PgSQL_Connection::async_reset_session(short event) {
 	return 1;
 }
 
-// Returns:
-// 0 when the ping is completed successfully
-// -1 when the ping is completed not successfully
-// 1 when the ping is not completed
-// -2 on timeout
-// the calling function should check pgsql error in pgsql struct
-int PgSQL_Connection::async_ping(short event) {
-	PROXY_TRACE();
-	// In native_mode pgsql_conn is permanently NULL; the libpq ping path is
-	// not applicable. Pretend the ping succeeded; the native path keeps its
-	// own liveness state via the socket readiness callback.
-	if (native_mode) {
-		async_state_machine = ASYNC_PING_SUCCESSFUL;
-		return 0;
-	}
-	assert(pgsql_conn);
-	switch (async_state_machine) {
-	case ASYNC_PING_SUCCESSFUL:
-		unknown_transaction_status = false;
-		async_state_machine = ASYNC_IDLE;
-		return 0;
-		break;
-	case ASYNC_PING_FAILED:
-		return -1;
-		break;
-	case ASYNC_PING_TIMEOUT:
-		return -2;
-		break;
-	case ASYNC_IDLE:
-		async_state_machine = ASYNC_PING_START;
-	default:
-		//handler(event);
-		async_state_machine = ASYNC_PING_SUCCESSFUL;
-		break;
-	}
-
-	// check again
-	switch (async_state_machine) {
-	case ASYNC_PING_SUCCESSFUL:
-		unknown_transaction_status = false;
-		async_state_machine = ASYNC_IDLE;
-		return 0;
-		break;
-	case ASYNC_PING_FAILED:
-		return -1;
-		break;
-	case ASYNC_PING_TIMEOUT:
-		return -2;
-		break;
-	default:
-		return 1;
-		break;
-	}
-	return 1;
-}
-
-bool PgSQL_Connection::IsKnownActiveTransaction() {
-	// Callers use this to decide whether a failed statement can safely be run
-	// again on a different connection. A connection that died in the middle of a
-	// transaction must still say it has one, otherwise the statement would be
-	// re-run on its own, outside that transaction. Do not add a liveness check
-	// here -- the answer has to survive the connection dying.
-	if (native_mode) {
-		return native_txn_status == 'T' || native_txn_status == 'E';
-	}
-	if (!pgsql_conn) return false;
-
-	PGTransactionStatusType status = PQtransactionStatus(pgsql_conn);
-	if (status == PQTRANS_INTRANS || status == PQTRANS_INERROR) {
-		return true;
-	}
-
-	// In pipeline mode, libpq status may be stale because ReadyForQuery hasn't been processed yet
-	// Use the session's transaction state manager which tracks BEGIN/COMMIT/ROLLBACK via SQL parsing
-	if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_ON && myds && myds->sess) {
-		return myds->sess->is_in_transaction();
-	}
-
-	return false;
-}
-
 bool PgSQL_Connection::IsActiveTransaction() {
 	// First check known state
 	if (IsKnownActiveTransaction()) {
@@ -4012,16 +3547,12 @@ void PgSQL_Connection::set_is_client() {
 }
 
 bool PgSQL_Connection::is_connection_in_reusable_state() const {
-	// Native only, and it has to answer before the check below: a connection that
-	// never finished connecting is unusable but has no error recorded against it.
-	// libpq falls through on purpose, so a dead libpq connection with no error
-	// still trips that check the way it always did.
-	if (native_mode && !backend_is_live()) {
-		return false;
-	}
-	// The backend still owes this connection a ReadyForQuery, so it is mid-batch and holding an
-	// implicit transaction. Its last status byte predates the batch and would say otherwise.
-	if (native_mode && native_unsynced_work) {
+	// The transport answers first: a native connection that never finished
+	// connecting, or that still owes the backend a ReadyForQuery, is mid-batch
+	// and unusable with no error recorded against it. libpq answers false here
+	// on purpose -- a dead libpq connection with nothing recorded must still
+	// trip the shared check below exactly the way it always did.
+	if (transport_blocks_reuse()) {
 		return false;
 	}
 	const PGTransactionStatusType txn_status = get_pg_transaction_status();
@@ -4076,715 +3607,6 @@ void PgSQL_Connection::next_multi_statement_result(PGresult* result) {
 	pgsql_result = result;
 	// copy buffer to PSarrayOut
 	query_result->buffer_to_PSarrayOut();
-}
-
-void PgSQL_Connection::stmt_prepare_start() {
-	PROXY_TRACE();
-	reset_error();
-	processing_multi_statement = false;
-	async_exit_status = PG_EVENT_NONE;
-
-	if (native_mode) {
-		// Native Parse drive (Task C). Emit a 'P' (Parse) message with the same
-		// backend statement name and parameter OIDs the libpq PQsendPrepare call
-		// below uses, terminated by Flush or Sync per the EXACT flag logic the libpq
-		// branch applies to PQsendFlushRequest vs PQsendPipelineSync.
-		native_stmt_reset_step();
-		const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
-		const Parse_Param_Types& parse_param_types = extended_query_info->parse_param_types;
-		native_stmt_step = PG_Native_Stmt_Step::PARSE;
-		// Implicit prepares carry no client Parse, so their ParseComplete '1' is
-		// suppressed; real client Parses (cache-miss) forward their '1'.
-		native_suppress_parse_complete =
-			(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_IMPLICIT_PREPARE) != 0;
-
-		pg_build_parse(native_outbuf, query.backend_stmt_name, query.ptr,
-			parse_param_types.data(),
-			static_cast<uint16_t>(parse_param_types.size()));
-
-		// Flush if this is not the last extended query message in the frame (or an
-		// implicit prepare); otherwise Sync. Mirrors the libpq branch exactly.
-		const bool use_flush =
-			(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_IMPLICIT_PREPARE) != 0 ||
-			(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
-		if (use_flush) {
-			pg_build_flush(native_outbuf);
-		} else {
-			pg_build_sync(native_outbuf);
-		}
-		native_stmt_sync_terminated = !use_flush;
-		native_stmt_send_or_wait();
-		return;
-	}
-
-	if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
-		if (PQenterPipelineMode(pgsql_conn) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to enter pipeline mode. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	}
-	
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
-
-	const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
-	const Parse_Param_Types& parse_param_types = extended_query_info->parse_param_types;
-
-	if (PQsendPrepare(pgsql_conn, query.backend_stmt_name, query.ptr, parse_param_types.size(), parse_param_types.data()) == 0) {
-		set_error_from_PQerrorMessage();
-		proxy_error("Failed to send prepare. %s\n", get_error_code_with_message().c_str());
-		return;
-	}
-
-	// Send a Flush if this is not the last extended query message in the sequence/frame (or is an implicit prepared);  
-	// otherwise, send a SYNC.
-	if ((extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_IMPLICIT_PREPARE) != 0 ||
-		(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0) {
-		if (PQsendFlushRequest(pgsql_conn) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to send flush request. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	} else {
-		if (PQsendPipelineSync(pgsql_conn) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	}
-	flush();
-}
-
-void PgSQL_Connection::stmt_prepare_cont(short event) {
-	PROXY_TRACE();
-	if (native_mode) {
-		native_stmt_flush_cont();
-		return;
-	}
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
-	async_exit_status = PG_EVENT_NONE;
-	if (event & POLLOUT) {
-		flush();
-	}
-}
-
-void PgSQL_Connection::stmt_describe_start() {
-	PROXY_TRACE();
-	reset_error();
-	processing_multi_statement = false;
-	async_exit_status = PG_EVENT_NONE;
-
-	if (native_mode) {
-		// Native Describe drive (Task C). 'D' with kind 'S' (statement) or 'P'
-		// (portal), matching the same statement-vs-portal branch libpq takes below.
-		native_stmt_reset_step();
-		const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
-		switch (extended_query_info->stmt_type) {
-		case 'P': // Portal
-			pg_build_describe(native_outbuf, 'P', extended_query_info->stmt_client_portal_name);
-			native_stmt_step = PG_Native_Stmt_Step::DESCRIBE_P;
-			break;
-		case 'S': // Prepared statement
-			pg_build_describe(native_outbuf, 'S', query.backend_stmt_name);
-			native_stmt_step = PG_Native_Stmt_Step::DESCRIBE_S;
-			break;
-		default:
-			set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, "Invalid statement type for describe", false);
-			proxy_error("Failed to build describe message. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-		const bool use_flush =
-			(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
-		if (use_flush) {
-			pg_build_flush(native_outbuf);
-		} else {
-			pg_build_sync(native_outbuf);
-		}
-		native_stmt_sync_terminated = !use_flush;
-		native_stmt_send_or_wait();
-		return;
-	}
-
-	if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
-		if (PQenterPipelineMode(pgsql_conn) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to enter pipeline mode. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	}
-
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
-
-	const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
-
-	switch (extended_query_info->stmt_type) {
-	case 'P': // Portal
-		if (PQsendDescribePortal(pgsql_conn, extended_query_info->stmt_client_portal_name) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to send describe portal message. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-		break;
-	case 'S': // Prepared Statement
-		if (PQsendDescribePrepared(pgsql_conn, query.backend_stmt_name) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to send describe prepared statement. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-		break;
-	default:
-		set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, "Invalid statement type for describe", false);
-		proxy_error("Failed to send describe message. %s\n", get_error_code_with_message().c_str());
-		return;
-	}
-
-	// Send a Flush if this is not the last extended query message in the sequence/frame;  
-	// otherwise, send a SYNC.
-	if ((extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0) {
-		if (PQsendFlushRequest(pgsql_conn) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to send flush request. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	} else {
-		if (PQsendPipelineSync(pgsql_conn) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	}
-	flush();
-}
-
-void PgSQL_Connection::stmt_describe_cont(short event) {
-	PROXY_TRACE();
-	if (native_mode) {
-		native_stmt_flush_cont();
-		return;
-	}
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
-	async_exit_status = PG_EVENT_NONE;
-	if (event & POLLOUT) {
-		flush();
-	}
-}
-
-void PgSQL_Connection::resync_start() {
-	PROXY_TRACE();
-	async_exit_status = PG_EVENT_NONE;
-
-	if (native_mode) {
-		// The client was already told this frame succeeded (a trailing message was
-		// answered locally), so the batch is still open on the backend. Sending the
-		// Sync concludes it -- the 'Z' clears native_unsynced_work.
-		native_stmt_reset_step();
-		native_stmt_step = PG_Native_Stmt_Step::RESYNC;
-		native_stmt_sync_terminated = true;
-		pg_build_sync(native_outbuf);
-		native_stmt_send_or_wait();
-		return;
-	}
-
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
-
-	if (PQsendPipelineSync(pgsql_conn) == 0) {
-		proxy_error("Failed to send pipeline sync.\n");
-		resync_failed = true;
-		return;
-	}
-	flush(true);
-}
-
-void PgSQL_Connection::resync_cont(short event) {
-	PROXY_TRACE();
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
-	if (native_mode) {
-		native_stmt_flush_cont();
-		return;
-	}
-	async_exit_status = PG_EVENT_NONE;
-	if (event & POLLOUT) {
-		flush(true);
-	}
-}
-
-void PgSQL_Connection::stmt_execute_start() {
-	PROXY_TRACE();
-	reset_error();
-	processing_multi_statement = false;
-	async_exit_status = PG_EVENT_NONE;
-
-	if (native_mode && native_bind_only) {
-		// Native named-portal Bind drive (Task P1): emit ONLY a Bind on the CLIENT'S
-		// named portal, terminated by Flush or Sync per the frame's SYNC flag. No
-		// Execute and no Describe are folded in — Execute/Describe of a named portal
-		// are separate client messages (routed by Task P2). The backend's real
-		// BindComplete '2' is forwarded to the client (the session did NOT synthesize
-		// one for named portals — see the BIND drain step). Params are decoded from the
-		// registry-owned Bind message exactly as the unnamed Execute path below reads
-		// them, preserving the client's per-param/per-result formats verbatim.
-		native_stmt_reset_step();
-		const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
-		const PgSQL_Bind_Message* bind_msg = extended_query_info->bind_msg;
-		assert(bind_msg); // registry entry always carries the bind message
-		const PgSQL_Bind_Data& bind_data = bind_msg->data();
-
-		std::vector<const char*> param_values;
-		std::vector<int32_t> param_lengths;
-		std::vector<uint16_t> param_formats;
-		std::vector<uint16_t> result_formats;
-
-		if (bind_data.num_param_values > 0) {
-			auto param_value_reader = bind_msg->get_param_value_reader();
-			param_values.resize(bind_data.num_param_values);
-			param_lengths.resize(bind_data.num_param_values);
-			for (uint16_t i = 0; i < bind_data.num_param_values; ++i) {
-				PgSQL_Param_Value param_val;
-				if (!param_value_reader.next(&param_val)) {
-					proxy_error("Failed to read param value at index %u\n", i);
-					set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
-						"Failed to read param value", false);
-					return;
-				}
-				param_values[i] = (param_val.len == -1) ? nullptr : reinterpret_cast<const char*>(param_val.value);
-				param_lengths[i] = param_val.len;
-			}
-		}
-
-		if (bind_data.num_param_formats > 0) {
-			auto param_fmt_reader = bind_msg->get_param_format_reader();
-			param_formats.resize(bind_data.num_param_formats);
-			for (uint16_t i = 0; i < bind_data.num_param_formats; ++i) {
-				uint16_t format;
-				if (!param_fmt_reader.next(&format)) {
-					proxy_error("Failed to read param format at index %u\n", i);
-					set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
-						"Failed to read param format", false);
-					return;
-				}
-				param_formats[i] = format; // 0 = text, 1 = binary
-			}
-		}
-
-		if (bind_data.num_result_formats > 0) {
-			auto result_fmt_reader = bind_msg->get_result_format_reader();
-			result_formats.resize(bind_data.num_result_formats);
-			for (uint16_t i = 0; i < bind_data.num_result_formats; ++i) {
-				uint16_t format;
-				if (!result_fmt_reader.next(&format)) {
-					proxy_error("Failed to read result format at index %u\n", i);
-					set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
-						"Failed to read result format", false);
-					return;
-				}
-				result_formats[i] = format;
-			}
-		}
-
-		pg_build_bind(native_outbuf, extended_query_info->stmt_client_portal_name, query.backend_stmt_name,
-			param_formats.empty() ? nullptr : param_formats.data(),
-			static_cast<uint16_t>(param_formats.size()),
-			param_values.empty() ? nullptr : param_values.data(),
-			param_lengths.empty() ? nullptr : param_lengths.data(),
-			static_cast<uint16_t>(param_values.size()),
-			result_formats.empty() ? nullptr : result_formats.data(),
-			static_cast<uint16_t>(result_formats.size()));
-
-		const bool use_flush =
-			(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
-		if (use_flush) {
-			pg_build_flush(native_outbuf);
-		} else {
-			pg_build_sync(native_outbuf);
-		}
-		native_stmt_sync_terminated = !use_flush;
-		native_stmt_step = PG_Native_Stmt_Step::BIND;
-		native_stmt_send_or_wait();
-		return;
-	}
-
-	if (native_mode && native_close_only) {
-		// Native named-portal Close drive (Task P2): emit ONLY a Close('P', portal) on
-		// the client's named portal, terminated by Flush or Sync per the frame's SYNC
-		// flag. No Bind/Execute. The backend's real CloseComplete '3' is forwarded to
-		// the client (unnamed Close is synthesized locally in the session; only named
-		// Close round-trips). PostgreSQL emits CloseComplete even when the portal does
-		// not exist (Close is idempotent), so the session evicts unconditionally on rc0.
-		native_stmt_reset_step();
-		const PgSQL_Extended_Query_Info* eqi = query.extended_query_info;
-		pg_build_close(native_outbuf, 'P', eqi->stmt_client_portal_name);
-		const bool use_flush =
-			(eqi->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
-		if (use_flush) {
-			pg_build_flush(native_outbuf);
-		} else {
-			pg_build_sync(native_outbuf);
-		}
-		native_stmt_sync_terminated = !use_flush;
-		native_stmt_step = PG_Native_Stmt_Step::CLOSE_P;
-		native_stmt_send_or_wait();
-		return;
-	}
-
-	if (native_mode &&
-		(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND) != 0) {
-		// Native named-portal Execute / resume drive (Task P2): the portal is ALREADY
-		// bound on the backend (a prior named Bind registered it), so emit ONLY
-		// Execute(portal, max_rows) — NO Bind. A Describe('P', portal) is folded in
-		// first exactly when the client asked for the portal's RowDescription
-		// (PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL, set by the Describe->Execute peek).
-		// max_rows is honored on the wire for NAMED portals only (the unnamed path below
-		// always emits 0 — invariant 2). A resume Execute after PortalSuspended is just
-		// another Execute on the same portal and takes this same path.
-		native_stmt_reset_step();
-		const PgSQL_Extended_Query_Info* eqi = query.extended_query_info;
-		if ((eqi->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
-			pg_build_describe(native_outbuf, 'P', eqi->stmt_client_portal_name);
-		}
-		pg_build_execute(native_outbuf, eqi->stmt_client_portal_name, eqi->max_rows);
-		const bool use_flush =
-			(eqi->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
-		if (use_flush) {
-			pg_build_flush(native_outbuf);
-		} else {
-			pg_build_sync(native_outbuf);
-		}
-		native_stmt_sync_terminated = !use_flush;
-		native_stmt_step = PG_Native_Stmt_Step::EXECUTE;
-		native_stmt_send_or_wait();
-		return;
-	}
-
-	if (native_mode) {
-		// Native Execute drive (Task C): Bind [+ Describe('P')] + Execute + Flush/Sync
-		// on the unnamed portal. Decodes the client's Bind params from the SAME parsed
-		// PgSQL_Bind_Message the libpq PQsendQueryPrepared branch below reads, but hands
-		// them to pg_build_bind preserving the client's per-param/per-result formats
-		// verbatim (protocol-native). Unlike the libpq branch, we do NOT expand a single
-		// param format across all params, and we forward ALL result formats faithfully
-		// (libpq mode collapses result formats to result_formats[0]; corpus clients use
-		// uniform formats, so the differential is unaffected).
-		native_stmt_reset_step();
-		const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
-		const PgSQL_Bind_Message* bind_msg = extended_query_info->bind_msg;
-		assert(bind_msg); // should never be null
-		const PgSQL_Bind_Data& bind_data = bind_msg->data();
-
-		std::vector<const char*> param_values;
-		std::vector<int32_t> param_lengths;
-		std::vector<uint16_t> param_formats;
-		std::vector<uint16_t> result_formats;
-
-		if (bind_data.num_param_values > 0) {
-			auto param_value_reader = bind_msg->get_param_value_reader();
-			param_values.resize(bind_data.num_param_values);
-			param_lengths.resize(bind_data.num_param_values);
-			for (uint16_t i = 0; i < bind_data.num_param_values; ++i) {
-				PgSQL_Param_Value param_val;
-				if (!param_value_reader.next(&param_val)) {
-					proxy_error("Failed to read param value at index %u\n", i);
-					set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
-						"Failed to read param value", false);
-					return;
-				}
-				// NULL => value pointer nullptr + length -1 (pg_build_bind emits length
-				// -1 with no bytes); empty/non-empty => real pointer + byte length.
-				param_values[i] = (param_val.len == -1) ? nullptr : reinterpret_cast<const char*>(param_val.value);
-				param_lengths[i] = param_val.len;
-			}
-		}
-
-		if (bind_data.num_param_formats > 0) {
-			auto param_fmt_reader = bind_msg->get_param_format_reader();
-			param_formats.resize(bind_data.num_param_formats);
-			for (uint16_t i = 0; i < bind_data.num_param_formats; ++i) {
-				uint16_t format;
-				if (!param_fmt_reader.next(&format)) {
-					proxy_error("Failed to read param format at index %u\n", i);
-					set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
-						"Failed to read param format", false);
-					return;
-				}
-				param_formats[i] = format; // 0 = text, 1 = binary
-			}
-		}
-
-		if (bind_data.num_result_formats > 0) {
-			auto result_fmt_reader = bind_msg->get_result_format_reader();
-			result_formats.resize(bind_data.num_result_formats);
-			for (uint16_t i = 0; i < bind_data.num_result_formats; ++i) {
-				uint16_t format;
-				if (!result_fmt_reader.next(&format)) {
-					proxy_error("Failed to read result format at index %u\n", i);
-					set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
-						"Failed to read result format", false);
-					return;
-				}
-				result_formats[i] = format;
-			}
-		}
-
-		pg_build_bind(native_outbuf, "", query.backend_stmt_name,
-			param_formats.empty() ? nullptr : param_formats.data(),
-			static_cast<uint16_t>(param_formats.size()),
-			param_values.empty() ? nullptr : param_values.data(),
-			param_lengths.empty() ? nullptr : param_lengths.data(),
-			static_cast<uint16_t>(param_values.size()),
-			result_formats.empty() ? nullptr : result_formats.data(),
-			static_cast<uint16_t>(result_formats.size()));
-
-		// Fold in a Describe('P') on the unnamed portal exactly when the libpq path
-		// would forward the portal's RowDescription — i.e. when the client asked for
-		// it (recorded as PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL). When it did not,
-		// no Describe is sent, the backend emits no 'T'/'n', and the client sees only
-		// '2'(suppressed)/'D'*/'C' — byte-identical to the libpq path, which sends the
-		// Describe but does not forward the RowDescription.
-		if ((extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
-			pg_build_describe(native_outbuf, 'P', "");
-		}
-
-		pg_build_execute(native_outbuf, "", 0); // unnamed portal, max_rows 0 (parity phase)
-
-		const bool use_flush =
-			(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
-		if (use_flush) {
-			pg_build_flush(native_outbuf);
-		} else {
-			pg_build_sync(native_outbuf);
-		}
-		native_stmt_sync_terminated = !use_flush;
-		native_stmt_step = PG_Native_Stmt_Step::EXECUTE;
-		native_stmt_send_or_wait();
-		return;
-	}
-
-	// Named-portal Bind is a native-mode-only capability. The session gate keys on the
-	// thread flag, but the backend connection assigned by find_or_create_backend may
-	// have been established earlier in libpq mode (the flag was flipped with a warm
-	// pool) — native_mode is fixed per-connection at creation. The libpq drive cannot
-	// express named portals, so surface a clean FEATURE_NOT_SUPPORTED rather than
-	// aborting. In a stable native-only deployment every backend conn is native and
-	// this branch is never taken; it is a reachable operational edge, NOT a programming
-	// error, so it must NOT assert.
-	// A named Execute / resume (PORTAL_ALREADY_BOUND) is likewise native-only: its
-	// native drive branch above is gated on native_mode, so on a libpq-mode backend
-	// connection (flag flipped with a warm pool) it would otherwise fall through to
-	// the libpq Bind+Execute path below and silently re-Bind the unnamed portal with
-	// the registry's stashed params — wrong semantics. Reject symmetrically with the
-	// Bind/Close paths (defensive; unreachable in a stable native-only deployment).
-	const bool named_execute_only =
-		query.extended_query_info != nullptr &&
-		(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND) != 0;
-	if (native_bind_only || native_close_only || named_execute_only) {
-		set_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
-			"named portals require the native backend protocol", false);
-		proxy_warning("native named-portal %s dispatched onto a libpq-mode backend connection "
-			"(use_native_backend_protocol flipped with a warm pool); rejecting on fd=%d\n",
-			native_close_only ? "Close" : (named_execute_only ? "Execute" : "Bind"), fd);
-		return;
-	}
-
-	if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
-		if (PQenterPipelineMode(pgsql_conn) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to enter pipeline mode. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	}
-
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
-
-	const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
-	const PgSQL_Bind_Message* bind_msg = extended_query_info->bind_msg;
-	assert(bind_msg); // should never be null
-	const PgSQL_Bind_Data& bind_data = bind_msg->data(); // will always have valid data
-
-	std::vector<const char*> param_values;
-	std::vector<int> param_lengths;
-	std::vector<int> param_formats;
-	std::vector<int> result_formats;
-
-	if (bind_data.num_param_values > 0) {
-		auto param_value_reader = bind_msg->get_param_value_reader();
-
-		param_values.resize(bind_data.num_param_values);
-		param_lengths.resize(bind_data.num_param_values);
-
-		for (int i = 0; i < bind_data.num_param_values; ++i) {
-			PgSQL_Param_Value param_val;
-			if (!param_value_reader.next(&param_val)) {
-				proxy_error("Failed to read param value at index %u\n", i);
-				set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
-					"Failed to read param value", false);
-				return;
-			}
-
-			param_values[i] = (reinterpret_cast<const char*>(param_val.value));
-			param_lengths[i] = param_val.len;
-		}
-	}
-
-	if (bind_data.num_param_formats > 0) {
-		auto param_fmt_reader = bind_msg->get_param_format_reader();
-
-		param_formats.resize(bind_data.num_param_formats);
-
-		for (int i = 0; i < bind_data.num_param_formats; ++i) {
-			uint16_t format;
-			if (!param_fmt_reader.next(&format)) {
-				proxy_error("Failed to read param format at index %u\n", i);
-				set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
-					"Failed to read param format", false);
-				return;
-			}
-			param_formats[i] = format; // 0 = text, 1 = binary
-		}
-	}
-
-	// Normalize param formats for libpq:
-	// According to the PostgreSQL Bind message specification:
-	// https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-BIND
-	//  - num_param_formats = 0 -> all parameters are TEXT
-	//  - num_param_formats = 1 -> the single format applies to all parameters (even 0 of them)
-	//  - num_param_formats = num_param_values -> formats are applied per-parameter in order
-	// Any other number of parameter formats is a protocol error.
-	if (!param_formats.empty()) {
-		if (param_formats.size() == 1 && param_values.size() != 1) {
-			// PostgreSQL protocol allows 1 format for all params, libpq DOES NOT,
-			// so expand it (resize to 0 correctly clears it when there are no params, issue #5899)
-			int fmt = param_formats[0];
-			param_formats.resize(param_values.size(), fmt);
-		} else if (param_formats.size() != param_values.size()) {
-			// Mirror PostgreSQL's exec_bind_message() wording and SQLSTATE
-			// (08P01, protocol_violation) so clients see the same diagnostic.
-			char errmsg[128];
-			snprintf(errmsg, sizeof(errmsg),
-				"bind message has %zu parameter formats but %zu parameters",
-				param_formats.size(), param_values.size());
-			proxy_error("%s\n", errmsg);
-			set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, errmsg, false);
-			return;
-		}
-	}
-
-	if (bind_data.num_result_formats > 0) {
-		auto result_fmt_reader = bind_msg->get_result_format_reader();
-		result_formats.resize(bind_data.num_result_formats);
-		for (int i = 0; i < bind_data.num_result_formats; ++i) {
-			uint16_t format;
-			if (!result_fmt_reader.next(&format)) {
-				proxy_error("Failed to read result format at index %u\n", i);
-				set_error(PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE,
-					"Failed to read result format", false);
-				return;
-			}
-			result_formats[i] = format;
-		}
-	}
-
-	// Issue #5866 defense-in-depth: PQsendQueryPrepared() below can express only ONE
-	// result-column format code, so a heterogeneous array would be silently collapsed
-	// to result_formats[0], corrupting every other column. The session-level gate in
-	// handle_post_sync_bind_message rejects this for libpq-mode sessions, but is
-	// skipped when pgsql-use_native_backend_protocol is on (the native drive forwards
-	// the array verbatim) — and such a session can still land here on a warm POOLED
-	// libpq connection after a flag flip. Error out rather than collapse.
-	for (size_t i = 1; i < result_formats.size(); ++i) {
-		if (result_formats[i] != result_formats[0]) {
-			set_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
-				"per-column result formats are not supported: all result columns must request the same format code",
-				false);
-			return;
-		}
-	}
-
-	// If the client did not send any parameter formats (num_param_formats = 0),
-	// PostgreSQL protocol defines this as "all parameters are TEXT".
-	// libpq represents this case by passing paramFormats = nullptr.
-	const int* param_formats_data = (param_formats.empty() == false ? param_formats.data() : nullptr);
-
-	if (PQsendQueryPrepared(pgsql_conn, query.backend_stmt_name, param_values.size(),
-		param_values.data(), param_lengths.data(), param_formats_data,
-		(result_formats.size() > 0) ? result_formats[0] : 0) == 0) {
-		set_error_from_PQerrorMessage();
-		proxy_error("Failed to send execute prepared statement. %s\n", get_error_code_with_message().c_str());
-		return;
-	}
-
-	// Send a Flush if this is not the last extended query message in the sequence/frame;  
-	// otherwise, send a SYNC.
-	if ((extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0) {
-		if (PQsendFlushRequest(pgsql_conn) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to send flush request. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	} else {
-		if (PQsendPipelineSync(pgsql_conn) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	}
-	flush();
-}
-
-void PgSQL_Connection::stmt_execute_cont(short event) {
-	PROXY_TRACE();
-	if (native_mode) {
-		native_stmt_flush_cont();
-		return;
-	}
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
-	async_exit_status = PG_EVENT_NONE;
-	if (event & POLLOUT) {
-		flush();
-	}
-}
-
-void PgSQL_Connection::reset_session_start() {
-	PROXY_TRACE();
-	if (native_mode) {
-		// Two commands, and the order is forced: the backend refuses DISCARD ALL while
-		// a transaction is open, so an open one is rolled back first and DISCARD ALL
-		// goes out on the next pass.
-		reset_session_in_pipeline = false; // nothing here ever runs in pipeline mode
-		reset_session_in_txn = IsKnownActiveTransaction();
-		const char* cmd = (reset_session_in_txn == false ? "DISCARD ALL" : "ROLLBACK");
-		set_query(cmd, strlen(cmd));
-		query_start();
-		if (async_exit_status == PG_EVENT_NONE && is_error_present() == false) {
-			// Reached only when the whole command actually went out: query_start() asks
-			// for writability instead if any of it is still buffered, and leaves an error
-			// set if the send failed outright. Nothing is left to send, so what we wait
-			// for is the reply. Say so, or the cycle finishes here without ever entering
-			// ASYNC_RESET_SESSION_CONT -- taking the reset timeout, which lives in that
-			// state, with it.
-			async_exit_status = PG_EVENT_READ;
-		}
-		return;
-	}
-	assert(pgsql_conn);
-	reset_error();
-	async_exit_status = PG_EVENT_NONE;
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
-
-	reset_session_in_pipeline = is_pipeline_active();
-	if (reset_session_in_pipeline) {
-		if (PQsendPipelineSync(pgsql_conn) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to send pipeline sync. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	} else {
-		reset_session_in_txn = IsKnownActiveTransaction();
-		if (PQsendQuery(pgsql_conn, (reset_session_in_txn == false ? "DISCARD ALL" : "ROLLBACK")) == 0) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to send query. %s\n", get_error_code_with_message().c_str());
-			return;
-		}
-	}
-	flush();
 }
 
 // Finish sending a reset command and read its reply, which is thrown away: a
@@ -4842,39 +3664,6 @@ void PgSQL_Connection::native_reset_session_cont() {
 			break;
 		}
 	}
-}
-
-void PgSQL_Connection::reset_session_cont(short event) {
-	PROXY_TRACE();
-	if (native_mode) {
-		native_reset_session_cont();
-		return;
-	}
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
-	async_exit_status = PG_EVENT_NONE;
-	if (event & POLLOUT) {
-		flush();
-		return;
-	}
-
-	if (PQconsumeInput(pgsql_conn) == 0) {
-		/* We will only set the error if we didn't capture error in last call. If is_error_present is true,
-		 * it indicates that an error was already captured during a previous PQconsumeInput call,
-		 * and we do not want to overwrite that information.
-		 */
-		if (is_error_present() == false) {
-			set_error_from_PQerrorMessage();
-			proxy_error("Failed to consume input. %s\n", get_error_code_with_message().c_str());
-		}
-		return;
-	}
-
-	if (PQisBusy(pgsql_conn)) {
-		async_exit_status = PG_EVENT_READ;
-		return;
-	}
-
-	pgsql_result = PQgetResult(pgsql_conn);
 }
 
 bool PgSQL_Connection::requires_RESETTING_CONNECTION(const PgSQL_Connection* client_conn) {
@@ -5009,25 +3798,6 @@ const char* PgSQL_Connection::get_pg_transaction_status_str() {
 		return "UNKNOWN";
 	}
 	return "INVALID";
-}
-
-const char* PgSQL_Connection::get_pg_backend_state() const {
-	if (PQstatus(pgsql_conn) != CONNECTION_OK)
-		return "disconnected";
-
-	switch (PQtransactionStatus(pgsql_conn)) {
-	case PQTRANS_IDLE:
-		return "idle";
-	case PQTRANS_ACTIVE:
-		return "active";
-	case PQTRANS_INTRANS:
-		return "idle in transaction";
-	case PQTRANS_INERROR:
-		return "idle in transaction (aborted)";
-	case PQTRANS_UNKNOWN:
-	default:
-		return "unknown";
-	}
 }
 
 bool PgSQL_Connection::handle_copy_out(const PGresult* result, uint64_t* processed_bytes) {
