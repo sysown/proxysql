@@ -56,10 +56,10 @@ static void test_mariadb_binlog_position_selection() {
 	       && strcmp(position, "0-1-270") == 0,
 	   "select MariaDB position accepts a single-domain value without a domain id");
 
-	memset(position, 0, sizeof(position));
-	ok(select_mariadb_binlog_position("0-1-270", nullptr, position, sizeof(position))
-	       && strcmp(position, "0-1-270") == 0,
-	   "select MariaDB position accepts a single canonical MariaDB domain without a domain id");
+	memset(position, 0x5a, sizeof(position));
+	ok(!select_mariadb_binlog_position("00-1-270", nullptr, position, sizeof(position))
+	       && position[0] == static_cast<char>(0x5a),
+	   "select MariaDB position rejects a non-canonical domain in the value without a domain id");
 
 	// A roomy buffer: the single MySQL UUID key must be rejected on its shape,
 	// not merely because the rendered string would not fit.
