@@ -585,9 +585,14 @@ bool render_mariadb_domain_position(const GTID_Set& set, const char* domain_id,
 		}
 		domain.assign(domain_id);
 	} else if (set.map.size() == 1) {
-		// No domain was reported: a single-domain position is unambiguous,
-		// anything else must not be guessed.
+		// No domain was reported: a single-domain position is unambiguous only
+		// when its key is a canonical MariaDB domain id. A single key coming from
+		// a malformed position (a MySQL UUID, for instance) must not be rendered
+		// as 'uuid-server-seq', so it fails closed like the multi-domain case.
 		domain = set.map.begin()->first;
+		if (!is_canonical_mariadb_domain_id(domain.c_str(), domain.size())) {
+			return false;
+		}
 	} else {
 		return false;
 	}

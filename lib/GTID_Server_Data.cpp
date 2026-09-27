@@ -358,7 +358,7 @@ bool GTID_Server_Data::writeout() {
 /*
  * The wire format for the binlogreader is five distinct messages, in plaintext:
  *
- * ST=<uuid>:<trxid>[-<trxid>][,<uuid>:<trxid>[-<trxid]>, ...] : Bootstrap message, providing individual transaction ID or trxid ranges for all seen UUID servers.
+ * ST=<uuid>:<trxid>[-<trxid>][,<uuid>:<trxid>[-<trxid>], ...] : Bootstrap message, providing individual transaction ID or trxid ranges for all seen UUID servers.
  * I1=<uuid>:<trxid>                                            : Latest seen single trxid for a given UUID.
  * I2=<trxid>                                                   : Latest seen single trxid, reusing UUID from previous I1/I3 message.
  * I3=<uuid>:<trxid_start>-<trxid_end>                         : Latest seen trxid range for a given UUID.

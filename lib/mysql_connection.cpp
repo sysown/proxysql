@@ -3475,17 +3475,18 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 				// enough. This is not yet async - see the design doc.
 				bool lookup_executed = false;
 				if (connect_gtid_lookup_connection()) {
-					if (mysql_query(gtid_lookup_mysql, "SELECT @@gtid_domain_id, @@gtid_binlog_pos") == 0) {
+					// Only the position is selected: @@gtid_domain_id of a fresh
+					// auxiliary connection is the server default, not the domain the
+					// client session may have set, so attributing the watermark to it
+					// would be a guess. Without a domain a single-domain position is
+					// accepted and a multi-domain one fails closed.
+					if (mysql_query(gtid_lookup_mysql, "SELECT @@gtid_binlog_pos") == 0) {
 						lookup_executed = true;
 						MYSQL_RES *result = mysql_store_result(gtid_lookup_mysql);
 						if (result != nullptr) {
 							MYSQL_ROW row = mysql_fetch_row(result);
-							// @@gtid_binlog_pos may list several domains. Only the token
-							// belonging to the auxiliary connection's own default
-							// @@gtid_domain_id is a valid GTID; a NULL domain is
-							// tolerated only for single-domain positions.
-							if (row != nullptr && row[1] != nullptr
-									&& select_mariadb_binlog_position(row[1], row[0], gtid_uuid, sizeof(gtid_uuid))) {
+							if (row != nullptr && row[0] != nullptr
+									&& select_mariadb_binlog_position(row[0], nullptr, gtid_uuid, sizeof(gtid_uuid))) {
 								size_t length = strlen(gtid_uuid) + 1;
 								memcpy(buff, gtid_uuid, length);
 								__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);

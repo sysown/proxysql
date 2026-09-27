@@ -175,25 +175,25 @@ Write-path GTID collection:
   accept `gtid_binlog_pos` in `session_track_system_variables` but still not
   return a session-state payload. `MySQL_Connection::get_gtid()` therefore uses
   a dedicated auxiliary MariaDB connection to run
-  `SELECT @@gtid_domain_id, @@gtid_binlog_pos`; it never queries the live
+  `SELECT @@gtid_binlog_pos`; it never queries the live
   connection, whose response buffer, `mysql->info`, and session state must
   remain intact.
 - `@@gtid_binlog_pos` can list several domains (`0-1-270,1-2-50`). The lookup
-  keeps only the token belonging to the domain it actually asked for — the
-  auxiliary connection's own `@@gtid_domain_id`, not the client session's — and
-  stores it as `domain-server-seq`. If the domain is unknown and the position
-  carries more than one domain, the lookup fails closed rather than storing an
-  ambiguous string.
+  asks for no domain, so it succeeds only when the position carries exactly one
+  domain and that domain's key is a canonical MariaDB domain id, which it
+  stores as `domain-server-seq`. A multi-domain position fails closed instead of
+  being attributed to any domain, and a malformed single-UUID position is
+  rejected rather than rendered as `uuid-server-seq`.
 
-  **Known limitation (multi-domain selection):** the domain selected is whatever
-  a freshly connected auxiliary session reports, i.e. the server's default
-  `gtid_domain_id`. A client session that issues `SET @@gtid_domain_id=1` is
-  attributed to the default domain instead of its own, because ProxySQL never
-  runs that `SET` and never reads the live connection. The stored GTID is
-  therefore the default domain's position, not necessarily the position the
-  client session actually advanced. Choosing the client's own domain would
-  require reading it from the live connection, which this design explicitly
-  avoids; it is left to a follow-up.
+  **Known limitation (multi-domain selection):** the client session's own
+  `@@gtid_domain_id` is never read, so no domain can be requested. A client
+  session that issues `SET @@gtid_domain_id=1` is therefore not collected at
+  all while the reported position is multi-domain, because ProxySQL never runs
+  that `SET` on the auxiliary connection and never reads the live connection.
+  Multi-domain positions are not collected until the live session domain is
+  available. Choosing the client's own domain would require reading it from the
+  live connection, which this design explicitly avoids; it is left to a
+  follow-up.
 - The auxiliary connection is created lazily, reused while the session is
   active, released when the pooled connection is returned, and closed on
   reset/destruction. Connect is capped at one second with a one-second negative

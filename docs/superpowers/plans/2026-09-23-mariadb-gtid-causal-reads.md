@@ -4,7 +4,7 @@
 
 **Goal:** ProxySQL causal reads accept MariaDB `domain-server-seq` as well as MySQL `uuid:seq`, matching on domain sequence watermarks.
 
-**Architecture:** Auto-detect per string. Reuse `GTID_Set` with MariaDB key = decimal `domain_id`. Snapshot/OK-packet MariaDB positions insert `[1, seq]`. Wire `ST=`/`I1=` already works if the id has no dashes (`I1=0:271`); `to_string()` must not UUID-dash short keys. MySQL keeps `SESSION_TRACK_GTIDS`; MariaDB uses a bounded auxiliary connection for `SELECT @@gtid_domain_id, @@gtid_binlog_pos` because MariaDB does not deliver session-track payloads. That auxiliary lookup is opt-in (`mysql-update_gtid_from_ok`) and still synchronous on the worker event loop — see the P1 limitation recorded in the design doc.
+**Architecture:** Auto-detect per string. Reuse `GTID_Set` with MariaDB key = decimal `domain_id`. Snapshot/OK-packet MariaDB positions insert `[1, seq]`. Wire `ST=`/`I1=` already works if the id has no dashes (`I1=0:271`); `to_string()` must not UUID-dash short keys. MySQL keeps `SESSION_TRACK_GTIDS`; MariaDB uses a bounded auxiliary connection for `SELECT @@gtid_binlog_pos` because MariaDB does not deliver session-track payloads, and collects only a single-domain position (no domain is inferred, so multi-domain positions fail closed). That auxiliary lookup is opt-in (`mysql-update_gtid_from_ok`) and still synchronous on the worker event loop — see the P1 limitation recorded in the design doc.
 
 **Tech Stack:** C++17, existing TAP unit harness (`test/tap/tests/unit`), `libproxysql.a`.
 
@@ -358,16 +358,21 @@ Tests in `gtid_parse_unit-t.cpp`:
 - [ ] **Step 1b: Unit-test `select_mariadb_binlog_position` / `render_mariadb_domain_position`**
 
 Bounded copy of the `@@gtid_binlog_pos` value into the connection's `gtid_uuid`
-buffer. The value may list several domains, so the helper takes the auxiliary
-connection's own default `@@gtid_domain_id` and renders only that domain as one
-`domain-server-seq`. Rejects empty, oversized, and unchanged values without
-touching the buffer, and fails closed when the domain is unknown and the
-position is multi-domain. Covered in `gtid_parse_unit-t.cpp`.
+buffer. The value may list several domains, so no domain is requested at all:
+the helper renders the position as one `domain-server-seq` only when it carries
+exactly one domain and that domain's key is a canonical MariaDB domain id.
+Rejects empty, oversized, and unchanged values without touching the buffer, and
+fails closed when the position is multi-domain, when the requested domain is
+absent, and when a single non-canonical key (a MySQL UUID, for instance) would
+otherwise be rendered as `uuid-server-seq`. Covered in `gtid_parse_unit-t.cpp`.
 
-The domain is the auxiliary connection's default, not the client session's: a
-client session that issued `SET @@gtid_domain_id=1` is still attributed to the
-server's default domain, because the live connection is never read. Recorded as
-a known multi-domain selection limitation in the design doc.
+No domain is inferred from the auxiliary connection either: its
+`@@gtid_domain_id` is the server default, while a client session that issued
+`SET @@gtid_domain_id=1` advances its own domain, so attributing the watermark
+to the auxiliary domain would record a wrong one. Consequently multi-domain
+positions are not collected at all until the live session domain is available.
+The live connection is never queried. Recorded as a known multi-domain
+selection limitation in the design doc.
 
 - [ ] **Step 2: Run — FAIL**
 
@@ -376,8 +381,8 @@ a known multi-domain selection limitation in the design doc.
 `get_gtid` keeps `SESSION_TRACK_GTIDS` first. When it yields nothing and the
 backend is MariaDB with no result set pending (`mysql->field_count == 0`, so
 only writes and DDL qualify) **and `mysql-update_gtid_from_ok` is enabled**, run
-`SELECT @@gtid_domain_id, @@gtid_binlog_pos` on the auxiliary connection and
-copy the single-domain native string into `gtid_uuid` / `buff`. Leave
+`SELECT @@gtid_binlog_pos` on the auxiliary connection and copy the
+single-domain native string into `gtid_uuid` / `buff`. Leave
 `*trx_id` unused as today (caller parses later).
 
 The lookup is a blocking connect plus query on the worker event loop, so it is
@@ -390,8 +395,8 @@ sub-state is a follow-up.
 The auxiliary connection is created lazily, reused for the life of the
 pooled connection, released by `release_gtid_lookup_connection()` when the
 session returns it to the pool, and closed on reset/destruction. It reuses
-`parent`/`userinfo`, mirrors SSL parameters, caps connect at one second and
-I/O at `mysql-connect_timeout_server`, and is accounted in
+`parent`/`userinfo`, mirrors SSL parameters, and hard-caps connect, read and
+write at one second, and is accounted in
 `server_connections_connected`. A connect or query failure is best-effort: log,
 close the connection, set a one-second negative retry window, and leave the
 live response untouched. Because the query never runs on `mysql`, `mysql->info`
@@ -463,7 +468,7 @@ git commit -m "test: MariaDB min_gtid causal read TAP"
 ### Task 7: Verification
 
 - [ ] `PROXYSQL31=1 make -C test/tap/tests/unit gtid_parse_unit-t gtid_set_unit-t gtid_server_data_unit-t`
-- [ ] Run the three binaries — all PASS. Expected counts: 59/59 `gtid_parse_unit-t`, 73/73 `gtid_set_unit-t`, 170/170 `gtid_server_data_unit-t`
+- [ ] Run the three binaries — all PASS. Expected counts: 61/61 `gtid_parse_unit-t`, 73/73 `gtid_set_unit-t`, 170/170 `gtid_server_data_unit-t`
 - [ ] `PROXYSQL31=1 make build_lib` — compiles
 - [ ] `python3 test/tap/groups/check_groups.py --source` — all source tests registered
 - [ ] Existing MySQL GTID unit counts remain green (`gtid_set_unit-t` original cases, `gtid_server_data_unit-t` original cases)
