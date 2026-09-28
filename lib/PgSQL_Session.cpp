@@ -1282,8 +1282,11 @@ void PgSQL_Session::handler_again___new_thread_to_cancel_query() {
 			// thread can send a raw CancelRequest instead of calling PQcancel.
 			if (myds->myconn->native_mode) {
 				backend_kill_args->native_mode = true;
-				backend_kill_args->backend_pid = myds->myconn->native_backend_pid;
-				backend_kill_args->native_secret_key = myds->myconn->native_backend_secret;
+				int backend_pid = 0;
+				int secret_key = 0;
+				myds->myconn->native_backend_key(backend_pid, secret_key);
+				backend_kill_args->backend_pid = backend_pid;
+				backend_kill_args->native_secret_key = secret_key;
 			}
 
 			pthread_attr_t attr;

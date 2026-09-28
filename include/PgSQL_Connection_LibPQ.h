@@ -66,6 +66,12 @@ public:
 	int get_pg_ssl_in_use() override;
 	ConnStatusType get_pg_connection_status() const override;
 	char last_ready_for_query_status() const override;
+	// Step 5a-ii: the base keeps the ReadyForQuery validation and the kill-path
+	// routing, and asks the transport for the storage behind both. libpq has neither
+	// -- it reads the letter from PQtransactionStatus() and takes the backend key
+	// from its PGconn -- so both of these do nothing.
+	void note_ready_for_query(char st) override;
+	void native_backend_key(int& pid, int& secret) const override;
 	bool needs_pollout() const override;
 	int get_pg_is_nonblocking() override;
 	const char* get_pg_error_message() override;

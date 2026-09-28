@@ -1318,6 +1318,21 @@ char PgSQL_Connection_LibPQ::last_ready_for_query_status() const {
 	return 'I';
 }
 
+void PgSQL_Connection_LibPQ::note_ready_for_query(char) {
+	// Nothing to store: libpq parses ReadyForQuery itself and this leaf answers
+	// last_ready_for_query_status() / transport_transaction_status() from
+	// PQtransactionStatus(), so there is no letter to remember here. The base still
+	// runs the validation, which is the part that has to happen for every transport.
+}
+
+void PgSQL_Connection_LibPQ::native_backend_key(int& pid, int& secret) const {
+	// Leave both alone. The kill path only calls this under `if (native_mode)`,
+	// which is never true here; for libpq PgSQL_Backend_Kill_Args takes the same two
+	// values from the PGconn its constructor was handed, via PQgetCancel/PQbackendPID.
+	(void)pid;
+	(void)secret;
+}
+
 bool PgSQL_Connection_LibPQ::needs_pollout() const {
 	return (async_exit_status & PG_EVENT_WRITE) != 0;
 }

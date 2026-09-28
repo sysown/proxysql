@@ -21,8 +21,8 @@
 
 // A native connection parked at a connect step. A fresh one has no socket and no TLS
 // objects, which is what a torn-down one is left holding.
-static PgSQL_Connection* parked_at(PgSQL_Connection::PG_Native_Conn_St st) {
-	PgSQL_Connection* c = new PgSQL_Connection_Native();
+static PgSQL_Connection_Native* parked_at(PgSQL_Connection_Native::PG_Native_Conn_St st) {
+	PgSQL_Connection_Native* c = new PgSQL_Connection_Native();
 	c->native_st = st;
 	return c;
 }
@@ -30,11 +30,11 @@ static PgSQL_Connection* parked_at(PgSQL_Connection::PG_Native_Conn_St st) {
 int main(int, char**) {
 	plan(3);
 
-	PgSQL_Connection* c = parked_at(PgSQL_Connection::PG_Native_Conn_St::SSL_HANDSHAKE);
+	PgSQL_Connection_Native* c = parked_at(PgSQL_Connection_Native::PG_Native_Conn_St::SSL_HANDSHAKE);
 	c->native_teardown();
-	ok(c->native_st == PgSQL_Connection::PG_Native_Conn_St::FAILED,
+	ok(c->native_st == PgSQL_Connection_Native::PG_Native_Conn_St::FAILED,
 	   "teardown leaves the connect state machine at FAILED, not at the step it died in%s",
-	   c->native_st == PgSQL_Connection::PG_Native_Conn_St::FAILED
+	   c->native_st == PgSQL_Connection_Native::PG_Native_Conn_St::FAILED
 		   ? "" : "  <-- the next connect_cont() replays that step against freed state");
 
 	// The call the session makes when the connect timeout expires. Before the fix this

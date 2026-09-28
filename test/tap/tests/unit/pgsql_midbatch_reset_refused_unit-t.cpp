@@ -42,7 +42,7 @@ struct Fixture {
 	PgSQL_Session* sess = nullptr;
 	PgSQL_SrvC* srv = nullptr;
 	PgSQL_Data_Stream* ds = nullptr;
-	PgSQL_Connection* conn = nullptr;
+	PgSQL_Connection_Native* conn = nullptr;
 	ProxySQL_Poll<PgSQL_Data_Stream>* polls = nullptr;
 };
 

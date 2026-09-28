@@ -27,10 +27,10 @@ static int open_dummy_fd() {
 
 // A connection in the state a healthy pooled one is in: open socket, login done,
 // backend last said it was idle.
-static PgSQL_Connection* make_live_native_conn() {
-	PgSQL_Connection* c = new PgSQL_Connection_Native();
+static PgSQL_Connection_Native* make_live_native_conn() {
+	PgSQL_Connection_Native* c = new PgSQL_Connection_Native();
 	c->fd = open_dummy_fd();
-	c->native_st = PgSQL_Connection::PG_Native_Conn_St::DONE;
+	c->native_st = PgSQL_Connection_Native::PG_Native_Conn_St::DONE;
 	// native_connected is what marks the connection usable; native_st is set to
 	// match what a real completed login leaves behind.
 	c->native_connected = true;
@@ -87,12 +87,12 @@ static void test_protocol_answer_stays_unqualified() {
 }
 
 static void test_conn_that_died_after_handshake() {
-	PgSQL_Connection* c = make_live_native_conn();
+	PgSQL_Connection_Native* c = make_live_native_conn();
 	// The usual way a connection dies: it worked, then the socket went away in the
 	// middle of a result. Only the closed socket shows it, so that half of the
 	// check has to be doing its job.
 	if (c->fd >= 0) { ::close(c->fd); c->fd = -1; }
-	ok(c->native_st == PgSQL_Connection::PG_Native_Conn_St::DONE &&
+	ok(c->native_st == PgSQL_Connection_Native::PG_Native_Conn_St::DONE &&
 	   c->is_connection_in_reusable_state() == false,
 	   "conn that died after a completed handshake (fd cleared, native_st still DONE) "
 	   "is not reusable -- the fd half of the liveness gate is load-bearing");
@@ -100,14 +100,14 @@ static void test_conn_that_died_after_handshake() {
 }
 
 static void test_healthy_conn_mid_partial_send_is_live() {
-	PgSQL_Connection* c = make_live_native_conn();
+	PgSQL_Connection_Native* c = make_live_native_conn();
 	// A query too big to write in one go leaves the connection in a sending state.
 	// Nothing is wrong with it, so it must still count as usable.
-	c->native_st = PgSQL_Connection::PG_Native_Conn_St::SEND_STARTUP;
-	c->native_st_after_send = PgSQL_Connection::PG_Native_Conn_St::DONE;
+	c->native_st = PgSQL_Connection_Native::PG_Native_Conn_St::SEND_STARTUP;
+	c->native_st_after_send = PgSQL_Connection_Native::PG_Native_Conn_St::DONE;
 	ok(c->is_connected() == true && c->is_connection_in_reusable_state() == true,
 	   "healthy conn parked at SEND_STARTUP by a partial send is still live and reusable");
-	c->native_st = PgSQL_Connection::PG_Native_Conn_St::DONE;
+	c->native_st = PgSQL_Connection_Native::PG_Native_Conn_St::DONE;
 	simulate_teardown(c);
 	delete c;
 }

@@ -256,6 +256,21 @@ char PgSQL_Client_Connection::last_ready_for_query_status() const {
 	return 'I';
 }
 
+void PgSQL_Client_Connection::note_ready_for_query(char) {
+	// A ReadyForQuery is a backend-to-frontend message and this transport has no
+	// backend, so nothing can reach here: both of the base's own call sites are
+	// inside native_* bodies, which now live in PgSQL_Connection_Native.cpp.
+	assert(0);
+}
+
+void PgSQL_Client_Connection::native_backend_key(int& pid, int& secret) const {
+	// The kill path only calls this under `if (native_mode)`, and native_mode is
+	// false for a client connection, so it cannot reach here either.
+	(void)pid;
+	(void)secret;
+	assert(0);
+}
+
 bool PgSQL_Client_Connection::needs_pollout() const {
 	// Only a backend stream asks this; a client stream is readable, never writable
 	// on the client's behalf. The initial async_exit_status reads as PG_EVENT_NONE.

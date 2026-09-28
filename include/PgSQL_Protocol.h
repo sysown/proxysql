@@ -720,6 +720,10 @@ private:
 	// split, and it writes num_fields directly (the public accessor is a getter
 	// only, and the value has to be set without a round trip through a setter).
 	friend class PgSQL_Connection_LibPQ;
+	// Same reason, native half. The native result drive moved into the Native leaf
+	// in step 5a-ii and calls buffer_to_PSarrayOut() on the error path; only the
+	// base was a friend before, and friendship is not inherited.
+	friend class PgSQL_Connection_Native;
 };
 
 class PgSQL_Protocol : public MySQL_Protocol {

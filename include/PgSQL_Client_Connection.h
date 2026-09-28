@@ -73,6 +73,12 @@ public:
 	int get_pg_ssl_in_use() override;
 	ConnStatusType get_pg_connection_status() const override;
 	char last_ready_for_query_status() const override;
+	// Step 5a-ii: base-owned state hooks this transport cannot be asked for. A
+	// ReadyForQuery is backend-to-frontend and a client stream has no backend; the
+	// kill path only reaches for the backend key under `if (native_mode)`, which is
+	// false here. Both are therefore unreachable, and say so.
+	void note_ready_for_query(char st) override;
+	void native_backend_key(int& pid, int& secret) const override;
 	bool needs_pollout() const override;
 	int get_pg_is_nonblocking() override;
 	const char* get_pg_error_message() override;
