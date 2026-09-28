@@ -89,7 +89,6 @@ class MySQL_Connection {
 	private:
 	void update_warning_count_from_connection();
 	void update_warning_count_from_statement();
-	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
 	void connect_start_SetAttributes();
 	void connect_start_SetCharset();
@@ -100,6 +99,16 @@ class MySQL_Connection {
 	void ProcessQueryAndSetStatusFlags_UserVariables(char *, int);
 	void ProcessQueryAndSetStatusFlags_Savepoint(char *);
 	void ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
+	MYSQL *gtid_lookup_mysql;
+	time_t gtid_lookup_retry_after;
+	bool connect_gtid_lookup_connection();
+	void close_gtid_lookup_connection();
+	// GTID collection steps, split out of get_gtid() to keep each one within the
+	// nesting and complexity budgets. They all assume get_gtid()'s preconditions
+	// (a live connection with no error and a changed session state) hold.
+	bool collect_gtid_to_buff(char *buff);
+	bool get_gtid_from_session_tracking(char *buff);
+	bool get_gtid_from_mariadb_lookup(char *buff);
 	public:
 	struct {
 		char *server_version;
@@ -298,8 +307,17 @@ class MySQL_Connection {
 	void set_is_client(); // used for local_stmts
 
 	void reset();
+	bool is_expired(unsigned long long now) const;
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
+	/**
+	 * @brief Close the auxiliary connection used to read the MariaDB GTID position.
+	 *
+	 * Must be called whenever the owning MySQL_Connection is no longer used by
+	 * the current session, so that the auxiliary connection is never left open
+	 * on an idle pooled connection.
+	 */
+	void release_gtid_lookup_connection();
 	/**
 	 * @brief Extract session variable changes from MySQL's session tracking system.
 	 *

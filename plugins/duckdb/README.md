@@ -22,7 +22,6 @@ The plugin and vendored DuckDB dependency are enabled only in the Plugin
 Chassis tier:
 
 ```bash
-git lfs pull --include="deps/duckdb/duckdb-1.4.5.tar.gz"
 deps/duckdb/verify-source.bash
 PROXYSQL40=1 make
 ```

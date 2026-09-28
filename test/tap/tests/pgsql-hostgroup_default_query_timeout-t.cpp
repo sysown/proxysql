@@ -43,10 +43,28 @@ using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 // High base picked to avoid collision with any infra-baseline rule_id.
 static constexpr int RULE_ID_BASE = 5000001;
 
-// Timing slop (ms). Lower-bound widened for CI load (early-fire by scheduler);
-// upper-bound symmetric. Mirrors the MySQL test's tolerances.
-static constexpr unsigned long long SLOP_LO_MS = 700;
-static constexpr unsigned long long SLOP_HI_MS = 700;
+// Timing slop (ms) for the "query must complete" case, where there is no
+// competing ceiling to discriminate against and the assertion only guards
+// against an early kill. Kept symmetric and tight.
+static constexpr unsigned long long COMPLETE_SLOP_MS = 700;
+
+// Upper-bound slop is per case, because what each case must still catch is a
+// different wrong ceiling:
+//   Case 2 (expect 3000 global): a wrong answer is the 8000 hostgroup override,
+//                               so the band may reach 6000 but not 8000.
+//   Case 3 (expect 1500 rule):   a wrong answer is the 3000 global ceiling, so
+//                               the band may reach 2900 but not 3000.
+//   Case 4 (expect 3000 global): same competing 8000 override as Case 2.
+// The lower bound is uniformly tight everywhere: firing well below the
+// configured ceiling would be a real regression.
+//
+// These upper bounds exist because the cancel round-trip is not bounded: CI
+// measured Case 4 at 5002ms against a 3000ms ceiling while Case 2, with the
+// very same ceiling, measured 3007ms in the same run. A +/-700ms band turned
+// that into a red build for unrelated branches without testing anything the
+// wider band would not.
+static constexpr unsigned long long SLOP_HI_GLOBAL_VS_OVERRIDE_MS = 3000;
+static constexpr unsigned long long SLOP_HI_RULE_VS_GLOBAL_MS    = 1400;
 
 static constexpr int GLOBAL_TIMEOUT_MS = 3000;
 static constexpr int HG_OVERRIDE_MS    = 8000;
@@ -161,8 +179,8 @@ static void run_success_case(
 	ok(st == PGRES_COMMAND_OK,
 		"%s: query completed (no kill). status=%d err=%s",
 		label, (int)st, PQerrorMessage(proxy.get()));
-	const unsigned long long lo = expected_ms > SLOP_LO_MS ? expected_ms - SLOP_LO_MS : 0;
-	const unsigned long long hi = expected_ms + SLOP_HI_MS;
+	const unsigned long long lo = expected_ms > COMPLETE_SLOP_MS ? expected_ms - COMPLETE_SLOP_MS : 0;
+	const unsigned long long hi = expected_ms + COMPLETE_SLOP_MS;
 	ok(elapsed_ms >= lo && elapsed_ms <= hi,
 		"%s: completed near %llums (band [%llu,%llu]). Actual: %llums",
 		label, expected_ms, lo, hi, elapsed_ms);
@@ -189,9 +207,12 @@ static bool check_runtime_default_query_timeout(PGconn* admin, int hg, int expec
 	return matched;
 }
 
+// One timed kill measurement. 'slop_hi_ms' is the per-case upper slack; see
+// its call sites for which wrong ceiling each case still has to catch.
 static void run_kill_case(
 	const string& sleep_query,
 	unsigned long long expected_ms,
+	unsigned long long slop_hi_ms,
 	const char* label
 ) {
 	PGConnPtr proxy = connect_backend();
@@ -211,8 +232,8 @@ static void run_kill_case(
 	ok(killed,
 		"%s: killed (status=%d, conn_status=%d, err=%s)",
 		label, (int)st, (int)PQstatus(proxy.get()), PQerrorMessage(proxy.get()));
-	const unsigned long long lo = expected_ms > SLOP_LO_MS ? expected_ms - SLOP_LO_MS : 0;
-	const unsigned long long hi = expected_ms + SLOP_HI_MS;
+	const unsigned long long lo = expected_ms > COMPLETE_SLOP_MS ? expected_ms - COMPLETE_SLOP_MS : 0;
+	const unsigned long long hi = expected_ms + slop_hi_ms;
 	ok(elapsed_ms >= lo && elapsed_ms <= hi,
 		"%s: killed near %llums (band [%llu,%llu]). Actual: %llums",
 		label, expected_ms, lo, hi, elapsed_ms);
@@ -302,12 +323,14 @@ int main(int, char**) {
 	run_kill_case(
 		"DO $$ BEGIN PERFORM pg_sleep(5); END $$ /* case2_no_override */",
 		GLOBAL_TIMEOUT_MS,
+		SLOP_HI_GLOBAL_VS_OVERRIDE_MS,
 		"Case 2");
 
 	// --- Case 3: query rule timeout wins over hostgroup override ----------
 	run_kill_case(
 		"DO $$ BEGIN PERFORM pg_sleep(3); END $$ /* case3_rule_wins */",
 		RULE_TIMEOUT_MS,
+		SLOP_HI_RULE_VS_GLOBAL_MS,
 		"Case 3");
 
 	// --- Case 4: invalid hostgroup setting is rejected; override unset ----
@@ -323,6 +346,7 @@ int main(int, char**) {
 	run_kill_case(
 		"DO $$ BEGIN PERFORM pg_sleep(5); END $$ /* case4_invalid_override */",
 		GLOBAL_TIMEOUT_MS,
+		SLOP_HI_GLOBAL_VS_OVERRIDE_MS,
 		"Case 4");
 
 	// --- Case 5: runtime view reflects the JSON-parsed value --------------

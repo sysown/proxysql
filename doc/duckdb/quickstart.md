@@ -5,12 +5,7 @@ runs the same data through both supported client protocols.
 
 ## 1. Build the v4.0 tier
 
-DuckDB's source archive is stored with Git LFS. Fetch it before the first
-build:
-
 ```bash
-git lfs install
-git lfs pull --include="deps/duckdb/duckdb-1.4.5.tar.gz"
 deps/duckdb/verify-source.bash
 PROXYSQL40=1 make
 ```

@@ -16,16 +16,15 @@ when switching modes, then rebuild with `PROXYSQL40=1` on every invocation.
 Do not hard-code `abi_version`. Plugin code must use
 `PROXYSQL_PLUGIN_ABI_VERSION`.
 
-### DuckDB archive is an LFS pointer
+### DuckDB archive fails verification
 
-Fetch and verify it:
+Run the verifier for the exact diagnostic:
 
 ```bash
-git lfs pull --include="deps/duckdb/duckdb-1.4.5.tar.gz"
 deps/duckdb/verify-source.bash
 ```
 
-The verifier also reports checksum or corrupt-archive failures.
+It reports checksum or corrupt-archive failures.
 
 ## Engine fails to open
 

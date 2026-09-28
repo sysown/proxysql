@@ -85,12 +85,11 @@ Router plugin is distinct from the MySQL X protocol plugin and is not yet
 included in release packages; source builds install
 `proxysql_mysql_router.so` under `/usr/lib/proxysql/plugins/`.
 
-Building ProxySQL from source requires Git LFS so the pinned OpenSSL source is
-hydrated before dependency builds start:
+Building ProxySQL from source needs nothing beyond a normal `git clone`:
+the pinned OpenSSL source archive is vendored directly in git. Verify it
+before building dependencies:
 
 ```bash
-git lfs install
-git lfs pull --include=deps/libssl/openssl-3.5.7.tar.gz
 deps/libssl/verify-source.bash
 ```
 

@@ -8,8 +8,8 @@ The DuckDB plugin requires the ProxySQL v4.0 Plugin Chassis build tier:
 PROXYSQL40=1
 ```
 
-The current vendored engine is DuckDB 1.4.5. Its source archive is stored with
-Git LFS, so a source build also requires Git LFS and the usual ProxySQL C/C++
+The current vendored engine is DuckDB 1.4.5. Its source archive is vendored
+directly in git, so a source build only needs the usual ProxySQL C/C++
 build toolchain.
 
 The plugin must be compiled with the same build mode as the ProxySQL core. In
@@ -19,11 +19,9 @@ plugin initialization.
 
 ## Source installation
 
-Fetch and verify the vendored source:
+Verify the vendored source:
 
 ```bash
-git lfs install
-git lfs pull --include="deps/duckdb/duckdb-1.4.5.tar.gz"
 deps/duckdb/verify-source.bash
 ```
 

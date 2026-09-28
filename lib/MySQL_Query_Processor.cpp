@@ -12,6 +12,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Query_Processor.h"
 #include "Query_Processor_ParserSQL.h"
+#include "proxysql_gtid.h"
 
 extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Admin *GloAdmin;
@@ -567,21 +568,8 @@ __exit__query_parser_command_type:
 }
 
 bool MySQL_Query_Processor::_is_valid_gtid(const char* gtid, size_t gtid_len) {
-	if (gtid_len < 3) {
-		return false;
-	}
-	const char* sep_pos = index(gtid, ':');
-	if (sep_pos == NULL) {
-		return false;
-	}
-	size_t uuid_len = sep_pos - gtid;
-	if (uuid_len < 1) {
-		return false;
-	}
-	if (gtid_len < uuid_len + 2) {
-		return false;
-	}
-	return true;
+	ParsedGTID parsed;
+	return parse_gtid(gtid, gtid_len, &parsed);
 }
 
 void MySQL_Query_Processor::update_query_processor_stats() {
@@ -758,25 +746,21 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 	newQR->regex_engine2 = NULL;
 	newQR->hits = 0;
 
-	newQR->client_addr_wildcard_position = -1; // not existing by default
 	newQR->client_addr = (client_addr ? strdup(client_addr) : NULL);
-	if (newQR->client_addr) {
-		char* pct = strchr(newQR->client_addr, '%');
-		if (pct) { // there is a wildcard . We assume Admin did already all the input validation
-			if (pct == newQR->client_addr) {
-				// client_addr == '%'
-				// % is at the end of the string, but also at the beginning
-				// becoming a catch all
-				newQR->client_addr_wildcard_position = 0;
-			}
-			else {
-				// this math is valid also if (pct == newQR->client_addr)
-				// but we separate it to clarify that client_addr_wildcard_position is a match all
-				newQR->client_addr_wildcard_position = strlen(newQR->client_addr) - strlen(pct);
-			}
-		}
+	if (qp_addr_predicate_init(&newQR->client_addr_pred, newQR->client_addr, QP_ADDR_FIELD_CLIENT) == false) {
+		// Admin rejects a malformed value before we get here, so this only
+		// fires on a rule that bypassed validation. Keep the address but leave
+		// the predicate inert rather than matching on a partial parse.
+		proxy_error("Query rule with rule_id %d has an invalid client_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (proxy_addr ? strdup(proxy_addr) : NULL);
+	if (qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY) == false) {
+		// Same reasoning as the client_addr case above: the predicate is left
+		// inert and the failure is reported, not silently ignored.
+		proxy_error("Query rule with rule_id %d has an invalid proxy_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->proxy_addr);
+	}
 	newQR->proxy_port = proxy_port;
 	newQR->log = log;
 	newQR->digest = 0;
@@ -904,25 +888,16 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 	newQR->regex_engine2 = NULL;
 	newQR->hits = 0;
 
-	newQR->client_addr_wildcard_position = -1; // not existing by default
 	newQR->client_addr = (mqr->client_addr ? strdup(mqr->client_addr) : NULL);
-	if (newQR->client_addr) {
-		char* pct = strchr(newQR->client_addr, '%');
-		if (pct) { // there is a wildcard . We assume Admin did already all the input validation
-			if (pct == newQR->client_addr) {
-				// client_addr == '%'
-				// % is at the end of the string, but also at the beginning
-				// becoming a catch all
-				newQR->client_addr_wildcard_position = 0;
-			}
-			else {
-				// this math is valid also if (pct == newQR->client_addr)
-				// but we separate it to clarify that client_addr_wildcard_position is a match all
-				newQR->client_addr_wildcard_position = strlen(newQR->client_addr) - strlen(pct);
-			}
-		}
+	if (qp_addr_predicate_init(&newQR->client_addr_pred, newQR->client_addr, QP_ADDR_FIELD_CLIENT) == false) {
+		proxy_error("Query rule with rule_id %d has an invalid client_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (mqr->proxy_addr ? strdup(mqr->proxy_addr) : NULL);
+	if (qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY) == false) {
+		proxy_error("Query rule with rule_id %d has an invalid proxy_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->proxy_addr);
+	}
 	newQR->proxy_port = mqr->proxy_port;
 	newQR->log = mqr->log;
 	newQR->digest = 0;
