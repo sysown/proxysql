@@ -301,6 +301,12 @@ void PgSQL_Client_Connection::reset_fetch_result_state() {
 	// no backend result, so there is nothing to reset.
 }
 
+bool PgSQL_Client_Connection::handle_ready_past_connect_start() const {
+	// A client stream connects to ProxySQL, not to a backend, so there is never a
+	// backend handle to be missing.
+	return true;
+}
+
 void PgSQL_Client_Connection::reset_transport_state() {
 	// exit_pipeline_mode and PQpipelineStatus() are libpq's; a client connection is
 	// never in pipeline mode.

@@ -2811,6 +2811,15 @@ void PgSQL_Connection_Native::reset_fetch_result_state() {
 	// its own per-message state and resets it where a fetch cycle starts.
 }
 
+bool PgSQL_Connection_Native::handle_ready_past_connect_start() const {
+	// This transport has no PGconn at any point in its life, so "the handle is present"
+	// has nothing to answer and the invariant cannot be violated. The native
+	// equivalent -- the socket is open and login finished -- is a different question
+	// with a different answer for a connection mid-handshake, and that is
+	// backend_is_live()'s to answer.
+	return true;
+}
+
 void PgSQL_Connection_Native::reset_transport_state() {
 	// exit_pipeline_mode and PQpipelineStatus() are libpq's; a native connection is
 	// never in pipeline mode.

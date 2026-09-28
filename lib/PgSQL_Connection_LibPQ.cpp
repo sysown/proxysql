@@ -1605,6 +1605,15 @@ void PgSQL_Connection_LibPQ::reset_fetch_result_state() {
 	ps_result.data = NULL;
 }
 
+bool PgSQL_Connection_LibPQ::handle_ready_past_connect_start() const {
+	// The one transport for which "no handle" past ASYNC_CONNECT_START is a bug.
+	// connect_start() is the only writer of pgsql_conn and the only place the connect
+	// can fail before creating it -- and every one of those early returns leaves
+	// async_state_machine at ASYNC_CONNECT_START, which is why the answer is
+	// pgsql_conn != NULL rather than something about the state.
+	return pgsql_conn != NULL;
+}
+
 void PgSQL_Connection_LibPQ::reset_transport_state() {
 	// exit_pipeline_mode = false, plus the DEBUG assertion that libpq's pipeline really
 	// is off -- both verbatim from the base's reset(). resync_failed, which reset()

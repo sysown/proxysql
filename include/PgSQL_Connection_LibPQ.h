@@ -57,6 +57,7 @@ public:
 	void free_transport_result() override;
 	void reset_fetch_result_state() override;
 	void reset_transport_state() override;
+	bool handle_ready_past_connect_start() const override;
 
 	// --- Fast-forward TLS borrow (Step 5a-i) ---
 	bool tls_borrow(SSL* ssl, BIO*& r, BIO*& w, bool& displaced) override;

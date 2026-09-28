@@ -493,8 +493,9 @@ public:
 	 * and appends it directly to the result buffer — no intermediate PGresult.
 	 *
 	 * It also updates the result flags/counters and the owning connection's
-	 * side-effect state (error_info, native_txn_status, native_params) per the
-	 * message type, mirroring the libpq add_* helpers.
+	 * side-effect state (error_info, and the native transport's native_txn_status /
+	 * native_params -- all three now owned by PgSQL_Connection_Native since step 5a-ii)
+	 * per the message type, mirroring the libpq add_* helpers.
 	 *
 	 * @param type        The backend message type byte.
 	 * @param payload     The message body (everything AFTER the 4-byte length).

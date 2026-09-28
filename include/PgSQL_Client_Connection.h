@@ -104,6 +104,7 @@ public:
 	void free_transport_result() override;
 	void reset_fetch_result_state() override;
 	void reset_transport_state() override;
+	bool handle_ready_past_connect_start() const override;
 };
 
 #endif // PROXYSQL_PGSQL_CLIENT_CONNECTION_H

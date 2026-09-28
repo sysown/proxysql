@@ -991,13 +991,16 @@ void PgSQL_Connection::fetch_result_start() {
 
 int PgSQL_Connection::async_connect(short event) {
 	PROXY_TRACE();
-	// A libpq connection always has a PGconn once it is past ASYNC_CONNECT_START. The
-	// native half is skipped because get_pg_connection() is permanently nullptr there
-	// (the native sub-state machine uses its own fd), so the test would fire on every
-	// native connect. That `!native_mode` guard is the last read of the flag inside the
-	// hierarchy and step 6 removes it.
+	// Past ASYNC_CONNECT_START, a transport's handle is in the state its own state
+	// machine guarantees. This used to read `!native_mode && pgsql_conn == NULL` -- the
+	// flag deciding which transport to ask, and the handle read out of the base. Step 6
+	// hands the whole question to the leaf: handle_ready_past_connect_start() is true for
+	// libpq only when pgsql_conn exists, and unconditionally true for the two transports
+	// that have no PGconn by design. That was the last read of native_mode inside the
+	// hierarchy; the constructor's initialiser and the reads in PgSQL_Session.cpp /
+	// PgSQL_HostGroups_Manager.cpp are outside it and are what the flag is for.
 	// LCOV_EXCL_START
-	if (!native_mode && get_pg_connection() == NULL && async_state_machine != ASYNC_CONNECT_START) {
+	if (async_state_machine != ASYNC_CONNECT_START && !handle_ready_past_connect_start()) {
 		assert(0);
 	}
 	// LCOV_EXCL_STOP

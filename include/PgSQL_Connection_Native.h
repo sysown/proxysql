@@ -105,6 +105,7 @@ public:
 	void free_transport_result() override;
 	void reset_fetch_result_state() override;
 	void reset_transport_state() override;
+	bool handle_ready_past_connect_start() const override;
 
 	// --- Native transport state (Step 5a-ii) ---
 	// Moved here from the base, and deliberately still `public` because that is the

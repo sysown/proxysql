@@ -358,10 +358,18 @@ public:
 	// dispatch. processed_bytes is passed by pointer so the counter the base
 	// declared stays the one both sides add to.
 	virtual HandlerStep fetch_result_dispatch(short event, uint64_t* processed_bytes) = 0;
-	// The ASYNC_*_END states. libpq installs its notice receiver and leaves
-	// pipeline mode if the connection is in one; native keeps pgsql_conn
-	// permanently NULL and never enters either.
+	// The ASYNC_*_END states. libpq installs its notice receiver, leaves pipeline
+	// mode if the connection is in one, and asserts the two "should be NULL" postconditions
+	// that used to sit inline in the handler; native has no notice receiver and never
+	// enters pipeline mode. All five pieces of that finalization moved into
+	// PgSQL_Connection_LibPQ::on_command_end() in steps 4 and 5b.
 	virtual void on_command_end() = 0;
+	// True when this transport's handle is in the state its own state machine
+	// guarantees once the connect has started -- for libpq, that pgsql_conn exists.
+	// async_connect() asserts it on every entry past ASYNC_CONNECT_START. Added in
+	// step 6 to retire the last `native_mode && pgsql_conn == NULL` read from the base:
+	// the flag was only ever there to pick which transport to ask.
+	virtual bool handle_ready_past_connect_start() const = 0;
 	// ASYNC_RESYNC_START. True when the connection is already synchronized and the
 	// Sync does not need to be sent at all. libpq asks PQpipelineStatus() --
 	// which answers PQ_PIPELINE_OFF for a NULL handle, so native must not ask and
@@ -714,7 +722,7 @@ public:
 	unsigned int get_memory_usage() const;
 	virtual int get_backend_pid() = 0;
 	// Whether the backend has not finished with this connection; callers use it to decide if the
-	// connection is safe to pool, reuse or retry on. Native has no libpq to ask and pgsql_conn is
+	// connection is safe to pool, reuse or retry on. Native has no libpq to ask and get_pg_connection() is
 	// always NULL there, so without this branch every one of those guards was dead.
 	virtual bool is_pipeline_active() = 0;
 	// Backend state snapshot for diagnostics. The native leaf reports
