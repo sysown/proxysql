@@ -175,6 +175,7 @@ PgSQL_Connection* PgSQL_Connection::create_backend() {
 
 PgSQL_Connection::PgSQL_Connection(bool is_client_conn, bool native) : native_mode(native) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new PgSQL_Connection %p\n", this);
+	async_exit_status = PG_EVENT_NONE;
 	is_client_connection = is_client_conn;
 	query_result = NULL;
 	query_result_reuse = NULL;
