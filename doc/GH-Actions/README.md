@@ -611,9 +611,11 @@ The same `v3.0` source tree compiles into three different products, selected by 
 | v3.1 | `PROXYSQL31=1` | `3.1.x` | FFTO, TSDB, ED25519 |
 | v4.0 | `PROXYSQL40=1` | `4.0.x` | plugin chassis; cascades to v3.1 |
 
-**All CI builds the v4.0 tier only.** `ci-builds.yml` has a single matrix leg and injects
-`PROXYSQL40=1` into `docker-compose.yml`, which the `_build` service's `environment:`
-block passes straight through to `make`.
+**Every regular CI build uses the v4.0 tier.** `ci-builds.yml` has a single matrix leg and,
+on the default `tier: v40`, injects `PROXYSQL40=1` into `docker-compose.yml`, which the
+`_build` service's `environment:` block passes straight through to `make`. The only callers
+that build anything else are the tier sweep described below, which passes `tier: v30` or
+`tier: v31` explicitly.
 
 > **Stale-object tier mismatch.** The Makefile does *not* track the tier flag between
 > invocations, so objects built under one tier are silently reused under another. The
@@ -2025,10 +2027,10 @@ these in one sentence. Answers after each question.
    dead ends.
 
 If those six answers feel comfortable, you can close this section. If
-not, re-read the [nesting diagram](#122-the-full-nesting-visualized)
-and then the [two-branch diagram](#123-the-proxysql-two-branch-split-visualized)
+not, re-read the [nesting diagram](#132-the-full-nesting-visualized)
+and then the [two-branch diagram](#133-the-proxysql-two-branch-split-visualized)
 until they do; if the last question stumped you, re-read
-[§13.6 Seeing what actually ran](#126-seeing-what-actually-ran--the-terminal-flow).
+[§13.6 Seeing what actually ran](#136-seeing-what-actually-ran--the-terminal-flow).
 
 ---
 
