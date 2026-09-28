@@ -9,6 +9,15 @@ class PgSQL_Client_Connection final : public PgSQL_Connection {
 public:
 	PgSQL_Client_Connection();
 
+	// --- Fast-forward TLS borrow (Step 5a-i) ---
+	// A client connection has no backend transport to lend. The guard in
+	// PgSQL_Data_Stream::adopt_backend_tls() (is_connected() and
+	// get_pg_ssl_in_use() are both 0 here) means none of these is ever called;
+	// assert(0) matches the 17 pre-existing dispatchers below.
+	bool tls_borrow(SSL* ssl, BIO*& r, BIO*& w, bool& displaced) override;
+	bool tls_still_borrowed() const override;
+	bool tls_return(SSL* ssl) override;
+
 	// --- handler() hooks (Step 4) ---
 	// Unreachable, like every state-machine dispatcher above: handler() is the
 	// backend drive and a client connection has nothing to drive.

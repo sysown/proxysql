@@ -1209,7 +1209,7 @@ bool PgSQL_Data_Stream::adopt_backend_tls() {
 	// Nothing to borrow is not a failure: a plaintext backend relays as it is.
 	if (myconn == NULL || ssl != NULL) return true;
 	if (myconn->is_connected() == false || myconn->get_pg_ssl_in_use() == 0) return true;
-	if (myconn->saved_backend_rbio != NULL || myconn->saved_backend_wbio != NULL) {
+	if (myconn->tls_still_borrowed()) {
 		// A previous borrower never gave it back. Overwriting would lose it, so
 		// refuse and make sure the connection is destroyed rather than pooled.
 		proxy_error("Backend TLS transport was never released by a previous relay. Not reusing this connection. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
@@ -1228,42 +1228,14 @@ bool PgSQL_Data_Stream::adopt_backend_tls() {
 	}
 	encrypted = true;
 	ssl = ssl_obj;
-	if (myconn->native_mode) {
-		// The native path built this SSL with two memory BIOs and keeps reading and
-		// writing through those same pointers. Share them rather than installing a
-		// pair here: SSL_set_bio() would free the ones still in use, and the next
-		// query on the connection would touch freed memory. Nothing is displaced,
-		// so there is nothing for release_backend_tls() to put back.
-		assert(myconn->native_rbio != NULL && myconn->native_wbio != NULL);
-		rbio_ssl = myconn->native_rbio;
-		wbio_ssl = myconn->native_wbio;
-		return true;
-	}
-	backend_tls_adopted = true;
-	// libpq's BIO carries the PGconn as app data and cannot be rebuilt from out
-	// here, so hold a reference: SSL_set_bio() frees whatever it replaces.
-	myconn->saved_backend_rbio = SSL_get_rbio(ssl);
-	myconn->saved_backend_wbio = SSL_get_wbio(ssl);
-	if (myconn->saved_backend_rbio) BIO_up_ref(myconn->saved_backend_rbio);
-	if (myconn->saved_backend_wbio && myconn->saved_backend_wbio != myconn->saved_backend_rbio) {
-		BIO_up_ref(myconn->saved_backend_wbio);
-	}
-	rbio_ssl = BIO_new(BIO_s_mem());
-	wbio_ssl = BIO_new(BIO_s_mem());
-	if (rbio_ssl == NULL || wbio_ssl == NULL) {
-		// Installing a half-built pair would leave the relay without a transport.
-		// Give the saved references back and refuse, so nothing is left displaced.
-		proxy_error("Cannot allocate the memory BIOs for a fast forward relay. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
-		if (rbio_ssl) BIO_free(rbio_ssl);
-		if (wbio_ssl) BIO_free(wbio_ssl);
-		rbio_ssl = NULL;
-		wbio_ssl = NULL;
-		if (myconn->saved_backend_wbio && myconn->saved_backend_wbio != myconn->saved_backend_rbio) {
-			BIO_free(myconn->saved_backend_wbio);
-		}
-		if (myconn->saved_backend_rbio) BIO_free(myconn->saved_backend_rbio);
-		myconn->saved_backend_rbio = NULL;
-		myconn->saved_backend_wbio = NULL;
+	// Which BIOs the relay gets, and whether the connection's own transport is
+	// left displaced, is the one thing here the base cannot answer.
+	backend_tls_adopted = false;
+	if (myconn->tls_borrow(ssl_obj, rbio_ssl, wbio_ssl, backend_tls_adopted) == false) {
+		// The transport was left as it was found, so the relay can simply not
+		// happen; refuse it and make sure the connection is destroyed rather than
+		// pooled, since a borrow that failed is not something to retry.
+		proxy_error("Cannot borrow the backend TLS transport for a fast forward relay. Not relaying. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
 		ssl = NULL;
 		encrypted = false;
 		backend_tls_adopted = false;
@@ -1271,7 +1243,6 @@ bool PgSQL_Data_Stream::adopt_backend_tls() {
 		myconn->reusable = false;
 		return false;
 	}
-	SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
 	return true;
 }
 
@@ -1299,12 +1270,12 @@ void PgSQL_Data_Stream::refuse_reuse_on_stranded_tls() {
 // backend, in this session or in whichever one gets the connection next.
 void PgSQL_Data_Stream::release_backend_tls() {
 	if (backend_tls_adopted == false) {
-		if (myconn != NULL && myconn->native_mode && ssl != NULL) {
-			// A native borrow shares the connection's own BIOs, so there is nothing to
-			// hand back. The stream still has to stop claiming the TLS: leaving these
-			// set makes the next query on this session take the encrypted path for a
-			// transport the connection is driving itself. The BIO pointers stay as the
-			// connection owns them.
+		if (myconn != NULL && ssl != NULL) {
+			// A borrow that displaced nothing shares the connection's own BIOs, so
+			// there is nothing to hand back. The stream still has to stop claiming the
+			// TLS: leaving these set makes the next query on this session take the
+			// encrypted path for a transport the connection is driving itself. The BIO
+			// pointers stay as the connection owns them.
 			// Still check whether the relay stopped mid-TLS-record: the connection's
 			// writer looks only at its own buffer and never sends what was left here.
 			refuse_reuse_on_stranded_tls();
@@ -1319,7 +1290,7 @@ void PgSQL_Data_Stream::release_backend_tls() {
 		}
 		return; // nothing was borrowed here
 	}
-	if (myconn == NULL || ssl == NULL || myconn->saved_backend_rbio == NULL) {
+	if (myconn == NULL || ssl == NULL) {
 		// Cannot hand it back, but our side is still cleared below: leaving 'encrypted'
 		// set would make ~PgSQL_Data_Stream() SSL_free() the connection's own SSL, which
 		// libpq frees again at PQfinish(). The connection keeps the saved reference, and
@@ -1329,10 +1300,13 @@ void PgSQL_Data_Stream::release_backend_tls() {
 	} else {
 		refuse_reuse_on_stranded_tls();
 		// Frees the memory pair and takes back the reference held since adopt.
-		SSL_set_bio(ssl, myconn->saved_backend_rbio,
-			(myconn->saved_backend_wbio ? myconn->saved_backend_wbio : myconn->saved_backend_rbio));
-		myconn->saved_backend_rbio = NULL;
-		myconn->saved_backend_wbio = NULL;
+		// A transport with nothing saved to put back is reported as a failure here
+		// rather than silently left holding a BIO it no longer owns.
+		if (myconn->tls_return(ssl) == false) {
+			proxy_error("Cannot restore the backend TLS transport. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
+			myconn->healthy = false;
+			myconn->reusable = false;
+		}
 	}
 	// Ciphertext a partial write left behind belongs to the connection we are
 	// giving up; it must not leak into whatever this stream is used for next.

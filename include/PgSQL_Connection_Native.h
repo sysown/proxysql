@@ -10,6 +10,11 @@ public:
 	PgSQL_Connection_Native();
 	~PgSQL_Connection_Native() override;
 
+	// --- Fast-forward TLS borrow (Step 5a-i) ---
+	bool tls_borrow(SSL* ssl, BIO*& r, BIO*& w, bool& displaced) override;
+	bool tls_still_borrowed() const override;
+	bool tls_return(SSL* ssl) override;
+
 	// --- handler() hooks (Step 4) ---
 	HandlerStep on_connect_end() override;
 	void on_connect_successful() override;

@@ -288,6 +288,35 @@ public:
 
 	PG_ASYNC_ST handler(short event);
 
+	// --- Fast-forward TLS borrow (PgSQL_Data_Stream) ---
+	//
+	// A fast forward relay has to drive the backend's TLS itself, which means
+	// either sharing the transport's BIOs (native) or displacing them with memory
+	// buffers (libpq). That is the one thing about TLS a relay cannot work out
+	// from the base, because the answer is two BIO pointers plus whether the
+	// connection's own transport was replaced. The stream keeps all of its own
+	// bookkeeping (ssl, encrypted, backend_tls_adopted, the stranded-bytes check)
+	// and asks these three instead of touching a leaf's members.
+	//
+	// ssl is the object the relay already fetched with get_pg_ssl_object() and
+	// checked for NULL, passed back in because a transport that replaces its own
+	// BIOs (libpq) has to be driven through it. r and w are out-parameters: on
+	// success the relay drives the returned pair. displaced says whether the
+	// connection's original transport was replaced, so the caller knows both that
+	// there is something for tls_return() to put back and that bytes stranded in
+	// the returned pair are this relay's alone.
+	// Returns false on a fatal error, having left nothing displaced.
+	virtual bool tls_borrow(SSL* ssl, BIO*& r, BIO*& w, bool& displaced) = 0;
+	// True while a previous borrow has not been returned. libpq's answer is "the
+	// saved BIOs are still set"; native never displaces anything, so always false.
+	virtual bool tls_still_borrowed() const = 0;
+	// Hand the connection's own transport back, if it was displaced. Called only
+	// after a successful tls_borrow() that reported displaced == true, and only
+	// after the caller has read whatever the returned pair still holds, because
+	// restoring frees it. Returns false when there is nothing to put back, having
+	// left the connection unusable.
+	virtual bool tls_return(SSL* ssl) = 0;
+
 	// --- handler() hooks ---
 	//
 	// handler() stays one non-virtual function on the base: the state machine is

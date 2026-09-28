@@ -78,6 +78,22 @@ const char* PgSQL_Client_Connection::transport_name() const {
 	return "client";
 }
 
+bool PgSQL_Client_Connection::tls_borrow(SSL* ssl, BIO*& r, BIO*& w, bool& displaced) {
+	assert(0); // a client connection has no backend transport to lend
+	(void)ssl; (void)r; (void)w; (void)displaced;
+	return false;
+}
+
+bool PgSQL_Client_Connection::tls_still_borrowed() const {
+	return false;
+}
+
+bool PgSQL_Client_Connection::tls_return(SSL* ssl) {
+	assert(0); // a client connection has no backend transport to lend
+	(void)ssl;
+	return false;
+}
+
 bool PgSQL_Client_Connection::set_single_row_mode() {
 	assert(0); // backend drive, not reachable on a client connection
 	return false;

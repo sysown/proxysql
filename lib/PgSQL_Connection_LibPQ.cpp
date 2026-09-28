@@ -81,6 +81,58 @@ PgSQL_Connection_LibPQ::~PgSQL_Connection_LibPQ() {
 	}
 }
 
+bool PgSQL_Connection_LibPQ::tls_borrow(SSL* ssl, BIO*& r, BIO*& w, bool& displaced) {
+	// libpq's BIO carries the PGconn as app data and cannot be rebuilt from out
+	// here, so hold a reference: SSL_set_bio() frees whatever it replaces.
+	saved_backend_rbio = SSL_get_rbio(ssl);
+	saved_backend_wbio = SSL_get_wbio(ssl);
+	if (saved_backend_rbio) BIO_up_ref(saved_backend_rbio);
+	if (saved_backend_wbio && saved_backend_wbio != saved_backend_rbio) {
+		BIO_up_ref(saved_backend_wbio);
+	}
+	r = BIO_new(BIO_s_mem());
+	w = BIO_new(BIO_s_mem());
+	if (r == NULL || w == NULL) {
+		// Installing a half-built pair would leave the relay without a transport.
+		// Give the saved references back and refuse, so nothing is left displaced.
+		proxy_error("Cannot allocate the memory BIOs for a fast forward relay. Session=%p, Conn=%p\n", (void*)myds->sess, this);
+		if (r) BIO_free(r);
+		if (w) BIO_free(w);
+		if (saved_backend_wbio && saved_backend_wbio != saved_backend_rbio) {
+			BIO_free(saved_backend_wbio);
+		}
+		if (saved_backend_rbio) BIO_free(saved_backend_rbio);
+		saved_backend_rbio = NULL;
+		saved_backend_wbio = NULL;
+		r = NULL;
+		w = NULL;
+		return false;
+	}
+	SSL_set_bio(ssl, r, w);
+	displaced = true;
+	return true;
+}
+
+bool PgSQL_Connection_LibPQ::tls_still_borrowed() const {
+	return saved_backend_rbio != NULL || saved_backend_wbio != NULL;
+}
+
+bool PgSQL_Connection_LibPQ::tls_return(SSL* ssl) {
+	if (ssl == NULL || saved_backend_rbio == NULL) {
+		// Nothing of ours is saved, so there is no transport to put back. The relay
+		// is still installed on the connection and the pair it allocated is still the
+		// SSL's, so report the failure rather than handing over NULL: the caller marks
+		// the connection unusable and destroys it instead of pooling it.
+		return false;
+	}
+	// Frees the memory pair and takes back the reference held since borrow.
+	SSL_set_bio(ssl, saved_backend_rbio,
+		(saved_backend_wbio ? saved_backend_wbio : saved_backend_rbio));
+	saved_backend_rbio = NULL;
+	saved_backend_wbio = NULL;
+	return true;
+}
+
 bool PgSQL_Connection_LibPQ::set_single_row_mode() {
 	assert(pgsql_conn);
 	if (PQsetSingleRowMode(pgsql_conn) == 0) {

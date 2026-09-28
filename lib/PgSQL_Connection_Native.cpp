@@ -58,6 +58,29 @@ PgSQL_Connection_Native::~PgSQL_Connection_Native() {
 	native_teardown();
 }
 
+bool PgSQL_Connection_Native::tls_borrow(SSL* ssl, BIO*& r, BIO*& w, bool& displaced) {
+	// The native path built this SSL with two memory BIOs and keeps reading and
+	// writing through those same pointers. Share them rather than installing a
+	// pair for the relay: SSL_set_bio() would free the ones still in use, and the
+	// next query on the connection would touch freed memory. Nothing is displaced,
+	// so there is nothing for tls_return() to put back.
+	(void)ssl;
+	assert(native_rbio != NULL && native_wbio != NULL);
+	r = native_rbio;
+	w = native_wbio;
+	displaced = false;
+	return true;
+}
+
+bool PgSQL_Connection_Native::tls_still_borrowed() const {
+	return false;
+}
+
+bool PgSQL_Connection_Native::tls_return(SSL* ssl) {
+	(void)ssl;
+	return true;
+}
+
 bool PgSQL_Connection_Native::set_single_row_mode() {
 	// There is no PQsetSingleRowMode() here: the native transport streams raw
 	// DataRow messages one at a time, which is what single-row mode exists to
