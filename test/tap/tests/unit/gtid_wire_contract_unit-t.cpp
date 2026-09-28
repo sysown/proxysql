@@ -57,6 +57,7 @@ static std::string resolve_fixture() {
 		"fixtures/mariadb_gtid_wire.txt",
 		"test/tap/tests/unit/fixtures/mariadb_gtid_wire.txt",
 		"../fixtures/mariadb_gtid_wire.txt",
+		"tests/unit/fixtures/mariadb_gtid_wire.txt",
 	};
 	for (const char *candidate : candidates) {
 		std::ifstream probe(candidate);
