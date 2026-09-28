@@ -456,7 +456,13 @@ jobs:
           # the unit-binary deletion further down).
           # ------------------------------------------------------------
           if [ "${IS_V40}" != "true" ]; then
-            sudo ci-control/.github/scripts/prune-tier-handoff.bash \
+            # ABSOLUTE path on purpose. `actions/checkout` places its `path:`
+            # relative to $GITHUB_WORKSPACE, so `path: ci-control` and
+            # `path: proxysql` are SIBLINGS -- and this step has already run
+            # `cd proxysql/`. A relative `ci-control/...` would therefore
+            # resolve to proxysql/ci-control/... and not exist. (It did, and
+            # every downgrade build died there; caught in PR #6234 review.)
+            sudo "${GITHUB_WORKSPACE}/ci-control/.github/scripts/prune-tier-handoff.bash" \
               --binary src/proxysql --groups test/tap/groups/groups.json
           fi
 
@@ -530,9 +536,16 @@ jobs:
           # test/deps -- the test/deps deletion below still applies.
           # On the v40 leg, retain every unit binary: the ~51 existing consumers
           # may select any of them, and the complete handoff is the only thing
-          # they get. On a v30/v31 leg, prune-tier-handoff.bash has already
-          # dropped the binaries this tier can never select (see above), so
-          # nothing further is needed here.
+          # they get.
+          #
+          # On a v30/v31 leg, prune-tier-handoff.bash has ALREADY reduced
+          # tests/unit to exactly the binaries this tier's version filter can
+          # select, and UNIT_COUNT above is measured after that prune. So the
+          # correct action is to keep them: ci-tier-sweep.yml runs the
+          # `unit-tests-g1` group explicitly, and deleting them here would
+          # leave the handoff unable to run it. (This branch used to be the
+          # catch-all `else` that deleted every unit binary; for v30/v31 that
+          # silently emptied tests/unit. Caught in PR #6234 review.)
           if [ "${IS_V40}" = "true" ]; then
             echo ">>> Retaining all ${UNIT_COUNT} unit test binaries for the complete v40 handoff"
           elif [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
@@ -541,8 +554,10 @@ jobs:
             KEPT=$(find test/tap/tests/unit -type f -name '*-t' 2>/dev/null | wc -l)
             echo ">>> Deleted $((UNIT_COUNT - KEPT)) unit test binaries, kept ${KEPT} mysqlx_*/plugin_* binaries"
           else
-            sudo find test/tap/tests/unit -type f -name '*-t' -delete
-            echo ">>> Deleted ${UNIT_COUNT} unit test binaries from the cache payload"
+            # A non-v40 TAP leg was already pruned to its selectable set. Only a
+            # leg that was NOT pruned (i.e. no -tap block ran) may still need
+            # the bulk delete; assert that rather than deleting blind.
+            echo ">>> Retaining the ${UNIT_COUNT} unit test binaries left by the ${TIER} tier prune"
           fi
 
           # Delete test/deps (~2.8 GB on disk). These are the test-framework

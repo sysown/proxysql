@@ -117,20 +117,30 @@ jobs:
       run: |
         set -uo pipefail
         command -v zstd >/dev/null || sudo apt-get install -y zstd
-        # GitHub's artifact index can lag behind creation even for a
-        # run-scoped query, so retry on a bounded budget and surface the real
-        # gh error. A single transient miss must not red the whole sweep.
+        # The artifact is produced by the `build` job of THIS run, which is a
+        # `needs:` dependency of this job, so it is already attached by the
+        # time we look. That makes a run-scoped lookup both sufficient and the
+        # only safe option.
+        #
+        # The existing consumers also fall back to the GLOBAL
+        # /actions/artifacts?name= index, because a self-hosted runner can
+        # pick a job up ~1 min after the build and land inside the window where
+        # that global index still lags. That does not apply here (see above),
+        # and the global fallback would let this job adopt a same-named
+        # artifact produced by a DIFFERENT run -- a cross-run trust expansion
+        # that Sonar flagged. So: run-scoped only, retried, and a hard error
+        # if it never resolves. We never unpack an artifact whose producing run
+        # is not this one.
         : "${HANDOFF_MAX_ATTEMPTS:=20}"   # bounded: 20 x 15s = up to ~5 min
         ERRLOG="$(mktemp)"
+        if [ -z "${BUILD_RUN_ID:-}" ]; then
+          echo "ERROR: BUILD_RUN_ID is empty; refusing to fetch the handoff" >&2
+          exit 1
+        fi
         resolve_aid() {
           local name="$1" out=""
-          if [ -n "${BUILD_RUN_ID:-}" ]; then
-            out=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
-                    --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" 2>>"$ERRLOG") || true
-            [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-          fi
-          out=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
-                  --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>>"$ERRLOG") || true
+          out=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
+                  --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" 2>>"$ERRLOG") || true
           [ -n "$out" ] && { printf '%s' "$out"; return 0; }
           return 1
         }
@@ -140,11 +150,12 @@ jobs:
           for attempt in $(seq 1 "$HANDOFF_MAX_ATTEMPTS"); do
             aid=$(resolve_aid "$name") && [ -n "$aid" ] && break
             aid=""
-            echo ">>> ${name} not resolvable yet (${attempt}/${HANDOFF_MAX_ATTEMPTS}); sleeping 15s"; sleep 15
+            echo ">>> ${name} not resolvable in run ${BUILD_RUN_ID} yet (${attempt}/${HANDOFF_MAX_ATTEMPTS}); sleeping 15s"; sleep 15
           done
           if [ -z "$aid" ]; then
-            echo "ERROR: handoff artifact ${name} not found after ${HANDOFF_MAX_ATTEMPTS} attempts (build_run=${BUILD_RUN_ID:-n/a})" >&2
-            echo "       Did the v${TIER} build leg succeed for ${SHA}?" >&2
+            echo "ERROR: handoff artifact ${name} not found in run ${BUILD_RUN_ID} after ${HANDOFF_MAX_ATTEMPTS} attempts" >&2
+            echo "       Did the ${TIER} build leg succeed for ${SHA}?" >&2
+            echo "       Note: only artifacts from THIS run are accepted, by design." >&2
             echo "--- last gh errors ---" >&2; tail -n 20 "$ERRLOG" >&2
             exit 1
           fi
