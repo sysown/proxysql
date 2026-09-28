@@ -38,11 +38,25 @@ RUNS_ON_UNTRUSTED = re.compile(
 TRUSTED_PREFIX = re.compile(r"\A\$\{\{\s*inputs\.trusted\s*&&")
 
 # Snapshot of the build matrix as of the callee SHA pinned by
-# CI-builds-fork.yml. Refresh this together with that pin. It was four
-# entries until 64b1465a9 / 308c14d67 (2026-09-06) retired the duplicate
-# legs. Note this couples a v3.0 lint to GH-Actions content: changing the
-# matrix there is a deliberate change that has to be mirrored here.
-EXPECTED_MATRIX = [("ubuntu24", "-tap-genai-gcov")]
+# CI-builds-fork.yml. Refresh this together with that pin, in step with a
+# reviewed change on GH-Actions. History: four entries until 64b1465a9 /
+# 308c14d67 (2026-09-06) retired the duplicate legs, then a single
+# `-tap-genai-gcov` entry, then `-tap` in #6242 when the tier became an
+# explicit `tier` input. The published handoff variant stayed
+# ubuntu24-tap-genai-gcov throughout, so downstream consumers are unaffected
+# by the matrix `type` token changing.
+#
+# Note this couples a v3.0 lint to GH-Actions content: any intentional matrix
+# change there needs a matching PR here or the lint goes red. That coupling
+# is the point -- an unreviewed matrix change is what let -tap-mysqlx reach
+# fork builds in the first place -- but it is real friction, not a free
+# check.
+EXPECTED_MATRIX = [("ubuntu24", "-tap")]
+
+# GitHub accepts a whole `permissions:` block only as a mapping of scopes or
+# as one of these two strings. `permissions: {}` disables every scope and is
+# a legal (narrowing) mapping, not a string.
+VALID_WHOLE_BLOCK_STRINGS = ("read-all", "write-all")
 
 PRIVILEGED_USES = ("LouisBrunner/checks-action", "actions/cache/", "actions/upload-artifact")
 PRIVILEGED_NAME = re.compile(
@@ -100,13 +114,18 @@ def widenings_beyond_fork_caller(permissions):
 
     ``none`` is an explicit denial and therefore always a narrowing, so it
     is never a widening whatever the scope.
+
+    A value that is not valid ``permissions`` syntax at all is reported by
+    :func:`permission_declaration_fault`, not here.
     """
     if permissions is None:
         return []
     if isinstance(permissions, str):
         # `read-all` / `write-all` are the valid shorthand forms. Both grant
         # more than contents:read.
-        return [] if permissions == "none" else [(permissions, permissions)]
+        return [] if permissions not in VALID_WHOLE_BLOCK_STRINGS else [
+            (permissions, permissions)
+        ]
     if not isinstance(permissions, dict):
         return []
 
@@ -120,6 +139,32 @@ def widenings_beyond_fork_caller(permissions):
         else:
             widenings.append((scope, level))
     return widenings
+
+
+def permission_declaration_fault(label, permissions):
+    """Return a problem string for a malformed ``permissions:`` value, else None.
+
+    GitHub accepts exactly three shapes for a whole ``permissions`` block: a
+    mapping of scopes, the string ``read-all``, or the string ``write-all``.
+    ``permissions: {}`` is a legal mapping that disables every scope. ``none``
+    is a *scope* value inside a mapping, not a whole-block value, and a scalar
+    such as ``42`` is not syntax at all.
+
+    Both of those can be rejected by GitHub before a job is scheduled, and the
+    widening check cannot see them -- it returns nothing for a value it does
+    not recognise -- so an unvalidated callee would pass the contract and
+    then fail the whole untrusted call.
+    """
+    if permissions is None:
+        return None
+    if isinstance(permissions, dict):
+        return None
+    if isinstance(permissions, str) and permissions in VALID_WHOLE_BLOCK_STRINGS:
+        return None
+    return (
+        f"callee {label} has an invalid permissions value {permissions!r}; expected a "
+        f"mapping of scopes, {{}}, 'read-all' or 'write-all'"
+    )
 
 
 def contains_unsafe_checkout(value):
@@ -212,6 +257,10 @@ def validate(base, fork, reusable):
         (f"job {name!r}", job.get("permissions"))
         for name, job in reusable.get("jobs", {}).items()
     ]:
+        fault = permission_declaration_fault(label, requested)
+        if fault is not None:
+            problems.append(fault)
+            continue
         for scope, level in widenings_beyond_fork_caller(requested):
             problems.append(
                 f"callee {label} requests {scope}: {level}, which the fork "

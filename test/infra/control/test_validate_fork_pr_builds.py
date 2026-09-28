@@ -49,7 +49,15 @@ def minimal_documents():
             "builds": {
                 "runs-on": "${{ inputs.trusted && (runner.environment == 'self-hosted' && false) || 'ubuntu-24.04' }}",
                 "strategy": {
-                    "matrix": {"include": [{"dist": "ubuntu24", "type": "-tap-genai-gcov"}]}
+                    # Derived from EXPECTED_MATRIX rather than hardcoded, so the
+                    # baseline cannot drift out of step with the snapshot when
+                    # a reviewed GH-Actions change updates it.
+                    "matrix": {
+                        "include": [
+                            {"dist": dist, "type": kind}
+                            for dist, kind in subject.EXPECTED_MATRIX
+                        ]
+                    }
                 },
                 "steps": [
                     {"name": "Archive artifacts", "if": SAFE_NESTED_GATE, "uses": "actions/upload-artifact@v4"},
@@ -255,12 +263,47 @@ class Mutations(unittest.TestCase):
     def test_string_permission_forms_do_not_crash(self):
         """`read-all` / `write-all` are valid GitHub syntax, so the guard must
         report them rather than raise while iterating."""
-        for permissions, expect_problem in (("write-all", True), ("read-all", True), ("none", False)):
+        for permissions, expect_problem in (("write-all", True), ("read-all", True)):
             with self.subTest(permissions=permissions):
                 base, fork, reusable = minimal_documents()
                 reusable["jobs"]["builds"]["permissions"] = permissions
                 problems = subject.validate(base, fork, reusable)
                 self.assertEqual(bool(problems), expect_problem, problems)
+
+    def test_invalid_permission_declarations_are_reported(self):
+        """`none` is a scope value, not a whole-block value, and a scalar is
+        not syntax at all. Both are rejected by GitHub at startup, and the
+        widening check returns nothing for either, so they need their own
+        report or the callee would pass the contract and still break."""
+
+        for permissions in ("none", 42, 0, ["read-all"], True):
+            with self.subTest(permissions=permissions):
+                base, fork, reusable = minimal_documents()
+                reusable["jobs"]["builds"]["permissions"] = permissions
+                problems = subject.validate(base, fork, reusable)
+                self.assertTrue(problems, permissions)
+                self.assertTrue(
+                    any("invalid permissions value" in problem for problem in problems),
+                    problems,
+                )
+
+    def test_empty_mapping_is_a_legal_narrowing(self):
+        """`permissions: {}` disables every scope, which the docs give as the
+        way to remove all access. It is a mapping, so it is valid and it
+        narrows, so it must not be reported."""
+        base, fork, reusable = minimal_documents()
+        reusable["jobs"]["builds"]["permissions"] = {}
+        self.assertEqual(subject.validate(base, fork, reusable), [])
+
+    def test_permission_declaration_fault(self):
+        self.assertIsNone(subject.permission_declaration_fault("x", None))
+        self.assertIsNone(subject.permission_declaration_fault("x", {}))
+        self.assertIsNone(subject.permission_declaration_fault("x", {"contents": "read"}))
+        self.assertIsNone(subject.permission_declaration_fault("x", "read-all"))
+        self.assertIsNone(subject.permission_declaration_fault("x", "write-all"))
+        for bad in ("none", "all", "", 42, True, ["read-all"]):
+            with self.subTest(value=bad):
+                self.assertIsNotNone(subject.permission_declaration_fault("x", bad))
 
     def test_widenings_helper(self):
         self.assertEqual(subject.widenings_beyond_fork_caller(None), [])
@@ -277,8 +320,12 @@ class Mutations(unittest.TestCase):
         self.assertEqual(
             subject.widenings_beyond_fork_caller("write-all"), [("write-all", "write-all")]
         )
-        # a non-mapping, non-string value must not raise
+        # Values that are not valid permissions syntax are this helper's
+        # business only in the sense that it must not raise on them;
+        # reporting them is permission_declaration_fault()'s job, and
+        # validate() calls that first.
         self.assertEqual(subject.widenings_beyond_fork_caller(42), [])
+        self.assertEqual(subject.widenings_beyond_fork_caller("none"), [])
 
     def test_unsafe_checkout_flag(self):
         for label, mutate in (
