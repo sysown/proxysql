@@ -74,11 +74,6 @@ void PgSQL_Client_Connection::on_reset_session_end() {
 	assert(0); // backend drive, not reachable on a client connection
 }
 
-bool PgSQL_Client_Connection::stmt_start_flushed_at_once() const {
-	assert(0); // backend drive, not reachable on a client connection
-	return false;
-}
-
 const char* PgSQL_Client_Connection::transport_name() const {
 	return "client";
 }

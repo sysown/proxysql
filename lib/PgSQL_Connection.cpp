@@ -522,14 +522,17 @@ handler_again:
 		if (async_exit_status) {
 			next_event(ASYNC_STMT_PREPARE_CONT);
 		} else {
-			if (stmt_start_flushed_at_once()) {
-				if (is_error_present()) {
-					NEXT_IMMEDIATE(ASYNC_STMT_PREPARE_END);
-				}
-				set_fetch_result_end_state(ASYNC_STMT_PREPARE_END);
-				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+			// Nothing is left to send, so either the whole frame went out and
+			// the reply is what we wait for, or the send failed outright and the
+			// path that failed left an error set. The two are told apart by that
+			// error, not by the transport: every PG_EVENT_NONE exit of the three
+			// stmt_*_start() bodies runs set_error()/set_error_from_PQerrorMessage()
+			// first, on libpq as well as native.
+			if (is_error_present()) {
+				NEXT_IMMEDIATE(ASYNC_STMT_PREPARE_END);
 			}
-			NEXT_IMMEDIATE(ASYNC_STMT_PREPARE_END);
+			set_fetch_result_end_state(ASYNC_STMT_PREPARE_END);
+			NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
 		}
 		break;
 	case ASYNC_STMT_PREPARE_CONT:
@@ -562,14 +565,12 @@ handler_again:
 		if (async_exit_status) {
 			next_event(ASYNC_STMT_DESCRIBE_CONT);
 		} else {
-			if (stmt_start_flushed_at_once()) {
-				if (is_error_present()) {
-					NEXT_IMMEDIATE(ASYNC_STMT_DESCRIBE_END);
-				}
-				set_fetch_result_end_state(ASYNC_STMT_DESCRIBE_END);
-				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+			// Same shape as ASYNC_STMT_PREPARE_START; see the comment there.
+			if (is_error_present()) {
+				NEXT_IMMEDIATE(ASYNC_STMT_DESCRIBE_END);
 			}
-			NEXT_IMMEDIATE(ASYNC_STMT_DESCRIBE_END);
+			set_fetch_result_end_state(ASYNC_STMT_DESCRIBE_END);
+			NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
 		}
 	}
 	break;
@@ -601,14 +602,12 @@ handler_again:
 		if (async_exit_status) {
 			next_event(ASYNC_STMT_EXECUTE_CONT);
 		} else {
-			if (stmt_start_flushed_at_once()) {
-				if (is_error_present()) {
-					NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
-				}
-				set_fetch_result_end_state(ASYNC_STMT_EXECUTE_END);
-				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+			// Same shape as ASYNC_STMT_PREPARE_START; see the comment there.
+			if (is_error_present()) {
+				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
 			}
-			NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
+			set_fetch_result_end_state(ASYNC_STMT_EXECUTE_END);
+			NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
 		}
 		break;
 	case ASYNC_STMT_EXECUTE_CONT:

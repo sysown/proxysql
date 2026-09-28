@@ -374,13 +374,6 @@ PgSQL_Connection::HandlerStep PgSQL_Connection_LibPQ::fetch_result_dispatch(shor
 	return go(fetch_result_end_st);
 }
 
-bool PgSQL_Connection_LibPQ::stmt_start_flushed_at_once() const {
-	// false, always. libpq's flush() cannot report that it sent everything: a
-	// PQflush() of 0 becomes PG_EVENT_READ, so a libpq connection always reaches
-	// the drain through ASYNC_STMT_*_CONT and never through the short cut.
-	return false;
-}
-
 void PgSQL_Connection_LibPQ::on_command_end() {
 	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
 

@@ -329,12 +329,6 @@ public:
 	// dispatch. processed_bytes is passed by pointer so the counter the base
 	// declared stays the one both sides add to.
 	virtual HandlerStep fetch_result_dispatch(short event, uint64_t* processed_bytes) = 0;
-	// The three ASYNC_STMT_*_START states: true when the transport sent the whole
-	// frame in one go, so the result drain can start without going through
-	// ASYNC_STMT_*_CONT. Only the native transport ever reports true, because
-	// libpq's flush() never says it sent everything. Replaced by the unconditional
-	// form in the next step of this split, once that is proven.
-	virtual bool stmt_start_flushed_at_once() const = 0;
 	// The ASYNC_*_END states. libpq installs its notice receiver and leaves
 	// pipeline mode if the connection is in one; native keeps pgsql_conn
 	// permanently NULL and never enters either.

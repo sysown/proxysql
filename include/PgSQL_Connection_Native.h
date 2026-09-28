@@ -16,7 +16,6 @@ public:
 	void on_connect_failed() override;
 	bool defer_first_result_read() override;
 	HandlerStep fetch_result_dispatch(short event, uint64_t* processed_bytes) override;
-	bool stmt_start_flushed_at_once() const override;
 	void on_command_end() override;
 	bool resync_already_synced() override;
 	bool resync_send_failed() override;

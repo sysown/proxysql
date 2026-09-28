@@ -118,13 +118,6 @@ PgSQL_Connection::HandlerStep PgSQL_Connection_Native::fetch_result_dispatch(sho
 	return go(ASYNC_USE_RESULT_CONT);
 }
 
-bool PgSQL_Connection_Native::stmt_start_flushed_at_once() const {
-	// true, always: a native frame is written to a non-blocking socket and the
-	// framer knows whether it had to stop short, so "the whole frame went out" is
-	// something this transport can report and libpq's cannot.
-	return true;
-}
-
 void PgSQL_Connection_Native::on_command_end() {
 	// Nothing: pgsql_conn is permanently NULL here, so there is no notice receiver
 	// to install, and the native transport never enters libpq's pipeline mode.
