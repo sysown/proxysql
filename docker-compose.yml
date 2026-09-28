@@ -279,34 +279,6 @@ services:
 
 ####################################################################################################
 ####################################################################################################
-  opensuse15_build:
-    extends:
-      service: _build
-    image: proxysql/packaging:build-opensuse15-v4.0.0
-    volumes:
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/suse-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - PKG_RELEASE=opensuse15
-      - PROXYSQL_BUILD_TYPE=clickhouse
-
-  opensuse15_clang_build:
-    extends:
-      service: opensuse15_build
-    image: proxysql/packaging:build-clang-opensuse15-v4.0.0
-    environment:
-      - PKG_RELEASE=opensuse15-clang
-
-  opensuse15_dbg_build:
-    extends:
-      service: opensuse15_build
-    environment:
-      - PKG_RELEASE=dbg-opensuse15
-      - PROXYSQL_BUILD_TYPE=debug
-
-####################################################################################################
   opensuse16_build:
     extends:
       service: _build

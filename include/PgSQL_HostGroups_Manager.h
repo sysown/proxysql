@@ -312,6 +312,12 @@ struct PgSQL_p_hg_dyn_counter {
 		gtid_executed,
 		proxysql_pgsql_error,
 		pgsql_error,
+#ifdef PROXYSQL31
+		hostgroup_pool_acquisitions,
+		hostgroup_pool_waits,
+		hostgroup_pool_wait_time,
+		hostgroup_backup_server_selected,
+#endif
 		SIZE_
 	};
 };
@@ -327,6 +333,9 @@ struct PgSQL_p_hg_dyn_gauge {
 		connection_pool_conn_used,
 		connection_pool_latency_us,
 		connection_pool_status,
+#ifdef PROXYSQL31
+		hostgroup_pool_waiters,
+#endif
 		SIZE_
 	};
 };
@@ -663,6 +672,13 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_latency_us_map {};
 		std::map<std::string, prometheus::Counter*> p_connection_pool_queries_map {};
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_status_map {};
+#ifdef PROXYSQL31
+		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_acquisitions_map {};
+		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_waits_map {};
+		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_wait_time_map {};
+		std::map<std::string, prometheus::Counter*> p_hostgroup_backup_server_selected_map {};
+		std::map<std::string, prometheus::Gauge*> p_hostgroup_pool_waiters_map {};
+#endif
 
 		/// Prometheus gtid_executed metrics
 		std::map<std::string, prometheus::Counter*> p_gtid_executed_map {};

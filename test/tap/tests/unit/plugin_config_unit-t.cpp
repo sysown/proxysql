@@ -307,6 +307,8 @@ static void test_dispatch_via_active_manager() {
 
 	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins_compat(mgr.get(), err),
 	   "load with a plugin that registers an admin command");
+	ok(proxysql_start_configured_plugins(mgr.get(), err),
+	   "start publishes the configured plugin command table");
 
 	ProxySQL_PluginCommandContext ctx { proxysql_plugin_get_admindb(),
 	                                     proxysql_plugin_get_configdb(),
@@ -339,9 +341,9 @@ static void test_dispatch_with_no_active_manager() {
 
 int main() {
 #ifdef PROXYSQL40
-	plan(48);  // PROXYSQL40: load succeeds; init fails separately (3 oks)
+	plan(49);  // PROXYSQL40: load succeeds; init fails separately (3 oks)
 #else
-	plan(47);  // Pre-chassis: load fails with init-side registration error (2 oks)
+	plan(48);  // Pre-chassis: load fails with init-side registration error (2 oks)
 #endif
 	make_log_path();
 

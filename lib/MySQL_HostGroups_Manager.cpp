@@ -170,7 +170,8 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
  */
 template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
 T j_get_srv_default_int_val(
-	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
+	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check,
+	const char *section = "servers_defaults"
 ) {
 	if (j.find(key) != j.end()) {
 		const json::value_t val_type = j[key].type();
@@ -183,16 +184,16 @@ T j_get_srv_default_int_val(
 				return val;
 			} else {
 				proxy_error(
-					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.%s.%s' for hostgroup %d."
 						" Value NOT UPDATED.\n",
-					static_cast<int64_t>(val), key.c_str(), hid
+					static_cast<int64_t>(val), section, key.c_str(), hid
 				);
 			}
 		} else {
 			proxy_error(
-				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.%s.%s' for hostgroup %d."
 					" Value NOT UPDATED.\n",
-				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
+				type_name, static_cast<std::uint8_t>(val_type), section, key.c_str(), hid
 			);
 		}
 	}
@@ -201,6 +202,31 @@ T j_get_srv_default_int_val(
 }
 
 
+//static void * HGCU_thread_run() {
+// HGCU worker threads have no per-thread variable sync, so the
+// thread-local mysql_thread___connection_max_age_ms is always 0 here.
+// Expiry checks in this worker must read the live global instead, under
+// the handler lock that guards it against a concurrent variable update.
+// The read is done once per reset batch: taking the lock per connection
+// would let a concurrent variable flush stall recycling of the whole
+// pool, and a batch is short enough that one snapshot per batch is
+// equivalent for expiry purposes.
+static unsigned long long MyHGM_current_max_age_ms() {
+	if (GloMTH == NULL) {
+		return 0;
+	}
+	GloMTH->rdlock();
+	unsigned long long max_age_ms = GloMTH->variables.connection_max_age_ms;
+	GloMTH->rdunlock();
+	return max_age_ms;
+}
+
+static bool MyConn_expired_by_max_age(MySQL_Connection *c, unsigned long long max_age_ms) {
+	if (max_age_ms == 0) {
+		return false;
+	}
+	return monotonic_time() > c->creation_time + max_age_ms * 1000ULL;
+}
 void * HGCU_thread_run() {
 	PtrArray *conn_array=new PtrArray();
 	set_thread_name("MyHGCU", GloVars.set_thread_name);
@@ -245,10 +271,20 @@ void * HGCU_thread_run() {
 		int *statuses=(int *)malloc(sizeof(int)*l);
 		my_bool *ret=(my_bool *)malloc(sizeof(my_bool)*l);
 		int i;
+		// One snapshot for the whole batch: the handler lock is taken once
+		// here instead of once per pooled connection, and every connection
+		// in the batch is judged against the same max age.
+		const unsigned long long max_age_ms = MyHGM_current_max_age_ms();
 		for (i=0;i<(int)l;i++) {
 			myconn=(MySQL_Connection *)conn_array->index(i);
 			myconn->reset();
 			MyHGM->increase_reset_counter();
+			if (MyConn_expired_by_max_age(myconn, max_age_ms)) {
+				// Aged out while waiting in the reset queue: skip the
+				// COM_CHANGE_USER and let the sweep below destroy it.
+				statuses[i]=0; ret[i]=1;
+				continue;
+			}
 			if (myconn->mysql->net.pvio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
 				MySQL_Connection_userinfo *userinfo = myconn->userinfo;
 				char *auth_password = NULL;
@@ -278,7 +314,13 @@ void * HGCU_thread_run() {
 			if (statuses[i]==0) {
 				myconn=(MySQL_Connection *)conn_array->remove_index_fast(i);
 				if (!ret[i]) {
-					MyHGM->push_MyConn_to_pool(myconn);
+					if (MyConn_expired_by_max_age(myconn, max_age_ms)) {
+						// Aged out during the reset: destroy instead of pooling.
+						myconn->send_quit=false;
+						MyHGM->destroy_MyConn_from_pool(myconn);
+					} else {
+						MyHGM->push_MyConn_to_pool(myconn);
+					}
 				} else {
 					myconn->send_quit=false;
 					MyHGM->destroy_MyConn_from_pool(myconn);
@@ -291,6 +333,11 @@ void * HGCU_thread_run() {
 		unsigned long long now=monotonic_time();
 		while (conn_array->len && ((monotonic_time() - now) < 1000000)) {
 			usleep(50);
+			// Re-read once per polling round rather than once per connection:
+			// this loop can spin for up to a second, so the snapshot taken
+			// with the batch would already be stale by the time a connection
+			// completes its async CHANGE_USER.
+			const unsigned long long round_max_age_ms = MyHGM_current_max_age_ms();
 			for (i=0;i<(int)conn_array->len;i++) {
 				myconn=(MySQL_Connection *)conn_array->index(i);
 				if (myconn->mysql->net.pvio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
@@ -313,8 +360,14 @@ void * HGCU_thread_run() {
 				if (statuses[i]==0) {
 					myconn=(MySQL_Connection *)conn_array->remove_index_fast(i);
 					if (!ret[i]) {
-						myconn->reset();
-						MyHGM->push_MyConn_to_pool(myconn);
+						if (MyConn_expired_by_max_age(myconn, round_max_age_ms)) {
+							// Aged out during the async reset: destroy instead of pooling.
+							myconn->send_quit=false;
+							MyHGM->destroy_MyConn_from_pool(myconn);
+						} else {
+							myconn->reset();
+							MyHGM->push_MyConn_to_pool(myconn);
+						}
 					} else {
 						myconn->send_quit=false;
 						MyHGM->destroy_MyConn_from_pool(myconn);
@@ -718,6 +771,33 @@ hg_metrics_map = std::make_tuple(
 			"Tracks the mysql errors encountered.",
 			metric_tags {}
 		)
+#ifdef PROXYSQL31
+		,
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_pool_acquisitions,
+			"proxysql_connpool_acquisitions_total",
+			"Successful backend connection acquisitions by hostgroup.",
+			metric_tags {{ "protocol", "mysql" }}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_pool_waits,
+			"proxysql_connpool_waits_total",
+			"Backend connection acquisition wait episodes by hostgroup.",
+			metric_tags {{ "protocol", "mysql" }}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_pool_wait_time,
+			"proxysql_connpool_wait_time_seconds_total",
+			"Cumulative duration of completed backend connection acquisition waits.",
+			metric_tags {{ "protocol", "mysql" }}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_backup_server_selected,
+			"proxysql_mysql_hostgroup_backup_server_selected_total",
+			"Times a backup-weight server was selected because no primary was available.",
+			metric_tags {{ "protocol", "mysql" }}
+		)
+#endif
 	},
 	// prometheus dynamic gauges
 	hg_dyn_gauge_vector {
@@ -755,6 +835,15 @@ hg_metrics_map = std::make_tuple(
 				{ "protocol", "mysql" }
 			}
 		)
+#ifdef PROXYSQL31
+		,
+		std::make_tuple (
+			p_hg_dyn_gauge::hostgroup_pool_waiters,
+			"proxysql_connpool_waiters",
+			"Sessions currently waiting to acquire a backend connection.",
+			metric_tags {{ "protocol", "mysql" }}
+		)
+#endif
 	}
 );
 
@@ -913,10 +1002,10 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 }
 
 #ifdef PROXYSQL40
-void MySQL_HostGroups_Manager::refresh_aws_locality_configuration() {
+void MySQL_HostGroups_Manager::refresh_aws_locality_configuration(bool acquire_lock) {
 	std::vector<AwsLocalityHostgroupConfig> hostgroups;
 
-	wrlock();
+	if (acquire_lock) wrlock();
 	for (unsigned int i = 0; i < MyHostGroups->len; ++i) {
 		MyHGC* hostgroup = static_cast<MyHGC*>(MyHostGroups->index(i));
 		if (!hostgroup->attributes.aws_locality_policy.valid) {
@@ -935,7 +1024,7 @@ void MySQL_HostGroups_Manager::refresh_aws_locality_configuration() {
 		}
 		hostgroups.emplace_back(std::move(config));
 	}
-	wrunlock();
+	if (acquire_lock) wrunlock();
 
 	if (aws_locality_manager_) {
 		aws_locality_manager_->configure(std::move(hostgroups));
@@ -1618,7 +1707,8 @@ bool MySQL_HostGroups_Manager::commit(
 	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 	bool only_commit_runtime_mysql_servers,
-	bool update_version
+	bool update_version,
+	bool acquire_lock
 ) {
 	// if only_commit_runtime_mysql_servers is true, mysql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_mysql_servers) {
@@ -1628,11 +1718,11 @@ bool MySQL_HostGroups_Manager::commit(
 	}
 
 	unsigned long long curtime1=monotonic_time();
-	wrlock();
+	if (acquire_lock) wrlock();
 	const bool result = commit_locked(peer_runtime_mysql_servers, peer_mysql_servers_v2,
 		only_commit_runtime_mysql_servers, update_version);
-	wrunlock();
-	finish_commit(curtime1);
+	if (acquire_lock) wrunlock();
+	finish_commit(curtime1, acquire_lock);
 	return result;
 }
 
@@ -1964,9 +2054,11 @@ bool MySQL_HostGroups_Manager::commit_locked(
 	return true;
 }
 
-void MySQL_HostGroups_Manager::finish_commit(unsigned long long curtime1) {
+void MySQL_HostGroups_Manager::finish_commit(unsigned long long curtime1, bool acquire_lock) {
 #ifdef PROXYSQL40
-	refresh_aws_locality_configuration();
+	// When the caller owns the HGM lock (acquire_lock == false), collect the
+	// locality configuration under that lock instead of re-acquiring it.
+	refresh_aws_locality_configuration(acquire_lock);
 #endif
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
@@ -2941,6 +3033,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 	MySrvC *mysrvc=(MySrvC *)c->parent;
 	if (c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE &&
 		c->send_quit &&
+		c->is_expired(monotonic_time()) == false &&
 		queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			if (c->backend_auth_type() != MySQLBackendAuthType::AWS_IAM) {
@@ -3420,9 +3513,7 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 				int i=0;
 				for (i=0; i<(int)mscl->conns_length() ; i++) {
 					MySQL_Connection *mc=mscl->index(i);
-					unsigned long long intv = mysql_thread___connection_max_age_ms;
-					intv *= 1000;
-					if (curtime > mc->creation_time + intv) {
+					if (mc->is_expired(curtime)) {
 						mc=mscl->remove(i);
 						delete mc;
 						i--;
@@ -3874,6 +3965,29 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			p_update_connection_pool_update_gauge(endpoint_id, common_labels,
 				status.p_connection_pool_status_map, ((int)mysrvc->get_status()) + 1, p_hg_dyn_gauge::connection_pool_status);
 		}
+#ifdef PROXYSQL31
+		const std::string hostgroup_id = std::to_string(myhgc->hid);
+		const std::map<std::string, std::string> labels {
+			{"hostgroup", hostgroup_id},
+			{"protocol", "mysql"}
+		};
+		const HostgroupPoolStatsSnapshot snapshot = myhgc->pool_stats.lifetime_snapshot();
+		p_update_map_counter(status.p_hostgroup_pool_acquisitions_map,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_pool_acquisitions],
+			hostgroup_id, labels, snapshot.acquisitions_total);
+		p_update_map_counter(status.p_hostgroup_pool_waits_map,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_pool_waits],
+			hostgroup_id, labels, snapshot.waits_total);
+		p_update_map_counter(status.p_hostgroup_pool_wait_time_map,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_pool_wait_time],
+			hostgroup_id, labels, snapshot.wait_time_us_total / 1000000.0);
+		p_update_map_counter(status.p_hostgroup_backup_server_selected_map,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_backup_server_selected],
+			hostgroup_id, labels, myhgc->backup_servers_selected.load(std::memory_order_relaxed));
+		p_update_map_gauge(status.p_hostgroup_pool_waiters_map,
+			status.p_dyn_gauge_array[p_hg_dyn_gauge::hostgroup_pool_waiters],
+			hostgroup_id, labels, snapshot.waiters);
+#endif
 	}
 
 	// Remove the non-present servers for the gauge metrics
@@ -6619,6 +6733,8 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
  *   - default_query_timeout: Value must be in [1000, 20*24*3600*1000]; takes precedence over
  *     'mysql-default_query_timeout' for queries that resolve to this hostgroup. Range mirrors
  *     the global 'mysql-default_query_timeout' bounds.
+ *   - backup_weight_threshold: Value must be in [0, 10000000].
+ *   - backup_availability: One of "selectable", "status", or "capacity".
  *
  *  In case input verification fails for a field, supplied 'MyHGC' is NOT updated for that field. An error
  *  message is logged specifying the source of the error.
@@ -6632,6 +6748,14 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 	myhgc->attributes.aws_iam_region = NULL;
 #ifdef PROXYSQL40
 	myhgc->attributes.aws_locality_policy = {};
+#endif
+
+#ifdef PROXYSQL31
+	if (hostgroup_settings[0] == '\0') {
+		myhgc->attributes.backup_weight_threshold = 0;
+		myhgc->attributes.backup_availability = 0;
+		return;
+	}
 #endif
 
 	if (hostgroup_settings[0] != '\0') {
@@ -6660,17 +6784,17 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 #endif
 
 			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
-			const int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
+			const int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check, "hostgroup_settings");
 			myhgc->attributes.handle_warnings = handle_warnings;
 
 			const auto monitor_slave_lag_when_null_check = [](int32_t monitor_slave_lag_when_null) -> bool 
 				{ return (monitor_slave_lag_when_null >= 0 && monitor_slave_lag_when_null <= 604800); };
-			const int32_t monitor_slave_lag_when_null = j_get_srv_default_int_val<int32_t>(j, hid, "monitor_slave_lag_when_null", monitor_slave_lag_when_null_check);
+			const int32_t monitor_slave_lag_when_null = j_get_srv_default_int_val<int32_t>(j, hid, "monitor_slave_lag_when_null", monitor_slave_lag_when_null_check, "hostgroup_settings");
 			myhgc->attributes.monitor_slave_lag_when_null = monitor_slave_lag_when_null;
 
 			const auto default_query_timeout_check = [](int32_t default_query_timeout) -> bool
 				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
-			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check);
+			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check, "hostgroup_settings");
 			myhgc->attributes.default_query_timeout = default_query_timeout;
 
 			const auto aws_iam_region = j.find("aws_iam_region");
@@ -6691,6 +6815,44 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 					}
 				}
 			}
+
+#ifdef PROXYSQL31
+			const auto backup_weight_threshold_check = [](int64_t v) -> bool {
+				return v >= 0 && v <= 10000000;
+			};
+			const auto backup_weight_threshold_it = j.find("backup_weight_threshold");
+			if (backup_weight_threshold_it == j.end()) {
+				myhgc->attributes.backup_weight_threshold = 0;
+			} else {
+				const int64_t backup_weight_threshold = j_get_srv_default_int_val<int64_t>(
+					j, hid, "backup_weight_threshold", backup_weight_threshold_check, "hostgroup_settings");
+				if (backup_weight_threshold != static_cast<int64_t>(-1)) {
+					myhgc->attributes.backup_weight_threshold = backup_weight_threshold;
+				}
+			}
+
+			const auto backup_availability_it = j.find("backup_availability");
+			if (backup_availability_it == j.end()) {
+				myhgc->attributes.backup_availability = 0;
+			} else if (backup_availability_it->type() == json::value_t::string) {
+				const std::string mode = backup_availability_it->get<std::string>();
+				if (mode == "selectable") {
+					myhgc->attributes.backup_availability = 0;
+				} else if (mode == "status") {
+					myhgc->attributes.backup_availability = 1;
+				} else if (mode == "capacity") {
+					myhgc->attributes.backup_availability = 2;
+				} else {
+					proxy_error(
+						"Invalid value '%s' supplied for 'mysql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
+						mode.c_str(), hid);
+				}
+			} else {
+				proxy_error(
+					"Invalid type supplied for 'mysql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
+					hid);
+			}
+#endif
 		}
 		catch (const json::exception&) {
 			proxy_error("hostgroup_settings_parse_failed for hostgroup %d. Value rejected.\n", hid);

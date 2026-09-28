@@ -37,6 +37,6 @@ install_on_host "${PRIMARY}"
 
 # Install on all other nodes
 NUM_NODES=${PROXYSQL_CLUSTER_NODES:-9}
-for i in $(seq 1 "${NUM_NODES}"); do
+for ((i = 1; i <= NUM_NODES; i++)); do
     install_on_host "proxy-node${i}.${INFRA_ID}"
 done

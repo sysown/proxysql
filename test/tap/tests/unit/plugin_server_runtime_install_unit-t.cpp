@@ -406,7 +406,7 @@ int main() {
 	clear_mysql_topology.incoming_replication_hostgroups =
 		select_rows("SELECT * FROM mysql_replication_hostgroups WHERE 0");
 	admin->mysql_servers_wrlock();
-	admin->load_mysql_servers_to_runtime(clear_mysql_topology, {}, {}, false);
+	admin->load_mysql_servers_to_runtime(clear_mysql_topology, {}, {}, true, false);
 	admin->mysql_servers_wrunlock();
 	incoming_pgsql_servers_t clear_pgsql_topology {};
 	clear_pgsql_topology.incoming_replication_hostgroups =

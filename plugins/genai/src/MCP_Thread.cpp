@@ -499,11 +499,39 @@ void MCP_Threads_Handler::rebuild_target_auth_map_locked() {
 		by_id[a.auth_profile_id] = &a;
 	}
 
+	// Issue #6168: a target profile that does not survive this join is
+	// invisible to the MCP query endpoint even though it stays visible in
+	// runtime_mcp_target_profiles. Record why for every dropped row (fed to
+	// the runtime view's skip_reason column) and warn, so the discrepancy is
+	// self-explaining instead of requiring a source read to diagnose.
+	std::map<std::string, std::string> new_skip_reasons;
+	MCP_Profile_Install_Stats stats;
+	stats.auth_profiles_installed = static_cast<int>(auth_profiles_.size());
+	stats.targets_read = static_cast<int>(target_profiles_.size());
+
 	std::map<std::string, MCP_Target_Auth_Context> new_map;
 	for (const auto& t : target_profiles_) {
-		if (t.active == 0) continue;
+		if (t.active == 0) {
+			new_skip_reasons[t.target_id] = MCP_SKIP_REASON_INACTIVE;
+			stats.targets_skipped_inactive++;
+			proxy_warning(
+				"MCP: target profile '%s' is not available to the query endpoint: %s\n",
+				t.target_id.c_str(), MCP_SKIP_REASON_INACTIVE
+			);
+			continue;
+		}
 		auto it = by_id.find(t.auth_profile_id);
-		if (it == by_id.end()) continue;  // dangling FK; skip silently
+		if (it == by_id.end()) {
+			new_skip_reasons[t.target_id] = MCP_SKIP_REASON_NO_AUTH_PROFILE;
+			stats.targets_skipped_no_auth_profile++;
+			proxy_warning(
+				"MCP: target profile '%s' is not available to the query endpoint: %s"
+				" (auth_profile_id='%s' has no row in mcp_auth_profiles)\n",
+				t.target_id.c_str(), MCP_SKIP_REASON_NO_AUTH_PROFILE,
+				t.auth_profile_id.c_str()
+			);
+			continue;
+		}
 		const MCP_Auth_Profile_Row& a = *it->second;
 
 		MCP_Target_Auth_Context ctx;
@@ -522,8 +550,28 @@ void MCP_Threads_Handler::rebuild_target_auth_map_locked() {
 		ctx.default_schema = a.default_schema;
 
 		new_map[t.target_id] = ctx;
+		stats.targets_effective++;
 	}
 	target_auth_map.swap(new_map);
+	target_skip_reasons_.swap(new_skip_reasons);
+	last_profile_install_stats_ = stats;
+
+	if (stats.targets_skipped() > 0) {
+		proxy_warning(
+			"MCP: %d of %d target profile(s) excluded from the runtime registry"
+			" (%d inactive, %d with an unresolved auth_profile_id);"
+			" they remain visible in runtime_mcp_target_profiles with effective=0\n",
+			stats.targets_skipped(), stats.targets_read,
+			stats.targets_skipped_inactive, stats.targets_skipped_no_auth_profile
+		);
+	}
+}
+
+MCP_Profile_Install_Stats MCP_Threads_Handler::get_last_profile_install_stats() {
+	pthread_rwlock_rdlock(&rwlock);
+	MCP_Profile_Install_Stats stats = last_profile_install_stats_;
+	pthread_rwlock_unlock(&rwlock);
+	return stats;
 }
 
 namespace {
@@ -651,6 +699,37 @@ bool insert_target_row(sqlite3_stmt* st, const MCP_Threads_Handler::MCP_Target_P
 	bind_int         (st, 9, t.allow_discovery);
 	bind_int         (st, 10, t.active);
 	bind_text_or_null(st, 11, t.comment.c_str());
+	SAFE_SQLITE3_STEP2(st);
+	const bool ok = (rc == SQLITE_DONE);
+	(*proxy_sqlite3_clear_bindings)(st);
+	(*proxy_sqlite3_reset)(st);
+	return ok;
+}
+
+// Same as insert_target_row, plus the two derived columns that exist only on
+// the runtime view (issue #6168). Kept separate rather than defaulted onto
+// insert_target_row so the main.mcp_target_profiles writers cannot silently
+// start binding columns that table does not have.
+bool insert_runtime_target_row(
+	sqlite3_stmt* st,
+	const MCP_Threads_Handler::MCP_Target_Profile_Row& t,
+	bool effective,
+	const std::string& skip_reason
+) {
+	int rc = 0;
+	bind_text_or_null(st, 1, t.target_id.c_str());
+	bind_text_or_null(st, 2, t.protocol.c_str());
+	bind_int         (st, 3, t.hostgroup_id);
+	bind_text_or_null(st, 4, t.auth_profile_id.c_str());
+	bind_text_or_null(st, 5, t.description.c_str());
+	bind_int         (st, 6, t.max_rows);
+	bind_int         (st, 7, t.timeout_ms);
+	bind_int         (st, 8, t.allow_explain);
+	bind_int         (st, 9, t.allow_discovery);
+	bind_int         (st, 10, t.active);
+	bind_text_or_null(st, 11, t.comment.c_str());
+	bind_int         (st, 12, effective ? 1 : 0);
+	bind_text_or_null(st, 13, skip_reason.c_str());
 	SAFE_SQLITE3_STEP2(st);
 	const bool ok = (rc == SQLITE_DONE);
 	(*proxy_sqlite3_clear_bindings)(st);
@@ -895,20 +974,30 @@ void MCP_Threads_Handler::project_target_profiles_to_runtime_view(SQLite3DB& adm
 	auto [prep_rc, stmt] = admindb.prepare_v2(
 		"INSERT INTO runtime_mcp_target_profiles"
 		" (target_id, protocol, hostgroup_id, auth_profile_id, description,"
-		"  max_rows, timeout_ms, allow_explain, allow_discovery, active, comment)"
-		" VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)");
+		"  max_rows, timeout_ms, allow_explain, allow_discovery, active, comment,"
+		"  effective, skip_reason)"
+		" VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)");
 	if (prep_rc != SQLITE_OK) {
 		admindb.execute("ROLLBACK");
 		return;
 	}
 	sqlite3_stmt* st = stmt.get();
 
+	// Copy the raw snapshot and the skip map together under one rdlock, so
+	// the projected effective/skip_reason columns describe the same rebuild
+	// that produced the rows (issue #6168). Taking two separate locks could
+	// straddle a concurrent LOAD and label rows from one generation with
+	// reasons from another.
 	pthread_rwlock_rdlock(&rwlock);
 	auto snapshot = target_profiles_;
+	auto skip_reasons = target_skip_reasons_;
 	pthread_rwlock_unlock(&rwlock);
 
 	for (const auto& t : snapshot) {
-		if (!insert_target_row(st, t)) {
+		const auto it = skip_reasons.find(t.target_id);
+		const bool effective = (it == skip_reasons.end());
+		const std::string skip_reason = effective ? std::string() : it->second;
+		if (!insert_runtime_target_row(st, t, effective, skip_reason)) {
 			admindb.execute("ROLLBACK");
 			return;
 		}

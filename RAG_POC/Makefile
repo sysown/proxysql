@@ -1,20 +1,25 @@
 CXX ?= g++
 CXXFLAGS ?= -std=c++17 -O2
 
-ROOT_DIR := ..
+PROXYSQL_PATH := $(abspath ..)
+
+include $(PROXYSQL_PATH)/include/makefiles_vars.mk
+include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
 INCLUDES := \
-	-I$(ROOT_DIR)/deps/json \
-	-I$(ROOT_DIR)/deps/mariadb-client-library/mariadb_client/include \
-	-I$(ROOT_DIR)/deps/curl/curl/include
+	-I$(JSON_IDIR) \
+	-I$(MARIADB_IDIR) \
+	-I$(CURL_IDIR) \
+	-I$(SSL_IDIR)
 
 LIBDIRS := \
-	-L$(ROOT_DIR)/deps/mariadb-client-library/mariadb_client/libmariadb
+	-L$(MARIADB_LDIR)
 
 # Use static libcurl
-CURL_STATIC_LIB := $(ROOT_DIR)/deps/curl/curl/lib/.libs/libcurl.a
+CURL_STATIC_LIB := $(CURL_LDIR)/libcurl.a
 
-LIBS := -lmariadbclient -lssl -lcrypto -lcrypt -ldl -lpthread $(CURL_STATIC_LIB) -lz
+LIBS := -lmariadbclient $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+	-lcrypt -ldl -lpthread -lz
 
 TARGET := rag_ingest
 SOURCES := rag_ingest.cpp

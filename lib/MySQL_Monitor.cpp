@@ -35,6 +35,7 @@ using json = nlohmann::json;
 #include "wqueue.h"
 
 #include <fcntl.h>
+#include <openssl/err.h>
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -188,24 +189,11 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 }
 
 static void close_mysql(MYSQL *my) {
-	if (my->net.pvio && !my->options.use_ssl) {
-		char buff[5];
-		mysql_hdr myhdr;
-		myhdr.pkt_id=0;
-		myhdr.pkt_length=1;
-		memcpy(buff, &myhdr, sizeof(mysql_hdr));
-		buff[4]=0x01;
-		int fd=my->net.fd;
-#ifdef __APPLE__
-		int arg_on=1;
-		setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
-		int wb=send(fd, buff, 5, 0);
-#else
-		int wb=send(fd, buff, 5, MSG_NOSIGNAL);
-#endif
-		fd+=wb; // dummy, to make compiler happy
-		fd-=wb; // dummy, to make compiler happy
-	}
+	// see proxy_mysql_send_com_quit() in mysql_connection.cpp : monitoring
+	// connections are the ones being opened and closed more often, thus the
+	// ones generating most of the 'Aborted connection' entries in the backend
+	// error log if the COM_QUIT isn't sent
+	proxy_mysql_send_com_quit(my);
 	mysql_close_no_command(my);
 }
 
@@ -6516,6 +6504,12 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 			}
 		}
 	}
+	// This thread is long-lived and does not use the async state-machine
+	// handlers that call MYSQL_OPENSSL_ERROR_CLEAR. A failed SSL operation
+	// would otherwise leave OpenSSL's thread-local error queue dirty and
+	// poison every later Aurora check on this thread. Do not require a live
+	// MYSQL*: create_new_connection() can fail with mysql already NULL.
+	ERR_clear_error();
 	}
 __exit_monitor_AWS_Aurora_thread_HG_now:
 	if (mmsd) {

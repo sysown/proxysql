@@ -19,7 +19,7 @@ The list of currently supported operating systems for native packaging is:
   - CentOS Stream 9, 10
   - Debian 12 (bookworm), 13 (trixie)
   - Fedora 40, 41, 42
-  - OpenSUSE Leap 15, 16
+  - OpenSUSE Leap 16
   - Ubuntu 22.04 (jammy), 24.04 (noble)
 - ARM64
   - AlmaLinux 8, 9, 10
@@ -27,7 +27,7 @@ The list of currently supported operating systems for native packaging is:
   - CentOS Stream 9, 10
   - Debian 12, 13
   - Fedora 40, 41, 42
-  - OpenSUSE Leap 15, 16
+  - OpenSUSE Leap 16
   - Ubuntu 22.04, 24.04
 
 Download a __deb__ or __rpm__ installer file for your OS and architecture from:
@@ -141,7 +141,7 @@ https://docs.docker.com/engine/install/
 git clone https://github.com/sysown/proxysql.git
 cd proxysql
 git checkout v3.0.3
-make ubuntu24   # or other target: ubuntu22, debian12, debian13, centos9, centos10, fedora40, fedora41, fedora42, opensuse15, opensuse16, almalinux8, almalinux9, almalinux10
+make ubuntu24   # or other target: ubuntu22, debian12, debian13, centos9, centos10, fedora40, fedora41, fedora42, opensuse16, almalinux8, almalinux9, almalinux10
 ```
 This will checkout the chosen version tag, pull the latest build image from DockerHub and build binaries and packages for the target distro.
 

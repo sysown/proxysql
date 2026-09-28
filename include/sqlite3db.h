@@ -166,6 +166,7 @@ class SQLite3_row {
 	~SQLite3_row();
 	void add_fields(sqlite3_stmt *stmt);
 	void add_fields(char **_fields);
+	bool add_fields(char **_fields, const unsigned long *_sizes);
 };
 
 class SQLite3_column {
@@ -193,6 +194,7 @@ class SQLite3_result {
 	void add_column_definition(int a, const char *b);
 	int add_row(sqlite3_stmt *stmt, bool skip=false);
 	int add_row(char **_fields);
+	int add_row(char **_fields, const unsigned long *_sizes);
 	int add_row(const char **_fields) { return add_row((char **)_fields); }
 	int add_row(SQLite3_row *old_row);
 	int add_row(const char* _field, ...);
@@ -219,14 +221,19 @@ class SQLite3DB {
 	private:
 	char *url;
 	sqlite3 *db;
+	bool quarantined;
 	pthread_rwlock_t rwlock;
 	public:
 	char *get_url() const { return url; }
-	sqlite3 *get_db() const { return db; }
+	sqlite3 *get_db() const { return quarantined ? nullptr : db; }
 	int assert_on_error;
 	SQLite3DB();
 	~SQLite3DB();
 	int open(char *, int);
+	// Permanently disables a connection whose transactional state cannot be
+	// recovered. sqlite3_close_v2 rolls back the live transaction before the
+	// handle is made unavailable to later Admin operations.
+	bool quarantine();
 
 	void rdlock();
 	void rdunlock();

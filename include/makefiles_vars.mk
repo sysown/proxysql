@@ -44,7 +44,7 @@ STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPL
 
 WGCOV :=
 ifeq ($(WITHGCOV),1)
-	WGCOV := -DWITHGCOV -lgcov --coverage
+	WGCOV := -DWITHGCOV -lgcov --coverage -fprofile-update=atomic
 endif
 
 WASAN :=

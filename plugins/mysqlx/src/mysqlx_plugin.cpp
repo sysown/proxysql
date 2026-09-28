@@ -129,7 +129,6 @@ bool sync_disk_to_memory(SQLite3DB& admindb, ProxySQL_PluginServices* services) 
 		"mysqlx_users",
 		"mysqlx_routes",
 		"mysqlx_backend_endpoints",
-		"mysqlx_variables",
 	};
 	bool all_ok = true;
 	for (const char* tbl : tables) {
@@ -150,16 +149,18 @@ bool mysqlx_start() {
 	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
 		SQLite3DB* admindb = ctx.services->get_admindb();
 		if (admindb != nullptr) {
+			mysqlx_warn_deprecated_disk_variables(*admindb, *ctx.services);
+
 			// Disk -> memory: keep the editable tables in sync with disk
 			// on startup, same as the canonical proxysql_admin path does
 			// for mysql_users / mysql_servers / etc. This is admin-tier
 			// persistence and is legitimate.
 			sync_disk_to_memory(*admindb, ctx.services);
 
-			// Memory -> module: the editable mysqlx_* tables now drive
-			// the in-memory store directly. Each install_*_from_admin
-			// SELECTs the editable table (and the relevant cross-module
-			// runtime_mysql_* projections), builds a new local map, and
+			// Memory -> module: the editable entity tables and mysqlx-*
+			// global variables drive the in-memory store. Entity installers
+			// SELECT the editable table (and the relevant cross-module
+			// runtime_mysql_* projections), build a new local map, and
 			// atomically swaps it into MysqlxConfigStore. We deliberately
 			// do NOT replicate this data into runtime_mysqlx_* admin
 			// tables -- those are projected on demand via the chassis
@@ -178,7 +179,7 @@ bool mysqlx_start() {
 			if (!ctx.config_store->install_users_from_admin(*admindb, err))     report_err("install_users_from_admin failed");
 			if (!ctx.config_store->install_routes_from_admin(*admindb, err))    report_err("install_routes_from_admin failed");
 			if (!ctx.config_store->install_endpoints_from_admin(*admindb, err)) report_err("install_endpoints_from_admin failed");
-			if (!ctx.config_store->install_variables_from_admin(*admindb, err)) report_err("install_variables_from_admin failed");
+			if (!ctx.config_store->install_variables_from_global(*admindb, err)) report_err("install_variables_from_global failed");
 		}
 	}
 

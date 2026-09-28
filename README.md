@@ -66,18 +66,38 @@ dpkg -i proxysql_3.0.4-ubuntu24_amd64.deb
 
 Distribution-agnostic `.tar.gz` builds are also published on the
 [releases page](https://github.com/sysown/proxysql/releases) — handy for hosts
-where a `.deb`/`.rpm` is inconvenient (any glibc 2.34+ / OpenSSL 3 Linux,
-`amd64` or `arm64`). Grab the `proxysql-<version>-linux-<arch>.tar.gz` asset,
+where a `.deb`/`.rpm` is inconvenient (any glibc 2.34+ Linux, `amd64` or
+`arm64`). ProxySQL embeds the pinned OpenSSL 3.5.7 libraries and does not need
+host OpenSSL shared libraries; GnuTLS remains a dynamic runtime dependency.
+This vendoring is not a FIPS compliance claim—future FIPS module support is
+tracked separately in [issue #6116](https://github.com/sysown/proxysql/issues/6116).
+Grab the `proxysql-<version>-linux-<arch>.tar.gz` asset,
 verify its checksum, and extract:
 ```bash
 sha256sum -c proxysql-<version>-linux-amd64.tar.gz.sha256
 tar xzf proxysql-<version>-linux-amd64.tar.gz
 ```
 The archive contains `bin/proxysql`, a sample `etc/proxysql.cnf`, the `systemd/`
-units, and helper tools. The v4.0 build additionally ships the runtime plugins
-under `lib/proxysql/` (`ProxySQL_MySQLX_Plugin.so`, `ProxySQL_GenAI_Plugin.so`).
+units, and helper tools. The v4.0 build additionally includes runtime plugins
+for MySQL X, GenAI, and the real
+[MySQL Router compatibility foundation](doc/mysql-router-plugin.md). The
+Router plugin is distinct from the MySQL X protocol plugin and is not yet
+included in release packages; source builds install
+`proxysql_mysql_router.so` under `/usr/lib/proxysql/plugins/`.
 See [AWS locality-aware backend selection](doc/aws-locality-awareness.md) for
 the optional external-provider contract and MySQL configuration controls.
+
+Building ProxySQL from source needs nothing beyond a normal `git clone`:
+the pinned OpenSSL source archive is vendored directly in git. Verify it
+before building dependencies:
+
+```bash
+deps/libssl/verify-source.bash
+```
+
+See the [vendored OpenSSL maintenance guide](doc/vendored_openssl.md) for source
+verification, recovery, and the supported patch-update procedure from
+[issue #6115](https://github.com/sysown/proxysql/issues/6115).
 
 Alternatively you can also use the available repositories:
 

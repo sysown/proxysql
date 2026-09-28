@@ -208,9 +208,10 @@ if [ "${SKIP_PROXYSQL}" = "1" ]; then
 
     # Extract test names belonging to this group, filtering by @proxysql_min_version
     TEST_NAMES=$(python3 -c "
-import json, sys
+import json, sys, os, re
 from packaging import version
 proxysql_ver = '${PROXYSQL_VERSION}'
+excl = os.environ.get('TEST_PY_TAP_EXCL', '')
 with open('${GROUPS_JSON}') as f:
     groups = json.load(f)
 for test_name, test_groups in sorted(groups.items()):
@@ -225,6 +226,8 @@ for test_name, test_groups in sorted(groups.items()):
                         print(f'SKIP ({test_name}): requires ProxySQL >= {min_ver}, have {proxysql_ver}', file=sys.stderr)
                         skip = True
                     break
+        if not skip and excl and re.search(excl, test_name):
+            continue
         if not skip:
             print(test_name)
 ")
@@ -310,6 +313,31 @@ if [ -z "${MYSQL_BINLOG_BIN}" ]; then
     MYSQL_BINLOG_BIN="$(command -v mysqlbinlog 2>/dev/null || true)"
 fi
 
+cleanup_test_runner() {
+    local exit_code=$?
+    trap - EXIT
+    set +e
+
+    # Run group cleanup on success, failure, interruption, or a crashed test
+    # container. This hook operates from the host while ProxySQL and its
+    # backing infrastructure are still reachable.
+    if [ -n "${TAP_GROUP}" ]; then
+        local pre_cleanup_hook="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/pre-cleanup.bash"
+        if [ ! -f "${pre_cleanup_hook}" ]; then
+            pre_cleanup_hook="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/pre-cleanup.bash"
+        fi
+        if [ -f "${pre_cleanup_hook}" ]; then
+            echo ">>> Executing group pre-cleanup hook: ${pre_cleanup_hook}"
+            "${pre_cleanup_hook}" || true
+        fi
+    fi
+
+    echo ">>> Cleaning up Test Runner container"
+    docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
+    exit "${exit_code}"
+}
+trap cleanup_test_runner EXIT
+
 # Execution: run the container
 docker run \
     --name "${TEST_CONTAINER}" \
@@ -328,6 +356,11 @@ docker run \
     -e DEFAULT_PGSQL_INFRA="${DEFAULT_PGSQL_INFRA}" \
     -e ROOT_PASSWORD="${ROOT_PASSWORD}" \
     -e TEST_PY_TAP_INCL="${TEST_PY_TAP_INCL}" \
+    -e RUN_DUCKDB_BENCH="${RUN_DUCKDB_BENCH:-}" \
+    -e BENCH_WARMUP="${BENCH_WARMUP:-}" \
+    -e BENCH_ITERS="${BENCH_ITERS:-}" \
+    -e BENCH_ROWS="${BENCH_ROWS:-}" \
+    -e BENCH_THREADS="${BENCH_THREADS:-}" \
     -e TAP_GROUP="${TAP_GROUP}" \
     -e SKIP_CLUSTER_START="${SKIP_CLUSTER_START}" \
     -e PROXYSQL_CLUSTER_NODES="${PROXYSQL_CLUSTER_NODES}" \
@@ -588,22 +621,3 @@ docker run \
         # Execute the Python tester
         python3 "${WORKSPACE}/test/scripts/bin/proxysql-tester.py"
     "
-
-# Execute group-specific pre-cleanup hook if it exists
-# This runs before the test runner container is removed, allowing cleanup
-# of ProxySQL-specific configuration while admin is still accessible
-if [ -n "${TAP_GROUP}" ]; then
-    PRE_CLEANUP_HOOK="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/pre-cleanup.bash"
-    if [ ! -f "${PRE_CLEANUP_HOOK}" ]; then
-        PRE_CLEANUP_HOOK="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/pre-cleanup.bash"
-    fi
-
-    if [ -f "${PRE_CLEANUP_HOOK}" ]; then
-        echo ">>> Executing group pre-cleanup hook: ${PRE_CLEANUP_HOOK}"
-        "${PRE_CLEANUP_HOOK}" || true  # Allow cleanup to fail
-    fi
-fi
-
-# Clean up only the runner container
-echo ">>> Cleaning up Test Runner container"
-docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true

@@ -173,6 +173,16 @@ static void test_global_dispatcher_with_active_manager() {
 	std::string err;
 	ok(proxysql_load_configured_plugins(mgr, paths, err) && proxysql_init_configured_plugins(mgr.get(), err),
 	   "load fake plugin (which registers a MySQL query hook)");
+	ok(!proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol::mysql),
+	   "query hooks remain unavailable until every configured plugin has started");
+	ProxySQL_PluginQueryHookResult before_start {ProxySQL_PluginQueryHookAction::deny, "untouched"};
+	auto before_start_payload = payload_for("u", "ip", "s", "before start");
+	ok(!proxysql_dispatch_configured_plugin_query_hook(
+		   ProxySQL_PluginProtocol::mysql, before_start_payload, before_start) &&
+	   before_start.message == "untouched",
+	   "query dispatch remains unavailable during plugin initialization");
+	ok(proxysql_start_configured_plugins(mgr.get(), err),
+	   "starting every configured plugin publishes the query-hook reader state");
 	ok(proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol::mysql),
 	   "has_hook helper reports a MySQL hook is now active");
 	ok(!proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol::pgsql),
@@ -265,7 +275,7 @@ static void test_reentrant_dispatch_across_protocols() {
 }
 
 int main() {
-	plan(46);
+	plan(49);
 
 	test_unregistered_protocols_have_no_hook();
 	test_register_and_dispatch_allow();

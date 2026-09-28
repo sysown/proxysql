@@ -442,6 +442,12 @@ struct p_hg_dyn_counter {
 		gtid_executed,
 		proxysql_mysql_error,
 		mysql_error,
+#ifdef PROXYSQL31
+		hostgroup_pool_acquisitions,
+		hostgroup_pool_waits,
+		hostgroup_pool_wait_time,
+		hostgroup_backup_server_selected,
+#endif
 		SIZE_
 	};
 };
@@ -457,6 +463,9 @@ struct p_hg_dyn_gauge {
 		connection_pool_conn_used,
 		connection_pool_latency_us,
 		connection_pool_status,
+#ifdef PROXYSQL31
+		hostgroup_pool_waiters,
+#endif
 		SIZE_
 	};
 };
@@ -862,6 +871,13 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_latency_us_map {};
 		std::map<std::string, prometheus::Counter*> p_connection_pool_queries_map {};
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_status_map {};
+#ifdef PROXYSQL31
+		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_acquisitions_map {};
+		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_waits_map {};
+		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_wait_time_map {};
+		std::map<std::string, prometheus::Counter*> p_hostgroup_backup_server_selected_map {};
+		std::map<std::string, prometheus::Gauge*> p_hostgroup_pool_waiters_map {};
+#endif
 
 		/// Prometheus gtid_executed metrics
 		std::map<std::string, prometheus::Counter*> p_gtid_executed_map {};
@@ -897,7 +913,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	~MySQL_HostGroups_Manager();
 	void init();
 #ifdef PROXYSQL40
-	void refresh_aws_locality_configuration();
+	void refresh_aws_locality_configuration(bool acquire_lock = true);
 	void set_aws_locality_awareness_enabled(bool enabled);
 	void refresh_aws_locality_stats(SQLite3DB* statsdb) const;
 	static bool project_aws_locality_stats(
@@ -927,7 +943,8 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 		bool only_commit_runtime_mysql_servers = true,
-		bool update_version = false
+		bool update_version = false,
+		bool acquire_lock = true
 	);
 	/**
 	 * @brief Extracted from 'commit'. Performs the following actions:
@@ -1287,7 +1304,7 @@ private:
 		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 		bool only_commit_runtime_mysql_servers, bool update_version);
-	void finish_commit(unsigned long long started_at);
+	void finish_commit(unsigned long long started_at, bool acquire_lock = true);
 	GTID_Server_Data* get_or_create_gtid_server_data(MySrvC* server, const std::string& endpoint);
 	void start_gtid_reader_if_needed(MySrvC* server, GTID_Server_Data* gtid_data);
 	bool update_hostgroup_manager_mappings();

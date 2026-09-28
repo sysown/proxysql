@@ -185,12 +185,13 @@ unsigned char* ok_to_eof_packet(const MySQL_QC_entry_t* entry) {
 }
 
 bool MySQL_Query_Cache::set(uint64_t user_hash, const unsigned char* kp, uint32_t kl, unsigned char* vp, 
-	uint32_t vl, uint64_t create_ms, uint64_t curtime_ms, uint64_t expire_ms, bool deprecate_eof_active) {
+	uint32_t vl, uint64_t create_ms, uint64_t curtime_ms, uint64_t expire_ms, bool deprecate_eof_active, uint64_t num_rows) {
 	MySQL_QC_entry_t* entry = (MySQL_QC_entry_t*)malloc(sizeof(MySQL_QC_entry_t));
 
 	entry->column_eof_pkt_offset = 0;
 	entry->row_eof_pkt_offset = 0;
 	entry->ok_pkt_offset = 0;
+	entry->num_rows = num_rows;
 
 	// Find the first EOF location
 	unsigned char* it = vp;
@@ -263,7 +264,7 @@ bool MySQL_Query_Cache::set(uint64_t user_hash, const unsigned char* kp, uint32_
 }
 
 unsigned char* MySQL_Query_Cache::get(uint64_t user_hash, const unsigned char* kp, const uint32_t kl, uint32_t* lv, 
-	uint64_t curtime_ms, uint64_t cache_ttl, bool deprecate_eof_active) {
+	uint64_t curtime_ms, uint64_t cache_ttl, bool deprecate_eof_active, uint64_t *num_rows) {
 	unsigned char* result = NULL;
 
 	std::shared_ptr<MySQL_QC_entry_t> entry_shared = std::static_pointer_cast<MySQL_QC_entry_t>(
@@ -271,6 +272,7 @@ unsigned char* MySQL_Query_Cache::get(uint64_t user_hash, const unsigned char* k
 	);
 
 	if (entry_shared) {
+		if (num_rows) *num_rows = entry_shared->num_rows;
 		if (deprecate_eof_active && entry_shared->column_eof_pkt_offset) {
 			result = eof_to_ok_packet(entry_shared.get());
 			*lv = entry_shared->length + eof_to_ok_dif;

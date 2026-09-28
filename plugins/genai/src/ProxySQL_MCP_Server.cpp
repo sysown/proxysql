@@ -22,27 +22,12 @@ using json = nlohmann::json;
 #include "genai_plugin.h"
 #include "proxysql_utils.h"
 
+#include <exception>
+
 using namespace httpserver;
 
-extern ProxySQL_Admin *GloAdmin;
-
-/**
- * @brief Thread function for the MCP server
- *
- * This function runs in a dedicated thread and starts the webserver.
- *
- * @param arg Pointer to the webserver instance
- * @return NULL
- */
-static void *mcp_server_thread(void *arg) {
-	set_thread_name("MCP_Server", GloVars.set_thread_name);
-	httpserver::webserver * ws = (httpserver::webserver *)arg;
-	ws->start(true);
-	return NULL;
-}
-
 ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
-	: port(p), use_ssl(h->variables.mcp_use_ssl), thread_id(0), handler(h)
+	: port(p), use_ssl(h->variables.mcp_use_ssl), handler(h)
 {
 	proxy_info("Creating ProxySQL MCP Server on port %d (SSL: %s)\n",
 		port, use_ssl ? "enabled" : "disabled");
@@ -288,22 +273,37 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 	}
 }
 
-void ProxySQL_MCP_Server::start() {
+bool ProxySQL_MCP_Server::start() {
 	if (!ws) {
 		proxy_error("Cannot start MCP server: webserver not initialized\n");
-		return;
+		return false;
 	}
 
 	const char* mode = handler->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
 	proxy_info("Starting MCP %s server on port %d\n", mode, port);
 
-	// Start the server in a dedicated thread
-	if (pthread_create(&thread_id, NULL, mcp_server_thread, ws.get()) != 0) {
-		proxy_error("Failed to create MCP server thread: %s\n", strerror(errno));
-		return;
+	// libhttpserver configures libmicrohttpd with its internal polling
+	// thread. Starting non-blocking here keeps the real bind in this call, so
+	// failures are known before plugin_main publishes the server instance.
+	try {
+		ws->start(false);
+	} catch (const std::exception& e) {
+		proxy_error("Failed to start MCP %s server on port %d: %s\n",
+			mode, port, e.what());
+		return false;
+	} catch (...) {
+		proxy_error("Failed to start MCP %s server on port %d: unknown error\n",
+			mode, port);
+		return false;
+	}
+
+	if (!ws->is_running()) {
+		proxy_error("Failed to start MCP %s server on port %d\n", mode, port);
+		return false;
 	}
 
 	proxy_info("MCP %s server started successfully\n", mode);
+	return true;
 }
 
 void ProxySQL_MCP_Server::stop() {
@@ -311,12 +311,6 @@ void ProxySQL_MCP_Server::stop() {
 		const char* mode = handler->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
 		proxy_info("Stopping MCP %s server\n", mode);
 		ws->stop();
-
-		if (thread_id) {
-			pthread_join(thread_id, NULL);
-			thread_id = 0;
-		}
-
 		proxy_info("MCP %s server stopped\n", mode);
 	}
 }

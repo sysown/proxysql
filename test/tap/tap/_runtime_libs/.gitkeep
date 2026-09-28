@@ -1,0 +1,2 @@
+This tracked placeholder keeps the runtime handoff directory owned by the
+host checkout. Generated shared libraries in this directory remain ignored.

@@ -79,7 +79,7 @@ cases=(
   'proxysql_3.1.11-ubuntu22-clang_amd64.deb|ubuntu:22.04'
   'proxysql-3.1.11-1-almalinux9.aarch64.rpm|almalinux:9'
   'proxysql-3.1.11-1-dbg-centos9.x86_64.rpm|quay.io/centos/centos:stream9'
-  'proxysql-3.1.11-1-opensuse15-clang.x86_64.rpm|opensuse/leap:15.6'
+  'proxysql-3.1.11-1-opensuse16-clang.x86_64.rpm|opensuse/leap:16.0'
 )
 
 for test_case in "${cases[@]}"; do
@@ -107,7 +107,7 @@ if [[ "$actual_zypper" != "$expected_zypper" ]]; then
   exit 1
 fi
 
-failure_package="$TMP_DIR/proxysql-3.1.11-1-opensuse15-clang.x86_64.rpm"
+failure_package="$TMP_DIR/proxysql-3.1.11-1-opensuse16-clang.x86_64.rpm"
 for failed_command in pull run; do
   if PATH="$FAKE_BIN:$PATH" FAKE_DOCKER_FAIL_COMMAND="$failed_command" \
     "$ROOT_DIR/test/infra/control/verify-package-install.bash" "$failure_package" \

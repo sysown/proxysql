@@ -219,6 +219,9 @@ void PgSQL_Query_Info::end() {
 }
 
 void PgSQL_Query_Info::reset_extended_query_info() {
+#ifdef PROXYSQL31
+	stmt_cache_valid = false;
+#endif
 	extended_query_info.bind_msg = nullptr;
 	extended_query_info.stmt_client_name = nullptr;
 	extended_query_info.stmt_client_portal_name = nullptr;
@@ -396,6 +399,11 @@ void PgSQL_Session::reset() {
 }
 
 PgSQL_Session::~PgSQL_Session() {
+#ifdef PROXYSQL31
+	if (thread) {
+		thread->leave_waiter(this);
+	}
+#endif // PROXYSQL31
 	if (locked_on_hostgroup >= 0) {
 		thread->status_variables.stvar[st_var_hostgroup_locked]--;
 	}
@@ -1266,8 +1274,8 @@ void PgSQL_Session::handler_again___new_thread_to_cancel_query() {
 
 			const PgSQL_Connection_userinfo* ui = client_myds->myconn->userinfo;
 			std::unique_ptr<PgSQL_Backend_Kill_Args> backend_kill_args = std::make_unique<PgSQL_Backend_Kill_Args>(
-				(PGconn*)myds->myconn->get_pg_connection(), ui->username, ui->password, ui->dbname, myds->myconn->parent->address,
-				myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->parent->use_ssl, 
+				(PGconn*)myds->myconn->get_pg_connection(), ui, myds->myconn->parent->address,
+				myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->parent->use_ssl,
 				PgSQL_Backend_Kill_Args::TYPE::CANCEL_QUERY, thread
 			);
 
@@ -2276,7 +2284,21 @@ __implicit_sync:
 				}
 				c = *((unsigned char*)pkt.ptr);
 				if (client_myds != NULL) {
-					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+					// PROXYSQL_SESSION_SQLITE is included here alongside ADMIN/STATS
+					// because plugin session handlers that serve the PgSQL protocol
+					// (e.g. the duckdb plugin's DuckDBListener) use this session type
+					// for their own client-facing sessions -- there is no backend
+					// connection to route a query to, only the plugin's own
+					// handler_function. handler___status_WAITING_CLIENT_DATA___
+					// STATE_SLEEP___MYSQL_COM_QUERY___not_mysql() (below) already has
+					// an explicit `case PROXYSQL_SESSION_SQLITE:` arm that dispatches
+					// to GloSQLite3Server/the session's handler_function; without this
+					// session type in this gate, that arm was unreachable dead code --
+					// a 'Q' packet on such a session fell through untouched, leaking
+					// pkt.ptr and leaving the client waiting forever for a response
+					// that was never generated.
+					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
+						session_type == PROXYSQL_SESSION_SQLITE) {
 						c = *((unsigned char*)pkt.ptr);
 						if (c == 'Q') {
 							handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
@@ -2286,9 +2308,24 @@ __implicit_sync:
 							l_free(pkt.size, pkt.ptr);
 							handler_ret = -1;
 							return handler_ret;
-						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E') {
-							l_free(pkt.size, pkt.ptr);
-							continue;
+						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E' ||
+						           ((c == 'H' || c == 'S') && session_type == PROXYSQL_SESSION_SQLITE)) {
+							if (session_type == PROXYSQL_SESSION_SQLITE) {
+								// Plugin-backed sessions get the message so the plugin can
+								// return its protocol-specific error and transaction state.
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
+							} else {
+								// ADMIN/STATS do not implement the extended-query protocol.
+								// A silent drop leaves libpq waiting forever for ParseComplete;
+								// reject it immediately with a complete error response instead.
+								client_myds->setDSS_STATE_QUERY_SENT_NET();
+								client_myds->myprot.generate_error_packet(true, true,
+									"PostgreSQL extended-query protocol is not supported on the admin interface",
+									PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+								l_free(pkt.size, pkt.ptr);
+								client_myds->DSS = STATE_SLEEP;
+								return handler_ret;
+							}
 						} else {
 							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -2607,6 +2644,11 @@ __implicit_sync:
 							pkt = { 0, nullptr };
 							bind_waiting_for_execute.reset(nullptr);
 							extended_query_exec_qp = true;
+#ifdef PROXYSQL31
+							extended_cache_frame_eligible = extended_cache_frame_stage == 3 &&
+								extended_query_phase == EXTQ_PHASE_EXECUTING_SYNC_CLIENT;
+							extended_cache_frame_stage = 0;
+#endif
 
 						__run_sync_again:
 							int rc = handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_SYNC();
@@ -5442,9 +5484,19 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 		if (mc == NULL) {
 			if (trxid) {
+#ifdef PROXYSQL31
+				last_pool_ff = (session_fast_forward || qpo->create_new_conn);
+				last_pool_gtid = true;
+				last_pool_max_lag_ms = -1;
+#endif // PROXYSQL31
 				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
 			}
 			else {
+#ifdef PROXYSQL31
+				last_pool_ff = (session_fast_forward || qpo->create_new_conn);
+				last_pool_gtid = false;
+				last_pool_max_lag_ms = (int)qpo->max_lag_ms;
+#endif // PROXYSQL31
 				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
 			}
 			thread->note_pool_attempt(mc == NULL);
@@ -5471,12 +5523,29 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // STRESSTESTPOOL_MEASURE
 	}
 #endif // STRESSTEST_POOL
+#ifdef PROXYSQL31
+	const unsigned int pool_stats_hid = mc ? mc->parent->myhgc->hid : mybe->hostgroup_id;
+	HostgroupPoolStats *pool_stats = mc
+		? &mc->parent->myhgc->pool_stats
+		: hostgroup_pool_wait.active_stats(pool_stats_hid);
+	if (!pool_stats) {
+		pool_stats = PgHGM->get_hostgroup_pool_stats(pool_stats_hid);
+	}
+	hostgroup_pool_wait.observe(pool_stats, thread->curtime, mc != nullptr, pool_stats_hid);
+#endif
 	if (mc) {
 		mybe->server_myds->attach_connection(mc);
 		thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
+#ifdef PROXYSQL31
+		pause_until = 0;
+		thread->leave_waiter(this);
+#endif // PROXYSQL31
 	}
 	else {
 		thread->status_variables.stvar[st_var_ConnPool_get_conn_failure]++;
+#ifdef PROXYSQL31
+		thread->enter_waiter(this, mybe->hostgroup_id);
+#endif // PROXYSQL31
 	}
 	if (qpo->max_lag_ms >= 0) {
 		if (qpo->max_lag_ms <= 360000) { // this is a relative time , we convert it to absolute
@@ -5564,7 +5633,55 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			 CurrentQuery.have_affected_rows = true;
 		}
 		CurrentQuery.rows_sent = num_rows;
+#ifdef PROXYSQL31
+		const unsigned int result_begin = client_myds->PSarrayOUT->len;
+		const auto packet_type = query_result->get_result_packet_type();
+		const unsigned int num_fields = query_result->get_num_fields();
+		// Without Describe, SELECT still returns DataRow/CommandComplete, but
+		// the result builder does not set TUPLE (it is set by RowDescription).
+		const auto extended_packet_type = PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY |
+			((CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) ?
+				PGSQL_QUERY_RESULT_TUPLE : 0);
+#endif
 		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
+#ifdef PROXYSQL31
+		if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.stmt_cache_valid &&
+			resultset_completed && !_conn->is_error_present()) {
+			// RequestEnd normally classifies new session state after result
+			// delivery. Do so before admission too: e.g. an advisory-lock SELECT
+			// must not populate an entry that lets another session skip the lock.
+			_conn->ProcessQueryAndSetStatusFlags(CurrentQuery.extended_query_info.stmt_info->digest_text,
+				transaction_state_manager->get_savepoint_count());
+		}
+		if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.stmt_cache_valid &&
+			!transfer_started && resultset_completed && !_conn->is_error_present() &&
+			num_fields > 0 && !_conn->MultiplexDisabled(false) &&
+			!_conn->IsActiveTransaction() && !_conn->processing_multi_statement &&
+			!(_conn->options.init_connect && _conn->options.init_connect[0]) &&
+			packet_type == extended_packet_type &&
+			qpo && qpo->cache_ttl > 0 && resultset_size <= UINT32_MAX &&
+			(qpo->cache_empty_result == 1 || num_rows ||
+				(qpo->cache_empty_result == -1 && thread->variables.query_cache_stores_empty_result))) {
+			// Earlier Parse/Bind responses may already be queued. Copy ONLY the
+			// buffers appended by this execution, never the entire output queue.
+			size_t length = 0;
+			for (unsigned int i = result_begin; i < client_myds->PSarrayOUT->len; ++i)
+				length += client_myds->PSarrayOUT->index(i)->size;
+			if (length == resultset_size && length >= 6) {
+				unsigned char* value = (unsigned char*)l_alloc(length);
+				size_t offset = 0;
+				for (unsigned int i = result_begin; i < client_myds->PSarrayOUT->len; ++i) {
+					const auto* packet = client_myds->PSarrayOUT->index(i);
+					memcpy(value + offset, packet->ptr, packet->size);
+					offset += packet->size;
+				}
+				GloPgQC->set(client_myds->myconn->userinfo->hash,
+					(const unsigned char*)CurrentQuery.stmt_cache_key, sizeof(CurrentQuery.stmt_cache_key),
+					value, length, thread->curtime / 1000, thread->curtime / 1000,
+					thread->curtime / 1000 + qpo->cache_ttl, num_rows, _affected_rows);
+			}
+		}
+#endif // PROXYSQL31
 		if (status == PROCESSING_QUERY && _conn->processing_multi_statement == false)
 			assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
 		if (status == PROCESSING_QUERY && transfer_started == false && 
@@ -5746,6 +5863,9 @@ unsigned long long PgSQL_Session::IdleTime() {
 	if (client_myds == 0) return 0;
 	if (status != WAITING_CLIENT_DATA && status != CONNECTING_CLIENT) return 0;
 	int idx = client_myds->poll_fds_idx;
+	// An off-poll frontend has no poll-based idle timestamp.
+	if (idx < 0 || static_cast<unsigned int>(idx) >= thread->mypolls.len ||
+		thread->mypolls.myds[idx] != client_myds) return 0;
 	unsigned long long last_sent = thread->mypolls.last_sent[idx];
 	unsigned long long last_recv = thread->mypolls.last_recv[idx];
 	unsigned long long last_time = (last_sent > last_recv ? last_sent : last_recv);
@@ -5797,6 +5917,9 @@ void PgSQL_Session::handle_transaction_state() {
 }
 
 void PgSQL_Session::RequestEnd(PgSQL_Data_Stream* myds, bool called_on_failure) {
+#ifdef PROXYSQL31
+	hostgroup_pool_wait.finish(thread ? thread->curtime : monotonic_time());
+#endif
 
 	// check if multiplexing needs to be disabled
 	const char* query_digest_text = NULL;
@@ -6449,6 +6572,17 @@ bool PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 		return false;
 	}
 
+	// A COPY relays raw bytes, so this stream needs the backend's TLS.
+	// switch_fast_forward_to_normal_mode() gives it back. Borrow it before any
+	// state is committed, so a refusal leaves the session in normal mode instead
+	// of relaying plaintext on an encrypted socket.
+	assert(mybe->server_myds->myconn != NULL);
+	if (mybe->server_myds->adopt_backend_tls() == false) {
+		proxy_error("Cannot switch to fast forward mode: the backend TLS transport could not be borrowed. Command: %.*s\n",
+			(int)command.size(), command.data());
+		return false;
+	}
+
 	// we use a switch to write the command in the info message
 	std::string client_info;
 	// we add the client details in the info message
@@ -6470,26 +6604,6 @@ bool PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 	mybe->server_myds->DSS = STATE_READY;
 	// myds needs to have encrypted value set correctly
 		
-	PgSQL_Data_Stream* myds = mybe->server_myds;
-	PgSQL_Connection* myconn = myds->myconn;
-	assert(myconn != NULL);
-
-	// if backend connection uses SSL we will set
-	// encrypted = true and we will start using the SSL structure
-	// directly from PGconn SSL structure.
-	if (myconn->is_connected() && myconn->get_pg_ssl_in_use()) {
-		SSL* ssl_obj = myconn->get_pg_ssl_object();
-		if (ssl_obj != NULL) {
-			myds->encrypted = true;
-			myds->ssl = ssl_obj;
-			myds->rbio_ssl = BIO_new(BIO_s_mem());
-			myds->wbio_ssl = BIO_new(BIO_s_mem());
-			SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
-		} else {
-			// it means that ProxySQL tried to use SSL to connect to the backend
-			// but the backend didn't support SSL		
-		}
-	}
 	set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
 
 	mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
@@ -6519,10 +6633,9 @@ void PgSQL_Session::switch_fast_forward_to_normal_mode() {
 		session_fast_forward = SESSION_FORWARD_TYPE_NONE;
 		PgSQL_Data_Stream* myds = mybe->server_myds;
 		PgSQL_Connection* myconn = myds->myconn;
-		if (myds->encrypted == true) {
-			myds->encrypted = false;
-			myds->ssl = NULL;
-		}
+		// Give the borrowed TLS back before the session uses the connection again or
+		// it is pooled, or the next query on it never reaches the backend.
+		myds->release_backend_tls();
 		RequestEnd(myds, false);
 		finishQuery(myds, myconn, false);
 	} else {
@@ -7083,6 +7196,10 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 		}
 	}
 
+	// Bind can be the first routed message of this cycle. Describe/Execute
+	// must inherit THIS route, not the previous request's route (which is -1
+	// after a simple-query cache hit, and may differ after a rule reload).
+	previous_hostgroup = current_hostgroup;
 	bind_waiting_for_execute.reset(bind_msg->release()); // release the ownership of the bind message
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	unsigned int nTxn = NumActiveTransactions();
@@ -7093,6 +7210,74 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 	status = WAITING_CLIENT_DATA;
 	return 0;
 }
+
+#ifdef PROXYSQL31
+bool PgSQL_Session::try_extended_query_cache(PgSQL_Execute_Message* execute_msg) {
+	CurrentQuery.stmt_cache_valid = false;
+	const auto* stmt = CurrentQuery.extended_query_info.stmt_info;
+	if (!extended_cache_frame_eligible || !extended_query_frame.empty() ||
+		!is_extended_query_ready_for_query() || execute_msg->data().max_rows != 0 ||
+		!qpo || qpo->cache_ttl <= 0 || qpo->new_query || qpo->error_msg ||
+		qpo->create_new_conn || qpo->multiplex == 0 || qpo->max_lag_ms >= 0 ||
+		locked_on_hostgroup >= 0 || !untracked_option_parameters.empty() ||
+		NumActiveTransactions() != 0 || transaction_persistent_hostgroup != -1 ||
+		(pgsql_thread___init_connect && pgsql_thread___init_connect[0]) ||
+		!stmt || stmt->PgQueryCmd != PGSQL_QUERY_SELECT || !stmt->digest_text ||
+		strcasestr(stmt->digest_text, " FOR UPDATE") || strcasestr(stmt->digest_text, " FOR SHARE") ||
+		strcasestr(stmt->digest_text, " FOR NO KEY UPDATE") || strcasestr(stmt->digest_text, " FOR KEY SHARE"))
+		return false;
+	// An attached backend can carry transaction, temporary-table or other
+	// session-local state, or an unfinished pipeline. Leave those sessions alone.
+	for (unsigned int i = 0; i < mybes->len; ++i) {
+		const auto* backend = (PgSQL_Backend*)mybes->index(i);
+		if (backend->server_myds && backend->server_myds->myconn) return false;
+	}
+	const auto& bind = *bind_waiting_for_execute;
+	const auto& packet = bind.get_raw_pkt();
+	// The existing Bind parser has validated both NUL-terminated names.
+	// Preserve all formats/counts/NULL markers/lengths/values byte-for-byte.
+	const size_t skip = 5 + strlen(bind.data().portal_name) + 1 + strlen(bind.data().stmt_name) + 1;
+	if (skip > packet.size) return false;
+	SpookyHash hash;
+	hash.Init(0, 0);
+	auto field = [&](const void* data, size_t length) {
+		hash.Update(&length, sizeof(length));
+		if (length) hash.Update(data, length);
+	};
+	field(stmt->query, stmt->query_length);
+	field(stmt->parse_param_types.data(), stmt->parse_param_types.size() * sizeof(uint32_t));
+	field((const unsigned char*)packet.ptr + skip, packet.size - skip);
+	const bool describe = execute_msg->send_describe_portal_result;
+	field(&describe, sizeof(describe));
+	// Include actual tracked values, not only their 32-bit comparison hashes.
+	// Unset and explicitly set values remain distinct (conservative misses).
+	const auto* conn = client_myds->myconn;
+	for (unsigned int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; ++i) {
+		const char* value = conn->variables[i].value;
+		field(value, value ? strlen(value) + 1 : 0);
+		value = conn->startup_parameters[i];
+		field(value, value ? strlen(value) + 1 : 0);
+	}
+	CurrentQuery.stmt_cache_key[0] = 0x5047455843510001ULL; // Extended cache domain/version, includes a NUL.
+	CurrentQuery.stmt_cache_key[1] = current_hostgroup;
+	hash.Final(&CurrentQuery.stmt_cache_key[2], &CurrentQuery.stmt_cache_key[3]);
+	CurrentQuery.stmt_cache_valid = true;
+	const auto entry = GloPgQC->get(conn->userinfo->hash,
+		(const unsigned char*)CurrentQuery.stmt_cache_key, sizeof(CurrentQuery.stmt_cache_key),
+		thread->curtime / 1000, qpo->cache_ttl);
+	if (!entry) return false;
+	client_myds->setDSS_STATE_QUERY_SENT_NET();
+	PgSQL_Data_Stream::copy_buffer_to_resultset(client_myds->PSarrayOUT, entry->value, entry->length, 'I');
+	CurrentQuery.rows_sent = entry->rows_sent;
+	CurrentQuery.affected_rows = entry->affected_rows;
+	CurrentQuery.have_affected_rows = entry->affected_rows != static_cast<uint64_t>(-1);
+	status = PROCESSING_STMT_EXECUTE;
+	RequestEnd(nullptr, false);
+	bind_waiting_for_execute.reset(nullptr);
+	extended_query_phase = EXTQ_PHASE_IDLE;
+	return true;
+}
+#endif // PROXYSQL31
 
 int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execute_msg) {
 	PROXY_TRACE();
@@ -7228,6 +7413,10 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 		extended_query_info.flags |= PGSQL_EXTENDED_QUERY_FLAG_SYNC;
 	}
 
+#ifdef PROXYSQL31
+	if (try_extended_query_cache(execute_msg)) return 0;
+#endif
+
 	mybe = find_or_create_backend(current_hostgroup);
 
 	// set query retries
@@ -7254,6 +7443,10 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 }
 
 void PgSQL_Session::reset_extended_query_frame() {
+#ifdef PROXYSQL31
+	extended_cache_frame_stage = 0;
+	extended_cache_frame_eligible = false;
+#endif
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session=%p client_myds=%p. Discarding all '%lu' messages in extended query frame\n",
 		this, client_myds, extended_query_frame.size());
 	// Reset the extended query frame and bind to execute
@@ -7365,6 +7558,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_P
 		writeout();
 		return false;
 	}
+#ifdef PROXYSQL31
+	extended_cache_frame_stage = 255;
+#endif
 	extended_query_frame.push(std::move(parse_msg)); // we will process it later, after sync packet
 	return true;
 }
@@ -7390,6 +7586,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_D
 		writeout();
 		return false;
 	}
+#ifdef PROXYSQL31
+	extended_cache_frame_stage = extended_cache_frame_stage == 1 && describe_msg->data().stmt_type == 'P' ? 2 : 255;
+#endif
 	extended_query_frame.push(std::move(describe_msg)); // we will process it later, after sync packet
 	return true;
 }
@@ -7414,6 +7613,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_C
 		writeout();
 		return false;
 	}
+#ifdef PROXYSQL31
+	extended_cache_frame_stage = 255;
+#endif
 	extended_query_frame.push(std::move(close_msg)); // we will process it later, after sync packet
 	return true;
 }
@@ -7438,6 +7640,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_B
 		writeout();
 		return false;
 	}
+#ifdef PROXYSQL31
+	extended_cache_frame_stage = extended_cache_frame_stage == 0 ? 1 : 255;
+#endif
 	extended_query_frame.push(std::move(bind_msg)); // we will process it later, after sync packet
 	return true;
 
@@ -7463,6 +7668,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_E
 		writeout();
 		return false;
 	}
+#ifdef PROXYSQL31
+	extended_cache_frame_stage = (extended_cache_frame_stage == 1 || extended_cache_frame_stage == 2) ? 3 : 255;
+#endif
 	extended_query_frame.push(std::move(execute_msg)); // we will process it later, after sync packet
 	return true;
 

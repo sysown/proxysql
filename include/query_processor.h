@@ -1,5 +1,6 @@
 #ifndef PROXYSQL_QUERY_PROCESSOR_H
 #define PROXYSQL_QUERY_PROCESSOR_H
+#include <atomic>
 #include <type_traits>
 #include <set>
 #include "proxysql.h"
@@ -22,6 +23,7 @@
 KHASH_MAP_INIT_STR(khStrInt, int)
 
 #include "proxysql_typedefs.h"
+#include "gen_utils.h"
 
 #define WUS_NOT_FOUND   0	// couldn't find any filter
 #define WUS_OFF         1	// allow the query
@@ -56,6 +58,45 @@ typedef struct _query_digest_stats_pointers_t {
 	char rows_sent[24];
 } query_digest_stats_pointers_t;
 
+/**
+ * @brief Per-digest statistics accumulated by the query digest map.
+ *
+ * @par Concurrency contract
+ * Entries live in `Query_Processor::digest_umap`, which is protected by
+ * `digest_rwlock`. The lock protects the *map* -- insertion, erasure and the
+ * swaps performed by the stats dumps and the purge -- and therefore guarantees
+ * that a `QP_query_digest_stats*` obtained under the lock stays alive for as
+ * long as the lock is held. It does **not** serialise updates to an individual
+ * entry.
+ *
+ * `update_query_digest()` only takes the lock for *reading* when the digest is
+ * already present, so several threads can call `add_time()` on the same entry
+ * at the same time, and concurrently with any reader holding the read lock
+ * (`get_query_digests()`, `get_query_digests_topk()`). The mutable counters are
+ * therefore `std::atomic<>`: without that, those updates would be data races.
+ *
+ * The atomics buy freedom from lost updates and torn reads on each field
+ * individually. They do **not** make a group of fields consistent with one
+ * another: a reader can observe `count_star` from after an update and
+ * `sum_time` from before it. A reader that needs a coherent row must take its
+ * own snapshot of every field it uses -- see `query_digest_snapshot_candidate()`
+ * -- and must never re-read a counter it has already used for ordering, since
+ * a value that changes mid-sort breaks the strict weak ordering `std::sort` and
+ * `std::priority_queue` require.
+ *
+ * All updates use `std::memory_order_relaxed`. These counters carry no
+ * happens-before relationship with any other state -- nothing is published
+ * through them -- so the only guarantee needed is atomicity of each individual
+ * read-modify-write.
+ *
+ * The remaining members are written once, by the constructor, and are immutable
+ * for the lifetime of the entry: `digest`, `digest_text`, `username`,
+ * `schemaname`, `client_address` and `hid`. They can be read under the read
+ * lock without synchronisation.
+ *
+ * @note Holding `std::atomic<>` members makes this class non-copyable and
+ *   non-movable. Entries are always handled through pointers.
+ */
 class QP_query_digest_stats {
 	public:
 	uint64_t digest;
@@ -66,26 +107,119 @@ class QP_query_digest_stats {
 	char username_buf[24];
 	char schemaname_buf[24];
 	char client_address_buf[24];
-	time_t first_seen;
-	time_t last_seen;
-	unsigned int count_star;
-	unsigned long long sum_time;
-	unsigned long long min_time;
-	unsigned long long max_time;
-	unsigned long long rows_affected;
-	unsigned long long rows_sent;
+	std::atomic<time_t> first_seen;
+	std::atomic<time_t> last_seen;
+	std::atomic<unsigned int> count_star;
+	std::atomic<unsigned long long> sum_time;
+	std::atomic<unsigned long long> min_time;
+	std::atomic<unsigned long long> max_time;
+	std::atomic<unsigned long long> rows_affected;
+	std::atomic<unsigned long long> rows_sent;
 	int hid;
 	QP_query_digest_stats(const char* _user, const char* _schema, uint64_t _digest, const char* _digest_text,
 		int _hid, const char* _client_addr, int query_digests_max_digest_length);
+	/**
+	 * @brief Record one observation of this digest.
+	 *
+	 * Safe to call concurrently from any number of threads holding the read
+	 * lock. Use merge() instead to combine two entries that have each already
+	 * accumulated observations -- passing an aggregate here would be counted as
+	 * a single sample.
+	 *
+	 * @param t Duration of the observation, in microseconds. A zero duration
+	 *   never becomes `min_time`.
+	 * @param n Observation timestamp (monotonic, the caller's cached `curtime`).
+	 * @param ra Rows affected to add.
+	 * @param rs Rows sent to add.
+	 * @param cnt Number of observations represented, normally 1.
+	 */
 	void add_time(
 		unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs,
 		unsigned long long cnt = 1
 	);
+	/**
+	 * @brief Fold the counters of @p other into this entry as aggregates.
+	 *
+	 * Sums the additive counters, takes the smallest non-zero `min_time` and
+	 * `first_seen`, and the largest `max_time` and `last_seen`. This is the
+	 * correct primitive whenever two entries for the same digest must be
+	 * reconciled: the stats-dump window in `get_query_digests_v2()` and the
+	 * purge window in `purge_query_digests_async()`.
+	 *
+	 * @param other Entry to fold in. Left unmodified; the caller owns it.
+	 */
 	void merge(const QP_query_digest_stats *other);
 	~QP_query_digest_stats();
 	char *get_digest_text(const umap_query_digest_text *digest_text_umap) const;
 	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp);
 };
+
+/**
+ * @brief How an address value on a query rule is to be compared.
+ *
+ * This replaces the former `client_addr_wildcard_position`, which overloaded a
+ * single int with two meanings ("no wildcard" vs "wildcard present") and
+ * silently reduced a value to a literal strcmp whenever it contained no '%'.
+ * That made both a bare '_' and a CIDR prefix load cleanly and then never
+ * match anything.
+ */
+enum qp_addr_match_t {
+	/// No address criterion on the rule.
+	QP_ADDR_MATCH_NONE = 0,
+	/// Byte-exact comparison against the rendered address text.
+	QP_ADDR_MATCH_EXACT,
+	/// mywildcmp() against the rendered address text ('%' and '_').
+	QP_ADDR_MATCH_WILDCARD,
+	/// Numeric containment against the parsed CIDR prefixes.
+	QP_ADDR_MATCH_CIDR
+};
+
+/**
+ * @brief A parsed address criterion, resolved once when the rule is loaded.
+ *
+ * The parsed prefixes are held inline so QP_rule_t stays trivially copyable and
+ * rule evaluation never parses or allocates.
+ */
+typedef struct _qp_addr_predicate_t {
+	int match;
+	int cidr_count;
+	IP_CIDR_t cidrs[MAX_CIDR_PREFIXES_PER_RULE];
+} qp_addr_predicate_t;
+
+/**
+ * @brief Which query rule field an address value belongs to.
+ *
+ * The two fields accept deliberately disjoint sets of forms, so one selector
+ * settles both questions at once:
+ *
+ *  - client_addr is the client identity as ProxySQL renders it, which is the
+ *    real TCP peer unless a PROXY protocol header supplied one. It is always a
+ *    rendered address: it accepts '%' and '_' wildcards, and it can never be a
+ *    filesystem path -- a leading '/' is always a mistake there.
+ *  - proxy_addr is the listener's own identity. For a Unix listener that is a
+ *    socket path such as "/tmp/proxysql.sock", which is compared literally and
+ *    must not be read as a prefix; it has never accepted wildcards.
+ */
+enum qp_addr_field_t {
+	QP_ADDR_FIELD_CLIENT = 0,
+	QP_ADDR_FIELD_PROXY
+};
+
+/**
+ * @brief Resolve @p value into @p pred, deciding the comparison mode.
+ *
+ * A value holding a '/' is a comma-separated CIDR list when it does not start
+ * with one; a NULL or empty value leaves the predicate in QP_ADDR_MATCH_NONE.
+ * A value containing '%' or '_' is a textual wildcard, for client_addr only.
+ * Anything else is compared exactly.
+ *
+ * @param pred  Predicate to fill. Left in QP_ADDR_MATCH_NONE on failure.
+ * @param value The configured client_addr / proxy_addr value.
+ * @param field Which field @p value came from, see qp_addr_field_t.
+ * @return true when @p value is well formed. On false the caller is expected to
+ *         report the rule as rejected rather than load it.
+ */
+bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, qp_addr_field_t field);
 
 typedef struct _Query_Processor_rule_t {
 	int rule_id;
@@ -94,8 +228,9 @@ typedef struct _Query_Processor_rule_t {
 	char *schemaname;
 	int flagIN;
 	char *client_addr;
-	int client_addr_wildcard_position;
+	qp_addr_predicate_t client_addr_pred;
 	char *proxy_addr;
+	qp_addr_predicate_t proxy_addr_pred;
 	int proxy_port;
 	uint64_t digest;
 	char *match_digest;
@@ -251,8 +386,15 @@ void __reset_rules(std::vector<QP_rule_t*>* qrs);
  * @param current_flagIN Current query flag.
  * @param username Session username.
  * @param schemaname Session schema name.
- * @param client_addr Client address.
- * @param proxy_addr Proxy listener address.
+ * @param client_addr Client identity, as rendered text. This is the real TCP
+ *        peer unless a PROXY protocol header supplied one.
+ * @param client_sa Client address, as a parsed sockaddr. Required for rules
+ *        whose client_addr is a CIDR prefix; may be NULL otherwise. Derived
+ *        from @p client_addr, never from the transport peer, so that a prefix
+ *        rule and its textual equivalent cannot disagree.
+ * @param proxy_addr Proxy listener address, as rendered text.
+ * @param proxy_sa Proxy listener address, as a parsed sockaddr. Required for
+ *        rules whose proxy_addr is a CIDR prefix; may be NULL otherwise.
  * @param proxy_port Proxy listener port.
  * @param digest Parsed query digest.
  * @param digest_text Parsed digest text.
@@ -267,7 +409,9 @@ bool rule_matches_query(
 	const char* username,
 	const char* schemaname,
 	const char* client_addr,
+	const struct sockaddr* client_sa,
 	const char* proxy_addr,
+	const struct sockaddr* proxy_sa,
 	int proxy_port,
 	uint64_t digest,
 	const char* digest_text,

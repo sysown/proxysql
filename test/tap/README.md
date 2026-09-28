@@ -1,5 +1,21 @@
 ## Folder structure
 
+## Persistent configuration policy
+
+The TAP tester restores ProxySQL configuration from disk between individual tests.
+Therefore, ordinary TAP test binaries and their per-test setup/teardown helpers
+**must not execute** `SAVE ... TO DISK` commands: they write test state into the
+persistent configuration and corrupt the baseline for later tests.
+
+One-time test-group baseline setup is different: its `pre-proxysql` scripts may
+save the deliberate group baseline that the tester restores between tests. Those
+scripts must never save per-test state.
+
+For normal setup and cleanup, change only the relevant in-memory admin tables and
+use `LOAD ... TO RUNTIME` to apply or remove those changes. A test may use `SAVE
+... TO DISK` only when persistence is itself the behavior under test; such a test
+must restore the original on-disk configuration before it exits.
+
 - `tap`: Contains TAP helper library for testing, and general utilities used across all tests.
 - `tests`: General test folder for either unitary or functional tests.
 - `tests_with_deps`: Test folder that holds all the tests that require special dependencies for being build.
@@ -20,6 +36,5 @@ cat > pre-test_grp_$TG-proxysql.sql << EOF
 # run this test group with:
 SET mysql-multiplexing='false';
 LOAD MYSQL VARIABLES TO RUNTIME;
-SAVE MYSQL VARIABLES TO DISK;
 EOF
 ```

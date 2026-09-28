@@ -102,15 +102,26 @@ int main(int, char**) {
 	}
 
 	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_username, cl.admin_password, cl.admin_port);
-	MYSQL* proxy = init_mysql_conn(cl.host, cl.username, cl.password, cl.port);
-	if (!admin || !proxy) {
-		if (proxy) mysql_close(proxy);
-		if (admin) mysql_close(admin);
+	if (!admin) {
 		return exit_status();
 	}
 
 	MYSQL_QUERY_T(admin, MYSQL_SET_SERVER_VERSION_QUERY);
+	// A per-interface override takes precedence over the scalar on feature-tier
+	// builds. UPDATE is also valid on stable builds, where it simply matches no
+	// rows, keeping this regression focused on scalar forwarding semantics.
+	MYSQL_QUERY_T(admin,
+		"UPDATE global_variables SET variable_value='{}' "
+		"WHERE variable_name='mysql-server_version_by_interface'");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	// Frontend versions are pinned at accept time, so connect only after the
+	// scalar-only runtime configuration above has been published.
+	MYSQL* proxy = init_mysql_conn(cl.host, cl.username, cl.password, cl.port);
+	if (!proxy) {
+		mysql_close(admin);
+		return exit_status();
+	}
 
 	// Mode 0 is internal-only; mode 1 always attempts backend forwarding.
 	// Modes 2 and 3 retain the existing smart-fallback coverage.
