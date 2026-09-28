@@ -10,6 +10,54 @@ public:
 	PgSQL_Connection_LibPQ();
 	~PgSQL_Connection_LibPQ() override;
 
+	// --- The libpq transport state (Step 5b) ---
+	// Private, and deliberately so: nothing outside this class and PgSQL_Query_Result
+	// (a friend) reads any of it any more. The three external readers that existed in
+	// step 5a-ii went through get_pg_connection() / native_mode instead, so there is no
+	// white-box test or consumer left that needs these in the open. The native leaf's
+	// state is still public because six unit tests drive its state machine by member.
+private:
+	PGconn* pgsql_conn;
+	PGresult* pgsql_result;
+	PSresult  ps_result;
+	uint8_t result_type;
+	bool is_copy_out;
+	// libpq's own transport, held while a fast forward relay has displaced it with
+	// memory buffers. Belongs to the connection, not to the stream that borrowed it.
+	BIO* saved_backend_rbio = nullptr;
+	BIO* saved_backend_wbio = nullptr;
+	bool exit_pipeline_mode; // true if it is safe to exit pipeline mode
+
+	// --- Methods that exist only for the libpq transport (Step 5b) ---
+	// Each of these sat on the base only because the base held the state above. None of
+	// them became a virtual: every caller was already inside this file, which is the
+	// whole test for "libpq-only" -- not that the name or the body looks like libpq.
+	// flush() 13 callers, set_error_from_PQerrorMessage() 25, get_result() 2,
+	// handle_copy_out() / next_multi_statement_result() / set_error_from_result() 1 each,
+	// and the two statics only ever reach PQsetNoticeReceiver() here.
+	void flush(bool is_resync = false);
+	bool handle_copy_out(const PGresult* result, uint64_t* processed_bytes);
+	void set_error_from_PQerrorMessage();
+	void set_error_from_result(const PGresult* result, uint16_t ext_fields = 0);
+	PGresult* get_result();
+	void next_multi_statement_result(PGresult* result);
+	static void notice_handler_cb(void* arg, const PGresult* result);
+	static void unhandled_notice_cb(void* arg, const PGresult* result);
+
+public:
+	// --- Shared code asking the transport for its own state (Step 5b) ---
+	// get_pg_connection() and backend_is_live() were the two places the base answered
+	// "is there a libpq, and is it usable" by reading pgsql_conn and branching on
+	// native_mode. Both are that question asked of the object that knows the answer.
+	const PGconn* get_pg_connection() const override;
+	bool backend_is_live() const override;
+	void compute_unknown_transaction_status() override;
+	// The PQclear() of pgsql_result, which is the only libpq-owned step inside the
+	// shared async_free_result() body.
+	void free_transport_result() override;
+	void reset_fetch_result_state() override;
+	void reset_transport_state() override;
+
 	// --- Fast-forward TLS borrow (Step 5a-i) ---
 	bool tls_borrow(SSL* ssl, BIO*& r, BIO*& w, bool& displaced) override;
 	bool tls_still_borrowed() const override;

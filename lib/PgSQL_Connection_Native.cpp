@@ -186,7 +186,10 @@ const char* PgSQL_Connection_Native::transport_name() const {
 
 void PgSQL_Connection_Native::connect_start() {
 	PROXY_TRACE();
-	assert(pgsql_conn == NULL); // already there is a connection
+	// Was `assert(pgsql_conn == NULL); // already there is a connection`. Step 5b moved
+	// the handle into PgSQL_Connection_LibPQ and made get_pg_connection() a pure virtual
+	// that answers nullptr here, so the same fact is now true by construction rather
+	// than by an assertion: there is no member on this object for a handle to live in.
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
 
@@ -2769,3 +2772,46 @@ void PgSQL_Connection_Native::native_reset_session_cont() {
 	}
 }
 
+
+// --- Step 5b: the base asking the transport for its own state ---
+// backend_is_live() is the only one of the six with a real answer. It was the base's
+// `if (native_mode) { return fd >= 0 && native_connected; }` arm, and it became pure in
+// step 5b, so the body came here with native_connected. The comment is the one the base
+// carried, kept because the reasoning is still load-bearing: do not substitute
+// native_st, which moves back to a sending state whenever a large query cannot be
+// written in one go, which would make a healthy connection look dead.
+bool PgSQL_Connection_Native::backend_is_live() const {
+	return fd >= 0 && native_connected;
+}
+
+// The other five were `if (pgsql_conn)` guards or libpq-only member reads in base
+// functions, and pgsql_conn is permanently NULL on this transport, so none of them ever
+// did anything here either. Saying so in the bodies keeps the next reader from looking
+// for the transport work that is missing.
+
+const PGconn* PgSQL_Connection_Native::get_pg_connection() const {
+	// plan:236-237. nullptr is load-bearing, not incidental: the native query
+	// differential test uses the NULL address as its native oracle.
+	return nullptr;
+}
+
+void PgSQL_Connection_Native::compute_unknown_transaction_status() {
+	// Was the base's `if (pgsql_conn) { ... }` guard around the PQtransactionStatus()
+	// switch. This transport tracks its own native_txn_status and never asked libpq,
+	// so there is nothing to compute here.
+}
+
+void PgSQL_Connection_Native::free_transport_result() {
+	// The PQclear() of a PGresult. The native fetch path streams bytes into
+	// PgSQL_Query_Result directly and never builds one.
+}
+
+void PgSQL_Connection_Native::reset_fetch_result_state() {
+	// result_type and ps_result are the libpq result shape. The native framer keeps
+	// its own per-message state and resets it where a fetch cycle starts.
+}
+
+void PgSQL_Connection_Native::reset_transport_state() {
+	// exit_pipeline_mode and PQpipelineStatus() are libpq's; a native connection is
+	// never in pipeline mode.
+}

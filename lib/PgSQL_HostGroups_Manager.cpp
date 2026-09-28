@@ -3103,11 +3103,15 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 					char buff[32];
 					snprintf(buff, sizeof(buff), "%p", static_cast<const void*>(conn->get_pg_connection()));
 					j["address"] = buff;
-					// Native connections have pgsql_conn==NULL; the libpq
+					// Native connections have no PGconn; the libpq
 					// accessors (get_pg_user, get_pg_host, ...) call PQxxx
 					// on the null pointer and crash the stats thread. Emit a
 					// minimal "native" record instead of crashing.
-					if (conn->pgsql_conn == NULL) {
+					// plan:266: this test was `conn->pgsql_conn == NULL`; it is now the
+					// transport selector, because the handle itself moved into the LibPQ
+					// leaf in step 5b. Same answer, and the "native_mode" JSON key that
+					// three TAP tests match on is unchanged.
+					if (conn->native_mode) {
 						j["native_mode"] = true;
 						j["host"] = conn->parent ? conn->parent->address : "";
 						j["port"] = conn->parent ? conn->parent->port : 0;

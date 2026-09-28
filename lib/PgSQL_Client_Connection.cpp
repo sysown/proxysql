@@ -271,6 +271,41 @@ void PgSQL_Client_Connection::native_backend_key(int& pid, int& secret) const {
 	assert(0);
 }
 
+// --- Step 5b ---
+// Before step 5b these six were `if (pgsql_conn)` guards and libpq-only member reads
+// inside base functions. A client connection has always had pgsql_conn == NULL, so
+// every one was already a no-op and these bodies are the same answers it gave before,
+// now asked of the object that knows it. The client-leaf equivalence unit test pins all
+// six against a never-connected PgSQL_Connection_LibPQ.
+
+const PGconn* PgSQL_Client_Connection::get_pg_connection() const {
+	return nullptr;
+}
+
+bool PgSQL_Client_Connection::backend_is_live() const {
+	// plan:135 -- false. There is no backend to be live.
+	return false;
+}
+
+void PgSQL_Client_Connection::compute_unknown_transaction_status() {
+	// plan:138 -- no-op. Was `if (pgsql_conn) { ... }` in the base, and false here.
+}
+
+void PgSQL_Client_Connection::free_transport_result() {
+	// The PQclear() of a PGresult this connection never had. It has never had one:
+	// only the libpq transport ever produced a PGresult.
+}
+
+void PgSQL_Client_Connection::reset_fetch_result_state() {
+	// result_type and ps_result are libpq's per-fetch outputs; a client stream fetches
+	// no backend result, so there is nothing to reset.
+}
+
+void PgSQL_Client_Connection::reset_transport_state() {
+	// exit_pipeline_mode and PQpipelineStatus() are libpq's; a client connection is
+	// never in pipeline mode.
+}
+
 bool PgSQL_Client_Connection::needs_pollout() const {
 	// Only a backend stream asks this; a client stream is readable, never writable
 	// on the client's behalf. The initial async_exit_status reads as PG_EVENT_NONE.

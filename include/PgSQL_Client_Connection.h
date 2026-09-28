@@ -92,6 +92,18 @@ public:
 	bool last_execute_suspended() const override;
 	bool result_had_notification() const override;
 	int relay_async_messages(PtrSizeArray* out) override;
+
+	// --- Step 5b: the base asking a transport that has none ---
+	// Each of these was, before step 5b, an `if (pgsql_conn)` guard or a read of a
+	// libpq-only member in a base function -- and a client connection has always had
+	// pgsql_conn == NULL, so every one of them was already a no-op. The plan pins these
+	// exact values in its client-leaf table (plan:126-138): nullptr, false, and no-ops.
+	const PGconn* get_pg_connection() const override;
+	bool backend_is_live() const override;
+	void compute_unknown_transaction_status() override;
+	void free_transport_result() override;
+	void reset_fetch_result_state() override;
+	void reset_transport_state() override;
 };
 
 #endif // PROXYSQL_PGSQL_CLIENT_CONNECTION_H

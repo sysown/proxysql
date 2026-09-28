@@ -93,6 +93,19 @@ public:
 	void note_ready_for_query(char st) override;
 	void native_backend_key(int& pid, int& secret) const override;
 
+	// --- Shared code asking the transport for its own state (Step 5b) ---
+	// backend_is_live() is the one real answer here: the libpq arm became pure in step
+	// 5b, and the half that was the base's (`fd >= 0 && native_connected`) is native
+	// state, so it belongs here. The rest are no-ops, and each was a no-op before step
+	// 5b too -- they were the `if (pgsql_conn)` guard, and pgsql_conn is permanently
+	// NULL on this transport, so none of them ever did anything.
+	const PGconn* get_pg_connection() const override;
+	bool backend_is_live() const override;
+	void compute_unknown_transaction_status() override;
+	void free_transport_result() override;
+	void reset_fetch_result_state() override;
+	void reset_transport_state() override;
+
 	// --- Native transport state (Step 5a-ii) ---
 	// Moved here from the base, and deliberately still `public` because that is the
 	// access it had there: this step relocates the state, it does not re-architect
@@ -104,10 +117,19 @@ public:
 	// because no such API exists. Tightening this to `private` is therefore real
 	// deferred work, not a one-line edit: it means giving the state machine the
 	// entry points the tests would use instead. It is tracked as a follow-up.
-	// Two of the base's members stayed behind on purpose -- `native_mode` (the
-	// const transport selector shared code reads) and `native_connected` (read by
-	// backend_is_live(), which the base destructor reaches); both carry the reason
-	// at their declaration in PgSQL_Connection.h.
+	// One of the base's two members that stayed behind on purpose -- `native_mode`, the
+	// const transport selector shared code reads. The other was `native_connected`, and
+	// it no longer qualifies: its only reader on the base was backend_is_live(), which
+	// step 5b turned into a pure virtual, so its body moved here. The reason it was
+	// originally left on the base (a comment claiming ~PgSQL_Connection() reached it
+	// through backend_is_live()) was wrong -- the reachability starts at this leaf's own
+	// destructor, not the base's; see compute_unknown_transaction_status() in
+	// PgSQL_Connection.h and progress.md.
+	//
+	// True once login has finished and the connection can carry queries. Set when the
+	// backend sends its first ready-for-query, cleared when we start a new connect or
+	// tear the connection down.
+	bool native_connected = false;
 	// --- Native backend connect/auth handshake state (Task 1.6a, plaintext only) ---
 	// Every member below is only meaningful on this transport. The base's
 	// `native_mode` is const and true for this leaf and no other, so no shared code

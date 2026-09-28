@@ -519,16 +519,39 @@ public:
 
 	void next_event(PG_ASYNC_ST new_st);
 	bool is_connected() const;
-	// NOT pure, unlike the other libpq-driven members above: ~PgSQL_Connection()
-	// calls async_free_result(), which calls this, and a base destructor may not
-	// dispatch to a pure virtual (the vtable is already the base's by then, so the
-	// call aborts the process with "pure virtual method called"). The whole body
-	// sits behind `if (pgsql_conn)`, which is false for the native and client
-	// leaves, so one concrete implementation serves all three and no leaf needs to
-	// override it. is_connected() and is_error_present() are likewise non-virtual.
-	virtual void compute_unknown_transaction_status();
+	// Pure, and the reachability is worth writing down because an earlier draft of this
+	// file stated it backwards. The chain that gets here is
+	//
+	//     ~PgSQL_Connection_LibPQ() -> async_free_result()
+	//         -> compute_unknown_transaction_status() -> is_connected() -> backend_is_live()
+	//
+	// -- it starts at the *leaf* destructor, not at ~PgSQL_Connection(). During
+	// ~PgSQL_Connection_LibPQ() the dynamic type is still LibPQ, so these overrides are
+	// live and no pure slot is ever touched. ~PgSQL_Connection() itself reaches none of
+	// them: it deletes userinfo / local_stmts / query_result, frees init_connect and the
+	// variable arrays, and decrements the connection counter. /tmp/opencode/audit_pv2.py
+	// measures that -- the base destructor's reachable set is one function, itself.
+	//
+	// That is the whole licence for this step: because the base destructor never gets
+	// here, the libpq half of the body can live in the LibPQ leaf. The native and client
+	// arms are no-ops, exactly as they were while the body sat behind `if (pgsql_conn)`.
+	// is_connected() and is_error_present() stay non-virtual.
+	virtual void compute_unknown_transaction_status() = 0;
+	// Frees the in-flight result. Stays CONCRETE on purpose, and not because of the
+	// destructor rule: most of this body is shared work (the query buffer, the
+	// ASYNC_IDLE transition, the query_result / query_result_reuse shuffle, new_result).
+	// Making it pure virtual would have handed all of that to per-leaf overrides, and the
+	// native one would have to be a no-op that silently drops it. Only the PQclear() of
+	// pgsql_result is libpq's, and that one line is free_transport_result() below.
+	//
+	// It is still called from ~PgSQL_Connection_LibPQ(), which is why
+	// compute_unknown_transaction_status() above is pure rather than concrete: from a
+	// leaf destructor its override is live, and from the base destructor none of this is
+	// reachable at all.
 	void async_free_result();
-	void flush(bool is_resync = false);
+	// The one libpq-owned step inside async_free_result(). Pure so the shared body above
+	// keeps its shape and the handle stays in the leaf that owns it.
+	virtual void free_transport_result() = 0;
 	bool IsActiveTransaction();
 	virtual bool IsKnownActiveTransaction() = 0;
 	bool IsServerOffline();
@@ -539,25 +562,6 @@ public:
 	bool requires_RESETTING_CONNECTION(const PgSQL_Connection* client_conn);
 	
 	bool has_same_connection_options(const PgSQL_Connection* c);
-
-	/**
-	 * @brief Sets the error information for this connection from the current libpq error message.
-	 *
-	 * This method retrieves the latest error message from the underlying PostgreSQL connection (via PQerrorMessage),
-	 * parses it into its component fields (such as severity, SQLSTATE, and message), and fills the internal error_info
-	 * structure accordingly. If the error message is not available, it sets a generic "Unknown error" with fatal severity.
-	 *
-	 * The function distinguishes between server errors (with fields like "S", "C", "M") and library-generated errors
-	 * (stored under the "LE" key). If a server error is present, it is preferred; otherwise, the library error message
-	 * is used. The error fields are extracted using parse_pq_error_message().
-	 *
-	 * Example error string: "S:5:ERRORC:5:12345M:12:Some message"
-	 *   - S: Severity
-	 *   - C: SQLSTATE code
-	 *   - M: Primary message
-	 *   - LE: Library error (if present)
-	 */
-	void set_error_from_PQerrorMessage();
 
 	inline
 	bool is_error_present() const {
@@ -615,26 +619,20 @@ public:
 		return (PQresultErrorField(result, PG_DIAG_SQLSTATE) != nullptr);
 	}
 
-	void set_error_from_result(const PGresult* result, uint16_t ext_fields = 0) {
-		if (is_error_result_valid(result)) { 
-			PgSQL_Error_Helper::fill_error_info(error_info, result, ext_fields);
-		} else {
-			set_error_from_PQerrorMessage();
-		}
-	}
-
 	void reset_error() { reset_error_info(error_info, false); }
 
 	bool reset_session_in_txn = false;
 	bool reset_session_in_pipeline = false;
 
-	PGresult* get_result();
-	void next_multi_statement_result(PGresult* result);
 	void update_bytes_recv(uint64_t bytes_recv);
 	void update_bytes_sent(uint64_t bytes_sent);
 	void ProcessQueryAndSetStatusFlags(const char* query_digest_text, int savepoint_count);
 
-	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
+	// The libpq handle, or nullptr when there is no libpq transport. Pure because the
+	// handle itself moved to PgSQL_Connection_LibPQ in step 5b; three external readers
+	// (PgSQL_HostGroups_Manager.cpp:3110, PgSQL_Session.cpp:3199 and :3720) now come
+	// through here or through native_mode instead of touching the member.
+	virtual const PGconn* get_pg_connection() const = 0;
 
 	// --- Transport-dependent accessors ---
 	// Each leaf answers from its own transport (libpq PGconn, native members, or
@@ -836,24 +834,23 @@ public:
 
 	PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
-	PGconn* pgsql_conn;
+	// The one transport-shaped member left on the base after step 5b, and it stays for
+	// the mundane reason rather than a safety one: it is a const set by the leaf's
+	// constructor, and code outside this hierarchy reads it to pick a transport --
+	// PgSQL_HostGroups_Manager's stats record, and the backend-kill path's choice
+	// between pg_terminate_backend() and a hand-built CancelRequest. `true` only for
+	// PgSQL_Connection_Native; LibPQ and PgSQL_Client_Connection pass false.
+	//
+	// Its sibling did not survive step 5b: `native_connected` also used to be here,
+	// justified by a comment claiming ~PgSQL_Connection() reached it. That chain was
+	// wrong -- the destructor that reaches it is this hierarchy's *leaf* destructor --
+	// and step 5b turned backend_is_live() into a pure virtual, so the member moved
+	// into PgSQL_Connection_Native with its only reader. See the reachability note at
+	// compute_unknown_transaction_status() above.
+	//
+	// Step 6 removes the remaining reads of this flag from inside the hierarchy; the
+	// reads listed above are outside it and are what it is for.
 	const bool native_mode = false;       // true → native wire protocol, false → libpq
-
-	// True once login has finished and the connection can carry queries. Set when
-	// the backend sends its first ready-for-query, cleared when we start a new
-	// connect or tear the connection down.
-	//
-	// One of only two native_* members left on the base in step 5a-ii, and it stays
-	// for the same reason backend_is_live() and compute_unknown_transaction_status()
-	// stay concrete rather than pure: backend_is_live() reads it, and the base
-	// destructor reaches backend_is_live() (~PgSQL_Connection() -> async_free_result()
-	// -> compute_unknown_transaction_status() -> is_connected() -> backend_is_live()),
-	// and a base destructor may not dispatch to a pure virtual. So the one answer
-	// that has to survive destruction cannot be asked of a leaf.
-	//
-	// native_mode stays for the mundane reason: it is the const transport selector,
-	// and shared code plus the kill path read it to pick a transport.
-	bool native_connected = false;
 
 	// The backend identity the kill path needs: the PID and the CancelRequest secret
 	// the backend sent in BackendKeyData. Only the native transport keeps them --
@@ -883,9 +880,6 @@ public:
 	// stmt_execute_start(). Task P2.
 	bool close_only = false;
 
-	uint8_t result_type;
-	PGresult* pgsql_result;
-	PSresult  ps_result;
 	PgSQL_Query_Result* query_result;
 	PgSQL_Query_Result* query_result_reuse;
 	unsigned long long creation_time;
@@ -894,20 +888,13 @@ public:
 	PG_ASYNC_ST async_state_machine;	// Async state machine
 	short wait_events;
 	bool new_result;
-	bool is_copy_out;
 
 	bool send_quit;
 	bool reusable;
-	// libpq's own transport, held while a fast forward relay has displaced it with
-	// memory buffers. Belongs to the connection, not to the stream that borrowed it.
-	BIO* saved_backend_rbio = nullptr;
-	BIO* saved_backend_wbio = nullptr;
-
 	bool healthy; // false: destroy the connection, never reset it; not restored by reset()
 	bool processing_multi_statement;
 	bool multiplex_delayed;
 	bool is_client_connection; // true if this is a client connection, false if it is a server connection
-	bool exit_pipeline_mode; // true if it is safe to exit pipeline mode
 	bool resync_failed; // true if the last resync attempt failed
 
 	PgSQL_STMT_Local* local_stmts;
@@ -924,6 +911,11 @@ public:
 	uint32_t status_flags;
 	unsigned long largest_query_length;
 	int async_exit_status; // exit status of Non blocking API
+	// Shared, and it stays even though only the LibPQ leaf writes it any more: its writer
+	// is compute_unknown_transaction_status(), but its readers are IsActiveTransaction()
+	// and async_reset_session(), and both are shared base functions. Same reason
+	// resync_failed and new_result stay. Moving it would buy a hook whose only job is to
+	// read one bool back out.
 	bool unknown_transaction_status;
 
 protected:
@@ -931,13 +923,11 @@ protected:
 	// answer about the connection's health is built on it. Transport-specific:
 	// libpq asks PQstatus(); native uses the socket and the login-finished flag.
 	//
-	// NOT pure, for the same reason as compute_unknown_transaction_status(): the base
-	// destructor reaches it ( ~PgSQL_Connection() -> async_free_result() ->
-	// compute_unknown_transaction_status() -> is_connected() -> here), and a base
-	// destructor may not dispatch to a pure virtual. `native_mode` is const and set
-	// by the leaf's constructor -- true only for PgSQL_Connection_Native -- so this
-	// one body is the same answer each leaf gave on its own.
-	bool backend_is_live() const;
+	// Pure, with the reachability spelled out at compute_unknown_transaction_status()
+	// above: is_connected() calls it, async_free_result() calls that, and
+	// ~PgSQL_Connection_LibPQ() calls that -- a leaf destructor, where this override is
+	// live. ~PgSQL_Connection() never reaches it, so the base destructor is safe.
+	virtual bool backend_is_live() const = 0;
 
 private:
 	// True once this connection has been added to the global count of connected
@@ -947,21 +937,30 @@ private:
 
 	// Set end state for the fetch result to indicate that it originates from a simple query or statement execution.
 	ASYNC_ST fetch_result_end_st = ASYNC_QUERY_END;
+	// Step 5b leaf hooks. Both are per-transport field resets that used to sit inline in
+	// a shared function; each is one no-op away from being wrong on the other transport,
+	// which is exactly what a pure virtual is for.
+	//
+	// fetch_result_start() ran `result_type = 0; ps_result = {0, 0, NULL};` inline.
+	// Left over from a previous fetch those are indistinguishable from values this one
+	// produced, so the reset belongs where the cycle starts -- but result_type and
+	// ps_result are libpq-only now.
+	virtual void reset_fetch_result_state() = 0;
+	// reset() ran `exit_pipeline_mode = false;` and, under DEBUG, asserted that
+	// PQpipelineStatus() agrees the pipeline is off. exit_pipeline_mode is libpq-only
+	// now; resync_failed, which reset() also clears, is shared and stays inline.
+	virtual void reset_transport_state() = 0;
+
 	inline void set_fetch_result_end_state(ASYNC_ST st) {
 		assert(st == ASYNC_QUERY_END || st == ASYNC_STMT_EXECUTE_END || 
 			st == ASYNC_STMT_DESCRIBE_END || st == ASYNC_STMT_PREPARE_END ||
 			st == ASYNC_RESYNC_END);
 		fetch_result_end_st = st;
 	}
-	// Handles the COPY OUT response from the server.
-	// Returns true if it consumes all buffer data, or false if the threshold for result size is reached
-	bool handle_copy_out(const PGresult* result, uint64_t* processed_bytes);
 	// True when this event has moved enough bytes that the result fetch should
 	// pause and let the client catch up. Shared by the libpq and native result
 	// loops so both honour pgsql-threshold_resultset_size the same way.
 	bool suspend_resultset_fetch(uint64_t processed_bytes) const;
-	static void notice_handler_cb(void* arg, const PGresult* result);
-	static void unhandled_notice_cb(void* arg, const PGresult* result);
 	void init_query_result();
 
 	/**

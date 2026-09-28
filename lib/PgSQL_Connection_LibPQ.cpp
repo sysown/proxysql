@@ -46,6 +46,15 @@ bool pgsql_append_conninfo_credentials(std::ostringstream& conninfo, const char*
 PgSQL_Connection_LibPQ::PgSQL_Connection_LibPQ()
 	: PgSQL_Connection(false, false)
 {
+	// Step 5b: these five used to be initialised by the base constructor, which no
+	// longer declares them. ps_result is not among them and never was -- it has no
+	// initialiser anywhere; reset_fetch_result_state() establishes it at the start of
+	// the first fetch cycle, which is what the old code relied on too.
+	pgsql_conn = NULL;
+	pgsql_result = NULL;
+	result_type = 0;
+	is_copy_out = false;
+	exit_pipeline_mode = false;
 }
 
 PgSQL_Connection_LibPQ::~PgSQL_Connection_LibPQ() {
@@ -427,7 +436,7 @@ PgSQL_Connection::HandlerStep PgSQL_Connection_LibPQ::fetch_result_dispatch(shor
 }
 
 void PgSQL_Connection_LibPQ::on_command_end() {
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection_LibPQ::unhandled_notice_cb, this);
 
 	// we check exit_pipeline_mode to ensure it is safe to exit pipeline mode
 	if (exit_pipeline_mode &&
@@ -487,7 +496,7 @@ PgSQL_Connection::HandlerStep PgSQL_Connection_LibPQ::reset_session_cont_dispatc
 }
 
 void PgSQL_Connection_LibPQ::on_reset_session_end() {
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection_LibPQ::unhandled_notice_cb, this);
 }
 
 const char* PgSQL_Connection_LibPQ::transport_name() const {
@@ -688,7 +697,7 @@ void PgSQL_Connection_LibPQ::query_start() {
 	processing_multi_statement = false;
 	async_exit_status = PG_EVENT_NONE;
 
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection_LibPQ::notice_handler_cb, this);
 
 	if (PQsendQuery(pgsql_conn, query.ptr) == 0) {
 		set_error_from_PQerrorMessage();
@@ -866,7 +875,7 @@ void PgSQL_Connection_LibPQ::stmt_prepare_start() {
 		}
 	}
 	
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection_LibPQ::notice_handler_cb, this);
 
 	const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
 	const Parse_Param_Types& parse_param_types = extended_query_info->parse_param_types;
@@ -919,7 +928,7 @@ void PgSQL_Connection_LibPQ::stmt_describe_start() {
 		}
 	}
 
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection_LibPQ::notice_handler_cb, this);
 
 	const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
 
@@ -975,7 +984,7 @@ void PgSQL_Connection_LibPQ::resync_start() {
 	PROXY_TRACE();
 	async_exit_status = PG_EVENT_NONE;
 
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection_LibPQ::notice_handler_cb, this);
 
 	if (PQsendPipelineSync(pgsql_conn) == 0) {
 		proxy_error("Failed to send pipeline sync.\n");
@@ -1008,7 +1017,7 @@ void PgSQL_Connection_LibPQ::reset_session_start() {
 	assert(pgsql_conn);
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection_LibPQ::notice_handler_cb, this);
 
 	reset_session_in_pipeline = is_pipeline_active();
 	if (reset_session_in_pipeline) {
@@ -1098,7 +1107,7 @@ void PgSQL_Connection_LibPQ::stmt_execute_start() {
 		}
 	}
 
-	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection_LibPQ::notice_handler_cb, this);
 
 	const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
 	const PgSQL_Bind_Message* bind_msg = extended_query_info->bind_msg;
@@ -1378,4 +1387,242 @@ bool PgSQL_Connection_LibPQ::result_had_notification() const {
 int PgSQL_Connection_LibPQ::relay_async_messages(PtrSizeArray* out) {
 	(void)out;
 	return 0;
+}
+
+// --- Step 5b: the libpq-only bodies, moved verbatim off the base ---
+// Each was on PgSQL_Connection only because the base held pgsql_conn and the
+// result state above. Nothing below was edited except the class qualifier, and
+// that is the whole proof that they belonged here: with `this` now a LibPQ, every
+// member they touch is a member of this class.
+
+void PgSQL_Connection_LibPQ::flush(bool is_resync) {
+	int res = PQflush(pgsql_conn);
+
+	if (res > 0) {
+		async_exit_status = PG_EVENT_WRITE;
+	}
+	else if (res == 0) {
+		async_exit_status = PG_EVENT_READ;
+	}
+	else {
+		if (!is_resync) {
+			set_error_from_PQerrorMessage();
+		} else {
+			resync_failed = true;
+		}
+		proxy_error("Failed to flush data to backend. %s\n", get_error_code_with_message().c_str());
+		async_exit_status = PG_EVENT_NONE;
+	}
+}
+bool PgSQL_Connection_LibPQ::handle_copy_out(const PGresult* result, uint64_t* processed_bytes) {
+
+	if (new_result == true) {
+		const unsigned int bytes_recv = query_result->add_copy_out_response_start(result);
+		update_bytes_recv(bytes_recv);
+		new_result = false;
+		is_copy_out = true;
+	}
+
+	char* buffer = NULL;
+	int copy_data_len = 0;
+
+	while ((copy_data_len = PQgetCopyData(pgsql_conn, &buffer, 1)) > 0) {
+		const unsigned int bytes_recv = query_result->add_copy_out_row(buffer, copy_data_len);
+		update_bytes_recv(bytes_recv);
+		PQfreemem(buffer);
+		buffer = NULL;
+		*processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
+		if (
+			(*processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
+			||
+			(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (*processed_bytes > (uint64_t)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (uint64_t)pgsql_thread___throttle_ratio_server_to_client))
+			) 
+		{
+			return false;
+		}
+	}
+
+	if (copy_data_len == -1) {
+		const unsigned int bytes_recv = query_result->add_copy_out_response_end();
+		update_bytes_recv(bytes_recv);
+		is_copy_out = false;
+	} else if (copy_data_len < 0) {
+		if (is_error_present() == false) {
+			set_error_from_PQerrorMessage();
+			proxy_error("PQgetCopyData failed. %s\n", get_error_code_with_message().c_str());
+		}
+		is_copy_out = false;
+	}
+
+	return true;
+}
+void PgSQL_Connection_LibPQ::notice_handler_cb(void* arg, const PGresult* result) {
+	assert(arg);
+	PgSQL_Connection* conn = (PgSQL_Connection*)arg;
+	if (conn->query_result == nullptr) {
+		// Notice received without active query_result. This can happen when:
+		// - RESET SESSION is in progress (DISCARD ALL or ROLLBACK)
+		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Notice received without active query_result [State: %d, FD: %d]: %s\n",
+			(int)conn->async_state_machine,
+			conn->get_pg_socket_fd(),
+			(result ? PQresultErrorMessage(result) : "unknown notice"));
+		return;
+	}
+	const unsigned int bytes_recv = conn->query_result->add_notice(result);
+	conn->update_bytes_recv(bytes_recv);
+}
+void PgSQL_Connection_LibPQ::unhandled_notice_cb(void* arg, const PGresult* result) {
+	assert(arg);
+	PgSQL_Connection* conn = (PgSQL_Connection*)arg;
+	proxy_error("Unhandled notice: '%s' received from backend [PID: %d] (Host: %s, Port: %d, User: %s, FD: %d, State: %d). Please report this issue for further investigation and enhancements.\n",
+		PQresultErrorMessage(result), conn->get_pg_backend_pid(), conn->get_pg_host(), atoi(conn->get_pg_port()), conn->get_pg_user(), conn->get_pg_socket_fd(), (int)conn->async_state_machine);
+#ifdef DEBUG
+	assert(0);
+#endif
+}
+PGresult* PgSQL_Connection_LibPQ::get_result() {
+	PGresult* result_tmp = pgsql_result;
+	pgsql_result = nullptr;
+	return result_tmp;
+}
+void PgSQL_Connection_LibPQ::next_multi_statement_result(PGresult* result) {
+	// set unprocessed result to pgsql_result
+	pgsql_result = result;
+	// copy buffer to PSarrayOut
+	query_result->buffer_to_PSarrayOut();
+}
+void PgSQL_Connection_LibPQ::set_error_from_PQerrorMessage() {
+	const char* raw_msg = PQerrorMessage(pgsql_conn);
+	if (raw_msg == nullptr) {
+		PgSQL_Error_Helper::fill_error_info(error_info, PGSQL_ERROR_CODES::ERRCODE_INTERNAL_ERROR, "Unknown error",
+			PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL);
+		return;
+	}
+
+	std::string org_msg(raw_msg);
+
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,
+		"Session=%p, Conn=%p, myds=%p. Error message: '%s' received from backend (Host: %s, Port: %d, User: %s, FD: %d)\n",
+		myds->sess, this, myds, org_msg.c_str(), parent->address, parent->port, userinfo->username, get_pg_socket_fd());
+
+	const auto error_field_map = parse_pq_error_message(org_msg);
+
+	auto lookup = [&error_field_map](const char* key, std::string_view fallback) -> std::string_view {
+		auto it = error_field_map.find(key);
+		if (it != error_field_map.end() && !it->second.empty())
+			return it->second.back();
+		return fallback;
+	};
+
+	std::string_view severity = lookup("S", PgSQL_Error_Helper::get_severity(PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL));
+	std::string_view sqlstate = lookup("C", PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION));
+	std::string_view primary_msg = lookup("M", "");
+	std::string_view lib_errmsg = lookup("LE", "");
+
+	// we are currently distinguishing between server errors and library-generated errors. 
+	// A library-generated error is only set when a server error is not available.
+	const std::string_view& full_msg = !primary_msg.empty() ? primary_msg : lib_errmsg;
+	PgSQL_Error_Helper::fill_error_info(error_info, sqlstate.data(), full_msg.data(), severity.data());
+}
+bool PgSQL_Connection_LibPQ::backend_is_live() const {
+	// The same check libpq makes internally, so this never rejects a connection
+	// libpq would have accepted. The other half of the base's old two-armed body --
+	// `fd >= 0 && native_connected` -- is native state and is now
+	// PgSQL_Connection_Native::backend_is_live().
+	//
+	// The `pgsql_conn != nullptr` term is a real runtime guard, not a transport
+	// dispatch: this leaf exists before its first connect_start() has created the
+	// handle, and the `if (pgsql_conn)` in compute_unknown_transaction_status() below
+	// is the same guard for the same window.
+	return pgsql_conn != nullptr && PQstatus(pgsql_conn) == CONNECTION_OK;
+}
+
+void PgSQL_Connection_LibPQ::compute_unknown_transaction_status() {
+	// The base's whole body, unchanged, minus the `if (pgsql_conn)` that used to make it
+	// a no-op for the other two leaves. The guard stays because it is still true for
+	// *this* leaf before its first connect_start(): there is no PGconn to ask yet, which
+	// is exactly the window the old code skipped. The comment explaining how the other
+	// two leaves skipped it went with them.
+	if (pgsql_conn) {
+		// make sure we have not missed even a single error
+		if (is_error_present() == false) {
+			unknown_transaction_status = false;
+			return;
+		}
+
+		// On a broken backend, PQtransactionStatus() returns PQTRANS_UNKNOWN
+		// even if a transaction was active — libpq has no cached INTRANS bit
+		// equivalent to MySQL's server_status & SERVER_STATUS_IN_TRANS. Force
+		// unknown_transaction_status=true so IsActiveTransaction() still
+		// reports true and the retry path does not replay inside-tx statements
+		// on a fresh connection (which would run them as autocommit).
+		if (is_connected() == false) {
+			unknown_transaction_status = true;
+			return;
+		}
+
+		switch (PQtransactionStatus(pgsql_conn)) {
+		case PQTRANS_INTRANS:
+		case PQTRANS_INERROR:
+		case PQTRANS_ACTIVE:
+			unknown_transaction_status = true;
+			break;
+		case PQTRANS_UNKNOWN:
+		default:
+			//unknown_transaction_status = false;
+			break;
+		}
+	}
+}
+
+// --- Step 5b: the base asking this transport for its own state ---
+
+const PGconn* PgSQL_Connection_LibPQ::get_pg_connection() const {
+	// The handle itself, and the whole reason this method became a virtual: it used to
+	// be a non-virtual inline on the base reading a member the base no longer has.
+	return pgsql_conn;
+}
+
+void PgSQL_Connection_LibPQ::free_transport_result() {
+	// The one libpq-owned step inside the shared async_free_result() body. Note the
+	// LibPQ destructor also PQclears pgsql_result, and the order matters: the leaf
+	// destructor runs first, so by the time ~PgSQL_Connection() calls
+	// async_free_result() this member is already NULL and this is a no-op there.
+	if (pgsql_result) {
+		PQclear(pgsql_result);
+		pgsql_result = NULL;
+	}
+}
+
+void PgSQL_Connection_LibPQ::reset_fetch_result_state() {
+	// Verbatim the four assignments that used to sit inline in the base's
+	// fetch_result_start(). Left over from a previous fetch these are
+	// indistinguishable from values this one produced, which is why they are reset
+	// where the cycle starts.
+	result_type = 0;
+	ps_result.id = 0;
+	ps_result.len = 0;
+	ps_result.data = NULL;
+}
+
+void PgSQL_Connection_LibPQ::reset_transport_state() {
+	// exit_pipeline_mode = false, plus the DEBUG assertion that libpq's pipeline really
+	// is off -- both verbatim from the base's reset(). resync_failed, which reset()
+	// also cleared, is shared and stayed inline.
+	exit_pipeline_mode = false;
+#ifdef DEBUG
+	if (pgsql_conn)
+		assert(PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF);
+#endif
+}
+
+void PgSQL_Connection_LibPQ::set_error_from_result(const PGresult* result, uint16_t ext_fields) {
+	// Was a header inline on the base. It reached PgSQL_Connection only because the
+	// base held error_info's companion state and set_error_from_PQerrorMessage(); both
+	// of its callers were already in this file.
+	if (is_error_result_valid(result)) {
+		PgSQL_Error_Helper::fill_error_info(error_info, result, ext_fields);
+	} else {
+		set_error_from_PQerrorMessage();
+	}
 }

@@ -3196,7 +3196,7 @@ int PgSQL_Session::RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn) {
 				uint32_t backend_stmt_id = myconn->local_stmts->generate_new_backend_stmt_id();
 				CurrentQuery.extended_query_info.stmt_backend_id = backend_stmt_id;
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session %p myconn %p pgsql_conn %p Processing STMT_PREPARE with new backend_stmt_id=%u\n", 
-					this, myconn, myconn->pgsql_conn, backend_stmt_id);
+					this, myconn, myconn->get_pg_connection(), backend_stmt_id);
 			}
 			 // this is used to generate the name of the prepared statement in the backend
 			char backend_stmt_name[32];
@@ -3715,10 +3715,12 @@ handler_again:
 					// 'I'/'T'/'E' byte, surfaced via get_pg_transaction_status()).
 					// The copy line has been commented out for libpq since the
 					// #3549 PG port (b01792cae9), so it is dead code regardless of
-					// mode; only the mode-appropriate liveness assert remains.
-					if (!myconn->native_mode) {
-						assert(myconn->pgsql_conn != NULL);
-					}
+					// mode. The liveness assert that used to stand here is gone
+					// (plan:267): it read `assert(myconn->pgsql_conn != NULL)` under
+					// `if (!native_mode)`, and after step 5b the leaf type is that
+					// assertion -- a PgSQL_Connection_LibPQ always has a PGconn once it
+					// has connected, and the window before it does is the same window
+					// backend_is_live()'s pgsql_conn guard covers.
 					//autocommit = myconn->pgsql->server_status & SERVER_STATUS_AUTOCOMMIT;
 				}
 
