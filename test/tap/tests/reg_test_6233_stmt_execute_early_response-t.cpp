@@ -87,9 +87,12 @@ bool run_admin(MYSQL* admin, const std::string& query) {
 // hostgroup) with apply=1, which would shadow the rules of this test and
 // conflict with the hostgroup lock. Run with only the rules of this test and
 // restore the original ones afterwards.
-bool snapshot_and_clear_rules(MYSQL* admin) {
-	return run_admin(admin, "DROP TABLE IF EXISTS mysql_query_rules_6233")
-		&& run_admin(admin, "CREATE TABLE mysql_query_rules_6233 AS SELECT * FROM mysql_query_rules")
+// 'snapshot_taken' tells whether restore_rules() can be used: it is set as
+// soon as the snapshot exists, even if clearing the rules fails afterwards.
+bool snapshot_and_clear_rules(MYSQL* admin, bool& snapshot_taken) {
+	snapshot_taken = run_admin(admin, "DROP TABLE IF EXISTS mysql_query_rules_6233")
+		&& run_admin(admin, "CREATE TABLE mysql_query_rules_6233 AS SELECT * FROM mysql_query_rules");
+	return snapshot_taken
 		&& run_admin(admin, "DELETE FROM mysql_query_rules")
 		&& run_admin(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 }
@@ -158,10 +161,11 @@ MYSQL_STMT* prepare(MYSQL* mysql, const char* query) {
  * @return 0 on success, the statement errno otherwise.
  */
 unsigned int execute_once(MYSQL_STMT* stmt, bool fetch_result = true) {
-	unsigned long param_len = kParam.size();
+	std::string param = kParam;
+	unsigned long param_len = param.size();
 	MYSQL_BIND bind {};
 	bind.buffer_type = MYSQL_TYPE_STRING;
-	bind.buffer = const_cast<char*>(kParam.data());
+	bind.buffer = param.data();
 	bind.buffer_length = param_len;
 	bind.length = &param_len;
 	if (mysql_stmt_bind_param(stmt, &bind)) {
@@ -253,9 +257,19 @@ int main(int /*argc*/, char** /*argv*/) {
 	}
 
 	const std::string saved_lock_on_hg = get_global_variable(admin, "mysql-set_query_lock_on_hostgroup");
+	bool snapshot_taken = false;
 	bool setup_ok = !saved_lock_on_hg.empty()
-		&& snapshot_and_clear_rules(admin)
+		&& snapshot_and_clear_rules(admin, snapshot_taken)
 		&& set_global_variable(admin, "mysql-set_query_lock_on_hostgroup", "1");
+
+	// Undo only what was actually changed, and attempt each restoration
+	// independently so that one failure does not skip the other.
+	auto restore_state = [&]() -> bool {
+		const bool rules_restored = !snapshot_taken || restore_rules(admin);
+		const bool variable_restored = saved_lock_on_hg.empty()
+			|| set_global_variable(admin, "mysql-set_query_lock_on_hostgroup", saved_lock_on_hg);
+		return rules_restored && variable_restored;
+	};
 
 	// --- Prepare all the statements before any matching rule exists ---
 	MYSQL* err_conn = connect_proxy(cl);
@@ -294,10 +308,7 @@ int main(int /*argc*/, char** /*argv*/) {
 	ok(rules_ok, "Installed error_msg, OK_msg and destination_hostgroup=%d rules", other_hg);
 
 	if (!(err_stmt && ok_stmt && lock_stmt && rules_ok)) {
-		restore_rules(admin);
-		if (!saved_lock_on_hg.empty()) {
-			set_global_variable(admin, "mysql-set_query_lock_on_hostgroup", saved_lock_on_hg);
-		}
+		restore_state();
 		return exit_status();
 	}
 
@@ -327,7 +338,7 @@ int main(int /*argc*/, char** /*argv*/) {
 	mysql_close(ok_conn);
 	mysql_close(lock_conn);
 
-	ok(restore_rules(admin) && set_global_variable(admin, "mysql-set_query_lock_on_hostgroup", saved_lock_on_hg),
+	ok(restore_state(),
 		"Restored the original query rules and mysql-set_query_lock_on_hostgroup");
 	mysql_close(admin);
 
