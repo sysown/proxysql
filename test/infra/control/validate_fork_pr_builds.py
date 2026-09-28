@@ -164,6 +164,25 @@ def validate(base, fork, reusable):
         problems.append("reusable workflow has no builds job")
         return problems
 
+    # The same callee serves both callers, and a called workflow may only
+    # narrow the caller's token, never widen it. CI-builds-fork.yml grants
+    # exactly `contents: read`, so ANY callee job asking for more makes
+    # GitHub reject the whole call before a job starts -- which presents as
+    # a bare `startup_failure` with zero jobs and no useful log. The
+    # resolve-tap-mode job requesting `pull-requests: read` did exactly that
+    # to every fork PR. Trusted runs get their scopes from the caller's
+    # write-all and need no job-level block at all.
+    for name, job in reusable.get("jobs", {}).items():
+        requested = job.get("permissions")
+        if not requested:
+            continue
+        for scope, level in requested.items():
+            if scope != "contents" or level not in ("read", "none"):
+                problems.append(
+                    f"callee job {name!r} requests {scope}: {level}, which the fork "
+                    f"caller does not grant; this fails the whole call at startup"
+                )
+
     require(
         RUNS_ON_UNTRUSTED.match(str(builds.get("runs-on", ""))) is not None,
         "untrusted mode does not force ubuntu-24.04",

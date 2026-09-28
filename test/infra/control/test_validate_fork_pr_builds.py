@@ -198,6 +198,33 @@ class Mutations(unittest.TestCase):
             "does not force ubuntu-24.04",
         )
 
+    def test_callee_jobs_may_not_request_more_than_the_fork_caller_grants(self):
+        """A callee job asking for a scope CI-builds-fork.yml lacks fails the whole
+        call at startup, with zero jobs and no log. This is the exact shape that
+        broke every fork PR: resolve-tap-mode declaring `pull-requests: read`."""
+
+        def grant(scope, level):
+            def mutate(b, f, r):
+                r["jobs"]["resolve-tap-mode"]["permissions"] = {scope: level}
+
+            return mutate
+
+        for scope, level in (
+            ("pull-requests", "read"),
+            ("pull-requests", "write"),
+            ("contents", "write"),
+            ("checks", "write"),
+            ("id-token", "write"),
+        ):
+            with self.subTest(scope=scope, level=level):
+                self.assertRejected(grant(scope, level), "the fork caller does not grant")
+
+    def test_callee_job_may_still_narrow_contents(self):
+        """Narrowing within what the fork caller grants stays legal."""
+        base, fork, reusable = minimal_documents()
+        reusable["jobs"]["builds"]["permissions"] = {"contents": "read"}
+        self.assertEqual(subject.validate(base, fork, reusable), [])
+
     def test_unsafe_checkout_flag(self):
         for label, mutate in (
             ("base", lambda b, f, r: b["jobs"]["run"].__setitem__("allow-unsafe-pr-checkout", True)),
