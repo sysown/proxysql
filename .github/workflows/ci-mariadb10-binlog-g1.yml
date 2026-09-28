@@ -14,10 +14,21 @@ jobs:
   tests:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
-    # Codecov's OIDC token and the checks update both require write permission.
-    # The v3.0 caller grants the same permission because caller and callee
-    # permissions are intersected for reusable workflows.
-    permissions: write-all
+    # Writes a check run and mints an OIDC token for Codecov, so keep the token
+    # bounded to exactly those operations rather than write-all.
+    #
+    # This job is reached through the workflow_run cascade, so `ref: ${{ env.SHA }}`
+    # is PR-controlled and the steps below execute scripts from that checkout.
+    # Combined with write-all and checkout's default credential persistence, a
+    # test change in a PR could read a contents-write token out of the cloned
+    # .git/config. Hence the narrow scopes plus `persist-credentials: false`,
+    # matching ci-ai-gcov.yml.
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      id-token: write
+      packages: read
     env:
       BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src
       MATRIX: '(mariadb10-binlog,genai-gcov)'
@@ -41,6 +52,9 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         path: proxysql
+        # Do not leave the token in the cloned .git/config: the PR-controlled
+        # checkout is used to run test scripts later in this job.
+        persist-credentials: false
         sparse-checkout: |
           include
           lib
