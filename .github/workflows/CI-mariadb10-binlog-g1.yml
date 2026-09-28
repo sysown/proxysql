@@ -14,9 +14,18 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
-    # The reusable workflow mints a Codecov OIDC token.  Permissions are
-    # intersected across caller and callee, so the caller also grants write-all.
-    permissions: write-all
+    # The reusable workflow mints a Codecov OIDC token and writes a check run.
+    # Permissions are intersected across caller and callee, so the caller has to
+    # grant at least what the callee needs -- but no more. Granting write-all
+    # here would hand a contents-write token to a job that is reached through
+    # the workflow_run cascade and then executes scripts from a PR-controlled
+    # checkout. Same narrow scopes as ci-ai-gcov.yml.
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      id-token: write
+      packages: read
     uses: sysown/proxysql/.github/workflows/ci-mariadb10-binlog-g1.yml@GH-Actions
     secrets: inherit
     with:
