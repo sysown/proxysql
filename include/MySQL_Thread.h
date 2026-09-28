@@ -29,6 +29,13 @@
 #include "prometheus_helpers.h"
 
 #include "MySQL_Set_Stmt_Parser.h"
+#ifdef PROXYSQL31
+#include "PgSQL_Waiter_List.h"
+#endif // PROXYSQL31
+
+#ifdef PROXYSQL40
+#include "ProxySQL_PluginListenerGate.h"
+#endif /* PROXYSQL40 */
 
 /*
 #define MIN_POLL_LEN 8
@@ -237,6 +244,7 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	void worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr);
 	void worker_thread_gets_sessions_from_idle_thread();
 	void idle_thread_gets_sessions_from_worker_thread();
+	/// Hand resumed sessions from this idle thread to a worker.
 	void idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr);
 	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(MySQL_Thread *thr);
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
@@ -271,6 +279,10 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	void *gen_args;	// this is a generic pointer to create any sort of structure
 
 	ProxySQL_Poll<MySQL_Data_Stream> mypolls;
+#ifdef PROXYSQL31
+	PgSQL_Waiter_Lists waiter_lists;
+	unsigned long long last_b_rearm_us = 0;
+#endif // PROXYSQL31
 	pthread_t thread_id;
 //	unsigned long long curtime;
 	unsigned long long pre_poll_time;
@@ -337,6 +349,11 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
   void poll_listener_del(int sock);
   //void register_session(MySQL_Session *, bool up_start=true);
   void unregister_session(int);
+#ifdef PROXYSQL31
+  void enter_waiter(MySQL_Session *sess, unsigned hid);
+  void leave_waiter(MySQL_Session *sess, bool restore_client = true);
+  void drop_from_poll(MySQL_Data_Stream *ds);
+#endif // PROXYSQL31
   struct pollfd * get_pollfd(unsigned int i);
   bool process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
 	//void ProcessAllSessions_SortingSessions();
@@ -369,6 +386,7 @@ class MySQL_Listeners_Manager {
 	int add(const char *iface, unsigned int num_threads, int **perthrsocks);
 	int find_idx(const char *iface);
 	int find_idx(const char *address, int port);
+	std::vector<std::string> registered_interfaces();
 	iface_info * find_iface_from_fd(int fd);
 	int get_fd(unsigned int idx);
 	void del(unsigned int idx);
@@ -940,6 +958,8 @@ class MySQL_Threads_Handler
 	unsigned int get_global_version();
 	void wrlock();
  	void wrunlock();
+	void rdlock();
+	void rdunlock();
 	/** @brief Commit staged variables and report grouped variables that retained prior values. */
 	MySQLThreadsCommitResult commit();
 	/**
@@ -1029,6 +1049,10 @@ class MySQL_Threads_Handler
 	int listener_add(const char *address, int port);
 	int listener_del(const char *iface);
 	int listener_del(const char *address, int port);
+#ifdef PROXYSQL40
+	/** Replace initialized MySQL interfaces while the caller holds the write lock. */
+	bool apply_interfaces_under_lock(const char* value, std::string& error);
+#endif
 	void start_listeners();
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);

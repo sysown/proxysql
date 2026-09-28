@@ -3,6 +3,7 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#include <vector>
 
 /*
 One of the main challenge in handling prepared statement (PS) is that a single
@@ -67,6 +68,10 @@ class MySQL_STMT_Global_info {
 //		int delay;
 //	} properties;
 	bool is_select_NOT_for_update;
+#ifdef PROXYSQL31
+	// Conservative full-SQL guard for result caching, separate from routing.
+	bool has_cache_locking_tokens;
+#endif
 	MYSQL_BIND **params; // seems unused (?)
 	MySQL_STMT_Global_info(uint64_t id, char *u, char *s, char *q, unsigned int ql, char *fc, MYSQL_STMT *stmt, uint64_t _h);
 	void update_metadata(MYSQL_STMT *stmt);
@@ -127,6 +132,9 @@ class StmtLongDataHandler {
 	StmtLongDataHandler();
 	~StmtLongDataHandler();
 	unsigned int reset(uint32_t _stmt_id);
+#ifdef PROXYSQL31
+	bool has_data(uint32_t stmt_id) const;
+#endif
 	bool add(uint32_t _stmt_id, uint16_t _param_id, void *_data, unsigned long _size);
 	void *get(uint32_t _stmt_id, uint16_t _param_id, unsigned long **_size, my_bool **_is_null);
 };
@@ -188,6 +196,9 @@ class MySQL_STMTs_local_v14 {
 	std::map<uint32_t, uint64_t> client_stmt_to_global_ids;
 	// this map associates client_stmt_id to prepare-time min_gtid annotations
 	std::map<uint32_t, std::string> client_stmt_to_min_gtid;
+	// COM_STMT_EXECUTE may omit types. These belong to a client handle, not
+	// the shared global statement or its last decoded backend bindings.
+	std::map<uint32_t, std::vector<unsigned char>> client_stmt_to_param_types;
 	// this multimap associate global_stmt_id to client_stmt_id : this is used only for client connections
 	std::multimap<uint64_t, uint32_t> global_stmt_to_client_ids;
 

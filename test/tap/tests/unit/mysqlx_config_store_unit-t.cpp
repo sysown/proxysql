@@ -46,12 +46,6 @@ const char kMysqlxEndpointsDdl[] =
 	" PRIMARY KEY (hostname, mysql_port)"
 	" )";
 
-const char kMysqlxVariablesDdl[] =
-	"CREATE TABLE mysqlx_variables ("
-	" variable_name VARCHAR NOT NULL PRIMARY KEY,"
-	" variable_value VARCHAR NOT NULL DEFAULT ''"
-	" )";
-
 std::unique_ptr<SQLite3DB> create_test_db() {
 	auto db = std::make_unique<SQLite3DB>();
 	db->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -62,7 +56,7 @@ std::unique_ptr<SQLite3DB> create_test_db() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(33);
+	plan(35);
 	diag("=== mysqlx_config_store_unit-t starting ===");
 
 	MysqlxResolvedIdentity identity {};
@@ -90,8 +84,9 @@ int main() {
 	ok(db->execute(kMysqlxUsersDdl) &&
 	   db->execute(kMysqlxRoutesDdl) &&
 	   db->execute(kMysqlxEndpointsDdl) &&
-	   db->execute(kMysqlxVariablesDdl),
-	   "editable mysqlx tables are created");
+	   db->execute(ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES) &&
+	   db->execute(ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES),
+	   "editable mysqlx tables and global variable tables are created");
 
 	ok(db->execute("INSERT INTO runtime_mysql_users (username, password, active, use_ssl, default_hostgroup, "
 	               "default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, "
@@ -112,8 +107,10 @@ int main() {
 
 	MysqlxConfigStore store {};
 	std::string err {};
-	ok(store.install_all_from_admin(*db, err) && err.empty(),
-	   "config store installs from admin tables");
+	ok(store.install_all_from_admin(*db, err) && err.empty() &&
+	   db->return_one_int("SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mysqlx-%'") == 5 &&
+	   db->return_one_int("SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'mysqlx-%'") == 5,
+	   "config store seeds and publishes five mysqlx-* global variables");
 
 	const auto resolved = store.resolve_identity("alice");
 	ok(resolved.has_value() &&
@@ -141,7 +138,7 @@ int main() {
 	ok(store.topology_generation() == 1,
 	   "topology generation increments on demand");
 
-	// --- mysqlx_tls_backend_mode (asymmetric TLS / AsClient mode) ---
+	// --- mysqlx-tls_backend_mode (asymmetric TLS / AsClient mode) ---
 
 	// String parser exercise: each documented value parses, unknown
 	// values produce nullopt so the install path can surface a useful
@@ -166,30 +163,44 @@ int main() {
 	ok(store.get_backend_tls_mode() == MysqlxBackendTlsMode::as_client,
 	   "store defaults backend tls mode to as_client (matches legacy behaviour)");
 
-	// LOAD round-trip: an explicit row should be parsed and cached.
-	ok(db->execute("INSERT INTO mysqlx_variables (variable_name, variable_value) VALUES "
-	               "('mysqlx_tls_backend_mode', 'required')") &&
-	   store.install_variables_from_admin(*db, err) && err.empty() &&
+	// LOAD round-trip: an explicit global variable should be parsed and cached.
+	ok(db->execute("UPDATE global_variables SET variable_value='required' "
+	               "WHERE variable_name='mysqlx-tls_backend_mode'") &&
+	   store.install_variables_from_global(*db, err) && err.empty() &&
 	   store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
-	   "store parses explicit mysqlx_tls_backend_mode='required' from admin");
+	   "store parses explicit mysqlx-tls_backend_mode='required' from global_variables");
 
-	// Invalid value: install must fail with a non-empty err describing the bad value.
-	ok(db->execute("UPDATE mysqlx_variables SET variable_value='garbage' "
-	               "WHERE variable_name='mysqlx_tls_backend_mode'") &&
-	   !store.install_variables_from_admin(*db, err) &&
+	// Invalid value: install must fail without committing defaults for any
+	// concurrently missing settings.
+	ok(db->execute("DELETE FROM global_variables WHERE variable_name='mysqlx-connect_timeout'") &&
+	   db->execute("UPDATE global_variables SET variable_value='garbage' "
+	               "WHERE variable_name='mysqlx-tls_backend_mode'") &&
+	   !store.install_variables_from_global(*db, err) &&
 	   err.find("garbage") != std::string::npos,
-	   "store rejects invalid mysqlx_tls_backend_mode with descriptive error");
+	   "store rejects invalid mysqlx-tls_backend_mode with descriptive error");
+	ok(db->return_one_int(
+	     "SELECT COUNT(*) FROM global_variables WHERE variable_name='mysqlx-connect_timeout'") == 0,
+	   "rejected install does not commit a missing variable default");
 	ok(store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
 	   "store retains last-good backend tls mode after rejected install");
 
-	// Absent row: removing the variable leaves the cached value alone.
+	// Absent row: startup/default seeding restores the documented default.
 	// Reset `err` first because the previous failing call left a message
-	// in it; install_variables_from_admin only writes on failure.
+	// in it; install_variables_from_global only writes on failure.
 	err.clear();
-	ok(db->execute("DELETE FROM mysqlx_variables WHERE variable_name='mysqlx_tls_backend_mode'") &&
-	   store.install_variables_from_admin(*db, err) && err.empty() &&
-	   store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
-	   "absent mysqlx_tls_backend_mode row leaves cached mode untouched");
+	ok(db->execute("DELETE FROM global_variables WHERE variable_name='mysqlx-tls_backend_mode'") &&
+	   store.install_variables_from_global(*db, err) && err.empty() &&
+	   store.get_backend_tls_mode() == MysqlxBackendTlsMode::as_client,
+	   "absent mysqlx-tls_backend_mode row is restored to its default");
+
+	err.clear();
+	ok(db->execute("INSERT INTO global_variables (variable_name, variable_value) "
+	               "VALUES ('mysqlx-unknown_setting', '1')") &&
+	   !store.install_variables_from_global(*db, err) &&
+	   err.find("unknown MySQLX variable") != std::string::npos &&
+	   db->return_one_int("SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name='mysqlx-unknown_setting'") == 0 &&
+	   db->execute("DELETE FROM global_variables WHERE variable_name='mysqlx-unknown_setting'"),
+	   "unknown mysqlx-* names are rejected without entering the runtime namespace");
 
 	// --- per-route tls_mode (issue #5692, TLS passthrough) ---
 	//

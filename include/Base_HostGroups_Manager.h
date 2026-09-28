@@ -95,6 +95,9 @@ class BaseHGC {	// MySQL Host Group Container
 	HostgroupPoolStats pool_stats;
 #endif
 	std::atomic<uint32_t> num_online_servers;
+#ifdef PROXYSQL31
+	std::atomic<uint64_t> backup_servers_selected;
+#endif
 	time_t last_log_time_num_online_servers;
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
@@ -114,6 +117,10 @@ class BaseHGC {	// MySQL Host Group Container
 		uint32_t throttle_connections_per_sec;
 		int32_t monitor_slave_lag_when_null;
 		int32_t default_query_timeout;
+#ifdef PROXYSQL31
+		int64_t backup_weight_threshold;
+		int8_t backup_availability;
+#endif
 		int8_t autocommit;
 		int8_t free_connections_pct;
 		int8_t handle_warnings;
@@ -176,6 +183,7 @@ class Base_HostGroups_Manager {
 	HGC * MyHGC_find(unsigned int);
 	HGC * MyHGC_lookup(unsigned int);
 	SQLite3_result * execute_query(char *query, char **error);
+	SQLite3_result * execute_query_under_lock(const char *query, char **error);
 #ifdef PROXYSQL31
 	HostgroupPoolStats * get_hostgroup_pool_stats(unsigned int hid);
 	SQLite3_result * SQL3_Hostgroup_Connection_Pool(bool reset);

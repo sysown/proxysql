@@ -2,11 +2,12 @@
 #include "tap.h"
 
 #include <climits>
+#include <map>
 #include <string>
 #include <vector>
 
 int main() {
-	plan(21);
+	plan(25);
 
 	// --- iface parsing -------------------------------------------------
 	std::vector<DuckDBIface> ifaces;
@@ -92,8 +93,25 @@ int main() {
 
 	// --- enable_external_access set/get ---------------------------------
 	err.clear();
-	ok(cfg.set("enable_external_access", "true", err) && cfg.enable_external_access() == true,
-	   "enable_external_access round-trips to true");
+	ok(cfg.set("enable_external_access", "1", err) && cfg.enable_external_access() == true,
+	   "enable_external_access alias '1' round-trips to true");
+	ok(cfg.get("enable_external_access") == "true",
+	   "boolean aliases are stored in canonical form");
+
+	err.clear();
+	ok(cfg.set("database_path", "", err) && cfg.get("database_path") == ":memory:",
+	   "an empty database path is stored as the canonical in-memory alias");
+
+	cfg.set("read_only", "false", err);
+	std::map<std::string, std::string> replacement = cfg.values();
+	replacement["threads"] = "6";
+	err.clear();
+	ok(cfg.replace_values(replacement, err) && cfg.threads() == 6,
+	   "a complete validated value snapshot replaces the store");
+	replacement["threads"] = "invalid";
+	err.clear();
+	ok(!cfg.replace_values(replacement, err) && cfg.threads() == 6,
+	   "a rejected replacement leaves the previous store untouched");
 
 	err.clear();
 	ok(cfg.set("enable_external_access", "not-a-bool", err) == false && !err.empty(),

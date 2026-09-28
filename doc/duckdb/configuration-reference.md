@@ -1,126 +1,73 @@
 # DuckDB Configuration Reference
 
-DuckDB plugin settings are stored as rows in `duckdb_variables`. The plugin's
-in-memory configuration store is exposed through the read-only
-`runtime_duckdb_variables` projection.
+DuckDB settings are rows in `global_variables` named with the `duckdb-`
+prefix. Effective values use the same names in `runtime_global_variables`.
 
-## Variable summary
-
-| Variable | Default | Accepted value | Applied by LOAD |
+| Variable | Default | Accepted value | Live behavior |
 |---|---|---|---|
-| `mysql_ifaces` | `0.0.0.0:6031` | semicolon-separated `addr:port` | Restart required |
-| `pgsql_ifaces` | `0.0.0.0:6034` | semicolon-separated `addr:port` | Restart required |
-| `database_path` | `:memory:` | DuckDB path or `:memory:` | Restart required |
-| `memory_limit` | `1GB` | DuckDB memory-limit string | Restart required |
-| `threads` | `2` | integer `1..INT_MAX` | Restart required for engine default |
-| `max_connections` | `100` | integer `1..INT_MAX` | Immediate |
-| `read_only` | `false` | `true/false`, `1/0`, `on/off` | Restart required |
-| `enable_external_access` | `false` | `true/false`, `1/0`, `on/off` | Restart required |
+| `duckdb-mysql_ifaces` | `0.0.0.0:6031` | semicolon-separated `addr:port` | changed value rejected; reopen listener |
+| `duckdb-pgsql_ifaces` | `0.0.0.0:6034` | semicolon-separated `addr:port` | changed value rejected; reopen listener |
+| `duckdb-database_path` | `:memory:` | DuckDB path or `:memory:` | changed value rejected; reopen database |
+| `duckdb-memory_limit` | `1GB` | DuckDB memory-limit string | immediate, validated and read back |
+| `duckdb-threads` | `2` | integer `1..INT_MAX` | immediate, visible to existing connections |
+| `duckdb-max_connections` | `100` | integer `1..INT_MAX` | immediate for new admission |
+| `duckdb-read_only` | `false` | boolean aliases | changed value rejected; reopen database |
+| `duckdb-enable_external_access` | `false` | boolean aliases | live `true` to `false`; reverse rejected |
 
-`LOAD DUCKDB VARIABLES TO RUNTIME` always updates the plugin configuration
-store for valid rows. “Restart required” means the already-created engine or
-listener continues using its old resource-level value until ProxySQL restarts.
-The new value is nevertheless visible in `runtime_duckdb_variables` after
-LOAD.
+Boolean aliases (`true/false`, `1/0`, `on/off`) are stored canonically. An
+empty database path becomes `:memory:`. Runtime engine values come from
+DuckDB `current_setting()`, including its canonical memory units.
 
-## `mysql_ifaces`
+## Listener variables
 
-MySQL-protocol listener addresses. Multiple entries are separated with `;`:
+Multiple entries are separated with `;`; IPv6 literals are bracketed:
 
 ```text
 127.0.0.1:6031;10.0.0.10:6031
-```
-
-Bracket IPv6 literals:
-
-```text
 [::1]:6031
 ```
 
-Ports must be between 1 and 65535. Listener sockets are created only at plugin
-startup; LOAD does not rebind them.
+Ports are 1 through 65535. Unchanged listener values do not block unrelated
+live changes. A changed value returns an error and remains pending in Main.
 
-## `pgsql_ifaces`
+## `duckdb-database_path`
 
-PostgreSQL-protocol listener addresses, using the same syntax as
-`mysql_ifaces`. The default is deliberately 6034. Port 6032 is ProxySQL Admin
-and must not be used as the DuckDB default.
+Empty or `:memory:` selects the process-lifetime in-memory database. Any other
+value is a path accessible by the ProxySQL account. Changing it never copies
+data. LOAD rejects replacement of an open database; Runtime and status keep
+naming the path actually open.
 
-Listener sockets are created only at startup.
+## `duckdb-memory_limit`
 
-## `database_path`
+Examples are `512MB`, `1GB`, and `8GB`. LOAD validates and applies the setting
+using an internal control connection, then reads it back. Invalid syntax fails
+the complete candidate before another valid edit can apply.
 
-The database passed to `duckdb_open_ext`:
+DuckDB shares ProxySQL's process. Leave memory for core, connection buffers,
+other plugins, the operating system, and workload spikes.
 
-- Empty or `:memory:` selects the shared process-lifetime in-memory database.
-- Any other value is treated as a file path.
+## `duckdb-threads`
 
-The ProxySQL service account needs suitable directory and file permissions.
-Changing this value does not migrate data. The engine opens the path only at
-plugin startup.
+Controls query parallelism. LOAD applies it globally and existing connections
+observe it. Direct client `SET threads=N` is routed through the same internal
+control connection, outside the client's transaction.
 
-## `memory_limit`
+## `duckdb-max_connections`
 
-A DuckDB memory-limit setting such as `512MB`, `1GB`, or `8GB`. It is passed to
-DuckDB when the engine opens. The configuration store accepts the string; an
-invalid DuckDB value causes engine startup to fail with a configuration error.
+Caps reservations across both listeners. Reducing it preserves existing
+sessions and rejects new ones until the count falls below the limit.
 
-This is an important containment setting because DuckDB runs inside the
-ProxySQL process. Leave memory for ProxySQL core workloads, connections, and
-the operating system.
+## `duckdb-read_only`
 
-## `threads`
+Maps to access mode at database open. `true` with effective `:memory:` is
+rejected during candidate validation. It does not replace external-access
+security.
 
-The DuckDB worker-thread count used for query parallelism. The value must be an
-integer from 1 through `INT_MAX`.
+## `duckdb-enable_external_access`
 
-The configured startup default requires an engine restart. A connected client
-can independently issue a DuckDB-native `SET threads=N` for its session where
-that behavior is appropriate.
+ProxySQL overrides DuckDB's permissive default and starts disabled. Tightening
+`true` to `false` works live and is applied last because it cannot be rolled
+back while open. Loosening `false` to `true` waits for the next database open.
 
-## `max_connections`
-
-Maximum reserved DuckDB client connections across both listeners. The value
-must be an integer from 1 through `INT_MAX`.
-
-This is the only current variable applied directly to a live engine/listener
-control path during LOAD. Reducing it does not terminate existing sessions. It
-prevents new reservations until the count falls below the new cap. A rejected
-socket is closed before a protocol session is created.
-
-## `read_only`
-
-When true, the engine is opened with DuckDB `access_mode=READ_ONLY`. It applies
-to the main database and requires restart.
-
-`read_only=true` cannot be combined with an effective `:memory:` path. That
-cross-field combination is rejected when the engine opens. Read-only mode is
-not a substitute for disabling external access: the two settings protect
-different surfaces.
-
-## `enable_external_access`
-
-Controls DuckDB's `enable_external_access` setting. ProxySQL overrides
-DuckDB's own permissive default and uses `false` unless the operator opts in.
-
-When false, DuckDB blocks external-state features such as local file readers,
-COPY to or from paths, and attaching arbitrary external files. When true,
-every authenticated plugin endpoint user can exercise those features with the
-operating-system permissions of the ProxySQL process.
-
-This setting is applied only when the engine opens. A LOAD from false to true
-does not enable access in the already-open engine. Restart is required. Read
-the [Security guide](security.md) first.
-
-## Validation behavior
-
-During LOAD:
-
-- Recognized, valid rows are installed.
-- Unknown names and invalid individual values are skipped.
-- The command succeeds for the valid rows and includes skipped-row details in
-  its message.
-
-Cross-field and DuckDB-engine validation occurs at engine open. Always inspect
-logs after restarting with a changed database path, memory limit, or read-only
-combination.
+Direct managed SET follows the same restrictions. Other DuckDB session SET
+statements continue through the ordinary client connection.

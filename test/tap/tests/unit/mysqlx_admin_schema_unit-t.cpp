@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+bool is_valid_global_variable(const char* var_name);
+
 namespace {
 
 std::vector<ProxySQL_PluginTableDef> registered_tables;
@@ -63,7 +65,7 @@ MysqlxPluginContext& mysqlx_context() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(25);
+	plan(26);
 	diag("=== mysqlx_admin_schema_unit-t starting ===");
 
 	reset_mocks();
@@ -104,10 +106,12 @@ int main() {
 	   "registered_tables contains mysqlx_backend_endpoints");
 	ok(has_table("runtime_mysqlx_backend_endpoints"),
 	   "registered_tables contains runtime_mysqlx_backend_endpoints");
-	ok(has_table("mysqlx_variables"),
-	   "registered_tables contains mysqlx_variables");
-	ok(has_table("runtime_mysqlx_variables"),
-	   "registered_tables contains runtime_mysqlx_variables");
+	ok(!has_table("mysqlx_variables"),
+	   "registered_tables does not contain deprecated mysqlx_variables");
+	ok(!has_table("runtime_mysqlx_variables"),
+	   "registered_tables does not contain deprecated runtime_mysqlx_variables");
+	ok(is_valid_global_variable("mysqlx-thread_pool_size"),
+	   "core accepts the mysqlx-* global variable namespace");
 	ok(has_table("stats_mysqlx_routes"),
 	   "registered_tables contains stats_mysqlx_routes");
 	ok(has_table("stats_mysqlx_processlist"),

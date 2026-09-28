@@ -41,14 +41,13 @@ startup phase before the database takes precedence).
 
 ### Startup Sequence
 
-ProxySQL uses a **four-phase** plugin lifecycle.  Every phase but Phase B
-is mandatory; Phase B is optional via the `register_schemas` descriptor
-field and only enabled when the plugin declares ABI version 2 or higher.
+ProxySQL uses an ordered six-phase plugin lifecycle. Schema registration is
+optional via the `register_schemas` descriptor field and is enabled only when
+the plugin declares ABI version 2 or higher.
 
-1. **Phase A — load.**  ProxySQL parses `proxysql.cnf` and populates the
-   `plugins` list.  For each plugin path, ProxySQL calls `dlopen()`,
-   resolves the `proxysql_plugin_descriptor_v1` symbol, and validates
-   the descriptor (`abi_version`, `name`, callback pointers).
+1. **Phase A — discover and register CLI.**  ProxySQL parses `proxysql.cnf`,
+   loads and validates each plugin, then invokes `register_cli_options` (ABI
+   6+) before the one definitive command-line parse.
 2. **Phase B — register_schemas (optional, ABI 2+).**  If the
    descriptor wires `register_schemas`, the loader invokes it with a
    `ProxySQL_PluginServices` whose `register_table` /
@@ -61,21 +60,23 @@ field and only enabled when the plugin declares ABI version 2 or higher.
    NOT touch DB handles here.  Plugins that leave `register_schemas`
    null (or that declare ABI 1) skip this phase entirely. Such plugins
    cannot declare persistent `config_db` tables; plugins that do must use
-   ABI 2+ and `register_schemas`. Other setup remains valid in Phase D.
+   ABI 2+ and `register_schemas`. Other setup remains valid in Phase E.
 3. **Phase C — admin materialization.**  The admin module initializes
    and materializes the SQLite schemas collected during Phase B
    (`merge_plugin_tables` + `CREATE TABLE`).  On DDL failure ProxySQL
    aborts startup.
-4. **Phase D — init.**  The plugin's `init()` callback is called,
-   receiving a fully live `ProxySQL_PluginServices` (DB handles now
-   valid). Commands, hooks, runtime callbacks, and non-persistent tables may
+4. **Phase D — early action (ABI 6+).**  After Admin is live, ProxySQL invokes
+   `early_action` once. It may continue normal startup or request a successful
+   or failed process exit (for example after bootstrap).
+5. **Phase E — init.**  The plugin's `init()` callback receives fully live
+   services. Commands, hooks, runtime callbacks, and non-persistent tables may
    be registered here, but `config_db` table registration is rejected because
    disk restoration has already run. Plugins that used Phase B finish their
    context setup here.
-5. **Phase E — start.**  The plugin's `start()` callback is called.
-   The plugin should start its threads, open listener sockets, and
-   load runtime configuration.  After this returns, ProxySQL is ready
-   and the plugin is live.
+6. **Phase F — start.**  The plugin's `start()` callback starts plugin-owned
+   workers and other active resources. After core runtime dependencies exist,
+   ABI-8 plugins also receive `runtime_ready()` immediately before listener
+   validation/start.
 
 ### Shutdown Sequence
 
@@ -105,47 +106,56 @@ All types are defined in `include/ProxySQL_Plugin.h`:
 ```cpp
 struct ProxySQL_PluginDescriptor {
     const char *name;                         // Human-readable plugin name
-    uint32_t abi_version;                     // Always PROXYSQL_PLUGIN_ABI_VERSION (layout 1 through 8, plus DEBUG bit)
+    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (currently 10)
     proxysql_plugin_init_cb init;             // bool (*)(ProxySQL_PluginServices *)
     proxysql_plugin_start_cb start;           // bool (*)()
     proxysql_plugin_stop_cb stop;             // bool (*)()
     proxysql_plugin_status_json_cb status_json;  // const char *(*)()
     proxysql_plugin_register_schemas_cb register_schemas; // ABI 2+, optional
+    proxysql_plugin_register_cli_options_cb register_cli_options; // ABI 6+, optional
+    proxysql_plugin_early_action_cb early_action; // ABI 6+, optional
+    proxysql_plugin_runtime_ready_cb runtime_ready; // ABI 8+, optional
 };
 ```
 
 | Field              | Type          | Description                                               |
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
-| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. Layout `1` is the pre-chassis six-field descriptor; ABI 2 adds `register_schemas`; ABI 3 adds `register_runtime_view`; ABI 4 adds the view's `db_kind`; ABI 5 adds Admin-mutex handoff callbacks to `ProxySQL_PluginCommandContext` plus IAM provider install/limits to services; ABI 6 adds metadata-provider install; ABI 7 adds the MySQL locality projection callback; ABI 8 adds IAM provider rollback. A v3/v3.1 core rejects layout `> 1`; the current PROXYSQL40 core accepts layouts `[1, 8]` only when the plugin's DEBUG tag exactly matches the core. |
-| `init`             | callback      | Phase D — called with live services; register tables and commands here (or finish context setup if `register_schemas` already did it). Persistent `config_db` tables must have been declared through `register_schemas` in Phase B. |
-| `start`            | callback      | Phase E — start threads, open sockets, load config.        |
+| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. The current PROXYSQL40 core accepts layout versions `[1, 10]` after masking the build-mode tag, and requires the plugin's DEBUG tag to match the core. See the ABI reference for the per-version matrix. |
+| `init`             | callback      | Phase E — called with live services; register commands, hooks, and non-persistent tables here. Persistent `config_db` tables must have been declared through `register_schemas` in Phase B. |
+| `start`            | callback      | Phase F — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
 | `status_json`      | callback      | Return a static JSON string describing plugin status.      |
 | `register_schemas` | callback      | Phase B (ABI 2+).  Optional; leave null to skip Phase B entirely.  Services passed here have `register_table` / `register_command` / `register_command_alias` / `register_runtime_view` LIVE but DB-handle getters returning `nullptr`. |
+| `register_cli_options` | callback | ABI 6+. Registers options before the one definitive core parse. |
+| `early_action` | callback | ABI 6+. Runs once after Admin is live and may continue startup or request process exit. |
+| `runtime_ready` | callback | ABI 8+. Runs after core runtime dependencies exist and before listener validation. |
 
-All callbacks return `bool` (except `status_json` which returns `const char*`).
-Return `true` on success, `false` on failure. A `false` return from
-`register_schemas`, `init`, or `start` causes ProxySQL to exit.
+Lifecycle and registration callbacks return `bool` (except `status_json`,
+which returns `const char*`). `early_action` instead returns
+`ProxySQL_PluginEarlyActionResult`: `continue_startup`, `exit_success`, or
+`exit_failure`. Return `true` on success and `false` on failure from boolean
+callbacks. A `false` return from `register_schemas`, `init`, or `start` causes
+ProxySQL to exit.
 
 #### ABI version
 
 `include/ProxySQL_Plugin.h` exposes a layout version and a build-mode tag:
 
-- `PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION` is currently `8`.
+- `PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION` is currently `10`.
 - `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` is bit 30. It is set when the plugin is
   compiled with `-DDEBUG` and clear otherwise.
 - `PROXYSQL_PLUGIN_ABI_VERSION` combines those values. Its raw value is
-  therefore `8` in a release build and `0x40000008` in a DEBUG build.
+  therefore `10` in a release build and `0x4000000A` in a DEBUG build.
 
 Plugins MUST assign `abi_version` from `PROXYSQL_PLUGIN_ABI_VERSION` rather
 than hard-coding either raw value. The loader first requires the DEBUG bit to
 match the running core exactly, because DEBUG-only fields change core object
 layouts. It then masks that bit and checks that the layout portion is in the
-supported `[1, 8]` range. A release plugin cannot load into a DEBUG core, or
-vice versa, even when both use layout version 8.
+supported `[1, 10]` range. A release plugin cannot load into a DEBUG core, or
+vice versa, even when both use layout version 10.
 
-ABIs 3 through 8 keep the descriptor layout identical to ABI 2; each adds
+ABIs 3 through 10 keep the descriptor layout identical to ABI 2; each adds
 only tail fields to service, context, or view structs. Plugins compiled
 against an older ABI therefore still load on the current core, where the
 trailing fields remain invisible to them.
@@ -186,17 +196,45 @@ struct ProxySQL_PluginServices {
     proxysql_plugin_register_command_alias_cb register_command_alias;
     // ABI 3 tail extension:
     proxysql_plugin_register_runtime_view_cb register_runtime_view;
-    // ABI 5 tail extensions, live only while init() is running:
+    // ABI 7 tail extension:
+    ProxySQL_PluginSecretResult (*put_secret)(...);
+    ProxySQL_PluginSecretResult (*get_secret)(...);
+    ProxySQL_PluginSecretResult (*erase_secret)(...);
+    // ABI 8 tail extensions:
+    bool (*set_listener_gate)(const ProxySQL_PluginListenerGate&);
+    ProxySQL_PluginMysqlConfigResult (*apply_mysql_config)(
+        const ProxySQL_PluginMysqlConfigPlan&);
+    // ABI 9 tail extension:
+    ProxySQL_PluginMysqlConfigResult (*apply_mysql_config_v2)(
+        const ProxySQL_PluginMysqlConfigPlanV2&);
+    // ABI 10 tail extensions (AWS integration):
+    // live only while init() is running:
     proxysql_plugin_install_aws_iam_token_source_cb install_aws_iam_token_source;
     proxysql_plugin_get_aws_iam_limits_cb get_aws_iam_limits;
-    // ABI 6 tail extension, live only while init() is running:
     proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
-    // ABI 7 tail extension, live during register_schemas() and init():
+    // live during register_schemas() and init():
     proxysql_plugin_refresh_mysql_aws_locality_stats_cb refresh_mysql_aws_locality_stats;
-    // ABI 8 tail extension, live only while init() is running:
+    // live only while init() is running:
     proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
 };
 ```
+
+#### `apply_mysql_config_v2` (ABI 9)
+
+ABI 9 preserves the complete ABI-8 `ProxySQL_PluginMysqlConfigPlan` and rule
+row. `ProxySQL_PluginMysqlConfigPlanV2` embeds that base plan and adds a
+separate array of `{rule_id, attributes}` rows. Attributes must be JSON objects
+and every ID must refer to one base-plan rule.
+
+The callback is synchronous: the plugin owns the plan arrays and strings only
+until the call returns. Core copies and validates them before taking locks, then
+publishes storage and live MySQL state as one generation. Validation failure,
+runtime failure, or transaction failure leaves the previous generation active.
+Phase B provides a rejecting stub. ABI-8 plugins continue using the unchanged
+V1 callback; ABI-9 plugins that require attributes should fail closed rather
+than falling back and losing behavior.
+
+#### AWS integration services (ABI 10)
 
 `install_aws_iam_token_source` allows an optional external provider to supply
 IAM database-authentication tokens. The provider passes a newly allocated
@@ -363,7 +401,7 @@ already registered (by this or another plugin) or if `refresh` is
 `nullptr`.
 
 `register_runtime_view` is live both during `register_schemas` (Phase B)
-and `init` (Phase D). Plugins typically register views alongside the
+and `init` (Phase E). Plugins typically register views alongside the
 editable tables they project. See the separation-of-duties contract
 under [Admin Integration Patterns](#admin-integration-patterns) below
 for why this exists.
@@ -605,7 +643,7 @@ void register_stats_table(ProxySQL_PluginServices& services,
 - **No dependency resolution**: Plugins are loaded in the order listed in
   `proxysql.cnf`. If one plugin depends on another, the dependency must be
   listed first.
-- **ABI compatibility**: The current core accepts layout versions `[1, 8]`
+- **ABI compatibility**: The current core accepts layout versions `[1, 10]`
   after masking `PROXYSQL_PLUGIN_ABI_DEBUG_BIT`, and separately requires that
   DEBUG bit to exactly match the core. Newly built plugins must set
   `abi_version = PROXYSQL_PLUGIN_ABI_VERSION`.

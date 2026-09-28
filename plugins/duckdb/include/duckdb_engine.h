@@ -6,10 +6,27 @@
 #include <atomic>
 #include <cstddef>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
 class DuckDBConfigStore;
+
+struct DuckDBEffectiveSettings {
+	std::string database_path;
+	std::string memory_limit;
+	int threads { 0 };
+	size_t max_connections { 0 };
+	bool read_only { false };
+	bool enable_external_access { false };
+};
+
+struct DuckDBLiveSettings {
+	std::optional<std::string> memory_limit;
+	std::optional<int> threads;
+	std::optional<size_t> max_connections;
+	std::optional<bool> enable_external_access;
+};
 
 // Owns the single process-wide duckdb_database. Connections are created
 // per session; DuckDB's own concurrency control serialises them, so no
@@ -39,6 +56,9 @@ public:
 	void interrupt_all();
 
 	std::string database_path() const;
+	bool effective_settings(DuckDBEffectiveSettings& out, std::string& err);
+	bool apply_live_settings(const DuckDBLiveSettings& desired, std::string& err,
+	                         std::vector<std::string>* applied = nullptr);
 
 	size_t open_connections() const;
 
@@ -52,6 +72,7 @@ public:
 private:
 	mutable std::mutex mutex_;
 	duckdb_database database_ { nullptr };
+	duckdb_connection control_connection_ { nullptr };
 	std::string database_path_;
 	std::vector<duckdb_connection> live_connections_;
 	std::atomic<size_t> open_connections_ { 0 };

@@ -13,7 +13,10 @@ The chassis exposes two ABI surfaces:
 1. **Descriptor surface** — what a plugin's `.so` exports. Defined in `include/ProxySQL_Plugin.h`. Stable across feature tiers. Tail-extensible.
 2. **Services surface** — what the chassis injects into the plugin (function pointers the plugin calls back through). Also defined in `include/ProxySQL_Plugin.h`. Also tail-extensible.
 
-A plugin compiled against ABI version N is loadable by a chassis that supports `PROXYSQL_PLUGIN_ABI_VERSION_MAX >= N`. The reverse — a future plugin against an older chassis — is rejected at load time.
+A plugin compiled against ABI layout version N is loadable by a chassis that
+supports `PROXYSQL_PLUGIN_ABI_VERSION_MAX >= N` and was built with the same
+`-DDEBUG` setting. The reverse — a future plugin against an older chassis — is
+rejected at load time.
 
 ---
 
@@ -32,19 +35,24 @@ The function's return value is a pointer to a static `ProxySQL_PluginDescriptor`
 | Field | Type | Required? | Read by chassis when |
 |---|---|---|---|
 | `name` | `const char*` (non-null, non-empty) | yes | always |
-| `abi_version` | `uint32_t` (must be in `[1, PROXYSQL_PLUGIN_ABI_VERSION_MAX]`) | yes | always |
+| `abi_version` | `uint32_t` (`PROXYSQL_PLUGIN_ABI_VERSION`: layout plus DEBUG tag) | yes | always |
 | `init` | function pointer | NULL allowed | Phase D |
 | `start` | function pointer | NULL allowed | Phase E |
 | `stop` | function pointer | NULL allowed | shutdown |
 | `status_json` | function pointer | NULL allowed | when `SHOW PLUGIN STATUS` is implemented (not yet) |
-| `register_schemas` | function pointer | NULL allowed | Phase B, **only when `abi_version >= 2`** |
+| `register_schemas` | function pointer | NULL allowed | Phase B, **only when the masked layout version is >= 2** |
+| `register_cli_options` | function pointer | NULL allowed | discovery, **only when the masked layout version is >= 6** |
+| `early_action` | function pointer | NULL allowed | after Admin materialization, **only when the masked layout version is >= 6** |
+| `runtime_ready` | function pointer | NULL allowed | immediately before listener validation, **only when the masked layout version is >= 8** |
 
 **Rules:**
 
 - The fields must appear in the order above. Reordering breaks ABI.
 - Fields can only be **appended** in future ABI versions, never inserted in the middle.
 - A NULL function pointer means "the plugin opts out of this phase". For example, a plugin with `start = nullptr` still loads and inits, but never spawns its own threads.
-- The chassis MUST NOT read past the last field defined for `abi_version`. ABI-1 plugins do not have `register_schemas`; reading it would be an out-of-bounds access.
+- The chassis MUST NOT read past the last field defined for the masked layout
+  version. ABI-1 plugins do not have `register_schemas`; reading it would be an
+  out-of-bounds access.
 
 ### Validation at load time
 
@@ -53,15 +61,35 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 - `dlsym` resolves `proxysql_plugin_descriptor_v1`. Else: load fails.
 - The function returns non-null. Else: load fails.
 - `descriptor->name` is non-null and non-empty. Else: load fails.
-- `descriptor->abi_version >= 1 && <= PROXYSQL_PLUGIN_ABI_VERSION_MAX`. Else: load fails with "unsupported plugin ABI version".
-- `descriptor->register_schemas`, if read at all, is read with the predicate `descriptor->abi_version >= 2u`.
+- `descriptor->abi_version` has its `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` masked;
+  the remaining layout must be in `[1, PROXYSQL_PLUGIN_ABI_VERSION_MAX]`.
+  Else: load fails with "unsupported plugin ABI version".
+- The descriptor's DEBUG tag must exactly match the running core. A release
+  plugin cannot load into a DEBUG core, or vice versa.
+- `descriptor->register_schemas`, if read at all, is read only when the
+  masked layout version is at least `2u`.
 
 ### Current ABI version
 
-```c
-#define PROXYSQL_PLUGIN_ABI_VERSION       5
-#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   5
+```cpp
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 9u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 9u;
+
+#ifdef DEBUG
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION =
+    PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#else
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION =
+    PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
+#endif
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX =
+    PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
 ```
+
+`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `9` in a release build and
+`0x40000009` in a DEBUG build. Plugins must use that constant rather than a
+literal so the loader can validate both the layout and build mode.
 
 ABI evolution so far:
 
@@ -73,8 +101,22 @@ ABI evolution so far:
   consumer may release the mutex during that wait and reacquire it before
   returning. ABI-4 plugins see the unchanged `{admindb, configdb, statsdb}`
   prefix and continue to load without using the new callbacks.
+- **ABI 5 → ABI 6:** appends descriptor callbacks for CLI registration and a
+  one-shot early action. The early action receives the definitive parsed option
+  context after Admin is live.
+- **ABI 6 → ABI 7:** appends encrypted put/get/erase secret callbacks to the
+  services table. Phase B exposes rejecting stubs; later phases use the
+  core-owned encrypted config store.
+- **ABI 7 → ABI 8:** appends `runtime_ready` to the descriptor and listener-gate
+  plus scoped MySQL configuration services to the services table. The ABI-8
+  MySQL rule row, base plan, and `apply_mysql_config` callback are frozen.
+- **ABI 8 → ABI 9:** appends `apply_mysql_config_v2` to the services table. Its
+  V2 plan wraps the unchanged ABI-8 plan and carries query-rule attributes in a
+  separate rule-ID-indexed array.
 
-Future ABI versions append fields. The chassis bumps `PROXYSQL_PLUGIN_ABI_VERSION_MAX` and gates each new field's read on `abi_version >= N`.
+Future ABI versions append fields. The chassis bumps the layout/version
+constants and gates each new field's read on the masked layout version being
+at least N.
 
 ---
 
@@ -98,6 +140,10 @@ The services struct is the **same shape** in every phase, but some function poin
 | `register_query_hook` | **returns false (warn)** | live | n/a | n/a |
 | `get_prometheus_registry` | live | live | live | live |
 | `register_runtime_view` (ABI 3+) | live | live | n/a | n/a |
+| encrypted secret callbacks (ABI 7+) | rejecting stubs | live | live | live |
+| `set_listener_gate` (ABI 8+) | rejecting stub | live | live | live |
+| `apply_mysql_config` (ABI 8+) | rejecting stub | live | live | live |
+| `apply_mysql_config_v2` (ABI 9+) | rejecting stub | live | live | live |
 
 Reasons:
 
@@ -110,7 +156,30 @@ Reasons:
 
 The services struct is **tail-extensible**. The chassis fills the struct in declaration order and the plugin reads what it knows about. A plugin compiled against ABI 2 still loads on the current chassis: its compiled-against `ProxySQL_PluginServices` ends at `register_command_alias` and the chassis simply doesn't dereference the trailing `register_runtime_view` for that plugin. Same rule applies for any future ABI-N additions.
 
-The reverse — a future plugin trying to call a field that doesn't exist on the current chassis — would crash. The chassis prevents this by rejecting plugins whose `abi_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX`.
+The reverse — a future plugin trying to call a field that doesn't exist on the
+current chassis — would crash. The chassis prevents this by rejecting plugins
+whose masked layout version exceeds `PROXYSQL_PLUGIN_ABI_VERSION_MAX`.
+
+### ABI-9 scoped MySQL publication
+
+`ProxySQL_PluginMysqlConfigPlanV2` embeds a complete, byte-for-byte unchanged
+`ProxySQL_PluginMysqlConfigPlan` and adds an array of
+`ProxySQL_PluginMysqlRuleAttributesRow { rule_id, attributes }`. Every rule ID
+must identify exactly one rule in the base plan. Duplicate or unknown IDs, null
+values, and attributes that are not valid JSON objects are rejected before any
+publication lock is acquired.
+
+The plan and every pointed-to string are borrowed only for the synchronous
+callback. Core deep-copies and validates them before locking. Successful
+publication applies the base rows and attributes as one generation to Admin
+memory, config disk, and live MySQL runtime. Any staging, commit, or runtime
+failure restores the previous complete runtime and storage state. Operator
+objects outside the caller's ownership ledger are preserved.
+
+ABI-8 plugins continue to call `apply_mysql_config`; their rule attributes are
+empty and their compiled row stride is unchanged. An ABI-9 plugin that requires
+attributes must check `apply_mysql_config_v2` and fail closed when it is absent;
+it must not silently fall back to V1.
 
 ---
 
@@ -197,9 +266,10 @@ Verified by `test/tap/tests/unit/plugin_manager_unit-t.cpp:test_multi_plugin_sta
 
 The chassis follows these rules for ABI evolution:
 
-1. **Increment `PROXYSQL_PLUGIN_ABI_VERSION` for any descriptor or services change.**
+1. **Increment `PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION` and its maximum for any descriptor or services change.**
 2. **Append, never insert.** New fields go at the end of the relevant struct.
-3. **Gate every new field's read.** When the chassis dereferences a field that's only valid for `abi_version >= N`, the read must be inside `if (descriptor->abi_version >= Nu)`.
+3. **Gate every new field's read.** Compare N with the masked layout version,
+   never the raw DEBUG-tagged `abi_version`.
 4. **Plugins set their own `abi_version` to whatever their compile-time header had.** This is the contract for "what fields I have". The chassis's `PROXYSQL_PLUGIN_ABI_VERSION_MAX` is the contract for "what fields I know how to read".
 5. **A future ABI N must not change the layout of fields that exist at ABI N-1.** Otherwise an older plugin stops being loadable.
 
@@ -209,7 +279,8 @@ The current public API surface (`ProxySQL_PluginDescriptor` + `ProxySQL_PluginSe
 
 The chassis can:
 - Pass `nullptr` as a service pointer to indicate "this service is unavailable in this phase". Plugin code must null-check.
-- Reject a plugin whose `abi_version` is unrecognised. Plugins must accept this and exit cleanly.
+- Reject a plugin whose layout version or DEBUG tag is unrecognised. Plugins
+  must accept this and exit cleanly.
 - Tear down a plugin (`stop` + `dlclose`) at any time after `init` succeeded.
 
 Plugins must NOT:
@@ -257,7 +328,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // abi_version (= 5)
+    PROXYSQL_PLUGIN_ABI_VERSION,          // 9 release, 0x40000009 DEBUG
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop
@@ -278,9 +349,11 @@ That's the minimum a chassis-aware plugin needs. The mysqlx plugin is the refere
 
 Anyone extending the chassis ABI in the future must:
 
-1. Bump `PROXYSQL_PLUGIN_ABI_VERSION` and `PROXYSQL_PLUGIN_ABI_VERSION_MAX` in `include/ProxySQL_Plugin.h`.
+1. Bump `PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION` and
+   `PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX` in `include/ProxySQL_Plugin.h`.
 2. Append the new field at the END of the relevant struct.
-3. Gate every read of the new field on `abi_version >= NEW_VERSION`.
+3. Gate every read of the new field on the masked layout version being at
+   least `NEW_VERSION`.
 4. Update [`PLUGIN_API.md`](../PLUGIN_API.md) with the new field's contract.
 5. Update this document's §2 (descriptor) or §3 (services) to add a row for the new field.
 6. Add a unit test in `test/tap/tests/unit/plugin_lifecycle_unit-t.cpp` (or wherever appropriate) that exercises (a) a plugin compiled at the previous ABI version still loads and runs, and (b) the new field is reachable when set.

@@ -39,7 +39,7 @@ inside an independently authenticated encrypted channel.
 
 ## External access is denied by default
 
-ProxySQL sets DuckDB `enable_external_access=false`, overriding DuckDB's own
+ProxySQL sets `duckdb-enable_external_access=false`, overriding DuckDB's own
 default. Keep it false unless all endpoint users are trusted with filesystem
 capabilities of the ProxySQL operating-system account.
 
@@ -50,13 +50,13 @@ Enabling external access can permit operations such as:
 - attaching other database files;
 - interacting with other external state supported by the DuckDB build.
 
-This setting is independent of `read_only`. A read-only main database does not
+This setting is independent of `duckdb-read_only`. A read-only main database does not
 make arbitrary filesystem reads safe and does not replace the external-access
 gate.
 
-Changing `enable_external_access` in `duckdb_variables` and running LOAD does
-not reconfigure the already-open engine. Restart is required. Do not interpret
-the runtime table alone as proof that the live engine adopted the change.
+Changing `duckdb-enable_external_access` from `true` to `false` applies live.
+The reverse direction is rejected while the database is open and waits for the
+next open. Runtime is read back from DuckDB and reports the effective value.
 
 ## Extension behavior
 
@@ -73,7 +73,7 @@ For a file-backed database:
 - make the ProxySQL service account the owner;
 - avoid world-readable or world-writable permissions;
 - protect backups with the same controls as the live file;
-- do not point `database_path` at a sensitive existing file.
+- do not point `duckdb-database_path` at a sensitive existing file.
 
 The plugin passes the configured path to DuckDB. Operating-system permissions
 are the final boundary for that path.
@@ -81,7 +81,7 @@ are the final boundary for that path.
 ## Resource isolation
 
 DuckDB shares the ProxySQL process. A memory- or CPU-intensive query can affect
-normal proxy duties. Set a conservative `memory_limit`, choose `threads`
+normal proxy duties. Set a conservative `duckdb-memory_limit`, choose `duckdb-threads`
 deliberately, cap connections, and limit which users can reach the plugin.
 
 There is currently no per-query timeout. Network isolation and credential
@@ -103,7 +103,7 @@ appropriate supported interface exists.
 
 - Bind only required interfaces.
 - Use dedicated active users and strong passwords.
-- Keep `enable_external_access=false` by default.
+- Keep `duckdb-enable_external_access=false` by default.
 - Use a dedicated database directory with restrictive permissions.
 - Set memory and connection limits before admitting traffic.
 - Verify backup confidentiality and restore procedures.

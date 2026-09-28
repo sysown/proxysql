@@ -1,4 +1,5 @@
 #include "ProxySQL_Plugin.h"
+#include "ProxySQL_Admin_Tables_Definitions.h"
 #include "mysqlx_admin_schema.h"
 #include "mysqlx_config_store.h"
 #include "tap.h"
@@ -14,6 +15,8 @@ namespace {
 
 std::vector<ProxySQL_PluginTableDef> registered_tables;
 std::vector<std::pair<std::string, proxysql_plugin_admin_command_cb>> registered_commands;
+std::vector<std::string> log_messages;
+std::vector<int> log_levels;
 
 void mock_register_table(const ProxySQL_PluginTableDef& def) {
 	registered_tables.push_back(def);
@@ -21,6 +24,11 @@ void mock_register_table(const ProxySQL_PluginTableDef& def) {
 
 void mock_register_command(const char* sql, proxysql_plugin_admin_command_cb cb) {
 	registered_commands.push_back({sql, cb});
+}
+
+void mock_log_message(int level, const char* message) {
+	log_levels.push_back(level);
+	log_messages.emplace_back(message != nullptr ? message : "");
 }
 
 proxysql_plugin_admin_command_cb find_command(const char* name) {
@@ -61,7 +69,7 @@ static bool create_tables_by_kind(SQLite3DB& db, ProxySQL_PluginDBKind kind) {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(34);
+	plan(36);
 	diag("=== mysqlx_admin_disk_commands_unit-t starting ===");
 
 	test_init_minimal();
@@ -71,27 +79,31 @@ int main() {
 	ProxySQL_PluginServices services {};
 	services.register_table = &mock_register_table;
 	services.register_command = &mock_register_command;
+	services.log_message = &mock_log_message;
 	ok(mysqlx_register_admin_schema(services), "mysqlx_register_admin_schema succeeds");
 
 	SQLite3DB admindb;
 	admindb.open(const_cast<char*>("file:mem_admindb?mode=memory&cache=shared"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);  // NOSONAR
-	// Mirror production (Admin_Bootstrap.cpp merge_plugin_tables +
-	// check_and_build_standard_tables): admin_db defs materialize in
-	// admindb, config_db defs in configdb, each exactly once. The
-	// plugin intentionally registers the same table name+def in both
-	// namespaces (register_table_pair) so the disk tier persists the
-	// memory tier; executing both namespaces into one handle (as the
-	// old create_all_tables did) double-creates 4 tables and logs
-	// benign "already exists" SQLITE errors that mask real failures.
 	ok(create_tables_by_kind(admindb, ProxySQL_PluginDBKind::admin_db),
 	   "admin fixture tables created in admindb");
+	admindb.execute(ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 
 	SQLite3DB configdb;
 	configdb.open(const_cast<char*>("file:mem_configdb?mode=memory&cache=shared"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);  // NOSONAR
 	ok(create_tables_by_kind(configdb, ProxySQL_PluginDBKind::config_db),
 	   "config fixture tables created in configdb");
+	configdb.execute(ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 
 	admindb.execute("ATTACH DATABASE 'file:mem_configdb?mode=memory&cache=shared' AS disk");
+	admindb.execute("CREATE TABLE disk.mysqlx_variables (variable_name VARCHAR PRIMARY KEY, variable_value VARCHAR)");
+	mysqlx_warn_deprecated_disk_variables(admindb, services);
+	ok(log_messages.size() == 1 && log_levels.size() == 1 && log_levels[0] == 4 &&
+	   log_messages[0].find("deprecated and ignored") != std::string::npos &&
+	   log_messages[0].find("DROP TABLE IF EXISTS disk.mysqlx_variables") != std::string::npos,
+	   "legacy disk.mysqlx_variables produces a warning-level manual-removal notice");
+	ok(admindb.return_one_int(
+	     "SELECT COUNT(*) FROM disk.sqlite_master WHERE type='table' AND name='mysqlx_variables'") == 1,
+	   "legacy disk.mysqlx_variables is not dropped automatically");
 
 	ProxySQL_PluginCommandContext ctx;
 	ctx.admindb = &admindb;
@@ -175,28 +187,33 @@ int main() {
 	}
 
 	{
-		admindb.execute("INSERT INTO mysqlx_variables (variable_name, variable_value) VALUES ('thread_pool_size', '8')");
-		admindb.execute("INSERT INTO mysqlx_variables (variable_name, variable_value) VALUES ('max_cached_connections', '100')");
+		admindb.execute("INSERT INTO global_variables (variable_name, variable_value) VALUES ('mysqlx-thread_pool_size', '8')");
+		admindb.execute("INSERT INTO global_variables (variable_name, variable_value) VALUES ('mysqlx-max_cached_connections_per_thread', '100')");
+		admindb.execute("INSERT INTO global_variables (variable_name, variable_value) VALUES ('admin-main_test', 'kept')");
+		admindb.execute("INSERT INTO disk.global_variables (variable_name, variable_value) VALUES ('admin-disk_test', 'kept')");
 
 		auto* save_cmd = find_command("SAVE MYSQLX VARIABLES TO DISK");
 		ok(save_cmd != nullptr, "SAVE MYSQLX VARIABLES TO DISK registered");
 		ProxySQL_PluginCommandResult save_res = save_cmd(ctx, nullptr);
 		ok(save_res.error_code == 0, "SAVE MYSQLX VARIABLES TO DISK succeeds");
 
-		admindb.execute("DELETE FROM mysqlx_variables");
+		admindb.execute("DELETE FROM global_variables WHERE variable_name LIKE 'mysqlx-%'");
 
 		auto* load_cmd = find_command("LOAD MYSQLX VARIABLES FROM DISK");
 		ok(load_cmd != nullptr, "LOAD MYSQLX VARIABLES FROM DISK registered");
 		ProxySQL_PluginCommandResult load_res = load_cmd(ctx, nullptr);
 		ok(load_res.error_code == 0, "LOAD MYSQLX VARIABLES FROM DISK succeeds");
 
-		int cnt = admindb.return_one_int("SELECT COUNT(*) FROM mysqlx_variables");
-		ok(cnt == 2, "both variables restored from disk");
+		int cnt = admindb.return_one_int("SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mysqlx-%'");
+		ok(cnt == 2 &&
+		   admindb.return_one_int("SELECT COUNT(*) FROM disk.global_variables WHERE variable_name='admin-disk_test'") == 1 &&
+		   admindb.return_one_int("SELECT COUNT(*) FROM global_variables WHERE variable_name='admin-main_test'") == 1,
+		   "mysqlx-* variables are restored without touching other namespaces");
 
-		int v1 = admindb.return_one_int("SELECT COUNT(*) FROM mysqlx_variables WHERE variable_name='thread_pool_size' AND variable_value='8'");
+		int v1 = admindb.return_one_int("SELECT COUNT(*) FROM global_variables WHERE variable_name='mysqlx-thread_pool_size' AND variable_value='8'");
 		ok(v1 == 1, "thread_pool_size variable value preserved");
 
-		int v2 = admindb.return_one_int("SELECT COUNT(*) FROM mysqlx_variables WHERE variable_name='max_cached_connections' AND variable_value='100'");
+		int v2 = admindb.return_one_int("SELECT COUNT(*) FROM global_variables WHERE variable_name='mysqlx-max_cached_connections_per_thread' AND variable_value='100'");
 		ok(v2 == 1, "max_cached_connections variable value preserved");
 	}
 

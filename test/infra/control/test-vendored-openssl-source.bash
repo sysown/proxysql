@@ -108,22 +108,17 @@ expect_failure \
 	"${missing_dir}/openssl-3.5.7.tar.gz" \
 	"${missing_dir}/openssl-3.5.7.tar.gz.sha256"
 
-pointer_dir="${tmp_dir}/pointer"
-mkdir -p "${pointer_dir}"
-printf '%s\n' \
-	'version https://git-lfs.github.com/spec/v1' \
-	'oid sha256:a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8' \
-	'size 53800000' \
-	> "${pointer_dir}/openssl-3.5.7.tar.gz"
-printf '%s  %s\n' \
-	a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8 \
-	openssl-3.5.7.tar.gz \
-	> "${pointer_dir}/openssl-3.5.7.tar.gz.sha256"
+text_dir="${tmp_dir}/text"
+mkdir -p "${text_dir}"
+printf '%s\n' 'not a gzip archive' > "${text_dir}/openssl-3.5.7.tar.gz"
+write_checksum \
+	"${text_dir}/openssl-3.5.7.tar.gz" \
+	"${text_dir}/openssl-3.5.7.tar.gz.sha256"
 expect_failure \
-	"unhydrated LFS pointer is rejected with recovery" \
-	"git lfs pull --include=deps/libssl/openssl-3.5.7.tar.gz" \
-	"${pointer_dir}/openssl-3.5.7.tar.gz" \
-	"${pointer_dir}/openssl-3.5.7.tar.gz.sha256"
+	"plain text file is rejected as invalid gzip" \
+	"not valid gzip data" \
+	"${text_dir}/openssl-3.5.7.tar.gz" \
+	"${text_dir}/openssl-3.5.7.tar.gz.sha256"
 
 missing_checksum_dir="${tmp_dir}/missing-checksum"
 make_fixture_archive "${missing_checksum_dir}" openssl-3.5.7

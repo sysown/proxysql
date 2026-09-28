@@ -1,5 +1,6 @@
-# v2.4.0 supports caching_sha2_password and TLS connections required by MySQL 8.4+.
-FROM ghcr.io/sysown/proxysql-mysqlbinlog:2.4.0-ubuntu22 AS binlog-reader
+# v2.5.0 keeps the caching_sha2_password and TLS support that MySQL 8.4+
+# requires, and adds MariaDB GTID support (native ARM64 images too).
+FROM ghcr.io/sysown/proxysql-mysqlbinlog:2.5.0-ubuntu22 AS binlog-reader
 
 FROM ubuntu:22.04
 

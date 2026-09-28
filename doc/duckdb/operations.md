@@ -20,22 +20,26 @@ Use this sequence for changes:
 
 ```sql
 -- Edit
-UPDATE duckdb_variables
+UPDATE global_variables
 SET variable_value='200'
-WHERE variable_name='max_connections';
+WHERE variable_name='duckdb-max_connections';
 
 -- Install recognized values into the module
 LOAD DUCKDB VARIABLES TO RUNTIME;
 
 -- Confirm the module view
-SELECT * FROM runtime_duckdb_variables ORDER BY variable_name;
+SELECT * FROM runtime_global_variables
+WHERE variable_name LIKE 'duckdb-%' ORDER BY variable_name;
 
 -- Persist the editable table
 SAVE DUCKDB VARIABLES TO DISK;
 ```
 
-Only `max_connections` changes the live accept cap immediately. Schedule a
-restart for listener addresses and engine-open settings.
+`duckdb-memory_limit`, `duckdb-threads`, and `duckdb-max_connections` apply live.
+Disabling `duckdb-enable_external_access` also applies live. Listener addresses
+(`duckdb-mysql_ifaces`, `duckdb-pgsql_ifaces`), `duckdb-database_path`,
+`duckdb-read_only`, and enabling `duckdb-enable_external_access` wait for the
+next plugin/database open.
 
 ## Health checks
 
@@ -57,9 +61,9 @@ when building dashboards or alerts.
 
 Three settings interact:
 
-- `memory_limit` constrains the embedded DuckDB engine.
-- `threads` controls DuckDB query parallelism.
-- `max_connections` caps concurrent accepted plugin sessions.
+- `duckdb-memory_limit` constrains the embedded DuckDB engine.
+- `duckdb-threads` controls DuckDB query parallelism.
+- `duckdb-max_connections` caps concurrent accepted plugin sessions.
 
 DuckDB executes in the ProxySQL process, so do not allocate the full host to
 DuckDB. Leave headroom for ProxySQL core, client buffers, monitoring, plugins,
@@ -97,7 +101,7 @@ ops/s as a product claim.
 
 ## Connection-limit behavior
 
-When the reservation count reaches `max_connections`, the listener closes a
+When the reservation count reaches `duckdb-max_connections`, the listener closes a
 newly accepted socket before constructing a protocol session. Existing
 connections remain active. Reducing the limit below the current count does not
 disconnect them; new admissions resume after the count drops below the cap.
@@ -128,8 +132,8 @@ at the configured path with correct ownership, then start and verify it.
 
 ## Restart changes
 
-Before restarting for `database_path`, `memory_limit`, `threads`, `read_only`,
-external access, or listener changes:
+Before restarting for `duckdb-database_path`, `duckdb-read_only`, enabling
+`duckdb-enable_external_access`, or listener changes:
 
 1. save the intended editable configuration to disk;
 2. record the current runtime view;
@@ -155,7 +159,7 @@ After upgrading the core/plugin pair:
 
 - confirm no ABI mismatch appears in logs;
 - verify the expected DuckDB file opens;
-- compare `runtime_duckdb_variables` with the saved disk rows;
+- compare the `duckdb-*` rows in `runtime_global_variables` with Disk;
 - run simple queries through both protocols;
 - test a transaction and an expected error path;
 - confirm connection and memory limits remain appropriate.

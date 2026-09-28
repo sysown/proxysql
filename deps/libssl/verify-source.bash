@@ -12,7 +12,6 @@ else
 fi
 archive_name=$(basename -- "${archive}")
 required_root=openssl-3.5.7
-lfs_path=deps/libssl/openssl-3.5.7.tar.gz
 
 fail() {
 	echo "ERROR: $*" >&2
@@ -33,17 +32,6 @@ sha256_file() {
 }
 
 [[ -f "${archive}" ]] || fail "OpenSSL source archive is missing: ${archive}"
-
-first_line=
-IFS= read -r first_line < "${archive}" || true
-if [[ "${first_line}" == 'version https://git-lfs.github.com/spec/v1' ]]; then
-	cat >&2 <<EOF
-ERROR: OpenSSL source archive is an unhydrated Git LFS pointer: ${archive}
-Hydrate the vendored source with:
-  git lfs pull --include=${lfs_path}
-EOF
-	exit 1
-fi
 
 [[ -f "${checksum_file}" ]] || fail "OpenSSL checksum file is missing: ${checksum_file}"
 

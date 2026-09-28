@@ -445,6 +445,7 @@ struct p_hg_dyn_counter {
 		hostgroup_pool_acquisitions,
 		hostgroup_pool_waits,
 		hostgroup_pool_wait_time,
+		hostgroup_backup_server_selected,
 #endif
 		SIZE_
 	};
@@ -869,6 +870,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_acquisitions_map {};
 		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_waits_map {};
 		std::map<std::string, prometheus::Counter*> p_hostgroup_pool_wait_time_map {};
+		std::map<std::string, prometheus::Counter*> p_hostgroup_backup_server_selected_map {};
 		std::map<std::string, prometheus::Gauge*> p_hostgroup_pool_waiters_map {};
 #endif
 
@@ -906,7 +908,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	~MySQL_HostGroups_Manager();
 	void init();
 #ifdef PROXYSQL40
-	void refresh_aws_locality_configuration();
+	void refresh_aws_locality_configuration(bool acquire_lock = true);
 	void set_aws_locality_awareness_enabled(bool enabled);
 	void refresh_aws_locality_stats(SQLite3DB* statsdb) const;
 	static bool project_aws_locality_stats(
@@ -935,7 +937,8 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 		bool only_commit_runtime_mysql_servers = true,
-		bool update_version = false
+		bool update_version = false,
+		bool acquire_lock = true
 	);
 	/**
 	 * @brief Extracted from 'commit'. Performs the following actions:

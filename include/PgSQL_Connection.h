@@ -547,6 +547,7 @@ public:
 	unsigned int number_of_matching_session_variables(const PgSQL_Connection* client_conn, unsigned int& not_matching);
 	void set_query(const char* stmt, unsigned long length, const char* _backend_stmt_name = nullptr, const PgSQL_Extended_Query_Info* extended_query_info = nullptr);
 	void reset();
+	bool is_expired(unsigned long long now) const;
 
 	bool IsKeepMultiplexEnabledVariables(const char* query_digest_text);
 
@@ -646,6 +647,11 @@ public:
 
 	bool send_quit;
 	bool reusable;
+	// libpq's own transport, held while a fast forward relay has displaced it with
+	// memory buffers. Belongs to the connection, not to the stream that borrowed it.
+	BIO* saved_backend_rbio = nullptr;
+	BIO* saved_backend_wbio = nullptr;
+
 	bool healthy; // false: destroy the connection, never reset it; not restored by reset()
 	bool processing_multi_statement;
 	bool multiplex_delayed;

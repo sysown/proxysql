@@ -25,6 +25,10 @@
 // Extern declarations (defined in test_globals.cpp)
 extern MySQL_HostGroups_Manager *MyHGM;
 extern PgSQL_HostGroups_Manager *PgHGM;
+#ifdef PROXYSQL31
+void init_myhgc_hostgroup_settings(const char *, MyHGC *);
+void init_myhgc_hostgroup_settings(const char *, PgSQL_HGC *);
+#endif
 
 // ============================================================================
 // Helpers
@@ -35,7 +39,7 @@ extern PgSQL_HostGroups_Manager *PgHGM;
  * @return 0 on success, -1 on failure.
  */
 static int add_mysql_server(int hg, const char *addr, int port,
-	int weight = 1, int max_conns = 100)
+	int64_t weight = 1, int max_conns = 100)
 {
 	srv_info_t info;
 	info.addr = addr;
@@ -63,6 +67,275 @@ static int remove_mysql_server(int hg, const char *addr, int port) {
 	MyHGM->wrunlock();
 	return rc;
 }
+
+#ifdef PROXYSQL31
+static int add_pgsql_server(int hg, const char *addr, int port,
+	int64_t weight, int64_t max_conns)
+{
+	PgSQL_srv_info_t info;
+	info.addr = addr;
+	info.port = port;
+	info.kind = "test";
+
+	PgSQL_srv_opts_t opts;
+	opts.weigth = weight;
+	opts.max_conns = max_conns;
+	opts.use_ssl = 0;
+
+	PgHGM->wrlock();
+	int rc = PgHGM->create_new_server_in_hg(hg, info, opts);
+	PgHGM->wrunlock();
+	return rc;
+}
+
+static MySrvC *find_mysql_server(int hg, const char *addr) {
+	MyHGC *hgc = MyHGM->MyHGC_find(hg);
+	if (hgc == nullptr) {
+		return nullptr;
+	}
+	for (unsigned int i = 0; i < hgc->mysrvs->cnt(); i++) {
+		MySrvC *server = hgc->mysrvs->idx(i);
+		if (strcmp(server->address, addr) == 0) {
+			return server;
+		}
+	}
+	return nullptr;
+}
+
+static PgSQL_SrvC *find_pgsql_server(int hg, const char *addr) {
+	PgSQL_HGC *hgc = PgHGM->MyHGC_find(hg);
+	if (hgc == nullptr) {
+		return nullptr;
+	}
+	for (unsigned int i = 0; i < hgc->mysrvs->cnt(); i++) {
+		PgSQL_SrvC *server = hgc->mysrvs->idx(i);
+		if (strcmp(server->address, addr) == 0) {
+			return server;
+		}
+	}
+	return nullptr;
+}
+
+static void test_mysql_post_unshun_respects_threshold() {
+	const int hid = 9101;
+	const int primary_rc = add_mysql_server(hid, "mysql-post-unshun-primary", 13306, 10, 0);
+	const int backup_rc = add_mysql_server(hid, "mysql-post-unshun-backup", 13307, 1, 100);
+	ok(primary_rc == 0 && backup_rc == 0, "MySQL HGM: post-unshun fixtures are created");
+	if (primary_rc != 0 || backup_rc != 0) {
+		return;
+	}
+
+	MyHGC *hgc = MyHGM->MyHGC_find(hid);
+	MySrvC *primary = find_mysql_server(hid, "mysql-post-unshun-primary");
+	MySrvC *backup = find_mysql_server(hid, "mysql-post-unshun-backup");
+	if (hgc == nullptr || primary == nullptr || backup == nullptr) {
+		ok(false, "MySQL HGM: post-unshun fixtures are addressable");
+		return;
+	}
+	hgc->attributes.backup_weight_threshold = 10;
+	hgc->attributes.backup_availability = 1;
+	MyHGM->wrlock();
+	backup->set_status(MYSQL_SERVER_STATUS_SHUNNED);
+	MyHGM->wrunlock();
+	backup->shunned_automatic = true;
+	backup->time_last_detected_error = time(nullptr) - 50;
+
+	const int old_default_max_latency_ms = mysql_thread___default_max_latency_ms;
+	const int old_shun_recovery_time_sec = mysql_thread___shun_recovery_time_sec;
+	const int old_connect_timeout_server_max = mysql_thread___connect_timeout_server_max;
+	const int old_session_track_variables = mysql_thread___session_track_variables;
+	const int old_unshun_algorithm = mysql_thread___unshun_algorithm;
+	mysql_thread___default_max_latency_ms = 1000;
+	mysql_thread___shun_recovery_time_sec = 100;
+	mysql_thread___connect_timeout_server_max = 100000;
+	mysql_thread___session_track_variables = session_track_variables::DISABLED;
+	mysql_thread___unshun_algorithm = 0;
+	MyHGM->wrlock();
+	MySrvC *selected = hgc->get_random_MySrvC(nullptr, 0, -1, nullptr);
+	MyHGM->wrunlock();
+	mysql_thread___default_max_latency_ms = old_default_max_latency_ms;
+	mysql_thread___shun_recovery_time_sec = old_shun_recovery_time_sec;
+	mysql_thread___connect_timeout_server_max = old_connect_timeout_server_max;
+	mysql_thread___session_track_variables = old_session_track_variables;
+	mysql_thread___unshun_algorithm = old_unshun_algorithm;
+	ok(selected == nullptr &&
+		hgc->backup_servers_selected.load(std::memory_order_relaxed) == 0,
+		"MySQL HGM: desperate-unshun does not bypass an available primary tier");
+}
+
+static void test_pgsql_post_unshun_respects_threshold() {
+	const int hid = 9102;
+	const int primary_rc = add_pgsql_server(hid, "pgsql-post-unshun-primary", 15306, 10, 0);
+	const int backup_rc = add_pgsql_server(hid, "pgsql-post-unshun-backup", 15307, 1, 100);
+	ok(primary_rc == 0 && backup_rc == 0, "PgSQL HGM: post-unshun fixtures are created");
+	if (primary_rc != 0 || backup_rc != 0) {
+		return;
+	}
+
+	PgSQL_HGC *hgc = PgHGM->MyHGC_find(hid);
+	PgSQL_SrvC *primary = find_pgsql_server(hid, "pgsql-post-unshun-primary");
+	PgSQL_SrvC *backup = find_pgsql_server(hid, "pgsql-post-unshun-backup");
+	if (hgc == nullptr || primary == nullptr || backup == nullptr) {
+		ok(false, "PgSQL HGM: post-unshun fixtures are addressable");
+		return;
+	}
+	hgc->attributes.backup_weight_threshold = 10;
+	hgc->attributes.backup_availability = 1;
+	backup->status = MYSQL_SERVER_STATUS_SHUNNED;
+	backup->shunned_automatic = true;
+	backup->time_last_detected_error = time(nullptr) - 50;
+
+	const int old_default_max_latency_ms = pgsql_thread___default_max_latency_ms;
+	const int old_shun_recovery_time_sec = pgsql_thread___shun_recovery_time_sec;
+	const int old_connect_timeout_server_max = pgsql_thread___connect_timeout_server_max;
+	const int old_unshun_algorithm = pgsql_thread___unshun_algorithm;
+	pgsql_thread___default_max_latency_ms = 1000;
+	pgsql_thread___shun_recovery_time_sec = 100;
+	pgsql_thread___connect_timeout_server_max = 100000;
+	pgsql_thread___unshun_algorithm = 0;
+	PgHGM->wrlock();
+	PgSQL_SrvC *selected = hgc->get_random_MySrvC(nullptr, 0, -1, nullptr);
+	PgHGM->wrunlock();
+	pgsql_thread___default_max_latency_ms = old_default_max_latency_ms;
+	pgsql_thread___shun_recovery_time_sec = old_shun_recovery_time_sec;
+	pgsql_thread___connect_timeout_server_max = old_connect_timeout_server_max;
+	pgsql_thread___unshun_algorithm = old_unshun_algorithm;
+	ok(selected == nullptr &&
+		hgc->backup_servers_selected.load(std::memory_order_relaxed) == 0,
+		"PgSQL HGM: desperate-unshun does not bypass an available primary tier");
+}
+
+static void test_mysql_primary_presence_weight_overflow() {
+	const int hid = 9103;
+	const int first_rc = add_mysql_server(hid, "mysql-overflow-primary-1", 13308, 2147483648LL, 100);
+	const int second_rc = add_mysql_server(hid, "mysql-overflow-primary-2", 13309, 2147483648LL, 100);
+	const int backup_rc = add_mysql_server(hid, "mysql-overflow-backup", 13310, 1, 100);
+	ok(first_rc == 0 && second_rc == 0 && backup_rc == 0,
+		"MySQL HGM: primary weight overflow fixtures are created");
+	if (first_rc != 0 || second_rc != 0 || backup_rc != 0) {
+		return;
+	}
+
+	MyHGC *hgc = MyHGM->MyHGC_find(hid);
+	MySrvC *first = find_mysql_server(hid, "mysql-overflow-primary-1");
+	MySrvC *second = find_mysql_server(hid, "mysql-overflow-primary-2");
+	if (hgc == nullptr || first == nullptr || second == nullptr) {
+		ok(false, "MySQL HGM: primary weight overflow fixtures are addressable");
+		return;
+	}
+	hgc->attributes.backup_weight_threshold = 10;
+	hgc->attributes.backup_availability = 0;
+	// Mirror the post-unshun tests: get_random_MySrvC() is a production entry
+	// point, so it must be called under the HGM write lock and with
+	// session_track_variables pinned to DISABLED (ENFORCED dereferences
+	// sess->thread, and these calls pass sess == nullptr).
+	const int old_default_max_latency_ms = mysql_thread___default_max_latency_ms;
+	const int old_session_track_variables = mysql_thread___session_track_variables;
+	mysql_thread___default_max_latency_ms = 1000;
+	mysql_thread___session_track_variables = session_track_variables::DISABLED;
+	MyHGM->wrlock();
+	MySrvC *selected = hgc->get_random_MySrvC(nullptr, 0, -1, nullptr);
+	MyHGM->wrunlock();
+	mysql_thread___default_max_latency_ms = old_default_max_latency_ms;
+	mysql_thread___session_track_variables = old_session_track_variables;
+	ok(selected == first || selected == second,
+		"MySQL HGM: primary presence survives a 2^32 unsigned weight sum");
+}
+
+static void test_pgsql_primary_presence_weight_overflow() {
+	const int hid = 9104;
+	const int first_rc = add_pgsql_server(hid, "pgsql-overflow-primary-1", 15308, 2147483648LL, 100);
+	const int second_rc = add_pgsql_server(hid, "pgsql-overflow-primary-2", 15309, 2147483648LL, 100);
+	const int backup_rc = add_pgsql_server(hid, "pgsql-overflow-backup", 15310, 1, 100);
+	ok(first_rc == 0 && second_rc == 0 && backup_rc == 0,
+		"PgSQL HGM: primary weight overflow fixtures are created");
+	if (first_rc != 0 || second_rc != 0 || backup_rc != 0) {
+		return;
+	}
+
+	PgSQL_HGC *hgc = PgHGM->MyHGC_find(hid);
+	PgSQL_SrvC *first = find_pgsql_server(hid, "pgsql-overflow-primary-1");
+	PgSQL_SrvC *second = find_pgsql_server(hid, "pgsql-overflow-primary-2");
+	if (hgc == nullptr || first == nullptr || second == nullptr) {
+		ok(false, "PgSQL HGM: primary weight overflow fixtures are addressable");
+		return;
+	}
+	hgc->attributes.backup_weight_threshold = 10;
+	hgc->attributes.backup_availability = 0;
+	// Mirror the MySQL overflow test: get_random_MySrvC() is a production entry
+	// point, so it must be called under the HGM write lock. (PgSQL has no
+	// mysql_thread___session_track_variables equivalent, so there is nothing to
+	// pin here.)
+	const int old_default_max_latency_ms = pgsql_thread___default_max_latency_ms;
+	pgsql_thread___default_max_latency_ms = 1000;
+	PgHGM->wrlock();
+	PgSQL_SrvC *selected = hgc->get_random_MySrvC(nullptr, 0, -1, nullptr);
+	PgHGM->wrunlock();
+	pgsql_thread___default_max_latency_ms = old_default_max_latency_ms;
+	ok(selected == first || selected == second,
+		"PgSQL HGM: primary presence survives a 2^32 unsigned weight sum");
+}
+
+static void test_mysql_parser_defaults() {
+	MyHGC hgc(9201);
+	hgc.attributes.max_num_online_servers = 12345;
+	hgc.attributes.backup_weight_threshold = 10;
+	hgc.attributes.backup_availability = 2;
+	init_myhgc_hostgroup_settings("{\"backup_weight_threshold\":5}", &hgc);
+	ok(hgc.attributes.backup_weight_threshold == 5 &&
+		hgc.attributes.backup_availability == 0 &&
+		hgc.attributes.max_num_online_servers == 12345,
+		"MySQL parser: omitted backup_availability resets to selectable without unrelated reset");
+
+	hgc.attributes.backup_weight_threshold = 10;
+	hgc.attributes.backup_availability = 2;
+	init_myhgc_hostgroup_settings("", &hgc);
+	ok(hgc.attributes.backup_weight_threshold == 0 &&
+		hgc.attributes.backup_availability == 0 &&
+		hgc.attributes.max_num_online_servers == 12345,
+		"MySQL parser: empty hostgroup settings reset backup defaults only");
+
+	hgc.attributes.backup_weight_threshold = 10;
+	hgc.attributes.backup_availability = 2;
+	init_myhgc_hostgroup_settings("{\"backup_weight_threshold\":-1,\"backup_availability\":\"invalid\"}", &hgc);
+	ok(hgc.attributes.backup_weight_threshold == 10 && hgc.attributes.backup_availability == 2,
+		"MySQL parser: invalid backup values retain previous values");
+
+	init_myhgc_hostgroup_settings("{", &hgc);
+	ok(hgc.attributes.backup_weight_threshold == 10 && hgc.attributes.backup_availability == 2,
+		"MySQL parser: malformed hostgroup settings retain previous backup values");
+}
+
+static void test_pgsql_parser_defaults() {
+	PgSQL_HGC hgc(9202);
+	hgc.attributes.max_num_online_servers = 12345;
+	hgc.attributes.backup_weight_threshold = 10;
+	hgc.attributes.backup_availability = 2;
+	init_myhgc_hostgroup_settings("{\"backup_weight_threshold\":5}", &hgc);
+	ok(hgc.attributes.backup_weight_threshold == 5 &&
+		hgc.attributes.backup_availability == 0 &&
+		hgc.attributes.max_num_online_servers == 12345,
+		"PgSQL parser: omitted backup_availability resets to selectable without unrelated reset");
+
+	hgc.attributes.backup_weight_threshold = 10;
+	hgc.attributes.backup_availability = 2;
+	init_myhgc_hostgroup_settings("", &hgc);
+	ok(hgc.attributes.backup_weight_threshold == 0 &&
+		hgc.attributes.backup_availability == 0 &&
+		hgc.attributes.max_num_online_servers == 12345,
+		"PgSQL parser: empty hostgroup settings reset backup defaults only");
+
+	hgc.attributes.backup_weight_threshold = 10;
+	hgc.attributes.backup_availability = 2;
+	init_myhgc_hostgroup_settings("{\"backup_weight_threshold\":-1,\"backup_availability\":\"invalid\"}", &hgc);
+	ok(hgc.attributes.backup_weight_threshold == 10 && hgc.attributes.backup_availability == 2,
+		"PgSQL parser: invalid backup values retain previous values");
+
+	init_myhgc_hostgroup_settings("{", &hgc);
+	ok(hgc.attributes.backup_weight_threshold == 10 && hgc.attributes.backup_availability == 2,
+		"PgSQL parser: malformed hostgroup settings retain previous backup values");
+}
+#endif
 
 // ============================================================================
 // 1. Server creation and removal
@@ -302,7 +575,7 @@ static void test_hostgroup_pool_stats(HGM *hgm, unsigned int hid, const char *pr
 
 int main() {
 #ifdef PROXYSQL31
-	plan(29);
+	plan(45);
 #else
 	plan(17);
 #endif
@@ -320,11 +593,19 @@ int main() {
 	test_mysql_latency();                // 1 test
 	test_mysql_hostgroup_independence(); // 2 tests
 	test_mysql_duplicate_server();       // 1 test
+#ifdef PROXYSQL31
+	test_mysql_post_unshun_respects_threshold();
+	test_mysql_primary_presence_weight_overflow();
+	test_mysql_parser_defaults();
+#endif
 
 	// PgSQL tests
 	test_pgsql_create_and_remove();      // 3 tests
 	test_pgsql_shun();                   // 1 test
 #ifdef PROXYSQL31
+	test_pgsql_post_unshun_respects_threshold();
+	test_pgsql_primary_presence_weight_overflow();
+	test_pgsql_parser_defaults();
 	test_hostgroup_pool_stats(MyHGM, 10, "MySQL"); // 5 tests
 	test_hostgroup_pool_stats(PgHGM, 100, "PgSQL"); // 5 tests
 	test_unknown_hostgroup_stats_lookup(MyHGM, "MySQL"); // 1 test

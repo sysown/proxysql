@@ -1,4 +1,6 @@
 #include "duckdb_session.h"
+#include "duckdb_config.h"
+#include "duckdb_engine.h"
 #include "duckdb.h"
 #include "sqlite3db.h"
 #include "tap.h"
@@ -35,7 +37,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(62);
+	plan(71);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -353,6 +355,43 @@ int main() {
 
 	duckdb_disconnect(&conn);
 	duckdb_close(&db);
+
+	DuckDBConfigStore managed_cfg;
+	DuckDBEngine managed_engine;
+	std::string managed_err;
+	if (!managed_engine.open(managed_cfg, managed_err)) {
+		BAIL_OUT("could not open managed DuckDB engine");
+	}
+	duckdb_connection managed_conn = nullptr;
+	if (!managed_engine.connect(&managed_conn, managed_err)) {
+		BAIL_OUT("could not connect to managed DuckDB engine");
+	}
+	bool handled = false;
+	ok(duckdb_execute_managed_set("SET TimeZone='UTC'", managed_engine, handled, managed_err) && !handled,
+	   "an unmanaged session SET remains on the ordinary client path");
+	ok(duckdb_execute_managed_set("SET threads=5", managed_engine, handled, managed_err) && handled,
+	   "a direct managed threads SET is routed through engine control");
+	ok(duckdb_execute_managed_set("SET threads=4 -- tune analytics", managed_engine, handled, managed_err) && handled,
+	   "a managed SET with a trailing SQL comment is still routed through engine control");
+	ok(scalar_count(managed_conn, "SELECT current_setting('threads')::INTEGER") == 4,
+	   "the commented managed SET is visible on an existing client connection");
+	ok(duckdb_execute_managed_set("SET threads=5; SELECT 1", managed_engine, handled, managed_err) && !handled,
+	   "an extra statement after SET stays on the ordinary client path");
+	ok(scalar_count(managed_conn, "SELECT current_setting('threads')::INTEGER") == 4,
+	   "an extra statement after SET does not change engine-global threads");
+	ok(duckdb_execute_managed_set("SET GLOBAL memory_limit='256MB';", managed_engine,
+	                              handled, managed_err) && handled,
+	   "a quoted direct memory SET is routed through engine control");
+	DuckDBEffectiveSettings managed_effective;
+	ok(managed_engine.effective_settings(managed_effective, managed_err) &&
+	   managed_effective.memory_limit == "244.1 MiB",
+	   "direct memory SET uses DuckDB canonical effective readback");
+	ok(!duckdb_execute_managed_set("SET access_mode='READ_ONLY'", managed_engine,
+	                               handled, managed_err) && handled &&
+	   managed_err.find("cannot be changed") != std::string::npos,
+	   "a direct startup-only access_mode change is rejected clearly");
+	managed_engine.disconnect(&managed_conn);
+	managed_engine.close();
 
 	return exit_status();
 }

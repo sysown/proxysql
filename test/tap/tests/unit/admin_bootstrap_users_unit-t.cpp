@@ -4,6 +4,17 @@
  */
 
 #include "tap.h"
+
+#ifdef PROXYSQL40
+
+int main() {
+	plan(1);
+	skip(1, "legacy bootstrap-user import is replaced by plugin publication in PROXYSQL40");
+	return exit_status();
+}
+
+#else
+
 #include "test_globals.h"
 #include "test_init.h"
 
@@ -149,3 +160,5 @@ int main() {
 	test_cleanup_minimal();
 	return exit_status();
 }
+
+#endif

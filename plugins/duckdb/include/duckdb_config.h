@@ -30,6 +30,9 @@ public:
 
 	bool set(const std::string& name, const std::string& value, std::string& err);
 	std::string get(const std::string& name) const;
+	std::map<std::string, std::string> values() const;
+	bool replace_values(const std::map<std::string, std::string>& values,
+	                    std::string& err);
 	std::vector<std::string> variable_names() const;
 
 	// Cross-field checks that a per-variable set() cannot make.

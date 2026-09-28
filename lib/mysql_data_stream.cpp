@@ -1000,10 +1000,18 @@ int MySQL_Data_Stream::write_to_net() {
 	//VALGRIND_ENABLE_ERROR_REPORTING;
 	if (bytes_io < 0) {
 		if (encrypted==false)	{
-			if ((poll_fds_idx < 0) || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) { // in write_to_net_poll() we has remove this safety
-                                                          // so we enforce it here
+#ifdef PROXYSQL31
+			if (poll_fds_idx < 0 || !mypolls) {
+				if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
+					shut_soft();
+			} else if (mypolls->fds[poll_fds_idx].revents & POLLOUT) {
 				shut_soft();
 			}
+#else
+			if (poll_fds_idx < 0 || !mypolls || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
+				shut_soft();
+			}
+#endif
 		} else {
 			int ssl_ret=SSL_get_error(ssl, bytes_io);
 			if (ssl_ret!=SSL_ERROR_WANT_READ && ssl_ret!=SSL_ERROR_WANT_WRITE) shut_soft();
@@ -1054,12 +1062,14 @@ bool MySQL_Data_Stream::available_data_out() {
 }
 
 void MySQL_Data_Stream::remove_pollout() {
+	if (!mypolls || poll_fds_idx < 0) return;
 	struct pollfd *_pollfd;
 	_pollfd=&mypolls->fds[poll_fds_idx];
 	_pollfd->events = 0;
 }
 
 void MySQL_Data_Stream::set_pollout() {
+	if (!mypolls || poll_fds_idx < 0) return;
 	struct pollfd *_pollfd;
 	_pollfd=&mypolls->fds[poll_fds_idx];
 	if (DSS > STATE_MARIADB_BEGIN && DSS < STATE_MARIADB_END) {
@@ -1192,10 +1202,14 @@ int MySQL_Data_Stream::write_to_net_poll() {
 	}
 	if (call_write_to_net) {
 		if (sess->session_type == PROXYSQL_SESSION_MYSQL) {
-			if (poll_fds_idx>-1) { // NOTE: attempt to force writes
-				if (net_failure==false)
-					rc += write_to_net();
+#ifndef PROXYSQL31
+			if (poll_fds_idx > -1) {
+#endif
+			if (net_failure==false)
+				rc += write_to_net();
+#ifndef PROXYSQL31
 			}
+#endif
 		} else {
 			rc += write_to_net();
 		}
@@ -1819,19 +1833,20 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		return;
 	}
 
-	unsigned long long intv = mysql_thread___connection_max_age_ms;
-	intv *= 1000;
-	if (
-		(( (intv) && (mc->last_time_used > mc->creation_time + intv) )
-		||
-		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection ))
-		&&
-		// NOTE: If the current session if in 'PINGING_SERVER' status, there is
-		// no need to reset the session. The destruction and creation of a new
-		// session in case this session has exceeded the time specified by
-		// 'connection_max_age_ms' will be deferred to the next time the session
-		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
-		sess->status != PINGING_SERVER
+	const bool too_many_stmts = mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection;
+	const bool expired = mc->is_expired(mc->last_time_used);
+	// NOTE: If the current session if in 'PINGING_SERVER' status, there is
+	// no need to reset the session. The destruction and creation of a new
+	// session in case this session has too many prepared statements will be
+	// deferred to the next time the session is used outside 'PINGING_SERVER'
+	// operation. For more context see #3502. A connection that already
+	// exceeded 'connection_max_age_ms' is destroyed regardless of the session
+	// status, otherwise the exemption would keep an aged connection in the
+	// pool for as long as the session keeps pinging.
+	if (expired) {
+		destroy_MySQL_Connection_From_Pool(true);
+	} else if (
+		sess->status != PINGING_SERVER && too_many_stmts
 	) {
 		if (mysql_thread___reset_connection_algorithm == 2 && mc->healthy) {
 			sess->create_new_session_and_reset_connection(this);
@@ -1839,6 +1854,9 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 			destroy_MySQL_Connection_From_Pool(true);
 		}
 	} else {
+		// the auxiliary GTID lookup connection is only valid for the current
+		// session, so it must not be left open on the pooled connection
+		mc->release_gtid_lookup_connection();
 		detach_connection();
 		unplug_backend();
 #ifdef STRESSTEST_POOL
