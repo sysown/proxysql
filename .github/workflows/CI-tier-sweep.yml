@@ -1,0 +1,71 @@
+name: CI-tier-sweep
+run-name: 'v3.0 ${{ github.workflow }} ${{ github.event.after || github.sha }}'
+
+on:
+  # MERGE-ONLY BY CONSTRUCTION.
+  #
+  # There is deliberately NO `pull_request` trigger here, and that single
+  # omission is the entire cost model for this workflow. Adding one would
+  # build the v3.0 and v3.1 tiers on every PR, which is exactly what this
+  # workflow exists to avoid.
+  #
+  # The tier sweep exists because every other CI run builds ONLY the v4.0 tier
+  # (PROXYSQL40=1). A v4.0-only build cannot detect a regression that breaks
+  # the v3.0 or v3.1 compile, because those tiers compile a strictly smaller
+  # set of translation units. We want that coverage, but only after a merge.
+  push:
+    branches:
+    - 'v3.0'
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    # `write-all` is deliberate and should STAY. Automated reviewers keep
+    # flagging it (SonarQube githubactions:S8234, zizmor excessive-permissions,
+    # CodeRabbit security). The reasoning, recorded so this is not re-litigated
+    # every review round:
+    #
+    # 1. This job's only real job is to call ci-tier-sweep.yml, whose `build`
+    #    leg in turn calls ci-builds.yml. Reusable-workflow permissions are the
+    #    INTERSECTION of caller and callee, so whatever is granted here is the
+    #    ceiling for the whole chain. Narrowing here narrows ci-builds.yml, and
+    #    ci-builds.yml deliberately declares no `permissions:` block precisely so
+    #    it can inherit the trusted caller's grant.
+    # 2. ci-builds.yml needs cache-writable and artifact-writable scopes.
+    #    CI-builds.yml:20-24 records the observed failure when it lacks them:
+    #    "actions/cache/save@v4 fails with 'cache write denied: token has no
+    #    writable scopes'". That is a hard CI break with a non-obvious error.
+    # 3. Expressing "all scopes except id-token" requires enumerating ~15
+    #    scopes, and every scope you forget is silently set to `none` -- the
+    #    failure mode doc/GH-Actions/README.md 11.5 warns about, which is also
+    #    why the repo default is left at `write` rather than narrowed per
+    #    workflow. Narrowing must be a repo-wide, tested change, not a drive-by
+    #    in one untested workflow.
+    # 4. Nothing here needs id-token/OIDC (no codecov use_oidc in this
+    #    workflow), so the only real delta from `write-all` is a scope we do not
+    #    use.
+    #
+    # Same reasoning for `secrets: inherit` below: no step in this chain reads
+    # any repo secret (all three only use the automatic secrets.GITHUB_TOKEN),
+    # but every caller in this repo uses `inherit` and the fork-isolation
+    # contract test asserts it for the trusted-caller shape
+    # (test/infra/control/validate_fork_pr_builds.py). Dropping it from exactly
+    # one caller would break the convention and silently discard any secret a
+    # future step needs.
+    permissions: write-all
+    # MERGE ORDER: this file resolves ci-tier-sweep.yml@GH-Actions as soon as
+    # it lands on the default branch. That reusable must already exist on
+    # GH-Actions or every push to v3.0 fails with "Unable to resolve action".
+    # See doc/GH-Actions/README.md 11.1 -- this is the exact failure mode that
+    # took CI down in Jan 2026.
+    uses: sysown/proxysql/.github/workflows/ci-tier-sweep.yml@GH-Actions
+    secrets: inherit
+    with:
+      trigger: ${{ toJson(github) }}

@@ -40,9 +40,21 @@ TRUSTED_PREFIX = re.compile(r"\A\$\{\{\s*inputs\.trusted\s*&&")
 # Snapshot of the build matrix as of the callee SHA pinned by
 # CI-builds-fork.yml. Refresh this together with that pin. It was four
 # entries until 64b1465a9 / 308c14d67 (2026-09-06) retired the duplicate
-# legs. Note this couples a v3.0 lint to GH-Actions content: changing the
-# matrix there is a deliberate change that has to be mirrored here.
-EXPECTED_MATRIX = [("ubuntu24", "-tap-genai-gcov")]
+# legs, then a single 'ubuntu24'/'-tap-genai-gcov' entry until the feature-tier
+# sweep (PR #6234, 2026-09-28) lifted the tier out of the `type` substring and
+# into an explicit `tier`/`variant` matrix key -- so the `type` token is now
+# just '-tap', and '-tap-genai-gcov' no longer appears. Note this couples a
+# v3.0 lint to GH-Actions content: changing the matrix there is a deliberate
+# change that has to be mirrored here.
+EXPECTED_MATRIX = [("ubuntu24", "-tap")]
+
+# The callee grew a `tier` input in #6234. An untrusted caller must not be able
+# to select a tier: CI-builds-fork.yml pins the callee to a commit SHA and
+# passes only `trusted: false`, so the input must resolve to its default. Pin
+# the default to v40 (the historical behaviour) so that adding a downgrade tier
+# to the caller/reusable cannot silently change what a fork PR builds.
+EXPECTED_TIER_DEFAULT = "v40"
+EXPECTED_TIER_VARIANTS = {"v30", "v31", "v40"}
 
 PRIVILEGED_USES = ("LouisBrunner/checks-action", "actions/cache/", "actions/upload-artifact")
 PRIVILEGED_NAME = re.compile(
@@ -158,6 +170,39 @@ def validate(base, fork, reusable):
     inputs = on_key(reusable).get("workflow_call", {}).get("inputs", {})
     trusted_input = inputs.get("trusted", {})
     require(trusted_input.get("default") is True, "reusable workflow lacks trusted=true default")
+
+    # The `tier` input selects the feature tier. A fork PR reaches the callee
+    # only via CI-builds-fork.yml, which pins a commit SHA and passes just
+    # `trusted: false`, so `tier` always resolves to its default. Pin it, so a
+    # future downgrade tier cannot be smuggled onto the untrusted path.
+    tier_input = inputs.get("tier", {})
+    require(
+        tier_input.get("default") == EXPECTED_TIER_DEFAULT,
+        f"reusable workflow tier input default is {tier_input.get('default')!r}, "
+        f"expected {EXPECTED_TIER_DEFAULT!r}",
+    )
+    # And the resolve-tier job must reject anything outside the known set,
+    # rather than defaulting an unknown tier to a build.
+    resolve_tier = reusable.get("jobs", {}).get("resolve-tier", {})
+    resolve_run = next(
+        (s.get("run", "") for s in resolve_tier.get("steps") or [] if s.get("id") == "t"),
+        "",
+    )
+    for tier in sorted(EXPECTED_TIER_VARIANTS):
+        require(
+            f"{tier})" in resolve_run,
+            f"resolve-tier does not handle the {tier} tier",
+        )
+    require(
+        re.search(r"^\s*\*\)\s*$", resolve_run, re.M) is not None,
+        "resolve-tier has no catch-all that fails on an unknown tier",
+    )
+    # A job may not widen the token beyond the least-privileged caller, which
+    # grants exactly contents: read (see 5e8468db4).
+    require(
+        "permissions" not in resolve_tier,
+        "resolve-tier declares permissions:, which breaks the contents:read-only fork caller",
+    )
 
     builds = reusable.get("jobs", {}).get("builds")
     if builds is None:
