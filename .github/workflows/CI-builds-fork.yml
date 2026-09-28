@@ -25,6 +25,12 @@ jobs:
     # The stale pin still carried `-tap-mysqlx`, whose staging block ran on
     # every fork PR and failed with
     #   ERROR: cannot stage libpq.so.5 -- no file matching ...
-    uses: sysown/proxysql/.github/workflows/ci-builds.yml@2a1c226e5d458a24ded79a15ff82d89840270a74
+    #
+    # 2a1c226e5d45 turned out to be unusable as an untrusted callee: its
+    # `resolve-tap-mode` job requested `pull-requests: read`, which
+    # CI-builds-fork.yml's `contents: read` cannot widen, so GitHub rejected
+    # the call and every fork PR landed on `startup_failure` with zero jobs.
+    # 5e8468db4981 drops that job-level block; see that commit on GH-Actions.
+    uses: sysown/proxysql/.github/workflows/ci-builds.yml@5e8468db498107c083a11eec3fface6801089437
     with:
       trusted: false
