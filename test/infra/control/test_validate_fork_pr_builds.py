@@ -225,6 +225,61 @@ class Mutations(unittest.TestCase):
         reusable["jobs"]["builds"]["permissions"] = {"contents": "read"}
         self.assertEqual(subject.validate(base, fork, reusable), [])
 
+    def test_workflow_level_callee_permissions_are_checked(self):
+        """A top-level `permissions:` widens the token for every job just as a
+        job-level one does, and reintroduces the same startup rejection."""
+        for permissions in (
+            {"contents": "read", "pull-requests": "read"},
+            {"contents": "read", "checks": "write"},
+            "write-all",
+            "read-all",
+        ):
+            with self.subTest(permissions=permissions):
+                base, fork, reusable = minimal_documents()
+                reusable["permissions"] = permissions
+                problems = subject.validate(base, fork, reusable)
+                self.assertTrue(problems, permissions)
+                self.assertTrue(
+                    any("callee workflow requests" in problem for problem in problems),
+                    problems,
+                )
+
+    def test_explicit_none_is_a_narrowing_not_a_widening(self):
+        """`none` denies a scope, so it is legal for any scope, including one
+        the fork caller never granted."""
+        base, fork, reusable = minimal_documents()
+        reusable["permissions"] = {"contents": "read", "pull-requests": "none"}
+        reusable["jobs"]["builds"]["permissions"] = {"id-token": "none", "contents": "read"}
+        self.assertEqual(subject.validate(base, fork, reusable), [])
+
+    def test_string_permission_forms_do_not_crash(self):
+        """`read-all` / `write-all` are valid GitHub syntax, so the guard must
+        report them rather than raise while iterating."""
+        for permissions, expect_problem in (("write-all", True), ("read-all", True), ("none", False)):
+            with self.subTest(permissions=permissions):
+                base, fork, reusable = minimal_documents()
+                reusable["jobs"]["builds"]["permissions"] = permissions
+                problems = subject.validate(base, fork, reusable)
+                self.assertEqual(bool(problems), expect_problem, problems)
+
+    def test_widenings_helper(self):
+        self.assertEqual(subject.widenings_beyond_fork_caller(None), [])
+        self.assertEqual(subject.widenings_beyond_fork_caller({}), [])
+        self.assertEqual(subject.widenings_beyond_fork_caller({"contents": "read"}), [])
+        self.assertEqual(subject.widenings_beyond_fork_caller({"contents": "none"}), [])
+        self.assertEqual(subject.widenings_beyond_fork_caller({"checks": "none"}), [])
+        self.assertEqual(
+            subject.widenings_beyond_fork_caller({"contents": "read", "checks": "none"}), []
+        )
+        self.assertEqual(
+            subject.widenings_beyond_fork_caller({"contents": "write"}), [("contents", "write")]
+        )
+        self.assertEqual(
+            subject.widenings_beyond_fork_caller("write-all"), [("write-all", "write-all")]
+        )
+        # a non-mapping, non-string value must not raise
+        self.assertEqual(subject.widenings_beyond_fork_caller(42), [])
+
     def test_unsafe_checkout_flag(self):
         for label, mutate in (
             ("base", lambda b, f, r: b["jobs"]["run"].__setitem__("allow-unsafe-pr-checkout", True)),

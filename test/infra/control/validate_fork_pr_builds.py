@@ -89,6 +89,39 @@ def on_key(document):
     return document[True]
 
 
+def widenings_beyond_fork_caller(permissions):
+    """Return (scope, level) pairs that exceed the fork caller's grant.
+
+    CI-builds-fork.yml grants exactly ``contents: read``, and a called
+    workflow may only narrow the caller's token, never widen it. Anything
+    beyond that is rejected by GitHub before a job is scheduled, so it has
+    to be reported rather than raised on -- including the string form
+    ``read-all`` / ``write-all``, which grants every scope.
+
+    ``none`` is an explicit denial and therefore always a narrowing, so it
+    is never a widening whatever the scope.
+    """
+    if permissions is None:
+        return []
+    if isinstance(permissions, str):
+        # `read-all` / `write-all` are the valid shorthand forms. Both grant
+        # more than contents:read.
+        return [] if permissions == "none" else [(permissions, permissions)]
+    if not isinstance(permissions, dict):
+        return []
+
+    widenings = []
+    for scope, level in permissions.items():
+        if level == "none":
+            continue
+        if scope == "contents":
+            if level != "read":
+                widenings.append((scope, level))
+        else:
+            widenings.append((scope, level))
+    return widenings
+
+
 def contains_unsafe_checkout(value):
     if isinstance(value, dict):
         return any(
@@ -172,16 +205,18 @@ def validate(base, fork, reusable):
     # resolve-tap-mode job requesting `pull-requests: read` did exactly that
     # to every fork PR. Trusted runs get their scopes from the caller's
     # write-all and need no job-level block at all.
-    for name, job in reusable.get("jobs", {}).items():
-        requested = job.get("permissions")
-        if not requested:
-            continue
-        for scope, level in requested.items():
-            if scope != "contents" or level not in ("read", "none"):
-                problems.append(
-                    f"callee job {name!r} requests {scope}: {level}, which the fork "
-                    f"caller does not grant; this fails the whole call at startup"
-                )
+    #
+    # Checked at the workflow level as well as per job: either is enough to
+    # reintroduce the same rejection.
+    for label, requested in [("workflow", reusable.get("permissions"))] + [
+        (f"job {name!r}", job.get("permissions"))
+        for name, job in reusable.get("jobs", {}).items()
+    ]:
+        for scope, level in widenings_beyond_fork_caller(requested):
+            problems.append(
+                f"callee {label} requests {scope}: {level}, which the fork "
+                f"caller does not grant; this fails the whole call at startup"
+            )
 
     require(
         RUNS_ON_UNTRUSTED.match(str(builds.get("runs-on", ""))) is not None,
