@@ -144,7 +144,7 @@ ${CC:-cc} -std=gnu99 -Wall -Wextra -Werror \
 	"${openssl_root}/libssl.a" "${openssl_root}/libcrypto.a" \
 	-pthread -ldl -lz -o "${tmp_dir}/mariadb-ca-cache"
 cache_status=0
-cache_modes=(isolation capath rotation retry new-retry lifecycle hit crl)
+cache_modes=(isolation capath rotation retry new-retry lifecycle hit crl thread-exit)
 # Optional integration check against the host's installed default CA bundle.
 if [[ ${CA_CACHE_TEST_SYSTEM_DEFAULTS:-0} == 1 ]]; then
 	cache_modes+=(default)

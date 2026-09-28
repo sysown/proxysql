@@ -152,8 +152,9 @@ dependency-free lint check.
 
 The MariaDB check builds the patched connector in a temporary directory and
 tests explicit and default CA isolation, file rotation, failed-load retries,
-cache hits, CRL-option isolation, and repeated thread cleanup using generated
-certificate fixtures. To additionally exercise the real connector with the
+cache hits, CRL-option isolation, repeated thread cleanup, and release of the
+per-thread cache when a thread exits without calling `mysql_thread_end()`,
+using generated certificate fixtures. To additionally exercise the real connector with the
 host's installed default CA bundle, set `CA_CACHE_TEST_SYSTEM_DEFAULTS=1`:
 
 ```bash
