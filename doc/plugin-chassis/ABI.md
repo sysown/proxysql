@@ -73,8 +73,8 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 
 ```cpp
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 9u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 9u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 10u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 10u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION =
@@ -87,8 +87,8 @@ constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX =
     PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
 ```
 
-`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `9` in a release build and
-`0x40000009` in a DEBUG build. Plugins must use that constant rather than a
+`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `10` in a release build and
+`0x4000000A` in a DEBUG build. Plugins must use that constant rather than a
 literal so the loader can validate both the layout and build mode.
 
 ABI evolution so far:
@@ -113,6 +113,10 @@ ABI evolution so far:
 - **ABI 8 → ABI 9:** appends `apply_mysql_config_v2` to the services table. Its
   V2 plan wraps the unchanged ABI-8 plan and carries query-rule attributes in a
   separate rule-ID-indexed array.
+- **ABI 9 → ABI 10:** appends the AWS integration services to the services
+  table: IAM token-source install/uninstall and waiter sizing, the AWS
+  metadata-provider install used by locality discovery, and the MySQL-owned
+  AWS-locality statistics projection callback.
 
 Future ABI versions append fields. The chassis bumps the layout/version
 constants and gates each new field's read on the masked layout version being
@@ -328,7 +332,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // 9 release, 0x40000009 DEBUG
+    PROXYSQL_PLUGIN_ABI_VERSION,          // 10 release, 0x4000000A DEBUG
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop
