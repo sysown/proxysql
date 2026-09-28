@@ -5826,15 +5826,11 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 
 void MySQL_Session::cleanup_stmt_execute() {
 	if (CurrentQuery.stmt_meta) {
-		if (CurrentQuery.stmt_meta->pkt) {
-			uint32_t stmt_global_id=0;
-			memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
-			SLDH->reset(stmt_global_id);
-			free(CurrentQuery.stmt_meta->pkt);
-			CurrentQuery.stmt_meta->pkt=NULL;
-		}
-
-		// free for all the buffer types in which we allocate
+		// free for all the buffer types in which we allocate.
+		// This must happen before SLDH->reset(): a parameter sent via
+		// COM_STMT_SEND_LONG_DATA points to the SLDH buffer instead of a buffer
+		// allocated by get_binds_from_pkt(), even for temporal types. That buffer
+		// is owned (and freed) by SLDH, so freeing it here too is a double-free.
 		for (int i = 0; i < CurrentQuery.stmt_meta->num_params; i++) {
 			enum enum_field_types buffer_type =
 				CurrentQuery.stmt_meta->binds[i].buffer_type;
@@ -5845,12 +5841,17 @@ void MySQL_Session::cleanup_stmt_execute() {
 				(buffer_type == MYSQL_TYPE_TIMESTAMP) ||
 				(buffer_type == MYSQL_TYPE_DATETIME)
 			) {
-				free(CurrentQuery.stmt_meta->binds[i].buffer);
+				void *buffer = CurrentQuery.stmt_meta->binds[i].buffer;
+				unsigned long *long_data_size = NULL;
+				my_bool *long_data_is_null = NULL;
+				if (buffer && buffer != SLDH->get(CurrentQuery.stmt_meta->stmt_id, i, &long_data_size, &long_data_is_null)) {
+					free(buffer);
+				}
 			}
 			// The stmt_execute_metadata_t is cached in sess_STMTs_meta and reused
 			// across executes. For every non-TIME parameter, binds[i].buffer does
-			// NOT own memory: it aliases either the STMT_EXECUTE packet just freed
-			// above (stmt_meta->pkt) or an SLDH long-data buffer just reset via
+			// NOT own memory: it aliases either the STMT_EXECUTE packet freed
+			// below (stmt_meta->pkt) or an SLDH long-data buffer freed below via
 			// SLDH->reset(). Leaving those pointers set makes them dangle until the
 			// next get_binds_from_pkt() re-points them. That re-point normally
 			// happens before use, but when a session spans multiple hostgroups the
@@ -5858,6 +5859,14 @@ void MySQL_Session::cleanup_stmt_execute() {
 			// where the cached, dangling binds can be consumed against freed memory
 			// (issue #5883). Null every buffer here so no dangling alias survives.
 			CurrentQuery.stmt_meta->binds[i].buffer = NULL;
+		}
+
+		if (CurrentQuery.stmt_meta->pkt) {
+			uint32_t stmt_global_id=0;
+			memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
+			SLDH->reset(stmt_global_id);
+			free(CurrentQuery.stmt_meta->pkt);
+			CurrentQuery.stmt_meta->pkt=NULL;
 		}
 	}
 	CurrentQuery.mysql_stmt=NULL;
