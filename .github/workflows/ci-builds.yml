@@ -46,9 +46,18 @@ env:
 jobs:
 
   resolve-tap-mode:
-    permissions:
-      contents: read
-      pull-requests: read
+    # NO `permissions:` block here -- same reason as the workflow-level one
+    # above. A called workflow may only narrow the caller's token, never
+    # widen it, and CI-builds-fork.yml grants exactly `contents: read`.
+    # Requesting `pull-requests: read` here made every fork PR fail at
+    # startup with zero jobs (`startup_failure`), because GitHub rejects a
+    # called workflow that asks for a scope its caller did not grant.
+    #
+    # Nothing is lost: the trusted caller (CI-builds.yml) grants write-all,
+    # so this job inherits pull-requests: read there, which is the only
+    # caller whose path reaches the `gh api` label read in
+    # resolve-tap-build-mode.bash. That script returns at its first line for
+    # an untrusted caller, so the fork path never needs the scope at all.
     runs-on: ubuntu-24.04
     outputs:
       mode: ${{ steps.resolve.outputs.mode }}
