@@ -535,6 +535,61 @@ static void test_statemgr_rollback_to_savepoint() {
 }
 
 // ============================================================
+// ROLLBACK while the client and backend records disagree
+// ============================================================
+
+static void set_record(PgSQL_Connection* conn, int idx, const char* value) {
+	free(conn->variables[idx].value);
+	conn->variables[idx].value = strdup(value);
+	conn->var_hash[idx] = SpookyHash::Hash32(value, strlen(value), 10);
+}
+
+// A connection reset can be put off until a transaction ends, so inside one the client's record of
+// a setting and the backend's can differ. ROLLBACK used to assert they were equal, which aborted the
+// proxy. It must instead put both back to the value from BEGIN, which is where ROLLBACK leaves the
+// backend.
+static void test_statemgr_rollback_records_apart() {
+	PgSQL_Session* sess = create_test_session();
+	PgSQL_ExplicitTxnStateMgr* mgr = sess->transaction_state_manager;
+	PgSQL_Connection* client = sess->client_myds->myconn;
+	PgSQL_Connection* server = sess->mybe->server_myds->myconn;
+	const uint32_t at_begin = client->var_hash[PGSQL_TIMEZONE];
+
+	mgr->handle_transaction("BEGIN");
+	set_record(client, PGSQL_TIMEZONE, "UTC");  // client moved, backend record left behind
+	ok(mgr->handle_transaction("ROLLBACK") == true, "statemgr: ROLLBACK with client record ahead of backend");
+	ok(client->var_hash[PGSQL_TIMEZONE] == at_begin && server->var_hash[PGSQL_TIMEZONE] == at_begin,
+		"statemgr: both records back to the BEGIN value (client was ahead)");
+
+	mgr->handle_transaction("BEGIN");
+	set_record(server, PGSQL_TIMEZONE, "UTC");  // backend moved, client record unchanged
+	ok(mgr->handle_transaction("ROLLBACK") == true, "statemgr: ROLLBACK with backend record ahead of client");
+	ok(client->var_hash[PGSQL_TIMEZONE] == at_begin && server->var_hash[PGSQL_TIMEZONE] == at_begin,
+		"statemgr: both records back to the BEGIN value (backend was ahead)");
+
+	destroy_test_session(sess);
+}
+
+static void test_statemgr_rollback_to_savepoint_records_apart() {
+	PgSQL_Session* sess = create_test_session();
+	PgSQL_ExplicitTxnStateMgr* mgr = sess->transaction_state_manager;
+	PgSQL_Connection* client = sess->client_myds->myconn;
+	PgSQL_Connection* server = sess->mybe->server_myds->myconn;
+	const uint32_t at_savepoint = client->var_hash[PGSQL_TIMEZONE];
+
+	mgr->handle_transaction("BEGIN");
+	mgr->handle_transaction("SAVEPOINT sp");
+	set_record(client, PGSQL_TIMEZONE, "UTC");
+	ok(mgr->handle_transaction("ROLLBACK TO SAVEPOINT sp") == true,
+		"statemgr: ROLLBACK TO SAVEPOINT with client and backend records apart");
+	ok(client->var_hash[PGSQL_TIMEZONE] == at_savepoint && server->var_hash[PGSQL_TIMEZONE] == at_savepoint,
+		"statemgr: both records back to the SAVEPOINT value");
+
+	mgr->handle_transaction("COMMIT");
+	destroy_test_session(sess);
+}
+
+// ============================================================
 // reset_state() with active transaction
 // ============================================================
 
@@ -694,7 +749,7 @@ static void test_current_query_short_truncation_limits() {
 }
 
 int main() {
-	plan(117);
+	plan(123);
 	test_init_minimal();
 
 	// --- Parser tests (54 tests) ---
@@ -730,11 +785,13 @@ int main() {
 	test_statemgr_savepoint_case_insensitive();     // 5
 	test_statemgr_end_as_commit();                  // 3
 	test_statemgr_abort_as_rollback();              // 3
-	// State manager subtotal: 58
+	test_statemgr_rollback_records_apart();         // 4
+	test_statemgr_rollback_to_savepoint_records_apart(); // 2
+	// State manager subtotal: 64
 
 	// --- Processlist query truncation (5 tests) ---
 	test_current_query_short_truncation_limits();   // 5
-	// Grand total: 54 + 58 + 5 = 117
+	// Grand total: 54 + 64 + 5 = 123
 
 	test_cleanup_minimal();
 	return exit_status();

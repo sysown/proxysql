@@ -33,8 +33,16 @@
 #define AUTH_PAM        111
 #define AUTH_SCRAM_SHA_256      112
 
-#define PG_PKT_STARTUP_V2  0x20000
 #define PG_PKT_STARTUP     0x30000
+
+/* Newest protocol version we implement, in the wire's major<<16|minor form. PostgreSQL puts this
+ * whole number in NegotiateProtocolVersion rather than the minor alone, and libpq compares it as a
+ * whole number, so it has to be sent that way. */
+#define PG_PROTOCOL_LATEST 0x30000
+
+/* A startup packet asking for a protocol version we do not implement, version 2 included. Not a
+ * wire value: it tells the startup handler to name the version in an error message. */
+#define PG_PKT_STARTUP_UNSUPPORTED 0xFFFFFFFF
 #define PG_PKT_CANCEL      80877102
 #define PG_PKT_SSLREQ      80877103
 #define PG_PKT_GSSENCREQ   80877104
@@ -52,8 +60,6 @@
 class ProxySQL_Admin;
 struct PgCredentials;
 struct ScramState;
-class PgSQL_STMT_Global_info;
-struct PgSQL_Describe_Cache;
 
 // Auth-method selection: map the floor (pgsql-authentication_method;
 // 1=cleartext, 2=md5, 3=scram) + the user's stored secret type (a PasswordType, as int) to the
@@ -71,6 +77,9 @@ struct pgsql_hdr {
 	uint32_t type;
 	uint32_t len;
 	PtrSize_t data;
+	/* Protocol version the client asked for, on a startup packet only. Zero on every other
+	 * packet. Kept so the startup handler can answer a version it does not speak. */
+	uint32_t version;
 };
 
 class PG_pkt 
@@ -225,6 +234,14 @@ public:
 	}
 	void write_AuthenticationRequest(uint32_t auth_type, const uint8_t* data, int len) {
 		write_generic('R', "ib", auth_type, data, len);
+	}
+	void write_NegotiateProtocolVersion(uint32_t latest_version, const std::vector<std::string>& unsupported_options) {
+		start_packet('v');
+		put_uint32(latest_version);
+		put_uint32(unsupported_options.size());
+		for (const std::string& opt : unsupported_options)
+			put_string(opt.c_str());
+		finish_packet();
 	}
 	void write_ReadyForQuery(char txn_state = 'I') {
 		write_generic('Z', "c", txn_state);
@@ -569,8 +586,7 @@ public:
     * @return The number of bytes added to the query result.
     *
     */
-    unsigned int add_describe_completion(const PGresult* result, uint8_t stmt_type,
-        const PgSQL_STMT_Global_info* stmt_info_for_cache = nullptr);
+    unsigned int add_describe_completion(const PGresult* result, uint8_t stmt_type);
 
 	/**
 	 * @brief Retrieves the query result set and copies it to a PtrSizeArray.
@@ -856,14 +872,6 @@ public:
 	bool generate_bind_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_no_data_packet(bool send, PtrSize_t* _ptr = NULL);
 
-	// Serve a statement-level Describe response from the set-once metadata cache,
-	// byte-identical to a backend round-trip: ParameterDescription 't' followed by
-	// RowDescription 'T' (or NoData 'n'), then — when `ready` — a ReadyForQuery 'Z'.
-	// Payloads are the raw wire bodies stored in `cache`; each is re-framed as
-	// type-byte + be32(len+4) + payload. No backend dispatch is involved.
-	bool generate_describe_from_cache(bool send, bool ready, char trx_state,
-		const PgSQL_Describe_Cache* cache, PtrSize_t* _ptr = NULL);
-
 	// temporary overriding generate_pkt_OK to avoid crash. FIXME remove this
 	bool generate_pkt_OK(bool send, void** ptr, unsigned int* len, uint8_t sequence_id, unsigned int affected_rows, 
 		uint64_t last_insert_id, uint16_t status, uint16_t warnings, char* msg, bool eof_identifier = false) {
@@ -1133,7 +1141,7 @@ public:
 	 *
 	 */
 	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result,
-		const PGresult* result, uint8_t stmt_type, const PgSQL_STMT_Global_info* stmt_info_for_cache = nullptr);
+		const PGresult* result, uint8_t stmt_type);
 
 	/**
 	 * @brief Extracts the header information from a PostgreSQL packet.

@@ -17,11 +17,12 @@
 #include "openssl/x509v3.h" // X509_VERIFY_PARAM_set1_host / set_hostflags (native backend TLS)
 #include "openssl/evp.h"     // EVP_MAX_MD_SIZE for cbind digest buffer (SCRAM-PLUS)
 #include "PgSQL_Backend_Protocol.h"  // pg_tls_server_end_point / pg_scram_build_cbind_input_* / pg_scram_set_cbind (SCRAM-PLUS)
-#include <openssl/crypto.h>   // OPENSSL_cleanse — non-elidable wipe of harvested SCRAM key material
+#include "openssl/crypto.h"   // OPENSSL_cleanse — non-elidable wipe of harvested SCRAM key material
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
+#include "c_tokenizer.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Monitor.hpp"
 #include "proxysql.h"
@@ -242,20 +243,21 @@ PgSQL_Connection::~PgSQL_Connection() {
 	}
 	saved_backend_rbio = NULL;
 	saved_backend_wbio = NULL;
+	// Subtract once for every connection that was added, libpq and native alike. The
+	// flag says whether this one was ever counted; asking is_connected() instead never
+	// subtracted a backend that had died, so the count only climbed. Clearing it keeps
+	// anyone from subtracting the same connection twice.
+	if (counted_in_connections_connected) {
+		__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
+		counted_in_connections_connected = false;
+	}
 	if (pgsql_conn) {
-		if (is_connected())
-			__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
 		async_free_result();
 		PQfinish(pgsql_conn);
 		pgsql_conn = NULL;
 	}
-	// Native (non-libpq) connection cleanup. In native mode pgsql_conn stays NULL,
-	// so the block above is skipped: mirror its connected-counter decrement and
-	// free the native socket + SCRAM state here.
+	// Native (non-libpq) connection cleanup: free the native socket + SCRAM state.
 	if (native_mode) {
-		if (native_connected) {
-			__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
-		}
 		if (native_scram) {
 			pg_scram_free(native_scram);
 			native_scram = nullptr;
@@ -264,9 +266,21 @@ PgSQL_Connection::~PgSQL_Connection() {
 			::close(fd);
 			fd = -1;
 		}
+		// The TLS session is owned by this connection (see PgSQL_Connection.h), so it
+		// must be released here as well as in native_teardown(): a pooled connection
+		// evicted by destroy_MyConn_from_pool() is `delete`d WITHOUT going through
+		// teardown, and would otherwise leak the SSL and both its BIOs. SSL_free()
+		// releases the BIOs too (SSL_set_bio transferred them).
+		if (native_ssl) {
+			SSL_free(native_ssl);
+			native_ssl  = nullptr;
+			native_rbio = nullptr;
+			native_wbio = nullptr;
+		}
 		// native_ssl_ctx is normally freed at SSL_new() time (the SSL holds a ref) or
 		// in native_teardown(); free here as a safety net if a connection is destroyed
-		// before either ran. The SSL* itself lives on myds and is freed by ~PgSQL_Data_Stream().
+		// before either ran. The SSL and its BIOs belong to this connection, not to
+		// myds: a fast_forward data stream only borrows them (adopt_backend_tls()).
 		if (native_ssl_ctx) {
 			SSL_CTX_free(native_ssl_ctx);
 			native_ssl_ctx = nullptr;
@@ -420,17 +434,21 @@ handler_again:
 		
 		if (get_pg_ssl_in_use()) {
 			if (myds && myds->sess && myds->sess->session_fast_forward) {
+				// Native connections come through here too. adopt_backend_tls() shares this
+				// connection's own memory BIOs with the stream instead of installing a new
+				// pair, so nothing the connection still uses gets freed underneath it.
 				assert(myds->ssl == NULL);
 				if (myds->adopt_backend_tls() == false) {
 					// This connection would relay in the clear, so fail the connect
-					// rather than hand it to the session. The gauge is incremented
-					// first because the destructor decrements it for any live PGconn.
-					__sync_fetch_and_add(&PgHGM->status.server_connections_connected, 1);
+					// rather than hand it to the session. It never reaches the count
+					// below, which is right because a failed connect is always deleted
+					// and never pooled.
 					NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 				}
 			}
 		}
 		__sync_fetch_and_add(&PgHGM->status.server_connections_connected, 1);
+		counted_in_connections_connected = true;
 		__sync_fetch_and_add(&parent->connect_OK, 1);
 		// Seed the PgSQL DNS cache from the just-established connection so
 		// the next connect for this hostname can skip getaddrinfo even if
@@ -477,6 +495,34 @@ handler_again:
 			if (is_error_present()) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			}
+			// Record where this query should go once its reply has been read.
+			//
+			// Two functions reach this case. async_query() runs ordinary client queries,
+			// and async_send_simple_command() is what ProxySQL uses internally to configure
+			// a backend connection, for example the "SET client_encoding" it sends when a
+			// pooled connection is given to a client that asked for a different encoding.
+			// Both send a single 'Q' message and both finish in ASYNC_QUERY_END, so that is
+			// the value stored here.
+			//
+			// ASYNC_QUERY_CONT below stores the same value, but it cannot be relied on to
+			// do it. query_start() will often write the whole 'Q' in one syscall, which is
+			// the normal outcome in native mode for something as short as a SET. When that
+			// happens there is nothing left to wait for, so we go straight to the result
+			// drain and never pass through ASYNC_QUERY_CONT at all.
+			//
+			// Nothing else ever clears this field. Without the line below it would still
+			// hold whatever an earlier extended-query step left on this connection, such as
+			// ASYNC_STMT_EXECUTE_END, and the result dispatch would jump there when the
+			// reply arrived. async_query() copes with that, because it accepts any *_END
+			// state as success. async_send_simple_command() does not: it accepts only
+			// ASYNC_QUERY_END, so anything else makes it answer "not finished yet" every
+			// time it is called, and the session then waits in SETTING_VARIABLE forever
+			// because nothing times it out.
+			//
+			// Only the native path can get into that state. libpq's flush never reports
+			// that it sent everything in one go, so a libpq connection always goes through
+			// ASYNC_QUERY_CONT and picks up the assignment there.
+			set_fetch_result_end_state(ASYNC_QUERY_END);
 			NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
 		}
 		break;
@@ -505,6 +551,14 @@ handler_again:
 				NEXT_IMMEDIATE(fetch_result_end_st);
 			}
 			init_query_result();
+			if (native_mode) {
+				// The request was flushed a moment ago and the backend has not had time to
+				// answer, so reading now returns EAGAIN almost every time. Let poll() report
+				// the reply instead; if it is already there, poll() returns at once.
+				async_exit_status = PG_EVENT_READ;
+				next_event(ASYNC_USE_RESULT_CONT);
+				break;
+			}
 			NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 		} else {
 			assert(0); // shouldn't ever reach here
@@ -525,7 +579,7 @@ handler_again:
 		// handles the native path and must NOT fall through to any libpq
 		// PGresult dispatch below.
 		if (native_mode) {
-			native_fetch_result_cont(event);
+			native_fetch_result_cont(event, &processed_bytes);
 			if (async_exit_status) {
 				// Need more bytes from the socket → wait for READ.
 				next_event(ASYNC_USE_RESULT_CONT);
@@ -536,6 +590,13 @@ handler_again:
 				// error: hand off to the end state (ASYNC_QUERY_END for queries,
 				// or the configured fetch_result_end_st).
 				NEXT_IMMEDIATE(fetch_result_end_st);
+			}
+			// Enough bytes moved in this event: pause and let the client drain,
+			// exactly as the libpq loop below does, so pgsql-threshold_resultset_size
+			// behaves the same on both paths.
+			if (suspend_resultset_fetch(processed_bytes)) {
+				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
+				break;
 			}
 			// Neither complete nor error nor waiting: loop to drain/recv more.
 			NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
@@ -594,10 +655,7 @@ handler_again:
 							bytes_recv = query_result->add_parse_completion();
 							break;
 						case ASYNC_STMT_DESCRIBE_END:
-							// Pass the global stmt_info so a statement-level Describe ('S')
-							// populates the set-once metadata cache (libpq-mode capture).
-							bytes_recv = query_result->add_describe_completion(result.get(), query.extended_query_info->stmt_type,
-								query.extended_query_info->stmt_info);
+							bytes_recv = query_result->add_describe_completion(result.get(), query.extended_query_info->stmt_type);
 							break;
 						case ASYNC_STMT_EXECUTE_END:
 							// PQsendQueryPrepared sends the sequence BIND -> DESCRIBE(PORTAL) -> EXECUTE -> SYNC
@@ -729,17 +787,7 @@ handler_again:
 					update_bytes_recv(bytes_recv);
 					processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 					
-					bool suspend_resultset_fetch = (processed_bytes > overflow_safe_multiply<8,unsigned int>(pgsql_thread___threshold_resultset_size));
-					 
-					if (suspend_resultset_fetch == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
-						suspend_resultset_fetch = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
-					}
-					
-					if (
-						suspend_resultset_fetch
-						||
-						(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
-						) {
+					if (suspend_resultset_fetch(processed_bytes)) {
 						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 						break;
 					} else {
@@ -757,17 +805,7 @@ handler_again:
 				update_bytes_recv(bytes_recv);
 				processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 
-				bool suspend_resultset_fetch = (processed_bytes > overflow_safe_multiply<8,unsigned int>(pgsql_thread___threshold_resultset_size));
-
-				if (suspend_resultset_fetch == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
-					suspend_resultset_fetch = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
-				}
-
-				if (
-					suspend_resultset_fetch
-					||
-					(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
-					) {
+				if (suspend_resultset_fetch(processed_bytes)) {
 					next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 					break;
 				} else {
@@ -783,36 +821,9 @@ handler_again:
 		// if we arrive here via async_perform_resync, the connection is in "Ready for Query" state,  
 		// but query_result will be empty. In this case, we check exit_pipeline_mode; if it is true,  
 		// it indicates a non-error scenario and we skip this check.
-		if (exit_pipeline_mode == false &&
-			(query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) == 0) {
-			// Issue #6110: normally error_info was set on a previous call. It is not always: a
-			// backend can answer a query with NO command outcome at all - a bare
-			// ReadyForQuery, without CommandComplete, EmptyQueryResponse or
-			// ErrorResponse. That is the backend violating the protocol, not an
-			// invariant of ours, so report it to the client rather than aborting the
-			// process. Setting error_info here also feeds add_error(NULL) below, which
-			// otherwise asserts for the same reason.
-			//
-			// Two independent consequences follow, one per object:
-			//   - the CONNECTION is unhealthy and not reusable, so it is destroyed
-			//     rather than pooled or reset. A reset cannot cure a server that
-			//     answers incorrectly, and another client must not inherit it.
-			//   - the SESSION is closed, because a reply we cannot interpret leaves
-			//     us unable to vouch for its protocol state.
-			// They are set separately on purpose: neither implies the other.
-			if (!is_error_present()) {
-				proxy_error("Backend %s:%d answered a query with no command outcome (bare ReadyForQuery)\n",
-					parent ? parent->address : "?", parent ? parent->port : 0);
-				set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION,
-					"backend answered the query with no command outcome", false);
-				reusable = false;
-				healthy = false;
-				if (myds && myds->sess) {
-					myds->sess->set_unhealthy();
-				}
-			}
-
-			query_result->add_error(NULL);
+		// exit_pipeline_mode means an async_perform_resync left the result empty on purpose.
+		if (exit_pipeline_mode == false) {
+			reject_result_without_outcome();
 		}
 
 		if (fetch_result_end_st != ASYNC_QUERY_END) {
@@ -1008,7 +1019,9 @@ handler_again:
 		break;
 
 	case ASYNC_RESYNC_START:
-		if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
+		// PQpipelineStatus(NULL) returns PQ_PIPELINE_OFF, so without this guard native
+		// would take the shortcut below and pool a connection still mid-batch.
+		if (!native_mode && PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
 			proxy_warning("Resync not required - connection already synchronized.\n");
 			NEXT_IMMEDIATE(ASYNC_RESYNC_END);
 		}
@@ -1017,6 +1030,16 @@ handler_again:
 		if (async_exit_status) {
 			next_event(ASYNC_RESYNC_CONT);
 		} else {
+			if (native_mode) {
+				// Sync sent in full (non-blocking, same as ASYNC_STMT_PREPARE_START):
+				// go straight to the drain. A fatal send also lands here with
+				// error_info set, so route that to END instead of an empty drain.
+				if (is_error_present()) {
+					NEXT_IMMEDIATE(ASYNC_RESYNC_END);
+				}
+				set_fetch_result_end_state(ASYNC_RESYNC_END);
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+			}
 			NEXT_IMMEDIATE(ASYNC_RESYNC_END);
 		}
 		break;
@@ -1033,6 +1056,11 @@ handler_again:
 			next_event(ASYNC_RESYNC_CONT);
 			break;
 		} else {
+			// A fatal send here also lands with error_info set, same as ASYNC_RESYNC_START;
+			// resync_failed is libpq-only and native never sets it.
+			if (native_mode && is_error_present()) {
+				NEXT_IMMEDIATE(ASYNC_RESYNC_END);
+			}
 			if (resync_failed == true) {
 				NEXT_IMMEDIATE(ASYNC_RESYNC_END);
 			}
@@ -1044,7 +1072,7 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
 			}
 		}
-		break;		
+		break;
 
 	case ASYNC_RESET_SESSION_START:
 		reset_session_start();
@@ -1118,8 +1146,14 @@ handler_again:
 		break;
 
 	default:
-		// not implemented yet
-		assert(0); 
+		// The connection is in a state nothing here knows how to handle. Log which
+		// state it was, so the abort below is not a bare assert with no clue, then stop.
+		proxy_error("Unhandled state %d in PgSQL_Connection::handler() for backend %s:%d (native_mode=%d, fd=%d). Aborting.\n",
+			(int)async_state_machine,
+			(parent && parent->address) ? parent->address : "(unknown)",
+			parent ? parent->port : -1,
+			native_mode ? 1 : 0, fd);
+		assert(0);
 	}
 	return async_state_machine;
 }
@@ -1158,6 +1192,15 @@ bool pgsql_append_conninfo_credentials(std::ostringstream& conninfo, const char*
 	char* password, bool has_scram_keys, const uint8_t* scram_client_key,
 	const uint8_t* scram_server_key, const char* conn_ctx)
 {
+	// libpq reads PGUSER, then the OS account name, whenever 'user' is missing or empty. Emitting a
+	// real password under that identity is the same fail-open the checks below refuse, so no
+	// username means no connection.
+	if (!username || *username == '\0') {
+		proxy_error("PgSQL backend %s: no username; refusing to connect rather than let libpq fall back to PGUSER or the OS user\n",
+			conn_ctx);
+		return false;
+	}
+
 	if (has_scram_keys) {
 		// Hand libpq the harvested ClientKey + the verifier's ServerKey (base64) and send NO
 		// password — the stored secret is a verifier, which libpq would otherwise wrongly run
@@ -1209,23 +1252,6 @@ bool pgsql_append_conninfo_credentials(std::ostringstream& conninfo, const char*
 	return false;
 }
 
-// escape_string_backslash_spaces() already emits DOUBLE backslashes for a space (and doubles a
-// literal backslash), i.e. it produces a value that survives libpq stripping one escape level out
-// of a single-quoted conninfo value. What it does NOT handle is the apostrophe: an unescaped ' ends
-// the quoted value and everything after it is parsed by libpq as further conninfo KEYWORDS
-// (host=, sslmode=, ...). This adds exactly that missing level and nothing else -- escaping
-// backslashes here as well would double what the helper already doubled and corrupt every value
-// containing a space (observed: DateStyle "ISO, MDY" arriving at the backend as "ISO,\\").
-static std::string pg_conninfo_escape_quotes(const char* v) {
-	std::string out;
-	if (v == nullptr) return out;
-	for (const char* c = v; *c; c++) {
-		if (*c == '\'') out += '\\';
-		out += *c;
-	}
-	return out;
-}
-
 std::string PgSQL_Connection::connect_start_DNS_lookup() {
 	// PgSQL_Monitor::dns_lookup() returns an IP on cache hit, or empty
 	// on miss / when 'parent->address' is itself an IP / when the cache is
@@ -1234,6 +1260,80 @@ std::string PgSQL_Connection::connect_start_DNS_lookup() {
 	const std::string ip = PgSQL_Monitor::dns_lookup(parent->address,
 		/*return_hostname_if_lookup_fails=*/false);
 	return ip;
+}
+
+// Raises a wire-form value to the level a libpq conninfo needs. libpq parses the conninfo
+// and strips one level of backslash escaping before the value reaches the wire, so doubling
+// every backslash of the wire form is what makes the backend see that exact wire form.
+// The spaces separating the "-c key=value" tokens need nothing: both values are single-quoted
+// in the conninfo, so they pass through untouched. The apostrophe does need it, for a different
+// reason: an unescaped ' ends the quoted value, and everything after it is parsed by libpq as
+// further conninfo KEYWORDS (host=, sslmode=, ...). Escaping it here keeps a client-supplied
+// option value a literal instead of a way to redirect the backend connection.
+static std::string pg_conninfo_escape_level(const std::string& wire) {
+	std::string out;
+	// Worst case is every character needing an escape, so reserve once rather than
+	// regrowing part-way through.
+	out.reserve(wire.size() * 2);
+	for (char c : wire) {
+		if (c == '\\' || c == '\'') out += '\\';
+		out += c;
+	}
+	return out;
+}
+
+bool PgSQL_Connection::build_and_record_startup_session_params(std::string& client_encoding_out,
+                                                   std::string& options_out,
+                                                   StartupParamEscape escape_mode) {
+	if (!(myds && myds->sess && myds->sess->client_myds)) return false;
+
+	// Client encoding is always set; it travels as its own startup key, not inside options.
+	const char* client_charset = pgsql_variables.client_get_value(myds->sess, PGSQL_CLIENT_ENCODING);
+	assert(client_charset);
+	const uint32_t client_charset_hash = pgsql_variables.client_get_hash(myds->sess, PGSQL_CLIENT_ENCODING);
+	assert(client_charset_hash);
+	// A startup key's value is a plain NUL-terminated string, so the wire form is the raw
+	// value; the conninfo form is derived from it at the end of this function.
+	client_encoding_out.assign(client_charset);
+	// charset validation is already done
+	pgsql_variables.server_set_hash_and_value(myds->sess, PGSQL_CLIENT_ENCODING, client_charset, client_charset_hash);
+
+	// The tracked variables, as "-c name=value" tokens, escaped for the wire.
+	std::string opts;
+	const char* separator = "";
+	for (int idx = 1; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
+		const char* value = pgsql_variables.client_get_value(myds->sess, idx);
+		opts += separator;
+		opts += "-c ";
+		opts += pgsql_tracked_variables[idx].set_variable_name;
+		opts += "=";
+		pg_append_escaped_option_value(opts, value);
+		separator = " ";
+		const uint32_t hash = pgsql_variables.client_get_hash(myds->sess, idx);
+		pgsql_variables.server_set_hash_and_value(myds->sess, idx, value, hash);
+	}
+	// The client's own connection options, which it supplied as options='-c ...'.
+	if (myds->sess->untracked_option_parameters.empty() == false) {
+		opts += separator;
+		opts += myds->sess->untracked_option_parameters;
+	}
+	options_out = std::move(opts);
+
+	// Snapshot variables[] into startup_parameters[] so requires_RESETTING_CONNECTION()
+	// knows these are already applied. server_set_hash_and_value() above wrote into
+	// sess->mybe->server_myds->myconn, and this copy is intra-object (variables[] ->
+	// startup_parameters[] on whichever connection it is called on), so it has to run on
+	// that same connection -- hence the same expression rather than `this`.
+	myds->sess->mybe->server_myds->myconn->copy_pgsql_variables_to_startup_parameters(true);
+
+	// Everything above is the wire form, which is what untracked_option_parameters is
+	// stored in too. The libpq path needs one level more, since libpq strips one while
+	// parsing the conninfo.
+	if (escape_mode == StartupParamEscape::Conninfo) {
+		client_encoding_out = pg_conninfo_escape_level(client_encoding_out);
+		options_out = pg_conninfo_escape_level(options_out);
+	}
+	return true;
 }
 
 void PgSQL_Connection::connect_start() {
@@ -1313,62 +1413,16 @@ void PgSQL_Connection::connect_start() {
 		conninfo << "sslmode='disable' "; // not supporting SSL
 	}
 
-	if (myds && myds->sess && myds->sess->client_myds) {
-		// Client Encoding should be always set
-		const char* client_charset = pgsql_variables.client_get_value(myds->sess, PGSQL_CLIENT_ENCODING);
-		assert(client_charset);
-		uint32_t client_charset_hash = pgsql_variables.client_get_hash(myds->sess, PGSQL_CLIENT_ENCODING);
-		assert(client_charset_hash);
-		{
-			// escape_string_backslash_spaces() covers spaces and backslashes for BOTH the
-			// conninfo quoting layer and the backend's options tokeniser (it emits two
-			// backslashes per space). pg_conninfo_escape_quotes() adds the one case it misses:
-			// the apostrophe, which would otherwise close the quoted conninfo value early.
-			const char* wire = escape_string_backslash_spaces(client_charset);
-			conninfo << "client_encoding='" << pg_conninfo_escape_quotes(wire) << "' ";
-			if (wire != client_charset) free((char*)wire);
+	{
+		std::string startup_encoding, startup_options;
+		if (build_and_record_startup_session_params(startup_encoding, startup_options,
+		                                           StartupParamEscape::Conninfo)) {
+			conninfo << "client_encoding='" << startup_encoding << "' ";
+			// Join the "-c key=value" tokens with a leading separator so the options value
+			// has no trailing space before the closing quote. PgBouncer rejects a startup
+			// packet whose options value ends in whitespace (#5801).
+			conninfo << "options='" << startup_options << "'";
 		}
-
-		// charset validation is already done 
-		pgsql_variables.server_set_hash_and_value(myds->sess, PGSQL_CLIENT_ENCODING, client_charset, client_charset_hash);
-
-		// optimized way to set client parameters on backend connection when creating a new connection
-		// Join the "-c key=value" tokens with a leading separator so the options value has
-		// no trailing space before the closing quote. PgBouncer rejects a startup packet
-		// whose options value ends in whitespace (#5801).
-		// Build the whole options value in its WIRE form first, then apply the conninfo
-		// quoting layer once over the finished string (see the comment above). Assembling it
-		// straight into `conninfo` cannot work: the second layer has to see the complete
-		// value, including untracked_option_parameters, which is also stored wire-escaped.
-		std::string opts;
-		const char* separator = "";
-		// excluding client_encoding, which is already set above
-		for (int idx = 1; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
-			const char* value = pgsql_variables.client_get_value(myds->sess, idx);
-			const char* escaped_str = escape_string_backslash_spaces(value);
-			opts += separator;
-			opts += "-c ";
-			opts += pgsql_tracked_variables[idx].set_variable_name;
-			opts += "=";
-			opts += escaped_str;
-			separator = " ";
-			if (escaped_str != value)
-				free((char*)escaped_str);
-
-			const uint32_t hash = pgsql_variables.client_get_hash(myds->sess, idx);
-			pgsql_variables.server_set_hash_and_value(myds->sess, idx, value, hash);
-		}
-
-		myds->sess->mybe->server_myds->myconn->copy_pgsql_variables_to_startup_parameters(true);
-
-		// if there are untracked parameters, the session should lock on the host group
-		if (myds->sess->untracked_option_parameters.empty() == false) {
-			opts += separator;
-			opts += myds->sess->untracked_option_parameters;
-		}
-
-		conninfo << "options='" << pg_conninfo_escape_quotes(opts.c_str()) << "'";
-		
 	}
 
 	/*conninfo << "postgres://";
@@ -1519,6 +1573,33 @@ static inline uint32_t pg_read_be32(const unsigned char* p) {
 	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+// The message types a query reply is allowed to carry:
+//   1 ParseComplete  2 BindComplete  3 CloseComplete  n NoData  s PortalSuspended
+//   t ParameterDescription  T RowDescription  D DataRow  C CommandComplete
+//   I EmptyQueryResponse  E ErrorResponse  N NoticeResponse  S ParameterStatus
+//   H CopyOutResponse  d CopyData  c CopyDone  Z ReadyForQuery  A NotificationResponse
+// Everything else belongs to the startup phase or to no phase at all. The native
+// path copies backend bytes to the client verbatim, so without this check a
+// backend could put an AuthenticationRequest ('R') in the middle of a result set
+// and the client would prompt its user for a password -- and the whole byte
+// stream, injected message included, is eligible for the query cache and would be
+// replayed to later clients. 'G'/'W' are deliberately absent: the CopyInResponse
+// safety net answers those earlier, so one arriving here means the stream is out
+// of step and the connection should go.
+// 'A' stays legal here because a NotificationResponse is a real message, not a sign of a
+// hostile backend. The drain loop discards it a few lines further on, so a connection
+// that carries one is kept instead of being thrown away as a protocol violation.
+static inline bool pg_native_type_legal_in_result(char t) {
+	switch (t) {
+		case '1': case '2': case '3': case 'n': case 's': case 't':
+		case 'T': case 'D': case 'C': case 'I': case 'E': case 'N':
+		case 'S': case 'H': case 'd': case 'c': case 'Z': case 'A':
+			return true;
+		default:
+			return false;
+	}
+}
+
 // Flush native_outbuf via non-blocking send(). Consumes the bytes that were
 // written; on EAGAIN leaves the remainder buffered and returns true (caller must
 // keep waiting for writable). Returns false on a fatal socket error.
@@ -1529,13 +1610,13 @@ bool PgSQL_Connection::native_ssl_pump_wbio_to_fd(bool& would_block) {
 	// First, pull any freshly produced ciphertext out of wbio into native_ssl_outbuf.
 	char buf[MY_SSL_BUFFER];
 	for (;;) {
-		int n = BIO_read(myds->wbio_ssl, buf, sizeof(buf));
+		int n = BIO_read(native_wbio, buf, sizeof(buf));
 		if (n > 0) {
 			native_ssl_outbuf.append(buf, (size_t)n);
 			continue;
 		}
 		// No more bytes pending; BIO_should_retry distinguishes empty from error.
-		if (!BIO_should_retry(myds->wbio_ssl)) {
+		if (!BIO_should_retry(native_wbio)) {
 			// For a mem BIO an "empty" read also returns !should_retry; that is normal.
 		}
 		break;
@@ -1560,9 +1641,10 @@ bool PgSQL_Connection::native_ssl_pump_wbio_to_fd(bool& would_block) {
 }
 
 bool PgSQL_Connection::native_flush_outbuf() {
+	native_ssl_block_dir = 0;
 	// Encrypted path: native_outbuf holds *plaintext* protocol bytes. Feed them to
 	// SSL_write, which produces ciphertext into wbio_ssl, then drain wbio to the fd.
-	if (myds && myds->encrypted && myds->ssl) {
+	if (native_ssl != nullptr) {
 		// If there is leftover ciphertext from a previous partial socket write, flush
 		// it first before producing more (preserves ordering).
 		if (!native_ssl_outbuf.empty()) {
@@ -1572,7 +1654,7 @@ bool PgSQL_Connection::native_flush_outbuf() {
 		}
 		while (!native_outbuf.empty()) {
 			ERR_clear_error();
-			int w = SSL_write(myds->ssl, native_outbuf.data(), (int)native_outbuf.size());
+			int w = SSL_write(native_ssl, native_outbuf.data(), (int)native_outbuf.size());
 			if (w > 0) {
 				native_outbuf.erase(0, (size_t)w);
 				bool wb = false;
@@ -1580,10 +1662,13 @@ bool PgSQL_Connection::native_flush_outbuf() {
 				if (wb) return true; // socket full; remaining plaintext stays buffered
 				continue;
 			}
-			int err = SSL_get_error(myds->ssl, w);
+			int err = SSL_get_error(native_ssl, w);
 			if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
 				// SSL needs to do I/O before it can accept more plaintext. Drain
 				// whatever ciphertext it produced and wait for the socket.
+				// WANT_READ means the socket being writable is not what we are waiting for --
+				// it already is, so asking to be woken on that alone spins the thread.
+				native_ssl_block_dir = (err == SSL_ERROR_WANT_READ) ? PG_EVENT_READ : PG_EVENT_WRITE;
 				bool wb = false;
 				if (!native_ssl_pump_wbio_to_fd(wb)) return false;
 				return true; // not fatal; resume on next event
@@ -1617,65 +1702,106 @@ bool PgSQL_Connection::native_flush_outbuf() {
 	return true;
 }
 
+// A fatal error during the RESULT phase kills the CONNECTION, not just the query,
+// so the socket must be torn down and not merely flagged.
+//
+// Two kinds of exit reach here and both are unrecoverable for the connection:
+//   * CONNECTION_FAILURE -- the peer closed, or a send()/recv() failed outright.
+//   * PROTOCOL_VIOLATION -- the byte stream is desynchronised. We no longer know
+//     where the next message begins, so nothing can ever be read from it safely
+//     again, even though the socket is still technically open.
+//
+// Closing the socket here is what marks the connection as unusable, so it gets
+// thrown away instead of going back into the pool.
+//
+// The auth and startup phases already do this -- their "backend closed during
+// auth" / "during startup" exits call native_teardown() -- the result phase simply
+// never did, on any of its exits.
+void PgSQL_Connection::native_result_fatal(const char* code, const char* message) {
+	set_error(code, message, false);
+	native_teardown();
+}
+
+void PgSQL_Connection::native_result_protocol_violation(const char* message) {
+	set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, message, false);
+	reusable = false;
+	healthy = false;
+	if (myds && myds->sess) {
+		myds->sess->set_unhealthy();
+	}
+	// Finish the result before handing it back. Rows already framed are flushed first so the
+	// error lands behind them rather than in front, and the ReadyForQuery closes the cycle.
+	// Report a failed transaction block if the client had one open, because the batch it was
+	// in is over.
+	if (query_result) {
+		query_result->buffer_to_PSarrayOut();
+		query_result->add_error(NULL);
+		query_result->add_ready_status(
+			(native_txn_status == 'T' || native_txn_status == 'E')
+				? PQTRANS_INERROR : PQTRANS_IDLE);
+	}
+	// The backend owes us nothing further: the cycle is over as far as this connection goes.
+	native_unsynced_work = false;
+}
+
 void PgSQL_Connection::native_teardown() {
 	if (native_scram) {
 		pg_scram_free(native_scram);
 		native_scram = nullptr;
 	}
+	// Not cleared here. The backend never sent the ReadyForQuery that ends the batch, so its
+	// outcome is unknown; clearing it would let the retry check replay work already committed.
 	if (fd >= 0) {
 		::close(fd);
 		fd = -1;
 	}
+	// Drop this connection from the count of connected backends. The check makes
+	// sure we only subtract if we added in the first place, so a teardown followed
+	// by the destructor still subtracts exactly once.
+	if (counted_in_connections_connected) {
+		__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
+		counted_in_connections_connected = false;
+	}
+	native_connected = false;
 	native_framer.reset();
 	native_outbuf.clear();
 	native_ssl_outbuf.clear();
-	// The SSL object (if any) lives on myds and is freed by ~PgSQL_Data_Stream();
-	// it uses mem BIOs so SSL_free()'s shutdown writes harmlessly into a mem buffer
-	// even though the fd is now closed. We only own the per-connection SSL_CTX here.
+	// The TLS session belongs to this connection (see PgSQL_Connection.h), so we
+	// free it here. SSL_set_bio() transferred both BIOs to the SSL, so SSL_free()
+	// releases all three; freeing the BIOs separately would be a double free. It
+	// uses mem BIOs, so SSL_free()'s shutdown writes harmlessly into a mem buffer
+	// even though the fd is already closed.
+	//
+	// This runs only on REAL teardown. A pool return must never reach here -- that
+	// was precisely finding A7, where the TLS context was destroyed while the
+	// socket stayed open and pooled.
+	if (native_ssl) {
+		SSL_free(native_ssl);
+		native_ssl  = nullptr;
+		native_rbio = nullptr;
+		native_wbio = nullptr;
+	}
 	if (native_ssl_ctx) {
 		SSL_CTX_free(native_ssl_ctx);
 		native_ssl_ctx = nullptr;
 	}
+	// The connect handshake must not resume: its steps read what was just freed, and the TLS
+	// step dereferences the BIOs that went with the SSL. connect_cont() does get called again
+	// on a connection the session is still holding, when the connect timeout expires.
+	native_st = PG_Native_Conn_St::FAILED;
 }
 
 // Defined out-of-line (not in the header) because PgSQL_Data_Stream is an incomplete
 // type at the header's accessor declarations. Native TLS reports SSL-in-use once the
 // handshake handed the SSL* to myds; the libpq path defers to PQsslInUse().
 int PgSQL_Connection::get_pg_ssl_in_use() {
-	if (native_mode) return (myds && myds->encrypted && myds->ssl) ? 1 : 0;
+	if (native_mode) return (native_ssl != nullptr) ? 1 : 0;
 	return PQsslInUse(pgsql_conn);
 }
 
 SSL* PgSQL_Connection::get_pg_ssl_object() {
-	if (native_mode) return (myds && myds->encrypted) ? myds->ssl : nullptr;
+	if (native_mode) return native_ssl;
 	return (SSL*)PQsslStruct(pgsql_conn, "OpenSSL");
-}
-
-// Capability gap (GSSAPI/SSPI/SCRAM-SHA-256-PLUS-only/unhandled auth): we cannot
-// complete this handshake natively. Tear down the native socket, disable
-// native_mode, log once per backend, and restart the connect via libpq by
-// re-entering connect_start() (now that native_mode==false it takes the libpq
-// branch and builds a fresh pgsql_conn). We then advance the connect/auth state
-// machine as if libpq's connect_start() had just run.
-void PgSQL_Connection::native_capability_gap(const char* mechanism) {
-	static thread_local bool warned = false;
-	if (!warned) {
-		proxy_warning("native backend auth capability gap (%s) for hg %u %s:%d; falling back to libpq\n",
-			mechanism ? mechanism : "unknown", parent->myhgc->hid, parent->address, parent->port);
-		warned = true;
-	}
-	native_teardown();
-	native_mode = false;
-	// Re-initiate the libpq connect. connect_start() asserts pgsql_conn==NULL,
-	// which still holds (native mode never created one). It sets async_exit_status
-	// for the libpq path; we mirror handler()'s ASYNC_CONNECT_START dispatch so
-	// the next event continues the libpq handshake.
-	connect_start();
-	if (async_exit_status) {
-		async_state_machine = ASYNC_CONNECT_CONT;
-	} else {
-		async_state_machine = ASYNC_CONNECT_END;
-	}
 }
 
 void PgSQL_Connection::native_connect_start() {
@@ -1738,11 +1864,18 @@ void PgSQL_Connection::native_connect_start() {
 
 	this->fd = sock;
 	native_host = parent->address ? parent->address : "";
+	// Mirror the libpq path's rule for `hostaddr` (connect_start(): passed only when
+	// the DNS cache resolved something DIFFERENT from parent->address) so that both
+	// paths report the same value for the same server configuration.
+	native_hostaddr = (!ip.empty() && parent->address && ip != std::string(parent->address)) ? ip : "";
+	native_port = portstr;
 	native_st = PG_Native_Conn_St::TCP_CONNECTING;
 	native_framer.reset();
 	native_outbuf.clear();
 	native_ssl_outbuf.clear();
 	native_connected = false;
+	// Cleared here rather than in teardown, so a reconnect on this object starts clean.
+	native_unsynced_work = false;
 
 	// Decide whether this backend wants TLS, and with which verification policy.
 	// The SSL param source is the SAME as the libpq path (get_Server_SSL_Params /
@@ -1829,8 +1962,8 @@ void PgSQL_Connection::native_connect_cont(short event) {
 				native_teardown();
 				return;
 			}
-			myds->ssl = SSL_new(native_ssl_ctx);
-			if (myds->ssl == nullptr) {
+			native_ssl = SSL_new(native_ssl_ctx);
+			if (native_ssl == nullptr) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "SSL_new() failed", false);
 				native_teardown();
 				return;
@@ -1840,11 +1973,11 @@ void PgSQL_Connection::native_connect_cont(short event) {
 			SSL_CTX_free(native_ssl_ctx);
 			native_ssl_ctx = nullptr;
 
-			SSL_set_connect_state(myds->ssl); // client role
+			SSL_set_connect_state(native_ssl); // client role
 			// verify-full: enforce hostname verification at the TLS layer.
 			if (native_ssl_mode == PG_Native_SSL_Mode::VERIFY_FULL) {
 				const char* host = (parent->address && parent->address[0]) ? parent->address : native_host.c_str();
-				X509_VERIFY_PARAM* vp = SSL_get0_param(myds->ssl);
+				X509_VERIFY_PARAM* vp = SSL_get0_param(native_ssl);
 				X509_VERIFY_PARAM_set_hostflags(vp, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
 				if (X509_VERIFY_PARAM_set1_host(vp, host, 0) != 1) {
 					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "failed to set TLS verify host", false);
@@ -1854,17 +1987,23 @@ void PgSQL_Connection::native_connect_cont(short event) {
 			}
 			// SNI: present the backend hostname (best-effort; ignored for IP literals).
 			if (parent->address && parent->address[0]) {
-				SSL_set_tlsext_host_name(myds->ssl, parent->address);
+				SSL_set_tlsext_host_name(native_ssl, parent->address);
 			}
-			myds->encrypted = true;
-			myds->rbio_ssl = BIO_new(BIO_s_mem());
-			myds->wbio_ssl = BIO_new(BIO_s_mem());
-			if (myds->rbio_ssl == nullptr || myds->wbio_ssl == nullptr) {
+			native_rbio = BIO_new(BIO_s_mem());
+			native_wbio = BIO_new(BIO_s_mem());
+			if (native_rbio == nullptr || native_wbio == nullptr) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_OUT_OF_MEMORY), "BIO_new() failed", false);
+				// Free them HERE, not via native_teardown(). Ownership passes to the
+				// SSL only at SSL_set_bio() below, which has not run yet -- so
+				// teardown's SSL_free(native_ssl) would not release them and the one
+				// that DID allocate would leak. Teardown nulls the pointers, so it
+				// cannot clean up after us either.
+				if (native_rbio) { BIO_free(native_rbio); native_rbio = nullptr; }
+				if (native_wbio) { BIO_free(native_wbio); native_wbio = nullptr; }
 				native_teardown();
 				return;
 			}
-			SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
+			SSL_set_bio(native_ssl, native_rbio, native_wbio);
 			native_st = PG_Native_Conn_St::SSL_HANDSHAKE;
 			// Kick the handshake immediately (it will emit ClientHello into wbio).
 			native_connect_cont(event);
@@ -1949,16 +2088,33 @@ void PgSQL_Connection::native_connect_cont(short event) {
 }
 
 bool PgSQL_Connection::native_send_startup() {
-	unsigned char startup[2048];
 	size_t slen2 = 0;
 	const char* user = userinfo->username ? userinfo->username : "";
 	const char* db = (userinfo->dbname && userinfo->dbname[0]) ? userinfo->dbname : user;
-	if (!pg_build_startup(startup, &slen2, sizeof(startup), user, db)) {
+
+	// Carry the session settings the libpq path sends in its conninfo. Without these a
+	// client's connection options are silently dropped, and every new backend connection
+	// pays a SET round-trip because requires_RESETTING_CONNECTION() sees a mismatch.
+	std::string startup_encoding, startup_options;
+	const bool have_params = build_and_record_startup_session_params(startup_encoding, startup_options,
+	                                                                 StartupParamEscape::Wire);
+
+	// The untracked half of the options string is client-controlled, so size the buffer
+	// from the content rather than assuming a fixed ceiling.
+	std::vector<unsigned char> startup(512 + strlen(user) + strlen(db) +
+	                                   startup_encoding.size() + startup_options.size());
+	if (!pg_build_startup(startup.data(), &slen2, startup.size(), user, db,
+	                      have_params ? startup_encoding.c_str() : nullptr,
+	                      have_params ? startup_options.c_str()  : nullptr,
+	                      "proxysql")) {
 		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
 			"startup message too large", false);
 		return false;
 	}
-	native_outbuf.assign((const char*)startup, slen2);
+	// Keep the options value for reporting (PROXYSQL INTERNAL SESSION / stats), matching
+	// what PQoptions() returns on the libpq path.
+	native_options = have_params ? startup_options : std::string();
+	native_outbuf.assign((const char*)startup.data(), slen2);
 	// After the StartupMessage flushes, wait for the AuthenticationRequest. On the
 	// TLS path native_send_or_buffer routes the plaintext through SSL_write.
 	if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
@@ -2111,14 +2267,14 @@ int PgSQL_Connection::native_drive_ssl_handshake() {
 
 	for (;;) {
 		ERR_clear_error();
-		int ret = SSL_do_handshake(myds->ssl);
+		int ret = SSL_do_handshake(native_ssl);
 		if (ret == 1) {
 			// Handshake complete. For VERIFY_CA / VERIFY_FULL, confirm the result.
 			// (For VERIFY_FULL the hostname check is folded into SSL_get_verify_result
 			// because we set the verify host on the SSL object before the handshake.)
 			if (native_ssl_mode == PG_Native_SSL_Mode::VERIFY_CA ||
 			    native_ssl_mode == PG_Native_SSL_Mode::VERIFY_FULL) {
-				X509* peer = SSL_get_peer_certificate(myds->ssl);
+				X509* peer = SSL_get_peer_certificate(native_ssl);
 				if (peer == nullptr) {
 					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
 						"TLS verification required but server presented no certificate", false);
@@ -2126,7 +2282,7 @@ int PgSQL_Connection::native_drive_ssl_handshake() {
 					return -1;
 				}
 				X509_free(peer);
-				long vr = SSL_get_verify_result(myds->ssl);
+				long vr = SSL_get_verify_result(native_ssl);
 				if (vr != X509_V_OK) {
 					char msg[256];
 					snprintf(msg, sizeof(msg), "TLS certificate verification failed: %s",
@@ -2148,7 +2304,7 @@ int PgSQL_Connection::native_drive_ssl_handshake() {
 			return 1;
 		}
 
-		int err = SSL_get_error(myds->ssl, ret);
+		int err = SSL_get_error(native_ssl, ret);
 		if (err == SSL_ERROR_WANT_WRITE) {
 			bool wb = false;
 			if (!native_ssl_pump_wbio_to_fd(wb)) {
@@ -2185,9 +2341,9 @@ int PgSQL_Connection::native_drive_ssl_handshake() {
 			unsigned char* src = cipher;
 			int len = (int)n;
 			while (len > 0) {
-				int w = BIO_write(myds->rbio_ssl, src, len);
+				int w = BIO_write(native_rbio, src, len);
 				if (w <= 0) {
-					if (!BIO_should_retry(myds->rbio_ssl)) {
+					if (!BIO_should_retry(native_rbio)) {
 						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "BIO_write during TLS handshake failed", false);
 						native_teardown();
 						return -1;
@@ -2237,20 +2393,24 @@ bool PgSQL_Connection::native_send_or_buffer(PG_Native_Conn_St resume_st) {
 }
 
 int PgSQL_Connection::native_recv_into_framer() {
+	native_ssl_block_dir = 0;
 	// Encrypted path: read ciphertext from fd into rbio, then SSL_read plaintext
 	// protocol bytes out and feed them to the framer. Mirrors the BIO-mem decrypt
 	// loop of PgSQL_Data_Stream::read_from_net(), but drives the raw fd directly.
-	if (myds && myds->encrypted && myds->ssl) {
+	if (native_ssl != nullptr) {
 		bool got = false;
 		unsigned char cipher[MY_SSL_BUFFER];
 		// Pull whatever ciphertext is available from the socket into rbio. A single
 		// recv() per call is sufficient: SSL_read below decrypts everything buffered,
 		// and the caller re-enters on the next READ event for more.
 		ssize_t n = ::recv(fd, cipher, sizeof(cipher), 0);
+		bool peer_closed = false;
 		if (n == 0) {
-			return -1; // peer closed
-		}
-		if (n < 0) {
+			// The peer closed, but the record layer may still hold plaintext we already
+			// received. Reporting the close now would throw away a reply that is complete,
+			// and the client would see a connection error instead of its result.
+			peer_closed = true;
+		} else if (n < 0) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				// Nothing new from the socket. There may still be buffered plaintext
 				// inside the SSL record layer; fall through to drain it.
@@ -2265,9 +2425,9 @@ int PgSQL_Connection::native_recv_into_framer() {
 			unsigned char* src = cipher;
 			int len = (int)n;
 			while (len > 0) {
-				int w = BIO_write(myds->rbio_ssl, src, len);
+				int w = BIO_write(native_rbio, src, len);
 				if (w <= 0) {
-					if (!BIO_should_retry(myds->rbio_ssl)) return -1;
+					if (!BIO_should_retry(native_rbio)) return -1;
 					continue;
 				}
 				src += w;
@@ -2278,14 +2438,23 @@ int PgSQL_Connection::native_recv_into_framer() {
 		for (;;) {
 			unsigned char plain[MY_SSL_BUFFER];
 			ERR_clear_error();
-			int r = SSL_read(myds->ssl, plain, sizeof(plain));
+			int r = SSL_read(native_ssl, plain, sizeof(plain));
 			if (r > 0) {
 				native_framer.feed(plain, (size_t)r);
 				got = true;
 				continue;
 			}
-			int err = SSL_get_error(myds->ssl, r);
+			int err = SSL_get_error(native_ssl, r);
 			if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+				if (err == SSL_ERROR_WANT_WRITE) {
+					// SSL owes the peer a record (a KeyUpdate response, a renegotiation step)
+					// before it will decrypt anything more. Send it, and wait on writable:
+					// the backend is holding its own reply until it arrives, so waiting to be
+					// read would wait forever.
+					native_ssl_block_dir = PG_EVENT_WRITE;
+					bool wb = false;
+					if (!native_ssl_pump_wbio_to_fd(wb)) return -1;
+				}
 				break; // need more ciphertext from the socket; wait for next event
 			}
 			if (err == SSL_ERROR_ZERO_RETURN) {
@@ -2298,22 +2467,32 @@ int PgSQL_Connection::native_recv_into_framer() {
 			while (ERR_get_error()) { /* drain */ }
 			return -1;
 		}
+		if (peer_closed) return got ? 1 : -1;
 		return got ? 1 : 0;
 	}
 
 	// Plaintext path (1.6a).
 	unsigned char tmp[16384];
+	// Cap one pass so a backend that keeps the socket full cannot push a whole
+	// result set into the framer buffer, which doubles, never shrinks, and lives
+	// as long as the pooled connection does.
+	const size_t burst_max = 16 * sizeof(tmp);
+	size_t fed = 0;
 	bool got = false;
 	for (;;) {
 		ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
 		if (n > 0) {
 			native_framer.feed(tmp, (size_t)n);
 			got = true;
+			fed += (size_t)n;
 			if ((size_t)n < sizeof(tmp)) break; // likely drained the socket buffer
+			if (fed >= burst_max) break;        // let the caller frame these; poll() reports the rest
 			continue;
 		}
 		if (n == 0) {
-			return -1; // peer closed
+			// Keep what this pass already framed. A result whose tail lands in the same read
+			// as the close is complete; discarding it turns it into a connection error.
+			return got ? 1 : -1;
 		}
 		// n < 0
 		if (errno == EAGAIN || errno == EWOULDBLOCK) break;
@@ -2321,6 +2500,61 @@ int PgSQL_Connection::native_recv_into_framer() {
 		return -1; // fatal
 	}
 	return got ? 1 : 0;
+}
+
+int PgSQL_Connection::native_relay_async_messages(PtrSizeArray* out) {
+	int r = native_recv_into_framer();
+	if (r < 0) return -1;   // EOF or fatal: the backend really is gone
+	if (r == 0) return 0;   // readable but nothing arrived yet
+	int relayed = 0;
+	for (;;) {
+		PgSQL_Backend_Msg msg;
+		PgSQL_Frame_Result fr = native_framer.next(msg);
+		if (fr == FRAME_NEED_MORE) break;   // partial tail stays buffered for the next read
+		if (fr == FRAME_ERROR) {
+			proxy_error("native: malformed message on idle backend %s:%d\n",
+				parent ? parent->address : "?", parent ? parent->port : 0);
+			return -1;
+		}
+		switch (msg.type) {
+			case 'A': {
+				// Rebuilt rather than reinterpreted: ProxySQL has no business parsing the
+				// channel and payload, it only has to hand the same bytes to the client.
+				const unsigned int size = 5 + msg.payload_len;
+				unsigned char* p = (unsigned char*)l_alloc(size);
+				const uint32_t wire_len = msg.payload_len + 4;
+				p[0] = 'A';
+				p[1] = (wire_len >> 24) & 0xff;
+				p[2] = (wire_len >> 16) & 0xff;
+				p[3] = (wire_len >> 8) & 0xff;
+				p[4] = wire_len & 0xff;
+				if (msg.payload_len) memcpy(p + 5, msg.payload, msg.payload_len);
+				out->add(p, size);
+				relayed++;
+				break;
+			}
+			case 'S':
+				// A reported setting changed under us, e.g. after a server config reload.
+				native_track_parameter_status(msg.payload, msg.payload_len);
+				break;
+			case 'N':
+				// The libpq path logs notices and does not forward them; match that rather
+				// than pushing one at a client sitting at ReadyForQuery.
+				proxy_info("native: notice on idle backend %s:%d, dropped\n",
+					parent ? parent->address : "?", parent ? parent->port : 0);
+				break;
+			case 'E':
+				// FATAL: idle_session_timeout, pg_terminate_backend, server shutdown.
+				// Record it so the log says why, then let the caller tear the session down.
+				native_fill_error_from_E(msg.payload, msg.payload_len);
+				return -1;
+			default:
+				proxy_error("native: unexpected message type '0x%02X' on idle backend %s:%d\n",
+					(unsigned char)msg.type, parent ? parent->address : "?", parent ? parent->port : 0);
+				return -1;
+		}
+	}
+	return relayed;
 }
 
 void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, uint32_t len) {
@@ -2398,6 +2632,15 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 
 		switch (auth_type) {
 		case 0: // AuthenticationOk
+			// SCRAM proves both sides. A backend that answers our client-final with a plain
+			// AuthenticationOk has skipped its half, so it never showed it knows the password --
+			// accepting it would hand the session to whoever is on the other end of the socket.
+			if (native_scram != nullptr && native_scram_step != PG_Native_Scram_Step::SERVER_VERIFIED) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION),
+					"backend completed authentication without finishing the SCRAM exchange", false);
+				native_teardown();
+				return;
+			}
 			native_st = PG_Native_Conn_St::STARTUP_TAIL;
 			// Fall through to consuming any already-buffered tail messages.
 			native_drive_startup_tail(0);
@@ -2405,6 +2648,16 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 
 		case 3: { // AuthenticationCleartextPassword
 			const char* pw = userinfo->password ? userinfo->password : "";
+			// Only a plaintext secret can answer this challenge: the backend wants the password
+			// itself, and a stored md5 hash or SCRAM verifier is a one-way derivation we cannot
+			// invert. libpq fails the same combination on its shared "no password supplied"
+			// guard in pg_fe_sendauth(), so refusing here keeps the two paths identical.
+			if (get_password_type(pw) != PASSWORD_TYPE_PLAINTEXT) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+					"backend requested a cleartext password but the stored credential is not a plaintext password", false);
+				native_teardown();
+				return;
+			}
 			size_t pwlen = strlen(pw);
 			native_outbuf.clear();
 			pg_append_typed_msg(native_outbuf, 'p', (const unsigned char*)pw, pwlen + 1); // include NUL
@@ -2426,7 +2679,34 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			char md5buf[36];
 			const char* user = userinfo->username ? userinfo->username : "";
 			const char* pw = userinfo->password ? userinfo->password : "";
-			pg_build_md5(md5buf, user, pw, salt); // "md5"+32hex+NUL (35 chars + NUL)
+			// An md5-stored secret IS hex(md5(password+user)) -- the inner hash this response is
+			// built from. Running pg_build_md5() over it hashes it a SECOND time and the backend
+			// rejects the login -- the md5 divergence from libpq, which reuses the stored hash
+			// via the patched md5_secret conninfo parameter.
+			switch (get_password_type(pw)) {
+			case PASSWORD_TYPE_MD5:
+				// get_password_type() applies the same test (length 35, "md5", 32 lowercase hex),
+				// so this branch is unreachable from here; it is the postcondition that keeps a
+				// half-built response off the wire if the two ever diverge. Covered directly by
+				// pgsql_backend_auth-t rather than end to end.
+				if (!pg_build_md5_from_secret(md5buf, pw, salt)) {
+					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+						"stored md5 credential is malformed; expected \"md5\" followed by 32 lowercase hex digits", false);
+					native_teardown();
+					return;
+				}
+				break;
+			case PASSWORD_TYPE_PLAINTEXT:
+				pg_build_md5(md5buf, user, pw, salt); // "md5"+32hex+NUL (35 chars + NUL)
+				break;
+			default:
+				// A SCRAM verifier cannot answer an md5 challenge at all: the two derivations
+				// share nothing. libpq reaches its no-password guard here and fails likewise.
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+					"backend requested md5 authentication but the stored credential is a SCRAM verifier", false);
+				native_teardown();
+				return;
+			}
 			native_outbuf.clear();
 			pg_append_typed_msg(native_outbuf, 'p', (const unsigned char*)md5buf, strlen(md5buf) + 1);
 			if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
@@ -2450,19 +2730,28 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			// Mechanism selection (mirror of design §4):
 			//   plain-only     -> plain
 			//   plus-only, TLS -> PLUS  (set cbind below)
-			//   plus-only, !TLS-> capability gap (cbind makes no sense over plaintext)
+			//   plus-only, !TLS-> fail (cbind makes no sense over plaintext)
 			//   both,    TLS   -> PLUS  (set cbind below)   <-- the upgrade
 			//   both,    !TLS  -> plain
-			//   neither        -> capability gap
-			const bool tls_in_use = (myds && myds->encrypted && myds->ssl);
+			//   neither        -> fail
+			const bool tls_in_use = (native_ssl != nullptr);
 			bool use_scram_plus = false;
 			if (has_scram_plus && tls_in_use) {
 				use_scram_plus = true;
 			} else if (has_scram_plus && !tls_in_use && !has_scram) {
-				native_capability_gap("SCRAM-SHA-256-PLUS only, no TLS");
+				// Channel binding hashes the server certificate, and a plaintext connection has
+				// none to hash. Retrying through libpq cannot help: both paths read the same
+				// use_ssl column, so libpq would connect in the clear as well and fail here too.
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+					"backend requires SCRAM-SHA-256-PLUS channel binding, which needs an encrypted connection to this server; set use_ssl=1 on its pgsql_servers row", false);
+				native_teardown();
 				return;
 			} else if (!has_scram && !has_scram_plus) {
-				native_capability_gap("no supported SASL mechanism");
+				// The libpq we bundle recognises these same two mechanism names and nothing else,
+				// so handing the connection to it would repeat this failure one connect later.
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_FEATURE_NOT_SUPPORTED),
+					"backend offers no SASL mechanism ProxySQL supports; only SCRAM-SHA-256 and SCRAM-SHA-256-PLUS are implemented", false);
+				native_teardown();
 				return;
 			}
 			// Remaining cases (has_scram && !use_scram_plus) -> plain.
@@ -2475,18 +2764,60 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 				return;
 			}
 
+			// Verifier pass-through. A verifier-stored user has no plaintext to
+			// derive from, so the exchange runs off the ClientKey harvested during that user's
+			// FRONTEND SCRAM login plus the verifier's ServerKey -- PgSQL_Protocol.cpp records
+			// both on the userinfo. Installed before client-first so client-final has them.
+			{
+				const char* stored = userinfo->password ? userinfo->password : "";
+				if (userinfo->has_scram_keys) {
+					if (!pg_scram_set_keys(native_scram, userinfo->scram_client_key,
+							userinfo->scram_server_key)) {
+						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+							"could not install the harvested SCRAM keys for the backend handshake", false);
+						native_teardown();
+						return;
+					}
+				} else switch (get_password_type(stored)) {
+				case PASSWORD_TYPE_PLAINTEXT:
+					break;   // libscram derives the keys ad-hoc from the plaintext
+				case PASSWORD_TYPE_SCRAM_SHA_256:
+					// A verifier with no harvested ClientKey: a proof derived from the verifier
+					// TEXT is always rejected. libpq refuses to build the conninfo at all here
+					// (pgsql_append_conninfo_credentials); fail for the same reason.
+					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+						"SCRAM verifier stored but no harvested ClientKey; cannot authenticate to the backend without a frontend SCRAM login", false);
+					native_teardown();
+					return;
+				default:
+					// An md5 secret shares no derivation with SCRAM, so there is nothing to reuse.
+					// A role's FRONTEND auth-method floor and its backend pg_hba method are chosen
+					// independently, so an md5-stored user meeting a scram-sha-256 backend is
+					// reachable -- and without this the md5 hash TEXT would go through PBKDF2 and
+					// fail as an opaque "password authentication failed". libpq stops on its
+					// no-password guard here (only md5_secret was set, never password).
+					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+						"backend requested SCRAM authentication but the stored credential is an md5 hash", false);
+					native_teardown();
+					return;
+				}
+			}
+
 			// If using -PLUS, set the cbind input BEFORE building client-first
 			// so the gs2 header in client-first is "p=tls-server-end-point,,".
 			if (use_scram_plus) {
 				unsigned char digest[EVP_MAX_MD_SIZE];
 				size_t digest_len = 0;
-				if (pg_tls_server_end_point(myds->ssl, digest, &digest_len) < 0) {
-					// Digest failed: degrade to plain if also offered, else
-					// capability gap. Log once via the capability-gap path.
+				if (pg_tls_server_end_point(native_ssl, digest, &digest_len) < 0) {
+					// Digest failed: degrade to plain if the backend also offered it.
 					if (has_scram) {
 						use_scram_plus = false;
 					} else {
-						native_capability_gap("SCRAM-SHA-256-PLUS cert digest failed");
+						// pg_tls_server_end_point() mirrors libpq's own fingerprint code step for
+						// step, so a certificate ours cannot digest defeats libpq's as well.
+						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							"could not compute this backend certificate's fingerprint for SCRAM-SHA-256-PLUS channel binding, and the backend offered no other mechanism", false);
+						native_teardown();
 						return;
 					}
 				} else {
@@ -2525,12 +2856,18 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(SASLInitialResponse) failed", false);
 				native_teardown();
+				return;
 			}
+			native_scram_step = PG_Native_Scram_Step::CLIENT_FIRST_SENT;
 			return;
 		}
 
 		case 11: { // AuthenticationSASLContinue: server-first message
-			if (native_scram == nullptr) {
+			// Exactly one is expected, and only after client-first. A second one would run the
+			// proof calculation over state libscram has already consumed, which trips an assert
+			// inside it and takes the process down; it would also emit a fresh proof over a salt
+			// the backend chose, which is an offline-crackable artifact it can ask for repeatedly.
+			if (native_scram == nullptr || native_scram_step != PG_Native_Scram_Step::CLIENT_FIRST_SENT) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "unexpected SASLContinue", false);
 				native_teardown();
 				return;
@@ -2538,7 +2875,10 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			// Copy server-first BEFORE building (client_final reads it; no further feed here,
 			// but copying keeps us robust against the dangling-pointer rule).
 			std::string server_first((const char*)rest, rest_len);
-			const char* pw = userinfo->password ? userinfo->password : "";
+			// With keys injected there is no password to send.
+			const char* pw = userinfo->has_scram_keys
+				? nullptr
+				: (userinfo->password ? userinfo->password : "");
 			const char* client_final = pg_scram_client_final(native_scram, pw, server_first.data(), server_first.size());
 			if (client_final == nullptr) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "SCRAM client-final failed", false);
@@ -2550,12 +2890,17 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(SASLResponse) failed", false);
 				native_teardown();
+				return;
 			}
+			native_scram_step = PG_Native_Scram_Step::CLIENT_FINAL_SENT;
 			return;
 		}
 
 		case 12: { // AuthenticationSASLFinal: server-final message
-			if (native_scram == nullptr) {
+			// Only after our client-final. Arriving earlier means the messages libscram compares
+			// the signature against were never built, and it reads them as strings -- a backend
+			// that skips straight to this message would crash the proxy.
+			if (native_scram == nullptr || native_scram_step != PG_Native_Scram_Step::CLIENT_FINAL_SENT) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "unexpected SASLFinal", false);
 				native_teardown();
 				return;
@@ -2566,6 +2911,7 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 				native_teardown();
 				return;
 			}
+			native_scram_step = PG_Native_Scram_Step::SERVER_VERIFIED;
 			// Server verified; an AuthenticationOk ('R',0) normally follows. Keep
 			// looping to consume it (it may already be framed).
 			break;
@@ -2575,16 +2921,47 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 		case 7:  // GSSAPI
 		case 8:  // GSSAPI continue
 		case 9:  // SSPI
-			native_capability_gap("GSSAPI/SSPI");
+			// Not supported. The libpq we bundle is built without GSSAPI (pg_config.h leaves
+			// ENABLE_GSS undefined), so handing the connection over would fail too, one
+			// connect attempt later and with a vaguer message.
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_FEATURE_NOT_SUPPORTED),
+				"backend requested GSSAPI/SSPI authentication, which ProxySQL does not support", false);
+			proxy_error("Native connect: backend %s:%d requested GSSAPI/SSPI authentication, which is not supported\n",
+				parent->address, parent->port);
+			native_teardown();
 			return;
 
 		default:
-			native_capability_gap("unhandled AuthenticationRequest");
+			// We implement the same authentication types as the libpq we bundle (trust, cleartext,
+			// md5, SCRAM), so anything else fails on both paths alike. The type number only fits
+			// in the log, which is why the client message stays generic.
+			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_FEATURE_NOT_SUPPORTED),
+				"backend requested an authentication method ProxySQL does not support", false);
+			proxy_error("Native connect: backend %s:%d requested unsupported AuthenticationRequest %u\n",
+				parent->address, parent->port, auth_type);
+			native_teardown();
 			return;
 		}
 		// Loop to process further already-buffered messages (e.g. AuthenticationOk
 		// after SASLFinal). msg.payload references stay valid until next feed().
 	}
+}
+
+// Record a ParameterStatus ('S'): two NUL-separated strings, name then value. The
+// backend sends one whenever a reported setting changes, and DISCARD ALL changes
+// every one of them back to its default. Dropping these would leave native_params
+// describing settings the connection no longer has.
+void PgSQL_Connection::native_track_parameter_status(const unsigned char* payload, uint32_t len) {
+	if (payload == nullptr || len == 0) return;
+	uint32_t i = 0;
+	const char* name = (const char*)payload;
+	while (i < len && payload[i] != 0) i++;
+	if (i >= len) return; // malformed; ignore
+	std::string nm(name, (const char*)(payload + i));
+	i++; // skip the NUL between the two strings
+	const char* val = (const char*)(payload + i);
+	while (i < len && payload[i] != 0) i++;
+	native_params[nm] = std::string(val, (const char*)(payload + i));
 }
 
 void PgSQL_Connection::native_drive_startup_tail(short /*event*/) {
@@ -2611,23 +2988,9 @@ void PgSQL_Connection::native_drive_startup_tail(short /*event*/) {
 		}
 		// FRAME_OK. Copy any payload we retain before a subsequent recv()/feed().
 		switch (msg.type) {
-		case 'S': { // ParameterStatus: two C-strings name, value
-			const unsigned char* p = msg.payload;
-			uint32_t len = msg.payload_len;
-			uint32_t i = 0;
-			const char* name = (const char*)p;
-			while (i < len && p[i] != 0) i++;
-			if (i >= len) break; // malformed; ignore
-			std::string nm(name, (const char*)(p + i));
-			i++; // skip NUL
-			const char* val = (const char*)(p + i);
-			uint32_t vstart = i;
-			while (i < len && p[i] != 0) i++;
-			std::string vl(val, (const char*)(p + i));
-			(void)vstart;
-			native_params[nm] = vl;
+		case 'S': // ParameterStatus
+			native_track_parameter_status(msg.payload, msg.payload_len);
 			break;
-		}
 		case 'K': { // BackendKeyData: int32 pid, int32 secret
 			if (msg.payload_len >= 8) {
 				native_backend_pid = (int)pg_read_be32(msg.payload);
@@ -2643,7 +3006,7 @@ void PgSQL_Connection::native_drive_startup_tail(short /*event*/) {
 			native_teardown();
 			return;
 		case 'Z': { // ReadyForQuery: 1 status byte
-			if (msg.payload_len >= 1) native_txn_status = (char)msg.payload[0];
+			if (msg.payload_len >= 1) set_ready_for_query_status((char)msg.payload[0]);
 			native_connected = true;
 			native_st = PG_Native_Conn_St::DONE;
 			async_exit_status = PG_EVENT_NONE; // connect/auth phase COMPLETE
@@ -2679,9 +3042,12 @@ void PgSQL_Connection::query_start() {
 		native_stmt_sync_terminated = false;
 		native_suppress_parse_complete = false;
 		native_stmt_error_resync = false;
-		// Reset the framer so any stray connect-phase bytes (there should be none
-		// after a clean ReadyForQuery) cannot leak into this query's result parse.
-		native_framer.reset();
+		native_result_had_notification = false;
+		// A connection pinned by LISTEN can be holding the front of an asynchronous
+		// message that arrived between queries; resetting here would drop those bytes and
+		// the rest would then be read as a new message header. Empty is the normal case
+		// for every other connection, so this still clears a stale framer.
+		if (native_framer.empty()) native_framer.reset();
 		native_outbuf.clear();
 		// Body for the 'Q' (Query) message is the SQL text followed by EXACTLY ONE
 		// NUL terminator, matching PQsendQuery() semantics. Callers are inconsistent
@@ -2858,6 +3224,9 @@ void PgSQL_Connection::native_stmt_send_or_wait() {
 		async_exit_status = PG_EVENT_NONE;
 		return;
 	}
+	// From here until a ReadyForQuery comes back, the backend is mid-batch. Recorded on the way out
+	// rather than at each of the six call sites so no future step can forget to.
+	native_unsynced_work = true;
 	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
 		async_exit_status = PG_EVENT_WRITE;
 	} else {
@@ -2879,30 +3248,11 @@ void PgSQL_Connection::native_stmt_flush_cont() {
 	}
 }
 
-void PgSQL_Connection::native_publish_describe_cache() {
-	// Publish the statement-level Describe metadata captured during this DESCRIBE_S
-	// step to the global statement's set-once cache. Guards:
-	//  - a global stmt_info must be attached to the current query;
-	//  - a ParameterDescription 't' must have been seen (empty param → the step
-	//    errored before metadata, or this isn't a real statement Describe) AND a
-	//    RowDescription/NoData must have terminated it;
-	//  - skip the allocation entirely if the cache is already populated.
-	// Ownership: publish_describe_cache() frees the candidate if it loses the race.
-	const PgSQL_Extended_Query_Info* eqi = query.extended_query_info;
-	if (eqi == nullptr || eqi->stmt_info == nullptr) return;
-	if (native_describe_param_payload.empty() || !native_describe_have_row) return;
-	if (eqi->stmt_info->get_describe_cache() != nullptr) return;
-
-	auto* cand = new PgSQL_Describe_Cache();
-	cand->param_desc_payload = native_describe_param_payload;
-	cand->no_data = native_describe_no_data;
-	if (!native_describe_no_data) {
-		cand->row_desc_payload = native_describe_row_payload;
-	}
-	eqi->stmt_info->publish_describe_cache(cand);
-}
-
-void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
+void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* processed_bytes) {
+	// Every byte handed to query_result counts towards this event's total, which
+	// the caller compares against pgsql-threshold_resultset_size to decide when
+	// to pause the fetch.
+	auto count_bytes = [&](unsigned int n) { if (processed_bytes) *processed_bytes += n; };
 	// Native result fetch (Task 1.6c / Phase 2). Pull backend bytes into the
 	// framer, then drain every complete message into query_result as raw
 	// client-wire bytes. Non-blocking throughout.
@@ -2911,7 +3261,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 	// query_result must have been allocated in ASYNC_USE_RESULT_START via
 	// init_query_result(). Guard defensively so we never deref a null result.
 	if (query_result == nullptr) {
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INTERNAL_ERROR), "native result fetch with no query_result", false);
+		native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INTERNAL_ERROR), "native result fetch with no query_result");
 		return;
 	}
 
@@ -2923,7 +3273,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 	// ReadyForQuery that complete the cycle. Mirrors query_cont()'s native branch.
 	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
 		if (!native_flush_outbuf()) {
-			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed during result fetch", false);
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed during result fetch");
 			return;
 		}
 		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -2933,15 +3283,21 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 		}
 	}
 
-	int r = native_recv_into_framer();
-	if (r < 0) {
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch", false);
-		return;
-	}
-	if (r == 0) {
-		// EAGAIN: no bytes available yet → wait for the socket to become readable.
-		async_exit_status = PG_EVENT_READ;
-		return;
+	if (native_fetch_paused) {
+		// Resuming a fetch that stopped on the byte threshold: the messages are
+		// already framed, and the backend may have nothing left to send.
+		native_fetch_paused = false;
+	} else {
+		int r = native_recv_into_framer();
+		if (r < 0) {
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch");
+			return;
+		}
+		if (r == 0) {
+			// EAGAIN: no bytes available yet → wait for the socket to become readable.
+			async_exit_status = PG_EVENT_READ;
+			return;
+		}
 	}
 
 	// Drain all complete messages. msg.payload points INTO the framer buffer and
@@ -2949,6 +3305,12 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 	// buffer) before looping, and we never feed() again inside this loop, so the
 	// dangling-pointer rule is respected.
 	for (;;) {
+		// Enough bytes for this event: stop before taking another message and let
+		// the client drain, the same rule the libpq fetch loop applies per row.
+		if (processed_bytes && suspend_resultset_fetch(*processed_bytes)) {
+			native_fetch_paused = true;
+			return;
+		}
 		PgSQL_Backend_Msg msg;
 		PgSQL_Frame_Result fr = native_framer.next(msg);
 		if (fr == FRAME_OK) {
@@ -2969,7 +3331,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 					// during the connect handshake; it is dead here (post-connect,
 					// mid-fetch) — only the flush result and async_exit_status count.
 					if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
-						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(CopyFail) failed", false);
+						native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(CopyFail) failed");
 						return;
 					}
 					if (async_exit_status == PG_EVENT_WRITE || !native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -2983,6 +3345,42 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 					}
 				}
 				continue;   // do NOT forward 'G'/'W' to the client
+			}
+
+			// Check the type before any of it is copied towards the client. Every
+			// add_native_backend_message() call below is reached through here, so this
+			// is the one place that has to hold. Nothing is forwarded and the
+			// connection is dropped, because a backend sending a type that cannot
+			// appear in a result stream is either hostile or desynchronized, and in
+			// both cases its remaining bytes are worthless.
+			if (!pg_native_type_legal_in_result(msg.type)) {
+				proxy_error("native backend protocol: illegal message type '0x%02X' in result stream on fd=%d; discarding connection\n",
+					(unsigned char)msg.type, fd);
+				// Record the reason and stop reading, but leave the socket open for now.
+				// Closing it here would make the session treat this as a connection that
+				// merely died, and the client would be told only that -- never what
+				// ProxySQL refused. Ending the cycle instead lets the session report the
+				// error, while the flags below make sure the connection is destroyed
+				// rather than returned to the pool.
+				native_result_protocol_violation("illegal backend message type in result stream");
+				return;
+			}
+
+			// A NotificationResponse answers a LISTEN, which belongs to the connection and
+			// not necessarily to the client currently holding it. PostgreSQL flushes pending
+			// notifications just before ReadyForQuery, so one legitimately arrives mid-reply;
+			// the question is who it is for. When this connection carries the subscription it
+			// is this client's, and forwarding it is the whole point -- a driver reading
+			// notifications synchronously gets them out of the query reply. Otherwise it
+			// belongs to nobody reachable, and handing it over would leak a channel and
+			// payload to an unrelated client, so it goes the way libpq sends it: nowhere.
+			if (msg.type == 'A') {
+				if (!get_status(STATUS_PGSQL_CONNECTION_LISTEN)) {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5,
+						"Discarded asynchronous NotificationResponse in result stream on fd=%d\n", fd);
+					continue;
+				}
+				native_result_had_notification = true;
 			}
 
 			// --- Extended-query (prepared-statement) drain (Task C) ---
@@ -2999,7 +3397,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// waits for its 'Z' below.
 				if (t == '2') {
 					if (native_stmt_step == PG_Native_Stmt_Step::BIND) {
-						query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+						count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 						if (!native_stmt_sync_terminated) {
 							native_result_complete = true;
 							return;
@@ -3017,7 +3415,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// unexpected in native extq (unnamed Close is synthesized) - forward it
 				// defensively rather than drop it.
 				if (t == '3') {
-					query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+					count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 					if (native_stmt_step == PG_Native_Stmt_Step::CLOSE_P &&
 						!native_stmt_sync_terminated) {
 						native_result_complete = true;
@@ -3032,7 +3430,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// for its 'Z'.
 				if (t == '1') {
 					if (!native_suppress_parse_complete) {
-						query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+						count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 					}
 					if (native_stmt_step == PG_Native_Stmt_Step::PARSE && !native_stmt_sync_terminated) {
 						native_result_complete = true;
@@ -3044,7 +3442,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// ErrorResponse: forward it (its side effect fills error_info, so the
 				// session sees rc -1), then get the backend back to ReadyForQuery.
 				if (t == 'E') {
-					query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+					count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 					if (native_stmt_sync_terminated) {
 						// A Sync already reached the backend, so it WILL emit 'Z' after
 						// the error; keep draining until we consume it.
@@ -3073,7 +3471,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 						}
 						pg_build_sync(native_outbuf);
 						if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
-							set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Sync) failed", false);
+							native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Sync) failed");
 							return;
 						}
 						if (async_exit_status == PG_EVENT_WRITE || !native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -3091,13 +3489,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// ReadyForQuery: completes any Sync-terminated step (and the injected-
 				// Sync error recovery above).
 				if (t == 'Z') {
-					query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
-					// A Sync-terminated statement-level Describe streamed its 't'+'T'|'n'
-					// through the generic case below and completes here — publish the
-					// captured metadata now (no-op if nothing valid was captured).
-					if (native_stmt_step == PG_Native_Stmt_Step::DESCRIBE_S) {
-						native_publish_describe_cache();
-					}
+					count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 					native_result_complete = true;
 					return;
 				}
@@ -3105,24 +3497,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// Everything else (ParameterDescription 't', RowDescription 'T', NoData
 				// 'n', DataRow 'D', CommandComplete 'C', EmptyQueryResponse 'I',
 				// ParameterStatus 'S', NoticeResponse 'N', etc.) streams through.
-				query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
-
-				// Statement-level Describe metadata capture (set-once cache): copy the
-				// backend's raw 't' body and 'T'/'n' state as they stream past, for
-				// publication on step completion. Portal Describes ('P') are never cached.
-				if (native_stmt_step == PG_Native_Stmt_Step::DESCRIBE_S) {
-					if (t == 't') {
-						native_describe_param_payload.assign((const char*)msg.payload, msg.payload_len);
-					} else if (t == 'T') {
-						native_describe_row_payload.assign((const char*)msg.payload, msg.payload_len);
-						native_describe_have_row = true;
-						native_describe_no_data = false;
-					} else if (t == 'n') {
-						native_describe_row_payload.clear();
-						native_describe_have_row = true;
-						native_describe_no_data = true;
-					}
-				}
+				count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 
 				// Named-portal suspend/resume bookkeeping (Task P2): record whether the
 				// EXECUTE step's terminator was 's' (PortalSuspended — max_rows cut the
@@ -3147,9 +3522,6 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 						(t == 'T' || t == 'n')) {
 						// DESCRIBE('S'): 't' precedes, then 'T'|'n' terminates.
 						// DESCRIBE('P'): 'T'|'n' terminates.
-						if (native_stmt_step == PG_Native_Stmt_Step::DESCRIBE_S) {
-							native_publish_describe_cache();
-						}
 						native_result_complete = true;
 						return;
 					}
@@ -3163,7 +3535,11 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				continue;
 			}
 
-			query_result->add_native_backend_message(msg.type, msg.payload, msg.payload_len);
+			// The same refusal, before the ReadyForQuery joins the result.
+			if (msg.type == 'Z') {
+				reject_result_without_outcome();
+			}
+			count_bytes(query_result->add_native_backend_message(msg.type, msg.payload, msg.payload_len));
 			if (msg.type == 'Z') {
 				// ReadyForQuery: the result stream for this query is complete.
 				native_result_complete = true;
@@ -3177,7 +3553,10 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 			return;
 		}
 		// FRAME_ERROR: malformed backend message length.
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during result fetch", false);
+		// Same class as the illegal-type guard above: ProxySQL decided this stream is not
+		// the protocol, so the client is told why rather than being left to infer it from a
+		// dropped connection.
+		native_result_protocol_violation("malformed backend message during result fetch");
 		return;
 	}
 }
@@ -3239,15 +3618,21 @@ int PgSQL_Connection::async_connect(short event) {
 	return 1;
 }
 
-bool PgSQL_Connection::is_connected() const {
+bool PgSQL_Connection::backend_is_live() const {
 	if (native_mode) {
-		// Native handshake completed (ReadyForQuery received) => usable in the pool.
-		return native_connected;
+		// Usable means the socket is still open and login finished. Do not use
+		// native_st here: it moves back to a sending state whenever a large query
+		// cannot be written in one go, which would make a healthy connection look
+		// dead.
+		return fd >= 0 && native_connected;
 	}
-	if (pgsql_conn == nullptr || PQstatus(pgsql_conn) != CONNECTION_OK) {
-		return false;
-	}
-	return true;
+	// The same check libpq makes internally, so this never rejects a connection
+	// libpq would have accepted.
+	return pgsql_conn != nullptr && PQstatus(pgsql_conn) == CONNECTION_OK;
+}
+
+bool PgSQL_Connection::is_connected() const {
+	return backend_is_live();
 }
 
 void PgSQL_Connection::compute_unknown_transaction_status() {
@@ -3440,15 +3825,11 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 int PgSQL_Connection::async_reset_session(short event) {
 	PROXY_TRACE();
 	PROXY_TRACE2();
-	// In native_mode pgsql_conn is permanently NULL (the native state machine
-	// owns the socket and is reset on a different code path). The libpq-only
-	// invariant asserted below does not hold for native connections; bail out
-	// early with a successful reset rather than crashing the process.
-	if (native_mode) {
-		async_state_machine = ASYNC_RESET_SESSION_SUCCESSFUL;
-		return 0;
-	}
-	assert(pgsql_conn);
+	// A native connection has no pgsql_conn and never will; only the libpq branches
+	// below dereference it. Everything else in this function -- the timeout, the error
+	// mapping, returning the connection to ASYNC_IDLE once the backend has acknowledged
+	// the reset -- serves both kinds of connection.
+	assert(native_mode || pgsql_conn);
 
 	server_status = parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
@@ -3578,10 +3959,12 @@ int PgSQL_Connection::async_ping(short event) {
 }
 
 bool PgSQL_Connection::IsKnownActiveTransaction() {
+	// Callers use this to decide whether a failed statement can safely be run
+	// again on a different connection. A connection that died in the middle of a
+	// transaction must still say it has one, otherwise the statement would be
+	// re-run on its own, outside that transaction. Do not add a liveness check
+	// here -- the answer has to survive the connection dying.
 	if (native_mode) {
-		// Native state machine tracks txn status in `native_txn_status` ('I'/'T'/'E'),
-		// the same byte the backend emits in ReadyForQuery. pgsql_conn is null for
-		// native connections, so the libpq path below does not apply.
 		return native_txn_status == 'T' || native_txn_status == 'E';
 	}
 	if (!pgsql_conn) return false;
@@ -3636,25 +4019,47 @@ void PgSQL_Connection::set_is_client() {
 }
 
 bool PgSQL_Connection::is_connection_in_reusable_state() const {
-	// In native mode pgsql_conn is NULL, so PQtransactionStatus() would return
-	// PQTRANS_UNKNOWN and wrongly classify a normal query error (backend sent
-	// ErrorResponse then ReadyForQuery — connection still idle and reusable) as a
-	// broken connection. Derive the transaction status from the last ReadyForQuery
-	// byte tracked natively.
-	PGTransactionStatusType txn_status;
-	if (native_mode) {
-		switch (native_txn_status) {
-			case 'I': txn_status = PQTRANS_IDLE; break;
-			case 'T': txn_status = PQTRANS_INTRANS; break;
-			case 'E': txn_status = PQTRANS_INERROR; break;
-			default:  txn_status = PQTRANS_UNKNOWN; break;
-		}
-	} else {
-		txn_status = PQtransactionStatus(pgsql_conn);
+	// Native only, and it has to answer before the check below: a connection that
+	// never finished connecting is unusable but has no error recorded against it.
+	// libpq falls through on purpose, so a dead libpq connection with no error
+	// still trips that check the way it always did.
+	if (native_mode && !backend_is_live()) {
+		return false;
 	}
-	bool conn_usable = !(txn_status == PQTRANS_UNKNOWN || txn_status == PQTRANS_ACTIVE);
+	// The backend still owes this connection a ReadyForQuery, so it is mid-batch and holding an
+	// implicit transaction. Its last status byte predates the batch and would say otherwise.
+	if (native_mode && native_unsynced_work) {
+		return false;
+	}
+	const PGTransactionStatusType txn_status = get_pg_transaction_status();
+	const bool conn_usable = !(txn_status == PQTRANS_UNKNOWN || txn_status == PQTRANS_ACTIVE);
 	assert(!(conn_usable == false && is_error_present() == false));
 	return conn_usable;
+}
+
+// A reply that says nothing -- a bare ReadyForQuery, with no CommandComplete, EmptyQueryResponse
+// or ErrorResponse (issue #6110). Tell the client and destroy the connection; a reset cannot cure
+// a server that answers incorrectly. Call this BEFORE the ReadyForQuery is added: a client told
+// the cycle is over discards whatever follows, so an error appended there is never seen.
+void PgSQL_Connection::reject_result_without_outcome() {
+	if ((query_result->get_result_packet_type() &
+	     (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) != 0) {
+		return;
+	}
+	if (!is_error_present()) {
+		proxy_error("Backend %s:%d answered a query with no command outcome (bare ReadyForQuery)\n",
+			parent ? parent->address : "?", parent ? parent->port : 0);
+		set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION,
+			"backend answered the query with no command outcome", false);
+		reusable = false;
+		healthy = false;
+		if (myds && myds->sess) {
+			myds->sess->set_unhealthy();
+		}
+	}
+	// Flush any rows still in the inline buffer, so the error lands behind them, not in front.
+	query_result->buffer_to_PSarrayOut();
+	query_result->add_error(NULL);
 }
 
 PGresult* PgSQL_Connection::get_result() {
@@ -3875,6 +4280,18 @@ void PgSQL_Connection::resync_start() {
 	PROXY_TRACE();
 	async_exit_status = PG_EVENT_NONE;
 
+	if (native_mode) {
+		// The client was already told this frame succeeded (a trailing message was
+		// answered locally), so the batch is still open on the backend. Sending the
+		// Sync concludes it -- the 'Z' clears native_unsynced_work.
+		native_stmt_reset_step();
+		native_stmt_step = PG_Native_Stmt_Step::RESYNC;
+		native_stmt_sync_terminated = true;
+		pg_build_sync(native_outbuf);
+		native_stmt_send_or_wait();
+		return;
+	}
+
 	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
 
 	if (PQsendPipelineSync(pgsql_conn) == 0) {
@@ -3888,6 +4305,10 @@ void PgSQL_Connection::resync_start() {
 void PgSQL_Connection::resync_cont(short event) {
 	PROXY_TRACE();
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
+	if (native_mode) {
+		native_stmt_flush_cont();
+		return;
+	}
 	async_exit_status = PG_EVENT_NONE;
 	if (event & POLLOUT) {
 		flush(true);
@@ -4330,6 +4751,26 @@ void PgSQL_Connection::stmt_execute_cont(short event) {
 
 void PgSQL_Connection::reset_session_start() {
 	PROXY_TRACE();
+	if (native_mode) {
+		// Two commands, and the order is forced: the backend refuses DISCARD ALL while
+		// a transaction is open, so an open one is rolled back first and DISCARD ALL
+		// goes out on the next pass.
+		reset_session_in_pipeline = false; // nothing here ever runs in pipeline mode
+		reset_session_in_txn = IsKnownActiveTransaction();
+		const char* cmd = (reset_session_in_txn == false ? "DISCARD ALL" : "ROLLBACK");
+		set_query(cmd, strlen(cmd));
+		query_start();
+		if (async_exit_status == PG_EVENT_NONE && is_error_present() == false) {
+			// Reached only when the whole command actually went out: query_start() asks
+			// for writability instead if any of it is still buffered, and leaves an error
+			// set if the send failed outright. Nothing is left to send, so what we wait
+			// for is the reply. Say so, or the cycle finishes here without ever entering
+			// ASYNC_RESET_SESSION_CONT -- taking the reset timeout, which lives in that
+			// state, with it.
+			async_exit_status = PG_EVENT_READ;
+		}
+		return;
+	}
 	assert(pgsql_conn);
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
@@ -4353,8 +4794,69 @@ void PgSQL_Connection::reset_session_start() {
 	flush();
 }
 
+// Finish sending a reset command and read its reply, which is thrown away: a
+// connection being reset has no client waiting for it. Reading stops at
+// ReadyForQuery. Two things in the reply are kept -- the transaction status, which
+// decides whether a second command is still owed, and an error, because a reset that
+// failed must not be reported as done or a dirty connection goes back in the pool.
+void PgSQL_Connection::native_reset_session_cont() {
+	async_exit_status = PG_EVENT_NONE;
+
+	// A command that did not fit in one write has to be finished before its reply
+	// can arrive.
+	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
+		if (!native_flush_outbuf()) {
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed during reset");
+			return;
+		}
+		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
+			async_exit_status = PG_EVENT_WRITE;
+			return;
+		}
+	}
+
+	for (;;) {
+		PgSQL_Backend_Msg msg;
+		PgSQL_Frame_Result fr = native_framer.next(msg);
+		if (fr == FRAME_NEED_MORE) {
+			int r = native_recv_into_framer();
+			if (r == 0) { // EAGAIN
+				async_exit_status = PG_EVENT_READ;
+				return;
+			}
+			if (r < 0) {
+				native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during reset");
+				return;
+			}
+			continue;
+		}
+		if (fr == FRAME_ERROR) {
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during reset");
+			return;
+		}
+		switch (msg.type) {
+		case 'E': // the backend refused the command; ReadyForQuery still follows it
+			native_fill_error_from_E(msg.payload, msg.payload_len);
+			break;
+		case 'S': // ParameterStatus: DISCARD ALL reverts reported settings and says so
+			native_track_parameter_status(msg.payload, msg.payload_len);
+			break;
+		case 'Z': // ReadyForQuery: the reply is complete
+			if (msg.payload_len >= 1) set_ready_for_query_status((char)msg.payload[0]);
+			return;
+		default:
+			// CommandComplete and NoticeResponse: nothing to keep.
+			break;
+		}
+	}
+}
+
 void PgSQL_Connection::reset_session_cont(short event) {
 	PROXY_TRACE();
+	if (native_mode) {
+		native_reset_session_cont();
+		return;
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
 	async_exit_status = PG_EVENT_NONE;
 	if (event & POLLOUT) {
@@ -4452,6 +4954,18 @@ char PgSQL_Connection::get_transaction_status_char() {
 		txn_status = 'U';
 	}
 	return txn_status;
+}
+
+bool PgSQL_Connection::suspend_resultset_fetch(uint64_t processed_bytes) const {
+	bool suspend = (processed_bytes > overflow_safe_multiply<8,unsigned int>(pgsql_thread___threshold_resultset_size));
+	// A cacheable query is allowed to buffer up to the whole query cache instead,
+	// otherwise it would be paused before it could ever be stored.
+	if (suspend == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
+		suspend = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
+	}
+	if (suspend == true) return true;
+	return (pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client
+		&& (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client));
 }
 
 void PgSQL_Connection::update_bytes_recv(uint64_t bytes_recv) {
@@ -4717,9 +5231,36 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 		if (!strncasecmp(query_digest_text, "SELECT pg_advisory_lock", sizeof("SELECT pg_advisory_lock")-1)) {
 			set_status(true, STATUS_PGSQL_CONNECTION_ADVISORY_LOCK);
 		}
-	} else { 
+	} else {
 		if (!strncasecmp(query_digest_text, "SELECT pg_advisory_unlock_all", sizeof("SELECT pg_advisory_unlock_all") - 1)) {
 			set_status(false, STATUS_PGSQL_CONNECTION_ADVISORY_LOCK);
+		}
+	}
+
+	// LISTEN registers a subscription on the backend connection, so the connection must
+	// stay with this session: notifications can only be delivered to the client that asked
+	// for them, and a pooled connection would hand them to whoever holds it next. This flag
+	// is also what stops such a connection returning to the pool still subscribed.
+	// Individual channels are not tracked, so only UNLISTEN * clears it -- after
+	// UNLISTEN <channel> ProxySQL cannot know whether any subscription remains, and
+	// unpinning while one does sends the next notification to the wrong client.
+	// DISCARD ALL is the other way out, and it clears every flag through reset().
+	// A subscription lives on this connection, so the connection has to stay with the
+	// session that made it: pooled, it would hand notifications to whoever holds it next.
+	// Only UNLISTEN * clears the flag, since individual channels are not tracked and
+	// unpinning while one remains sends the next notification to the wrong client.
+	// DISCARD ALL is the other way out, through reset().
+	if (get_status(STATUS_PGSQL_CONNECTION_LISTEN) == false) {
+		if (pgsql_stmt_first_keyword_is(query_digest_text, "LISTEN")) {
+			set_status(true, STATUS_PGSQL_CONNECTION_LISTEN);
+		}
+	} else {
+		// The star may abut the keyword: UNLISTEN* is valid and the digest keeps it joined,
+		// so a compare against "UNLISTEN " would leave the connection pinned for good.
+		if (pgsql_stmt_first_keyword_is(query_digest_text, "UNLISTEN")) {
+			const char* p = query_digest_text + sizeof("UNLISTEN") - 1;
+			while (*p == ' ') p++;
+			if (*p == '*') set_status(false, STATUS_PGSQL_CONNECTION_LISTEN);
 		}
 	}
 
@@ -4840,7 +5381,9 @@ int PgSQL_Connection::async_send_simple_command(short event, char* stmt, unsigne
 int PgSQL_Connection::async_perform_resync(short event) {
 	PROXY_TRACE();
 	PROXY_TRACE2();
-	assert(pgsql_conn);
+	// pgsql_conn is permanently NULL in native_mode; resync_start()/resync_cont() drive
+	// their own native branch instead of the PQsendPipelineSync() calls below.
+	assert(native_mode || pgsql_conn);
 
 	server_status = parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
@@ -4878,7 +5421,13 @@ int PgSQL_Connection::async_perform_resync(short event) {
 			query_result = NULL;
 		}
 		compute_unknown_transaction_status();
-		if (resync_failed) {
+		// resync_failed only covers the two libpq send-phase paths that don't call
+		// set_error() (PQsendPipelineSync/PQflush failures) -- it was never a full signal.
+		// is_error_present() catches native's failures and a drain-phase libpq failure
+		// (PQconsumeInput in fetch_result_cont()) that resync_failed has always missed too;
+		// fetch_result_start() resets error state before this drain runs for both modes,
+		// so it can't be a stale leftover here.
+		if (resync_failed || is_error_present()) {
 			return -1;
 		} else {
 			async_state_machine = ASYNC_IDLE;
@@ -4996,8 +5545,8 @@ bool PgSQL_Connection::MultiplexDisabled(bool check_delay_token) {
 	if (status_flags & (STATUS_PGSQL_CONNECTION_USER_VARIABLE | STATUS_PGSQL_CONNECTION_PREPARED_STATEMENT |
 		STATUS_PGSQL_CONNECTION_LOCK_TABLES | STATUS_PGSQL_CONNECTION_TEMPORARY_TABLE | STATUS_PGSQL_CONNECTION_ADVISORY_LOCK | 
 		STATUS_PGSQL_CONNECTION_NO_MULTIPLEX | STATUS_PGSQL_CONNECTION_HAS_SEQUENCES | STATUS_PGSQL_CONNECTION_ADVISORY_XACT_LOCK | 
-		STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG | STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT 
-		/*| STATUS_PGSQL_CONNECTION_HAS_WARNINGS*/ )) {
+		STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG | STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT |
+		STATUS_PGSQL_CONNECTION_LISTEN )) {
 		ret = true;
 	}
 	if (check_delay_token && auto_increment_delay_token) return true;
@@ -5279,11 +5828,6 @@ void PgSQL_Connection::copy_pgsql_variables_to_startup_parameters(bool copy_only
 }
 
 void PgSQL_Connection::copy_startup_parameters_to_pgsql_variables(bool copy_only_critical_param) {
-	// In native_mode the libpq-allocated startup_parameters / hash arrays are
-	// not populated (native state machine keeps the ParameterStatus values
-	// directly in native_params). The libpq-only invariant asserted below
-	// does not hold; skip the copy.
-	if (native_mode) return;
 
 	//memcpy(var_hash, startup_parameters_hash, sizeof(uint32_t) * PGSQL_NAME_LAST_LOW_WM);
 	for (int i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
@@ -5342,7 +5886,10 @@ PgSQL_Backend_Kill_Args::PgSQL_Backend_Kill_Args(PGconn* conn, const PgSQL_Conne
 		cancel_conn = nullptr;
 	}
 	username = strdup(ui->username);
-	password = strdup(ui->password);
+	// A user with no stored secret is the one case worth carrying instead of crashing here:
+	// pgsql_append_conninfo_credentials() refuses to build a conninfo without a credential, so
+	// the terminate is skipped rather than run as whoever owns the ProxySQL process.
+	password = ui->password ? strdup(ui->password) : nullptr;
 	hostname = strdup(host);
 	dbname = strdup(ui->dbname);
 	// Carry the harvested SCRAM keys, so TERMINATE_CONNECTION can authenticate a verifier-stored
