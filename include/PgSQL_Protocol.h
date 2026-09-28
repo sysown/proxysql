@@ -716,6 +716,10 @@ private:
 
 	friend class PgSQL_Protocol;
 	friend class PgSQL_Connection;
+	// The libpq result drain moved into the LibPQ leaf in step 4 of the connection
+	// split, and it writes num_fields directly (the public accessor is a getter
+	// only, and the value has to be set without a round trip through a setter).
+	friend class PgSQL_Connection_LibPQ;
 };
 
 class PgSQL_Protocol : public MySQL_Protocol {

@@ -9,6 +9,23 @@ class PgSQL_Client_Connection final : public PgSQL_Connection {
 public:
 	PgSQL_Client_Connection();
 
+	// --- handler() hooks (Step 4) ---
+	// Unreachable, like every state-machine dispatcher above: handler() is the
+	// backend drive and a client connection has nothing to drive.
+	HandlerStep on_connect_end() override;
+	void on_connect_successful() override;
+	void on_connect_failed() override;
+	bool defer_first_result_read() override;
+	HandlerStep fetch_result_dispatch(short event, uint64_t* processed_bytes) override;
+	bool stmt_start_flushed_at_once() const override;
+	void on_command_end() override;
+	bool resync_already_synced() override;
+	bool resync_send_failed() override;
+	HandlerStep reset_session_cont_dispatch() override;
+	void on_reset_session_end() override;
+	const char* transport_name() const override;
+	bool set_single_row_mode() override;
+
 	// --- Transport-dependent overrides (Step 3) ---
 	// A client-side connection has no transport. The state-machine dispatchers
 	// are unreachable here (they would today trip assert(pgsql_conn) or

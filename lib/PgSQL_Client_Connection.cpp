@@ -22,6 +22,72 @@ PgSQL_Client_Connection::PgSQL_Client_Connection() : PgSQL_Connection(true, fals
 
 // --- State-machine dispatchers (unreachable) ---
 
+// --- handler() hooks (Step 4) ---
+// Unreachable, like every state-machine dispatcher above: handler() is the
+// backend drive and a client connection has nothing to drive.
+
+PgSQL_Connection::HandlerStep PgSQL_Client_Connection::on_connect_end() {
+	assert(0); // backend drive, not reachable on a client connection
+	return HandlerStep::CONTINUE;
+}
+
+void PgSQL_Client_Connection::on_connect_successful() {
+	assert(0); // backend drive, not reachable on a client connection
+}
+
+void PgSQL_Client_Connection::on_connect_failed() {
+	assert(0); // backend drive, not reachable on a client connection
+}
+
+bool PgSQL_Client_Connection::defer_first_result_read() {
+	assert(0); // backend drive, not reachable on a client connection
+	return false;
+}
+
+PgSQL_Connection::HandlerStep PgSQL_Client_Connection::fetch_result_dispatch(short event, uint64_t* processed_bytes) {
+	(void)event;
+	(void)processed_bytes;
+	assert(0); // backend drive, not reachable on a client connection
+	return HandlerStep::CONTINUE;
+}
+
+void PgSQL_Client_Connection::on_command_end() {
+	assert(0); // backend drive, not reachable on a client connection
+}
+
+bool PgSQL_Client_Connection::resync_already_synced() {
+	assert(0); // backend drive, not reachable on a client connection
+	return false;
+}
+
+bool PgSQL_Client_Connection::resync_send_failed() {
+	assert(0); // backend drive, not reachable on a client connection
+	return false;
+}
+
+PgSQL_Connection::HandlerStep PgSQL_Client_Connection::reset_session_cont_dispatch() {
+	assert(0); // backend drive, not reachable on a client connection
+	return HandlerStep::CONTINUE;
+}
+
+void PgSQL_Client_Connection::on_reset_session_end() {
+	assert(0); // backend drive, not reachable on a client connection
+}
+
+bool PgSQL_Client_Connection::stmt_start_flushed_at_once() const {
+	assert(0); // backend drive, not reachable on a client connection
+	return false;
+}
+
+const char* PgSQL_Client_Connection::transport_name() const {
+	return "client";
+}
+
+bool PgSQL_Client_Connection::set_single_row_mode() {
+	assert(0); // backend drive, not reachable on a client connection
+	return false;
+}
+
 void PgSQL_Client_Connection::connect_start() {
 	assert(0); // backend drive, not reachable on a client connection
 }

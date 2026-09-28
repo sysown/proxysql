@@ -8,6 +8,22 @@
 class PgSQL_Connection_LibPQ final : public PgSQL_Connection {
 public:
 	PgSQL_Connection_LibPQ();
+	~PgSQL_Connection_LibPQ() override;
+
+	// --- handler() hooks (Step 4) ---
+	HandlerStep on_connect_end() override;
+	void on_connect_successful() override;
+	void on_connect_failed() override;
+	bool defer_first_result_read() override;
+	HandlerStep fetch_result_dispatch(short event, uint64_t* processed_bytes) override;
+	bool stmt_start_flushed_at_once() const override;
+	void on_command_end() override;
+	bool resync_already_synced() override;
+	bool resync_send_failed() override;
+	HandlerStep reset_session_cont_dispatch() override;
+	void on_reset_session_end() override;
+	const char* transport_name() const override;
+	bool set_single_row_mode() override;
 
 	// --- Transport-dependent overrides (Step 3) ---
 	// State machine and health dispatchers moved off the base; each leaf owns

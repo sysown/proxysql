@@ -48,6 +48,407 @@ PgSQL_Connection_LibPQ::PgSQL_Connection_LibPQ()
 {
 }
 
+PgSQL_Connection_LibPQ::~PgSQL_Connection_LibPQ() {
+	// The libpq transport's own resources. A leaf destructor runs before the base
+	// body, so these three happen ahead of the shared cleanup instead of in the
+	// middle of it. Nothing that runs later needs them: PQclear() takes only a
+	// PGresult, the BIOs are this connection's own, and async_free_result() reads
+	// userinfo, local_stmts and query_result -- all still alive, because the base
+	// body is what deletes those.
+	if (pgsql_result) {
+		PQclear(pgsql_result);
+		pgsql_result = NULL;
+	}
+	// Still held here means a relay went away without releasing it. Drop it so it
+	// cannot outlive the connection.
+	// BIO_free, not BIO_free_all: this is the reference adopt_backend_tls() took
+	// with BIO_up_ref, and the chain behind it belongs to libpq.
+	if (saved_backend_wbio && saved_backend_wbio != saved_backend_rbio) {
+		BIO_free(saved_backend_wbio);
+	}
+	if (saved_backend_rbio) {
+		BIO_free(saved_backend_rbio);
+	}
+	saved_backend_rbio = NULL;
+	saved_backend_wbio = NULL;
+	if (pgsql_conn) {
+		// async_free_result() first, and while pgsql_conn is still a live handle:
+		// it calls compute_unknown_transaction_status(), which asks PQstatus() and
+		// PQtransactionStatus() about it. PQfinish() has to come after, as it did.
+		async_free_result();
+		PQfinish(pgsql_conn);
+		pgsql_conn = NULL;
+	}
+}
+
+bool PgSQL_Connection_LibPQ::set_single_row_mode() {
+	assert(pgsql_conn);
+	if (PQsetSingleRowMode(pgsql_conn) == 0) {
+		set_error_from_PQerrorMessage();
+		proxy_error("Failed to set single row mode. %s\n", get_error_code_with_message().c_str());
+		return false;
+	}
+	return true;
+}
+
+PgSQL_Connection::HandlerStep PgSQL_Connection_LibPQ::on_connect_end() {
+	// libpq hands back a blocking socket, and this is where it stops blocking.
+	if (PQisnonblocking(pgsql_conn) == false) {
+		// Set non-blocking mode
+		if (PQsetnonblocking(pgsql_conn, 1) != 0) {
+			set_error_from_PQerrorMessage();
+			proxy_error("Failed to set non-blocking mode: %s\n", get_error_code_with_message().c_str());
+			return go(ASYNC_CONNECT_FAILED);
+		}
+	}
+	return HandlerStep::CONTINUE;
+}
+
+void PgSQL_Connection_LibPQ::on_connect_successful() {
+	// Seed the PgSQL DNS cache from the just-established connection so the next
+	// connect for this hostname can skip getaddrinfo even if the background
+	// resolver loop hasn't visited it yet.
+	PgSQL_Monitor::update_dns_cache_from_pgsql_conn(pgsql_conn);
+}
+
+void PgSQL_Connection_LibPQ::on_connect_failed() {
+	// Nothing: the PGConn is left for the destructor to PQfinish(). A connect that
+	// failed is never pooled, so there is nothing to release early either.
+}
+
+bool PgSQL_Connection_LibPQ::defer_first_result_read() {
+	// false: the request really is on the wire and readable now, because
+	// ASYNC_QUERY_CONT only hands over once the flush reported it was.
+	return false;
+}
+
+PgSQL_Connection::HandlerStep PgSQL_Connection_LibPQ::fetch_result_dispatch(short event, uint64_t* processed_bytes) {
+	fetch_result_cont(event);
+	if (async_exit_status) {
+		next_event(ASYNC_USE_RESULT_CONT);
+		return HandlerStep::YIELD;
+	}
+
+	// Issue #6109: the fetch produced nothing to dispatch. fetch_result_cont()
+	// returns from its PQconsumeInput() failure without assigning result_type, so
+	// the dispatch below would act on the previous iteration's value; its other
+	// empty returns set async_exit_status and were handled above. The transport may
+	// also be gone with a result already taken (result_type 1 or 2 and a NULL
+	// pgsql_result), which libpq reports as CONNECTION_BAD.
+	//
+	// End the cycle either way, so async_query() returns -1 and the session
+	// destroys the connection and unplugs the dead fd. Not is_error_present():
+	// that is also true for an ordinary backend ERROR, which must keep flowing
+	// through the PGRES_FATAL_ERROR arm below. pgsql_result == NULL keeps a pending
+	// multi-statement result dispatching first. is_copy_out is cleared because a
+	// backend dying mid-COPY would otherwise reach the end state with it still set.
+	if (result_type == 0 || (pgsql_result == NULL && PQstatus(pgsql_conn) == CONNECTION_BAD)) {
+		is_copy_out = false;
+		if (!is_error_present()) {
+			set_error(PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE,
+				"backend connection lost mid-result", false);
+		}
+		return go(fetch_result_end_st);
+	}
+
+	if (result_type == 1) {
+		std::unique_ptr<PGresult, decltype(&PQclear)> result(get_result(), PQclear);
+
+		if (result) {
+
+			const ExecStatusType exec_status_type = PQresultStatus(result.get());
+
+			// Multi-statements are supported only in simple queries
+			if (fetch_result_end_st == ASYNC_QUERY_END &&
+				(query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR))) {
+				next_multi_statement_result(result.release());
+				next_event(ASYNC_USE_RESULT_START);
+				return HandlerStep::YIELD;
+			}
+
+			switch (exec_status_type) {
+			case PGRES_COMMAND_OK:
+				{
+					unsigned int bytes_recv = 0;
+					switch (fetch_result_end_st)
+					{
+					case ASYNC_STMT_PREPARE_END:
+						bytes_recv = query_result->add_parse_completion();
+						break;
+					case ASYNC_STMT_DESCRIBE_END:
+						bytes_recv = query_result->add_describe_completion(result.get(), query.extended_query_info->stmt_type);
+						break;
+					case ASYNC_STMT_EXECUTE_END:
+						// PQsendQueryPrepared sends the sequence BIND -> DESCRIBE(PORTAL) -> EXECUTE -> SYNC
+						// Since libpq does not indicate whether the DESCRIBE PORTAL step produced a
+						// NoData packet for commands such as INSERT, DELETE, or UPDATE.
+						// In these cases, libpq returns PGRES_COMMAND_OK (whereas SELECT statements
+						// yield PGRES_SINGLE_TUPLE or PGRES_TUPLES_OK). Therefore, it is safe to
+						// explicitly append a NoData packet to the result.
+						if ((query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
+							bytes_recv = query_result->add_no_data();
+						}
+						// fallthrough
+					default:
+						bytes_recv += query_result->add_command_completion(result.get());
+						break;
+					}
+					update_bytes_recv(bytes_recv);
+				}
+				return go(ASYNC_USE_RESULT_CONT);
+			case PGRES_EMPTY_QUERY:
+				{
+					unsigned int bytes_recv = 0;
+
+					if (fetch_result_end_st == ASYNC_STMT_EXECUTE_END) {
+						if ((query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
+							bytes_recv = query_result->add_no_data();
+						}
+					}
+					bytes_recv += query_result->add_empty_query_response(result.get());
+					update_bytes_recv(bytes_recv);
+				}
+				return go(ASYNC_USE_RESULT_CONT);
+			case PGRES_TUPLES_OK:
+			case PGRES_SINGLE_TUPLE:
+				break;
+			case PGRES_COPY_OUT:
+				if (handle_copy_out(result.get(), processed_bytes) == false) {
+					next_event(ASYNC_USE_RESULT_CONT);
+					return HandlerStep::YIELD; // Threashold for result size reached. Pause temporarily
+				}
+				return go(ASYNC_USE_RESULT_CONT);
+			case PGRES_COPY_IN:
+			case PGRES_COPY_BOTH:
+				// disconnect client session (and backend connection) if COPY (STDIN) command bypasses the initial checks.
+				// This scenario should be handled in fast-forward mode and should never occur at this point.
+				if (myds && myds->sess) {
+					proxy_warning("Unable to process the '%s' command from client %s:%d. Please report a bug for future enhancements.\n",
+						myds->sess->CurrentQuery.QueryParserArgs.digest_text ? myds->sess->CurrentQuery.QueryParserArgs.digest_text : "COPY",
+						myds->sess->client_myds->addr.addr, myds->sess->client_myds->addr.port);
+				} else {
+					proxy_warning("Unable to process the 'COPY' command. Please report a bug for future enhancements.\n");
+				}
+				set_error(PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, "Unable to process 'COPY' command", true);
+				return go(fetch_result_end_st);
+			case PGRES_PIPELINE_SYNC:
+				// backend connection is in Ready for Query state, we can now safely exit pipeline mode
+				exit_pipeline_mode = true;
+				return go(ASYNC_USE_RESULT_CONT);
+			case PGRES_PIPELINE_ABORTED:
+				// received an extended query immediately after an error was triggered by a previous query (before sync).
+				// In ProxySQL this should never happen, since the extended query frame is reset after an error.
+				// However, it may rarely occur if an error is raised during the "describe portal" phase (while executing).
+				// In that case, we continue until PGRES_PIPELINE_SYNC (Ready for Query state) is received, then safely exit pipeline mode.
+				return go(ASYNC_USE_RESULT_CONT);
+			case PGRES_BAD_RESPONSE:
+			case PGRES_NONFATAL_ERROR:
+			case PGRES_FATAL_ERROR:
+			default:
+				// if on previous call we encountered a FATAL error, we will not process the result, as it will contain residual protocol messages
+				// from the broken connection
+				if (is_error_present() == true && get_error_severity() == PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL) {
+					return go(ASYNC_USE_RESULT_CONT);
+				}
+
+				// we don't have a command completion, empty query responseor error packet in the result. This check is here to
+				// handle internal cleanup of libpq that might return residual protocol messages from the broken connection and
+				// may add multiple final packets.
+				//if ((query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) == 0) {
+				set_error_from_result(result.get(), PGSQL_ERROR_FIELD_ALL);
+				assert(is_error_present());
+
+				// we will not send FATAL error messages to the client
+				const PGSQL_ERROR_SEVERITY severity = get_error_severity();
+				if (severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR ||
+					severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_WARNING ||
+					severity == PGSQL_ERROR_SEVERITY::ERRSEVERITY_NOTICE) {
+
+					const unsigned int bytes_recv = query_result->add_error(result.get());
+					update_bytes_recv(bytes_recv);
+				}
+
+				const PGSQL_ERROR_CATEGORY error_category = get_error_category();
+				if (error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_SYNTAX_ERROR &&
+					error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_STATUS &&
+					error_category != PGSQL_ERROR_CATEGORY::ERRCATEGORY_DATA_ERROR) {
+					proxy_error("Error: %s, Multi-Statement: %d\n", get_error_code_with_message().c_str(), processing_multi_statement);
+				}
+				return go(ASYNC_USE_RESULT_CONT);
+			}
+
+			if (new_result == true) {
+				bool should_add_row_description = true;
+
+				// In extended query mode, we should add RowDescription only if the DESCRIBE PORTAL message was sent
+				// before the EXECUTE message.
+				if (fetch_result_end_st == ASYNC_STMT_EXECUTE_END) {
+					should_add_row_description =
+						(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0;
+				}
+
+				if (should_add_row_description) {
+					const auto bytes_recv = query_result->add_row_description(result.get());
+					update_bytes_recv(bytes_recv);
+				} else {
+					query_result->num_fields = PQnfields(result.get());
+				}
+
+				new_result = false;
+			}
+
+			if (PQntuples(result.get()) > 0) {
+				const unsigned int bytes_recv = query_result->add_row(result.get());
+				update_bytes_recv(bytes_recv);
+				*processed_bytes += bytes_recv;	// issue #527 : bytes processed during this event, added to the caller's counter
+
+				if (suspend_resultset_fetch(*processed_bytes)) {
+					next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
+					return HandlerStep::YIELD;
+				} else {
+					return go(ASYNC_USE_RESULT_CONT); // we continue looping
+				}
+			} else {
+				const unsigned int bytes_recv=query_result->add_command_completion(result.get(), false);
+				update_bytes_recv(bytes_recv);
+				return go(ASYNC_USE_RESULT_CONT);
+			}
+		}
+	} else if (result_type == 2) {
+		if (ps_result.id == 'D') {
+			unsigned int bytes_recv=query_result->add_row(&ps_result);
+			update_bytes_recv(bytes_recv);
+			*processed_bytes += bytes_recv;	// issue #527 : bytes processed during this event, added to the caller's counter
+
+			if (suspend_resultset_fetch(*processed_bytes)) {
+				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
+				return HandlerStep::YIELD;
+			} else {
+				return go(ASYNC_USE_RESULT_CONT); // we continue looping
+			}
+		} else {
+			assert(0);
+		}
+	} else {
+		assert(0);
+	}
+
+	// if we arrive here via async_perform_resync, the connection is in "Ready for Query" state,
+	// but query_result will be empty. In this case, we check exit_pipeline_mode; if it is true,
+	// it indicates a non-error scenario and we skip this check.
+	// exit_pipeline_mode means an async_perform_resync left the result empty on purpose.
+	if (exit_pipeline_mode == false) {
+		reject_result_without_outcome();
+	}
+
+	if (fetch_result_end_st != ASYNC_QUERY_END) {
+		bool has_error = (query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_ERROR) != 0;
+
+		// Normally, ReadyForQuery is not sent immediately if we are in extended query mode
+		// and there are pending messages in the queue, as it will be sent once the entire
+		// extended query frame has been processed.
+		//
+		// Edge case: if a message fails with an error while the queue still contains pending
+		// messages, the queue will be cleared later in the session. In this situation,
+		// ReadyForQuery would never be sent because the pending messages are discarded.
+		//
+		// Fix: if the result indicates an error, explicitly send ReadyForQuery immediately.
+		// The extended query frame will still be reset later in the session.
+		if (!myds->sess->is_extended_query_ready_for_query() && !has_error) {
+			// Skip sending ReadyForQuery if there are still extended query messages pending in the queue
+			return go(fetch_result_end_st);
+		}
+
+		// An error has occurred while executing extended query sequence,
+		// and connection is not in 'Ready for Query' state, i.e., unsynchronized.
+		// To recover, we must resync by sending a SYNC to the backend connection.
+		if (!exit_pipeline_mode && has_error) {
+			return go(ASYNC_RESYNC_START);
+		}
+	}
+
+	// finally add ready for query packet
+	query_result->add_ready_status(PQtransactionStatus(pgsql_conn));
+	update_bytes_recv(6);
+	//processing_multi_statement = false;
+	return go(fetch_result_end_st);
+}
+
+bool PgSQL_Connection_LibPQ::stmt_start_flushed_at_once() const {
+	// false, always. libpq's flush() cannot report that it sent everything: a
+	// PQflush() of 0 becomes PG_EVENT_READ, so a libpq connection always reaches
+	// the drain through ASYNC_STMT_*_CONT and never through the short cut.
+	return false;
+}
+
+void PgSQL_Connection_LibPQ::on_command_end() {
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
+
+	// we check exit_pipeline_mode to ensure it is safe to exit pipeline mode
+	if (exit_pipeline_mode &&
+		PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_ON) {
+		if (PQexitPipelineMode(pgsql_conn) == 0) {
+			set_error_from_PQerrorMessage();
+			proxy_error("Failed to exit pipeline mode. %s\n", get_error_code_with_message().c_str());
+		}
+		exit_pipeline_mode = false;
+	}
+}
+
+bool PgSQL_Connection_LibPQ::resync_already_synced() {
+	// Only askable here: PQpipelineStatus() answers PQ_PIPELINE_OFF for a NULL
+	// handle, so the native transport must not make this test at all.
+	if (PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) {
+		proxy_warning("Resync not required - connection already synchronized.\n");
+		return true;
+	}
+	return false;
+}
+
+bool PgSQL_Connection_LibPQ::resync_send_failed() {
+	// A failed Sync is reported with resync_failed and no error record:
+	// resync_start() sets it when PQsendPipelineSync() returns 0, and flush(true)
+	// sets it instead of setting an error. In ASYNC_RESYNC_START, arriving at the
+	// "everything was sent" arm at all implies it, which is what lets the shared
+	// form stand in for the old libpq arm.
+	return resync_failed;
+}
+
+PgSQL_Connection::HandlerStep PgSQL_Connection_LibPQ::reset_session_cont_dispatch() {
+	PGresult* result = get_result();
+	if (result) {
+		if (PQresultStatus(result) != PGRES_COMMAND_OK &&
+			PQresultStatus(result) != PGRES_PIPELINE_SYNC) {
+			set_error_from_result(result, PGSQL_ERROR_FIELD_ALL);
+			assert(is_error_present());
+		}
+		PQclear(result);
+		return go(ASYNC_RESET_SESSION_CONT);
+	}
+	if (reset_session_in_pipeline) {
+		if (PQexitPipelineMode(pgsql_conn) == 0) {
+			set_error_from_PQerrorMessage();
+			proxy_error("Failed to exit pipeline mode. %s\n", get_error_code_with_message().c_str());
+			return go(ASYNC_RESET_SESSION_END);
+		}
+		reset_session_in_pipeline = false;
+		return go(ASYNC_RESET_SESSION_START);
+	}
+	if (reset_session_in_txn) {
+		reset_session_in_txn = false;
+		return go(ASYNC_RESET_SESSION_START);
+	}
+	return go(ASYNC_RESET_SESSION_END);
+}
+
+void PgSQL_Connection_LibPQ::on_reset_session_end() {
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
+}
+
+const char* PgSQL_Connection_LibPQ::transport_name() const {
+	return "libpq";
+}
+
 void PgSQL_Connection_LibPQ::connect_start() {
 	PROXY_TRACE();
 	assert(pgsql_conn == NULL); // already there is a connection

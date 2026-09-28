@@ -287,6 +287,80 @@ public:
 	static PgSQL_Connection* create_backend();
 
 	PG_ASYNC_ST handler(short event);
+
+	// --- handler() hooks ---
+	//
+	// handler() stays one non-virtual function on the base: the state machine is
+	// transport-independent, only the work each state does is not. Every inline
+	// block in handler() that had to ask which transport it was on became a hook
+	// below, and handler() itself no longer reads native_mode anywhere.
+	//
+	// Each such block had exactly two ways out -- jump to the next state, or hand
+	// control back to the poll loop -- so HandlerStep is a complete description of
+	// them: go(X) is a state jump (the old NEXT_IMMEDIATE), YIELD is a next_event()
+	// followed by a return, CONTINUE is falling into the shared code after the
+	// call. handler() turns AGAIN back into the same `goto handler_again` the
+	// NEXT_IMMEDIATE macro did, so the state machine reads as it did before.
+	enum class HandlerStep { AGAIN, YIELD, CONTINUE };
+
+	HandlerStep go(PG_ASYNC_ST st) {
+		async_state_machine = st;
+		return HandlerStep::AGAIN;
+	}
+
+	// ASYNC_CONNECT_END. libpq hands its socket to non-blocking mode here; the
+	// native transport created the socket O_NONBLOCK already. Reports AGAIN when
+	// it jumped to ASYNC_CONNECT_FAILED.
+	virtual HandlerStep on_connect_end() = 0;
+	// ASYNC_CONNECT_SUCCESSFUL, once the connection is counted. libpq seeds the
+	// monitor's DNS cache from the just-established PGconn; the native path
+	// resolves through that cache itself.
+	virtual void on_connect_successful() = 0;
+	// ASYNC_CONNECT_FAILED and ASYNC_CONNECT_TIMEOUT, before the error is counted.
+	// libpq leaves the PGconn for the destructor; the native transport releases the
+	// socket and SCRAM state now.
+	virtual void on_connect_failed() = 0;
+	// ASYNC_USE_RESULT_START. False means the reply can be read straight away.
+	// Native answers true: the request was flushed a moment ago and the backend
+	// has had no time to answer, so reading now returns EAGAIN almost every time.
+	virtual bool defer_first_result_read() = 0;
+	// ASYNC_USE_RESULT_CONT, past the shared resultset-size threshold check. This
+	// is the whole per-transport result drain, including the libpq PGresult
+	// dispatch. processed_bytes is passed by pointer so the counter the base
+	// declared stays the one both sides add to.
+	virtual HandlerStep fetch_result_dispatch(short event, uint64_t* processed_bytes) = 0;
+	// The three ASYNC_STMT_*_START states: true when the transport sent the whole
+	// frame in one go, so the result drain can start without going through
+	// ASYNC_STMT_*_CONT. Only the native transport ever reports true, because
+	// libpq's flush() never says it sent everything. Replaced by the unconditional
+	// form in the next step of this split, once that is proven.
+	virtual bool stmt_start_flushed_at_once() const = 0;
+	// The ASYNC_*_END states. libpq installs its notice receiver and leaves
+	// pipeline mode if the connection is in one; native keeps pgsql_conn
+	// permanently NULL and never enters either.
+	virtual void on_command_end() = 0;
+	// ASYNC_RESYNC_START. True when the connection is already synchronized and the
+	// Sync does not need to be sent at all. libpq asks PQpipelineStatus() --
+	// which answers PQ_PIPELINE_OFF for a NULL handle, so native must not ask and
+	// would otherwise pool a connection still mid-batch.
+	virtual bool resync_already_synced() = 0;
+	// ASYNC_RESYNC_START / ASYNC_RESYNC_CONT: the Sync did not go out, so do not
+	// drain a connection whose Sync never left. libpq reports that with
+	// resync_failed and no error record; native with a set error. In the START
+	// state reaching here on libpq implies resync_failed, which is why the shared
+	// form reproduces the old libpq arm exactly.
+	virtual bool resync_send_failed() = 0;
+	// ASYNC_RESET_SESSION_CONT, once the shared timeout and error checks are past.
+	// libpq reads the discarded reply and leaves pipeline mode; native has already
+	// read its reply in reset_session_cont().
+	virtual HandlerStep reset_session_cont_dispatch() = 0;
+	// ASYNC_RESET_SESSION_END. libpq reinstalls its notice receiver; native has
+	// none.
+	virtual void on_reset_session_end() = 0;
+	// Which transport this connection drives, for the crash diagnostic in the
+	// unhandled-state arm of handler(). Replaces the native_mode read that used
+	// to be there.
+	virtual const char* transport_name() const = 0;
 	virtual void connect_start() = 0;
 	// Builds the session settings a backend StartupMessage must carry: the
 	// client_encoding value and the "-c name=value ..." options string (tracked
@@ -313,6 +387,10 @@ public:
 	virtual void query_cont(short event) = 0;
 	void fetch_result_start();
 	virtual void fetch_result_cont(short event) = 0;
+	// PQsetSingleRowMode() is a libpq concept and the native transport streams
+	// raw DataRow messages one at a time instead, so the call site used to guard it
+	// with `!native_mode &&`. As a hook the native answer is simply true.
+	virtual bool set_single_row_mode() = 0;
 
     /**
      * @brief Initiates the asynchronous preparation of a SQL statement.
@@ -529,7 +607,6 @@ public:
 
 	PGresult* get_result();
 	void next_multi_statement_result(PGresult* result);
-	bool set_single_row_mode();
 	void update_bytes_recv(uint64_t bytes_recv);
 	void update_bytes_sent(uint64_t bytes_sent);
 	void ProcessQueryAndSetStatusFlags(const char* query_digest_text, int savepoint_count);

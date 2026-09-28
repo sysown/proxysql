@@ -45,6 +45,129 @@ PgSQL_Connection_Native::PgSQL_Connection_Native()
 {
 }
 
+PgSQL_Connection_Native::~PgSQL_Connection_Native() {
+	// native_teardown() rather than a second copy of the native cleanup the base
+	// destructor used to inline, so the pool-return path and the destruction path
+	// release the same resources in the same order. It also subtracts from
+	// server_connections_connected when this connection was counted and clears the
+	// flag, so the base destructor's own decrement finds it already false and the
+	// count still moves exactly once. native_teardown() sets fd = -1, so a
+	// teardown earlier in the connection's life is not repeated here -- which also
+	// covers the safety net the old inline block carried for a connection
+	// destroyed before native_teardown() had ever run.
+	native_teardown();
+}
+
+bool PgSQL_Connection_Native::set_single_row_mode() {
+	// There is no PQsetSingleRowMode() here: the native transport streams raw
+	// DataRow messages one at a time, which is what single-row mode exists to
+	// arrange. The call site used to guard this with `!native_mode &&`, so
+	// "succeeded" is exactly what it answered before.
+	return true;
+}
+
+PgSQL_Connection::HandlerStep PgSQL_Connection_Native::on_connect_end() {
+	// Nothing to do: native_connect_start() created the socket O_NONBLOCK, so
+	// there is no PQsetnonblocking() handshake.
+	return HandlerStep::CONTINUE;
+}
+
+void PgSQL_Connection_Native::on_connect_successful() {
+	// Nothing to seed: native_connect_start() resolved the address through the
+	// monitor's DNS cache, so that cache is already warm for the next connect.
+}
+
+void PgSQL_Connection_Native::on_connect_failed() {
+	// Release the native socket/SCRAM state promptly. Some failure sub-paths
+	// already teardown, but a generic failure may reach here with the fd still
+	// open; native_teardown() sets fd=-1 so this is double-close safe.
+	if (fd >= 0) {
+		native_teardown();
+	}
+}
+
+bool PgSQL_Connection_Native::defer_first_result_read() {
+	return true;
+}
+
+PgSQL_Connection::HandlerStep PgSQL_Connection_Native::fetch_result_dispatch(short event, uint64_t* processed_bytes) {
+	// --- Native simple-query / simple-command result fetch (Task 1.6c) ---
+	// Stream raw backend messages directly into query_result. This fully
+	// handles the native path and must NOT fall through to any libpq
+	// PGresult dispatch.
+	native_fetch_result_cont(event, processed_bytes);
+	if (async_exit_status) {
+		// Need more bytes from the socket -> wait for READ.
+		next_event(ASYNC_USE_RESULT_CONT);
+		return HandlerStep::YIELD;
+	}
+	if (native_result_complete || is_error_present()) {
+		// ReadyForQuery consumed (result complete) or a fatal recv/frame
+		// error: hand off to the end state (ASYNC_QUERY_END for queries,
+		// or the configured fetch_result_end_st).
+		return go(fetch_result_end_st);
+	}
+	// Enough bytes moved in this event: pause and let the client drain,
+	// exactly as the libpq loop does, so pgsql-threshold_resultset_size
+	// behaves the same on both paths.
+	if (suspend_resultset_fetch(*processed_bytes)) {
+		next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
+		return HandlerStep::YIELD;
+	}
+	// Neither complete nor error nor waiting: loop to drain/recv more.
+	return go(ASYNC_USE_RESULT_CONT);
+}
+
+bool PgSQL_Connection_Native::stmt_start_flushed_at_once() const {
+	// true, always: a native frame is written to a non-blocking socket and the
+	// framer knows whether it had to stop short, so "the whole frame went out" is
+	// something this transport can report and libpq's cannot.
+	return true;
+}
+
+void PgSQL_Connection_Native::on_command_end() {
+	// Nothing: pgsql_conn is permanently NULL here, so there is no notice receiver
+	// to install, and the native transport never enters libpq's pipeline mode.
+}
+
+bool PgSQL_Connection_Native::resync_already_synced() {
+	// Always false, and it has to be. PQpipelineStatus(NULL) answers
+	// PQ_PIPELINE_OFF, so asking here would let a connection that is still
+	// mid-batch take the shortcut and be pooled.
+	return false;
+}
+
+bool PgSQL_Connection_Native::resync_send_failed() {
+	// A native send failure sets an error record, which is what the shared form
+	// checks. (libpq reports the same thing with resync_failed and no record,
+	// which is why the shared form is `resync_send_failed() || resync_failed`.)
+	return is_error_present();
+}
+
+PgSQL_Connection::HandlerStep PgSQL_Connection_Native::reset_session_cont_dispatch() {
+	// native_reset_session_cont() has already read and discarded the reply, and
+	// nothing here ever enters pipeline mode, so libpq's PGresult and
+	// reset_session_in_pipeline arms have no counterpart here -- get_result() has
+	// nothing to return either, with pgsql_conn permanently NULL. The two arms
+	// that remain are not libpq's: an open transaction still needs another pass to
+	// roll it back, and otherwise the reset is finished. Both were in the shared
+	// body and both have to keep advancing the state machine, so they are repeated
+	// here rather than left to fall out of the case.
+	if (reset_session_in_txn) {
+		reset_session_in_txn = false;
+		return go(ASYNC_RESET_SESSION_START);
+	}
+	return go(ASYNC_RESET_SESSION_END);
+}
+
+void PgSQL_Connection_Native::on_reset_session_end() {
+	// No notice receiver to reinstall.
+}
+
+const char* PgSQL_Connection_Native::transport_name() const {
+	return "native";
+}
+
 void PgSQL_Connection_Native::connect_start() {
 	PROXY_TRACE();
 	assert(pgsql_conn == NULL); // already there is a connection
