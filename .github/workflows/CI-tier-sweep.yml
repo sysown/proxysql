@@ -1,0 +1,42 @@
+name: CI-tier-sweep
+run-name: 'v3.0 ${{ github.workflow }} ${{ github.event.after || github.sha }}'
+
+on:
+  # MERGE-ONLY BY CONSTRUCTION.
+  #
+  # There is deliberately NO `pull_request` trigger here, and that single
+  # omission is the entire cost model for this workflow. Adding one would
+  # build the v3.0 and v3.1 tiers on every PR, which is exactly what this
+  # workflow exists to avoid.
+  #
+  # The tier sweep exists because every other CI run builds ONLY the v4.0 tier
+  # (PROXYSQL40=1). A v4.0-only build cannot detect a regression that breaks
+  # the v3.0 or v3.1 compile, because those tiers compile a strictly smaller
+  # set of translation units. We want that coverage, but only after a merge.
+  push:
+    branches:
+    - 'v3.0'
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    # `write-all` for the same reason as CI-builds.yml: reusable-workflow
+    # permissions are the intersection of caller and callee, and the callee
+    # creates check runs, reads artifacts and nests another ci-builds.yml call.
+    permissions: write-all
+    # MERGE ORDER: this file resolves ci-tier-sweep.yml@GH-Actions as soon as
+    # it lands on the default branch. That reusable must already exist on
+    # GH-Actions or every push to v3.0 fails with "Unable to resolve action".
+    # See doc/GH-Actions/README.md 10.1 -- this is the exact failure mode that
+    # took CI down in Jan 2026.
+    uses: sysown/proxysql/.github/workflows/ci-tier-sweep.yml@GH-Actions
+    secrets: inherit
+    with:
+      trigger: ${{ toJson(github) }}
