@@ -44,7 +44,7 @@ jobs:
     #    writable scopes'". That is a hard CI break with a non-obvious error.
     # 3. Expressing "all scopes except id-token" requires enumerating ~15
     #    scopes, and every scope you forget is silently set to `none` -- the
-    #    failure mode doc/GH-Actions/README.md 5.5 warns about, which is also
+    #    failure mode doc/GH-Actions/README.md 11.5 warns about, which is also
     #    why the repo default is left at `write` rather than narrowed per
     #    workflow. Narrowing must be a repo-wide, tested change, not a drive-by
     #    in one untested workflow.
@@ -63,7 +63,7 @@ jobs:
     # MERGE ORDER: this file resolves ci-tier-sweep.yml@GH-Actions as soon as
     # it lands on the default branch. That reusable must already exist on
     # GH-Actions or every push to v3.0 fails with "Unable to resolve action".
-    # See doc/GH-Actions/README.md 10.1 -- this is the exact failure mode that
+    # See doc/GH-Actions/README.md 11.1 -- this is the exact failure mode that
     # took CI down in Jan 2026.
     uses: sysown/proxysql/.github/workflows/ci-tier-sweep.yml@GH-Actions
     secrets: inherit
