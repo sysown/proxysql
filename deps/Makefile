@@ -186,11 +186,18 @@ curl/curl/lib/.libs/libcurl.a: $(OPENSSL_BUILD_STAMP) Makefile
 	cd curl/curl && autoreconf -fi
 ifeq ($(UNAME_S),Darwin)
 	cd curl/curl && sed -i '' 's/as_fn_error \$$? "one or more libs available at link-time are not available run-time/echo "Skipped check: one or more libs available at link-time are not available run-time/' configure
-	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
+	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
 else
-	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
+	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
 endif
-	cd curl/curl && CFLAGS=-fPIC CC=${CC} CXX=${CXX} ${MAKE} \
+# libcurl.a is linked into the shared libtap, which on aarch64 fails with non-PIC
+# objects. -fPIC is appended to the caller's CFLAGS for configure, whose generated
+# Makefile assigns CFLAGS itself (a CFLAGS environment variable given to make is
+# ignored). A CFLAGS given on the make command line reaches this make through
+# MAKEFLAGS and overrides the configured value, so only in that case is -fPIC
+# appended here as well; otherwise curl keeps its configured flags (e.g. -O2).
+	cd curl/curl && CC=${CC} CXX=${CXX} ${MAKE} \
+		$(if $(filter command line,$(origin CFLAGS)),CFLAGS="$(CFLAGS) -fPIC") \
 		BLANK_AT_MAKETIME= \
 		LIBCURL_PC_LIBS_PRIVATE='$$(filter-out $(OPENSSL_STATIC_LIBS),$$(LIBCURL_PC_LIBS))'
 
