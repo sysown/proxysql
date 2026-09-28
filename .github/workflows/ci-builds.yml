@@ -12,6 +12,11 @@ on:
         type: boolean
         default: true
 
+# This branch requires a pull request, including for admins
+# (enforce_admins is on). `CI-builds-fork.yml` pins a commit on this
+# branch, so anything that lands here changes what an untrusted fork
+# build executes -- direct pushes skip that review entirely.
+#
 # Intentionally NO `permissions:` block here.
 #
 # A reusable workflow may not request more than its caller grants, so a
