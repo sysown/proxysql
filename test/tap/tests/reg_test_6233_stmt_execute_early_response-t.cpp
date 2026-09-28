@@ -2,6 +2,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 #include "mysql.h"
 #include "json.hpp"
@@ -120,6 +121,47 @@ std::string get_global_variable(MYSQL* admin, const char* name) {
 	return value;
 }
 
+/**
+ * @brief Returns the number of hits of a query rule, or -1 on error.
+ * @details The worker threads accumulate hits locally and publish them to
+ *   stats_mysql_query_rules from their maintenance loop, so the value can lag
+ *   behind the executions. See wait_rule_hits().
+ */
+long long rule_hits(MYSQL* admin, int rule_id) {
+	long long hits = -1;
+	const std::string query = "SELECT hits FROM stats_mysql_query_rules WHERE rule_id=" + std::to_string(rule_id);
+	if (mysql_query(admin, query.c_str()) == 0) {
+		MYSQL_RES* res = mysql_store_result(admin);
+		MYSQL_ROW row = res ? mysql_fetch_row(res) : nullptr;
+		if (row && row[0]) {
+			hits = atoll(row[0]);
+		}
+		if (res) {
+			mysql_free_result(res);
+		}
+	} else {
+		diag("Failed to read the hits of rule %d: %s", rule_id, mysql_error(admin));
+	}
+	return hits;
+}
+
+/**
+ * @brief Waits up to 10 seconds for the hits of a query rule to reach
+ *   'expected'.
+ * @return The last number of hits read.
+ */
+long long wait_rule_hits(MYSQL* admin, int rule_id, long long expected) {
+	long long hits = -1;
+	for (int i = 0; i < 100; i++) {
+		hits = rule_hits(admin, rule_id);
+		if (hits >= expected) {
+			break;
+		}
+		usleep(100 * 1000);
+	}
+	return hits;
+}
+
 bool set_global_variable(MYSQL* admin, const char* name, const std::string& value) {
 	return run_admin(admin, std::string("SET ") + name + "='" + value + "'")
 		&& run_admin(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
@@ -181,8 +223,15 @@ unsigned int execute_once(MYSQL_STMT* stmt, bool fetch_result = true) {
 	if (mysql_stmt_store_result(stmt)) {
 		return mysql_stmt_errno(stmt);
 	}
-	while (mysql_stmt_fetch(stmt) == 0) {}
+	int fetch_rc;
+	do {
+		fetch_rc = mysql_stmt_fetch(stmt);
+	} while (fetch_rc == 0);
 	mysql_stmt_free_result(stmt);
+	if (fetch_rc != MYSQL_NO_DATA) {
+		diag("mysql_stmt_fetch failed (%d): %s", fetch_rc, mysql_stmt_error(stmt));
+		return mysql_stmt_errno(stmt) ? mysql_stmt_errno(stmt) : 1;
+	}
 	return 0;
 }
 
@@ -248,7 +297,7 @@ int main(int /*argc*/, char** /*argv*/) {
 		return EXIT_FAILURE;
 	}
 
-	plan(12);
+	plan(13);
 
 	MYSQL* admin = connect_admin(cl);
 	ok(admin != nullptr, "Connect to ProxySQL admin");
@@ -308,7 +357,9 @@ int main(int /*argc*/, char** /*argv*/) {
 	ok(rules_ok, "Installed error_msg, OK_msg and destination_hostgroup=%d rules", other_hg);
 
 	if (!(err_stmt && ok_stmt && lock_stmt && rules_ok)) {
-		restore_state();
+		if (!restore_state()) {
+			diag("Failed to restore the original query rules and/or mysql-set_query_lock_on_hostgroup");
+		}
 		return exit_status();
 	}
 
@@ -320,6 +371,10 @@ int main(int /*argc*/, char** /*argv*/) {
 	// --- OK_msg: OK packet from handler_WCD_SS_MCQ_qpo_OK_msg() ---
 	matching = execute_many(ok_stmt, 0, false);
 	ok(matching == kExecutions, "OK_msg rule: %d/%d executions succeeded", matching, kExecutions);
+	// A successful execute alone could also come from the backend: make sure
+	// the executions were answered by the OK_msg rule.
+	const long long ok_rule_hits = wait_rule_hits(admin, kRuleIdBase + 1, kExecutions);
+	ok(ok_rule_hits == kExecutions, "OK_msg rule: %lld/%d executions answered by the rule", ok_rule_hits, kExecutions);
 	ok(proxysql_survives(cl), "ProxySQL alive and serving after OK_msg executions");
 
 	// --- Hostgroup lock: 9006 from the query-processor epilogue ---

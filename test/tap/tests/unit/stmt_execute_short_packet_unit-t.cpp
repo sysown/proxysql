@@ -30,8 +30,10 @@
 #include <cstdlib>
 #include <cstring>
 
-// Fill freed memory with 0x5a, so that reading the cached metadata after the
-// old code deleted it reports a non-NULL 'pkt' instead of silently passing.
+// Fill freed memory with 0x5a, so that a packet or cached metadata wrongly
+// freed by get_binds_from_pkt() is detected by the checks below instead of
+// silently passing (with the old code, the destructor sets 'pkt' to NULL right
+// before freeing the metadata, and the packet contents may survive the free).
 extern "C" const char* malloc_conf;
 const char* malloc_conf = "junk:true";
 
@@ -45,18 +47,35 @@ constexpr uint32_t kStmtId = 6233;
  *   With at least one parameter, the NULL bitmap and the new-params-bound flag
  *   are missing.
  */
+constexpr size_t kTruncatedPktSize = 14;
+
+void fill_truncated_execute_pkt(unsigned char* p) {
+	memset(p, 0, kTruncatedPktSize);
+	p[0] = kTruncatedPktSize - 4; // payload length
+	p[4] = 0x17;                  // COM_STMT_EXECUTE
+	memcpy(p + 5, &kStmtId, sizeof(kStmtId));
+	p[9] = 0;                     // flags: CURSOR_TYPE_NO_CURSOR
+	p[10] = 1;                    // iteration count
+}
+
 PtrSize_t build_truncated_execute_pkt() {
 	PtrSize_t pkt;
-	pkt.size = 14;
+	pkt.size = kTruncatedPktSize;
 	pkt.ptr = malloc(pkt.size);
-	unsigned char* p = static_cast<unsigned char*>(pkt.ptr);
-	memset(p, 0, pkt.size);
-	p[0] = pkt.size - 4; // payload length
-	p[4] = 0x17;         // COM_STMT_EXECUTE
-	memcpy(p + 5, &kStmtId, sizeof(kStmtId));
-	p[9] = 0;            // flags: CURSOR_TYPE_NO_CURSOR
-	p[10] = 1;           // iteration count
+	fill_truncated_execute_pkt(static_cast<unsigned char*>(pkt.ptr));
 	return pkt;
+}
+
+/**
+ * @brief Tells whether the packet still holds what build_truncated_execute_pkt()
+ *   wrote, i.e. it was not freed (and junk-filled) by get_binds_from_pkt().
+ */
+bool packet_intact(const PtrSize_t& pkt) {
+	// Not heap-allocated: a malloc() of the same size could get the chunk just
+	// freed by get_binds_from_pkt() back, and rewrite the expected bytes in it.
+	unsigned char expected[kTruncatedPktSize];
+	fill_truncated_execute_pkt(expected);
+	return pkt.size == kTruncatedPktSize && memcmp(expected, pkt.ptr, kTruncatedPktSize) == 0;
 }
 
 /**
@@ -87,8 +106,8 @@ void test_first_execute(MySQL_STMT_Global_info* stmt_info) {
 	ok(stmt_meta == nullptr, "first execute: no metadata is handed back to the caller");
 
 	// The caller still owns the packet and frees it, as the session does.
+	ok(packet_intact(pkt), "first execute: packet left to the caller, not freed by get_binds_from_pkt()");
 	l_free(pkt.size, pkt.ptr);
-	ok(true, "first execute: packet freed exactly once by the caller");
 }
 
 void test_cached_metadata(MySQL_STMT_Global_info* stmt_info) {
@@ -104,9 +123,9 @@ void test_cached_metadata(MySQL_STMT_Global_info* stmt_info) {
 	// cache) and must not keep a pointer to the packet the caller frees.
 	ok(cached->pkt == nullptr, "cached metadata: packet detached from the cached metadata");
 
+	ok(packet_intact(pkt), "cached metadata: packet left to the caller, not freed by get_binds_from_pkt()");
 	l_free(pkt.size, pkt.ptr);
 	delete cached;
-	ok(true, "cached metadata: packet and metadata freed exactly once");
 }
 
 } // namespace

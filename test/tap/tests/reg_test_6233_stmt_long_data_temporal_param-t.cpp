@@ -76,8 +76,15 @@ bool consume_result(MYSQL_STMT* stmt) {
 		diag("mysql_stmt_store_result failed: %s", mysql_stmt_error(stmt));
 		return false;
 	}
-	while (mysql_stmt_fetch(stmt) == 0) {}
+	int fetch_rc;
+	do {
+		fetch_rc = mysql_stmt_fetch(stmt);
+	} while (fetch_rc == 0);
 	mysql_stmt_free_result(stmt);
+	if (fetch_rc != MYSQL_NO_DATA) {
+		diag("mysql_stmt_fetch failed (%d): %s", fetch_rc, mysql_stmt_error(stmt));
+		return false;
+	}
 	return true;
 }
 
