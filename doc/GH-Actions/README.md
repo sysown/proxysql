@@ -1,6 +1,6 @@
 # ProxySQL CI Architecture
 
-**Last updated:** 2026-09-28
+**Last updated:** 2026-09-29
 
 This document is the authoritative reference for ProxySQL's GitHub Actions CI
 setup. It covers the two-branch workflow split, the trigger chain, the test
@@ -92,15 +92,14 @@ Reusable workflows (`workflow_call`) solve this cleanly: the caller on `v3.0`
 is a 20-line stub that says *"delegate to `ci-legacy-g1.yml` on the
 `GH-Actions` branch"*, and the `GH-Actions` branch owns all the heavy logic.
 
-### The canonical caller (20 lines)
+### The caller shape
 
-All `CI-*.yml` files on `v3.0` follow this shape. This is
-`CI-legacy-g1.yml` verbatim (other callers differ only in name and `uses:`
-target):
+The following excerpt shows the caller structure. Dispatch inputs and
+permissions are abbreviated here; the workflow file is authoritative.
 
 ```yaml
 name: CI-legacy-g1
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+run-name: "${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} ${{ inputs.producer_run_id && format('producer={0}/{1}', inputs.producer_run_id, inputs.producer_attempt) || format('trigger={0}/{1}', github.event.workflow_run.id || github.run_id, github.event.workflow_run.run_attempt || github.run_attempt) }}"
 
 on:
   workflow_dispatch:
@@ -606,6 +605,12 @@ and `ci:v3.1` adds Innovative (`PROXYSQL31=1`). Both labels select all three.
 `ci:asan` selects ASAN for each selected tier instead of a second normal build.
 The independent unit ASAN/TSAN and cluster-simulator pipelines retain their scope.
 
+When switching product tiers in a local build tree, run `make clean` first:
+the Makefile does not track changed tier flags in existing objects. Reusing
+objects from another tier can cause mismatches such as an unresolved
+`mysql_thread___ffto_max_buffer_size`. A lower-tier build is itself a regression
+test. A selected applicable test with a missing binary is a failure, not a skip.
+
 **Label edits do not trigger CI.** Existing events and filters are unchanged.
 The central build setup reads labels once, when its setup job executes. A label
 edit before setup can affect that run; edits after setup affect the next ordinary
@@ -630,7 +635,8 @@ There is no repository-wide newest-SHA artifact fallback.
 
 Consumer workflows save a producer binding for reruns. A consumer-only rerun
 uses that binding even if labels have changed or another build has run for the
-same SHA. Manual consumer dispatch requires an explicit producer run/attempt.
+same SHA. Manual consumer dispatch requires both an explicit producer run ID
+and an explicit attempt; there is no silent attempt-1 default.
 Manual producer dispatch and branch pushes use v4.0/normal by default. A full
 producer rerun creates a new plan; a failed-job rerun retains the original plan
 and skips uploads already published under that execution. Manual subsets have
@@ -673,9 +679,27 @@ The old post-merge sweep, its reusable, shard configuration and runtime group
 list have been removed. There is no replacement scheduled sweep.
 `check_ci_tier_fanout.py` checks the paired branches and ensures the 54 migrated
 groups retain execution routes on both lower tiers and that their workflows
-actually invoke the recorded groups. Its migration fixture is evidence,
+actually invoke the recorded groups in both normal and ASAN modes. Caller,
+nested-job, test-job and test-step conditions are checked, along with selected
+matrix wiring. Unsupported conditions fail closed for manual inspection. Its
+migration fixture is evidence,
 not a runtime work list. The current consumer catalogue is
 `GH-Actions:.github/ci-tier-consumers.json`.
+
+Rollout must be coordinated: remove the sweep caller first, retain its runtime
+files while active sweeps finish, and drain old central build/trigger/consumer
+cascades before switching the compatible engine and caller implementations.
+Old triggers do not publish the new accepted-producer artifact. Do not deploy
+this caller tip independently against the old engine; remove remaining sweep
+runtime files only after old executions have drained.
+
+Before production contains the tier catalogue, `.github/ci-tier-engine-ref` pins
+the paired candidate for lint. The lint workflow fetches that SHA and reads its
+workflow/catalogue data; it does not execute candidate engine code. Once the
+production catalogue exists, selection automatically returns to `origin/GH-Actions`.
+The pin can then be removed. An explicit `CI_ENGINE_REF` always takes precedence.
+If the chosen ref cannot be fetched, paired checks report a skip while their
+unit tests still run.
 
 For local paired validation, set `CI_ENGINE_REF` to the candidate engine branch
 when running `test/infra/control/run-ci-lint.bash`. For a live isolated probe,
@@ -1099,8 +1123,9 @@ gh run list --branch <branch> --commit <sha>
 ```
 
 The v3.0 branch's runs include a run-name of the form:
-`<branch> <workflow> <head_sha>`. Filter on the SHA to find all related
-runs.
+`<branch> <workflow> <head_sha> trigger=<run_id>/<attempt>`. Manual consumer
+runs instead identify the selected `producer=<run_id>/<attempt>`. Filter by
+SHA and execution identity to distinguish repeated runs of the same commit.
 
 ### Step 3: inspect the reusable version actually used
 
@@ -1738,7 +1763,7 @@ is the display title**, because `CI-legacy-g1.yml`'s `run-name:` field
 explicitly injects it:
 
 ```yaml
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+run-name: "${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} ${{ inputs.producer_run_id && format('producer={0}/{1}', inputs.producer_run_id, inputs.producer_attempt) || format('trigger={0}/{1}', github.event.workflow_run.id || github.run_id, github.event.workflow_run.run_attempt || github.run_attempt) }}"
 ```
 
 So to identify "which run belongs to my PR commit", **grep the display

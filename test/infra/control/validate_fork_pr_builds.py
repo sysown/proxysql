@@ -210,7 +210,7 @@ def validate(base, fork, reusable):
         require('permissions' not in planner, 'planner widens fork token permissions')
         require(RUNS_ON_UNTRUSTED.match(str(planner.get('runs-on', ''))) is not None,
                 'untrusted planner does not force ubuntu-24.04')
-        selections = [step for step in planner.get('steps', []) if 'ci_tier_runtime.py plan' in step.get('run', '')]
+        selections = [step for step in planner.get('steps', []) if 'ci_tier_runtime.py plan' in str(step.get('run', ''))]
         require(len(selections) == 1 and selections[0].get('env', {}).get('TRUSTED') == '${{ inputs.trusted }}',
                 'planner must preserve caller trust when resolving labels')
 
@@ -225,6 +225,9 @@ def validate(base, fork, reusable):
     )
 
     if 'plan' in reusable.get('jobs', {}):
+        needs=builds.get('needs') or []
+        needs=[needs] if isinstance(needs,str) else needs
+        require('plan' in needs, 'builds must depend on plan')
         require(builds.get('strategy', {}).get('matrix') == '${{ fromJson(needs.plan.outputs.matrix) }}',
                 'build matrix must come from the trusted-aware configuration planner')
     else:
@@ -247,15 +250,15 @@ def validate(base, fork, reusable):
         for step in job.get("steps") or []:
             uses = str(step.get("uses", ""))
             name = str(step.get("name", ""))
-            if any(token in uses for token in PRIVILEGED_USES) or PRIVILEGED_NAME.search(name) or re.search(r'ci_tier_runtime.py (result|finalize|units)', step.get('run', '')):
+            if any(token in uses for token in PRIVILEGED_USES) or PRIVILEGED_NAME.search(name) or re.search(r'ci_tier_runtime.py (result|finalize|units)', str(step.get('run', ''))):
                 privileged.append((step, job.get('if', '')))
 
     require(bool(privileged), "no privileged steps discovered")
     for step, job_condition in privileged:
         label = step.get("name") or step.get("uses")
-        condition = step.get("if") or job_condition or ""
+        conditions = [str(step.get("if") or ""), str(job_condition or "")]
         require(
-            TRUSTED_PREFIX.match(condition) is not None and not top_level_disjunction(condition),
+            any(TRUSTED_PREFIX.match(condition) is not None and not top_level_disjunction(condition) for condition in conditions),
             f"privileged step is not trusted-gated: {label}",
         )
 

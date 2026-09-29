@@ -1,19 +1,20 @@
 # Selected-tier CI implementation validation
 
-Prepared locally on 2026-09-29. This is a review candidate, not a production
+Updated after automated review on 2026-09-29. This is a review candidate, not a production
 rollout or a claim that live GitHub execution has passed.
 
 ## Branches and isolation
 
 - Engine: `feature/ci-pr-tiers-engine`, based on `b83e4a156`, candidate
-  `5450c067a`; worktree `../ci-pr-tiers-engine`.
+  `d7418b7cd`; worktree `../ci-pr-tiers-engine`.
 - Callers: `feature/ci-pr-tiers-callers`, based on `696781be8`; this worktree.
 - PR #5882's local worktree remains clean at `f677fb909b9b70b9f248a61eb9299db99315a435`.
 - Read-only GitHub verification still shows PR #5882 at
   `3f0def2d6e408561de3efb18b7fc5adf428ff65f` on
   `feature/pgsql-native-backend-protocol`.
-- No push, merge, PR creation, workflow dispatch, label change, branch-protection
-  change, or production-ref update was performed. Both worktrees are retained.
+- Review branches are published as PRs #6263 and #6264. No merge, workflow
+  dispatch, label change, branch-protection change, or production-ref update
+  was performed. Both worktrees are retained.
 
 ## Implemented behavior
 
@@ -37,19 +38,23 @@ repository, SHA and token. Manual subsets use distinct summary and check names.
 
 ## Local evidence
 
-- 36 helper/workflow Python tests pass, covering selection, immutable identity,
+- 43 helper/workflow Python tests pass, covering selection, immutable identity,
   safe archive extraction, real tar/zstd/ZIP restoration and binary execution,
   version filtering, partial reruns, delayed consumers, manual/cross-repository
   ownership, legacy multi-instance callers, and the reproduced summary race.
 - Both plugin handoff regression scripts pass, as do the existing ASAN resolver
   and tier-pruning shell suites.
-- Paired `CI_ENGINE_REF=feature/ci-pr-tiers-engine test/infra/control/run-ci-lint.bash`
-  passes. Its advisory group-coverage output retains the baseline warning
+- Full `test/infra/control/run-ci-lint.bash` passes using the automatically
+  selected companion SHA. The missing-engine-ref path also passes, skipping
+  paired structural checks while still running every validator test suite. Its advisory group-coverage output retains the baseline warning
   `missing-workflow NEW=1 known=36`; this is not a warning-free claim.
-- Fork-isolation mutation tests: 20 passed. Tier-route mutation tests: 5 passed,
-  including removal of only v3.0 and changing the actual executed group.
+- Fork-isolation mutation tests: 22 passed. Tier-route mutation tests: 8 passed,
+  including removal of either lower tier, disabled routes, selected-matrix wiring,
+  both modes, and producer unit coverage. Engine-ref selection tests: 2 passed.
 - Engine actionlint passes for the full workflow directory. Caller actionlint
-  passes for all 73 modified workflows. Whole-tree caller actionlint still has
+  passes for all 74 modified workflows (embedded shellcheck disabled in both).
+  Full embedded shellcheck retains legacy diagnostics; the modified lint scripts
+  pass standalone shellcheck. Whole-tree caller actionlint still has
   pre-existing deprecated `macos-13` labels in unrelated workflows.
 - Trigger-map comparison, Python compilation, `git diff --check`, Bash syntax
   and shellcheck of the modified lint entry point pass.
@@ -92,6 +97,30 @@ independent review of the corrections is claimed.
 | MySQLX nested checkout escapes candidate ref | Uses resolved control SHA |
 | Migration validator accepts incomplete lower-tier routes | Requires both tiers and actual group invocation |
 | Concurrent summary publication/rerun lifecycle | Mitigated, but strict guarantee remains unresolved; see below |
+
+## Automated review corrections
+
+- Lower-tier test steps no longer depend on the coverage-only flag. Runner-pool
+  pickers use hosted runners so they can assess a saturated self-hosted pool.
+- Coverage uploads identify the tested SHA, and parser-algorithm coverage names
+  match the infrastructure identity.
+- Artifact downloads allow 900 seconds and retry bounded transient read failures.
+  Ambiguous write failures are never replayed; explicit rate-limit rejections
+  may retry. Error output does not disclose subprocess stderr or payloads.
+- Manual consumers require both producer run and attempt; titles identify that
+  producer. Reporting permissions are explicit throughout summary calls.
+- Fanout validation checks enabled automatic routes, actual group invocation,
+  selected-tier matrices and required dependencies for both lower tiers/modes.
+  Unsupported conditions fail closed. Fork checks accept either job or step
+  trust guards and require the producer to depend on its plan.
+- `.github/ci-tier-engine-ref` pins the reviewed companion commit for lint while
+  production lacks the catalogue. Candidate data is fetched, not executed.
+  Once production contains the catalogue, lint automatically selects production.
+  Missing-ref handling covers both paired checks while all validator tests run.
+- Operator documentation restores the clean-build warning and staged rollout
+  requirements and clarifies that `control_ref` selects scripts only.
+
+These corrections do not close the reporting/live-validation limits below.
 
 ## Remaining reporting and live-validation boundary
 

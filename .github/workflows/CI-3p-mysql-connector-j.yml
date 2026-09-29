@@ -1,5 +1,5 @@
 name: CI-3p-mysql-connector-j
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} trigger=${{ github.event.workflow_run.id || github.run_id }}/${{ github.event.workflow_run.run_attempt || github.run_attempt }}'
+run-name: "${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} ${{ inputs.producer_run_id && format('producer={0}/{1}', inputs.producer_run_id, inputs.producer_attempt) || format('trigger={0}/{1}', github.event.workflow_run.id || github.run_id, github.event.workflow_run.run_attempt || github.run_attempt) }}"
 
 on:
   workflow_dispatch:
@@ -11,14 +11,14 @@ on:
       control_ref:
         type: string
         default: GH-Actions
-        description: CI implementation ref for isolated validation
+        description: CI script ref; candidate workflow validation also requires repinning uses
       producer_run_id:
         type: string
-        default: ''
+        required: true
         description: Exact producer workflow run ID (manual tests)
       producer_attempt:
         type: string
-        default: '1'
+        required: true
         description: Exact producer attempt (manual tests)
   workflow_run:
     workflows: [CI-trigger]
@@ -49,7 +49,7 @@ jobs:
       consumer_id: run-mysql
       control_ref: ${{ inputs.control_ref || 'GH-Actions' }}
       producer_run_id: ${{ inputs.producer_run_id || '' }}
-      producer_attempt: ${{ inputs.producer_attempt || '1' }}
+      producer_attempt: ${{ inputs.producer_attempt || '' }}
   run-mariadb:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     # `write-all` is required because reusable-workflow permissions are the
@@ -69,4 +69,4 @@ jobs:
       consumer_id: run-mariadb
       control_ref: ${{ inputs.control_ref || 'GH-Actions' }}
       producer_run_id: ${{ inputs.producer_run_id || '' }}
-      producer_attempt: ${{ inputs.producer_attempt || '1' }}
+      producer_attempt: ${{ inputs.producer_attempt || '' }}
