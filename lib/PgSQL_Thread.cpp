@@ -1198,7 +1198,11 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.stats_time_query_processor = false;
 	variables.query_cache_stores_empty_result = true;
 	variables.kill_backend_connection_when_disconnect = true;
+#ifdef PROXYSQL31
+	variables.use_native_backend_protocol = true;
+#else
 	variables.use_native_backend_protocol = false;
+#endif
 	variables.sessions_sort = true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms = 1;
