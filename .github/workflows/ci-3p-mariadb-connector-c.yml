@@ -12,13 +12,29 @@ on:
         type: string
       connector:
         type: string
+      # Cross-repository callers (e.g. ProxySQL/proxysql_3p_testing_public) pass the tested ProxySQL
+      # repository, commit, branch and CI-builds run explicitly. Empty = the sysown/proxysql caller's
+      # workflow_run event, as before.
+      proxysql_repo:
+        type: string
+        default: ''
+      sha:
+        type: string
+        default: ''
+      branch:
+        type: string
+        default: ''
+      build_run_id:
+        type: string
+        default: ''
 
 env:
   TESTTREE: ${{ inputs.testtree || inputs.trigger.event.inputs.testtree || 'main' }}
   TESTNAME: mariadb-connector-c
   TESTDIST: ubuntu24
-  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-  BRANCH: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_branch || github.ref_name }}
+  PROXYSQL_REPO: ${{ inputs.proxysql_repo || github.repository }}
+  SHA: ${{ inputs.sha || inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  BRANCH: ${{ inputs.branch || inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_branch || github.ref_name }}
 
 jobs:
   test:
@@ -41,7 +57,7 @@ jobs:
         
     - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       id: checks
-      if: always()
+      if: ${{ always() && env.PROXYSQL_REPO == github.repository }}
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
@@ -70,7 +86,7 @@ jobs:
     - name: Checkout proxysql
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
-        repository: ${{ github.repository }}
+        repository: ${{ env.PROXYSQL_REPO }}
         ref: ${{ env.SHA }}
         # full (blobless) history so 'git describe' reports the tested version
         fetch-depth: 0
@@ -89,9 +105,10 @@ jobs:
       # ci-builds-handoff-<sha>-ubuntu24-tap-genai-gcov-full artifact (same resolution logic as
       # ci-mysql84-g1.yml). Only src/ and the .gcno files are unpacked, the TAP binaries are not needed.
       env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        REPO: ${{ github.repository }}
-        BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
+        # PROXYSQL_ARTIFACTS_TOKEN: optional, for callers whose token cannot read PROXYSQL_REPO artifacts
+        GH_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN || secrets.GITHUB_TOKEN }}
+        REPO: ${{ env.PROXYSQL_REPO }}
+        BUILD_RUN_ID: ${{ inputs.build_run_id || inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
         HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
       run: |
         set -uo pipefail
@@ -214,7 +231,7 @@ jobs:
           proxysql_3p_testing/test_${{ env.TESTNAME }}/logs
           
     - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      if: always()
+      if: ${{ always() && env.PROXYSQL_REPO == github.repository }}
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         check_id: ${{ steps.checks.outputs.check_id }}
