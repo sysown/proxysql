@@ -311,8 +311,22 @@ static void test_copy() {
 	ok(cp.has_gtid(UUID_A, 35), "copy: copy has new data");
 }
 
+static void test_mariadb_domain_keys() {
+	GTID_Set gs;
+	gs.add("0", trxid_t(1), trxid_t(270));
+	gs.set_server_id("0", 1);
+	ok(gs.has_gtid("0", 100), "domain watermark contains 100");
+	ok(!gs.has_gtid("0", 271), "domain watermark excludes 271");
+	ok(gs.to_string() == "0:1-270", "wire string is domain:1-seq");
+	ok(gs.to_display_string() == "0-1-270", "display is native MariaDB");
+	GTID_Set cp = gs.copy();
+	ok(cp.get_server_id("0") == 1, "copy preserves server_id");
+	gs.clear();
+	ok(gs.to_string().empty() && gs.get_server_id("0") == 0, "clear drops server_id");
+}
+
 int main() {
-	plan(67);
+	plan(73);
 
 	test_add_interval();				          // 8 assertions
 	test_add_trxid();                             // 2 assertions
@@ -331,6 +345,7 @@ int main() {
 	test_clear();                                 // 3 assertions
 	test_to_string();                             // 5 assertions
 	test_copy();                                  // 5 assertions
+	test_mariadb_domain_keys();                   // 6 assertions
 
 	return exit_status();
 }

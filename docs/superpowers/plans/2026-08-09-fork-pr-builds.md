@@ -1,5 +1,16 @@
 # Safe Fork Pull Request Builds Implementation Plan
 
+> **Amended 2026-09-26.** The validator this plan introduced was
+> `test/infra/control/validate-fork-pr-builds.bash`, an embedded Ruby heredoc.
+> It has since been rewritten as `test/infra/control/validate_fork_pr_builds.py`
+> (python3 + PyYAML, already a repo dependency) and wired into
+> `run-ci-lint.bash`, so it runs in CI on every PR instead of by hand. The
+> Ruby snippets below are left as the original record; the current
+> implementation is the Python file. The build matrix also shrank from four
+> entries to one (`ubuntu24,-tap-genai-gcov`) in
+> 64b1465a9 / 308c14d67, and the fork caller's callee pin is now bumped
+> forward as GH-Actions moves rather than left at 44ff88ee4c69.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Run the four existing build variants for approved fork PRs without executing fork code in the privileged `workflow_run` cascade.
@@ -22,7 +33,7 @@
 
 **Files:**
 
-- Create: `test/infra/control/validate-fork-pr-builds.bash`
+- Create: `test/infra/control/validate_fork_pr_builds.py`
 
 **Interfaces:**
 
@@ -115,14 +126,14 @@ RUBY
 
 - [ ] **Step 2: Run the test and confirm it fails**
 
-Run: `bash test/infra/control/validate-fork-pr-builds.bash HEAD origin/GH-Actions`
+Run: `python3 test/infra/control/validate_fork_pr_builds.py HEAD origin/GH-Actions`
 
 Expected: FAIL because the fork workflow and the reusable-workflow input do not exist. Once the implementation exists, this test semantically rejects absent or changed matrix pairs, fork callers with broader permissions or secrets, changes to the trusted caller's permission/secret contract, and privileged reusable-workflow steps that are not guarded by `inputs.trusted`.
 
 - [ ] **Step 3: Commit the test**
 
 ```bash
-git add test/infra/control/validate-fork-pr-builds.bash
+git add test/infra/control/validate_fork_pr_builds.py
 git commit -m "test(ci): validate fork PR build isolation"
 ```
 
@@ -152,7 +163,7 @@ Add checks that require `inputs.trusted` to guard the cache restore/save/packing
 Run from `.worktrees/ci-fork-pr-builds-actions`:
 
 ```bash
-bash ../ci-fork-pr-builds/test/infra/control/validate-fork-pr-builds.bash ci/fork-pr-builds HEAD
+python3 ../ci-fork-pr-builds/test/infra/control/validate_fork_pr_builds.py ci/fork-pr-builds HEAD
 ```
 
 Expected: FAIL because `ci-builds.yml` has no `trusted` input or guards.
@@ -180,7 +191,7 @@ When `trusted` is false, force `runs-on: ubuntu-24.04`. Express the runner selec
 ```bash
 ruby -e 'require "yaml"; YAML.load_file(".github/workflows/ci-builds.yml")'
 git diff --check
-bash ../ci-fork-pr-builds/test/infra/control/validate-fork-pr-builds.bash ci/fork-pr-builds HEAD
+python3 ../ci-fork-pr-builds/test/infra/control/validate_fork_pr_builds.py ci/fork-pr-builds HEAD
 ```
 
 Expected: YAML and whitespace checks pass; the validator still fails only because the base fork caller is absent.
@@ -252,7 +263,7 @@ for workflow in .github/workflows/CI-builds.yml .github/workflows/CI-builds-fork
   ruby -e 'require "yaml"; YAML.load_file(ARGV.fetch(0))' "$workflow"
 done
 git diff --check
-bash test/infra/control/validate-fork-pr-builds.bash HEAD ci/fork-pr-builds-actions
+python3 test/infra/control/validate_fork_pr_builds.py HEAD ci/fork-pr-builds-actions
 ```
 
 Expected: all commands exit 0.
@@ -260,7 +271,7 @@ Expected: all commands exit 0.
 - [ ] **Step 4: Commit the base-branch change**
 
 ```bash
-git add .github/workflows/CI-builds.yml .github/workflows/CI-builds-fork.yml .github/workflows/CI-trigger.yml test/infra/control/validate-fork-pr-builds.bash
+git add .github/workflows/CI-builds.yml .github/workflows/CI-builds-fork.yml .github/workflows/CI-trigger.yml test/infra/control/validate_fork_pr_builds.py
 git commit -m "ci: run fork PR builds in restricted workflow"
 ```
 
@@ -278,7 +289,7 @@ git commit -m "ci: run fork PR builds in restricted workflow"
 - [ ] **Step 1: Inspect for privilege regressions**
 
 ```bash
-git diff origin/v3.0...ci/fork-pr-builds -- .github/workflows test/infra/control/validate-fork-pr-builds.bash
+git diff origin/v3.0...ci/fork-pr-builds -- .github/workflows test/infra/control/validate_fork_pr_builds.py
 git -C ../ci-fork-pr-builds-actions diff origin/GH-Actions...ci/fork-pr-builds-actions -- .github/workflows/ci-builds.yml
 ```
 
@@ -287,7 +298,7 @@ Confirm the fork caller and untrusted path contain no `allow-unsafe-pr-checkout:
 - [ ] **Step 2: Re-run all validation**
 
 ```bash
-bash test/infra/control/validate-fork-pr-builds.bash ci/fork-pr-builds ci/fork-pr-builds-actions
+python3 test/infra/control/validate_fork_pr_builds.py ci/fork-pr-builds ci/fork-pr-builds-actions
 git diff --check origin/v3.0...ci/fork-pr-builds
 git -C ../ci-fork-pr-builds-actions diff --check origin/GH-Actions...ci/fork-pr-builds-actions
 ```

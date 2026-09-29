@@ -1,6 +1,6 @@
 # ProxySQL CI Architecture
 
-**Last updated:** 2026-04-11
+**Last updated:** 2026-09-28
 
 This document is the authoritative reference for ProxySQL's GitHub Actions CI
 setup. It covers the two-branch workflow split, the trigger chain, the test
@@ -12,7 +12,7 @@ If you touch anything under `.github/workflows/` on either `v3.0` or the
 
 > **New to GitHub Actions terminology, or confused by check-run labels
 > like `CI-maketest / builds (testgalera)`?** Jump to
-> [§12 Understanding GitHub Actions vocabulary](#understanding-github-actions-vocabulary--read-this-first-if-confused)
+> [§13 Understanding GitHub Actions vocabulary](#understanding-github-actions-vocabulary--read-this-first-if-confused)
 > first — it walks through every term (workflow / run / job / matrix /
 > check run / caller / reusable) with diagrams and a concrete walkthrough,
 > then come back here.
@@ -27,13 +27,14 @@ If you touch anything under `.github/workflows/` on either `v3.0` or the
 4. [CI-trigger and CI-builds: the entry point](#ci-trigger-and-ci-builds-the-entry-point)
 5. [The dedicated-reusable pattern](#the-dedicated-reusable-pattern)
 6. [Cache layout produced by CI-builds](#cache-layout-produced-by-ci-builds)
-7. [The TAP groups system](#the-tap-groups-system)
-8. [Workflow catalogue](#workflow-catalogue)
-9. [Adding a new test group end-to-end](#adding-a-new-test-group-end-to-end)
-10. [Common pitfalls and historical gotchas](#common-pitfalls-and-historical-gotchas)
-11. [Debugging a failing CI run](#debugging-a-failing-ci-run)
-12. [Understanding GitHub Actions vocabulary — read this first if confused](#understanding-github-actions-vocabulary--read-this-first-if-confused)
-13. [Glossary (quick reference)](#glossary-quick-reference)
+7. [The feature tiers and the merge-only tier sweep](#the-feature-tiers-and-the-merge-only-tier-sweep)
+8. [The TAP groups system](#the-tap-groups-system)
+9. [Workflow catalogue](#workflow-catalogue)
+10. [Adding a new test group end-to-end](#adding-a-new-test-group-end-to-end)
+11. [Common pitfalls and historical gotchas](#common-pitfalls-and-historical-gotchas)
+12. [Debugging a failing CI run](#debugging-a-failing-ci-run)
+13. [Understanding GitHub Actions vocabulary — read this first if confused](#understanding-github-actions-vocabulary--read-this-first-if-confused)
+14. [Glossary (quick reference)](#glossary-quick-reference)
 
 ---
 
@@ -321,7 +322,15 @@ listening for `workflow_run[completed]` on `CI-trigger` fires.
 | **Triggers** | `workflow_run` on `CI-trigger` with `types: [in_progress]` (so it starts as soon as `CI-trigger` starts, without waiting for `CI-trigger` to finish) |
 | **Purpose** | Compiles ProxySQL inside Docker containers and saves the artifacts into the build cache that all downstream test workflows will restore. |
 
-The build matrix:
+> ⚠️ **This table is stale.** The multi-leg cache-based build described here was
+> replaced by the unified regular build: `ci-builds.yml` now has a **single** matrix leg
+> (`ubuntu24`, `-tap`) which publishes one handoff **artifact** (not a cache), and
+> `PROXYSQLGENAI` no longer exists — the v4.0 tier is selected with `PROXYSQL40=1`.
+> See [§7 The feature tiers and the merge-only tier sweep](#the-feature-tiers-and-the-merge-only-tier-sweep)
+> for the current mechanism, and read `ci-builds.yml@GH-Actions` as the source of truth
+> rather than this table.
+
+The build matrix (historical):
 
 | Matrix entry | Docker target | Flags set via `sed` into `docker-compose.yml` | Consumers |
 |---|---|---|---|
@@ -589,6 +598,171 @@ Cache entries expire after 7 days of inactivity (GitHub's default policy).
 
 ---
 
+## The feature tiers and the merge-only tier sweep
+
+### The three tiers
+
+The same `v3.0` source tree compiles into three different products, selected by a
+`make` flag:
+
+| Tier | Flag | `GITVERSION` | Adds |
+|---|---|---|---|
+| v3.0 | *(none)* | `3.0.x` | Stable core |
+| v3.1 | `PROXYSQL31=1` | `3.1.x` | FFTO, TSDB, ED25519 |
+| v4.0 | `PROXYSQL40=1` | `4.0.x` | plugin chassis; cascades to v3.1 |
+
+**Every regular CI build uses the v4.0 tier.** `ci-builds.yml` has a single matrix leg and,
+on the default `tier: v40`, injects `PROXYSQL40=1` into `docker-compose.yml`, which the
+`_build` service's `environment:` block passes straight through to `make`. The only callers
+that build anything else are the tier sweep described below, which passes `tier: v30` or
+`tier: v31` explicitly.
+
+> **Stale-object tier mismatch.** The Makefile does *not* track the tier flag between
+> invocations, so objects built under one tier are silently reused under another. The
+> classic symptom is a link failure on `mysql_thread___ffto_max_buffer_size`. Always
+> `make clean` when switching tiers, and pass the same flag to every `make` in a session.
+
+### Why test selection is already tier-aware
+
+You do **not** need separate `groups.json` files or per-tier test lists.
+`run-tests-isolated.bash:199-236` derives the version from the built binary and filters
+on `@proxysql_min_version` tags in `groups.json`:
+
+```bash
+PROXYSQL_VERSION=$(${PROXYSQL_BIN} --version 2>&1 | grep -oP 'ProxySQL version \K[0-9]+\.[0-9]+\.[0-9]+')
+```
+
+Because the Makefile bakes the tier-bumped version into the binary, a v3.0 build reports
+`3.0.x` and the harness *automatically* skips every test tagged
+`@proxysql_min_version:3.1` or `:4.0`. A v3.1 build skips only `:4.0`.
+
+Two consequences worth knowing:
+
+* **The downgrade build is itself a regression test.** Compiling without `PROXYSQL40=1`
+  fails if any `lib/` or `test/tap/tests/` file unconditionally references a v4.0-only
+  symbol. That is precisely the class of bug a v4.0-only CI cannot catch, and `Check build`
+  surfaces it before a single test runs. An untagged test that is `#ifdef`-gated for
+  v4.0 will therefore break the v3.0 build until someone adds the tag.
+* **A missing binary is a FAILURE**, not a skip (`run-tests-isolated.bash:256-262`). Hence
+  the pruning described below.
+
+### `CI-tier-sweep` — the merge-only cascade
+
+| | |
+|---|---|
+| **Caller** | `v3.0:.github/workflows/CI-tier-sweep.yml` |
+| **Reusable** | `GH-Actions:.github/workflows/ci-tier-sweep.yml` |
+| **Triggers** | `push` to `v3.0` only, plus `workflow_dispatch` |
+| **Builds** | one `ci-builds.yml` leg per tier: `v30`, `v31` |
+| **Tests** | `unit-tests-g1`, `legacy-g1`, `mysql84-g1` per tier |
+
+> **The merge-only guarantee is one line:** the caller declares `on: push` and deliberately
+> does **not** declare `pull_request`. Do not add it. That single omission is the entire
+> cost model — with it, every PR would pay for two extra full debug TAP builds.
+
+The sweep is **advisory, not merge-blocking.** Branch protection can only require checks
+that exist on a PR head; these run on a pushed commit. A red sweep is loud (a failing
+check run on the merge commit) but never blocks the next PR.
+
+Shape of the reusable:
+
+```text
+CI-tier-sweep (push to v3.0)
+  └─ build  [tier: v30, v31]  → nested call: ci-builds.yml  with tier: v30|v31
+  └─ tests  [tier: v30, v31]  → download handoff, run 3 groups sequentially
+```
+
+The `build` job is a **nested reusable-workflow call** (`uses: ./.github/workflows/ci-builds.yml`),
+so it reuses all of `ci-builds.yml`'s machinery — self-hosted pool routing, the docker nuke,
+workspace ownership reclaim, the deps-archive verification, `Check build`, the handoff
+publish. The sweep adds no build logic of its own.
+
+### Handoff artifact names carry the tier
+
+`ci-builds.yml` publishes `ci-builds-handoff-<sha>-<variant>-full`. The variant is the
+tier's identity:
+
+| Tier | Artifact | Consumed by |
+|---|---|---|
+| v4.0 | `ci-builds-handoff-<sha>-ubuntu24-tap-genai-gcov-full` | the ~51 existing consumers |
+| v3.0 | `ci-builds-handoff-<sha>-ubuntu24-tap-v30-full` | `ci-tier-sweep.yml` |
+| v3.1 | `ci-builds-handoff-<sha>-ubuntu24-tap-v31-full` | `ci-tier-sweep.yml` |
+
+Because the handoff is an **artifact, not a cache**, adding tiers is purely additive — no
+cache-key collision and no pressure on the 10 GB repo cache quota. `ci-builds.yml` takes
+the tier from a `tier` input that **defaults to `v40`**, which is what keeps the existing
+consumers (which hardcode `HANDOFF_VARIANT: ubuntu24-tap-genai-gcov`) working untouched.
+
+The tier is resolved once by a `resolve-tier` job, mirroring the existing
+`resolve-tap-mode` idiom, and exposed to the build as `env.IS_V40`. Every v4.0-only step
+(the MySQLX/GenAI plugin staging, `WITHGCOV=1`, the plugin-presence assertion) gates on
+that one boolean instead of substring-matching the matrix `type`.
+
+> **`resolve-tier` must not declare a `permissions:` block.** A called workflow may only
+> *narrow* its caller's token, and `CI-builds-fork.yml` grants exactly `contents: read`.
+> Requesting a scope there makes every fork PR fail at startup with zero jobs
+> (`startup_failure`) — see commit `5e8468db4`.
+
+### Why a downgrade handoff is pruned
+
+Debug unit-test binaries are ~170 MB each (they statically link `libproxysql.a`), and the
+v4.0 handoff deliberately retains all of them so any consumer may select any test. A
+downgrade build will never *select* the newer ones, so they are dead weight.
+
+`ci-control/.github/scripts/prune-tier-handoff.bash` drops them before packing, which
+both shrinks the artifact and makes a "not found" false-red structurally impossible. It:
+
+* reads the version from `src/proxysql --version` and keeps a test iff its highest
+  `@proxysql_min_version` is `<=` that version — the same rule as
+  `run-tests-isolated.bash`;
+* runs on the **host**, so deletions use `sudo` (the binaries are root-owned, and unlink
+  needs write access to the parent directory);
+* refuses to run if the version cannot be determined, if nothing is selectable, or if it
+  would empty the tree;
+* leaves any binary *not registered* in `groups.json` alone, and warns — deleting data it
+  cannot reason about would hide a real "built but never registered" bug;
+* is staged into `ci-control/` by its own `ref: GH-Actions` sparse checkout, because
+  `.github/scripts/` exists only on that branch (the main checkout is the commit under
+  test, and `v3.0` has no `.github/scripts/` at all). Same reason `resolve-tap-mode` does
+  its own checkout.
+
+Tests live in `.github/scripts/tests/test-prune-tier-handoff.bash` (not wired into a
+workflow, consistent with the other tests in that directory):
+
+```bash
+.github/scripts/tests/test-prune-tier-handoff.bash
+```
+
+### Which groups the sweep runs, and why
+
+| Group | Why |
+|---|---|
+| `unit-tests-g1` | `SKIP_PROXYSQL=1` in its `env.sh`, so it runs **host-only** — no Docker backends at all. Cheapest possible signal. |
+| `legacy-g1` | `legacy/infras.lst` covers dbdeployer-mysql57, dbdeployer-mariadb10 **and** docker-pgsql16-single — MySQL, MariaDB and PostgreSQL in one group. |
+| `mysql84-g1` | pure MySQL 8.4 with **zero** version gates, so the test set is identical across v3.0/v3.1/v4.0. The cleanest cross-tier differential. |
+
+All three run **sequentially inside one job** so the multi-GB handoff is downloaded exactly
+once per tier, with a distinct `INFRA_ID` per group so Docker container namespaces do not
+collide.
+
+`COVERAGE` is deliberately not set: non-v4.0 builds compile without `WITHGCOV=1`, so there
+are no `.gcno` files for the collector to match.
+
+### Groups that go empty under a downgrade build
+
+These select **zero** tests against a v3.0/v3.1 binary and would abort with
+`ERROR: No tests found for group` (`run-tests-isolated.bash:236`):
+
+| Tier | Empty groups |
+|---|---|
+| v3.0 | `ai-g2`, `duckdb-e2e-g1`, `mysqlx-g1`, `mysqlx-e2e-g1`, `mysqlx-soak-g1`, `mysqlx-tsan-g1` |
+| v3.1 | `duckdb-e2e-g1`, `mysqlx-g1`, `mysqlx-e2e-g1`, `mysqlx-soak-g1`, `mysqlx-tsan-g1` |
+
+The curated sweep set avoids all of them. If you extend the sweep, derive the exclusion
+list from the version filter rather than hand-maintaining it.
+
+---
+
 ## The TAP groups system
 
 TAP tests are split into **groups** declared in
@@ -702,7 +876,8 @@ All `CI-*.yml` files on `v3.0` as of 2026-04-11. Status is as observed on
 | Caller (v3.0) | Reusable (GH-Actions) | Trigger | Purpose | Status |
 |---|---|---|---|---|
 | `CI-trigger.yml` | `ci-trigger.yml` | `push`, `pull_request`, `workflow_dispatch` | Anchor PR `head_sha`, block on `CI-builds` | ✅ |
-| `CI-builds.yml` | `ci-builds.yml` | `workflow_run[in_progress]` on `CI-trigger` | Build 3 variants, populate caches | ✅ |
+| `CI-builds.yml` | `ci-builds.yml` | `workflow_run[in_progress]` on `CI-trigger` | Build the handoff, publish the artifact | ✅ |
+| `CI-tier-sweep.yml` | `ci-tier-sweep.yml` | `push` to `v3.0` only, `workflow_dispatch` | Build + test the **v3.0** and **v3.1** tiers, post-merge only (see §7) | ✅ |
 | `CI-lint-groups-json.yml` | *(inline, no reusable)* | `push`, `pull_request` on `groups.json` only | Lint `test/tap/groups/groups.json` format | ✅ |
 
 ### TAP test groups (dedicated-reusable pattern)
@@ -1082,7 +1257,7 @@ CI-maketest / builds (testgalera)
 By the end of the section you should be able to open any PR, look at any
 check-run label, and know exactly which file (on which branch) produced it.
 
-### 12.1 The seven terms you need to keep straight
+### 13.1 The seven terms you need to keep straight
 
 These are **not** ProxySQL-specific — they are standard GitHub Actions
 vocabulary — except for #7 which is the ProxySQL caller/reusable split.
@@ -1307,9 +1482,9 @@ run**, depending on which one the link points to. The caller run is
 always a thin one-job pass-through; the reusable run is the one with the
 matrix, the steps, and the actual test output.
 
-### 12.2 The full nesting, visualized
+### 13.2 The full nesting, visualized
 
-Pin this diagram on the wall of your mental model. Every term from §12.1
+Pin this diagram on the wall of your mental model. Every term from §13.1
 fits into exactly one slot here:
 
 ```
@@ -1367,7 +1542,7 @@ Key reading of the diagram:
    point at the commit. They are created by either GitHub
    auto-generation, or manually by `LouisBrunner/checks-action`, or both.
 
-### 12.3 The ProxySQL two-branch split, visualized
+### 13.3 The ProxySQL two-branch split, visualized
 
 When ProxySQL's caller/reusable split is layered on top of the above, **the
 picture doubles up**:
@@ -1426,7 +1601,7 @@ Checks tab:
   not the caller run on `v3.0`.
 - To read the YAML that ran, you want the **GH-Actions branch version**.
 
-### 12.4 How the `CI-maketest / builds (testgalera)` label is built
+### 13.4 How the `CI-maketest / builds (testgalera)` label is built
 
 Tracing the literal string character-by-character from the YAML to what
 you see:
@@ -1483,7 +1658,7 @@ workflow directory of the v3.0 branch finds nothing useful:
   `testgalera` *does* find it, but that hit tells you what the Make target
   does, not what the workflow does.
 
-### 12.5 Common confusions, answered directly
+### 13.5 Common confusions, answered directly
 
 **Q: "I see `CI-maketest` in the Actions tab, but when I click the run,
 the page URL says `/actions/runs/...` on the `GH-Actions` branch. Is that
@@ -1551,7 +1726,7 @@ cell of a shared workflow. Contrast with `CI-maketest`, where the 6
 build flavors ARE matrix cells of one shared workflow. Both patterns
 exist in the repo for historical reasons.
 
-### 12.6 Seeing what actually ran — the terminal flow
+### 13.6 Seeing what actually ran — the terminal flow
 
 The GitHub web UI for check runs is genuinely broken: if you click on a
 row in the PR "Checks" tab, the page you land on is a **check-run page**
@@ -1633,7 +1808,7 @@ via a `workflow_run` chain, and GitHub records `workflow_run`-triggered
 runs as belonging to the *default branch*, not the PR's branch. The
 run's metadata `headSha` (not shown in the default column layout) is
 also the v3.0 branch HEAD at cascade time, **not the PR commit**. This
-is the documented gotcha in §10.2 ("workflow_run chains use the
+is the documented gotcha in §11.2 ("workflow_run chains use the
 triggering workflow's head_sha").
 
 **The only place in this output where the actual PR commit SHA appears
@@ -1690,13 +1865,13 @@ View this run on GitHub: https://github.com/sysown/proxysql/actions/runs/2428103
 Notice the job name here is `run / tests (mysql57)` — **not**
 `CI-legacy-g1 / tests (mysql57)` like the check-run row. The prefix
 differs because check runs and jobs live in different namespaces
-(see §12.1 and §12.4). Specifically:
+(see §13.1 and §13.4). Specifically:
 
 - **Job name** prefix `run /` comes from the caller stub on `v3.0`,
   whose job is literally `jobs.run:`.
 - **Check-run name** prefix `CI-legacy-g1 /` comes from the workflow's
   `name:` field, used by `LouisBrunner/checks-action` as the first piece
-  of its `name:` template (see §12.4).
+  of its `name:` template (see §13.4).
 
 The suffix `tests (mysql57)` comes from the reusable on `GH-Actions`
 (the reusable has `jobs.tests:` with a `matrix.infradb: [mysql57]`
@@ -1809,7 +1984,7 @@ row to a job log through the web UI**. Use the four-step terminal flow
 every time. It is faster, more reliable, and leaves a command history
 you can paste into PR reviews.
 
-### 12.7 Sanity-check yourself
+### 13.7 Sanity-check yourself
 
 If you understand the vocabulary, you should be able to answer each of
 these in one sentence. Answers after each question.
@@ -1852,10 +2027,10 @@ these in one sentence. Answers after each question.
    dead ends.
 
 If those six answers feel comfortable, you can close this section. If
-not, re-read the [nesting diagram](#122-the-full-nesting-visualized)
-and then the [two-branch diagram](#123-the-proxysql-two-branch-split-visualized)
+not, re-read the [nesting diagram](#132-the-full-nesting-visualized)
+and then the [two-branch diagram](#133-the-proxysql-two-branch-split-visualized)
 until they do; if the last question stumped you, re-read
-[§12.6 Seeing what actually ran](#126-seeing-what-actually-ran--the-terminal-flow).
+[§13.6 Seeing what actually ran](#136-seeing-what-actually-ran--the-terminal-flow).
 
 ---
 
