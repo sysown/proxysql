@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ci_tier_plan import resolve_selection, make_plan, consumer_matrix, validate_manifest
+from ci_tier_plan import resolve_selection, make_plan, consumer_matrix, validate_manifest, applicable_tests
 
 class SelectionTests(unittest.TestCase):
     def context(self):
@@ -57,5 +57,11 @@ class SelectionTests(unittest.TestCase):
         cat={'consumers':[dict(workflow='CI-example',file='ci-example.yml',job='tests',automatic=True,tiers=['v40'],groups=[],cells=[],axes={'infradb':{'var':'MATRIX_mysql'}},instance='run')]}
         plan=make_plan(c,dict(tiers=['v40'],mode='normal',pr_number=42),cat)
         self.assertEqual(plan['checks'][1]['cell']['infradb'],'mysql84')
+
+    def test_repository_short_minimum_version_tags(self):
+        groups={'core-t':['g1'],'innovative-t':['g1','@proxysql_min_version:3.1'],'plugin-t':['g1','@proxysql_min_version:4.0']}
+        self.assertEqual(applicable_tests(groups,'g1','3.0.12'),['core-t'])
+        self.assertEqual(applicable_tests(groups,'g1','3.1.12'),['core-t','innovative-t'])
+        self.assertEqual(applicable_tests(groups,'g1','4.0.12'),sorted(groups))
 
 if __name__=='__main__':unittest.main()
