@@ -206,11 +206,11 @@ sequenceDiagram
     GH->>Trigger: start (on: push, pull_request)
     Trigger->>Builds: start (on: workflow_run [in_progress])
     Note over Trigger,Builds: CI-trigger runs a 'gh run watch' babysitter<br/>step that blocks until CI-builds finishes.
-    Builds-->>Builds: Build in Docker, cache src/test/bin/matrix
+    Builds-->>Builds: Build in Docker, publish handoff artifact
     Builds-->>Trigger: build completed (watch loop unblocks)
     Trigger-->>GH: CI-trigger completed
     GH->>Test: start (on: workflow_run [completed])
-    Test-->>Test: Restore src/test caches, run TAP group
+    Test-->>Test: Download handoff artifact, run TAP group
     Test-->>GH: success or failure
 ```
 
@@ -223,8 +223,9 @@ git push / open PR
   │     │
   │     ├─► CI-builds (on: workflow_run [in_progress])
   │     │     │
-  │     │     └─► Build ubuntu22-tap, debian12-dbg, ubuntu24-tap-genai-gcov
-  │     │         Cache src/, test/, bin/, tap-matrix*.json
+  │     │     └─► Build ubuntu24-tap (single leg since #6234)
+  │     │         Publishes handoff artifacts; the callee runs no
+  │     │         actions/cache/save (see §6 for the stale cache layout)
   │     │
   │     └─► (CI-trigger babysitter step `gh run watch` blocks until CI-builds
   │          completes, then CI-trigger itself completes)
@@ -573,7 +574,16 @@ they happen they can be replicated with a single `sed`.
 
 ## Cache layout produced by CI-builds
 
-`CI-builds` produces four separate cache entries per matrix build, each
+> ⚠️ **This section is stale.** The callee no longer runs
+> `actions/cache/save` at all — `ci-builds.yml@GH-Actions` publishes handoff
+> **artifacts** instead, since #6234. So the `_bin`/`_src`/`_test`/`_matrix`
+> entries below are no longer produced by CI-builds, while 22 caller
+> workflows still reference `actions/cache/restore`/`save`. Whether each of
+> those is a live consumer or a dormant `restore` of an entry that can no
+> longer be created needs a per-workflow audit, so this section is left
+> as-is rather than rewritten on a guess. Fixing it is tracked separately.
+
+`CI-builds` produced four separate cache entries per matrix build, each
 keyed by `{SHA}_{dist}_{type}_{suffix}`:
 
 | Key suffix | Contents | Who restores it |

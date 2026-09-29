@@ -4334,7 +4334,12 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 		size_t null_bitmap_length=(num_params+7)/8;
 		if (pkt.size < (14+1+null_bitmap_length)) {
 			// some data missing?
-			delete ret;
+			// The packet is still owned (and freed) by the caller: detach it,
+			// or the destructor frees it too (double-free).
+			ret->pkt = NULL;
+			// Only free when metadata not obtained from cache (i.e. first execute),
+			// or sess_STMTs_meta is left with a dangling pointer.
+			if (!*stmt_meta) { delete ret; }
 			return NULL;
 		}
 		memcpy(&new_params_bound_flag,p+null_bitmap_length,1);

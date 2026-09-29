@@ -45,7 +45,9 @@ TRUSTED_PREFIX = re.compile(r"\A\$\{\{\s*inputs\.trusted\s*&&")
 # into an explicit `tier`/`variant` matrix key -- so the `type` token is now
 # just '-tap', and '-tap-genai-gcov' no longer appears. Note this couples a
 # v3.0 lint to GH-Actions content: changing the matrix there is a deliberate
-# change that has to be mirrored here.
+# change that has to be mirrored here. It is real friction -- the lint went red
+# within an hour of #6234 landing -- but it is the coupling that would have
+# caught -tap-mysqlx reaching fork builds unreviewed, so keep it.
 EXPECTED_MATRIX = [("ubuntu24", "-tap")]
 
 # The callee grew a `tier` input in #6234. An untrusted caller must not be able
@@ -55,6 +57,11 @@ EXPECTED_MATRIX = [("ubuntu24", "-tap")]
 # to the caller/reusable cannot silently change what a fork PR builds.
 EXPECTED_TIER_DEFAULT = "v40"
 EXPECTED_TIER_VARIANTS = {"v30", "v31", "v40"}
+
+# GitHub accepts a whole `permissions:` block only as a mapping of scopes or
+# as one of these two strings. `permissions: {}` disables every scope and is
+# a legal (narrowing) mapping, not a string.
+VALID_WHOLE_BLOCK_STRINGS = ("read-all", "write-all")
 
 PRIVILEGED_USES = ("LouisBrunner/checks-action", "actions/cache/", "actions/upload-artifact")
 PRIVILEGED_NAME = re.compile(
@@ -99,6 +106,70 @@ def on_key(document):
     if "on" in document:
         return document["on"]
     return document[True]
+
+
+def widenings_beyond_fork_caller(permissions):
+    """Return (scope, level) pairs that exceed the fork caller's grant.
+
+    CI-builds-fork.yml grants exactly ``contents: read``, and a called
+    workflow may only narrow the caller's token, never widen it. Anything
+    beyond that is rejected by GitHub before a job is scheduled, so it has
+    to be reported rather than raised on -- including the string form
+    ``read-all`` / ``write-all``, which grants every scope.
+
+    ``none`` is an explicit denial and therefore always a narrowing, so it
+    is never a widening whatever the scope.
+
+    A value that is not valid ``permissions`` syntax at all is reported by
+    :func:`permission_declaration_fault`, not here.
+    """
+    if permissions is None:
+        return []
+    if isinstance(permissions, str):
+        # `read-all` / `write-all` are the valid shorthand forms. Both grant
+        # more than contents:read.
+        return [] if permissions not in VALID_WHOLE_BLOCK_STRINGS else [
+            (permissions, permissions)
+        ]
+    if not isinstance(permissions, dict):
+        return []
+
+    widenings = []
+    for scope, level in permissions.items():
+        if level == "none":
+            continue
+        if scope == "contents":
+            if level != "read":
+                widenings.append((scope, level))
+        else:
+            widenings.append((scope, level))
+    return widenings
+
+
+def permission_declaration_fault(label, permissions):
+    """Return a problem string for a malformed ``permissions:`` value, else None.
+
+    GitHub accepts exactly three shapes for a whole ``permissions`` block: a
+    mapping of scopes, the string ``read-all``, or the string ``write-all``.
+    ``permissions: {}`` is a legal mapping that disables every scope. ``none``
+    is a *scope* value inside a mapping, not a whole-block value, and a scalar
+    such as ``42`` is not syntax at all.
+
+    Both of those can be rejected by GitHub before a job is scheduled, and the
+    widening check cannot see them -- it returns nothing for a value it does
+    not recognise -- so an unvalidated callee would pass the contract and
+    then fail the whole untrusted call.
+    """
+    if permissions is None:
+        return None
+    if isinstance(permissions, dict):
+        return None
+    if isinstance(permissions, str) and permissions in VALID_WHOLE_BLOCK_STRINGS:
+        return None
+    return (
+        f"callee {label} has an invalid permissions value {permissions!r}; expected a "
+        f"mapping of scopes, {{}}, 'read-all' or 'write-all'"
+    )
 
 
 def contains_unsafe_checkout(value):
@@ -218,6 +289,31 @@ def validate(base, fork, reusable):
     if builds is None:
         problems.append("reusable workflow has no builds job")
         return problems
+
+    # The same callee serves both callers, and a called workflow may only
+    # narrow the caller's token, never widen it. CI-builds-fork.yml grants
+    # exactly `contents: read`, so ANY callee job asking for more makes
+    # GitHub reject the whole call before a job starts -- which presents as
+    # a bare `startup_failure` with zero jobs and no useful log. The
+    # resolve-tap-mode job requesting `pull-requests: read` did exactly that
+    # to every fork PR. Trusted runs get their scopes from the caller's
+    # write-all and need no job-level block at all.
+    #
+    # Checked at the workflow level as well as per job: either is enough to
+    # reintroduce the same rejection.
+    for label, requested in [("workflow", reusable.get("permissions"))] + [
+        (f"job {name!r}", job.get("permissions"))
+        for name, job in reusable.get("jobs", {}).items()
+    ]:
+        fault = permission_declaration_fault(label, requested)
+        if fault is not None:
+            problems.append(fault)
+            continue
+        for scope, level in widenings_beyond_fork_caller(requested):
+            problems.append(
+                f"callee {label} requests {scope}: {level}, which the fork "
+                f"caller does not grant; this fails the whole call at startup"
+            )
 
     require(
         RUNS_ON_UNTRUSTED.match(str(builds.get("runs-on", ""))) is not None,
