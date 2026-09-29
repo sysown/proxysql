@@ -233,21 +233,34 @@ for test_name, test_groups in sorted(groups.items()):
 ")
 
     if [ -z "${TEST_NAMES}" ]; then
-        # Every test in this group is gated out by @proxysql_min_version against
-        # the version of the binary under test. That is a legitimate, expected
-        # outcome when running a downgrade tier: the group may exist and be
-        # fully wired in CI, yet have nothing to run against ProxySQL 3.0.x
-        # (e.g. mysqlx-g1 and the duckdb/ai groups are all 4.0-only).
+        # Two very different situations produce an empty TEST_NAMES, and they
+        # must NOT be conflated:
         #
-        # So SKIP, do not fail. Hard-failing here meant a single v4.0-only group
-        # in a cross-tier sweep aborted the whole job before any other group
-        # could run, and it made the sweep fragile in the worst way: adding one
-        # @proxysql_min_version:4.1 test in a new group would break CI with an
-        # error that looks like a harness bug.
+        #   (a) the group exists in groups.json and every one of its tests is
+        #       gated out by @proxysql_min_version against the binary under
+        #       test. Legitimate on a downgrade tier -- ai-g2 runs on v3.1 (1
+        #       test) and has nothing at all on v3.0; mysqlx/duckdb are wholly
+        #       4.0-only. SKIP.
         #
-        # Set TAP_REQUIRE_TESTS=1 to restore the strict behaviour, for callers
-        # where an empty group really is a misconfiguration.
-        echo ">>> SKIPPING group '${TAP_GROUP}': no test is selectable by ProxySQL ${PROXYSQL_VERSION:-<unknown>} (all gated by @proxysql_min_version)"
+        #   (b) the group name is not in groups.json at all -- a typo, a stale
+        #       shard list, or garbage. That is always a caller bug and must
+        #       fail, or a cross-tier sweep would report green having run
+        #       nothing. (This is not hypothetical: a shard list built from a
+        #       bash array named GROUPS ended up holding the runner user's
+        #       numeric group IDs, and every one of them "skipped".)
+        #
+        # So: verify the group is known before treating emptiness as a skip.
+        if ! python3 -c "
+import json, sys
+groups = json.load(open('${GROUPS_JSON}'))
+sys.exit(0 if any('${TAP_GROUP}' in v for v in groups.values()) else 1)
+"; then
+            echo "ERROR: TAP_GROUP='${TAP_GROUP}' does not appear in ${GROUPS_JSON}"
+            echo "       This is a caller bug (typo, stale group list), not a version skip." >&2
+            exit 1
+        fi
+
+        echo ">>> SKIPPING group '${TAP_GROUP}': it exists, but no test is selectable by ProxySQL ${PROXYSQL_VERSION:-<unknown>} (all gated by @proxysql_min_version)"
         if [ "${TAP_REQUIRE_TESTS:-0}" = "1" ]; then
             echo "ERROR: No tests found for group '${TAP_GROUP}' in groups.json (TAP_REQUIRE_TESTS=1)"
             exit 1
