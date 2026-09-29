@@ -1,6 +1,6 @@
 # PR-label-selected CI product tiers
 
-Status: proposed design for review; implementation has not started.
+Status: approved by the user on 2026-09-29; implementation planning underway.
 
 ## Intent and agreed behavior
 
