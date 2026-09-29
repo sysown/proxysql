@@ -87,6 +87,20 @@ def minimal_documents():
     return base, fork, reusable
 
 
+class SnapshotPlanner(unittest.TestCase):
+    def documents(self):
+        base,fork,reusable=minimal_documents()
+        del reusable['jobs']['resolve-tier']
+        reusable['jobs']['plan']={'runs-on':reusable['jobs']['builds']['runs-on'],
+            'steps':[{'env':{'TRUSTED':'${{ inputs.trusted }}'},'run':'python3 ci_tier_runtime.py plan'}]}
+        reusable['jobs']['builds']['strategy']['matrix']='${{ fromJson(needs.plan.outputs.matrix) }}'
+        return base,fork,reusable
+    def test_snapshot_planner_is_supported(self):
+        self.assertEqual(subject.validate(*self.documents()),[])
+    def test_planner_cannot_force_trust(self):
+        docs=self.documents();docs[2]['jobs']['plan']['steps'][0]['env']['TRUSTED']='true'
+        self.assertTrue(subject.validate(*docs))
+
 class TopLevelDisjunction(unittest.TestCase):
     def test_rejects(self):
         for condition in (

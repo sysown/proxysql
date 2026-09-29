@@ -1,5 +1,5 @@
 name: CI-3p-pgjdbc
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} trigger=${{ github.event.workflow_run.id || github.run_id }}/${{ github.event.workflow_run.run_attempt || github.run_attempt }}'
 
 on:
   workflow_dispatch:
@@ -8,9 +8,21 @@ on:
         description: 'proxysql_3p_testing treeish/branch/tag/hash'
         default: main
         type: string
+      control_ref:
+        type: string
+        default: GH-Actions
+        description: CI implementation ref for isolated validation
+      producer_run_id:
+        type: string
+        default: ''
+        description: Exact producer workflow run ID (manual tests)
+      producer_attempt:
+        type: string
+        default: '1'
+        description: Exact producer attempt (manual tests)
   workflow_run:
-    workflows: [ CI-trigger ]
-    types: [ completed ]
+    workflows: [CI-trigger]
+    types: [completed]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
@@ -35,3 +47,7 @@ jobs:
       trigger: ${{ toJson(github) }}
       infradb: ${{ vars.MATRIX_3P_PGJDBC_infradb_pgsql }}
       connector: ${{ vars.MATRIX_3P_PGJDBC_connector_pgsql }}
+      consumer_id: run-pgsql
+      control_ref: ${{ inputs.control_ref || 'GH-Actions' }}
+      producer_run_id: ${{ inputs.producer_run_id || '' }}
+      producer_attempt: ${{ inputs.producer_attempt || '1' }}

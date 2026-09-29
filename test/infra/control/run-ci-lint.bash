@@ -57,22 +57,19 @@ run_check "Check vendored OpenSSL consumer flags" \
 # ref plus ci-builds.yml on GH-Actions, so it needs both refs fetched. The
 # workflow fetches GH-Actions with a tolerated failure, so skip rather than fail
 # the whole lint suite when it is momentarily unavailable.
-if git rev-parse --verify --quiet origin/GH-Actions >/dev/null; then
+if git rev-parse --verify --quiet ${CI_ENGINE_REF:-origin/GH-Actions} >/dev/null; then
 	run_check "Check fork PR build isolation contract" \
-		python3 test/infra/control/validate_fork_pr_builds.py HEAD origin/GH-Actions
+		python3 test/infra/control/validate_fork_pr_builds.py HEAD ${CI_ENGINE_REF:-origin/GH-Actions}
 	run_check "Test fork PR build isolation validator" \
 		python3 -m unittest discover -s test/infra/control -p test_validate_fork_pr_builds.py
 else
-	echo ">>> Check fork PR build isolation contract: SKIPPED (origin/GH-Actions not fetched)"
+	echo ">>> Check fork PR build isolation contract: SKIPPED (${CI_ENGINE_REF:-origin/GH-Actions} not fetched)"
 fi
 run_check "Check group infra/workflow coverage (warn-only)" \
 	python3 test/tap/groups/lint_group_coverage.py
-# tier-sweep.lst is the work list CI-tier-sweep reads at run time. Unlike
-# lint_group_coverage.py (warn-only, advisory) this one FAILS: if a group is
-# wired into regular CI and runnable on a downgrade tier but missing from the
-# list, the merge-only sweep has silently stopped covering it. See
-# test/infra/control/check_tier_sweep_groups.py for why that direction matters.
-run_check "Check tier-sweep group list is in sync" \
-	python3 test/infra/control/check_tier_sweep_groups.py
+run_check "Check selected-tier fanout and migrated coverage" \
+    python3 test/infra/control/check_ci_tier_fanout.py --callers-ref HEAD --engine-ref "${CI_ENGINE_REF:-origin/GH-Actions}"
+run_check "Test selected-tier fanout validator" \
+    python3 -m unittest discover -s test/infra/control -p test_check_ci_tier_fanout.py
 
 echo ">>> CI lint suite: OK"
