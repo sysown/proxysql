@@ -18,7 +18,7 @@ on:
         default: ''
       producer_attempt:
         type: string
-        default: '1'
+        default: ''
 env:
   # SHA the caller's workflow_run fired on (i.e. the PR commit), or
   # github.sha for the workflow_dispatch path. All cache keys, checkouts,
@@ -491,6 +491,10 @@ jobs:
       TIER: ${{ matrix.tier }}
       COVERAGE: ${{ matrix.coverage && '1' || '0' }}
   tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     needs:
     - tier-context
     - e2e-tests

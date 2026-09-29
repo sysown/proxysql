@@ -40,7 +40,7 @@ on:
         default: ''
       producer_attempt:
         type: string
-        default: '1'
+        default: ''
       testtree:
         type: string
         default: ''
@@ -262,6 +262,10 @@ jobs:
     name: ${{ matrix.check_name }}
     if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['test'][0] != null }}
   tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     needs:
     - tier-context
     - test

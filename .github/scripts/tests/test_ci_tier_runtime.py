@@ -94,4 +94,10 @@ class RuntimeTests(unittest.TestCase):
      source.request.assert_not_called()
    finally:os.chdir(prior)
 
+ def test_explicit_producer_requires_an_attempt(self):
+  gh=dict(repository='sysown/proxysql',run_id='8',run_attempt='1')
+  with patch.object(runtime,'context',return_value=dict(self.ctx(),event='workflow_dispatch')),patch.object(runtime,'api_for') as api,patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'PRODUCER_RUN_ID':'2','PRODUCER_ATTEMPT':''}):
+   with self.assertRaisesRegex(ValueError,'requires producer_attempt'):runtime.consumer()
+   api.return_value.artifacts.assert_not_called()
+
 if __name__=='__main__':unittest.main()

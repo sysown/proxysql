@@ -130,7 +130,9 @@ def consumer():
         producer=GitHubAPI(gh['repository']).json_artifact(int(gh['run_id']),binding_name,'binding.json')
         if ctx['event']!='workflow_dispatch':verify_binding(producer,ctx)
     elif os.environ.get('PRODUCER_RUN_ID'):
-        run=int(os.environ['PRODUCER_RUN_ID']);build_attempt=int(os.environ.get('PRODUCER_ATTEMPT') or '1')
+        run=int(os.environ['PRODUCER_RUN_ID'])
+        if not os.environ.get('PRODUCER_ATTEMPT'):raise ValueError('explicit producer selection requires producer_attempt')
+        build_attempt=int(os.environ['PRODUCER_ATTEMPT'])
         names=[a['name'] for a in api.artifacts(run) if a['name'].startswith('ci-manifest-') and a['name'].endswith(f'-b{run}-a{build_attempt}')]
         if len(names)!=1:raise ValueError('manual dispatch requires an exact producer run and attempt with a manifest')
         producer=api.json_artifact(run,names[0],'manifest.json')
@@ -241,7 +243,9 @@ def units():
     check=next(c for c in plan['checks'] if c['job']=='tier-units' and c['tier']==leg['tier'])
     api=api_for(plan)
     publish_result(plan,check['key'],'in_progress',api,gh['run_id'],gh['run_attempt'])
-    env=dict(os.environ,SKIP_PROXYSQL='1',TAP_GROUP='unit-tests-g1',INFRA_ID='ci-units-'+leg['tier'])
+    group=os.environ['TAP_GROUP']
+    if group!='unit-tests-g1':raise ValueError('unsupported producer unit group')
+    env=dict(os.environ,SKIP_PROXYSQL='1',TAP_GROUP=group,INFRA_ID='ci-units-'+leg['tier'])
     result=subprocess.run(['test/infra/control/run-tests-isolated.bash'],cwd='proxysql',env=env)
     publish_result(plan,check['key'],'success' if result.returncode==0 else 'failure',api,gh['run_id'],gh['run_attempt'])
     if result.returncode:raise RuntimeError('lower-tier unit tests failed')

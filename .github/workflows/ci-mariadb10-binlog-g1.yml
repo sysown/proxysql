@@ -18,7 +18,7 @@ on:
         default: ''
       producer_attempt:
         type: string
-        default: '1'
+        default: ''
 env:
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
@@ -139,7 +139,7 @@ jobs:
         export COVERAGE="${COVERAGE}"
         test/infra/control/run-tests-isolated.bash
 
-      if: ${{ matrix.coverage && (success()) }}
+      if: ${{ success() }}
     - name: Cleanup
       if: always()
       run: |
@@ -216,6 +216,10 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.tier-context.outputs.matrices)['tests'] || fromJson('[{}]') }}
   tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     needs:
     - tier-context
     - tests

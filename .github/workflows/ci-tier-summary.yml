@@ -13,6 +13,10 @@ on:
         required: true
 jobs:
   summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     runs-on: ${{ (github.actor == 'renecannao' && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
     timeout-minutes: 15
     concurrency:

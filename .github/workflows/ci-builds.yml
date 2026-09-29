@@ -575,6 +575,7 @@ jobs:
 
     - name: Run lower-tier unit coverage
       env:
+        TAP_GROUP: unit-tests-g1
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |

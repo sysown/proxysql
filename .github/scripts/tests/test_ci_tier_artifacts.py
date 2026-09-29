@@ -44,6 +44,14 @@ class ArtifactTests(unittest.TestCase):
    self.assertEqual(GitHubAPI('sysown/proxysql').request('repos/sysown/proxysql/check-runs')['id'],7)
    sleep.assert_called_once()
 
+ def test_rejected_rate_limited_write_can_retry_without_replaying_unknown_outcome(self):
+  import subprocess
+  from unittest.mock import patch
+  replies=[subprocess.CompletedProcess([],1,b'',b'HTTP 429 secondary rate limit'),subprocess.CompletedProcess([],0,b'{"id":7}',b'')]
+  with patch('ci_tier_artifacts.subprocess.run',side_effect=replies),patch('ci_tier_artifacts.time.sleep') as sleep:
+   self.assertEqual(GitHubAPI('repo').request('check-runs','POST',{'name':'test'})['id'],7)
+   sleep.assert_called_once_with(60)
+
  def test_restore_checks_real_archive_and_binary_version(self):
   import io,json,subprocess,tarfile,tempfile,zipfile
   from ci_tier_artifacts import restore_handoff
@@ -79,5 +87,26 @@ class ArtifactTests(unittest.TestCase):
   with patch('ci_tier_artifacts.subprocess.run',side_effect=replies) as run:
    self.assertEqual(binary_version('/tmp/fixture'),'ProxySQL version 4.0.12')
    self.assertIn('proxysql/packaging:build-ubuntu24-v4.0.0',run.call_args.args[0])
+
+ def test_download_timeout_and_network_errors_retry_only_reads(self):
+  import subprocess
+  from unittest.mock import patch
+  success=subprocess.CompletedProcess([],0,b'payload',b'')
+  failures=[subprocess.TimeoutExpired(['gh'],60),subprocess.CompletedProcess([],1,b'',b'connection reset by peer')]
+  for failure in failures:
+   with self.subTest(failure=type(failure).__name__),patch('ci_tier_artifacts.subprocess.run',side_effect=[failure,success]) as run,patch('ci_tier_artifacts.time.sleep'):
+    self.assertEqual(GitHubAPI('repo').request('artifacts/1/zip',raw=True),b'payload')
+    self.assertGreater(run.call_args.kwargs['timeout'],60)
+  for method in ['POST','PATCH']:
+   for failure in [*failures,subprocess.CompletedProcess([],1,b'',b'HTTP 503')]:
+    with self.subTest(method=method),patch('ci_tier_artifacts.subprocess.run',side_effect=[failure,success]) as run,patch('ci_tier_artifacts.time.sleep'):
+     with self.assertRaises(RuntimeError):GitHubAPI('repo').request('check-runs',method,payload={'name':'test'})
+     self.assertEqual(run.call_count,1)
+ def test_timeout_retries_are_bounded_and_do_not_expose_payload(self):
+  import subprocess
+  from unittest.mock import patch
+  with patch('ci_tier_artifacts.subprocess.run',side_effect=subprocess.TimeoutExpired(['secret'],60,stderr=b'secret')) as run,patch('ci_tier_artifacts.time.sleep'):
+   with self.assertRaisesRegex(RuntimeError,'timed out') as failure:GitHubAPI('repo').request('artifacts/1/zip',raw=True)
+   self.assertNotIn('secret',str(failure.exception));self.assertEqual(run.call_count,6)
 
 if __name__=='__main__':unittest.main()

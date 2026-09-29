@@ -18,7 +18,7 @@ on:
         default: ''
       producer_attempt:
         type: string
-        default: '1'
+        default: ''
       source_repository:
         type: string
         default: ''

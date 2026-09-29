@@ -22,4 +22,26 @@ class WorkflowTests(unittest.TestCase):
   for file in ['ci-unit-group.yml','ci-ai-gcov.yml']:
    d=workflow(file);events=d.get('on',d.get(True,{}))
    self.assertNotIn('pull_request',events)
+ def test_test_execution_is_independent_of_coverage(self):
+  for file in (ROOT/'.github/workflows').glob('*.yml'):
+   doc=workflow(file.name)
+   for job in doc.get('jobs',{}).values():
+    for step in job.get('steps',[]):
+     if 'run-tests-isolated.bash' in step.get('run',''):
+      with self.subTest(file=file.name):self.assertNotIn('matrix.coverage',str(step.get('if','')))
+ def test_runner_picker_does_not_wait_on_its_target_pool(self):
+  for file in (ROOT/'.github/workflows').glob('*.yml'):
+   picker=workflow(file.name).get('jobs',{}).get('pick-runner')
+   if picker:
+    with self.subTest(file=file.name):self.assertNotIn('self-hosted',str(picker['runs-on']))
+ def test_coverage_uses_tested_sha_and_infrastructure_path(self):
+  for file in (ROOT/'.github/workflows').glob('*.yml'):
+   for job in workflow(file.name).get('jobs',{}).values():
+    if 'CI_BINDING' not in job.get('env',{}):continue
+    for step in job.get('steps',[]):
+     if 'codecov' in step.get('uses',''):
+      with self.subTest(file=file.name):self.assertEqual(step.get('with',{}).get('override_commit'),'${{ env.SHA }}')
+  text=(ROOT/'.github/workflows/ci-set_parser_algorithm_3-g1.yml').read_text()
+  self.assertNotIn('ci_infra_logs/ci-set_parser_algorithm_3-g1/',text)
+
 if __name__=='__main__':unittest.main()

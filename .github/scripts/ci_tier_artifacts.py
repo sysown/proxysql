@@ -19,14 +19,29 @@ class GitHubAPI:
     def request(self,path,method='GET',payload=None,raw=False):
         args=['gh','api',path,'--method',method]
         if payload is not None:args+=['--input','-']
-        for attempt in range(6):
-            result=subprocess.run(args,input=json.dumps(payload).encode() if payload is not None else None,
-                                  capture_output=True,timeout=60,env=dict(os.environ,GH_TOKEN=self.token) if self.token else None)
+        attempts=6
+        for attempt in range(attempts):
+            try:
+                result=subprocess.run(args,input=json.dumps(payload).encode() if payload is not None else None,
+                    capture_output=True,timeout=900 if raw else 60,
+                    env=dict(os.environ,GH_TOKEN=self.token) if self.token else None)
+            except subprocess.TimeoutExpired:
+                if method!='GET' or attempt==attempts-1:
+                    raise RuntimeError(f'GitHub API {method} {path}: timed out') from None
+                time.sleep(min(30,2**attempt))
+                continue
             if not result.returncode:
                 return result.stdout if raw else json.loads(result.stdout or b'{}')
             error=result.stderr.decode(errors='replace').lower()
-            transient=any(marker in error for marker in ('rate limit','http 429','http 502','http 503','http 504'))
-            if not transient or attempt==5:
+            transient=any(marker in error for marker in (
+                'rate limit','http 429','http 500','http 502','http 503','http 504',
+                'connection reset','i/o timeout','tls handshake timeout','unexpected eof',
+                'connection timed out','temporary failure in name resolution'))
+            # A rate-limit rejection did not perform the write; other write
+            # failures may have committed and must not be replayed.
+            rejected_limit='http 429' in error or ('http 403' in error and 'rate limit' in error)
+            retryable=transient if method=='GET' else rejected_limit
+            if not retryable or attempt==attempts-1:
                 raise RuntimeError(f'GitHub API {method} {path}: exit {result.returncode}')
             time.sleep(60 if 'rate limit' in error or '429' in error else min(30,2**attempt))
 

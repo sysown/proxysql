@@ -18,7 +18,7 @@ on:
         default: ''
       producer_attempt:
         type: string
-        default: '1'
+        default: ''
 env:
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
@@ -220,7 +220,7 @@ jobs:
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
-        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        override_commit: ${{ env.SHA }}
         files: proxysql/ci_infra_logs/ci-mysql84-gr-g8-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-mysql84-gr-g8-${{ matrix.tier }}-${{ github.run_id }}.info
         flags: integration-tests
         name: tap-mysql84-gr-g8-coverage
@@ -259,7 +259,7 @@ jobs:
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
-        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        override_commit: ${{ env.SHA }}
         files: proxysql/ci_infra_logs/ci-mysql84-gr-g8-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-mysql84-gr-g8-${{ matrix.tier }}-${{ github.run_id }}.info
         flags: integration-tests
         name: tap-mysql84-gr-g8-coverage
@@ -284,7 +284,7 @@ jobs:
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
-        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        override_commit: ${{ env.SHA }}
         files: proxysql/ci_infra_logs/ci-mysql84-gr-g8-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-mysql84-gr-g8-${{ matrix.tier }}-${{ github.run_id }}.info
         flags: integration-tests
         name: tap-mysql84-gr-g8-coverage
@@ -314,6 +314,10 @@ jobs:
     name: ${{ matrix.check_name }}
     if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['tests'][0] != null }}
   tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     needs:
     - tier-context
     - tests

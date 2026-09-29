@@ -20,7 +20,7 @@ on:
         default: ''
       producer_attempt:
         type: string
-        default: '1'
+        default: ''
 env:
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
@@ -185,6 +185,10 @@ jobs:
       TIER: ${{ matrix.tier }}
       COVERAGE: ${{ matrix.coverage && '1' || '0' }}
   tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     needs:
     - tier-context
     - tests
