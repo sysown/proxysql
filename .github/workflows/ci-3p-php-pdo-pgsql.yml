@@ -16,7 +16,7 @@ on:
 env:
   TESTTREE: ${{ inputs.testtree || inputs.trigger.event.inputs.testtree || 'main' }}
   TESTNAME: php-pdo-pgsql
-  TESTDIST: debian12
+  TESTDIST: ubuntu24
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
   BRANCH: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_branch || github.ref_name }}
 
@@ -32,7 +32,6 @@ jobs:
     env:
       INFRADB:  ${{ matrix.infradb }}
       CONNECTOR:  ${{ matrix.connector }}
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_debian12-dbg_bin
       MATRIX: '(${{ matrix.infradb }},${{ matrix.connector }})'
 
     steps:
@@ -63,36 +62,67 @@ jobs:
           test_${{ env.TESTNAME }}
 #          proxysql
 
-#    - name: Wait for cache
-#      if: ${{ env.BRANCH != 'none' }}
-#      env:
-#        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-#      run: |
-#        echo "Wating for cache '${BLDCACHE}' ..."
-#        sleep $(( $RANDOM / 1024 ))
-#        PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
-#        while [[ -z ${PROBE} ]]; do
-#          echo "Wating for cache '${BLDCACHE}' ..."
-#          sleep 30
-#          PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
-#        done
-#        echo "Cache available '${BLDCACHE}'"
-
-    - name: Cache restore bin
-      if: ${{ env.BRANCH != 'none' }}
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+    - name: Checkout proxysql
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
-        key: ${{ env.BLDCACHE }}
-        fail-on-cache-miss: true
-        path: cache_bin.tar.zst
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        # full (blobless) history so 'git describe' reports the tested version
+        fetch-depth: 0
+        filter: 'blob:none'
+        path: 'proxysql'
+        # include/lib/src so fastcov can resolve the gcov sources
+        sparse-checkout: |
+          include
+          lib
+          src
 
-    - name: Unpack bin cache
-      if: ${{ env.BRANCH != 'none' }}
+    - name: Download build handoff
+      # CI-builds publishes the v4.0 tier (PROXYSQL40=1 WITHGCOV=1) ubuntu24 debug build as the
+      # ci-builds-handoff-<sha>-ubuntu24-tap-genai-gcov-full artifact (same resolution logic as
+      # ci-mysql84-g1.yml). Only src/ and the .gcno files are unpacked, the TAP binaries are not needed.
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
+        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
       run: |
+        set -uo pipefail
         command -v zstd >/dev/null || sudo apt-get install -y zstd
+        : "${HANDOFF_MAX_ATTEMPTS:=20}"   # bounded: 20 x 15s = up to ~5 min
+        ERRLOG="$(mktemp)"
+        resolve_aid() {
+          local name="$1" out=""
+          if [ -n "${BUILD_RUN_ID:-}" ]; then
+            out=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
+                    --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" 2>>"$ERRLOG") || true
+            [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+          fi
+          out=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
+                  --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>>"$ERRLOG") || true
+          [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+          return 1
+        }
+        name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-full"
+        aid=""
+        for attempt in $(seq 1 "$HANDOFF_MAX_ATTEMPTS"); do
+          aid=$(resolve_aid "$name") && [ -n "$aid" ] && break
+          aid=""
+          echo ">>> ${name} not resolvable yet (${attempt}/${HANDOFF_MAX_ATTEMPTS}); sleeping 15s"; sleep 15
+        done
+        if [ -z "$aid" ]; then
+          echo "ERROR: handoff artifact ${name} not found after ${HANDOFF_MAX_ATTEMPTS} attempts (build_run=${BUILD_RUN_ID:-n/a}) -- did CI-builds succeed for ${SHA}?" >&2
+          echo "--- last gh errors ---" >&2; tail -n 20 "$ERRLOG" >&2
+          exit 1
+        fi
+        echo ">>> downloading ${name} (id=${aid})"
+        gh api "repos/${REPO}/actions/artifacts/${aid}/zip" > handoff-full.zip || { echo "ERROR: download ${name} failed" >&2; exit 1; }
         cd proxysql/
-        zstd -d < ../cache_bin.tar.zst | tar -xf -
-        rm ../cache_bin.tar.zst
+        unzip -p ../handoff-full.zip cache_full.tar.zst | zstd -d | tar -xf - --wildcards 'src/*' 'lib/obj/*' \
+          || { echo "ERROR: unpack ${name} failed" >&2; exit 1; }
+        rm -f ../handoff-full.zip
+        chmod +x src/proxysql
+        file src/proxysql
 
     - name: Prepare
       run: |
@@ -107,10 +137,10 @@ jobs:
 
         sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' common/infra-docker-hoster/docker-compose.yml
 
-        # use cached build
-        rm -rf ./proxysql && mv ../proxysql . || true
-        ls -l proxysql/binaries/
-        git -C ./proxysql describe --long --abbrev=7 
+        # use the CI-builds handoff (ubuntu24, v4.0 tier)
+        rm -rf ./proxysql && mv ../proxysql .
+        ls -l proxysql/src/proxysql
+        git -C ./proxysql describe --long --abbrev=7
 
         # extend timout
         cd test_${{ env.TESTNAME }}
