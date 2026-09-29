@@ -1,6 +1,7 @@
 # PR-label-selected CI product tiers
 
-Status: approved by the user on 2026-09-29; implementation planning underway.
+Status: approved design; isolated implementation prepared. See the validation report
+for the unresolved strict rerun-reporting guarantee and live-validation boundary.
 
 ## Intent and agreed behavior
 

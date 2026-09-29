@@ -20,7 +20,7 @@ def target(job):
     return match.group(1) if match else None
 
 def validate_routes(rows,callers,engines,known_groups,migrated):
-    errors=[];covered=set();identities=set()
+    errors=[];covered={'v30':set(),'v31':set()};identities=set()
     for row in rows:
         identity=(row['workflow'],row.get('instance','run'),row['job'])
         if identity in identities:errors.append('duplicate consumer '+str(identity))
@@ -31,24 +31,41 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
             build=engines.get('ci-builds.yml',{})
             if not any('ci_tier_runtime.py units' in s.get('run','') for s in build.get('jobs',{}).get('builds',{}).get('steps',[])):
                 errors.append('missing lower-tier unit execution')
-            else:covered.update(row['groups'])
+            else:
+                for tier in covered:
+                    if tier in row['tiers']:covered[tier].update(row['groups'])
             continue
         caller=callers.get(row['workflow'])
         if not caller:errors.append('missing caller '+row['workflow']);continue
         if row['automatic']!=is_automatic(caller):errors.append('automatic/manual mismatch '+row['workflow'])
-        start=target(caller['jobs'].get(row.get('instance','run'),{}));reachable=set()
-        def walk(name):
+        start_job=caller['jobs'].get(row.get('instance','run'),{});start=target(start_job);reachable=set();bindings={}
+        def resolve(value,inputs):
+            return re.sub(r'\$\{\{\s*inputs\.([a-zA-Z0-9_]+)\s*\}\}',lambda m:str(inputs.get(m[1],m[0])),str(value))
+        def walk(name,inputs):
             if not name or name in reachable:return
-            reachable.add(name)
+            reachable.add(name);bindings[name]=inputs
             if name not in engines:errors.append('missing reusable '+name);return
-            for job in engines[name].get('jobs',{}).values():walk(target(job))
-        walk(start)
+            for job in engines[name].get('jobs',{}).values():
+                walk(target(job),{k:resolve(v,inputs) for k,v in job.get('with',{}).items()})
+        walk(start,start_job.get('with',{}))
         if row['file'] not in reachable or row['file'] not in engines:errors.append('unreachable consumer '+str(identity));continue
         body=engines[row['file']]
         if 'tier-context' not in body.get('jobs',{}):errors.append('missing tier context '+row['file'])
         if row['job'] not in body.get('jobs',{}):errors.append('missing consumer job '+str(identity))
-        if row['automatic'] and is_automatic(caller) and set(row['tiers'])&{'v30','v31'}:covered.update(row['groups'])
-    for group in sorted(migrated-covered):errors.append('lower-tier coverage lost: '+group)
+        wired=set()
+        for step in body.get('jobs',{}).get(row['job'],{}).get('steps',[]):
+            run=resolve(step.get('run',''),bindings.get(row['file'],{}))
+            if 'run-tests-isolated.bash' not in run and 'unit-tests' not in run:continue
+            value=resolve(step.get('env',{}).get('TAP_GROUP',''),bindings.get(row['file'],{}))
+            if value:wired.add(value)
+            wired.update(re.findall(r'''TAP_GROUP=["']?([a-zA-Z0-9_-]+)''',run))
+        missing=set(row['groups'])-wired
+        if missing:errors.append('group not executed by '+str(identity)+': '+', '.join(sorted(missing)))
+        if row['automatic'] and is_automatic(caller):
+            for tier in covered:
+                if tier in row['tiers']:covered[tier].update(set(row['groups'])&wired)
+    for tier in covered:
+        for group in sorted(migrated-covered[tier]):errors.append('lower-tier coverage lost: '+tier+'/'+group)
     for name,body in engines.items():
         for jobid,job in body.get('jobs',{}).items():
             if any('ci_tier_runtime.py restore' in s.get('run','') or 'ci-builds-handoff-' in s.get('run','') for s in job.get('steps',[])):

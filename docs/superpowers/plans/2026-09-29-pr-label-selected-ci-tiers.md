@@ -1,5 +1,12 @@
 # PR-label-selected CI product tiers implementation plan
 
+Execution status: Tasks 1–4 and 6 are implemented; Task 5 is implemented with
+an unresolved strict lifecycle guarantee; Task 7 has local validation and one
+independent review, with live GitHub validation outstanding. The original
+checklist below remains the acceptance specification; the validation report and
+ledger record executed checks and deviations rather than checking unproven items.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Select additional CI product tiers through PR labels, report each configuration on the PR, and remove the post-merge tier sweep without affecting PR #5882 during development.
@@ -192,4 +199,6 @@ Use Python dictionaries serialized as JSON at the process boundary. Validate req
 - Task interfaces use the same plan/manifest schema, execution identity, and function names throughout.
 - The baseline caller lint, ASAN selector, and pruning tests passed. The two plugin condition tests must be repaired and re-run under Task 3; they are not waived.
 - Recommended execution method: **Native** (one implementer in this session, then an independent whole-change review). The tasks share manifest and reporting interfaces, so sequential implementation reduces coordination overhead and conflicting workflow edits.
-- Status: ready for user review of the plan and execution-method selection; implementation has not started.
+- Status: implementation and independent review completed locally; corrections verified.
+  The strict aggregate rerun guarantee remains an explicit limitation, not an accepted
+  relaxation of the design. See `2026-09-29-pr-label-selected-ci-tiers-validation.md`.

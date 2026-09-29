@@ -4,7 +4,7 @@ class RouteTests(unittest.TestCase):
  def fixture(self):
   rows=[dict(workflow='CI-g1',file='ci-g1.yml',job='tests',instance='run',automatic=True,tiers=['v40','v30','v31'],groups=['g1'],cells=[{}])]
   callers={'CI-g1':{'on':{'workflow_run':{'workflows':['CI-trigger']}},'jobs':{'run':{'uses':'sysown/proxysql/.github/workflows/ci-g1.yml@GH-Actions'}}}}
-  engines={'ci-g1.yml':{'jobs':{'tier-context':{},'tests':{'steps':[{'run':'python3 ci_tier_runtime.py restore'}]}}}}
+  engines={'ci-g1.yml':{'jobs':{'tier-context':{},'tests':{'steps':[{'run':'python3 ci_tier_runtime.py restore'}, {'run':'export TAP_GROUP=g1\ntest/infra/control/run-tests-isolated.bash'}]}}}}
   return rows,callers,engines
  def test_good_and_missing(self):
   rows,c,e=self.fixture();self.assertEqual(validate_routes(rows,c,e,{'g1'},{'g1'}),[])
@@ -17,4 +17,9 @@ class RouteTests(unittest.TestCase):
   self.assertTrue(validate_routes(rows,c,e,{}, {'g1'}))
   self.assertTrue(validate_routes(rows+rows,c,e,{'g1'},{'g1'}))
  def test_version_is_numeric(self):self.assertGreater(version('3.10.0'),version('3.9.0'))
+ def test_each_lower_tier_and_executed_group_are_required(self):
+  rows,c,e=self.fixture();rows[0]['tiers'].remove('v30')
+  self.assertTrue(validate_routes(rows,c,e,{'g1'},{'g1'}))
+  rows,c,e=self.fixture();e['ci-g1.yml']['jobs']['tests']['steps'][1]['run']='export TAP_GROUP=wrong\ntest/infra/control/run-tests-isolated.bash'
+  self.assertTrue(validate_routes(rows,c,e,{'g1'},{'g1'}))
 if __name__=='__main__':unittest.main()

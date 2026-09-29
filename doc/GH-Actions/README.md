@@ -617,7 +617,9 @@ also captured in this configuration snapshot.
 One producer run builds all selected tiers with `fail-fast: false`. A check
 registration binds the original trigger ID/attempt to the producer ID/attempt;
 `CI-trigger` follows that registration rather than searching run titles by SHA.
-The execution ID is `t<origin>-a<attempt>-b<producer>-a<attempt>`.
+After success it publishes `ci-accepted-producer-a<attempt>`; all consumers use
+that immutable acceptance, so a later producer rerun cannot rebind a delayed
+consumer. The execution ID is `t<origin>-a<attempt>-b<producer>-a<attempt>`.
 
 The initial `ci-plan-<execution>` artifact records the selection and expected
 checks. The immutable `ci-manifest-<execution>` includes actual product versions,
@@ -629,7 +631,12 @@ There is no repository-wide newest-SHA artifact fallback.
 Consumer workflows save a producer binding for reruns. A consumer-only rerun
 uses that binding even if labels have changed or another build has run for the
 same SHA. Manual consumer dispatch requires an explicit producer run/attempt.
-Manual producer dispatch and branch pushes use v4.0/normal by default.
+Manual producer dispatch and branch pushes use v4.0/normal by default. A full
+producer rerun creates a new plan; a failed-job rerun retains the original plan
+and skips uploads already published under that execution. Manual subsets have
+a distinct `CI / manual consumer …` summary. Cross-repository consumers use
+`PROXYSQL_ARTIFACTS_TOKEN` only for source reads and report on the caller's
+repository/SHA with its own token.
 
 ### PR checks and applicable tests
 
@@ -640,11 +647,19 @@ identifies the source revision and trigger execution; tier/mode live in the
 job names and PR checks because they are resolved after the run is created.
 
 `CI / selected tiers` summarizes the required applicable checks for that
-execution. A missing, failed, cancelled or unexpectedly skipped result cannot
-produce success. Short serialized finalizers recompute the whole result without
-occupying a runner for the entire test fanout. If cancellation prevents all
-finalizers from running, the summary can remain pending; it must not turn green
-without terminal evidence. Repository branch-protection settings are unchanged.
+execution. Short serialized finalizers require all applicable custom results
+and validate native jobs before reporting success. Partial reruns retain cells
+that were not rerun. Starts reset the summary; terminal writes are revalidated
+to correct concurrent updates, without occupying a runner for the whole fanout.
+
+**Reporting limitation:** GitHub's Checks API has no conditional update tied to
+a workflow attempt. A rerun can briefly show the preceding aggregate result;
+if cancelled before any reporting step/finalizer runs, that previous result can
+remain visible. The custom summary is therefore not a substitute for native
+Actions checks or a sufficient standalone merge gate. Initial executions with
+missing evidence remain pending. This limitation needs an event-aware reporting
+protocol if a strictly immediate rerun invalidation guarantee is required.
+Repository branch-protection settings are unchanged.
 
 Tests still use `@proxysql_min_version` and the built binary's actual version.
 Mixed groups retain applicable lower-tier tests; empty groups are explicitly
@@ -657,7 +672,8 @@ retaining coverage previously supplied by the sweep without enabling new events.
 The old post-merge sweep, its reusable, shard configuration and runtime group
 list have been removed. There is no replacement scheduled sweep.
 `check_ci_tier_fanout.py` checks the paired branches and ensures the 54 migrated
-groups retain lower-tier execution routes. Its migration fixture is evidence,
+groups retain execution routes on both lower tiers and that their workflows
+actually invoke the recorded groups. Its migration fixture is evidence,
 not a runtime work list. The current consumer catalogue is
 `GH-Actions:.github/ci-tier-consumers.json`.
 
