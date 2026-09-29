@@ -21,8 +21,14 @@
  *
  * INFRA / SCENARIO COVERAGE
  * -------------------------
- * Same legacy-g1 infra (docker-pgsql16-single, scram-sha-256, non-TLS).
- * One live scenario. 10,000-row result with mixed types and NULLs.
+ * Same legacy-g1 infra (docker-pgsql16-single, scram-sha-256).
+ * A 10,000-row result with mixed types and NULLs, run twice:
+ *   - with the default pgsql-threshold_resultset_size, where the whole result
+ *     fits below the flush threshold (8 x 4MB);
+ *   - with the threshold at its 1024-byte minimum, so the result is flushed to
+ *     the client in many chunks while the backend keeps streaming.
+ * Both scenarios run once per transport (plain, then TLS on both legs), see
+ * pgsql-native_transport.h.
  */
 
 #include <string>
@@ -37,6 +43,7 @@
 #include "tap.h"
 #include "utils.h"
 #include <openssl/evp.h>
+#include "pgsql-native_transport.h"
 
 CommandLine cl;
 
@@ -218,10 +225,10 @@ static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>
     if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
     for (const auto& r : saved) {
         std::stringstream ins;
-        ins << "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,comment) "
+        ins << "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment) "
             << "VALUES (" << hg << ",'" << r.hostname << "'," << r.port << ","
             << (r.max_connections.empty() ? std::string("1000") : r.max_connections)
-            << ",'" << r.comment << "')";
+            << "," << native_backend_use_ssl() << ",'" << r.comment << "')";
         if (!execAdmin(admin, ins.str())) return false;
     }
     if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
@@ -232,7 +239,7 @@ static PGConnPtr createClientConn() {
     std::stringstream ss;
     ss << "host=" << cl.pgsql_host << " port=" << cl.pgsql_port
        << " user=" << cl.pgsql_username << " password=" << cl.pgsql_password
-       << " dbname=" << cl.pgsql_username << " sslmode=disable";
+       << " dbname=" << cl.pgsql_username << " sslmode=" << native_client_sslmode();
     return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
 }
 static std::fstream f_proxysql_log{};
@@ -246,10 +253,100 @@ static void drainLogToNow() {
     get_matching_lines(f_proxysql_log, "__no_such_marker_line__");
 }
 
+static std::string adminScalar(PGconn* admin, const std::string& query) {
+    PGresult* res = PQexec(admin, query.c_str());
+    std::string out;
+    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0 && !PQgetisnull(res, 0, 0))
+        out = PQgetvalue(res, 0, 0);
+    PQclear(res);
+    return out;
+}
+
+static bool setThresholdResultsetSize(PGconn* admin, const std::string& value) {
+    return execAdmin(admin, "SET pgsql-threshold_resultset_size=" + value) &&
+           execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+}
+
+// Assertions emitted by run_scenario().
+static const int SCENARIO_ASSERTIONS = 4;
+
+// Runs `stream_q` through the libpq oracle and then the native path, and
+// compares the fingerprints: structure, all-rows hash, per-column hashes, and
+// the native path actually serving the query.
+static void run_scenario(PGconn* admin, const std::vector<ServerRow>& saved,
+                         const std::string& stream_q, const char* scenario) {
+    const std::string tag = native_transport_label(scenario);
+
+    // Phase 1: libpq oracle.
+    if (!setNativeMode(admin, false)) { BAIL_OUT("libpq mode failed"); }
+    if (!flushBackendPool(admin, BACKEND_HG, saved)) { BAIL_OUT("flush libpq failed"); }
+    auto libpq_client = createClientConn();
+    if (!libpq_client || PQstatus(libpq_client.get()) != CONNECTION_OK) {
+        BAIL_OUT("libpq client conn failed: %s",
+                 libpq_client ? PQerrorMessage(libpq_client.get()) : "null");
+    }
+    diag("%s libpq: running streaming query...", tag.c_str());
+    StreamFingerprint libpq_fp = run_streaming(libpq_client.get(), stream_q);
+    diag("%s libpq: %zu rows, %d cols, all_rows_hash=%s", tag.c_str(),
+         libpq_fp.row_count, libpq_fp.ncols, libpq_fp.all_rows_hash.c_str());
+
+    // Phase 2: native path.
+    if (!setNativeMode(admin, true)) { BAIL_OUT("native mode failed"); }
+    if (!flushBackendPool(admin, BACKEND_HG, saved)) { BAIL_OUT("flush native failed"); }
+    drainLogToNow();
+    auto native_client = createClientConn();
+    if (!native_client || PQstatus(native_client.get()) != CONNECTION_OK) {
+        BAIL_OUT("native client conn failed: %s",
+                 native_client ? PQerrorMessage(native_client.get()) : "null");
+    }
+    diag("%s native: running streaming query...", tag.c_str());
+    StreamFingerprint native_fp = run_streaming(native_client.get(), stream_q);
+    diag("%s native: %zu rows, %d cols, all_rows_hash=%s", tag.c_str(),
+         native_fp.row_count, native_fp.ncols, native_fp.all_rows_hash.c_str());
+
+    // (1) row count + col count + cmdtag match. An empty fingerprint on both
+    // paths (e.g. the query failed twice) must not count as a match.
+    bool structural = (libpq_fp.row_count == STREAM_ROWS) &&
+                      (libpq_fp.row_count == native_fp.row_count) &&
+                      (libpq_fp.ncols == native_fp.ncols) &&
+                      (libpq_fp.colnames == native_fp.colnames) &&
+                      (libpq_fp.coltypes == native_fp.coltypes) &&
+                      (libpq_fp.cmd_tag == native_fp.cmd_tag);
+    ok(structural, "%s streaming: structural (row count, col count, names, types, cmdtag) match",
+       tag.c_str());
+    if (!structural) {
+        diag("  libpq : %zu rows, %d cols", libpq_fp.row_count, libpq_fp.ncols);
+        diag("  native: %zu rows, %d cols", native_fp.row_count, native_fp.ncols);
+    }
+
+    // (2) all-rows hash match
+    bool all_hash = (libpq_fp.all_rows_hash == native_fp.all_rows_hash);
+    ok(all_hash, "%s streaming: all_rows_hash matches (libpq=%s native=%s)", tag.c_str(),
+       libpq_fp.all_rows_hash.c_str(), native_fp.all_rows_hash.c_str());
+
+    // (3) per-column hash match (allows localizing the mismatch)
+    bool col_hash = (libpq_fp.col_hashes.size() == native_fp.col_hashes.size());
+    if (col_hash) {
+        for (size_t c = 0; c < libpq_fp.col_hashes.size(); c++) {
+            if (libpq_fp.col_hashes[c] != native_fp.col_hashes[c]) {
+                diag("col %zu (%s) hash differs: libpq=%s native=%s",
+                     c, libpq_fp.colnames[c].c_str(),
+                     libpq_fp.col_hashes[c].c_str(),
+                     native_fp.col_hashes[c].c_str());
+                col_hash = false;
+            }
+        }
+    }
+    ok(col_hash, "%s streaming: per-column hashes match", tag.c_str());
+
+    // (4) native path was actually used (no fallback warning in log)
+    bool fell_back = nativeFallbackObserved();
+    ok(!fell_back, "%s native path used for streaming query (no libpq fallback)", tag.c_str());
+}
+
 int main(int /*argc*/, char** /*argv*/) {
-    // 4 assertions: per-fingerprint equality, row count, all-rows hash,
-    // per-column hash, native path.
-    plan(4);
+    // Per transport: 2 scenarios x SCENARIO_ASSERTIONS, plus the transport check.
+    plan((int)NATIVE_TRANSPORT_COUNT * (2 * SCENARIO_ASSERTIONS + NATIVE_TRANSPORT_CHECKS));
 
     if (cl.getEnv())
         return exit_status();
@@ -271,8 +368,15 @@ int main(int /*argc*/, char** /*argv*/) {
         BAIL_OUT("No pgsql_servers row in hostgroup %d", BACKEND_HG);
         return exit_status();
     }
-    diag("Backend under test (hg %d): %s:%s, streaming %zu rows",
-         BACKEND_HG, saved[0].hostname.c_str(), saved[0].port.c_str(), STREAM_ROWS);
+    const std::string saved_threshold = adminScalar(admin.get(),
+        "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-threshold_resultset_size'");
+    if (saved_threshold.empty()) {
+        BAIL_OUT("Cannot read pgsql-threshold_resultset_size");
+        return exit_status();
+    }
+    diag("Backend under test (hg %d): %s:%s, streaming %zu rows, threshold_resultset_size=%s",
+         BACKEND_HG, saved[0].hostname.c_str(), saved[0].port.c_str(), STREAM_ROWS,
+         saved_threshold.c_str());
 
     // The streaming query: integer id, a derived text column, the square,
     // a column with NULL on even rows. Deterministic.
@@ -284,78 +388,27 @@ int main(int /*argc*/, char** /*argv*/) {
       << "FROM generate_series(1, " << STREAM_ROWS << ") AS g";
     const std::string STREAM_Q = q.str();
 
-    // Phase 1: libpq oracle.
-    if (!setNativeMode(admin.get(), false)) { BAIL_OUT("libpq mode failed"); return exit_status(); }
-    if (!flushBackendPool(admin.get(), BACKEND_HG, saved)) { BAIL_OUT("flush libpq failed"); return exit_status(); }
-    auto libpq_client = createClientConn();
-    if (!libpq_client || PQstatus(libpq_client.get()) != CONNECTION_OK) {
-        BAIL_OUT("libpq client conn failed: %s",
-                 libpq_client ? PQerrorMessage(libpq_client.get()) : "null");
-        return exit_status();
-    }
-    diag("libpq: running streaming query...");
-    StreamFingerprint libpq_fp = run_streaming(libpq_client.get(), STREAM_Q);
-    diag("libpq: %zu rows, %d cols, all_rows_hash=%s",
-         libpq_fp.row_count, libpq_fp.ncols, libpq_fp.all_rows_hash.c_str());
+    for (size_t transport = 0; transport < NATIVE_TRANSPORT_COUNT; transport++) {
+        native_transport_select(transport);
+        ok_native_transport(admin.get(), BACKEND_HG,
+            [&] { return setNativeMode(admin.get(), true) && flushBackendPool(admin.get(), BACKEND_HG, saved); },
+            createClientConn, /*check_client*/ true);
 
-    // Phase 2: native path.
-    if (!setNativeMode(admin.get(), true)) { BAIL_OUT("native mode failed"); return exit_status(); }
-    if (!flushBackendPool(admin.get(), BACKEND_HG, saved)) { BAIL_OUT("flush native failed"); return exit_status(); }
-    drainLogToNow();
-    auto native_client = createClientConn();
-    if (!native_client || PQstatus(native_client.get()) != CONNECTION_OK) {
-        BAIL_OUT("native client conn failed: %s",
-                 native_client ? PQerrorMessage(native_client.get()) : "null");
-        return exit_status();
-    }
-    diag("native: running streaming query...");
-    StreamFingerprint native_fp = run_streaming(native_client.get(), STREAM_Q);
-    diag("native: %zu rows, %d cols, all_rows_hash=%s",
-         native_fp.row_count, native_fp.ncols, native_fp.all_rows_hash.c_str());
+        run_scenario(admin.get(), saved, STREAM_Q, "default threshold");
 
-    // Assertions.
-    bool all_ok = true;
-    // (1) row count + col count + cmdtag match
-    bool structural = (libpq_fp.row_count == native_fp.row_count) &&
-                     (libpq_fp.ncols == native_fp.ncols) &&
-                     (libpq_fp.colnames == native_fp.colnames) &&
-                     (libpq_fp.coltypes == native_fp.coltypes) &&
-                     (libpq_fp.cmd_tag == native_fp.cmd_tag);
-    ok(structural, "streaming: structural (row count, col count, names, types, cmdtag) match");
-    if (!structural) {
-        diag("  libpq : %zu rows, %d cols", libpq_fp.row_count, libpq_fp.ncols);
-        diag("  native: %zu rows, %d cols", native_fp.row_count, native_fp.ncols);
-        all_ok = false;
-    }
-
-    // (2) all-rows hash match
-    bool all_hash = (libpq_fp.all_rows_hash == native_fp.all_rows_hash);
-    ok(all_hash, "streaming: all_rows_hash matches (libpq=%s native=%s)",
-       libpq_fp.all_rows_hash.c_str(), native_fp.all_rows_hash.c_str());
-    if (!all_hash) all_ok = false;
-
-    // (3) per-column hash match (allows localizing the mismatch)
-    bool col_hash = (libpq_fp.col_hashes.size() == native_fp.col_hashes.size());
-    if (col_hash) {
-        for (size_t c = 0; c < libpq_fp.col_hashes.size(); c++) {
-            if (libpq_fp.col_hashes[c] != native_fp.col_hashes[c]) {
-                diag("col %zu (%s) hash differs: libpq=%s native=%s",
-                     c, libpq_fp.colnames[c].c_str(),
-                     libpq_fp.col_hashes[c].c_str(),
-                     native_fp.col_hashes[c].c_str());
-                col_hash = false;
-            }
+        // 1024 is the variable's minimum. The flush threshold is 8x the setting,
+        // so the ~300KB result is handed to the client in many chunks.
+        if (!setThresholdResultsetSize(admin.get(), "1024")) {
+            BAIL_OUT("Cannot lower pgsql-threshold_resultset_size");
+            return exit_status();
         }
+        run_scenario(admin.get(), saved, STREAM_Q, "threshold_resultset_size=1024");
+        setThresholdResultsetSize(admin.get(), saved_threshold);
     }
-    ok(col_hash, "streaming: per-column hashes match");
 
-    // (4) native path was actually used (no fallback warning in log)
-    bool fell_back = nativeFallbackObserved();
-    ok(!fell_back, "native path used for streaming query (no libpq fallback)");
-
+    native_transport_select(0);
     setNativeMode(admin.get(), false);
     flushBackendPool(admin.get(), BACKEND_HG, saved);
 
-    (void)all_ok;
     return exit_status();
 }

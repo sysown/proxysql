@@ -26,7 +26,9 @@
  * are native_path_used=false with an explanatory detail. A CopyInResponse
  * reaching the native drive is answered with CopyFail (clean error, no hang).
  *
- * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256, no TLS).
+ * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256). The corpus runs once
+ * per transport: plaintext, then TLS on both the client and backend legs
+ * (see pgsql-native_transport.h).
  */
 
 #include <string>
@@ -42,6 +44,7 @@
 #include "tap.h"
 #include "utils.h"
 #include "pgsql-native_tracking.h"
+#include "pgsql-native_transport.h"
 
 CommandLine cl;
 
@@ -50,8 +53,8 @@ static std::fstream f_proxysql_log{};
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 
 static std::string make_table_name() {
-	return "pgsql_native_copy_" + std::to_string(getpid()) + "_" +
-	       std::to_string(time(nullptr));
+	return "pgsql_native_copy_" + std::string(native_transport_name()) + "_" +
+	       std::to_string(getpid()) + "_" + std::to_string(time(nullptr));
 }
 
 static PGConnPtr open_admin_conn() {
@@ -70,7 +73,7 @@ static PGConnPtr open_client_conn() {
 	   << " user=" << cl.pgsql_username
 	   << " password=" << cl.pgsql_password
 	   << " dbname=" << cl.pgsql_username
-	   << " sslmode=disable";
+	   << " sslmode=" << native_client_sslmode();
 	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
 }
 
@@ -115,10 +118,10 @@ static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>
 	if (!execAdmin(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg))) return false;
 	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
 	for (const auto& r : saved) {
-		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,comment) VALUES ("
+		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment) VALUES ("
 			+ std::to_string(hg) + ",'" + r.hostname + "'," + r.port + ","
 			+ (r.max_connections.empty() ? std::string("1000") : r.max_connections)
-			+ ",'" + r.comment + "')";
+			+ "," + std::to_string(native_backend_use_ssl()) + ",'" + r.comment + "')";
 		if (!execAdmin(admin, ins)) return false;
 	}
 	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
@@ -556,7 +559,8 @@ int main(int /*argc*/, char** /*argv*/) {
 	auto outs = copy_out_cases();
 	auto ins  = copy_in_cases();
 	int n_cases = (int)(outs.size() + ins.size());
-	plan(n_cases + 1);
+	// Per transport: n_cases per-case ok lines + 1 coverage summary + the transport check.
+	plan((int)NATIVE_TRANSPORT_COUNT * (n_cases + 1 + NATIVE_TRANSPORT_CHECKS));
 	if (cl.getEnv()) return exit_status();
 
 	std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
@@ -577,21 +581,33 @@ int main(int /*argc*/, char** /*argv*/) {
 	diag("Backend under test (hg %d): %s:%s", BACKEND_HG,
 	     saved[0].hostname.c_str(), saved[0].port.c_str());
 
-	CoverageRecorder cov;
-	for (const auto& tc : outs) {
-		CaseRunResult cr = run_out_case(admin.get(), tc, saved);
-		bool ff = routed_via_fast_forward(tc.cmd);
-		std::string detail = cr.detail;
-		if (ff) detail += " [routed via session fast_forward (by design)]";
-		cov.record({tc.label, tc.kind, cr.result_match, ff ? false : !cr.fell_back, detail});
+	// The whole corpus runs once per transport (plain, then TLS on both legs).
+	for (size_t transport = 0; transport < NATIVE_TRANSPORT_COUNT; transport++) {
+		native_transport_select(transport);
+		ok_native_transport(admin.get(), BACKEND_HG,
+			[&] { return setNativeMode(admin.get(), true) && flushBackendPool(admin.get(), BACKEND_HG, saved); },
+			[] { return open_client_conn(); }, /*check_client*/ true);
+
+		CoverageRecorder cov;
+		for (const auto& tc : outs) {
+			CaseRunResult cr = run_out_case(admin.get(), tc, saved);
+			bool ff = routed_via_fast_forward(tc.cmd);
+			std::string detail = cr.detail;
+			if (ff) detail += " [routed via session fast_forward (by design)]";
+			cov.record({native_transport_label(tc.label), tc.kind, cr.result_match, ff ? false : !cr.fell_back, detail});
+		}
+		for (const auto& tc : ins) {
+			CaseRunResult cr = run_in_case(admin.get(), tc, saved);
+			bool ff = routed_via_fast_forward(tc.cmd);
+			std::string detail = cr.detail;
+			if (ff) detail += " [routed via session fast_forward (by design)]";
+			cov.record({native_transport_label(tc.label), tc.kind, cr.result_match, ff ? false : !cr.fell_back, detail});
+		}
+		cov.emit_tap();
 	}
-	for (const auto& tc : ins) {
-		CaseRunResult cr = run_in_case(admin.get(), tc, saved);
-		bool ff = routed_via_fast_forward(tc.cmd);
-		std::string detail = cr.detail;
-		if (ff) detail += " [routed via session fast_forward (by design)]";
-		cov.record({tc.label, tc.kind, cr.result_match, ff ? false : !cr.fell_back, detail});
-	}
-	cov.emit_tap();
+
+	native_transport_select(0);
+	setNativeMode(admin.get(), false);
+	flushBackendPool(admin.get(), BACKEND_HG, saved);
 	return exit_status();
 }

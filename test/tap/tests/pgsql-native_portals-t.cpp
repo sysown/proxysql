@@ -48,7 +48,14 @@
  * PortalSuspended 's', EmptyQueryResponse 'I', ParameterDescription 't', and the
  * ReadyForQuery 'Z' transaction-status byte — is compared in FULL.
  *
- * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256, no TLS).
+ * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256).
+ *
+ * TRANSPORTS
+ * ----------
+ * Everything after the smoke check runs once per transport (see
+ * pgsql-native_transport.h). pg_lite_client cannot negotiate TLS, so the client
+ * leg stays plaintext in both passes; the "tls" pass encrypts the backend leg,
+ * which is the one the native portal drive writes to.
  */
 
 #include <string>
@@ -64,6 +71,7 @@
 #include "tap.h"
 #include "utils.h"
 #include "pgsql-native_tracking.h"
+#include "pgsql-native_transport.h"
 
 CommandLine cl;
 static const int BACKEND_HG = 0;
@@ -133,10 +141,10 @@ static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>
 	if (!execAdmin(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg))) return false;
 	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
 	for (const auto& r : saved) {
-		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,comment) VALUES ("
+		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment) VALUES ("
 			+ std::to_string(hg) + ",'" + r.hostname + "'," + r.port + ","
 			+ (r.max_connections.empty() ? std::string("1000") : r.max_connections)
-			+ ",'" + r.comment + "')";
+			+ "," + std::to_string(native_backend_use_ssl()) + ",'" + r.comment + "')";
 		if (!execAdmin(admin, ins)) return false;
 	}
 	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
@@ -443,7 +451,7 @@ static OpRecord runDifferential(const std::string& label, const std::string& kin
 		cb->disconnect();
 		ran = true;
 	} catch (const PgException& e) {
-		return {label, kind, false, false, std::string("exception: ") + e.what()};
+		return {native_transport_label(label), kind, false, false, std::string("exception: ") + e.what()};
 	}
 	// Coverage truthfulness: "native" is VERIFIED from the proxysql log (no
 	// libpq-fallback warning during the proxy leg), not assumed.
@@ -451,11 +459,12 @@ static OpRecord runDifferential(const std::string& label, const std::string& kin
 	bool match = ran && (a == b);
 	std::string detail = "backend='" + a + "'";
 	if (!match) detail += " proxy='" + b + "'";
-	return {label, kind, match, !fell_back, detail};
+	return {native_transport_label(label), kind, match, !fell_back, detail};
 }
 
 int main(int /*argc*/, char** /*argv*/) {
-	plan(1 /*smoke*/ + 10 /*corpus records*/ + 1 /*coverage summary*/ + 1 /*multiplexing*/);
+	plan(1 /*smoke*/ + (int)NATIVE_TRANSPORT_COUNT *
+		(10 /*corpus records*/ + 1 /*coverage summary*/ + 1 /*multiplexing*/ + NATIVE_TRANSPORT_CHECKS));
 	if (cl.getEnv()) return exit_status();
 
 	PGConnPtr admin = open_admin_conn();
@@ -503,197 +512,212 @@ int main(int /*argc*/, char** /*argv*/) {
 		   detail.empty() ? "" : " -- ", detail.c_str());
 	}
 
-	// ---- Native mode + fresh native-only pool for the differential corpus ----
-	if (!setNativeMode(admin.get(), true) || !flushBackendPool(admin.get(), BACKEND_HG, saved)) {
-		auth_scope.restore();  // BAIL_OUT is exit(255): destructor never runs
-		BAIL_OUT("failed to enable native mode / flush pool");
-		return exit_status();
-	}
+	for (size_t transport = 0; transport < NATIVE_TRANSPORT_COUNT; transport++) {
+		native_transport_select(transport);
+		// The check uses a libpq client in sslmode=disable, like the raw client below.
+		ok_native_transport(admin.get(), BACKEND_HG,
+			[&] { return setNativeMode(admin.get(), true) && flushBackendPool(admin.get(), BACKEND_HG, saved); },
+			[] {
+				std::stringstream ss;
+				ss << "host=" << cl.pgsql_host << " port=" << cl.pgsql_port << " user=" << cl.pgsql_root_username
+				   << " password=" << cl.pgsql_root_password << " dbname=postgres sslmode=disable";
+				return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
+			}, /*check_client*/ false);
 
-	CoverageRecorder cov;
-
-	// Cases 1-7: direct-vs-proxy differentials.
-	cov.record(runDifferential("PORTAL_BASIC: Parse+Bind+Describe(P)+Execute+Close+Sync",
-		"PORTAL_BASIC", script_basic));
-	cov.record(runDifferential("PORTAL_MULTI: p1,p2 over one stmt, Execute p2 then p1",
-		"PORTAL_MULTI", script_multi));
-	cov.record(runDifferential("PORTAL_SUSPEND: Execute(max_rows=2) x2 + Execute(0) over 5 rows",
-		"PORTAL_SUSPEND", script_suspend));
-	cov.record(runDifferential("PORTAL_TXN: portal survives Sync in txn, dies at COMMIT",
-		"PORTAL_TXN", script_txn));
-	cov.record(runDifferential("PORTAL_SYNC_DESTROY: implicit-txn Sync destroys portal",
-		"PORTAL_SYNC_DESTROY", script_sync_destroy));
-	cov.record(runDifferential("PORTAL_CLOSE_IDEMPOTENT: Close(P,nonexistent)->CloseComplete",
-		"PORTAL_CLOSE_IDEMPOTENT", script_close_idempotent));
-	cov.record(runDifferential("PORTAL_ERR_BIND_DUP: Bind same portal twice, no close",
-		"PORTAL_ERR_BIND_DUP", script_bind_dup));
-
-	// ---- Case 10: statement closed while its portal lives (last-owner teardown
-	// path through the d561b767c-fixed rc0 ordering), with the EVENTSLOG ACTIVE
-	// so LogQuery's format=2 JSON writer actually reads stmt_client_name/digest
-	// before the deferred clear frees the registry entry. The infra defaults
-	// eventslog_default_log=1/format=2 (docker-pgsql16-single config.sql); we
-	// verify and force+restore if a prior run left them off. Also asserts
-	// proxysql did NOT crash/restart across the case (ProxySQL_Uptime monotonic)
-	// — see the script's comment on why the differential alone is not enough. ----
-	{
-		const std::string q_ev_log =
-			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-eventslog_default_log'";
-		const std::string q_ev_fmt =
-			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-eventslog_format'";
-		const std::string q_uptime =
-			"SELECT Variable_Value FROM stats_pgsql_global WHERE Variable_Name='ProxySQL_Uptime'";
-		std::string ev_log = adminScalar(admin.get(), q_ev_log);
-		std::string ev_fmt = adminScalar(admin.get(), q_ev_fmt);
-		bool ev_forced = false;
-		if (ev_log != "1" || ev_fmt != "2") {
-			ev_forced = execAdmin(admin.get(), "SET pgsql-eventslog_default_log=1") &&
-			            execAdmin(admin.get(), "SET pgsql-eventslog_format=2") &&
-			            execAdmin(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+		// ---- Native mode + fresh native-only pool for the differential corpus ----
+		if (!setNativeMode(admin.get(), true) || !flushBackendPool(admin.get(), BACKEND_HG, saved)) {
+			auth_scope.restore();  // BAIL_OUT is exit(255): destructor never runs
+			BAIL_OUT("failed to enable native mode / flush pool");
+			return exit_status();
 		}
-		diag("PORTAL_STMT_LAST_OWNER: eventslog default_log=%s format=%s%s",
-		     ev_log.c_str(), ev_fmt.c_str(), ev_forced ? " (forced on for this case)" : "");
-		long uptime_before = atol(adminScalar(admin.get(), q_uptime).c_str());
-		OpRecord rec = runDifferential(
-			"PORTAL_STMT_LAST_OWNER: Close('S') with portal open, Execute, Sync teardown (eventslog on)",
-			"PORTAL_STMT_LAST_OWNER", script_stmt_last_owner);
-		long uptime_after = atol(adminScalar(admin.get(), q_uptime).c_str());
-		// A crash would restart proxysql (angel) and reset the uptime counter.
-		bool no_restart = (uptime_before > 0 && uptime_after >= uptime_before);
-		if (!no_restart) {
-			rec.result_match = false;
-			rec.detail += " (proxysql RESTARTED during case: uptime " +
-				std::to_string(uptime_before) + " -> " + std::to_string(uptime_after) + ")";
-		} else {
-			rec.detail += " uptime_monotonic=" + std::to_string(uptime_before) + "->" +
-				std::to_string(uptime_after);
-		}
-		if (ev_forced) {  // restore only what we changed
-			execAdmin(admin.get(), "SET pgsql-eventslog_default_log=" + (ev_log.empty() ? "0" : ev_log));
-			execAdmin(admin.get(), "SET pgsql-eventslog_format=" + (ev_fmt.empty() ? "1" : ev_fmt));
-			execAdmin(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
-		}
-		cov.record(rec);
-	}
 
-	// ---- Case 4 addendum: multiplexing pin release, asserted NON-vacuously.
-	// The raw client STAYS CONNECTED AND IDLE while we watch the admin stats:
-	//   * during the explicit txn (portal p1 bound, Sync'd) the backend conn is
-	//     attached to the session -> SUM(ConnUsed)=1 for the hostgroup;
-	//   * after COMMIT completes, the txn ended AND the txn-'I' clear destroyed
-	//     the named portal, so the sticky portal pin must release and the conn
-	//     return to the pool -> SUM(ConnUsed) drops to 0 WHILE the client is
-	//     still connected.
-	// If the pin release were broken (e.g. named_portals surviving the txn-'I'
-	// clear kept sticky_backend_connection true), ConnUsed would stay 1 for the
-	// whole 5s window and this fails. The client disconnects only AFTER the
-	// poll, so session teardown cannot fake the release (the previous version
-	// polled after disconnect, which passes regardless — vacuous).
-	{
-		int used_in_txn = -1, used_after = -1;
-		bool released = false;
-		std::string err;
-		auto pollConnUsed = [&](void) -> int {
-			std::string v = adminScalar(admin.get(),
-				"SELECT SUM(ConnUsed) FROM stats_pgsql_connection_pool WHERE hostgroup="
-				+ std::to_string(BACKEND_HG));
-			return v.empty() ? -1 : atoi(v.c_str());
-		};
-		try {
-			auto c = connectProxy();
-			c->execute("BEGIN");
-			c->consumeInputUntilReady();
-			c->prepareStatement("s1", "SELECT $1::int", false);
-			c->bindStatement("s1", "p1", {{std::string("5"), 0}}, {}, false);
-			c->sendSync();
-			c->consumeInputUntilReady();
-			used_in_txn = pollConnUsed();          // expect 1: pinned by open txn+portal
-			c->execute("COMMIT");
-			c->consumeInputUntilReady();
-			for (int i = 0; i < 50; i++) {         // bounded window: <= 5s
-				used_after = pollConnUsed();
-				if (used_after == 0) { released = true; break; }
-				usleep(100000);
+		CoverageRecorder cov;
+
+		// Cases 1-7: direct-vs-proxy differentials.
+		cov.record(runDifferential("PORTAL_BASIC: Parse+Bind+Describe(P)+Execute+Close+Sync",
+			"PORTAL_BASIC", script_basic));
+		cov.record(runDifferential("PORTAL_MULTI: p1,p2 over one stmt, Execute p2 then p1",
+			"PORTAL_MULTI", script_multi));
+		cov.record(runDifferential("PORTAL_SUSPEND: Execute(max_rows=2) x2 + Execute(0) over 5 rows",
+			"PORTAL_SUSPEND", script_suspend));
+		cov.record(runDifferential("PORTAL_TXN: portal survives Sync in txn, dies at COMMIT",
+			"PORTAL_TXN", script_txn));
+		cov.record(runDifferential("PORTAL_SYNC_DESTROY: implicit-txn Sync destroys portal",
+			"PORTAL_SYNC_DESTROY", script_sync_destroy));
+		cov.record(runDifferential("PORTAL_CLOSE_IDEMPOTENT: Close(P,nonexistent)->CloseComplete",
+			"PORTAL_CLOSE_IDEMPOTENT", script_close_idempotent));
+		cov.record(runDifferential("PORTAL_ERR_BIND_DUP: Bind same portal twice, no close",
+			"PORTAL_ERR_BIND_DUP", script_bind_dup));
+
+		// ---- Case 10: statement closed while its portal lives (last-owner teardown
+		// path through the d561b767c-fixed rc0 ordering), with the EVENTSLOG ACTIVE
+		// so LogQuery's format=2 JSON writer actually reads stmt_client_name/digest
+		// before the deferred clear frees the registry entry. The infra defaults
+		// eventslog_default_log=1/format=2 (docker-pgsql16-single config.sql); we
+		// verify and force+restore if a prior run left them off. Also asserts
+		// proxysql did NOT crash/restart across the case (ProxySQL_Uptime monotonic)
+		// — see the script's comment on why the differential alone is not enough. ----
+		{
+			const std::string q_ev_log =
+				"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-eventslog_default_log'";
+			const std::string q_ev_fmt =
+				"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-eventslog_format'";
+			const std::string q_uptime =
+				"SELECT Variable_Value FROM stats_pgsql_global WHERE Variable_Name='ProxySQL_Uptime'";
+			std::string ev_log = adminScalar(admin.get(), q_ev_log);
+			std::string ev_fmt = adminScalar(admin.get(), q_ev_fmt);
+			bool ev_forced = false;
+			if (ev_log != "1" || ev_fmt != "2") {
+				ev_forced = execAdmin(admin.get(), "SET pgsql-eventslog_default_log=1") &&
+				            execAdmin(admin.get(), "SET pgsql-eventslog_format=2") &&
+				            execAdmin(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
 			}
-			c->disconnect();                       // AFTER the poll — see above
-		} catch (const PgException& e) { err = e.what(); }
-		ok(released && used_in_txn == 1,
-		   "Multiplexing pin release: ConnUsed %d (in txn, portal bound) -> %d within 5s of "
-		   "COMMIT+portal-invalidation, client still connected%s%s",
-		   used_in_txn, used_after, err.empty() ? "" : " -- ", err.c_str());
-	}
+			diag("PORTAL_STMT_LAST_OWNER: eventslog default_log=%s format=%s%s",
+			     ev_log.c_str(), ev_fmt.c_str(), ev_forced ? " (forced on for this case)" : "");
+			long uptime_before = atol(adminScalar(admin.get(), q_uptime).c_str());
+			OpRecord rec = runDifferential(
+				"PORTAL_STMT_LAST_OWNER: Close('S') with portal open, Execute, Sync teardown (eventslog on)",
+				"PORTAL_STMT_LAST_OWNER", script_stmt_last_owner);
+			long uptime_after = atol(adminScalar(admin.get(), q_uptime).c_str());
+			// A crash would restart proxysql (angel) and reset the uptime counter.
+			bool no_restart = (uptime_before > 0 && uptime_after >= uptime_before);
+			if (!no_restart) {
+				rec.result_match = false;
+				rec.detail += " (proxysql RESTARTED during case: uptime " +
+					std::to_string(uptime_before) + " -> " + std::to_string(uptime_after) + ")";
+			} else {
+				rec.detail += " uptime_monotonic=" + std::to_string(uptime_before) + "->" +
+					std::to_string(uptime_after);
+			}
+			if (ev_forced) {  // restore only what we changed
+				execAdmin(admin.get(), "SET pgsql-eventslog_default_log=" + (ev_log.empty() ? "0" : ev_log));
+				execAdmin(admin.get(), "SET pgsql-eventslog_format=" + (ev_fmt.empty() ? "1" : ev_fmt));
+				execAdmin(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+			}
+			cov.record(rec);
+		}
 
-	// ---- Case 8: libpq-mode named-Bind reject (leg B only, regression guard
-	// for invariant 1). Named Bind -> FEATURE_NOT_SUPPORTED (0A000) with the
-	// byte-exact "only unnamed portals are supported" message. ----
-	{
-		bool reject_ok = false;
-		std::string detail;
-		if (setNativeMode(admin.get(), false) && flushBackendPool(admin.get(), BACKEND_HG, saved)) {
+		// ---- Case 4 addendum: multiplexing pin release, asserted NON-vacuously.
+		// The raw client STAYS CONNECTED AND IDLE while we watch the admin stats:
+		//   * during the explicit txn (portal p1 bound, Sync'd) the backend conn is
+		//     attached to the session -> SUM(ConnUsed)=1 for the hostgroup;
+		//   * after COMMIT completes, the txn ended AND the txn-'I' clear destroyed
+		//     the named portal, so the sticky portal pin must release and the conn
+		//     return to the pool -> SUM(ConnUsed) drops to 0 WHILE the client is
+		//     still connected.
+		// If the pin release were broken (e.g. named_portals surviving the txn-'I'
+		// clear kept sticky_backend_connection true), ConnUsed would stay 1 for the
+		// whole 5s window and this fails. The client disconnects only AFTER the
+		// poll, so session teardown cannot fake the release (the previous version
+		// polled after disconnect, which passes regardless — vacuous).
+		{
+			int used_in_txn = -1, used_after = -1;
+			bool released = false;
+			std::string err;
+			auto pollConnUsed = [&](void) -> int {
+				std::string v = adminScalar(admin.get(),
+					"SELECT SUM(ConnUsed) FROM stats_pgsql_connection_pool WHERE hostgroup="
+					+ std::to_string(BACKEND_HG));
+				return v.empty() ? -1 : atoi(v.c_str());
+			};
 			try {
 				auto c = connectProxy();
+				c->execute("BEGIN");
+				c->consumeInputUntilReady();
 				c->prepareStatement("s1", "SELECT $1::int", false);
-				c->bindStatement("s1", "p1", {{std::string("1"), 0}}, {}, false);
+				c->bindStatement("s1", "p1", {{std::string("5"), 0}}, {}, false);
 				c->sendSync();
-				auto msgs = collectRaw(*c);
-				c->disconnect();
-				std::string sqlstate, msg;
-				for (auto& m : msgs) {
-					if (m.first == 'E') {
-						sqlstate = errSqlstate(m.second);
-						// extract 'M' (message) field
-						size_t i = 0;
-						while (i < m.second.size() && m.second[i] != 0) {
-							char field = (char)m.second[i++];
-							std::string val;
-							while (i < m.second.size() && m.second[i] != 0) val += (char)m.second[i++];
-							if (i < m.second.size()) i++;
-							if (field == 'M') msg = val;
+				c->consumeInputUntilReady();
+				used_in_txn = pollConnUsed();          // expect 1: pinned by open txn+portal
+				c->execute("COMMIT");
+				c->consumeInputUntilReady();
+				for (int i = 0; i < 50; i++) {         // bounded window: <= 5s
+					used_after = pollConnUsed();
+					if (used_after == 0) { released = true; break; }
+					usleep(100000);
+				}
+				c->disconnect();                       // AFTER the poll — see above
+			} catch (const PgException& e) { err = e.what(); }
+			ok(released && used_in_txn == 1,
+			   "[%s] Multiplexing pin release: ConnUsed %d (in txn, portal bound) -> %d within 5s of "
+			   "COMMIT+portal-invalidation, client still connected%s%s",
+			   native_transport_name(), used_in_txn, used_after, err.empty() ? "" : " -- ", err.c_str());
+		}
+
+		// ---- Case 8: libpq-mode named-Bind reject (leg B only, regression guard
+		// for invariant 1). Named Bind -> FEATURE_NOT_SUPPORTED (0A000) with the
+		// byte-exact "only unnamed portals are supported" message. ----
+		{
+			bool reject_ok = false;
+			std::string detail;
+			if (setNativeMode(admin.get(), false) && flushBackendPool(admin.get(), BACKEND_HG, saved)) {
+				try {
+					auto c = connectProxy();
+					c->prepareStatement("s1", "SELECT $1::int", false);
+					c->bindStatement("s1", "p1", {{std::string("1"), 0}}, {}, false);
+					c->sendSync();
+					auto msgs = collectRaw(*c);
+					c->disconnect();
+					std::string sqlstate, msg;
+					for (auto& m : msgs) {
+						if (m.first == 'E') {
+							sqlstate = errSqlstate(m.second);
+							// extract 'M' (message) field
+							size_t i = 0;
+							while (i < m.second.size() && m.second[i] != 0) {
+								char field = (char)m.second[i++];
+								std::string val;
+								while (i < m.second.size() && m.second[i] != 0) val += (char)m.second[i++];
+								if (i < m.second.size()) i++;
+								if (field == 'M') msg = val;
+							}
 						}
 					}
-				}
-				reject_ok = (sqlstate == "0A000" && msg == "only unnamed portals are supported");
-				detail = "sqlstate='" + sqlstate + "' msg='" + msg + "'";
-			} catch (const PgException& e) { detail = std::string("exception: ") + e.what(); }
-		} else {
-			detail = "admin: set libpq mode failed";
+					reject_ok = (sqlstate == "0A000" && msg == "only unnamed portals are supported");
+					detail = "sqlstate='" + sqlstate + "' msg='" + msg + "'";
+				} catch (const PgException& e) { detail = std::string("exception: ") + e.what(); }
+			} else {
+				detail = "admin: set libpq mode failed";
+			}
+			cov.record({native_transport_label("PORTAL_LIBPQ_MODE_REJECTS: named Bind -> FEATURE_NOT_SUPPORTED (libpq mode)"),
+				"PORTAL_LIBPQ_MODE_REJECTS", reject_ok, false, detail});
 		}
-		cov.record({"PORTAL_LIBPQ_MODE_REJECTS: named Bind -> FEATURE_NOT_SUPPORTED (libpq mode)",
-			"PORTAL_LIBPQ_MODE_REJECTS", reject_ok, false, detail});
-	}
 
-	// ---- Case 9: unnamed flow client-visible sequence is byte-identical
-	// between native and libpq ProxySQL (the P1/P2 changes must not perturb the
-	// unnamed single-slot flow — invariant 2, seen from the client). ----
-	{
-		std::string native_seq, libpq_seq, detail;
-		bool eq = false;
-		bool fell_back = true;  // pessimistic until the native phase is log-verified
-		try {
-			if (setNativeMode(admin.get(), true) && flushBackendPool(admin.get(), BACKEND_HG, saved)) {
-				drainLogToNow();  // scope the fallback scan to the native phase
-				auto c = connectProxy();
-				native_seq = script_unnamed(*c);
-				c->disconnect();
-				fell_back = nativeFallbackObserved();
-			}
-			if (setNativeMode(admin.get(), false) && flushBackendPool(admin.get(), BACKEND_HG, saved)) {
-				auto c = connectProxy();
-				libpq_seq = script_unnamed(*c);
-				c->disconnect();
-			}
-			eq = !native_seq.empty() && (native_seq == libpq_seq);
-			detail = "native='" + native_seq + "'";
-			if (!eq) detail += " libpq='" + libpq_seq + "'";
-		} catch (const PgException& e) { detail = std::string("exception: ") + e.what(); }
-		cov.record({"PORTAL_UNNAMED_UNCHANGED: native==libpq client-visible unnamed cycle",
-			"PORTAL_UNNAMED_UNCHANGED", eq, !fell_back, detail});
+		// ---- Case 9: unnamed flow client-visible sequence is byte-identical
+		// between native and libpq ProxySQL (the P1/P2 changes must not perturb the
+		// unnamed single-slot flow — invariant 2, seen from the client). ----
+		{
+			std::string native_seq, libpq_seq, detail;
+			bool eq = false;
+			bool fell_back = true;  // pessimistic until the native phase is log-verified
+			try {
+				if (setNativeMode(admin.get(), true) && flushBackendPool(admin.get(), BACKEND_HG, saved)) {
+					drainLogToNow();  // scope the fallback scan to the native phase
+					auto c = connectProxy();
+					native_seq = script_unnamed(*c);
+					c->disconnect();
+					fell_back = nativeFallbackObserved();
+				}
+				if (setNativeMode(admin.get(), false) && flushBackendPool(admin.get(), BACKEND_HG, saved)) {
+					auto c = connectProxy();
+					libpq_seq = script_unnamed(*c);
+					c->disconnect();
+				}
+				eq = !native_seq.empty() && (native_seq == libpq_seq);
+				detail = "native='" + native_seq + "'";
+				if (!eq) detail += " libpq='" + libpq_seq + "'";
+			} catch (const PgException& e) { detail = std::string("exception: ") + e.what(); }
+			cov.record({native_transport_label("PORTAL_UNNAMED_UNCHANGED: native==libpq client-visible unnamed cycle"),
+				"PORTAL_UNNAMED_UNCHANGED", eq, !fell_back, detail});
+		}
+
+		cov.emit_tap();
 	}
 
 	// Restore defaults.
+	native_transport_select(0);
 	setNativeMode(admin.get(), false);
 	flushBackendPool(admin.get(), BACKEND_HG, saved);
 
-	cov.emit_tap();
 	return exit_status();
 }

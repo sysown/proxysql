@@ -58,7 +58,9 @@
  *    prepared statements that run inside a BEGIN/COMMIT block. The same
  *    fix will repair both.
  *
- * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256, no TLS).
+ * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256). The corpus runs once
+ * per transport: plaintext, then TLS on both the client and backend legs
+ * (see pgsql-native_transport.h).
  */
 
 #include <string>
@@ -77,6 +79,7 @@
 #include "tap.h"
 #include "utils.h"
 #include "pgsql-native_tracking.h"
+#include "pgsql-native_transport.h"
 
 CommandLine cl;
 static const int BACKEND_HG = 0;
@@ -84,8 +87,8 @@ static std::fstream f_proxysql_log{};
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 
 static std::string make_table_name() {
-	return "pgsql_native_prep_" + std::to_string(getpid()) + "_" +
-	       std::to_string(time(nullptr));
+	return "pgsql_native_prep_" + std::string(native_transport_name()) + "_" +
+	       std::to_string(getpid()) + "_" + std::to_string(time(nullptr));
 }
 
 static PGConnPtr open_admin_conn() {
@@ -104,7 +107,7 @@ static PGConnPtr open_client_conn(const std::string& extra_opts = "") {
 	   << " user=" << cl.pgsql_username
 	   << " password=" << cl.pgsql_password
 	   << " dbname=" << cl.pgsql_username
-	   << " sslmode=disable";
+	   << " sslmode=" << native_client_sslmode();
 	if (!extra_opts.empty()) ss << " " << extra_opts;
 	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
 }
@@ -150,10 +153,10 @@ static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>
 	if (!execAdmin(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg))) return false;
 	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
 	for (const auto& r : saved) {
-		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,comment) VALUES ("
+		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment) VALUES ("
 			+ std::to_string(hg) + ",'" + r.hostname + "'," + r.port + ","
 			+ (r.max_connections.empty() ? std::string("1000") : r.max_connections)
-			+ ",'" + r.comment + "')";
+			+ "," + std::to_string(native_backend_use_ssl()) + ",'" + r.comment + "')";
 		if (!execAdmin(admin, ins)) return false;
 	}
 	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
@@ -1327,7 +1330,9 @@ int main(int /*argc*/, char** /*argv*/) {
 	const int n_dealloc_xproto = N_DEALLOC_XPROTO_PER_MODE; // binary-prepare + SQL DEALLOCATE, native path
 	const int n_dealloc_all = N_DALLALL_MATRIX;           // DEALLOCATE ALL matrix, native path
 	const int n_varsync = N_VARSYNC_REUSE;                // variable-sync reuse hang, native path
-	plan(n_cases + 1 + n_varsync + n_dealloc_reg + n_dealloc_xproto + n_dealloc_all);
+	// Everything below runs once per transport, each pass adding the transport check.
+	const int per_transport = n_cases + 1 + n_varsync + n_dealloc_reg + n_dealloc_xproto + n_dealloc_all;
+	plan((int)NATIVE_TRANSPORT_COUNT * (per_transport + NATIVE_TRANSPORT_CHECKS));
 	if (cl.getEnv()) return exit_status();
 
 	std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
@@ -1348,97 +1353,108 @@ int main(int /*argc*/, char** /*argv*/) {
 	diag("Backend under test (hg %d): %s:%s", BACKEND_HG,
 	     saved[0].hostname.c_str(), saved[0].port.c_str());
 
-	CoverageRecorder cov;
-	diag("=== SQL-side prepared statements (cases P0-P9) ===");
-	for (const auto& tc : sql_cases) {
-		SqlCaseRunResult cr = run_sql(admin.get(), tc, saved);
-		cov.record({tc.label, tc.kind, cr.result_match, !cr.fell_back, cr.detail});
+	// The whole corpus runs once per transport (plain, then TLS on both legs).
+	for (size_t transport = 0; transport < NATIVE_TRANSPORT_COUNT; transport++) {
+		native_transport_select(transport);
+		ok_native_transport(admin.get(), BACKEND_HG,
+			[&] { return setNativeMode(admin.get(), true) && flushBackendPool(admin.get(), BACKEND_HG, saved); },
+			[] { return open_client_conn(); }, /*check_client*/ true);
+
+		CoverageRecorder cov;
+		diag("=== SQL-side prepared statements (cases P0-P9) ===");
+		for (const auto& tc : sql_cases) {
+			SqlCaseRunResult cr = run_sql(admin.get(), tc, saved);
+			cov.record({native_transport_label(tc.label), tc.kind, cr.result_match, !cr.fell_back, cr.detail});
+		}
+		diag("=== Extended-query prepared statements (cases P10-P29) ===");
+		for (const auto& tc : extq_cases) {
+			ExtQCaseRunResult cr = run_extq(admin.get(), tc, saved);
+			cov.record({native_transport_label(tc.label), tc.kind, cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_MULTI_CYCLE: two independent extended-query cycles, one session ===");
+		{
+			std::vector<ExtQCase> seq;
+			seq.push_back({"mc1", "EXT_MULTI_CYCLE",
+				"mc1", "SELECT $1::int + 1",
+				{}, {{"", {"10"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			seq.push_back({"mc2", "EXT_MULTI_CYCLE",
+				"mc2", "SELECT $1::text || '!'",
+				{}, {{"", {"hi"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/true, saved);
+			cov.record({native_transport_label("P21: EXT_MULTI_CYCLE (mc1, mc2 in one session)"), "EXT_MULTI_CYCLE",
+				cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_REUSE: same statement name re-prepared after DEALLOCATE ===");
+		{
+			std::vector<ExtQCase> seq;
+			seq.push_back({"ru1-first", "EXT_REUSE",
+				"ru1", "SELECT $1::int + 1",
+				{}, {{"", {"1"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			seq.push_back({"ru1-reprepared", "EXT_REUSE",
+				"ru1", "SELECT $1::int + 100", // different query text, same client name
+				{}, {{"", {"2"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/true, saved);
+			cov.record({native_transport_label("P22: EXT_REUSE ('ru1' re-prepared after DEALLOCATE)"), "EXT_REUSE",
+				cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_GLOBAL_DEDUP: two sessions, identical query text ===");
+		{
+			std::vector<ExtQCase> seq;
+			seq.push_back({"gd1", "EXT_GLOBAL_DEDUP",
+				"gd1", "SELECT $1::int * 2",
+				{}, {{"", {"21"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			seq.push_back({"gd2", "EXT_GLOBAL_DEDUP",
+				"gd2", "SELECT $1::int * 2", // identical text, different session+name
+				{}, {{"", {"5"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/false, saved);
+			cov.record({native_transport_label("P23: EXT_GLOBAL_DEDUP (gd1, gd2 identical query, distinct sessions)"), "EXT_GLOBAL_DEDUP",
+				cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_PARSE_ERR_MIDFRAME: injected-Sync error-recovery (PQsendQueryParams) ===");
+		{
+			ExtQCaseRunResult cr = run_midframe_err(admin.get(), "NOT VALID SQL AT ALL", saved);
+			cov.record({native_transport_label("P24: EXT_PARSE_ERR_MIDFRAME (mid-frame Parse error, connection reused after)"),
+				"EXT_PARSE_ERR_MIDFRAME", cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_DESCRIBE_AFTER_DDL (libpq): Describe never replays the pre-DDL description ===");
+		{
+			ExtQCaseRunResult cr = run_describe_after_ddl(admin.get(), /*native=*/false, "dc25", saved);
+			cov.record({native_transport_label("P25: EXT_DESCRIBE_AFTER_DDL (libpq; Describe does not replay the pre-DDL description)"),
+				"EXT_DESCRIBE_AFTER_DDL", cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_DESCRIBE_AFTER_DDL (native): Describe never replays the pre-DDL description ===");
+		{
+			ExtQCaseRunResult cr = run_describe_after_ddl(admin.get(), /*native=*/true, "dc26", saved);
+			cov.record({native_transport_label("P26: EXT_DESCRIBE_AFTER_DDL (native; Describe does not replay the pre-DDL description)"),
+				"EXT_DESCRIBE_AFTER_DDL", cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		cov.emit_tap();
+
+		// Runs first among the absolute-check blocks: it is the only one with its own
+		// deadline, so a regression here reports a clean failure instead of letting the
+		// deadline-less DEALLOCATE cases wedge the whole run.
+		diag("=== Variable-sync reuse regression (native path; 10s deadline) ===");
+		run_varsync_reuse_regression(admin.get(), saved);
+
+		diag("=== DEALLOCATE-forwarding regression (native path; absolute checks) ===");
+		run_dealloc_regression(admin.get(), /*native=*/true, saved);
+
+		diag("=== Cross-protocol DEALLOCATE: binary prepare + SQL DEALLOCATE (native path) ===");
+		run_dealloc_xproto_regression(admin.get(), /*native=*/true, saved);
+
+		diag("=== DEALLOCATE ALL matrix (native path) ===");
+		run_dealloc_all_matrix(admin.get(), /*native=*/true, saved);
 	}
-	diag("=== Extended-query prepared statements (cases P10-P29) ===");
-	for (const auto& tc : extq_cases) {
-		ExtQCaseRunResult cr = run_extq(admin.get(), tc, saved);
-		cov.record({tc.label, tc.kind, cr.result_match, !cr.fell_back, cr.detail});
-	}
 
-	diag("=== EXT_MULTI_CYCLE: two independent extended-query cycles, one session ===");
-	{
-		std::vector<ExtQCase> seq;
-		seq.push_back({"mc1", "EXT_MULTI_CYCLE",
-			"mc1", "SELECT $1::int + 1",
-			{}, {{"", {"10"}, {}, {}, 0}}, false, false, true, false, false, ""});
-		seq.push_back({"mc2", "EXT_MULTI_CYCLE",
-			"mc2", "SELECT $1::text || '!'",
-			{}, {{"", {"hi"}, {}, {}, 0}}, false, false, true, false, false, ""});
-		ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/true, saved);
-		cov.record({"P21: EXT_MULTI_CYCLE (mc1, mc2 in one session)", "EXT_MULTI_CYCLE",
-			cr.result_match, !cr.fell_back, cr.detail});
-	}
-
-	diag("=== EXT_REUSE: same statement name re-prepared after DEALLOCATE ===");
-	{
-		std::vector<ExtQCase> seq;
-		seq.push_back({"ru1-first", "EXT_REUSE",
-			"ru1", "SELECT $1::int + 1",
-			{}, {{"", {"1"}, {}, {}, 0}}, false, false, true, false, false, ""});
-		seq.push_back({"ru1-reprepared", "EXT_REUSE",
-			"ru1", "SELECT $1::int + 100", // different query text, same client name
-			{}, {{"", {"2"}, {}, {}, 0}}, false, false, true, false, false, ""});
-		ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/true, saved);
-		cov.record({"P22: EXT_REUSE ('ru1' re-prepared after DEALLOCATE)", "EXT_REUSE",
-			cr.result_match, !cr.fell_back, cr.detail});
-	}
-
-	diag("=== EXT_GLOBAL_DEDUP: two sessions, identical query text ===");
-	{
-		std::vector<ExtQCase> seq;
-		seq.push_back({"gd1", "EXT_GLOBAL_DEDUP",
-			"gd1", "SELECT $1::int * 2",
-			{}, {{"", {"21"}, {}, {}, 0}}, false, false, true, false, false, ""});
-		seq.push_back({"gd2", "EXT_GLOBAL_DEDUP",
-			"gd2", "SELECT $1::int * 2", // identical text, different session+name
-			{}, {{"", {"5"}, {}, {}, 0}}, false, false, true, false, false, ""});
-		ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/false, saved);
-		cov.record({"P23: EXT_GLOBAL_DEDUP (gd1, gd2 identical query, distinct sessions)", "EXT_GLOBAL_DEDUP",
-			cr.result_match, !cr.fell_back, cr.detail});
-	}
-
-	diag("=== EXT_PARSE_ERR_MIDFRAME: injected-Sync error-recovery (PQsendQueryParams) ===");
-	{
-		ExtQCaseRunResult cr = run_midframe_err(admin.get(), "NOT VALID SQL AT ALL", saved);
-		cov.record({"P24: EXT_PARSE_ERR_MIDFRAME (mid-frame Parse error, connection reused after)",
-			"EXT_PARSE_ERR_MIDFRAME", cr.result_match, !cr.fell_back, cr.detail});
-	}
-
-	diag("=== EXT_DESCRIBE_AFTER_DDL (libpq): Describe never replays the pre-DDL description ===");
-	{
-		ExtQCaseRunResult cr = run_describe_after_ddl(admin.get(), /*native=*/false, "dc25", saved);
-		cov.record({"P25: EXT_DESCRIBE_AFTER_DDL (libpq; Describe does not replay the pre-DDL description)",
-			"EXT_DESCRIBE_AFTER_DDL", cr.result_match, !cr.fell_back, cr.detail});
-	}
-
-	diag("=== EXT_DESCRIBE_AFTER_DDL (native): Describe never replays the pre-DDL description ===");
-	{
-		ExtQCaseRunResult cr = run_describe_after_ddl(admin.get(), /*native=*/true, "dc26", saved);
-		cov.record({"P26: EXT_DESCRIBE_AFTER_DDL (native; Describe does not replay the pre-DDL description)",
-			"EXT_DESCRIBE_AFTER_DDL", cr.result_match, !cr.fell_back, cr.detail});
-	}
-
-	cov.emit_tap();
-
-	// Runs first among the absolute-check blocks: it is the only one with its own
-	// deadline, so a regression here reports a clean failure instead of letting the
-	// deadline-less DEALLOCATE cases wedge the whole run.
-	diag("=== Variable-sync reuse regression (native path; 10s deadline) ===");
-	run_varsync_reuse_regression(admin.get(), saved);
-
-	diag("=== DEALLOCATE-forwarding regression (native path; absolute checks) ===");
-	run_dealloc_regression(admin.get(), /*native=*/true, saved);
-
-	diag("=== Cross-protocol DEALLOCATE: binary prepare + SQL DEALLOCATE (native path) ===");
-	run_dealloc_xproto_regression(admin.get(), /*native=*/true, saved);
-
-	diag("=== DEALLOCATE ALL matrix (native path) ===");
-	run_dealloc_all_matrix(admin.get(), /*native=*/true, saved);
+	native_transport_select(0);
+	flushBackendPool(admin.get(), BACKEND_HG, saved);
 	setNativeMode(admin.get(), false); // leave the proxy in the default mode
 
 	return exit_status();
