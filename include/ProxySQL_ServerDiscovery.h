@@ -137,6 +137,22 @@ bool proxysql_collect_active_builtin_server_topology(ProxySQL_ServerProtocol pro
 	const ProxySQL_ServerBuiltinTopologyInputs& inputs,
 	std::vector<uint32_t>& hostgroups, std::string& error);
 
+// Holds a protocol's runtime-install mutex for the current thread ahead of
+// other locks. Lock order is: Admin servers lock -> runtime install -> HGM.
+// Paths that must lock the Hostgroups Manager before loading servers (plugin
+// MySQL configuration publication) take this first; a transaction created on
+// the same thread while it is held reuses it instead of locking again.
+class ProxySQL_ServerRuntimeInstallLock {
+public:
+	explicit ProxySQL_ServerRuntimeInstallLock(ProxySQL_ServerProtocol protocol);
+	~ProxySQL_ServerRuntimeInstallLock();
+	ProxySQL_ServerRuntimeInstallLock(const ProxySQL_ServerRuntimeInstallLock&) = delete;
+	ProxySQL_ServerRuntimeInstallLock& operator=(const ProxySQL_ServerRuntimeInstallLock&) = delete;
+
+private:
+	int index_ {-1};
+};
+
 class ProxySQL_ServerRuntimeInstallTransaction {
 public:
 	ProxySQL_ServerRuntimeInstallTransaction() noexcept;

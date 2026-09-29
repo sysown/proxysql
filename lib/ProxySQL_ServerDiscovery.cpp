@@ -32,6 +32,7 @@ std::atomic<uint64_t> read_only_monitor_epochs[2] {{0}, {0}};
 std::mutex mysql_install_mutex;
 std::mutex pgsql_install_mutex;
 thread_local bool install_reservation[2] {false, false};
+thread_local bool install_lock_held[2] {false, false};
 
 int protocol_index(ProxySQL_ServerProtocol protocol) {
 	return protocol == ProxySQL_ServerProtocol::mysql ? 0 :
@@ -119,6 +120,21 @@ bool append_topology_rows(const SQLite3_result& rows, const BuiltinTopologyTable
 }
 }
 
+ProxySQL_ServerRuntimeInstallLock::ProxySQL_ServerRuntimeInstallLock(
+	ProxySQL_ServerProtocol protocol) {
+	const int index = protocol_index(protocol);
+	if (index < 0 || install_lock_held[index]) return;
+	install_mutex(protocol).lock();
+	install_lock_held[index] = true;
+	index_ = index;
+}
+
+ProxySQL_ServerRuntimeInstallLock::~ProxySQL_ServerRuntimeInstallLock() {
+	if (index_ < 0) return;
+	install_lock_held[index_] = false;
+	install_mutex(index_ == 0 ? ProxySQL_ServerProtocol::mysql : ProxySQL_ServerProtocol::pgsql).unlock();
+}
+
 struct ProxySQL_ServerRuntimeInstallTransaction::Impl {
 	ProxySQL_ServerProtocol protocol;
 	uint64_t candidate;
@@ -149,7 +165,11 @@ ProxySQL_ServerRuntimeInstallTransaction::ProxySQL_ServerRuntimeInstallTransacti
 		error = "nested server runtime installation is not supported";
 		return;
 	}
-	std::unique_lock<std::mutex> lock(install_mutex(protocol));
+	// When this thread already holds the install lock ahead of HGM, the
+	// transaction runs under it and must not lock (or later release) it.
+	std::unique_lock<std::mutex> lock = install_lock_held[index]
+		? std::unique_lock<std::mutex>()
+		: std::unique_lock<std::mutex>(install_mutex(protocol));
 	const uint64_t current = installed_generation(protocol).load(std::memory_order_relaxed);
 	if (current == std::numeric_limits<uint64_t>::max()) {
 		error = "server runtime generation exhausted";

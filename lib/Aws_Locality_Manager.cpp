@@ -23,7 +23,7 @@ using nlohmann::json;
 
 namespace {
 
-AwsLocalityPolicy invalid_policy(
+AwsLocalityPolicy invalid_locality_policy(
 	uint32_t hostgroup_id,
 	const char* field,
 	AwsLocalityPolicyError& error) {
@@ -111,27 +111,27 @@ AwsLocalityPolicy parse_aws_locality_policy(
 	AwsLocalityPolicyError& error) {
 	error = {};
 	if (!policy_json.is_object()) {
-		return invalid_policy(hostgroup_id, "locality_awareness", error);
+		return invalid_locality_policy(hostgroup_id, "locality_awareness", error);
 	}
 
 	AwsLocalityPolicy policy;
 	if (!read_multiplier(policy_json, "same_region_multiplier",
 			policy.same_region_multiplier)) {
-		return invalid_policy(hostgroup_id, "same_region_multiplier", error);
+		return invalid_locality_policy(hostgroup_id, "same_region_multiplier", error);
 	}
 	if (!read_multiplier(policy_json, "same_az_multiplier",
 			policy.same_az_multiplier) ||
 		policy.same_az_multiplier < policy.same_region_multiplier) {
-		return invalid_policy(hostgroup_id, "same_az_multiplier", error);
+		return invalid_locality_policy(hostgroup_id, "same_az_multiplier", error);
 	}
 	if (!read_seconds(policy_json, "refresh_interval_seconds", 300, 30, 86400,
 			policy.refresh_interval_seconds)) {
-		return invalid_policy(hostgroup_id, "refresh_interval_seconds", error);
+		return invalid_locality_policy(hostgroup_id, "refresh_interval_seconds", error);
 	}
 	if (!read_seconds(policy_json, "stale_ttl_seconds", 1800,
 			policy.refresh_interval_seconds, 604800,
 			policy.stale_ttl_seconds)) {
-		return invalid_policy(hostgroup_id, "stale_ttl_seconds", error);
+		return invalid_locality_policy(hostgroup_id, "stale_ttl_seconds", error);
 	}
 
 	policy.valid = true;

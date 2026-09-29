@@ -644,13 +644,15 @@ class ProxySQL_Admin {
 	bool all_modules_started;
 	ProxySQL_Admin();
 	~ProxySQL_Admin();
-	SQLite3DB *admindb;	// in memory
-	SQLite3DB *statsdb;	// in memory
-	SQLite3DB *configdb; // on disk
-	SQLite3DB *monitordb;	// in memory
-	SQLite3DB *statsdb_disk; // on disk
+	// Null until init(): callers such as get_mysql_servers_v2() test
+	// `GloAdmin->admindb` before use, which requires a defined value.
+	SQLite3DB *admindb {nullptr};	// in memory
+	SQLite3DB *statsdb {nullptr};	// in memory
+	SQLite3DB *configdb {nullptr}; // on disk
+	SQLite3DB *monitordb {nullptr};	// in memory
+	SQLite3DB *statsdb_disk {nullptr}; // on disk
 #ifdef DEBUG
-	SQLite3DB *debugdb_disk; // on disk for debug
+	SQLite3DB *debugdb_disk {nullptr}; // on disk for debug
 	int debug_output;
 #endif
 	int pipefd[2];

@@ -6590,6 +6590,10 @@ SQLite3_result* hgm_query(const char* sql, std::string& error) {
 	return result;
 }
 
+// Taken just before MyHGM so the plugin publication path keeps the canonical
+// "runtime install -> HGM" order used by load_mysql_servers_to_runtime().
+thread_local std::unique_ptr<ProxySQL_ServerRuntimeInstallLock> plugin_config_install_lock;
+
 bool plugin_config_lock(void* opaque, ProxySQL_PluginConfigLock which, std::string& error) {
 	auto* admin = static_cast<ProxySQL_Admin*>(opaque);
 	switch (which) {
@@ -6598,6 +6602,8 @@ bool plugin_config_lock(void* opaque, ProxySQL_PluginConfigLock which, std::stri
 			return true;
 		case ProxySQL_PluginConfigLock::hostgroups:
 			if (MyHGM == nullptr) { error = "MySQL hostgroup manager is not available"; return false; }
+			plugin_config_install_lock.reset(
+				new ProxySQL_ServerRuntimeInstallLock(ProxySQL_ServerProtocol::mysql));
 			MyHGM->wrlock();
 			return true;
 		case ProxySQL_PluginConfigLock::auth:
@@ -6621,7 +6627,10 @@ void plugin_config_unlock(void* opaque, ProxySQL_PluginConfigLock which) {
 	auto* admin = static_cast<ProxySQL_Admin*>(opaque);
 	switch (which) {
 		case ProxySQL_PluginConfigLock::admin: admin->mysql_servers_wrunlock(); break;
-		case ProxySQL_PluginConfigLock::hostgroups: MyHGM->wrunlock(); break;
+		case ProxySQL_PluginConfigLock::hostgroups:
+			MyHGM->wrunlock();
+			plugin_config_install_lock.reset();
+			break;
 		case ProxySQL_PluginConfigLock::auth: pthread_mutex_unlock(&users_mutex); break;
 		case ProxySQL_PluginConfigLock::query_processor: GloMyQPro->wrunlock(); break;
 		case ProxySQL_PluginConfigLock::mysql_threads: GloMTH->wrunlock(); break;
