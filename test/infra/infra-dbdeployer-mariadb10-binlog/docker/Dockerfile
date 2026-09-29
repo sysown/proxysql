@@ -10,7 +10,7 @@ FROM ubuntu:22.04
 # with a major >= 11 was classified as newer than MySQL 8.0.23 and the generated
 # replication SQL used CHANGE REPLICATION SOURCE TO, which MariaDB rejects. Keep
 # this at 2.4.0 or newer.
-ARG DBDEPLOYER_VERSION=2.4.1
+ARG DBDEPLOYER_VERSION=2.4.2
 
 ENV DEBIAN_FRONTEND=noninteractive
 
