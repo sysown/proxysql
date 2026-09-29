@@ -94,9 +94,9 @@ def consumer_matrix(plan, workflow, job, instance=None):
             for c in plan['checks'] if c['workflow']==workflow and c['job']==job and c['applicable'] and (instance is None or c['cell'].get('ci_instance','run')==instance)]
 
 def version_tuple(version):
-    match=re.search(r'(\d+)\.(\d+)\.(\d+)',version)
+    match=re.search(r'(\d+)\.(\d+)(?:\.(\d+))?',version)
     if not match:raise ValueError('invalid binary version')
-    return tuple(map(int,match.groups()))
+    return tuple(int(part or 0) for part in match.groups())
 
 def applicable_tests(groups, group, version):
     limit=version_tuple(version)
