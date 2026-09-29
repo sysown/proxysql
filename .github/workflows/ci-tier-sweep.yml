@@ -77,6 +77,25 @@ jobs:
           echo "::error::shards.json declares no shards; the sweep would run nothing"
           exit 1
         fi
+        # The labels must be exactly 0..count-1, each once. Deriving `count`
+        # from the array length is only safe while that holds: GitHub collapses
+        # a duplicated matrix combination, so a repeated label leaves fewer
+        # jobs than `count`, and the modulo in the run step would then route
+        # group indices past the last real shard to nobody -- groups that
+        # silently never run. Validate rather than trust the comment.
+        python3 - ci-control/.github/shards.json <<'PY'
+        import json, sys
+        shards = json.load(open(sys.argv[1]))["shards"]
+        want = [str(i) for i in range(len(shards))]
+        if shards != want:
+            print("::error::shards.json must be exactly %s, got %s" % (want, shards),
+                  file=sys.stderr)
+            print("       Duplicated or non-contiguous labels would make SHARD_COUNT "
+                  "disagree with the number of matrix jobs, and groups whose index "
+                  "modulo lands on a missing shard would never run.", file=sys.stderr)
+            sys.exit(1)
+        print("shard labels are contiguous and unique: %s" % (shards,))
+        PY
         echo "Resolved ${count} shards: ${shards}"
         printf 'shards=%s\n' "${shards}" >> "$GITHUB_OUTPUT"
         printf 'count=%s\n'  "${count}"  >> "$GITHUB_OUTPUT"
