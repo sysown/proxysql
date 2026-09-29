@@ -1,0 +1,88 @@
+name: CI tier context
+on:
+  workflow_call:
+    secrets:
+      PROXYSQL_ARTIFACTS_TOKEN:
+        required: false
+    inputs:
+      trigger:
+        type: string
+      consumer_id:
+        type: string
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: ''
+      source_repository:
+        type: string
+        default: ''
+      source_sha:
+        type: string
+        default: ''
+      consumer_file:
+        type: string
+        required: true
+      consumer_inputs:
+        type: string
+        default: '{}'
+    outputs:
+      matrices:
+        value: ${{ jobs.context.outputs.matrices }}
+      binding:
+        value: ${{ jobs.context.outputs.binding }}
+      execution_id:
+        value: ${{ jobs.context.outputs.execution_id }}
+      control_sha:
+        value: ${{ jobs.context.outputs.control_sha }}
+      sha:
+        value: ${{ jobs.context.outputs.sha }}
+jobs:
+  context:
+    runs-on: ${{ (github.actor == 'renecannao' && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    outputs:
+      matrices: ${{ steps.context.outputs.matrices }}
+      binding: ${{ steps.context.outputs.binding }}
+      execution_id: ${{ steps.context.outputs.execution_id }}
+      control_sha: ${{ steps.context.outputs.control_sha }}
+      sha: ${{ steps.context.outputs.sha }}
+    steps:
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ inputs.control_ref }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Bind this workflow to its producer
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        TRIGGER_JSON: ${{ inputs.trigger }}
+        CONSUMER_INSTANCE: ${{ inputs.consumer_id }}
+        PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+        PRODUCER_ATTEMPT: ${{ inputs.producer_attempt }}
+        SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+        SOURCE_SHA: ${{ inputs.source_sha }}
+        CONSUMER_FILE: ${{ inputs.consumer_file }}
+        CONSUMER_INPUTS: ${{ inputs.consumer_inputs }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py consumer
+      id: context
+    - name: Remember producer across reruns
+      if: ${{ github.run_attempt == 1 }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ steps.context.outputs.binding_name }}
+        path: |
+          binding.json
+          manifest.json
+        retention-days: 3

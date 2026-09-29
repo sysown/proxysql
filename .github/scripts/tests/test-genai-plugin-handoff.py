@@ -39,10 +39,16 @@ restore = named_step(ai_steps, "Restore GenAI plugin from build handoff")
 verify = named_step(ai_steps, "Verify binary and GenAI plugin")
 
 assert "inputs.trusted" in stage["if"]
-assert "contains(matrix.type,'-genai')" in stage["if"]
+assert "matrix.tier == 'v40'" in stage["if"]
+for trusted in (False, True):
+    for tier in ('v30', 'v31', 'v40'):
+        expression = stage['if'].removeprefix('${{').removesuffix('}}').strip()
+        expression = expression.replace('inputs.trusted', str(trusted)).replace('success()', 'True').replace('matrix.tier', repr(tier)).replace('&&', ' and ')
+        assert eval(expression, {'__builtins__': {}}, {}) == (trusted and tier == 'v40')
+
 
 names = [step.get("name") for step in ai_steps]
-assert names.index("Download build handoff") < names.index(restore["name"])
+assert names.index("Restore selected product handoff") < names.index(restore["name"])
 assert names.index(restore["name"]) < names.index(verify["name"])
 assert names.index(verify["name"]) < names.index("Start infrastructure")
 

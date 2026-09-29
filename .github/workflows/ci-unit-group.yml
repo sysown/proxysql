@@ -9,10 +9,33 @@ on:
         type: string
         required: true
 
+      consumer_id:
+        type: string
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: ''
 env:
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
+  tier-context:
+    uses: ./.github/workflows/ci-tier-context.yml
+    with:
+      trigger: ${{ inputs.trigger }}
+      consumer_id: ${{ inputs.consumer_id }}
+      control_ref: ${{ inputs.control_ref }}
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
+      consumer_file: ci-unit-group.yml
+      consumer_inputs: ${{ toJson(inputs) }}
+    secrets: inherit
   tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -22,156 +45,156 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-        id: check
-        if: always()
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: '${{ github.workflow }} / ${{ github.job }} (${{ inputs.tap_group }})'
-          repo: ${{ github.repository }}
-          sha: ${{ env.SHA }}
-          status: in_progress
-          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-context.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Start selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: proxysql
+        persist-credentials: false
 
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ env.SHA }}
-          path: proxysql
-          persist-credentials: false
-
-      - name: Download complete regular handoff
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-        run: |
-          set -euo pipefail
-          command -v zstd >/dev/null || sudo apt-get install -y zstd
-          artifact_name="ci-builds-handoff-${SHA}-ubuntu24-tap-genai-gcov-full"
-          : "${HANDOFF_MAX_ATTEMPTS:=20}"
-          error_log="$(mktemp)"
-          resolve_artifact_id() {
-            local artifact_id=""
-            if [ -n "${BUILD_RUN_ID}" ]; then
-              artifact_id="$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
-                --jq ".artifacts[] | select(.name == \"${artifact_name}\" and .expired == false) | .id" \
-                2>>"${error_log}" | tail -n1 || true)"
-            fi
-            if [ -z "${artifact_id}" ]; then
-              artifact_id="$(gh api "repos/${REPO}/actions/artifacts?name=${artifact_name}&per_page=100" \
-                --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty' \
-                2>>"${error_log}" || true)"
-            fi
-            printf '%s' "${artifact_id}"
-          }
-          artifact_id=""
-          for attempt in $(seq 1 "${HANDOFF_MAX_ATTEMPTS}"); do
-            artifact_id="$(resolve_artifact_id)"
-            [ -n "${artifact_id}" ] && break
-            echo ">>> ${artifact_name} is not available (${attempt}/${HANDOFF_MAX_ATTEMPTS}); retrying in 15s"
-            sleep 15
-          done
-          if [ -z "${artifact_id}" ]; then
-            echo "ERROR: complete regular handoff ${artifact_name} was not found" >&2
-            tail -n 20 "${error_log}" >&2 || true
-            exit 1
+    - name: Restore selected product handoff
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py restore
+    - name: Pull Ubuntu 24 build image
+      env:
+        GHCR_USER: ${{ github.actor }}
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3 4 5; do
+          echo ">>> GHCR login+pull attempt ${attempt}/5"
+          if echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin \
+            && docker pull proxysql/packaging:build-ubuntu24-v4.0.0; then
+            exit 0
           fi
-          gh api "repos/${REPO}/actions/artifacts/${artifact_id}/zip" > full-handoff.zip
-          unzip -o full-handoff.zip
-          zstd -d < cache_full.tar.zst | tar -xf - -C proxysql
-          rm -f full-handoff.zip cache_full.tar.zst
-          test -x proxysql/src/proxysql
+          if [ "${attempt}" -lt 5 ]; then
+            sleep "$((attempt * 10))"
+          fi
+        done
+        echo "ERROR: failed to pull Ubuntu 24 build image after 5 attempts" >&2
+        exit 1
 
-      - name: Pull Ubuntu 24 build image
-        env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3 4 5; do
-            echo ">>> GHCR login+pull attempt ${attempt}/5"
-            if echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin \
-              && docker pull proxysql/packaging:build-ubuntu24-v4.0.0; then
-              exit 0
-            fi
-            if [ "${attempt}" -lt 5 ]; then
-              sleep "$((attempt * 10))"
-            fi
-          done
-          echo "ERROR: failed to pull Ubuntu 24 build image after 5 attempts" >&2
-          exit 1
+    - name: Run selected unit group
+      env:
+        TAP_GROUP: ${{ inputs.tap_group }}
+      run: |
+        set -euo pipefail
+        unit_list="$(mktemp "${RUNNER_TEMP}/unit-tests.XXXXXX")"
+        trap 'rm -f "${unit_list}"' EXIT
+        python3 - <<'PY' > "${unit_list}"
+        import json
+        import os
+        import pathlib
 
-      - name: Run selected unit group
-        env:
-          TAP_GROUP: ${{ inputs.tap_group }}
-        run: |
-          set -euo pipefail
-          unit_list="$(mktemp "${RUNNER_TEMP}/unit-tests.XXXXXX")"
-          trap 'rm -f "${unit_list}"' EXIT
-          python3 - <<'PY' > "${unit_list}"
-          import json
-          import os
-          import pathlib
-
-          group = os.environ["TAP_GROUP"]
-          repo_root = pathlib.Path("proxysql").resolve(strict=True)
-          with (repo_root / "test/tap/groups/groups.json").open(encoding="utf-8") as source:
-              groups = json.load(source)
-          selected = sorted(name for name, tags in groups.items() if group in tags)
-          if not selected:
-              raise SystemExit(f"ERROR: no tests are registered for {group}")
-          unit_dir = (repo_root / "test/tap/tests/unit").resolve(strict=True)
-          for name in selected:
-              try:
-                  path = (unit_dir / name).resolve(strict=True)
-                  path.relative_to(unit_dir)
-              except (OSError, RuntimeError, ValueError):
-                  raise SystemExit(
-                      f"ERROR: {group} selects non-unit or missing executable: {name}"
-                  )
-              if not path.is_file() or not os.access(path, os.X_OK):
-                  raise SystemExit(
-                      f"ERROR: {group} selects non-unit or missing executable: {name}"
-                  )
-              print(path.relative_to(repo_root))
-          PY
-          docker run --rm --network none \
-            -e TAP_GROUP \
-            -v "${PWD}/proxysql:/opt/proxysql" \
-            -v "${unit_list}:/tmp/unit-tests:ro" \
-            -w /opt/proxysql \
-            -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap:/opt/proxysql/test/tap/tap/_runtime_libs \
-            proxysql/packaging:build-ubuntu24-v4.0.0 \
-            bash -ceu '
-              failed=""
-              while IFS= read -r test_binary; do
-                echo ">>> ${test_binary}"
-                if ! "${test_binary}"; then
-                  failed="${failed} ${test_binary}"
-                fi
-              done < /tmp/unit-tests
-              if [ -n "${failed}" ]; then
-                echo ">>> FAILED:${failed}" >&2
-                exit 1
+        group = os.environ["TAP_GROUP"]
+        repo_root = pathlib.Path("proxysql").resolve(strict=True)
+        with (repo_root / "test/tap/groups/groups.json").open(encoding="utf-8") as source:
+            groups = json.load(source)
+        import sys
+        sys.path.insert(0, str(pathlib.Path('ci-control/.github/scripts').resolve()))
+        from ci_tier_plan import applicable_tests
+        metadata = json.loads((repo_root / 'src/ci-tier.json').read_text())
+        selected = applicable_tests(groups, group, metadata['version'])
+        if not selected:
+            raise SystemExit(f"ERROR: no tests are registered for {group}")
+        unit_dir = (repo_root / "test/tap/tests/unit").resolve(strict=True)
+        for name in selected:
+            try:
+                path = (unit_dir / name).resolve(strict=True)
+                path.relative_to(unit_dir)
+            except (OSError, RuntimeError, ValueError):
+                raise SystemExit(
+                    f"ERROR: {group} selects non-unit or missing executable: {name}"
+                )
+            if not path.is_file() or not os.access(path, os.X_OK):
+                raise SystemExit(
+                    f"ERROR: {group} selects non-unit or missing executable: {name}"
+                )
+            print(path.relative_to(repo_root))
+        PY
+        docker run --rm --network none \
+          -e TAP_GROUP \
+          -v "${PWD}/proxysql:/opt/proxysql" \
+          -v "${unit_list}:/tmp/unit-tests:ro" \
+          -w /opt/proxysql \
+          -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap:/opt/proxysql/test/tap/tap/_runtime_libs \
+          proxysql/packaging:build-ubuntu24-v4.0.0 \
+          bash -ceu '
+            failed=""
+            while IFS= read -r test_binary; do
+              echo ">>> ${test_binary}"
+              if ! "${test_binary}"; then
+                failed="${failed} ${test_binary}"
               fi
-            '
+            done < /tmp/unit-tests
+            if [ -n "${failed}" ]; then
+              echo ">>> FAILED:${failed}" >&2
+              exit 1
+            fi
+          '
 
-      - name: Archive unit-test logs on failure
-        if: ${{ failure() && !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ${{ github.workflow }}-${{ env.SHA }}-${{ inputs.tap_group }}-logs-run#${{ github.run_number }}
-          path: proxysql/test/tap/tests/unit/*.log
-          if-no-files-found: ignore
+    - name: Archive unit-test logs on failure
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-${{ inputs.tap_group }}-logs-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
+        path: proxysql/test/tap/tests/unit/*.log
+        if-no-files-found: ignore
 
-      - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-        if: always()
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          check_id: ${{ steps.check.outputs.check_id }}
-          repo: ${{ github.repository }}
-          sha: ${{ env.SHA }}
-          conclusion: ${{ job.status }}
-          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    - name: Complete selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ always() }}
+    needs:
+    - tier-context
+    name: ${{ matrix.check_name }}
+    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['tests'][0] != null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.tier-context.outputs.matrices)['tests'] || fromJson('[{}]') }}
+    env:
+      SHA: ${{ needs.tier-context.outputs.sha }}
+      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
+      CI_LEG: ${{ toJson(matrix) }}
+      TIER: ${{ matrix.tier }}
+      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
+  tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+    needs:
+    - tier-context
+    - tests
+    if: ${{ always() && needs.tier-context.result == 'success' }}
+    uses: ./.github/workflows/ci-tier-summary.yml
+    with:
+      binding: ${{ needs.tier-context.outputs.binding }}
+      control_ref: ${{ needs.tier-context.outputs.control_sha }}
+    secrets: inherit

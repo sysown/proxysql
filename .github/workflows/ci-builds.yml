@@ -2,6 +2,15 @@ name: CI-builds
 
 on:
   workflow_dispatch:
+    inputs:
+      trusted:
+        type: boolean
+        default: true
+        description: Use trusted repository CI infrastructure
+      control_ref:
+        type: string
+        default: GH-Actions
+        description: CI control revision
   workflow_call:
     inputs:
       trigger:
@@ -11,186 +20,52 @@ on:
         required: false
         type: boolean
         default: true
-      tier:
-        # Feature tier to build. v30 = Stable (no flag at all), v31 =
-        # PROXYSQL31=1, v40 = PROXYSQL40=1 (implies PROXYSQL31).
-        #
-        # The default is v40 because that is what every historical caller has
-        # built: PRs and merges alike run the v4.0 tier. CI-tier-sweep.yml is
-        # the only caller that passes anything else, and it does so with its
-        # own explicit matrix leg. Keeping the default at v40 is what makes
-        # this change a no-op for the ~51 existing consumers.
-        description: Feature tier to build (v30, v31 or v40).
-        required: false
+      control_ref:
         type: string
-        default: 'v40'
-      variant:
-        # Artifact variant name, published as
-        # ci-builds-handoff-<sha>-<variant>-full. Defaults to the historical
-        # v40 variant so the existing consumers' hardcoded
-        # HANDOFF_VARIANT: ubuntu24-tap-genai-gcov keeps resolving.
-        description: Handoff artifact variant name.
-        required: false
-        type: string
-        default: 'ubuntu24-tap-genai-gcov'
-
-# This branch requires a pull request, including for admins
-# (enforce_admins is on). `CI-builds-fork.yml` pins a commit on this
-# branch, so anything that lands here changes what an untrusted fork
-# build executes -- direct pushes skip that review entirely.
-#
-# Intentionally NO `permissions:` block here.
-#
-# A reusable workflow may not request more than its caller grants, so a
-# static declaration must be <= the LEAST privileged caller. That is
-# unsatisfiable here: trusted builds need the cache and artifact scopes,
-# while fork builds must hold no write-capable token at all (see
-# docs/superpowers/specs/2026-08-09-fork-pr-builds-design.md, "Security
-# Constraints"). Declaring `write-all` made every call from the
-# least-privilege caller fail before any job started -- which is why
-# CI-builds-fork.yml has never once run (startup_failure on every fork PR).
-#
-# With no block the called workflow inherits the caller's permissions:
-#   CI-builds.yml      (trusted)   grants write-all      -> unchanged
-#   CI-builds-fork.yml (untrusted) grants contents:read  -> now starts
-#
-# contents:read is sufficient for an `inputs.trusted == false` run: only
-# `Checkout repository` executes. Every cache/restore, cache/save,
-# upload-artifact and archive step is gated on inputs.trusted, and BOTH
-# LouisBrunner/checks-action steps are `inputs.trusted && always()`, so the
-# fork path creates no custom checks and needs no checks:write -- exactly as
-# the design spec requires.
-#
-# On a direct `workflow_dispatch` there is no caller, so the repository
-# default token applies (currently `write`), which covers the cache and
-# artifact steps. This workflow uses no OIDC, so the absence of id-token
-# in that default is not a concern.
-
+        default: GH-Actions
 env:
   LOCK: CI_BUILDS_${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
 
-  resolve-tap-mode:
-    # NO `permissions:` block here -- same reason as the workflow-level one
-    # above. A called workflow may only narrow the caller's token, never
-    # widen it, and CI-builds-fork.yml grants exactly `contents: read`.
-    # Requesting `pull-requests: read` here made every fork PR fail at
-    # startup with zero jobs (`startup_failure`), because GitHub rejects a
-    # called workflow that asks for a scope its caller did not grant.
-    #
-    # Nothing is lost: the trusted caller (CI-builds.yml) grants write-all,
-    # so this job inherits pull-requests: read there, which is the only
-    # caller whose path reaches the `gh api` label read in
-    # resolve-tap-build-mode.bash. That script returns at its first line for
-    # an untrusted caller, so the fork path never needs the scope at all.
-    runs-on: ubuntu-24.04
+  plan:
+    runs-on: ${{ inputs.trusted && ((github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
+    timeout-minutes: 20
     outputs:
-      mode: ${{ steps.resolve.outputs.mode }}
+      plan: ${{ steps.plan.outputs.plan }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      execution_id: ${{ steps.plan.outputs.execution_id }}
+      control_sha: ${{ steps.plan.outputs.control_sha }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
-        ref: GH-Actions
+        repository: sysown/proxysql
+        ref: ${{ inputs.control_ref }}
         path: ci-control
-        sparse-checkout: |
-          .github/scripts/resolve-tap-build-mode.bash
-        sparse-checkout-cone-mode: false
-    - name: Resolve TAP build mode from PR label
-      id: resolve
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Resolve selected product configurations
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        TRUSTED: ${{ inputs.trusted }}
+        GITHUB_JSON: ${{ toJson(github) }}
         TRIGGER_JSON: ${{ inputs.trigger }}
+        TRUSTED: ${{ inputs.trusted }}
+        CI_VARIABLES: ${{ toJson(vars) }}
       run: |
-        chmod +x ci-control/.github/scripts/resolve-tap-build-mode.bash
-        mode="$(ci-control/.github/scripts/resolve-tap-build-mode.bash)"
-        echo "Selected TAP build mode: ${mode}"
-        printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
-
-  resolve-tier:
-    # NO `permissions:` block here, for exactly the reason spelled out on
-    # resolve-tap-mode above: a called workflow may only narrow the caller's
-    # token, never widen it, and CI-builds-fork.yml grants exactly
-    # `contents: read`. Declaring any scope here would make every fork PR fail
-    # at startup with zero jobs. This job needs no token at all -- it is pure
-    # shell, no checkout, no API call -- so it is safe for every caller.
-    #
-    # This job exists so that `tier` reaches `builds` the same way
-    # `TAP_BUILD_MODE` does (a resolve-* job feeding `needs.*.outputs.*` into
-    # the matrix and env), rather than by reading `inputs` inside
-    # `strategy.matrix`. It matches the file's existing idiom, and it puts the
-    # tier validation in exactly one place.
-    runs-on: ubuntu-24.04
-    outputs:
-      tier: ${{ steps.t.outputs.tier }}
-      variant: ${{ steps.t.outputs.variant }}
-      is_v40: ${{ steps.t.outputs.is_v40 }}
-    steps:
-    - name: Resolve feature tier
-      id: t
-      env:
-        TIER_IN: ${{ inputs.tier }}
-        VARIANT_IN: ${{ inputs.variant }}
-      run: |
-        set -euo pipefail
-        case "${TIER_IN}" in
-          v30)
-            TIER=v30
-            VARIANT="${VARIANT_IN}"
-            [ "${VARIANT}" = 'ubuntu24-tap-genai-gcov' ] && VARIANT=ubuntu24-tap-v30
-            ;;
-          v31)
-            TIER=v31
-            VARIANT="${VARIANT_IN}"
-            [ "${VARIANT}" = 'ubuntu24-tap-genai-gcov' ] && VARIANT=ubuntu24-tap-v31
-            ;;
-          v40)
-            TIER=v40
-            # The v40 variant is load-bearing: 49 existing consumers hardcode
-            # it. Never let a caller silently repoint it.
-            VARIANT=ubuntu24-tap-genai-gcov
-            ;;
-          *)
-            echo "::error::unknown tier '${TIER_IN}' (expected v30, v31 or v40)"
-            exit 1
-            ;;
-        esac
-        echo "Resolved feature tier: ${TIER} (variant=${VARIANT})"
-        printf 'tier=%s\n'    "${TIER}"    >> "$GITHUB_OUTPUT"
-        printf 'variant=%s\n' "${VARIANT}" >> "$GITHUB_OUTPUT"
-        printf 'is_v40=%s\n'  "$([ "${TIER}" = v40 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-
-#  lock:
-#    runs-on: ubuntu-22.04
-#    env:
-#      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-#
-#    steps:
-#
-#    - name: Concurency locking
-#      run: |
-#        # lock fast
-#        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
-#        gh variable -R ${{ github.repository }} list | grep -i ${LOCK} >/dev/null || gh variable -R ${{ github.repository }} set ${LOCK} -b '${{ github.workflow }}' >/dev/null
-#
-#        # wait for unlock
-#        sleep 5
-#        PROBE="$(gh variable -R ${{ github.repository }} list | grep -i ${LOCK} || echo '')"
-#        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
-#          while [[ ! -z ${PROBE} ]]; do
-#            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
-#            sleep 15
-#            PROBE="$(gh variable -R ${{ github.repository }} list | grep -i ${LOCK} || echo '')"
-#          done
-#        else
-#          echo "Aquired lock '${LOCK^^}' by '${{ github.workflow }}'"
-#        fi
-
-
-
+        python3 ci-control/.github/scripts/ci_tier_runtime.py plan
+      id: plan
+    - name: Publish execution plan
+      if: ${{ inputs.trusted && success() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-plan-${{ steps.plan.outputs.execution_id }}
+        path: plan.json
+        retention-days: 3
   builds:
-    needs: [ resolve-tap-mode, resolve-tier ]
+    needs:
+    - plan
     # Route to the self-hosted proxysql-ci pool only when: the actor is renecannao
     # (trusted) AND this workflow is listed in the SELFHOSTED_WORKFLOWS repo variable.
     # Otherwise fall back to GitHub-hosted ubuntu-24.04. Empty/absent variable = no routing.
@@ -201,70 +76,22 @@ jobs:
 #      matrix: ${{ steps.set-matrix.outputs.matrix }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-
-          # The sole regular producer. It builds the complete chassis with
-          # coverage metadata and retains every TAP/unit binary for every
-          # downstream group.
-          #
-          # `type` is now just '-tap': that token is what selects
-          # `make ubuntu24-tap` -> build_tap_test_debug (see the note at the
-          # make invocation). The feature tier used to be smuggled into this
-          # same string as a '-genai' / '-gcov' substring and then recovered by
-          # pattern-matching it back out in five different places, which meant
-          # the tier had two sources of truth. `tier` is now an explicit matrix
-          # key, and `variant` is what actually names the handoff artifact.
-          - dist: 'ubuntu24'
-            type: '-tap'
-            tier: ${{ needs.resolve-tier.outputs.tier }}
-            variant: ${{ needs.resolve-tier.outputs.variant }}
-          # ubuntu22 is needed for ASAN TAP testing
-          # disabled to save cache space
-          #- dist: 'ubuntu22'
-          #  type: '-tap-asan'
-#          - dist: 'ubuntu22'
-#            type: '-clang'
-#          - dist: 'ubuntu22'
-#            type: '-clang-tap'
-#          - dist: 'ubuntu22'
-#            type: '-clang-tap-asan'
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     env:
       # Feature tier, resolved once in the resolve-tier job and threaded in
       # here. IS_V40 is the single boolean every v4.0-only step gates on, so
       # "does this step need the plugin chassis?" is answered in one place
       # instead of by substring-matching `type` at each call site.
-      TIER: ${{ needs.resolve-tier.outputs.tier }}
-      IS_V40: ${{ needs.resolve-tier.outputs.is_v40 }}
-      VARIANT: ${{ needs.resolve-tier.outputs.variant }}
-      TAP_BUILD_MODE: ${{ needs.resolve-tap-mode.outputs.mode }}
-      MATRIX: '(${{ matrix.dist }},${{ matrix.type }},${{ needs.resolve-tier.outputs.tier }},${{ needs.resolve-tap-mode.outputs.mode }})'
+      TIER: ${{ matrix.tier }}
+      IS_V40: ${{ matrix.tier == 'v40' }}
+      VARIANT: ${{ matrix.variant }}
+      TAP_BUILD_MODE: ${{ matrix.mode }}
+      MATRIX: '(${{ matrix.tier }},${{ matrix.mode }})'
 
+      CI_PLAN: ${{ needs.plan.outputs.plan }}
+      CI_LEG: ${{ toJson(matrix) }}
     steps:
 
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      id: checks
-      if: ${{ inputs.trusted && always() }}
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        status: 'in_progress'
-#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-    
-    # Self-hosted runners reuse the working directory between jobs. A cancelled
-    # dockerized build can leave its Compose stack running against the
-    # bind-mounted checkout (./:/opt/proxysql), where it continues to create
-    # root-owned files while the next job starts. A VM receives all CI-builds
-    # matrix legs serially, so the stale writer can belong to a different
-    # distribution than the new leg. The previous project-name-filtered cleanup
-    # never matched, because the Makefile names each project
-    # <BLD_NAME>-<GITVERSION> (e.g. ubuntu24-tap-genai-gcov-3.0.11-502-gd8bdd5a), not the
-    # bare distribution name. Nuke ALL docker state on the runner instead: every
-    # container, every volume, every network. Nothing dockerized may survive
-    # into the next job.
     - name: Nuke all docker state (self-hosted)
       if: ${{ inputs.trusted && runner.environment == 'self-hosted' }}
       run: |
@@ -305,6 +132,31 @@ jobs:
           exit 1
         fi
 
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.plan.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Check immutable artifacts retained by a partial rerun
+      id: artifacts
+      if: ${{ inputs.trusted && success() }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py artifact-status
+    - name: Start product build check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ inputs.trusted && success() }}
     - name: Checkout repository
       if: ${{ success() }}
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -327,23 +179,6 @@ jobs:
     # which does `cd proxysql/`, can invoke it by a short path while the
     # script's own relative test/tap/... lookups still resolve against the
     # commit under test.
-    - name: Stage tier-prune helper
-      if: ${{ inputs.trusted && success() && needs.resolve-tier.outputs.is_v40 != 'true' }}
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      with:
-        repository: ${{ github.repository }}
-        ref: GH-Actions
-        path: ci-control
-        sparse-checkout: |
-          .github/scripts/prune-tier-handoff.bash
-        sparse-checkout-cone-mode: false
-
-    # Vendored dependency archives are committed directly to git (no Git LFS),
-    # so a plain checkout already contains the real archives. Just run each
-    # dep's verifier before the Docker build container starts. The glob is
-    # guarded so a branch with no verifier scripts still succeeds; enable
-    # nullglob so a missing verifier expands to no loop iterations rather
-    # than a literal non-executable pattern that would fail under `set -e`.
     - name: Verify vendored source archives
       if: ${{ inputs.trusted && success() }}
       working-directory: proxysql
@@ -401,7 +236,7 @@ jobs:
             sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
             # Coverage instrumentation. v40-only: WITHGCOV=1 costs build time
             # and emits .gcno that only the Codecov collector consumes, and the
-            # CI-tier-sweep consumer does not set COVERAGE=1. See the handoff
+            # lower-tier consumers do not set COVERAGE=1. See the handoff
             # pack step, which tolerates a missing .gcno set.
             sed -i "/command/i \      - WITHGCOV=1" docker-compose.yml
             ;;
@@ -546,7 +381,7 @@ jobs:
           # On a v30/v31 leg, prune-tier-handoff.bash has ALREADY reduced
           # tests/unit to exactly the binaries this tier's version filter can
           # select, and UNIT_COUNT above is measured after that prune. So the
-          # correct action is to keep them: ci-tier-sweep.yml runs the
+          # correct action is to keep them: lower-tier CI runs the
           # `unit-tests-g1` group explicitly, and deleting them here would
           # leave the handoff unable to run it. (This branch used to be the
           # catch-all `else` that deleted every unit binary; for v30/v31 that
@@ -669,7 +504,7 @@ jobs:
       # prints "[skip] <plugin> (PROXYSQL40 not set)"), and the `cp -L
       # plugins/mysqlx/...` below is unconditional, so this step must not run
       # for v30/v31 or it aborts on a missing file.
-      if: ${{ inputs.trusted && success() && needs.resolve-tier.outputs.is_v40 == 'true' }}
+      if: ${{ inputs.trusted && success() && matrix.tier == 'v40' }}
       run: |
         set -euo pipefail
         cd proxysql/
@@ -723,7 +558,7 @@ jobs:
 
     - name: Stage GenAI plugin in test handoff
       # v40 only -- see the MySQLX staging step above.
-      if: ${{ inputs.trusted && success() && needs.resolve-tier.outputs.is_v40 == 'true' }}
+      if: ${{ inputs.trusted && success() && matrix.tier == 'v40' }}
       run: |
         set -euo pipefail
         cd proxysql/
@@ -738,6 +573,28 @@ jobs:
         test -s "${plugin_dest}"
         ls -la "$(dirname "${plugin_dest}")"
 
+    - name: Run lower-tier unit coverage
+      env:
+        TAP_GROUP: unit-tests-g1
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py units
+      if: ${{ inputs.trusted && success() && matrix.tier != 'v40' }}
+    - name: Record built product metadata
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py stamp
+      if: ${{ inputs.trusted && success() }}
+    - name: Publish product metadata
+      if: ${{ inputs.trusted && success() && steps.artifacts.outputs.publish_metadata == 'true' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-leg-${{ needs.plan.outputs.execution_id }}-${{ matrix.tier }}
+        path: metadata.json
+        retention-days: 3
     - name: Pack complete regular handoff (zstd-15)
       # Tier-agnostic. This used to be gated on the '-gcov' substring, i.e. on
       # the v40 leg only. The pack itself is tier-agnostic already: every entry
@@ -769,14 +626,11 @@ jobs:
           | zstd -15 -T0 -o ../cache_full.tar.zst
 
     - name: Upload complete regular handoff
-      if: ${{ inputs.trusted && success() }}
+      if: ${{ inputs.trusted && success() && steps.artifacts.outputs.publish_handoff == 'true' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        # The variant is the tier's identity in the artifact namespace. Every
-        # existing consumer hardcodes HANDOFF_VARIANT: ubuntu24-tap-genai-gcov,
-        # so resolve-tier pins that exact name for v40; the sweep's legs publish
-        # ubuntu24-tap-v30 / -v31 alongside it, with no collision.
-        name: ci-builds-handoff-${{ env.SHA }}-${{ env.VARIANT }}-full
+        # Execution, product tier and mode identify this immutable handoff.
+        name: ${{ matrix.artifact_name }}
         retention-days: 1
         # 0 is deliberate: the payload is already zstd-15 compressed by the pack
         # step, and re-compressing it measures at <=0.23% size for minutes of
@@ -831,7 +685,7 @@ jobs:
       if: ${{ inputs.trusted && failure() && !cancelled() && (steps.build.outcome == 'failure' || steps.check_build.outcome == 'failure') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: ci-builds-${{ env.SHA }}-run#${{ github.run_number }}-${{ matrix.dist }}${{ matrix.type }}
+        name: ci-builds-${{ needs.plan.outputs.execution_id }}-${{ matrix.tier }}-${{ matrix.mode }}-logs-attempt${{ github.run_attempt }}
         # The checkout is a live bind mount on self-hosted runners. Uploading
         # it after an unrelated preflight failure can race a stale container
         # and turn a diagnostic upload into a second failure. Build logs are
@@ -839,36 +693,44 @@ jobs:
         path: proxysql/ci_build_log/
         if-no-files-found: warn
 
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+    - name: Complete product build check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
       if: ${{ inputs.trusted && always() }}
+    name: ${{ matrix.check_name }}
+  finalize:
+    needs:
+    - plan
+    - builds
+    if: ${{ inputs.trusted && always() && needs.plan.result == 'success' }}
+    runs-on: ${{ inputs.trusted && ((github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
+    steps:
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        check_id: ${{ steps.checks.outputs.check_id }}
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        conclusion: ${{ job.status }}
-#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-
-#  unlock:
-#    runs-on: ubuntu-22.04
-#    if: ${{ always() }}
-#    needs: [ builds ]
-#    env:
-#      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-#
-#    steps:
-#    
-#    - name: Concurency unlock
-#      run: |
-#        # delete lock
-#        PROBE="$(gh variable -R ${{ github.repository }} list | grep -i ${LOCK} || echo '')"
-#        if [[ ${PROBE} =~ ${{ github.workflow }} ]]; then
-#          echo "Releasing lock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-#          gh variable -R ${{ github.repository }} delete ${LOCK} || true
-#        elif [[ ! -z ${PROBE} ]]; then
-#          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-#        #  exit -1
-#        else
-#          echo "Not locked '${LOCK^^}'"
-#        fi
+        repository: sysown/proxysql
+        ref: ${{ needs.plan.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Finalize build manifest
+      id: finalize
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CI_PLAN: ${{ needs.plan.outputs.plan }}
+        BUILD_RESULT: ${{ needs.builds.result }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py finalize
+    - name: Publish immutable manifest
+      if: ${{ inputs.trusted && steps.finalize.outputs.publish_manifest == 'true' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-manifest-${{ needs.plan.outputs.execution_id }}
+        path: manifest.json
+        retention-days: 3

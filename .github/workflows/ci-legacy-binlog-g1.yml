@@ -6,6 +6,18 @@ on:
       trigger:
         type: string
 
+      consumer_id:
+        type: string
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: ''
 permissions:
   actions: read
   checks: write
@@ -15,8 +27,12 @@ permissions:
 
 jobs:
   tests:
-    uses: sysown/proxysql/.github/workflows/ci-ai-gcov.yml@GH-Actions
+    uses: ./.github/workflows/ci-ai-gcov.yml
     with:
       trigger: ${{ inputs.trigger }}
       tap_group: legacy-binlog-g1
       infra_id: ci-legacy-binlog-g1
+      consumer_id: ${{ inputs.consumer_id }}
+      control_ref: ${{ inputs.control_ref }}
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
