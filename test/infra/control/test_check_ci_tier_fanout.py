@@ -1,10 +1,13 @@
 import copy,unittest
 from check_ci_tier_fanout import validate_routes, version
+from ci_tier_conditions import condition_allows
 class RouteTests(unittest.TestCase):
  def fixture(self):
   rows=[dict(workflow='CI-g1',file='ci-g1.yml',job='tests',instance='run',automatic=True,tiers=['v40','v30','v31'],groups=['g1'],cells=[{}])]
   callers={'CI-g1':{'on':{'workflow_run':{'workflows':['CI-trigger']}},'jobs':{'run':{'uses':'sysown/proxysql/.github/workflows/ci-g1.yml@GH-Actions'}}}}
   engines={'ci-g1.yml':{'jobs':{'tier-context':{},'tests':{'needs':['tier-context'],'strategy':{'matrix':{'include':"${{ fromJson(needs.tier-context.outputs.matrices)['tests'] || fromJson('[{}]') }}"}},'steps':[{'run':'python3 ci_tier_runtime.py restore'}, {'run':'export TAP_GROUP=g1\ntest/infra/control/run-tests-isolated.bash'}]}}}}
+  engines['ci-g1.yml']['jobs']['tier-context']={'uses':'./.github/workflows/ci-tier-context.yml','with':{'consumer_file':'ci-g1.yml'}}
+  engines['ci-tier-context.yml']={'on':{'workflow_call':{'outputs':{'matrices':{'value':'${{ jobs.context.outputs.matrices }}'}}}},'jobs':{'context':{'outputs':{'matrices':'${{ steps.context.outputs.matrices }}'},'steps':[{'id':'context','run':'python3 ci-control/.github/scripts/ci_tier_runtime.py consumer','env':{'CONSUMER_FILE':'${{ inputs.consumer_file }}'}}]}}}
   return rows,callers,engines
  def test_good_and_missing(self):
   rows,c,e=self.fixture();self.assertEqual(validate_routes(rows,c,e,{'g1'},{'g1'}),[])
@@ -47,6 +50,7 @@ class RouteTests(unittest.TestCase):
   row=dict(workflow='CI-builds',file='ci-unit-group.yml',job='tier-units',automatic=True,tiers=['v30','v31'],groups=['unit-tests-g1'],cells=[{}])
   callers={'CI-builds':{'on':{'workflow_run':{'workflows':['CI-trigger']}},'jobs':{'run':{'uses':'sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions'}}}}
   engines={'ci-builds.yml':{'jobs':{'builds':{'needs':['plan'],'strategy':{'matrix':'${{ fromJson(needs.plan.outputs.matrix) }}'},'steps':[{'run':'python3 ci_tier_runtime.py units','env':{'TAP_GROUP':'unit-tests-g1'},'if':"${{ inputs.trusted && success() && matrix.tier != 'v40' }}"}]}}}}
+  engines['ci-builds.yml']['jobs']['plan']={'outputs':{'matrix':'${{ steps.plan.outputs.matrix }}'},'steps':[{'id':'plan','run':'python3 ci-control/.github/scripts/ci_tier_runtime.py plan'}]}
   return [row],callers,engines
  def test_unit_route_requires_automatic_execution_and_group(self):
   rows,c,e=self.unit_fixture();self.assertEqual(validate_routes(rows,c,e,{'unit-tests-g1'},{'unit-tests-g1'}),[])
@@ -58,4 +62,36 @@ class RouteTests(unittest.TestCase):
    if what=='group':job['steps'][0]['env']['TAP_GROUP']='wrong'
    if what=='matrix':job['strategy']['matrix']={'tier':['v40']}
    self.assertIn('lower-tier coverage lost: v30/unit-tests-g1',validate_routes(rows,c,e,{'unit-tests-g1'},{'unit-tests-g1'}),what)
+ def test_negation_with_comparisons_fails_closed(self):
+  for gate in ["!matrix.tier == 'v40'", "!matrix.tier != 'v30'", "!(matrix.tier) == 'v40'"]:
+   with self.subTest(gate=gate):
+    with self.assertRaisesRegex(ValueError,'negation.*comparison'):
+     condition_allows(gate,'v30','normal')
+  self.assertTrue(condition_allows('!cancelled()','v30','normal'))
+  self.assertTrue(condition_allows("!cancelled() && matrix.tier != 'v40'",'v30','normal'))
+  self.assertFalse(condition_allows('!matrix.coverage','v40','normal'))
+ def test_matrix_output_chain_must_be_enabled_and_wired(self):
+  for what in ['disabled-call','wrong-callee','wrong-file','workflow-output','job-output','disabled-job','disabled-step','wrong-command','missing-step','missing-env']:
+   with self.subTest(what=what):
+    rows,c,e=self.fixture(); call=e['ci-g1.yml']['jobs']['tier-context']
+    shared=e['ci-tier-context.yml']; job=shared['jobs']['context']; step=job['steps'][0]
+    if what=='disabled-call':call['if']='${{ false }}'
+    if what=='wrong-callee':call['uses']='./.github/workflows/other.yml'
+    if what=='wrong-file':call['with']['consumer_file']='ci-wrong.yml'
+    if what=='workflow-output':shared['on']['workflow_call']['outputs']['matrices']['value']='{}'
+    if what=='job-output':job['outputs']['matrices']='{}'
+    if what=='disabled-job':job['if']='${{ false }}'
+    if what=='disabled-step':step['if']='${{ false }}'
+    if what=='wrong-command':step['run']='echo no matrix'
+    if what=='missing-step':job['steps']=[]
+    if what=='missing-env':step['env']={}
+    self.assertIn('lower-tier coverage lost: v30/g1',validate_routes(rows,c,e,{'g1'},{'g1'}))
+ def test_producer_plan_output_must_be_enabled_and_wired(self):
+  for what in ['output','job','step','command']:
+   rows,c,e=self.unit_fixture(); plan=e['ci-builds.yml']['jobs']['plan']
+   if what=='output':plan['outputs']['matrix']='{}'
+   if what=='job':plan['if']='${{ false }}'
+   if what=='step':plan['steps'][0]['if']='${{ false }}'
+   if what=='command':plan['steps'][0]['run']='echo no plan'
+   self.assertIn('lower-tier coverage lost: v30/unit-tests-g1',validate_routes(rows,c,e,{'unit-tests-g1'},{'unit-tests-g1'}))
 if __name__=='__main__':unittest.main()

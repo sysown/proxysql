@@ -1124,8 +1124,10 @@ gh run list --branch <branch> --commit <sha>
 
 The v3.0 branch's runs include a run-name of the form:
 `<branch> <workflow> <head_sha> trigger=<run_id>/<attempt>`. Manual consumer
-runs instead identify the selected `producer=<run_id>/<attempt>`. Filter by
-SHA and execution identity to distinguish repeated runs of the same commit.
+runs instead identify the selected `producer=<run_id>/<attempt>`. Filter automatic
+runs by SHA and trigger identity. For manual consumers, search
+by `producer=<run_id>/<attempt>`: the title SHA belongs to the dispatch ref,
+which can differ from the selected producer commit.
 
 ### Step 3: inspect the reusable version actually used
 

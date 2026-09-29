@@ -100,6 +100,13 @@ def condition_allows(condition, tier, mode, inputs=None, job='tests'):
     if expression[offset:].strip() or not translated:
         raise ValueError('unsupported condition token')
     try:
-        return bool(evaluate(ast.parse(' '.join(translated), mode='eval').body))
+        tree = ast.parse(' '.join(translated), mode='eval').body
+        # Actions binds ! above equality; Python binds not below equality.
+        # Reject ambiguous negated comparisons, while allowing independent
+        # terms such as !cancelled() && matrix.tier != 'v40'.
+        if any(isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not)
+               and isinstance(node.operand, ast.Compare) for node in ast.walk(tree)):
+            raise ValueError('negation before comparison is unsupported; use an explicit inverse comparison')
+        return bool(evaluate(tree))
     except (SyntaxError, TypeError, KeyError, AttributeError) as error:
         raise ValueError('unsupported condition expression') from error

@@ -34,6 +34,56 @@ def selected_matrix(job, job_id, producer=False):
     expected="${{ fromJson(needs.tier-context.outputs.matrices)['"+job_id+"'] || fromJson('[{}]') }}"
     return re.sub(r'\s+','',str(matrix['include']))==re.sub(r'\s+','',expected)
 
+def same_expression(value, expected):
+    return re.sub(r'\s+', '', str(value)) == re.sub(r'\s+', '', expected)
+
+
+def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, producer):
+    """Trace matrix outputs to the enabled plan/consumer runtime step.
+
+    This validates workflow wiring, not arbitrary Python semantics. The engine's
+    runtime/plan tests validate the actual tier cells emitted by those commands.
+    """
+    if producer:
+        source = body.get('jobs', {}).get('plan', {})
+        source_inputs = inputs
+        step_id, output, command = 'plan', 'matrix', 'plan'
+    else:
+        call = body.get('jobs', {}).get('tier-context', {})
+        if target(call) != 'ci-tier-context.yml':
+            return False
+        if not allowed(call.get('if'), tier, mode, inputs, row['job']):
+            return False
+        source_inputs = {key: resolve(value, inputs) for key, value in call.get('with', {}).items()}
+        if source_inputs.get('consumer_file') != row['file']:
+            return False
+        shared = engines.get('ci-tier-context.yml', {})
+        declared = events(shared).get('workflow_call', {}).get('outputs', {}).get('matrices', {})
+        if not same_expression(declared.get('value'), '${{ jobs.context.outputs.matrices }}'):
+            return False
+        source = shared.get('jobs', {}).get('context', {})
+        step_id, output, command = 'context', 'matrices', 'consumer'
+    if not allowed(source.get('if'), tier, mode, source_inputs, row['job']):
+        return False
+    if not same_expression(source.get('outputs', {}).get(output),
+                           '${{ steps.' + step_id + '.outputs.' + output + ' }}'):
+        return False
+    steps = [step for step in source.get('steps', []) if step.get('id') == step_id]
+    if len(steps) != 1:
+        return False
+    step = steps[0]
+    if not allowed(step.get('if'), tier, mode, source_inputs, row['job']):
+        return False
+    # Accept only the reviewed invocation; a commented command or a subsequent
+    # echo overwriting GITHUB_OUTPUT must not satisfy the output contract.
+    if str(step.get('run', '')).strip() != 'python3 ci-control/.github/scripts/ci_tier_runtime.py ' + command:
+        return False
+    if not producer and not same_expression(step.get('env', {}).get('CONSUMER_FILE'),
+                                            '${{ inputs.consumer_file }}'):
+        return False
+    return True
+
+
 def validate_routes(rows,callers,engines,known_groups,migrated):
     errors=[];covered={'v30':set(),'v31':set()};identities=set()
     def allowed(condition,tier,mode,inputs,job):
@@ -78,6 +128,10 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
                 wired=set()
                 for inputs,gates in routes:
                     if not all(allowed(gate,tier,mode,values,row['job']) for gate,values in gates):continue
+                    if not matrix_source_allows(body,engines,row,inputs,tier,mode,allowed,producer):
+                        message='matrix output source is disabled or miswired: '+str(identity)
+                        if message not in errors:errors.append(message)
+                        continue
                     if not allowed(job.get('if'),tier,mode,inputs,row['job']):continue
                     for step in job.get('steps',[]):
                         run=resolve(step.get('run',''),inputs)

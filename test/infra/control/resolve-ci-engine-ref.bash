@@ -12,6 +12,9 @@ elif [[ -f .github/ci-tier-engine-ref ]]; then
         exit 1
     fi
     printf '%s\n' "${candidate_sha}"
+elif git rev-parse --verify --quiet origin/GH-Actions >/dev/null; then
+    echo 'Paired CI engine lacks the tier catalogue and no .github/ci-tier-engine-ref pin exists; restore the companion pin or select a compatible CI_ENGINE_REF.' >&2
+    exit 1
 else
     printf '%s\n' origin/GH-Actions
 fi

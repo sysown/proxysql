@@ -28,6 +28,15 @@ class EngineRefTests(unittest.TestCase):
             (root / '.github/ci-tier-engine-ref').write_text('bad-ref\n')
             self.assertNotEqual(select().returncode, 0)
             (root / '.github/ci-tier-engine-ref').write_text(pin + '\n')
+            (root / '.github/ci-tier-engine-ref').unlink()
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            'commit', '--allow-empty', '-qm', 'legacy engine'], cwd=root, check=True)
+            subprocess.run(['git', 'update-ref', 'refs/remotes/origin/GH-Actions', 'HEAD'], cwd=root, check=True)
+            result = select()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('catalogue', result.stderr)
+            self.assertIn('pin', result.stderr)
             (root / '.github/ci-tier-consumers.json').write_text('{}')
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',

@@ -48,7 +48,7 @@ repository, SHA and token. Manual subsets use distinct summary and check names.
   selected companion SHA. The missing-engine-ref path also passes, skipping
   paired structural checks while still running every validator test suite. Its advisory group-coverage output retains the baseline warning
   `missing-workflow NEW=1 known=36`; this is not a warning-free claim.
-- Fork-isolation mutation tests: 22 passed. Tier-route mutation tests: 8 passed,
+- Fork-isolation mutation tests: 22 passed. Tier-route mutation tests: 11 passed,
   including removal of either lower tier, disabled routes, selected-matrix wiring,
   both modes, and producer unit coverage. Engine-ref selection tests: 2 passed.
 - Engine actionlint passes for the full workflow directory. Caller actionlint
@@ -119,6 +119,26 @@ independent review of the corrections is claimed.
   Missing-ref handling covers both paired checks while all validator tests run.
 - Operator documentation restores the clean-build warning and staged rollout
   requirements and clarifies that `control_ref` selects scripts only.
+
+Follow-up Cubic review on the published revision:
+
+- Negation before a comparison is rejected with a diagnostic rather than
+  translated with Python's different precedence. Independent negation terms,
+  such as `!cancelled() && matrix.tier != 'v40'`, remain supported.
+- Coverage requires an enabled matrix source: the consumer call, shared workflow
+  output, context job output and runtime step must be wired together. The
+  producer's plan output is checked too. Mutation tests cover disabled sources,
+  broken output mappings, missing steps and the wrong runtime command or file.
+  This is a structural contract; engine tests validate runtime-emitted cells.
+- A fetched legacy engine without a companion pin fails with a clear diagnostic.
+  Manual-run documentation directs searches to producer run/attempt, since the
+  title SHA is the dispatch ref's SHA.
+- Both comments about empty automatic producer inputs describe the intended
+  paired contract: the engine inputs are optional strings defaulting to empty,
+  and `consumer()` loads the trigger's accepted-producer artifact when no manual
+  run ID is supplied. They do not require caller changes; live candidate
+  validation and staged rollout remain necessary.
+- The full paired lint suite and standalone shellcheck pass after these changes.
 
 These corrections do not close the reporting/live-validation limits below.
 
