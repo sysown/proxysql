@@ -304,10 +304,10 @@ jobs:
           echo "WARNING: ${LIST} not found; falling back to the original 3-group baseline"
           ALL_GROUPS=(unit-tests-g1 legacy-g1 mysql84-g1)
         fi
-        GROUPS=()
+        SELECTED_GROUPS=()
         i=0
         for g in "${ALL_GROUPS[@]}"; do
-          if [ $((i % SHARD_COUNT)) -eq "${SHARD}" ]; then GROUPS+=("${g}"); fi
+          if [ $((i % SHARD_COUNT)) -eq "${SHARD}" ]; then SELECTED_GROUPS+=("${g}"); fi
           i=$((i + 1))
         done
         # Guard the matrix/count contract at run time. SHARD comes from the
@@ -318,16 +318,53 @@ jobs:
           echo "::error::shard '${SHARD}' is not a valid index for SHARD_COUNT=${SHARD_COUNT}"
           exit 1
         fi
-        echo ">>> shard ${SHARD}/${SHARD_COUNT}: ${#GROUPS[@]} of ${#ALL_GROUPS[@]} groups"
-        printf '>>>   %s\n' "${GROUPS[@]}"
+        echo ">>> shard ${SHARD}/${SHARD_COUNT}: ${#SELECTED_GROUPS[@]} of ${#ALL_GROUPS[@]} groups"
+        printf '>>>   %s\n' "${SELECTED_GROUPS[@]}"
 
-        if [ "${#GROUPS[@]}" -eq 0 ]; then
-          echo ">>> shard ${SHARD} has no groups; nothing to do"
+        if [ "${#SELECTED_GROUPS[@]}" -eq 0 ]; then
+          # Distinguish "this shard legitimately has no work" from "the list is
+          # broken". The latter used to exit 0 here, which made a list that was
+          # all comments -- or a list that failed to parse -- look like a
+          # perfectly green sweep that ran nothing.
+          if [ "${#ALL_GROUPS[@]}" -eq 0 ]; then
+            echo "::error::${LIST} exists but yielded no groups; refusing to run an empty sweep"
+            exit 1
+          fi
+          echo ">>> shard ${SHARD} has no groups (list has ${#ALL_GROUPS[@]}); nothing to do"
           exit 0
         fi
 
+        # Every selected name must be a real group. This is not paranoia: the
+        # array was once called GROUPS, which bash reserves for the runner
+        # user's group IDs, so `GROUPS=()` silently did nothing and the shard
+        # ended up "running" TAP_GROUP=1004, TAP_GROUP=114, ... Those are
+        # unknown to groups.json, and an unknown group selects zero tests --
+        # which run-tests-isolated.bash treats as a legitimate skip. So a
+        # garbage group would have produced a green sweep that ran nothing at
+        # all. Validate identity, not just the count.
+        #
+        # NOTE: group names are VALUES in groups.json (array elements), not
+        # keys -- the keys are test names like "admin_show_fields_from-t". A
+        # grep for "<group>" followed by a colon matches nothing and would
+        # reject every real group. Derive the valid set once (one python call,
+        # not one per group) and test membership with grep -Fxq.
+        VALID_GROUPS="$(python3 -c 'import json;g=json.load(open("test/tap/groups/groups.json"));print("\n".join(sorted({e for v in g.values() for e in v if not str(e).startswith("@")})))')"
+        if [ -z "${VALID_GROUPS}" ]; then
+          echo "::error::could not read any group names from test/tap/groups/groups.json" >&2
+          exit 1
+        fi
+        while IFS= read -r g; do
+          [ -n "${g}" ] || continue
+          if ! printf '%s\n' "${VALID_GROUPS}" | grep -Fxq -- "${g}"; then
+            echo "::error::selected group '${g}' is not a group in test/tap/groups/groups.json" >&2
+            echo "       Refusing to run: an unknown group silently selects zero tests." >&2
+            exit 1
+          fi
+        done < <(printf '%s\n' "${SELECTED_GROUPS[@]}")
+        echo ">>> all ${#SELECTED_GROUPS[@]} selected groups verified against groups.json"
+
         overall=0
-        for GROUP in "${GROUPS[@]}"; do
+        for GROUP in "${SELECTED_GROUPS[@]}"; do
           INFRA="ci-tier-sweep-${TIER}-${GROUP}"
           echo ""
           echo "==================================================================="
@@ -366,7 +403,7 @@ jobs:
         cd proxysql
         # The per-group teardown normally handled this; sweep whatever is left
         # so a failed group cannot leak a container onto the shared runner.
-        for GROUP in "${GROUPS[@]}"; do
+        for GROUP in "${SELECTED_GROUPS[@]}"; do
           export INFRA_ID="ci-tier-sweep-${TIER}-${GROUP}"
           export TAP_GROUP="${GROUP}"
           test/infra/control/stop-proxysql-isolated.bash >/dev/null 2>&1 || true
@@ -385,7 +422,12 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: ${{ github.workflow }}-${{ env.TIER }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
+        # The shard MUST be in the name. All shards of one tier share
+        # workflow/tier/SHA/run-number, and upload-artifact@v4 artifacts are
+        # immutable and single-upload, so two failing shards would collide and
+        # one upload would fail -- losing the very logs needed to debug the
+        # failure that triggered the upload.
+        name: ${{ github.workflow }}-${{ env.TIER }}-shard${{ env.SHARD }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
         path: |
           proxysql/ci_*_logs/
         if-no-files-found: warn
