@@ -76,7 +76,7 @@ jobs:
         path: 'proxysql_3p_testing'
         # nothing later in the job needs git credentials, keep the PAT out of .git/config
         persist-credentials: false
-        token: ${{ secrets.GH_TOKEN_PROXYSQL }}
+        token: ${{ secrets.GH_TOKEN_PROXYSQL || github.token }}
         # optional read-only deploy key of proxysql/proxysql_3p_testing, used instead of the token when set
         # (cross-repository callers that do not hold GH_TOKEN_PROXYSQL)
         ssh-key: ${{ secrets.PROXYSQL_3P_TESTING_DEPLOY_KEY }}
