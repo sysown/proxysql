@@ -67,5 +67,12 @@ else
 fi
 run_check "Check group infra/workflow coverage (warn-only)" \
 	python3 test/tap/groups/lint_group_coverage.py
+# tier-sweep.lst is the work list CI-tier-sweep reads at run time. Unlike
+# lint_group_coverage.py (warn-only, advisory) this one FAILS: if a group is
+# wired into regular CI and runnable on a downgrade tier but missing from the
+# list, the merge-only sweep has silently stopped covering it. See
+# test/infra/control/check_tier_sweep_groups.py for why that direction matters.
+run_check "Check tier-sweep group list is in sync" \
+	python3 test/infra/control/check_tier_sweep_groups.py
 
 echo ">>> CI lint suite: OK"
