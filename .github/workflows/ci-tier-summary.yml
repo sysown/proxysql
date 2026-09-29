@@ -1,6 +1,9 @@
 name: CI tier summary
 on:
   workflow_call:
+    secrets:
+      PROXYSQL_ARTIFACTS_TOKEN:
+        required: false
     inputs:
       binding:
         type: string
@@ -27,6 +30,7 @@ jobs:
     - name: Reconcile selected tier results
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
         CI_BINDING: ${{ inputs.binding }}
       run: |

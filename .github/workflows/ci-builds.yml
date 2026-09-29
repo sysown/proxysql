@@ -140,6 +140,14 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Check immutable artifacts retained by a partial rerun
+      id: artifacts
+      if: ${{ inputs.trusted && success() }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py artifact-status
     - name: Start product build check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -580,7 +588,7 @@ jobs:
         python3 ci-control/.github/scripts/ci_tier_runtime.py stamp
       if: ${{ inputs.trusted && success() }}
     - name: Publish product metadata
-      if: ${{ inputs.trusted && success() }}
+      if: ${{ inputs.trusted && success() && steps.artifacts.outputs.publish_metadata == 'true' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: ci-leg-${{ needs.plan.outputs.execution_id }}-${{ matrix.tier }}
@@ -617,13 +625,10 @@ jobs:
           | zstd -15 -T0 -o ../cache_full.tar.zst
 
     - name: Upload complete regular handoff
-      if: ${{ inputs.trusted && success() }}
+      if: ${{ inputs.trusted && success() && steps.artifacts.outputs.publish_handoff == 'true' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        # The variant is the tier's identity in the artifact namespace. Every
-        # existing consumer hardcodes HANDOFF_VARIANT: ubuntu24-tap-genai-gcov,
-        # so resolve-tier pins that exact name for v40; the sweep's legs publish
-        # ubuntu24-tap-v30 / -v31 alongside it, with no collision.
+        # Execution, product tier and mode identify this immutable handoff.
         name: ${{ matrix.artifact_name }}
         retention-days: 1
         # 0 is deliberate: the payload is already zstd-15 compressed by the pack
@@ -679,7 +684,7 @@ jobs:
       if: ${{ inputs.trusted && failure() && !cancelled() && (steps.build.outcome == 'failure' || steps.check_build.outcome == 'failure') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: ci-builds-${{ needs.plan.outputs.execution_id }}-${{ matrix.tier }}-${{ matrix.mode }}-logs
+        name: ci-builds-${{ needs.plan.outputs.execution_id }}-${{ matrix.tier }}-${{ matrix.mode }}-logs-attempt${{ github.run_attempt }}
         # The checkout is a live bind mount on self-hosted runners. Uploading
         # it after an unrelated preflight failure can race a stale container
         # and turn a diagnostic upload into a second failure. Build logs are
@@ -713,6 +718,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Finalize build manifest
+      id: finalize
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -721,6 +727,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py finalize
     - name: Publish immutable manifest
+      if: ${{ steps.finalize.outputs.publish_manifest == 'true' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: ci-manifest-${{ needs.plan.outputs.execution_id }}

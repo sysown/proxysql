@@ -32,3 +32,10 @@ jobs:
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py wait-build
+    - name: Publish accepted producer for this cascade
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-accepted-producer-a${{ github.run_attempt }}
+        path: producer.json
+        retention-days: 3
+        if-no-files-found: error

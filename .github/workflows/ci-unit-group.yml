@@ -110,7 +110,11 @@ jobs:
         repo_root = pathlib.Path("proxysql").resolve(strict=True)
         with (repo_root / "test/tap/groups/groups.json").open(encoding="utf-8") as source:
             groups = json.load(source)
-        selected = sorted(name for name, tags in groups.items() if group in tags)
+        import sys
+        sys.path.insert(0, str(pathlib.Path('ci-control/.github/scripts').resolve()))
+        from ci_tier_plan import applicable_tests
+        metadata = json.loads((repo_root / 'src/ci-tier.json').read_text())
+        selected = applicable_tests(groups, group, metadata['version'])
         if not selected:
             raise SystemExit(f"ERROR: no tests are registered for {group}")
         unit_dir = (repo_root / "test/tap/tests/unit").resolve(strict=True)

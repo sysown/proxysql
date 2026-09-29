@@ -102,6 +102,7 @@ jobs:
     - name: Start selected product test check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
         CHECK_KEY: ${{ matrix.check_key }}
         CHECK_STATUS: in_progress
@@ -146,6 +147,7 @@ jobs:
     - name: Restore selected product handoff
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
@@ -252,6 +254,7 @@ jobs:
     - name: Complete selected product test check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
         CHECK_KEY: ${{ matrix.check_key }}
         CHECK_STATUS: ${{ job.status }}

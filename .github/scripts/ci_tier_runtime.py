@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """GitHub Actions adapters for the tested tier contracts."""
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,8 +9,8 @@ import subprocess
 import sys
 import time
 from ci_tier_plan import resolve_selection, make_plan, consumer_matrix, applicable_tests, validate_manifest, check_key
-from ci_tier_artifacts import GitHubAPI, resolve_producer, load_manifest, select_artifact, restore_handoff, verify_binding
-from ci_tier_checks import register, publish_result, reconcile
+from ci_tier_artifacts import binary_version, GitHubAPI, resolve_producer, load_manifest, select_artifact, restore_handoff, verify_binding
+from ci_tier_checks import register, publish_result, reconcile, reporting_repository
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -34,7 +35,8 @@ def read_plan():
     validate_manifest(plan);verify_binding(plan,binding)
     if plan['execution_id']!=binding['execution_id']:raise ValueError('plan attempt mismatch')
     return plan
-def api_for(plan):return GitHubAPI(plan['repository'])
+def api_for(plan):return GitHubAPI(plan['repository'],token=os.environ.get('SOURCE_ARTIFACTS_TOKEN') or None)
+def reporting_api(plan):return GitHubAPI(reporting_repository(plan))
 def plan_command():
     ctx=context();api=api_for(ctx);trusted=os.environ.get('TRUSTED')=='true'
     selection=resolve_selection(ctx,trusted,lambda number:api.request(f"repos/{ctx['repository']}/pulls/{number}"))
@@ -51,12 +53,14 @@ def plan_command():
 
 def stamp():
     plan=read_plan();leg=json.loads(os.environ['CI_LEG']);root=Path('proxysql')
-    version=subprocess.check_output([str(root.resolve()/'src/proxysql'),'--version'],text=True)
+    version=binary_version(root)
     from ci_tier_artifacts import validate_binary
     validate_binary(leg['tier'],version)
     groups=json.loads((root/'test/tap/groups/groups.json').read_text())
     applicable={c['key']:not c['groups'] or any(applicable_tests(groups,g,version) for g in c['groups']) for c in plan['checks'] if c['tier']==leg['tier']}
-    metadata=dict(execution_id=plan['execution_id'],sha=plan['sha'],tier=leg['tier'],mode=leg['mode'],version=version,applicable=applicable)
+    all_groups={tag for tags in groups.values() for tag in tags if not tag.startswith('@')}
+    applicable_groups=sorted(g for g in all_groups if applicable_tests(groups,g,version))
+    metadata=dict(applicable_groups=applicable_groups,execution_id=plan['execution_id'],sha=plan['sha'],tier=leg['tier'],mode=leg['mode'],version=version,applicable=applicable)
     (root/'src/ci-tier.json').write_text(json.dumps(metadata))
     Path('metadata.json').write_text(json.dumps(metadata))
 
@@ -75,17 +79,52 @@ def finalize():
         if metadata['execution_id']!=plan['execution_id'] or metadata['sha']!=plan['sha']:raise ValueError('foreign build metadata')
         leg['artifact_id']=select_artifact(api.artifacts(plan['build_id']),leg['artifact_name'])['id']
         leg['version']=metadata['version']
+        leg['applicable_groups']=metadata['applicable_groups']
         for check in plan['checks']:
             if check['tier']!=leg['tier']:continue
             check['applicable']=metadata['applicable'][check['key']]
             if not check['applicable']:
                 api.request(f"repos/{plan['repository']}/check-runs/{check['check_id']}",'PATCH',{'status':'completed','conclusion':'neutral',
                     'output':{'title':'Not applicable','summary':'No tests in this group apply to the built product version.'}})
+    # A failed-job rerun reuses its successful plan and any published handoffs.
+    # Keep an existing final manifest immutable if only finalization is retried.
+    name='ci-manifest-'+plan['execution_id']
+    existing=[a for a in api.artifacts(plan['build_id']) if a['name']==name and not a.get('expired')]
+    if existing:
+        original=api.json_artifact(plan['build_id'],name,'manifest.json')
+        validate_manifest(original);verify_binding(original,plan)
+        plan=original
     Path('manifest.json').write_text(json.dumps(plan))
+    emit(publish_manifest=not bool(existing))
+
+def artifact_status():
+    plan=read_plan();leg=json.loads(os.environ['CI_LEG'])
+    names={a['name'] for a in api_for(plan).artifacts(plan['build_id']) if not a.get('expired')}
+    emit(publish_metadata=f"ci-leg-{plan['execution_id']}-{leg['tier']}" not in names,
+         publish_handoff=leg['artifact_name'] not in names)
+
+def consumer_instance(manifest,workflow,instance,supplied):
+    checks=[c for c in manifest['checks'] if c['workflow']==workflow]
+    instances={c['cell'].get('ci_instance','run') for c in checks}
+    if instance in instances or not instances:return instance
+    from ci_tier_plan import parse_axis
+    candidates=[]
+    for candidate in instances:
+        cells=[c['cell'] for c in checks if c['cell'].get('ci_instance','run')==candidate]
+        axes={k for cell in cells for k in cell if k!='ci_instance'}
+        if axes and all(supplied.get(k) and set(parse_axis(supplied[k]))=={cell[k] for cell in cells} for k in axes):
+            candidates.append(candidate)
+    if len(candidates)!=1:raise ValueError('ambiguous legacy consumer instance; pass consumer_id')
+    return candidates[0]
 
 def consumer():
     ctx=context();api=api_for(ctx);gh=json.loads(os.environ['GITHUB_JSON'])
-    binding_name='ci-tier-binding-'+os.environ.get('CONSUMER_INSTANCE','run')
+    supplied=json.loads(os.environ.get('CONSUMER_INPUTS','{}'))
+    instance=os.environ.get('CONSUMER_INSTANCE','run')
+    # Old multi-instance callers lack consumer_id. Their stable input digest
+    # separates binding uploads before their catalogue instance is resolved.
+    suffix='-'+hashlib.sha256(json.dumps({k:v for k,v in supplied.items() if k!='trigger'},sort_keys=True).encode()).hexdigest()[:12] if instance=='run' and supplied else ''
+    binding_name='ci-tier-binding-'+instance+suffix
     attempt=int(gh['run_attempt'])
     if attempt>1:
         producer=GitHubAPI(gh['repository']).json_artifact(int(gh['run_id']),binding_name,'binding.json')
@@ -97,16 +136,18 @@ def consumer():
         producer=api.json_artifact(run,names[0],'manifest.json')
     else:
         if ctx['event']=='workflow_dispatch':raise ValueError('manual consumer dispatch requires producer_run_id and producer_attempt')
-        producer=resolve_producer(ctx,api)
+        producer=api.json_artifact(ctx['trigger_id'],f"ci-accepted-producer-a{ctx['trigger_attempt']}",'producer.json')
+        verify_binding(producer,ctx)
     manifest=load_bound(producer)
-    workflow=gh['workflow'];instance=os.environ.get('CONSUMER_INSTANCE','run')
+    workflow=gh['workflow']
+    manual=ctx['event']=='workflow_dispatch' or gh['repository']!=manifest['repository']
+    if not manual:instance=consumer_instance(manifest,workflow,instance,supplied)
     jobs=sorted({c['job'] for c in manifest['checks'] if c['workflow']==workflow and c['cell'].get('ci_instance','run')==instance})
     override=producer.get('consumer_manifest')
-    if not jobs or gh['repository']!=manifest['repository']:
+    if not jobs or manual:
         if attempt>1 and not override:raise ValueError('rerun has no original consumer manifest')
         if not override:
             catalogue=json.loads((ROOT/'ci-tier-consumers.json').read_text())
-            supplied=json.loads(os.environ.get('CONSUMER_INPUTS','{}'))
             rows=[];seen=set()
             for item in catalogue['consumers']:
                 if item['file']!=os.environ.get('CONSUMER_FILE') or item['job'] in seen:continue
@@ -122,7 +163,13 @@ def consumer():
             manifest=copy.deepcopy(manifest)
             manifest['checks']=[c for c in derived['checks'] if c['workflow']!='CI-builds']
             if not manifest['checks']:raise ValueError('manual consumer has no applicable configurations')
-            register(manifest,api,origin=False)
+            for check in manifest['checks']:
+                leg=next(l for l in manifest['legs'] if l['tier']==check['tier'])
+                check['applicable']=not check['groups'] or any(g in leg['applicable_groups'] for g in check['groups'])
+            manifest['reporting']=dict(repository=gh['repository'],sha=gh['sha'] if gh['repository']!=manifest['repository'] else manifest['sha'],
+                identity=manifest['execution_id']+':consumer:'+gh['repository']+':'+str(gh['run_id'])+':'+binding_name,
+                name='CI / manual consumer '+workflow+' / '+instance)
+            register(manifest,reporting_api(manifest),origin=False)
             override={'repository':gh['repository'],'run_id':int(gh['run_id']),'artifact':binding_name}
         jobs=sorted({c['job'] for c in manifest['checks'] if c['workflow']==workflow})
     matrices={job:consumer_matrix(manifest,workflow,job,instance) for job in jobs}
@@ -147,13 +194,13 @@ def bound_manifest():
 def result():
     plan=read_plan() if os.environ.get('CI_PLAN') else bound_manifest()
     key=os.environ['CHECK_KEY'];gh=json.loads(os.environ['GITHUB_JSON'])
-    publish_result(plan,key,os.environ['CHECK_STATUS'],api_for(plan),gh['run_id'],gh['run_attempt'])
+    publish_result(plan,key,os.environ['CHECK_STATUS'],reporting_api(plan),gh['run_id'],gh['run_attempt'],run_repository=gh['repository'])
 
 def restore():
     plan=bound_manifest();leg=json.loads(os.environ['CI_LEG']);restore_handoff(plan,leg,Path('proxysql'),api_for(plan))
 
 def summary():
-    plan=bound_manifest();reconcile(plan,api_for(plan))
+    plan=bound_manifest();reconcile(plan,reporting_api(plan))
 
 def producer_lookup():
     # CI-trigger runs on the source event, before CI-builds can register itself.
@@ -183,6 +230,7 @@ def producer_lookup():
         run=api.request(f"repos/{ctx['repository']}/actions/runs/{producer['build_id']}/attempts/{producer['build_attempt']}")
         if run['status']=='completed':
             if run['conclusion']!='success':raise RuntimeError('producer failed: '+str(run['conclusion']))
+            Path('producer.json').write_text(json.dumps(producer))
             return
         time.sleep(30)
     raise RuntimeError('timed out waiting for producer completion')
@@ -198,5 +246,5 @@ def units():
     if result.returncode:raise RuntimeError('lower-tier unit tests failed')
 
 if __name__=='__main__':
-    commands={'plan':plan_command,'stamp':stamp,'finalize':finalize,'consumer':consumer,'result':result,'restore':restore,'summary':summary,'wait-build':producer_lookup,'units':units}
+    commands={'artifact-status':artifact_status,'plan':plan_command,'stamp':stamp,'finalize':finalize,'consumer':consumer,'result':result,'restore':restore,'summary':summary,'wait-build':producer_lookup,'units':units}
     commands[sys.argv[1]]()

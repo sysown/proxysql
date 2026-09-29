@@ -132,7 +132,7 @@ jobs:
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
       with:
         repository: ${{ github.repository }}
-        ref: GH-Actions
+        ref: ${{ needs.tier-context.outputs.control_sha }}
         path: gh-actions
         persist-credentials: false
         sparse-checkout: |

@@ -1,6 +1,9 @@
 name: CI tier context
 on:
   workflow_call:
+    secrets:
+      PROXYSQL_ARTIFACTS_TOKEN:
+        required: false
     inputs:
       trigger:
         type: string
@@ -61,6 +64,7 @@ jobs:
     - name: Bind this workflow to its producer
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
         TRIGGER_JSON: ${{ inputs.trigger }}
         CONSUMER_INSTANCE: ${{ inputs.consumer_id }}

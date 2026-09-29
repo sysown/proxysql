@@ -25,6 +25,8 @@ class ArtifactTests(unittest.TestCase):
   good=tarfile.TarInfo('src/proxysql');safe_members([good])
   for name in ['../secret','/tmp/escape','src/../../secret']:
    with self.assertRaises(ValueError):safe_members([tarfile.TarInfo(name)])
+  link=tarfile.TarInfo('test/afl_digest_test/c_tokenizer.cpp');link.type=tarfile.SYMTYPE;link.linkname='../../lib/c_tokenizer.cpp'
+  safe_members([link])
   link=tarfile.TarInfo('src/link');link.type=tarfile.SYMTYPE;link.linkname='../../escape'
   with self.assertRaises(ValueError):safe_members([link])
  def test_registration_is_not_sha_search(self):
@@ -54,14 +56,28 @@ class ArtifactTests(unittest.TestCase):
    binary=source/'src/proxysql';binary.write_text('#!/bin/sh\necho "ProxySQL version 3.0.12"\n');binary.chmod(0o755)
    meta=dict(execution_id=plan['execution_id'],sha=plan['sha'],tier='v30',mode='asan')
    (source/'src/ci-tier.json').write_text(json.dumps(meta))
-   with tarfile.open(root/'full.tar','w') as tar:tar.add(source/'src',arcname='src')
+   (source/'test/afl_digest_test').mkdir(parents=True)
+   (source/'lib').mkdir();(source/'lib/c_tokenizer.cpp').write_text('fixture')
+   (source/'test/afl_digest_test/c_tokenizer.cpp').symlink_to('../../lib/c_tokenizer.cpp')
+   with tarfile.open(root/'full.tar','w') as tar:
+    for folder_name in ['src','test','lib']:tar.add(source/folder_name,arcname=folder_name)
    payload=subprocess.check_output(['zstd','-q','-c',str(root/'full.tar')])
    data=io.BytesIO()
    with zipfile.ZipFile(data,'w') as archive:archive.writestr('cache_full.tar.zst',payload)
    api=Mock(repository='sysown/proxysql');api.artifacts.return_value=[dict(id=9,name=leg['artifact_name'],expired=False)];api.request.return_value=data.getvalue()
    restore_handoff(plan,leg,root/'restored',api)
+   self.assertEqual((root/'restored/test/afl_digest_test/c_tokenizer.cpp').read_text(),'fixture')
    self.assertEqual(json.loads((root/'restored/src/ci-tier.json').read_text()),meta)
    wrong=dict(leg,artifact_name='wrong')
    with self.assertRaisesRegex(ValueError,'identity'):restore_handoff(plan,wrong,root/'wrong',api)
+
+ def test_binary_version_uses_build_abi_when_host_loader_fails(self):
+  import subprocess
+  from unittest.mock import patch
+  from ci_tier_artifacts import binary_version
+  replies=[subprocess.CompletedProcess([],1,'','GLIBC_2.38 not found'),subprocess.CompletedProcess([],0,'ProxySQL version 4.0.12','')]
+  with patch('ci_tier_artifacts.subprocess.run',side_effect=replies) as run:
+   self.assertEqual(binary_version('/tmp/fixture'),'ProxySQL version 4.0.12')
+   self.assertIn('proxysql/packaging:build-ubuntu24-v4.0.0',run.call_args.args[0])
 
 if __name__=='__main__':unittest.main()

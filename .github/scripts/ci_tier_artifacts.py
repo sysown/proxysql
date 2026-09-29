@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import posixpath
 from pathlib import Path, PurePosixPath
 import subprocess
 import tarfile
@@ -12,14 +13,15 @@ import zipfile
 from ci_tier_plan import validate_manifest, version_tuple
 
 class GitHubAPI:
-    def __init__(self, repository):
+    def __init__(self, repository, token=None):
         self.repository=repository
+        self.token=token
     def request(self,path,method='GET',payload=None,raw=False):
         args=['gh','api',path,'--method',method]
         if payload is not None:args+=['--input','-']
         for attempt in range(6):
             result=subprocess.run(args,input=json.dumps(payload).encode() if payload is not None else None,
-                                  capture_output=True,timeout=60)
+                                  capture_output=True,timeout=60,env=dict(os.environ,GH_TOKEN=self.token) if self.token else None)
             if not result.returncode:
                 return result.stdout if raw else json.loads(result.stdout or b'{}')
             error=result.stderr.decode(errors='replace').lower()
@@ -80,9 +82,23 @@ def safe_members(members):
             raise ValueError('unsafe handoff archive member: '+member.name)
         if member.issym() or member.islnk():
             link=PurePosixPath(member.linkname)
-            # Reject outward links; extraction also uses Python's data filter.
-            if link.is_absolute() or '..' in link.parts:raise ValueError('unsafe handoff link')
+            # Symlinks are relative to their parent; hard links to the archive root.
+            target=PurePosixPath(posixpath.normpath(str(path.parent/link if member.issym() else link)))
+            if link.is_absolute() or '..' in target.parts:raise ValueError('unsafe handoff link')
+            # The data filter additionally resolves chains through existing links.
     return members
+
+def binary_version(root):
+    root=Path(root).resolve()
+    result=subprocess.run([str(root/'src/proxysql'),'--version'],capture_output=True,text=True)
+    if result.returncode==0:return result.stdout+result.stderr
+    # Ubuntu 24 artifacts need their build ABI; consumers can run on Ubuntu 22.
+    # Use the same packaging image as the unit runner if the host loader fails.
+    result=subprocess.run(['docker','run','--rm','--network','none','-v',str(root)+':/opt/proxysql:ro',
+        '-e','LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap:/opt/proxysql/test/tap/tap/_runtime_libs',
+        'proxysql/packaging:build-ubuntu24-v4.0.0','/opt/proxysql/src/proxysql','--version'],
+        capture_output=True,text=True,check=True)
+    return result.stdout+result.stderr
 
 def restore_handoff(manifest,leg,destination,api):
     validate_manifest(manifest)
@@ -102,5 +118,4 @@ def restore_handoff(manifest,leg,destination,api):
     metadata=json.loads((destination/'src/ci-tier.json').read_text())
     for key,value in [('execution_id',manifest['execution_id']),('sha',manifest['sha']),('tier',leg['tier']),('mode',leg['mode'])]:
         if metadata.get(key)!=value:raise ValueError('restored metadata mismatch: '+key)
-    result=subprocess.run([str(destination.resolve()/'src/proxysql'),'--version'],capture_output=True,text=True,check=True)
-    validate_binary(leg['tier'],result.stdout+result.stderr)
+    validate_binary(leg['tier'],binary_version(destination))
