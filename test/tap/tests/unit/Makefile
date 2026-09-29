@@ -546,6 +546,7 @@ $(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
 # ===========================================================================
 
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
+	mysql_tls_write_retry_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
@@ -586,6 +587,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	gtid_set_unit-t \
 	gtid_parse_unit-t \
 	gtid_server_data_unit-t \
+	gtid_wire_contract_unit-t \
 	admin_bootstrap_users_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
