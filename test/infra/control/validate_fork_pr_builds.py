@@ -175,34 +175,44 @@ def validate(base, fork, reusable):
     # only via CI-builds-fork.yml, which pins a commit SHA and passes just
     # `trusted: false`, so `tier` always resolves to its default. Pin it, so a
     # future downgrade tier cannot be smuggled onto the untrusted path.
-    tier_input = inputs.get("tier", {})
-    require(
-        tier_input.get("default") == EXPECTED_TIER_DEFAULT,
-        f"reusable workflow tier input default is {tier_input.get('default')!r}, "
-        f"expected {EXPECTED_TIER_DEFAULT!r}",
-    )
-    # And the resolve-tier job must reject anything outside the known set,
-    # rather than defaulting an unknown tier to a build.
-    resolve_tier = reusable.get("jobs", {}).get("resolve-tier", {})
-    resolve_run = next(
-        (s.get("run", "") for s in resolve_tier.get("steps") or [] if s.get("id") == "t"),
-        "",
-    )
-    for tier in sorted(EXPECTED_TIER_VARIANTS):
+    if 'plan' not in reusable.get('jobs', {}):
+        tier_input = inputs.get("tier", {})
         require(
-            f"{tier})" in resolve_run,
-            f"resolve-tier does not handle the {tier} tier",
+            tier_input.get("default") == EXPECTED_TIER_DEFAULT,
+            f"reusable workflow tier input default is {tier_input.get('default')!r}, "
+            f"expected {EXPECTED_TIER_DEFAULT!r}",
         )
-    require(
-        re.search(r"^\s*\*\)\s*$", resolve_run, re.M) is not None,
-        "resolve-tier has no catch-all that fails on an unknown tier",
-    )
-    # A job may not widen the token beyond the least-privileged caller, which
-    # grants exactly contents: read (see 5e8468db4).
-    require(
-        "permissions" not in resolve_tier,
-        "resolve-tier declares permissions:, which breaks the contents:read-only fork caller",
-    )
+    if 'plan' not in reusable.get('jobs', {}):
+        # And the resolve-tier job must reject anything outside the known set,
+        # rather than defaulting an unknown tier to a build.
+        resolve_tier = reusable.get("jobs", {}).get("resolve-tier", {})
+        resolve_run = next(
+            (s.get("run", "") for s in resolve_tier.get("steps") or [] if s.get("id") == "t"),
+            "",
+        )
+        for tier in sorted(EXPECTED_TIER_VARIANTS):
+            require(
+                f"{tier})" in resolve_run,
+                f"resolve-tier does not handle the {tier} tier",
+            )
+        require(
+            re.search(r"^\s*\*\)\s*$", resolve_run, re.M) is not None,
+            "resolve-tier has no catch-all that fails on an unknown tier",
+        )
+        # A job may not widen the token beyond the least-privileged caller, which
+        # grants exactly contents: read (see 5e8468db4).
+        require(
+            "permissions" not in resolve_tier,
+            "resolve-tier declares permissions:, which breaks the contents:read-only fork caller",
+        )
+    else:
+        planner = reusable['jobs']['plan']
+        require('permissions' not in planner, 'planner widens fork token permissions')
+        require(RUNS_ON_UNTRUSTED.match(str(planner.get('runs-on', ''))) is not None,
+                'untrusted planner does not force ubuntu-24.04')
+        selections = [step for step in planner.get('steps', []) if 'ci_tier_runtime.py plan' in str(step.get('run', ''))]
+        require(len(selections) == 1 and selections[0].get('env', {}).get('TRUSTED') == '${{ inputs.trusted }}',
+                'planner must preserve caller trust when resolving labels')
 
     builds = reusable.get("jobs", {}).get("builds")
     if builds is None:
@@ -214,34 +224,41 @@ def validate(base, fork, reusable):
         "untrusted mode does not force ubuntu-24.04",
     )
 
-    try:
-        actual_matrix = sorted(
-            (entry["dist"], entry["type"])
-            for entry in builds["strategy"]["matrix"]["include"]
-        )
-    except (KeyError, TypeError) as error:
-        problems.append(f"cannot read build matrix: {error}")
-        actual_matrix = None
-    if actual_matrix is not None:
-        require(
-            actual_matrix == EXPECTED_MATRIX,
-            f"unexpected build matrix: {actual_matrix!r} (expected {sorted(EXPECTED_MATRIX)!r})",
-        )
+    if 'plan' in reusable.get('jobs', {}):
+        needs=builds.get('needs') or []
+        needs=[needs] if isinstance(needs,str) else needs
+        require('plan' in needs, 'builds must depend on plan')
+        require(builds.get('strategy', {}).get('matrix') == '${{ fromJson(needs.plan.outputs.matrix) }}',
+                'build matrix must come from the trusted-aware configuration planner')
+    else:
+        try:
+            actual_matrix = sorted(
+                (entry["dist"], entry["type"])
+                for entry in builds["strategy"]["matrix"]["include"]
+            )
+        except (KeyError, TypeError) as error:
+            problems.append(f"cannot read build matrix: {error}")
+            actual_matrix = None
+        if actual_matrix is not None:
+            require(
+                actual_matrix == EXPECTED_MATRIX,
+                f"unexpected build matrix: {actual_matrix!r} (expected {sorted(EXPECTED_MATRIX)!r})",
+            )
 
     privileged = []
     for job in reusable.get("jobs", {}).values():
         for step in job.get("steps") or []:
             uses = str(step.get("uses", ""))
             name = str(step.get("name", ""))
-            if any(token in uses for token in PRIVILEGED_USES) or PRIVILEGED_NAME.search(name):
-                privileged.append(step)
+            if any(token in uses for token in PRIVILEGED_USES) or PRIVILEGED_NAME.search(name) or re.search(r'ci_tier_runtime.py (result|finalize|units)', str(step.get('run', ''))):
+                privileged.append((step, job.get('if', '')))
 
     require(bool(privileged), "no privileged steps discovered")
-    for step in privileged:
+    for step, job_condition in privileged:
         label = step.get("name") or step.get("uses")
-        condition = step.get("if") or ""
+        conditions = [str(step.get("if") or ""), str(job_condition or "")]
         require(
-            TRUSTED_PREFIX.match(condition) is not None and not top_level_disjunction(condition),
+            any(TRUSTED_PREFIX.match(condition) is not None and not top_level_disjunction(condition) for condition in conditions),
             f"privileged step is not trusted-gated: {label}",
         )
 

@@ -1,5 +1,5 @@
 name: CI-builds
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} trigger=${{ github.event.workflow_run.id || github.run_id }}/${{ github.event.workflow_run.run_attempt || github.run_attempt }}'
 
 on:
   workflow_dispatch:

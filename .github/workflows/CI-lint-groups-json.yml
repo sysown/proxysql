@@ -26,5 +26,14 @@ jobs:
           git fetch --no-tags --depth=1 origin \
             +refs/heads/GH-Actions:refs/remotes/origin/GH-Actions \
             || echo "::warning::could not fetch GH-Actions; the workflow-coverage check will skip"
+      - name: Fetch paired engine candidate before production supports tiers
+        # This SHA is read as workflow/catalogue data only. Once GH-Actions has
+        # the catalogue, the selector automatically returns to the production ref.
+        run: |
+          engine_ref="$(test/infra/control/resolve-ci-engine-ref.bash)"
+          if [[ "${engine_ref}" =~ ^[0-9a-f]{40}$ ]]; then
+            git fetch --no-tags --depth=1 origin "${engine_ref}" \
+              || echo "::warning::could not fetch paired engine; paired checks will skip if unavailable"
+          fi
       - name: Run repository CI lint suite
         run: test/infra/control/run-ci-lint.bash

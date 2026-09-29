@@ -87,6 +87,31 @@ def minimal_documents():
     return base, fork, reusable
 
 
+class SnapshotPlanner(unittest.TestCase):
+    def documents(self):
+        base,fork,reusable=minimal_documents()
+        del reusable['jobs']['resolve-tier']
+        reusable['jobs']['plan']={'runs-on':reusable['jobs']['builds']['runs-on'],
+            'steps':[{'env':{'TRUSTED':'${{ inputs.trusted }}'},'run':'python3 ci_tier_runtime.py plan'}]}
+        reusable['jobs']['builds']['needs']=['plan']
+        reusable['jobs']['builds']['strategy']['matrix']='${{ fromJson(needs.plan.outputs.matrix) }}'
+        return base,fork,reusable
+    def test_planner_requires_dependency_and_handles_non_string_steps(self):
+        docs=self.documents();docs[2]['jobs']['builds'].pop('needs')
+        self.assertIn('builds must depend on plan',subject.validate(*docs))
+        for run in [None,123]:
+            docs=self.documents();docs[2]['jobs']['plan']['steps'][0]['run']=run
+            self.assertIn('planner must preserve caller trust when resolving labels',subject.validate(*docs))
+    def test_job_trust_guard_applies_with_independent_step_condition(self):
+        docs=self.documents()
+        docs[2]['jobs']['finalize']={'if':'${{ inputs.trusted && always() }}','steps':[{'uses':'actions/upload-artifact@abc','if':'${{ success() }}'}]}
+        self.assertEqual(subject.validate(*docs),[])
+    def test_snapshot_planner_is_supported(self):
+        self.assertEqual(subject.validate(*self.documents()),[])
+    def test_planner_cannot_force_trust(self):
+        docs=self.documents();docs[2]['jobs']['plan']['steps'][0]['env']['TRUSTED']='true'
+        self.assertTrue(subject.validate(*docs))
+
 class TopLevelDisjunction(unittest.TestCase):
     def test_rejects(self):
         for condition in (
