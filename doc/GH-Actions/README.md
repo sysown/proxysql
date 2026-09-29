@@ -27,7 +27,7 @@ If you touch anything under `.github/workflows/` on either `v3.0` or the
 4. [CI-trigger and CI-builds: the entry point](#ci-trigger-and-ci-builds-the-entry-point)
 5. [The dedicated-reusable pattern](#the-dedicated-reusable-pattern)
 6. [Cache layout produced by CI-builds](#cache-layout-produced-by-ci-builds)
-7. [The feature tiers and the merge-only tier sweep](#the-feature-tiers-and-the-merge-only-tier-sweep)
+7. [PR-label-selected product tiers](#pr-label-selected-product-tiers)
 8. [The TAP groups system](#the-tap-groups-system)
 9. [Workflow catalogue](#workflow-catalogue)
 10. [Adding a new test group end-to-end](#adding-a-new-test-group-end-to-end)
@@ -326,7 +326,7 @@ listening for `workflow_run[completed]` on `CI-trigger` fires.
 > replaced by the unified regular build: `ci-builds.yml` now has a **single** matrix leg
 > (`ubuntu24`, `-tap`) which publishes one handoff **artifact** (not a cache), and
 > `PROXYSQLGENAI` no longer exists — the v4.0 tier is selected with `PROXYSQL40=1`.
-> See [§7 The feature tiers and the merge-only tier sweep](#the-feature-tiers-and-the-merge-only-tier-sweep)
+> See [§7 PR-label-selected product tiers](#pr-label-selected-product-tiers)
 > for the current mechanism, and read `ci-builds.yml@GH-Actions` as the source of truth
 > rather than this table.
 
@@ -598,168 +598,75 @@ Cache entries expire after 7 days of inactivity (GitHub's default policy).
 
 ---
 
-## The feature tiers and the merge-only tier sweep
+## PR-label-selected product tiers
 
-### The three tiers
+All standard TAP configurations build the same source revision. With no tier
+labels CI builds v4.0 (`PROXYSQL40=1`). `ci:v3.0` adds Stable (no tier flag),
+and `ci:v3.1` adds Innovative (`PROXYSQL31=1`). Both labels select all three.
+`ci:asan` selects ASAN for each selected tier instead of a second normal build.
+The independent unit ASAN/TSAN and cluster-simulator pipelines retain their scope.
 
-The same `v3.0` source tree compiles into three different products, selected by a
-`make` flag:
+**Label edits do not trigger CI.** Existing events and filters are unchanged.
+The central build setup reads labels once, when its setup job executes. A label
+edit before setup can affect that run; edits after setup affect the next ordinary
+execution. Consumers never re-query labels. Repository-variable matrices are
+also captured in this configuration snapshot.
 
-| Tier | Flag | `GITVERSION` | Adds |
-|---|---|---|---|
-| v3.0 | *(none)* | `3.0.x` | Stable core |
-| v3.1 | `PROXYSQL31=1` | `3.1.x` | FFTO, TSDB, ED25519 |
-| v4.0 | `PROXYSQL40=1` | `4.0.x` | plugin chassis; cascades to v3.1 |
+### Execution identity and artifacts
 
-**Every regular CI build uses the v4.0 tier.** `ci-builds.yml` has a single matrix leg and,
-on the default `tier: v40`, injects `PROXYSQL40=1` into `docker-compose.yml`, which the
-`_build` service's `environment:` block passes straight through to `make`. The only callers
-that build anything else are the tier sweep described below, which passes `tier: v30` or
-`tier: v31` explicitly.
+One producer run builds all selected tiers with `fail-fast: false`. A check
+registration binds the original trigger ID/attempt to the producer ID/attempt;
+`CI-trigger` follows that registration rather than searching run titles by SHA.
+The execution ID is `t<origin>-a<attempt>-b<producer>-a<attempt>`.
 
-> **Stale-object tier mismatch.** The Makefile does *not* track the tier flag between
-> invocations, so objects built under one tier are silently reused under another. The
-> classic symptom is a link failure on `mysql_thread___ffto_max_buffer_size`. Always
-> `make clean` when switching tiers, and pass the same flag to every `make` in a session.
+The initial `ci-plan-<execution>` artifact records the selection and expected
+checks. The immutable `ci-manifest-<execution>` includes actual product versions,
+artifact IDs and applicability. Handoffs are named
+`ci-handoff-<execution>-<tier>-<mode>-full`. Consumers download from the exact
+producer and verify embedded metadata and the restored binary's product tier.
+There is no repository-wide newest-SHA artifact fallback.
 
-### Why test selection is already tier-aware
+Consumer workflows save a producer binding for reruns. A consumer-only rerun
+uses that binding even if labels have changed or another build has run for the
+same SHA. Manual consumer dispatch requires an explicit producer run/attempt.
+Manual producer dispatch and branch pushes use v4.0/normal by default.
 
-You do **not** need separate `groups.json` files or per-tier test lists.
-`run-tests-isolated.bash:199-236` derives the version from the built binary and filters
-on `@proxysql_min_version` tags in `groups.json`:
+### PR checks and applicable tests
 
-```bash
-PROXYSQL_VERSION=$(${PROXYSQL_BIN} --version 2>&1 | grep -oP 'ProxySQL version \K[0-9]+\.[0-9]+\.[0-9]+')
-```
+Checks are queued on the source SHA during setup. Each test job updates its
+existing check, named for example
+`CI-mysql84-gr-g2 / tests (v3.1, mysql84, asan)`. The outer Actions run title
+identifies the source revision and trigger execution; tier/mode live in the
+job names and PR checks because they are resolved after the run is created.
 
-Because the Makefile bakes the tier-bumped version into the binary, a v3.0 build reports
-`3.0.x` and the harness *automatically* skips every test tagged
-`@proxysql_min_version:3.1` or `:4.0`. A v3.1 build skips only `:4.0`.
+`CI / selected tiers` summarizes the required applicable checks for that
+execution. A missing, failed, cancelled or unexpectedly skipped result cannot
+produce success. Short serialized finalizers recompute the whole result without
+occupying a runner for the entire test fanout. If cancellation prevents all
+finalizers from running, the summary can remain pending; it must not turn green
+without terminal evidence. Repository branch-protection settings are unchanged.
 
-Two consequences worth knowing:
+Tests still use `@proxysql_min_version` and the built binary's actual version.
+Mixed groups retain applicable lower-tier tests; empty groups are explicitly
+not applicable. Plugin-only jobs use v4.0. Coverage upload is enabled only for
+instrumented artifacts. Lower-tier `unit-tests-g1` runs within the producer,
+retaining coverage previously supplied by the sweep without enabling new events.
 
-* **The downgrade build is itself a regression test.** Compiling without `PROXYSQL40=1`
-  fails if any `lib/` or `test/tap/tests/` file unconditionally references a v4.0-only
-  symbol. That is precisely the class of bug a v4.0-only CI cannot catch, and `Check build`
-  surfaces it before a single test runs. An untagged test that is `#ifdef`-gated for
-  v4.0 will therefore break the v3.0 build until someone adds the tag.
-* **A missing binary is a FAILURE**, not a skip (`run-tests-isolated.bash:256-262`). Hence
-  the pruning described below.
+### Sweep removal and coverage guard
 
-### `CI-tier-sweep` — the merge-only cascade
+The old post-merge sweep, its reusable, shard configuration and runtime group
+list have been removed. There is no replacement scheduled sweep.
+`check_ci_tier_fanout.py` checks the paired branches and ensures the 54 migrated
+groups retain lower-tier execution routes. Its migration fixture is evidence,
+not a runtime work list. The current consumer catalogue is
+`GH-Actions:.github/ci-tier-consumers.json`.
 
-| | |
-|---|---|
-| **Caller** | `v3.0:.github/workflows/CI-tier-sweep.yml` |
-| **Reusable** | `GH-Actions:.github/workflows/ci-tier-sweep.yml` |
-| **Triggers** | `push` to `v3.0` only, plus `workflow_dispatch` |
-| **Builds** | one `ci-builds.yml` leg per tier: `v30`, `v31` |
-| **Tests** | `unit-tests-g1`, `legacy-g1`, `mysql84-g1` per tier |
-
-> **The merge-only guarantee is one line:** the caller declares `on: push` and deliberately
-> does **not** declare `pull_request`. Do not add it. That single omission is the entire
-> cost model — with it, every PR would pay for two extra full debug TAP builds.
-
-The sweep is **advisory, not merge-blocking.** Branch protection can only require checks
-that exist on a PR head; these run on a pushed commit. A red sweep is loud (a failing
-check run on the merge commit) but never blocks the next PR.
-
-Shape of the reusable:
-
-```text
-CI-tier-sweep (push to v3.0)
-  └─ build  [tier: v30, v31]  → nested call: ci-builds.yml  with tier: v30|v31
-  └─ tests  [tier: v30, v31]  → download handoff, run 3 groups sequentially
-```
-
-The `build` job is a **nested reusable-workflow call** (`uses: ./.github/workflows/ci-builds.yml`),
-so it reuses all of `ci-builds.yml`'s machinery — self-hosted pool routing, the docker nuke,
-workspace ownership reclaim, the deps-archive verification, `Check build`, the handoff
-publish. The sweep adds no build logic of its own.
-
-### Handoff artifact names carry the tier
-
-`ci-builds.yml` publishes `ci-builds-handoff-<sha>-<variant>-full`. The variant is the
-tier's identity:
-
-| Tier | Artifact | Consumed by |
-|---|---|---|
-| v4.0 | `ci-builds-handoff-<sha>-ubuntu24-tap-genai-gcov-full` | the ~51 existing consumers |
-| v3.0 | `ci-builds-handoff-<sha>-ubuntu24-tap-v30-full` | `ci-tier-sweep.yml` |
-| v3.1 | `ci-builds-handoff-<sha>-ubuntu24-tap-v31-full` | `ci-tier-sweep.yml` |
-
-Because the handoff is an **artifact, not a cache**, adding tiers is purely additive — no
-cache-key collision and no pressure on the 10 GB repo cache quota. `ci-builds.yml` takes
-the tier from a `tier` input that **defaults to `v40`**, which is what keeps the existing
-consumers (which hardcode `HANDOFF_VARIANT: ubuntu24-tap-genai-gcov`) working untouched.
-
-The tier is resolved once by a `resolve-tier` job, mirroring the existing
-`resolve-tap-mode` idiom, and exposed to the build as `env.IS_V40`. Every v4.0-only step
-(the MySQLX/GenAI plugin staging, `WITHGCOV=1`, the plugin-presence assertion) gates on
-that one boolean instead of substring-matching the matrix `type`.
-
-> **`resolve-tier` must not declare a `permissions:` block.** A called workflow may only
-> *narrow* its caller's token, and `CI-builds-fork.yml` grants exactly `contents: read`.
-> Requesting a scope there makes every fork PR fail at startup with zero jobs
-> (`startup_failure`) — see commit `5e8468db4`.
-
-### Why a downgrade handoff is pruned
-
-Debug unit-test binaries are ~170 MB each (they statically link `libproxysql.a`), and the
-v4.0 handoff deliberately retains all of them so any consumer may select any test. A
-downgrade build will never *select* the newer ones, so they are dead weight.
-
-`ci-control/.github/scripts/prune-tier-handoff.bash` drops them before packing, which
-both shrinks the artifact and makes a "not found" false-red structurally impossible. It:
-
-* reads the version from `src/proxysql --version` and keeps a test iff its highest
-  `@proxysql_min_version` is `<=` that version — the same rule as
-  `run-tests-isolated.bash`;
-* runs on the **host**, so deletions use `sudo` (the binaries are root-owned, and unlink
-  needs write access to the parent directory);
-* refuses to run if the version cannot be determined, if nothing is selectable, or if it
-  would empty the tree;
-* leaves any binary *not registered* in `groups.json` alone, and warns — deleting data it
-  cannot reason about would hide a real "built but never registered" bug;
-* is staged into `ci-control/` by its own `ref: GH-Actions` sparse checkout, because
-  `.github/scripts/` exists only on that branch (the main checkout is the commit under
-  test, and `v3.0` has no `.github/scripts/` at all). Same reason `resolve-tap-mode` does
-  its own checkout.
-
-Tests live in `.github/scripts/tests/test-prune-tier-handoff.bash` (not wired into a
-workflow, consistent with the other tests in that directory):
-
-```bash
-.github/scripts/tests/test-prune-tier-handoff.bash
-```
-
-### Which groups the sweep runs, and why
-
-| Group | Why |
-|---|---|
-| `unit-tests-g1` | `SKIP_PROXYSQL=1` in its `env.sh`, so it runs **host-only** — no Docker backends at all. Cheapest possible signal. |
-| `legacy-g1` | `legacy/infras.lst` covers dbdeployer-mysql57, dbdeployer-mariadb10 **and** docker-pgsql16-single — MySQL, MariaDB and PostgreSQL in one group. |
-| `mysql84-g1` | pure MySQL 8.4 with **zero** version gates, so the test set is identical across v3.0/v3.1/v4.0. The cleanest cross-tier differential. |
-
-All three run **sequentially inside one job** so the multi-GB handoff is downloaded exactly
-once per tier, with a distinct `INFRA_ID` per group so Docker container namespaces do not
-collide.
-
-`COVERAGE` is deliberately not set: non-v4.0 builds compile without `WITHGCOV=1`, so there
-are no `.gcno` files for the collector to match.
-
-### Groups that go empty under a downgrade build
-
-These select **zero** tests against a v3.0/v3.1 binary and would abort with
-`ERROR: No tests found for group` (`run-tests-isolated.bash:236`):
-
-| Tier | Empty groups |
-|---|---|
-| v3.0 | `ai-g2`, `duckdb-e2e-g1`, `mysqlx-g1`, `mysqlx-e2e-g1`, `mysqlx-soak-g1`, `mysqlx-tsan-g1` |
-| v3.1 | `duckdb-e2e-g1`, `mysqlx-g1`, `mysqlx-e2e-g1`, `mysqlx-soak-g1`, `mysqlx-tsan-g1` |
-
-The curated sweep set avoids all of them. If you extend the sweep, derive the exclusion
-list from the version filter rather than hand-maintaining it.
+For local paired validation, set `CI_ENGINE_REF` to the candidate engine branch
+when running `test/infra/control/run-ci-lint.bash`. For a live isolated probe,
+set the optional `control_ref` and pin the caller's reusable reference to the
+candidate implementation as well; overriding a script checkout alone does not
+switch the reusable workflow definition. Do not update shared `GH-Actions` just
+to test a candidate while other PRs are using it.
 
 ---
 
@@ -877,7 +784,6 @@ All `CI-*.yml` files on `v3.0` as of 2026-04-11. Status is as observed on
 |---|---|---|---|---|
 | `CI-trigger.yml` | `ci-trigger.yml` | `push`, `pull_request`, `workflow_dispatch` | Anchor PR `head_sha`, block on `CI-builds` | ✅ |
 | `CI-builds.yml` | `ci-builds.yml` | `workflow_run[in_progress]` on `CI-trigger` | Build the handoff, publish the artifact | ✅ |
-| `CI-tier-sweep.yml` | `ci-tier-sweep.yml` | `push` to `v3.0` only, `workflow_dispatch` | Build + test the **v3.0** and **v3.1** tiers, post-merge only (see §7) | ✅ |
 | `CI-lint-groups-json.yml` | *(inline, no reusable)* | `push`, `pull_request` on `groups.json` only | Lint `test/tap/groups/groups.json` format | ✅ |
 
 ### TAP test groups (dedicated-reusable pattern)

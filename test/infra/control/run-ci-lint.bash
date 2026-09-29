@@ -57,9 +57,9 @@ run_check "Check vendored OpenSSL consumer flags" \
 # ref plus ci-builds.yml on GH-Actions, so it needs both refs fetched. The
 # workflow fetches GH-Actions with a tolerated failure, so skip rather than fail
 # the whole lint suite when it is momentarily unavailable.
-if git rev-parse --verify --quiet ${CI_ENGINE_REF:-origin/GH-Actions} >/dev/null; then
+if git rev-parse --verify --quiet "${CI_ENGINE_REF:-origin/GH-Actions}" >/dev/null; then
 	run_check "Check fork PR build isolation contract" \
-		python3 test/infra/control/validate_fork_pr_builds.py HEAD ${CI_ENGINE_REF:-origin/GH-Actions}
+		python3 test/infra/control/validate_fork_pr_builds.py HEAD "${CI_ENGINE_REF:-origin/GH-Actions}"
 	run_check "Test fork PR build isolation validator" \
 		python3 -m unittest discover -s test/infra/control -p test_validate_fork_pr_builds.py
 else

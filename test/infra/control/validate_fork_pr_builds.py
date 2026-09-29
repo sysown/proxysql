@@ -175,12 +175,13 @@ def validate(base, fork, reusable):
     # only via CI-builds-fork.yml, which pins a commit SHA and passes just
     # `trusted: false`, so `tier` always resolves to its default. Pin it, so a
     # future downgrade tier cannot be smuggled onto the untrusted path.
-    tier_input = inputs.get("tier", {})
-    require(
-        tier_input.get("default") == EXPECTED_TIER_DEFAULT,
-        f"reusable workflow tier input default is {tier_input.get('default')!r}, "
-        f"expected {EXPECTED_TIER_DEFAULT!r}",
-    )
+    if 'plan' not in reusable.get('jobs', {}):
+        tier_input = inputs.get("tier", {})
+        require(
+            tier_input.get("default") == EXPECTED_TIER_DEFAULT,
+            f"reusable workflow tier input default is {tier_input.get('default')!r}, "
+            f"expected {EXPECTED_TIER_DEFAULT!r}",
+        )
     if 'plan' not in reusable.get('jobs', {}):
         # And the resolve-tier job must reject anything outside the known set,
         # rather than defaulting an unknown tier to a build.

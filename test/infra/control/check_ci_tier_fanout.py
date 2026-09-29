@@ -61,7 +61,7 @@ def load_tree(ref):
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--callers-ref',default='HEAD');parser.add_argument('--engine-ref',default='origin/GH-Actions');args=parser.parse_args()
-    callers={v['name']:v for v in load_tree(args.callers_ref).values()}
+    callers={v['name']:v for filename,v in load_tree(args.callers_ref).items() if filename.startswith('CI-')}
     engines=load_tree(args.engine_ref)
     rows=json.loads(git('show',args.engine_ref+':.github/ci-tier-consumers.json'))['consumers']
     groups=json.loads(git('show',args.callers_ref+':test/tap/groups/groups.json'))
