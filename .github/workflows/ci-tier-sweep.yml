@@ -363,6 +363,14 @@ jobs:
         done < <(printf '%s\n' "${SELECTED_GROUPS[@]}")
         echo ">>> all ${#SELECTED_GROUPS[@]} selected groups verified against groups.json"
 
+        # Persist the selection. The Cleanup step is a SEPARATE shell, and
+        # GitHub does not carry shell arrays between steps -- so referencing
+        # SELECTED_GROUPS there expands to nothing and the leftover-container
+        # sweep silently does nothing. Write the names out and read them back.
+        SELECTED_FILE="${GITHUB_WORKSPACE}/ci-tier-sweep-selected-groups.txt"
+        printf '%s\n' "${SELECTED_GROUPS[@]}" > "${SELECTED_FILE}"
+        echo ">>> wrote ${#SELECTED_GROUPS[@]} group names to ${SELECTED_FILE}"
+
         overall=0
         for GROUP in "${SELECTED_GROUPS[@]}"; do
           INFRA="ci-tier-sweep-${TIER}-${GROUP}"
@@ -403,12 +411,23 @@ jobs:
         cd proxysql
         # The per-group teardown normally handled this; sweep whatever is left
         # so a failed group cannot leak a container onto the shared runner.
-        for GROUP in "${SELECTED_GROUPS[@]}"; do
-          export INFRA_ID="ci-tier-sweep-${TIER}-${GROUP}"
-          export TAP_GROUP="${GROUP}"
-          test/infra/control/stop-proxysql-isolated.bash >/dev/null 2>&1 || true
-          test/infra/control/destroy-infras.bash >/dev/null 2>&1 || true
-        done
+        #
+        # This runs in its own shell, so it cannot see the TAP step's shell
+        # array. Read the names the TAP step persisted instead. If that file is
+        # missing the TAP step never got as far as selecting anything, and the
+        # catch-all `docker ps` sweep below is all that applies.
+        SELECTED_FILE="${GITHUB_WORKSPACE}/ci-tier-sweep-selected-groups.txt"
+        if [ -f "${SELECTED_FILE}" ]; then
+          while IFS= read -r GROUP; do
+            [ -n "${GROUP}" ] || continue
+            export INFRA_ID="ci-tier-sweep-${TIER}-${GROUP}"
+            export TAP_GROUP="${GROUP}"
+            test/infra/control/stop-proxysql-isolated.bash >/dev/null 2>&1 || true
+            test/infra/control/destroy-infras.bash >/dev/null 2>&1 || true
+          done < "${SELECTED_FILE}"
+        else
+          echo "no selected-group file at ${SELECTED_FILE}; relying on the catch-all docker sweep"
+        fi
         docker ps -a --format '{{.Names}}' | grep -E "ci-tier-sweep" | xargs -r docker rm -f 2>/dev/null || true
 
     - name: Fix artifact permissions
