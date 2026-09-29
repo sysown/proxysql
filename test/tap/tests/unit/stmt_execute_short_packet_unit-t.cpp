@@ -141,7 +141,10 @@ void reexec_with_junk_filling(char** argv) {
 		? std::string(conf) + ",junk:true" : std::string("junk:true");
 	setenv("MALLOC_CONF", new_conf.c_str(), 1);
 	execv("/proc/self/exe", argv);
-	// execv() failed (e.g. no /proc): run without junk filling.
+	// No /proc (e.g. macOS): re-execute through argv[0], looked up in PATH
+	// only when it has no slash, as the shell does.
+	execvp(argv[0], argv);
+	// Both failed: run without junk filling.
 }
 
 } // namespace
