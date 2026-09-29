@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "Shard list for CI-tier-sweep's test job. This file is the SINGLE source of",
+    "truth: the job matrix is built from it via fromJson(), and SHARD_COUNT is",
+    "derived from its length by the `plan` job. Keeping the count in the matrix",
+    "by hand instead would allow the two to drift, and the harmful direction is",
+    "silent -- a SHARD_COUNT larger than the matrix drops groups that then never",
+    "run, with no error anywhere.",
+    "",
+    "Cost model (measured on the first real sweep): ~54 groups / ~800 test-runs",
+    "per tier at roughly 30s per integration test. Sequential that is ~7h per",
+    "tier. Each shard re-downloads the multi-GB handoff (a few minutes), so",
+    "sharding trades a few minutes of download for N-fold parallelism.",
+    "",
+    "6 matches the self-hosted proxysql-ci pool size. Raise it only together with",
+    "runner capacity, and remember per-group INFRA_IDs keep Docker namespaces",
+    "from colliding."
+  ],
+  "shards": ["0", "1", "2", "3", "4", "5"]
+}
