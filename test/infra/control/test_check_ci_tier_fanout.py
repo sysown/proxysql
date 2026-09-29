@@ -94,4 +94,47 @@ class RouteTests(unittest.TestCase):
    if what=='step':plan['steps'][0]['if']='${{ false }}'
    if what=='command':plan['steps'][0]['run']='echo no plan'
    self.assertIn('lower-tier coverage lost: v30/unit-tests-g1',validate_routes(rows,c,e,{'unit-tests-g1'},{'unit-tests-g1'}))
+ def dependency_fixture(self, location):
+  if location=='plan':
+   rows,c,e=self.unit_fixture(); groups={'unit-tests-g1'}; jobs=e['ci-builds.yml']['jobs']; job=jobs['plan']
+  else:
+   rows,c,e=self.fixture(); groups={'g1'}
+   if location=='context':jobs=e['ci-tier-context.yml']['jobs']; job=jobs['context']
+   elif location=='call':jobs=e['ci-g1.yml']['jobs']; job=jobs['tier-context']
+   elif location=='tests':jobs=e['ci-g1.yml']['jobs']; job=jobs['tests']
+   elif location=='wrapper':
+    c['CI-g1']['jobs']['run']['uses']='./.github/workflows/wrapper.yml'
+    e['wrapper.yml']={'jobs':{'run':{'uses':'./.github/workflows/ci-g1.yml'}}}
+    jobs=e['wrapper.yml']['jobs'];job=jobs['run']
+   else:jobs=c['CI-g1']['jobs']; job=jobs['run']
+  jobs['blocked']={'if':'${{ false }}','steps':[{'run':'true'}]}
+  job['needs']=job.get('needs',[])+['blocked']
+  return rows,c,e,groups,jobs,job
+ def test_skipped_dependencies_remove_coverage_at_every_boundary(self):
+  for location in ['context','call','plan','tests','caller','wrapper']:
+   for condition in [None, '${{ true }}', '${{ success() }}', "${{ needs.blocked.result == 'skipped' }}", "${{ contains('always()', 'always') }}"]:
+    with self.subTest(location=location,condition=condition):
+     rows,c,e,groups,jobs,job=self.dependency_fixture(location)
+     if condition is not None:job['if']=condition
+     errors=validate_routes(rows,c,e,groups,groups)
+     for tier in ['v30','v31']:
+      self.assertIn('lower-tier coverage lost: '+tier+'/'+next(iter(groups)), errors)
+ def test_status_overrides_can_run_after_skipped_dependency(self):
+  for location in ['context','call','plan','tests','caller','wrapper']:
+   for condition in ['${{ always() }}', '${{ !cancelled() }}', "${{ always() && needs.blocked.result == 'skipped' }}"]:
+    with self.subTest(location=location,condition=condition):
+     rows,c,e,groups,jobs,job=self.dependency_fixture(location);job['if']=condition
+     self.assertEqual(validate_routes(rows,c,e,groups,groups),[])
+ def test_transitive_missing_and_cyclic_dependencies_fail_closed(self):
+  for mutation in ['transitive','missing','cycle']:
+   rows,c,e,groups,jobs,job=self.dependency_fixture('context')
+   if mutation=='transitive':
+    jobs['middle']={'needs':'blocked','steps':[{'run':'true'}]};job['needs']='middle'
+   if mutation=='missing':job['needs']='missing';job['if']='${{ always() }}'
+   if mutation=='cycle':jobs['blocked']['needs']='context';job['if']='${{ always() }}'
+   self.assertIn('lower-tier coverage lost: v30/g1',validate_routes(rows,c,e,groups,groups))
+ def test_status_checks_do_not_turn_skips_into_failures(self):
+  for condition in ['${{ failure() }}','${{ cancelled() }}','${{ always() && success() }}', "${{ always() && needs.blocked.result == 'success' }}"]:
+   rows,c,e,groups,jobs,job=self.dependency_fixture('context');job['if']=condition
+   self.assertIn('lower-tier coverage lost: v30/g1',validate_routes(rows,c,e,groups,groups))
 if __name__=='__main__':unittest.main()

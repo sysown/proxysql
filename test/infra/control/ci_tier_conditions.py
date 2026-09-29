@@ -20,23 +20,23 @@ FUNCTIONS = {
 }
 
 
-def evaluate(node):
+def evaluate(node, functions=FUNCTIONS):
     """Evaluate whitelisted AST nodes without executing workflow-supplied code."""
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return not evaluate(node.operand)
+        return not evaluate(node.operand, functions)
     if isinstance(node, ast.BoolOp):
         value = None
         for item in node.values:
-            value = evaluate(item)
+            value = evaluate(item, functions)
             if isinstance(node.op, ast.And) and not value:
                 return value
             if isinstance(node.op, ast.Or) and value:
                 return value
         return value
     if isinstance(node, ast.Compare) and len(node.ops) == 1:
-        left, right = evaluate(node.left), evaluate(node.comparators[0])
+        left, right = evaluate(node.left, functions), evaluate(node.comparators[0], functions)
         if isinstance(left, str) and isinstance(right, str):
             left, right = left.lower(), right.lower()
         if isinstance(node.ops[0], ast.Eq):
@@ -44,9 +44,9 @@ def evaluate(node):
         if isinstance(node.ops[0], ast.NotEq):
             return left != right
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
-        return FUNCTIONS[node.func.id](*(evaluate(arg) for arg in node.args))
+        return functions[node.func.id](*(evaluate(arg, functions) for arg in node.args))
     if isinstance(node, ast.Subscript):
-        value, key = evaluate(node.value), evaluate(node.slice)
+        value, key = evaluate(node.value, functions), evaluate(node.slice, functions)
         try:
             return value[key]
         except (KeyError, IndexError):
@@ -54,12 +54,12 @@ def evaluate(node):
     raise ValueError('unsupported condition syntax')
 
 
-def condition_allows(condition, tier, mode, inputs=None, job='tests'):
+def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_results=None):
     """Check a gate for one selected tier/mode, failing closed on unknown context."""
-    if isinstance(condition, bool):
-        return condition
     if condition is None:
-        return True
+        condition = True
+    if isinstance(condition, bool):
+        condition = 'true' if condition else 'false'
     expression = str(condition).strip()
     if expression.startswith('${{') and expression.endswith('}}'):
         expression = expression[3:-2].strip()
@@ -75,6 +75,9 @@ def condition_allows(condition, tier, mode, inputs=None, job='tests'):
         'needs.tier-context.result': 'success',
         'needs.tier-context.outputs.matrices': json.dumps({job: [{'tier': tier}]}),
     }
+    if needs_results is not None:
+        context.pop('needs.tier-context.result', None)
+        context.update({'needs.' + key + '.result': value for key, value in needs_results.items()})
     context.update({'inputs.' + key: value for key, value in (inputs or {}).items()})
     translated = []
     offset = 0
@@ -107,6 +110,18 @@ def condition_allows(condition, tier, mode, inputs=None, job='tests'):
         if any(isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not)
                and isinstance(node.operand, ast.Compare) for node in ast.walk(tree)):
             raise ValueError('negation before comparison is unsupported; use an explicit inverse comparison')
-        return bool(evaluate(tree))
+        functions = dict(FUNCTIONS)
+        if needs_results is not None:
+            # Model job gating in a successful, non-cancelled cascade. A
+            # skipped prerequisite is not a failure. Runtime failures are
+            # outside this structural check.
+            successful = all(result == 'success' for result in needs_results.values())
+            functions['success'] = lambda: successful
+            has_status = any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                             and node.func.id in ('success', 'failure', 'cancelled', 'always')
+                             for node in ast.walk(tree))
+            if not has_status and not successful:
+                return False
+        return bool(evaluate(tree, functions))
     except (SyntaxError, TypeError, KeyError, AttributeError) as error:
         raise ValueError('unsupported condition expression') from error

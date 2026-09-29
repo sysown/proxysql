@@ -38,13 +38,46 @@ def same_expression(value, expected):
     return re.sub(r'\s+', '', str(value)) == re.sub(r'\s+', '', expected)
 
 
-def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, producer):
+def job_reachable(body, job_id, inputs, tier, mode, consumer_job, allowed):
+    """Resolve static job eligibility, assuming runnable jobs complete successfully.
+
+    Missing jobs and dependency cycles are invalid even under always(). This
+    does not predict failures inside runnable steps or execute candidate code.
+    """
+    jobs = body.get('jobs', {})
+    results = {}
+    visiting = set()
+
+    def visit(name):
+        if name in visiting:
+            raise ValueError('cyclic job dependency: ' + name)
+        if name not in jobs:
+            raise ValueError('missing job dependency: ' + str(name))
+        if name in results:
+            return results[name]
+        visiting.add(name)
+        job = jobs[name]
+        needs = job.get('needs', [])
+        needs = [needs] if isinstance(needs, str) else needs
+        if not isinstance(needs, list) or any(not isinstance(item, str) for item in needs):
+            raise ValueError('invalid job dependencies: ' + name)
+        dependencies = {dependency: visit(dependency) for dependency in needs}
+        runs = allowed(job.get('if'), tier, mode, inputs, consumer_job, dependencies)
+        visiting.remove(name)
+        results[name] = 'success' if runs else 'skipped'
+        return results[name]
+
+    return visit(job_id) == 'success'
+
+
+def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, runnable, producer):
     """Trace matrix outputs to the enabled plan/consumer runtime step.
 
     This validates workflow wiring, not arbitrary Python semantics. The engine's
     runtime/plan tests validate the actual tier cells emitted by those commands.
     """
     if producer:
+        source_body, source_job = body, 'plan'
         source = body.get('jobs', {}).get('plan', {})
         source_inputs = inputs
         step_id, output, command = 'plan', 'matrix', 'plan'
@@ -52,7 +85,7 @@ def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, produc
         call = body.get('jobs', {}).get('tier-context', {})
         if target(call) != 'ci-tier-context.yml':
             return False
-        if not allowed(call.get('if'), tier, mode, inputs, row['job']):
+        if not runnable(body, 'tier-context', inputs, tier, mode, row['job']):
             return False
         source_inputs = {key: resolve(value, inputs) for key, value in call.get('with', {}).items()}
         if source_inputs.get('consumer_file') != row['file']:
@@ -61,9 +94,10 @@ def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, produc
         declared = events(shared).get('workflow_call', {}).get('outputs', {}).get('matrices', {})
         if not same_expression(declared.get('value'), '${{ jobs.context.outputs.matrices }}'):
             return False
+        source_body, source_job = shared, 'context'
         source = shared.get('jobs', {}).get('context', {})
         step_id, output, command = 'context', 'matrices', 'consumer'
-    if not allowed(source.get('if'), tier, mode, source_inputs, row['job']):
+    if not runnable(source_body, source_job, source_inputs, tier, mode, row['job']):
         return False
     if not same_expression(source.get('outputs', {}).get(output),
                            '${{ steps.' + step_id + '.outputs.' + output + ' }}'):
@@ -86,10 +120,16 @@ def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, produc
 
 def validate_routes(rows,callers,engines,known_groups,migrated):
     errors=[];covered={'v30':set(),'v31':set()};identities=set()
-    def allowed(condition,tier,mode,inputs,job):
-        try:return condition_allows(condition,tier,mode,inputs,job)
+    def allowed(condition,tier,mode,inputs,job,needs_results=None):
+        try:return condition_allows(condition,tier,mode,inputs,job,needs_results)
         except ValueError as error:
             message='cannot prove route condition: '+str(error)
+            if message not in errors:errors.append(message)
+            return False
+    def runnable(body, job_id, inputs, tier, mode, consumer_job):
+        try:return job_reachable(body,job_id,inputs,tier,mode,consumer_job,allowed)
+        except ValueError as error:
+            message='cannot prove job prerequisites: '+str(error)
             if message not in errors:errors.append(message)
             return False
     for row in rows:
@@ -107,15 +147,15 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
             if not name or name in ancestors:return
             if name not in engines:errors.append('missing reusable '+name);return
             if name==row['file']:routes.append((inputs,gates))
-            for job in engines[name].get('jobs',{}).values():
+            for job_id,job in engines[name].get('jobs',{}).items():
                 nested={k:resolve(v,inputs) for k,v in job.get('with',{}).items()}
-                walk(target(job),nested,gates+[(job.get('if'),inputs)],ancestors|{name})
+                walk(target(job),nested,gates+[(engines[name],job_id,inputs)],ancestors|{name})
         producer=row['workflow']=='CI-builds' and row['job']=='tier-units'
         if producer:
             body=engines.get('ci-builds.yml',{});job=body.get('jobs',{}).get('builds',{})
-            if target(start_job)=='ci-builds.yml':routes=[(start_job.get('with',{}),[(start_job.get('if'),{})])]
+            if target(start_job)=='ci-builds.yml':routes=[(start_job.get('with',{}),[(caller,row.get('instance','run'),{})])]
         else:
-            walk(target(start_job),start_job.get('with',{}),[(start_job.get('if'),{})],set())
+            walk(target(start_job),start_job.get('with',{}),[(caller,row.get('instance','run'),{})],set())
             body=engines.get(row['file'],{});job=body.get('jobs',{}).get(row['job'],{})
             if 'tier-context' not in body.get('jobs',{}):errors.append('missing tier context '+row['file'])
         if not routes:errors.append('unreachable consumer '+str(identity));continue
@@ -127,12 +167,12 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
             for mode in ['normal','asan']:
                 wired=set()
                 for inputs,gates in routes:
-                    if not all(allowed(gate,tier,mode,values,row['job']) for gate,values in gates):continue
-                    if not matrix_source_allows(body,engines,row,inputs,tier,mode,allowed,producer):
+                    if not all(runnable(scope,job_id,values,tier,mode,row['job']) for scope,job_id,values in gates):continue
+                    if not matrix_source_allows(body,engines,row,inputs,tier,mode,allowed,runnable,producer):
                         message='matrix output source is disabled or miswired: '+str(identity)
                         if message not in errors:errors.append(message)
                         continue
-                    if not allowed(job.get('if'),tier,mode,inputs,row['job']):continue
+                    if not runnable(body,'builds' if producer else row['job'],inputs,tier,mode,row['job']):continue
                     for step in job.get('steps',[]):
                         run=resolve(step.get('run',''),inputs)
                         executed=('ci_tier_runtime.py units' in run if producer else

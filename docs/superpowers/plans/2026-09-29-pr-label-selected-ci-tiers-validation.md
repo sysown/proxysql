@@ -48,7 +48,7 @@ repository, SHA and token. Manual subsets use distinct summary and check names.
   selected companion SHA. The missing-engine-ref path also passes, skipping
   paired structural checks while still running every validator test suite. Its advisory group-coverage output retains the baseline warning
   `missing-workflow NEW=1 known=36`; this is not a warning-free claim.
-- Fork-isolation mutation tests: 22 passed. Tier-route mutation tests: 11 passed,
+- Fork-isolation mutation tests: 22 passed. Tier-route mutation tests: 15 passed,
   including removal of either lower tier, disabled routes, selected-matrix wiring,
   both modes, and producer unit coverage. Engine-ref selection tests: 2 passed.
 - Engine actionlint passes for the full workflow directory. Caller actionlint
@@ -139,6 +139,15 @@ Follow-up Cubic review on the published revision:
   run ID is supplied. They do not require caller changes; live candidate
   validation and staged rollout remain necessary.
 - The full paired lint suite and standalone shellcheck pass after these changes.
+
+The subsequent prerequisite finding is also corrected: matrix sources, reusable
+calls, wrappers and test jobs follow `needs` transitively. A skipped prerequisite
+blocks the implicit success gate; explicit `always()` / `!cancelled()` conditions
+can permit execution. `success()` and `needs.<job>.result` use the derived
+prerequisite states. Missing jobs and dependency cycles fail closed, even with
+`always()`. This models static eligibility in a successful, non-cancelled cascade;
+it does not predict runtime failures inside runnable jobs. Mutation tests cover
+these boundaries, transitive skips, status overrides and invalid graphs.
 
 These corrections do not close the reporting/live-validation limits below.
 
