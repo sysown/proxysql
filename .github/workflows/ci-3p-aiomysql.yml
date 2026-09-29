@@ -181,12 +181,27 @@ jobs:
         fi
 
         cat ./logs/*/*_summary.log
-        FAILS=$(cat ./logs/*/*_summary.log | grep -oPm1 '(?<=^FAIL: )\d+')
-        ERRORS=$(cat ./logs/*/*_summary.log | grep -oPm1 '(?<=^ERROR: )\d+')
+        # raw value of every "FAIL: <n>" / "ERROR: <n>" line of every summary: the totals are printed more
+        # than once and "FAIL: -" means no baseline matched. Any non-integer value is kept verbatim, so the
+        # integer checks below fail; otherwise the highest count, so any summary with failures fails the step.
+        FAIL_VALUES=$(cat ./logs/*/*_summary.log | grep -oP '(?<=^FAIL: )\S+' | sort -u)
+        ERROR_VALUES=$(cat ./logs/*/*_summary.log | grep -oP '(?<=^ERROR: )\S+' | sort -u)
+        if grep -qvxE '[0-9]+' <<< "${FAIL_VALUES}"; then
+          FAILS="${FAIL_VALUES//$'\n'/,}"
+        else
+          FAILS=$(sort -n <<< "${FAIL_VALUES}" | tail -1)
+        fi
+        ERRORS=''
+        if [[ -n "${ERROR_VALUES}" ]]; then
+          if grep -qvxE '[0-9]+' <<< "${ERROR_VALUES}"; then
+            ERRORS="${ERROR_VALUES//$'\n'/,}"
+          else
+            ERRORS=$(sort -n <<< "${ERROR_VALUES}" | tail -1)
+          fi
+        fi
 
-        # the summary prints "FAIL: N" more than once: only the first match, and it must be an integer
         if ! [[ "${FAILS}" =~ ^[0-9]+$ ]]; then
-          echo "ERROR: Could not parse FAIL count from summary log"
+          echo "ERROR: Could not parse FAIL count from summary log: '${FAILS}'"
           exit 1
         fi
         if [[ ${FAILS} -ne 0 ]]; then
