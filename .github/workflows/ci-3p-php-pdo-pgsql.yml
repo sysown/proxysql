@@ -177,15 +177,20 @@ jobs:
         fi
 
         cat ./logs/*/*_summary.log
-        FAILS=$(cat ./logs/*/*_summary.log | grep -oP '(?<=^FAIL: )\d+')
-        ERRORS=$(cat ./logs/*/*_summary.log | grep -oP '(?<=^ERROR: )\d+')
+        FAILS=$(cat ./logs/*/*_summary.log | grep -oPm1 '(?<=^FAIL: )\d+')
+        ERRORS=$(cat ./logs/*/*_summary.log | grep -oPm1 '(?<=^ERROR: )\d+')
 
-        if [[ -z "${FAILS}" ]]; then
+        # the summary prints "FAIL: N" more than once: only the first match, and it must be an integer
+        if ! [[ "${FAILS}" =~ ^[0-9]+$ ]]; then
           echo "ERROR: Could not parse FAIL count from summary log"
           exit 1
         fi
         if [[ ${FAILS} -ne 0 ]]; then
           echo "FAILED: ${FAILS} test failure(s)"
+          exit 1
+        fi
+        if [[ -n "${ERRORS}" && ! "${ERRORS}" =~ ^[0-9]+$ ]]; then
+          echo "ERROR: Could not parse ERROR count from summary log: '${ERRORS}'"
           exit 1
         fi
         if [[ -n "${ERRORS}" && ${ERRORS} -ne 0 ]]; then
