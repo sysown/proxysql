@@ -66,7 +66,26 @@ DYNAMIC_DISCOVERY_PREFIXES = ("cluster_sim_",)
 # 3.1.x and a v3.0 build reports 3.0.x, so anything up to the next minor counts.
 TIER_CEILINGS = {"v30": "3.0.99", "v31": "3.1.99"}
 
-GROUP_TOKEN = re.compile(r"[A-Za-z0-9_.=-]+-g[0-9]+")
+def workflow_blob(ref: str) -> str:
+    """Filenames + contents of .github/workflows at `ref`, as one string.
+
+    Substring matching against this blob is what lint_group_coverage.py does
+    (it tests `group in blob`). Matching on a `-g<N>` token regex instead --
+    which is what this file did originally -- silently misses any group whose
+    name has no `-g<N>` suffix. There is exactly one today, `pgsql-repl`, and it
+    was consequently excluded from the sweep while this checker reported OK.
+    So: mirror the reference implementation rather than approximating it.
+    """
+    parts: list[str] = []
+    for path in git(
+        "ls-tree", "-r", "--name-only", ref, ".github/workflows/", check=True
+    ).split():
+        parts.append(path)
+        try:
+            parts.append(git("show", f"{ref}:{path}", check=True))
+        except SystemExit:
+            raise
+    return "\n".join(parts)
 
 
 def parse_version(value: str) -> tuple[int, ...]:
@@ -102,47 +121,27 @@ def git(*args: str, check: bool = False) -> str:
     return proc.stdout if proc.returncode == 0 else ""
 
 
-def git_grep_optional(*args: str) -> str:
-    """git grep, where exit 1 means 'no match' but >1 means a real failure.
+def wired_group_names(refs: list[str], all_groups: set[str]) -> set[str]:
+    """Groups selectable by some workflow, per lint_group_coverage.py's rule.
 
-    `git grep` exits 1 when nothing matches, which is normal and not an error.
-    Any other non-zero exit is a real problem and must not be read as "no
-    workflows referenced this", or check (B) passes vacuously.
+    Three conditions, in the reference implementation's spirit:
+      (a) a CI-<group>.yml caller exists;
+      (b) the group name appears anywhere in a workflow's filename or content
+          (substring, not a token regex -- see workflow_blob);
+      (c) the group belongs to a dynamically discovered family.
     """
-    proc = subprocess.run(
-        ("git", "grep", *args), cwd=REPO, capture_output=True, text=True
-    )
-    if proc.returncode not in (0, 1):
-        print(
-            f"ERROR: `git {' '.join(args)}` failed (exit {proc.returncode}): "
-            f"{proc.stderr.strip()}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return proc.stdout
-
-
-def wired_group_names(refs: list[str]) -> set[str]:
-    """Groups selectable by some workflow, per lint_group_coverage.py's rule."""
     found: set[str] = set()
     for ref in refs:
-        # (a) CI-<group>.yml callers
+        blob = workflow_blob(ref)
+        for group in all_groups:
+            if group in blob:
+                found.add(group)
         for path in git(
             "ls-tree", "-r", "--name-only", ref, ".github/workflows/", check=True
         ).split():
             m = re.match(r"\.github/workflows/[Cc]I-(.+)\.ya?ml$", path)
             if m:
                 found.add(m.group(1))
-        # (b) the name appearing anywhere in a workflow (catches callers whose
-        #     filename is not the group name, e.g. CI-unittests.yml -> unit-tests-g1)
-        found.update(
-            GROUP_TOKEN.findall(
-                git_grep_optional(
-                    "-h", "-o", "-E", r"[A-Za-z0-9_.=-]+-g[0-9]+", ref, "--",
-                    ".github/workflows/",
-                )
-            )
-        )
     return found
 
 
@@ -212,7 +211,7 @@ def main() -> int:
             f"{ACTIONS_REF} is not fetched; only this branch's workflows were "
             "examined, so some groups may look unwired that are not"
         )
-    wired = wired_group_names(refs)
+    wired = wired_group_names(refs, set(members))
     # Families selected at run time by a workflow's own discovery step have no
     # CI-<group>.yml caller and never appear in a workflow's text, so they are
     # wired by definition (mirrors lint_group_coverage.py).

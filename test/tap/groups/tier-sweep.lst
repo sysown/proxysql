@@ -1,6 +1,6 @@
 # TAP groups exercised by CI-tier-sweep (the merge-only v3.0/v3.1 sweep).
 #
-# Selection rule (enforced by test/infra/control/check_tier_sweep_groups.bash):
+# Selection rule (enforced by test/infra/control/check_tier_sweep_groups.py):
 #   a group is listed IFF
 #     (1) it is already wired into regular CI -- a CI-<group>.yml caller, or
 #         the name appears in a workflow on this branch or on origin/GH-Actions
