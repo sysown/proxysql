@@ -4471,10 +4471,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
-					RequestEnd(NULL, 9005, buf);
+					RequestEnd_and_free_pkt(&pkt, 9005, buf);
 					free(buf);
 					SLDH->reset(client_stmt_id);
-					l_free(pkt.size,pkt.ptr);
 					return;
 				}
 			}
@@ -5845,15 +5844,11 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 
 void MySQL_Session::cleanup_stmt_execute() {
 	if (CurrentQuery.stmt_meta) {
-		if (CurrentQuery.stmt_meta->pkt) {
-			uint32_t stmt_global_id=0;
-			memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
-			SLDH->reset(stmt_global_id);
-			free(CurrentQuery.stmt_meta->pkt);
-			CurrentQuery.stmt_meta->pkt=NULL;
-		}
-
-		// free for all the buffer types in which we allocate
+		// free for all the buffer types in which we allocate.
+		// This must happen before SLDH->reset(): a parameter sent via
+		// COM_STMT_SEND_LONG_DATA points to the SLDH buffer instead of a buffer
+		// allocated by get_binds_from_pkt(), even for temporal types. That buffer
+		// is owned (and freed) by SLDH, so freeing it here too is a double-free.
 		for (int i = 0; i < CurrentQuery.stmt_meta->num_params; i++) {
 			enum enum_field_types buffer_type =
 				CurrentQuery.stmt_meta->binds[i].buffer_type;
@@ -5864,12 +5859,17 @@ void MySQL_Session::cleanup_stmt_execute() {
 				(buffer_type == MYSQL_TYPE_TIMESTAMP) ||
 				(buffer_type == MYSQL_TYPE_DATETIME)
 			) {
-				free(CurrentQuery.stmt_meta->binds[i].buffer);
+				void *buffer = CurrentQuery.stmt_meta->binds[i].buffer;
+				unsigned long *long_data_size = NULL;
+				my_bool *long_data_is_null = NULL;
+				if (buffer && buffer != SLDH->get(CurrentQuery.stmt_meta->stmt_id, i, &long_data_size, &long_data_is_null)) {
+					free(buffer);
+				}
 			}
 			// The stmt_execute_metadata_t is cached in sess_STMTs_meta and reused
 			// across executes. For every non-TIME parameter, binds[i].buffer does
-			// NOT own memory: it aliases either the STMT_EXECUTE packet just freed
-			// above (stmt_meta->pkt) or an SLDH long-data buffer just reset via
+			// NOT own memory: it aliases either the STMT_EXECUTE packet freed
+			// below (stmt_meta->pkt) or an SLDH long-data buffer freed below via
 			// SLDH->reset(). Leaving those pointers set makes them dangle until the
 			// next get_binds_from_pkt() re-points them. That re-point normally
 			// happens before use, but when a session spans multiple hostgroups the
@@ -5877,6 +5877,14 @@ void MySQL_Session::cleanup_stmt_execute() {
 			// where the cached, dangling binds can be consumed against freed memory
 			// (issue #5883). Null every buffer here so no dangling alias survives.
 			CurrentQuery.stmt_meta->binds[i].buffer = NULL;
+		}
+
+		if (CurrentQuery.stmt_meta->pkt) {
+			uint32_t stmt_global_id=0;
+			memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
+			SLDH->reset(stmt_global_id);
+			free(CurrentQuery.stmt_meta->pkt);
+			CurrentQuery.stmt_meta->pkt=NULL;
 		}
 	}
 	CurrentQuery.mysql_stmt=NULL;
@@ -7524,6 +7532,29 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt) {
 }
 
 /**
+ * @brief Complete the current request and release the client packet exactly once.
+ *
+ * For COM_STMT_EXECUTE, MySQL_Protocol::get_binds_from_pkt() stores the client
+ * packet in stmt_meta->pkt, and RequestEnd() -> Query_Info::end() frees it
+ * (fix for bug #796). Calling l_free() on the same packet afterwards is a
+ * double-free that silently corrupts the heap (#5639, #6233). Capture the
+ * ownership before RequestEnd(), which resets CurrentQuery.stmt_meta, and only
+ * free the packet here when stmt_meta does not own it.
+ *
+ * @param[in,out] pkt The client packet being answered without a backend.
+ * @param myerrno Error code forwarded to RequestEnd().
+ * @param errmsg Error message forwarded to RequestEnd().
+ */
+void MySQL_Session::RequestEnd_and_free_pkt(PtrSize_t *pkt, const unsigned int myerrno, const char *errmsg) {
+	const bool stmt_meta_owns_pkt =
+		(CurrentQuery.stmt_meta != NULL && CurrentQuery.stmt_meta->pkt == pkt->ptr);
+	RequestEnd(NULL, myerrno, errmsg);
+	if (!stmt_meta_owns_pkt) {
+		l_free(pkt->size,pkt->ptr);
+	}
+}
+
+/**
  * @brief Handle the generation and sending of an OK message packet in response to a successful query execution.
  *
  * This (formely inline) function is responsible for setting up and sending an OK message packet to the client in response
@@ -7539,8 +7570,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt) {
 	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 	if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 	client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,0,0,setStatus,0,qpo->OK_msg);
-	RequestEnd(NULL, 0);
-	l_free(pkt->size,pkt->ptr);
+	RequestEnd_and_free_pkt(pkt, 0);
 }
 
 /**
@@ -7556,8 +7586,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt) {
 	client_myds->DSS=STATE_QUERY_SENT_NET;
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",qpo->error_msg);
 	MyHGM->add_mysql_errors(current_hostgroup, (char *)"", 0, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, 1148, (char *)qpo->error_msg);
-	RequestEnd(NULL, 1148, qpo->error_msg);
-	l_free(pkt->size,pkt->ptr);
+	RequestEnd_and_free_pkt(pkt, 1148, qpo->error_msg);
 }
 
 /**
@@ -7576,18 +7605,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
 	string errmsg = "Got a packet bigger than 'max_allowed_packet' bytes";
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1153,(char *)"08S01", errmsg.c_str(), true);
 	MyHGM->add_mysql_errors(current_hostgroup, (char *)"", 0, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, 1153, (char *)errmsg.c_str());
-	// Issue #5639: when called from the COM_STMT_EXECUTE path,
-	// MySQL_Protocol::get_binds_from_pkt() has set stmt_meta->pkt to alias
-	// pkt->ptr. RequestEnd() -> Query_Info::end() then free()s stmt_meta->pkt
-	// (the fix for bug #796), so the l_free() below would be a double-free of
-	// the same buffer. Capture the alias before RequestEnd() (which may reset
-	// stmt_meta) and skip the second free when the alias was present.
-	const bool stmt_meta_owns_pkt =
-		(CurrentQuery.stmt_meta != NULL && CurrentQuery.stmt_meta->pkt == pkt->ptr);
-	RequestEnd(NULL, 1153, errmsg.c_str());
-	if (!stmt_meta_owns_pkt) {
-		l_free(pkt->size,pkt->ptr);
-	}
+	RequestEnd_and_free_pkt(pkt, 1153, errmsg.c_str());
 }
 
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, ps_type prepare_stmt_type) {
@@ -8866,8 +8884,7 @@ __exit_set_destination_hostgroup:
 				snprintf(buf, sizeof(buf), "ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d", locked_on_hostgroup, current_hostgroup);
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9006,(char *)"Y0000",buf);
 				thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
-				RequestEnd(NULL, 9006, buf);
-				l_free(pkt->size,pkt->ptr);
+				RequestEnd_and_free_pkt(pkt, 9006, buf);
 				return true;
 			}
 		}
