@@ -49,12 +49,65 @@ jobs:
       tier: ${{ matrix.tier }}
       trusted: true
 
+  # Derive the shard axis from .github/shards.json so the matrix and the shard
+  # COUNT can never disagree. See that file for why the harmful direction of
+  # that drift is silent.
+  plan:
+    runs-on: ubuntu-24.04
+    permissions: {}
+    outputs:
+      shards: ${{ steps.p.outputs.shards }}
+      count: ${{ steps.p.outputs.count }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: GH-Actions
+        path: ci-control
+        sparse-checkout: |
+          .github/shards.json
+        sparse-checkout-cone-mode: false
+    - name: Resolve shard axis
+      id: p
+      run: |
+        set -euo pipefail
+        shards="$(python3 -c 'import json,sys; print(json.dumps(json.load(open("ci-control/.github/shards.json"))["shards"]))')"
+        count="$(python3 -c 'import json,sys; print(len(json.load(open("ci-control/.github/shards.json"))["shards"]))')"
+        if [ "${count}" -lt 1 ]; then
+          echo "::error::shards.json declares no shards; the sweep would run nothing"
+          exit 1
+        fi
+        # The labels must be exactly 0..count-1, each once. Deriving `count`
+        # from the array length is only safe while that holds: GitHub collapses
+        # a duplicated matrix combination, so a repeated label leaves fewer
+        # jobs than `count`, and the modulo in the run step would then route
+        # group indices past the last real shard to nobody -- groups that
+        # silently never run. Validate rather than trust the comment.
+        python3 - ci-control/.github/shards.json <<'PY'
+        import json, sys
+        shards = json.load(open(sys.argv[1]))["shards"]
+        want = [str(i) for i in range(len(shards))]
+        if shards != want:
+            print("::error::shards.json must be exactly %s, got %s" % (want, shards),
+                  file=sys.stderr)
+            print("       Duplicated or non-contiguous labels would make SHARD_COUNT "
+                  "disagree with the number of matrix jobs, and groups whose index "
+                  "modulo lands on a missing shard would never run.", file=sys.stderr)
+            sys.exit(1)
+        print("shard labels are contiguous and unique: %s" % (shards,))
+        PY
+        echo "Resolved ${count} shards: ${shards}"
+        printf 'shards=%s\n' "${shards}" >> "$GITHUB_OUTPUT"
+        printf 'count=%s\n'  "${count}"  >> "$GITHUB_OUTPUT"
+
   tests:
-    needs: build
+    needs: [ build, plan ]
     strategy:
       fail-fast: false
       matrix:
         tier: [ 'v30', 'v31' ]
+        # Built from the plan job so the axis and SHARD_COUNT share one source.
+        shard: ${{ fromJson(needs.plan.outputs.shards) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     # write-all: this job creates a custom check run (checks:write) and reads
@@ -68,7 +121,9 @@ jobs:
       #   v30 -> ubuntu24-tap-v30
       #   v31 -> ubuntu24-tap-v31
       HANDOFF_VARIANT: ${{ matrix.tier == 'v30' && 'ubuntu24-tap-v30' || 'ubuntu24-tap-v31' }}
-      MATRIX: '(${{ matrix.tier }},v40-sweep)'
+      SHARD: ${{ matrix.shard }}
+      SHARD_COUNT: ${{ needs.plan.outputs.count }}
+      MATRIX: '(${{ matrix.tier }},shard${{ matrix.shard }})'
     steps:
 
     - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
@@ -227,25 +282,25 @@ jobs:
         exit 1
 
     - name: Run curated TAP groups
-      # A curated set, not all ~99 groups. Each extra tier costs one full
-      # debug TAP build plus one infra plus one group run, so sweeping
-      # everything would roughly triple merge-time CI cost for little extra
-      # signal. Ordered cheapest-and-broadest first.
+      # Runs the group list in test/tap/groups/tier-sweep.lst, sharded across
+      # the matrix by `shard`. That list is every group regular CI already
+      # exercises AND which has at least one test selectable on v3.0 or v3.1
+      # -- ~54 groups / ~800 test-runs per tier. Groups no workflow ever
+      # selects are deliberately out of scope: enabling them would conflate
+      # "does this tier work" with "does this group work at all".
       #
-      #   unit-tests-g1  SKIP_PROXYSQL=1 in test/tap/groups/unit-tests/env.sh,
-      #                  so run-tests-isolated.bash takes its host-only path:
-      #                  no Docker backends at all. Fastest signal available.
-      #   legacy-g1      legacy/infras.lst covers dbdeployer-mysql57,
-      #                  dbdeployer-mariadb10 AND docker-pgsql16-single, so
-      #                  this one group exercises MySQL, MariaDB and
-      #                  PostgreSQL. Loses only 1 of 54 tests at v3.0.
-      #   mysql84-g1     pure MySQL 8.4 with zero version gates, so the test
-      #                  set is identical across v3.0/v3.1/v4.0 -- the
-      #                  cleanest cross-tier differential.
+      # A listed group whose tests are ALL gated out on the running tier skips
+      # cleanly (run-tests-isolated.bash), so a v4.0-only group in the list
+      # (ai-g2 on v3.0) costs one no-op iteration rather than failing the job.
       #
-      # All three run sequentially in THIS job so the multi-GB handoff is
-      # downloaded exactly once per tier, with a distinct INFRA_ID per group
-      # so the Docker container namespaces do not collide.
+      # Groups WITHIN a shard run sequentially with a distinct INFRA_ID each,
+      # so Docker container namespaces never collide. Sharding, not the loop,
+      # is what supplies the parallelism: sequential across all 54 groups would
+      # be ~7h per tier.
+      #
+      # The list is read AFTER `cd proxysql`, hence the path carries no
+      # `proxysql/` prefix. With one it would not resolve, and this step would
+      # silently fall back to the 3-group baseline forever.
       #
       # COVERAGE is deliberately NOT set: non-v40 builds are compiled without
       # WITHGCOV=1, so there are no .gcno files for the collector to match.
@@ -253,8 +308,90 @@ jobs:
       run: |
         set -uo pipefail
         cd proxysql
+        # Resolve this shard's slice of the group list. The list lives on the
+        # branch under test (test/tap/groups/tier-sweep.lst, kept in sync with
+        # groups.json by test/infra/control/check_tier_sweep_groups.py), so the
+        # sweep reads the same data the maintainers edit.
+        #
+        # The fallback matters for the window between this reusable landing and
+        # the v3.0-side list landing: until tier-sweep.lst exists, behave exactly
+        # as the original 3-group sweep did rather than running nothing.
+        LIST="test/tap/groups/tier-sweep.lst"
+        if [ -f "${LIST}" ]; then
+          mapfile -t ALL_GROUPS < <(grep -vE '^[[:space:]]*(#|$)' "${LIST}")
+        else
+          echo "WARNING: ${LIST} not found; falling back to the original 3-group baseline"
+          ALL_GROUPS=(unit-tests-g1 legacy-g1 mysql84-g1)
+        fi
+        SELECTED_GROUPS=()
+        i=0
+        for g in "${ALL_GROUPS[@]}"; do
+          if [ $((i % SHARD_COUNT)) -eq "${SHARD}" ]; then SELECTED_GROUPS+=("${g}"); fi
+          i=$((i + 1))
+        done
+        # Guard the matrix/count contract at run time. SHARD comes from the
+        # matrix and SHARD_COUNT from the same shards.json, so these can only
+        # disagree if the file is edited badly -- which would otherwise show up
+        # as groups silently never running.
+        if ! [[ "${SHARD}" =~ ^[0-9]+$ ]] || [ "${SHARD}" -lt 0 ] || [ "${SHARD}" -ge "${SHARD_COUNT}" ]; then
+          echo "::error::shard '${SHARD}' is not a valid index for SHARD_COUNT=${SHARD_COUNT}"
+          exit 1
+        fi
+        echo ">>> shard ${SHARD}/${SHARD_COUNT}: ${#SELECTED_GROUPS[@]} of ${#ALL_GROUPS[@]} groups"
+        printf '>>>   %s\n' "${SELECTED_GROUPS[@]}"
+
+        if [ "${#SELECTED_GROUPS[@]}" -eq 0 ]; then
+          # Distinguish "this shard legitimately has no work" from "the list is
+          # broken". The latter used to exit 0 here, which made a list that was
+          # all comments -- or a list that failed to parse -- look like a
+          # perfectly green sweep that ran nothing.
+          if [ "${#ALL_GROUPS[@]}" -eq 0 ]; then
+            echo "::error::${LIST} exists but yielded no groups; refusing to run an empty sweep"
+            exit 1
+          fi
+          echo ">>> shard ${SHARD} has no groups (list has ${#ALL_GROUPS[@]}); nothing to do"
+          exit 0
+        fi
+
+        # Every selected name must be a real group. This is not paranoia: the
+        # array was once called GROUPS, which bash reserves for the runner
+        # user's group IDs, so `GROUPS=()` silently did nothing and the shard
+        # ended up "running" TAP_GROUP=1004, TAP_GROUP=114, ... Those are
+        # unknown to groups.json, and an unknown group selects zero tests --
+        # which run-tests-isolated.bash treats as a legitimate skip. So a
+        # garbage group would have produced a green sweep that ran nothing at
+        # all. Validate identity, not just the count.
+        #
+        # NOTE: group names are VALUES in groups.json (array elements), not
+        # keys -- the keys are test names like "admin_show_fields_from-t". A
+        # grep for "<group>" followed by a colon matches nothing and would
+        # reject every real group. Derive the valid set once (one python call,
+        # not one per group) and test membership with grep -Fxq.
+        VALID_GROUPS="$(python3 -c 'import json;g=json.load(open("test/tap/groups/groups.json"));print("\n".join(sorted({e for v in g.values() for e in v if not str(e).startswith("@")})))')"
+        if [ -z "${VALID_GROUPS}" ]; then
+          echo "::error::could not read any group names from test/tap/groups/groups.json" >&2
+          exit 1
+        fi
+        while IFS= read -r g; do
+          [ -n "${g}" ] || continue
+          if ! printf '%s\n' "${VALID_GROUPS}" | grep -Fxq -- "${g}"; then
+            echo "::error::selected group '${g}' is not a group in test/tap/groups/groups.json" >&2
+            echo "       Refusing to run: an unknown group silently selects zero tests." >&2
+            exit 1
+          fi
+        done < <(printf '%s\n' "${SELECTED_GROUPS[@]}")
+        echo ">>> all ${#SELECTED_GROUPS[@]} selected groups verified against groups.json"
+
+        # Persist the selection. The Cleanup step is a SEPARATE shell, and
+        # GitHub does not carry shell arrays between steps -- so referencing
+        # SELECTED_GROUPS there expands to nothing and the leftover-container
+        # sweep silently does nothing. Write the names out and read them back.
+        SELECTED_FILE="${GITHUB_WORKSPACE}/ci-tier-sweep-selected-groups.txt"
+        printf '%s\n' "${SELECTED_GROUPS[@]}" > "${SELECTED_FILE}"
+        echo ">>> wrote ${#SELECTED_GROUPS[@]} group names to ${SELECTED_FILE}"
+
         overall=0
-        for GROUP in unit-tests-g1 legacy-g1 mysql84-g1; do
+        for GROUP in "${SELECTED_GROUPS[@]}"; do
           INFRA="ci-tier-sweep-${TIER}-${GROUP}"
           echo ""
           echo "==================================================================="
@@ -293,12 +430,23 @@ jobs:
         cd proxysql
         # The per-group teardown normally handled this; sweep whatever is left
         # so a failed group cannot leak a container onto the shared runner.
-        for GROUP in unit-tests-g1 legacy-g1 mysql84-g1; do
-          export INFRA_ID="ci-tier-sweep-${TIER}-${GROUP}"
-          export TAP_GROUP="${GROUP}"
-          test/infra/control/stop-proxysql-isolated.bash >/dev/null 2>&1 || true
-          test/infra/control/destroy-infras.bash >/dev/null 2>&1 || true
-        done
+        #
+        # This runs in its own shell, so it cannot see the TAP step's shell
+        # array. Read the names the TAP step persisted instead. If that file is
+        # missing the TAP step never got as far as selecting anything, and the
+        # catch-all `docker ps` sweep below is all that applies.
+        SELECTED_FILE="${GITHUB_WORKSPACE}/ci-tier-sweep-selected-groups.txt"
+        if [ -f "${SELECTED_FILE}" ]; then
+          while IFS= read -r GROUP; do
+            [ -n "${GROUP}" ] || continue
+            export INFRA_ID="ci-tier-sweep-${TIER}-${GROUP}"
+            export TAP_GROUP="${GROUP}"
+            test/infra/control/stop-proxysql-isolated.bash >/dev/null 2>&1 || true
+            test/infra/control/destroy-infras.bash >/dev/null 2>&1 || true
+          done < "${SELECTED_FILE}"
+        else
+          echo "no selected-group file at ${SELECTED_FILE}; relying on the catch-all docker sweep"
+        fi
         docker ps -a --format '{{.Names}}' | grep -E "ci-tier-sweep" | xargs -r docker rm -f 2>/dev/null || true
 
     - name: Fix artifact permissions
@@ -312,7 +460,12 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: ${{ github.workflow }}-${{ env.TIER }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
+        # The shard MUST be in the name. All shards of one tier share
+        # workflow/tier/SHA/run-number, and upload-artifact@v4 artifacts are
+        # immutable and single-upload, so two failing shards would collide and
+        # one upload would fail -- losing the very logs needed to debug the
+        # failure that triggered the upload.
+        name: ${{ github.workflow }}-${{ env.TIER }}-shard${{ env.SHARD }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
         path: |
           proxysql/ci_*_logs/
         if-no-files-found: warn
