@@ -22,7 +22,8 @@
 // so the path is reachable with a standard connector. The test repeatedly
 // executes a statement whose DATETIME parameter is sent as long data, then
 // verifies that ProxySQL still serves new connections, text queries and
-// prepared statements.
+// prepared statements. It also executes a DATETIME parameter sent inside the
+// COM_STMT_EXECUTE packet, whose MYSQL_TIME buffer must still be freed.
 
 namespace {
 
@@ -89,11 +90,12 @@ bool consume_result(MYSQL_STMT* stmt) {
 }
 
 /**
- * @brief Executes the statement once, sending its DATETIME parameter via
- *   COM_STMT_SEND_LONG_DATA instead of inside the COM_STMT_EXECUTE packet.
+ * @brief Executes the statement once with a DATETIME parameter.
+ * @param as_long_data Send the value via COM_STMT_SEND_LONG_DATA instead of
+ *   inside the COM_STMT_EXECUTE packet.
  * @return true if the execution succeeded and its result was consumed.
  */
-bool execute_with_long_data_datetime(MYSQL_STMT* stmt) {
+bool execute_datetime(MYSQL_STMT* stmt, bool as_long_data) {
 	// ProxySQL forwards the long data buffer to the backend as the bind buffer
 	// of the declared type, so send a full MYSQL_TIME.
 	MYSQL_TIME ts {};
@@ -113,7 +115,7 @@ bool execute_with_long_data_datetime(MYSQL_STMT* stmt) {
 		diag("mysql_stmt_bind_param failed: %s", mysql_stmt_error(stmt));
 		return false;
 	}
-	if (mysql_stmt_send_long_data(stmt, 0, reinterpret_cast<const char*>(&ts), sizeof(ts))) {
+	if (as_long_data && mysql_stmt_send_long_data(stmt, 0, reinterpret_cast<const char*>(&ts), sizeof(ts))) {
 		diag("mysql_stmt_send_long_data failed: %s", mysql_stmt_error(stmt));
 		return false;
 	}
@@ -167,7 +169,7 @@ int main(int /*argc*/, char** /*argv*/) {
 		return EXIT_FAILURE;
 	}
 
-	plan(4);
+	plan(5);
 
 	MYSQL* mysql = connect_proxy(cl);
 	MYSQL_STMT* stmt = mysql ? prepare(mysql, "SELECT ? AS reg_test_6233_long_data_datetime") : nullptr;
@@ -181,7 +183,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
 	int succeeded = 0;
 	for (int i = 0; i < kExecutions; i++) {
-		if (execute_with_long_data_datetime(stmt)) {
+		if (execute_datetime(stmt, true)) {
 			succeeded++;
 		} else {
 			diag("Execution %d failed", i);
@@ -190,6 +192,24 @@ int main(int /*argc*/, char** /*argv*/) {
 	}
 	ok(succeeded == kExecutions,
 		"%d/%d executions with a DATETIME parameter sent as long data succeeded", succeeded, kExecutions);
+
+	// A DATETIME parameter inside the packet: its MYSQL_TIME buffer is owned by
+	// the bind and must still be freed by cleanup_stmt_execute().
+	MYSQL_STMT* inline_stmt = prepare(mysql, "SELECT ? AS reg_test_6233_inline_datetime");
+	int inline_succeeded = 0;
+	for (int i = 0; inline_stmt != nullptr && i < kExecutions; i++) {
+		if (execute_datetime(inline_stmt, false)) {
+			inline_succeeded++;
+		} else {
+			diag("Inline execution %d failed", i);
+			break;
+		}
+	}
+	ok(inline_succeeded == kExecutions,
+		"%d/%d executions with a DATETIME parameter inside the packet succeeded", inline_succeeded, kExecutions);
+	if (inline_stmt != nullptr) {
+		mysql_stmt_close(inline_stmt);
+	}
 
 	ok(simple_select_works(mysql), "The same session still serves queries");
 	ok(proxysql_survives(cl), "ProxySQL alive and serving after the long data executions");

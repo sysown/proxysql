@@ -29,13 +29,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-
-// Fill freed memory with 0x5a, so that a packet or cached metadata wrongly
-// freed by get_binds_from_pkt() is detected by the checks below instead of
-// silently passing (with the old code, the destructor sets 'pkt' to NULL right
-// before freeing the metadata, and the packet contents may survive the free).
-extern "C" const char* malloc_conf;
-const char* malloc_conf = "junk:true";
+#include <string>
+#include <unistd.h>
 
 namespace {
 
@@ -128,9 +123,32 @@ void test_cached_metadata(MySQL_STMT_Global_info* stmt_info) {
 	delete cached;
 }
 
+/**
+ * @brief Re-executes the test once with jemalloc junk filling enabled.
+ * @details Without junk filling, jemalloc leaves freed memory untouched, so a
+ *   packet or cached metadata wrongly freed by get_binds_from_pkt() would still
+ *   look valid and the checks would pass with the old code. jemalloc reads
+ *   MALLOC_CONF before main(), hence the re-exec. 'malloc_conf' can't be used:
+ *   test_globals.cpp already defines it. Without jemalloc (e.g. the ASAN
+ *   builds) MALLOC_CONF is ignored, and ASAN reports the bugs by itself.
+ */
+void reexec_with_junk_filling(char** argv) {
+	const char* conf = getenv("MALLOC_CONF");
+	if (conf != nullptr && strstr(conf, "junk:true") != nullptr) {
+		return;
+	}
+	const std::string new_conf = (conf != nullptr && *conf != '\0')
+		? std::string(conf) + ",junk:true" : std::string("junk:true");
+	setenv("MALLOC_CONF", new_conf.c_str(), 1);
+	execv("/proc/self/exe", argv);
+	// execv() failed (e.g. no /proc): run without junk filling.
+}
+
 } // namespace
 
-int main() {
+int main(int /*argc*/, char** argv) {
+	reexec_with_junk_filling(argv);
+
 	plan(7);
 
 	test_init_minimal();

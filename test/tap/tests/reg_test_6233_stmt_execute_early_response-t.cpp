@@ -313,7 +313,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
 	// Undo only what was actually changed, and attempt each restoration
 	// independently so that one failure does not skip the other.
-	auto restore_state = [&]() -> bool {
+	auto restore_state = [admin, &snapshot_taken, &saved_lock_on_hg]() -> bool {
 		const bool rules_restored = !snapshot_taken || restore_rules(admin);
 		const bool variable_restored = saved_lock_on_hg.empty()
 			|| set_global_variable(admin, "mysql-set_query_lock_on_hostgroup", saved_lock_on_hg);
