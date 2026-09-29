@@ -233,8 +233,26 @@ for test_name, test_groups in sorted(groups.items()):
 ")
 
     if [ -z "${TEST_NAMES}" ]; then
-        echo "ERROR: No tests found for group '${TAP_GROUP}' in groups.json"
-        exit 1
+        # Every test in this group is gated out by @proxysql_min_version against
+        # the version of the binary under test. That is a legitimate, expected
+        # outcome when running a downgrade tier: the group may exist and be
+        # fully wired in CI, yet have nothing to run against ProxySQL 3.0.x
+        # (e.g. mysqlx-g1 and the duckdb/ai groups are all 4.0-only).
+        #
+        # So SKIP, do not fail. Hard-failing here meant a single v4.0-only group
+        # in a cross-tier sweep aborted the whole job before any other group
+        # could run, and it made the sweep fragile in the worst way: adding one
+        # @proxysql_min_version:4.1 test in a new group would break CI with an
+        # error that looks like a harness bug.
+        #
+        # Set TAP_REQUIRE_TESTS=1 to restore the strict behaviour, for callers
+        # where an empty group really is a misconfiguration.
+        echo ">>> SKIPPING group '${TAP_GROUP}': no test is selectable by ProxySQL ${PROXYSQL_VERSION:-<unknown>} (all gated by @proxysql_min_version)"
+        if [ "${TAP_REQUIRE_TESTS:-0}" = "1" ]; then
+            echo "ERROR: No tests found for group '${TAP_GROUP}' in groups.json (TAP_REQUIRE_TESTS=1)"
+            exit 1
+        fi
+        exit 0
     fi
 
     # Search for test binaries in known test directories

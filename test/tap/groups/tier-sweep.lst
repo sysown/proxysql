@@ -1,0 +1,77 @@
+# TAP groups exercised by CI-tier-sweep (the merge-only v3.0/v3.1 sweep).
+#
+# Selection rule (enforced by test/infra/control/check_tier_sweep_groups.bash):
+#   a group is listed IFF
+#     (1) it is already wired into regular CI -- a CI-<group>.yml caller, or
+#         the name appears in a workflow on this branch or on origin/GH-Actions
+#         (same "wired" definition as test/tap/groups/lint_group_coverage.py), AND
+#     (2) at least one of its tests survives @proxysql_min_version on v3.0 OR
+#         v3.1, i.e. the sweep can actually run something for it on some tier.
+#
+# Condition (1) is what keeps this honest: the sweep re-runs tests that regular
+# CI already exercises on the v4.0 tier. Groups that no workflow ever selects are
+# deliberately OUT of scope -- enabling them would conflate "does this tier
+# work" with "does this group work at all", and 41 groups are in that state.
+#
+# A listed group whose tests are ALL gated out on the running tier is not an
+# error: run-tests-isolated.bash skips it cleanly. ai-g2 is the current example
+# -- it runs on v3.1 (1 test) and skips on v3.0 (0 tests).
+#
+# Do not hand-maintain group membership beyond adding/removing names; the lint
+# check fails if this file and groups.json disagree in either direction.
+#
+# Verified at the time of writing: 54 groups, 805 test-runs on v3.0, 867 on v3.1.
+ai-g1
+ai-g2
+legacy-binlog-g1
+legacy-clickhouse-g1
+legacy-g1
+legacy-g10
+legacy-g2
+legacy-g3
+legacy-g4
+legacy-g5
+legacy-g6
+legacy-g7
+legacy-g8
+legacy-g9
+mariadb10-binlog-g1
+mariadb10-galera-g1
+mariadb10-galera-g2
+mariadb10-galera-g3
+mariadb10-galera-g4
+mariadb10-galera-g5
+mariadb10-galera-g6
+mariadb10-galera-g7
+mariadb10-galera-g8
+mariadb10-galera-g9
+mysql-router-ic-g1
+mysql56-single-g1
+mysql84-binlog-g1
+mysql84-g1
+mysql84-g2
+mysql84-g3
+mysql84-g4
+mysql84-g5
+mysql84-g6
+mysql84-g7
+mysql84-g8
+mysql84-g9
+mysql84-gr-g1
+mysql84-gr-g2
+mysql84-gr-g3
+mysql84-gr-g4
+mysql84-gr-g5
+mysql84-gr-g6
+mysql84-gr-g7
+mysql84-gr-g8
+mysql84-gr-g9
+mysql90-binlog-g1
+mysql90-gr-g1
+mysql93-gr-g1
+mysql95-binlog-g1
+mysql95-gr-g1
+no-infra-g1
+pgsql-socket-g1
+set_parser_algorithm_3-g1
+unit-tests-g1
