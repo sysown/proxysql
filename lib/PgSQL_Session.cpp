@@ -1273,7 +1273,8 @@ void PgSQL_Session::handler_again___new_thread_to_cancel_query() {
 			std::unique_ptr<PgSQL_Backend_Kill_Args> backend_kill_args = std::make_unique<PgSQL_Backend_Kill_Args>(
 				(PGconn*)myds->myconn->get_pg_connection(), ui, myds->myconn->parent->address,
 				myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->parent->use_ssl,
-				PgSQL_Backend_Kill_Args::TYPE::CANCEL_QUERY, thread
+				PgSQL_Backend_Kill_Args::TYPE::CANCEL_QUERY, thread,
+				myds->myconn->native_mode ? myds->myconn->get_pg_socket_fd() : -1
 			);
 			// Native connections have no libpq handle; the constructor's
 			// PQgetCancel/PQbackendPID(NULL) yield nothing usable. Supply the
@@ -5226,6 +5227,16 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 				if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
 					mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
 				}
+				if (explicit_txn) {
+					// The error below reports an aborted explicit transaction. Keep
+					// rejecting work until the client ends it; acquiring a fresh backend
+					// here would execute that work in autocommit despite ReadyForQuery(E).
+					tx_poisoned = true;
+					thread->status_variables.tx_poisoned_total++;
+				}
+				// The discarded backend's transaction is gone. Poisoned-session
+				// recovery uses tx_poisoned, not the old BEGIN/savepoint snapshots.
+				if (transaction_state_manager) transaction_state_manager->reset_state();
 				// PostgreSQL words these two differently at the same SQLSTATE.
 				const char* errmsg = explicit_txn
 					? "DISCARD ALL cannot run inside a transaction block"

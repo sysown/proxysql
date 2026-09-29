@@ -1342,6 +1342,14 @@ void PgSQL_Connection::connect_start() {
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
 
+	// libpq understands both filesystem and Linux abstract Unix-socket hosts.
+	// Preserve its socket naming and default-port rules on a connection even
+	// when the global native TCP protocol is enabled.
+	if (native_mode && parent->address &&
+		(parent->address[0] == '/' || parent->address[0] == '@')) {
+		native_mode = false;
+	}
+
 	if (native_mode) {
 		native_connect_start();
 		return;
@@ -2138,15 +2146,8 @@ SSL_CTX* PgSQL_Connection::native_create_client_ssl_ctx() {
 		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_OUT_OF_MEMORY), "SSL_CTX_new(client) failed", false);
 		return nullptr;
 	}
-	// TLS 1.2 floor (match-or-exceed the server ctx; never negotiate legacy TLS).
-	if (!SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION)) {
-		SSL_CTX_free(ctx);
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "SSL_CTX_set_min_proto_version failed", false);
-		return nullptr;
-	}
-
 	// Resolve backend SSL params (same source/order as the libpq path ~990-1024).
-	std::string ca, cert, key, crl, crldir;
+	std::string ca, cert, key, crl, crldir, min_protocol, max_protocol;
 	std::unique_ptr<PgSQLServers_SslParams> ssl_params {
 		PgHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username)
 	};
@@ -2156,6 +2157,8 @@ SSL_CTX* PgSQL_Connection::native_create_client_ssl_ctx() {
 		key    = ssl_params->ssl_key;
 		crl    = ssl_params->ssl_crl;
 		crldir = ssl_params->ssl_crlpath;
+		min_protocol = ssl_params->ssl_min_protocol_version;
+		max_protocol = ssl_params->ssl_max_protocol_version;
 	} else {
 		if (pgsql_thread___ssl_p2s_ca)      ca     = pgsql_thread___ssl_p2s_ca;
 		if (pgsql_thread___ssl_p2s_cert)    cert   = pgsql_thread___ssl_p2s_cert;
@@ -2163,9 +2166,36 @@ SSL_CTX* PgSQL_Connection::native_create_client_ssl_ctx() {
 		if (pgsql_thread___ssl_p2s_crl)     crl    = pgsql_thread___ssl_p2s_crl;
 		if (pgsql_thread___ssl_p2s_crlpath) crldir = pgsql_thread___ssl_p2s_crlpath;
 	}
+	// The server row uses the same parsed range as libpq conninfo. An unset
+	// minimum keeps the native TLS 1.2 default; an unset maximum is OpenSSL's
+	// default (no explicit cap).
+	auto protocol_version = [](const std::string& name) -> int {
+		std::string lower = name;
+		for (char& c : lower) {
+			if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+		}
+		if (lower == "tlsv1") return TLS1_VERSION;
+		if (lower == "tlsv1.1") return TLS1_1_VERSION;
+		if (lower == "tlsv1.2") return TLS1_2_VERSION;
+		if (lower == "tlsv1.3") return TLS1_3_VERSION;
+		return -1;
+	};
+	const int min_version = min_protocol.empty() ? TLS1_2_VERSION : protocol_version(min_protocol);
+	const int max_version = max_protocol.empty() ? 0 : protocol_version(max_protocol);
+	if (min_version < 0 || max_version < 0 ||
+	    (max_version != 0 && min_version > max_version) ||
+	    SSL_CTX_set_min_proto_version(ctx, min_version) != 1 ||
+	    SSL_CTX_set_max_proto_version(ctx, max_version) != 1) {
+		SSL_CTX_free(ctx);
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+			"invalid or unsupported ssl_protocol_version_range", false);
+		proxy_error("Native TLS: invalid protocol range '%s' - '%s' for %s:%d\n",
+			min_protocol.c_str(), max_protocol.c_str(), parent->address, parent->port);
+		return nullptr;
+	}
 
-	// Trust store (CA): needed for VERIFY_CA / VERIFY_FULL. Loaded whenever present
-	// so a future mode switch does not require reconnect logic changes.
+	// libpq verifies the peer for sslmode=require when sslrootcert is configured.
+	// Keep REQUIRE without a CA as encryption only.
 	if (!ca.empty()) {
 		if (SSL_CTX_load_verify_locations(ctx, ca.c_str(), nullptr) != 1) {
 			SSL_CTX_free(ctx);
@@ -2226,11 +2256,11 @@ SSL_CTX* PgSQL_Connection::native_create_client_ssl_ctx() {
 	}
 
 	// Verification mode -> SSL_VERIFY_*. We mirror libpq sslmode semantics:
-	//   REQUIRE      -> SSL_VERIFY_NONE (encrypt, do NOT verify)  [current default]
+	//   REQUIRE      -> verify the chain if a root CA is configured
 	//   VERIFY_CA    -> SSL_VERIFY_PEER (verify chain to CA)
 	//   VERIFY_FULL  -> SSL_VERIFY_PEER (+ hostname, set on the SSL object)
 	// Note: SSL_VERIFY_NONE on a client still completes the handshake; the cert is
-	// received but not checked. This matches libpq's `require`. Hostname enforcement
+	// received but not checked. Hostname enforcement
 	// for VERIFY_FULL is applied via X509_VERIFY_PARAM_set1_host on the SSL object.
 	switch (native_ssl_mode) {
 		case PG_Native_SSL_Mode::VERIFY_CA:
@@ -2238,6 +2268,8 @@ SSL_CTX* PgSQL_Connection::native_create_client_ssl_ctx() {
 			SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
 			break;
 		case PG_Native_SSL_Mode::REQUIRE:
+			SSL_CTX_set_verify(ctx, ca.empty() ? SSL_VERIFY_NONE : SSL_VERIFY_PEER, nullptr);
+			break;
 		case PG_Native_SSL_Mode::DISABLE:
 		default:
 			SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
@@ -2269,11 +2301,11 @@ int PgSQL_Connection::native_drive_ssl_handshake() {
 		ERR_clear_error();
 		int ret = SSL_do_handshake(native_ssl);
 		if (ret == 1) {
-			// Handshake complete. For VERIFY_CA / VERIFY_FULL, confirm the result.
+			// Handshake complete. Confirm the result whenever peer verification
+			// was enabled, including REQUIRE with a configured root CA.
 			// (For VERIFY_FULL the hostname check is folded into SSL_get_verify_result
 			// because we set the verify host on the SSL object before the handshake.)
-			if (native_ssl_mode == PG_Native_SSL_Mode::VERIFY_CA ||
-			    native_ssl_mode == PG_Native_SSL_Mode::VERIFY_FULL) {
+			if (SSL_get_verify_mode(native_ssl) & SSL_VERIFY_PEER) {
 				X509* peer = SSL_get_peer_certificate(native_ssl);
 				if (peer == nullptr) {
 					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
@@ -2358,14 +2390,20 @@ int PgSQL_Connection::native_drive_ssl_handshake() {
 		}
 		// SSL_ERROR_SSL / SSL_ERROR_SYSCALL / ZERO_RETURN -> fatal handshake error.
 		{
+			long vr = SSL_get_verify_result(native_ssl);
 			unsigned long e = ERR_peek_last_error();
 			char ebuf[256] = {0};
 			if (e) ERR_error_string_n(e, ebuf, sizeof(ebuf));
 			char msg[320];
-			snprintf(msg, sizeof(msg), "TLS handshake failed%s%s", e ? ": " : "", e ? ebuf : "");
+			if ((SSL_get_verify_mode(native_ssl) & SSL_VERIFY_PEER) && vr != X509_V_OK) {
+				snprintf(msg, sizeof(msg), "TLS certificate verification failed: %s",
+					X509_verify_cert_error_string(vr));
+			} else {
+				snprintf(msg, sizeof(msg), "TLS handshake failed%s%s", e ? ": " : "", e ? ebuf : "");
+			}
 			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), msg, false);
 			proxy_error("Native TLS: handshake to %s:%d failed (SSL_get_error=%d): %s\n",
-				parent->address, parent->port, err, ebuf[0] ? ebuf : "(no detail)");
+				parent->address, parent->port, err, msg);
 			while (ERR_get_error()) { /* drain */ }
 			native_teardown();
 			return -1;
@@ -5886,7 +5924,17 @@ void PgSQL_Connection::init_query_result() {
 }
 
 PgSQL_Backend_Kill_Args::PgSQL_Backend_Kill_Args(PGconn* conn, const PgSQL_Connection_userinfo* ui, const char* host,
-	unsigned int p, unsigned int hid, bool ssl, TYPE typ, PgSQL_Thread* thd) {
+	unsigned int p, unsigned int hid, bool ssl, TYPE typ, PgSQL_Thread* thd, int native_fd) {
+	// The kill thread outlives the backend connection. Capture the exact peer
+	// while its socket is live; hostname resolution may choose a different server.
+	if (typ == TYPE::CANCEL_QUERY && native_fd >= 0) {
+		socklen_t len = sizeof(native_peer);
+		if (getpeername(native_fd, reinterpret_cast<sockaddr*>(&native_peer), &len) == 0 &&
+			((native_peer.ss_family == AF_INET && len >= sizeof(sockaddr_in)) ||
+			 (native_peer.ss_family == AF_INET6 && len >= sizeof(sockaddr_in6)))) {
+			native_peer_len = len;
+		}
+	}
 
 	if (typ == TYPE::CANCEL_QUERY)
 		cancel_conn = PQgetCancel(conn);
@@ -5964,7 +6012,7 @@ PgSQL_Backend_Kill_Args::~PgSQL_Backend_Kill_Args() {
 }
 
 // Native-mode query cancellation primitive. Opens a fresh TCP connection to
-// host:port with a BOUNDED connect (non-blocking connect + poll, 5s) and sends
+// the original peer with a BOUNDED connect (non-blocking connect + poll, 5s) and sends
 // the 16-byte CancelRequest carrying (pid, secret) with a bounded blocking send
 // (SO_SNDTIMEO). This runs inside the detached kill thread, which tolerates
 // blocking (PQcancel blocks too), but the bound keeps a black-holed backend
@@ -5979,73 +6027,64 @@ PgSQL_Backend_Kill_Args::~PgSQL_Backend_Kill_Args() {
 // backend or middlebox nonetheless refuses the plaintext connection, the
 // failure is reported gracefully (proxy_error + error counter) and the query
 // simply runs to completion, mirroring a lost PQcancel.
-static bool pg_native_send_cancel_request(const char* host, unsigned int port,
+static bool pg_native_send_cancel_request(const sockaddr_storage& peer, socklen_t peer_len,
 	int pid, int secret, char* errbuf, size_t errlen) {
 	const int CONNECT_TIMEOUT_MS = 5000;
-	struct addrinfo hints;
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
-	char portstr[16];
-	snprintf(portstr, sizeof(portstr), "%u", port);
-
-	struct addrinfo* res = nullptr;
-	int gai = getaddrinfo(host, portstr, &hints, &res);
-	if (gai != 0 || res == nullptr) {
-		snprintf(errbuf, errlen, "getaddrinfo(%s:%s) failed: %s", host, portstr, gai_strerror(gai));
-		if (res) freeaddrinfo(res);
+	if (!((peer.ss_family == AF_INET && peer_len >= sizeof(sockaddr_in)) ||
+		  (peer.ss_family == AF_INET6 && peer_len >= sizeof(sockaddr_in6))) ||
+		peer_len > sizeof(peer)) {
+		snprintf(errbuf, errlen, "original TCP peer is unavailable");
 		return false;
 	}
 
-	int sock = -1;
-	for (struct addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
-		sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-		if (sock < 0) continue;
-		// Bounded connect: non-blocking connect + poll(POLLOUT) with timeout,
-		// then verify SO_ERROR. Falls through to the next addrinfo on failure.
-		int fl = fcntl(sock, F_GETFL, 0);
-		if (fl < 0 || fcntl(sock, F_SETFL, fl | O_NONBLOCK) < 0) {
-			::close(sock); sock = -1; continue;
-		}
-		int rc = ::connect(sock, ai->ai_addr, ai->ai_addrlen);
-		if (rc != 0 && errno != EINPROGRESS) {
-			::close(sock); sock = -1; continue;
-		}
-		if (rc != 0) { // in progress: wait bounded for writability
-			struct pollfd pfd;
-			pfd.fd = sock;
-			pfd.events = POLLOUT;
-			pfd.revents = 0;
-			int prc;
-			do {
-				prc = ::poll(&pfd, 1, CONNECT_TIMEOUT_MS);
-			} while (prc < 0 && errno == EINTR);
-			if (prc <= 0) { // timeout or poll error
-				::close(sock); sock = -1; continue;
-			}
-			int soerr = 0;
-			socklen_t slen = sizeof(soerr);
-			if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &soerr, &slen) < 0 || soerr != 0) {
-				::close(sock); sock = -1; continue;
-			}
-		}
-		// Connected: restore blocking mode and bound the send with SO_SNDTIMEO.
-		if (fcntl(sock, F_SETFL, fl) < 0) {
-			::close(sock); sock = -1; continue;
-		}
-		struct timeval tv;
-		tv.tv_sec = CONNECT_TIMEOUT_MS / 1000;
-		tv.tv_usec = (CONNECT_TIMEOUT_MS % 1000) * 1000;
-		setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)); // best-effort
-		break;
-	}
-	freeaddrinfo(res);
+	int sock = ::socket(peer.ss_family, SOCK_STREAM, IPPROTO_TCP);
 	if (sock < 0) {
-		snprintf(errbuf, errlen, "connect(%s:%s) failed or timed out (%dms): %s",
-			host, portstr, CONNECT_TIMEOUT_MS, strerror(errno));
+		snprintf(errbuf, errlen, "socket(original peer) failed: %s", strerror(errno));
 		return false;
 	}
+	int fl = fcntl(sock, F_GETFL, 0);
+	if (fl < 0 || fcntl(sock, F_SETFL, fl | O_NONBLOCK) < 0) {
+		snprintf(errbuf, errlen, "fcntl(original peer) failed: %s", strerror(errno));
+		::close(sock);
+		return false;
+	}
+	int rc = ::connect(sock, reinterpret_cast<const sockaddr*>(&peer), peer_len);
+	if (rc != 0 && errno != EINPROGRESS) {
+		snprintf(errbuf, errlen, "connect(original peer) failed: %s", strerror(errno));
+		::close(sock);
+		return false;
+	}
+	if (rc != 0) {
+		struct pollfd pfd { sock, POLLOUT, 0 };
+		int prc;
+		do {
+			prc = ::poll(&pfd, 1, CONNECT_TIMEOUT_MS);
+		} while (prc < 0 && errno == EINTR);
+		if (prc <= 0) {
+			snprintf(errbuf, errlen, "connect(original peer) failed or timed out (%dms)",
+				CONNECT_TIMEOUT_MS);
+			::close(sock);
+			return false;
+		}
+		int soerr = 0;
+		socklen_t slen = sizeof(soerr);
+		if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &soerr, &slen) < 0 || soerr != 0) {
+			snprintf(errbuf, errlen, "connect(original peer) failed: %s",
+				strerror(soerr ? soerr : errno));
+			::close(sock);
+			return false;
+		}
+	}
+	// Connected: restore blocking mode and bound the send with SO_SNDTIMEO.
+	if (fcntl(sock, F_SETFL, fl) < 0) {
+		snprintf(errbuf, errlen, "fcntl(original peer) failed: %s", strerror(errno));
+		::close(sock);
+		return false;
+	}
+	struct timeval tv;
+	tv.tv_sec = CONNECT_TIMEOUT_MS / 1000;
+	tv.tv_usec = (CONNECT_TIMEOUT_MS % 1000) * 1000;
+	setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)); // best-effort
 
 	unsigned char pkt[16];
 	pg_build_cancel_request(pkt, pid, secret);
@@ -6074,7 +6113,7 @@ void* PgSQL_backend_kill_thread(void* arg) {
 		if (backend_kill_args->native_mode) {
 			if (backend_kill_args->pgsql_thd) backend_kill_args->pgsql_thd->status_variables.stvar[st_var_killed_queries]++;
 			char nerrbuf[256];
-			if (!pg_native_send_cancel_request(backend_kill_args->hostname, backend_kill_args->port,
+			if (!pg_native_send_cancel_request(backend_kill_args->native_peer, backend_kill_args->native_peer_len,
 				backend_kill_args->backend_pid, backend_kill_args->native_secret_key, nerrbuf, sizeof(nerrbuf))) {
 				proxy_error("Failed to cancel query (native) on %s:%d with backend PID %d: %s\n",
 					backend_kill_args->hostname, backend_kill_args->port, backend_kill_args->backend_pid, nerrbuf);

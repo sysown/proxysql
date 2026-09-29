@@ -5,6 +5,7 @@
 #include "cpp.h"
 #include "PgSQL_Error_Helper.h"
 #include "PgSQL_Backend_Protocol.h"
+#include <sys/socket.h>
 #include <map>
 #include <string>
 
@@ -1134,12 +1135,14 @@ public:
 
 	// Native-mode cancellation. When native_mode is true the backend connection
 	// has no libpq handle (cancel_conn is NULL), so CANCEL_QUERY is served by
-	// opening a fresh blocking TCP connection to hostname:port and sending a raw
+	// opening a fresh TCP connection to the captured original peer and sending a raw
 	// 16-byte CancelRequest carrying (backend_pid, native_secret_key). For
 	// TERMINATE_CONNECTION, backend_pid is set to the real backend PID captured
 	// from BackendKeyData so the libpq pg_terminate_backend() path works too.
 	bool native_mode = false;
 	int native_secret_key = 0;
+	sockaddr_storage native_peer {};
+	socklen_t native_peer_len = 0;
 
 	// SSL options
 	struct SSLConfig {
@@ -1156,7 +1159,8 @@ public:
 	// 'ui' supplies the credentials (username/password/dbname AND any harvested SCRAM keys); it is
 	// deep-copied, since the kill runs on a detached thread that outlives the source connection.
 	PgSQL_Backend_Kill_Args(PGconn* conn, const PgSQL_Connection_userinfo* ui, const char* host,
-		unsigned int port, unsigned int hid, bool ssl, TYPE typ, PgSQL_Thread* thd);
+		unsigned int port, unsigned int hid, bool ssl, TYPE typ, PgSQL_Thread* thd,
+		int native_fd = -1);
 	~PgSQL_Backend_Kill_Args();
 };
 
