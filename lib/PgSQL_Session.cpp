@@ -88,6 +88,13 @@ static const std::set<std::string> pgsql_other_variables = {
 	"synchronous_commit"
 };
 
+static const RE2 re_inline_comment("(?U)/\\*.*\\*/");
+static const RE2 re_versioned_set_comment("^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/");
+static const RE2 re_reset_keyword("(?i)\\bRESET\\b");
+static const RE2 re_discard_keyword("(?i)\\bDISCARD\\b");
+static const RE2 re_deallocate_keyword("(?i)\\bDEALLOCATE\\b(\\s+PREPARE)?");
+static const RE2 re_non_word_chars("[^\\w]*");
+
 #include "proxysql_find_charset.h"
 
 // --- tx-poisoned helpers ---------------------------------------------------
@@ -3492,6 +3499,12 @@ handler_again:
 					}
 					if (status == PROCESSING_STMT_DESCRIBE || status == PROCESSING_STMT_EXECUTE) {
 						uint32_t backend_stmt_id = myconn->local_stmts->find_backend_stmt_id_from_global_id(CurrentQuery.extended_query_info.stmt_global_id);
+						// Backend statement ids are local to a backend connection. Always take the id
+						// from 'myconn', including 0: a stale id left by a previous backend connection
+						// (e.g. after a query retry) must not be reused by the implicit prepare below,
+						// or 'proxysql_ps_<id>' can collide with a statement that already exists on
+						// this connection (42P05). See issue #6197.
+						CurrentQuery.extended_query_info.stmt_backend_id = backend_stmt_id;
 						if (backend_stmt_id == 0) {
 							// the connection doesn't have the prepared statements prepared
 							// we try to create it now
@@ -3521,7 +3534,6 @@ handler_again:
 							previous_status.push(status);
 							NEXT_IMMEDIATE(PROCESSING_STMT_PREPARE);
 						}
-						CurrentQuery.extended_query_info.stmt_backend_id = backend_stmt_id;
 					}
 				}
 			}
@@ -4342,7 +4354,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (session_type == PROXYSQL_SESSION_PGSQL) {
 		//__sync_fetch_and_add(&PgHGM->status.frontend_use_db, 1);
 		string nq = string((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
-		RE2::GlobalReplace(&nq, (char*)"(?U)/\\*.*\\*/", (char*)" ");
+		RE2::GlobalReplace(&nq, re_inline_comment, " ");
 		char* sn_tmp = (char*)nq.c_str();
 		while (sn_tmp < (nq.c_str() + nq.length() - 4) && *sn_tmp == ' ')
 			sn_tmp++;
@@ -4553,8 +4565,8 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	// this code is executed only if locked_on_hostgroup is not set yet
 	// if locked_on_hostgroup is set, we do not try to parse the SET statement
 	std::string nq = std::string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
-	RE2::GlobalReplace(&nq, "^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/", "SET\\1");
-	RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
+	RE2::GlobalReplace(&nq, re_versioned_set_comment, "SET\\1");
+	RE2::GlobalReplace(&nq, re_inline_comment, "");
 	// remove trailing space and semicolon if present. See issue#4380
 	nq.erase(nq.find_last_not_of(" ;") + 1);
 	if (
@@ -4789,9 +4801,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_RESET_command(const char* dig, bool* lock_hostgroup) {
 	std::string nq = std::string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 
-	RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
-	RE2::GlobalReplace(&nq, "(?i)\\bRESET\\b", "");
-	RE2::GlobalReplace(&nq, "[^\\w]*", "");
+	RE2::GlobalReplace(&nq, re_inline_comment, "");
+	RE2::GlobalReplace(&nq, re_reset_keyword, "");
+	RE2::GlobalReplace(&nq, re_non_word_chars, "");
 
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing RESET command %s\n", nq.c_str());
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing RESET command = %s\n", nq.c_str());
@@ -4911,9 +4923,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 	std::string nq = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 
-	RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
-	RE2::GlobalReplace(&nq, "(?i)\\bDISCARD\\b", "");
-	RE2::GlobalReplace(&nq, "[^\\w]*", "");
+	RE2::GlobalReplace(&nq, re_inline_comment, "");
+	RE2::GlobalReplace(&nq, re_discard_keyword, "");
+	RE2::GlobalReplace(&nq, re_non_word_chars, "");
 
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing DISCARD command %s\n", nq.c_str());
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing DISCARD command = %s\n", nq.c_str());
@@ -4976,9 +4988,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	
 	std::string nq = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 
-	RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
-	RE2::GlobalReplace(&nq, "(?i)\\bDEALLOCATE\\b(\\s+PREPARE)?", "");
-	RE2::GlobalReplace(&nq, "[^\\w]*", "");
+	RE2::GlobalReplace(&nq, re_inline_comment, "");
+	RE2::GlobalReplace(&nq, re_deallocate_keyword, "");
+	RE2::GlobalReplace(&nq, re_non_word_chars, "");
 
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing DEALLOCATE command %s\n", nq.c_str());
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing DEALLOCATE command = %s\n", nq.c_str());
@@ -5045,9 +5057,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 				// Only do expensive parsing if we're going to block the command
 				std::string nq = std::string(dig);
-				RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
-				RE2::GlobalReplace(&nq, "(?i)\\bRESET\\b", "");
-				RE2::GlobalReplace(&nq, "[^\\w]*", "");
+				RE2::GlobalReplace(&nq, re_inline_comment, "");
+				RE2::GlobalReplace(&nq, re_reset_keyword, "");
+				RE2::GlobalReplace(&nq, re_non_word_chars, "");
 
 				bool is_reset_all = (strncasecmp(nq.c_str(), "ALL", 3) == 0);
 				client_myds->DSS = STATE_QUERY_SENT_NET;
@@ -6540,6 +6552,12 @@ bool PgSQL_Session::is_in_transaction() const {
  * error.)
  */
 void PgSQL_Session::set_previous_status_mode3(bool allow_execute) {
+	// Leaving PROCESSING_* to (re)acquire or reset the backend connection: any
+	// backend statement id obtained so far belongs to a connection that is being
+	// replaced (retry) or whose statements are being discarded (reset). Clear it so
+	// that the id is regenerated/looked up on the connection actually used, instead
+	// of sending 'proxysql_ps_<stale id>' to a different backend. See issue #6197.
+	CurrentQuery.extended_query_info.stmt_backend_id = 0;
 	switch (status) {
 	case PROCESSING_QUERY:
 	case PROCESSING_STMT_PREPARE:
@@ -7092,42 +7110,6 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 		return 2;
 	}
 
-	// Issue #5866: prepared statements are executed on the backend through libpq's
-	// PQsendQueryPrepared(), whose API accepts only a single result-column format
-	// code that applies to every column. A Bind that requests HETEROGENEOUS
-	// per-column result formats (e.g. text for one column and binary for another,
-	// as PostgreSQL drivers such as Go's pgx do for a bytea column) cannot be
-	// honored: the array would be collapsed to its first element and the remaining
-	// columns returned in the wrong format, silently corrupting data. Until the
-	// backend path no longer depends on libpq, reject such a Bind with a clean
-	// error instead of returning corrupted results. Uniform arrays are honored as
-	// before: 0 codes means "all text", 1 code means "applies to all columns", and
-	// an N-code array whose values are all identical is equivalent to a single
-	// code (which libpq can represent).
-	if (bind_data.num_result_formats > 1) {
-		auto result_fmt_reader = bind_msg->get_result_format_reader();
-		uint16_t first_format = 0;
-		bool heterogeneous = false;
-		for (uint16_t i = 0; i < bind_data.num_result_formats; ++i) {
-			uint16_t format = 0;
-			if (!result_fmt_reader.next(&format)) {
-				break; // malformed array; let the normal path surface the protocol error
-			}
-			if (i == 0) {
-				first_format = format;
-			} else if (format != first_format) {
-				heterogeneous = true;
-				break;
-			}
-		}
-		if (heterogeneous) {
-			handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
-				"per-column result formats are not supported: all result columns must request the same format code",
-				false);
-			return 2;
-		}
-	}
-	
 	// Look up an existing local statement info for client-provided statement name
 	const PgSQL_STMT_Global_info* stmt_info = client_myds->myconn->local_stmts->find_stmt_info_from_stmt_name(stmt_client_name);
 	if (!stmt_info) {

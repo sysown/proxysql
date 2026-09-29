@@ -1,6 +1,6 @@
 # ProxySQL CI Architecture
 
-**Last updated:** 2026-04-11
+**Last updated:** 2026-09-29
 
 This document is the authoritative reference for ProxySQL's GitHub Actions CI
 setup. It covers the two-branch workflow split, the trigger chain, the test
@@ -12,7 +12,7 @@ If you touch anything under `.github/workflows/` on either `v3.0` or the
 
 > **New to GitHub Actions terminology, or confused by check-run labels
 > like `CI-maketest / builds (testgalera)`?** Jump to
-> [§12 Understanding GitHub Actions vocabulary](#understanding-github-actions-vocabulary--read-this-first-if-confused)
+> [§13 Understanding GitHub Actions vocabulary](#understanding-github-actions-vocabulary--read-this-first-if-confused)
 > first — it walks through every term (workflow / run / job / matrix /
 > check run / caller / reusable) with diagrams and a concrete walkthrough,
 > then come back here.
@@ -27,13 +27,14 @@ If you touch anything under `.github/workflows/` on either `v3.0` or the
 4. [CI-trigger and CI-builds: the entry point](#ci-trigger-and-ci-builds-the-entry-point)
 5. [The dedicated-reusable pattern](#the-dedicated-reusable-pattern)
 6. [Cache layout produced by CI-builds](#cache-layout-produced-by-ci-builds)
-7. [The TAP groups system](#the-tap-groups-system)
-8. [Workflow catalogue](#workflow-catalogue)
-9. [Adding a new test group end-to-end](#adding-a-new-test-group-end-to-end)
-10. [Common pitfalls and historical gotchas](#common-pitfalls-and-historical-gotchas)
-11. [Debugging a failing CI run](#debugging-a-failing-ci-run)
-12. [Understanding GitHub Actions vocabulary — read this first if confused](#understanding-github-actions-vocabulary--read-this-first-if-confused)
-13. [Glossary (quick reference)](#glossary-quick-reference)
+7. [PR-label-selected product tiers](#pr-label-selected-product-tiers)
+8. [The TAP groups system](#the-tap-groups-system)
+9. [Workflow catalogue](#workflow-catalogue)
+10. [Adding a new test group end-to-end](#adding-a-new-test-group-end-to-end)
+11. [Common pitfalls and historical gotchas](#common-pitfalls-and-historical-gotchas)
+12. [Debugging a failing CI run](#debugging-a-failing-ci-run)
+13. [Understanding GitHub Actions vocabulary — read this first if confused](#understanding-github-actions-vocabulary--read-this-first-if-confused)
+14. [Glossary (quick reference)](#glossary-quick-reference)
 
 ---
 
@@ -91,15 +92,14 @@ Reusable workflows (`workflow_call`) solve this cleanly: the caller on `v3.0`
 is a 20-line stub that says *"delegate to `ci-legacy-g1.yml` on the
 `GH-Actions` branch"*, and the `GH-Actions` branch owns all the heavy logic.
 
-### The canonical caller (20 lines)
+### The caller shape
 
-All `CI-*.yml` files on `v3.0` follow this shape. This is
-`CI-legacy-g1.yml` verbatim (other callers differ only in name and `uses:`
-target):
+The following excerpt shows the caller structure. Dispatch inputs and
+permissions are abbreviated here; the workflow file is authoritative.
 
 ```yaml
 name: CI-legacy-g1
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+run-name: "${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} ${{ inputs.producer_run_id && format('producer={0}/{1}', inputs.producer_run_id, inputs.producer_attempt) || format('trigger={0}/{1}', github.event.workflow_run.id || github.run_id, github.event.workflow_run.run_attempt || github.run_attempt) }}"
 
 on:
   workflow_dispatch:
@@ -206,11 +206,11 @@ sequenceDiagram
     GH->>Trigger: start (on: push, pull_request)
     Trigger->>Builds: start (on: workflow_run [in_progress])
     Note over Trigger,Builds: CI-trigger runs a 'gh run watch' babysitter<br/>step that blocks until CI-builds finishes.
-    Builds-->>Builds: Build in Docker, cache src/test/bin/matrix
+    Builds-->>Builds: Build in Docker, publish handoff artifact
     Builds-->>Trigger: build completed (watch loop unblocks)
     Trigger-->>GH: CI-trigger completed
     GH->>Test: start (on: workflow_run [completed])
-    Test-->>Test: Restore src/test caches, run TAP group
+    Test-->>Test: Download handoff artifact, run TAP group
     Test-->>GH: success or failure
 ```
 
@@ -223,8 +223,9 @@ git push / open PR
   │     │
   │     ├─► CI-builds (on: workflow_run [in_progress])
   │     │     │
-  │     │     └─► Build ubuntu22-tap, debian12-dbg, ubuntu24-tap-genai-gcov
-  │     │         Cache src/, test/, bin/, tap-matrix*.json
+  │     │     └─► Build ubuntu24-tap (single leg since #6234)
+  │     │         Publishes handoff artifacts; the callee runs no
+  │     │         actions/cache/save (see §6 for the stale cache layout)
   │     │
   │     └─► (CI-trigger babysitter step `gh run watch` blocks until CI-builds
   │          completes, then CI-trigger itself completes)
@@ -321,7 +322,15 @@ listening for `workflow_run[completed]` on `CI-trigger` fires.
 | **Triggers** | `workflow_run` on `CI-trigger` with `types: [in_progress]` (so it starts as soon as `CI-trigger` starts, without waiting for `CI-trigger` to finish) |
 | **Purpose** | Compiles ProxySQL inside Docker containers and saves the artifacts into the build cache that all downstream test workflows will restore. |
 
-The build matrix:
+> ⚠️ **This table is stale.** The multi-leg cache-based build described here was
+> replaced by the unified regular build: `ci-builds.yml` now has a **single** matrix leg
+> (`ubuntu24`, `-tap`) which publishes one handoff **artifact** (not a cache), and
+> `PROXYSQLGENAI` no longer exists — the v4.0 tier is selected with `PROXYSQL40=1`.
+> See [§7 PR-label-selected product tiers](#pr-label-selected-product-tiers)
+> for the current mechanism, and read `ci-builds.yml@GH-Actions` as the source of truth
+> rather than this table.
+
+The build matrix (historical):
 
 | Matrix entry | Docker target | Flags set via `sed` into `docker-compose.yml` | Consumers |
 |---|---|---|---|
@@ -565,7 +574,16 @@ they happen they can be replicated with a single `sed`.
 
 ## Cache layout produced by CI-builds
 
-`CI-builds` produces four separate cache entries per matrix build, each
+> ⚠️ **This section is stale.** The callee no longer runs
+> `actions/cache/save` at all — `ci-builds.yml@GH-Actions` publishes handoff
+> **artifacts** instead, since #6234. So the `_bin`/`_src`/`_test`/`_matrix`
+> entries below are no longer produced by CI-builds, while 22 caller
+> workflows still reference `actions/cache/restore`/`save`. Whether each of
+> those is a live consumer or a dormant `restore` of an entry that can no
+> longer be created needs a per-workflow audit, so this section is left
+> as-is rather than rewritten on a guess. Fixing it is tracked separately.
+
+`CI-builds` produced four separate cache entries per matrix build, each
 keyed by `{SHA}_{dist}_{type}_{suffix}`:
 
 | Key suffix | Contents | Who restores it |
@@ -586,6 +604,119 @@ abc123_ubuntu22-tap_matrix
 ```
 
 Cache entries expire after 7 days of inactivity (GitHub's default policy).
+
+---
+
+## PR-label-selected product tiers
+
+All standard TAP configurations build the same source revision. With no tier
+labels CI builds v4.0 (`PROXYSQL40=1`). `ci:v3.0` adds Stable (no tier flag),
+and `ci:v3.1` adds Innovative (`PROXYSQL31=1`). Both labels select all three.
+`ci:asan` selects ASAN for each selected tier instead of a second normal build.
+The independent unit ASAN/TSAN and cluster-simulator pipelines retain their scope.
+
+When switching product tiers in a local build tree, run `make clean` first:
+the Makefile does not track changed tier flags in existing objects. Reusing
+objects from another tier can cause mismatches such as an unresolved
+`mysql_thread___ffto_max_buffer_size`. A lower-tier build is itself a regression
+test. A selected applicable test with a missing binary is a failure, not a skip.
+
+**Label edits do not trigger CI.** Existing events and filters are unchanged.
+The central build setup reads labels once, when its setup job executes. A label
+edit before setup can affect that run; edits after setup affect the next ordinary
+execution. Consumers never re-query labels. Repository-variable matrices are
+also captured in this configuration snapshot.
+
+### Execution identity and artifacts
+
+One producer run builds all selected tiers with `fail-fast: false`. A check
+registration binds the original trigger ID/attempt to the producer ID/attempt;
+`CI-trigger` follows that registration rather than searching run titles by SHA.
+After success it publishes `ci-accepted-producer-a<attempt>`; all consumers use
+that immutable acceptance, so a later producer rerun cannot rebind a delayed
+consumer. The execution ID is `t<origin>-a<attempt>-b<producer>-a<attempt>`.
+
+The initial `ci-plan-<execution>` artifact records the selection and expected
+checks. The immutable `ci-manifest-<execution>` includes actual product versions,
+artifact IDs and applicability. Handoffs are named
+`ci-handoff-<execution>-<tier>-<mode>-full`. Consumers download from the exact
+producer and verify embedded metadata and the restored binary's product tier.
+There is no repository-wide newest-SHA artifact fallback.
+
+Consumer workflows save a producer binding for reruns. A consumer-only rerun
+uses that binding even if labels have changed or another build has run for the
+same SHA. Manual consumer dispatch requires both an explicit producer run ID
+and an explicit attempt; there is no silent attempt-1 default.
+Manual producer dispatch and branch pushes use v4.0/normal by default. A full
+producer rerun creates a new plan; a failed-job rerun retains the original plan
+and skips uploads already published under that execution. Manual subsets have
+a distinct `CI / manual consumer …` summary. Cross-repository consumers use
+`PROXYSQL_ARTIFACTS_TOKEN` only for source reads and report on the caller's
+repository/SHA with its own token.
+
+### PR checks and applicable tests
+
+Checks are queued on the source SHA during setup. Each test job updates its
+existing check, named for example
+`CI-mysql84-gr-g2 / tests (v3.1, mysql84, asan)`. The outer Actions run title
+identifies the source revision and trigger execution; tier/mode live in the
+job names and PR checks because they are resolved after the run is created.
+
+`CI / selected tiers` summarizes the required applicable checks for that
+execution. Short serialized finalizers require all applicable custom results
+and validate native jobs before reporting success. Partial reruns retain cells
+that were not rerun. Starts reset the summary; terminal writes are revalidated
+to correct concurrent updates, without occupying a runner for the whole fanout.
+
+**Reporting limitation:** GitHub's Checks API has no conditional update tied to
+a workflow attempt. A rerun can briefly show the preceding aggregate result;
+if cancelled before any reporting step/finalizer runs, that previous result can
+remain visible. The custom summary is therefore not a substitute for native
+Actions checks or a sufficient standalone merge gate. Initial executions with
+missing evidence remain pending. This limitation needs an event-aware reporting
+protocol if a strictly immediate rerun invalidation guarantee is required.
+Repository branch-protection settings are unchanged.
+
+Tests still use `@proxysql_min_version` and the built binary's actual version.
+Mixed groups retain applicable lower-tier tests; empty groups are explicitly
+not applicable. Plugin-only jobs use v4.0. Coverage upload is enabled only for
+instrumented artifacts. Lower-tier `unit-tests-g1` runs within the producer,
+retaining coverage previously supplied by the sweep without enabling new events.
+
+### Sweep removal and coverage guard
+
+The old post-merge sweep, its reusable, shard configuration and runtime group
+list have been removed. There is no replacement scheduled sweep.
+`check_ci_tier_fanout.py` checks the paired branches and ensures the 54 migrated
+groups retain execution routes on both lower tiers and that their workflows
+actually invoke the recorded groups in both normal and ASAN modes. Caller,
+nested-job, test-job and test-step conditions are checked, along with selected
+matrix wiring. Unsupported conditions fail closed for manual inspection. Its
+migration fixture is evidence,
+not a runtime work list. The current consumer catalogue is
+`GH-Actions:.github/ci-tier-consumers.json`.
+
+Rollout must be coordinated: remove the sweep caller first, retain its runtime
+files while active sweeps finish, and drain old central build/trigger/consumer
+cascades before switching the compatible engine and caller implementations.
+Old triggers do not publish the new accepted-producer artifact. Do not deploy
+this caller tip independently against the old engine; remove remaining sweep
+runtime files only after old executions have drained.
+
+Before production contains the tier catalogue, `.github/ci-tier-engine-ref` pins
+the paired candidate for lint. The lint workflow fetches that SHA and reads its
+workflow/catalogue data; it does not execute candidate engine code. Once the
+production catalogue exists, selection automatically returns to `origin/GH-Actions`.
+The pin can then be removed. An explicit `CI_ENGINE_REF` always takes precedence.
+If the chosen ref cannot be fetched, paired checks report a skip while their
+unit tests still run.
+
+For local paired validation, set `CI_ENGINE_REF` to the candidate engine branch
+when running `test/infra/control/run-ci-lint.bash`. For a live isolated probe,
+set the optional `control_ref` and pin the caller's reusable reference to the
+candidate implementation as well; overriding a script checkout alone does not
+switch the reusable workflow definition. Do not update shared `GH-Actions` just
+to test a candidate while other PRs are using it.
 
 ---
 
@@ -702,7 +833,7 @@ All `CI-*.yml` files on `v3.0` as of 2026-04-11. Status is as observed on
 | Caller (v3.0) | Reusable (GH-Actions) | Trigger | Purpose | Status |
 |---|---|---|---|---|
 | `CI-trigger.yml` | `ci-trigger.yml` | `push`, `pull_request`, `workflow_dispatch` | Anchor PR `head_sha`, block on `CI-builds` | ✅ |
-| `CI-builds.yml` | `ci-builds.yml` | `workflow_run[in_progress]` on `CI-trigger` | Build 3 variants, populate caches | ✅ |
+| `CI-builds.yml` | `ci-builds.yml` | `workflow_run[in_progress]` on `CI-trigger` | Build the handoff, publish the artifact | ✅ |
 | `CI-lint-groups-json.yml` | *(inline, no reusable)* | `push`, `pull_request` on `groups.json` only | Lint `test/tap/groups/groups.json` format | ✅ |
 
 ### TAP test groups (dedicated-reusable pattern)
@@ -1002,8 +1133,11 @@ gh run list --branch <branch> --commit <sha>
 ```
 
 The v3.0 branch's runs include a run-name of the form:
-`<branch> <workflow> <head_sha>`. Filter on the SHA to find all related
-runs.
+`<branch> <workflow> <head_sha> trigger=<run_id>/<attempt>`. Manual consumer
+runs instead identify the selected `producer=<run_id>/<attempt>`. Filter automatic
+runs by SHA and trigger identity. For manual consumers, search
+by `producer=<run_id>/<attempt>`: the title SHA belongs to the dispatch ref,
+which can differ from the selected producer commit.
 
 ### Step 3: inspect the reusable version actually used
 
@@ -1082,7 +1216,7 @@ CI-maketest / builds (testgalera)
 By the end of the section you should be able to open any PR, look at any
 check-run label, and know exactly which file (on which branch) produced it.
 
-### 12.1 The seven terms you need to keep straight
+### 13.1 The seven terms you need to keep straight
 
 These are **not** ProxySQL-specific — they are standard GitHub Actions
 vocabulary — except for #7 which is the ProxySQL caller/reusable split.
@@ -1307,9 +1441,9 @@ run**, depending on which one the link points to. The caller run is
 always a thin one-job pass-through; the reusable run is the one with the
 matrix, the steps, and the actual test output.
 
-### 12.2 The full nesting, visualized
+### 13.2 The full nesting, visualized
 
-Pin this diagram on the wall of your mental model. Every term from §12.1
+Pin this diagram on the wall of your mental model. Every term from §13.1
 fits into exactly one slot here:
 
 ```
@@ -1367,7 +1501,7 @@ Key reading of the diagram:
    point at the commit. They are created by either GitHub
    auto-generation, or manually by `LouisBrunner/checks-action`, or both.
 
-### 12.3 The ProxySQL two-branch split, visualized
+### 13.3 The ProxySQL two-branch split, visualized
 
 When ProxySQL's caller/reusable split is layered on top of the above, **the
 picture doubles up**:
@@ -1426,7 +1560,7 @@ Checks tab:
   not the caller run on `v3.0`.
 - To read the YAML that ran, you want the **GH-Actions branch version**.
 
-### 12.4 How the `CI-maketest / builds (testgalera)` label is built
+### 13.4 How the `CI-maketest / builds (testgalera)` label is built
 
 Tracing the literal string character-by-character from the YAML to what
 you see:
@@ -1483,7 +1617,7 @@ workflow directory of the v3.0 branch finds nothing useful:
   `testgalera` *does* find it, but that hit tells you what the Make target
   does, not what the workflow does.
 
-### 12.5 Common confusions, answered directly
+### 13.5 Common confusions, answered directly
 
 **Q: "I see `CI-maketest` in the Actions tab, but when I click the run,
 the page URL says `/actions/runs/...` on the `GH-Actions` branch. Is that
@@ -1551,7 +1685,7 @@ cell of a shared workflow. Contrast with `CI-maketest`, where the 6
 build flavors ARE matrix cells of one shared workflow. Both patterns
 exist in the repo for historical reasons.
 
-### 12.6 Seeing what actually ran — the terminal flow
+### 13.6 Seeing what actually ran — the terminal flow
 
 The GitHub web UI for check runs is genuinely broken: if you click on a
 row in the PR "Checks" tab, the page you land on is a **check-run page**
@@ -1633,7 +1767,7 @@ via a `workflow_run` chain, and GitHub records `workflow_run`-triggered
 runs as belonging to the *default branch*, not the PR's branch. The
 run's metadata `headSha` (not shown in the default column layout) is
 also the v3.0 branch HEAD at cascade time, **not the PR commit**. This
-is the documented gotcha in §10.2 ("workflow_run chains use the
+is the documented gotcha in §11.2 ("workflow_run chains use the
 triggering workflow's head_sha").
 
 **The only place in this output where the actual PR commit SHA appears
@@ -1641,7 +1775,7 @@ is the display title**, because `CI-legacy-g1.yml`'s `run-name:` field
 explicitly injects it:
 
 ```yaml
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+run-name: "${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} ${{ inputs.producer_run_id && format('producer={0}/{1}', inputs.producer_run_id, inputs.producer_attempt) || format('trigger={0}/{1}', github.event.workflow_run.id || github.run_id, github.event.workflow_run.run_attempt || github.run_attempt) }}"
 ```
 
 So to identify "which run belongs to my PR commit", **grep the display
@@ -1690,13 +1824,13 @@ View this run on GitHub: https://github.com/sysown/proxysql/actions/runs/2428103
 Notice the job name here is `run / tests (mysql57)` — **not**
 `CI-legacy-g1 / tests (mysql57)` like the check-run row. The prefix
 differs because check runs and jobs live in different namespaces
-(see §12.1 and §12.4). Specifically:
+(see §13.1 and §13.4). Specifically:
 
 - **Job name** prefix `run /` comes from the caller stub on `v3.0`,
   whose job is literally `jobs.run:`.
 - **Check-run name** prefix `CI-legacy-g1 /` comes from the workflow's
   `name:` field, used by `LouisBrunner/checks-action` as the first piece
-  of its `name:` template (see §12.4).
+  of its `name:` template (see §13.4).
 
 The suffix `tests (mysql57)` comes from the reusable on `GH-Actions`
 (the reusable has `jobs.tests:` with a `matrix.infradb: [mysql57]`
@@ -1809,7 +1943,7 @@ row to a job log through the web UI**. Use the four-step terminal flow
 every time. It is faster, more reliable, and leaves a command history
 you can paste into PR reviews.
 
-### 12.7 Sanity-check yourself
+### 13.7 Sanity-check yourself
 
 If you understand the vocabulary, you should be able to answer each of
 these in one sentence. Answers after each question.
@@ -1852,10 +1986,10 @@ these in one sentence. Answers after each question.
    dead ends.
 
 If those six answers feel comfortable, you can close this section. If
-not, re-read the [nesting diagram](#122-the-full-nesting-visualized)
-and then the [two-branch diagram](#123-the-proxysql-two-branch-split-visualized)
+not, re-read the [nesting diagram](#132-the-full-nesting-visualized)
+and then the [two-branch diagram](#133-the-proxysql-two-branch-split-visualized)
 until they do; if the last question stumped you, re-read
-[§12.6 Seeing what actually ran](#126-seeing-what-actually-ran--the-terminal-flow).
+[§13.6 Seeing what actually ran](#136-seeing-what-actually-ran--the-terminal-flow).
 
 ---
 

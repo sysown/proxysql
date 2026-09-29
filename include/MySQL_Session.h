@@ -240,6 +240,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 *   should be updated, and previous query resources cleanup.
 	 */
 	void RequestEnd(MySQL_Data_Stream * myds, const unsigned int myerrno = 0, const char * errmsg = nullptr);
+	void RequestEnd_and_free_pkt(PtrSize_t *pkt, const unsigned int myerrno = 0, const char *errmsg = nullptr);
 	void LogQuery(MySQL_Data_Stream * myds, const unsigned int myerrno = 0, const char * errmsg = nullptr);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();

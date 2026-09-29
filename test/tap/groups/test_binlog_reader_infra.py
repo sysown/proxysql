@@ -8,11 +8,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 INFRA_NAMES = (
+    "infra-dbdeployer-mariadb10-binlog",
     "infra-dbdeployer-mysql84-binlog",
     "infra-dbdeployer-mysql90-binlog",
     "infra-dbdeployer-mysql95-binlog",
 )
-READER_IMAGE = "ghcr.io/sysown/proxysql-mysqlbinlog:2.4.0-ubuntu22"
+READER_IMAGE = "ghcr.io/sysown/proxysql-mysqlbinlog:2.5.0-ubuntu22"
 READER_BINARY = "/bin/proxysql_binlog_reader"
 
 
@@ -51,7 +52,7 @@ def reader_command_tokens(entrypoint: str) -> list[str]:
 
 
 class BinlogReaderInfraContractTest(unittest.TestCase):
-    def test_all_modern_binlog_infras_use_v240_with_ci_tls_policy(self) -> None:
+    def test_all_modern_binlog_infras_use_pinned_reader_with_ci_tls_policy(self) -> None:
         for infra_name in INFRA_NAMES:
             with self.subTest(infra=infra_name):
                 docker_dir = REPO_ROOT / "test" / "infra" / infra_name / "docker"

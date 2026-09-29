@@ -1805,6 +1805,14 @@ void MySQL_Threads_Handler::wrunlock() {
 	pthread_rwlock_unlock(&rwlock);
 }
 
+void MySQL_Threads_Handler::rdlock() {
+	pthread_rwlock_rdlock(&rwlock);
+}
+
+void MySQL_Threads_Handler::rdunlock() {
+	pthread_rwlock_unlock(&rwlock);
+}
+
 int MySQL_Threads_Handler::set_int_variable_and_commit(
 	const char* name, const char* value
 ) {

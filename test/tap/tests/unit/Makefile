@@ -550,6 +550,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
+	stmt_execute_short_packet_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_command_complete_unit-t \
 	ffto_protocol_unit-t \
@@ -592,6 +593,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	connection_unhealthy_unit-t \
+	connection_max_age_unit-t \
 	cluster_sync_unit-t \
 	parsersql_unit-t \
 	pgsql_query_processor_unit-t \
