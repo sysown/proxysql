@@ -27,6 +27,15 @@ on:
       build_run_id:
         type: string
         default: ''
+    # Declared so that callers outside this organization can pass them explicitly: 'secrets: inherit'
+    # only works for callers in the same organization/enterprise (sysown/proxysql callers are unchanged).
+    secrets:
+      GH_TOKEN_PROXYSQL:
+        required: false
+      PROXYSQL_3P_TESTING_DEPLOY_KEY:
+        required: false
+      PROXYSQL_ARTIFACTS_TOKEN:
+        required: false
 
 env:
   TESTTREE: ${{ inputs.testtree || inputs.trigger.event.inputs.testtree || 'main' }}
