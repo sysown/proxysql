@@ -4,6 +4,7 @@
 #include <ma_pvio.h>
 #include <openssl/ssl.h>
 #include <openssl/pem.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,6 +77,32 @@ static void copy_file(const char *source, const char *destination)
   fclose(in);
   require(fclose(out) == 0, "close CA replacement");
 }
+/* Counts releases of the X509_STORE tagged by the thread-exit mode. The
+ * ex_data free callback runs when the store's last reference is dropped. */
+static int store_tag_index= -1;
+static int store_tag;
+static int store_tag_frees;
+static void store_tag_free(void *parent, void *ptr, CRYPTO_EX_DATA *ad,
+                           int idx, long argl, void *argp)
+{
+  (void)parent; (void)ad; (void)idx; (void)argl; (void)argp;
+  if (ptr == &store_tag)
+    ++store_tag_frees;
+}
+/* Worker that caches a CA and exits WITHOUT calling mysql_thread_end(), as
+ * application threads using the plain client API commonly do. */
+static void *cache_without_thread_end(void *path)
+{
+  SSL *ssl= connect_tls((const char *)path, NULL);
+  require(ssl != NULL, "thread CA load");
+  require(X509_STORE_set_ex_data(SSL_CTX_get_cert_store(SSL_get_SSL_CTX(ssl)),
+                                 store_tag_index, &store_tag) == 1,
+          "tag cached store");
+  /* Only the thread's cache keeps the store alive past this point. */
+  close_tls(ssl);
+  require(store_tag_frees == 0, "cached store released while its thread is alive");
+  return NULL;
+}
 int main(int argc, char **argv)
 {
   SSL *first, *second;
@@ -84,7 +111,31 @@ int main(int argc, char **argv)
   mode= argv[1]; one= argv[2]; two= argv[3]; corrupt= argv[4];
   mutable= argv[5]; capath= argv[6];
   require(mysql_thread_init() == 0, "thread init");
-  if (strcmp(mode, "hit") == 0) {
+  if (strcmp(mode, "default") == 0) {
+    SSL *with_crl;
+    X509_STORE *store;
+    require(unsetenv("SSL_CERT_FILE") == 0 && unsetenv("SSL_CERT_DIR") == 0,
+            "clear default trust environment");
+    first= connect_tls(NULL, NULL);
+    second= connect_tls(NULL, NULL);
+    require(first != NULL && second != NULL, "default CA loads");
+    store= SSL_CTX_get_cert_store(SSL_get_SSL_CTX(first));
+    require(sk_X509_OBJECT_num(X509_STORE_get0_objects(store)) > 0,
+            "default CA fixture requires an installed system bundle");
+    require(store == SSL_CTX_get_cert_store(SSL_get_SSL_CTX(second)),
+            "connector did not cache default bundle");
+    with_crl= connect_tls_options(NULL, NULL, capath);
+    require(with_crl != NULL, "default CA with CRL options loads");
+    require(store != SSL_CTX_get_cert_store(SSL_get_SSL_CTX(with_crl)),
+            "default CA with CRL options reused cache");
+    require((X509_VERIFY_PARAM_get_flags(X509_STORE_get0_param(store)) &
+              (X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL)) == 0,
+            "default CA CRL flags contaminated cached store");
+    close_tls(with_crl);
+    mysql_thread_end();
+    require(sk_X509_OBJECT_num(X509_STORE_get0_objects(store)) > 0,
+            "thread cleanup invalidated live default trust");
+  } else if (strcmp(mode, "hit") == 0) {
     first= connect_tls(one, NULL);
     second= connect_tls(one, NULL);
     require(first != NULL && second != NULL, "unchanged CA loads");
@@ -127,6 +178,16 @@ int main(int argc, char **argv)
     copy_file(two, mutable);
     second= connect_tls(mutable, NULL);
     require(second != NULL && trusts(second, two) && !trusts(second, one), "recovery retained stale trust");
+  } else if (strcmp(mode, "thread-exit") == 0) {
+    pthread_t worker;
+    store_tag_index= X509_STORE_get_ex_new_index(0, NULL, NULL, NULL, store_tag_free);
+    require(store_tag_index >= 0, "store ex_data index");
+    first= NULL;
+    second= NULL;
+    require(pthread_create(&worker, NULL, cache_without_thread_end, (void *)one) == 0,
+            "create worker thread");
+    require(pthread_join(worker, NULL) == 0, "join worker thread");
+    require(store_tag_frees == 1, "thread exit leaked the cached CA store");
   } else {
     require(strcmp(mode, "lifecycle") == 0, "known test mode");
     first= connect_tls(one, NULL);

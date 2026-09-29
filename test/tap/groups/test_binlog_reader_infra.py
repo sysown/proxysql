@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 INFRA_NAMES = (
+    "infra-dbdeployer-mariadb10-binlog",
     "infra-dbdeployer-mysql84-binlog",
     "infra-dbdeployer-mysql90-binlog",
     "infra-dbdeployer-mysql95-binlog",
