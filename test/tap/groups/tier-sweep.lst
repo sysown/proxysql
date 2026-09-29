@@ -1,34 +1,25 @@
 # TAP groups exercised by CI-tier-sweep (the merge-only v3.0/v3.1 sweep).
 #
-# Selection rule (enforced by test/infra/control/check_tier_sweep_groups.py):
-#   a group is listed IFF
-#     (1) it is already wired into regular CI -- a CI-<group>.yml caller, or
-#         the name appears in a workflow on this branch or on origin/GH-Actions
-#         (same "wired" definition as test/tap/groups/lint_group_coverage.py), AND
-#     (2) at least one of its tests survives @proxysql_min_version on v3.0 OR
-#         v3.1, i.e. the sweep can actually run something for it on some tier.
+#   a group is listed IFF it is
+#     (1) already wired into regular CI (a CI-<group>.yml caller, the name
+#         appears in a workflow on this branch or on origin/GH-Actions, or it
+#         is in a dynamically discovered family) -- the same definition as
+#         test/tap/groups/lint_group_coverage.py; AND
+#     (2) not in a family the sweep's stock build cannot run (see below); AND
+#     (3) selectable on at least one of v3.0 / v3.1.
 #
-# Condition (1) is what keeps this honest: the sweep re-runs tests that regular
-# CI already exercises on the v4.0 tier. Groups that no workflow ever selects are
-# deliberately OUT of scope -- enabling them would conflate "does this tier
-# work" with "does this group work at all", and 41 groups are in that state.
-#
-# A listed group whose tests are ALL gated out on the running tier is not an
-# error: run-tests-isolated.bash skips it cleanly. ai-g2 is the current example
-# -- it runs on v3.1 (1 test) and skips on v3.0 (0 tests).
-#
-# Do not hand-maintain group membership beyond adding/removing names; the lint
-# check fails if this file and groups.json disagree in either direction.
-#
+# Condition (2) exists because (1) is necessary but NOT sufficient. The six
+# cluster_sim_* groups are wired -- CI-cluster-simulator.yml discovers them at
+# run time -- but that workflow also runs `make build_cluster_simulator` and
+# stages test/deps/cluster_simulator, and the group env files point at that
+# binary. The sweep builds a stock `make ubuntu24-tap` handoff which does not
+# contain it, and run-tests-isolated.bash has no simulator handling, so these
+# groups would fail every run for a reason unrelated to the tier. They are
+# excluded deliberately. Teaching the sweep to build and stage the simulator is
+# the work that would let them back in.
 #
 ai-g1
 ai-g2
-cluster_sim_aurora-g1
-cluster_sim_galera-g1
-cluster_sim_group_repl-g1
-cluster_sim_rds_bgd-g1
-cluster_sim_read_only-g1
-cluster_sim_repl_lag-g1
 legacy-binlog-g1
 legacy-clickhouse-g1
 legacy-g1

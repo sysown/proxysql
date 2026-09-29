@@ -250,7 +250,11 @@ for name in selected:
     EXCL_DROPPED="$(printf '%s\n' "${TEST_SELECTION}" | sed -n '1s/^#STATS total=\([0-9]*\) excluded=\([0-9]*\)$/\2/p')"
     TEST_NAMES="$(printf '%s\n' "${TEST_SELECTION}" | sed '1{/^#STATS /d}')"
     : "${GROUP_TEST_COUNT:=0}" "${EXCL_DROPPED:=0}"
-    echo ">>> group '${TAP_GROUP}': ${GROUP_TEST_COUNT} test(s) in groups.json, ${EXCL_DROPPED} dropped by TEST_PY_TAP_EXCL, ${#TEST_NAMES} selected"
+    # ${#TEST_NAMES} is the LENGTH of the newline-joined string, not a count
+    # of entries, so it would print "43 selected" for a handful of tests.
+    SELECTED_COUNT="$(printf '%s\n' "${TEST_NAMES}" | grep -c . || true)"
+    : "${SELECTED_COUNT:=0}"
+    echo ">>> group '${TAP_GROUP}': ${GROUP_TEST_COUNT} test(s) in groups.json, ${EXCL_DROPPED} dropped by TEST_PY_TAP_EXCL, ${SELECTED_COUNT} selected"
 
     if [ -z "${TEST_NAMES}" ]; then
         # Two very different situations produce an empty TEST_NAMES, and they

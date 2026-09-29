@@ -61,6 +61,24 @@ ACTIONS_REF = "origin/GH-Actions"
 # reported OK.
 DYNAMIC_DISCOVERY_PREFIXES = ("cluster_sim_",)
 
+# Groups that regular CI runs, but the SWEEP's stock build cannot run.
+#
+# "Wired into regular CI" is necessary but not sufficient. A group can be
+# exercised in CI only because that workflow produced a build and a runtime
+# the sweep does not. cluster_sim_* is exactly that case:
+# CI-cluster-simulator.yml runs `make build_cluster_simulator` and then
+# `cluster-simulator-ci.bash stage`, and the group env files point at
+# test/deps/cluster_simulator/cluster_simulator and its tests tree. The sweep
+# builds a stock `make ubuntu24-tap` handoff, which does not build that dep,
+# and run-tests-isolated.bash has no simulator handling whatsoever. So these
+# groups would be selected, find a missing runtime, and fail -- every sweep
+# run, forever, for a reason that has nothing to do with the tier.
+#
+# Listing them is therefore a deliberate exclusion, not an oversight. Removing
+# it means teaching the sweep to build and stage the simulator, which is a
+# separate piece of work.
+BUILD_UNSUPPORTED_PREFIXES = ("cluster_sim_",)
+
 # The two tiers the sweep builds, as upper bounds. Matched to the Makefile's
 # GIT_VERSION bump for each feature tier (Makefile:82-92): a v3.1 build reports
 # 3.1.x and a v3.0 build reports 3.0.x, so anything up to the next minor counts.
@@ -232,9 +250,14 @@ def main() -> int:
     for name in duplicates:
         problems.append(f"{name}: listed more than once in tier-sweep.lst")
 
+    def sweep_can_build(group: str) -> bool:
+        """False for families needing a build the sweep does not produce."""
+        return not group.startswith(BUILD_UNSUPPORTED_PREFIXES)
+
     runnable_any = [
         g for g in members
-        if any(survivors(g, members, required, c) for c in TIER_CEILINGS.values())
+        if sweep_can_build(g)
+        and any(survivors(g, members, required, c) for c in TIER_CEILINGS.values())
     ]
 
     # (B) wired + runnable on some tier but not listed -> silently dropped coverage
@@ -243,6 +266,15 @@ def main() -> int:
             problems.append(
                 f"{group}: wired into regular CI and runnable on at least one "
                 "sweep tier, but missing from tier-sweep.lst"
+            )
+
+    # a listed group the sweep cannot build -> would fail every run
+    for name in listed:
+        if name in members and not sweep_can_build(name):
+            problems.append(
+                f"{name}: listed, but the sweep's stock build cannot run it "
+                "(needs a dedicated build/runtime); remove it or teach the "
+                "sweep to build that first"
             )
 
     # listed but now dead on every tier -> harmless tag change, just note it
