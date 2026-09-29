@@ -61,6 +61,8 @@ jobs:
         ref: ${{ env.TESTTREE }}
         fetch-depth: 1
         path: 'proxysql_3p_testing'
+        # nothing later in the job needs git credentials, keep the PAT out of .git/config
+        persist-credentials: false
         token: ${{ secrets.GH_TOKEN_PROXYSQL }}
         sparse-checkout: |
           common
@@ -77,6 +79,8 @@ jobs:
         fetch-depth: 0
         filter: 'blob:none'
         path: 'proxysql'
+        # the checkout is moved into the harness and mounted into the test containers, keep the token out of .git/config
+        persist-credentials: false
         # include/lib/src so fastcov can resolve the gcov sources
         sparse-checkout: |
           include
