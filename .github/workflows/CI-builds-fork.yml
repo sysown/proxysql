@@ -20,8 +20,10 @@ jobs:
     # then the reusable workflow changed in two ways that matter here:
     #   * 2026-08-19 35366926d dropped the libpq.so.5 staging (#6115 links
     #     libpq.a; deps/Makefile never built the shared object)
-    #   * 2026-09-06 64b1465a9 / 308c14d67 retired the duplicate legs, so
-    #     the matrix is now the single ubuntu24/-tap-genai-gcov entry
+    #   * 2026-09-06 64b1465a9 / 308c14d67 retired the duplicate legs, leaving
+    #     a single ubuntu24/-tap leg (the `type` token was -tap-genai-gcov
+    #     until #6234 moved the tier into an explicit `tier` input; the
+    #     published handoff variant is still ubuntu24-tap-genai-gcov)
     # The stale pin still carried `-tap-mysqlx`, whose staging block ran on
     # every fork PR and failed with
     #   ERROR: cannot stage libpq.so.5 -- no file matching ...

@@ -224,8 +224,8 @@ git push / open PR
   │     │
   │     ├─► CI-builds (on: workflow_run [in_progress])
   │     │     │
-  │     │     └─► Build ubuntu22-tap, debian12-dbg, ubuntu24-tap-genai-gcov
-  │     │         Cache src/, test/, bin/, tap-matrix*.json
+  │     │     └─► Build ubuntu24-tap (single leg, publishes a handoff artifact)
+  │     │         No src/ test/ bin/ caches: handoffs, not caches
   │     │
   │     └─► (CI-trigger babysitter step `gh run watch` blocks until CI-builds
   │          completes, then CI-trigger itself completes)
