@@ -93,7 +93,7 @@ static bool execSql(PGConnPtr& admin, const std::string& sql) {
 }
 
 int main(int argc, char** argv) {
-	plan(6);
+	plan(10);
 
 	if (cl.getEnv()) return exit_status();
 
@@ -128,15 +128,18 @@ int main(int argc, char** argv) {
 	//    Before the fix this failed at PQconnectdb with
 	//    "invalid port number: \"0\"".
 	// -----------------------------------------------------------------
+	bool native_on = execSql(admin, "SET pgsql-use_native_backend_protocol='true'") &&
+		execSql(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	ok(native_on, "Native backend protocol enabled for the Unix-socket query");
 	auto backend = createNewConnection(BACKEND);
-	ok(backend != nullptr, "Client connection through ProxySQL (via Unix-socket backend) succeeds");
+	ok(backend != nullptr, "Native-enabled client connection via Unix-socket backend succeeds");
 
 	if (backend != nullptr) {
 		PGresult* res = PQexec(backend.get(), "SELECT 1 AS one");
 		bool ok_q = (PQresultStatus(res) == PGRES_TUPLES_OK
 			&& PQntuples(res) == 1
 			&& strcmp(PQgetvalue(res, 0, 0), "1") == 0);
-		ok(ok_q, "SELECT 1 through the proxy returns the expected result");
+		ok(ok_q, "SELECT 1 through the native-enabled proxy returns the expected result");
 		if (!ok_q) {
 			diag("PQresultStatus=%d, ntuples=%d, value=%s, error=%s",
 				PQresultStatus(res), PQntuples(res),
@@ -145,7 +148,22 @@ int main(int argc, char** argv) {
 		}
 		PQclear(res);
 	} else {
-		ok(0, "SELECT 1 through the proxy returns the expected result");
+		ok(0, "SELECT 1 through the native-enabled proxy returns the expected result");
+	}
+	backend.reset();
+	bool native_off = execSql(admin, "SET pgsql-use_native_backend_protocol='false'") &&
+		execSql(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	ok(native_off, "Native backend protocol restored after the Unix-socket query");
+	auto libpq_backend = createNewConnection(BACKEND);
+	ok(libpq_backend != nullptr, "Libpq-mode client connection via Unix-socket backend succeeds");
+	if (libpq_backend != nullptr) {
+		PGresult* res = PQexec(libpq_backend.get(), "SELECT 1 AS one");
+		ok(PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1 &&
+			strcmp(PQgetvalue(res, 0, 0), "1") == 0,
+			"SELECT 1 through the libpq-mode proxy returns the expected result");
+		PQclear(res);
+	} else {
+		ok(0, "SELECT 1 through the libpq-mode proxy returns the expected result");
 	}
 
 	// -----------------------------------------------------------------

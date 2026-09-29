@@ -306,6 +306,8 @@
   "pgsql_native_teardown_state_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_tls_handover_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_tls_verify_modes_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_native_unix_endpoint_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_native_cancel_endpoint_unit-t" : [ "unit-tests-g1" ],
   "pgsql_query_cache_allocation_unit-t" : [ "unit-tests-g1" ],
   "pgsql_query_logging_autodump-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],
   "pgsql_query_logging_memory-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],

@@ -46,6 +46,7 @@
 #include <cstring>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -459,13 +460,84 @@ static void sc_durability(PgConnection& c) {
     c.sendSync();
 }
 
+// #6249: reporting ReadyForQuery(E) is not enough. The next statement must
+// remain rejected even though the local DISCARD handler destroyed the backend.
+static void checkAbortedRecovery(bool extended_discard, const char* recovery, const char* mode) {
+    bool rejected_discard = false, stayed_aborted = false, recovered = false;
+    bool no_committed_write = false, usable = false;
+    try {
+        PGConnPtr be = backendLibpq();
+        if (!be || PQstatus(be.get()) != CONNECTION_OK || !truncateFixture(be.get()))
+            throw std::runtime_error("cannot initialize durability fixture");
+        auto c = connectProxy();
+        c->execute("BEGIN");
+        const auto begin = collect(*c, 1);
+        c->execute("INSERT INTO " + FIXTURE + " VALUES (1)");
+        const auto before_discard = collect(*c, 1);
+        if (!errorCodes(before_discard).empty() || lastReadyState(before_discard) != 'T')
+            throw std::runtime_error("cannot insert within the transaction before DISCARD");
+        if (extended_discard) {
+            extStep(*c, "abort_discard", "DISCARD ALL", true);
+            c->sendSync();
+        } else {
+            c->execute("DISCARD ALL");
+        }
+        const auto discard = collect(*c, 1);
+        rejected_discard = lastReadyState(begin) == 'T' &&
+            errorCodes(discard) == "25001" && lastReadyState(discard) == 'E';
+
+        c->execute("SELECT 1");
+        const auto select = collect(*c, 1);
+        c->execute("INSERT INTO " + FIXTURE + " VALUES (6249)");
+        const auto insert = collect(*c, 1);
+        extStep(*c, "abort_write", "INSERT INTO " + FIXTURE + " VALUES (6249)", false);
+        c->sendSync();
+        const auto extended_insert = collect(*c, 1);
+        stayed_aborted = errorCodes(select) == "25P02" && lastReadyState(select) == 'E' &&
+            errorCodes(insert) == "25P02" && lastReadyState(insert) == 'E' &&
+            errorCodes(extended_insert) == "25P02" && lastReadyState(extended_insert) == 'E';
+        diag("  after rejected DISCARD: SELECT=%s INSERT=%s extended INSERT=%s",
+             errorCodes(select).c_str(), errorCodes(insert).c_str(), errorCodes(extended_insert).c_str());
+
+        c->execute(recovery);
+        const auto end = collect(*c, 1);
+        const std::vector<uint8_t> rollback_tag = {'R','O','L','L','B','A','C','K',0};
+        bool rolled_back = false;
+        for (const auto& m : end) if (m.type == 'C' && m.payload == rollback_tag) rolled_back = true;
+        recovered = errorCodes(end).empty() && lastReadyState(end) == 'I' && rolled_back;
+        no_committed_write = fixtureRowCount(be.get()) == 0;
+
+        c->execute("BEGIN");
+        const auto next_begin = collect(*c, 1);
+        c->execute("INSERT INTO " + FIXTURE + " VALUES (1)");
+        const auto next_insert = collect(*c, 1);
+        c->execute("ROLLBACK");
+        const auto next_rollback = collect(*c, 1);
+        c->execute("DISCARD ALL");
+        const auto next_discard = collect(*c, 1);
+        usable = errorCodes(next_begin).empty() && lastReadyState(next_begin) == 'T' &&
+            errorCodes(next_insert).empty() && lastReadyState(next_insert) == 'T' &&
+            errorCodes(next_rollback).empty() && lastReadyState(next_rollback) == 'I' &&
+            errorCodes(next_discard).empty() && lastReadyState(next_discard) == 'I' &&
+            fixtureRowCount(be.get()) == 0;
+    } catch (const std::exception& e) {
+        diag("aborted transaction recovery probe failed: %s", e.what());
+    }
+    const char* wire = extended_discard ? "extended" : "simple";
+    ok(rejected_discard, "DISCARD abort [%s/%s/%s]: reports 25001 and aborted state", mode, wire, recovery);
+    ok(stayed_aborted, "DISCARD abort [%s/%s/%s]: subsequent simple/extended statements rejected with 25P02", mode, wire, recovery);
+    ok(recovered, "DISCARD abort [%s/%s/%s]: recovery reports ROLLBACK and idle state", mode, wire, recovery);
+    ok(no_committed_write, "DISCARD abort [%s/%s/%s]: rejected writes never commit", mode, wire, recovery);
+    ok(usable, "DISCARD abort [%s/%s/%s]: new transaction and idle DISCARD work after recovery", mode, wire, recovery);
+}
+
 // ------------------------------------------------------------------ main
 
 static const char* MODE_NAME[2] = { "libpq backend protocol", "native backend protocol" };
 
 int main(int, char**) {
-    // (parity cases + queued-behind + durability) per protocol phase
-    plan((int)((sizeof(PARITY_CASES) / sizeof(PARITY_CASES[0]) + 2) * 2));
+    // Existing parity cases plus 5 assertions for each DISCARD/recovery shape.
+    plan((int)((sizeof(PARITY_CASES) / sizeof(PARITY_CASES[0]) + 2 + 5 * 2 * 2) * 2));
 
     if (cl.getEnv()) return exit_status();
 
@@ -511,6 +583,11 @@ int main(int, char**) {
         if (!flushBackendPool(admin, BACKEND_HG, saved_servers)) {
             cleanup();
             BAIL_OUT("cannot flush the backend pool between protocol phases");
+        }
+
+        for (bool extended : {false, true}) {
+            for (const char* recovery : {"ROLLBACK", "COMMIT"})
+                checkAbortedRecovery(extended, recovery, MODE_NAME[mode]);
         }
 
         // ---- parity cases: the proxy's bytes must be PostgreSQL's bytes ------
