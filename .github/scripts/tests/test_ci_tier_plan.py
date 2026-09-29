@@ -52,4 +52,10 @@ class SelectionTests(unittest.TestCase):
         p['schema']=900
         with self.assertRaises(ValueError):validate_manifest(p)
 
+    def test_variable_names_follow_github_case_insensitivity(self):
+        c=self.context();c['variables']={'MATRIX_MYSQL':"[ 'mysql84' ]"}
+        cat={'consumers':[dict(workflow='CI-example',file='ci-example.yml',job='tests',automatic=True,tiers=['v40'],groups=[],cells=[],axes={'infradb':{'var':'MATRIX_mysql'}},instance='run')]}
+        plan=make_plan(c,dict(tiers=['v40'],mode='normal',pr_number=42),cat)
+        self.assertEqual(plan['checks'][1]['cell']['infradb'],'mysql84')
+
 if __name__=='__main__':unittest.main()

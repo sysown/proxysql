@@ -74,7 +74,13 @@ stage = named_step(
     "Stage MySQLX runtime libraries in test handoff",
 )
 assert "inputs.trusted" in stage["if"]
-assert "contains(matrix.type,'-mysqlx')" in stage["if"]
+assert "matrix.tier == 'v40'" in stage["if"]
+for trusted in (False, True):
+    for tier in ('v30', 'v31', 'v40'):
+        expression = stage['if'].removeprefix('${{').removesuffix('}}').strip()
+        expression = expression.replace('inputs.trusted', str(trusted)).replace('success()', 'True').replace('matrix.tier', repr(tier)).replace('&&', ' and ')
+        assert eval(expression, {'__builtins__': {}}, {}) == (trusted and tier == 'v40')
+
 
 with tempfile.TemporaryDirectory() as directory:
     cwd = Path(directory)
