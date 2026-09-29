@@ -1,6 +1,7 @@
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Monitor.hpp"
 #include "PgSQL_Thread.h"
+#include "ProxySQL_ServerDiscovery.h"
 
 #include "gen_utils.h"
 
@@ -510,12 +511,7 @@ tasks_conf_t fetch_updated_conf(PgSQL_Monitor* mon, PgSQL_HostGroups_Manager* hg
 			" GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
-	unique_ptr<SQLite3_result> readonly_srvs { fetch_hgm_srvs_conf(hgm,
-		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
-			" FROM pgsql_servers JOIN pgsql_replication_hostgroups"
-				" ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
-			" WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()"
-	)};
+	unique_ptr<SQLite3_result> readonly_srvs { hgm->get_read_only_servers() };
 
 	unique_ptr<SQLite3_result> repl_srvs { fetch_hgm_srvs_conf(hgm,
 		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM pgsql_servers"
@@ -2511,9 +2507,22 @@ void* PgSQL_monitor_scheduler_thread() {
 	uint64_t cur_intv_start = 0;
 	tasks_intvs_t next_intvs {};
 	vector<task_batch_t> tasks_batches {};
+#ifdef PROXYSQL40
+	uint64_t read_only_wake_epoch = proxysql_server_read_only_monitor_epoch(
+		ProxySQL_ServerProtocol::pgsql);
+#endif
 
 	while (GloPgMon->shutdown.load(std::memory_order_acquire) == false && pgsql_thread___monitor_enabled == true) {
 		cur_intv_start = monotonic_time();
+
+#ifdef PROXYSQL40
+		const uint64_t current_wake_epoch = proxysql_server_read_only_monitor_epoch(
+			ProxySQL_ServerProtocol::pgsql);
+		if (current_wake_epoch != read_only_wake_epoch) {
+			read_only_wake_epoch = current_wake_epoch;
+			next_intvs.next_readonly_at = 0;
+		}
+#endif
 
 		uint64_t closest_intv {
 			std::min({
@@ -2957,7 +2966,7 @@ void* PgSQL_Monitor::monitor_dns_cache() {
 					delay_us *= 40;
 					if (delay_us > 1000000 || delay_us <= 0)
 						delay_us = 10000;
-					delay_us = delay_us + rand() % delay_us; // NOSONAR cpp:S2245 — non-crypto jitter to spread DNS refresh load; no security boundary.
+					delay_us = delay_us + rand_fast() % delay_us;
 				}
 
 				// Walk the bookkeeper: drop orphans, requeue expired ones, keep

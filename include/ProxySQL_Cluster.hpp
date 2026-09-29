@@ -4,13 +4,33 @@
 #include "cpp.h"
 #include "thread.h"
 #include "wqueue.h"
+#include "ProxySQL_ServerDiscovery.h"
+#include "ProxySQL_ServerModuleCluster.h"
 #include <vector>
 #include <atomic>
+#include <functional>
 
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
 #define PROXYSQL_NODE_METRICS_LEN	5
+
+class SQLite3_result;
+
+#ifdef PROXYSQL40
+// Shared final step of the v1 runtime-server pulls. `commit_core_rows` takes
+// ownership of `core_rows`; old peers bypass affiliated callbacks but still
+// publish their committed core snapshot to the local controller.
+bool proxysql_cluster_install_v1_runtime_post_fetch(
+	ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
+	bool module_runtime_supported,
+	const std::vector<ProxySQL_ServerModuleClusterTable>& module_tables,
+	const std::function<void(SQLite3_result*)>& stage_core_rows,
+	const std::function<bool(SQLite3_result*)>& commit_core_rows);
+bool proxysql_snapshot_installed_builtin_server_topology(
+	ProxySQL_ServerProtocol protocol, std::vector<uint32_t>& hostgroups,
+	std::string& error);
+#endif
 
 /**
  * @file ProxySQL_Cluster.hpp
@@ -218,6 +238,8 @@
 #define CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM runtime_pgsql_replication_hostgroups ORDER BY writer_hostgroup"
 #define CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES "PROXY_SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM runtime_pgsql_hostgroup_attributes ORDER BY hostgroup_id"
 
+bool proxysql_cluster_monitor_should_query_checksums(bool global_checksum_changed);
+
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	public:
 	time_t last_updated;
@@ -229,6 +251,14 @@ class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 		diff_check = 0;
 	}
 };
+
+// Dynamic server-module capability is independent from the legacy Servers
+// version/epoch.  The latter validates only the core payload once a peer has
+// been selected through its corresponding module poll.
+bool proxysql_server_module_peer_is_ready_for_selection(
+	const ProxySQL_Checksum_Value_2& module_state,
+	const ProxySQL_Checksum_Value_2& legacy_server_state,
+	unsigned int threshold);
 
 class ProxySQL_Node_Metrics {
 	public:
@@ -323,6 +353,12 @@ class ProxySQL_Node_Entry {
 		ProxySQL_Checksum_Value_2 pgsql_users;
 		ProxySQL_Checksum_Value_2 pgsql_servers_v2;
 		ProxySQL_Checksum_Value_2 pgsql_variables;
+#ifdef PROXYSQL40
+		ProxySQL_Checksum_Value_2 server_module_mysql_v1;
+		ProxySQL_Checksum_Value_2 server_module_mysql_v2;
+		ProxySQL_Checksum_Value_2 server_module_pgsql_v1;
+		ProxySQL_Checksum_Value_2 server_module_pgsql_v2;
+#endif
 	} checksums_values;
 	uint64_t global_checksum;
 };

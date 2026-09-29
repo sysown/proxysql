@@ -17,6 +17,8 @@
 #include "ProxySQL_PluginListenerGate.h"
 #include "ProxySQL_PluginConfig.h"
 
+#include "ProxySQL_ServerDiscovery.h"
+
 class SQLite3DB;
 class SQLite3_result;
 class AwsIamTokenSource;
@@ -63,6 +65,8 @@ namespace prometheus { class Registry; }
 //          IAM token-source install/uninstall and waiter sizing, the general
 //          AWS metadata-provider install used by locality discovery, and the
 //          MySQL-owned AWS-locality stats projection callback.
+//   ABI 11: ProxySQL_PluginServices appends provider-neutral server discovery
+//          module/controller registration and desired-set submission.
 //
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //
@@ -81,8 +85,8 @@ namespace prometheus { class Registry; }
 // A plugin built without -DDEBUG, loaded into a core built with
 // -DDEBUG (or vice versa), silently disagrees with the core about these
 // offsets while still reporting a numerically "compatible" abi_version
-// under the plain ABI 1..10 scheme above (e.g. a release plugin's
-// abi_version=10 is <= a debug core's max=10, so the ordinary
+// under the plain ABI 1..11 scheme above (e.g. a release plugin's
+// abi_version=11 is <= a debug core's max=11, so the ordinary
 // forward-compatibility range check does not catch it).
 //
 // What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
@@ -124,23 +128,23 @@ namespace prometheus { class Registry; }
 //
 // PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
 // (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
-// in a numeric space (bit 30) the plain layout-version numbers (1..10,
+// in a numeric space (bit 30) the plain layout-version numbers (1..11,
 // and unlikely to reach 2^30 for a long time) never touch, so a
 // DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
 // "compatible" via ordinary integer range comparison -- the loader
 // checks this bit for an EXACT match, as a step separate from (and in
-// addition to) the ABI 1..10 forward-compatibility range check below.
+// addition to) the ABI 1..11 forward-compatibility range check below.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
 
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 10u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 10u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 11u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 11u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 #else
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
 #endif
-// Layout-only ceiling used for the ABI 1..10 range check. Callers must mask
+// Layout-only ceiling used for the ABI 1..11 range check. Callers must mask
 // off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
 // against this constant -- see lib/ProxySQL_PluginManager.cpp.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
@@ -511,6 +515,18 @@ struct ProxySQL_PluginServices {
 	proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
 	proxysql_plugin_refresh_mysql_aws_locality_stats_cb refresh_mysql_aws_locality_stats;
 	proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
+	// ABI-11 extension. Server modules can register during Phase B or normal
+	// init; discovery controllers install only during normal init. Uninstall is
+	// live during normal init and the owning plugin's stop() callback so its
+	// installed controller can synchronously drain and be destroyed before
+	// stop returns. A plugin cannot uninstall another plugin's controller.
+	// A plugin may retain post_server_desired_set and call it from start or
+	// steady-state workers. The callback pins the active manager through the
+	// synchronous acknowledgement and fails closed after manager unpublication.
+	proxysql_plugin_register_server_module_cb register_server_module;
+	proxysql_plugin_install_server_discovery_controller_cb install_server_discovery_controller;
+	proxysql_plugin_uninstall_server_discovery_controller_cb uninstall_server_discovery_controller;
+	proxysql_plugin_post_server_desired_set_cb post_server_desired_set;
 #endif /* PROXYSQL40 */
 };
 

@@ -73,8 +73,8 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 
 ```cpp
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 10u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 10u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 11u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 11u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION =
@@ -87,8 +87,8 @@ constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX =
     PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
 ```
 
-`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `10` in a release build and
-`0x4000000A` in a DEBUG build. Plugins must use that constant rather than a
+`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `11` in a release build and
+`0x4000000B` in a DEBUG build. Plugins must use that constant rather than a
 literal so the loader can validate both the layout and build mode.
 
 ABI evolution so far:
@@ -117,6 +117,8 @@ ABI evolution so far:
   table: IAM token-source install/uninstall and waiter sizing, the AWS
   metadata-provider install used by locality discovery, and the MySQL-owned
   AWS-locality statistics projection callback.
+- **ABI 10 → ABI 11:** appends the provider-neutral server-module/controller
+  registration, runtime snapshot, and desired-set submission services.
 
 Future ABI versions append fields. The chassis bumps the layout/version
 constants and gates each new field's read on the masked layout version being
@@ -332,7 +334,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // 10 release, 0x4000000A DEBUG
+    PROXYSQL_PLUGIN_ABI_VERSION,          // 11 release, 0x4000000B DEBUG
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop

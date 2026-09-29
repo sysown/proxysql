@@ -1073,6 +1073,9 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		proxy_error("Failed to materialize Admin database schemas\n");
 		return false;
 	}
+#ifdef PROXYSQL40
+	if (!verify_registered_server_module_tables_after_upgrade()) return false;
+#endif
 
 	__attach_db(admindb, configdb, (char *)"disk");
 #ifdef PROXYSQL40
