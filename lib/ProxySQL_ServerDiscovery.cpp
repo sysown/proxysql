@@ -19,9 +19,11 @@
 bool proxysql_server_discovery_admin_available();
 void proxysql_wake_server_discovery_admin();
 bool proxysql_materialize_server_desired_set(const ProxySQL_ServerDesiredSet& desired_set);
-extern "C" void proxysql_server_discovery_after_final_revalidation_for_test(
-	ProxySQL_ServerProtocol) __attribute__((weak));
+void (*proxysql_server_discovery_after_final_revalidation_for_test)(ProxySQL_ServerProtocol) = nullptr;
+void (*proxysql_server_reconcile_after_hgm_snapshot_for_test)(ProxySQL_ServerProtocol) = nullptr;
+void (*proxysql_server_discovery_retirement_attempt_for_test)(ProxySQL_ServerProtocol) = nullptr;
 #endif
+void (*proxysql_servers_v2_refresh_exception_for_test)(int, int) = nullptr;
 
 namespace {
 std::atomic<uint64_t> mysql_generation {0};

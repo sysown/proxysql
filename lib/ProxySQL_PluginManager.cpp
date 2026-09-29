@@ -35,8 +35,6 @@
 extern ProxySQL_GlobalVariables GloVars;
 extern MySQL_Threads_Handler *GloMTH;
 
-extern "C" void proxysql_server_discovery_retirement_attempt_for_test(
-	ProxySQL_ServerProtocol) __attribute__((weak));
 
 SQLite3DB* proxysql_plugin_get_admindb();
 SQLite3DB* proxysql_plugin_get_configdb();

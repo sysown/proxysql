@@ -100,8 +100,6 @@ private:
 
 using std::function;
 
-extern "C" void proxysql_servers_v2_refresh_exception_for_test(int, int)
-	__attribute__((weak));
 
 #ifdef TEST_AURORA
 static unsigned long long array_mysrvc_total = 0;
@@ -4723,8 +4721,6 @@ void PgSQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(PgSQL_SrvC* 
 }
 
 #ifdef PROXYSQL40
-extern "C" void proxysql_server_reconcile_after_hgm_snapshot_for_test(
-	ProxySQL_ServerProtocol) __attribute__((weak));
 
 bool PgSQL_HostGroups_Manager::reconcile_server_desired_set(
 	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {

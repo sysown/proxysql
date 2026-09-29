@@ -220,4 +220,14 @@ using proxysql_plugin_uninstall_server_discovery_controller_cb = bool (*)(
 	ProxySQL_ServerProtocol);
 using proxysql_plugin_post_server_desired_set_cb = bool (*)(ProxySQL_ServerDesiredSet);
 
+// Test seams. Null in production; unit tests assign them to inject failures or
+// observe interleavings. Plain function pointers defined in the library (not
+// weak symbols a test defines) so every platform's linker accepts them.
+extern void (*proxysql_servers_v2_refresh_exception_for_test)(int protocol, int stage);
+#ifdef PROXYSQL40
+extern void (*proxysql_server_discovery_after_final_revalidation_for_test)(ProxySQL_ServerProtocol);
+extern void (*proxysql_server_reconcile_after_hgm_snapshot_for_test)(ProxySQL_ServerProtocol);
+extern void (*proxysql_server_discovery_retirement_attempt_for_test)(ProxySQL_ServerProtocol);
+#endif
+
 #endif /* PROXYSQL_SERVER_DISCOVERY_H */

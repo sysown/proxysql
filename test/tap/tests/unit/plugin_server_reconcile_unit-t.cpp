@@ -88,18 +88,15 @@ void wait_at_reconcile_hook(ReconcileHookMode expected) {
 	reconcile_hook.cv.wait(lock, [] { return reconcile_hook.release; });
 }
 
-extern "C" void proxysql_server_discovery_after_final_revalidation_for_test(
-	ProxySQL_ServerProtocol) {
+void after_final_revalidation_hook(ProxySQL_ServerProtocol) {
 	wait_at_reconcile_hook(ReconcileHookMode::final_apply);
 }
 
-extern "C" void proxysql_server_reconcile_after_hgm_snapshot_for_test(
-	ProxySQL_ServerProtocol) {
+void after_hgm_snapshot_hook(ProxySQL_ServerProtocol) {
 	wait_at_reconcile_hook(ReconcileHookMode::hgm_snapshot);
 }
 
-extern "C" void proxysql_server_discovery_retirement_attempt_for_test(
-	ProxySQL_ServerProtocol) {
+void retirement_attempt_hook(ProxySQL_ServerProtocol) {
 	std::lock_guard<std::mutex> lock(reconcile_hook.mutex);
 	reconcile_hook.retirement_attempted = true;
 	reconcile_hook.cv.notify_all();
@@ -308,6 +305,9 @@ ProxySQL_ServerDesiredSet pgsql_desired(uint64_t generation,
 
 int main() {
 	plan(84);
+	proxysql_server_discovery_after_final_revalidation_for_test = &after_final_revalidation_hook;
+	proxysql_server_reconcile_after_hgm_snapshot_for_test = &after_hgm_snapshot_hook;
+	proxysql_server_discovery_retirement_attempt_for_test = &retirement_attempt_hook;
 	test_init_minimal();
 	test_init_query_processor();
 	test_init_hostgroups();

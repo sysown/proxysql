@@ -42,7 +42,7 @@ std::atomic<int> refresh_exception_protocol {-1};
 std::atomic<int> refresh_exception_stage {static_cast<int>(RefreshExceptionStage::none)};
 }
 
-extern "C" void proxysql_servers_v2_refresh_exception_for_test(int protocol, int stage) {
+void servers_v2_refresh_exception_hook(int protocol, int stage) {
 	if (refresh_exception_protocol.load() == protocol &&
 		refresh_exception_stage.load() == stage)
 		throw std::runtime_error("injected Servers-v2 refresh exception");
@@ -299,6 +299,7 @@ bool post_and_drain(ProxySQL_PluginManager& manager, ProxySQL_Admin& admin,
 
 int main() {
 	plan(59);
+	proxysql_servers_v2_refresh_exception_for_test = &servers_v2_refresh_exception_hook;
 	test_init_minimal();
 	test_init_query_processor();
 	test_init_hostgroups();

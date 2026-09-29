@@ -37,9 +37,6 @@ using json = nlohmann::json;
 
 using std::function;
 
-extern "C" void proxysql_servers_v2_refresh_exception_for_test(int, int)
-	__attribute__((weak));
-
 #ifdef PROXYSQL40
 namespace {
 
@@ -3427,9 +3424,6 @@ __exit_replication_lag_action:
 }
 
 #ifdef PROXYSQL40
-extern "C" void proxysql_server_reconcile_after_hgm_snapshot_for_test(
-	ProxySQL_ServerProtocol) __attribute__((weak));
-
 bool MySQL_HostGroups_Manager::reconcile_server_desired_set(
 	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
 	if (desired_set.protocol != ProxySQL_ServerProtocol::mysql) {
