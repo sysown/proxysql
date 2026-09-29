@@ -89,6 +89,7 @@ class RuntimeTests(unittest.TestCase):
      derived=register.call_args.args[0]
      self.assertEqual(derived['reporting']['repository'],'consumer/tests')
      self.assertNotEqual(derived['reporting']['identity'],plan['execution_id'])
+     self.assertTrue(all(c['name'].startswith('Manual / ') for c in derived['checks']))
      self.assertEqual(len(output.call_args.kwargs['matrices']['tests']),1)
      source.request.assert_not_called()
    finally:os.chdir(prior)

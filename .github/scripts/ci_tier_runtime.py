@@ -164,6 +164,7 @@ def consumer():
             manifest['checks']=[c for c in derived['checks'] if c['workflow']!='CI-builds']
             if not manifest['checks']:raise ValueError('manual consumer has no applicable configurations')
             for check in manifest['checks']:
+                check['name']='Manual / '+check['name']
                 leg=next(l for l in manifest['legs'] if l['tier']==check['tier'])
                 check['applicable']=not check['groups'] or any(g in leg['applicable_groups'] for g in check['groups'])
             manifest['reporting']=dict(repository=gh['repository'],sha=gh['sha'] if gh['repository']!=manifest['repository'] else manifest['sha'],
