@@ -19,7 +19,9 @@
  *  - Check for correct concurrent clear_text_pass caching ('caching_sha2_password').
  */
 
+#include <atomic>
 #include <charconv>
+#include <chrono>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -35,6 +37,7 @@
 #include "openssl/types.h"
 #include "json.hpp"
 #include "mysql.h"
+#include "errmsg.h"
 
 #include "tap.h"
 #include "command_line.h"
@@ -629,6 +632,94 @@ int config_mysql_conn(const CommandLine& cl, const test_conf_t& conf, MYSQL* pro
 	return cflags;
 }
 
+/**
+ * @brief Upper bound for retrying a single connection attempt that failed at the transport level.
+ * @details Must exceed the Linux TIME_WAIT period (60s), the time needed for ephemeral ports to be
+ *  released once exhausted.
+ */
+const std::chrono::seconds TRANSPORT_RETRY_TIMEOUT { 120 };
+
+/// Total number of transport-level connection retries performed by all the client threads.
+std::atomic<uint64_t> transport_retries { 0 };
+/// Number of connection attempts that kept failing at transport level after exhausting the retries.
+std::atomic<uint64_t> transport_failures { 0 };
+
+/**
+ * @brief Checks if a connection error was produced client side, before reaching ProxySQL.
+ * @details These errors are raised by the connector socket layer (socket creation or 'connect()'
+ *  failure); no packet has been exchanged with ProxySQL, so no auth has been attempted. The typical
+ *  cause is exhaustion of local ephemeral ports: this test performs tens of thousands of short-lived
+ *  connections, each leaving the local port in TIME_WAIT for 60s. With a fast enough connection rate
+ *  the default port range (~28k ports) is exhausted, and 'connect()' fails with EADDRNOTAVAIL.
+ */
+bool is_transport_error(uint32_t myerrno) {
+	return myerrno == CR_CONNECTION_ERROR || myerrno == CR_CONN_HOST_ERROR || myerrno == CR_IPSOCK_ERROR;
+}
+
+/**
+ * @brief Performs a connection attempt, retrying transport-level failures (see 'is_transport_error').
+ * @details Since a transport error implies that ProxySQL was never reached, retrying is equivalent to
+ *  the original attempt, and doesn't alter the auth state being tested. A failed 'mysql_real_connect'
+ *  resets the handle options, so every retry uses a fresh handle configured via 'config_mysql_conn'.
+ *  Retries are logged and accounted in 'transport_retries'; attempts that exhaust the retries are
+ *  accounted in 'transport_failures', and reported as a test failure by 'main'.
+ * @param proxy Handle to use for the attempt; replaced by a new handle on retries. Must be closed by
+ *  the caller, the final attempt error remains available on it.
+ * @return The result of the final 'mysql_real_connect' call.
+ */
+MYSQL* connect_with_retry(
+	const CommandLine& cl, const test_conf_t& conf, const test_creds_t& creds, MYSQL*& proxy
+) {
+	using std::chrono::steady_clock;
+
+	const auto start { steady_clock::now() };
+	std::chrono::milliseconds backoff { 10 };
+	uint32_t retries = 0;
+
+	while (true) {
+		int cflags = config_mysql_conn(cl, conf, proxy);
+		MYSQL* myconn {
+			mysql_real_connect(proxy, cl.host, creds.name.c_str(), creds.pass.get(), NULL, cl.port, NULL, cflags)
+		};
+
+		if (myconn || !is_transport_error(mysql_errno(proxy))) {
+			if (retries) {
+				diag(
+					"Connection attempt completed after transport retries   thread:`%lu`, retries:%u, errno:'%d'",
+					pthread_self(), retries, myconn ? 0 : mysql_errno(proxy)
+				);
+			}
+			return myconn;
+		}
+
+		if (steady_clock::now() - start > TRANSPORT_RETRY_TIMEOUT) {
+			diag(
+				"Connection attempt exhausted transport retries   thread:`%lu`, retries:%u, errno:'%d', error:'%s'",
+				pthread_self(), retries, mysql_errno(proxy), mysql_error(proxy)
+			);
+			transport_failures += 1;
+			return nullptr;
+		}
+
+		// Only log the first failure of each attempt; avoid flooding the log
+		if (retries == 0) {
+			diag(
+				"Connection attempt failed at transport level; retrying   thread:`%lu`, errno:'%d', error:'%s'",
+				pthread_self(), mysql_errno(proxy), mysql_error(proxy)
+			);
+		}
+
+		retries += 1;
+		transport_retries += 1;
+
+		mysql_close(proxy);
+		proxy = mysql_init(NULL);
+
+		std::this_thread::sleep_for(backoff);
+		backoff = std::min(backoff * 2, std::chrono::milliseconds { 500 });
+	}
+}
+
 void test_creds_frontend_backend(
 	const CommandLine& cl,
 	const test_conf_t& conf,
@@ -637,12 +728,9 @@ void test_creds_frontend_backend(
 	bool supports_rsa
 ) {
 	MYSQL* proxy = mysql_init(NULL);
-	int cflags = config_mysql_conn(cl, conf, proxy);
 
 	diag("Performing connection attempt   creds:`%s`", to_string(creds).c_str());
-	MYSQL* myconn {
-		mysql_real_connect(proxy, cl.host, creds.name.c_str(), creds.pass.get(), NULL, cl.port, NULL, cflags)
-	};
+	MYSQL* myconn { connect_with_retry(cl, conf, creds, proxy) };
 
 	user_auth_stats_t auth_info { update_auth_reg(myconn, creds.name, creds.pass.get(), auth_reg) };
 	bool exp_success = chk_seq_exp_scs(conf, creds, auth_info, supports_rsa);
@@ -704,15 +792,12 @@ void test_creds_frontend(
 	const chk_exp_scs_t& chk_exp_scs
 ) {
 	MYSQL* proxy = mysql_init(NULL);
-	int cflags = config_mysql_conn(cl, conf, proxy);
 
 	const string creds_str { to_string(creds) };
 	const uint64_t th_id { pthread_self() };
 
 	diag("Performing connection attempt   thread:`%lu`, creds:`%s`", th_id, creds_str.c_str());
-	MYSQL* myconn {
-		mysql_real_connect(proxy, cl.host, creds.name.c_str(), creds.pass.get(), NULL, cl.port, NULL, cflags)
-	};
+	MYSQL* myconn { connect_with_retry(cl, conf, creds, proxy) };
 
 	bool exp_scs = chk_exp_scs(conf, creds);
 	if (exp_scs) {
@@ -751,15 +836,12 @@ user_auth_stats_t check_auth_creds(
 	const CommandLine& cl, const test_conf_t& conf, const test_creds_t& creds, bool supports_rsa
 ) {
 	MYSQL* proxy = mysql_init(NULL);
-	int cflags = config_mysql_conn(cl, conf, proxy);
 
 	const string creds_str { to_string(creds) };
 	const uint64_t th_id { pthread_self() };
 
 	diag("Performing connection attempt   thread:`%lu`, creds:`%s`", th_id, creds_str.c_str());
-	MYSQL* myconn {
-		mysql_real_connect(proxy, cl.host, creds.name.c_str(), creds.pass.get(), NULL, cl.port, NULL, cflags)
-	};
+	MYSQL* myconn { connect_with_retry(cl, conf, creds, proxy) };
 
 	user_auth_stats_t auth_stats {};
 
@@ -775,6 +857,10 @@ user_auth_stats_t check_auth_creds(
 			auth_stats = user_auth_stats_t { user_def_t { creds.name }, 0, 1, full_sha2_auth };
 		}
 	} else {
+		diag(
+			"Connection attempt failed   thread:`%lu`, errno:'%d', error:'%s'",
+			th_id, mysql_errno(proxy), mysql_error(proxy)
+		);
 		auth_stats = user_auth_stats_t { user_def_t { creds.name }, 0, 0, 0 };
 	}
 
@@ -1418,7 +1504,7 @@ int main(int argc, char** argv) {
 		+ non_warmup_tests_fail_count * NUM_CLIENT_THREADS
 		+ non_warmup_tests_scs_count * NUM_CLIENT_THREADS * 2
 		+ non_warmup_tests_scs_ratio
-		+ 11
+		+ 12
 		+ (cl.use_noise ? 4 : 0)
 	);
 
@@ -1555,6 +1641,14 @@ int main(int argc, char** argv) {
 
 		if (res) { goto cleanup; }
 	}
+
+	// Transport-level failures never reach ProxySQL; they would be miscounted as auth failures
+	diag("Transport-level connection retries performed   retries:%lu", transport_retries.load());
+	ok(
+		transport_failures == 0,
+		"No connection attempt should fail at transport level after retries   failures:%lu, retries:%lu",
+		transport_failures.load(), transport_retries.load()
+	);
 
 cleanup:
 

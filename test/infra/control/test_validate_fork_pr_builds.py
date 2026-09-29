@@ -43,9 +43,35 @@ def minimal_documents():
         },
     }
     reusable = {
-        "on": {"workflow_call": {"inputs": {"trusted": {"type": "boolean", "default": True}}}},
+        "on": {
+            "workflow_call": {
+                "inputs": {
+                    "trusted": {"type": "boolean", "default": True},
+                    # The tier input must default to v40, matching the callee.
+                    "tier": {"type": "string", "default": "v40"},
+                }
+            }
+        },
         "jobs": {
             "resolve-tap-mode": {"steps": [{"uses": "actions/checkout@abc"}]},
+            # resolve-tier handles every known tier and fails on anything else.
+            # It must not declare `permissions:` -- a called workflow may only
+            # narrow the fork caller's token, which is exactly contents: read.
+            "resolve-tier": {
+                "steps": [
+                    {
+                        "id": "t",
+                        "run": (
+                            "case \"${TIER_IN}\" in\n"
+                            "  v30)\n    TIER=v30 ;;\n"
+                            "  v31)\n    TIER=v31 ;;\n"
+                            "  v40)\n    TIER=v40 ;;\n"
+                            "  *)\n    echo error; exit 1 ;;\n"
+                            "esac\n"
+                        ),
+                    }
+                ]
+            },
             "builds": {
                 "runs-on": "${{ inputs.trusted && (runner.environment == 'self-hosted' && false) || 'ubuntu-24.04' }}",
                 "strategy": {
@@ -340,6 +366,56 @@ class Mutations(unittest.TestCase):
         ):
             with self.subTest(document=label):
                 self.assertRejected(mutate, "unsafe fork checkout enabled")
+
+    def test_tier_input_must_stay_pinned_to_v40(self):
+        # A fork PR reaches the callee only through CI-builds-fork.yml, which
+        # passes just trusted: false. So the tier always resolves to the input
+        # default; that default must stay v40 or a downgrade tier could be
+        # smuggled onto the untrusted build path.
+        for bad in ("v30", "v31", "v4.0", "40", ""):
+            with self.subTest(default=bad):
+                self.assertRejected(
+                    lambda b, f, r, d=bad: r["on"]["workflow_call"]["inputs"]["tier"].__setitem__(
+                        "default", d
+                    ),
+                    "tier input default",
+                )
+        self.assertRejected(
+            lambda b, f, r: r["on"]["workflow_call"]["inputs"].pop("tier"),
+            "tier input default",
+        )
+
+    def test_resolve_tier_must_cover_every_tier_and_reject_the_rest(self):
+        for tier in ("v30", "v31", "v40"):
+            with self.subTest(missing=tier):
+                def drop(b, f, r, t=tier):
+                    step = r["jobs"]["resolve-tier"]["steps"][0]
+                    step["run"] = step["run"].replace(f"  {t})\n", "")
+
+                self.assertRejected(drop, f"does not handle the {tier} tier")
+
+        # An unknown tier must fail loudly, not fall through to some default.
+        def drop_catch_all(b, f, r):
+            step = r["jobs"]["resolve-tier"]["steps"][0]
+            step["run"] = step["run"].replace("  *)\n    echo error; exit 1 ;;\n", "")
+
+        self.assertRejected(drop_catch_all, "catch-all")
+
+        self.assertRejected(
+            lambda b, f, r: r["jobs"].pop("resolve-tier"),
+            "does not handle the v30 tier",
+        )
+
+    def test_resolve_tier_must_not_widen_the_fork_token(self):
+        # Per 5e8468db4 a called workflow may only narrow the caller's token,
+        # and the fork caller grants exactly contents: read. Declaring any
+        # permissions: here makes every fork PR fail at startup.
+        self.assertRejected(
+            lambda b, f, r: r["jobs"]["resolve-tier"].__setitem__(
+                "permissions", {"contents": "read"}
+            ),
+            "breaks the contents:read-only fork caller",
+        )
 
     def test_all_problems_are_reported_not_just_the_first(self):
         base, fork, reusable = minimal_documents()
