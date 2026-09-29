@@ -16,7 +16,7 @@ def aggregate_state(manifest,observations):
 
 def url(plan,run_id=None):return f"https://github.com/{plan['repository']}/actions/runs/{run_id or plan['build_id']}"
 
-def register(plan,api):
+def register(plan,api,origin=True):
     path=f"repos/{plan['repository']}/check-runs"
     payload={'name':'CI / selected tiers','head_sha':plan['sha'],'status':'in_progress',
              'external_id':plan['execution_id']+':summary','details_url':url(plan),
@@ -25,6 +25,7 @@ def register(plan,api):
     for check in plan['checks']:
         check['check_id']=api.request(path,'POST',dict(name=check['name'],head_sha=plan['sha'],status='queued',
             external_id=plan['execution_id']+':'+check['key'],details_url=url(plan)))['id']
+    if not origin:return plan
     identity={k:plan[k] for k in ('repository','sha','trigger_id','trigger_attempt','build_id','build_attempt','execution_id','control_sha')}
     external=f"ci-tier-origin:{plan['trigger_id']}:{plan['trigger_attempt']}"
     checks=api.pages(f"repos/{plan['repository']}/commits/{plan['sha']}/check-runs?filter=all",'check_runs')

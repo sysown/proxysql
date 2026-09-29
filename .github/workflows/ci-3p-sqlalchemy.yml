@@ -72,6 +72,8 @@ jobs:
       producer_attempt: ${{ inputs.producer_attempt }}
       source_repository: ${{ inputs.proxysql_repo }}
       source_sha: ${{ inputs.sha }}
+      consumer_file: ci-3p-sqlalchemy.yml
+      consumer_inputs: ${{ toJson(inputs) }}
     secrets: inherit
   test:
     runs-on: ubuntu-24.04

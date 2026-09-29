@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """GitHub Actions adapters for the tested tier contracts."""
+import copy
 import json
 import os
 from pathlib import Path
@@ -87,7 +88,7 @@ def consumer():
     binding_name='ci-tier-binding-'+os.environ.get('CONSUMER_INSTANCE','run')
     attempt=int(gh['run_attempt'])
     if attempt>1:
-        producer=api.json_artifact(int(gh['run_id']),binding_name,'binding.json')
+        producer=GitHubAPI(gh['repository']).json_artifact(int(gh['run_id']),binding_name,'binding.json')
         if ctx['event']!='workflow_dispatch':verify_binding(producer,ctx)
     elif os.environ.get('PRODUCER_RUN_ID'):
         run=int(os.environ['PRODUCER_RUN_ID']);build_attempt=int(os.environ.get('PRODUCER_ATTEMPT') or '1')
@@ -97,17 +98,51 @@ def consumer():
     else:
         if ctx['event']=='workflow_dispatch':raise ValueError('manual consumer dispatch requires producer_run_id and producer_attempt')
         producer=resolve_producer(ctx,api)
-    manifest=load_manifest(producer,api)
+    manifest=load_bound(producer)
     workflow=gh['workflow'];instance=os.environ.get('CONSUMER_INSTANCE','run')
     jobs=sorted({c['job'] for c in manifest['checks'] if c['workflow']==workflow and c['cell'].get('ci_instance','run')==instance})
+    override=producer.get('consumer_manifest')
+    if not jobs or gh['repository']!=manifest['repository']:
+        if attempt>1 and not override:raise ValueError('rerun has no original consumer manifest')
+        if not override:
+            catalogue=json.loads((ROOT/'ci-tier-consumers.json').read_text())
+            supplied=json.loads(os.environ.get('CONSUMER_INPUTS','{}'))
+            rows=[];seen=set()
+            for item in catalogue['consumers']:
+                if item['file']!=os.environ.get('CONSUMER_FILE') or item['job'] in seen:continue
+                if supplied.get('tap_group') and supplied['tap_group'] not in item['groups']:continue
+                row=copy.deepcopy(item);row.update(workflow=workflow,automatic=True,instance=instance)
+                for axis in row.get('axes',{}):
+                    if axis in supplied and supplied[axis]:
+                        from ci_tier_plan import parse_axis
+                        row['axes'][axis]=parse_axis(supplied[axis])
+                rows.append(row);seen.add(item['job'])
+            if not rows:raise ValueError('consumer not present in this producer plan or control catalogue')
+            derived=make_plan(manifest,manifest['selection'],{'consumers':rows})
+            manifest=copy.deepcopy(manifest)
+            manifest['checks']=[c for c in derived['checks'] if c['workflow']!='CI-builds']
+            if not manifest['checks']:raise ValueError('manual consumer has no applicable configurations')
+            register(manifest,api,origin=False)
+            override={'repository':gh['repository'],'run_id':int(gh['run_id']),'artifact':binding_name}
+        jobs=sorted({c['job'] for c in manifest['checks'] if c['workflow']==workflow})
     matrices={job:consumer_matrix(manifest,workflow,job,instance) for job in jobs}
-    Path('binding.json').write_text(json.dumps({k:manifest[k] for k in ('repository','sha','trigger_id','trigger_attempt','build_id','build_attempt','execution_id','control_sha')}))
+    binding={k:manifest[k] for k in ('repository','sha','trigger_id','trigger_attempt','build_id','build_attempt','execution_id','control_sha')}
+    if override:binding['consumer_manifest']=override
+    Path('binding.json').write_text(json.dumps(binding))
     Path('manifest.json').write_text(json.dumps(manifest))
     emit(matrices=matrices,binding=json.loads(Path('binding.json').read_text()),execution_id=manifest['execution_id'],
          control_sha=manifest['control_sha'],sha=manifest['sha'],binding_name=binding_name)
 
+def load_bound(binding):
+    override=binding.get('consumer_manifest')
+    if override:
+        plan=GitHubAPI(override['repository']).json_artifact(override['run_id'],override['artifact'],'manifest.json')
+        validate_manifest(plan);verify_binding(plan,binding)
+        return plan
+    return load_manifest(binding,api_for(binding))
+
 def bound_manifest():
-    binding=json.loads(os.environ['CI_BINDING']);return load_manifest(binding,api_for(binding))
+    return load_bound(json.loads(os.environ['CI_BINDING']))
 
 def result():
     plan=read_plan() if os.environ.get('CI_PLAN') else bound_manifest()
@@ -129,7 +164,16 @@ def producer_lookup():
     while time.monotonic()<deadline:
         try:
             producer=resolve_producer(ctx,api);break
-        except ValueError:time.sleep(15)
+        except ValueError:
+            # Setup can fail before a registration exists (for example a label API error).
+            # The caller title carries the exact origin, so this is not a SHA lookup.
+            runs=api.request(f"repos/{ctx['repository']}/actions/workflows/CI-builds.yml/runs?event=workflow_run&per_page=100")['workflow_runs']
+            suffix=f" trigger={ctx['trigger_id']}/{ctx['trigger_attempt']}"
+            candidates=[r for r in runs if r.get('display_title','').endswith(suffix)]
+            if any(r['status']=='completed' and r['conclusion']!='success' for r in candidates):
+                raise RuntimeError('producer failed before publishing a build registration')
+            errors_since=None
+            time.sleep(15)
         except RuntimeError:
             if errors_since is None:errors_since=time.monotonic()
             if time.monotonic()-errors_since>300:raise

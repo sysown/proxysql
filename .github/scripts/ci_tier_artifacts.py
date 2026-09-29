@@ -17,12 +17,17 @@ class GitHubAPI:
     def request(self,path,method='GET',payload=None,raw=False):
         args=['gh','api',path,'--method',method]
         if payload is not None:args+=['--input','-']
-        result=subprocess.run(args,input=json.dumps(payload).encode() if payload is not None else None,
-                              capture_output=True,timeout=60)
-        if result.returncode:
-            # gh stderr can contain URLs; never print credential-bearing request input.
-            raise RuntimeError(f'GitHub API {method} {path}: exit {result.returncode}')
-        return result.stdout if raw else json.loads(result.stdout or b'{}')
+        for attempt in range(6):
+            result=subprocess.run(args,input=json.dumps(payload).encode() if payload is not None else None,
+                                  capture_output=True,timeout=60)
+            if not result.returncode:
+                return result.stdout if raw else json.loads(result.stdout or b'{}')
+            error=result.stderr.decode(errors='replace').lower()
+            transient=any(marker in error for marker in ('rate limit','http 429','http 502','http 503','http 504'))
+            if not transient or attempt==5:
+                raise RuntimeError(f'GitHub API {method} {path}: exit {result.returncode}')
+            time.sleep(60 if 'rate limit' in error or '429' in error else min(30,2**attempt))
+
     def pages(self,path,key):
         records=[]
         for page in range(1,1001):

@@ -22,6 +22,12 @@ on:
       source_sha:
         type: string
         default: ''
+      consumer_file:
+        type: string
+        required: true
+      consumer_inputs:
+        type: string
+        default: '{}'
     outputs:
       matrices:
         value: ${{ jobs.context.outputs.matrices }}
@@ -62,6 +68,8 @@ jobs:
         PRODUCER_ATTEMPT: ${{ inputs.producer_attempt }}
         SOURCE_REPOSITORY: ${{ inputs.source_repository }}
         SOURCE_SHA: ${{ inputs.source_sha }}
+        CONSUMER_FILE: ${{ inputs.consumer_file }}
+        CONSUMER_INPUTS: ${{ inputs.consumer_inputs }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py consumer
       id: context
@@ -70,5 +78,7 @@ jobs:
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: ${{ steps.context.outputs.binding_name }}
-        path: binding.json
+        path: |
+          binding.json
+          manifest.json
         retention-days: 3

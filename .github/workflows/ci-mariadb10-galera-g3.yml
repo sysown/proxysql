@@ -31,6 +31,8 @@ jobs:
       control_ref: ${{ inputs.control_ref }}
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_attempt: ${{ inputs.producer_attempt }}
+      consumer_file: ci-mariadb10-galera-g3.yml
+      consumer_inputs: ${{ toJson(inputs) }}
     secrets: inherit
   tests:
     runs-on: ubuntu-22.04

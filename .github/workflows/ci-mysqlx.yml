@@ -42,6 +42,8 @@ jobs:
       control_ref: ${{ inputs.control_ref }}
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_attempt: ${{ inputs.producer_attempt }}
+      consumer_file: ci-mysqlx.yml
+      consumer_inputs: ${{ toJson(inputs) }}
     secrets: inherit
   e2e-tests:
     runs-on: ubuntu-24.04
