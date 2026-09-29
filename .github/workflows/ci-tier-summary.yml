@@ -1,0 +1,33 @@
+name: CI tier summary
+on:
+  workflow_call:
+    inputs:
+      binding:
+        type: string
+        required: true
+      control_ref:
+        type: string
+        required: true
+jobs:
+  summary:
+    runs-on: ${{ (github.actor == 'renecannao' && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    concurrency:
+      group: ci-tier-summary-${{ fromJson(inputs.binding).execution_id }}
+      cancel-in-progress: false
+    steps:
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ inputs.control_ref }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Reconcile selected tier results
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CI_BINDING: ${{ inputs.binding }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py summary

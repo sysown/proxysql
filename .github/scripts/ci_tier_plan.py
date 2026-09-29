@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Pure CI product configuration and execution identity contracts."""
+import ast
 import hashlib
 import itertools
 import json
@@ -55,7 +56,7 @@ def make_plan(context, selection, catalogue):
                 continue
             cells = consumer['cells']
             if consumer.get('axes'):
-                axes = {k: json.loads(context.get('variables', {})[v['var']]) if isinstance(v,dict) else v for k,v in consumer['axes'].items()}
+                axes = {k: parse_axis({k.upper(): value for k,value in context.get('variables', {}).items()}[v['var'].upper()]) if isinstance(v,dict) else v for k,v in consumer['axes'].items()}
                 if any(not isinstance(v,list) or not v for v in axes.values()):
                     raise ValueError('empty/invalid configured consumer matrix: '+consumer['workflow'])
                 cells = [dict(zip(axes,values)) for values in itertools.product(*axes.values())]
@@ -101,3 +102,10 @@ def applicable_tests(groups, group, version):
     limit=version_tuple(version)
     return sorted(name for name,tags in groups.items() if group in tags and
                   all(version_tuple(t.split(':',1)[1]) <= limit for t in tags if t.startswith('@proxysql_min_version:')))
+
+def parse_axis(value):
+    try: result=json.loads(value)
+    except ValueError: result=ast.literal_eval(value)
+    if not isinstance(result,list) or any(not isinstance(item,(str,int,float,bool)) for item in result):
+        raise ValueError('matrix axis must be a JSON array of scalars')
+    return result

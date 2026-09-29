@@ -7,6 +7,18 @@ on:
       trigger:
         type: string
 
+      consumer_id:
+        type: string
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: '1'
 env:
   # SHA the caller's workflow_run fired on (i.e. the PR commit), or
   # github.sha for the workflow_dispatch path. All cache keys, checkouts,
@@ -22,6 +34,15 @@ jobs:
   # binaries run inside the build image with --network host so they
   # reach 127.0.0.1:$mysqlx_port. mysqlx-e2e/env.sh documents this
   # arrangement.
+  tier-context:
+    uses: ./.github/workflows/ci-tier-context.yml
+    with:
+      trigger: ${{ inputs.trigger }}
+      consumer_id: ${{ inputs.consumer_id }}
+      control_ref: ${{ inputs.control_ref }}
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
+    secrets: inherit
   e2e-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -32,91 +53,36 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-        id: checks
-        if: always()
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: '${{ github.workflow }} / ${{ github.job }}'
-          repo: ${{ github.repository }}
-          sha: ${{ env.SHA }}
-          status: 'in_progress'
-          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-context.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Start selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: 'proxysql'
 
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ env.SHA }}
-          path: 'proxysql'
-
-      - name: Download build handoff
-        # Build payload arrives as workflow artifacts, not an Actions cache:
-        # GitHub made cache writes read-only for workflow_run/untrusted triggers
-        # (changelog 2026-06-26). Download the per-type handoff artifacts and
-        # unpack into proxysql/. The following 'Restore plugin .so' step then
-        # copies the mysqlx/genai .so out of the unpacked test tree as before.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-          BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-          HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
-          HANDOFF_TYPES: full
-        run: |
-          set -uo pipefail
-          command -v zstd >/dev/null || sudo apt-get install -y zstd
-          # Resolve the build-handoff artifact robustly. Self-hosted runners can
-          # pick up this job within ~1 min of CI-builds finishing -- earlier than
-          # GitHub-hosted runners queue -- which lands inside the window where
-          # GitHub's GLOBAL name-filtered artifact index (artifacts?name=) still
-          # lags behind creation, returning empty for an artifact that already
-          # exists. Prefer resolving via the triggering CI-builds run's OWN
-          # artifact list (run-scoped: populated as soon as the artifact is
-          # attached, not subject to the global-index lag); fall back to the
-          # global name query. Retry on a bounded budget and surface the real gh
-          # error, so a genuine build failure is distinguishable from transient lag.
-          : "${HANDOFF_MAX_ATTEMPTS:=20}"   # bounded: 20 x 15s = up to ~5 min
-          ERRLOG="$(mktemp)"
-          resolve_aid() {
-            local name="$1" out=""
-            if [ -n "${BUILD_RUN_ID:-}" ]; then
-              out=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
-                      --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" 2>>"$ERRLOG") || true
-              [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-            fi
-            out=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
-                    --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>>"$ERRLOG") || true
-            [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-            return 1
-          }
-          for t in $HANDOFF_TYPES; do
-            name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-${t}"
-            aid=""
-            for attempt in $(seq 1 "$HANDOFF_MAX_ATTEMPTS"); do
-              aid=$(resolve_aid "$name") && [ -n "$aid" ] && break
-              aid=""
-              echo ">>> ${name} not resolvable yet (${attempt}/${HANDOFF_MAX_ATTEMPTS}); sleeping 15s"; sleep 15
-            done
-            if [ -z "$aid" ]; then
-              echo "ERROR: handoff artifact ${name} not found after ${HANDOFF_MAX_ATTEMPTS} attempts (build_run=${BUILD_RUN_ID:-n/a}) -- did CI-builds succeed for ${SHA}?" >&2
-              echo "--- last gh errors ---" >&2; tail -n 20 "$ERRLOG" >&2
-              exit 1
-            fi
-            echo ">>> downloading ${name} (id=${aid})"
-            gh api "repos/${REPO}/actions/artifacts/${aid}/zip" > "handoff-${t}.zip" || { echo "ERROR: download ${name} failed" >&2; exit 1; }
-            unzip -o "handoff-${t}.zip" || { echo "ERROR: unzip ${name} failed" >&2; exit 1; }
-          done
-          mkdir -p proxysql
-          cd proxysql/
-          for tb in ../cache_*.tar.zst; do
-            [ -e "$tb" ] || continue
-            echo ">>> unpacking $(basename "$tb")"
-            zstd -d < "$tb" | tar -xf - || { echo "ERROR: unpack $tb failed" >&2; exit 1; }
-          done
-          rm -f ../cache_*.tar.zst ../handoff-*.zip
-
-      - name: Restore plugin .so files from _runtime_libs
+    - name: Restore selected product handoff
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py restore
+    - name: Restore plugin .so files from _runtime_libs
         # CI-builds stages plugins/mysqlx + plugins/genai .so files
         # into test/tap/tap/_runtime_libs/. Shared RE2 builds also stage
         # libre2.so.10. The _src cache path list is shared
@@ -125,98 +91,100 @@ jobs:
         # files ride along inside the _test cache instead. Copy them
         # back to plugins/mysqlx/ and plugins/genai/ (the paths the
         # soak harness's setup-infras.bash bind-mounts from).
-        run: |
-          cd proxysql/
-          mkdir -p plugins/mysqlx plugins/genai
-          [ -f test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so ] && \
-            cp test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so plugins/mysqlx/
-          [ -f test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so ] && \
-            cp test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so plugins/genai/
-          ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
+      run: |
+        cd proxysql/
+        mkdir -p plugins/mysqlx plugins/genai
+        [ -f test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so ] && \
+          cp test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so plugins/mysqlx/
+        [ -f test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so ] && \
+          cp test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so plugins/genai/
+        ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
 
-      - name: Install MySQL 8.4 runtime libs
+    - name: Install MySQL 8.4 runtime libs
         # The glibc 2.28 MySQL archive uses Noble's ncurses/tinfo 6 ABI.
         # Oracle's generic mysqld still requests libaio.so.1 while Noble's
         # time64 package exposes the same x86_64 ABI as libaio.so.1t64
         # (MySQL bug #119954). Provide that name in a job-private directory
         # so dbdeployer's library validation and the sandbox see it without
         # modifying the runner's system library directories.
-        run: |
-          # The runner image ships a pre-baked apt index that pins point-
-          # releases which get superseded and pulled from the mirror, so a
-          # bare install 404s when a runner's pre-baked index refers to
-          # "404 Not Found"). Refresh the index first so we resolve to the
-          # currently-published version.
-          sudo apt-get update -y
-          sudo apt-get install -y -qq --no-install-recommends \
-            libaio1t64 libnuma1 libncurses6 libtinfo6
-          MYSQLX_COMPAT_LIB_DIR="${RUNNER_TEMP}/mysqlx-compat-libs"
-          mkdir -p "${MYSQLX_COMPAT_LIB_DIR}"
-          LIBAIO_T64=$(ldconfig -p | awk '$1 == "libaio.so.1t64" { print $NF; exit }')
-          test -n "${LIBAIO_T64}"
-          ln -s "${LIBAIO_T64}" "${MYSQLX_COMPAT_LIB_DIR}/libaio.so.1"
-          echo "LD_LIBRARY_PATH=${MYSQLX_COMPAT_LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> "${GITHUB_ENV}"
+      run: |
+        # The runner image ships a pre-baked apt index that pins point-
+        # releases which get superseded and pulled from the mirror, so a
+        # bare install 404s when a runner's pre-baked index refers to
+        # "404 Not Found"). Refresh the index first so we resolve to the
+        # currently-published version.
+        sudo apt-get update -y
+        sudo apt-get install -y -qq --no-install-recommends \
+          libaio1t64 libnuma1 libncurses6 libtinfo6
+        MYSQLX_COMPAT_LIB_DIR="${RUNNER_TEMP}/mysqlx-compat-libs"
+        mkdir -p "${MYSQLX_COMPAT_LIB_DIR}"
+        LIBAIO_T64=$(ldconfig -p | awk '$1 == "libaio.so.1t64" { print $NF; exit }')
+        test -n "${LIBAIO_T64}"
+        ln -s "${LIBAIO_T64}" "${MYSQLX_COMPAT_LIB_DIR}/libaio.so.1"
+        echo "LD_LIBRARY_PATH=${MYSQLX_COMPAT_LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> "${GITHUB_ENV}"
 
-      - name: Checkout GH-Actions dbdeployer guard
+    - name: Checkout GH-Actions dbdeployer guard
         # The control test and ci-mysqlx.yml live on GH-Actions. The job
         # checks out the source SHA into proxysql/, which does not carry
         # either file (v3.0 only has the uppercase CI-mysqlx.yml caller).
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: ${{ github.repository }}
-          ref: GH-Actions
-          path: gh-actions
-          persist-credentials: false
-          sparse-checkout: |
-            .github/workflows/ci-mysqlx.yml
-            test/infra/control/test-ci-mysqlx-dbdeployer-install.bash
-          sparse-checkout-cone-mode: false
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: GH-Actions
+        path: gh-actions
+        persist-credentials: false
+        sparse-checkout: |
+          .github/workflows/ci-mysqlx.yml
+          test/infra/control/test-ci-mysqlx-dbdeployer-install.bash
+        sparse-checkout-cone-mode: false
 
-      - name: Verify dbdeployer install guard
-        run: gh-actions/test/infra/control/test-ci-mysqlx-dbdeployer-install.bash
+    - name: Verify dbdeployer install guard
+      run: |-
+        gh-actions/test/infra/control/test-ci-mysqlx-dbdeployer-install.bash
 
-      - name: Install dbdeployer
+
+    - name: Install dbdeployer
         # GitHub runner images may already provide dbdeployer. Its upstream
         # installer exits non-zero in that case, so install only when PATH
         # does not already resolve a usable binary. The installer leaves the
         # binary in cwd when run as non-root, hence the explicit PATH move.
-        run: |
-          if ! command -v dbdeployer >/dev/null 2>&1; then
-            installer="$(mktemp)"
-            trap 'rm -f "${installer}"' EXIT
-            curl --fail --location --proto '=https' --tlsv1.2 \
-              https://raw.githubusercontent.com/ProxySQL/dbdeployer/0982f16ad02a20df13caf02838d2722a1e304e4f/scripts/dbdeployer-install.sh \
-              -o "${installer}"
-            printf '%s  %s\n' '04ef082fb20dc3e5ad9b164dd96374e6c01034d068ccc891684fabc1be52f6b5' "${installer}" | sha256sum --check --status
-            bash "${installer}"
-            if [ -f dbdeployer ] && ! command -v dbdeployer >/dev/null 2>&1; then
-              sudo install -m 0755 dbdeployer /usr/local/bin/dbdeployer
-              rm -f dbdeployer
-            fi
+      run: |
+        if ! command -v dbdeployer >/dev/null 2>&1; then
+          installer="$(mktemp)"
+          trap 'rm -f "${installer}"' EXIT
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            https://raw.githubusercontent.com/ProxySQL/dbdeployer/0982f16ad02a20df13caf02838d2722a1e304e4f/scripts/dbdeployer-install.sh \
+            -o "${installer}"
+          printf '%s  %s\n' '04ef082fb20dc3e5ad9b164dd96374e6c01034d068ccc891684fabc1be52f6b5' "${installer}" | sha256sum --check --status
+          bash "${installer}"
+          if [ -f dbdeployer ] && ! command -v dbdeployer >/dev/null 2>&1; then
+            sudo install -m 0755 dbdeployer /usr/local/bin/dbdeployer
+            rm -f dbdeployer
           fi
-          dbdeployer --version
+        fi
+        dbdeployer --version
 
-      - name: Download and unpack MySQL 8.4
+    - name: Download and unpack MySQL 8.4
         # dbdeployer 2.1's download catalog only records the glibc 2.17
         # x86_64 archive. Keep dbdeployer's catalog-driven 8.4 version
         # selection, but request the matching official glibc 2.28 minimal
         # archive by URL so its clients use libncurses.so.6/libtinfo.so.6.
-        run: |
-          mkdir -p "$HOME/opt/mysql"
-          CATALOG_URL=$(dbdeployer downloads get-by-version 8.4 --newest --minimal --dry-run \
-            | awk '/^would download:/ { print $3; exit }')
-          test -n "${CATALOG_URL}"
-          MYSQL_URL=${CATALOG_URL/linux-glibc2.17-x86_64-minimal.tar.xz/linux-glibc2.28-x86_64-minimal.tar.xz}
-          case "${MYSQL_URL}" in
-            https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-8.4.*-linux-glibc2.28-x86_64-minimal.tar.xz) ;;
-            *) echo "ERROR: unexpected MySQL download URL: ${MYSQL_URL}" >&2; exit 1 ;;
-          esac
-          dbdeployer downloads get "${MYSQL_URL}" --retries-on-failure 3
-          TARBALL=$(ls -t mysql-8.4.*-linux-glibc2.28-x86_64-minimal.tar.xz 2>/dev/null | head -1)
-          test -n "${TARBALL}"
-          dbdeployer unpack "$TARBALL"
+      run: |
+        mkdir -p "$HOME/opt/mysql"
+        CATALOG_URL=$(dbdeployer downloads get-by-version 8.4 --newest --minimal --dry-run \
+          | awk '/^would download:/ { print $3; exit }')
+        test -n "${CATALOG_URL}"
+        MYSQL_URL=${CATALOG_URL/linux-glibc2.17-x86_64-minimal.tar.xz/linux-glibc2.28-x86_64-minimal.tar.xz}
+        case "${MYSQL_URL}" in
+          https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-8.4.*-linux-glibc2.28-x86_64-minimal.tar.xz) ;;
+          *) echo "ERROR: unexpected MySQL download URL: ${MYSQL_URL}" >&2; exit 1 ;;
+        esac
+        dbdeployer downloads get "${MYSQL_URL}" --retries-on-failure 3
+        TARBALL=$(ls -t mysql-8.4.*-linux-glibc2.28-x86_64-minimal.tar.xz 2>/dev/null | head -1)
+        test -n "${TARBALL}"
+        dbdeployer unpack "$TARBALL"
 
-      - name: Deploy MySQL 8.4 sandbox
+    - name: Deploy MySQL 8.4 sandbox
         # The three behaviours preserved from the old workflow:
         # (1) MySQL 8.4 needs --my-cnf-options "mysql_native_password=ON"
         #     because the auth plugin is no longer loaded by default;
@@ -225,70 +193,70 @@ jobs:
         # (3) Statements run on separate connections so default-role
         #     activation lands between GRANT R_CUSTOM and the CREATE
         #     USER statement.
-        run: |
-          VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1)
-          dbdeployer deploy single "$VERSION" --my-cnf-options "mysql_native_password=ON"
-          SANDBOX="$HOME/sandboxes/msb_${VERSION//./_}"
-          for i in $(seq 1 30); do
-            if "$SANDBOX/use" -e "SELECT 1" &>/dev/null; then
-              echo "MySQL $VERSION is ready"
-              break
-            fi
-            sleep 2
-          done
-          "$SANDBOX/use" <<SQL
-          GRANT R_CUSTOM TO 'msandbox'@'localhost';
-          SET DEFAULT ROLE R_CUSTOM, R_DO_IT_ALL TO 'msandbox'@'localhost';
-          SQL
-          "$SANDBOX/use" <<SQL
-          CREATE USER IF NOT EXISTS 'mysqlx_test'@'%' IDENTIFIED WITH mysql_native_password BY 'mysqlx_test';
-          SQL
-          "$SANDBOX/use" <<SQL
-          GRANT ALL PRIVILEGES ON *.* TO 'mysqlx_test'@'%';
-          SQL
-          "$SANDBOX/use" <<SQL
-          FLUSH PRIVILEGES;
-          SQL
+      run: |
+        VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1)
+        dbdeployer deploy single "$VERSION" --my-cnf-options "mysql_native_password=ON"
+        SANDBOX="$HOME/sandboxes/msb_${VERSION//./_}"
+        for i in $(seq 1 30); do
+          if "$SANDBOX/use" -e "SELECT 1" &>/dev/null; then
+            echo "MySQL $VERSION is ready"
+            break
+          fi
+          sleep 2
+        done
+        "$SANDBOX/use" <<SQL
+        GRANT R_CUSTOM TO 'msandbox'@'localhost';
+        SET DEFAULT ROLE R_CUSTOM, R_DO_IT_ALL TO 'msandbox'@'localhost';
+        SQL
+        "$SANDBOX/use" <<SQL
+        CREATE USER IF NOT EXISTS 'mysqlx_test'@'%' IDENTIFIED WITH mysql_native_password BY 'mysqlx_test';
+        SQL
+        "$SANDBOX/use" <<SQL
+        GRANT ALL PRIVILEGES ON *.* TO 'mysqlx_test'@'%';
+        SQL
+        "$SANDBOX/use" <<SQL
+        FLUSH PRIVILEGES;
+        SQL
 
-      - name: Resolve mysqlx port
+    - name: Resolve mysqlx port
         # dbdeployer's port scheme is <major><minor><patch> for classic
         # and that + 10000 for X (8408 -> 18408). Read it from the
         # sandbox's my.sandbox.cnf so we don't hard-code an off-by-one
         # if dbdeployer's convention shifts.
-        run: |
-          VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1)
-          SANDBOX="$HOME/sandboxes/msb_${VERSION//./_}"
-          MYSQLX_PORT=$(grep '^mysqlx-port' "$SANDBOX/my.sandbox.cnf" | tail -1 | sed 's/^mysqlx-port=//')
-          for i in $(seq 1 30); do
-            if timeout 2 bash -c "echo > /dev/tcp/127.0.0.1/$MYSQLX_PORT" 2>/dev/null; then
-              echo "MYSQLX_E2E_PORT=$MYSQLX_PORT" >> "$GITHUB_ENV"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "ERROR: X Protocol not reachable on port $MYSQLX_PORT" >&2
-          exit 1
+      run: |
+        VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1)
+        SANDBOX="$HOME/sandboxes/msb_${VERSION//./_}"
+        MYSQLX_PORT=$(grep '^mysqlx-port' "$SANDBOX/my.sandbox.cnf" | tail -1 | sed 's/^mysqlx-port=//')
+        for i in $(seq 1 30); do
+          if timeout 2 bash -c "echo > /dev/tcp/127.0.0.1/$MYSQLX_PORT" 2>/dev/null; then
+            echo "MYSQLX_E2E_PORT=$MYSQLX_PORT" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "ERROR: X Protocol not reachable on port $MYSQLX_PORT" >&2
+        exit 1
 
-      - name: Log in to GHCR and pull build image
-        env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set +e
-          attempt=0
-          max_attempts=5
-          while [ $attempt -lt $max_attempts ]; do
-            attempt=$((attempt + 1))
-            if echo "$GHCR_TOKEN" | docker login ghcr.io \
-                -u "$GHCR_USER" --password-stdin \
-                && docker pull proxysql/packaging:build-ubuntu24-v4.0.0; then
-              exit 0
-            fi
-            sleep $((attempt * 10))
-          done
-          exit 1
+    - name: Log in to GHCR and pull build image
+      env:
+        GHCR_USER: ${{ github.actor }}
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set +e
+        attempt=0
+        max_attempts=5
+        while [ $attempt -lt $max_attempts ]; do
+          attempt=$((attempt + 1))
+          if echo "$GHCR_TOKEN" | docker login ghcr.io \
+              -u "$GHCR_USER" --password-stdin \
+              && docker pull proxysql/packaging:build-ubuntu24-v4.0.0; then
+            exit 0
+          fi
+          sleep $((attempt * 10))
+        done
+        exit 1
 
-      - name: Run mysqlx e2e tests inside build image (--network host -> dbdeployer mysqlx)
+    - name: Run mysqlx e2e tests inside build image (--network host -> dbdeployer mysqlx)
         # The three e2e binaries (test_mysqlx_admin_tables-t,
         # test_mysqlx_plugin_load-t, test_mysqlx_e2e_handshake-t) talk
         # directly to the dbdeployer MySQL 8.4 instance on 127.0.0.1:
@@ -296,56 +264,62 @@ jobs:
         # of 33060 which is wrong for this dbdeployer arrangement; we
         # save the discovered port, source env.sh, then restore the
         # discovered port so the test connects to the right place.
-        run: |
-          docker run --rm \
-            --network host \
-            -v "$(pwd)/proxysql:/opt/proxysql" \
-            -e "MYSQLX_E2E_PORT=${MYSQLX_E2E_PORT}" \
-            -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap/_runtime_libs \
-            -w /opt/proxysql/test/tap/tests \
-            proxysql/packaging:build-ubuntu24-v4.0.0 \
-            bash -c '
-              set -e
-              DISCOVERED="${MYSQLX_E2E_PORT:?missing}"
-              source /opt/proxysql/test/tap/groups/mysqlx-e2e/env.sh
-              export MYSQLX_E2E_PORT="$DISCOVERED"
-              ran=0
-              for t in test_mysqlx_admin_tables-t test_mysqlx_plugin_load-t test_mysqlx_e2e_handshake-t; do
-                if [ -x "$t" ]; then
-                  echo ">>> ./$t"
-                  ./"$t" || exit 1
-                  ran=1
-                fi
-              done
-              if [ "$ran" = "0" ]; then
-                echo "ERROR: no test_mysqlx_*-t binaries found" >&2
-                exit 1
+      run: |
+        docker run --rm \
+          --network host \
+          -v "$(pwd)/proxysql:/opt/proxysql" \
+          -e "MYSQLX_E2E_PORT=${MYSQLX_E2E_PORT}" \
+          -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap/_runtime_libs \
+          -w /opt/proxysql/test/tap/tests \
+          proxysql/packaging:build-ubuntu24-v4.0.0 \
+          bash -c '
+            set -e
+            DISCOVERED="${MYSQLX_E2E_PORT:?missing}"
+            source /opt/proxysql/test/tap/groups/mysqlx-e2e/env.sh
+            export MYSQLX_E2E_PORT="$DISCOVERED"
+            ran=0
+            for t in test_mysqlx_admin_tables-t test_mysqlx_plugin_load-t test_mysqlx_e2e_handshake-t; do
+              if [ -x "$t" ]; then
+                echo ">>> ./$t"
+                ./"$t" || exit 1
+                ran=1
               fi
-            '
+            done
+            if [ "$ran" = "0" ]; then
+              echo "ERROR: no test_mysqlx_*-t binaries found" >&2
+              exit 1
+            fi
+          '
 
-      - name: Cleanup sandbox
-        if: always()
-        run: |
-          VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1 || echo "")
-          [ -n "$VERSION" ] && dbdeployer delete single "$VERSION" 2>/dev/null || true
+    - name: Cleanup sandbox
+      if: always()
+      run: |
+        VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1 || echo "")
+        [ -n "$VERSION" ] && dbdeployer delete single "$VERSION" 2>/dev/null || true
 
-      - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-        if: always()
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          check_id: ${{ steps.checks.outputs.check_id }}
-          repo: ${{ github.repository }}
-          sha: ${{ env.SHA }}
-          conclusion: ${{ job.status }}
-          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-
-  # mysqlx-soak-g1 runs the operational harness scripts inside the
-  # standard docker-isolated TAP infra. Mirrors ci-legacy-g4 exactly:
-  # restore caches, pull the test-runner image, ensure-infras + run-
-  # tests-isolated. The plugin .so came from the chassis build in
-  # CI-builds; start-proxysql-isolated.bash bind-mounts it into the
-  # ProxySQL container per PROXYSQL_LOAD_MYSQLX_PLUGIN=1 in
-  # mysqlx-soak/env.sh.
+    - name: Complete selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ always() }}
+    needs:
+    - tier-context
+    name: ${{ matrix.check_name }}
+    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['e2e-tests'][0] != null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.tier-context.outputs.matrices)['e2e-tests'] || fromJson('[{}]') }}
+    env:
+      SHA: ${{ needs.tier-context.outputs.sha }}
+      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
+      CI_LEG: ${{ toJson(matrix) }}
+      TIER: ${{ matrix.tier }}
+      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
   soak-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -353,105 +327,52 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        connector_version: ['9.7.0', '26.7.0']
+        include: ${{ fromJson(needs.tier-context.outputs.matrices)['soak-tests'] || fromJson('[{}]') }}
     permissions:
       actions: read
       checks: write
       contents: read
       packages: read
     steps:
-      - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-        id: checks
-        if: always()
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: '${{ github.workflow }} / ${{ github.job }} (Connector/Python ${{ matrix.connector_version }})'
-          repo: ${{ github.repository }}
-          sha: ${{ env.SHA }}
-          status: 'in_progress'
-          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-context.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Start selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: 'proxysql'
+        sparse-checkout: |
+          test/infra
+          test/tap/groups
+          test/scripts
 
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ env.SHA }}
-          path: 'proxysql'
-          sparse-checkout: |
-            test/infra
-            test/tap/groups
-            test/scripts
+    - name: Verify Connector/Python Dockerfile pins
+      run: |-
+        proxysql/test/infra/docker-base/test-connector-version-pins.bash
 
-      - name: Verify Connector/Python Dockerfile pins
-        run: proxysql/test/infra/docker-base/test-connector-version-pins.bash
 
-      - name: Download build handoff
-        # Build payload arrives as workflow artifacts, not an Actions cache:
-        # GitHub made cache writes read-only for workflow_run/untrusted triggers
-        # (changelog 2026-06-26). Download the per-type handoff artifacts and
-        # unpack into proxysql/. The following 'Restore plugin .so' step then
-        # copies the mysqlx/genai .so out of the unpacked test tree as before.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-          BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-          HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
-          HANDOFF_TYPES: full
-        run: |
-          set -uo pipefail
-          command -v zstd >/dev/null || sudo apt-get install -y zstd
-          # Resolve the build-handoff artifact robustly. Self-hosted runners can
-          # pick up this job within ~1 min of CI-builds finishing -- earlier than
-          # GitHub-hosted runners queue -- which lands inside the window where
-          # GitHub's GLOBAL name-filtered artifact index (artifacts?name=) still
-          # lags behind creation, returning empty for an artifact that already
-          # exists. Prefer resolving via the triggering CI-builds run's OWN
-          # artifact list (run-scoped: populated as soon as the artifact is
-          # attached, not subject to the global-index lag); fall back to the
-          # global name query. Retry on a bounded budget and surface the real gh
-          # error, so a genuine build failure is distinguishable from transient lag.
-          : "${HANDOFF_MAX_ATTEMPTS:=20}"   # bounded: 20 x 15s = up to ~5 min
-          ERRLOG="$(mktemp)"
-          resolve_aid() {
-            local name="$1" out=""
-            if [ -n "${BUILD_RUN_ID:-}" ]; then
-              out=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
-                      --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" 2>>"$ERRLOG") || true
-              [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-            fi
-            out=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
-                    --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>>"$ERRLOG") || true
-            [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-            return 1
-          }
-          for t in $HANDOFF_TYPES; do
-            name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-${t}"
-            aid=""
-            for attempt in $(seq 1 "$HANDOFF_MAX_ATTEMPTS"); do
-              aid=$(resolve_aid "$name") && [ -n "$aid" ] && break
-              aid=""
-              echo ">>> ${name} not resolvable yet (${attempt}/${HANDOFF_MAX_ATTEMPTS}); sleeping 15s"; sleep 15
-            done
-            if [ -z "$aid" ]; then
-              echo "ERROR: handoff artifact ${name} not found after ${HANDOFF_MAX_ATTEMPTS} attempts (build_run=${BUILD_RUN_ID:-n/a}) -- did CI-builds succeed for ${SHA}?" >&2
-              echo "--- last gh errors ---" >&2; tail -n 20 "$ERRLOG" >&2
-              exit 1
-            fi
-            echo ">>> downloading ${name} (id=${aid})"
-            gh api "repos/${REPO}/actions/artifacts/${aid}/zip" > "handoff-${t}.zip" || { echo "ERROR: download ${name} failed" >&2; exit 1; }
-            unzip -o "handoff-${t}.zip" || { echo "ERROR: unzip ${name} failed" >&2; exit 1; }
-          done
-          mkdir -p proxysql
-          cd proxysql/
-          for tb in ../cache_*.tar.zst; do
-            [ -e "$tb" ] || continue
-            echo ">>> unpacking $(basename "$tb")"
-            zstd -d < "$tb" | tar -xf - || { echo "ERROR: unpack $tb failed" >&2; exit 1; }
-          done
-          rm -f ../cache_*.tar.zst ../handoff-*.zip
-
-      - name: Restore plugin .so files from _runtime_libs
+    - name: Restore selected product handoff
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py restore
+    - name: Restore plugin .so files from _runtime_libs
         # CI-builds stages plugins/mysqlx + plugins/genai .so files
         # into test/tap/tap/_runtime_libs/. Shared RE2 builds also stage
         # libre2.so.10. The _src cache path list is shared
@@ -460,100 +381,121 @@ jobs:
         # files ride along inside the _test cache instead. Copy them
         # back to plugins/mysqlx/ and plugins/genai/ (the paths the
         # soak harness's setup-infras.bash bind-mounts from).
-        run: |
-          cd proxysql/
-          mkdir -p plugins/mysqlx plugins/genai
-          [ -f test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so ] && \
-            cp test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so plugins/mysqlx/
-          [ -f test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so ] && \
-            cp test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so plugins/genai/
-          ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
+      run: |
+        cd proxysql/
+        mkdir -p plugins/mysqlx plugins/genai
+        [ -f test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so ] && \
+          cp test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so plugins/mysqlx/
+        [ -f test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so ] && \
+          cp test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so plugins/genai/
+        ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
 
-      - name: Verify binary + plugin .so
-        run: |
-          chmod +x proxysql/src/proxysql
-          file proxysql/src/proxysql
-          test -f proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
-            || { echo "ERROR: ProxySQL_MySQLX_Plugin.so missing from src cache"; exit 1; }
+    - name: Verify binary + plugin .so
+      run: |
+        chmod +x proxysql/src/proxysql
+        file proxysql/src/proxysql
+        test -f proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
+          || { echo "ERROR: ProxySQL_MySQLX_Plugin.so missing from src cache"; exit 1; }
 
-      - name: Build CI base image
+    - name: Build CI base image
         # Same pattern ci-legacy-g4 uses: build the test-runner image
         # from test/infra/docker-base. Includes mysqlx-connector-python
         # so the soak harness scripts (behavioral_validation.py,
         # stress.py) can run inside the test-runner container.
-        env:
-          MYSQLX_SOAK_IMAGE: proxysql-ci-base:mysqlx-connector-${{ matrix.connector_version }}
-        run: |
-          cd proxysql/test/infra/docker-base
-          docker build \
-            --build-arg MYSQL_CONNECTOR_PYTHON_VERSION=${{ matrix.connector_version }} \
-            -t "$MYSQLX_SOAK_IMAGE" \
-            -t proxysql-ci-base:latest \
-            .
-          docker run --rm -i "$MYSQLX_SOAK_IMAGE" python3 - "${{ matrix.connector_version }}" <<'PY'
-          from importlib.metadata import version
-          import sys
+      env:
+        MYSQLX_SOAK_IMAGE: proxysql-ci-base:mysqlx-connector-${{ matrix.connector_version }}
+      run: |
+        cd proxysql/test/infra/docker-base
+        docker build \
+          --build-arg MYSQL_CONNECTOR_PYTHON_VERSION=${{ matrix.connector_version }} \
+          -t "$MYSQLX_SOAK_IMAGE" \
+          -t proxysql-ci-base:latest \
+          .
+        docker run --rm -i "$MYSQLX_SOAK_IMAGE" python3 - "${{ matrix.connector_version }}" <<'PY'
+        from importlib.metadata import version
+        import sys
 
-          expected = sys.argv[1]
-          packages = ("mysql-connector-python", "mysqlx-connector-python")
-          actual = {package: version(package) for package in packages}
-          print(actual)
-          if any(found != expected for found in actual.values()):
-              raise SystemExit(f"expected {expected}, got {actual}")
-          PY
+        expected = sys.argv[1]
+        packages = ("mysql-connector-python", "mysqlx-connector-python")
+        actual = {package: version(package) for package in packages}
+        print(actual)
+        if any(found != expected for found in actual.values()):
+            raise SystemExit(f"expected {expected}, got {actual}")
+        PY
 
-      - name: Start infrastructure
-        run: |
-          cd proxysql
-          export INFRA_ID="ci-mysqlx-soak-${GITHUB_RUN_ID}"
-          export TAP_GROUP="mysqlx-soak"
-          [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
-          test/infra/control/ensure-infras.bash
+    - name: Start infrastructure
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-mysqlx-soak-${GITHUB_RUN_ID}-${{ matrix.tier }}-${{ github.run_id }}"
+        export TAP_GROUP="mysqlx-soak"
+        [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
+        test/infra/control/ensure-infras.bash
 
-      - name: Run mysqlx-soak-g1 tests
-        timeout-minutes: 90
-        run: |
-          cd proxysql
-          export INFRA_ID="ci-mysqlx-soak-${GITHUB_RUN_ID}"
-          export TAP_GROUP="mysqlx-soak-g1"
-          # Short stress so the CI run completes inside a reasonable
-          # window; long soaks invoke stress.py directly with --duration
-          # 24h on staging (issue #5677).
-          export MYSQLX_SOAK_DURATION="60s"
-          export MYSQLX_SOAK_CONCURRENT="20"
-          [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
-          test/infra/control/run-tests-isolated.bash
+    - name: Run mysqlx-soak-g1 tests
+      timeout-minutes: 90
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-mysqlx-soak-${GITHUB_RUN_ID}-${{ matrix.tier }}-${{ github.run_id }}"
+        export TAP_GROUP="mysqlx-soak-g1"
+        # Short stress so the CI run completes inside a reasonable
+        # window; long soaks invoke stress.py directly with --duration
+        # 24h on staging (issue #5677).
+        export MYSQLX_SOAK_DURATION="60s"
+        export MYSQLX_SOAK_CONCURRENT="20"
+        [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
+        test/infra/control/run-tests-isolated.bash
 
-      - name: Cleanup
-        if: always()
-        run: |
-          set +e
-          cd proxysql
-          export INFRA_ID="ci-mysqlx-soak-${GITHUB_RUN_ID}"
-          export TAP_GROUP="mysqlx-soak"
-          docker logs proxysql.ci-mysqlx-soak-${GITHUB_RUN_ID} 2>&1 | tail -50 || true
-          test/infra/control/stop-proxysql-isolated.bash || true
-          test/infra/control/destroy-infras.bash || true
+    - name: Cleanup
+      if: always()
+      run: |
+        set +e
+        cd proxysql
+        export INFRA_ID="ci-mysqlx-soak-${GITHUB_RUN_ID}-${{ matrix.tier }}-${{ github.run_id }}"
+        export TAP_GROUP="mysqlx-soak"
+        docker logs proxysql.ci-mysqlx-soak-${GITHUB_RUN_ID}-${{ matrix.tier }}-${{ github.run_id }} 2>&1 | tail -50 || true
+        test/infra/control/stop-proxysql-isolated.bash || true
+        test/infra/control/destroy-infras.bash || true
 
-      - name: Fix artifact permissions
-        if: ${{ failure() && !cancelled() }}
-        run: |
-          sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: |
+        sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
 
-      - name: Archive logs
-        if: ${{ failure() && !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ${{ github.workflow }}-${{ env.SHA }}-${{ github.job }}-connector-${{ matrix.connector_version }}-run#${{ github.run_number }}
-          path: |
-            proxysql/ci_*_logs/
+    - name: Archive logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-${{ github.job }}-connector-${{ matrix.connector_version }}-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
+        path: |
+          proxysql/ci_*_logs/
 
-      - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-        if: always()
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          check_id: ${{ steps.checks.outputs.check_id }}
-          repo: ${{ github.repository }}
-          sha: ${{ env.SHA }}
-          conclusion: ${{ job.status }}
-          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    - name: Complete selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ always() }}
+    needs:
+    - tier-context
+    name: ${{ matrix.check_name }}
+    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['soak-tests'][0] != null }}
+    env:
+      SHA: ${{ needs.tier-context.outputs.sha }}
+      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
+      CI_LEG: ${{ toJson(matrix) }}
+      TIER: ${{ matrix.tier }}
+      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
+  tier-summary:
+    needs:
+    - tier-context
+    - e2e-tests
+    - soak-tests
+    if: ${{ always() && needs.tier-context.result == 'success' }}
+    uses: ./.github/workflows/ci-tier-summary.yml
+    with:
+      binding: ${{ needs.tier-context.outputs.binding }}
+      control_ref: ${{ needs.tier-context.outputs.control_sha }}
+    secrets: inherit

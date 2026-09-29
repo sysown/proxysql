@@ -7,10 +7,31 @@ on:
       trigger:
         type: string
 
+      consumer_id:
+        type: string
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: '1'
 env:
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
+  tier-context:
+    uses: ./.github/workflows/ci-tier-context.yml
+    with:
+      trigger: ${{ inputs.trigger }}
+      consumer_id: ${{ inputs.consumer_id }}
+      control_ref: ${{ inputs.control_ref }}
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
+    secrets: inherit
   tests:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
@@ -33,19 +54,28 @@ jobs:
       BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src
       MATRIX: '(mariadb10-binlog,genai-gcov)'
 
+      SHA: ${{ needs.tier-context.outputs.sha }}
+      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
+      CI_LEG: ${{ toJson(matrix) }}
+      TIER: ${{ matrix.tier }}
+      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
     steps:
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      id: checks
-      continue-on-error: true
-      if: always()
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        status: 'in_progress'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-context.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Start selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout repository
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
@@ -63,56 +93,12 @@ jobs:
           test/tap
           test/scripts
 
-    - name: Download GCOV build handoff
+    - name: Restore selected product handoff
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        REPO: ${{ github.repository }}
-        SHA: ${{ env.SHA }}
-        BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
-        HANDOFF_TYPES: full
+        GITHUB_JSON: ${{ toJson(github) }}
       run: |
-        set -euo pipefail
-        command -v zstd >/dev/null || sudo apt-get install -y zstd
-        errors="$(mktemp)"
-        resolve_artifact() {
-          local name="$1" artifact_id=""
-          if [ -n "${BUILD_RUN_ID}" ]; then
-            artifact_id=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
-              --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" \
-              2>>"${errors}") || true
-            [ -n "${artifact_id}" ] && { printf '%s' "${artifact_id}"; return 0; }
-          fi
-          artifact_id=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
-            --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' \
-            2>>"${errors}") || true
-          [ -n "${artifact_id}" ] && { printf '%s' "${artifact_id}"; return 0; }
-          return 1
-        }
-        for type in ${HANDOFF_TYPES}; do
-          name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-${type}"
-          artifact_id=""
-          for attempt in $(seq 1 20); do
-            artifact_id=$(resolve_artifact "${name}") && [ -n "${artifact_id}" ] && break
-            artifact_id=""
-            echo "${name} not available (${attempt}/20); waiting 15 seconds"
-            sleep 15
-          done
-          if [ -z "${artifact_id}" ]; then
-            echo "ERROR: build handoff ${name} was not found" >&2
-            tail -n 20 "${errors}" >&2 || true
-            exit 1
-          fi
-          gh api "repos/${REPO}/actions/artifacts/${artifact_id}/zip" > "handoff-${type}.zip"
-          unzip -o "handoff-${type}.zip"
-        done
-        mkdir -p proxysql
-        cd proxysql
-        for archive in ../cache_*.tar.zst; do
-          [ -e "${archive}" ] || continue
-          zstd -d < "${archive}" | tar -xf -
-        done
-
+        python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Verify GCOV daemon binary
       run: |
         chmod +x proxysql/src/proxysql
@@ -148,9 +134,10 @@ jobs:
         cd proxysql
         export INFRA_ID=ci-mariadb10-binlog-g1
         export TAP_GROUP=mariadb10-binlog-g1
-        export COVERAGE=1
+        export COVERAGE="${COVERAGE}"
         test/infra/control/run-tests-isolated.bash
 
+      if: ${{ matrix.coverage && (success()) }}
     - name: Cleanup
       if: always()
       run: |
@@ -165,30 +152,34 @@ jobs:
 
     - name: Fix artifact permissions
       if: ${{ failure() && !cancelled() }}
-      run: sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+      run: |-
+        sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+
 
     - name: Archive failure logs
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: proxysql/ci_*_logs/
 
     - name: Archive coverage report
-      if: ${{ !cancelled() }}
+      if: ${{ matrix.coverage && (!cancelled()) }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: proxysql/ci_infra_logs/ci-mariadb10-binlog-g1/coverage-report/
         if-no-files-found: ignore
 
     - name: Require non-empty binlog coverage LCOV
       id: require_lcov
-      if: always()
-      run: test -s proxysql/ci_infra_logs/ci-mariadb10-binlog-g1/coverage-report/ci-mariadb10-binlog-g1.info
+      if: ${{ matrix.coverage && (always()) }}
+      run: |-
+        test -s proxysql/ci_infra_logs/ci-mariadb10-binlog-g1/coverage-report/ci-mariadb10-binlog-g1.info
+
 
     - name: Upload coverage to Codecov
-      if: ${{ always() && steps.require_lcov.outcome == 'success' }}
+      if: ${{ matrix.coverage && (always() && steps.require_lcov.outcome == 'success') }}
       continue-on-error: true
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:
@@ -205,13 +196,30 @@ jobs:
         fail_ci_if_error: false
         verbose: true
 
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      continue-on-error: true
-      if: ${{ always() && steps.checks.outputs.check_id != '' }}
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        check_id: ${{ steps.checks.outputs.check_id }}
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        conclusion: ${{ job.status }}
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    - name: Complete selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ always() }}
+    needs:
+    - tier-context
+    name: ${{ matrix.check_name }}
+    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['tests'][0] != null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.tier-context.outputs.matrices)['tests'] || fromJson('[{}]') }}
+  tier-summary:
+    needs:
+    - tier-context
+    - tests
+    if: ${{ always() && needs.tier-context.result == 'success' }}
+    uses: ./.github/workflows/ci-tier-summary.yml
+    with:
+      binding: ${{ needs.tier-context.outputs.binding }}
+      control_ref: ${{ needs.tier-context.outputs.control_sha }}
+    secrets: inherit

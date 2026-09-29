@@ -52,8 +52,11 @@ def publish_result(plan,key,status,api,run_id,attempt):
 
 def reconcile(plan,api):
     observed=[];runs={}
+    all_checks=api.pages(f"repos/{plan['repository']}/commits/{plan['sha']}/check-runs?filter=all",'check_runs')
+    by_id={c['id']:c for c in all_checks}
     for check in plan['checks']:
-        result=api.request(f"repos/{plan['repository']}/check-runs/{check['check_id']}")
+        result=by_id.get(check['check_id'])
+        if result is None:continue
         if result.get('external_id')!=plan['execution_id']+':'+check['key']:raise ValueError('foreign check identity')
         row=dict(result,key=check['key'],execution_id=plan['execution_id'])
         try:meta=json.loads(result.get('output',{}).get('text') or '{}')

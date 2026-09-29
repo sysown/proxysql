@@ -3,6 +3,10 @@ name: CI-trigger
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      control_ref:
+        type: string
+        default: GH-Actions
 
 jobs:
   trigger:
@@ -14,148 +18,17 @@ jobs:
     timeout-minutes: 240
 
     steps:
-    - name: Trigger workflow_run[in_progress]
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ inputs.control_ref }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Wait for this trigger execution build
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
       run: |
-        set -euo pipefail
-
-        readonly API_ERROR_WINDOW_SECONDS="${CI_API_ERROR_WINDOW_SECONDS:-300}"
-        readonly API_CALL_TIMEOUT_SECONDS="${CI_API_CALL_TIMEOUT_SECONDS:-30}"
-        readonly API_RETRY_INITIAL_SECONDS="${CI_API_RETRY_INITIAL_SECONDS:-5}"
-        readonly API_RETRY_MAX_SECONDS="${CI_API_RETRY_MAX_SECONDS:-30}"
-        readonly DISCOVERY_POLL_SECONDS="${CI_DISCOVERY_POLL_SECONDS:-20}"
-        readonly STATUS_POLL_SECONDS="${CI_STATUS_POLL_SECONDS:-30}"
-        readonly INITIAL_DELAY_SECONDS="${CI_INITIAL_DELAY_SECONDS:-5}"
-        readonly GH_BIN="${GH_BIN:-gh}"
-        readonly REPOSITORY="${{ github.repository }}"
-
-        RUNNAME1="${{ github.event.after || github.sha }}"
-        RUNNAME2="${{ github.event.pull_request.head.sha || github.sha }}"
-        RUNNAME3="${{ github.sha }}"
-        GH_RESPONSE=""
-
-        gh_poll() {
-          local operation="$1"
-          shift
-
-          local deadline=$((SECONDS + API_ERROR_WINDOW_SECONDS))
-          local delay="${API_RETRY_INITIAL_SECONDS}"
-          local attempt=1
-          local response=""
-          local status=0
-
-          while true; do
-            local remaining=$((deadline - SECONDS))
-            if ((remaining <= 0)); then
-              echo "::error::GitHub API polling failed for ${API_ERROR_WINDOW_SECONDS} consecutive seconds while ${operation}"
-              return 1
-            fi
-
-            local call_timeout="${API_CALL_TIMEOUT_SECONDS}"
-            if ((call_timeout > remaining)); then
-              call_timeout="${remaining}"
-            fi
-
-            if response=$(timeout --signal=KILL "${call_timeout}s" "${GH_BIN}" "$@" 2>&1); then
-              GH_RESPONSE="${response}"
-              return 0
-            else
-              status=$?
-            fi
-
-            remaining=$((deadline - SECONDS))
-            if ((remaining <= 0)); then
-              echo "::error::GitHub API polling failed for ${API_ERROR_WINDOW_SECONDS} consecutive seconds while ${operation}; last exit ${status}"
-              printf '%s\n' "${response}"
-              return 1
-            fi
-
-            local sleep_for="${delay}"
-            if ((sleep_for > remaining)); then
-              sleep_for="${remaining}"
-            fi
-            echo "::warning::GitHub API call failed while ${operation} (attempt ${attempt}, exit ${status}); retrying in ${sleep_for}s"
-            printf '%s\n' "${response}"
-            sleep "${sleep_for}"
-
-            if ((delay < API_RETRY_MAX_SECONDS)); then
-              delay=$((delay * 2))
-              if ((delay > API_RETRY_MAX_SECONDS)); then
-                delay="${API_RETRY_MAX_SECONDS}"
-              fi
-            fi
-            attempt=$((attempt + 1))
-          done
-        }
-
-        echo "Get CI-builds run id for '${RUNNAME1}|${RUNNAME2}|${RUNNAME3}' ..."
-        sleep "${INITIAL_DELAY_SECONDS}"
-
-        RUNID=""
-        while [[ -z "${RUNID}" ]]; do
-          gh_poll "discovering CI-builds" -R "${REPOSITORY}" run list \
-            --workflow CI-builds --limit 100 \
-            --json databaseId,displayTitle,status
-
-          for expected_sha in "${RUNNAME1}" "${RUNNAME2}" "${RUNNAME3}"; do
-            [[ -n "${expected_sha}" ]] || continue
-            RUNID=$(jq -r --arg sha "${expected_sha}" \
-              'first(.[] | select(.displayTitle | contains($sha)) | .databaseId) // empty' \
-              <<<"${GH_RESPONSE}")
-            [[ -z "${RUNID}" ]] || break
-          done
-
-          if [[ -z "${RUNID}" ]]; then
-            echo "CI-builds run is not visible yet; retrying in ${DISCOVERY_POLL_SECONDS}s"
-            sleep "${DISCOVERY_POLL_SECONDS}"
-          fi
-        done
-
-        echo "Found CI-builds run ${RUNID}; waiting for its confirmed conclusion"
-        while true; do
-          gh_poll "querying CI-builds run ${RUNID}" -R "${REPOSITORY}" run view "${RUNID}" \
-            --json status,conclusion
-
-          run_status=$(jq -r '.status // empty' <<<"${GH_RESPONSE}")
-          run_conclusion=$(jq -r '.conclusion // empty' <<<"${GH_RESPONSE}")
-          if [[ -z "${run_status}" ]]; then
-            echo "::error::GitHub API returned no status for CI-builds run ${RUNID}"
-            exit 1
-          fi
-
-          if [[ "${run_status}" != "completed" ]]; then
-            echo "CI-builds run ${RUNID} is ${run_status}; polling again in ${STATUS_POLL_SECONDS}s"
-            sleep "${STATUS_POLL_SECONDS}"
-            continue
-          fi
-
-          if [[ "${run_conclusion}" == "success" ]]; then
-            echo "CI-builds run ${RUNID} completed successfully"
-            break
-          fi
-
-          echo "::error::CI-builds run ${RUNID} completed with conclusion '${run_conclusion:-unknown}'"
-          exit 1
-        done
-
-    - name: Trigger workflow_run[completed]
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        echo "Cleanup skipped ..."
-        # Housekeeping only: opportunistically delete skipped runs. Per-call
-        # failures (typically HTTP 401 "Bad credentials" on runs that the
-        # PR-scoped GITHUB_TOKEN does not have rights to delete -- e.g. runs
-        # from forked PRs or other branches) MUST NOT fail this step,
-        # because failing this step marks the CI-trigger job as 'failure',
-        # which prevents every downstream test workflow from firing (they
-        # gate on workflow_run.conclusion == 'success'). See issue #5811.
-        gh -R ${{ github.repository }} run list -s skipped -L 100 --json databaseId -q '.[].databaseId' \
-            | while read -r id; do
-                if ! gh -R ${{ github.repository }} run delete "$id" 2>&1; then
-                    echo "  skip run $id (no rights / already gone)"
-                fi
-            done
-        echo "Triggered workflow_run[completed]: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'"
-        
+        python3 ci-control/.github/scripts/ci_tier_runtime.py wait-build
