@@ -184,9 +184,7 @@ jobs:
         sed -i 's/timeout -v -s1 800 //' run-tests.bash
         
         # set tested database infra
-        sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
-        sed -i 's/^fn_test_proxysql_dev m/#fn_test_proxysql_dev m/' run-tests.bash
-        sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
+        # the database under test is selected by run-tests.bash itself (INFRADB -> fn_test ${DB})
 
     - name: Run tests
       timeout-minutes: 90
