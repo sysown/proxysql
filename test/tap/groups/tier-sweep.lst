@@ -20,9 +20,15 @@
 # Do not hand-maintain group membership beyond adding/removing names; the lint
 # check fails if this file and groups.json disagree in either direction.
 #
-# Verified at the time of writing: 54 groups, 805 test-runs on v3.0, 867 on v3.1.
+#
 ai-g1
 ai-g2
+cluster_sim_aurora-g1
+cluster_sim_galera-g1
+cluster_sim_group_repl-g1
+cluster_sim_rds_bgd-g1
+cluster_sim_read_only-g1
+cluster_sim_repl_lag-g1
 legacy-binlog-g1
 legacy-clickhouse-g1
 legacy-g1

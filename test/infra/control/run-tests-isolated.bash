@@ -206,16 +206,27 @@ if [ "${SKIP_PROXYSQL}" = "1" ]; then
         echo ">>> WARNING: ProxySQL binary not found at ${PROXYSQL_BIN}, skipping version filtering"
     fi
 
-    # Extract test names belonging to this group, filtering by @proxysql_min_version
-    TEST_NAMES=$(python3 -c "
+    # Extract test names belonging to this group, filtering by @proxysql_min_version.
+    #
+    # The first line emitted is a stats marker carrying how many tests the group
+    # has in total and how many were dropped by TEST_PY_TAP_EXCL. The empty-
+    # selection branch below needs that to tell "the tier's version filter
+    # removed everything" (a legitimate skip) from "an exclusion filter removed
+    # everything" (a caller mistake that must not be reported as a healthy
+    # skip). Stripped from TEST_NAMES below.
+    TEST_SELECTION="$(python3 -c "
 import json, sys, os, re
 from packaging import version
 proxysql_ver = '${PROXYSQL_VERSION}'
 excl = os.environ.get('TEST_PY_TAP_EXCL', '')
 with open('${GROUPS_JSON}') as f:
     groups = json.load(f)
+total = 0
+excluded = 0
+selected = []
 for test_name, test_groups in sorted(groups.items()):
     if '${TAP_GROUP}' in test_groups:
+        total += 1
         # Check @proxysql_min_version tag
         skip = False
         if proxysql_ver:
@@ -227,10 +238,19 @@ for test_name, test_groups in sorted(groups.items()):
                         skip = True
                     break
         if not skip and excl and re.search(excl, test_name):
+            excluded += 1
             continue
         if not skip:
-            print(test_name)
-")
+            selected.append(test_name)
+print('#STATS total=%d excluded=%d' % (total, excluded))
+for name in selected:
+    print(name)
+")"
+    GROUP_TEST_COUNT="$(printf '%s\n' "${TEST_SELECTION}" | sed -n '1s/^#STATS total=\([0-9]*\) excluded=\([0-9]*\)$/\1/p')"
+    EXCL_DROPPED="$(printf '%s\n' "${TEST_SELECTION}" | sed -n '1s/^#STATS total=\([0-9]*\) excluded=\([0-9]*\)$/\2/p')"
+    TEST_NAMES="$(printf '%s\n' "${TEST_SELECTION}" | sed '1{/^#STATS /d}')"
+    : "${GROUP_TEST_COUNT:=0}" "${EXCL_DROPPED:=0}"
+    echo ">>> group '${TAP_GROUP}': ${GROUP_TEST_COUNT} test(s) in groups.json, ${EXCL_DROPPED} dropped by TEST_PY_TAP_EXCL, ${#TEST_NAMES} selected"
 
     if [ -z "${TEST_NAMES}" ]; then
         # Two very different situations produce an empty TEST_NAMES, and they
@@ -257,6 +277,16 @@ sys.exit(0 if any('${TAP_GROUP}' in v for v in groups.values()) else 1)
 "; then
             echo "ERROR: TAP_GROUP='${TAP_GROUP}' does not appear in ${GROUPS_JSON}"
             echo "       This is a caller bug (typo, stale group list), not a version skip." >&2
+            exit 1
+        fi
+
+        if [ "${EXCL_DROPPED:-0}" -gt 0 ]; then
+            # (c) the selection was emptied by TEST_PY_TAP_EXCL, not by the
+            # version filter. Reporting this as a healthy version skip would
+            # mean a filter that matches everything silently stands in for
+            # having run the group. Fail, so the filter is noticed.
+            echo "ERROR: TAP_GROUP='${TAP_GROUP}' has ${GROUP_TEST_COUNT} test(s) but all ${EXCL_DROPPED} were removed by TEST_PY_TAP_EXCL='${TEST_PY_TAP_EXCL}'" >&2
+            echo "       Refusing to report a version skip: nothing was excluded by @proxysql_min_version." >&2
             exit 1
         fi
 
