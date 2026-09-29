@@ -199,7 +199,6 @@ jobs:
       if: ${{ !cancelled() }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
       run: |
         set +e
         cd proxysql_3p_testing/test_${{ env.TESTNAME }}
