@@ -727,7 +727,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py finalize
     - name: Publish immutable manifest
-      if: ${{ steps.finalize.outputs.publish_manifest == 'true' }}
+      if: ${{ inputs.trusted && steps.finalize.outputs.publish_manifest == 'true' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: ci-manifest-${{ needs.plan.outputs.execution_id }}
