@@ -29,8 +29,17 @@
  * Each iteration prepares a new statement and flips S1 to OFFLINE_HARD while the S1
  * connection is being established, with a sweep of delays. When the race lands, the
  * Parse is retried on X (S2). A second, timing-free scenario keeps the backend connection
- * attached between requests (pgsql-multiplexing=false), see below. S2 has a negligible weight, so its 'Queries' counter only
- * grows through retries: it is used as a lower bound proving the retry path ran.
+ * attached between requests (pgsql-multiplexing=false), see below.
+ *
+ * Evidence that a statement moved from S1 to S2 comes from stats_pgsql_connection_pool:
+ *   - scenario 1: an iteration counts as a retry only if it both opened a connection to
+ *     S1 (ConnOK+ConnERR grew) and ran a query on S2 (Queries grew). A statement routed to
+ *     S2 directly, because S1 was already offline when the session picked a server,
+ *     opens no S1 connection and is not counted. Landing the race is timing dependent,
+ *     so if it never lands the "exercised" assertion is skipped, not failed: scenario 2
+ *     covers the same fix deterministically.
+ *   - scenario 2: S1's Queries must grow while the statement is first prepared and
+ *     executed, and S2's Queries must grow after S1 goes offline.
  */
 
 #include <arpa/inet.h>
@@ -111,10 +120,17 @@ static bool set_s1_status(PGconn* admin, const std::string& s1, const char* stat
 		exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 }
 
-static long s2_queries(PGconn* admin, const std::string& s2) {
-	const std::string v = query_value(admin, "SELECT Queries FROM stats_pgsql_connection_pool WHERE hostgroup=" +
-		std::to_string(TEST_HG) + " AND srv_host='" + s2 + "'");
+// 'expr' is a column expression of stats_pgsql_connection_pool, e.g. "Queries".
+// Returns -1 if the server has no row.
+static long pool_stat(PGconn* admin, const std::string& host, const char* expr) {
+	const std::string v = query_value(admin, std::string("SELECT ") + expr + " FROM stats_pgsql_connection_pool WHERE hostgroup=" +
+		std::to_string(TEST_HG) + " AND srv_host='" + host + "'");
 	return v.empty() ? -1 : atol(v.c_str());
+}
+
+// True if both counters were read and 'after' is larger.
+static bool grew(long before, long after) {
+	return before >= 0 && after > before;
 }
 
 static bool cleanup(PGconn* admin) {
@@ -125,7 +141,7 @@ static bool cleanup(PGconn* admin) {
 }
 
 int main(int, char**) {
-	plan(8);
+	plan(9);
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return exit_status();
@@ -186,7 +202,6 @@ int main(int, char**) {
 	}
 	ok(warm, "Warm-up statement prepared on S2");
 
-	const long s2_before = s2_queries(admin, s2);
 	static const useconds_t delays[] = { 0, 200, 500, 1000, 1500, 2000, 3000, 5000 };
 	const int n_delays = sizeof(delays) / sizeof(delays[0]);
 	int iterations = 0, collisions = 0, other_errors = 0, successes = 0;
@@ -198,6 +213,8 @@ int main(int, char**) {
 		PGconn* c = open_conn(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_password, "client");
 		if (!c) break;
 		iterations++;
+		const long s1_conns_before = pool_stat(admin, s1, "ConnOK+ConnERR");
+		const long s2_queries_before = pool_stat(admin, s2, "Queries");
 
 		// A statement never seen before: its Parse is sent to a backend, which must be a
 		// brand-new connection on S1.
@@ -227,13 +244,20 @@ int main(int, char**) {
 			other_errors++;
 		}
 		PQfinish(c);
-		retries = s2_queries(admin, s2) - s2_before;
+		if (grew(s1_conns_before, pool_stat(admin, s1, "ConnOK+ConnERR")) &&
+			grew(s2_queries_before, pool_stat(admin, s2, "Queries"))) {
+			retries++;
+		}
 	}
 
-	diag("iterations=%d successes=%d collisions=%d other_errors=%d retries_on_S2=%ld",
+	diag("iterations=%d successes=%d collisions=%d other_errors=%d retries_S1_to_S2=%ld",
 		iterations, successes, collisions, other_errors, retries);
 	ok(iterations > 0, "Ran %d iterations", iterations);
-	ok(retries > 0, "The offline-during-query retry path was exercised (%ld queries counted on S2)", retries);
+	if (retries > 0) {
+		ok(true, "The offline-during-query retry path was exercised (%ld iterations moved from S1 to S2)", retries);
+	} else {
+		skip(1, "the offline-during-connect race never landed in %d iterations; scenario 2 covers the fix", iterations);
+	}
 	ok(successes > 0 && other_errors == 0 && collisions == 0,
 		"Retried statements succeed without backend prepared statement name collisions "
 		"(%d successes, %d other errors, %d collisions, first: '%s')",
@@ -249,7 +273,8 @@ int main(int, char**) {
 	//   d. C prepares s2: B generates id 1 again -> 42P05 "proxysql_ps_1" already exists.
 	const std::string orig_multiplexing = query_value(admin,
 		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-multiplexing'");
-	bool sc2_ready = exec_ok(admin, "SET pgsql-multiplexing='false'") &&
+	bool sc2_ready = !orig_multiplexing.empty() &&
+		exec_ok(admin, "SET pgsql-multiplexing='false'") &&
 		exec_ok(admin, "LOAD PGSQL VARIABLES TO RUNTIME") &&
 		exec_ok(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + hg + " AND hostname='" + s2 + "'") &&
 		set_s1_status(admin, s1, "OFFLINE_HARD") &&
@@ -258,8 +283,8 @@ int main(int, char**) {
 		set_s1_status(admin, s1, "ONLINE");
 	std::string sc2_err;
 	bool sc2_ok = false;
-	long sc2_s2_before = s2_queries(admin, s2);
-	long sc2_retries = 0;
+	bool sc2_ran_on_s1 = false;
+	bool sc2_ran_on_s2 = false;
 	PGconn* c = sc2_ready ? open_conn(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_password, "sticky client") : nullptr;
 	if (c) {
 		auto prep_exec = [&](const char* name, const std::string& q, bool prepare) -> bool {
@@ -281,22 +306,27 @@ int main(int, char**) {
 		};
 		const std::string qs1 = std::string("SELECT 101 /* ") + MARKER + " sticky s1 */";
 		const std::string qs2 = std::string("SELECT 102 /* ") + MARKER + " sticky s2 */";
-		sc2_ok = prep_exec("s1", qs1, true) &&
+		const long s1_before = pool_stat(admin, s1, "Queries");
+		sc2_ok = prep_exec("s1", qs1, true);
+		sc2_ran_on_s1 = sc2_ok && grew(s1_before, pool_stat(admin, s1, "Queries"));
+		const long s2_before = pool_stat(admin, s2, "Queries");
+		sc2_ok = sc2_ok &&
 			set_s1_status(admin, s1, "OFFLINE_HARD") &&
 			prep_exec("s1", qs1, false) &&
 			prep_exec("s2", qs2, true);
-		sc2_retries = s2_queries(admin, s2) - sc2_s2_before;
+		sc2_ran_on_s2 = sc2_ok && grew(s2_before, pool_stat(admin, s2, "Queries"));
 		PQfinish(c);
 	}
 	if (!sc2_err.empty()) diag("sticky scenario error: %s", sc2_err.c_str());
-	ok(sc2_ready && sc2_retries > 0, "Sticky connection scenario: execute was retried on S2 (%ld queries counted on S2)",
-		sc2_retries);
+	ok(sc2_ready && sc2_ran_on_s1 && sc2_ran_on_s2,
+		"Sticky connection scenario: the statement ran on S1, then on S2 after S1 went offline (S1=%d S2=%d)",
+		sc2_ran_on_s1, sc2_ran_on_s2);
 	ok(sc2_ok && sc2_err.find("proxysql_ps_") == std::string::npos,
 		"Sticky connection scenario: no backend prepared statement name collision (error: '%s')", sc2_err.c_str());
-	if (!orig_multiplexing.empty()) {
-		exec_ok(admin, "SET pgsql-multiplexing='" + orig_multiplexing + "'");
+	const bool mux_restored = !orig_multiplexing.empty() &&
+		exec_ok(admin, "SET pgsql-multiplexing='" + orig_multiplexing + "'") &&
 		exec_ok(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
-	}
+	ok(mux_restored, "Restored pgsql-multiplexing='%s'", orig_multiplexing.c_str());
 
 	ok(cleanup(admin), "Removed hostgroup %d and routing rule", TEST_HG);
 	PQfinish(admin);

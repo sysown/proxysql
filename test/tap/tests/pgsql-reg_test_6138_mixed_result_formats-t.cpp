@@ -179,6 +179,10 @@ int main() {
 	std::string text_err;
 	std::string second_err;
 	try {
+		// The text form of a timestamptz is rendered in the session time zone; pin it so
+		// the date prefix check below does not depend on the backend's default.
+		c2->execute("SET TimeZone TO 'UTC'");
+		c2->waitForReady();
 		c2->prepareStatement("other_name", PGX_QUERY, true);
 		// All-text formats must return every column as text.
 		const auto res = run_bound(c2, "other_name", { 0, 0, 0 });

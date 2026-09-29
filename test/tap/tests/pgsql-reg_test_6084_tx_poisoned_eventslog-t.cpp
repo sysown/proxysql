@@ -339,17 +339,16 @@ static void run_recovery_case(RecoveryCase& rc, const string& nonce) {
 
 	PGresult* r = PQexec(cli, rc.query.c_str());
 	const char* tag = PQcmdStatus(r);
-	rc.recovered = PQresultStatus(r) == PGRES_COMMAND_OK && tag && strcmp(tag, "ROLLBACK") == 0
+	const bool tx_recovered = PQresultStatus(r) == PGRES_COMMAND_OK && tag && strcmp(tag, "ROLLBACK") == 0
 		&& PQtransactionStatus(cli) == PQTRANS_IDLE && PQstatus(cli) == CONNECTION_OK;
-	ok(rc.recovered, "%s: '%s' recovers the session (status=%s tag=%s txn=%d)",
-	   rc.label, rc.query.c_str(), PQresStatus(PQresultStatus(r)), tag ? tag : "(null)",
-	   (int)PQtransactionStatus(cli));
-	PQclear(r);
-
+	const int txn_status = (int)PQtransactionStatus(cli);
 	// The session must remain usable after the logged recovery.
-	if (rc.recovered && !exec_command(cli, "SELECT 1")) {
-		diag("%s: post-recovery SELECT 1 failed", rc.label);
-	}
+	const bool usable = tx_recovered && exec_command(cli, "SELECT 1");
+	rc.recovered = tx_recovered && usable;
+	ok(rc.recovered, "%s: '%s' recovers the session and it stays usable (status=%s tag=%s txn=%d usable=%d)",
+	   rc.label, rc.query.c_str(), PQresStatus(PQresultStatus(r)), tag ? tag : "(null)",
+	   txn_status, usable);
+	PQclear(r);
 	PQfinish(cli);
 }
 

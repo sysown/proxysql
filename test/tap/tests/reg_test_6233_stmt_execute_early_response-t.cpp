@@ -98,11 +98,18 @@ bool snapshot_and_clear_rules(MYSQL* admin, bool& snapshot_taken) {
 		&& run_admin(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 }
 
+// Every step is attempted even if an earlier one fails, so the rules of this test
+// are always unloaded from runtime. The snapshot is dropped only once the original
+// rules were copied back from it.
 bool restore_rules(MYSQL* admin) {
-	return run_admin(admin, "DELETE FROM mysql_query_rules")
-		&& run_admin(admin, "INSERT INTO mysql_query_rules SELECT * FROM mysql_query_rules_6233")
-		&& run_admin(admin, "DROP TABLE mysql_query_rules_6233")
-		&& run_admin(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	bool restored = run_admin(admin, "DELETE FROM mysql_query_rules")
+		&& run_admin(admin, "INSERT INTO mysql_query_rules SELECT * FROM mysql_query_rules_6233");
+	if (restored) {
+		restored = run_admin(admin, "DROP TABLE mysql_query_rules_6233");
+	} else {
+		diag("Original query rules kept in admin table mysql_query_rules_6233");
+	}
+	return run_admin(admin, "LOAD MYSQL QUERY RULES TO RUNTIME") && restored;
 }
 
 std::string get_global_variable(MYSQL* admin, const char* name) {
