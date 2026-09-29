@@ -1,0 +1,2010 @@
+{
+  "schema": 1,
+  "consumers": [
+    {
+      "workflow": "CI-3p-aiomysql",
+      "file": "ci-3p-aiomysql.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_AIOMYSQL_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_AIOMYSQL_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-aiomysql",
+      "file": "ci-3p-aiomysql.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_AIOMYSQL_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_AIOMYSQL_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-django-framework",
+      "file": "ci-3p-django-framework.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_DJANGO_FRAMEWORK_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_DJANGO_FRAMEWORK_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-django-framework",
+      "file": "ci-3p-django-framework.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_DJANGO_FRAMEWORK_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_DJANGO_FRAMEWORK_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-django-framework",
+      "file": "ci-3p-django-framework.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_DJANGO_FRAMEWORK_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_DJANGO_FRAMEWORK_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql"
+    },
+    {
+      "workflow": "CI-3p-laravel-framework",
+      "file": "ci-3p-laravel-framework.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_LARAVEL_FRAMEWORK_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_LARAVEL_FRAMEWORK_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-laravel-framework",
+      "file": "ci-3p-laravel-framework.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_LARAVEL_FRAMEWORK_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_LARAVEL_FRAMEWORK_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-laravel-framework",
+      "file": "ci-3p-laravel-framework.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_LARAVEL_FRAMEWORK_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_LARAVEL_FRAMEWORK_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql"
+    },
+    {
+      "workflow": "CI-3p-mariadb-connector-c",
+      "file": "ci-3p-mariadb-connector-c.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_C_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_C_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-mariadb-connector-c",
+      "file": "ci-3p-mariadb-connector-c.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_C_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_C_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-mysql-connector-j",
+      "file": "ci-3p-mysql-connector-j.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MYSQL_CONNECTOR_J_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MYSQL_CONNECTOR_J_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-mysql-connector-j",
+      "file": "ci-3p-mysql-connector-j.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MYSQL_CONNECTOR_J_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MYSQL_CONNECTOR_J_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-pgjdbc",
+      "file": "ci-3p-pgjdbc.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PGJDBC_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PGJDBC_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql"
+    },
+    {
+      "workflow": "CI-3p-php-pdo-mysql",
+      "file": "ci-3p-php-pdo-mysql.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PHP_PDO_MYSQL_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PHP_PDO_MYSQL_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-php-pdo-mysql",
+      "file": "ci-3p-php-pdo-mysql.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PHP_PDO_MYSQL_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PHP_PDO_MYSQL_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-php-pdo-pgsql",
+      "file": "ci-3p-php-pdo-pgsql.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PHP_PDO_PGSQL_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PHP_PDO_PGSQL_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql"
+    },
+    {
+      "workflow": "CI-3p-postgresql",
+      "file": "ci-3p-postgresql.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_POSTGRESQL_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_POSTGRESQL_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql"
+    },
+    {
+      "workflow": "CI-3p-sqlalchemy",
+      "file": "ci-3p-sqlalchemy.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_SQLALCHEMY_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_SQLALCHEMY_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-sqlalchemy",
+      "file": "ci-3p-sqlalchemy.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_SQLALCHEMY_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_SQLALCHEMY_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-sqlalchemy",
+      "file": "ci-3p-sqlalchemy.yml",
+      "job": "test",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_SQLALCHEMY_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_SQLALCHEMY_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql"
+    },
+    {
+      "workflow": "CI-ai-g1",
+      "file": "ci-ai-gcov.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "ai-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-ai-g2",
+      "file": "ci-ai-gcov.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "ai-g2"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-basictests",
+      "file": "ci-basictests.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [
+        {
+          "testdist": "ubuntu24-tap-genai-gcov",
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "testdist": [
+          "ubuntu24-tap-genai-gcov"
+        ],
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-binlog-g1",
+      "file": "ci-ai-gcov.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-binlog-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-clickhouse-g1",
+      "file": "ci-legacy-clickhouse-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-clickhouse-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "clickhouse23"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "clickhouse23"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g1",
+      "file": "ci-legacy-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g10",
+      "file": "ci-legacy-g10.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g10"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g2-genai",
+      "file": "ci-legacy-g2-genai.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g2"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g2",
+      "file": "ci-legacy-g2.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g2"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g3",
+      "file": "ci-legacy-g3.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g3"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g4",
+      "file": "ci-legacy-g4.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g4"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g5",
+      "file": "ci-legacy-g5.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g5"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g6",
+      "file": "ci-legacy-g6.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g6"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g7",
+      "file": "ci-legacy-g7.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g7"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g8",
+      "file": "ci-legacy-g8.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g8"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-legacy-g9",
+      "file": "ci-legacy-g9.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g9"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mariadb10-binlog-g1",
+      "file": "ci-mariadb10-binlog-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mariadb10-binlog-g1"
+      ],
+      "cells": [
+        {}
+      ],
+      "axes": {},
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mariadb10-galera-g1",
+      "file": "ci-mariadb10-galera-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mariadb10-galera-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mariadb10"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mariadb10"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mariadb10-galera-g2",
+      "file": "ci-mariadb10-galera-g2.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mariadb10-galera-g2"
+      ],
+      "cells": [
+        {
+          "infradb": "mariadb10"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mariadb10"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mariadb10-galera-g3",
+      "file": "ci-mariadb10-galera-g3.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mariadb10-galera-g3"
+      ],
+      "cells": [
+        {
+          "infradb": "mariadb10"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mariadb10"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mariadb10-galera-g4",
+      "file": "ci-mariadb10-galera-g4.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mariadb10-galera-g4"
+      ],
+      "cells": [
+        {
+          "infradb": "mariadb10"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mariadb10"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mariadb10-galera-g5",
+      "file": "ci-mariadb10-galera-g5.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mariadb10-galera-g5"
+      ],
+      "cells": [
+        {
+          "infradb": "mariadb10"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mariadb10"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mariadb10-galera-g6",
+      "file": "ci-mariadb10-galera-g6.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mariadb10-galera-g6"
+      ],
+      "cells": [
+        {
+          "infradb": "mariadb10"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mariadb10"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mariadb10-galera-g7",
+      "file": "ci-mariadb10-galera-g7.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mariadb10-galera-g7"
+      ],
+      "cells": [
+        {
+          "infradb": "mariadb10"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mariadb10"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mariadb10-galera-g8",
+      "file": "ci-mariadb10-galera-g8.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mariadb10-galera-g8"
+      ],
+      "cells": [
+        {
+          "infradb": "mariadb10"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mariadb10"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mariadb10-galera-g9",
+      "file": "ci-mariadb10-galera-g9.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mariadb10-galera-g9"
+      ],
+      "cells": [
+        {
+          "infradb": "mariadb10"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mariadb10"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql-router-ic-g1",
+      "file": "ci-ai-gcov.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql-router-ic-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql56-single-g1",
+      "file": "ci-mysql56-single-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql56-single-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql56"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql56"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-binlog-g1",
+      "file": "ci-mysql84-binlog-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-binlog-g1"
+      ],
+      "cells": [
+        {}
+      ],
+      "axes": {},
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-g1",
+      "file": "ci-mysql84-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-g2",
+      "file": "ci-mysql84-g2.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-g2"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-g3",
+      "file": "ci-mysql84-g3.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-g3"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-g4",
+      "file": "ci-mysql84-g4.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-g4"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-g5",
+      "file": "ci-mysql84-g5.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-g5"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-g6",
+      "file": "ci-mysql84-g6.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-g6"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-g7",
+      "file": "ci-mysql84-g7.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-g7"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-g8",
+      "file": "ci-mysql84-g8.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-g8"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-g9",
+      "file": "ci-mysql84-g9.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-g9"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-gr-g1",
+      "file": "ci-mysql84-gr-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-gr-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-gr-g2",
+      "file": "ci-mysql84-gr-g2.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-gr-g2"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-gr-g3",
+      "file": "ci-mysql84-gr-g3.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-gr-g3"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-gr-g4",
+      "file": "ci-mysql84-gr-g4.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-gr-g4"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-gr-g5",
+      "file": "ci-mysql84-gr-g5.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-gr-g5"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-gr-g6",
+      "file": "ci-mysql84-gr-g6.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-gr-g6"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-gr-g7",
+      "file": "ci-mysql84-gr-g7.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-gr-g7"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-gr-g8",
+      "file": "ci-mysql84-gr-g8.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-gr-g8"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql84-gr-g9",
+      "file": "ci-mysql84-gr-g9.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql84-gr-g9"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql90-binlog-g1",
+      "file": "ci-ai-gcov.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql90-binlog-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql90-gr-g1",
+      "file": "ci-mysql90-gr-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql90-gr-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql90"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql90"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql93-gr-g1",
+      "file": "ci-mysql93-gr-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql93-gr-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql93"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql93"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql95-binlog-g1",
+      "file": "ci-ai-gcov.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql95-binlog-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql84"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql84"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysql95-gr-g1",
+      "file": "ci-mysql95-gr-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "mysql95-gr-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql95"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql95"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysqlx-g1",
+      "file": "ci-unit-group.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [
+        "mysqlx-g1"
+      ],
+      "cells": [
+        {}
+      ],
+      "axes": {},
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysqlx",
+      "file": "ci-mysqlx.yml",
+      "job": "e2e-tests",
+      "automatic": true,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [
+        {}
+      ],
+      "axes": {},
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-mysqlx",
+      "file": "ci-mysqlx.yml",
+      "job": "soak-tests",
+      "automatic": true,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [
+        "mysqlx-soak-g1"
+      ],
+      "cells": [
+        {
+          "connector_version": "9.7.0"
+        },
+        {
+          "connector_version": "26.7.0"
+        }
+      ],
+      "axes": {
+        "connector_version": [
+          "9.7.0",
+          "26.7.0"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-no-infra-g1",
+      "file": "ci-no-infra-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "no-infra-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "no-infra"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "no-infra"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-pgsql-socket-g1",
+      "file": "ci-pgsql-socket-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "pgsql-socket-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "pgsql16socket"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "pgsql16socket"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-repltests",
+      "file": "ci-repltests.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [
+        {
+          "testdist": "ubuntu24-tap-genai-gcov",
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "testdist": [
+          "ubuntu24-tap-genai-gcov"
+        ],
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-selftests",
+      "file": "ci-selftests.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [
+        {
+          "testdist": "ubuntu24-tap-genai-gcov",
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "testdist": [
+          "ubuntu24-tap-genai-gcov"
+        ],
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-set_parser_algorithm_3-g1",
+      "file": "ci-set_parser_algorithm_3-g1.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "set_parser_algorithm_3-g1"
+      ],
+      "cells": [
+        {
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-shuntest",
+      "file": "ci-shuntest.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [
+        {
+          "testdist": "ubuntu24-tap-genai-gcov",
+          "infradb": "mysql57"
+        }
+      ],
+      "axes": {
+        "testdist": [
+          "ubuntu24-tap-genai-gcov"
+        ],
+        "infradb": [
+          "mysql57"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-taptests-pgsql-cluster",
+      "file": "ci-taptests-pgsql-cluster.yml",
+      "job": "tests",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "legacy-g3"
+      ],
+      "cells": [
+        {
+          "testdist": "ubuntu24-tap-genai-gcov"
+        }
+      ],
+      "axes": {
+        "testdist": [
+          "ubuntu24-tap-genai-gcov"
+        ]
+      },
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-unittests",
+      "file": "ci-unittests.yml",
+      "job": "tests",
+      "automatic": false,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "unit-tests-g1"
+      ],
+      "cells": [
+        {}
+      ],
+      "axes": {},
+      "instance": "run"
+    },
+    {
+      "workflow": "CI-builds",
+      "file": "ci-unit-group.yml",
+      "job": "tier-units",
+      "automatic": true,
+      "tiers": [
+        "v30",
+        "v31"
+      ],
+      "groups": [
+        "unit-tests-g1"
+      ],
+      "cells": [
+        {}
+      ]
+    }
+  ]
+}
