@@ -11,6 +11,8 @@ if ! command -v envsubst >/dev/null 2>&1; then
 fi
 
 cd "${repo_root}"
+CI_ENGINE_REF="$("${script_dir}/resolve-ci-engine-ref.bash")"
+export CI_ENGINE_REF
 
 run_check() {
 	local label="$1"
@@ -57,15 +59,21 @@ run_check "Check vendored OpenSSL consumer flags" \
 # ref plus ci-builds.yml on GH-Actions, so it needs both refs fetched. The
 # workflow fetches GH-Actions with a tolerated failure, so skip rather than fail
 # the whole lint suite when it is momentarily unavailable.
-if git rev-parse --verify --quiet origin/GH-Actions >/dev/null; then
+if git rev-parse --verify --quiet "${CI_ENGINE_REF}" >/dev/null; then
 	run_check "Check fork PR build isolation contract" \
-		python3 test/infra/control/validate_fork_pr_builds.py HEAD origin/GH-Actions
-	run_check "Test fork PR build isolation validator" \
-		python3 -m unittest discover -s test/infra/control -p test_validate_fork_pr_builds.py
+		python3 test/infra/control/validate_fork_pr_builds.py HEAD "${CI_ENGINE_REF}"
+	run_check "Check selected-tier fanout and migrated coverage" \
+		python3 test/infra/control/check_ci_tier_fanout.py --callers-ref HEAD --engine-ref "${CI_ENGINE_REF}"
 else
-	echo ">>> Check fork PR build isolation contract: SKIPPED (origin/GH-Actions not fetched)"
+	echo ">>> Paired fork and tier coverage checks: SKIPPED (${CI_ENGINE_REF} not fetched)"
 fi
+run_check "Test fork PR build isolation validator" \
+	python3 -m unittest discover -s test/infra/control -p test_validate_fork_pr_builds.py
 run_check "Check group infra/workflow coverage (warn-only)" \
 	python3 test/tap/groups/lint_group_coverage.py
+run_check "Test paired engine-ref selection" \
+	python3 -m unittest discover -s test/infra/control -p test_ci_engine_ref.py
+run_check "Test selected-tier fanout validator" \
+    python3 -m unittest discover -s test/infra/control -p test_check_ci_tier_fanout.py
 
 echo ">>> CI lint suite: OK"

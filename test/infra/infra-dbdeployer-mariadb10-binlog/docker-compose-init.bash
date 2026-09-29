@@ -128,22 +128,25 @@ fi
 
 # 6. Wait for dbdeployer entrypoint to finish the MariaDB deployment
 #
-# The budget is larger than the shared 240s other infras use. dbdeployer >= 2.4.0
-# runs wait_until_wsrep_ready after starting each node, which short-circuits
-# only when the server has no wsrep_ready status at all. That holds for MySQL,
-# but MariaDB reports `wsrep_ready OFF` even without Galera, so every node burns
-# the full 60 x 2s poll before giving up: ~2 minutes per node, ~6 minutes for
-# this 3-node sandbox. Tracked upstream in ProxySQL/dbdeployer; until it is
-# fixed, this infra has to outlast the delay.
+# dbdeployer >= 2.4.2 is required here, for two reasons.
 #
-# dbdeployer 2.4.0 is still required here: it carries the fix for dbdeployer#82,
-# where a MariaDB major >= 11 was treated as newer than MySQL 8.0.23 and the
-# generated replication SQL used CHANGE REPLICATION SOURCE TO, which MariaDB
-# rejects. 2.3.0 and earlier still have `major == 10` and would break the 11.4,
-# 12.3 and 13.0 infras tracked in issues 6236-6238.
+# dbdeployer#142: 2.4.0 and 2.4.1 ran wait_until_wsrep_ready after starting
+# every node, which short-circuits only when the server has no wsrep_ready
+# status at all. That holds for MySQL, but MariaDB reports `wsrep_ready OFF`
+# even without Galera, so each node burned the full 60 x 2s poll before giving
+# up: ~2 minutes per node, ~6 minutes for this 3-node sandbox. 2.4.2 decides at
+# sandbox-creation time whether a node waits at all, so only Galera and PXC
+# cluster nodes do -- a MariaDB replication sandbox now deploys in seconds. This
+# infra previously carried MAX_WAIT=600 to outlast that delay and is back on the
+# shared 120s budget.
+#
+# dbdeployer#82: 2.3.0 and earlier treat a MariaDB major >= 11 as newer than
+# MySQL 8.0.23 and generate CHANGE REPLICATION SOURCE TO, which MariaDB rejects.
+# Fixed from 2.4.0 onward. 2.4.2 additionally puts 11.4.13, 12.3.3 and 13.0.2
+# into dbdeployer's own CI, the versions tracked in issues 6236-6238.
 CONTAINER="${COMPOSE_PROJECT}-dbdeployer1-1"
 echo -n "Waiting for dbdeployer to finish deployment..."
-MAX_WAIT=600
+MAX_WAIT=120
 COUNT=0
 while ! docker exec "${CONTAINER}" test -f /tmp/dbdeployer_ready 2>/dev/null; do
     if [ $COUNT -ge $MAX_WAIT ]; then

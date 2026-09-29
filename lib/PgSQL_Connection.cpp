@@ -4504,12 +4504,10 @@ void PgSQL_Connection::stmt_execute_start() {
 	if (native_mode) {
 		// Native Execute drive (Task C): Bind [+ Describe('P')] + Execute + Flush/Sync
 		// on the unnamed portal. Decodes the client's Bind params from the SAME parsed
-		// PgSQL_Bind_Message the libpq PQsendQueryPrepared branch below reads, but hands
-		// them to pg_build_bind preserving the client's per-param/per-result formats
-		// verbatim (protocol-native). Unlike the libpq branch, we do NOT expand a single
-		// param format across all params, and we forward ALL result formats faithfully
-		// (libpq mode collapses result formats to result_formats[0]; corpus clients use
-		// uniform formats, so the differential is unaffected).
+		// PgSQL_Bind_Message the libpq branch below reads, but hands them to
+		// pg_build_bind preserving the client's per-param/per-result formats verbatim.
+		// Unlike the libpq branch, we do not expand a single param format across all
+		// params. Both paths forward the complete result-format array.
 		native_stmt_reset_step();
 		const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
 		const PgSQL_Bind_Message* bind_msg = extended_query_info->bind_msg;
@@ -4728,30 +4726,19 @@ void PgSQL_Connection::stmt_execute_start() {
 		}
 	}
 
-	// Issue #5866 defense-in-depth: PQsendQueryPrepared() below can express only ONE
-	// result-column format code, so a heterogeneous array would be silently collapsed
-	// to result_formats[0], corrupting every other column. The session-level gate in
-	// handle_post_sync_bind_message rejects this for libpq-mode sessions, but is
-	// skipped when pgsql-use_native_backend_protocol is on (the native drive forwards
-	// the array verbatim) — and such a session can still land here on a warm POOLED
-	// libpq connection after a flag flip. Error out rather than collapse.
-	for (size_t i = 1; i < result_formats.size(); ++i) {
-		if (result_formats[i] != result_formats[0]) {
-			set_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
-				"per-column result formats are not supported: all result columns must request the same format code",
-				false);
-			return;
-		}
-	}
-
 	// If the client did not send any parameter formats (num_param_formats = 0),
 	// PostgreSQL protocol defines this as "all parameters are TEXT".
 	// libpq represents this case by passing paramFormats = nullptr.
 	const int* param_formats_data = (param_formats.empty() == false ? param_formats.data() : nullptr);
 
-	if (PQsendQueryPrepared(pgsql_conn, query.backend_stmt_name, param_values.size(),
+	// Forward the client's result format codes unchanged: 0 codes (all text), 1 code
+	// (applies to all columns) or one code per result column, possibly mixed text and
+	// binary (issue #6138). PQsendQueryPrepared() can only express a single code for all
+	// columns, so the vendored libpq provides PQsendQueryPreparedWithResultFormats().
+	// PostgreSQL itself validates the number of codes against the result columns.
+	if (PQsendQueryPreparedWithResultFormats(pgsql_conn, query.backend_stmt_name, param_values.size(),
 		param_values.data(), param_lengths.data(), param_formats_data,
-		(result_formats.size() > 0) ? result_formats[0] : 0) == 0) {
+		result_formats.size(), (result_formats.empty() == false ? result_formats.data() : nullptr)) == 0) {
 		set_error_from_PQerrorMessage();
 		proxy_error("Failed to send execute prepared statement. %s\n", get_error_code_with_message().c_str());
 		return;

@@ -9,25 +9,16 @@
  * for `bytea` and text for `text`/`varchar`, i.e. a HETEROGENEOUS array such as
  * `{0, 1}`.
  *
- * ProxySQL executes prepared statements on the backend through libpq's
- * `PQsendQueryPrepared`, whose API accepts only a SINGLE result format that
- * applies to every column. ProxySQL therefore used to collapse the requested
- * array to `result_formats[0]`, silently returning the remaining columns in the
- * wrong format — a `bytea` requested as binary came back as `\x...` hex text,
- * which the client then mis-decoded (issue #5866).
+ * ProxySQL executes prepared statements on the backend through libpq. Stock
+ * `PQsendQueryPrepared` accepts only a SINGLE result format for every column, so
+ * ProxySQL used to collapse the requested array to `result_formats[0]`, silently
+ * returning the remaining columns in the wrong format (issue #5866). The interim
+ * fix rejected heterogeneous arrays with 0A000, which broke drivers such as pgx
+ * (issue #6138). The vendored libpq now provides
+ * `PQsendQueryPreparedWithResultFormats`, and ProxySQL forwards the array as is.
  *
- * Because libpq structurally cannot express per-column result formats, the
- * interim behavior is to FAIL LOUD: a Bind carrying a heterogeneous result
- * format array is rejected with a clean ErrorResponse instead of returning
- * corrupted data. Uniform arrays (all-text or all-binary, including size>1
- * arrays whose codes are all identical) are still honored.
- *
- * This test is also the acceptance harness for the eventual removal of libpq
- * from the backend path: `test_mixed_result_formats()` accepts EITHER a clean
- * rejection (current interim) OR a correct binary `bytea` (once per-column
- * formats are supported natively), and fails ONLY on silent corruption. The
- * emitted diagnostic states which regime is active, so a future protocol
- * implementation can be confirmed to solve the problem simply by re-running.
+ * This test checks that uniform arrays keep working and that heterogeneous arrays
+ * return every column in the format requested for it.
  */
 
 #include <string>
@@ -107,7 +98,7 @@ std::shared_ptr<PgConnection> create_connection() {
 
 // Runs TEST_QUERY as a prepared statement with the given per-column result
 // format array and returns the decoded result. Throws PgException on an
-// ErrorResponse (e.g. the fail-loud rejection).
+// ErrorResponse.
 std::shared_ptr<PgResult> run_with_result_formats(
 	const std::shared_ptr<PgConnection>& conn,
 	const std::string& stmt_name,
@@ -152,7 +143,7 @@ void test_uniform_text_default() {
 }
 
 // Guard: a size>1 array whose codes are all identical (all text) is uniform and
-// must be honored — the fail-loud check must not treat {0,0} as heterogeneous.
+// must be honored.
 void test_uniform_text_explicit() {
 	diag("Test %d: uniform result formats — explicit {0,0}", test_count++);
 	auto conn = create_connection();
@@ -189,48 +180,36 @@ void test_uniform_binary() {
 	}
 }
 
-// The core of issue #5866: a HETEROGENEOUS result-format array {0,1}.
+// The core of issue #5866 / #6138: HETEROGENEOUS result-format arrays.
 //
-// This single assertion holds across all three regimes and fails only on
-// silent corruption:
-//   - Corruption (the bug):   a result is returned but the bytea is NOT correct
-//                             binary (wrong format label and/or hex content).
-//                             -> FAIL. (This is the RED state before the fix.)
-//   - Fail-loud (interim):    a clean ErrorResponse is returned.  -> PASS.
-//   - Native per-column (future, libpq removed): correct raw binary bytea.
-//                             -> PASS.
-// The diagnostic reports which regime is active.
-void test_mixed_result_formats() {
-	diag("Test %d: heterogeneous result formats {0,1} (issue #5866)", test_count++);
+// ProxySQL forwards the per-column result format array to the backend unchanged
+// (vendored libpq PQsendQueryPreparedWithResultFormats()), so each column must be
+// returned in the format requested for it. Before #6138 such a Bind was rejected
+// with 0A000 (interim fail-loud behavior), and before that the array was silently
+// collapsed to its first element, corrupting data. Both are failures now.
+void test_mixed_result_formats(const std::vector<int16_t>& formats) {
+	const std::string label = "{" + std::to_string(formats[0]) + "," + std::to_string(formats[1]) + "}";
+	diag("Test %d: heterogeneous result formats %s (issues #5866, #6138)", test_count++, label.c_str());
 	auto conn = create_connection();
 	if (!conn) { BAIL_OUT("backend connection failed"); return; }
 	try {
-		auto result = run_with_result_formats(conn, "stmt_mixed", { 0, 1 });
-		// A result was returned (no ErrorResponse). It is only acceptable if the
-		// bytea column was honored as correct raw binary; anything else is the
-		// silent corruption of #5866.
-		bool correct_binary =
-			result &&
-			result->rowCount() == 1 &&
-			result->columnFormat(1) == 1 &&
-			value_is_bytes(result->getValue(0, 1), NULL_BYTES);
-		if (correct_binary) {
-			diag("REGIME: per-column result formats are honored natively — #5866 is fully solved");
-		} else {
-			int16_t fmt = (result && result->columnCount() > 1) ? result->columnFormat(1) : -1;
-			diag("REGIME: silent corruption — bytea column format=%d did not return the requested binary bytes", fmt);
-		}
-		ok(correct_binary,
-			"heterogeneous {0,1} must not silently corrupt: bytea returned as correct binary");
+		auto result = run_with_result_formats(conn, "stmt_mixed", formats);
+		bool text_ok = result && result->rowCount() == 1 && result->columnFormat(0) == formats[0] &&
+			(formats[0] == 0 ? value_is_text(result->getValue(0, 0), "header") :
+				value_is_bytes(result->getValue(0, 0), std::vector<uint8_t>{ 'h', 'e', 'a', 'd', 'e', 'r' }));
+		bool bytea_ok = result && result->rowCount() == 1 && result->columnFormat(1) == formats[1] &&
+			(formats[1] == 1 ? value_is_bytes(result->getValue(0, 1), NULL_BYTES) :
+				value_is_text(result->getValue(0, 1), NULL_HEX_TEXT));
+		ok(text_ok, "heterogeneous %s: text column returned in requested format %d", label.c_str(), formats[0]);
+		ok(bytea_ok, "heterogeneous %s: bytea column returned in requested format %d", label.c_str(), formats[1]);
 	} catch (const PgException& e) {
-		// Clean rejection — the interim fail-loud behavior.
-		diag("REGIME: fail-loud active — heterogeneous per-column result formats are rejected, not yet supported natively");
-		ok(true, "heterogeneous {0,1} rejected cleanly instead of corrupting: %s", e.what());
+		ok(false, "heterogeneous %s must be supported, got error: %s", label.c_str(), e.what());
+		ok(false, "heterogeneous %s: bytea column returned in requested format %d", label.c_str(), formats[1]);
 	}
 }
 
 int main() {
-	plan(3 + 2 + 3 + 1); // uniform_text_default(3) + text_explicit(2) + binary(3) + mixed(1)
+	plan(3 + 2 + 3 + 2 + 2); // uniform_text_default(3) + text_explicit(2) + binary(3) + mixed {0,1}(2) + mixed {1,0}(2)
 
 	if (cl.getEnv())
 		return exit_status();
@@ -252,7 +231,8 @@ int main() {
 	test_uniform_text_default();
 	test_uniform_text_explicit();
 	test_uniform_binary();
-	test_mixed_result_formats();
+	test_mixed_result_formats({ 0, 1 });
+	test_mixed_result_formats({ 1, 0 });
 
 	return exit_status();
 }

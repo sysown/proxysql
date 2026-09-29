@@ -555,6 +555,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
+	stmt_execute_short_packet_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_backend_framing-t pgsql_backend_auth-t pgsql_backend_extq-t \
 	pgsql_command_complete_unit-t \
