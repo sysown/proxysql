@@ -442,6 +442,226 @@
       "instance": "run-pgsql"
     },
     {
+      "workflow": "CI-3p-pymysql",
+      "file": "ci-3p-pymysql.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PYMYSQL_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PYMYSQL_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-pymysql",
+      "file": "ci-3p-pymysql.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PYMYSQL_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PYMYSQL_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-mysqlclient",
+      "file": "ci-3p-mysqlclient.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MYSQLCLIENT_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MYSQLCLIENT_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-mysqlclient",
+      "file": "ci-3p-mysqlclient.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MYSQLCLIENT_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MYSQLCLIENT_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-mysql-connector-python",
+      "file": "ci-3p-mysql-connector-python.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MYSQL_CONNECTOR_PYTHON_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MYSQL_CONNECTOR_PYTHON_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-mysql-connector-python",
+      "file": "ci-3p-mysql-connector-python.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MYSQL_CONNECTOR_PYTHON_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MYSQL_CONNECTOR_PYTHON_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-go-mysql",
+      "file": "ci-3p-go-mysql.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_GO_MYSQL_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_GO_MYSQL_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-go-mysql",
+      "file": "ci-3p-go-mysql.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_GO_MYSQL_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_GO_MYSQL_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
+      "workflow": "CI-3p-psycopg",
+      "file": "ci-3p-psycopg.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PSYCOPG_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PSYCOPG_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql"
+    },
+    {
+      "workflow": "CI-3p-node-mysql2",
+      "file": "ci-3p-node-mysql2.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_NODE_MYSQL2_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_NODE_MYSQL2_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-node-mysql2",
+      "file": "ci-3p-node-mysql2.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_NODE_MYSQL2_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_NODE_MYSQL2_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
       "workflow": "CI-ai-g1",
       "file": "ci-ai-gcov.yml",
       "job": "tests",

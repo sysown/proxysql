@@ -1,4 +1,4 @@
-name: CI-3p-django-framework
+name: CI-3p-mysqlclient
 
 on:
   # Manual runs bind to an explicit producer (ci_tier_runtime.py consumer() requires both) and may
@@ -83,7 +83,7 @@ on:
 
 env:
   TESTTREE: ${{ inputs.testtree || (inputs.trigger && fromJson(inputs.trigger).event.inputs.testtree) || 'main' }}
-  TESTNAME: django-framework
+  TESTNAME: mysqlclient
   TESTDIST: ubuntu24
   PROXYSQL_REPO: ${{ inputs.proxysql_repo || github.repository }}
   SHA: ${{ inputs.sha || inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
@@ -105,7 +105,7 @@ jobs:
       producer_attempt: ${{ inputs.producer_attempt }}
       source_repository: ${{ inputs.proxysql_repo }}
       source_sha: ${{ inputs.sha }}
-      consumer_file: ci-3p-django-framework.yml
+      consumer_file: ci-3p-mysqlclient.yml
       consumer_inputs: ${{ toJson(inputs) }}
     secrets: inherit
   test:
@@ -196,7 +196,7 @@ jobs:
         set -eo pipefail
 
         cd proxysql_3p_testing/
-        ./setup.sh test_${{ env.TESTNAME }}
+        ./setup.sh test_${{ env.TESTNAME }}/${{ env.TESTNAME }}
 
         sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' common/infra-docker-hoster/docker-compose.yml
 
@@ -207,24 +207,7 @@ jobs:
 
         # extend timout
         cd test_${{ env.TESTNAME }}
-        #sed -i 's/timeout -v -s1 800 //' run-tests.bash
-
-        # fix permissions
-        mkdir -p ${{ env.TESTNAME }}/cache
-        chmod -R 777 ${{ env.TESTNAME }}/cache
-
-        # set tested database infra
-        #sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
-        #sed -i 's/^fn_test_proxysql_dev m/#fn_test_proxysql_dev m/' run-tests.bash
-
-        # cherry-pick utf8mb4 patch from django 5.2.x
-        # https://github.com/django/django/commit/9609b48b9149aa0b96208588b99ce6161be6a287
-        cd ${{ env.TESTNAME }}
-        if [[ $(git branch --show-current) == stable/5.1.x ]]; then
-          git cherry-pick -n 9609b48 || true
-          git add docs/releases/5.2.txt || true
-          git cherry-pick -n --continue || true
-        fi
+        sed -i 's/timeout -v -s1 800 //' run-tests.bash
 
     - name: Run tests
       timeout-minutes: 90
@@ -232,7 +215,6 @@ jobs:
         set +e
 
         cd proxysql_3p_testing/test_${{ env.TESTNAME }}
-        #sed -i 's/docker-compose/docker compose/g' run-tests.bash
         ./run-tests.bash
         RC=$?
 

@@ -1,7 +1,36 @@
 name: CI-3p-pymysql
 
 on:
+  # Manual runs bind to an explicit producer (ci_tier_runtime.py consumer() requires both) and may
+  # narrow the catalogue axes; the other inputs mirror the workflow_call defaults.
   workflow_dispatch:
+    inputs:
+      producer_run_id:
+        description: 'sysown/proxysql CI-builds run id of the build to test'
+        required: true
+        type: string
+      producer_attempt:
+        description: 'attempt of that CI-builds run'
+        required: true
+        type: string
+      infradb:
+        description: 'optional JSON array overriding the catalogue infradb axis, e.g. ["mysql8.0"]'
+        default: ''
+        type: string
+      connector:
+        description: 'optional JSON array overriding the catalogue connector axis'
+        default: ''
+        type: string
+      consumer_id:
+        default: run
+        type: string
+      control_ref:
+        default: GH-Actions
+        type: string
+      testtree:
+        description: 'proxysql_3p_testing treeish (default: main)'
+        default: ''
+        type: string
   workflow_call:
     inputs:
       trigger:
@@ -29,6 +58,21 @@ on:
         default: ''
     # Declared so that callers outside this organization can pass them explicitly: 'secrets: inherit'
     # only works for callers in the same organization/enterprise (sysown/proxysql callers are unchanged).
+      consumer_id:
+        type: string
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: ''
+      testtree:
+        type: string
+        default: ''
     secrets:
       GH_TOKEN_PROXYSQL:
         required: false
@@ -38,7 +82,7 @@ on:
         required: false
 
 env:
-  TESTTREE: ${{ inputs.testtree || inputs.trigger.event.inputs.testtree || 'main' }}
+  TESTTREE: ${{ inputs.testtree || (inputs.trigger && fromJson(inputs.trigger).event.inputs.testtree) || 'main' }}
   TESTNAME: pymysql
   TESTDIST: ubuntu24
   PROXYSQL_REPO: ${{ inputs.proxysql_repo || github.repository }}
@@ -46,36 +90,64 @@ env:
   BRANCH: ${{ inputs.branch || inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_branch || github.ref_name }}
 
 jobs:
+  tier-context:
+    # least privilege: read the repository and the producer's artifacts, report check runs
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+    uses: ./.github/workflows/ci-tier-context.yml
+    with:
+      trigger: ${{ inputs.trigger }}
+      consumer_id: ${{ inputs.consumer_id }}
+      control_ref: ${{ inputs.control_ref }}
+      producer_run_id: ${{ inputs.producer_run_id || inputs.build_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
+      source_repository: ${{ inputs.proxysql_repo }}
+      source_sha: ${{ inputs.sha }}
+      consumer_file: ci-3p-pymysql.yml
+      consumer_inputs: ${{ toJson(inputs) }}
+    secrets: inherit
   test:
+    # least privilege: read the repository and the producer's artifacts, report check runs
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-#        infradb: [ 'mysql57', 'mysql80', 'mysql84', 'mysql90', 'mariadb10.5', 'mariadb10.6', 'mariadb10.11', 'mariadb11.2', 'mariadb11.4', 'mariadb11.5' ]
-#        infradb: [ 'mysql57' ]
-        infradb: ${{ fromJson( inputs.infradb ) }}
-#        connector: [ 'v0.2.0' ]
-        connector: ${{ fromJson( inputs.connector ) }}
+        include: ${{ fromJson(needs.tier-context.outputs.matrices)['test'] || fromJson('[{}]') }}
     env:
-      INFRADB:  ${{ matrix.infradb }}
-      CONNECTOR:  ${{ matrix.connector }}
+      INFRADB: ${{ matrix.infradb }}
+      CONNECTOR: ${{ matrix.connector }}
       MATRIX: '(${{ matrix.infradb }},${{ matrix.connector }})'
 
+      SHA: ${{ needs.tier-context.outputs.sha }}
+      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
+      CI_LEG: ${{ toJson(matrix) }}
+      TIER: ${{ matrix.tier }}
+      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
     steps:
-        
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      id: checks
-      if: ${{ always() && env.PROXYSQL_REPO == github.repository }}
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        status: 'in_progress'
-#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-    
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-context.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Start selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout proxysql_3p_testing
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
@@ -112,66 +184,20 @@ jobs:
           lib
           src
 
-    - name: Download build handoff
-      # CI-builds publishes the v4.0 tier (PROXYSQL40=1 WITHGCOV=1) ubuntu24 debug build as the
-      # ci-builds-handoff-<sha>-ubuntu24-tap-genai-gcov-full artifact (same resolution logic as
-      # ci-mysql84-g1.yml). Only src/ and the .gcno files are unpacked, the TAP binaries are not needed.
+    - name: Restore selected product handoff
       env:
-        # PROXYSQL_ARTIFACTS_TOKEN: optional, for callers whose token cannot read PROXYSQL_REPO artifacts
-        GH_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN || secrets.GITHUB_TOKEN }}
-        REPO: ${{ env.PROXYSQL_REPO }}
-        BUILD_RUN_ID: ${{ inputs.build_run_id || inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
       run: |
-        set -uo pipefail
-        command -v zstd >/dev/null || sudo apt-get install -y zstd
-        : "${HANDOFF_MAX_ATTEMPTS:=20}"   # bounded: 20 x 15s = up to ~5 min
-        ERRLOG="$(mktemp)"
-        resolve_aid() {
-          local name="$1" out=""
-          if [ -n "${BUILD_RUN_ID:-}" ]; then
-            out=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
-                    --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" 2>>"$ERRLOG") || true
-            [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-          fi
-          out=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
-                  --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>>"$ERRLOG") || true
-          [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-          return 1
-        }
-        name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-full"
-        aid=""
-        for attempt in $(seq 1 "$HANDOFF_MAX_ATTEMPTS"); do
-          aid=$(resolve_aid "$name") && [ -n "$aid" ] && break
-          aid=""
-          echo ">>> ${name} not resolvable yet (${attempt}/${HANDOFF_MAX_ATTEMPTS}); sleeping 15s"; sleep 15
-        done
-        if [ -z "$aid" ]; then
-          echo "ERROR: handoff artifact ${name} not found after ${HANDOFF_MAX_ATTEMPTS} attempts (build_run=${BUILD_RUN_ID:-n/a}) -- did CI-builds succeed for ${SHA}?" >&2
-          echo "--- last gh errors ---" >&2; tail -n 20 "$ERRLOG" >&2
-          exit 1
-        fi
-        echo ">>> downloading ${name} (id=${aid})"
-        gh api "repos/${REPO}/actions/artifacts/${aid}/zip" > handoff-full.zip || { echo "ERROR: download ${name} failed" >&2; exit 1; }
-        cd proxysql/
-        unzip -p ../handoff-full.zip cache_full.tar.zst | zstd -d | tar -xf - --wildcards 'src/*' 'lib/obj/*' \
-          || { echo "ERROR: unpack ${name} failed" >&2; exit 1; }
-        rm -f ../handoff-full.zip
-        chmod +x src/proxysql
-        file src/proxysql
-
+        python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Prepare
       run: |
-        set +e
-        
+        set -eo pipefail
+
         cd proxysql_3p_testing/
         # the submodule directory is PyMySQL, test_pymysql/pymysql is a symlink to it
         ./setup.sh test_${{ env.TESTNAME }}/PyMySQL
-        #git switch ${{ env.TESTTREE }}
-        #git pull
-        #git config user.email "GH-Actions@proxysql.com"
-        #git config user.name "GH-Actions"
-        #git rebase main -f -s recursive -X theirs
 
         sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' common/infra-docker-hoster/docker-compose.yml
 
@@ -179,23 +205,22 @@ jobs:
         rm -rf ./proxysql && mv ../proxysql .
         ls -l proxysql/src/proxysql
         git -C ./proxysql describe --long --abbrev=7
-        
+
         # extend timout
         cd test_${{ env.TESTNAME }}
         sed -i 's/timeout -v -s1 800 //' run-tests.bash
-        
+
     - name: Run tests
       timeout-minutes: 90
       run: |
         set +e
-        
+
         cd proxysql_3p_testing/test_${{ env.TESTNAME }}
         ./run-tests.bash
         RC=$?
-        
-        #sudo chmod -R 777 ${{ github.workspace }}/*
+
         exit $RC
-        
+
     - name: Check baseline
       if: ${{ !cancelled() }}
       run: |
@@ -253,17 +278,35 @@ jobs:
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: ${{ github.workflow }}-${{ env.SHA }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-${{ matrix.infradb }}-${{ matrix.connector }}-logs-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: |
           proxysql_3p_testing/test_${{ env.TESTNAME }}/logs
-          
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      if: ${{ always() && env.PROXYSQL_REPO == github.repository }}
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        check_id: ${{ steps.checks.outputs.check_id }}
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        conclusion: ${{ job.status }}
-#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Complete selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ always() }}
+    needs:
+    - tier-context
+    name: ${{ matrix.check_name }}
+    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['test'][0] != null }}
+  tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+    needs:
+    - tier-context
+    - test
+    if: ${{ always() && needs.tier-context.result == 'success' }}
+    uses: ./.github/workflows/ci-tier-summary.yml
+    with:
+      binding: ${{ needs.tier-context.outputs.binding }}
+      control_ref: ${{ needs.tier-context.outputs.control_sha }}
+    secrets: inherit
