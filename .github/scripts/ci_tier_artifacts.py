@@ -103,6 +103,29 @@ def safe_members(members):
             # The data filter additionally resolves chains through existing links.
     return members
 
+def handoff_filter(member,dest_path):
+    """tarfile's 'data' filter, working around CPython gh-107845 on older interpreters.
+
+    Before 3.10.13/3.11.5 the data filter resolved a relative symlink target against the destination
+    root instead of the link's own directory (ubuntu-22.04 runners ship Python 3.10.12). That both
+    rejects legitimate in-tree links, e.g. test/afl_digest_test/c_tokenizer.h -> ../../include/c_tokenizer.h
+    (LinkOutsideDestinationError), and accepts links that escape through a link extracted earlier,
+    e.g. a/b/c/alias -> ../../.. then a/b/c/link -> alias/../outside. So every symlink gets the fixed
+    interpreters' check: realpath() of the target taken from the link's directory, following links
+    already extracted, must stay under the destination. A link the old filter rejected but that passes
+    this check gets the rest of the data filter (modes, ownership, member type) through a copy with a
+    harmless target, and its original target back.
+    """
+    if not member.issym():return tarfile.data_filter(member,dest_path)
+    try:filtered=tarfile.data_filter(member,dest_path)
+    except tarfile.LinkOutsideDestinationError:filtered=None
+    root=os.path.realpath(dest_path)
+    target=os.path.realpath(os.path.join(root,os.path.dirname(member.name),member.linkname))
+    if os.path.commonpath([root,target])!=root:raise tarfile.LinkOutsideDestinationError(member,target)
+    if filtered is None:
+        filtered=tarfile.data_filter(member.replace(linkname='.',deep=False),dest_path).replace(linkname=member.linkname,deep=False)
+    return filtered
+
 def binary_version(root):
     root=Path(root).resolve()
     result=subprocess.run([str(root/'src/proxysql'),'--version'],capture_output=True,text=True)
@@ -129,7 +152,7 @@ def restore_handoff(manifest,leg,destination,api):
         with tarpath.open('wb') as out:subprocess.run(['zstd','-d','-c',str(packed)],stdout=out,check=True)
         destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
         with tarfile.open(tarpath) as archive:
-            archive.extractall(destination,members=safe_members(archive.getmembers()),filter='data')
+            archive.extractall(destination,members=safe_members(archive.getmembers()),filter=handoff_filter)
     metadata=json.loads((destination/'src/ci-tier.json').read_text())
     for key,value in [('execution_id',manifest['execution_id']),('sha',manifest['sha']),('tier',leg['tier']),('mode',leg['mode'])]:
         if metadata.get(key)!=value:raise ValueError('restored metadata mismatch: '+key)

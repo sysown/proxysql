@@ -29,6 +29,39 @@ class ArtifactTests(unittest.TestCase):
   safe_members([link])
   link=tarfile.TarInfo('src/link');link.type=tarfile.SYMTYPE;link.linkname='../../escape'
   with self.assertRaises(ValueError):safe_members([link])
+ def test_handoff_filter_resolves_symlinks_from_their_directory(self):
+  # CPython gh-107845 (Python < 3.10.13/3.11.5, e.g. ubuntu-22.04): the data filter resolved relative
+  # symlink targets against the destination root; emulate that and check the fallback's own verdict
+  import os,tarfile,tempfile
+  from unittest.mock import patch
+  from ci_tier_artifacts import handoff_filter
+  real=tarfile.data_filter
+  def buggy(member,dest_path):
+   # only the old root-relative symlink check: the interpreter's own filter must not judge the target
+   # (fixed interpreters reject or, since CVE-2025-4517, normalise it), so it sees a harmless one
+   if not member.issym():return real(member,dest_path)
+   root=os.path.realpath(dest_path);target=os.path.realpath(os.path.join(root,member.linkname))
+   if os.path.commonpath([root,target])!=root:raise tarfile.LinkOutsideDestinationError(member,target)
+   return real(member.replace(linkname='.',deep=False),dest_path).replace(linkname=member.linkname,deep=False)
+  def link(name,target):
+   member=tarfile.TarInfo(name);member.type=tarfile.SYMTYPE;member.linkname=target;return member
+  with tempfile.TemporaryDirectory() as folder,patch('ci_tier_artifacts.tarfile.data_filter',side_effect=buggy):
+   inside=handoff_filter(link('test/afl_digest_test/c_tokenizer.h','../../include/c_tokenizer.h'),folder)
+   self.assertEqual(inside.linkname,'../../include/c_tokenizer.h')
+   with self.assertRaises(tarfile.LinkOutsideDestinationError):handoff_filter(link('test/escape','../../outside'),folder)
+   # a link already extracted is followed, as the fixed interpreters do
+   os.makedirs(os.path.join(folder,'a/b'));os.symlink('/',os.path.join(folder,'a/b/up'))
+   with self.assertRaises(tarfile.LinkOutsideDestinationError):handoff_filter(link('a/b/c/d/x','../../up/etc'),folder)
+   # a link the old filter accepts (resolved from the root) that escapes through a link extracted earlier
+   os.makedirs(os.path.join(folder,'p/q/r'));os.symlink('../../..',os.path.join(folder,'p/q/r/alias'))
+   self.assertEqual(handoff_filter(link('p/q/r/alias2','../../..'),folder).linkname,'../../..')
+   self.assertEqual(buggy(link('p/q/r/link','alias/../outside'),folder).linkname,'alias/../outside')
+   with self.assertRaises(tarfile.LinkOutsideDestinationError):handoff_filter(link('p/q/r/link','alias/../outside'),folder)
+  # and on this interpreter's own data filter
+  with tempfile.TemporaryDirectory() as folder:
+   os.makedirs(os.path.join(folder,'p/q/r'));os.symlink('../../..',os.path.join(folder,'p/q/r/alias'))
+   with self.assertRaises(tarfile.LinkOutsideDestinationError):handoff_filter(link('p/q/r/link','alias/../outside'),folder)
+   self.assertEqual(handoff_filter(link('test/afl_digest_test/c_tokenizer.h','../../include/c_tokenizer.h'),folder).linkname,'../../include/c_tokenizer.h')
  def test_registration_is_not_sha_search(self):
   class API:
    def pages(self,path,key):return [{'external_id':'ci-tier-origin:1:1','output':{'text':'{"build_id":2,"build_attempt":1,"trigger_id":1,"trigger_attempt":1,"repository":"sysown/proxysql","sha":"'+('a'*40)+'"}'}}]
