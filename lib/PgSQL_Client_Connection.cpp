@@ -182,8 +182,10 @@ bool PgSQL_Client_Connection::IsKnownActiveTransaction() {
 
 // --- Accessors (the never-connected libpq answers) ---
 
-// get_pg_connection() is not here: the base keeps it a plain inline returning
-// pgsql_conn, which is nullptr on a client connection, so it needs no override.
+// get_pg_connection() IS here, at the bottom of this file: it is a pure virtual
+// on the base and this leaf answers nullptr, which is the same value the old
+// inline returned for a client connection. The override exists because the base
+// asked, not because the answer changed.
 
 int PgSQL_Client_Connection::get_pg_server_version() {
 	return 0;

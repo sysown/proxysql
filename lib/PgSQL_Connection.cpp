@@ -947,26 +947,15 @@ bool PgSQL_Connection::build_and_record_startup_session_params(std::string& clie
 	return true;
 }
 
-// ===========================================================================
-// Native (non-libpq) backend connect + authentication (Task 1.6a, PLAINTEXT)
-// ===========================================================================
-//
-// These routines drive a small sub-state machine (native_st) that performs the
-// PostgreSQL frontend handshake by hand: a non-blocking TCP connect, a
-// StartupMessage, the AuthenticationRequest exchange (trust / cleartext / md5 /
-// SCRAM-SHA-256), and then consumes the post-auth messages (ParameterStatus,
-// BackendKeyData, ReadyForQuery) so the connection becomes usable in the pool.
-//
-// Event-loop contract (see handler()/next_event()):
-//   - async_exit_status = PG_EVENT_WRITE -> we have bytes to send / want writable
-//   - async_exit_status = PG_EVENT_READ  -> waiting for backend bytes
-//   - async_exit_status = PG_EVENT_NONE  -> the connect/auth phase is COMPLETE
-//
-// TLS is NOT handled here (sub-task 1.6b). Backends requiring SSL are assumed
-// non-SSL for now; a backend that rejects plaintext will surface as an error.
-
 // Build a one-byte-typed frontend message ('p' PasswordMessage / SASL response)
-// into native_outbuf: type byte, int32 big-endian length (= 4 + bodylen), body.
+// into out: type byte, int32 big-endian length (= 4 + bodylen), body.
+//
+// The only caller is the native transport, which frames its PasswordMessage and
+// SASL responses this way; the libpq transport gets the same bytes from
+// PQputPasswords/PQsendPasswordGSS, so it needs no builder. The connect and
+// authentication state machine this used to sit above now lives in
+// PgSQL_Connection_Native, where its SSLRequest -> SSL_READ_REPLY ->
+// SSL_HANDSHAKE path is handled in full.
 void pg_append_typed_msg(std::string& out, char type, const unsigned char* body, size_t bodylen) {
 	uint32_t len = (uint32_t)(4 + bodylen);
 	unsigned char hdr[5];
