@@ -133,6 +133,10 @@ seconds and UTC offsets, including in `RETURNING`. It retains text metadata.
 UUID values also convert directly, including in `RETURNING`, as canonical
 lowercase strings with text metadata.
 
+`TIME_NS`, `ENUM`, and `BIT` support direct `RETURNING` results with text
+metadata. Nanosecond precision, enum labels, and leading zeroes in bit strings
+are preserved.
+
 Many DuckDB values are rendered directly. For types outside the direct
 compatibility list, the plugin prepares a wrapper that casts result columns to
 `VARCHAR` before executing the statement. This makes common nested and special

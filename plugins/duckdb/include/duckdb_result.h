@@ -16,13 +16,18 @@ struct DuckDBColumnType {
 
 enum class DuckDBResultProtocol { mysql, pgsql };
 
+// Borrow a logical type and map it to the C type ID, including TIME_NS,
+// which the vendored DuckDB C API omits. Does not take ownership.
+duckdb_type duckdb_result_type_id(duckdb_logical_type logical);
+
 // Converts a materialised duckdb_result into the SQLite3_result that
 // core's MySQL and PostgreSQL serialisers both consume.
 //
 // Values are read through DuckDB's C chunk/vector API (string_t lengths for
-// VARCHAR/BLOB, typed vector data for everything else). This preserves
-// embedded NUL bytes that DuckDB 1.4.5's legacy result materialisation loses
-// even through duckdb_value_string().
+// VARCHAR/BLOB, typed vector data for other scalar types).
+// ENUM uses the vendored native C++ dictionary lookup for length-aware labels.
+// This preserves embedded NUL bytes that DuckDB 1.4.5's legacy result
+// materialisation loses even through duckdb_value_string().
 // This is correct on the wire for the column types the compatibility
 // allowlist supports: both text protocols transmit values as strings.
 // Optional column_types receives the executed result's schema (including
@@ -30,9 +35,9 @@ enum class DuckDBResultProtocol { mysql, pgsql };
 // for numeric/boolean/binary metadata and retain text metadata for other types.
 // BLOB cells use raw bytes for MySQL and hex BYTEA text for PostgreSQL.
 // BOOLEAN cells use 0/1 for MySQL and f/t for PostgreSQL.
-// Direct conversion supports scalar numeric/boolean values, DATE/TIME/TIME_TZ,
-// TIMESTAMP and its S/MS/NS resolutions, INTERVAL, UUID, VARCHAR and BLOB. Timestamp
-// resolutions use native DuckDB value formatting, preserving nanoseconds,
+// Direct conversion supports scalar numeric/boolean values, DATE/TIME/TIME_TZ/TIME_NS,
+// TIMESTAMP and its S/MS/NS resolutions, INTERVAL, UUID, ENUM, BIT, VARCHAR
+// and BLOB. Timestamp resolutions use native DuckDB formatting, preserving nanoseconds,
 // negative epochs and infinities without another query.
 //
 // Types outside duckdb_type_renders_as_text() still produce null fields on

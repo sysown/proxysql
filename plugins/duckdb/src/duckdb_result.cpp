@@ -1,5 +1,7 @@
 #include "duckdb_result.h"
 #include "sqlite3db.h"
+#include "duckdb/common/types/value.hpp"
+#include "duckdb/common/types/vector.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -50,6 +52,21 @@ bool render_native_value(duckdb_value raw, std::string& out, std::string& error)
 		return true;
 	} catch (const std::exception& exception) {
 		error = std::string("DuckDB value conversion failed: ") + exception.what();
+		return false;
+	}
+}
+
+// The vendored C API represents duckdb_vector as a native Vector pointer.
+// Its enum dictionary accessor uses strdup and truncates embedded NULs, so
+// use DuckDB's length-aware native lookup. The plugin links the same vendored
+// DuckDB build; keep native dictionary access confined to this helper.
+bool render_enum_value(duckdb_vector raw, idx_t row, std::string& out, std::string& error) {
+	try {
+		auto& vector = *reinterpret_cast<duckdb::Vector*>(raw);
+		out = duckdb::EnumType::GetValue(vector.GetValue(row));
+		return true;
+	} catch (const std::exception& exception) {
+		error = std::string("DuckDB ENUM conversion failed: ") + exception.what();
 		return false;
 	}
 }
@@ -152,6 +169,8 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		out = format_double(static_cast<double*>(data)[row]);
 		return true;
 	// Native value conversion does not prepare or execute another statement.
+	case DUCKDB_TYPE_TIME_NS:
+		return render_native_value(duckdb_create_time_ns(static_cast<duckdb_time_ns*>(data)[row]), out, error);
 	case DUCKDB_TYPE_TIME_TZ:
 		return render_native_value(duckdb_create_time_tz_value(static_cast<duckdb_time_tz*>(data)[row]), out, error);
 	case DUCKDB_TYPE_UUID: {
@@ -208,6 +227,24 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		}
 		out = buf;
 		return true;
+	}
+	case DUCKDB_TYPE_ENUM:
+		return render_enum_value(vector, row, out, error);
+	case DUCKDB_TYPE_BIT: {
+		duckdb_string_t value = static_cast<duckdb_string_t*>(data)[row];
+		const uint64_t length = duckdb_string_t_length(value);
+		const auto* bytes = reinterpret_cast<const uint8_t*>(duckdb_string_t_data(&value));
+		// One byte stores the padding count; the remaining bytes store bits.
+		if (length < 2 || bytes[0] > 7) {
+			error = "invalid DuckDB BIT storage";
+			return false;
+		}
+		if ((length - 1) * 8 - bytes[0] >= INT_MAX) {
+			error = "DuckDB BIT text exceeds ProxySQL's INT_MAX row-size limit";
+			return false;
+		}
+		// duckdb_create_bit copies the bytes; its API takes a mutable pointer.
+		return render_native_value(duckdb_create_bit({ const_cast<uint8_t*>(bytes), length }), out, error);
 	}
 	case DUCKDB_TYPE_VARCHAR:
 		assign_string_t(static_cast<duckdb_string_t*>(data)[row], out);
@@ -310,6 +347,16 @@ bool duckdb_append_sqlite3_row(SQLite3_result& out, char** fields,
 	return false;
 }
 
+duckdb_type duckdb_result_type_id(duckdb_logical_type logical) {
+	if (!logical) return DUCKDB_TYPE_INVALID;
+	const duckdb_type type = duckdb_get_type_id(logical);
+	// DuckDB 1.4.5 omits TIME_NS from its C API logical-type mapping.
+	if (type == DUCKDB_TYPE_INVALID &&
+	    reinterpret_cast<duckdb::LogicalType*>(logical)->id() == duckdb::LogicalTypeId::TIME_NS)
+		return DUCKDB_TYPE_TIME_NS;
+	return type;
+}
+
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
                                       std::vector<DuckDBColumnType>* column_types,
                                       DuckDBResultProtocol protocol) {
@@ -325,17 +372,17 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
 	for (idx_t c = 0; c < ncols; c++) {
 		const char* name = duckdb_column_name(res, c);
 		out->add_column_definition(SQLITE_TEXT, name != nullptr ? name : "");
-		types[c] = duckdb_column_type(res, c);
+		duckdb_logical_type logical = duckdb_column_logical_type(res, c);
+		types[c] = duckdb_result_type_id(logical);
 		if (column_types != nullptr) {
 			DuckDBColumnType column { types[c] };
 			if (column.type == DUCKDB_TYPE_DECIMAL) {
-				duckdb_logical_type logical = duckdb_column_logical_type(res, c);
 				column.precision = duckdb_decimal_width(logical);
 				column.scale = duckdb_decimal_scale(logical);
-				duckdb_destroy_logical_type(&logical);
 			}
 			column_types->push_back(column);
 		}
+		duckdb_destroy_logical_type(&logical);
 	}
 
 	std::vector<char*> fields(static_cast<size_t>(ncols), nullptr);
@@ -401,6 +448,7 @@ bool duckdb_type_renders_as_text(duckdb_type t) {
 		case DUCKDB_TYPE_DATE:
 		case DUCKDB_TYPE_TIME:
 		case DUCKDB_TYPE_TIME_TZ:
+		case DUCKDB_TYPE_TIME_NS:
 		case DUCKDB_TYPE_TIMESTAMP:
 		case DUCKDB_TYPE_TIMESTAMP_S:
 		case DUCKDB_TYPE_TIMESTAMP_MS:
@@ -412,6 +460,8 @@ bool duckdb_type_renders_as_text(duckdb_type t) {
 		case DUCKDB_TYPE_VARCHAR:
 		case DUCKDB_TYPE_BLOB:
 		case DUCKDB_TYPE_UUID:
+		case DUCKDB_TYPE_ENUM:
+		case DUCKDB_TYPE_BIT:
 			return true;
 		default:
 			return false;
@@ -423,7 +473,10 @@ bool duckdb_result_has_unrenderable_column(duckdb_result* res) {
 
 	const idx_t ncols = duckdb_column_count(res);
 	for (idx_t c = 0; c < ncols; c++) {
-		if (!duckdb_type_renders_as_text(duckdb_column_type(res, c))) {
+		duckdb_logical_type logical = duckdb_column_logical_type(res, c);
+		const bool renderable = duckdb_type_renders_as_text(duckdb_result_type_id(logical));
+		duckdb_destroy_logical_type(&logical);
+		if (!renderable) {
 			return true;
 		}
 	}

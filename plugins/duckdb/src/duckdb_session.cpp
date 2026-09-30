@@ -640,7 +640,10 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	bool needs_wrap = false;
 	const idx_t ncols = duckdb_prepared_statement_column_count(stmt);
 	for (idx_t c = 0; c < ncols; c++) {
-		if (!duckdb_type_renders_as_text(duckdb_prepared_statement_column_type(stmt, c))) {
+		duckdb_logical_type logical = duckdb_prepared_statement_column_logical_type(stmt, c);
+		const bool renderable = duckdb_type_renders_as_text(duckdb_result_type_id(logical));
+		duckdb_destroy_logical_type(&logical);
+		if (!renderable) {
 			needs_wrap = true;
 			break;
 		}

@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(65);
+	plan(72);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -293,6 +293,45 @@ int main(int argc, char** argv) {
 		r = exec_or_bail(c, "SELECT i, t FROM t_pg_timetz WHERE false");
 		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 0 && PQnfields(r) == 2 &&
 		   PQftype(r, 0) == 23 && PQftype(r, 1) == 25, "empty TIMETZ results preserve PostgreSQL column metadata");
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_scalar(i INTEGER, t TIME_NS, b BIT, e ENUM('', 'ready', 'café'))");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create TIME_NS/BIT/ENUM RETURNING fixture");
+		PQclear(r);
+		r = exec_or_bail(c, "INSERT INTO t_pg_scalar VALUES "
+			"(1, '12:34:56.123456789', '000101001', 'café'), (2, '24:00:00', '0', ''), (3, NULL, NULL, NULL) RETURNING *");
+		const bool shape_ok = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 3 && PQnfields(r) == 4;
+		ok(shape_ok && PQftype(r, 0) == 23 && PQftype(r, 1) == 25 && PQftype(r, 2) == 25 && PQftype(r, 3) == 25,
+		   "TIME_NS/BIT/ENUM RETURNING retains neighboring PostgreSQL numeric metadata");
+		const char* expected[3][3] = {{ "12:34:56.123456789", "000101001", "café" },
+		                             { "24:00:00", "0", "" }, { nullptr, nullptr, nullptr }};
+		bool values_ok = shape_ok;
+		for (int i = 0; values_ok && i < 3; ++i) {
+			values_ok = std::string(PQgetvalue(r, i, 0)) == std::to_string(i + 1);
+			for (int j = 0; values_ok && j < 3; ++j)
+				values_ok = expected[i][j] ? !PQgetisnull(r, i, j + 1) && std::strcmp(PQgetvalue(r, i, j + 1), expected[i][j]) == 0
+				                           : PQgetisnull(r, i, j + 1);
+		}
+		ok(values_ok, "PostgreSQL preserves nanosecond time, BIT leading zeroes, ENUM labels, empty strings and NULL");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_scalar");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "3") == 0, "scalar RETURNING inserts exactly once");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT * FROM t_pg_scalar WHERE false");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 0 && PQnfields(r) == 4 &&
+		   PQftype(r, 0) == 23 && PQftype(r, 1) == 25 && PQftype(r, 2) == 25 && PQftype(r, 3) == 25,
+		   "empty scalar results preserve PostgreSQL metadata");
+		PQclear(r);
+		r = exec_or_bail(c, "UPDATE t_pg_scalar SET b='000000001' WHERE i=1 RETURNING b");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "000000001") == 0, "BIT UPDATE RETURNING preserves leading zeroes");
+		PQclear(r);
+		r = exec_or_bail(c, "DELETE FROM t_pg_scalar WHERE i=1 RETURNING e");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "café") == 0, "ENUM DELETE RETURNING preserves the label");
 		PQclear(r);
 	}
 

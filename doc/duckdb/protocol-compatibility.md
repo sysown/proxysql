@@ -129,6 +129,12 @@ UUID values convert directly to canonical lowercase strings, including in DML
 `RETURNING`. UUID columns retain text metadata; adjacent numeric columns retain
 their numeric metadata. SQL NULL remains a protocol null.
 
+`TIME_NS`, `ENUM`, and `BIT` also convert directly, including DML `RETURNING`.
+`TIME_NS` preserves nanosecond precision, ENUM returns the full label (including
+empty labels and embedded NUL bytes), and BIT returns its sequence of `0`/`1`
+characters with leading zeroes intact. These columns retain text metadata;
+SQL NULL and neighboring numeric metadata are preserved.
+
 Other DuckDB types are detected from the prepared statement before execution.
 The plugin attempts to execute a wrapper equivalent to:
 
@@ -136,8 +142,8 @@ The plugin attempts to execute a wrapper equivalent to:
 SELECT COLUMNS(*)::VARCHAR FROM (<original query>)
 ```
 
-This commonly renders `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, ENUM,
-BIT, and time-zone timestamp variants as readable text. The decision occurs
+This commonly renders `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, and
+time-zone timestamp variants as readable text. The decision occurs
 before execution, so volatile expressions and side effects execute exactly
 once.
 

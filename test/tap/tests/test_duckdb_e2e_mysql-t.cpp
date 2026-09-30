@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(62);
+	plan(69);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -241,6 +241,41 @@ int main(int argc, char** argv) {
 		ok(fields && mysql_num_rows(r) == 0 && fields[0].type == MYSQL_TYPE_LONG &&
 		   fields[1].type == MYSQL_TYPE_VAR_STRING, "empty TIMETZ results preserve MySQL column metadata");
 		if (r) mysql_free_result(r);
+	}
+
+	{
+		ok(mysql_query(c, "CREATE OR REPLACE TABLE t_mysql_scalar(i INTEGER, t TIME_NS, b BIT, e ENUM('', 'ready', 'café'))") == 0,
+		   "create TIME_NS/BIT/ENUM RETURNING fixture");
+		const int rc = mysql_query(c, "INSERT INTO t_mysql_scalar VALUES "
+			"(1, '12:34:56.123456789', '000101001', 'café'), (2, '24:00:00', '0', ''), (3, NULL, NULL, NULL) RETURNING *");
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* fields = r && mysql_num_fields(r) == 4 ? mysql_fetch_fields(r) : nullptr;
+		ok(fields && fields[0].type == MYSQL_TYPE_LONG && fields[1].type == MYSQL_TYPE_VAR_STRING &&
+		   fields[2].type == MYSQL_TYPE_VAR_STRING && fields[3].type == MYSQL_TYPE_VAR_STRING,
+		   "TIME_NS/BIT/ENUM RETURNING retains neighboring MySQL numeric metadata");
+		const char* expected[3][3] = {{ "12:34:56.123456789", "000101001", "café" },
+		                             { "24:00:00", "0", "" }, { nullptr, nullptr, nullptr }};
+		bool values_ok = fields && mysql_num_rows(r) == 3;
+		for (int i = 0; values_ok && i < 3; ++i) {
+			MYSQL_ROW row = mysql_fetch_row(r);
+			values_ok = row && row[0] && std::string(row[0]) == std::to_string(i + 1);
+			for (int j = 0; values_ok && j < 3; ++j)
+				values_ok = expected[i][j] ? row[j + 1] && std::strcmp(row[j + 1], expected[i][j]) == 0 : !row[j + 1];
+		}
+		ok(values_ok, "MySQL preserves nanosecond time, BIT leading zeroes, ENUM labels, empty strings and NULL");
+		if (r) mysql_free_result(r);
+		ok(one_cell(c, "SELECT COUNT(*) FROM t_mysql_scalar") == "3", "scalar RETURNING inserts exactly once");
+		const int empty_rc = mysql_query(c, "SELECT * FROM t_mysql_scalar WHERE false");
+		r = empty_rc == 0 ? mysql_store_result(c) : nullptr;
+		fields = r && mysql_num_fields(r) == 4 ? mysql_fetch_fields(r) : nullptr;
+		ok(fields && mysql_num_rows(r) == 0 && fields[0].type == MYSQL_TYPE_LONG &&
+		   fields[1].type == MYSQL_TYPE_VAR_STRING && fields[2].type == MYSQL_TYPE_VAR_STRING &&
+		   fields[3].type == MYSQL_TYPE_VAR_STRING, "empty scalar results preserve MySQL metadata");
+		if (r) mysql_free_result(r);
+		ok(one_cell(c, "UPDATE t_mysql_scalar SET b='000000001' WHERE i=1 RETURNING b") == "000000001",
+		   "BIT UPDATE RETURNING preserves leading zeroes");
+		ok(one_cell(c, "DELETE FROM t_mysql_scalar WHERE i=1 RETURNING e") == "café",
+		   "ENUM DELETE RETURNING preserves the label");
 	}
 
 	// NULL must arrive as a real NULL, not the string "NULL".

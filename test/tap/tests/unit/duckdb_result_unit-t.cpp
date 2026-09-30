@@ -18,10 +18,13 @@ SQLite3_result* run(duckdb_connection conn, const char* sql,
                     DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql) {
 	duckdb_result res;
 	if (duckdb_query(conn, sql, &res) != DuckDBSuccess) {
+		diag("query failed: %s: %s", sql, duckdb_result_error(&res));
 		duckdb_destroy_result(&res);
 		return nullptr;
 	}
-	SQLite3_result* out = duckdb_result_to_sqlite3(&res, nullptr, nullptr, protocol);
+	std::string error;
+	SQLite3_result* out = duckdb_result_to_sqlite3(&res, &error, nullptr, protocol);
+	if (!error.empty()) diag("conversion failed: %s: %s", sql, error.c_str());
 	duckdb_destroy_result(&res);
 	return out;
 }
@@ -38,7 +41,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(77);
+	plan(95);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -198,6 +201,58 @@ int main() {
 		ok(r && r->rows_count == 1 && !r->rows[0]->fields[0], "direct TIMETZ NULL stays NULL");
 		ok(duckdb_type_renders_as_text(DUCKDB_TYPE_TIME_TZ), "TIMETZ needs no query-wide VARCHAR wrapper");
 	}
+
+	{
+		for (const char* expected : { "00:00:00", "00:00:00.000000001", "12:34:56.123456789",
+		                              "23:59:59.999999999", "24:00:00" }) {
+			const std::string sql = std::string("SELECT '") + expected + "'::TIME_NS, NULL::TIME_NS";
+			std::unique_ptr<SQLite3_result> r(run(conn, sql.c_str()));
+			ok(field_equals(r.get(), 0, 0, expected) && !r->rows[0]->fields[1],
+			   "TIME_NS preserves nanoseconds and NULL: %s (received %s)", expected,
+			   r && r->rows_count && r->rows[0]->fields[0] ? r->rows[0]->fields[0] : "NULL");
+		}
+	}
+	{
+		for (const char* expected : { "0", "1", "00000000", "10101010", "000101001", "11111111111111111" }) {
+			const std::string sql = std::string("SELECT '") + expected + "'::BIT, NULL::BIT";
+			std::unique_ptr<SQLite3_result> r(run(conn, sql.c_str()));
+			ok(field_equals(r.get(), 0, 0, expected) && !r->rows[0]->fields[1],
+			   "BIT preserves leading zeroes, padding and NULL: %s", expected);
+		}
+		const std::string expected(70001, '1');
+		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT repeat('1', 70001)::BIT"));
+		ok(field_equals(r.get(), 0, 0, expected.c_str()), "BIT renders values larger than inline string storage");
+	}
+	{
+		std::unique_ptr<SQLite3_result> r(run(conn,
+			"SELECT ''::ENUM('', 'hello'), 'hello'::ENUM('', 'hello'), NULL::ENUM('', 'hello')"));
+		ok(field_equals(r.get(), 0, 0, "") && field_equals(r.get(), 0, 1, "hello") && !r->rows[0]->fields[2],
+		   "ENUM renders labels and distinguishes empty labels from NULL");
+	}
+	// Exercise UINT8/UINT16/UINT32 ordinals, including indices above 255/65535.
+	for (int count : { 255, 256, 65537 }) {
+		const std::string type = "enum_width_" + std::to_string(count);
+		const std::string setup_sql = "CREATE TYPE " + type + " AS ENUM (SELECT 'label_' || i::VARCHAR FROM range(" +
+			std::to_string(count) + ") r(i) ORDER BY i)";
+		duckdb_result setup;
+		if (duckdb_query(conn, setup_sql.c_str(), &setup) != DuckDBSuccess) BAIL_OUT("could not create wide ENUM");
+		duckdb_destroy_result(&setup);
+		const std::string expected = "label_" + std::to_string(count - 1);
+		const std::string sql = "SELECT '" + expected + "'::" + type;
+		std::unique_ptr<SQLite3_result> r(run(conn, sql.c_str()));
+		ok(field_equals(r.get(), 0, 0, expected.c_str()), "ENUM dictionary of %d labels preserves its final ordinal", count);
+	}
+	{
+		duckdb_result setup;
+		if (duckdb_query(conn, "CREATE TYPE enum_nul AS ENUM (SELECT 'a' || chr(0) || 'b')", &setup) != DuckDBSuccess)
+			BAIL_OUT("could not create embedded-NUL ENUM");
+		duckdb_destroy_result(&setup);
+		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT ('a' || chr(0) || 'b')::enum_nul"));
+		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] && r->rows[0]->sizes[0] == 3 &&
+		   std::memcmp(r->rows[0]->fields[0], "a\0b", 3) == 0, "ENUM labels preserve embedded NUL bytes");
+	}
+	ok(duckdb_type_renders_as_text(DUCKDB_TYPE_TIME_NS) && duckdb_type_renders_as_text(DUCKDB_TYPE_ENUM) &&
+	   duckdb_type_renders_as_text(DUCKDB_TYPE_BIT), "TIME_NS, ENUM and BIT need no query-wide VARCHAR wrapper");
 
 	for (const bool seconds : { true, false }) {
 		duckdb_prepared_statement statement = nullptr;
