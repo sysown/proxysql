@@ -2346,7 +2346,7 @@
       "execution_step": "Make-test"
     },
     {
-      "workflow": "CI-codeql",
+      "workflow": "CI-CodeQL",
       "file": "ci-codeql.yml",
       "job": "analyze",
       "automatic": true,

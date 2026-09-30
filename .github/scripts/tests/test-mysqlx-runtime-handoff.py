@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 
@@ -33,10 +34,11 @@ def compile_shared(output: Path, source: str, *link_args: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def run_script(step: dict, cwd: Path) -> subprocess.CompletedProcess[str]:
+def run_script(step: dict, cwd: Path, tier: str = "v40") -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", "-c", "set -euo pipefail\n" + step["run"]],
         cwd=cwd,
+        env={**os.environ, "IS_V40": str(tier == "v40").lower()},
         text=True,
         capture_output=True,
         check=False,
@@ -71,15 +73,15 @@ def create_workspace(root: Path, dynamic_libpq: bool) -> tuple[Path, Path]:
 
 stage = named_step(
     workflow_steps(".github/workflows/ci-builds.yml", "builds"),
-    "Stage MySQLX runtime libraries in test handoff",
+    "Stage compiled runtime libraries in test handoff",
 )
 assert "inputs.trusted" in stage["if"]
-assert "matrix.tier == 'v40'" in stage["if"]
+assert "matrix.tier" not in stage["if"]
 for trusted in (False, True):
     for tier in ('v30', 'v31', 'v40'):
         expression = stage['if'].removeprefix('${{').removesuffix('}}').strip()
         expression = expression.replace('inputs.trusted', str(trusted)).replace('success()', 'True').replace('matrix.tier', repr(tier)).replace('&&', ' and ')
-        assert eval(expression, {'__builtins__': {}}, {}) == (trusted and tier == 'v40')
+        assert eval(expression, {'__builtins__': {}}, {}) == trusted
 
 
 with tempfile.TemporaryDirectory() as directory:
@@ -116,5 +118,16 @@ with tempfile.TemporaryDirectory() as directory:
     result = run_script(stage, cwd)
     assert result.returncode != 0
     assert "cannot inspect test/tap/tap/libtap.so" in result.stdout + result.stderr
+
+for tier in ('v30', 'v31'):
+    with tempfile.TemporaryDirectory() as directory:
+        cwd = Path(directory)
+        repo, libpq = create_workspace(cwd, dynamic_libpq=True)
+        (repo / "plugins/mysqlx/ProxySQL_MySQLX_Plugin.so").unlink()
+        result = run_script(stage, cwd, tier)
+        assert result.returncode == 0, result.stdout + result.stderr
+        runtime_dir = repo / "test/tap/tap/_runtime_libs"
+        assert (runtime_dir / "libpq.so.5").read_bytes() == libpq.read_bytes()
+        assert not (runtime_dir / "ProxySQL_MySQLX_Plugin.so").exists()
 
 print("MySQLX runtime handoff contract passed")

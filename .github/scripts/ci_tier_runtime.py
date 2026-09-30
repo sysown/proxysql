@@ -55,7 +55,12 @@ def standalone_selection():
     """Snapshot labels for suites triggered directly, without a CI-builds producer."""
     gh=json.loads(os.environ['GITHUB_JSON']);api=GitHubAPI(gh['repository'])
     identity=dict(repository=gh['repository'],sha=gh['sha'],run_id=int(gh['run_id']))
+    existing=[]
     if int(gh['run_attempt'])>1:
+        # An earlier attempt may have failed before upload. Only absence permits
+        # a fresh selection; expired, ambiguous or corrupt snapshots must fail.
+        existing=[a for a in api.artifacts(identity['run_id']) if a['name']=='ci-tier-selection']
+    if existing:
         snapshot=api.json_artifact(identity['run_id'],'ci-tier-selection','selection.json')
         if any(snapshot.get(key)!=value for key,value in identity.items()):
             raise ValueError('standalone selection identity mismatch')
@@ -71,7 +76,8 @@ def standalone_selection():
         or selection['mode'] not in ('normal','asan')):
         raise ValueError('invalid standalone tier selection')
     Path('selection.json').write_text(json.dumps(snapshot))
-    emit(tiers=selection['tiers'],mode=selection['mode'],control_sha=snapshot['control_sha'])
+    emit(tiers=selection['tiers'],mode=selection['mode'],control_sha=snapshot['control_sha'],
+         publish_selection=not bool(existing))
 
 def stamp():
     plan=read_plan();leg=json.loads(os.environ['CI_LEG']);root=Path('proxysql')

@@ -40,7 +40,7 @@ jobs:
       run: |
         python3 .github/scripts/ci_tier_runtime.py selection
     - name: Save selection for reruns
-      if: ${{ github.run_attempt == 1 }}
+      if: ${{ steps.selection.outputs.publish_selection == 'true' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: ci-tier-selection

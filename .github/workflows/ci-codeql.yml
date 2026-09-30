@@ -1,4 +1,4 @@
-name: CI-codeql
+name: CI-CodeQL
 'on':
   workflow_call:
     inputs:
@@ -83,7 +83,7 @@ jobs:
       name: Build C++
       run: |
         cd proxysql
-        make -j$(nproc) clickhouse
+        make -j"$(nproc)" clickhouse
       env:
         PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
         PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
@@ -104,7 +104,11 @@ jobs:
     needs:
     - tier-context
     if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['analyze'][0] != null }}
-    permissions: write-all
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      security-events: write
   tier-summary:
     permissions:
       actions: read

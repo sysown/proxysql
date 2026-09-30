@@ -1,9 +1,15 @@
-import json,unittest
+import json,subprocess,sys,unittest
 from pathlib import Path
 import yaml
 ROOT=Path(__file__).resolve().parents[3]
 def workflow(name):return yaml.safe_load((ROOT/'.github/workflows'/name).read_text())
 class WorkflowTests(unittest.TestCase):
+ def test_plugin_handoff_contracts(self):
+  for script in ['test-genai-plugin-handoff.py','test-mysqlx-runtime-handoff.py']:
+   with self.subTest(script=script):
+    result=subprocess.run([sys.executable,str(ROOT/'.github/scripts/tests'/script)],
+                          cwd=ROOT,capture_output=True,text=True)
+    self.assertEqual(result.returncode,0,result.stdout+result.stderr)
  def test_build_matrix_uses_single_snapshot(self):
   d=workflow('ci-builds.yml');self.assertIn('plan',d['jobs'])
   self.assertIn('needs.plan.outputs.matrix',str(d['jobs']['builds']['strategy']['matrix']))
@@ -15,8 +21,14 @@ class WorkflowTests(unittest.TestCase):
    with self.subTest(file=item['file'],job=item['job']):
     self.assertIn('tier-context',d['jobs'])
     self.assertIn('matrix.check_name',j.get('name',''))
-    command='make ' if item.get('build_from_source') else 'ci_tier_runtime.py restore'
-    self.assertTrue(any(command in s.get('run','') for s in j['steps']))
+    if item.get('build_from_source'):
+     build_name={'ci-codeql.yml':'Build C++','ci-maketest.yml':'Make-test'}.get(item['file'],'Build selected product inside Docker')
+     build=next(s for s in j['steps'] if s.get('name')==build_name)
+     self.assertRegex(build.get('run',''),r'(?m)^\s*make\s+')
+     self.assertIn('PROXYSQL40',build.get('env',{}))
+     self.assertIn('PROXYSQL31',build.get('env',{}))
+    else:
+     self.assertTrue(any('ci_tier_runtime.py restore' in s.get('run','') for s in j['steps']))
     self.assertFalse(any('repos/${REPO}/actions/artifacts?name=' in s.get('run','') for s in j['steps']))
  def test_no_producer_only_test_runner(self):
   self.assertNotIn('ci_tier_runtime.py units', (ROOT/'.github/workflows/ci-builds.yml').read_text())
@@ -38,7 +50,7 @@ class WorkflowTests(unittest.TestCase):
    self.assertNotIn('TIER',run)
  def test_other_compiled_workflows_use_the_same_selected_tiers(self):
   cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
-  for name in ['CI-maketest','CI-codeql']:
+  for name in ['CI-maketest','CI-CodeQL']:
    rows=[r for r in cat['consumers'] if r['workflow']==name]
    self.assertEqual(len(rows),1)
    self.assertEqual(set(rows[0]['tiers']),{'v30','v31','v40'})

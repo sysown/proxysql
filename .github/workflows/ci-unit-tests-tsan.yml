@@ -87,7 +87,10 @@ jobs:
     - tier-context
     - pick-runner
     if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['unit-tests-tsan'][0] != null }}
-    permissions: write-all
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
     timeout-minutes: 120
     steps:

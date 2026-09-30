@@ -91,7 +91,11 @@ jobs:
     if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['unit-tests'][0] != null }}
     runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
     timeout-minutes: 120
-    permissions: write-all
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      id-token: write
     steps:
     - name: Checkout repository
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -157,7 +161,9 @@ jobs:
       if: always()
       run: test -s coverage/lcov.info
     - name: Upload coverage to Codecov
-      if: always() && steps.require-lcov.outcome == 'success'
+      id: codecov_1
+      if: ${{ !cancelled() && steps.require-lcov.outcome == 'success' }}
+      continue-on-error: true
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
       with:
         codecov_yml_path: proxysql/codecov.yml
@@ -168,8 +174,49 @@ jobs:
         use_oidc: true
         disable_search: true
         plugins: noop
-        fail_ci_if_error: false
+        fail_ci_if_error: true
         verbose: true
+    - name: Wait before Codecov retry 1
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      run: sleep 15
+    - name: Upload coverage to Codecov (retry 1)
+      id: codecov_2
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
+      with:
+        codecov_yml_path: proxysql/codecov.yml
+        override_commit: ${{ env.SHA }}
+        files: proxysql/coverage/lcov.info
+        flags: unit-tests
+        name: unit-tests-asan-coverage-${{ matrix.tier }}
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        fail_ci_if_error: true
+        verbose: true
+    - name: Wait before Codecov retry 2
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      run: sleep 45
+    - name: Upload coverage to Codecov (retry 2)
+      id: codecov_3
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
+      with:
+        codecov_yml_path: proxysql/codecov.yml
+        override_commit: ${{ env.SHA }}
+        files: proxysql/coverage/lcov.info
+        flags: unit-tests
+        name: unit-tests-asan-coverage-${{ matrix.tier }}
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        fail_ci_if_error: true
+        verbose: true
+    - name: Report Codecov upload failure
+      if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
+      run: 'echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."'
     - name: Upload coverage HTML report
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
