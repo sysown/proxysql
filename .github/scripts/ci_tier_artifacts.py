@@ -103,6 +103,25 @@ def safe_members(members):
             # The data filter additionally resolves chains through existing links.
     return members
 
+def handoff_filter(member,dest_path):
+    """tarfile's 'data' filter, working around CPython gh-107845 on older interpreters.
+
+    Before 3.10.13/3.11.5 the data filter resolved a relative symlink target against the destination
+    root instead of the link's own directory, so the in-tree link
+    test/afl_digest_test/c_tokenizer.h -> ../../include/c_tokenizer.h was rejected as
+    LinkOutsideDestinationError (ubuntu-22.04 runners ship Python 3.10.12). On that error, redo the
+    fixed interpreters' check (realpath of the target from the link's directory, following links
+    already extracted) and, if the target stays inside the destination, apply the rest of the data
+    filter to a copy with a harmless target and put the original target back.
+    """
+    try:return tarfile.data_filter(member,dest_path)
+    except tarfile.LinkOutsideDestinationError:
+        if not member.issym():raise
+        root=os.path.realpath(dest_path)
+        target=os.path.realpath(os.path.join(root,os.path.dirname(member.name),member.linkname))
+        if os.path.commonpath([root,target])!=root:raise
+        return tarfile.data_filter(member.replace(linkname='.',deep=False),dest_path).replace(linkname=member.linkname,deep=False)
+
 def binary_version(root):
     root=Path(root).resolve()
     result=subprocess.run([str(root/'src/proxysql'),'--version'],capture_output=True,text=True)
@@ -129,7 +148,7 @@ def restore_handoff(manifest,leg,destination,api):
         with tarpath.open('wb') as out:subprocess.run(['zstd','-d','-c',str(packed)],stdout=out,check=True)
         destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
         with tarfile.open(tarpath) as archive:
-            archive.extractall(destination,members=safe_members(archive.getmembers()),filter='data')
+            archive.extractall(destination,members=safe_members(archive.getmembers()),filter=handoff_filter)
     metadata=json.loads((destination/'src/ci-tier.json').read_text())
     for key,value in [('execution_id',manifest['execution_id']),('sha',manifest['sha']),('tier',leg['tier']),('mode',leg['mode'])]:
         if metadata.get(key)!=value:raise ValueError('restored metadata mismatch: '+key)
