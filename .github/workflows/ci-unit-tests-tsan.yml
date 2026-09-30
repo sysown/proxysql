@@ -1,0 +1,212 @@
+name: CI-unit-tests-tsan
+'on':
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+      consumer_id:
+        type: string
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: ''
+jobs:
+  tier-context:
+    uses: ./.github/workflows/ci-tier-context.yml
+    with:
+      trigger: ${{ inputs.trigger }}
+      consumer_id: ${{ inputs.consumer_id }}
+      control_ref: ${{ inputs.control_ref }}
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
+      consumer_file: ci-unit-tests-tsan.yml
+      consumer_inputs: ${{ toJson(inputs) }}
+    secrets: inherit
+  pick-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+    outputs:
+      runson: ${{ steps.pick.outputs.runson }}
+    steps:
+    - name: Pick runner pool
+      id: pick
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
+        ELIGIBLE: ${{ (github.actor == 'renecannao' || (github.event.workflow_run && github.event.workflow_run.actor.login == 'renecannao'))
+          && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
+      run: |
+        set -uo pipefail
+        choice='"ubuntu-24.04"'
+        if [ "${ELIGIBLE:-}" = "true" ]; then
+          POOL="${POOL_SIZE:-6}"
+          demand=0; err=0
+          : > e1
+          in_progress_ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>e1) || err=1
+          queued_ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id' 2>>e1) || err=1
+          if [ "$err" = "0" ]; then
+            ids="${in_progress_ids:-}"$'\n'"${queued_ids:-}"
+            for rid in ${ids}; do
+              [ -n "$rid" ] || continue
+              [ "$demand" -ge "$POOL" ] && break
+              if ! n=$(gh api --paginate --slurp "repos/${REPO}/actions/runs/${rid}/jobs?per_page=100" 2>>e1 | jq '[.[].jobs[]|select((.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm"))) or (.status=="queued" and (([.labels[]]|index("proxysql-ci")) != null)))]|length'); then
+                err=1
+                break
+              fi
+              demand=$(( demand + ${n:-0} ))
+            done
+          fi
+          if [ "$err" = "0" ]; then
+            free=$(( POOL - demand ))
+            echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (occupied+queued)"
+            if [ "${free}" -ge 1 ]; then
+              choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
+            else
+              choice='"ubuntu-24.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
+            fi
+          else
+            echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1
+            choice='"ubuntu-24.04"'; echo ">>> demand query failed -> spill to GitHub-hosted"
+          fi
+        else
+          echo ">>> not eligible for self-hosted -> GitHub-hosted"
+        fi
+        echo "runson=${choice}" >> "$GITHUB_OUTPUT"
+        echo ">>> decision: runson=${choice}"
+  unit-tests-tsan:
+    needs:
+    - tier-context
+    - pick-runner
+    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['unit-tests-tsan'][0] != null }}
+    permissions: write-all
+    runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    timeout-minutes: 120
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        fetch-depth: 0
+        persist-credentials: false
+        submodules: 'false'
+        path: proxysql
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-context.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Start selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      working-directory: ${{ github.workspace }}
+    - name: Relax ASLR for ThreadSanitizer
+      run: sudo sysctl -w vm.mmap_rnd_bits=28
+    - name: Build selected product inside Docker
+      env:
+        WITHTSAN: '1'
+        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
+        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
+      run: |
+        make ubuntu24-tap
+    - name: Filter tests by compiled product version
+      run: |
+        sudo "${GITHUB_WORKSPACE}/ci-control/.github/scripts/prune-tier-handoff.bash" \
+          --binary src/proxysql --groups test/tap/groups/groups.json
+    - name: Run mysqlx-tsan-g1 + unit-tests-g1 TAP groups inside Docker
+      env:
+        TAP_GROUP: mysqlx-tsan-g1
+        INFRA_ID: ci-unit-tests-tsan
+      run: |
+        # Two on-the-fly apt installs: the build image is package-build-
+        # focused, not test-execution-focused, so it ships neither.
+        #   * python3-packaging: run-tests-isolated.bash uses it to
+        #     compare @proxysql_min_version tags from groups.json.
+        #   * libprotobuf-dev: the mysqlx_*-t binaries link dynamically
+        #     against libprotobuf.so.32 (mysqlx plugin's protobuf-3.x
+        #     dependency). The build entrypoint installs it during the
+        #     build phase, but `docker compose run --rm` starts from
+        #     the original image so the runtime lib has to be
+        #     re-installed here.
+        docker compose run --rm \
+          -e WORKSPACE=/opt/proxysql \
+          -e INFRA_ID="${INFRA_ID}" \
+          -e TAP_GROUP="${TAP_GROUP}" \
+          --entrypoint bash \
+          ubuntu24_dbg_build \
+           -lc 'apt-get update -qq \
+                && apt-get install -y --no-install-recommends python3-packaging libprotobuf-dev \
+                && cd /opt/proxysql \
+                && { TAP_GROUP=mysqlx-tsan-g1 test/infra/control/run-tests-isolated.bash; mysqlx_status=$?
+                     tsan_excl=$(python3 -c "import json; g=json.load(open('\''test/tap/groups/groups.json'\'')); print('\''|'\''.join(n for n,m in g.items() if '\''mysqlx-tsan-g1'\'' in m))")
+                     SKIP_PROXYSQL=1 TSAN_OPTIONS="halt_on_error=0:abort_on_error=0:exitcode=0:second_deadlock_stack=1:history_size=7" TAP_GROUP=unit-tests-g1 TEST_PY_TAP_EXCL="${tsan_excl}" test/infra/control/run-tests-isolated.bash; unit_status=$?
+                     test "${mysqlx_status}" -eq 0 && test "${unit_status}" -eq 0; }'
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: |
+        # actions/upload-artifact dies with EACCES when it scandirs
+        # into directories under ci_*_logs/ that were created inside
+        # the docker build container (root-owned). Make everything
+        # readable by the runner user before upload.
+        sudo chmod -R a+rX ci_*_logs/ 2>/dev/null || true
+    - name: Archive logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
+        path: proxysql/ci_*_logs/
+    - name: Complete selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ always() }}
+      working-directory: ${{ github.workspace }}
+    name: ${{ matrix.check_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.tier-context.outputs.matrices)['unit-tests-tsan'] || fromJson('[{}]') }}
+    env:
+      SHA: ${{ needs.tier-context.outputs.sha }}
+      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
+      CI_LEG: ${{ toJson(matrix) }}
+      TIER: ${{ matrix.tier }}
+      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
+    defaults:
+      run:
+        working-directory: proxysql
+  tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+    needs:
+    - tier-context
+    - unit-tests-tsan
+    if: ${{ always() && needs.tier-context.result == 'success' }}
+    uses: ./.github/workflows/ci-tier-summary.yml
+    with:
+      binding: ${{ needs.tier-context.outputs.binding }}
+      control_ref: ${{ needs.tier-context.outputs.control_sha }}
+    secrets: inherit

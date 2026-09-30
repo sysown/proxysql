@@ -21,7 +21,8 @@
           "var": "MATRIX_3P_AIOMYSQL_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-aiomysql",
@@ -43,7 +44,8 @@
           "var": "MATRIX_3P_AIOMYSQL_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-django-framework",
@@ -65,7 +67,8 @@
           "var": "MATRIX_3P_DJANGO_FRAMEWORK_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-django-framework",
@@ -87,7 +90,8 @@
           "var": "MATRIX_3P_DJANGO_FRAMEWORK_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-django-framework",
@@ -109,7 +113,8 @@
           "var": "MATRIX_3P_DJANGO_FRAMEWORK_connector_pgsql"
         }
       },
-      "instance": "run-pgsql"
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-laravel-framework",
@@ -131,7 +136,8 @@
           "var": "MATRIX_3P_LARAVEL_FRAMEWORK_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-laravel-framework",
@@ -153,7 +159,8 @@
           "var": "MATRIX_3P_LARAVEL_FRAMEWORK_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-laravel-framework",
@@ -175,7 +182,8 @@
           "var": "MATRIX_3P_LARAVEL_FRAMEWORK_connector_pgsql"
         }
       },
-      "instance": "run-pgsql"
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-mariadb-connector-c",
@@ -197,7 +205,8 @@
           "var": "MATRIX_3P_MARIADB_CONNECTOR_C_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-mariadb-connector-c",
@@ -219,7 +228,8 @@
           "var": "MATRIX_3P_MARIADB_CONNECTOR_C_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-mysql-connector-j",
@@ -241,7 +251,8 @@
           "var": "MATRIX_3P_MYSQL_CONNECTOR_J_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-mysql-connector-j",
@@ -263,7 +274,8 @@
           "var": "MATRIX_3P_MYSQL_CONNECTOR_J_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-pgjdbc",
@@ -285,7 +297,8 @@
           "var": "MATRIX_3P_PGJDBC_connector_pgsql"
         }
       },
-      "instance": "run-pgsql"
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-php-pdo-mysql",
@@ -307,7 +320,8 @@
           "var": "MATRIX_3P_PHP_PDO_MYSQL_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-php-pdo-mysql",
@@ -329,7 +343,8 @@
           "var": "MATRIX_3P_PHP_PDO_MYSQL_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-php-pdo-pgsql",
@@ -351,7 +366,8 @@
           "var": "MATRIX_3P_PHP_PDO_PGSQL_connector_pgsql"
         }
       },
-      "instance": "run-pgsql"
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-postgresql",
@@ -373,7 +389,8 @@
           "var": "MATRIX_3P_POSTGRESQL_connector_pgsql"
         }
       },
-      "instance": "run-pgsql"
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-sqlalchemy",
@@ -395,7 +412,8 @@
           "var": "MATRIX_3P_SQLALCHEMY_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-sqlalchemy",
@@ -417,7 +435,8 @@
           "var": "MATRIX_3P_SQLALCHEMY_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-sqlalchemy",
@@ -439,7 +458,8 @@
           "var": "MATRIX_3P_SQLALCHEMY_connector_pgsql"
         }
       },
-      "instance": "run-pgsql"
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-pymysql",
@@ -447,7 +467,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -459,7 +481,8 @@
           "var": "MATRIX_3P_PYMYSQL_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-pymysql",
@@ -467,7 +490,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -479,7 +504,8 @@
           "var": "MATRIX_3P_PYMYSQL_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-mysqlclient",
@@ -487,7 +513,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -499,7 +527,8 @@
           "var": "MATRIX_3P_MYSQLCLIENT_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-mysqlclient",
@@ -507,7 +536,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -519,7 +550,8 @@
           "var": "MATRIX_3P_MYSQLCLIENT_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-mysql-connector-python",
@@ -527,7 +559,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -539,7 +573,8 @@
           "var": "MATRIX_3P_MYSQL_CONNECTOR_PYTHON_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-mysql-connector-python",
@@ -547,7 +582,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -559,7 +596,8 @@
           "var": "MATRIX_3P_MYSQL_CONNECTOR_PYTHON_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-go-mysql",
@@ -567,7 +605,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -579,7 +619,8 @@
           "var": "MATRIX_3P_GO_MYSQL_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-go-mysql",
@@ -587,7 +628,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -599,7 +642,8 @@
           "var": "MATRIX_3P_GO_MYSQL_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-psycopg",
@@ -607,7 +651,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -619,7 +665,8 @@
           "var": "MATRIX_3P_PSYCOPG_connector_pgsql"
         }
       },
-      "instance": "run-pgsql"
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-node-mysql2",
@@ -627,7 +674,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -639,7 +688,8 @@
           "var": "MATRIX_3P_NODE_MYSQL2_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-node-mysql2",
@@ -647,7 +697,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -659,7 +711,8 @@
           "var": "MATRIX_3P_NODE_MYSQL2_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-ai-g1",
@@ -736,7 +789,8 @@
           "mysql57"
         ]
       },
-      "instance": "run"
+      "instance": "run",
+      "execution_step": "Run basic tests"
     },
     {
       "workflow": "CI-legacy-binlog-g1",
@@ -1957,7 +2011,9 @@
       "job": "tests",
       "automatic": true,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [
         "mysqlx-g1"
@@ -1974,14 +2030,20 @@
       "job": "e2e-tests",
       "automatic": true,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [
         {}
       ],
       "axes": {},
-      "instance": "run"
+      "instance": "run",
+      "applicability_groups": [
+        "mysqlx-g1"
+      ],
+      "execution_step": "Run mysqlx e2e tests inside build image (--network host -> dbdeployer mysqlx)"
     },
     {
       "workflow": "CI-mysqlx",
@@ -1989,7 +2051,9 @@
       "job": "soak-tests",
       "automatic": true,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [
         "mysqlx-soak-g1"
@@ -2085,7 +2149,8 @@
           "mysql57"
         ]
       },
-      "instance": "run"
+      "instance": "run",
+      "execution_step": "Replication-tests"
     },
     {
       "workflow": "CI-selftests",
@@ -2112,7 +2177,8 @@
           "mysql57"
         ]
       },
-      "instance": "run"
+      "instance": "run",
+      "execution_step": "Self-tests"
     },
     {
       "workflow": "CI-set_parser_algorithm_3-g1",
@@ -2164,7 +2230,8 @@
           "mysql57"
         ]
       },
-      "instance": "run"
+      "instance": "run",
+      "execution_step": "Shun-tests"
     },
     {
       "workflow": "CI-taptests-pgsql-cluster",
@@ -2211,11 +2278,31 @@
       "instance": "run"
     },
     {
-      "workflow": "CI-builds",
-      "file": "ci-unit-group.yml",
-      "job": "tier-units",
+      "workflow": "CI-unit-tests-asan-coverage",
+      "file": "ci-unit-tests-asan-coverage.yml",
+      "job": "unit-tests",
       "automatic": true,
       "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [
+        {}
+      ],
+      "axes": {},
+      "instance": "run",
+      "build_from_source": true,
+      "execution_step": "Run unit tests + capture coverage inside Docker"
+    },
+    {
+      "workflow": "CI-unit-tests-tsan",
+      "file": "ci-unit-tests-tsan.yml",
+      "job": "unit-tests-tsan",
+      "automatic": true,
+      "tiers": [
+        "v40",
         "v30",
         "v31"
       ],
@@ -2224,7 +2311,64 @@
       ],
       "cells": [
         {}
-      ]
+      ],
+      "axes": {},
+      "instance": "run",
+      "build_from_source": true
+    },
+    {
+      "workflow": "CI-maketest",
+      "file": "ci-maketest.yml",
+      "job": "builds",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "testdist": [
+          "ubuntu22"
+        ],
+        "target": [
+          "testaurora",
+          "testgalera",
+          "testgrouprep",
+          "testreadonly",
+          "testreplicationlag",
+          "testall"
+        ]
+      },
+      "instance": "run",
+      "build_from_source": true,
+      "execution_step": "Make-test"
+    },
+    {
+      "workflow": "CI-codeql",
+      "file": "ci-codeql.yml",
+      "job": "analyze",
+      "automatic": true,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "testdist": [
+          "ubuntu24-tap-genai-gcov"
+        ],
+        "language": [
+          "cpp",
+          "python"
+        ]
+      },
+      "instance": "run",
+      "build_from_source": true,
+      "execution_step": "Perform CodeQL Analysis"
     }
   ]
 }

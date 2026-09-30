@@ -11,13 +11,43 @@ class WorkflowTests(unittest.TestCase):
  def test_consumers_have_tier_identity(self):
   cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
   for item in cat['consumers']:
-   if item['job']=='tier-units':continue
    d=workflow(item['file']);j=d['jobs'][item['job']]
    with self.subTest(file=item['file'],job=item['job']):
     self.assertIn('tier-context',d['jobs'])
     self.assertIn('matrix.check_name',j.get('name',''))
-    self.assertTrue(any('ci_tier_runtime.py restore' in s.get('run','') for s in j['steps']))
+    command='make ' if item.get('build_from_source') else 'ci_tier_runtime.py restore'
+    self.assertTrue(any(command in s.get('run','') for s in j['steps']))
     self.assertFalse(any('repos/${REPO}/actions/artifacts?name=' in s.get('run','') for s in j['steps']))
+ def test_no_producer_only_test_runner(self):
+  self.assertNotIn('ci_tier_runtime.py units', (ROOT/'.github/workflows/ci-builds.yml').read_text())
+  cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
+  self.assertFalse(any(row['job']=='tier-units' for row in cat['consumers']))
+ def test_sanitizers_use_shared_consumers_for_every_tier(self):
+  cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
+  for suffix,job in [('asan-coverage','unit-tests'),('tsan','unit-tests-tsan')]:
+   rows=[r for r in cat['consumers'] if r['workflow']=='CI-unit-tests-'+suffix]
+   self.assertEqual(len(rows),1)
+   self.assertEqual(set(rows[0]['tiers']),{'v30','v31','v40'})
+   self.assertTrue(rows[0]['automatic'])
+   d=workflow(rows[0]['file']);j=d['jobs'][job]
+   self.assertIn('needs.tier-context.outputs.matrices',str(j['strategy']))
+   run=next(s['run'] for s in j['steps'] if s.get('name','').startswith('Run '))
+   self.assertIn('docker compose run --rm',run)
+   self.assertIn('ubuntu24_dbg_build',run)
+   self.assertNotIn('matrix.tier',run)
+   self.assertNotIn('TIER',run)
+ def test_other_compiled_workflows_use_the_same_selected_tiers(self):
+  cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
+  for name in ['CI-maketest','CI-codeql']:
+   rows=[r for r in cat['consumers'] if r['workflow']==name]
+   self.assertEqual(len(rows),1)
+   self.assertEqual(set(rows[0]['tiers']),{'v30','v31','v40'})
+   self.assertTrue(rows[0]['automatic'])
+ def test_catalogue_does_not_choose_different_workflows_by_tier(self):
+  cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
+  for row in cat['consumers']:
+   with self.subTest(workflow=row['workflow']):
+    self.assertEqual(set(row['tiers']),{'v30','v31','v40'})
  def test_specialty_trigger_unchanged(self):
   for file in ['ci-unit-group.yml','ci-ai-gcov.yml']:
    d=workflow(file);events=d.get('on',d.get(True,{}))

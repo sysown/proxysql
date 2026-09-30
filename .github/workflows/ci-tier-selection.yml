@@ -1,0 +1,48 @@
+name: Select standalone product tiers
+'on':
+  workflow_call:
+    inputs:
+      control_ref:
+        type: string
+        default: GH-Actions
+    outputs:
+      control_sha:
+        value: ${{ jobs.selection.outputs.control_sha }}
+      tiers:
+        value: ${{ jobs.selection.outputs.tiers }}
+      mode:
+        value: ${{ jobs.selection.outputs.mode }}
+jobs:
+  selection:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      control_sha: ${{ steps.selection.outputs.control_sha }}
+      tiers: ${{ steps.selection.outputs.tiers }}
+      mode: ${{ steps.selection.outputs.mode }}
+    steps:
+    - name: Checkout CI selection code
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ inputs.control_ref }}
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Select product tiers once per run
+      id: selection
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+      run: |
+        python3 .github/scripts/ci_tier_runtime.py selection
+    - name: Save selection for reruns
+      if: ${{ github.run_attempt == 1 }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-tier-selection
+        path: selection.json
+        retention-days: 30

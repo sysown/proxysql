@@ -1,0 +1,224 @@
+name: CI-unit-tests-asan-coverage
+'on':
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+      consumer_id:
+        type: string
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: ''
+env:
+  ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1:halt_on_error=1
+jobs:
+  tier-context:
+    uses: ./.github/workflows/ci-tier-context.yml
+    with:
+      trigger: ${{ inputs.trigger }}
+      consumer_id: ${{ inputs.consumer_id }}
+      control_ref: ${{ inputs.control_ref }}
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
+      consumer_file: ci-unit-tests-asan-coverage.yml
+      consumer_inputs: ${{ toJson(inputs) }}
+    secrets: inherit
+  pick-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+    outputs:
+      runson: ${{ steps.pick.outputs.runson }}
+    steps:
+    - name: Pick runner pool
+      id: pick
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
+        ELIGIBLE: ${{ (github.actor == 'renecannao' || (github.event.workflow_run && github.event.workflow_run.actor.login == 'renecannao'))
+          && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
+      run: |
+        set -uo pipefail
+        choice='"ubuntu-24.04"'
+        if [ "${ELIGIBLE:-}" = "true" ]; then
+          POOL="${POOL_SIZE:-6}"
+          demand=0; err=0
+          : > e1
+          in_progress_ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>e1) || err=1
+          queued_ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id' 2>>e1) || err=1
+          if [ "$err" = "0" ]; then
+            ids="${in_progress_ids:-}"$'\n'"${queued_ids:-}"
+            for rid in ${ids}; do
+              [ -n "$rid" ] || continue
+              [ "$demand" -ge "$POOL" ] && break
+              if ! n=$(gh api --paginate --slurp "repos/${REPO}/actions/runs/${rid}/jobs?per_page=100" 2>>e1 | jq '[.[].jobs[]|select((.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm"))) or (.status=="queued" and (([.labels[]]|index("proxysql-ci")) != null)))]|length'); then
+                err=1
+                break
+              fi
+              demand=$(( demand + ${n:-0} ))
+            done
+          fi
+          if [ "$err" = "0" ]; then
+            free=$(( POOL - demand ))
+            echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (occupied+queued)"
+            if [ "${free}" -ge 1 ]; then
+              choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
+            else
+              choice='"ubuntu-24.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
+            fi
+          else
+            echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1
+            choice='"ubuntu-24.04"'; echo ">>> demand query failed -> spill to GitHub-hosted"
+          fi
+        else
+          echo ">>> not eligible for self-hosted -> GitHub-hosted"
+        fi
+        echo "runson=${choice}" >> "$GITHUB_OUTPUT"
+        echo ">>> decision: runson=${choice}"
+  unit-tests:
+    needs:
+    - tier-context
+    - pick-runner
+    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['unit-tests'][0] != null }}
+    runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    timeout-minutes: 120
+    permissions: write-all
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        fetch-depth: 0
+        persist-credentials: false
+        submodules: 'false'
+        path: proxysql
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-context.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Start selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      working-directory: ${{ github.workspace }}
+    - name: Relax ASLR for AddressSanitizer
+      run: sudo sysctl -w vm.mmap_rnd_bits=28
+    - name: Build selected product inside Docker
+      env:
+        WITHASAN: '1'
+        WITHGCOV: '1'
+        NOJEMALLOC: '1'
+        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
+        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
+      run: |
+        make ubuntu24-tap
+    - name: Filter tests by compiled product version
+      run: |
+        sudo "${GITHUB_WORKSPACE}/ci-control/.github/scripts/prune-tier-handoff.bash" \
+          --binary src/proxysql --groups test/tap/groups/groups.json
+    - name: Run unit tests + capture coverage inside Docker
+      run: |
+        docker compose run --rm \
+          -e ASAN_OPTIONS="${ASAN_OPTIONS}" \
+          --entrypoint bash \
+          ubuntu24_dbg_build \
+          -lc 'cd /opt/proxysql && test/infra/control/run-unit-tests-asan-coverage.bash'
+    - name: Fix artifact permissions
+      if: always()
+      run: |
+        sudo chmod -R a+rX coverage/ unit-test-logs/ 2>/dev/null || true
+    - name: Upload coverage LCOV file
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: unit-tests-coverage-lcov-${{ env.SHA }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
+        path: proxysql/coverage/lcov.info
+        if-no-files-found: warn
+    - name: Require non-empty coverage/lcov.info
+      id: require-lcov
+      if: always()
+      run: test -s coverage/lcov.info
+    - name: Upload coverage to Codecov
+      if: always() && steps.require-lcov.outcome == 'success'
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
+      with:
+        codecov_yml_path: proxysql/codecov.yml
+        override_commit: ${{ env.SHA }}
+        files: proxysql/coverage/lcov.info
+        flags: unit-tests
+        name: unit-tests-asan-coverage-${{ matrix.tier }}
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        fail_ci_if_error: false
+        verbose: true
+    - name: Upload coverage HTML report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: unit-tests-coverage-html-${{ env.SHA }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
+        path: proxysql/coverage/html/
+        if-no-files-found: warn
+    - name: Upload unit-test logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: unit-tests-logs-${{ env.SHA }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
+        path: proxysql/unit-test-logs/
+        if-no-files-found: warn
+    - name: Complete selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ always() }}
+      working-directory: ${{ github.workspace }}
+    name: ${{ matrix.check_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.tier-context.outputs.matrices)['unit-tests'] || fromJson('[{}]') }}
+    env:
+      SHA: ${{ needs.tier-context.outputs.sha }}
+      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
+      CI_LEG: ${{ toJson(matrix) }}
+      TIER: ${{ matrix.tier }}
+      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
+    defaults:
+      run:
+        working-directory: proxysql
+  tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+    needs:
+    - tier-context
+    - unit-tests
+    if: ${{ always() && needs.tier-context.result == 'success' }}
+    uses: ./.github/workflows/ci-tier-summary.yml
+    with:
+      binding: ${{ needs.tier-context.outputs.binding }}
+      control_ref: ${{ needs.tier-context.outputs.control_sha }}
+    secrets: inherit

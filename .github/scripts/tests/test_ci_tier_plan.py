@@ -46,7 +46,8 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(p['execution_id'],'t12-a1-b34-a1')
         self.assertEqual(len(p['checks']),6) # two builds, four tests; manual excluded
         self.assertEqual(len(consumer_matrix(p,'CI-example','tests')),4)
-        self.assertEqual(p['legs'][1]['coverage'],False)
+        self.assertTrue(all(leg['coverage'] for leg in p['legs']))
+        self.assertTrue(all(cell['coverage'] for cell in consumer_matrix(p,'CI-example','tests')))
         self.assertNotEqual(p['legs'][0]['artifact_name'],p['legs'][1]['artifact_name'])
         validate_manifest(p)
         p['schema']=900
@@ -57,6 +58,14 @@ class SelectionTests(unittest.TestCase):
         cat={'consumers':[dict(workflow='CI-example',file='ci-example.yml',job='tests',automatic=True,tiers=['v40'],groups=[],cells=[],axes={'infradb':{'var':'MATRIX_mysql'}},instance='run')]}
         plan=make_plan(c,dict(tiers=['v40'],mode='normal',pr_number=42),cat)
         self.assertEqual(plan['checks'][1]['cell']['infradb'],'mysql84')
+
+    def test_feature_applicability_does_not_claim_an_unexecuted_tap_group(self):
+        row=dict(workflow='CI-plugin',file='ci-plugin.yml',job='e2e',automatic=True,
+                 tiers=['v40','v30','v31'],groups=[],applicability_groups=['plugin-g1'],cells=[{}])
+        plan=make_plan(self.context(),dict(tiers=['v40','v30','v31'],mode='normal'),{'consumers':[row]})
+        checks=[check for check in plan['checks'] if check['workflow']=='CI-plugin']
+        self.assertEqual(len(checks),3)
+        self.assertTrue(all(check['groups']==['plugin-g1'] for check in checks))
 
     def test_repository_short_minimum_version_tags(self):
         groups={'core-t':['g1'],'innovative-t':['g1','@proxysql_min_version:3.1'],'plugin-t':['g1','@proxysql_min_version:4.0']}

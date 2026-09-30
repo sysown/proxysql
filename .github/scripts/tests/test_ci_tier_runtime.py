@@ -10,7 +10,7 @@ class RuntimeTests(unittest.TestCase):
  def test_failed_producer_marks_unrun_units_and_consumers_skipped(self):
   plan={'repository':'sysown/proxysql','checks':[
    dict(check_id=1,workflow='CI-builds',job='builds'),
-   dict(check_id=2,workflow='CI-builds',job='tier-units'),
+   dict(check_id=2,workflow='CI-unit-tests-tsan',job='unit-tests-tsan'),
    dict(check_id=3,workflow='CI-tests',job='tests')]}
   api=Mock();api.request.return_value={'status':'queued'}
   with patch.object(runtime,'read_plan',return_value=plan),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'reconcile'),patch.dict(os.environ,{'BUILD_RESULT':'failure'}):
@@ -19,13 +19,36 @@ class RuntimeTests(unittest.TestCase):
   self.assertEqual([p['conclusion'] for p in writes],['failure','skipped','skipped'])
 
  def test_failed_producer_does_not_call_started_units_blocked(self):
-  plan={'repository':'sysown/proxysql','checks':[dict(check_id=1,workflow='CI-builds',job='tier-units')]}
+  plan={'repository':'sysown/proxysql','checks':[dict(check_id=1,workflow='CI-unit-tests-tsan',job='unit-tests-tsan')]}
   api=Mock();api.request.return_value={'status':'in_progress'}
   with patch.object(runtime,'read_plan',return_value=plan),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'reconcile'),patch.dict(os.environ,{'BUILD_RESULT':'failure'}):
    with self.assertRaisesRegex(RuntimeError,'required producer job failed'):runtime.finalize()
   self.assertEqual(api.request.call_args.args[2]['conclusion'],'failure')
   self.assertNotIn('blocked',api.request.call_args.args[2]['output']['summary'])
 
+ def test_standalone_selection_snapshots_labels_and_reuses_them_on_rerun(self):
+  gh=dict(repository='sysown/proxysql',sha='a'*40,run_id='9',run_attempt='1',event_name='pull_request',event={'pull_request':{'number':42}})
+  api=Mock();api.request.return_value={'labels':[{'name':'ci:v3.0'},{'name':'ci:v3.1'}]}
+  with tempfile.TemporaryDirectory() as folder:
+   prior=os.getcwd();os.chdir(folder)
+   try:
+    with patch.object(runtime,'GitHubAPI',return_value=api),patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'GITHUB_OUTPUT':str(Path(folder)/'out')}):
+     self.assertTrue(hasattr(runtime,'standalone_selection'))
+     runtime.standalone_selection()
+     snapshot=json.loads(Path('selection.json').read_text())
+     self.assertEqual(snapshot['selection']['tiers'],['v40','v30','v31'])
+    gh['run_attempt']='2';api.reset_mock();api.json_artifact.return_value=snapshot
+    with patch.object(runtime,'GitHubAPI',return_value=api),patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'GITHUB_OUTPUT':str(Path(folder)/'out')}):
+     runtime.standalone_selection();api.request.assert_not_called()
+     self.assertEqual(json.loads(Path('selection.json').read_text()),snapshot)
+     api.json_artifact.assert_called_once_with(9,'ci-tier-selection','selection.json')
+   finally:os.chdir(prior)
+ def test_standalone_rerun_rejects_a_foreign_snapshot(self):
+  gh=dict(repository='sysown/proxysql',sha='a'*40,run_id='9',run_attempt='2')
+  api=Mock();api.json_artifact.return_value=dict(repository='sysown/proxysql',sha='b'*40,run_id=9,selection={'tiers':['v40'],'mode':'normal'})
+  with patch.object(runtime,'GitHubAPI',return_value=api),patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh)}):
+   self.assertTrue(hasattr(runtime,'standalone_selection'))
+   with self.assertRaisesRegex(ValueError,'selection identity mismatch'):runtime.standalone_selection()
  def test_untrusted_plan_never_calls_api(self):
   with tempfile.TemporaryDirectory() as folder:
    prior=os.getcwd();os.chdir(folder)

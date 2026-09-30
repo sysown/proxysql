@@ -27,7 +27,7 @@ def check_key(workflow, job, tier, cell):
     return hashlib.sha256(identity.encode()).hexdigest()[:24]
 
 def mode_label(tier, mode):
-    return ('asan+gcov' if mode == 'asan' else 'coverage') if tier == 'v40' else ('asan' if mode == 'asan' else 'debug')
+    return 'asan+gcov' if mode == 'asan' else 'coverage'
 
 def make_plan(context, selection, catalogue):
     for field in ('trigger_id', 'trigger_attempt', 'build_id', 'build_attempt'):
@@ -44,7 +44,7 @@ def make_plan(context, selection, catalogue):
         if tier not in TIERS:
             raise ValueError('invalid product tier')
         mode = selection['mode']
-        leg = dict(tier=tier, mode=mode, coverage=tier == 'v40',
+        leg = dict(tier=tier, mode=mode, coverage=True,
                    variant=f'ubuntu24-tap-{tier}-{mode}',
                    artifact_name=f'ci-handoff-{eid}-{tier}-{mode}-full')
         plan['legs'].append(leg)
@@ -67,7 +67,7 @@ def make_plan(context, selection, catalogue):
                 middle = (info + ', ') if info else ''
                 plan['checks'].append(dict(key=check_key(consumer['workflow'],consumer['job'],tier,cell),
                     workflow=consumer['workflow'],job=consumer['job'],tier=tier,mode=mode,cell=cell,
-                    groups=consumer['groups'],required=True,applicable=True,
+                    groups=consumer.get('applicability_groups',consumer['groups']),required=True,applicable=True,
                     name=f"{consumer['workflow']} / {consumer['job']} ({TIERS[tier]}, {middle}{mode_label(tier,mode)})"))
     return plan
 
@@ -87,7 +87,7 @@ def validate_manifest(plan):
 
 def consumer_matrix(plan, workflow, job, instance=None):
     validate_manifest(plan)
-    return [dict(c['cell'],tier=c['tier'],mode=c['mode'],coverage=c['tier']=='v40',
+    return [dict(c['cell'],tier=c['tier'],mode=c['mode'],coverage=next(l['coverage'] for l in plan['legs'] if l['tier']==c['tier']),
                  check_key=c['key'],check_name=c['name'],check_id=c.get('check_id',0),
                  execution_id=plan['execution_id'],build_id=plan['build_id'],build_attempt=plan['build_attempt'],
                  artifact_name=next(l['artifact_name'] for l in plan['legs'] if l['tier']==c['tier']))

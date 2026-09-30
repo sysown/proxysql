@@ -103,31 +103,34 @@ jobs:
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
-    - name: Restore GenAI plugin from build handoff
+    - name: Restore compiled GenAI plugin from build handoff
       run: |
-        set -euo pipefail
-        cd proxysql/
-        plugin_src="test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so"
-        plugin_dest="plugins/genai/ProxySQL_GenAI_Plugin.so"
-        if [ ! -s "${plugin_src}" ]; then
-          echo "ERROR: required GenAI plugin missing from build handoff: ${plugin_src}" >&2
-          exit 1
-        fi
-        mkdir -p "$(dirname "${plugin_dest}")"
-        cp "${plugin_src}" "${plugin_dest}"
-        test -s "${plugin_dest}"
-
-      if: ${{ success() && matrix.tier == 'v40' }}
-    - name: Verify binary and GenAI plugin
+        python3 - <<'PY_PLUGIN'
+        import json
+        import shutil
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path('ci-control/.github/scripts').resolve()))
+        from ci_tier_plan import version_tuple
+        root = Path('proxysql')
+        metadata = json.loads((root / 'src/ci-tier.json').read_text())
+        # Plugin availability follows the compiled product, just like test
+        # version filtering. A supported but missing plugin is still fatal.
+        if version_tuple(metadata['version']) < (4, 0, 0):
+            print('Compiled product does not include the GenAI plugin')
+        else:
+            source = root / 'test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so'
+            if not source.is_file() or not source.stat().st_size:
+                raise SystemExit('Required GenAI plugin missing from build handoff')
+            destination = root / 'plugins/genai/ProxySQL_GenAI_Plugin.so'
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+        PY_PLUGIN
+    - name: Verify binary
       run: |
         chmod +x proxysql/src/proxysql
         file proxysql/src/proxysql
-        test -s proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so || {
-          echo "ERROR: ProxySQL_GenAI_Plugin.so was not restored" >&2
-          exit 1
-        }
 
-      if: ${{ success() && matrix.tier == 'v40' }}
     - name: Log in to GHCR and pull CI base image
       env:
         GHCR_USER: ${{ github.actor }}
