@@ -465,6 +465,7 @@ Query_Info::Query_Info()
 	affected_rows=0;
 	last_insert_id = 0;
 	rows_sent=0;
+	multi_result=false;
 	start_time=0;
 	end_time=0;
 	stmt_client_id=0;
@@ -508,6 +509,7 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	affected_rows=0;
 	last_insert_id = 0;
 	rows_sent=0;
+	multi_result=false;
 	sess->gtid_hid=-1;
 	stmt_client_id=0;
 }
@@ -6716,6 +6718,7 @@ handler_again:
 								break;
 							// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
 							case 2:
+								CurrentQuery.multi_result = true;
 								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->warning_count, myconn->myds);
 								  if (myconn->MyRS) { // we also need to clear MyRS, so that the next staement will recreate it if needed
 										if (myconn->MyRS_reuse) {
@@ -9368,12 +9371,16 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 	if (MyRS) {
 		assert(MyRS->result);
 		bool transfer_started=MyRS->transfer_started;
+		unsigned int result_start = client_myds->PSarrayOUT->len;
 		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
 		CurrentQuery.rows_sent = MyRS->num_rows;
 		bool com_field_list=client_myds->com_field_list;
 		assert(resultset_completed); // the resultset should always be completed if MySQL_Result_to_MySQL_wire is called
 		if (transfer_started==false) { // we have all the resultset when MySQL_Result_to_MySQL_wire was called
-			if (qpo && qpo->cache_ttl>0 && com_field_list==false) { // the resultset should be cached
+			// A cache entry holds exactly one result. Responses with several results
+			// (multi-statement or CALL) are never cached, see #6229.
+			if (qpo && qpo->cache_ttl>0 && com_field_list==false
+				&& CurrentQuery.multi_result==false && !(mysql->server_status & SERVER_MORE_RESULTS_EXIST)) { // the resultset should be cached
 				if (mysql_errno(mysql)==0 &&
 					(mysql_warning_count(mysql)==0 ||
 					 mysql_thread___query_cache_handle_warnings==1)) { // no errors
@@ -9400,7 +9407,9 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 							(thread->variables.query_cache_stores_empty_result || MyRS->num_rows)
 						)
 					) {
-						client_myds->resultset->copy_add(client_myds->PSarrayOUT,0,client_myds->PSarrayOUT->len);
+						// Earlier queued responses must not become part of this entry:
+						// the buffer is sized for this result only.
+						client_myds->resultset->copy_add(client_myds->PSarrayOUT, result_start, client_myds->PSarrayOUT->len - result_start);
 						client_myds->resultset_length=MyRS->resultset_size;
 						unsigned char *aa=client_myds->resultset2buffer(false);
 						while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);

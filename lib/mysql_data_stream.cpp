@@ -1727,6 +1727,7 @@ unsigned char * MySQL_Data_Stream::resultset2buffer(bool del) {
 	PtrSize_t *ps;
 	for (i=0;i<resultset->len;i++) {
 		ps=resultset->index(i);
+		assert(l + ps->size <= resultset_length); // callers size the buffer, see #6229
 		memcpy(mybuff+l,ps->ptr,ps->size);
 		if (del) l_free(ps->size,ps->ptr);
 		l+=ps->size;
