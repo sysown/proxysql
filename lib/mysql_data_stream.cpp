@@ -981,9 +981,11 @@ int MySQL_Data_Stream::write_to_net() {
 				if (n==0 || (n==-1 && myds_errno != EINTR && myds_errno != EAGAIN)) {
 					shut_soft();
 					return 0;
-				} else {
-					return -1;
 				}
+				// SSL_write() may already have accepted bytes_io plaintext bytes.
+				// EAGAIN/EINTR only defer the ciphertext flush: keep ssl_write_buf
+				// pending, but reach the common queue/counter accounting below.
+				// Returning here would encrypt and send the same plaintext again.
 			}
 		}
 	} else {
@@ -1854,9 +1856,6 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 			destroy_MySQL_Connection_From_Pool(true);
 		}
 	} else {
-		// the auxiliary GTID lookup connection is only valid for the current
-		// session, so it must not be left open on the pooled connection
-		mc->release_gtid_lookup_connection();
 		detach_connection();
 		unplug_backend();
 #ifdef STRESSTEST_POOL

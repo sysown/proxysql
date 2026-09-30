@@ -1,0 +1,50 @@
+"""PR cancellation runs from trusted control code for every new head."""
+from pathlib import Path
+import json
+import os
+import subprocess
+import unittest
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+class CancelSupersededTests(unittest.TestCase):
+    def test_catalogued_consumer_callers_allow_head_lookup_and_cancellation(self):
+        engine_ref = os.environ.get('CI_ENGINE_REF', 'origin/GH-Actions')
+        catalogue = json.loads(subprocess.check_output(
+            ['git', 'show', engine_ref + ':.github/ci-tier-consumers.json'], cwd=ROOT))
+        consumer_files = {row['file'] for row in catalogue['consumers']}
+        consumer_names = {row['workflow'] for row in catalogue['consumers']}
+        for path in (ROOT / '.github/workflows').glob('*.yml'):
+            workflow = yaml.safe_load(path.read_text())
+            for name, job in workflow.get('jobs', {}).items():
+                uses = job.get('uses', '')
+                if not uses.startswith('sysown/proxysql/.github/workflows/'):
+                    continue
+                if (uses.rsplit('/', 1)[-1].split('@')[0] not in consumer_files
+                        and workflow.get('name') not in consumer_names):
+                    continue
+                permissions = job.get('permissions', workflow.get('permissions'))
+                if permissions == 'write-all':
+                    continue
+                with self.subTest(workflow=path.name, job=name):
+                    self.assertIsInstance(permissions, dict)
+                    self.assertEqual(permissions.get('actions'), 'write')
+                    self.assertIn(permissions.get('pull-requests'), ('read', 'write'))
+
+    def test_every_pr_update_calls_trusted_cancellation_with_write_permission(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/CI-cancel-superseded.yml').read_text())
+        events = workflow.get('on', workflow.get(True, {}))
+        self.assertEqual(events, {'pull_request_target': {'types': ['opened', 'reopened', 'synchronize']}})
+        self.assertEqual(workflow['permissions'], {'actions': 'write', 'contents': 'read', 'pull-requests': 'read'})
+        self.assertEqual(workflow['jobs'], {'cancel': {
+            'uses': 'sysown/proxysql/.github/workflows/ci-cancel-superseded.yml@GH-Actions'}})
+        self.assertEqual(workflow['concurrency'], {
+            'group': 'cancel-superseded-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}',
+            'cancel-in-progress': True})
+
+
+if __name__ == '__main__':
+    unittest.main()

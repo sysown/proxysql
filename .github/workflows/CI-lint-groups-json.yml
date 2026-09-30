@@ -9,7 +9,41 @@ permissions:
   contents: read
 
 jobs:
+  # Push events have no labels. Resolve only metadata before starting the lint
+  # suite; direct PR runs can use their event payload without this runner.
+  push-label:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.label.outputs.skip }}
+    steps:
+      - name: Check associated open PR labels
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          skip=false
+          if [[ "$REF_TYPE" == branch ]]; then
+            labels=$(gh api --method GET --paginate "repos/${GH_REPO}/pulls" \
+              -f state=open -f per_page=100 -f "head=${GH_REPO%%/*}:${HEAD_REF}" --jq '
+              .[] | select(.state == "open" and .head.repo.full_name == env.GH_REPO and .head.ref == env.HEAD_REF)
+              | .labels[] | select((.name | ascii_downcase) == "ci:skip") | .name')
+            if [[ -n "$labels" ]]; then
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
   lint:
+    needs: push-label
+    if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (github.event_name != 'push' || (needs.push-label.result == 'success' && needs.push-label.outputs.skip == 'false')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -26,5 +60,14 @@ jobs:
           git fetch --no-tags --depth=1 origin \
             +refs/heads/GH-Actions:refs/remotes/origin/GH-Actions \
             || echo "::warning::could not fetch GH-Actions; the workflow-coverage check will skip"
+      - name: Fetch paired engine candidate until production supports shared execution
+        # This SHA is read as workflow/catalogue data only. Once GH-Actions has
+        # the compatible shared-execution catalogue, use production again.
+        run: |
+          engine_ref="$(test/infra/control/resolve-ci-engine-ref.bash)"
+          if [[ "${engine_ref}" =~ ^[0-9a-f]{40}$ ]]; then
+            git fetch --no-tags --depth=1 origin "${engine_ref}" \
+              || echo "::warning::could not fetch paired engine; paired checks will skip if unavailable"
+          fi
       - name: Run repository CI lint suite
         run: test/infra/control/run-ci-lint.bash

@@ -1,6 +1,6 @@
 # ProxySQL CI Architecture
 
-**Last updated:** 2026-09-28
+**Last updated:** 2026-09-30
 
 This document is the authoritative reference for ProxySQL's GitHub Actions CI
 setup. It covers the two-branch workflow split, the trigger chain, the test
@@ -27,7 +27,7 @@ If you touch anything under `.github/workflows/` on either `v3.0` or the
 4. [CI-trigger and CI-builds: the entry point](#ci-trigger-and-ci-builds-the-entry-point)
 5. [The dedicated-reusable pattern](#the-dedicated-reusable-pattern)
 6. [Cache layout produced by CI-builds](#cache-layout-produced-by-ci-builds)
-7. [The feature tiers and the merge-only tier sweep](#the-feature-tiers-and-the-merge-only-tier-sweep)
+7. [PR-label-selected product tiers](#pr-label-selected-product-tiers)
 8. [The TAP groups system](#the-tap-groups-system)
 9. [Workflow catalogue](#workflow-catalogue)
 10. [Adding a new test group end-to-end](#adding-a-new-test-group-end-to-end)
@@ -92,15 +92,14 @@ Reusable workflows (`workflow_call`) solve this cleanly: the caller on `v3.0`
 is a 20-line stub that says *"delegate to `ci-legacy-g1.yml` on the
 `GH-Actions` branch"*, and the `GH-Actions` branch owns all the heavy logic.
 
-### The canonical caller (20 lines)
+### The caller shape
 
-All `CI-*.yml` files on `v3.0` follow this shape. This is
-`CI-legacy-g1.yml` verbatim (other callers differ only in name and `uses:`
-target):
+The following excerpt shows the caller structure. Dispatch inputs and
+permissions are abbreviated here; the workflow file is authoritative.
 
 ```yaml
 name: CI-legacy-g1
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+run-name: "${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} ${{ inputs.producer_run_id && format('producer={0}/{1}', inputs.producer_run_id, inputs.producer_attempt) || format('trigger={0}/{1}', github.event.workflow_run.id || github.run_id, github.event.workflow_run.run_attempt || github.run_attempt) }}"
 
 on:
   workflow_dispatch:
@@ -114,7 +113,7 @@ concurrency:
 
 jobs:
   run:
-    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    if: ${{ (!github.event.workflow_run || !startsWith(github.event.workflow_run.display_title, '[ci:skip] ')) && (github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run) }}
     uses: sysown/proxysql/.github/workflows/ci-legacy-g1.yml@GH-Actions
     secrets: inherit
     with:
@@ -207,11 +206,11 @@ sequenceDiagram
     GH->>Trigger: start (on: push, pull_request)
     Trigger->>Builds: start (on: workflow_run [in_progress])
     Note over Trigger,Builds: CI-trigger runs a 'gh run watch' babysitter<br/>step that blocks until CI-builds finishes.
-    Builds-->>Builds: Build in Docker, cache src/test/bin/matrix
+    Builds-->>Builds: Build in Docker, publish handoff artifact
     Builds-->>Trigger: build completed (watch loop unblocks)
     Trigger-->>GH: CI-trigger completed
     GH->>Test: start (on: workflow_run [completed])
-    Test-->>Test: Restore src/test caches, run TAP group
+    Test-->>Test: Download handoff artifact, run TAP group
     Test-->>GH: success or failure
 ```
 
@@ -224,8 +223,9 @@ git push / open PR
   │     │
   │     ├─► CI-builds (on: workflow_run [in_progress])
   │     │     │
-  │     │     └─► Build ubuntu22-tap, debian12-dbg, ubuntu24-tap-genai-gcov
-  │     │         Cache src/, test/, bin/, tap-matrix*.json
+  │     │     └─► Build ubuntu24-tap (single leg since #6234)
+  │     │         Publishes handoff artifacts; the callee runs no
+  │     │         actions/cache/save (see §6 for the stale cache layout)
   │     │
   │     └─► (CI-trigger babysitter step `gh run watch` blocks until CI-builds
   │          completes, then CI-trigger itself completes)
@@ -244,11 +244,9 @@ git push / open PR
            CI-taptests           CI-taptests-ssl     CI-taptests-asan
            CI-taptests-groups    CI-taptests-pgsql-cluster
            CI-codeql
-           CI-3p-aiomysql        CI-3p-django-framework
-           CI-3p-laravel-framework                    CI-3p-mariadb-connector-c
-           CI-3p-mysql-connector-j                    CI-3p-pgjdbc
-           CI-3p-php-pdo-mysql   CI-3p-php-pdo-pgsql  CI-3p-postgresql
-           CI-3p-sqlalchemy
+
+           (The CI-3p-* callers are not part of this cascade: they are
+           manual-only, see "Third-party integration" below.)
 ```
 
 ### Why the cascade looks the way it does
@@ -326,7 +324,7 @@ listening for `workflow_run[completed]` on `CI-trigger` fires.
 > replaced by the unified regular build: `ci-builds.yml` now has a **single** matrix leg
 > (`ubuntu24`, `-tap`) which publishes one handoff **artifact** (not a cache), and
 > `PROXYSQLGENAI` no longer exists — the v4.0 tier is selected with `PROXYSQL40=1`.
-> See [§7 The feature tiers and the merge-only tier sweep](#the-feature-tiers-and-the-merge-only-tier-sweep)
+> See [§7 PR-label-selected product tiers](#pr-label-selected-product-tiers)
 > for the current mechanism, and read `ci-builds.yml@GH-Actions` as the source of truth
 > rather than this table.
 
@@ -337,6 +335,37 @@ The build matrix (historical):
 | `ubuntu22, -tap` | `make ubuntu22-dbg` | debug + TAP test binaries | most test workflows |
 | `debian12, -dbg` | `make debian12-dbg` | debug | 3p integration workflows |
 | `ubuntu24, -tap-genai-gcov` | `make ubuntu24-dbg` | `PROXYSQLGENAI=1` + `WITHGCOV=1` | `CI-legacy-g2-genai` only |
+
+### Pause PR CI with `ci:skip`
+
+Add the `ci:skip` label to an early PR to skip automatic build/test jobs and
+standalone PR checks on subsequent pushes. Remove the label and push again to
+resume. Labels are read from the triggering PR event; adding or removing this
+label alone does not start build/test jobs or cancel runs. PR-triggered runs
+retain their event's labels on rerun. Manual dispatches, schedules, release
+builds, explicit bot mentions, and external apps such as CodeRabbit are
+unaffected.
+
+`CI-trigger` records the decision by prefixing its run title with `[ci:skip] `.
+Every `workflow_run` caller checks that prefix before invoking its reusable.
+This is necessary even when the trigger's own job is skipped: a completed
+trigger can still emit a downstream event. Preserve this guard when adding
+callers. Direct PR jobs check the label themselves, including fork builds.
+
+`CI-lint-groups-json` also listens to pushes. Its small, read-only `push-label`
+job checks current labels on open PRs for the exact pushed repository and
+branch before allowing the lint suite to start, including on reruns. This
+applies to any branch that heads a labeled PR. An API failure fails that job and blocks lint rather
+than treating unknown labels as permission to run. Skipped workflow/check
+records and this metadata job can still appear in Actions; this label suppresses
+the substantive jobs, not the creation of workflow records. Skipped jobs are
+not evidence that tests passed; branch-protection settings are unchanged.
+
+Rollout: merge these caller changes into `v3.0`, then update existing feature
+branches from `v3.0` before relying on the label. `workflow_run` callers come
+from the default branch, while push/PR workflows need the updated feature-branch
+files. No `GH-Actions` change is needed. Until both sides are updated, retain
+`[skip ci]` in commits that must not start CI.
 
 ### Opt-in TAP ASAN
 
@@ -574,7 +603,16 @@ they happen they can be replicated with a single `sed`.
 
 ## Cache layout produced by CI-builds
 
-`CI-builds` produces four separate cache entries per matrix build, each
+> ⚠️ **This section is stale.** The callee no longer runs
+> `actions/cache/save` at all — `ci-builds.yml@GH-Actions` publishes handoff
+> **artifacts** instead, since #6234. So the `_bin`/`_src`/`_test`/`_matrix`
+> entries below are no longer produced by CI-builds, while 22 caller
+> workflows still reference `actions/cache/restore`/`save`. Whether each of
+> those is a live consumer or a dormant `restore` of an entry that can no
+> longer be created needs a per-workflow audit, so this section is left
+> as-is rather than rewritten on a guess. Fixing it is tracked separately.
+
+`CI-builds` produced four separate cache entries per matrix build, each
 keyed by `{SHA}_{dist}_{type}_{suffix}`:
 
 | Key suffix | Contents | Who restores it |
@@ -598,168 +636,134 @@ Cache entries expire after 7 days of inactivity (GitHub's default policy).
 
 ---
 
-## The feature tiers and the merge-only tier sweep
+## PR-label-selected product tiers
 
-### The three tiers
+All standard TAP configurations build the same source revision. With no tier
+labels CI builds v4.0 (`PROXYSQL40=1`). `ci:v3.0` adds Stable (no tier flag),
+and `ci:v3.1` adds Innovative (`PROXYSQL31=1`). Both labels select all three.
+`ci:asan` selects ASAN for each selected tier instead of a second normal build.
+The independent unit ASAN/TSAN and cluster-simulator pipelines retain their scope.
 
-The same `v3.0` source tree compiles into three different products, selected by a
-`make` flag:
+When switching product tiers in a local build tree, run `make clean` first:
+the Makefile does not track changed tier flags in existing objects. Reusing
+objects from another tier can cause mismatches such as an unresolved
+`mysql_thread___ffto_max_buffer_size`. A lower-tier build is itself a regression
+test. A selected applicable test with a missing binary is a failure, not a skip.
 
-| Tier | Flag | `GITVERSION` | Adds |
-|---|---|---|---|
-| v3.0 | *(none)* | `3.0.x` | Stable core |
-| v3.1 | `PROXYSQL31=1` | `3.1.x` | FFTO, TSDB, ED25519 |
-| v4.0 | `PROXYSQL40=1` | `4.0.x` | plugin chassis; cascades to v3.1 |
+**Label edits do not trigger CI.** Existing events and filters are unchanged.
+The central build setup reads labels once, when its setup job executes. A label
+edit before setup can affect that run; edits after setup affect the next ordinary
+execution. Consumers never re-query labels. Repository-variable matrices are
+also captured in this configuration snapshot.
 
-**Every regular CI build uses the v4.0 tier.** `ci-builds.yml` has a single matrix leg and,
-on the default `tier: v40`, injects `PROXYSQL40=1` into `docker-compose.yml`, which the
-`_build` service's `environment:` block passes straight through to `make`. The only callers
-that build anything else are the tier sweep described below, which passes `tier: v30` or
-`tier: v31` explicitly.
+### Execution identity and artifacts
 
-> **Stale-object tier mismatch.** The Makefile does *not* track the tier flag between
-> invocations, so objects built under one tier are silently reused under another. The
-> classic symptom is a link failure on `mysql_thread___ffto_max_buffer_size`. Always
-> `make clean` when switching tiers, and pass the same flag to every `make` in a session.
+One producer run builds all selected tiers with `fail-fast: false`. A check
+registration binds the original trigger ID/attempt to the producer ID/attempt;
+`CI-trigger` follows that registration rather than searching run titles by SHA.
+After success it publishes `ci-accepted-producer-a<attempt>`; all consumers use
+that immutable acceptance, so a later producer rerun cannot rebind a delayed
+consumer. The execution ID is `t<origin>-a<attempt>-b<producer>-a<attempt>`.
 
-### Why test selection is already tier-aware
+The initial `ci-plan-<execution>` artifact records the selection and expected
+checks. The immutable `ci-manifest-<execution>` includes actual product versions,
+artifact IDs and applicability. Handoffs are named
+`ci-handoff-<execution>-<tier>-<mode>-full`. Consumers download from the exact
+producer and verify embedded metadata and the restored binary's product tier.
+There is no repository-wide newest-SHA artifact fallback.
 
-You do **not** need separate `groups.json` files or per-tier test lists.
-`run-tests-isolated.bash:199-236` derives the version from the built binary and filters
-on `@proxysql_min_version` tags in `groups.json`:
+Consumer workflows save a producer binding for reruns. A consumer-only rerun
+uses that binding even if labels have changed or another build has run for the
+same SHA. Manual consumer dispatch requires both an explicit producer run ID
+and an explicit attempt; there is no silent attempt-1 default.
+Manual producer dispatch and branch pushes use v4.0/normal by default. A full
+producer rerun creates a new plan; a failed-job rerun retains the original plan
+and skips uploads already published under that execution. Manual subsets have
+a distinct `CI / manual consumer …` summary. Cross-repository consumers use
+`PROXYSQL_ARTIFACTS_TOKEN` only for source reads and report on the caller's
+repository/SHA with its own token.
 
-```bash
-PROXYSQL_VERSION=$(${PROXYSQL_BIN} --version 2>&1 | grep -oP 'ProxySQL version \K[0-9]+\.[0-9]+\.[0-9]+')
-```
+### PR checks and applicable tests
 
-Because the Makefile bakes the tier-bumped version into the binary, a v3.0 build reports
-`3.0.x` and the harness *automatically* skips every test tagged
-`@proxysql_min_version:3.1` or `:4.0`. A v3.1 build skips only `:4.0`.
+Checks are queued on the source SHA during setup. Each test job updates its
+existing check, named for example
+`CI-mysql84-gr-g2 / tests (v3.1, mysql84, asan)`. The outer Actions run title
+identifies the source revision and trigger execution; tier/mode live in the
+job names and PR checks because they are resolved after the run is created.
 
-Two consequences worth knowing:
+`CI / selected tiers` summarizes the required applicable checks for that
+execution. Short serialized finalizers require all applicable custom results
+and validate native jobs before reporting success. Partial reruns retain cells
+that were not rerun. Starts reset the summary; terminal writes are revalidated
+to correct concurrent updates, without occupying a runner for the whole fanout.
 
-* **The downgrade build is itself a regression test.** Compiling without `PROXYSQL40=1`
-  fails if any `lib/` or `test/tap/tests/` file unconditionally references a v4.0-only
-  symbol. That is precisely the class of bug a v4.0-only CI cannot catch, and `Check build`
-  surfaces it before a single test runs. An untagged test that is `#ifdef`-gated for
-  v4.0 will therefore break the v3.0 build until someone adds the tag.
-* **A missing binary is a FAILURE**, not a skip (`run-tests-isolated.bash:256-262`). Hence
-  the pruning described below.
+**Reporting limitation:** GitHub's Checks API has no conditional update tied to
+a workflow attempt. A rerun can briefly show the preceding aggregate result;
+if cancelled before any reporting step/finalizer runs, that previous result can
+remain visible. The custom summary is therefore not a substitute for native
+Actions checks or a sufficient standalone merge gate. Initial executions with
+missing evidence remain pending. This limitation needs an event-aware reporting
+protocol if a strictly immediate rerun invalidation guarantee is required.
+Repository branch-protection settings are unchanged.
 
-### `CI-tier-sweep` — the merge-only cascade
+Tests still use `@proxysql_min_version` and the built binary's actual version.
+Mixed groups retain applicable lower-tier tests; empty groups are explicitly
+not applicable, including plugin suites unavailable in the compiled product.
+All selected tiers use the same ASAN/coverage and TSAN unit workflows, rebuilt
+inside `ubuntu24_dbg_build` and executed in that same image. The producer does
+not run unit tests. Every tier uses GCOV in the shared TAP build and the same
+coverage collection steps. Only compile-time product flags and version-based
+test filtering differ; sanitizer options and test commands are shared.
 
-| | |
-|---|---|
-| **Caller** | `v3.0:.github/workflows/CI-tier-sweep.yml` |
-| **Reusable** | `GH-Actions:.github/workflows/ci-tier-sweep.yml` |
-| **Triggers** | `push` to `v3.0` only, plus `workflow_dispatch` |
-| **Builds** | one `ci-builds.yml` leg per tier: `v30`, `v31` |
-| **Tests** | `unit-tests-g1`, `legacy-g1`, `mysql84-g1` per tier |
+CodeQL uses the same producer-bound selection. `CI-maketest` compiles the six
+simulator targets independently at 02:17 UTC nightly (v4.0), or by manual
+dispatch with v4.0, v3.1, or v3.0 selected. It no longer runs in the PR cascade
+or consumes producer artifacts; actual simulator test runs remain in PR CI. Standalone
+macOS smoke, cluster simulation, and PostgreSQL compatibility workflows keep
+their existing triggers and snapshot the same tier labels once per run. Reruns
+reuse that snapshot. Cluster simulation caches and all matrix artifacts include
+the product tier; the restored simulator binary is checked against that tier.
+The fixed ASAN, TSAN, and simulator coverage configurations apply equally to
+every selected product. Manual third-party suites remain manual.
 
-> **The merge-only guarantee is one line:** the caller declares `on: push` and deliberately
-> does **not** declare `pull_request`. Do not add it. That single omission is the entire
-> cost model — with it, every PR would pay for two extra full debug TAP builds.
+Deploy the paired GH-Actions engine change before the v3.0 caller change, then
+start a new PR CI run. Existing runs retain their original manifests and build
+instrumentation; they do not acquire newly selected tiers on rerun.
 
-The sweep is **advisory, not merge-blocking.** Branch protection can only require checks
-that exist on a PR head; these run on a pushed commit. A red sweep is loud (a failing
-check run on the merge commit) but never blocks the next PR.
+### Sweep removal and coverage guard
 
-Shape of the reusable:
+The old post-merge sweep, its reusable, shard configuration and runtime group
+list have been removed. There is no replacement scheduled sweep.
+`check_ci_tier_fanout.py` checks the paired branches and ensures the 54 migrated
+groups retain execution routes on both lower tiers and that their workflows
+actually invoke the recorded groups in both normal and ASAN modes. Caller,
+nested-job, test-job and test-step conditions are checked, along with selected
+matrix wiring. Unsupported conditions fail closed for manual inspection. Its
+migration fixture is evidence,
+not a runtime work list. The current consumer catalogue is
+`GH-Actions:.github/ci-tier-consumers.json`.
 
-```text
-CI-tier-sweep (push to v3.0)
-  └─ build  [tier: v30, v31]  → nested call: ci-builds.yml  with tier: v30|v31
-  └─ tests  [tier: v30, v31]  → download handoff, run 3 groups sequentially
-```
+Rollout must be coordinated: remove the sweep caller first, retain its runtime
+files while active sweeps finish, and drain old central build/trigger/consumer
+cascades before switching the compatible engine and caller implementations.
+Old triggers do not publish the new accepted-producer artifact. Do not deploy
+this caller tip independently against the old engine; remove remaining sweep
+runtime files only after old executions have drained.
 
-The `build` job is a **nested reusable-workflow call** (`uses: ./.github/workflows/ci-builds.yml`),
-so it reuses all of `ci-builds.yml`'s machinery — self-hosted pool routing, the docker nuke,
-workspace ownership reclaim, the deps-archive verification, `Check build`, the handoff
-publish. The sweep adds no build logic of its own.
+Before production contains the tier catalogue, `.github/ci-tier-engine-ref` pins
+the paired candidate for lint. The lint workflow fetches that SHA and reads its
+workflow/catalogue data; it does not execute candidate engine code. Once the
+production catalogue exists, selection automatically returns to `origin/GH-Actions`.
+The pin can then be removed. An explicit `CI_ENGINE_REF` always takes precedence.
+If the chosen ref cannot be fetched, paired checks report a skip while their
+unit tests still run.
 
-### Handoff artifact names carry the tier
-
-`ci-builds.yml` publishes `ci-builds-handoff-<sha>-<variant>-full`. The variant is the
-tier's identity:
-
-| Tier | Artifact | Consumed by |
-|---|---|---|
-| v4.0 | `ci-builds-handoff-<sha>-ubuntu24-tap-genai-gcov-full` | the ~51 existing consumers |
-| v3.0 | `ci-builds-handoff-<sha>-ubuntu24-tap-v30-full` | `ci-tier-sweep.yml` |
-| v3.1 | `ci-builds-handoff-<sha>-ubuntu24-tap-v31-full` | `ci-tier-sweep.yml` |
-
-Because the handoff is an **artifact, not a cache**, adding tiers is purely additive — no
-cache-key collision and no pressure on the 10 GB repo cache quota. `ci-builds.yml` takes
-the tier from a `tier` input that **defaults to `v40`**, which is what keeps the existing
-consumers (which hardcode `HANDOFF_VARIANT: ubuntu24-tap-genai-gcov`) working untouched.
-
-The tier is resolved once by a `resolve-tier` job, mirroring the existing
-`resolve-tap-mode` idiom, and exposed to the build as `env.IS_V40`. Every v4.0-only step
-(the MySQLX/GenAI plugin staging, `WITHGCOV=1`, the plugin-presence assertion) gates on
-that one boolean instead of substring-matching the matrix `type`.
-
-> **`resolve-tier` must not declare a `permissions:` block.** A called workflow may only
-> *narrow* its caller's token, and `CI-builds-fork.yml` grants exactly `contents: read`.
-> Requesting a scope there makes every fork PR fail at startup with zero jobs
-> (`startup_failure`) — see commit `5e8468db4`.
-
-### Why a downgrade handoff is pruned
-
-Debug unit-test binaries are ~170 MB each (they statically link `libproxysql.a`), and the
-v4.0 handoff deliberately retains all of them so any consumer may select any test. A
-downgrade build will never *select* the newer ones, so they are dead weight.
-
-`ci-control/.github/scripts/prune-tier-handoff.bash` drops them before packing, which
-both shrinks the artifact and makes a "not found" false-red structurally impossible. It:
-
-* reads the version from `src/proxysql --version` and keeps a test iff its highest
-  `@proxysql_min_version` is `<=` that version — the same rule as
-  `run-tests-isolated.bash`;
-* runs on the **host**, so deletions use `sudo` (the binaries are root-owned, and unlink
-  needs write access to the parent directory);
-* refuses to run if the version cannot be determined, if nothing is selectable, or if it
-  would empty the tree;
-* leaves any binary *not registered* in `groups.json` alone, and warns — deleting data it
-  cannot reason about would hide a real "built but never registered" bug;
-* is staged into `ci-control/` by its own `ref: GH-Actions` sparse checkout, because
-  `.github/scripts/` exists only on that branch (the main checkout is the commit under
-  test, and `v3.0` has no `.github/scripts/` at all). Same reason `resolve-tap-mode` does
-  its own checkout.
-
-Tests live in `.github/scripts/tests/test-prune-tier-handoff.bash` (not wired into a
-workflow, consistent with the other tests in that directory):
-
-```bash
-.github/scripts/tests/test-prune-tier-handoff.bash
-```
-
-### Which groups the sweep runs, and why
-
-| Group | Why |
-|---|---|
-| `unit-tests-g1` | `SKIP_PROXYSQL=1` in its `env.sh`, so it runs **host-only** — no Docker backends at all. Cheapest possible signal. |
-| `legacy-g1` | `legacy/infras.lst` covers dbdeployer-mysql57, dbdeployer-mariadb10 **and** docker-pgsql16-single — MySQL, MariaDB and PostgreSQL in one group. |
-| `mysql84-g1` | pure MySQL 8.4 with **zero** version gates, so the test set is identical across v3.0/v3.1/v4.0. The cleanest cross-tier differential. |
-
-All three run **sequentially inside one job** so the multi-GB handoff is downloaded exactly
-once per tier, with a distinct `INFRA_ID` per group so Docker container namespaces do not
-collide.
-
-`COVERAGE` is deliberately not set: non-v4.0 builds compile without `WITHGCOV=1`, so there
-are no `.gcno` files for the collector to match.
-
-### Groups that go empty under a downgrade build
-
-These select **zero** tests against a v3.0/v3.1 binary and would abort with
-`ERROR: No tests found for group` (`run-tests-isolated.bash:236`):
-
-| Tier | Empty groups |
-|---|---|
-| v3.0 | `ai-g2`, `duckdb-e2e-g1`, `mysqlx-g1`, `mysqlx-e2e-g1`, `mysqlx-soak-g1`, `mysqlx-tsan-g1` |
-| v3.1 | `duckdb-e2e-g1`, `mysqlx-g1`, `mysqlx-e2e-g1`, `mysqlx-soak-g1`, `mysqlx-tsan-g1` |
-
-The curated sweep set avoids all of them. If you extend the sweep, derive the exclusion
-list from the version filter rather than hand-maintaining it.
+For local paired validation, set `CI_ENGINE_REF` to the candidate engine branch
+when running `test/infra/control/run-ci-lint.bash`. For a live isolated probe,
+set the optional `control_ref` and pin the caller's reusable reference to the
+candidate implementation as well; overriding a script checkout alone does not
+switch the reusable workflow definition. Do not update shared `GH-Actions` just
+to test a candidate while other PRs are using it.
 
 ---
 
@@ -873,11 +877,19 @@ All `CI-*.yml` files on `v3.0` as of 2026-04-11. Status is as observed on
 
 ### Orchestration
 
+On each PR open, reopen, or new head, `CI-cancel-superseded` runs trusted
+`GH-Actions` control code on a GitHub-hosted runner to cancel older CI for that
+PR. It follows downstream runs back to their originating trigger and checks
+the current PR head before cancellation. Producers and consumers also reject
+superseded PR work before registering checks or reading artifacts. Label-only
+changes do not trigger the sweep. Deploy the engine reusable before the caller.
+
 | Caller (v3.0) | Reusable (GH-Actions) | Trigger | Purpose | Status |
 |---|---|---|---|---|
 | `CI-trigger.yml` | `ci-trigger.yml` | `push`, `pull_request`, `workflow_dispatch` | Anchor PR `head_sha`, block on `CI-builds` | ✅ |
 | `CI-builds.yml` | `ci-builds.yml` | `workflow_run[in_progress]` on `CI-trigger` | Build the handoff, publish the artifact | ✅ |
-| `CI-tier-sweep.yml` | `ci-tier-sweep.yml` | `push` to `v3.0` only, `workflow_dispatch` | Build + test the **v3.0** and **v3.1** tiers, post-merge only (see §7) | ✅ |
+| `CI-cancel-superseded.yml` | `ci-cancel-superseded.yml` | `pull_request_target`: opened, reopened, synchronize | Cancel superseded PR runs without waiting for self-hosted runners | ✅ |
+| `CI-maketest.yml` | *(inline, no reusable)* | Nightly 02:17 UTC; `workflow_dispatch` | Compile six simulator targets independently of PR CI | ✅ |
 | `CI-lint-groups-json.yml` | *(inline, no reusable)* | `push`, `pull_request` on `groups.json` only | Lint `test/tap/groups/groups.json` format | ✅ |
 
 ### TAP test groups (dedicated-reusable pattern)
@@ -888,7 +900,6 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 |---|---|---|---|---|---|
 | `CI-basictests.yml` | `ci-basictests.yml` | `basictests` | mysql57 | `ubuntu22-tap_src` | ✅ |
 | `CI-selftests.yml` | `ci-selftests.yml` | — (no group) | — | `ubuntu22-tap_src` | ✅ |
-| `CI-maketest.yml` | `ci-maketest.yml` | — (runs `make test` in Docker) | mysql57 | `ubuntu22-tap_src` | ✅ |
 | `CI-legacy-g1.yml` | `ci-legacy-g1.yml` | `legacy-g1` | mysql57, mariadb10, pgsql16 | `ubuntu22-tap_src` + `_test` | ✅ (new, PR #5597) |
 | `CI-legacy-g2.yml` | `ci-legacy-g2.yml` | `legacy-g2` | mysql57, mariadb10, pgsql16, clickhouse23 | `ubuntu22-tap_src` + `_test` | ✅ |
 | `CI-legacy-g2-genai.yml` | `ci-legacy-g2-genai.yml` | `legacy-g2` | mysql57, mariadb10, pgsql16, clickhouse23 | `ubuntu24-tap-genai-gcov_src` + `_test` | ✅ |
@@ -926,11 +937,22 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 
 ### Third-party integration (`CI-3p-*`)
 
-Ten workflows test ProxySQL against external client libraries, independent
-of the build cache (they build ProxySQL inline inside the workflow). Each
-triggers on `workflow_run[completed]` on `CI-trigger` and reads its matrix
-from GitHub repository variables like
+Callers of the `ci-3p-*` reusable workflows must allow `actions: write`,
+`pull-requests: read`, `checks: write`, and `contents: read`. The context job needs Actions write
+permission to cancel superseded same-repository PR runs. Test and summary
+jobs retain `actions: read`; manual and cross-repository executions do not
+use the PR cancellation guard.
+
+Sixteen workflows test ProxySQL against external client libraries, independent
+of the build cache (they build ProxySQL inline inside the workflow). They
+read their matrix from GitHub repository variables like
 `MATRIX_3P_AIOMYSQL_infradb_mysql`.
+
+These callers are **manual-only** (`workflow_dispatch`): they do not chain off
+`CI-trigger`, and their catalogue rows in `.github/ci-tier-consumers.json` on
+`GH-Actions` are `automatic: false` (#6276), so sysown builds register no
+CI-3p checks. The suites run automatically from the cross-repository 3p
+testing caller (`ProxySQL/proxysql_3p_testing_public`).
 
 | Caller | Client | Protocols |
 |---|---|---|
@@ -944,6 +966,14 @@ from GitHub repository variables like
 | `CI-3p-php-pdo-pgsql.yml` | PHP PDO PostgreSQL | PostgreSQL |
 | `CI-3p-postgresql.yml` | libpq (native) | PostgreSQL |
 | `CI-3p-sqlalchemy.yml` | SQLAlchemy ORM | MySQL, PostgreSQL |
+| `CI-3p-pymysql.yml` | Python PyMySQL | MySQL |
+| `CI-3p-mysqlclient.yml` | Python mysqlclient | MySQL |
+| `CI-3p-mysql-connector-python.yml` | MySQL Connector/Python | MySQL |
+| `CI-3p-go-mysql.yml` | Go MySQL | MySQL |
+| `CI-3p-node-mysql2.yml` | Node.js mysql2 | MySQL |
+| `CI-3p-psycopg.yml` | Python psycopg | PostgreSQL |
+
+The last six (#6273) are catalogued for the v4.0 tier only.
 
 ### Release tarballs (generic Linux binaries)
 
@@ -1177,8 +1207,11 @@ gh run list --branch <branch> --commit <sha>
 ```
 
 The v3.0 branch's runs include a run-name of the form:
-`<branch> <workflow> <head_sha>`. Filter on the SHA to find all related
-runs.
+`<branch> <workflow> <head_sha> trigger=<run_id>/<attempt>`. Manual consumer
+runs instead identify the selected `producer=<run_id>/<attempt>`. Filter automatic
+runs by SHA and trigger identity. For manual consumers, search
+by `producer=<run_id>/<attempt>`: the title SHA belongs to the dispatch ref,
+which can differ from the selected producer commit.
 
 ### Step 3: inspect the reusable version actually used
 
@@ -1239,6 +1272,11 @@ binary directly and print a summary.
 ---
 
 ## Understanding GitHub Actions vocabulary — read this first if confused
+
+The `CI-maketest` examples below describe its historical PR caller/reusable
+structure. It now runs as an inline nightly/manual workflow; see the workflow
+catalogue above for its current triggers. The naming and matrix concepts still
+apply to the other caller/reusable workflow pairs.
 
 This section is the long-form explanation of the terminology. If you just
 want a word defined quickly, skip to the [compact glossary](#glossary-quick-reference)
@@ -1816,7 +1854,7 @@ is the display title**, because `CI-legacy-g1.yml`'s `run-name:` field
 explicitly injects it:
 
 ```yaml
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+run-name: "${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} ${{ inputs.producer_run_id && format('producer={0}/{1}', inputs.producer_run_id, inputs.producer_attempt) || format('trigger={0}/{1}', github.event.workflow_run.id || github.run_id, github.event.workflow_run.run_attempt || github.run_attempt) }}"
 ```
 
 So to identify "which run belongs to my PR commit", **grep the display

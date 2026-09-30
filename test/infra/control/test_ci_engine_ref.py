@@ -1,0 +1,102 @@
+"""Exercise paired-ref selection without fetching or changing production refs."""
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[3]
+SELECTOR = ROOT / 'test/infra/control/resolve-ci-engine-ref.bash'
+
+
+class EngineRefTests(unittest.TestCase):
+    def test_pair_pin_and_production_transition(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            subprocess.run(['git', 'init', '-q', folder], check=True)
+            (root / '.github').mkdir()
+            pin = 'a' * 40
+            (root / '.github/ci-tier-engine-ref').write_text(pin + '\n')
+            env = dict(os.environ)
+            env.pop('CI_ENGINE_REF', None)
+            def select():
+                return subprocess.run(['bash', str(SELECTOR)], cwd=root, env=env, text=True, capture_output=True)
+            result = select()
+            self.assertEqual(result.stdout.strip(), pin)
+            self.assertEqual(result.stderr, '')
+            env['CI_ENGINE_REF'] = 'explicit-candidate'
+            self.assertEqual(select().stdout.strip(), 'explicit-candidate')
+            env.pop('CI_ENGINE_REF')
+            (root / '.github/ci-tier-engine-ref').write_text('bad-ref\n')
+            self.assertNotEqual(select().returncode, 0)
+            (root / '.github/ci-tier-engine-ref').write_text(pin + '\n')
+            (root / '.github/ci-tier-engine-ref').unlink()
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            'commit', '--allow-empty', '-qm', 'legacy engine'], cwd=root, check=True)
+            subprocess.run(['git', 'update-ref', 'refs/remotes/origin/GH-Actions', 'HEAD'], cwd=root, check=True)
+            result = select()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('catalogue', result.stderr)
+            self.assertIn('pin', result.stderr)
+            (root / '.github/ci-tier-engine-ref').write_text(pin + '\n')
+            result = select()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), pin)
+            self.assertEqual(result.stderr, '')
+            (root / '.github/ci-tier-engine-ref').unlink()
+            (root / '.github/ci-tier-consumers.json').write_text('{"schema": 2}')
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                            'commit', '-qm', 'engine available'], cwd=root, check=True)
+            subprocess.run(['git', 'update-ref', 'refs/remotes/origin/GH-Actions', 'HEAD'], cwd=root, check=True)
+            self.assertEqual(select().stdout.strip(), 'origin/GH-Actions')
+
+    def test_old_catalogue_uses_the_paired_candidate_until_engine_merge(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            subprocess.run(['git','init','-q',folder],check=True)
+            (root/'.github').mkdir()
+            (root/'.github/ci-tier-consumers.json').write_text('{"schema":1}')
+            subprocess.run(['git','add','.'],cwd=root,check=True)
+            subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','old catalogue'],cwd=root,check=True)
+            subprocess.run(['git','update-ref','refs/remotes/origin/GH-Actions','HEAD'],cwd=root,check=True)
+            pin='b'*40
+            (root/'.github/ci-tier-engine-ref').write_text(pin+'\n')
+            env=dict(os.environ);env.pop('CI_ENGINE_REF',None)
+            result=subprocess.run(['bash',str(SELECTOR)],cwd=root,env=env,text=True,capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout.strip(),pin)
+            self.assertEqual(result.stderr, '')
+
+    def test_malformed_catalogue_is_not_silently_replaced_by_pin(self):
+        for contents in ['{', '[]', '{"schema":"2"}', '{"schema":null}', '{"schema":true}', '{"schema":2.5}']:
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                subprocess.run(['git', 'init', '-q', folder], check=True)
+                (root / '.github').mkdir()
+                (root / '.github/ci-tier-consumers.json').write_text(contents)
+                subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+                subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                                'commit', '-qm', 'malformed engine'], cwd=root, check=True)
+                subprocess.run(['git', 'update-ref', 'refs/remotes/origin/GH-Actions', 'HEAD'], cwd=root, check=True)
+                (root / '.github/ci-tier-engine-ref').write_text('a' * 40 + '\n')
+                env = dict(os.environ)
+                env.pop('CI_ENGINE_REF', None)
+                result = subprocess.run(['bash', str(SELECTOR)], cwd=root, env=env, text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                self.assertIn('Invalid CI engine catalogue', result.stderr)
+                self.assertIn('origin/GH-Actions', result.stderr)
+
+    def test_fanout_guard_and_unit_tests_without_engine_ref(self):
+        text = (ROOT / 'test/infra/control/run-ci-lint.bash').read_text()
+        section = text[text.index('if git rev-parse'):]
+        before_else = section.split('\nelse\n', 1)[0]
+        self.assertIn('Check selected-tier fanout', before_else)
+        after_guard = section.split('\nfi\n', 1)[1]
+        self.assertIn('Test selected-tier fanout validator', after_guard)
+
+
+if __name__ == '__main__':
+    unittest.main()

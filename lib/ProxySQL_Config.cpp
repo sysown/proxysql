@@ -114,8 +114,9 @@ void ProxySQL_Config::addField(std::string& data, const char* name, const char* 
 	if (value == NULL || value[0] == 0) return;
 
 	// Escape the double quotes in all the fields contents
+	static const RE2 re_double_quote("\"");
 	std::string esc_value { value };
-	RE2::GlobalReplace(&esc_value, "\"", "\\\\\"");
+	RE2::GlobalReplace(&esc_value, re_double_quote, "\\\\\"");
 
 	ss << "\t\t" << name << "=" << dq << esc_value.c_str() << dq << "\n";
 	data += ss.str();

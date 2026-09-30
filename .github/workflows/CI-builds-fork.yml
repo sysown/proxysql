@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   run:
-    if: ${{ github.event.pull_request.head.repo.fork }}
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (github.event.pull_request.head.repo.fork) }}
     # Bump, don't unpin. The pin is part of the fork isolation contract --
     # validate_fork_pr_builds.py asserts a full 40-char SHA, so the callee
     # must stay immutable. 44ff88ee4c69 (2026-08-09) was the youngest callee
@@ -20,11 +20,19 @@ jobs:
     # then the reusable workflow changed in two ways that matter here:
     #   * 2026-08-19 35366926d dropped the libpq.so.5 staging (#6115 links
     #     libpq.a; deps/Makefile never built the shared object)
-    #   * 2026-09-06 64b1465a9 / 308c14d67 retired the duplicate legs, so
-    #     the matrix is now the single ubuntu24/-tap-genai-gcov entry
+    #   * 2026-09-06 64b1465a9 / 308c14d67 retired the duplicate legs, leaving
+    #     a single ubuntu24/-tap leg (the `type` token was -tap-genai-gcov
+    #     until #6234 moved the tier into an explicit `tier` input; the
+    #     published handoff variant is still ubuntu24-tap-genai-gcov)
     # The stale pin still carried `-tap-mysqlx`, whose staging block ran on
     # every fork PR and failed with
     #   ERROR: cannot stage libpq.so.5 -- no file matching ...
-    uses: sysown/proxysql/.github/workflows/ci-builds.yml@2a1c226e5d458a24ded79a15ff82d89840270a74
+    #
+    # 2a1c226e5d45 turned out to be unusable as an untrusted callee: its
+    # `resolve-tap-mode` job requested `pull-requests: read`, which
+    # CI-builds-fork.yml's `contents: read` cannot widen, so GitHub rejected
+    # the call and every fork PR landed on `startup_failure` with zero jobs.
+    # 5e8468db4981 drops that job-level block; see that commit on GH-Actions.
+    uses: sysown/proxysql/.github/workflows/ci-builds.yml@5e8468db498107c083a11eec3fface6801089437
     with:
       trusted: false

@@ -18,7 +18,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
+  # A ci:skip label edit must not replace a pending run or cancel active work.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}${{ github.event.action == 'labeled' && github.event.label.name == 'ci:skip' && '-[ci:skip]' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -32,9 +33,11 @@ jobs:
     # exist first (nightly/label runs have no guaranteed prior CI-builds run
     # to restore from).
     if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'pg-compat')
+      !contains(github.event.pull_request.labels.*.name, 'ci:skip') &&
+      (github.event_name == 'schedule' ||
+       github.event_name == 'workflow_dispatch' ||
+       (contains(github.event.pull_request.labels.*.name, 'pg-compat') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'pg-compat')))
     # write-all: reusable-workflow permissions are the intersection of
     # caller + callee: the callee at ci-pg-compat.yml@GH-Actions also
     # declares write-all (needed for actions/upload-artifact's write scope
