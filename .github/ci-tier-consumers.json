@@ -352,7 +352,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -364,7 +366,8 @@
           "var": "MATRIX_3P_PHP_MYSQLI_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-php-mysqli",
@@ -372,7 +375,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -384,7 +389,8 @@
           "var": "MATRIX_3P_PHP_MYSQLI_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-php-pdo-pgsql",
@@ -691,7 +697,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -703,7 +711,8 @@
           "var": "MATRIX_3P_MARIADB_CONNECTOR_J_connector_mysql"
         }
       },
-      "instance": "run-mysql"
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-mariadb-connector-j",
@@ -711,7 +720,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -723,7 +734,8 @@
           "var": "MATRIX_3P_MARIADB_CONNECTOR_J_connector_mariadb"
         }
       },
-      "instance": "run-mariadb"
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-psycopg",
@@ -754,7 +766,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -766,7 +780,8 @@
           "var": "MATRIX_3P_NODE_POSTGRES_connector_pgsql"
         }
       },
-      "instance": "run-pgsql"
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-pgx",
@@ -774,7 +789,9 @@
       "job": "test",
       "automatic": false,
       "tiers": [
-        "v40"
+        "v40",
+        "v30",
+        "v31"
       ],
       "groups": [],
       "cells": [],
@@ -786,7 +803,8 @@
           "var": "MATRIX_3P_PGX_connector_pgsql"
         }
       },
-      "instance": "run-pgsql"
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
     },
     {
       "workflow": "CI-3p-node-mysql2",
