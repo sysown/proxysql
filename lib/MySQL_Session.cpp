@@ -7276,10 +7276,11 @@ handler_again:
 							if (rc1 == 1)
 								NEXT_IMMEDIATE(CONNECTING_SERVER);
 						}
-						if (myerr == 2000 /* CR_UNKNOWN_ERROR */ && mysql_thread___enable_load_data_local_infile == false
+						if (myerr == 2000 /* CR_UNKNOWN_ERROR */
 							&& strcmp(mysql_error(myconn->mysql), "Load data local infile forbidden") == 0) {
-							// The connector refused a backend 'LOAD DATA LOCAL INFILE' file request, see
-							// MySQL_Connection::apply_local_infile_policy(). The connection isn't broken:
+							// The connector refused a backend 'LOAD DATA LOCAL INFILE' file request: the
+							// feature is disabled (see MySQL_Connection::apply_local_infile_policy()), or the
+							// statement doesn't start with 'LOAD' (connector's AUTO mode). The connection isn't broken:
 							// report the error to the client, and discard the backend connection since
 							// the server may still have pending results.
 							proxy_warning(
