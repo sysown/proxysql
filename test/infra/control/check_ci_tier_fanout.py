@@ -111,6 +111,7 @@ def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, runnab
 
 
 def validate_routes(rows,callers,engines,known_groups,migrated):
+    """Validate all consumer structures and prove execution for local routes."""
     errors=[];covered={'v30':set(),'v31':set()};identities=set()
     def allowed(condition,tier,mode,inputs,job,needs_results=None):
         try:return condition_allows(condition,tier,mode,inputs,job,needs_results)
@@ -130,8 +131,40 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
         identities.add(identity)
         for group in set(row['groups']+row.get('applicability_groups',[])):
             if group not in known_groups:errors.append('unknown group '+group)
+        # Consumer structure is shared even when the caller lives elsewhere.
+        if row['file'] not in engines:
+            errors.append('missing reusable '+row['file'])
+            continue
+        body=engines[row['file']]
+        if row['job'] not in body.get('jobs',{}):
+            errors.append('missing consumer job '+row['file']+'/'+row['job'])
+            continue
+        job=body['jobs'][row['job']]
+        if 'tier-context' not in body.get('jobs',{}):
+            errors.append('missing tier context '+row['file'])
+        if not selected_matrix(job,row['job']):
+            errors.append('consumer matrix bypasses selected tiers: '+str(identity))
+            continue
+        required_groups=set(row['groups'])
+        execution_step=row.get('execution_step')
+        if not required_groups and (not isinstance(execution_step,str) or not execution_step.strip()):
+            errors.append('group-less consumer lacks a valid execution_step: '+str(identity))
+            continue
+        if execution_step and not any(
+            step.get('name')==execution_step
+            and any(isinstance(step.get(key),str) and step[key].strip() for key in ('run','uses'))
+            for step in job.get('steps',[])
+        ):
+            errors.append('consumer execution step missing or empty: '+str(identity))
+            continue
         caller=callers.get(row['workflow'])
-        if not caller:errors.append('missing caller '+row['workflow']);continue
+        if caller is None:
+            # The shared catalogue also serves manual suites dispatched from
+            # other repositories. Only automatic entries require a local
+            # caller; existing local manual callers are still validated below.
+            if row['automatic'] is not False:
+                errors.append('missing caller '+row['workflow'])
+            continue
         if row['automatic']!=is_automatic(caller):errors.append('automatic/manual mismatch '+row['workflow'])
         start_job=caller['jobs'].get(row.get('instance','run'),{})
         routes=[]
@@ -143,15 +176,7 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
                 nested={k:resolve(v,inputs) for k,v in job.get('with',{}).items()}
                 walk(target(job),nested,gates+[(engines[name],job_id,inputs)],ancestors|{name})
         walk(target(start_job),start_job.get('with',{}),[(caller,row.get('instance','run'),{})],set())
-        body=engines.get(row['file'],{});job=body.get('jobs',{}).get(row['job'],{})
-        if 'tier-context' not in body.get('jobs',{}):errors.append('missing tier context '+row['file'])
         if not routes:errors.append('unreachable consumer '+str(identity));continue
-        if not selected_matrix(job,row['job']):
-            errors.append('consumer matrix bypasses selected tiers: '+str(identity));continue
-        required_groups=set(row['groups'])
-        execution_step=row.get('execution_step')
-        if not required_groups and (not isinstance(execution_step,str) or not execution_step.strip()):
-            errors.append('group-less consumer lacks a valid execution_step: '+str(identity));continue
         for tier in row['tiers']:
             per_mode=[]
             for mode in ['normal','asan']:

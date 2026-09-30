@@ -1,0 +1,21 @@
+name: CI-cancel-superseded
+run-name: Cancel superseded CI for PR ${{ github.event.pull_request.number }}
+
+on:
+  # Execute trusted base-branch control code only; never check out PR code.
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+concurrency:
+  # A delayed event for an old head must not cancel the new head's sweep.
+  group: cancel-superseded-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  cancel:
+    uses: sysown/proxysql/.github/workflows/ci-cancel-superseded.yml@GH-Actions
