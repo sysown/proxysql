@@ -1,66 +1,51 @@
 name: CI-macos-unit-smoke
-run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
-
-on:
-  pull_request:
-    paths:
-      - '.github/workflows/CI-macos-unit-smoke.yml'
-      - 'Makefile'
-      - 'deps/**'
-      - 'include/**'
-      - 'lib/**'
-      - 'src/**'
-      - 'test/tap/**'
-      - 'test/infra/control/test-mariadb-default-trust-store.bash'
-      - 'test/infra/control/fixtures/mariadb-*.c'
-  workflow_dispatch:
-
+run-name: ${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}
 permissions:
   contents: read
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-
 jobs:
+  tier-selection:
+    uses: sysown/proxysql/.github/workflows/ci-tier-selection.yml@GH-Actions
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
   build-and-unit-smoke:
     runs-on: macos-14
     timeout-minutes: 120
-
     steps:
     - name: Checkout repository
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
-        # Keep this bounded: fetching every branch fails on macOS because the
-        # repository has refs whose names differ only by letter case.
         fetch-depth: 1000
         fetch-tags: true
         persist-credentials: false
-
     - name: Install dependencies
       run: brew install automake bzip2 cmake gpatch gnutls libevent libtool icu4c pkg-config libiconv zlib
-
     - name: Select GNU patch
       run: echo "$(brew --prefix gpatch)/libexec/gnubin" >> "$GITHUB_PATH"
-
     - name: Build ProxySQL
       run: make -j"$(sysctl -n hw.ncpu)"
-
+      env:
+        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
+        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
     - name: Verify MariaDB default CA caching and trust isolation
       env:
         CA_CACHE_TEST_SYSTEM_DEFAULTS: '1'
       run: test/infra/control/test-mariadb-default-trust-store.bash
-
     - name: Build macOS unit smoke tests
       run: |
         make -C test/tap/tests/unit -j"$(sysctl -n hw.ncpu)" \
           smoke_test-t query_processor_unit-t
-
+      env:
+        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
+        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
     - name: Run macOS unit smoke tests
       run: |
         test/tap/tests/unit/smoke_test-t
         test/tap/tests/unit/query_processor_unit-t
-
     - name: Verify static ProxySQL linkage on macOS
       run: |
         set -euo pipefail
@@ -75,3 +60,22 @@ jobs:
             exit 1
           fi
         done
+    needs: tier-selection
+    strategy:
+      fail-fast: false
+      matrix:
+        tier: ${{ fromJson(needs.tier-selection.outputs.tiers) }}
+    name: macOS smoke / ${{ matrix.tier }}
+'on':
+  pull_request:
+    paths:
+    - .github/workflows/CI-macos-unit-smoke.yml
+    - Makefile
+    - deps/**
+    - include/**
+    - lib/**
+    - src/**
+    - test/tap/**
+    - test/infra/control/test-mariadb-default-trust-store.bash
+    - test/infra/control/fixtures/mariadb-*.c
+  workflow_dispatch: null

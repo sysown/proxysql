@@ -677,9 +677,24 @@ Repository branch-protection settings are unchanged.
 
 Tests still use `@proxysql_min_version` and the built binary's actual version.
 Mixed groups retain applicable lower-tier tests; empty groups are explicitly
-not applicable. Plugin-only jobs use v4.0. Coverage upload is enabled only for
-instrumented artifacts. Lower-tier `unit-tests-g1` runs within the producer,
-retaining coverage previously supplied by the sweep without enabling new events.
+not applicable, including plugin suites unavailable in the compiled product.
+All selected tiers use the same ASAN/coverage and TSAN unit workflows, rebuilt
+inside `ubuntu24_dbg_build` and executed in that same image. The producer does
+not run unit tests. Every tier uses GCOV in the shared TAP build and the same
+coverage collection steps. Only compile-time product flags and version-based
+test filtering differ; sanitizer options and test commands are shared.
+
+`CI-maketest` and CodeQL use the same producer-bound selection. Standalone
+macOS smoke, cluster simulation, and PostgreSQL compatibility workflows keep
+their existing triggers and snapshot the same tier labels once per run. Reruns
+reuse that snapshot. Cluster simulation caches and all matrix artifacts include
+the product tier; the restored simulator binary is checked against that tier.
+The fixed ASAN, TSAN, and simulator coverage configurations apply equally to
+every selected product. Manual third-party suites remain manual.
+
+Deploy the paired GH-Actions engine change before the v3.0 caller change, then
+start a new PR CI run. Existing runs retain their original manifests and build
+instrumentation; they do not acquire newly selected tiers on rerun.
 
 ### Sweep removal and coverage guard
 
