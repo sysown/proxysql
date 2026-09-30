@@ -2455,35 +2455,6 @@
       "build_from_source": true
     },
     {
-      "workflow": "CI-maketest",
-      "file": "ci-maketest.yml",
-      "job": "builds",
-      "automatic": true,
-      "tiers": [
-        "v40",
-        "v30",
-        "v31"
-      ],
-      "groups": [],
-      "cells": [],
-      "axes": {
-        "testdist": [
-          "ubuntu22"
-        ],
-        "target": [
-          "testaurora",
-          "testgalera",
-          "testgrouprep",
-          "testreadonly",
-          "testreplicationlag",
-          "testall"
-        ]
-      },
-      "instance": "run",
-      "build_from_source": true,
-      "execution_step": "Make-test"
-    },
-    {
       "workflow": "CI-CodeQL",
       "file": "ci-codeql.yml",
       "job": "analyze",
