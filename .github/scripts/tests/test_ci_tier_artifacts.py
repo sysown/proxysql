@@ -50,6 +50,16 @@ class ArtifactTests(unittest.TestCase):
    # a link already extracted is followed, as the fixed interpreters do
    os.makedirs(os.path.join(folder,'a/b'));os.symlink('/',os.path.join(folder,'a/b/up'))
    with self.assertRaises(tarfile.LinkOutsideDestinationError):handoff_filter(link('a/b/c/d/x','../../up/etc'),folder)
+   # a link the old filter accepts (resolved from the root) that escapes through a link extracted earlier
+   os.makedirs(os.path.join(folder,'p/q/r'));os.symlink('../../..',os.path.join(folder,'p/q/r/alias'))
+   self.assertEqual(handoff_filter(link('p/q/r/alias2','../../..'),folder).linkname,'../../..')
+   buggy(link('p/q/r/link','alias/../outside'),folder)
+   with self.assertRaises(tarfile.LinkOutsideDestinationError):handoff_filter(link('p/q/r/link','alias/../outside'),folder)
+  # and on this interpreter's own data filter
+  with tempfile.TemporaryDirectory() as folder:
+   os.makedirs(os.path.join(folder,'p/q/r'));os.symlink('../../..',os.path.join(folder,'p/q/r/alias'))
+   with self.assertRaises(tarfile.LinkOutsideDestinationError):handoff_filter(link('p/q/r/link','alias/../outside'),folder)
+   self.assertEqual(handoff_filter(link('test/afl_digest_test/c_tokenizer.h','../../include/c_tokenizer.h'),folder).linkname,'../../include/c_tokenizer.h')
  def test_registration_is_not_sha_search(self):
   class API:
    def pages(self,path,key):return [{'external_id':'ci-tier-origin:1:1','output':{'text':'{"build_id":2,"build_attempt":1,"trigger_id":1,"trigger_attempt":1,"repository":"sysown/proxysql","sha":"'+('a'*40)+'"}'}}]
