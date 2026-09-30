@@ -51,6 +51,34 @@ def plan_command():
     binding={k:plan[k] for k in ('repository','sha','trigger_id','trigger_attempt','build_id','build_attempt','execution_id','control_sha')}
     emit(plan=binding,matrix={'include':matrix},execution_id=plan['execution_id'],control_sha=plan['control_sha'])
 
+def standalone_selection():
+    """Snapshot labels for suites triggered directly, without a CI-builds producer."""
+    gh=json.loads(os.environ['GITHUB_JSON']);api=GitHubAPI(gh['repository'])
+    identity=dict(repository=gh['repository'],sha=gh['sha'],run_id=int(gh['run_id']))
+    existing=[]
+    if int(gh['run_attempt'])>1:
+        # An earlier attempt may have failed before upload. Only absence permits
+        # a fresh selection; expired, ambiguous or corrupt snapshots must fail.
+        existing=[a for a in api.artifacts(identity['run_id']) if a['name']=='ci-tier-selection']
+    if existing:
+        snapshot=api.json_artifact(identity['run_id'],'ci-tier-selection','selection.json')
+        if any(snapshot.get(key)!=value for key,value in identity.items()):
+            raise ValueError('standalone selection identity mismatch')
+    else:
+        pr=gh.get('event',{}).get('pull_request')
+        ctx=dict(event=gh['event_name'],pull_requests=[{'number':pr['number']}] if pr else [])
+        selection=resolve_selection(ctx,True,lambda number:api.request(f"repos/{gh['repository']}/pulls/{number}"))
+        snapshot=dict(identity,selection=selection,control_sha=subprocess.check_output(
+            ['git','-C',str(ROOT.parent),'rev-parse','HEAD'],text=True).strip())
+    selection=snapshot['selection']
+    if (not selection['tiers'] or len(set(selection['tiers']))!=len(selection['tiers'])
+        or any(tier not in ('v40','v30','v31') for tier in selection['tiers'])
+        or selection['mode'] not in ('normal','asan')):
+        raise ValueError('invalid standalone tier selection')
+    Path('selection.json').write_text(json.dumps(snapshot))
+    emit(tiers=selection['tiers'],mode=selection['mode'],control_sha=snapshot['control_sha'],
+         publish_selection=not bool(existing))
+
 def stamp():
     plan=read_plan();leg=json.loads(os.environ['CI_LEG']);root=Path('proxysql')
     version=binary_version(root)
@@ -239,18 +267,6 @@ def producer_lookup():
         time.sleep(30)
     raise RuntimeError('timed out waiting for producer completion')
 
-def units():
-    plan=read_plan();leg=json.loads(os.environ['CI_LEG']);gh=json.loads(os.environ['GITHUB_JSON'])
-    check=next(c for c in plan['checks'] if c['job']=='tier-units' and c['tier']==leg['tier'])
-    api=api_for(plan)
-    publish_result(plan,check['key'],'in_progress',api,gh['run_id'],gh['run_attempt'])
-    group=os.environ['TAP_GROUP']
-    if group!='unit-tests-g1':raise ValueError('unsupported producer unit group')
-    env=dict(os.environ,SKIP_PROXYSQL='1',TAP_GROUP=group,INFRA_ID='ci-units-'+leg['tier'])
-    result=subprocess.run(['test/infra/control/run-tests-isolated.bash'],cwd='proxysql',env=env)
-    publish_result(plan,check['key'],'success' if result.returncode==0 else 'failure',api,gh['run_id'],gh['run_attempt'])
-    if result.returncode:raise RuntimeError('lower-tier unit tests failed')
-
 if __name__=='__main__':
-    commands={'artifact-status':artifact_status,'plan':plan_command,'stamp':stamp,'finalize':finalize,'consumer':consumer,'result':result,'restore':restore,'summary':summary,'wait-build':producer_lookup,'units':units}
+    commands={'selection':standalone_selection,'artifact-status':artifact_status,'plan':plan_command,'stamp':stamp,'finalize':finalize,'consumer':consumer,'result':result,'restore':restore,'summary':summary,'wait-build':producer_lookup}
     commands[sys.argv[1]]()

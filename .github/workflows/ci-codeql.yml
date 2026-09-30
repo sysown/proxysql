@@ -1,131 +1,125 @@
-name: CI-codeql
-
-on:
-  workflow_dispatch:
+name: CI-CodeQL
+'on':
   workflow_call:
     inputs:
       trigger:
         type: string
-
-env:
-  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-
+      consumer_id:
+        type: string
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: ''
 jobs:
+  tier-context:
+    uses: ./.github/workflows/ci-tier-context.yml
+    with:
+      trigger: ${{ inputs.trigger }}
+      consumer_id: ${{ inputs.consumer_id }}
+      control_ref: ${{ inputs.control_ref }}
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
+      consumer_file: ci-codeql.yml
+      consumer_inputs: ${{ toJson(inputs) }}
+    secrets: inherit
   analyze:
-    name: Analyze
+    name: ${{ matrix.check_name }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
-#    permissions:
-#      actions: read
-#      contents: read
-#      security-events: write
-
     strategy:
       fail-fast: false
       matrix:
-        testdist: [ 'ubuntu24-tap-genai-gcov' ]
-        language: [ 'cpp', 'python' ]
-        # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'ruby' ]
-        # Learn more about CodeQL language support at https://git.io/codeql-language-support
+        include: ${{ fromJson(needs.tier-context.outputs.matrices)['analyze'] || fromJson('[{}]') }}
     env:
       TESTDIST: ${{ matrix.testdist }}
-      MATRIX: '(${{ matrix.language }})'
-
+      MATRIX: (${{ matrix.language }})
+      SHA: ${{ needs.tier-context.outputs.sha }}
+      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
+      CI_LEG: ${{ toJson(matrix) }}
+      TIER: ${{ matrix.tier }}
+      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
     steps:
-
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      id: checks
-      if: always()
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        status: 'in_progress'
-#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-    
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-context.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Start selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Update
       run: sudo apt-get update
-
     - name: Install build tools
       run: sudo apt-get -y install make automake git wget gcc g++ libtool equivs python3
-
     - name: Install build dependencies
       run: sudo apt-get -y install libssl-dev gnutls-dev libgnutls28-dev libmysqlclient-dev libboost-all-dev libunwind8 libunwind-dev uuid-dev ca-certificates
-
     - name: Checkout repository
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         fetch-depth: 0
-        path: 'proxysql'
-
-#    - name: Wait for cache
-#      if: ${{ env.BRANCH != 'none' }}
-#      env:
-#        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-#      run: |
-#        echo "Wating for cache '${BLDCACHE}' ..."
-#        sleep $(( $RANDOM / 1024 ))
-#        PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
-#        while [[ -z ${PROBE} ]]; do
-#          echo "Wating for cache '${BLDCACHE}' ..."
-#          sleep 30
-#          PROBE="$(gh cache list --limit 300 --repo ${{ github.repository }} | grep -i ${BLDCACHE} || echo '')"
-#        done
-#        echo "Cache available '${BLDCACHE}'"
-
-#    - name: Cache restore src
-#      id: cache-src
-#      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-#      with:
-#        key: ${{ env.BLDCACHE }}
-#        fail-on-cache-miss: true
-#        path: |
-#          proxysql/src/
-
-    # Initializes the CodeQL tools for scanning.
+        path: proxysql
+        persist-credentials: false
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
+      uses: github/codeql-action/init@c4dd10e44af883a891fe31ced449bcb4a6728b9b
       with:
         languages: ${{ matrix.language }}
-#        checkout_path: proxysql/
-
-#    - if: matrix.language == 'python' || matrix.language == 'java' 
-#      name: Autobuild
-#      uses: github/codeql-action/autobuild@v2
-      
-#    - if: matrix.language == 'cpp' 
-#      name: Git describe
-#      env:
-#        GH_TOKEN: ${{ github.GITHUB_TOKEN }}
-#      run: |
-#        export VERS=$(git ls-remote https://github.com/${{ github.repository }}.git "refs/tags/*" | grep -v 'refs/tags/v' | sed -e 's|.*/||g' | tail -2 | head -1)
-#        export HASH=$(gh api repos/${{ github.repository }}/git/refs/heads/v2.x | jq '.object.sha' | cut -c2-8)
-#        export CMTS=$(gh api repos/${{ github.repository }}/compare/${VERS}...v2.x | jq '.ahead_by')
-#        echo "git descibe : ${VERS}-${CMTS}-g${HASH}"
-#        echo "GIT_VERSION=${VERS}-${CMTS}-g${HASH}" >> $GITHUB_ENV
-    
     - if: matrix.language == 'cpp'
       name: Build C++
       run: |
         cd proxysql
-        make -j$(nproc) clickhouse
-
+        make -j"$(nproc)" clickhouse
+      env:
+        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
+        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
+      uses: github/codeql-action/analyze@c4dd10e44af883a891fe31ced449bcb4a6728b9b
       with:
         checkout_path: proxysql/
-      
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      if: always()
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        check_id: ${{ steps.checks.outputs.check_id }}
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        conclusion: ${{ job.status }}
-#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+        category: ${{ matrix.tier }}-${{ matrix.language }}
+    - name: Complete selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ always() }}
+    needs:
+    - tier-context
+    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['analyze'][0] != null }}
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      security-events: write
+  tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+    needs:
+    - tier-context
+    - analyze
+    if: ${{ always() && needs.tier-context.result == 'success' }}
+    uses: ./.github/workflows/ci-tier-summary.yml
+    with:
+      binding: ${{ needs.tier-context.outputs.binding }}
+      control_ref: ${{ needs.tier-context.outputs.control_sha }}
+    secrets: inherit

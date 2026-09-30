@@ -1,57 +1,74 @@
 name: CI-maketest
-
-on:
-  workflow_dispatch:
+'on':
   workflow_call:
     inputs:
       trigger:
         type: string
-      target:
+      consumer_id:
         type: string
-
-env:
-  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: ''
 jobs:
+  tier-context:
+    uses: ./.github/workflows/ci-tier-context.yml
+    with:
+      trigger: ${{ inputs.trigger }}
+      consumer_id: ${{ inputs.consumer_id }}
+      control_ref: ${{ inputs.control_ref }}
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
+      consumer_file: ci-maketest.yml
+      consumer_inputs: ${{ toJson(inputs) }}
+    secrets: inherit
   builds:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        testdist: [ 'ubuntu22' ]
-        target: [ 'testaurora','testgalera','testgrouprep','testreadonly','testreplicationlag','testall' ]
+        include: ${{ fromJson(needs.tier-context.outputs.matrices)['builds'] || fromJson('[{}]') }}
     env:
       TESTDIST: ${{ matrix.testdist }}
       TARGET: ${{ matrix.target }}
-      MATRIX: '(${{ matrix.target }})'
-
+      MATRIX: (${{ matrix.target }})
+      SHA: ${{ needs.tier-context.outputs.sha }}
+      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
+      CI_LEG: ${{ toJson(matrix) }}
+      TIER: ${{ matrix.tier }}
+      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
     steps:
-         
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      id: checks
-      if: always()
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        status: 'in_progress'
-#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-    
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-context.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Start selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout repository
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         fetch-depth: 0
-        path: 'proxysql'
-        
-#    - name: hot-fixes
-#      run: |
-#        sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
-        
+        path: proxysql
+        persist-credentials: false
     - name: Make-test
       timeout-minutes: 90
       run: |
@@ -60,31 +77,52 @@ jobs:
         #git fetch --tags --force
         GIT_VERSION=$(git describe --long --abbrev=7)
         echo "GIT_VERSION=${GIT_VERSION}"
-        echo "GIT_VERSION=${GIT_VERSION}" >> $GITHUB_ENV
-        
+        echo "GIT_VERSION=${GIT_VERSION}" >> "$GITHUB_ENV"
+
         echo "TARGET: ${{ matrix.target }}"
         sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make cleanall && make -j$(nproc) ${{ matrix.target }}'" docker-compose.yml
-        make ${TESTDIST}-dbg | tee ../build.log
-        
+        make "${TESTDIST}-dbg" | tee ../build.log
+      env:
+        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
+        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
     - name: Check build
       run: |
         grep 'exited with code 0' build.log
-        
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
-        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}-${{ matrix.target }}
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}-${{ matrix.target }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: |
           ./build-*.log
-          
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      if: always()
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        check_id: ${{ steps.checks.outputs.check_id }}
-        repo: ${{ github.repository }}
-        sha: ${{ env.SHA }}
-        conclusion: ${{ job.status }}
-#        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+    - name: Complete selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ always() }}
+    needs:
+    - tier-context
+    name: ${{ matrix.check_name }}
+    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['builds'][0] != null }}
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+  tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+    needs:
+    - tier-context
+    - builds
+    if: ${{ always() && needs.tier-context.result == 'success' }}
+    uses: ./.github/workflows/ci-tier-summary.yml
+    with:
+      binding: ${{ needs.tier-context.outputs.binding }}
+      control_ref: ${{ needs.tier-context.outputs.control_sha }}
+    secrets: inherit

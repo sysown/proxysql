@@ -78,12 +78,8 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     env:
-      # Feature tier, resolved once in the resolve-tier job and threaded in
-      # here. IS_V40 is the single boolean every v4.0-only step gates on, so
-      # "does this step need the plugin chassis?" is answered in one place
-      # instead of by substring-matching `type` at each call site.
+      # Feature tier and instrumentation come from the single label snapshot.
       TIER: ${{ matrix.tier }}
-      IS_V40: ${{ matrix.tier == 'v40' }}
       VARIANT: ${{ matrix.variant }}
       TAP_BUILD_MODE: ${{ matrix.mode }}
       MATRIX: '(${{ matrix.tier }},${{ matrix.mode }})'
@@ -166,7 +162,7 @@ jobs:
         fetch-depth: 0
         path: 'proxysql'
 
-    # Stage the tier-prune helper for non-v40 legs.
+    # Stage the shared version filter for every build leg.
     #
     # It lives under .github/scripts/, which exists ONLY on the GH-Actions
     # branch -- the main `Checkout repository` step above checks out the
@@ -222,6 +218,8 @@ jobs:
         # `Makefile:106-111` re-exports them, so a value injected here reaches
         # make. PROXYSQL40 is additionally forwarded to the plugin sub-makes by
         # entrypoint.bash's EXTRA (entrypoint.bash:52-53).
+        # Instrument every product tier identically.
+        sed -i "/command/i \      - WITHGCOV=1" docker-compose.yml
         case "${TIER}" in
           v40)
             # GenAI / v4.0 chassis tier flag. PROXYSQLGENAI was REMOVED in
@@ -234,11 +232,6 @@ jobs:
             # was exercising a Stable core, with FFTO/TSDB/genai/pass-through
             # #ifdef'd out. Use PROXYSQL40=1 so the core matches the tier.
             sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
-            # Coverage instrumentation. v40-only: WITHGCOV=1 costs build time
-            # and emits .gcno that only the Codecov collector consumes, and the
-            # lower-tier consumers do not set COVERAGE=1. See the handoff
-            # pack step, which tolerates a missing .gcno set.
-            sed -i "/command/i \      - WITHGCOV=1" docker-compose.yml
             ;;
           v31)
             # v3.1 tier: FFTO + TSDB + ED25519, no plugin chassis.
@@ -269,42 +262,10 @@ jobs:
           if [ "${{ runner.environment }}" = "self-hosted" ]; then export MAKEOPT="-j8"; fi
           make ${{ matrix.dist }}-tap | tee ci_build_log/build-tap.log
 
-          # ------------------------------------------------------------
-          # Feature-tier handoff pruning (v30/v31 only).
-          #
-          # A downgrade build compiles a strictly smaller set of test
-          # translation units, and run-tests-isolated.bash already refuses to
-          # SELECT any binary whose @proxysql_min_version exceeds the running
-          # binary's own compiled version. So the binaries that are too new for
-          # this tier are dead weight in the handoff. Drop them here, which
-          # does two things at once:
-          #   1. shrinks the artifact -- the unit binaries are ~170 MB each
-          #      because they statically link libproxysql.a in debug mode, so
-          #      for a v30 leg this removes ~68 of 133 of them;
-          #   2. makes a "not-found" false-red structurally impossible, since
-          #      run-tests-isolated.bash:256-262 counts a missing binary as a
-          #      FAILURE.
-          #
-          # This MUST run before the tap-matrix* generation below, so those
-          # files describe the tree that actually ships.
-          #
-          # v40 is deliberately excluded: the existing consumers depend on the
-          # complete binary set, and its version filter selects everything.
-          # sudo is required -- the binaries are created by the build container
-          # running as root, and unlink needs write access to the parent
-          # directory, which the runner user does not have (same constraint as
-          # the unit-binary deletion further down).
-          # ------------------------------------------------------------
-          if [ "${IS_V40}" != "true" ]; then
-            # ABSOLUTE path on purpose. `actions/checkout` places its `path:`
-            # relative to $GITHUB_WORKSPACE, so `path: ci-control` and
-            # `path: proxysql` are SIBLINGS -- and this step has already run
-            # `cd proxysql/`. A relative `ci-control/...` would therefore
-            # resolve to proxysql/ci-control/... and not exist. (It did, and
-            # every downgrade build died there; caught in PR #6234 review.)
-            sudo "${GITHUB_WORKSPACE}/ci-control/.github/scripts/prune-tier-handoff.bash" \
-              --binary src/proxysql --groups test/tap/groups/groups.json
-          fi
+          # Filter by the built product version in every tier. The same
+          # selection applies to the handoff and standalone sanitizer builds.
+          sudo "${GITHUB_WORKSPACE}/ci-control/.github/scripts/prune-tier-handoff.bash" \
+            --binary src/proxysql --groups test/tap/groups/groups.json
 
           # create matrix of all test folders containing *-t
           echo "[ "$(find test/tap/ -name '*-t' | xargs -n1 dirname | uniq | sed 's|test/tap/||' | xargs -I{} -n1 echo -n "'{}', ")"]" > tap-matrix.json
@@ -335,12 +296,7 @@ jobs:
           # to fail and the entire TAP pipeline to break.
           # ------------------------------------------------------------
 
-          # Compile-time safety checks. A normal TAP build produces the
-          # integration binaries in tests/; it need not build tests/unit.
-          # The -tap-mysqlx cache is the exception: CI-mysqlx runs its
-          # mysqlx_*_unit-t and plugin_*_unit-t binaries directly.
-          # Fail loudly when the expected binaries are absent rather than
-          # letting cache-pruning succeed on an empty set.
+          # Every successful handoff must contain integration and unit tests.
           TAP_COUNT=$(find test/tap/tests test/tap/tests_with_deps -path test/tap/tests/unit -prune -o -type f -name '*-t' -executable -print 2>/dev/null | wc -l)
           UNIT_COUNT=$(find test/tap/tests/unit -type f -name '*-t' -executable 2>/dev/null | wc -l)
           echo ">>> Compiled ${TAP_COUNT} TAP test binaries, including ${UNIT_COUNT} unit test binaries"
@@ -357,48 +313,8 @@ jobs:
             exit 1
           fi
 
-          # Delete unit test binaries before the cache save. Each is ~170 MB
-          # because they statically link libproxysql.a in debug mode
-          # (52 binaries × 170 MB = 8.8 GB). CI-unittests on v3.0 is
-          # disabled for now; when it's re-enabled it will need its own
-          # rebuild strategy (probably a full docker-compose rebuild).
-          #
-          # sudo is required: files under test/tap/tests/unit/ and test/deps/
-          # are created inside the docker build container running as root,
-          # and the host-side runner user can't always remove root-owned
-          # files under root-owned subdirectories (unlink needs write access
-          # to the parent directory, which the runner doesn't always have).
-          #
-          # On the -tap-mysqlx matrix variant, CI-mysqlx (downstream) runs
-          # the mysqlx_*_unit-t and plugin_*_unit-t binaries directly against
-          # this cache, so preserve those and delete only the rest. Spot-
-          # checks (readelf) confirm the kept binaries do not dyn-link to
-          # test/deps -- the test/deps deletion below still applies.
-          # On the v40 leg, retain every unit binary: the ~51 existing consumers
-          # may select any of them, and the complete handoff is the only thing
-          # they get.
-          #
-          # On a v30/v31 leg, prune-tier-handoff.bash has ALREADY reduced
-          # tests/unit to exactly the binaries this tier's version filter can
-          # select, and UNIT_COUNT above is measured after that prune. So the
-          # correct action is to keep them: lower-tier CI runs the
-          # `unit-tests-g1` group explicitly, and deleting them here would
-          # leave the handoff unable to run it. (This branch used to be the
-          # catch-all `else` that deleted every unit binary; for v30/v31 that
-          # silently emptied tests/unit. Caught in PR #6234 review.)
-          if [ "${IS_V40}" = "true" ]; then
-            echo ">>> Retaining all ${UNIT_COUNT} unit test binaries for the complete v40 handoff"
-          elif [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
-            sudo find test/tap/tests/unit -type f -name '*-t' \
-              ! -name 'mysqlx_*_unit-t' ! -name 'plugin_*_unit-t' -delete
-            KEPT=$(find test/tap/tests/unit -type f -name '*-t' 2>/dev/null | wc -l)
-            echo ">>> Deleted $((UNIT_COUNT - KEPT)) unit test binaries, kept ${KEPT} mysqlx_*/plugin_* binaries"
-          else
-            # A non-v40 TAP leg was already pruned to its selectable set. Only a
-            # leg that was NOT pruned (i.e. no -tap block ran) may still need
-            # the bulk delete; assert that rather than deleting blind.
-            echo ">>> Retaining the ${UNIT_COUNT} unit test binaries left by the ${TIER} tier prune"
-          fi
+          # Every handoff retains the complete applicable unit test set.
+          echo ">>> Retaining ${UNIT_COUNT} applicable unit test binaries"
 
           # Delete test/deps (~2.8 GB on disk). These are the test-framework
           # dependencies (mariadb-connector-c, mysql-connector-c 5.7,
@@ -499,12 +415,8 @@ jobs:
           grep 'exited with code 0' ${LOG} || exit 1
         done
 
-    - name: Stage MySQLX runtime libraries in test handoff
-      # v40 only: a downgrade build produces no plugins at all (the Makefile
-      # prints "[skip] <plugin> (PROXYSQL40 not set)"), and the `cp -L
-      # plugins/mysqlx/...` below is unconditional, so this step must not run
-      # for v30/v31 or it aborts on a missing file.
-      if: ${{ inputs.trusted && success() && matrix.tier == 'v40' }}
+    - name: Stage compiled runtime libraries in test handoff
+      if: ${{ inputs.trusted && success() }}
       run: |
         set -euo pipefail
         cd proxysql/
@@ -552,35 +464,18 @@ jobs:
           echo "libtap.so uses static libpq; no libpq runtime library to stage"
         fi
 
-        cp -L plugins/mysqlx/ProxySQL_MySQLX_Plugin.so "${runtime_dir}/"
-        cp -L plugins/genai/ProxySQL_GenAI_Plugin.so "${runtime_dir}/" 2>/dev/null || true
+        # The build decides which plugins exist. Package all of its outputs
+        # identically, including builds with no plugins.
+        shopt -s nullglob
+        for plugin in plugins/*/*.so; do
+          if [ ! -s "${plugin}" ]; then
+            echo "ERROR: empty or missing plugin: ${plugin}" >&2
+            exit 1
+          fi
+          cp -L "${plugin}" "${runtime_dir}/"
+        done
         ls -la "${runtime_dir}/"
 
-    - name: Stage GenAI plugin in test handoff
-      # v40 only -- see the MySQLX staging step above.
-      if: ${{ inputs.trusted && success() && matrix.tier == 'v40' }}
-      run: |
-        set -euo pipefail
-        cd proxysql/
-        plugin_src="plugins/genai/ProxySQL_GenAI_Plugin.so"
-        plugin_dest="test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so"
-        if [ ! -s "${plugin_src}" ]; then
-          echo "ERROR: required GenAI plugin missing after build: ${plugin_src}" >&2
-          exit 1
-        fi
-        mkdir -p "$(dirname "${plugin_dest}")"
-        cp -L "${plugin_src}" "${plugin_dest}"
-        test -s "${plugin_dest}"
-        ls -la "$(dirname "${plugin_dest}")"
-
-    - name: Run lower-tier unit coverage
-      env:
-        TAP_GROUP: unit-tests-g1
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GITHUB_JSON: ${{ toJson(github) }}
-      run: |
-        python3 ci-control/.github/scripts/ci_tier_runtime.py units
-      if: ${{ inputs.trusted && success() && matrix.tier != 'v40' }}
     - name: Record built product metadata
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -609,15 +504,6 @@ jobs:
         gcno=(lib/obj/*.gcno)
         matrix_files=(tap-matrix*)
         plugin_files=(plugins/*/*.so)
-        # Only the v40 leg can have plugins. Asserting their presence
-        # unconditionally is what blocked every downgrade build: a v30/v31
-        # build legitimately produces zero (Makefile prints
-        # "[skip] <plugin> (PROXYSQL40 not set)" for each one). Assert on v40
-        # so a chassis regression there still fails loudly.
-        if [ "${IS_V40}" = "true" ] && [ "${#plugin_files[@]}" -lt 1 ]; then
-          echo "ERROR: no plugin shared libraries were built for the v40 handoff" >&2
-          exit 1
-        fi
         echo ">>> packing handoff: tier=${TIER} variant=${VARIANT} gcno=${#gcno[@]} matrix=${#matrix_files[@]} plugins=${#plugin_files[@]}"
         # "${arr[@]}" on an empty array is a no-op under set -u on bash >= 4.4
         # (all packaging containers), which is what lets the tier-agnostic

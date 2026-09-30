@@ -1,4 +1,4 @@
-import contextlib,io,json,os,sys,tempfile,unittest
+import contextlib,io,json,os,sys,tempfile,unittest,zipfile
 from pathlib import Path
 from unittest.mock import patch,Mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -10,7 +10,7 @@ class RuntimeTests(unittest.TestCase):
  def test_failed_producer_marks_unrun_units_and_consumers_skipped(self):
   plan={'repository':'sysown/proxysql','checks':[
    dict(check_id=1,workflow='CI-builds',job='builds'),
-   dict(check_id=2,workflow='CI-builds',job='tier-units'),
+   dict(check_id=2,workflow='CI-unit-tests-tsan',job='unit-tests-tsan'),
    dict(check_id=3,workflow='CI-tests',job='tests')]}
   api=Mock();api.request.return_value={'status':'queued'}
   with patch.object(runtime,'read_plan',return_value=plan),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'reconcile'),patch.dict(os.environ,{'BUILD_RESULT':'failure'}):
@@ -19,13 +19,83 @@ class RuntimeTests(unittest.TestCase):
   self.assertEqual([p['conclusion'] for p in writes],['failure','skipped','skipped'])
 
  def test_failed_producer_does_not_call_started_units_blocked(self):
-  plan={'repository':'sysown/proxysql','checks':[dict(check_id=1,workflow='CI-builds',job='tier-units')]}
+  plan={'repository':'sysown/proxysql','checks':[dict(check_id=1,workflow='CI-unit-tests-tsan',job='unit-tests-tsan')]}
   api=Mock();api.request.return_value={'status':'in_progress'}
   with patch.object(runtime,'read_plan',return_value=plan),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'reconcile'),patch.dict(os.environ,{'BUILD_RESULT':'failure'}):
    with self.assertRaisesRegex(RuntimeError,'required producer job failed'):runtime.finalize()
   self.assertEqual(api.request.call_args.args[2]['conclusion'],'failure')
   self.assertNotIn('blocked',api.request.call_args.args[2]['output']['summary'])
 
+ def test_standalone_selection_snapshots_labels_and_reuses_them_on_rerun(self):
+  gh=dict(repository='sysown/proxysql',sha='a'*40,run_id='9',run_attempt='1',event_name='pull_request',event={'pull_request':{'number':42}})
+  api=Mock();api.request.return_value={'labels':[{'name':'ci:v3.0'},{'name':'ci:v3.1'}]}
+  with tempfile.TemporaryDirectory() as folder:
+   prior=os.getcwd();os.chdir(folder)
+   try:
+    with patch.object(runtime,'GitHubAPI',return_value=api),patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'GITHUB_OUTPUT':str(Path(folder)/'out')}):
+     self.assertTrue(hasattr(runtime,'standalone_selection'))
+     runtime.standalone_selection()
+     snapshot=json.loads(Path('selection.json').read_text())
+     self.assertEqual(snapshot['selection']['tiers'],['v40','v30','v31'])
+    gh['run_attempt']='2';api.reset_mock();api.json_artifact.return_value=snapshot
+    api.artifacts.return_value=[dict(id=1,name='ci-tier-selection',expired=False)]
+    with patch.object(runtime,'GitHubAPI',return_value=api),patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'GITHUB_OUTPUT':str(Path(folder)/'out')}):
+     runtime.standalone_selection();api.request.assert_not_called()
+     self.assertEqual(json.loads(Path('selection.json').read_text()),snapshot)
+     api.json_artifact.assert_called_once_with(9,'ci-tier-selection','selection.json')
+   finally:os.chdir(prior)
+ def test_standalone_rerun_rejects_a_foreign_snapshot(self):
+  gh=dict(repository='sysown/proxysql',sha='a'*40,run_id='9',run_attempt='2')
+  api=Mock();api.json_artifact.return_value=dict(repository='sysown/proxysql',sha='b'*40,run_id=9,selection={'tiers':['v40'],'mode':'normal'})
+  api.artifacts.return_value=[dict(id=1,name='ci-tier-selection',expired=False)]
+  with patch.object(runtime,'GitHubAPI',return_value=api),patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh)}):
+   self.assertTrue(hasattr(runtime,'standalone_selection'))
+   with self.assertRaisesRegex(ValueError,'selection identity mismatch'):runtime.standalone_selection()
+ def test_standalone_retry_recovers_missing_snapshot_then_freezes_selection(self):
+  gh=dict(repository='sysown/proxysql',sha='a'*40,run_id='9',run_attempt='1',event_name='pull_request',event={'pull_request':{'number':42}})
+  api=runtime.GitHubAPI(gh['repository']);records=[];archive=None;labels=[{'name':'ci:v3.0'}]
+  def request(path,**kwargs):
+   if '/artifacts?' in path:return {'artifacts':records}
+   if path.endswith('/zip'):return archive
+   if path.endswith('/pulls/42'):return {'labels':labels}
+   self.fail('unexpected API request: '+path)
+  with tempfile.TemporaryDirectory() as folder:
+   prior=os.getcwd();os.chdir(folder)
+   try:
+    output=Path(folder)/'out'
+    with patch.object(runtime,'GitHubAPI',return_value=api),patch.object(api,'request',side_effect=request),patch.dict(os.environ,{'GITHUB_OUTPUT':str(output)}):
+     # Selection succeeded, but the first attempt failed before artifact upload.
+     with patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh)}):runtime.standalone_selection()
+     gh['run_attempt']='2';output.write_text('')
+     with patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh)}):runtime.standalone_selection()
+     recovered=json.loads(Path('selection.json').read_text())
+     self.assertEqual(recovered['selection']['tiers'],['v40','v30'])
+     self.assertIn('publish_selection=true',output.read_text().splitlines())
+     # The successful retry uploads its snapshot; later label edits cannot alter it.
+     payload=io.BytesIO()
+     with zipfile.ZipFile(payload,'w') as z:z.writestr('selection.json',json.dumps(recovered))
+     archive=payload.getvalue();records.append(dict(id=17,name='ci-tier-selection',expired=False))
+     gh['run_attempt']='3';labels[:]=[{'name':'ci:v3.1'}];output.write_text('')
+     with patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh)}):runtime.standalone_selection()
+     self.assertEqual(json.loads(Path('selection.json').read_text()),recovered)
+     self.assertIn('publish_selection=false',output.read_text().splitlines())
+   finally:os.chdir(prior)
+ def test_standalone_retry_does_not_replace_unreadable_existing_snapshot(self):
+  gh=dict(repository='sysown/proxysql',sha='a'*40,run_id='9',run_attempt='2',event_name='pull_request',event={'pull_request':{'number':42}})
+  live=dict(id=17,name='ci-tier-selection',expired=False)
+  for records,error in [([live,dict(live,id=18)],ValueError),([dict(live,expired=True)],ValueError),([live],zipfile.BadZipFile)]:
+   with self.subTest(records=records),tempfile.TemporaryDirectory() as folder:
+    api=runtime.GitHubAPI(gh['repository'])
+    def request(path,**kwargs):
+     if '/artifacts?' in path:return {'artifacts':records}
+     if path.endswith('/zip'):return b'corrupt archive'
+     self.fail('must not resolve fresh labels after finding a snapshot')
+    prior=os.getcwd();os.chdir(folder)
+    try:
+     with patch.object(runtime,'GitHubAPI',return_value=api),patch.object(api,'request',side_effect=request),patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'GITHUB_OUTPUT':str(Path(folder)/'out')}):
+      with self.assertRaises(error):runtime.standalone_selection()
+     self.assertFalse(Path('selection.json').exists())
+    finally:os.chdir(prior)
  def test_untrusted_plan_never_calls_api(self):
   with tempfile.TemporaryDirectory() as folder:
    prior=os.getcwd();os.chdir(folder)

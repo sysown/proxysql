@@ -46,12 +46,12 @@ def run_script(step: dict, cwd: Path) -> subprocess.CompletedProcess[str]:
 def create_workspace(root: Path, dynamic_libpq: bool) -> tuple[Path, Path]:
     repo = root / "proxysql"
     tap_dir = repo / "test/tap/tap"
-    plugin_dir = repo / "plugins/mysqlx"
+    plugin_dir = repo / "plugins/example"
     libpq_dir = repo / "deps/postgresql/postgresql/src/interfaces/libpq"
     tap_dir.mkdir(parents=True)
     plugin_dir.mkdir(parents=True)
     libpq_dir.mkdir(parents=True)
-    (plugin_dir / "ProxySQL_MySQLX_Plugin.so").write_bytes(b"mysqlx-plugin")
+    (plugin_dir / "Example_Plugin.so").write_bytes(b"example-plugin")
 
     libtap = tap_dir / "libtap.so"
     libpq = libpq_dir / "libpq.so.5"
@@ -71,15 +71,10 @@ def create_workspace(root: Path, dynamic_libpq: bool) -> tuple[Path, Path]:
 
 stage = named_step(
     workflow_steps(".github/workflows/ci-builds.yml", "builds"),
-    "Stage MySQLX runtime libraries in test handoff",
+    "Stage compiled runtime libraries in test handoff",
 )
 assert "inputs.trusted" in stage["if"]
-assert "matrix.tier == 'v40'" in stage["if"]
-for trusted in (False, True):
-    for tier in ('v30', 'v31', 'v40'):
-        expression = stage['if'].removeprefix('${{').removesuffix('}}').strip()
-        expression = expression.replace('inputs.trusted', str(trusted)).replace('success()', 'True').replace('matrix.tier', repr(tier)).replace('&&', ' and ')
-        assert eval(expression, {'__builtins__': {}}, {}) == (trusted and tier == 'v40')
+assert "matrix.tier" not in stage["if"]
 
 
 with tempfile.TemporaryDirectory() as directory:
@@ -90,7 +85,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert "libtap.so uses static libpq" in result.stdout
     runtime_dir = repo / "test/tap/tap/_runtime_libs"
     assert not (runtime_dir / "libpq.so.5").exists()
-    assert (runtime_dir / "ProxySQL_MySQLX_Plugin.so").read_bytes() == b"mysqlx-plugin"
+    assert (runtime_dir / "Example_Plugin.so").read_bytes() == b"example-plugin"
 
 with tempfile.TemporaryDirectory() as directory:
     cwd = Path(directory)
@@ -117,4 +112,35 @@ with tempfile.TemporaryDirectory() as directory:
     assert result.returncode != 0
     assert "cannot inspect test/tap/tap/libtap.so" in result.stdout + result.stderr
 
-print("MySQLX runtime handoff contract passed")
+# The packaging contract depends on built outputs, not a feature or tier list.
+for plugins in [[], ['one'], ['one', 'two']]:
+    with tempfile.TemporaryDirectory() as directory:
+        cwd = Path(directory)
+        repo, _ = create_workspace(cwd, dynamic_libpq=False)
+        (repo / "plugins/example/Example_Plugin.so").unlink()
+        for name in plugins:
+            source = repo / f"plugins/{name}/{name}.so"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(name.encode())
+        result = run_script(stage, cwd)
+        assert result.returncode == 0, result.stdout + result.stderr
+        runtime_dir = repo / "test/tap/tap/_runtime_libs"
+        assert sorted(p.name for p in runtime_dir.iterdir()) == [name + '.so' for name in plugins]
+        for name in plugins:
+            assert (runtime_dir / f"{name}.so").read_bytes() == name.encode()
+
+for invalid in ('empty', 'broken-link'):
+    with tempfile.TemporaryDirectory() as directory:
+        cwd = Path(directory)
+        repo, _ = create_workspace(cwd, dynamic_libpq=False)
+        source = repo / "plugins/example/Example_Plugin.so"
+        source.unlink()
+        if invalid == 'empty':
+            source.touch()
+        else:
+            source.symlink_to('missing.so')
+        result = run_script(stage, cwd)
+        assert result.returncode != 0, (invalid, result.stdout, result.stderr)
+        assert 'empty or missing plugin' in result.stdout + result.stderr
+
+print("Runtime handoff contract passed")

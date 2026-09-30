@@ -1,9 +1,15 @@
-import json,unittest
+import json,subprocess,sys,unittest
 from pathlib import Path
 import yaml
 ROOT=Path(__file__).resolve().parents[3]
 def workflow(name):return yaml.safe_load((ROOT/'.github/workflows'/name).read_text())
 class WorkflowTests(unittest.TestCase):
+ def test_plugin_handoff_contracts(self):
+  for script in ['test-genai-plugin-handoff.py','test-runtime-handoff.py']:
+   with self.subTest(script=script):
+    result=subprocess.run([sys.executable,str(ROOT/'.github/scripts/tests'/script)],
+                          cwd=ROOT,capture_output=True,text=True)
+    self.assertEqual(result.returncode,0,result.stdout+result.stderr)
  def test_build_matrix_uses_single_snapshot(self):
   d=workflow('ci-builds.yml');self.assertIn('plan',d['jobs'])
   self.assertIn('needs.plan.outputs.matrix',str(d['jobs']['builds']['strategy']['matrix']))
@@ -11,13 +17,49 @@ class WorkflowTests(unittest.TestCase):
  def test_consumers_have_tier_identity(self):
   cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
   for item in cat['consumers']:
-   if item['job']=='tier-units':continue
    d=workflow(item['file']);j=d['jobs'][item['job']]
    with self.subTest(file=item['file'],job=item['job']):
     self.assertIn('tier-context',d['jobs'])
     self.assertIn('matrix.check_name',j.get('name',''))
-    self.assertTrue(any('ci_tier_runtime.py restore' in s.get('run','') for s in j['steps']))
+    if item.get('build_from_source'):
+     build_name={'ci-codeql.yml':'Build C++','ci-maketest.yml':'Make-test'}.get(item['file'],'Build selected product inside Docker')
+     build=next(s for s in j['steps'] if s.get('name')==build_name)
+     self.assertRegex(build.get('run',''),r'(?m)^\s*make\s+')
+     self.assertEqual(build['env']['PROXYSQL40'], "${{ matrix.tier == 'v40' && '1' || '' }}")
+     self.assertEqual(build['env']['PROXYSQL31'], "${{ matrix.tier == 'v31' && '1' || '' }}")
+    else:
+     self.assertTrue(any('ci_tier_runtime.py restore' in s.get('run','') for s in j['steps']))
     self.assertFalse(any('repos/${REPO}/actions/artifacts?name=' in s.get('run','') for s in j['steps']))
+ def test_no_producer_only_test_runner(self):
+  self.assertNotIn('ci_tier_runtime.py units', (ROOT/'.github/workflows/ci-builds.yml').read_text())
+  cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
+  self.assertFalse(any(row['job']=='tier-units' for row in cat['consumers']))
+ def test_sanitizers_use_shared_consumers_for_every_tier(self):
+  cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
+  for suffix,job in [('asan-coverage','unit-tests'),('tsan','unit-tests-tsan')]:
+   rows=[r for r in cat['consumers'] if r['workflow']=='CI-unit-tests-'+suffix]
+   self.assertEqual(len(rows),1)
+   self.assertEqual(set(rows[0]['tiers']),{'v30','v31','v40'})
+   self.assertTrue(rows[0]['automatic'])
+   d=workflow(rows[0]['file']);j=d['jobs'][job]
+   self.assertIn('needs.tier-context.outputs.matrices',str(j['strategy']))
+   run=next(s['run'] for s in j['steps'] if s.get('name','').startswith('Run '))
+   self.assertIn('docker compose run --rm',run)
+   self.assertIn('ubuntu24_dbg_build',run)
+   self.assertNotIn('matrix.tier',run)
+   self.assertNotIn('TIER',run)
+ def test_other_compiled_workflows_use_the_same_selected_tiers(self):
+  cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
+  for name in ['CI-maketest','CI-CodeQL']:
+   rows=[r for r in cat['consumers'] if r['workflow']==name]
+   self.assertEqual(len(rows),1)
+   self.assertEqual(set(rows[0]['tiers']),{'v30','v31','v40'})
+   self.assertTrue(rows[0]['automatic'])
+ def test_catalogue_does_not_choose_different_workflows_by_tier(self):
+  cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
+  for row in cat['consumers']:
+   with self.subTest(workflow=row['workflow']):
+    self.assertEqual(set(row['tiers']),{'v30','v31','v40'})
  def test_specialty_trigger_unchanged(self):
   for file in ['ci-unit-group.yml','ci-ai-gcov.yml']:
    d=workflow(file);events=d.get('on',d.get(True,{}))
