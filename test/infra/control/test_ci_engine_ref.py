@@ -37,12 +37,28 @@ class EngineRefTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('catalogue', result.stderr)
             self.assertIn('pin', result.stderr)
-            (root / '.github/ci-tier-consumers.json').write_text('{}')
+            (root / '.github/ci-tier-consumers.json').write_text('{"schema": 2}')
             subprocess.run(['git', 'add', '.'], cwd=root, check=True)
             subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
                             'commit', '-qm', 'engine available'], cwd=root, check=True)
             subprocess.run(['git', 'update-ref', 'refs/remotes/origin/GH-Actions', 'HEAD'], cwd=root, check=True)
             self.assertEqual(select().stdout.strip(), 'origin/GH-Actions')
+
+    def test_old_catalogue_uses_the_paired_candidate_until_engine_merge(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            subprocess.run(['git','init','-q',folder],check=True)
+            (root/'.github').mkdir()
+            (root/'.github/ci-tier-consumers.json').write_text('{"schema":1}')
+            subprocess.run(['git','add','.'],cwd=root,check=True)
+            subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','old catalogue'],cwd=root,check=True)
+            subprocess.run(['git','update-ref','refs/remotes/origin/GH-Actions','HEAD'],cwd=root,check=True)
+            pin='b'*40
+            (root/'.github/ci-tier-engine-ref').write_text(pin+'\n')
+            env=dict(os.environ);env.pop('CI_ENGINE_REF',None)
+            result=subprocess.run(['bash',str(SELECTOR)],cwd=root,env=env,text=True,capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout.strip(),pin)
 
     def test_fanout_guard_and_unit_tests_without_engine_ref(self):
         text = (ROOT / 'test/infra/control/run-ci-lint.bash').read_text()
