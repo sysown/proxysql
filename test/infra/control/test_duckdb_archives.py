@@ -80,6 +80,33 @@ class DuckDBArchives(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('libparquet_extension.a', result.stderr)
 
+    def test_up_to_date_plugin_still_rejects_a_missing_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build = root / 'build/release'
+            build.mkdir(parents=True)
+            self.fixture(build)
+            make = shutil.which('gmake') or 'make'
+            directory = ROOT / 'plugins/duckdb'
+            objects = subprocess.run(
+                [make, '-s', '-f', 'Makefile', '-f', '-', 'inspect-objects'],
+                cwd=directory, text=True, capture_output=True, check=True,
+                input="inspect-objects:\n\t@echo '$(OBJS)'\n").stdout.split()
+            output = root / 'already-built.so'
+            output.write_bytes(b'previously linked plugin')
+            # Suppress compilation of real source objects. The compiler must
+            # not run: this output is newer than every link prerequisite.
+            skip = [arg for obj in objects for arg in ('-o', obj)]
+            cmd = [make, '-s', str(output), f'PLUGIN_SO={output}', f'DUCKDB_PATH={root}',
+                   'CXX=false', *skip]
+            result = subprocess.run(cmd, cwd=directory, text=True, capture_output=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            (build / 'extension/parquet/libparquet_extension.a').unlink()
+            result = subprocess.run(cmd, cwd=directory, text=True, capture_output=True, timeout=20)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('libparquet_extension.a', result.stderr)
+            self.assertEqual(output.read_bytes(), b'previously linked plugin')
+
 
 if __name__ == '__main__':
     unittest.main()
