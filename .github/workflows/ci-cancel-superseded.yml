@@ -1,0 +1,28 @@
+name: Cancel superseded PR CI
+
+on:
+  workflow_call:
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  cancel:
+    if: github.event_name == 'pull_request_target'
+    # Cancellation must not wait behind the old CI jobs in the self-hosted pool.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - name: Checkout trusted CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: GH-Actions
+        sparse-checkout: .github
+        persist-credentials: false
+    - name: Cancel older runs for this PR
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 .github/scripts/ci_cancel_superseded.py

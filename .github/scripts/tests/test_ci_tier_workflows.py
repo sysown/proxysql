@@ -4,6 +4,16 @@ import yaml
 ROOT=Path(__file__).resolve().parents[3]
 def workflow(name):return yaml.safe_load((ROOT/'.github/workflows'/name).read_text())
 class WorkflowTests(unittest.TestCase):
+ def test_cancellation_never_executes_pr_code_or_waits_for_self_hosted(self):
+  d=workflow('ci-cancel-superseded.yml');job=d['jobs']['cancel']
+  self.assertEqual(d['permissions'],{'actions':'write','contents':'read','pull-requests':'read'})
+  self.assertEqual(job['runs-on'],'ubuntu-24.04')
+  self.assertEqual(job['if'],"github.event_name == 'pull_request_target'")
+  checkout=job['steps'][0]
+  self.assertEqual(checkout['with']['repository'],'sysown/proxysql')
+  self.assertEqual(checkout['with']['ref'],'GH-Actions')
+  self.assertFalse(checkout['with']['persist-credentials'])
+  self.assertEqual(job['steps'][1]['run'],'python3 .github/scripts/ci_cancel_superseded.py')
  def test_plugin_handoff_contracts(self):
   for script in ['test-genai-plugin-handoff.py','test-runtime-handoff.py']:
    with self.subTest(script=script):
