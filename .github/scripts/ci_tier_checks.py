@@ -5,14 +5,15 @@ import json
 def aggregate_state(manifest,observations):
     observed={r['key']:r for r in observations if r.get('execution_id')==manifest['execution_id']}
     required=[c for c in manifest['checks'] if c['required'] and c['applicable']]
-    pending=0;failed=0
+    pending=0;failed=0;blocked=0
     for check in required:
         result=observed.get(check['key'],{})
         if result.get('status')!='completed':pending+=1
+        elif result.get('conclusion')=='skipped':blocked+=1
         elif result.get('conclusion')!='success':failed+=1
-    text=f'{len(required)-pending-failed}/{len(required)} passed; {pending} pending; {failed} failed'
+    text=f'{len(required)-pending-failed-blocked}/{len(required)} passed; {pending} pending; {failed} failed; {blocked} blocked/skipped'
     if pending:return {'status':'in_progress','output':{'title':'Selected product tiers','summary':text}}
-    return {'status':'completed','conclusion':'failure' if failed else 'success','output':{'title':'Selected product tiers','summary':text}}
+    return {'status':'completed','conclusion':'failure' if failed or blocked else 'success','output':{'title':'Selected product tiers','summary':text}}
 
 def reporting_repository(plan):return plan.get('reporting',{}).get('repository',plan['repository'])
 def scope(plan):return plan.get('reporting',{}).get('identity',plan['execution_id'])

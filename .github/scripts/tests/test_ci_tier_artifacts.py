@@ -121,6 +121,70 @@ class ArtifactTests(unittest.TestCase):
    self.assertEqual(binary_version('/tmp/fixture'),'ProxySQL version 4.0.12')
    self.assertIn('proxysql/packaging:build-ubuntu24-v4.0.0',run.call_args.args[0])
 
+ def test_host_probe_accepts_external_binary_and_external_symlink(self):
+  import tempfile
+  from ci_tier_artifacts import binary_version
+  with tempfile.TemporaryDirectory() as folder:
+   root=Path(folder)/'tree';root.mkdir()
+   binary=Path(folder)/'external';binary.write_text('#!/bin/sh\necho "ProxySQL version 3.1.12"\n');binary.chmod(0o755)
+   (root/'link').symlink_to(binary)
+   for path in [str(binary),'link']:
+    with self.subTest(path=path):
+     self.assertIn('ProxySQL version 3.1.12',binary_version(root,path))
+
+ def test_external_binary_host_failure_does_not_mount_external_tree(self):
+  import subprocess
+  from unittest.mock import patch
+  from ci_tier_artifacts import binary_version
+  with patch('ci_tier_artifacts.subprocess.run',return_value=subprocess.CompletedProcess([],1,'','host loader failure')) as run:
+   with self.assertRaisesRegex(RuntimeError,'outside') as failure:
+    binary_version('/tmp/tree','/tmp/external')
+   self.assertIn('host loader failure',str(failure.exception))
+   self.assertEqual(run.call_count,1)
+
+ def test_host_probe_timeout_falls_back_with_bounded_probes(self):
+  import subprocess
+  from unittest.mock import patch
+  from ci_tier_artifacts import binary_version
+  replies=[subprocess.TimeoutExpired(['proxysql'],300),subprocess.CompletedProcess([],0,'ProxySQL version 3.1.12','')]
+  with patch('ci_tier_artifacts.subprocess.run',side_effect=replies) as run:
+   self.assertIn('3.1.12',binary_version('/tmp/tree'))
+   self.assertEqual(run.call_count,2)
+   for call in run.call_args_list:
+    self.assertGreater(call.kwargs['timeout'],0)
+    self.assertLessEqual(call.kwargs['timeout'],300)
+
+ def test_container_timeout_cleans_up_its_named_container_even_if_cleanup_fails(self):
+  import subprocess
+  from unittest.mock import patch
+  from ci_tier_artifacts import binary_version
+  for cleanup in [subprocess.CompletedProcess([],0,'',''),
+                  subprocess.CompletedProcess([],1,'','daemon unavailable'),
+                  subprocess.TimeoutExpired(['docker','rm'],30),OSError('docker unavailable')]:
+   replies=[subprocess.CompletedProcess([],1,'','host loader failure'),
+            subprocess.TimeoutExpired(['docker','run'],300),cleanup]
+   with self.subTest(cleanup=type(cleanup).__name__),patch('ci_tier_artifacts.subprocess.run',side_effect=replies) as run:
+    with self.assertRaisesRegex(RuntimeError,'timed out') as failure:
+     binary_version('/tmp/tree')
+    self.assertIn('host loader failure',str(failure.exception))
+    self.assertEqual(run.call_count,3)
+    command=run.call_args_list[1].args[0]
+    name=command[command.index('--name')+1]
+    self.assertTrue(name.startswith('ci-version-'))
+    self.assertEqual(run.call_args.args[0],['docker','rm','-f',name])
+    self.assertGreater(run.call_args.kwargs['timeout'],0)
+    self.assertLessEqual(run.call_args.kwargs['timeout'],30)
+
+ def test_container_probes_use_distinct_names(self):
+  import subprocess
+  from unittest.mock import patch
+  from ci_tier_artifacts import binary_version
+  replies=[subprocess.CompletedProcess([],1,'','host failure'),subprocess.CompletedProcess([],0,'ProxySQL version 3.0.12','')]*2
+  with patch('ci_tier_artifacts.subprocess.run',side_effect=replies) as run:
+   binary_version('/tmp/tree');binary_version('/tmp/tree')
+   commands=[run.call_args_list[i].args[0] for i in [1,3]]
+   self.assertNotEqual(*[c[c.index('--name')+1] for c in commands])
+
  def test_download_timeout_and_network_errors_retry_only_reads(self):
   import subprocess
   from unittest.mock import patch

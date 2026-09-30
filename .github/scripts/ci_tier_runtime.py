@@ -70,8 +70,9 @@ def finalize():
         for check in plan['checks']:
             current=api.request(f"repos/{plan['repository']}/check-runs/{check['check_id']}")
             if current['status']!='completed':
-                api.request(f"repos/{plan['repository']}/check-runs/{check['check_id']}",'PATCH',{'status':'completed','conclusion':'failure' if check['workflow']=='CI-builds' else 'skipped',
-                    'output':{'title':'Build prerequisite failed','summary':'Test fanout was blocked; see the producer run.'}})
+                failed=current['status']=='in_progress' or (check['workflow']=='CI-builds' and check['job']=='builds')
+                api.request(f"repos/{plan['repository']}/check-runs/{check['check_id']}",'PATCH',{'status':'completed','conclusion':'failure' if failed else 'skipped',
+                    'output':{'title':'Producer failed','summary':('Required job did not complete successfully' if failed else 'Test fanout was blocked')+'; see the producer run.'}})
         reconcile(plan,api)
         raise RuntimeError('required producer job failed')
     for leg in plan['legs']:

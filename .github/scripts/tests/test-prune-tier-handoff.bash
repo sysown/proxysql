@@ -163,6 +163,48 @@ else
 fi
 assert_remaining 5 "bad version deletes nothing"
 
+# --- host loader failure: probe in the build ABI before pruning -------------
+mkdir -p "$tmp_dir/bin"
+cat >"$tmp_dir/bin/docker" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$DOCKER_ARGS"
+if [ "${DOCKER_FAIL:-0}" = 1 ]; then
+  echo 'container loader failed' >&2
+  exit 1
+fi
+printf 'ProxySQL version %s, codename TEST\n' "$DOCKER_VERSION"
+EOF
+chmod +x "$tmp_dir/bin/docker"
+export PATH="$tmp_dir/bin:$PATH" DOCKER_ARGS="$tmp_dir/docker.args"
+for tier in 3.0.12 3.1.12; do
+  make_tree
+  printf '#!/bin/sh\necho "host GLIBC_2.38 not found" >&2\nexit 1\n' >"$tmp_dir/src/proxysql"
+  export DOCKER_VERSION="$tier"
+  out="$(run_pruner)" || { echo "FAIL [host ABI fallback]: $out" >&2; exit 1; }
+  grep -Fxq 'proxysql/packaging:build-ubuntu24-v4.0.0' "$DOCKER_ARGS" || {
+    echo "FAIL [fallback image]: unexpected Docker arguments" >&2; cat "$DOCKER_ARGS" >&2; exit 1; }
+  grep -Fxq '/opt/proxysql/src/proxysql' "$DOCKER_ARGS" || {
+    echo "FAIL [fallback binary]: unexpected Docker arguments" >&2; cat "$DOCKER_ARGS" >&2; exit 1; }
+  grep -Fxq "$tmp_dir:/opt/proxysql:ro" "$DOCKER_ARGS" || {
+    echo "FAIL [read-only mount]: unexpected Docker arguments" >&2; cat "$DOCKER_ARGS" >&2; exit 1; }
+  if [ "$tier" = 3.0.12 ]; then
+    assert_remaining 2 "v30 container probe"
+  else
+    assert_remaining 3 "v31 container probe"
+  fi
+done
+make_tree
+export DOCKER_FAIL=1
+if out="$(run_pruner)"; then
+  echo 'FAIL [both probes fail]: unexpectedly succeeded' >&2; exit 1
+fi
+grep -q 'host GLIBC_2.38 not found' <<<"$out" || {
+  echo "FAIL [host error preserved]: $out" >&2; exit 1; }
+grep -q 'container loader failed' <<<"$out" || {
+  echo "FAIL [container error preserved]: $out" >&2; exit 1; }
+assert_remaining 5 "failed probes delete nothing"
+unset DOCKER_FAIL
+
 # --- negative: missing groups.json must abort -------------------------------
 out="$( cd "$tmp_dir" && "$pruner" --binary src/proxysql \
         --groups test/tap/groups/nope.json 2>&1 || true )"
