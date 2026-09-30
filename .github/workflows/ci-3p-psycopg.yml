@@ -1,7 +1,36 @@
 name: CI-3p-psycopg
 
 on:
+  # Manual runs bind to an explicit producer (ci_tier_runtime.py consumer() requires both) and may
+  # narrow the catalogue axes; the other inputs mirror the workflow_call defaults.
   workflow_dispatch:
+    inputs:
+      producer_run_id:
+        description: 'sysown/proxysql CI-builds run id of the build to test'
+        required: true
+        type: string
+      producer_attempt:
+        description: 'attempt of that CI-builds run'
+        required: true
+        type: string
+      infradb:
+        description: 'optional JSON array overriding the catalogue infradb axis, e.g. ["mysql8.0"]'
+        default: ''
+        type: string
+      connector:
+        description: 'optional JSON array overriding the catalogue connector axis'
+        default: ''
+        type: string
+      consumer_id:
+        default: run
+        type: string
+      control_ref:
+        default: GH-Actions
+        type: string
+      testtree:
+        description: 'proxysql_3p_testing treeish (default: main)'
+        default: ''
+        type: string
   workflow_call:
     inputs:
       trigger:
@@ -62,6 +91,11 @@ env:
 
 jobs:
   tier-context:
+    # least privilege: read the repository and the producer's artifacts, report check runs
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     uses: ./.github/workflows/ci-tier-context.yml
     with:
       trigger: ${{ inputs.trigger }}
@@ -75,6 +109,11 @@ jobs:
       consumer_inputs: ${{ toJson(inputs) }}
     secrets: inherit
   test:
+    # least privilege: read the repository and the producer's artifacts, report check runs
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     strategy:
@@ -154,15 +193,10 @@ jobs:
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Prepare
       run: |
-        set +e
+        set -eo pipefail
 
         cd proxysql_3p_testing/
         ./setup.sh test_${{ env.TESTNAME }}/${{ env.TESTNAME }}
-        #git switch ${{ env.TESTTREE }}
-        #git pull
-        #git config user.email "GH-Actions@proxysql.com"
-        #git config user.name "GH-Actions"
-        #git rebase main -f -s recursive -X theirs
 
         sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' common/infra-docker-hoster/docker-compose.yml
 
@@ -184,7 +218,6 @@ jobs:
         ./run-tests.bash
         RC=$?
 
-        #sudo chmod -R 777 ${{ github.workspace }}/*
         exit $RC
 
     - name: Check baseline
