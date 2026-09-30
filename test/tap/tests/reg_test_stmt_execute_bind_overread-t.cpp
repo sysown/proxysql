@@ -152,6 +152,11 @@ int main(int argc, char** argv) {
 		{ "LONG with no bytes", MYSQL_TYPE_LONG, { } },
 		{ "DATETIME claiming 11 bytes with 2", MYSQL_TYPE_DATETIME, { 11, 0xe8, 0x07 } },
 		{ "TIME claiming 12 bytes with none", MYSQL_TYPE_TIME, { 12 } },
+		// Invalid lengths: the decoder reads fixed offsets (8 bytes for TIME, 4 for DATE).
+		{ "TIME with invalid length 1", MYSQL_TYPE_TIME, { 1, 0x00 } },
+		{ "DATETIME with invalid length 2", MYSQL_TYPE_DATETIME, { 2, 0xe8, 0x07 } },
+		// Types not valid for parameters used to hit an assert().
+		{ "unsupported parameter type NEWDATE", MYSQL_TYPE_NEWDATE, { 0x00 } },
 	};
 
 	plan(2 + cases.size() * 2);

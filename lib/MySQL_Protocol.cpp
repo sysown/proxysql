@@ -4488,7 +4488,10 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 					break;
 				case MYSQL_TYPE_TIME:
 					{
-						if (!avail(1) || static_cast<uint8_t>(p[0]) > 12 || !avail(1 + static_cast<uint8_t>(p[0]))) return malformed(i);
+						// The decoding below reads fixed offsets: only the lengths defined by the protocol are valid
+						if (!avail(1)) return malformed(i);
+						const uint8_t tlen = static_cast<uint8_t>(p[0]);
+						if ((tlen != 0 && tlen != 8 && tlen != 12) || !avail(1 + tlen)) return malformed(i);
 						binds[i].buffer=malloc(sizeof(MYSQL_TIME)); // NOTE: remember to free() this
 						uint8_t l;
 						memcpy(&l,p,1);
@@ -4513,7 +4516,10 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 				case MYSQL_TYPE_TIMESTAMP:
 				case MYSQL_TYPE_DATETIME:
 					{
-						if (!avail(1) || static_cast<uint8_t>(p[0]) > 11 || !avail(1 + static_cast<uint8_t>(p[0]))) return malformed(i);
+						// The decoding below reads fixed offsets: only the lengths defined by the protocol are valid
+						if (!avail(1)) return malformed(i);
+						const uint8_t dlen = static_cast<uint8_t>(p[0]);
+						if ((dlen != 0 && dlen != 4 && dlen != 7 && dlen != 11) || !avail(1 + dlen)) return malformed(i);
 						binds[i].buffer=malloc(sizeof(MYSQL_TIME)); // NOTE: remember to free() this
 						uint8_t l;
 						memcpy(&l,p,1);
@@ -4568,13 +4574,10 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 					}
 					break;
 				default:
-					// LCOV_EXCL_START
 					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
 							"of query %s from user %s with default schema %s\n",
 							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
+					return malformed(i);
 			}
 		}
 	}
