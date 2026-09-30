@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(72);
+	plan(80);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -333,6 +333,73 @@ int main(int argc, char** argv) {
 		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
 		   std::strcmp(PQgetvalue(r, 0, 0), "café") == 0, "ENUM DELETE RETURNING preserves the label");
 		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_tstz(i INTEGER, t TIMESTAMPTZ)");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create TIMESTAMPTZ RETURNING fixture");
+		PQclear(r);
+		r = exec_or_bail(c, "INSERT INTO t_pg_tstz VALUES "
+			"(1, '2024-01-02 03:04:05.123456+05:30'), (2, NULL) RETURNING i, t");
+		const bool shape_ok = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 2 && PQnfields(r) == 2;
+		ok(shape_ok && PQftype(r, 0) == 23 && PQftype(r, 1) == 25,
+		   "TIMESTAMPTZ RETURNING retains neighboring PostgreSQL numeric metadata");
+		ok(shape_ok && std::strcmp(PQgetvalue(r, 0, 1), "2024-01-01 21:34:05.123456+00") == 0 && PQgetisnull(r, 1, 1),
+		   "PostgreSQL TIMESTAMPTZ preserves instant and NULL");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_tstz");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "2") == 0, "TIMESTAMPTZ RETURNING inserts exactly once");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT current_setting('enable_external_access')");
+		if (PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) != 1) BAIL_OUT("could not inspect external access setting");
+		const bool external = std::strcmp(PQgetvalue(r, 0, 0), "t") == 0;
+		PQclear(r);
+		bool have_icu = false;
+		if (external) {
+			r = exec_or_bail(c, "SELECT installed OR loaded FROM duckdb_extensions() WHERE extension_name='icu'");
+			if (PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) != 1) BAIL_OUT("could not inspect ICU availability");
+			have_icu = std::strcmp(PQgetvalue(r, 0, 0), "t") == 0;
+			PQclear(r);
+		}
+		if (!have_icu) {
+			skip(4, "ICU is not installed or external access is disabled on the DuckDB server");
+		} else {
+			for (const char* sql : { "LOAD icu", "SET TimeZone='America/New_York'" }) {
+				r = exec_or_bail(c, sql);
+				if (PQresultStatus(r) != PGRES_COMMAND_OK) BAIL_OUT("could not enable ICU timezone: %s", PQresultErrorMessage(r));
+				PQclear(r);
+			}
+			r = exec_or_bail(c, "SELECT '2024-01-01 12:00:00+00'::TIMESTAMPTZ, '2024-07-01 12:00:00+00'::TIMESTAMPTZ");
+			ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && PQnfields(r) == 2 &&
+			   std::strcmp(PQgetvalue(r, 0, 0), "2024-01-01 07:00:00-05") == 0 &&
+			   std::strcmp(PQgetvalue(r, 0, 1), "2024-07-01 08:00:00-04") == 0,
+			   "PostgreSQL TIMESTAMPTZ follows session timezone in winter and summer");
+			PQclear(r);
+			r = exec_or_bail(c, "UPDATE t_pg_tstz SET t='2024-03-10 07:00:00+00' WHERE i=1 RETURNING t");
+			ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+			   std::strcmp(PQgetvalue(r, 0, 0), "2024-03-10 03:00:00-04") == 0,
+			   "TIMESTAMPTZ UPDATE RETURNING uses the session DST offset");
+			PQclear(r);
+			PGconn* other = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
+			if (!other) BAIL_OUT("could not open second timezone session");
+			r = exec_or_bail(other, "SET TimeZone='Asia/Kolkata'");
+			if (PQresultStatus(r) != PGRES_COMMAND_OK) BAIL_OUT("could not set second timezone");
+			PQclear(r);
+			PGresult* second = exec_or_bail(other, "SELECT t FROM t_pg_tstz WHERE i=1");
+			r = exec_or_bail(c, "SELECT t FROM t_pg_tstz WHERE i=1");
+			ok(PQresultStatus(second) == PGRES_TUPLES_OK && PQntuples(second) == 1 &&
+			   PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+			   std::strcmp(PQgetvalue(second, 0, 0), "2024-03-10 12:30:00+05:30") == 0 &&
+			   std::strcmp(PQgetvalue(r, 0, 0), "2024-03-10 03:00:00-04") == 0,
+			   "PostgreSQL sessions independently format the same stored TIMESTAMPTZ");
+			PQclear(second);
+			PQclear(r);
+			PQfinish(other);
+			r = exec_or_bail(c, "SET TimeZone='UTC'");
+			ok(PQresultStatus(r) == PGRES_COMMAND_OK, "restore PostgreSQL session timezone");
+			PQclear(r);
+		}
 	}
 
 	{

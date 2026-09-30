@@ -4,6 +4,7 @@
 #include "tap.h"
 
 #include <climits>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -23,7 +24,7 @@ SQLite3_result* run(duckdb_connection conn, const char* sql,
 		return nullptr;
 	}
 	std::string error;
-	SQLite3_result* out = duckdb_result_to_sqlite3(&res, &error, nullptr, protocol);
+	SQLite3_result* out = duckdb_result_to_sqlite3(&res, &error, nullptr, protocol, conn);
 	if (!error.empty()) diag("conversion failed: %s: %s", sql, error.c_str());
 	duckdb_destroy_result(&res);
 	return out;
@@ -41,7 +42,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(95);
+	plan(109);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -253,6 +254,91 @@ int main() {
 	}
 	ok(duckdb_type_renders_as_text(DUCKDB_TYPE_TIME_NS) && duckdb_type_renders_as_text(DUCKDB_TYPE_ENUM) &&
 	   duckdb_type_renders_as_text(DUCKDB_TYPE_BIT), "TIME_NS, ENUM and BIT need no query-wide VARCHAR wrapper");
+
+	{
+		const struct { const char* input; const char* expected; } cases[] = {
+			{ "2024-01-02 03:04:05.123456+05:30", "2024-01-01 21:34:05.123456+00" },
+			{ "1969-12-31 23:59:59.999999+00", "1969-12-31 23:59:59.999999+00" },
+			{ "2024-01-01 00:00:00-03:30", "2024-01-01 03:30:00+00" },
+			{ "infinity", "infinity" }, { "-infinity", "-infinity" }
+		};
+		for (const auto& c : cases) {
+			const std::string sql = std::string("SELECT '") + c.input + "'::TIMESTAMPTZ, NULL::TIMESTAMPTZ";
+			std::unique_ptr<SQLite3_result> r(run(conn, sql.c_str()));
+			ok(field_equals(r.get(), 0, 0, c.expected) && !r->rows[0]->fields[1],
+			   "direct TIMESTAMPTZ preserves instant and NULL: %s", c.input);
+		}
+		duckdb_result setup;
+		if (duckdb_query(conn, "SELECT installed OR loaded FROM duckdb_extensions() WHERE extension_name='icu'", &setup) != DuckDBSuccess)
+			BAIL_OUT("could not inspect ICU availability");
+		const bool have_icu = duckdb_value_boolean(&setup, 0, 0);
+		duckdb_destroy_result(&setup);
+		if (!have_icu) {
+			skip(7, "ICU extension is not installed; install the matching ICU extension for timezone tests");
+		} else {
+			for (const char* sql : { "LOAD icu", "SET TimeZone='America/New_York'" }) {
+				if (duckdb_query(conn, sql, &setup) != DuckDBSuccess) BAIL_OUT("could not enable ICU timezone: %s", duckdb_result_error(&setup));
+				duckdb_destroy_result(&setup);
+			}
+			const struct { const char* input; const char* expected; } zoned[] = {
+				{ "2024-01-01 12:00:00+00", "2024-01-01 07:00:00-05" },
+				{ "2024-07-01 12:00:00+00", "2024-07-01 08:00:00-04" },
+				{ "2024-03-10 06:59:59.123456+00", "2024-03-10 01:59:59.123456-05" },
+				{ "2024-03-10 07:00:00+00", "2024-03-10 03:00:00-04" },
+				{ "2024-11-03 05:30:00+00", "2024-11-03 01:30:00-04" },
+				{ "2024-11-03 06:30:00+00", "2024-11-03 01:30:00-05" }
+			};
+			for (const auto& c : zoned) {
+				const std::string sql = std::string("SELECT '") + c.input + "'::TIMESTAMPTZ";
+				std::unique_ptr<SQLite3_result> r(run(conn, sql.c_str()));
+				ok(field_equals(r.get(), 0, 0, c.expected), "TIMESTAMPTZ uses session timezone across DST: %s", c.expected);
+			}
+			duckdb_connection other = nullptr;
+			if (duckdb_connect(db, &other) != DuckDBSuccess) BAIL_OUT("could not open second timezone session");
+			if (duckdb_query(other, "SET TimeZone='Asia/Kolkata'", &setup) != DuckDBSuccess) BAIL_OUT("could not set second timezone");
+			duckdb_destroy_result(&setup);
+			std::unique_ptr<SQLite3_result> r(run(other, "SELECT '2024-07-01 12:00:00+00'::TIMESTAMPTZ"));
+			std::unique_ptr<SQLite3_result> original(run(conn, "SELECT '2024-07-01 12:00:00+00'::TIMESTAMPTZ"));
+			ok(field_equals(r.get(), 0, 0, "2024-07-01 17:30:00+05:30") &&
+			   field_equals(original.get(), 0, 0, "2024-07-01 08:00:00-04"), "TIMESTAMPTZ formatting isolates session timezones");
+			duckdb_disconnect(&other);
+			if (duckdb_query(conn, "SET TimeZone='UTC'", &setup) != DuckDBSuccess) BAIL_OUT("could not restore timezone");
+			duckdb_destroy_result(&setup);
+		}
+	}
+
+	{
+		duckdb_result native;
+		if (duckdb_query(conn, "SELECT '2024-01-01 00:00:00+00'::TIMESTAMPTZ", &native) != DuckDBSuccess)
+			BAIL_OUT("could not create TIMESTAMPTZ context fixture");
+		std::string error;
+		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&native, &error));
+		ok(!r && !error.empty(), "TIMESTAMPTZ conversion without its connection reports an error instead of using UTC");
+		duckdb_destroy_result(&native);
+	}
+
+	{
+		// Cross many chunk boundaries and compare with DuckDB's own SQL
+		// VARCHAR cast, the prior wire representation. Record relative cost
+		// without a flaky timing threshold in the regression assertion.
+		const std::string sql = "SELECT CASE WHEN i%7=0 THEN NULL ELSE "
+			"'2024-03-10 06:59:59+00'::TIMESTAMPTZ + i * INTERVAL 1 SECOND END AS t FROM range(100000) r(i)";
+		const auto start = std::chrono::steady_clock::now();
+		std::unique_ptr<SQLite3_result> direct(run(conn, sql.c_str()));
+		const auto converted = std::chrono::steady_clock::now();
+		std::unique_ptr<SQLite3_result> cast(run(conn, ("SELECT t::VARCHAR FROM (" + sql + ")").c_str()));
+		const auto end = std::chrono::steady_clock::now();
+		bool equal = direct && cast && direct->rows_count == 100000 && cast->rows_count == 100000;
+		for (int i = 0; equal && i < 100000; ++i) {
+			const char* a = direct->rows[i]->fields[0];
+			const char* b = cast->rows[i]->fields[0];
+			equal = a && b ? std::strcmp(a, b) == 0 : a == b;
+		}
+		ok(equal, "TIMESTAMPTZ conversion matches DuckDB VARCHAR across 100000 rows and NULLs");
+		diag("TIMESTAMPTZ 100000 rows: direct %.2f ms, SQL VARCHAR %.2f ms",
+		     std::chrono::duration<double, std::milli>(converted - start).count(),
+		     std::chrono::duration<double, std::milli>(end - converted).count());
+	}
 
 	for (const bool seconds : { true, false }) {
 		duckdb_prepared_statement statement = nullptr;

@@ -130,6 +130,11 @@ original timestamp precision without casting neighboring columns to text.
 `TIME WITH TIME ZONE` (`TIMETZ`) also converts directly, preserving fractional
 seconds and UTC offsets, including in `RETURNING`. It retains text metadata.
 
+`TIMESTAMP WITH TIME ZONE` (`TIMESTAMPTZ`) converts directly with text metadata,
+including in `RETURNING`. With ICU loaded, the connection's TimeZone and Calendar
+settings control the display. The stored instant is preserved. Loading ICU
+requires external access; see [Extension behavior](security.md#extension-behavior).
+
 UUID values also convert directly, including in `RETURNING`, as canonical
 lowercase strings with text metadata.
 

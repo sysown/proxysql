@@ -38,7 +38,9 @@ duckdb_type duckdb_result_type_id(duckdb_logical_type logical);
 // Direct conversion supports scalar numeric/boolean values, DATE/TIME/TIME_TZ/TIME_NS,
 // TIMESTAMP and its S/MS/NS resolutions, INTERVAL, UUID, ENUM, BIT, VARCHAR
 // and BLOB. Timestamp resolutions use native DuckDB formatting, preserving nanoseconds,
-// negative epochs and infinities without another query.
+// negative epochs and infinities without another query. TIMESTAMPTZ uses the
+// originating connection's native cast to preserve its session timezone; conn
+// must be supplied for nonempty results containing a TIMESTAMPTZ column.
 //
 // Types outside duckdb_type_renders_as_text() still produce null fields on
 // this low-level path. Callers must inspect the result schema and wrap or
@@ -86,7 +88,8 @@ duckdb_type duckdb_result_type_id(duckdb_logical_type logical);
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res,
                                          std::string* error = nullptr,
                                          std::vector<DuckDBColumnType>* column_types = nullptr,
-                                         DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql);
+                                         DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql,
+                                         duckdb_connection conn = nullptr);
 
 // Appends one length-aware converted row and translates SQLite's status into
 // the converter's error contract. This keeps an oversized row from being

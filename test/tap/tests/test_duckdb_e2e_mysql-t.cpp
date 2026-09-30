@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(69);
+	plan(77);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -276,6 +276,49 @@ int main(int argc, char** argv) {
 		   "BIT UPDATE RETURNING preserves leading zeroes");
 		ok(one_cell(c, "DELETE FROM t_mysql_scalar WHERE i=1 RETURNING e") == "café",
 		   "ENUM DELETE RETURNING preserves the label");
+	}
+
+	{
+		ok(mysql_query(c, "CREATE OR REPLACE TABLE t_mysql_tstz(i INTEGER, t TIMESTAMPTZ)") == 0,
+		   "create TIMESTAMPTZ RETURNING fixture");
+		const int rc = mysql_query(c, "INSERT INTO t_mysql_tstz VALUES "
+			"(1, '2024-01-02 03:04:05.123456+05:30'), (2, NULL) RETURNING i, t");
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* fields = r && mysql_num_fields(r) == 2 ? mysql_fetch_fields(r) : nullptr;
+		ok(fields && fields[0].type == MYSQL_TYPE_LONG && fields[1].type == MYSQL_TYPE_VAR_STRING,
+		   "TIMESTAMPTZ RETURNING retains neighboring MySQL numeric metadata");
+		MYSQL_ROW row = fields ? mysql_fetch_row(r) : nullptr;
+		const bool first_ok = row && row[1] && std::strcmp(row[1], "2024-01-01 21:34:05.123456+00") == 0;
+		row = fields ? mysql_fetch_row(r) : nullptr;
+		ok(r && mysql_num_rows(r) == 2 && first_ok && row && !row[1], "MySQL TIMESTAMPTZ preserves instant and NULL");
+		if (r) mysql_free_result(r);
+		ok(one_cell(c, "SELECT COUNT(*) FROM t_mysql_tstz") == "2", "TIMESTAMPTZ RETURNING inserts exactly once");
+		const std::string external = one_cell(c, "SELECT current_setting('enable_external_access')");
+		if (external != "0" && external != "1") BAIL_OUT("could not inspect external access setting");
+		std::string available = "0";
+		if (external == "1") {
+			available = one_cell(c, "SELECT installed OR loaded FROM duckdb_extensions() WHERE extension_name='icu'");
+			if (available != "0" && available != "1") BAIL_OUT("could not inspect ICU availability");
+		}
+		if (available != "1") {
+			skip(4, "ICU is not installed or external access is disabled on the DuckDB server");
+		} else {
+			if (mysql_query(c, "LOAD icu") || mysql_query(c, "SET TimeZone='America/New_York'"))
+				BAIL_OUT("could not enable ICU timezone: %s", mysql_error(c));
+			ok(one_cell(c, "SELECT '2024-01-01 12:00:00+00'::TIMESTAMPTZ") == "2024-01-01 07:00:00-05" &&
+			   one_cell(c, "SELECT '2024-07-01 12:00:00+00'::TIMESTAMPTZ") == "2024-07-01 08:00:00-04",
+			   "MySQL TIMESTAMPTZ follows session timezone in winter and summer");
+			ok(one_cell(c, "UPDATE t_mysql_tstz SET t='2024-03-10 07:00:00+00' WHERE i=1 RETURNING t") ==
+			   "2024-03-10 03:00:00-04", "TIMESTAMPTZ UPDATE RETURNING uses the session DST offset");
+			MYSQL* other = connect_duckdb(cl, cl.username, cl.password);
+			if (!other) BAIL_OUT("could not open second timezone session");
+			ok(mysql_query(other, "SET TimeZone='Asia/Kolkata'") == 0 &&
+			   one_cell(other, "SELECT t FROM t_mysql_tstz WHERE i=1") == "2024-03-10 12:30:00+05:30" &&
+			   one_cell(c, "SELECT t FROM t_mysql_tstz WHERE i=1") == "2024-03-10 03:00:00-04",
+			   "MySQL sessions independently format the same stored TIMESTAMPTZ");
+			mysql_close(other);
+			ok(mysql_query(c, "SET TimeZone='UTC'") == 0, "restore MySQL session timezone");
+		}
 	}
 
 	// NULL must arrive as a real NULL, not the string "NULL".

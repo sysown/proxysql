@@ -2,6 +2,8 @@
 #include "sqlite3db.h"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/main/connection.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -68,6 +70,28 @@ bool render_enum_value(duckdb_vector raw, idx_t row, std::string& out, std::stri
 	} catch (const std::exception& exception) {
 		error = std::string("DuckDB ENUM conversion failed: ") + exception.what();
 		return false;
+	}
+}
+
+// Use the same session-aware VARCHAR cast as DuckDB SQL, without preparing or
+// executing another query. In particular, ICU binds TimeZone and Calendar from
+// this connection instead of applying a context-free UTC cast.
+std::unique_ptr<duckdb::Vector> render_session_vector(duckdb_vector raw, idx_t count,
+                                                       duckdb_connection conn, std::string& error) {
+	if (!conn) {
+		error = "DuckDB TIMESTAMPTZ conversion requires the originating connection";
+		return nullptr;
+	}
+	try {
+		auto& vector = *reinterpret_cast<duckdb::Vector*>(raw);
+		auto& connection = *reinterpret_cast<duckdb::Connection*>(conn);
+		auto text = std::make_unique<duckdb::Vector>(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), count);
+		duckdb::VectorOperations::Cast(*connection.context, vector, *text, count);
+		text->Flatten(count);
+		return text;
+	} catch (const std::exception& exception) {
+		error = std::string("DuckDB session value conversion failed: ") + exception.what();
+		return nullptr;
 	}
 }
 
@@ -359,7 +383,7 @@ duckdb_type duckdb_result_type_id(duckdb_logical_type logical) {
 
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
                                       std::vector<DuckDBColumnType>* column_types,
-                                      DuckDBResultProtocol protocol) {
+                                      DuckDBResultProtocol protocol, duckdb_connection conn) {
 	if (error != nullptr) error->clear();
 	if (column_types != nullptr) column_types->clear();
 	if (res == nullptr) return nullptr;
@@ -399,8 +423,22 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
 		duckdb_data_chunk chunk = duckdb_result_get_chunk(*res, chunk_index);
 		if (chunk == nullptr) break;
 		const idx_t nrows = duckdb_data_chunk_get_size(chunk);
+		// Bind ICU settings once per column/chunk, not once per cell. Keep
+		// native VARCHAR vectors alive until their rows have been copied.
+		std::vector<std::unique_ptr<duckdb::Vector>> session_text(static_cast<size_t>(ncols));
 		for (idx_t c = 0; c < ncols; c++) {
 			vectors[c] = duckdb_data_chunk_get_vector(chunk, c);
+			if (types[c] == DUCKDB_TYPE_TIMESTAMP_TZ && nrows != 0) {
+				std::string conversion_error;
+				session_text[c] = render_session_vector(vectors[c], nrows, conn, conversion_error);
+				if (!session_text[c]) {
+					duckdb_destroy_data_chunk(&chunk);
+					delete out;
+					if (error) *error = conversion_error;
+					return nullptr;
+				}
+				vectors[c] = reinterpret_cast<duckdb_vector>(session_text[c].get());
+			}
 		}
 
 		for (idx_t r = 0; r < nrows; r++) {
@@ -409,7 +447,8 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
 				fields[c] = nullptr;
 				sizes[c] = 0;
 				if (!duckdb_type_renders_as_text(types[c]) || vectors[c] == nullptr) continue;
-				if (!render_cell(types[c], vectors[c], r, rendered[c], protocol, row_error)) {
+				const duckdb_type render_type = session_text[c] ? DUCKDB_TYPE_VARCHAR : types[c];
+				if (!render_cell(render_type, vectors[c], r, rendered[c], protocol, row_error)) {
 					if (!row_error.empty()) break;
 					continue;
 				}
@@ -428,7 +467,8 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
 	return out;
 }
 
-// This allowlist describes render_cell above. The original scalar set used
+// This allowlist describes direct result conversion, including the
+// session-aware TIMESTAMPTZ vector cast. The original scalar set used
 // DuckDB's legacy C result casts; vector conversion additionally supports
 // TIMESTAMP_S/MS/NS through DuckDB's native value-formatting API. Keep unknown
 // types outside the list so callers wrap or reject them before execution.
@@ -453,6 +493,7 @@ bool duckdb_type_renders_as_text(duckdb_type t) {
 		case DUCKDB_TYPE_TIMESTAMP_S:
 		case DUCKDB_TYPE_TIMESTAMP_MS:
 		case DUCKDB_TYPE_TIMESTAMP_NS:
+		case DUCKDB_TYPE_TIMESTAMP_TZ:
 		case DUCKDB_TYPE_HUGEINT:
 		case DUCKDB_TYPE_UHUGEINT:
 		case DUCKDB_TYPE_DECIMAL:

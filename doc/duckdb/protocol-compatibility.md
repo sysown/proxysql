@@ -121,9 +121,12 @@ formatter, including in DML `RETURNING`. Text metadata preserves fractional
 seconds and signed offsets, including offsets with seconds. SQL NULL and
 adjacent numeric metadata are preserved.
 
-`TIMESTAMP WITH TIME ZONE` still uses the VARCHAR fallback so DuckDB can apply
-the session timezone when formatting; direct session-aware conversion remains
-pending.
+`TIMESTAMP WITH TIME ZONE` (`TIMESTAMPTZ`) converts directly using the
+originating connection's native DuckDB cast. With ICU loaded, formatting respects
+the session TimeZone and Calendar, including daylight-saving transitions.
+Without ICU, DuckDB's built-in UTC formatting applies. Values retain text
+metadata, microsecond precision, infinities and NULL, including in `RETURNING`;
+adjacent numeric columns retain their numeric metadata.
 
 UUID values convert directly to canonical lowercase strings, including in DML
 `RETURNING`. UUID columns retain text metadata; adjacent numeric columns retain
@@ -142,8 +145,8 @@ The plugin attempts to execute a wrapper equivalent to:
 SELECT COLUMNS(*)::VARCHAR FROM (<original query>)
 ```
 
-This commonly renders `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, and
-time-zone timestamp variants as readable text. The decision occurs
+This commonly renders `LIST`, `STRUCT`, `MAP`, `ARRAY`, and `UNION` as
+readable text. The decision occurs
 before execution, so volatile expressions and side effects execute exactly
 once.
 

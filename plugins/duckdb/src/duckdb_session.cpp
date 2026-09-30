@@ -767,7 +767,7 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	// exactly once above, so just convert it.
 	outcome.has_resultset = true;
 	std::string conversion_error;
-	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error, &outcome.column_types, protocol);
+	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error, &outcome.column_types, protocol, conn);
 	duckdb_destroy_result(&res);
 	if (!conversion_error.empty()) {
 		outcome.ok = false;
