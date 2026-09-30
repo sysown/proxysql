@@ -95,9 +95,9 @@ env:
 
 jobs:
   tier-context:
-    # least privilege: read the repository and the producer's artifacts, report check runs
+    # Read artifacts, report checks, and cancel this workflow if its PR head is superseded.
     permissions:
-      actions: read
+      actions: write
       checks: write
       contents: read
     uses: ./.github/workflows/ci-tier-context.yml
