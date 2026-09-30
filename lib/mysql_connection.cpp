@@ -444,8 +444,6 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
  */
 MySQL_Connection::MySQL_Connection() {
 	mysql=NULL;
-	gtid_lookup_mysql=NULL;
-	gtid_lookup_retry_after=0;
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
 	send_quit=true;
@@ -520,7 +518,6 @@ MySQL_Connection::MySQL_Connection() {
 
 MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
-	close_gtid_lookup_connection();
 	if (options.server_version) free(options.server_version);
 	if (options.init_connect) free(options.init_connect);
 	if (options.ldap_user_variable) free(options.ldap_user_variable);
@@ -3289,7 +3286,6 @@ int MySQL_Connection::async_send_simple_command(
 }
 
 void MySQL_Connection::reset() {
-	close_gtid_lookup_connection();
 	bool old_no_multiplex_hg = get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 	bool old_compress = get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
 	status_flags=0;
@@ -3346,107 +3342,6 @@ bool MySQL_Connection::is_expired(unsigned long long now) const {
 	return now > creation_time + max_age_ms * 1000ULL;
 }
 
-// Picks the credential to authenticate the auxiliary lookup with: a stored
-// sha1 hash is used as-is, a plaintext password is sent as sent.
-static char *gtid_lookup_auth_password(MySQL_Connection_userinfo *userinfo) {
-	if (userinfo->password == nullptr) {
-		return NULL;
-	}
-	if (userinfo->password[0] == '*') {
-		return userinfo->sha1_pass;
-	}
-	return userinfo->password;
-}
-
-// Connects the auxiliary lookup, resolving the server address the same way the
-// regular connection does: a named server is reached over TCP, while port 0
-// means a local socket.
-static MYSQL *gtid_lookup_real_connect(MYSQL *lookup_mysql, MySrvC *parent,
-                                       MySQL_Connection_userinfo *userinfo, char *auth_password) {
-	if (parent->port) {
-		const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
-		const char *host_ip = res_ip.empty() ? parent->address : res_ip.c_str();
-		return mysql_real_connect(lookup_mysql, host_ip, userinfo->username, auth_password, NULL,
-		                          parent->port, NULL, 0);
-	}
-	return mysql_real_connect(lookup_mysql, "localhost", userinfo->username, auth_password, NULL,
-	                          0, parent->address, 0);
-}
-
-// MariaDB has no SESSION_TRACK_GTIDS, so the GTID watermark is read from a
-// second connection to the same server. The connect and the query both run
-// synchronously on the worker event loop, so the waits are capped at one second
-// and failures are rate limited by gtid_lookup_retry_after.
-bool MySQL_Connection::connect_gtid_lookup_connection() {
-	if (gtid_lookup_mysql != NULL) {
-		return true;
-	}
-	if (parent == NULL || userinfo == NULL) {
-		return false;
-	}
-	if (gtid_lookup_retry_after != 0 && time(nullptr) < gtid_lookup_retry_after) {
-		return false;
-	}
-	MYSQL *lookup_mysql = mysql_init(NULL);
-	if (lookup_mysql == NULL) {
-		return false;
-	}
-	if (mysql != NULL && mysql->charset != NULL) {
-		lookup_mysql->charset = mysql->charset;
-	}
-	unsigned int timeout = 1;
-	mysql_options(lookup_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-	unsigned int io_timeout = mysql_thread___connect_timeout_server / 1000;
-	if (io_timeout == 0 || io_timeout > 1) {
-		io_timeout = 1;
-	}
-	mysql_options(lookup_mysql, MYSQL_OPT_READ_TIMEOUT, &io_timeout);
-	mysql_options(lookup_mysql, MYSQL_OPT_WRITE_TIMEOUT, &io_timeout);
-	std::unique_ptr<MySQLServers_SslParams> lookup_ssl_params;
-	if (parent->use_ssl) {
-		lookup_ssl_params.reset(MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username));
-		MySQL_Connection::set_ssl_params(lookup_mysql, lookup_ssl_params.get());
-		mysql_options(lookup_mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)&proxysql_keylog_write_line_callback);
-	}
-	char *auth_password = gtid_lookup_auth_password(userinfo);
-	MYSQL *ret_mysql_lookup = gtid_lookup_real_connect(lookup_mysql, parent, userinfo, auth_password);
-	if (ret_mysql_lookup == NULL) {
-		unsigned int myerr = mysql_errno(lookup_mysql);
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup connection to %s:%d failed: %u: %s\n",
-				parent->address, parent->port, myerr, mysql_error(lookup_mysql));
-		if (lookup_ssl_params != NULL) {
-			if (myerr >= 2000 && myerr < 3000) {
-				ERR_clear_error();
-			}
-		}
-		mysql_close_no_command(lookup_mysql);
-		gtid_lookup_retry_after = time(nullptr) + 1;
-		return false;
-	}
-	gtid_lookup_mysql=lookup_mysql;
-	gtid_lookup_retry_after=0;
-	if (MyHGM != NULL) {
-		__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
-	}
-	return true;
-}
-
-void MySQL_Connection::release_gtid_lookup_connection() {
-	close_gtid_lookup_connection();
-}
-
-void MySQL_Connection::close_gtid_lookup_connection() {
-	if (gtid_lookup_mysql == NULL) {
-		return;
-	}
-	proxy_mysql_send_com_quit(gtid_lookup_mysql);
-	mysql_close_no_command(gtid_lookup_mysql);
-	gtid_lookup_mysql=NULL;
-	if (MyHGM != NULL) {
-		__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
-	}
-}
-
 bool MySQL_Connection::collect_gtid_to_buff(char *buff) {
 	// gtid_uuid is a fixed-size member that is only ever filled by the bounded
 	// select_* helpers, so the length is taken within the member's own bounds.
@@ -3473,57 +3368,6 @@ bool MySQL_Connection::get_gtid_from_session_tracking(char *buff) {
 	return collect_gtid_to_buff(buff);
 }
 
-// MariaDB has no SESSION_TRACK_GTIDS. The position is read on a dedicated
-// connection: a query on 'mysql' would consume the pending response, so
-// 'mysql->info' and the session tracking state would be lost. Only writes
-// and DDL are looked up ('field_count' is 0 when no result set is pending), so
-// SELECT traffic does not pay for the extra round trip.
-// The lookup is a blocking connect+query on the worker event loop, hence it is
-// opt-in: only 'mysql-update_gtid_from_ok' (the flag that consumes the
-// collected GTID) enables it. client_session_track_gtid alone is not enough.
-// This is not yet async - see the design doc.
-bool MySQL_Connection::get_gtid_from_mariadb_lookup(char *buff) {
-	if (mysql->field_count != 0 || !mysql_thread___update_gtid_from_ok) {
-		return false;
-	}
-	if (mysql->server_version == nullptr || strstr(mysql->server_version, "MariaDB") == nullptr) {
-		return false;
-	}
-
-	if (!connect_gtid_lookup_connection()) {
-		gtid_lookup_retry_after = time(nullptr) + 1;
-		close_gtid_lookup_connection();
-		return false;
-	}
-	if (mysql_query(gtid_lookup_mysql, "SELECT @@gtid_binlog_pos") != 0) {
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup query to %s:%d failed: %u: %s\n",
-				parent->address, parent->port, mysql_errno(gtid_lookup_mysql), mysql_error(gtid_lookup_mysql));
-		gtid_lookup_retry_after = time(nullptr) + 1;
-		close_gtid_lookup_connection();
-		return false;
-	}
-
-	// Only the position is selected: @@gtid_domain_id of a fresh auxiliary
-	// connection is the server default, not the domain the client session may
-	// have set, so attributing the watermark to it would be a guess. Without a
-	// domain a single-domain position is accepted and a multi-domain one fails
-	// closed.
-	bool collected = false;
-	MYSQL_RES *result = mysql_store_result(gtid_lookup_mysql);
-	if (result != nullptr) {
-		MYSQL_ROW row = mysql_fetch_row(result);
-		if (row != nullptr && row[0] != nullptr
-				&& select_mariadb_binlog_position(row[0], nullptr, gtid_uuid, sizeof(gtid_uuid))) {
-			collected = collect_gtid_to_buff(buff);
-		} else {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "GTID lookup on %s:%d did not yield an unambiguous position\n",
-					parent->address, parent->port);
-		}
-		mysql_free_result(result);
-	}
-	return collected;
-}
-
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	// note: current implementation for for OWN GTID only!
 	if (buff == NULL || trx_id == NULL) {
@@ -3538,7 +3382,7 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	if ((mysql->server_status & SERVER_SESSION_STATE_CHANGED) == 0) { // only if status changed
 		return false;
 	}
-	return get_gtid_from_session_tracking(buff) || get_gtid_from_mariadb_lookup(buff);
+	return get_gtid_from_session_tracking(buff);
 }
 
 bool MySQL_Connection::get_variables(std::unordered_map<string, string>& variables) {
