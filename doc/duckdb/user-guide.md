@@ -116,6 +116,9 @@ Both frontend protocols currently describe all columns as text. SQL NULL is
 preserved as a real null value, and embedded NUL bytes in supported strings are
 length-aware internally.
 
+Finite `DOUBLE` values are rendered with enough significant digits to preserve
+their value when parsed back as a double by a client.
+
 Many DuckDB values are rendered directly. For types outside the direct
 compatibility list, the plugin prepares a wrapper that casts result columns to
 `VARCHAR` before executing the statement. This makes common nested and special

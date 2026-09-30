@@ -4,7 +4,10 @@
 #include "utils.h"
 
 #include <cstring>
+#include <cstdlib>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -38,7 +41,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(22);
+	plan(24);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -47,6 +50,17 @@ int main(int argc, char** argv) {
 	ok(one_cell(c, "SELECT 42 AS answer") == "42", "integer literal round-trips");
 	ok(one_cell(c, "SELECT 'hello' AS s") == "hello", "string literal round-trips");
 	ok(one_cell(c, "SELECT CAST(1.5 AS DOUBLE) AS d") == "1.5", "double round-trips");
+
+	for (const auto& value : {
+		std::make_pair("SELECT '1.0000000000000002'::DOUBLE", 0x1.0000000000001p0),
+		std::make_pair("SELECT '1.7976931348623157e308'::DOUBLE", std::numeric_limits<double>::max())
+	}) {
+		const std::string text = one_cell(c, value.first);
+		char* end = nullptr;
+		const double received = std::strtod(text.c_str(), &end);
+		ok(!text.empty() && *end == '\0' && received == value.second,
+		   "DOUBLE survives MySQL text transfer exactly: %s", value.first);
+	}
 
 	// NULL must arrive as a real NULL, not the string "NULL".
 	{

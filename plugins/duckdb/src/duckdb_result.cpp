@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -22,7 +23,8 @@ std::string format_double(double v) {
 	if (std::isnan(v)) return "nan";
 	if (std::isinf(v)) return v > 0 ? "inf" : "-inf";
 	char buf[64];
-	std::snprintf(buf, sizeof(buf), "%.15g", v);
+	// Preserve the binary64 value when a client parses the text response.
+	std::snprintf(buf, sizeof(buf), "%.*g", std::numeric_limits<double>::max_digits10, v);
 	return buf;
 }
 

@@ -3,8 +3,11 @@
 #include "command_line.h"
 
 #include <cstring>
+#include <cstdlib>
+#include <limits>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 #include <arpa/inet.h>
 #include <poll.h>
@@ -113,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(26);
+	plan(28);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -125,6 +128,22 @@ int main(int argc, char** argv) {
 		   std::strcmp(PQgetvalue(r, 0, 0), "42") == 0, "integer literal round-trips");
 		ok(PQnfields(r) == 1 && std::strcmp(PQfname(r, 0), "answer") == 0,
 		   "the column name is preserved");
+		PQclear(r);
+	}
+
+	for (const auto& value : {
+		std::make_pair("SELECT '1.0000000000000002'::DOUBLE", 0x1.0000000000001p0),
+		std::make_pair("SELECT '1.7976931348623157e308'::DOUBLE", std::numeric_limits<double>::max())
+	}) {
+		PGresult* r = exec_or_bail(c, value.first);
+		bool exact = false;
+		if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && !PQgetisnull(r, 0, 0)) {
+			const char* text = PQgetvalue(r, 0, 0);
+			char* end = nullptr;
+			const double received = std::strtod(text, &end);
+			exact = end != text && *end == '\0' && received == value.second;
+		}
+		ok(exact, "DOUBLE survives PostgreSQL text transfer exactly: %s", value.first);
 		PQclear(r);
 	}
 

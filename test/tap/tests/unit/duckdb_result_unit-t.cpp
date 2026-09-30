@@ -4,6 +4,9 @@
 #include "tap.h"
 
 #include <climits>
+#include <cmath>
+#include <cstdlib>
+#include <limits>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -34,7 +37,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(40);
+	plan(51);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -65,6 +68,41 @@ int main() {
 		// them), unlike the nested/UUID/etc. types covered above.
 		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT CAST(1.5 AS DOUBLE) AS d"));
 		ok(field_equals(r.get(), 0, 0, "1.5"), "float/double value renders as text");
+	}
+
+	{
+		// Fifteen significant digits cannot preserve every binary64 value.
+		// Compare parsed text to independent binary values, including signed zero.
+		const struct { const char* literal; double value; } cases[] = {
+			{ "1.0000000000000002", 0x1.0000000000001p0 },
+			{ "-1.0000000000000002", -0x1.0000000000001p0 },
+			{ "9007199254740991", 9007199254740991.0 },
+			{ "9007199254740992", 9007199254740992.0 },
+			{ "1.7976931348623157e308", std::numeric_limits<double>::max() },
+			{ "-1.7976931348623157e308", std::numeric_limits<double>::lowest() },
+			{ "2.2250738585072014e-308", std::numeric_limits<double>::min() },
+			{ "4.9406564584124654e-324", std::numeric_limits<double>::denorm_min() },
+			{ "0.0", 0.0 },
+			{ "-0.0", -0.0 }
+		};
+		for (const auto& c : cases) {
+			const std::string sql = std::string("SELECT '") + c.literal + "'::DOUBLE";
+			std::unique_ptr<SQLite3_result> r(run(conn, sql.c_str()));
+			const char* text = r && r->rows_count == 1 ? r->rows[0]->fields[0] : nullptr;
+			char* end = nullptr;
+			const double value = text ? std::strtod(text, &end) : 0.0;
+			ok(text && end != text && *end == '\0' && value == c.value &&
+			   std::signbit(value) == std::signbit(c.value),
+			   "DOUBLE %s survives text conversion exactly (received %s)",
+			   c.literal, text ? text : "NULL");
+		}
+		std::unique_ptr<SQLite3_result> special(run(conn,
+			"SELECT 'NaN'::DOUBLE, 'Infinity'::DOUBLE, '-Infinity'::DOUBLE, NULL::DOUBLE"));
+		ok(field_equals(special.get(), 0, 0, "nan") &&
+		   field_equals(special.get(), 0, 1, "inf") &&
+		   field_equals(special.get(), 0, 2, "-inf") &&
+		   special->rows[0]->fields[3] == nullptr,
+		   "nonfinite DOUBLE values and SQL NULL retain their representations");
 	}
 
 	{
