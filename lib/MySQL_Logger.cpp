@@ -1387,11 +1387,13 @@ void MySQL_Logger::events_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (events.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(events.base_filename)+11);
-		sprintf(filen,"%s.%08d",events.base_filename,events.log_file_id);
+		const size_t filen_size = strlen(events.base_filename)+13;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s.%08d",events.base_filename,events.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(events.datadir)+strlen(events.base_filename)+11);
-		sprintf(filen,"%s/%s.%08d",events.datadir,events.base_filename,events.log_file_id);
+		const size_t filen_size = strlen(events.datadir)+strlen(events.base_filename)+14;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s/%s.%08d",events.datadir,events.base_filename,events.log_file_id);
 	}
 	events.logfile=new std::fstream();
 	events.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
@@ -1443,11 +1445,13 @@ void MySQL_Logger::audit_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (audit.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(audit.base_filename)+11);
-		sprintf(filen,"%s.%08d",audit.base_filename,audit.log_file_id);
+		const size_t filen_size = strlen(audit.base_filename)+13;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s.%08d",audit.base_filename,audit.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(audit.datadir)+strlen(audit.base_filename)+11);
-		sprintf(filen,"%s/%s.%08d",audit.datadir,audit.base_filename,audit.log_file_id);
+		const size_t filen_size = strlen(audit.datadir)+strlen(audit.base_filename)+14;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s/%s.%08d",audit.datadir,audit.base_filename,audit.log_file_id);
 	}
 	audit.logfile=new std::fstream();
 	audit.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
@@ -1555,8 +1559,9 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+9);
-		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+		const size_t ca_size = cl+9;
+		ca=(char *)malloc(ca_size);
+		snprintf(ca, ca_size, "%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
 	enum log_event_type let = PROXYSQL_COM_QUERY; // default
@@ -1838,8 +1843,9 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+9);
-		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+		const size_t ca_size = cl+9;
+		ca=(char *)malloc(ca_size);
+		snprintf(ca, ca_size, "%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
 
