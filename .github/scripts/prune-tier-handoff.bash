@@ -60,8 +60,26 @@ if [ ! -f "${GROUPS_JSON}" ]; then
   exit 1
 fi
 
-# Same extraction as run-tests-isolated.bash:203.
-version_line="$("${BINARY}" --version 2>&1 | grep -oP 'ProxySQL version \K[0-9]+\.[0-9]+\.[0-9]+' || true)"
+# Use the shared host/build-container probe: the host may lack the ABI used
+# to build src/proxysql. Refuse to delete anything if neither probe succeeds.
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if ! version_output="$(python3 - "$script_dir" "$BINARY" <<'PY_VERSION'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from ci_tier_artifacts import binary_version
+try:
+    print(binary_version(Path.cwd(), sys.argv[2]), end='')
+except (OSError, ValueError, RuntimeError) as error:
+    print(error, file=sys.stderr)
+    sys.exit(1)
+PY_VERSION
+)"; then
+  echo "ERROR: could not determine the ProxySQL version from ${BINARY}; refusing to prune" >&2
+  exit 1
+fi
+# Same extraction as the test selector; metadata never substitutes for a probe.
+version_line="$(printf '%s\n' "$version_output" | grep -oP 'ProxySQL version \K[0-9]+\.[0-9]+\.[0-9]+' || true)"
 if [ -z "${version_line}" ]; then
   echo "ERROR: could not determine the ProxySQL version from ${BINARY}" >&2
   echo "       Refusing to prune: a wrong guess silently deletes the wrong binaries." >&2

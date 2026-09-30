@@ -7,6 +7,25 @@ from ci_tier_plan import make_plan
 
 class RuntimeTests(unittest.TestCase):
  def ctx(self):return dict(repository='sysown/proxysql',sha='a'*40,control_sha='b'*40,trigger_id=1,trigger_attempt=1,build_id=2,build_attempt=1,event='pull_request',pull_requests=[{'number':42}],variables={})
+ def test_failed_producer_marks_unrun_units_and_consumers_skipped(self):
+  plan={'repository':'sysown/proxysql','checks':[
+   dict(check_id=1,workflow='CI-builds',job='builds'),
+   dict(check_id=2,workflow='CI-builds',job='tier-units'),
+   dict(check_id=3,workflow='CI-tests',job='tests')]}
+  api=Mock();api.request.return_value={'status':'queued'}
+  with patch.object(runtime,'read_plan',return_value=plan),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'reconcile'),patch.dict(os.environ,{'BUILD_RESULT':'failure'}):
+   with self.assertRaisesRegex(RuntimeError,'required producer job failed'):runtime.finalize()
+  writes=[call.args[2] for call in api.request.call_args_list if len(call.args)>1 and call.args[1]=='PATCH']
+  self.assertEqual([p['conclusion'] for p in writes],['failure','skipped','skipped'])
+
+ def test_failed_producer_does_not_call_started_units_blocked(self):
+  plan={'repository':'sysown/proxysql','checks':[dict(check_id=1,workflow='CI-builds',job='tier-units')]}
+  api=Mock();api.request.return_value={'status':'in_progress'}
+  with patch.object(runtime,'read_plan',return_value=plan),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'reconcile'),patch.dict(os.environ,{'BUILD_RESULT':'failure'}):
+   with self.assertRaisesRegex(RuntimeError,'required producer job failed'):runtime.finalize()
+  self.assertEqual(api.request.call_args.args[2]['conclusion'],'failure')
+  self.assertNotIn('blocked',api.request.call_args.args[2]['output']['summary'])
+
  def test_untrusted_plan_never_calls_api(self):
   with tempfile.TemporaryDirectory() as folder:
    prior=os.getcwd();os.chdir(folder)

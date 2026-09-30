@@ -126,17 +126,30 @@ def handoff_filter(member,dest_path):
         filtered=tarfile.data_filter(member.replace(linkname='.',deep=False),dest_path).replace(linkname=member.linkname,deep=False)
     return filtered
 
-def binary_version(root):
+def binary_version(root, binary='src/proxysql'):
     root=Path(root).resolve()
-    result=subprocess.run([str(root/'src/proxysql'),'--version'],capture_output=True,text=True)
-    if result.returncode==0:return result.stdout+result.stderr
+    binary_path=(root/binary).resolve()
+    # The container only receives this tree; never map an unrelated host path.
+    relative=binary_path.relative_to(root)
+    try:
+        result=subprocess.run([str(binary_path),'--version'],capture_output=True,text=True)
+        if result.returncode==0:return result.stdout+result.stderr
+        host_error=f'exit {result.returncode}: '+result.stdout+result.stderr
+    except OSError as error:
+        host_error=str(error)
     # Ubuntu 24 artifacts need their build ABI; consumers can run on Ubuntu 22.
     # Use the same packaging image as the unit runner if the host loader fails.
-    result=subprocess.run(['docker','run','--rm','--network','none','-v',str(root)+':/opt/proxysql:ro',
-        '-e','LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap:/opt/proxysql/test/tap/tap/_runtime_libs',
-        'proxysql/packaging:build-ubuntu24-v4.0.0','/opt/proxysql/src/proxysql','--version'],
-        capture_output=True,text=True,check=True)
-    return result.stdout+result.stderr
+    try:
+        result=subprocess.run(['docker','run','--rm','--network','none','-v',str(root)+':/opt/proxysql:ro',
+            '-e','LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap:/opt/proxysql/test/tap/tap/_runtime_libs',
+            'proxysql/packaging:build-ubuntu24-v4.0.0',str(Path('/opt/proxysql')/relative),'--version'],
+            capture_output=True,text=True)
+        if result.returncode==0:return result.stdout+result.stderr
+        container_error=f'exit {result.returncode}: '+result.stdout+result.stderr
+    except OSError as error:
+        container_error=str(error)
+    raise RuntimeError(f'ProxySQL version probe failed. Host: {host_error}\nBuild container: {container_error}')
+
 
 def restore_handoff(manifest,leg,destination,api):
     validate_manifest(manifest)

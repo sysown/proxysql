@@ -13,6 +13,18 @@ class CheckTests(unittest.TestCase):
   for outcome in ['failure','cancelled','timed_out','skipped','neutral']:
    states[1]['conclusion']=outcome
    self.assertEqual(aggregate_state(p,states)['conclusion'],'failure')
+ def test_blocked_checks_are_not_counted_as_test_failures(self):
+  p=self.plan()
+  states=[dict(key='a',status='completed',conclusion='failure',execution_id='run'),
+          dict(key='b',status='completed',conclusion='skipped',execution_id='run')]
+  result=aggregate_state(p,states)
+  self.assertEqual(result['conclusion'],'failure')
+  self.assertEqual(result['output']['summary'],'0/2 passed; 0 pending; 1 failed; 1 blocked/skipped')
+  states[0]['conclusion']='success'
+  result=aggregate_state(p,states)
+  self.assertEqual(result['conclusion'],'failure')
+  self.assertEqual(result['output']['summary'],'1/2 passed; 0 pending; 0 failed; 1 blocked/skipped')
+
  def test_old_attempt_and_wrong_execution_do_not_count(self):
   states=[dict(key=k,status='completed',conclusion='success',execution_id='other') for k in ['a','b']]
   self.assertNotEqual(aggregate_state(self.plan(),states).get('conclusion'),'success')
