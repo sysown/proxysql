@@ -17,7 +17,8 @@ from ci_tier_artifacts import GitHubAPI
 @contextlib.contextmanager
 def artifact_server(mode, on_api_request=None, extra_payload=b''):
     payload = b''.join(bytes([n])*65536 for n in range(32))+extra_payload
-    barrier = threading.Barrier(8)
+    parallel_ready = threading.Event()
+    barrier = threading.Barrier(8, action=parallel_ready.set)
     requests = []
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -41,7 +42,8 @@ def artifact_server(mode, on_api_request=None, extra_payload=b''):
             if mode == 'ignore-range':
                 offset = 0
                 limit = len(payload)
-            if mode == 'parallel':
+            # Synchronize the first wave only; resumed parts arrive independently.
+            if mode in ('parallel', 'parallel-resume') and not parallel_ready.is_set():
                 barrier.wait(timeout=5)
             self.send_response(200 if mode == 'ignore-range' else 206)
             self.send_header('Content-Length', str(limit - offset))
