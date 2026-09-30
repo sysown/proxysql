@@ -358,10 +358,6 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         path: 'proxysql'
-        sparse-checkout: |
-          test/infra
-          test/tap/groups
-          test/scripts
 
     - name: Verify Connector/Python Dockerfile pins
       run: |-

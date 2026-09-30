@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Run-scoped GitHub API and handoff operations. Never select by newest SHA."""
 import io
+import http.client
 import json
 import os
 import posixpath
+import shutil
 from pathlib import Path, PurePosixPath
 import subprocess
 import tarfile
@@ -11,7 +13,14 @@ import tempfile
 import time
 import zipfile
 import uuid
+import urllib.error
+import urllib.request
 from ci_tier_plan import validate_manifest, version_tuple
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Resolve the signed storage URL without forwarding the GitHub token.
+        return None
 
 class GitHubAPI:
     def __init__(self, repository, token=None):
@@ -45,6 +54,60 @@ class GitHubAPI:
             if not retryable or attempt==attempts-1:
                 raise RuntimeError(f'GitHub API {method} {path}: exit {result.returncode}')
             time.sleep(60 if 'rate limit' in error or '429' in error else min(30,2**attempt))
+
+    def download(self,path,destination,size):
+        """Stream large immutable artifacts to disk, resuming interrupted reads."""
+        token=self.token or os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
+        if not token:
+            auth=subprocess.run(['gh','auth','token'],capture_output=True,text=True,timeout=60)
+            if auth.returncode:raise RuntimeError('Cannot obtain artifact download credentials')
+            token=auth.stdout.strip()
+        url=path if path.startswith(('http://','https://')) else 'https://api.github.com/'+path
+        opener=urllib.request.build_opener(NoRedirect())
+        # A 5 GB handoff can take >15 minutes on self-hosted links. Bound the
+        # whole transfer to one hour; each stalled socket still times out in 60s.
+        deadline=time.monotonic()+3600
+        with Path(destination).open('w+b') as out:
+            for attempt in range(6):
+                try:
+                    # Signed URLs expire; resolve a fresh one for every attempt.
+                    request=urllib.request.Request(url,headers={'Authorization':'Bearer '+token})
+                    try:
+                        response=opener.open(request,timeout=60)
+                    except urllib.error.HTTPError as error:
+                        if error.code!=302:raise
+                        response=error
+                    with response:
+                        if response.code!=302:raise ValueError('artifact endpoint did not redirect')
+                        location=response.headers['Location']
+                    offset=out.tell()
+                    request=urllib.request.Request(location,headers={'Range':f'bytes={offset}-'})
+                    with urllib.request.urlopen(request,timeout=60) as response:
+                        if response.status==200:
+                            out.seek(0);out.truncate();offset=0
+                        elif response.status!=206 or response.headers.get('Content-Range')!=f'bytes {offset}-{size-1}/{size}':
+                            raise ValueError('unexpected artifact byte range')
+                        print(f'Artifact download attempt {attempt+1}: {offset}/{size} bytes',flush=True)
+                        reported=offset
+                        while True:
+                            if time.monotonic()>=deadline:raise TimeoutError('download deadline')
+                            chunk=response.read1(1024*1024)
+                            if not chunk:break
+                            if out.tell()+len(chunk)>size:raise ValueError('artifact exceeds expected size')
+                            out.write(chunk)
+                            if out.tell()-reported>=256*1024*1024:
+                                reported=out.tell()
+                                print(f'Artifact download: {reported}/{size} bytes',flush=True)
+                    if out.tell()!=size:raise OSError('incomplete artifact download')
+                    return
+                except (OSError,urllib.error.URLError,http.client.HTTPException) as error:
+                    # Never log an exception containing a signed URL or credentials.
+                    reason=f'HTTP {error.code}' if isinstance(error,urllib.error.HTTPError) else type(error).__name__
+                    if isinstance(error,urllib.error.HTTPError):error.close()
+                    if attempt==5 or time.monotonic()>=deadline:
+                        raise RuntimeError(f'Artifact download failed ({reason}); received {out.tell()}/{size} bytes') from None
+                    print(f'Artifact download interrupted ({reason}); resuming at {out.tell()} bytes',flush=True)
+                    time.sleep(min(30,2**attempt))
 
     def pages(self,path,key):
         records=[]
@@ -182,9 +245,13 @@ def restore_handoff(manifest,leg,destination,api):
     record=select_artifact(api.artifacts(manifest['build_id']),expected['artifact_name'])
     if expected.get('artifact_id') and record['id']!=expected['artifact_id']:raise ValueError('handoff artifact replaced')
     with tempfile.TemporaryDirectory() as tmp:
-        raw=api.request(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",raw=True)
-        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            packed=Path(tmp)/'cache_full.tar.zst';packed.write_bytes(archive.read('cache_full.tar.zst'))
+        downloaded=Path(tmp)/'handoff.zip'
+        api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'])
+        with zipfile.ZipFile(downloaded) as archive:
+            packed=Path(tmp)/'cache_full.tar.zst'
+            with archive.open('cache_full.tar.zst') as source,packed.open('wb') as out:
+                shutil.copyfileobj(source,out,1024*1024)
+        downloaded.unlink()
         tarpath=Path(tmp)/'full.tar'
         with tarpath.open('wb') as out:subprocess.run(['zstd','-d','-c',str(packed)],stdout=out,check=True)
         destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)

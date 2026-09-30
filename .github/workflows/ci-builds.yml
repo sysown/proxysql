@@ -502,7 +502,7 @@ jobs:
         command -v zstd >/dev/null || sudo apt-get install -y zstd
         cd proxysql/
         shopt -s nullglob
-        gcno=(lib/obj/*.gcno)
+        gcno=(lib/obj/*.gcno plugins/*/obj/*.gcno)
         matrix_files=(tap-matrix*)
         plugin_files=(plugins/*/*.so)
         echo ">>> packing handoff: tier=${TIER} variant=${VARIANT} gcno=${#gcno[@]} matrix=${#matrix_files[@]} plugins=${#plugin_files[@]}"
