@@ -3527,7 +3527,17 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				// ReadyForQuery: completes any Sync-terminated step (and the injected-
 				// Sync error recovery above).
 				if (t == 'Z') {
-					count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
+					const bool has_error = (query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_ERROR) != 0;
+					if (!myds->sess->is_extended_query_ready_for_query() && !has_error) {
+						// An implicit Sync before a simple query ends the backend
+						// extended cycle, but the client awaits the simple query's
+						// ReadyForQuery. Match the libpq path while still recording
+						// the backend transaction state and flushing its result.
+						if (msg.payload_len >= 1) set_ready_for_query_status((char)msg.payload[0]);
+						query_result->buffer_to_PSarrayOut();
+					} else {
+						count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
+					}
 					native_result_complete = true;
 					return;
 				}

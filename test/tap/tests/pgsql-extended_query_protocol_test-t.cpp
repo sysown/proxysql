@@ -2366,8 +2366,8 @@ void test_malformed_execute_packet() {
 	}
 }
 
-void test_bind_named_portal() {
-	diag("Test %d: Bind with named portal (should fail)", test_count++);
+void test_bind_named_portal(bool native_backend) {
+	diag("Test %d: Bind with named portal (%s backend)", test_count++, native_backend ? "native" : "libpq");
 	auto conn = create_connection();
 	if (!conn) return;
 
@@ -2379,10 +2379,15 @@ void test_bind_named_portal() {
 		conn->bindStatement("stmt_portal", "named_portal", { param }, {}, false);
 		conn->sendSync();
 
-		// Should get error response
 		char type;
 		std::vector<uint8_t> buffer;
 		conn->readMessage(type, buffer);
+		if (native_backend) {
+			ok(type == PgConnection::BIND_COMPLETE, "Received BindComplete for named portal bind");
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::READY_FOR_QUERY, "Received ReadyForQuery after named portal bind and Sync");
+			return;
+		}
 
 		ok(type == PgConnection::ERROR_RESPONSE,
 			"Received error for named portal bind");
@@ -5264,6 +5269,17 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	// v3.0 omits this variable and uses libpq; native-capable tiers expose
+	// the runtime setting, which also permits running this suite in libpq mode.
+	PGResultPtr backend_mode(PQexec(admin_conn.get(),
+		"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-use_native_backend_protocol'"), &PQclear);
+	if (PQresultStatus(backend_mode.get()) != PGRES_TUPLES_OK) {
+		BAIL_OUT("Failed to read PostgreSQL backend protocol mode: %s", PQerrorMessage(admin_conn.get()));
+		return exit_status();
+	}
+	const bool native_backend = PQntuples(backend_mode.get()) == 1 &&
+		strcmp(PQgetvalue(backend_mode.get(), 0, 0), "true") == 0;
+
 	try {
 		// Parse Prepared Statement
 		test_parse_without_sync();
@@ -5314,7 +5330,7 @@ int main(int argc, char** argv) {
 		test_malformed_execute_packet();
 
 		// Portals
-		test_bind_named_portal(); 
+		test_bind_named_portal(native_backend);
 		test_describe_portal(); 
 		test_close_portal();   
 		test_portal_lifecycle(); 
