@@ -7254,11 +7254,15 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *query=NULL;
-	char *q=NULL;
-	char *error=NULL;
-	//q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d, %d)";
+	auto execute = [&](const char *sql, auto bind) {
+		auto [rc, statement_unique] = mydb->prepare_v2(sql);
+		ASSERT_SQLITE_OK(rc, mydb);
+		bind(statement_unique.get());
+		char *error = NULL;
+		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
+		if (error) free(error);
+		return resultset;
+	};
 
 	int writer_is_also_reader=0;
 	int new_reader_weight = 1;
@@ -7287,13 +7291,18 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 	}
 
-	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+1024*1024);
-	sprintf(query, q, _server_id, domain_name, aurora_port, _whid, _rhid);
-	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
-	if (error) {
-		free(error);
-		error=NULL;
-	}
+	// NOTE: Aurora hostnames are built by concatenating the server_id and the domain_name.
+	string full_hostname { string { _server_id } + string { domain_name } };
+
+	resultset = execute(
+		"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname=?1 AND port=?2 AND status<>3 AND hostgroup_id IN (?3, ?4)",
+		[&](sqlite3_stmt *statement) {
+			int rc = (*proxy_sqlite3_bind_text)(statement, 1, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 2, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 3, _whid); ASSERT_SQLITE_OK(rc, mydb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 4, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+		}
+	);
 
 	if (resultset) {
 		if (resultset->rows_count) {
@@ -7330,85 +7339,124 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 		if (resultset->rows_count) {
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
-			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=%d";
-			sprintf(query,q,_rhid);
-			mydb->execute(query);
-			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
-			sprintf(query, q, _writer_hostgroup, _server_id, domain_name, aurora_port);
-			mydb->execute(query);
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
-			sprintf(query, q, _writer_hostgroup, _server_id, domain_name, aurora_port, _writer_hostgroup);
-			mydb->execute(query);
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
-			sprintf(query, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
-			mydb->execute(query);
-			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			sprintf(query, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
-			mydb->execute(query);
+			execute(
+				"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=?1",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
+			execute(
+				"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=?1 AND hostname=?2 AND port=?3",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_text)(statement, 2, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
+			execute(
+				"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=?1 WHERE hostname=?2 AND port=?3 AND hostgroup_id<>?4",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_text)(statement, 2, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 4, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
+			execute(
+				"DELETE FROM mysql_servers_incoming WHERE hostname=?1 AND port=?2 AND hostgroup_id<>?3",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_text)(statement, 1, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
+			execute(
+				"UPDATE mysql_servers_incoming SET status=0 WHERE hostname=?1 AND port=?2 AND hostgroup_id=?3",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_text)(statement, 1, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 
 			// we need to move the old writer into the reader HG
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE status=3 AND hostgroup_id=%d";
-			sprintf(query,q,_rhid);
-			mydb->execute(query);
-			q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming SELECT %d, hostname, port, gtid_port, %d, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=%d AND status=0";
-			sprintf(query,q,_rhid, new_reader_weight, _whid);
-			mydb->execute(query);
+			execute(
+				"DELETE FROM mysql_servers_incoming WHERE status=3 AND hostgroup_id=?1",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
+			execute(
+				"INSERT OR IGNORE INTO mysql_servers_incoming SELECT ?1, hostname, port, gtid_port, ?2, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=?3 AND status=0",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, new_reader_weight); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _whid); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 
 			if (writer_is_also_reader && read_HG>=0) {
-				q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
-				sprintf(query, q, read_HG, _writer_hostgroup, _server_id, domain_name, aurora_port);
-				mydb->execute(query);
-				q = (char *)"UPDATE mysql_servers_incoming SET weight=%d WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
-				sprintf(query, q, new_reader_weight, read_HG, _server_id, domain_name, aurora_port);
-				mydb->execute(query);
+				execute(
+					"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT ?1,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=?2 AND hostname=?3 AND port=?4",
+					[&](sqlite3_stmt *statement) {
+						int rc = (*proxy_sqlite3_bind_int64)(statement, 1, read_HG); ASSERT_SQLITE_OK(rc, mydb);
+						rc = (*proxy_sqlite3_bind_int64)(statement, 2, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+						rc = (*proxy_sqlite3_bind_text)(statement, 3, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+						rc = (*proxy_sqlite3_bind_int64)(statement, 4, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+					}
+				);
+				execute(
+					"UPDATE mysql_servers_incoming SET weight=?1 WHERE hostgroup_id=?2 AND hostname=?3 AND port=?4",
+					[&](sqlite3_stmt *statement) {
+						int rc = (*proxy_sqlite3_bind_int64)(statement, 1, new_reader_weight); ASSERT_SQLITE_OK(rc, mydb);
+						rc = (*proxy_sqlite3_bind_int64)(statement, 2, read_HG); ASSERT_SQLITE_OK(rc, mydb);
+						rc = (*proxy_sqlite3_bind_text)(statement, 3, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+						rc = (*proxy_sqlite3_bind_int64)(statement, 4, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+					}
+				);
 			}
 			uint64_t checksum_current = 0;
 			uint64_t checksum_incoming = 0;
 			{
-				int cols=0;
-				int affected_rows=0;
-				SQLite3_result *resultset_servers=NULL;
-				char *query=NULL;
-				char *q1 = NULL;
-				char *q2 = NULL;
-				char *error=NULL;
-				q1 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
-				q2 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers_incoming.comment FROM mysql_servers_incoming JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
-				query = (char *)malloc(strlen(q2)+128);
-				sprintf(query,q1,_writer_hostgroup);
-				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
-				if (error == NULL) {
-					if (resultset_servers) {
-						checksum_current = resultset_servers->raw_checksum();
+				SQLite3_result *resultset_servers = execute(
+					"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=?1 ORDER BY hostgroup_id, hostname, port",
+					[&](sqlite3_stmt *statement) {
+						int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 					}
-				}
+				);
 				if (resultset_servers) {
+					checksum_current = resultset_servers->raw_checksum();
 					delete resultset_servers;
-					resultset_servers = NULL;
 				}
-				sprintf(query,q2,_writer_hostgroup);
-				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
-				if (error == NULL) {
-					if (resultset_servers) {
-						checksum_incoming = resultset_servers->raw_checksum();
+				SQLite3_result *resultset_incoming = execute(
+					"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers_incoming.comment FROM mysql_servers_incoming JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=?1 ORDER BY hostgroup_id, hostname, port",
+					[&](sqlite3_stmt *statement) {
+						int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 					}
+				);
+				if (resultset_incoming) {
+					checksum_incoming = resultset_incoming->raw_checksum();
+					delete resultset_incoming;
 				}
-				if (resultset_servers) {
-					delete resultset_servers;
-					resultset_servers = NULL;
-				}
-				free(query);
 			}
 			if (checksum_incoming!=checksum_current) {
 				proxy_warning("AWS Aurora: setting host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
-				q = (char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id NOT IN (%d, %d)";
-				sprintf(query, q, _rhid, _whid);
-				mydb->execute(query);
+				execute(
+					"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id NOT IN (?1, ?2)",
+					[&](sqlite3_stmt *statement) {
+						int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+						rc = (*proxy_sqlite3_bind_int64)(statement, 2, _whid); ASSERT_SQLITE_OK(rc, mydb);
+					}
+				);
 				commit();
 				wrlock();
-				q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
-				sprintf(query,q,_whid,_rhid);
-				mydb->execute(query);
+				execute(
+					"DELETE FROM mysql_servers WHERE hostgroup_id IN (?1 , ?2)",
+					[&](sqlite3_stmt *statement) {
+						int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _whid); ASSERT_SQLITE_OK(rc, mydb);
+						rc = (*proxy_sqlite3_bind_int64)(statement, 2, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+					}
+				);
 				generate_mysql_servers_table(&_whid);
 				generate_mysql_servers_table(&_rhid);
 				wrunlock();
@@ -7418,11 +7466,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				}
 			}
 			GloAdmin->mysql_servers_wrunlock();
-			free(query);
-			query = NULL;
 		} else {
-			string full_hostname { string { _server_id } + string { domain_name } };
-
 			GloAdmin->mysql_servers_wrlock();
 			wrlock();
 
@@ -7445,9 +7489,13 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				);
 				purge_mysql_servers_table();
 
-				const char del_srvs_query_t[] { "DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)" };
-				const string del_srvs_query { cstr_format(del_srvs_query_t, _whid, _rhid).str };
-				mydb->execute(del_srvs_query.c_str());
+				execute(
+					"DELETE FROM mysql_servers WHERE hostgroup_id IN (?1 , ?2)",
+					[&](sqlite3_stmt *statement) {
+						int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _whid); ASSERT_SQLITE_OK(rc, mydb);
+						rc = (*proxy_sqlite3_bind_int64)(statement, 2, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+					}
+				);
 
 				generate_mysql_servers_table(&_whid);
 				generate_mysql_servers_table(&_rhid);
@@ -7478,9 +7526,6 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 		delete resultset;
 		resultset=NULL;
 	}
-	if (query) {
-		free(query);
-	}
 	free(domain_name);
 }
 
@@ -7488,9 +7533,15 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *query=NULL;
-	char *q=NULL;
-	char *error=NULL;
+	auto execute = [&](const char *sql, auto bind) {
+		auto [rc, statement_unique] = mydb->prepare_v2(sql);
+		ASSERT_SQLITE_OK(rc, mydb);
+		bind(statement_unique.get());
+		char *error = NULL;
+		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
+		if (error) free(error);
+		return resultset;
+	};
 	int _writer_hostgroup = _whid;
 	int aurora_port = 3306;
 	int new_reader_weight = 0;
@@ -7511,15 +7562,18 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 		}
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 	}
-	q = (char*)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d,%d)";
-	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+32+32+32);
-	sprintf(query, q, _server_id, domain_name, aurora_port, _whid, _rhid);
-	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
-	if (error) {
-		free(error);
-		error=NULL;
-	}
-	free(query);
+	// NOTE: Aurora hostnames are built by concatenating the server_id and the domain_name.
+	string full_hostname { string { _server_id } + string { domain_name } };
+
+	resultset = execute(
+		"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname=?1 AND port=?2 AND status<>3 AND hostgroup_id IN (?3,?4)",
+		[&](sqlite3_stmt *statement) {
+			int rc = (*proxy_sqlite3_bind_text)(statement, 1, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 2, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 3, _whid); ASSERT_SQLITE_OK(rc, mydb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 4, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+		}
+	);
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
 			proxy_warning("AWS Aurora: setting host %s%s:%d (part of cluster with writer_hostgroup=%d) in a reader, moving from writer_hostgroup %d to reader_hostgroup %d\n", _server_id, domain_name, aurora_port, _whid, _whid, _rhid);
@@ -7527,34 +7581,51 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			// If server present as WRITER try moving it to 'reader_hostgroup'.
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+512);
-			sprintf(query, q, _rhid, _server_id, domain_name, aurora_port, _whid);
-			mydb->execute(query);
+			execute(
+				"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=?1 WHERE hostname=?2 AND port=?3 AND hostgroup_id=?4",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_text)(statement, 2, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 4, _whid); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			// Reader could previously be also a reader, in which case previous operation 'UPDATE OR IGNORE'
 			// did nothing. If server is still in the 'writer_hostgroup', we should remove it.
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			sprintf(query, q, _server_id, domain_name, aurora_port, _whid);
-			mydb->execute(query);
-			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			sprintf(query, q, _server_id, domain_name, aurora_port, _rhid);
-			mydb->execute(query);
+			execute(
+				"DELETE FROM mysql_servers_incoming WHERE hostname=?1 AND port=?2 AND hostgroup_id=?3",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_text)(statement, 1, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _whid); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
+			execute(
+				"UPDATE mysql_servers_incoming SET status=0 WHERE hostname=?1 AND port=?2 AND hostgroup_id=?3",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_text)(statement, 1, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			commit();
 			wrlock();
 
-			q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
-			sprintf(query,q,_whid,_rhid);
-			mydb->execute(query);
+			execute(
+				"DELETE FROM mysql_servers WHERE hostgroup_id IN (?1 , ?2)",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _whid); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			generate_mysql_servers_table(&_whid);
 			generate_mysql_servers_table(&_rhid);
 
 			wrunlock();
 			GloAdmin->mysql_servers_wrunlock();
-			free(query);
 		} else {
 			// we couldn't find the server
 			// autodiscovery algorithm here
-			string full_hostname { string { _server_id } + string { domain_name } };
 			GloAdmin->mysql_servers_wrlock();
 			wrlock();
 
@@ -7566,9 +7637,13 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			if (wr_res == 0) {
 				purge_mysql_servers_table();
 
-				const char del_srvs_query_t[] { "DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)" };
-				const string del_srvs_query { cstr_format(del_srvs_query_t, _whid, _rhid).str };
-				mydb->execute(del_srvs_query.c_str());
+				execute(
+					"DELETE FROM mysql_servers WHERE hostgroup_id IN (?1 , ?2)",
+					[&](sqlite3_stmt *statement) {
+						int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _whid); ASSERT_SQLITE_OK(rc, mydb);
+						rc = (*proxy_sqlite3_bind_int64)(statement, 2, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+					}
+				);
 
 				generate_mysql_servers_table(&_whid);
 				generate_mysql_servers_table(&_rhid);
