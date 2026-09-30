@@ -37,7 +37,11 @@ check_archives() {
             echo "$platform with $count archives should fail before linking" >&2
             exit 1
         fi
-        grep -q 'ERROR: expected at least' "$fixture/output"
+        if ! grep -q 'ERROR: expected at least' "$fixture/output"; then
+            cat "$fixture/output" >&2
+            echo "$platform with $count archives failed for an unexpected reason" >&2
+            exit 1
+        fi
     fi
 }
 check_archives Darwin 15 pass
