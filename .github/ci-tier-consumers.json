@@ -5,7 +5,7 @@
       "workflow": "CI-3p-aiomysql",
       "file": "ci-3p-aiomysql.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -27,7 +27,7 @@
       "workflow": "CI-3p-aiomysql",
       "file": "ci-3p-aiomysql.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -49,7 +49,7 @@
       "workflow": "CI-3p-django-framework",
       "file": "ci-3p-django-framework.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -71,7 +71,7 @@
       "workflow": "CI-3p-django-framework",
       "file": "ci-3p-django-framework.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -93,7 +93,7 @@
       "workflow": "CI-3p-django-framework",
       "file": "ci-3p-django-framework.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -115,7 +115,7 @@
       "workflow": "CI-3p-laravel-framework",
       "file": "ci-3p-laravel-framework.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -137,7 +137,7 @@
       "workflow": "CI-3p-laravel-framework",
       "file": "ci-3p-laravel-framework.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -159,7 +159,7 @@
       "workflow": "CI-3p-laravel-framework",
       "file": "ci-3p-laravel-framework.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -181,7 +181,7 @@
       "workflow": "CI-3p-mariadb-connector-c",
       "file": "ci-3p-mariadb-connector-c.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -203,7 +203,7 @@
       "workflow": "CI-3p-mariadb-connector-c",
       "file": "ci-3p-mariadb-connector-c.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -225,7 +225,7 @@
       "workflow": "CI-3p-mysql-connector-j",
       "file": "ci-3p-mysql-connector-j.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -247,7 +247,7 @@
       "workflow": "CI-3p-mysql-connector-j",
       "file": "ci-3p-mysql-connector-j.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -269,7 +269,7 @@
       "workflow": "CI-3p-pgjdbc",
       "file": "ci-3p-pgjdbc.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -291,7 +291,7 @@
       "workflow": "CI-3p-php-pdo-mysql",
       "file": "ci-3p-php-pdo-mysql.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -313,7 +313,7 @@
       "workflow": "CI-3p-php-pdo-mysql",
       "file": "ci-3p-php-pdo-mysql.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -335,7 +335,7 @@
       "workflow": "CI-3p-php-pdo-pgsql",
       "file": "ci-3p-php-pdo-pgsql.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -357,7 +357,7 @@
       "workflow": "CI-3p-postgresql",
       "file": "ci-3p-postgresql.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -379,7 +379,7 @@
       "workflow": "CI-3p-sqlalchemy",
       "file": "ci-3p-sqlalchemy.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -401,7 +401,7 @@
       "workflow": "CI-3p-sqlalchemy",
       "file": "ci-3p-sqlalchemy.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
@@ -423,7 +423,7 @@
       "workflow": "CI-3p-sqlalchemy",
       "file": "ci-3p-sqlalchemy.yml",
       "job": "test",
-      "automatic": true,
+      "automatic": false,
       "tiers": [
         "v40",
         "v30",
