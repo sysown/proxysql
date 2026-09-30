@@ -796,6 +796,8 @@ MySQLColumnType mysql_column_type(const DuckDBColumnType& column) {
 	out.flags = NUM_FLAG;
 	out.decimals = 0;
 	switch (column.type) {
+	case DUCKDB_TYPE_BOOLEAN:
+		out.type = MYSQL_TYPE_TINY; out.length = 1; break;
 	case DUCKDB_TYPE_UTINYINT: out.flags |= UNSIGNED_FLAG; [[fallthrough]];
 	case DUCKDB_TYPE_TINYINT:
 		out.type = MYSQL_TYPE_TINY; out.length = out.flags & UNSIGNED_FLAG ? 3 : 4; break;
@@ -840,6 +842,7 @@ struct PgSQLColumnType {
 
 PgSQLColumnType pgsql_column_type(const DuckDBColumnType& column) {
 	switch (column.type) {
+	case DUCKDB_TYPE_BOOLEAN: return { 16, 1, -1 }; // bool
 	case DUCKDB_TYPE_BLOB: return { 17, -1, -1 }; // bytea, hex text encoding
 	case DUCKDB_TYPE_TINYINT:
 	case DUCKDB_TYPE_SMALLINT:

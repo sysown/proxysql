@@ -113,7 +113,8 @@ CURRENT_DATABASE()` return `memory` for `:memory:` and the configured
 ## Result values
 
 Both frontend protocols expose numeric column types, including decimal scale
-and unsigned ranges. BLOBs use MySQL binary metadata or PostgreSQL BYTEA with
+and unsigned ranges. Booleans use MySQL TINYINT with 0/1 values or PostgreSQL
+BOOLEAN with f/t values. BLOBs use MySQL binary metadata or PostgreSQL BYTEA with
 hex text encoding. Other columns currently use text metadata. SQL NULL is
 preserved as a real null value, and embedded NUL bytes in supported strings are
 length-aware internally. See [Protocol compatibility](protocol-compatibility.md)

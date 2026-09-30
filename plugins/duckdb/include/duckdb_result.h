@@ -27,8 +27,9 @@ enum class DuckDBResultProtocol { mysql, pgsql };
 // allowlist supports: both text protocols transmit values as strings.
 // Optional column_types receives the executed result's schema (including
 // decimal precision/scale) before chunk access; plugin serializers use it
-// for numeric/binary metadata and retain text metadata for other types.
+// for numeric/boolean/binary metadata and retain text metadata for other types.
 // BLOB cells use raw bytes for MySQL and hex BYTEA text for PostgreSQL.
+// BOOLEAN cells use 0/1 for MySQL and f/t for PostgreSQL.
 // The original compatibility allowlist was verified against DuckDB
 // 1.4.5's deprecated C API (duckdb/src/include/duckdb/main/capi/cast/
 // generic.hpp, GetInternalCValue's switch on deprecated_type) -- this is

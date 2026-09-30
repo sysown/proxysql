@@ -14,13 +14,14 @@
 namespace {
 
 // Runs `sql` on a fresh in-memory database and converts the result.
-SQLite3_result* run(duckdb_connection conn, const char* sql) {
+SQLite3_result* run(duckdb_connection conn, const char* sql,
+                    DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql) {
 	duckdb_result res;
 	if (duckdb_query(conn, sql, &res) != DuckDBSuccess) {
 		duckdb_destroy_result(&res);
 		return nullptr;
 	}
-	SQLite3_result* out = duckdb_result_to_sqlite3(&res);
+	SQLite3_result* out = duckdb_result_to_sqlite3(&res, nullptr, nullptr, protocol);
 	duckdb_destroy_result(&res);
 	return out;
 }
@@ -37,7 +38,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(51);
+	plan(53);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -55,6 +56,15 @@ int main() {
 		   "column name is preserved");
 		ok(field_equals(r.get(), 0, 0, "42"),
 		   "integer value renders as text");
+	}
+
+	{
+		std::unique_ptr<SQLite3_result> mysql(run(conn, "SELECT true, false, NULL::BOOLEAN"));
+		ok(field_equals(mysql.get(), 0, 0, "1") && field_equals(mysql.get(), 0, 1, "0") &&
+		   mysql->rows[0]->fields[2] == nullptr, "MySQL boolean conversion distinguishes true, false and NULL");
+		std::unique_ptr<SQLite3_result> pgsql(run(conn, "SELECT true, false, NULL::BOOLEAN", DuckDBResultProtocol::pgsql));
+		ok(field_equals(pgsql.get(), 0, 0, "t") && field_equals(pgsql.get(), 0, 1, "f") &&
+		   pgsql->rows[0]->fields[2] == nullptr, "PostgreSQL boolean conversion uses native text representations");
 	}
 
 	{

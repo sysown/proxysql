@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(47);
+	plan(48);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
 		if (r) mysql_free_result(r);
 	}
 	for (const char* sql : {
-		"SELECT true AS fallback",
+		"SELECT INTERVAL 1 DAY AS fallback",
 		"SELECT DATE '2024-01-01' AS fallback",
 		"SELECT 42 AS numeric_value, [1, 2] AS wrapped_value"
 	}) {
@@ -169,6 +169,19 @@ int main(int argc, char** argv) {
 	{
 		const std::string value = one_cell(c, "SELECT repeat('a', 70000)::BLOB");
 		ok(value == std::string(70000, 'a'), "MySQL BLOB values larger than 64 KiB remain intact");
+	}
+
+	{
+		const int rc = mysql_query(c, "SELECT true, false, NULL::BOOLEAN");
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* fields = r ? mysql_fetch_fields(r) : nullptr;
+		MYSQL_ROW row = r ? mysql_fetch_row(r) : nullptr;
+		ok(r && mysql_num_fields(r) == 3 && row && fields[0].type == MYSQL_TYPE_TINY &&
+		   fields[1].type == MYSQL_TYPE_TINY && fields[2].type == MYSQL_TYPE_TINY &&
+		   fields[0].length == 1 && fields[1].length == 1 && fields[2].length == 1 &&
+		   row[0] && std::strcmp(row[0], "1") == 0 && row[1] && std::strcmp(row[1], "0") == 0 && !row[2],
+		   "MySQL booleans carry TINYINT metadata and numeric values while preserving NULL");
+		if (r) mysql_free_result(r);
 	}
 
 	// NULL must arrive as a real NULL, not the string "NULL".

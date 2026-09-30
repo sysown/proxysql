@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(50);
+	plan(51);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -186,7 +186,7 @@ int main(int argc, char** argv) {
 		PQclear(r);
 	}
 	for (const char* sql : {
-		"SELECT true AS fallback",
+		"SELECT INTERVAL 1 DAY AS fallback",
 		"SELECT DATE '2024-01-01' AS fallback",
 		"SELECT 42 AS numeric_value, [1, 2] AS wrapped_value"
 	}) {
@@ -229,6 +229,15 @@ int main(int argc, char** argv) {
 		ok(decoded && std::string(reinterpret_cast<char*>(decoded), size) == std::string(70000, 'a'),
 		   "libpq decodes BYTEA values larger than 64 KiB without truncation");
 		PQfreemem(decoded);
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "SELECT true, false, NULL::BOOLEAN");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 3 && PQntuples(r) == 1 &&
+		   PQftype(r, 0) == 16 && PQftype(r, 1) == 16 && PQftype(r, 2) == 16 && PQfsize(r, 0) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "t") == 0 && std::strcmp(PQgetvalue(r, 0, 1), "f") == 0 &&
+		   PQgetisnull(r, 0, 2), "PostgreSQL booleans carry native metadata and values while preserving NULL");
 		PQclear(r);
 	}
 

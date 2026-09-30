@@ -91,7 +91,10 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 	char buf[64];
 	switch (type) {
 	case DUCKDB_TYPE_BOOLEAN:
-		out = static_cast<bool*>(data)[row] ? "true" : "false";
+		if (protocol == DuckDBResultProtocol::pgsql)
+			out = static_cast<bool*>(data)[row] ? "t" : "f";
+		else
+			out = static_cast<bool*>(data)[row] ? "1" : "0";
 		return true;
 	case DUCKDB_TYPE_TINYINT:
 		out = std::to_string(static_cast<int8_t*>(data)[row]);

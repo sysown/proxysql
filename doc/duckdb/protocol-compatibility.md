@@ -77,12 +77,13 @@ above is guaranteed to be absorbed or translated.
 
 ## Result metadata and conversion
 
-Numeric and binary results carry native type metadata on both endpoints. Values still use
+Numeric, boolean, and binary results carry native type metadata on both endpoints. Values still use
 the text transfer format; this does not add prepared statements or binary
 transfer support.
 
 | DuckDB type | MySQL metadata | PostgreSQL metadata |
 | --- | --- | --- |
+| BOOLEAN | TINYINT(1), values 0/1 | BOOLEAN, values f/t |
 | TINYINT / SMALLINT | TINY / SHORT | SMALLINT |
 | INTEGER / BIGINT | LONG / LONGLONG | INTEGER / BIGINT |
 | UTINYINT / USMALLINT / UINTEGER | Corresponding integer type, unsigned flag | SMALLINT / INTEGER / BIGINT |
@@ -94,7 +95,7 @@ transfer support.
 
 MySQL expression nullability is reported as unknown rather than claiming
 NOT NULL. Typed NULLs and zero-row results retain their numeric metadata.
-Boolean, temporal, and other unmapped types currently retain text metadata.
+Temporal and other unmapped types currently retain text metadata.
 If a VARCHAR wrapper is needed, metadata describes the wrapped result: all its
 columns are text, including any originally numeric columns.
 
