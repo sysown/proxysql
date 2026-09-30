@@ -26,7 +26,9 @@ class WorkflowTests(unittest.TestCase):
   d=workflow('ci-cancel-superseded.yml');job=d['jobs']['cancel']
   self.assertEqual(d['permissions'],{'actions':'write','contents':'read','pull-requests':'read'})
   self.assertEqual(job['runs-on'],'ubuntu-24.04')
-  self.assertEqual(job['if'],"github.event_name == 'pull_request_target'")
+  # Both trusted events are swept: pull_request_target for PRs, push for
+  # long-lived branches. Neither path may check out the code under test.
+  self.assertEqual(job['if'],"github.event_name == 'pull_request_target' || github.event_name == 'push'")
   checkout=job['steps'][0]
   self.assertEqual(checkout['with']['repository'],'sysown/proxysql')
   self.assertEqual(checkout['with']['ref'],'GH-Actions')

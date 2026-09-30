@@ -54,17 +54,30 @@ jobs:
         choice='"ubuntu-22.04"'
         if [ "${ELIGIBLE:-}" = "true" ]; then
           POOL="${POOL_SIZE:-6}"
+          # Listing runners needs repo admin, which no available token has, so
+          # infer pool demand from job state the default token CAN read.
+          # demand = in-progress jobs carrying the 'proxysql-ci' label, i.e. the
+          # jobs actually occupying a pool VM right now.
+          #
+          # Two corrections vs the original heuristic:
+          #  - Match the 'proxysql-ci' label, not a 'ci-vm' runner_name prefix.
+          #    The prefix missed every dev128-ci-vm-* runner, so their occupancy
+          #    was invisible and the pool looked emptier than it was.
+          #  - Count in-progress jobs ONLY. Including queued jobs made the
+          #    decision self-defeating: any backlog kept demand >= POOL, which
+          #    pinned every later decider to spill regardless of real occupancy.
+          # free = POOL - demand; self-hosted iff free>=1.
+          # Early-exit once demand hits POOL.
           demand=0; err=0
-          ids=$( { gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id';
-                   gh api --paginate "repos/${REPO}/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id'; } 2>e1 ) || err=1
+          ids=$( gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>e1 ) || err=1
           if [ "$err" = "0" ]; then
             for rid in ${ids:-}; do
               [ "$demand" -ge "$POOL" ] && break
-              n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select((.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm"))) or (.status=="queued" and (([.labels[]]|index("proxysql-ci")) != null)))]|length' 2>/dev/null) || n=0
+              n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length' 2>/dev/null) || n=0
               demand=$(( demand + ${n:-0} ))
             done
             free=$(( POOL - demand ))
-            echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (occupied+queued)"
+            echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (in-progress on pool)"
             if [ "${free}" -ge 1 ]; then
               choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
             else
