@@ -97,9 +97,11 @@ BIT, and specialized timestamp variants as readable text. The decision occurs
 before execution, so volatile expressions and side effects execute exactly
 once.
 
-Some DML `RETURNING` statements cannot be placed in that wrapper. In that
-fallback path the original statement executes once, but an unsupported result
-column can be returned as NULL. SQL NULL itself is otherwise preserved as a
+Some DML `RETURNING` statements cannot be placed in that wrapper. If the result
+cannot be rendered, the plugin rejects the statement before execution with
+SQLSTATE `0A000` (MySQL error 1235). No mutation or default-expression evaluation
+occurs. Cast unsupported result expressions explicitly to `VARCHAR`, for
+example `INSERT INTO t VALUES (...) RETURNING id::VARCHAR`. SQL NULL remains a
 real protocol null.
 
 ## Errors

@@ -120,8 +120,9 @@ Many DuckDB values are rendered directly. For types outside the direct
 compatibility list, the plugin prepares a wrapper that casts result columns to
 `VARCHAR` before executing the statement. This makes common nested and special
 types readable without executing the original statement twice. A DML
-`RETURNING` shape that cannot be wrapped can still return NULL for an
-unsupported result type; see [Protocol compatibility](protocol-compatibility.md).
+`RETURNING` shape that cannot be wrapped is rejected before execution when its
+result type is unsupported. Cast the returned expression to `VARCHAR`; see
+[Protocol compatibility](protocol-compatibility.md).
 
 ## One statement per request
 

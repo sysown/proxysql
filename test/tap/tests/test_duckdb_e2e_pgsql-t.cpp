@@ -20,11 +20,14 @@ namespace {
 // instead of failing outright.
 const char* DUCKDB_PGSQL_PORT = "6034";
 
-PGconn* connect_duckdb(CommandLine& cl, const char* user, const char* pass) {
+PGconn* connect_duckdb(CommandLine& cl, const char* user, const char* pass,
+                       bool raw_protocol = false) {
 	std::string conninfo = "host=" + std::string(cl.host) +
 		" port=" + DUCKDB_PGSQL_PORT +
 		" user=" + user + " password=" + pass +
 		" dbname=main connect_timeout=10";
+	// Direct send/recv tests need plaintext frames; libpq normally negotiates TLS.
+	if (raw_protocol) conninfo += " sslmode=disable";
 	PGconn* c = PQconnectdb(conninfo.c_str());
 	if (c == nullptr) return nullptr;
 	if (PQstatus(c) != CONNECTION_OK) { PQfinish(c); return NULL; }
@@ -110,7 +113,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(21);
+	plan(26);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -202,6 +205,39 @@ int main(int argc, char** argv) {
 	}
 
 	{
+		PGresult* r = exec_or_bail(c,
+			"CREATE OR REPLACE TABLE t_pg_returning(id UUID DEFAULT gen_random_uuid())");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create unsupported RETURNING fixture");
+		PQclear(r);
+
+		r = exec_or_bail(c, "INSERT INTO t_pg_returning DEFAULT VALUES RETURNING id");
+		const char* state = PQresultErrorField(r, PG_DIAG_SQLSTATE);
+		ok(PQresultStatus(r) == PGRES_FATAL_ERROR && state &&
+		   std::strcmp(state, "0A000") == 0 &&
+		   std::strstr(PQresultErrorMessage(r), "VARCHAR") != nullptr,
+		   "unsupported RETURNING reports an actionable feature-not-supported error");
+		PQclear(r);
+
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_returning");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "0") == 0,
+		   "rejected RETURNING leaves no committed row");
+		PQclear(r);
+
+		r = exec_or_bail(c, "INSERT INTO t_pg_returning DEFAULT VALUES RETURNING id::VARCHAR");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   !PQgetisnull(r, 0, 0) && std::strlen(PQgetvalue(r, 0, 0)) == 36,
+		   "an explicit VARCHAR cast returns the UUID value");
+		PQclear(r);
+
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_returning");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "1") == 0,
+		   "the supported RETURNING insert executes exactly once");
+		PQclear(r);
+	}
+
+	{
 		// The error must carry a syntax-error SQLSTATE, not core's
 		// hardcoded 28000 (invalid authorization).
 		PGresult* r = exec_or_bail(c, "SELECT FROM WHERE");
@@ -243,14 +279,14 @@ int main(int argc, char** argv) {
 	}
 
 	for (char type : { 'P', 'B', 'C', 'D', 'E' }) {
-		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
+		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password, true);
 		ok(extended != NULL && unsupported_message_gets_error(extended, type),
 		   "unsupported extended-query message %c gets an immediate ErrorResponse", type);
 		if (extended != NULL) PQfinish(extended);
 	}
 
 	{
-		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
+		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password, true);
 		ok(extended != NULL && extended_error_resynchronizes_on_sync(extended),
 		   "extended-query rejection emits one error, discards Flush until Sync, then sends ReadyForQuery");
 		if (extended != NULL) PQfinish(extended);

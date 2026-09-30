@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(17);
+	plan(22);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -88,6 +88,25 @@ int main(int argc, char** argv) {
 		   "UUID arrives as text, not NULL");
 		if (r) mysql_free_result(r);
 	}
+
+	// A failed conversion must not commit a write or fabricate a SQL NULL.
+	ok(mysql_query(c, "CREATE OR REPLACE TABLE t_mysql_returning(id UUID DEFAULT gen_random_uuid())") == 0,
+	   "create unsupported RETURNING fixture");
+	const int returning_rc = mysql_query(c, "INSERT INTO t_mysql_returning DEFAULT VALUES RETURNING id");
+	ok(returning_rc != 0 && mysql_errno(c) == 1235 &&
+	   std::strcmp(mysql_sqlstate(c), "0A000") == 0 &&
+	   std::strstr(mysql_error(c), "VARCHAR") != NULL,
+	   "unsupported RETURNING reports an actionable feature-not-supported error");
+	{
+		MYSQL_RES* r = mysql_store_result(c);
+		if (r) mysql_free_result(r);
+	}
+	ok(one_cell(c, "SELECT COUNT(*) FROM t_mysql_returning") == "0",
+	   "rejected RETURNING leaves no committed row");
+	ok(one_cell(c, "INSERT INTO t_mysql_returning DEFAULT VALUES RETURNING id::VARCHAR").size() == 36,
+	   "an explicit VARCHAR cast returns the UUID value");
+	ok(one_cell(c, "SELECT COUNT(*) FROM t_mysql_returning") == "1",
+	   "the supported RETURNING insert executes exactly once");
 
 	ok(mysql_query(c, "SELECT 1; SELECT 2") != 0, "multi-statement is rejected");
 

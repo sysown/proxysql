@@ -581,9 +581,9 @@ std::string trim_trailing_semicolons(const std::string& sql) {
 // probe: preparing `SELECT [nextval('s')]` does not advance the
 // sequence) -- and only THEN execute exactly one of the two candidate
 // statements (original or wrapped), via duckdb_execute_prepared().
-// `effective` is therefore executed exactly once no matter which way
-// the decision goes, which is what makes the old lexical safety gate
-// (duckdb_is_safe_to_rewrap) unnecessary: it existed solely to stop a
+// If neither candidate can represent the result, reject without execution.
+// Otherwise the selected statement runs exactly once. This makes the old
+// lexical safety gate (duckdb_is_safe_to_rewrap) unnecessary: it existed solely to stop a
 // second execution that this design no longer performs, so it has been
 // removed rather than kept as inert legacy code.
 //
@@ -673,14 +673,16 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 			duckdb_destroy_prepare(&stmt);
 			exec_stmt = wrap_stmt;
 		} else {
-			// The wrap doesn't parse (e.g. RETURNING DML, which cannot
-			// legally sit inside a FROM-clause subquery in this DuckDB
-			// grammar). Fall back to the ORIGINAL prepared statement --
-			// still not executed yet either way -- and accept the
-			// degraded (NULL-rendering) output for the unrenderable
-			// column: degraded output beats no output for a query that
-			// is about to succeed.
+			// Unsupported output must not masquerade as SQL NULL. Reject
+			// before executing the original statement, so a RETURNING
+			// mutation cannot commit or evaluate defaults on this path.
 			duckdb_destroy_prepare(&wrap_stmt);
+			duckdb_destroy_prepare(&stmt);
+			outcome.ok = false;
+			outcome.error_type = DUCKDB_ERROR_NOT_IMPLEMENTED;
+			outcome.error = "DuckDB result cannot be represented by this protocol path; "
+				"cast unsupported result expressions explicitly to VARCHAR";
+			return finish();
 		}
 	}
 
@@ -757,8 +759,7 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	}
 
 	// rtype == DUCKDB_RESULT_TYPE_QUERY_RESULT: either the original
-	// query (renderable, or unrenderable-but-fell-back-to-degraded), or
-	// the wrap (every column now VARCHAR). Either way it already ran
+	// query (renderable), or the wrap (every column now VARCHAR). It ran
 	// exactly once above, so just convert it.
 	outcome.has_resultset = true;
 	std::string conversion_error;

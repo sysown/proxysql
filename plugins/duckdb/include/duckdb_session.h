@@ -106,15 +106,9 @@ struct DuckDBExecOutcome {
 // C3 is decided from a *prepared* statement's column types -- via
 // duckdb_prepared_statement_column_type() and
 // duckdb_type_renders_as_text() (duckdb_result.h) -- BEFORE anything is
-// executed, so `effective` runs exactly once no matter which way the
-// decision goes. There used to be a lexical "is this safe to run a
-// second time" gate (duckdb_is_safe_to_rewrap) here; it is gone because
-// nothing is ever run a second time any more, so it had nothing left to
-// guard -- see the long comment on duckdb_execute_effective's
-// definition for the full reasoning, including why a bare DML statement
-// can never reach the wrapped-execution path at all (it fails to
-// *parse* as `SELECT COLUMNS(*)::VARCHAR FROM (<stmt>)`, so the decision
-// falls back to the original statement before anything runs).
+// executed. If neither direct conversion nor the VARCHAR wrapper can
+// represent the result, reject before execution. Otherwise execute the
+// selected prepared statement exactly once.
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective);
 
 // Routes managed engine-global SET statements through DuckDBEngine's internal
