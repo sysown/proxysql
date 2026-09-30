@@ -1,28 +1,39 @@
 name: CI-CodeQL
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
-
-on:
+run-name: ${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha
+  }} ${{ inputs.producer_run_id && format('producer={0}/{1}', inputs.producer_run_id, inputs.producer_attempt) || format('trigger={0}/{1}', github.event.workflow_run.id || github.run_id, github.event.workflow_run.run_attempt
+  || github.run_attempt) }}
+'on':
   workflow_dispatch:
+    inputs:
+      control_ref:
+        type: string
+        default: GH-Actions
+        description: CI script ref; candidate workflow validation also requires repinning uses
+      producer_run_id:
+        type: string
+        required: true
+        description: Exact producer workflow run ID (manual tests)
+      producer_attempt:
+        type: string
+        required: true
+        description: Exact producer attempt (manual tests)
   workflow_run:
-    workflows: [ CI-trigger ]
-    types: [ completed ]
-
+    workflows:
+    - CI-trigger
+    types:
+    - completed
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
-
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
-    # `write-all` is required because reusable-workflow permissions are the
-    # intersection of caller + callee. Without it the workflow_run event's
-    # GITHUB_TOKEN has no cache-writable scope, so the callee's
-    # actions/cache/save@v4 fails with 'cache write denied: token has no
-    # writable scopes' (GitHub started enforcing this for workflow_run in
-    # early July 2026 alongside the Node.js 20 -> 24 actions deprecation).
-    # The callee at ci-<group>.yml@GH-Actions also declares write-all.
     permissions: write-all
     uses: sysown/proxysql/.github/workflows/ci-codeql.yml@GH-Actions
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
+      consumer_id: run
+      control_ref: ${{ inputs.control_ref || 'GH-Actions' }}
+      producer_run_id: ${{ inputs.producer_run_id || '' }}
+      producer_attempt: ${{ inputs.producer_attempt || '' }}

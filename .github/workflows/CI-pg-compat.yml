@@ -34,7 +34,8 @@ jobs:
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'pg-compat')
+      (contains(github.event.pull_request.labels.*.name, 'pg-compat') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'pg-compat'))
     # write-all: reusable-workflow permissions are the intersection of
     # caller + callee: the callee at ci-pg-compat.yml@GH-Actions also
     # declares write-all (needed for actions/upload-artifact's write scope

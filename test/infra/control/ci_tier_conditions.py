@@ -64,7 +64,7 @@ def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_resu
     if expression.startswith('${{') and expression.endswith('}}'):
         expression = expression[3:-2].strip()
     context = {
-        'matrix.tier': tier, 'matrix.mode': mode, 'matrix.coverage': tier == 'v40',
+        'matrix.tier': tier, 'matrix.mode': mode, 'matrix.coverage': True,
         'inputs.trusted': True,
         'github.event.workflow_run': True,
         'github.event.workflow_run.conclusion': 'success',
