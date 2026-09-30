@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(51);
+	plan(55);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -238,6 +238,33 @@ int main(int argc, char** argv) {
 		   PQftype(r, 0) == 16 && PQftype(r, 1) == 16 && PQftype(r, 2) == 16 && PQfsize(r, 0) == 1 &&
 		   std::strcmp(PQgetvalue(r, 0, 0), "t") == 0 && std::strcmp(PQgetvalue(r, 0, 1), "f") == 0 &&
 		   PQgetisnull(r, 0, 2), "PostgreSQL booleans carry native metadata and values while preserving NULL");
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "SELECT 42::INTEGER, '2024-01-02 03:04:05'::TIMESTAMP_S, "
+			"'2024-01-02 03:04:05.123'::TIMESTAMP_MS, '1969-12-31 23:59:59.999999999'::TIMESTAMP_NS");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 4 && PQntuples(r) == 1 &&
+		   PQftype(r, 0) == 23 && PQftype(r, 3) == 25 &&
+		   std::strcmp(PQgetvalue(r, 0, 1), "2024-01-02 03:04:05") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 2), "2024-01-02 03:04:05.123") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 3), "1969-12-31 23:59:59.999999999") == 0,
+		   "timestamp resolutions retain precision without changing adjacent PostgreSQL numeric metadata");
+		PQclear(r);
+		r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_timestamp(i INTEGER, ts TIMESTAMP_NS)");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create timestamp RETURNING fixture");
+		PQclear(r);
+		r = exec_or_bail(c, "INSERT INTO t_pg_timestamp VALUES "
+			"(1, '2024-01-02 03:04:05.123456789'), (2, NULL) RETURNING i, ts");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 2 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "1") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 1), "2024-01-02 03:04:05.123456789") == 0 &&
+		   std::strcmp(PQgetvalue(r, 1, 0), "2") == 0 && PQgetisnull(r, 1, 1),
+		   "PostgreSQL RETURNING delivers nanosecond timestamps and NULL directly");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_timestamp");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "2") == 0, "timestamp RETURNING inserts exactly once");
 		PQclear(r);
 	}
 

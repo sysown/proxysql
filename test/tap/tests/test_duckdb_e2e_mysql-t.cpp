@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(48);
+	plan(52);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -183,6 +183,38 @@ int main(int argc, char** argv) {
 		   "MySQL booleans carry TINYINT metadata and numeric values while preserving NULL");
 		if (r) mysql_free_result(r);
 	}
+
+	{
+		const int rc = mysql_query(c, "SELECT 42::INTEGER, '2024-01-02 03:04:05'::TIMESTAMP_S, "
+			"'2024-01-02 03:04:05.123'::TIMESTAMP_MS, '1969-12-31 23:59:59.999999999'::TIMESTAMP_NS");
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* fields = r ? mysql_fetch_fields(r) : nullptr;
+		MYSQL_ROW row = r ? mysql_fetch_row(r) : nullptr;
+		ok(r && mysql_num_fields(r) == 4 && fields[0].type == MYSQL_TYPE_LONG &&
+		   fields[3].type == MYSQL_TYPE_VAR_STRING && row && row[1] && row[2] && row[3] &&
+		   std::strcmp(row[1], "2024-01-02 03:04:05") == 0 &&
+		   std::strcmp(row[2], "2024-01-02 03:04:05.123") == 0 &&
+		   std::strcmp(row[3], "1969-12-31 23:59:59.999999999") == 0,
+		   "timestamp resolutions retain precision without changing adjacent MySQL numeric metadata");
+		if (r) mysql_free_result(r);
+	}
+	ok(mysql_query(c, "CREATE OR REPLACE TABLE t_mysql_timestamp(i INTEGER, ts TIMESTAMP_NS)") == 0,
+	   "create timestamp RETURNING fixture");
+	{
+		const int rc = mysql_query(c, "INSERT INTO t_mysql_timestamp VALUES "
+			"(1, '2024-01-02 03:04:05.123456789'), (2, NULL) RETURNING i, ts");
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_ROW first = r ? mysql_fetch_row(r) : nullptr;
+		const bool first_ok = first && first[0] && first[1] && std::strcmp(first[0], "1") == 0 &&
+			std::strcmp(first[1], "2024-01-02 03:04:05.123456789") == 0;
+		MYSQL_ROW second = r ? mysql_fetch_row(r) : nullptr;
+		ok(r && mysql_num_rows(r) == 2 && first_ok && second && second[0] &&
+		   std::strcmp(second[0], "2") == 0 && !second[1],
+		   "MySQL RETURNING delivers nanosecond timestamps and NULL directly");
+		if (r) mysql_free_result(r);
+	}
+	ok(one_cell(c, "SELECT COUNT(*) FROM t_mysql_timestamp") == "2",
+	   "timestamp RETURNING inserts exactly once");
 
 	// NULL must arrive as a real NULL, not the string "NULL".
 	{

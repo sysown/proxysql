@@ -6,8 +6,11 @@
 #include <climits>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
 #include <limits>
+#include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -27,6 +30,28 @@ std::string format_double(double v) {
 	// Preserve the binary64 value when a client parses the text response.
 	std::snprintf(buf, sizeof(buf), "%.*g", std::numeric_limits<double>::max_digits10, v);
 	return buf;
+}
+
+bool render_timestamp_value(duckdb_value raw, std::string& out, std::string& error) {
+	const auto destroy_value = [](duckdb_value value) { duckdb_destroy_value(&value); };
+	std::unique_ptr<std::remove_pointer_t<duckdb_value>, decltype(destroy_value)> value(raw, destroy_value);
+	if (!value) {
+		error = "failed to create DuckDB timestamp value for conversion";
+		return false;
+	}
+	try {
+		// This C API entry point can throw when its native cast overflows.
+		std::unique_ptr<char, decltype(&duckdb_free)> text(duckdb_get_varchar(value.get()), duckdb_free);
+		if (!text) {
+			error = "failed to convert DuckDB timestamp value to text";
+			return false;
+		}
+		out = text.get();
+		return true;
+	} catch (const std::exception& exception) {
+		error = std::string("DuckDB timestamp conversion failed: ") + exception.what();
+		return false;
+	}
 }
 
 std::string add_decimal_point(std::string digits, bool neg, uint8_t scale) {
@@ -126,6 +151,14 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 	case DUCKDB_TYPE_DOUBLE:
 		out = format_double(static_cast<double*>(data)[row]);
 		return true;
+	// Delegate resolution, negative epochs and infinity formatting to DuckDB.
+	// Native value conversion does not prepare or execute another statement.
+	case DUCKDB_TYPE_TIMESTAMP_S:
+		return render_timestamp_value(duckdb_create_timestamp_s(static_cast<duckdb_timestamp_s*>(data)[row]), out, error);
+	case DUCKDB_TYPE_TIMESTAMP_MS:
+		return render_timestamp_value(duckdb_create_timestamp_ms(static_cast<duckdb_timestamp_ms*>(data)[row]), out, error);
+	case DUCKDB_TYPE_TIMESTAMP_NS:
+		return render_timestamp_value(duckdb_create_timestamp_ns(static_cast<duckdb_timestamp_ns*>(data)[row]), out, error);
 	case DUCKDB_TYPE_DATE: {
 		const duckdb_date value = static_cast<duckdb_date*>(data)[row];
 		if (!duckdb_is_finite_date(value)) {
@@ -337,28 +370,10 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
 	return out;
 }
 
-// Mirrors -- deliberately as an allowlist, not a hand-maintained denylist
-// -- GetInternalCValue's switch on deprecated_type in
-// duckdb/src/include/duckdb/main/capi/cast/generic.hpp, the sole
-// authoritative source for which duckdb_type values duckdb_value_string()
-// can actually render (it calls through GetInternalCValue<duckdb_string,
-// ToCStringCastWrapper<StringCast>>, which uses this exact switch). Every
-// case listed there is reproduced here; anything else -- whether a type
-// this file's author thought to consider or not -- falls to `default:` in
-// both switches and is treated as unrenderable. That symmetry is the
-// point: mirroring the switch's positive list means a duckdb_type this
-// switch doesn't yet have a case for (a future DuckDB version's new type,
-// for instance) is safely treated as unrenderable by default, rather than
-// silently passing through undetected the way a denylist would.
-//
-// Confirmed against every duckdb_type enumerator DuckDB 1.4.5 defines
-// (duckdb.h:62-140, DUCKDB_TYPE_INVALID through DUCKDB_TYPE_TIME_NS) and
-// empirically: a standalone probe compiled against the built duckdb_static
-// archives confirmed duckdb_value_string() returns a null data pointer (regardless of
-// duckdb_value_is_null()) for representatives of every type NOT in this
-// list, including nested/composite types (LIST, STRUCT, MAP, ARRAY, UNION)
-// and non-nested scalars that are easy to assume "just work" (UUID, ENUM,
-// BIT, TIME_TZ, TIMESTAMP_TZ, BIGNUM, TIMESTAMP_S/MS/NS).
+// This allowlist describes render_cell above. The original scalar set used
+// DuckDB's legacy C result casts; vector conversion additionally supports
+// TIMESTAMP_S/MS/NS through DuckDB's native value-formatting API. Keep unknown
+// types outside the list so callers wrap or reject them before execution.
 bool duckdb_type_renders_as_text(duckdb_type t) {
 	switch (t) {
 		case DUCKDB_TYPE_BOOLEAN:
@@ -375,6 +390,9 @@ bool duckdb_type_renders_as_text(duckdb_type t) {
 		case DUCKDB_TYPE_DATE:
 		case DUCKDB_TYPE_TIME:
 		case DUCKDB_TYPE_TIMESTAMP:
+		case DUCKDB_TYPE_TIMESTAMP_S:
+		case DUCKDB_TYPE_TIMESTAMP_MS:
+		case DUCKDB_TYPE_TIMESTAMP_NS:
 		case DUCKDB_TYPE_HUGEINT:
 		case DUCKDB_TYPE_UHUGEINT:
 		case DUCKDB_TYPE_DECIMAL:

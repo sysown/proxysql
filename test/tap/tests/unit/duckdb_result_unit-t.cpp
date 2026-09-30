@@ -38,7 +38,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(53);
+	plan(64);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -157,6 +157,54 @@ int main() {
 	{
 		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT TIMESTAMP '2024-01-01 12:00:00' AS ts"));
 		ok(field_equals(r.get(), 0, 0, "2024-01-01 12:00:00"), "timestamp value renders as text");
+	}
+
+	{
+		const struct { const char* sql; const char* expected; } cases[] = {
+			{ "SELECT '2024-01-02 03:04:05'::TIMESTAMP_S", "2024-01-02 03:04:05" },
+			{ "SELECT '2024-01-02 03:04:05.123'::TIMESTAMP_MS", "2024-01-02 03:04:05.123" },
+			{ "SELECT '2024-01-02 03:04:05.123456789'::TIMESTAMP_NS", "2024-01-02 03:04:05.123456789" },
+			{ "SELECT '1969-12-31 23:59:59.999999999'::TIMESTAMP_NS", "1969-12-31 23:59:59.999999999" },
+			{ "SELECT 'infinity'::TIMESTAMP_NS", "infinity" },
+			{ "SELECT '-infinity'::TIMESTAMP_MS", "-infinity" },
+			{ "SELECT 'infinity'::TIMESTAMP_S", "infinity" }
+		};
+		for (const auto& c : cases) {
+			std::unique_ptr<SQLite3_result> r(run(conn, c.sql));
+			ok(field_equals(r.get(), 0, 0, c.expected), "direct timestamp conversion preserves %s", c.expected);
+		}
+		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT NULL::TIMESTAMP_NS"));
+		ok(r && r->rows_count == 1 && !r->rows[0]->fields[0], "direct nanosecond timestamp NULL stays NULL");
+		ok(duckdb_type_renders_as_text(DUCKDB_TYPE_TIMESTAMP_S) &&
+		   duckdb_type_renders_as_text(DUCKDB_TYPE_TIMESTAMP_MS) &&
+		   duckdb_type_renders_as_text(DUCKDB_TYPE_TIMESTAMP_NS),
+		   "timestamp resolutions do not require a query-wide VARCHAR wrapper");
+	}
+
+	for (const bool seconds : { true, false }) {
+		duckdb_prepared_statement statement = nullptr;
+		if (duckdb_prepare(conn, seconds ? "SELECT ?::TIMESTAMP_S" : "SELECT ?::TIMESTAMP_MS", &statement) != DuckDBSuccess)
+			BAIL_OUT("could not prepare extreme timestamp fixture");
+		duckdb_value value = seconds
+			? duckdb_create_timestamp_s({ std::numeric_limits<int64_t>::max() - 1 })
+			: duckdb_create_timestamp_ms({ std::numeric_limits<int64_t>::max() - 1 });
+		const duckdb_state bound = duckdb_bind_value(statement, 1, value);
+		duckdb_destroy_value(&value);
+		duckdb_result native;
+		if (bound != DuckDBSuccess || duckdb_execute_prepared(statement, &native) != DuckDBSuccess)
+			BAIL_OUT("could not execute extreme timestamp fixture");
+		duckdb_destroy_prepare(&statement);
+		bool rejected = false;
+		try {
+			std::string error;
+			std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&native, &error));
+			rejected = !r && !error.empty();
+		} catch (...) {
+			// The conversion API must report failure rather than throw past
+			// the executor's rollback path.
+		}
+		ok(rejected, "out-of-range TIMESTAMP_%s formatting reports a conversion error", seconds ? "S" : "MS");
+		duckdb_destroy_result(&native);
 	}
 
 	{

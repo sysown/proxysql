@@ -109,6 +109,13 @@ The direct conversion path supports common scalar values including booleans,
 signed and unsigned integers, floats, doubles, dates, time, timestamps,
 decimals, intervals, VARCHAR, and BLOB.
 
+`TIMESTAMP_S`, `TIMESTAMP_MS`, and `TIMESTAMP_NS` convert directly using DuckDB's
+native value formatter. Nanosecond precision, pre-epoch values, infinities, and
+NULL are preserved, including in DML `RETURNING`. These values retain text
+metadata to preserve DuckDB's precision and range; neighboring numeric columns
+keep their numeric metadata.
+Values outside DuckDB's text-formatting range return conversion errors.
+
 Other DuckDB types are detected from the prepared statement before execution.
 The plugin attempts to execute a wrapper equivalent to:
 
@@ -117,7 +124,7 @@ SELECT COLUMNS(*)::VARCHAR FROM (<original query>)
 ```
 
 This commonly renders `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, UUID, ENUM,
-BIT, and specialized timestamp variants as readable text. The decision occurs
+BIT, and time-zone timestamp variants as readable text. The decision occurs
 before execution, so volatile expressions and side effects execute exactly
 once.
 

@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <memory>
+#include <limits>
 #include <string>
 
 namespace {
@@ -37,7 +38,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(79);
+	plan(81);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -268,6 +269,39 @@ int main() {
 		ok(rollback.ok && duckdb_pgsql_transaction_status(conn) == 'I' &&
 		   scalar_count(conn, "SELECT COUNT(*) FROM t") == 2,
 		   "rollback after rejection discards pending work and restores idle state");
+	}
+
+	{
+		// Imported/parameter-bound timestamps can exceed the native text
+		// formatter's range. A RETURNING conversion error must undo the write.
+		duckdb_result setup;
+		for (const char* sql : { "CREATE TABLE ts_extreme_source(ts TIMESTAMP_S)",
+		                        "CREATE TABLE ts_extreme_target(ts TIMESTAMP_S)" }) {
+			if (duckdb_query(conn, sql, &setup) != DuckDBSuccess)
+				BAIL_OUT("could not create extreme timestamp tables");
+			duckdb_destroy_result(&setup);
+		}
+		duckdb_prepared_statement statement = nullptr;
+		if (duckdb_prepare(conn, "INSERT INTO ts_extreme_source VALUES (?)", &statement) != DuckDBSuccess)
+			BAIL_OUT("could not prepare extreme timestamp insert");
+		duckdb_value value = duckdb_create_timestamp_s({ std::numeric_limits<int64_t>::max() - 1 });
+		const duckdb_state bound = duckdb_bind_value(statement, 1, value);
+		duckdb_destroy_value(&value);
+		if (bound != DuckDBSuccess || duckdb_execute_prepared(statement, &setup) != DuckDBSuccess)
+			BAIL_OUT("could not populate extreme timestamp source");
+		duckdb_destroy_result(&setup);
+		duckdb_destroy_prepare(&statement);
+
+		const DuckDBExecOutcome outcome = duckdb_execute_effective(conn,
+			"INSERT INTO ts_extreme_target SELECT ts FROM ts_extreme_source RETURNING ts");
+		std::unique_ptr<SQLite3_result> r(outcome.result);
+		ok(!outcome.ok && !outcome.has_resultset && !r &&
+		   outcome.error_type == DUCKDB_ERROR_OUT_OF_RANGE,
+		   "extreme timestamp RETURNING reports a conversion error");
+		ok(scalar_count(conn, "SELECT COUNT(*) FROM ts_extreme_target") == 0 &&
+		   scalar_count(conn, "SELECT COUNT(*) FROM ts_extreme_source") == 1 &&
+		   duckdb_pgsql_transaction_status(conn) == 'I',
+		   "timestamp conversion failure rolls back the mutation and leaves the connection usable");
 	}
 
 	{

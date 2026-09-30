@@ -123,6 +123,10 @@ for the type mappings and text fallbacks.
 Finite `DOUBLE` values are rendered with enough significant digits to preserve
 their value when parsed back as a double by a client.
 
+Second-, millisecond-, and nanosecond-resolution timestamps convert directly,
+including in `RETURNING` results. They retain text metadata and preserve the
+original timestamp precision without casting neighboring columns to text.
+
 Many DuckDB values are rendered directly. For types outside the direct
 compatibility list, the plugin prepares a wrapper that casts result columns to
 `VARCHAR` before executing the statement. This makes common nested and special
