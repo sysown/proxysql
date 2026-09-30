@@ -16,8 +16,8 @@ printf '%s\n' "${e2e_job}" | grep -Eq '^    runs-on: ubuntu-24\.04$' || {
 }
 
 runtime_step="$(printf '%s\n' "${e2e_job}" | awk '
-  /^      - name: Install MySQL 8\.4 runtime libs$/ { capture = 1 }
-  capture && /^      - name:/ && $0 !~ /Install MySQL 8\.4 runtime libs/ { exit }
+  /^[[:space:]]+- name: Install MySQL 8\.4 runtime libs$/ { capture = 1 }
+  capture && /^[[:space:]]+- name:/ && $0 !~ /Install MySQL 8\.4 runtime libs/ { exit }
   capture { print }
 ')"
 
@@ -35,8 +35,8 @@ printf '%s\n' "${runtime_step}" | grep -Fq 'ln -s "${LIBAIO_T64}" "${MYSQLX_COMP
 }
 
 download_step="$(printf '%s\n' "${e2e_job}" | awk '
-  /^      - name: Download and unpack MySQL 8\.4$/ { capture = 1 }
-  capture && /^      - name:/ && $0 !~ /Download and unpack MySQL 8\.4/ { exit }
+  /^[[:space:]]+- name: Download and unpack MySQL 8\.4$/ { capture = 1 }
+  capture && /^[[:space:]]+- name:/ && $0 !~ /Download and unpack MySQL 8\.4/ { exit }
   capture { print }
 ')"
 
@@ -58,9 +58,9 @@ if printf '%s\n' "${e2e_job}" | grep -Fq -- '--skip-library-check'; then
 fi
 
 step="$(awk '
-  /^      - name: Install dbdeployer$/ { capture = 1 }
+  /^[[:space:]]+- name: Install dbdeployer$/ { capture = 1 }
   capture { print }
-  capture && /^      - name: Download and unpack MySQL 8\.4$/ { exit }
+  capture && /^[[:space:]]+- name: Download and unpack MySQL 8\.4$/ { exit }
 ' "${workflow}")"
 
 guard_body="$(printf '%s\n' "${step}" | awk '
