@@ -74,7 +74,7 @@ endif
 # leaking template instantiations across the boundary.
 CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
 	$(OPTZ) $(WGCOV) $(WASAN) -pthread \
-	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB)
+	$(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB)
 
 # Hardening flags. Skip _FORTIFY_SOURCE under ASAN (incompatible) and when
 # OPTZ contains -O0 (requires optimisation to take effect).

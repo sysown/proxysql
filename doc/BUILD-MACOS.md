@@ -40,6 +40,21 @@ Or for a debug build:
 make debug
 ```
 
+ClickHouse support is compiled into both release and debug builds on macOS,
+just as on Linux. `LEGACY_BUILD` no longer selects a reduced feature set;
+the old `build_*_legacy` targets are compatibility aliases for the normal build.
+Compiling the support does not start the ClickHouse listener: use the
+`--clickhouse-server` runtime option when you want to enable it.
+
+For the v4 plugin chassis, build with `gmake -j$(sysctl -n hw.ncpu) PROXYSQL40=1`.
+Existing macOS/FreeBSD checkouts need a **clean rebuild of core and all plugins**
+when updating to this default; an incremental `make` can reuse incompatible
+objects built without ClickHouse. The same clean-rebuild requirement applies
+whenever feature flags change:
+`PROXYSQLCLICKHOUSE` changes shared C++ class layouts. Its default is now `1`
+on every platform. An explicitly customized build using `PROXYSQLCLICKHOUSE=0`
+must use that same value for **all** plugins, including the WebUI plugin.
+
 ## Troubleshooting
 
 ### Linking Issues

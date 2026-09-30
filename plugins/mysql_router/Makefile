@@ -35,7 +35,7 @@ PSQLTSDB := $(if $(filter 1,$(PROXYSQLTSDB)),-DPROXYSQLTSDB)
 
 CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
 	$(OPTZ) $(WGCOV) $(WASAN) -pthread -fstack-protector-strong \
-	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) -DGITVERSION=\"$(GIT_VERSION)\"
+	$(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) -DGITVERSION=\"$(GIT_VERSION)\"
 CXXFLAGS += -DMYSQL_ROUTER_CONNECTOR_C
 
 ifeq ($(WASAN),)
