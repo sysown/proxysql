@@ -1,4 +1,4 @@
-name: CI-3p-pymysql
+name: CI-3p-go-mysql
 
 on:
   workflow_dispatch:
@@ -54,7 +54,7 @@ on:
 
 env:
   TESTTREE: ${{ inputs.testtree || (inputs.trigger && fromJson(inputs.trigger).event.inputs.testtree) || 'main' }}
-  TESTNAME: pymysql
+  TESTNAME: go-mysql
   TESTDIST: ubuntu24
   PROXYSQL_REPO: ${{ inputs.proxysql_repo || github.repository }}
   SHA: ${{ inputs.sha || inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
@@ -71,7 +71,7 @@ jobs:
       producer_attempt: ${{ inputs.producer_attempt }}
       source_repository: ${{ inputs.proxysql_repo }}
       source_sha: ${{ inputs.sha }}
-      consumer_file: ci-3p-pymysql.yml
+      consumer_file: ci-3p-go-mysql.yml
       consumer_inputs: ${{ toJson(inputs) }}
     secrets: inherit
   test:
@@ -157,8 +157,7 @@ jobs:
         set +e
 
         cd proxysql_3p_testing/
-        # the submodule directory is PyMySQL, test_pymysql/pymysql is a symlink to it
-        ./setup.sh test_${{ env.TESTNAME }}/PyMySQL
+        ./setup.sh test_${{ env.TESTNAME }}/${{ env.TESTNAME }}
         #git switch ${{ env.TESTTREE }}
         #git pull
         #git config user.email "GH-Actions@proxysql.com"
