@@ -439,7 +439,7 @@ jobs:
             ls -la "$dir" || true
             return 1
           fi
-          cp -L "$src" "$dest/$soname"
+          cp -fL "$src" "$dest/$soname"
           echo "staged $soname <- $(readlink -f "$src")"
         }
 
@@ -472,7 +472,8 @@ jobs:
             echo "ERROR: empty or missing plugin: ${plugin}" >&2
             exit 1
           fi
-          cp -L "${plugin}" "${runtime_dir}/"
+          # Replace root-owned files pre-staged by the container build.
+          cp -fL "${plugin}" "${runtime_dir}/"
         done
         ls -la "${runtime_dir}/"
 
