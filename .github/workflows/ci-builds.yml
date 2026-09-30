@@ -78,10 +78,8 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     env:
-      # Feature tier, resolved once in the resolve-tier job and threaded in
-      # here. IS_V40 is the single boolean every v4.0-only step gates on, so
-      # "does this step need the plugin chassis?" is answered in one place
-      # instead of by substring-matching `type` at each call site.
+      # Feature tier and instrumentation come from the single label snapshot.
+      # IS_V40 describes compiled plugin availability, not test execution.
       TIER: ${{ matrix.tier }}
       IS_V40: ${{ matrix.tier == 'v40' }}
       VARIANT: ${{ matrix.variant }}
@@ -480,7 +478,7 @@ jobs:
         ls -la "${runtime_dir}/"
 
     - name: Stage GenAI plugin in test handoff
-      # v40 only -- see the MySQLX staging step above.
+      # The GenAI plugin is compiled only when PROXYSQL40 is enabled.
       if: ${{ inputs.trusted && success() && matrix.tier == 'v40' }}
       run: |
         set -euo pipefail
