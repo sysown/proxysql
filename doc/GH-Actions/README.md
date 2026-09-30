@@ -1,6 +1,6 @@
 # ProxySQL CI Architecture
 
-**Last updated:** 2026-09-29
+**Last updated:** 2026-09-30
 
 This document is the authoritative reference for ProxySQL's GitHub Actions CI
 setup. It covers the two-branch workflow split, the trigger chain, the test
@@ -113,7 +113,7 @@ concurrency:
 
 jobs:
   run:
-    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    if: ${{ (!github.event.workflow_run || !startsWith(github.event.workflow_run.display_title, '[ci:skip] ')) && (github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run) }}
     uses: sysown/proxysql/.github/workflows/ci-legacy-g1.yml@GH-Actions
     secrets: inherit
     with:
@@ -335,6 +335,37 @@ The build matrix (historical):
 | `ubuntu22, -tap` | `make ubuntu22-dbg` | debug + TAP test binaries | most test workflows |
 | `debian12, -dbg` | `make debian12-dbg` | debug | 3p integration workflows |
 | `ubuntu24, -tap-genai-gcov` | `make ubuntu24-dbg` | `PROXYSQLGENAI=1` + `WITHGCOV=1` | `CI-legacy-g2-genai` only |
+
+### Pause PR CI with `ci:skip`
+
+Add the `ci:skip` label to an early PR to skip automatic build/test jobs and
+standalone PR checks on subsequent pushes. Remove the label and push again to
+resume. Labels are read from the triggering PR event; adding or removing this
+label alone does not start build/test jobs or cancel runs. PR-triggered runs
+retain their event's labels on rerun. Manual dispatches, schedules, release
+builds, explicit bot mentions, and external apps such as CodeRabbit are
+unaffected.
+
+`CI-trigger` records the decision by prefixing its run title with `[ci:skip] `.
+Every `workflow_run` caller checks that prefix before invoking its reusable.
+This is necessary even when the trigger's own job is skipped: a completed
+trigger can still emit a downstream event. Preserve this guard when adding
+callers. Direct PR jobs check the label themselves, including fork builds.
+
+`CI-lint-groups-json` also listens to pushes. Its small, read-only `push-label`
+job checks current labels on open PRs for the exact pushed repository and
+branch before allowing the lint suite to start, including on reruns. This
+applies to any branch that heads a labeled PR. An API failure fails that job and blocks lint rather
+than treating unknown labels as permission to run. Skipped workflow/check
+records and this metadata job can still appear in Actions; this label suppresses
+the substantive jobs, not the creation of workflow records. Skipped jobs are
+not evidence that tests passed; branch-protection settings are unchanged.
+
+Rollout: merge these caller changes into `v3.0`, then update existing feature
+branches from `v3.0` before relying on the label. `workflow_run` callers come
+from the default branch, while push/PR workflows need the updated feature-branch
+files. No `GH-Actions` change is needed. Until both sides are updated, retain
+`[skip ci]` in commits that must not start CI.
 
 ### Opt-in TAP ASAN
 
