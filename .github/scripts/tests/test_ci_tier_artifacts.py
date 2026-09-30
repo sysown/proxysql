@@ -37,10 +37,12 @@ class ArtifactTests(unittest.TestCase):
   from ci_tier_artifacts import handoff_filter
   real=tarfile.data_filter
   def buggy(member,dest_path):
-   if member.issym():
-    root=os.path.realpath(dest_path);target=os.path.realpath(os.path.join(root,member.linkname))
-    if os.path.commonpath([root,target])!=root:raise tarfile.LinkOutsideDestinationError(member,target)
-   return real(member,dest_path)
+   # only the old root-relative symlink check: the interpreter's own filter must not judge the target
+   # (fixed interpreters reject or, since CVE-2025-4517, normalise it), so it sees a harmless one
+   if not member.issym():return real(member,dest_path)
+   root=os.path.realpath(dest_path);target=os.path.realpath(os.path.join(root,member.linkname))
+   if os.path.commonpath([root,target])!=root:raise tarfile.LinkOutsideDestinationError(member,target)
+   return real(member.replace(linkname='.',deep=False),dest_path).replace(linkname=member.linkname,deep=False)
   def link(name,target):
    member=tarfile.TarInfo(name);member.type=tarfile.SYMTYPE;member.linkname=target;return member
   with tempfile.TemporaryDirectory() as folder,patch('ci_tier_artifacts.tarfile.data_filter',side_effect=buggy):
@@ -53,7 +55,7 @@ class ArtifactTests(unittest.TestCase):
    # a link the old filter accepts (resolved from the root) that escapes through a link extracted earlier
    os.makedirs(os.path.join(folder,'p/q/r'));os.symlink('../../..',os.path.join(folder,'p/q/r/alias'))
    self.assertEqual(handoff_filter(link('p/q/r/alias2','../../..'),folder).linkname,'../../..')
-   buggy(link('p/q/r/link','alias/../outside'),folder)
+   self.assertEqual(buggy(link('p/q/r/link','alias/../outside'),folder).linkname,'alias/../outside')
    with self.assertRaises(tarfile.LinkOutsideDestinationError):handoff_filter(link('p/q/r/link','alias/../outside'),folder)
   # and on this interpreter's own data filter
   with tempfile.TemporaryDirectory() as folder:
