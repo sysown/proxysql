@@ -880,7 +880,7 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 
 ### Third-party integration (`CI-3p-*`)
 
-Ten workflows test ProxySQL against external client libraries, independent
+Sixteen workflows test ProxySQL against external client libraries, independent
 of the build cache (they build ProxySQL inline inside the workflow). They
 read their matrix from GitHub repository variables like
 `MATRIX_3P_AIOMYSQL_infradb_mysql`.
@@ -903,6 +903,14 @@ testing caller (`ProxySQL/proxysql_3p_testing_public`).
 | `CI-3p-php-pdo-pgsql.yml` | PHP PDO PostgreSQL | PostgreSQL |
 | `CI-3p-postgresql.yml` | libpq (native) | PostgreSQL |
 | `CI-3p-sqlalchemy.yml` | SQLAlchemy ORM | MySQL, PostgreSQL |
+| `CI-3p-pymysql.yml` | Python PyMySQL | MySQL |
+| `CI-3p-mysqlclient.yml` | Python mysqlclient | MySQL |
+| `CI-3p-mysql-connector-python.yml` | MySQL Connector/Python | MySQL |
+| `CI-3p-go-mysql.yml` | Go MySQL | MySQL |
+| `CI-3p-node-mysql2.yml` | Node.js mysql2 | MySQL |
+| `CI-3p-psycopg.yml` | Python psycopg | PostgreSQL |
+
+The last six (#6273) are catalogued for the v4.0 tier only.
 
 ### Release tarballs (generic Linux binaries)
 
