@@ -568,6 +568,15 @@ bool ProxySQL_Statistics::system_memory_timetoget(unsigned long long curtime) {
 }
 #endif
 
+static char *format_timestamp_query(const char *format, time_t start, time_t end) {
+	const int length = snprintf(NULL, 0, format, start, end);
+	assert(length >= 0);
+	const size_t query_size = static_cast<size_t>(length) + 1;
+	char *query = (char *)malloc(query_size);
+	snprintf(query, query_size, format, start, end);
+	return query;
+}
+
 SQLite3_result * ProxySQL_Statistics::get_mysql_metrics(int interval) {
 	SQLite3_result *resultset = NULL;
 	int cols;
@@ -581,8 +590,7 @@ SQLite3_result * ProxySQL_Statistics::get_mysql_metrics(int interval) {
 		case 1800:
 		case 3600:
 		case 7200:
-			query = (char *)malloc(strlen(query1)+128);
-			sprintf(query, query1, ts-interval, ts);
+			query = format_timestamp_query(query1, ts-interval, ts);
 			break;
 		case 28800:
 		case 86400:
@@ -590,8 +598,7 @@ SQLite3_result * ProxySQL_Statistics::get_mysql_metrics(int interval) {
 		case 604800:
 		case 2592000:
 		case 7776000:
-			query = (char *)malloc(strlen(query2)+128);
-			sprintf(query, query2, ts-interval, ts);
+			query = format_timestamp_query(query2, ts-interval, ts);
 			break;
 		default:
 			// LCOV_EXCL_START
@@ -636,8 +643,7 @@ SQLite3_result * ProxySQL_Statistics::get_myhgm_metrics(int interval) {
 		case 1800:
 		case 3600:
 		case 7200:
-			query = (char *)malloc(strlen(query1)+128);
-			sprintf(query, query1, ts-interval, ts);
+			query = format_timestamp_query(query1, ts-interval, ts);
 			break;
 		case 28800:
 		case 86400:
@@ -645,8 +651,7 @@ SQLite3_result * ProxySQL_Statistics::get_myhgm_metrics(int interval) {
 		case 604800:
 		case 2592000:
 		case 7776000:
-			query = (char *)malloc(strlen(query2)+128);
-			sprintf(query, query2, ts-interval, ts);
+			query = format_timestamp_query(query2, ts-interval, ts);
 			break;
 		default:
 			// LCOV_EXCL_START
@@ -679,8 +684,7 @@ SQLite3_result * ProxySQL_Statistics::get_MySQL_Query_Cache_metrics(int interval
 		case 1800:
 		case 3600:
 		case 7200:
-			query = (char *)malloc(strlen(query1)+128);
-			sprintf(query, query1, ts-interval, ts);
+			query = format_timestamp_query(query1, ts-interval, ts);
 			break;
 		case 28800:
 		case 86400:
@@ -688,8 +692,7 @@ SQLite3_result * ProxySQL_Statistics::get_MySQL_Query_Cache_metrics(int interval
 		case 604800:
 		case 2592000:
 		case 7776000:
-			query = (char *)malloc(strlen(query2)+128);
-			sprintf(query, query2, ts-interval, ts);
+			query = format_timestamp_query(query2, ts-interval, ts);
 			break;
 		default:
 			// LCOV_EXCL_START
@@ -724,8 +727,7 @@ SQLite3_result * ProxySQL_Statistics::get_system_memory_metrics(int interval) {
 		case 1800:
 		case 3600:
 		case 7200:
-			query = (char *)malloc(strlen(query1)+128);
-			sprintf(query, query1, ts-interval, ts);
+			query = format_timestamp_query(query1, ts-interval, ts);
 			break;
 		case 28800:
 		case 86400:
@@ -733,8 +735,7 @@ SQLite3_result * ProxySQL_Statistics::get_system_memory_metrics(int interval) {
 		case 604800:
 		case 2592000:
 		case 7776000:
-			query = (char *)malloc(strlen(query2)+128);
-			sprintf(query, query2, ts-interval, ts);
+			query = format_timestamp_query(query2, ts-interval, ts);
 			break;
 		default:
 			// LCOV_EXCL_START
@@ -769,8 +770,7 @@ SQLite3_result * ProxySQL_Statistics::get_system_cpu_metrics(int interval) {
 		case 1800:
 		case 3600:
 		case 7200:
-			query = (char *)malloc(strlen(query1)+128);
-			sprintf(query, query1, ts-interval, ts);
+			query = format_timestamp_query(query1, ts-interval, ts);
 			break;
 		case 28800:
 		case 86400:
@@ -778,8 +778,7 @@ SQLite3_result * ProxySQL_Statistics::get_system_cpu_metrics(int interval) {
 		case 604800:
 		case 2592000:
 		case 7776000:
-			query = (char *)malloc(strlen(query2)+128);
-			sprintf(query, query2, ts-interval, ts);
+			query = format_timestamp_query(query2, ts-interval, ts);
 			break;
 		default:
 			// LCOV_EXCL_START
@@ -1360,26 +1359,26 @@ void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
 	} else {
 		char buf[1024];
 		if (resultset2->rows_count == 0) {
-			sprintf(buf,"INSERT INTO mysql_query_cache_hour SELECT timestamp/3600*3600 , MAX(count_GET), MAX(count_GET_OK), MAX(count_SET), MAX(bytes_IN), MAX(bytes_OUT), MAX(Entries_Purged), AVG(Entries_In_Cache), AVG(Memory_bytes) FROM mysql_query_cache WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+			snprintf(buf, sizeof(buf), "INSERT INTO mysql_query_cache_hour SELECT timestamp/3600*3600 , MAX(count_GET), MAX(count_GET_OK), MAX(count_SET), MAX(bytes_IN), MAX(bytes_OUT), MAX(Entries_Purged), AVG(Entries_In_Cache), AVG(Memory_bytes) FROM mysql_query_cache WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 			statsdb_disk->execute(buf);
 		} else {
 			SQLite3_row *r = resultset2->rows[0];
 			if (r->fields[0]) {
 				time_t t = atol(r->fields[0]);
 				if (ts >= t + 3600) {
-					sprintf(buf,"INSERT INTO mysql_query_cache_hour SELECT timestamp/3600*3600 , MAX(count_GET), MAX(count_GET_OK), MAX(count_SET), MAX(bytes_IN), MAX(bytes_OUT), MAX(Entries_Purged), AVG(Entries_In_Cache), AVG(Memory_bytes) FROM mysql_query_cache WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
+					snprintf(buf, sizeof(buf), "INSERT INTO mysql_query_cache_hour SELECT timestamp/3600*3600 , MAX(count_GET), MAX(count_GET_OK), MAX(count_SET), MAX(bytes_IN), MAX(bytes_OUT), MAX(Entries_Purged), AVG(Entries_In_Cache), AVG(Memory_bytes) FROM mysql_query_cache WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
 					statsdb_disk->execute(buf);
 				}
 			} else {
-				sprintf(buf,"INSERT INTO mysql_query_cache_hour SELECT timestamp/3600*3600 , MAX(count_GET), MAX(count_GET_OK), MAX(count_SET), MAX(bytes_IN), MAX(bytes_OUT), MAX(Entries_Purged), AVG(Entries_In_Cache), AVG(Memory_bytes) FROM mysql_query_cache WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+				snprintf(buf, sizeof(buf), "INSERT INTO mysql_query_cache_hour SELECT timestamp/3600*3600 , MAX(count_GET), MAX(count_GET_OK), MAX(count_SET), MAX(bytes_IN), MAX(bytes_OUT), MAX(Entries_Purged), AVG(Entries_In_Cache), AVG(Memory_bytes) FROM mysql_query_cache WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 				statsdb_disk->execute(buf);
 			}
 		}
 		delete resultset2;
 		resultset2 = NULL;
-		sprintf(buf,"DELETE FROM mysql_query_cache WHERE timestamp < %ld", ts - 3600*24*7);
+		snprintf(buf, sizeof(buf), "DELETE FROM mysql_query_cache WHERE timestamp < %ld", ts - 3600*24*7);
 		statsdb_disk->execute(buf);
-		sprintf(buf,"DELETE FROM mysql_query_cache_hour WHERE timestamp < %ld", ts - 3600*24*365);
+		snprintf(buf, sizeof(buf), "DELETE FROM mysql_query_cache_hour WHERE timestamp < %ld", ts - 3600*24*365);
 		statsdb_disk->execute(buf);
 	}
 }
