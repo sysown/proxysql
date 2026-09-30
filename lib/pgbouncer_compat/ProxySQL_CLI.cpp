@@ -107,6 +107,12 @@ static int cmd_import_pgbouncer(int argc, const char* argv[]) {
                 std::cerr << "  WARNING: " << w.message << "\n";
             }
         }
+        if (!result.notes.empty()) {
+            std::cerr << "\nNotes:\n";
+            for (const auto& n : result.notes) {
+                std::cerr << "  NOTE: " << n.message << "\n";
+            }
+        }
 
         std::cerr << "\nDry run complete. "
                   << result.server_count << " servers, "
@@ -129,6 +135,12 @@ static int cmd_import_pgbouncer(int argc, const char* argv[]) {
         std::cerr << "\nWarnings:\n";
         for (const auto& w : result.warnings) {
             std::cerr << "  WARNING: " << w.message << "\n";
+        }
+    }
+    if (!result.notes.empty()) {
+        std::cerr << "\nNotes:\n";
+        for (const auto& n : result.notes) {
+            std::cerr << "  NOTE: " << n.message << "\n";
         }
     }
 

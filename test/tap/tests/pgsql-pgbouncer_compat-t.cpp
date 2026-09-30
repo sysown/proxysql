@@ -13,12 +13,20 @@
  *   - every PgBouncer SHOW command, plain and EXTENDED
  *   - every SQL statement the converter emits for a representative config
  * so that a schema drift or a typo fails here rather than in production.
+ *
+ * It also imports a userlist.txt holding an md5 hash and a SCRAM-SHA-256
+ * verifier (#6134) and logs in through ProxySQL with both users, which is the
+ * only check that proves hashed credentials work end to end.
  */
 
 #include <string>
 #include <sstream>
 #include <vector>
 #include <cstring>
+#include <cstdlib>
+#include <cctype>
+#include <fstream>
+#include <unistd.h>
 #include <libpq-fe.h>
 
 #include "command_line.h"
@@ -125,6 +133,166 @@ static void test_native_show_still_works(PGconn* admin) {
 	bool rejected = (PQresultStatus(res) == PGRES_FATAL_ERROR);
 	PQclear(res);
 	ok(rejected, "SHOW POOLS <trailing token> is not treated as SHOW POOLS");
+}
+
+// ---------------------------------------------------------------------------
+// Hashed userlist.txt import (#6134)
+// ---------------------------------------------------------------------------
+static const int HASHED_USERLIST_TESTS = 5;
+
+static PGconn* connect_pg(const char* host, int port, const char* user,
+                          const char* pass, const char* db) {
+	std::stringstream cs;
+	cs << "host=" << host << " port=" << port << " user=" << user
+	   << " password=" << pass << " dbname=" << db << " sslmode=disable";
+	return PQconnectdb(cs.str().c_str());
+}
+
+static std::string exec_scalar(PGconn* c, const std::string& q) {
+	PGresult* res = PQexec(c, q.c_str());
+	std::string v;
+	if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0 && !PQgetisnull(res, 0, 0)) {
+		v = PQgetvalue(res, 0, 0);
+	}
+	PQclear(res);
+	return v;
+}
+
+// Log in through ProxySQL and require a query to reach the backend, which needs
+// both the frontend and the backend leg to authenticate with the stored hash.
+static bool select_through_proxysql(const CommandLine& cl, const char* user, const char* pass) {
+	PGconn* c = connect_pg(cl.pgsql_host, cl.pgsql_port, user, pass, "postgres");
+	bool passed = false;
+	if (PQstatus(c) != CONNECTION_OK) {
+		diag("login through ProxySQL failed for '%s': %s", user, PQerrorMessage(c));
+	} else {
+		passed = exec_scalar(c, "SELECT 1") == "1";
+		if (!passed) diag("SELECT 1 through ProxySQL failed for '%s': %s", user, PQerrorMessage(c));
+	}
+	PQfinish(c);
+	return passed;
+}
+
+/**
+ * Import a userlist.txt with an md5 hash (infra role 'md5user', which the
+ * backend authenticates with md5) and a SCRAM-SHA-256 verifier copied from the
+ * backend, then log in through ProxySQL as both users.
+ *
+ * Must run before the other converter tests: the representative config enables
+ * the firewall whitelist and rewrites pgsql_servers, and this test reads the
+ * backend address from the current runtime servers.
+ */
+static void test_hashed_userlist_authenticates(PGconn* admin, const CommandLine& cl) {
+	const char* MD5_USER = "md5user";  // infra role: password_encryption=md5, pg_hba md5
+	const char* MD5_PASS = "md5user";  // NOSONAR(cpp:S2068): infra test credential.
+	const char* SCRAM_USER = "pgbouncer_scram_user";
+	const char* SCRAM_PASS = "pgbouncer_scram_pw"; // NOSONAR(cpp:S2068): synthetic test credential.
+
+	std::string be_host = exec_scalar(admin,
+		"SELECT hostname FROM runtime_pgsql_servers ORDER BY hostgroup_id LIMIT 1");
+	std::string be_port = exec_scalar(admin,
+		"SELECT port FROM runtime_pgsql_servers ORDER BY hostgroup_id LIMIT 1");
+
+	PGconn* be = connect_pg(cl.pgsql_server_host, cl.pgsql_server_port,
+		cl.pgsql_server_username, cl.pgsql_server_password, "postgres");
+	if (PQstatus(be) != CONNECTION_OK || be_host.empty() || be_port.empty()) {
+		diag("backend connection: %s; runtime server '%s:%s'",
+			PQerrorMessage(be), be_host.c_str(), be_port.c_str());
+		skip(HASHED_USERLIST_TESTS, "no backend connection or no runtime pgsql server");
+		PQfinish(be);
+		return;
+	}
+
+	// The md5 user must be usable directly against the backend.
+	std::string md5_hash = exec_scalar(be,
+		std::string("SELECT rolpassword FROM pg_authid WHERE rolname='") + MD5_USER + "'");
+	bool md5_backend_ok = false;
+	if (md5_hash.rfind("md5", 0) == 0) {
+		PGconn* probe = connect_pg(cl.pgsql_server_host, cl.pgsql_server_port,
+			MD5_USER, MD5_PASS, "postgres");
+		md5_backend_ok = PQstatus(probe) == CONNECTION_OK;
+		PQfinish(probe);
+	}
+
+	bool scram_ok =
+		exec_ok(be, "SET password_encryption TO 'scram-sha-256'", "set password_encryption") &&
+		exec_ok(be, std::string("DROP ROLE IF EXISTS ") + SCRAM_USER, "drop scram role") &&
+		exec_ok(be, std::string("CREATE ROLE ") + SCRAM_USER + " LOGIN PASSWORD '" + SCRAM_PASS + "'",
+			"create scram role");
+	std::string verifier = scram_ok ? exec_scalar(be,
+		std::string("SELECT rolpassword FROM pg_authid WHERE rolname='") + SCRAM_USER + "'") : "";
+
+	if (!md5_backend_ok || verifier.rfind("SCRAM-SHA-256$", 0) != 0) {
+		skip(HASHED_USERLIST_TESTS,
+			"backend lacks an md5-authenticated '%s' or a SCRAM role (md5 %s, verifier '%.14s')",
+			MD5_USER, md5_backend_ok ? "ok" : "unusable", verifier.c_str());
+		exec_ok(be, std::string("DROP ROLE IF EXISTS ") + SCRAM_USER, "drop scram role");
+		PQfinish(be);
+		return;
+	}
+
+	// PgBouncer accepts uppercase md5 hex, ProxySQL only lowercase: the import
+	// must normalise it.
+	std::string md5_upper = md5_hash;
+	for (size_t i = 3; i < md5_upper.size(); i++) {
+		md5_upper[i] = std::toupper(static_cast<unsigned char>(md5_upper[i]));
+	}
+
+	// A private directory under the working directory, not a shared temp dir.
+	char dir_template[] = "pgbouncer_hashed_XXXXXX";
+	const char* dir = mkdtemp(dir_template);
+	if (dir == nullptr) {
+		skip(HASHED_USERLIST_TESTS, "cannot create a directory for the PgBouncer config files");
+		exec_ok(be, std::string("DROP ROLE IF EXISTS ") + SCRAM_USER, "drop scram role");
+		PQfinish(be);
+		return;
+	}
+	std::string ini_path = std::string(dir) + "/pgbouncer.ini";
+	std::string userlist_path = std::string(dir) + "/userlist.txt";
+	{
+		std::ofstream ini(ini_path);
+		ini << "[databases]\n"
+		    << "* = host=" << be_host << " port=" << be_port << "\n"
+		    << "[pgbouncer]\n"
+		    << "auth_type = md5\n"
+		    // resolved relative to the directory of pgbouncer.ini
+		    << "auth_file = userlist.txt\n"
+		    << "pool_mode = transaction\n";
+		std::ofstream userlist(userlist_path);
+		userlist << "\"" << MD5_USER << "\" \"" << md5_upper << "\"\n"
+		         << "\"" << SCRAM_USER << "\" \"" << verifier << "\"\n";
+	}
+
+	PgBouncer::Config config;
+	bool parsed = PgBouncer::parse_config_file(ini_path, config);
+	for (const auto& e : config.errors) diag("parse error: %s:%d: %s", e.file.c_str(), e.line, e.message.c_str());
+	ok(parsed && config.auth_entries.size() == 2,
+	   "hashed userlist.txt parses (%zu auth entries)", config.auth_entries.size());
+
+	PgBouncer::ConfigConverter converter;
+	PgBouncer::ConversionResult result = converter.convert(config, true);
+	for (const auto& e : result.errors) diag("conversion error: %s", e.message.c_str());
+	for (const auto& n : result.notes) diag("conversion note: %s", n.message.c_str());
+	ok(result.success, "hashed userlist.txt converts in strict mode");
+
+	int failed = 0;
+	for (const auto& e : result.entries) {
+		if (e.sql.empty() || strncasecmp(e.sql.c_str(), "SAVE ", 5) == 0) continue;
+		if (!exec_ok(admin, e.sql, "converter statement")) failed++;
+	}
+	ok(failed == 0, "every statement of the hashed userlist import executed (%d failed)", failed);
+
+	ok(select_through_proxysql(cl, MD5_USER, MD5_PASS),
+	   "md5-stored user '%s' imported from userlist.txt logs in and reaches the backend", MD5_USER);
+	ok(select_through_proxysql(cl, SCRAM_USER, SCRAM_PASS),
+	   "SCRAM-verifier-stored user '%s' imported from userlist.txt logs in and reaches the backend",
+	   SCRAM_USER);
+
+	// The backend role is dropped by main() once pooled connections are gone.
+	unlink(userlist_path.c_str());
+	unlink(ini_path.c_str());
+	rmdir(dir);
+	PQfinish(be);
 }
 
 // ---------------------------------------------------------------------------
@@ -259,8 +427,9 @@ int main(int argc, char** argv) {
 	}
 
 	// 10 plain SHOW + 10 EXTENDED SHOW + 10 column-count + 8 unsupported
-	// + 3 native SHOW + 4 converter SQL + 3 populated tables + 2 import
-	plan(NUM_SUPPORTED * 3 + NUM_UNSUPPORTED + 3 + 4 + 3 + 2);
+	// + 3 native SHOW + hashed userlist import + 4 converter SQL
+	// + 3 populated tables + 2 import
+	plan(NUM_SUPPORTED * 3 + NUM_UNSUPPORTED + 3 + HASHED_USERLIST_TESTS + 4 + 3 + 2);
 
 	PGconn* admin = connect_admin(cl);
 	if (PQstatus(admin) != CONNECTION_OK) {
@@ -274,6 +443,7 @@ int main(int argc, char** argv) {
 	test_unsupported_commands(admin);
 	test_native_show_still_works(admin);
 
+	test_hashed_userlist_authenticates(admin, cl);
 	test_converter_sql_executes(admin);
 	test_converter_populated_tables(admin);
 	test_import_missing_file(admin);
@@ -307,6 +477,18 @@ int main(int argc, char** argv) {
 		}
 		PQclear(res);
 	}
+
+	// Drop the SCRAM role created by test_hashed_userlist_authenticates. The
+	// restore above removed the user from ProxySQL; pooled backend connections
+	// may still hold it, so terminate them first.
+	PGconn* be = connect_pg(cl.pgsql_server_host, cl.pgsql_server_port,
+		cl.pgsql_server_username, cl.pgsql_server_password, "postgres");
+	if (PQstatus(be) == CONNECTION_OK) {
+		exec_ok(be, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+			"WHERE usename='pgbouncer_scram_user'", "terminate scram role sessions");
+		exec_ok(be, "DROP ROLE IF EXISTS pgbouncer_scram_user", "drop scram role");
+	}
+	PQfinish(be);
 
 	PQfinish(admin);
 	return exit_status();
