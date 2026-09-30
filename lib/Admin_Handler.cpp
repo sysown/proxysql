@@ -1662,7 +1662,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -1730,7 +1730,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -1802,7 +1802,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_info("Tried to load invalid user %s\n", name);
 					char *s=(char *)"Invalid name %s";
 					char *m=(char *)malloc(strlen(s)+strlen(name)+1);
-					sprintf(m,s,name);
+					snprintf(m,strlen(s)+strlen(name)+1,s,name);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -1992,7 +1992,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2357,7 +2357,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2498,7 +2498,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2622,7 +2622,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2666,7 +2666,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2771,7 +2771,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2898,7 +2898,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -5566,7 +5566,7 @@ __run_query:
 		} else {
 			char *a = (char *)"ProxySQL Admin Error: ";
 			char *new_msg = (char *)malloc(strlen(error)+strlen(a)+1);
-			sprintf(new_msg, "%s%s", a, error);
+			snprintf(new_msg, strlen(error)+strlen(a)+1, "%s%s", a, error);
 
 			admin_send_resultset(sess, resultset, new_msg, affected_rows, query);
 

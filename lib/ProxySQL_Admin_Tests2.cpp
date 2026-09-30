@@ -1255,7 +1255,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 					SPA->load_mysql_query_rules_to_runtime();
 				}
 				msg = (char *)malloc(128);
-				sprintf(msg,"Loaded mysql_query_rules_fast_routing to runtime %d times",test_arg1);
+				snprintf(msg,128,"Loaded mysql_query_rules_fast_routing to runtime %d times",test_arg1);
 				SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 				run_query=false;
 				free(msg);
@@ -1291,7 +1291,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 							SPA->send_error_msg_to_client(sess, (char *)"Severe error in verifying rules in mysql_query_rules_fast_routing");
 						} else {
 							msg = (char *)malloc(256);
-							sprintf(msg,"Error verifying mysql_query_rules_fast_routing. Found %d rows out of %d", ret1, ret2);
+							snprintf(msg,256,"Error verifying mysql_query_rules_fast_routing. Found %d rows out of %d", ret1, ret2);
 							SPA->send_error_msg_to_client(sess, msg);
 							free(msg);
 						}
@@ -1307,7 +1307,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 				test_arg1 *= 1000;
 				ProxySQL_Test___Refresh_MySQL_Variables(test_arg1);
 				msg = (char *)malloc(128);
-				sprintf(msg,"Refreshed MySQL Variables %d times",test_arg1);
+				snprintf(msg,128,"Refreshed MySQL Variables %d times",test_arg1);
 				SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 				run_query=false;
 				free(msg);
@@ -1381,7 +1381,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 							SPA->send_ok_msg_to_client(sess, (char *)"Verified all rows from firewall whitelist", ret1, query_no_space);
 						} else {
 							msg = (char *)malloc(256);
-							sprintf(msg,"Error verifying firewall whitelist. Found %d entries out of %d", ret2, ret1);
+							snprintf(msg,256,"Error verifying firewall whitelist. Found %d entries out of %d", ret2, ret1);
 							SPA->send_error_msg_to_client(sess, msg);
 							free(msg);
 						}

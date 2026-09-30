@@ -1239,7 +1239,7 @@ unsigned int PgSQL_Threads_Handler::get_global_version() {
 
 int PgSQL_Threads_Handler::listener_add(const char* address, int port) {
 	char* s = (char*)malloc(strlen(address) + 32);
-	sprintf(s, "%s:%d", address, port);
+	snprintf(s, strlen(address) + 32, "%s:%d", address, port);
 	int ret = listener_add((const char*)s);
 	free(s);
 	return ret;
@@ -2398,7 +2398,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 	size_t fv = 0;
 	for (i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
 		char* m = (char*)malloc(strlen(pgsql_tracked_variables[i].internal_variable_name) + 1 + strlen((char*)"default_"));
-		sprintf(m, "default_%s", pgsql_tracked_variables[i].internal_variable_name);
+		snprintf(m, strlen(pgsql_tracked_variables[i].internal_variable_name) + 1 + strlen((char*)"default_"), "default_%s", pgsql_tracked_variables[i].internal_variable_name);
 		ret[fv] = m;
 		fv++;
 	}

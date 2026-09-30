@@ -1632,7 +1632,7 @@ unsigned int MySQL_Threads_Handler::get_global_version() {
 
 int MySQL_Threads_Handler::listener_add(const char *address, int port) {
 	char *s=(char *)malloc(strlen(address)+32);
-	sprintf(s,"%s:%d",address,port);
+	snprintf(s,strlen(address)+32,"%s:%d",address,port);
 	int ret=listener_add((const char *)s);
 	free(s);
 	return ret;
@@ -3267,7 +3267,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 	for (i=0; i < SQL_NAME_LAST_LOW_WM ; i++) {
 		if (mysql_tracked_variables[i].is_global_variable) {
 			char * m = (char *)malloc(strlen(mysql_tracked_variables[i].internal_variable_name)+1+strlen((char *)"default_"));
-			sprintf(m,"default_%s", mysql_tracked_variables[i].internal_variable_name);
+			snprintf(m,strlen(mysql_tracked_variables[i].internal_variable_name)+1+strlen((char *)"default_"),"default_%s", mysql_tracked_variables[i].internal_variable_name);
 			ret[fv] = m;
 			fv++;
 		}

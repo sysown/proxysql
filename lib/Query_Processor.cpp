@@ -1094,7 +1094,7 @@ int Query_Processor<QP_DERIVED>::search_rules_fast_routing_dest_hg(
 	if (keylen >= sizeof(keybuf)) {
 		keybuf_ptr = (char *)malloc(keylen);
 	}
-	sprintf(keybuf_ptr,"%s%s%s---%d", u, rand_del, s, flagIN);
+	snprintf(keybuf_ptr,keylen,"%s%s%s---%d", u, rand_del, s, flagIN);
 
 	if (lock) {
 		rdlock();
@@ -3175,7 +3175,7 @@ fast_routing_hashmap_t Query_Processor<QP_DERIVED>::create_fast_routing_hashmap(
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			sprintf(ptr,"%s%s%s---%s",r->fields[0],rand_del,r->fields[1],r->fields[2]);
+			snprintf(ptr,strlen(r->fields[0])+rand_del_size+strlen(r->fields[1])+strlen(r->fields[2])+4,"%s%s%s---%s",r->fields[0],rand_del,r->fields[1],r->fields[2]);
 			int destination_hostgroup = atoi(r->fields[3]);
 			int ret;
 			khiter_t k = kh_put(khStrInt, fast_routing, ptr, &ret); // add the key
@@ -3245,7 +3245,7 @@ int Query_Processor<QP_DERIVED>::testing___find_HG_in_mysql_query_rules_fast_rou
 		if (keylen > 250) {
 			keybuf_ptr = (char *)malloc(keylen);
 		}
-		sprintf(keybuf_ptr,"%s%s%s---%d", username, rand_del, schemaname, flagIN);
+		snprintf(keybuf_ptr,keylen,"%s%s%s---%d", username, rand_del, schemaname, flagIN);
 		khiter_t k = kh_get(khStrInt, rules_fast_routing, keybuf_ptr);
 		if (k == kh_end(rules_fast_routing)) {
 		} else {

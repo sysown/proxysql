@@ -1283,7 +1283,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					proxy_error("invalid value for parameter \"%s\": \"%s\"\n", param_name.c_str(), param_val.c_str());
 					m = (char*)"invalid value for parameter \"%s\": \"%s\"";
 					errmsg = (char*)malloc(param_val.length() + param_name.length() + strlen(m));
-					sprintf(errmsg, m, param_name.c_str(), param_val.c_str());
+					snprintf(errmsg, param_val.length() + param_name.length() + strlen(m), m, param_name.c_str(), param_val.c_str());
 					generate_error_packet(true, false, errmsg, PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, true);
 					free(errmsg);	
 					ret = EXECUTION_STATE::FAILED;
@@ -1363,7 +1363,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					proxy_error("invalid value for parameter \"%s\": \"%s\"\n", pgsql_tracked_variables[idx].set_variable_name, value_copy.c_str());
 					m = (char*)"invalid value for parameter \"%s\": \"%s\"";
 					errmsg = (char*)malloc(value_copy.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m));
-					sprintf(errmsg, m, pgsql_tracked_variables[idx].set_variable_name, value_copy.c_str());
+					snprintf(errmsg, value_copy.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m), m, pgsql_tracked_variables[idx].set_variable_name, value_copy.c_str());
 					generate_error_packet(true, false, errmsg, PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, true);
 					free(errmsg);
 					ret = EXECUTION_STATE::FAILED;

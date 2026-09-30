@@ -6884,7 +6884,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 	}
 	char *address = (char *)malloc(strlen(_server_id)+strlen(domain_name)+1);
-	sprintf(address,"%s%s",_server_id,domain_name);
+	snprintf(address,strlen(_server_id)+strlen(domain_name)+1,"%s%s",_server_id,domain_name);
 	GloAdmin->mysql_servers_wrlock();
 	wrlock();
 	int i,j;
