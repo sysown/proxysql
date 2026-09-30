@@ -106,7 +106,7 @@ class ArtifactTests(unittest.TestCase):
    data=io.BytesIO()
    with zipfile.ZipFile(data,'w') as archive:archive.writestr('cache_full.tar.zst',payload)
    api=Mock(repository='sysown/proxysql');api.artifacts.return_value=[dict(id=9,name=leg['artifact_name'],expired=False,size_in_bytes=len(data.getvalue()))]
-   api.download.side_effect=lambda path,target,size:Path(target).write_bytes(data.getvalue())
+   api.download.side_effect=lambda path,target,size,**kwargs:Path(target).write_bytes(data.getvalue())
    restore_handoff(plan,leg,root/'restored',api)
    self.assertEqual((root/'restored/test/afl_digest_test/c_tokenizer.cpp').read_text(),'fixture')
    self.assertEqual(json.loads((root/'restored/src/ci-tier.json').read_text()),meta)

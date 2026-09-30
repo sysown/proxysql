@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Run-scoped GitHub API and handoff operations. Never select by newest SHA."""
 import io
+import concurrent.futures
+import hashlib
+import re
+from threading import Event
 import http.client
 import json
 import os
@@ -21,6 +25,100 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # Resolve the signed storage URL without forwarding the GitHub token.
         return None
+
+# Avoid multiple connections for small artifacts; large handoffs use eight.
+MIN_DOWNLOAD_PART_BYTES=64*1024*1024
+
+class RangeUnsupported(Exception):
+    """The storage server ignored a bounded range; retry as one stream."""
+
+
+def download_timeout(deadline,cancelled=None):
+    if cancelled is not None and cancelled.is_set():
+        raise RuntimeError('artifact download cancelled')
+    remaining=deadline-time.monotonic()
+    if remaining<=0:raise TimeoutError('download deadline')
+    return min(60,remaining)
+
+
+def artifact_location(url,token,deadline,cancelled):
+    # Never send GitHub credentials to the signed storage URL.
+    request=urllib.request.Request(url,headers={'Authorization':'Bearer '+token})
+    try:
+        response=urllib.request.build_opener(NoRedirect()).open(
+            request,timeout=download_timeout(deadline,cancelled))
+    except urllib.error.HTTPError as error:
+        if error.code!=302:raise
+        response=error
+    with response:
+        if response.code!=302:raise ValueError('artifact endpoint did not redirect')
+        return response.headers['Location']
+
+
+def download_part(url,token,target,start,end,size,deadline,cancelled,parallel):
+    with target.open('w+b') as out:
+        for attempt in range(6):
+            try:
+                location=artifact_location(url,token,deadline,cancelled)
+                offset=start+out.tell()
+                request=urllib.request.Request(location,headers={
+                    'Range':f'bytes={offset}-{end if parallel else ""}'})
+                with urllib.request.urlopen(request,timeout=download_timeout(deadline,cancelled)) as response:
+                    if response.status==200:
+                        if parallel:raise RangeUnsupported()
+                        out.seek(0);out.truncate();offset=0
+                    elif response.status!=206 or response.headers.get('Content-Range')!=f'bytes {offset}-{end}/{size}':
+                        raise ValueError('unexpected artifact byte range')
+                    print(f'Artifact range {start}-{end}, attempt {attempt+1}: {out.tell()}/{end-start+1} bytes',flush=True)
+                    reported=out.tell()
+                    while True:
+                        download_timeout(deadline,cancelled)
+                        chunk=response.read1(1024*1024)
+                        if not chunk:break
+                        if out.tell()+len(chunk)>end-start+1:
+                            raise ValueError('artifact exceeds expected range size')
+                        out.write(chunk)
+                        if out.tell()-reported>=256*1024*1024:
+                            reported=out.tell()
+                            print(f'Artifact range {start}-{end}: {reported}/{end-start+1} bytes',flush=True)
+                if out.tell()!=end-start+1:raise OSError('incomplete artifact download')
+                return
+            except (OSError,http.client.HTTPException) as error:
+                # Never log exceptions containing signed URLs or credentials.
+                reason=f'HTTP {error.code}' if isinstance(error,urllib.error.HTTPError) else type(error).__name__
+                if isinstance(error,urllib.error.HTTPError):error.close()
+                remaining=deadline-time.monotonic()
+                if attempt==5 or remaining<=0:
+                    raise RuntimeError(f'Artifact download failed ({reason}); range {start}-{end} received {out.tell()} bytes') from None
+                print(f'Artifact range {start}-{end} interrupted ({reason}); resuming at {out.tell()} bytes',flush=True)
+                if cancelled.wait(min(30,2**attempt,remaining)):
+                    raise RuntimeError('artifact download cancelled') from None
+
+
+def download_parts(url,token,folder,size,workers,deadline):
+    cancelled=Event()
+    chunk=(size+workers-1)//workers
+    parts=[folder/f'part-{i}' for i in range(workers)]
+    if workers==1:
+        download_part(url,token,parts[0],0,size-1,size,deadline,cancelled,False)
+        return parts
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures=[pool.submit(download_part,url,token,part,i*chunk,
+                min(size-1,(i+1)*chunk-1),size,deadline,cancelled,True)
+                for i,part in enumerate(parts)]
+            try:
+                for future in concurrent.futures.as_completed(futures):future.result()
+            finally:
+                # Stop peers before cleaning scratch files or starting fallback.
+                cancelled.set()
+                for future in futures:future.cancel()
+    except RangeUnsupported:
+        print('Artifact storage ignored ranges; falling back to one stream',flush=True)
+        for part in parts:part.unlink(missing_ok=True)
+        return download_parts(url,token,folder,size,1,deadline)
+    return parts
+
 
 class GitHubAPI:
     def __init__(self, repository, token=None):
@@ -55,64 +153,35 @@ class GitHubAPI:
                 raise RuntimeError(f'GitHub API {method} {path}: exit {result.returncode}')
             time.sleep(60 if 'rate limit' in error or '429' in error else min(30,2**attempt))
 
-    def download(self,path,destination,size):
-        """Stream large immutable artifacts to disk, resuming interrupted reads."""
+    def download(self,path,destination,size,digest=None):
+        """Download large artifacts in up to eight resumable, disk-backed parts."""
+        if size<=0:raise ValueError('invalid artifact size')
+        if digest and not re.fullmatch(r'sha256:[0-9a-fA-F]{64}',digest):
+            raise ValueError('unsupported artifact checksum')
         token=self.token or os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
         if not token:
             auth=subprocess.run(['gh','auth','token'],capture_output=True,text=True,timeout=60)
             if auth.returncode:raise RuntimeError('Cannot obtain artifact download credentials')
             token=auth.stdout.strip()
         url=path if path.startswith(('http://','https://')) else 'https://api.github.com/'+path
-        opener=urllib.request.build_opener(NoRedirect())
-        # A 5 GB handoff can take >15 minutes on self-hosted links. Bound the
-        # whole transfer to one hour; each stalled socket still times out in 60s.
         deadline=time.monotonic()+3600
-        def request_timeout():
-            remaining=deadline-time.monotonic()
-            if remaining<=0:raise TimeoutError('download deadline')
-            return min(60,remaining)
-        with Path(destination).open('w+b') as out:
-            for attempt in range(6):
-                try:
-                    # Signed URLs expire; resolve a fresh one for every attempt.
-                    request=urllib.request.Request(url,headers={'Authorization':'Bearer '+token})
-                    try:
-                        response=opener.open(request,timeout=request_timeout())
-                    except urllib.error.HTTPError as error:
-                        if error.code!=302:raise
-                        response=error
-                    with response:
-                        if response.code!=302:raise ValueError('artifact endpoint did not redirect')
-                        location=response.headers['Location']
-                    offset=out.tell()
-                    request=urllib.request.Request(location,headers={'Range':f'bytes={offset}-'})
-                    with urllib.request.urlopen(request,timeout=request_timeout()) as response:
-                        if response.status==200:
-                            out.seek(0);out.truncate();offset=0
-                        elif response.status!=206 or response.headers.get('Content-Range')!=f'bytes {offset}-{size-1}/{size}':
-                            raise ValueError('unexpected artifact byte range')
-                        print(f'Artifact download attempt {attempt+1}: {offset}/{size} bytes',flush=True)
-                        reported=offset
-                        while True:
-                            if time.monotonic()>=deadline:raise TimeoutError('download deadline')
-                            chunk=response.read1(1024*1024)
-                            if not chunk:break
-                            if out.tell()+len(chunk)>size:raise ValueError('artifact exceeds expected size')
+        workers=min(8,max(1,size//MIN_DOWNLOAD_PART_BYTES))
+        destination=Path(destination)
+        # Scratch files live beside the target for atomic publication after verification.
+        with tempfile.TemporaryDirectory(dir=destination.parent,prefix='.artifact-') as tmp:
+            parts=download_parts(url,token,Path(tmp),size,workers,deadline)
+            assembled=Path(tmp)/'complete.zip'
+            checksum=hashlib.sha256()
+            with assembled.open('wb') as out:
+                for part in parts:
+                    with part.open('rb') as source:
+                        while chunk:=source.read(1024*1024):
+                            download_timeout(deadline)
+                            checksum.update(chunk)
                             out.write(chunk)
-                            if out.tell()-reported>=256*1024*1024:
-                                reported=out.tell()
-                                print(f'Artifact download: {reported}/{size} bytes',flush=True)
-                    if out.tell()!=size:raise OSError('incomplete artifact download')
-                    return
-                except (OSError,urllib.error.URLError,http.client.HTTPException) as error:
-                    # Never log an exception containing a signed URL or credentials.
-                    reason=f'HTTP {error.code}' if isinstance(error,urllib.error.HTTPError) else type(error).__name__
-                    if isinstance(error,urllib.error.HTTPError):error.close()
-                    remaining=deadline-time.monotonic()
-                    if attempt==5 or remaining<=0:
-                        raise RuntimeError(f'Artifact download failed ({reason}); received {out.tell()}/{size} bytes') from None
-                    print(f'Artifact download interrupted ({reason}); resuming at {out.tell()} bytes',flush=True)
-                    time.sleep(min(30,2**attempt,remaining))
+            if digest and 'sha256:'+checksum.hexdigest()!=digest.lower():
+                raise ValueError('artifact checksum mismatch')
+            assembled.replace(destination)
 
     def pages(self,path,key):
         records=[]
@@ -251,7 +320,7 @@ def restore_handoff(manifest,leg,destination,api):
     if expected.get('artifact_id') and record['id']!=expected['artifact_id']:raise ValueError('handoff artifact replaced')
     with tempfile.TemporaryDirectory() as tmp:
         downloaded=Path(tmp)/'handoff.zip'
-        api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'])
+        api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest'))
         with zipfile.ZipFile(downloaded) as archive:
             packed=Path(tmp)/'cache_full.tar.zst'
             with archive.open('cache_full.tar.zst') as source,packed.open('wb') as out:
