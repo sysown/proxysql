@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 
 // A connection pointed at a server row, which is all the context the builder reads.
@@ -53,9 +54,12 @@ struct TestCertificate {
 			(const unsigned char*)name, -1, -1, 0);
 		X509_set_issuer_name(cert, subject);
 		if (!X509_sign(cert, key, EVP_sha256())) return;
-		ca_path = "/tmp/pgsql_native_tls_" + std::to_string(getpid()) + "_" + name + ".pem";
-		FILE* f = fopen(ca_path.c_str(), "w");
-		if (!f) { ca_path.clear(); return; }
+		char path[] = "/tmp/pgsql_native_tls_XXXXXX";
+		const int fd = mkstemp(path);
+		if (fd == -1) return;
+		ca_path = path;
+		FILE* f = fdopen(fd, "w");
+		if (!f) { close(fd); unlink(ca_path.c_str()); ca_path.clear(); return; }
 		const bool wrote = PEM_write_X509(f, cert) == 1;
 		fclose(f);
 		if (!wrote) { unlink(ca_path.c_str()); ca_path.clear(); }
@@ -168,7 +172,20 @@ static void populate_server_params(const std::string& ca) {
 }
 
 int main(int, char**) {
-	plan(25);
+	plan(28);
+	std::string first_path, second_path;
+	{
+		TestCertificate first("tempfile-probe"), second("tempfile-probe");
+		if (!first.valid() || !second.valid()) BAIL_OUT("could not create TLS temporary-file fixtures");
+		first_path = first.ca_path;
+		second_path = second.ca_path;
+		ok(first_path != second_path, "certificate fixtures with the same name have independent files");
+		struct stat info {};
+		ok(stat(first_path.c_str(), &info) == 0 && (info.st_mode & 0777) == 0600,
+		   "certificate fixture files are accessible only by their owner");
+	}
+	ok(access(first_path.c_str(), F_OK) == -1 && access(second_path.c_str(), F_OK) == -1,
+	   "certificate fixture destruction removes both temporary files");
 	test_init_minimal();
 	test_init_query_processor();
 	test_init_hostgroups();   // the builder asks PgHGM for this server's SSL params
