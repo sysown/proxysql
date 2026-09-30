@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 
@@ -33,13 +34,14 @@ def compile_shared(output: Path, source: str, *link_args: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def run_script(step: dict, cwd: Path) -> subprocess.CompletedProcess[str]:
+def run_script(step: dict, cwd: Path, **credentials) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", "-c", "set -euo pipefail\n" + step["run"]],
         cwd=cwd,
         text=True,
         capture_output=True,
         check=False,
+        **credentials,
     )
 
 
@@ -142,5 +144,29 @@ for invalid in ('empty', 'broken-link'):
         result = run_script(stage, cwd)
         assert result.returncode != 0, (invalid, result.stdout, result.stderr)
         assert 'empty or missing plugin' in result.stdout + result.stderr
+
+# Container builds can pre-stage root-owned files in a runner-owned directory.
+# A normal invocation models an unwritable file with mode 0444; when run as
+# root, reproduce the container ownership exactly and stage as an ordinary user.
+with tempfile.TemporaryDirectory() as directory:
+    cwd = Path(directory)
+    repo, _ = create_workspace(cwd, dynamic_libpq=False)
+    runtime_dir = repo / 'test/tap/tap/_runtime_libs'
+    runtime_dir.mkdir()
+    destination = runtime_dir / 'Example_Plugin.so'
+    destination.write_bytes(b'previous build')
+    destination.chmod(0o444)
+    credentials = {}
+    runner_uid = os.getuid()
+    if os.geteuid() == 0:
+        runner_uid = 65534
+        cwd.chmod(0o755)
+        os.chown(runtime_dir, runner_uid, runner_uid)
+        destination.chmod(0o644)
+        credentials = dict(user=runner_uid, group=runner_uid, extra_groups=[])
+    result = run_script(stage, cwd, **credentials)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert destination.read_bytes() == b'example-plugin'
+    assert destination.stat().st_uid == runner_uid
 
 print("Runtime handoff contract passed")
