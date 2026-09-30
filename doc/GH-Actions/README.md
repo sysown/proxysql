@@ -244,11 +244,9 @@ git push / open PR
            CI-taptests           CI-taptests-ssl     CI-taptests-asan
            CI-taptests-groups    CI-taptests-pgsql-cluster
            CI-codeql
-           CI-3p-aiomysql        CI-3p-django-framework
-           CI-3p-laravel-framework                    CI-3p-mariadb-connector-c
-           CI-3p-mysql-connector-j                    CI-3p-pgjdbc
-           CI-3p-php-pdo-mysql   CI-3p-php-pdo-pgsql  CI-3p-postgresql
-           CI-3p-sqlalchemy
+
+           (The CI-3p-* callers are not part of this cascade: they are
+           manual-only, see "Third-party integration" below.)
 ```
 
 ### Why the cascade looks the way it does
@@ -882,11 +880,16 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 
 ### Third-party integration (`CI-3p-*`)
 
-Ten workflows test ProxySQL against external client libraries, independent
-of the build cache (they build ProxySQL inline inside the workflow). Each
-triggers on `workflow_run[completed]` on `CI-trigger` and reads its matrix
-from GitHub repository variables like
+Sixteen workflows test ProxySQL against external client libraries, independent
+of the build cache (they build ProxySQL inline inside the workflow). They
+read their matrix from GitHub repository variables like
 `MATRIX_3P_AIOMYSQL_infradb_mysql`.
+
+These callers are **manual-only** (`workflow_dispatch`): they do not chain off
+`CI-trigger`, and their catalogue rows in `.github/ci-tier-consumers.json` on
+`GH-Actions` are `automatic: false` (#6276), so sysown builds register no
+CI-3p checks. The suites run automatically from the cross-repository 3p
+testing caller (`ProxySQL/proxysql_3p_testing_public`).
 
 | Caller | Client | Protocols |
 |---|---|---|
@@ -900,6 +903,14 @@ from GitHub repository variables like
 | `CI-3p-php-pdo-pgsql.yml` | PHP PDO PostgreSQL | PostgreSQL |
 | `CI-3p-postgresql.yml` | libpq (native) | PostgreSQL |
 | `CI-3p-sqlalchemy.yml` | SQLAlchemy ORM | MySQL, PostgreSQL |
+| `CI-3p-pymysql.yml` | Python PyMySQL | MySQL |
+| `CI-3p-mysqlclient.yml` | Python mysqlclient | MySQL |
+| `CI-3p-mysql-connector-python.yml` | MySQL Connector/Python | MySQL |
+| `CI-3p-go-mysql.yml` | Go MySQL | MySQL |
+| `CI-3p-node-mysql2.yml` | Node.js mysql2 | MySQL |
+| `CI-3p-psycopg.yml` | Python psycopg | PostgreSQL |
+
+The last six (#6273) are catalogued for the v4.0 tier only.
 
 ### Release tarballs (generic Linux binaries)
 
