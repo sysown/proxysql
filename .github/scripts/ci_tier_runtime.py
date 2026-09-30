@@ -146,6 +146,28 @@ def consumer_instance(manifest,workflow,instance,supplied):
     if len(candidates)!=1:raise ValueError('ambiguous legacy consumer instance; pass consumer_id')
     return candidates[0]
 
+def manual_consumer_rows(workflow,instance,supplied):
+    """Catalogue rows of this consumer file for a manual consumer, with the axes the dispatch supplies.
+
+    A file can have one row per instance (e.g. run-mysql / run-mariadb with different axes): use the rows of
+    the requested instance. When it matches none (callers that pass no consumer_id get 'run'), the rows are
+    only interchangeable if the dispatch supplies every axis.
+    """
+    from ci_tier_plan import parse_axis
+    catalogue=json.loads((ROOT/'ci-tier-consumers.json').read_text())
+    candidates=[item for item in catalogue['consumers'] if item['file']==os.environ.get('CONSUMER_FILE')]
+    instances=sorted({item.get('instance','run') for item in candidates})
+    if instance in instances:candidates=[item for item in candidates if item.get('instance','run')==instance]
+    elif len(instances)>1 and any(not supplied.get(axis) for item in candidates for axis in item.get('axes',{})):
+        raise ValueError('ambiguous consumer instance '+instance+': pass consumer_id (one of '+', '.join(instances)+') or every axis')
+    rows=[];seen=set()
+    for item in candidates:
+        if item['job'] in seen or (supplied.get('tap_group') and supplied['tap_group'] not in item['groups']):continue
+        row=copy.deepcopy(item);row.update(workflow=workflow,automatic=True,instance=instance)
+        row['axes']={axis:parse_axis(supplied[axis]) if supplied.get(axis) else value for axis,value in row.get('axes',{}).items()}
+        rows.append(row);seen.add(item['job'])
+    return rows
+
 def consumer():
     ctx=context();api=api_for(ctx);gh=json.loads(os.environ['GITHUB_JSON'])
     supplied=json.loads(os.environ.get('CONSUMER_INPUTS','{}'))
@@ -178,19 +200,10 @@ def consumer():
     if not jobs or manual:
         if attempt>1 and not override:raise ValueError('rerun has no original consumer manifest')
         if not override:
-            catalogue=json.loads((ROOT/'ci-tier-consumers.json').read_text())
-            rows=[];seen=set()
-            for item in catalogue['consumers']:
-                if item['file']!=os.environ.get('CONSUMER_FILE') or item['job'] in seen:continue
-                if supplied.get('tap_group') and supplied['tap_group'] not in item['groups']:continue
-                row=copy.deepcopy(item);row.update(workflow=workflow,automatic=True,instance=instance)
-                for axis in row.get('axes',{}):
-                    if axis in supplied and supplied[axis]:
-                        from ci_tier_plan import parse_axis
-                        row['axes'][axis]=parse_axis(supplied[axis])
-                rows.append(row);seen.add(item['job'])
+            rows=manual_consumer_rows(workflow,instance,supplied)
             if not rows:raise ValueError('consumer not present in this producer plan or control catalogue')
-            derived=make_plan(manifest,manifest['selection'],{'consumers':rows})
+            # axes the dispatch did not supply come from this repository's variables (the manifest has none)
+            derived=make_plan(dict(manifest,variables=ctx['variables']),manifest['selection'],{'consumers':rows})
             manifest=copy.deepcopy(manifest)
             manifest['checks']=[c for c in derived['checks'] if c['workflow']!='CI-builds']
             if not manifest['checks']:raise ValueError('manual consumer has no applicable configurations')
