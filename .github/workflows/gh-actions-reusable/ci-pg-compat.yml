@@ -3,7 +3,7 @@ jobs:
   tier-selection:
     uses: ./.github/workflows/ci-tier-selection.yml
     with:
-      control_ref: ${{ inputs.control_ref }}
+      control_ref: ${{ inputs.control_ref || 'GH-Actions' }}
     permissions:
       contents: read
       actions: read
@@ -11,15 +11,36 @@ jobs:
   pg-compat:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
-    permissions: write-all
+    permissions:
+      contents: read
+      packages: read
     steps:
     - name: Checkout
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
     - name: Build selected ProxySQL product (debug)
-      run: make -j$(nproc) debug
+      run: make -j"$(nproc)" debug
       env:
         PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
         PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
+    - name: Log in to GHCR and pull CI base image
+      env:
+        GHCR_USER: ${{ github.actor }}
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3 4 5; do
+          echo ">>> GHCR login and pull attempt ${attempt}/5"
+          if echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin \
+              && docker pull ghcr.io/sysown/proxysql-ci-base:latest; then
+            docker tag ghcr.io/sysown/proxysql-ci-base:latest proxysql-ci-base:latest
+            exit 0
+          fi
+          [ "$attempt" -eq 5 ] || sleep $((attempt * 10))
+        done
+        exit 1
+
     - name: Stand up infra (backends + Toxiproxy + ProxySQL)
       env:
         INFRA_ID: ci-${{ matrix.tier }}-${{ github.run_id }}-${{ github.run_attempt }}

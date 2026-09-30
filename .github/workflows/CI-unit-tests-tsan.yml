@@ -24,7 +24,7 @@ run-name: ${{ github.event.workflow_run && github.event.workflow_run.head_branch
     types:
     - completed
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 jobs:
   run:

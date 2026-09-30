@@ -149,20 +149,24 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
         if not selected_matrix(job,row['job']):
             errors.append('consumer matrix bypasses selected tiers: '+str(identity));continue
         required_groups=set(row['groups'])
+        execution_step=row.get('execution_step')
+        if not required_groups and (not isinstance(execution_step,str) or not execution_step.strip()):
+            errors.append('group-less consumer lacks a valid execution_step: '+str(identity));continue
         for tier in row['tiers']:
             per_mode=[]
             for mode in ['normal','asan']:
-                wired=set();execution_ran=False
+                wired=set();execution_ran=False;matrix_source_failed=False
                 for inputs,gates in routes:
                     if not all(runnable(scope,job_id,values,tier,mode,row['job']) for scope,job_id,values in gates):continue
                     if not matrix_source_allows(body,engines,row,inputs,tier,mode,allowed,runnable):
-                        message='matrix output source is disabled or miswired: '+str(identity)
+                        matrix_source_failed=True
+                        message='matrix output source is disabled or miswired: '+str(identity)+' on '+tier+'/'+mode
                         if message not in errors:errors.append(message)
                         continue
                     if not runnable(body,row['job'],inputs,tier,mode,row['job']):continue
                     for step in job.get('steps',[]):
                         run=resolve(step.get('run',''),inputs)
-                        if (step.get('name')==row.get('execution_step') and (run.strip() or step.get('uses'))
+                        if (execution_step and step.get('name')==execution_step and (run.strip() or step.get('uses'))
                             and allowed(step.get('if'),tier,mode,inputs,row['job'])):
                             execution_ran=True
                         executed=('run-tests-isolated.bash' in run or 'run-unit-tests-asan-coverage.bash' in run or 'unit-tests' in run)
@@ -170,7 +174,7 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
                         value=resolve(step.get('env',{}).get('TAP_GROUP',''),inputs)
                         if value:wired.add(value)
                         wired.update(re.findall(r"TAP_GROUP=[\"']?([a-zA-Z0-9_-]+)",run))
-                if not required_groups and not execution_ran:
+                if not required_groups and not execution_ran and not matrix_source_failed:
                     errors.append('consumer execution missing or disabled: '+str(identity)+' on '+tier+'/'+mode)
                 per_mode.append(wired)
                 missing=required_groups-wired

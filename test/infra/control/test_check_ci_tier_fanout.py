@@ -56,12 +56,57 @@ class RouteTests(unittest.TestCase):
    if mutation=='missing':step['name']='Wrong step'
    if mutation=='empty':step.pop('run')
    self.assertTrue(validate_routes(rows,c,e,{'g1'},set()),mutation)
+ def test_group_less_consumers_require_a_named_execution_contract(self):
+  for value in [None, '', '   ', 123]:
+   for unnamed_step in [{'run':'python3 ci_tier_runtime.py restore'}, {'uses':'actions/checkout@v4'}]:
+    with self.subTest(value=value,step=unnamed_step):
+     rows,c,e=self.fixture();rows[0]['groups']=[]
+     if value is not None:rows[0]['execution_step']=value
+     e['ci-g1.yml']['jobs']['tests']['steps']=[unnamed_step]
+     errors=validate_routes(rows,c,e,{'g1'},set())
+     self.assertIn("group-less consumer lacks a valid execution_step: ('CI-g1', 'run', 'tests')",errors)
  def test_instrumentation_is_the_same_for_every_tier(self):
   for tier in ['v30','v31','v40']:
    self.assertTrue(condition_allows('matrix.coverage',tier,'normal'))
  def test_a_producer_unit_side_path_is_not_a_consumer(self):
-  rows,c,e=self.fixture();rows[0].update(workflow='CI-builds',job='tier-units')
-  self.assertTrue(validate_routes(rows,c,e,{'g1'},{'g1'}))
+  rows,c,e=self.fixture();rows[0].update(workflow='CI-builds',file='ci-builds.yml',job='tier-units')
+  c['CI-builds']=c.pop('CI-g1')
+  c['CI-builds']['jobs']['run']['uses']='./.github/workflows/ci-builds.yml'
+  e['ci-builds.yml']=e.pop('ci-g1.yml');jobs=e['ci-builds.yml']['jobs']
+  jobs['tier-context']['with']['consumer_file']='ci-builds.yml'
+  jobs['tier-units']=jobs.pop('tests')
+  jobs['tier-units']['strategy']['matrix']['include']="${{ fromJson(needs.tier-context.outputs.matrices)['tier-units'] || fromJson('[{}]') }}"
+  self.assertEqual(validate_routes(rows,c,e,{'g1'},{'g1'}),[])
+  # A producer side path running the same group cannot substitute for a
+  # consumer whose matrix comes from the selected-tier execution contract.
+  jobs['tier-units']['strategy']['matrix']={'tier':['v30','v31','v40']}
+  self.assertEqual(validate_routes(rows,c,e,{'g1'},{'g1'}),[
+   "consumer matrix bypasses selected tiers: ('CI-builds', 'run', 'tier-units')",
+   'lower-tier coverage lost: v30/g1', 'lower-tier coverage lost: v31/g1'])
+ def test_group_less_matrix_failures_report_only_the_source_for_each_cell(self):
+  for condition in ['${{ false }}', "${{ matrix.mode == 'normal' }}"]:
+   with self.subTest(condition=condition):
+    rows,c,e=self.fixture();rows[0]['groups']=[];rows[0]['execution_step']='Run suite'
+    e['ci-g1.yml']['jobs']['tests']['steps'][1]['name']='Run suite'
+    self.assertEqual(validate_routes(rows,c,e,{'g1'},set()),[])
+    e['ci-tier-context.yml']['jobs']['context']['steps'][0]['if']=condition
+    errors=validate_routes(rows,c,e,{'g1'},set())
+    modes=['normal','asan'] if condition=='${{ false }}' else ['asan']
+    self.assertEqual(errors,[
+     "matrix output source is disabled or miswired: ('CI-g1', 'run', 'tests') on "+tier+'/'+mode
+     for tier in ['v40','v30','v31'] for mode in modes])
+ def test_group_less_disabled_job_remains_an_execution_failure(self):
+  rows,c,e=self.fixture();rows[0]['groups']=[];rows[0]['execution_step']='Run suite'
+  e['ci-g1.yml']['jobs']['tests']['steps'][1]['name']='Run suite'
+  e['ci-g1.yml']['jobs']['tests']['if']='${{ false }}'
+  # Source failures affect ASAN only; the disabled job must still be diagnosed
+  # on normal cells, where a valid source does not prove suite execution.
+  e['ci-tier-context.yml']['jobs']['context']['steps'][0]['if']="${{ matrix.mode == 'normal' }}"
+  errors=validate_routes(rows,c,e,{'g1'},set())
+  for tier in ['v40','v30','v31']:
+   self.assertIn("consumer execution missing or disabled: ('CI-g1', 'run', 'tests') on "+tier+'/normal',errors)
+   self.assertIn("matrix output source is disabled or miswired: ('CI-g1', 'run', 'tests') on "+tier+'/asan',errors)
+  self.assertEqual(len(errors),6)
  def test_negation_with_comparisons_fails_closed(self):
   for gate in ["!matrix.tier == 'v40'", "!matrix.tier != 'v30'", "!(matrix.tier) == 'v40'"]:
    with self.subTest(gate=gate):
