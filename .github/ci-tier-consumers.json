@@ -669,6 +669,46 @@
       "execution_step": "Run tests"
     },
     {
+      "workflow": "CI-3p-node-postgres",
+      "file": "ci-3p-node-postgres.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_NODE_POSTGRES_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_NODE_POSTGRES_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql"
+    },
+    {
+      "workflow": "CI-3p-pgx",
+      "file": "ci-3p-pgx.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PGX_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PGX_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql"
+    },
+    {
       "workflow": "CI-3p-node-mysql2",
       "file": "ci-3p-node-mysql2.yml",
       "job": "test",
