@@ -256,6 +256,7 @@ class MySQL_Connection {
 	void set_autocommit_cont(short event);
 	void set_names_start();
 	void set_names_cont(short event);
+	void apply_local_infile_policy();
 	void real_query_start();
 	void real_query_cont(short event);
 #ifndef PROXYSQL_USE_RESULT
