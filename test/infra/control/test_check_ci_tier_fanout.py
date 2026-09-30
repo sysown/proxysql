@@ -15,6 +15,79 @@ class RouteTests(unittest.TestCase):
  def test_manual_does_not_cover_automatic(self):
   rows,c,e=self.fixture();c['CI-g1']['on']={'workflow_dispatch':None}
   self.assertIn('automatic/manual mismatch CI-g1',validate_routes(rows,c,e,{'g1'},{'g1'}))
+ def test_external_manual_consumer_needs_no_local_caller(self):
+  """External manual consumers may omit a caller in this repository."""
+  rows,_,e=self.fixture()
+  rows[0]['automatic']=False
+  self.assertEqual(validate_routes(rows,{},e,{'g1'},set()),[])
+ def test_external_manual_consumer_still_validates_reusable_contract(self):
+  """A missing caller must not hide a broken reusable consumer."""
+  for mutation,expected in [
+   ('workflow','missing reusable ci-g1.yml'),
+   ('job','missing consumer job ci-g1.yml/tests'),
+   ('context','missing tier context ci-g1.yml'),
+   ('matrix',"consumer matrix bypasses selected tiers: ('CI-g1', 'run', 'tests')"),
+   ('execution',"group-less consumer lacks a valid execution_step: ('CI-g1', 'run', 'tests')"),
+  ]:
+   with self.subTest(mutation=mutation):
+    rows,_,e=self.fixture()
+    rows[0]['automatic']=False
+    if mutation=='workflow':
+     del e['ci-g1.yml']
+    if mutation=='job':
+     del e['ci-g1.yml']['jobs']['tests']
+    if mutation=='context':
+     del e['ci-g1.yml']['jobs']['tier-context']
+    if mutation=='matrix':
+     e['ci-g1.yml']['jobs']['tests']['strategy']['matrix']={'tier':['v40']}
+    if mutation=='execution':
+     rows[0]['groups']=[]
+    self.assertIn(expected,validate_routes(rows,{},e,{'g1'},set()))
+ def test_automatic_consumer_still_requires_local_caller(self):
+  """Automatic catalogue entries require a local trigger."""
+  rows,_,e=self.fixture()
+  self.assertIn('missing caller CI-g1',validate_routes(rows,{},e,{'g1'},set()))
+ def test_external_manual_execution_step_must_exist_and_do_work(self):
+  """A declared execution step must name an actual command or action."""
+  for content in [{'run':'run-tests'}, {'uses':'owner/action@v1'}]:
+   for mutation in ['missing','renamed','empty','whitespace']:
+    with self.subTest(content=content,mutation=mutation):
+     rows,_,e=self.fixture()
+     rows[0].update(automatic=False,groups=[],execution_step='Run suite')
+     step=dict(name='Run suite',**content)
+     e['ci-g1.yml']['jobs']['tests']['steps']=[step]
+     self.assertEqual(validate_routes(rows,{},e,{'g1'},set()),[])
+     if mutation=='missing':
+      e['ci-g1.yml']['jobs']['tests']['steps']=[]
+     if mutation=='renamed':
+      step['name']='Wrong name'
+     if mutation=='empty':
+      step.pop(next(iter(content)))
+     if mutation=='whitespace':
+      step[next(iter(content))]='   '
+     self.assertIn("consumer execution step missing or empty: ('CI-g1', 'run', 'tests')",validate_routes(rows,{},e,{'g1'},set()))
+ def test_external_manual_consumer_does_not_supply_migrated_coverage(self):
+  """External manual suites cannot replace automatic tier coverage."""
+  rows,_,e=self.fixture()
+  rows[0]['automatic']=False
+  errors=validate_routes(rows,{},e,{'g1'},{'g1'})
+  for tier in ['v30','v31']:
+   self.assertIn('lower-tier coverage lost: '+tier+'/g1',errors)
+ def test_local_manual_caller_still_validates_its_route(self):
+  """Local manual callers must reach the catalogued reusable workflow."""
+  rows,c,e=self.fixture()
+  rows[0]['automatic']=False
+  c['CI-g1']['on']={'workflow_dispatch':None}
+  self.assertEqual(validate_routes(rows,c,e,{'g1'},set()),[])
+  c['CI-g1']['jobs']['run']['uses']='./.github/workflows/missing.yml'
+  self.assertIn('missing reusable missing.yml',validate_routes(rows,c,e,{'g1'},set()))
+ def test_local_manual_caller_still_validates_execution(self):
+  """Local manual routes must execute their promised test groups."""
+  rows,c,e=self.fixture()
+  rows[0]['automatic']=False
+  c['CI-g1']['on']={'workflow_dispatch':None}
+  e['ci-g1.yml']['jobs']['tests']['steps'][1]['if']='${{ false }}'
+  self.assertTrue(any(error.startswith('group not executed by ') for error in validate_routes(rows,c,e,{'g1'},set())))
  def test_unknown_missing_nested_and_duplicate(self):
   rows,c,e=self.fixture();self.assertIn('missing reusable ci-g1.yml',validate_routes(rows,c,{}, {'g1'},{'g1'}))
   self.assertIn('unknown group g1',validate_routes(rows,c,e,{}, {'g1'}))
