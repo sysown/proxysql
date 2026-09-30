@@ -11,7 +11,9 @@ class WorkflowTests(unittest.TestCase):
     if 'ci-tier-context.yml' not in job.get('uses',''):continue
     permissions=job.get('permissions',doc.get('permissions'))
     if isinstance(permissions,dict):
-     with self.subTest(file=file.name):self.assertEqual(permissions.get('actions'),'write')
+     with self.subTest(file=file.name):
+      self.assertEqual(permissions.get('actions'),'write')
+      self.assertEqual(permissions.get('pull-requests'),'read')
  def test_cancellation_never_executes_pr_code_or_waits_for_self_hosted(self):
   d=workflow('ci-cancel-superseded.yml');job=d['jobs']['cancel']
   self.assertEqual(d['permissions'],{'actions':'write','contents':'read','pull-requests':'read'})
