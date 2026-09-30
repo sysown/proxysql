@@ -217,7 +217,7 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 			" hg_%d: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d }"
 		" }",
 		WHG, hg_whg_exp_queries, hg_whg_queries, hg_whg_exp_sync_queries, hg_whg_sync_queries,
-		RHG, NUM_CHECKS, hg_rhg_queries, NUM_CHECKS, hg_rhg_queries
+		RHG, NUM_CHECKS, hg_rhg_queries, NUM_CHECKS, hg_rhg_sync_queries
 	);
 
 	// Reset connection pool stats

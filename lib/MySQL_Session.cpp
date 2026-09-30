@@ -2531,16 +2531,6 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 		return ret;
 	}
 
-	const char *server_version = mybe->server_myds->myconn->mysql->server_version;
-	if (server_version != nullptr && strstr(server_version, "MariaDB") != nullptr) {
-		// MariaDB has no SESSION_TRACK_GTIDS. Never send the variable, and never
-		// try again for this backend connection. The GTID is read from
-		// @@gtid_binlog_pos on a dedicated connection instead, see
-		// MySQL_Connection::get_gtid().
-		mybe->server_myds->myconn->options.session_track_gtids_sent = true;
-		return ret;
-	}
-
 	uint32_t b_int = mybe->server_myds->myconn->options.session_track_gtids_int;
 	uint32_t f_int = client_myds->myconn->options.session_track_gtids_int;
 
@@ -3518,10 +3508,25 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 	return ret;
 }
 
+// MariaDB has no SESSION_TRACK_GTIDS. Its equivalent of OWN_GTID is tracking the
+// 'last_gtid' system variable, reported in the OK packet of each committed
+// transaction. The expression adds it to the tracked variables without dropping
+// the ones already tracked: '*' already includes it, and CONCAT() with '*' fails.
+static const char MARIADB_TRACK_LAST_GTID[] =
+	"IF(@@session.session_track_system_variables='*'"
+	" OR FIND_IN_SET('last_gtid',@@session.session_track_system_variables),"
+	"@@session.session_track_system_variables,"
+	"CONCAT_WS(',',NULLIF(@@session.session_track_system_variables,''),'last_gtid'))";
+
 bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids, true);
+	const char *server_version = mybe->server_myds->myconn->mysql->server_version;
+	if (server_version != nullptr && strstr(server_version, "MariaDB") != nullptr) {
+		ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"session_track_system_variables", MARIADB_TRACK_LAST_GTID, true);
+	} else {
+		ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids, true);
+	}
 	return ret;
 }
 

@@ -528,8 +528,13 @@ bool select_session_gtid(
 		}
 		selected.assign(session_track_gtids, gtids_len);
 	} else {
+		// MariaDB reports the GTID of the session's own last transaction as the
+		// tracked system variable 'last_gtid', the equivalent of MySQL's OWN_GTID.
+		auto last_gtid = sysvars.find("last_gtid");
 		auto binlog_pos = sysvars.find("gtid_binlog_pos");
-		if (binlog_pos != sysvars.end() && !binlog_pos->second.empty()) {
+		if (last_gtid != sysvars.end() && !last_gtid->second.empty()) {
+			selected = last_gtid->second;
+		} else if (binlog_pos != sysvars.end() && !binlog_pos->second.empty()) {
 			selected = binlog_pos->second;
 		} else {
 			auto current_pos = sysvars.find("gtid_current_pos");
@@ -630,19 +635,6 @@ bool render_mariadb_domain_position(const GTID_Set& set, const char* domain_id,
 
 	memcpy(buf, rendered.c_str(), rendered.size() + 1);
 	return true;
-}
-
-bool select_mariadb_binlog_position(const char* position, const char* domain_id,
-                                    char* buf, size_t buf_len) {
-	if (position == nullptr || *position == '\0') {
-		return false;
-	}
-
-	GTID_Set set;
-	if (!parse_gtid_set(position, &set)) {
-		return false;
-	}
-	return render_mariadb_domain_position(set, domain_id, buf, buf_len);
 }
 
 static bool add_mysql_gtid_token(GTID_Set& set, const char* token, size_t len) {

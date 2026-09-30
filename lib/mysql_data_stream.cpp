@@ -1856,9 +1856,6 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 			destroy_MySQL_Connection_From_Pool(true);
 		}
 	} else {
-		// the auxiliary GTID lookup connection is only valid for the current
-		// session, so it must not be left open on the pooled connection
-		mc->release_gtid_lookup_connection();
 		detach_connection();
 		unplug_backend();
 #ifdef STRESSTEST_POOL
