@@ -4438,19 +4438,22 @@ bool Group_Replication_Info::update(int b, int r, int o, int mw, int mtb, bool _
 void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *_error) {
 	int cols=0;
 	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=NULL;
-	char *q=NULL;
-	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
-	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
-	sprintf(query,q,_hostname,_port);
-  mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		free(error);
-		error=NULL;
-	}
-	free(query);
+	auto execute = [&](const char *sql, auto bind) {
+		auto [rc, statement_unique] = mydb->prepare_v2(sql);
+		ASSERT_SQLITE_OK(rc, mydb);
+		bind(statement_unique.get());
+		char *error = NULL;
+		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
+		if (error) free(error);
+		return resultset;
+	};
+	SQLite3_result *resultset = execute(
+		"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname=?1 AND port=?2 AND status<>3",
+		[&](sqlite3_stmt *statement) {
+			int rc = (*proxy_sqlite3_bind_text)(statement, 1, _hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 2, _port); ASSERT_SQLITE_OK(rc, mydb);
+		}
+	);
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
 			proxy_warning("Group Replication: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
@@ -4458,40 +4461,41 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			// NOTE: Only updated the servers that have belong to the same cluster.
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
-				" SELECT %d UNION ALL"
-				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
-				" SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
-			")";
-			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
-			mydb->execute(query);
+			execute(
+				"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?1) WHERE hostname=?2 AND port=?3 AND hostgroup_id IN ( SELECT ?1 UNION ALL SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?1 UNION ALL SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?1)",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_text)(statement, 2, _hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _port); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			// NOTE: Only delete the servers that have belong to the same cluster.
-			q=(char*)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
-				" SELECT %d UNION ALL"
-				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
-				" SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
-			")";
-			sprintf(query,q,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
-			mydb->execute(query);
-			//free(query);
-			// q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			// sprintf(query,q,_hostname,_port,_writer_hostgroup);
-			q=(char *)"UPDATE mysql_servers_incoming SET status=(CASE "
-				" (SELECT status FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND"
-					" hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)) WHEN 2 THEN 2 ELSE 0 END)"
-				" WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			sprintf(query,q,_hostname,_port,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
-			mydb->execute(query);
-			//free(query);
+			execute(
+				"DELETE FROM mysql_servers_incoming WHERE hostname=?1 AND port=?2 AND hostgroup_id IN ( SELECT ?3 UNION ALL SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?3 UNION ALL SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?3)",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_text)(statement, 1, _hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, _port); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
+			execute(
+				"UPDATE mysql_servers_incoming SET status=(CASE (SELECT status FROM mysql_servers_incoming WHERE hostname=?1 AND port=?2 AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?3)) WHEN 2 THEN 2 ELSE 0 END) WHERE hostname=?1 AND port=?2 AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?3)",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_text)(statement, 1, _hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, _port); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			converge_group_replication_config(_writer_hostgroup);
 			commit();
 			wrlock();
 			SQLite3_result *resultset2=NULL;
-			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup);
-			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+			resultset2 = execute(
+				"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?1",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			if (resultset2) {
 				if (resultset2->rows_count) {
 					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
@@ -4500,9 +4504,15 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 						int backup_writer_hostgroup=atoi(r->fields[1]);
 						int reader_hostgroup=atoi(r->fields[2]);
 						int offline_hostgroup=atoi(r->fields[3]);
-						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
-						sprintf(query,q,_writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup);
-						mydb->execute(query);
+						execute(
+							"DELETE FROM mysql_servers WHERE hostgroup_id IN (?1, ?2, ?3, ?4)",
+							[&](sqlite3_stmt *statement) {
+								int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+								rc = (*proxy_sqlite3_bind_int64)(statement, 2, backup_writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+								rc = (*proxy_sqlite3_bind_int64)(statement, 3, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+								rc = (*proxy_sqlite3_bind_int64)(statement, 4, offline_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+							}
+						);
 						generate_mysql_servers_table(&writer_hostgroup);
 						generate_mysql_servers_table(&backup_writer_hostgroup);
 						generate_mysql_servers_table(&reader_hostgroup);
@@ -4514,7 +4524,6 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 			}
 			wrunlock();
 			GloAdmin->mysql_servers_wrunlock();
-			free(query);
 		}
 	}
 	if (resultset) {
@@ -4541,19 +4550,22 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *_error) {
 	int cols=0;
 	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=NULL;
-	char *q=NULL;
-	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
-	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
-	sprintf(query,q,_hostname,_port);
-  mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
-	if (error) {
-		free(error);
-		error=NULL;
-	}
-	free(query);
+	auto execute = [&](const char *sql, auto bind) {
+		auto [rc, statement_unique] = mydb->prepare_v2(sql);
+		ASSERT_SQLITE_OK(rc, mydb);
+		bind(statement_unique.get());
+		char *error = NULL;
+		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
+		if (error) free(error);
+		return resultset;
+	};
+	SQLite3_result *resultset = execute(
+		"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname=?1 AND port=?2 AND status<>3",
+		[&](sqlite3_stmt *statement) {
+			int rc = (*proxy_sqlite3_bind_text)(statement, 1, _hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 2, _port); ASSERT_SQLITE_OK(rc, mydb);
+		}
+	);
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
 			proxy_warning("Group Replication: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
@@ -4561,39 +4573,42 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			// NOTE: Only updated the servers that have belong to the same cluster.
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
-				" SELECT %d UNION ALL"
-				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
-				" SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
-			")";
-			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
-			mydb->execute(query);
+			execute(
+				"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?1) WHERE hostname=?2 AND port=?3 AND hostgroup_id IN ( SELECT ?1 UNION ALL SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?1 UNION ALL SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?1)",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_text)(statement, 2, _hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _port); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			// NOTE: Only delete the servers that have belong to the same cluster.
-			q=(char*)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
-				" SELECT %d UNION ALL"
-				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
-				" SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
-			")";
-			sprintf(query,q,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
-			mydb->execute(query);
-			//free(query);
+			execute(
+				"DELETE FROM mysql_servers_incoming WHERE hostname=?1 AND port=?2 AND hostgroup_id IN ( SELECT ?3 UNION ALL SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?3 UNION ALL SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?3)",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_text)(statement, 1, _hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, _port); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			// NOTE: In case of the server being 'OFFLINE_SOFT' we preserve this status. Otherwise we set the server as 'ONLINE'.
-			q=(char *)"UPDATE mysql_servers_incoming SET status=(CASE "
-				" (SELECT status FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND"
-					" hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)) WHEN 2 THEN 2 ELSE 0 END)"
-				" WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			sprintf(query,q,_hostname,_port,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
-			mydb->execute(query);
-			//free(query);
+			execute(
+				"UPDATE mysql_servers_incoming SET status=(CASE (SELECT status FROM mysql_servers_incoming WHERE hostname=?1 AND port=?2 AND hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?3)) WHEN 2 THEN 2 ELSE 0 END) WHERE hostname=?1 AND port=?2 AND hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?3)",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_text)(statement, 1, _hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, _port); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 3, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			converge_group_replication_config(_writer_hostgroup);
 			commit();
 			wrlock();
 			SQLite3_result *resultset2=NULL;
-			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup);
-			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+			resultset2 = execute(
+				"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=?1",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, _writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			if (resultset2) {
 				if (resultset2->rows_count) {
 					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
@@ -4602,9 +4617,15 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 						int backup_writer_hostgroup=atoi(r->fields[1]);
 						int reader_hostgroup=atoi(r->fields[2]);
 						int offline_hostgroup=atoi(r->fields[3]);
-						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
-						sprintf(query,q,writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup);
-						mydb->execute(query);
+						execute(
+							"DELETE FROM mysql_servers WHERE hostgroup_id IN (?1, ?2, ?3, ?4)",
+							[&](sqlite3_stmt *statement) {
+								int rc = (*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+								rc = (*proxy_sqlite3_bind_int64)(statement, 2, backup_writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+								rc = (*proxy_sqlite3_bind_int64)(statement, 3, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+								rc = (*proxy_sqlite3_bind_int64)(statement, 4, offline_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+							}
+						);
 						generate_mysql_servers_table(&writer_hostgroup);
 						generate_mysql_servers_table(&backup_writer_hostgroup);
 						generate_mysql_servers_table(&reader_hostgroup);
@@ -4616,7 +4637,6 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 			}
 			wrunlock();
 			GloAdmin->mysql_servers_wrunlock();
-			free(query);
 		}
 	}
 	if (resultset) {
