@@ -75,6 +75,10 @@ run_check "Test paired engine-ref selection" \
 	python3 -m unittest discover -s test/infra/control -p test_ci_engine_ref.py
 run_check "Test selected-tier fanout validator" \
     python3 -m unittest discover -s test/infra/control -p test_check_ci_tier_fanout.py
+run_check "Check nightly simulator build schedule" \
+    python3 -m unittest discover -s test/infra/control -p test_maketest_schedule.py
+run_check "Check superseded PR cancellation trigger" \
+    python3 -m unittest discover -s test/infra/control -p test_cancel_superseded.py
 
 run_check "Test CI skip-label gates" \
     python3 -m unittest discover -s test/infra/control -p test_ci_skip_label.py

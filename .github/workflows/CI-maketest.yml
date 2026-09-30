@@ -1,39 +1,64 @@
 name: CI-maketest
-run-name: ${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha
-  }} ${{ inputs.producer_run_id && format('producer={0}/{1}', inputs.producer_run_id, inputs.producer_attempt) || format('trigger={0}/{1}', github.event.workflow_run.id || github.run_id, github.event.workflow_run.run_attempt
-  || github.run_attempt) }}
-'on':
+run-name: Nightly simulator builds (${{ inputs.tier || 'v4.0' }}) @ ${{ github.sha }}
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
   workflow_dispatch:
     inputs:
-      control_ref:
-        type: string
-        default: GH-Actions
-        description: CI script ref; candidate workflow validation also requires repinning uses
-      producer_run_id:
-        type: string
-        required: true
-        description: Exact producer workflow run ID (manual tests)
-      producer_attempt:
-        type: string
-        required: true
-        description: Exact producer attempt (manual tests)
-  workflow_run:
-    workflows:
-    - CI-trigger
-    types:
-    - completed
+      tier:
+        description: Product version to compile
+        type: choice
+        options: [v4.0, v3.1, v3.0]
+        default: v4.0
+
+permissions:
+  contents: read
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.tier || 'v4.0' }}
+  cancel-in-progress: false
+
 jobs:
-  run:
-    if: ${{ (!github.event.workflow_run || !startsWith(github.event.workflow_run.display_title, '[ci:skip] ')) && (github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run) }}
-    permissions: write-all
-    uses: sysown/proxysql/.github/workflows/ci-maketest.yml@GH-Actions
-    secrets: inherit
-    with:
-      trigger: ${{ toJson(github) }}
-      consumer_id: run
-      control_ref: ${{ inputs.control_ref || 'GH-Actions' }}
-      producer_run_id: ${{ inputs.producer_run_id || '' }}
-      producer_attempt: ${{ inputs.producer_attempt || '' }}
+  builds:
+    name: build (${{ inputs.tier || 'v4.0' }}, ${{ matrix.target }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [testaurora, testgalera, testgrouprep, testreadonly, testreplicationlag, testall]
+    env:
+      TARGET: ${{ matrix.target }}
+      PROXYSQL40: ${{ (inputs.tier == 'v4.0' || inputs.tier == '') && '1' || '' }}
+      PROXYSQL31: ${{ inputs.tier == 'v3.1' && '1' || '' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: proxysql
+      - name: Build simulator configuration
+        timeout-minutes: 90
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd proxysql
+          GIT_VERSION="$(git describe --long --abbrev=7)"
+          BUILD_JOBS="$(nproc)"
+          export GIT_VERSION BUILD_JOBS
+          echo "Building ${TARGET} at ${GITHUB_SHA} (${GIT_VERSION})"
+          compose_project="maketest-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET}"
+          trap 'docker compose -p "$compose_project" down --volumes --remove-orphans' EXIT
+          docker compose -p "$compose_project" run --rm -T \
+            -e TARGET -e BUILD_JOBS ubuntu22_dbg_build \
+            bash -l -c 'git config --system --add safe.directory /opt/proxysql && cd /opt/proxysql && make cleanall && make -j"$BUILD_JOBS" "$TARGET"' \
+            2>&1 | tee ../build.log
+      - name: Archive build log
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: maketest-${{ inputs.tier || 'v4.0' }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build.log
