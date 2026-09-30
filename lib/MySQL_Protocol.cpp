@@ -2328,7 +2328,7 @@ static bool mysql_decode_length_ll_checked(unsigned char* ptr, const unsigned ch
 		return false;
 	}
 
-	const int decoded_len = mysql_decode_length_ll(ptr, len);
+	const int decoded_len = mysql_decode_length_ll(ptr, static_cast<size_t>(end - ptr), len);
 	if (decoded_len <= 0) {
 		return false;
 	}
@@ -4561,7 +4561,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 						uint8_t l=0;
 						uint32_t len { 0 };
 						if (!avail(1)) return malformed(i);
-						l=mysql_decode_length_checked((unsigned char *)p, end - p, &len);
+						l=mysql_decode_length((unsigned char *)p, end - p, &len);
 						if (l == 0 || !avail(l) || static_cast<size_t>(end - (p + l)) < len) return malformed(i);
 						if (l>1) {
 							PROXY_TRACE();

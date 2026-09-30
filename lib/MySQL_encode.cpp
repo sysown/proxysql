@@ -205,8 +205,8 @@ typedef union _4bytes_t {
 
 unsigned int CPY3(unsigned char *ptr) {
 	_4bytes_t buf;
-	buf.i=*(uint32_t *)ptr;
-	buf.data[3]=0;
+	buf.i = 0;
+	memcpy(buf.data, ptr, 3);
 	return buf.i;
 }
 
@@ -222,34 +222,22 @@ uint64_t CPY8(unsigned char *ptr) {
  * poiter to the variable to store the length
  * returns the bytes length of th field
 */
-uint8_t mysql_decode_length(unsigned char *ptr, uint32_t *len) {
+uint8_t mysql_decode_length(unsigned char *ptr, size_t avail, uint32_t *len) {
+	if (avail < 1) return 0;
 	if (*ptr <= 0xfb) { if (len) { *len = CPY1(ptr); };  return 1; }
-	if (*ptr == 0xfc) { if (len) { *len = CPY2(ptr+1); }; return 3; }
-	if (*ptr == 0xfd) { if (len) { *len = CPY3(ptr+1); };  return 4; }
-	if (*ptr == 0xfe) { if (len) { *len = CPY4(ptr+1); };  return 9; }
-	return 0; // never reaches here
+	if (*ptr == 0xfc) { if (avail < 3) return 0; if (len) { *len = CPY2(ptr+1); }; return 3; }
+	if (*ptr == 0xfd) { if (avail < 4) return 0; if (len) { *len = CPY3(ptr+1); };  return 4; }
+	if (*ptr == 0xfe) { if (avail < 9) return 0; if (len) { *len = CPY4(ptr+1); };  return 9; }
+	return 0;
 }
 
-/**
- * @brief Bounded variant of 'mysql_decode_length()'.
- * @param ptr Pointer to the length-encoded integer.
- * @param avail Number of bytes readable from 'ptr'.
- * @param len Where to store the decoded value.
- * @return The size of the encoded integer, or 0 if it's invalid or exceeds 'avail'.
- */
-uint8_t mysql_decode_length_checked(unsigned char *ptr, size_t avail, uint32_t *len) {
-	if (avail == 0 || *ptr == 0xff) return 0;
-	const uint8_t enc_len = *ptr <= 0xfb ? 1 : (*ptr == 0xfc ? 3 : (*ptr == 0xfd ? 4 : 9));
-	if (avail < enc_len) return 0;
-	return mysql_decode_length(ptr, len);
-}
-
-uint8_t mysql_decode_length_ll(unsigned char *ptr, uint64_t *len) {
+uint8_t mysql_decode_length_ll(unsigned char *ptr, size_t avail, uint64_t *len) {
+	if (avail < 1) return 0;
 	if (*ptr <= 0xfb) { if (len) { *len = CPY1(ptr); };  return 1; }
-	if (*ptr == 0xfc) { if (len) { *len = CPY2(ptr+1); }; return 3; }
-	if (*ptr == 0xfd) { if (len) { *len = CPY3(ptr+1); };  return 4; }
-	if (*ptr == 0xfe) { if (len) { *len = CPY8(ptr+1); };  return 9; }
-	return 0; // never reaches here
+	if (*ptr == 0xfc) { if (avail < 3) return 0; if (len) { *len = CPY2(ptr+1); }; return 3; }
+	if (*ptr == 0xfd) { if (avail < 4) return 0; if (len) { *len = CPY3(ptr+1); };  return 4; }
+	if (*ptr == 0xfe) { if (avail < 9) return 0; if (len) { *len = CPY8(ptr+1); };  return 9; }
+	return 0;
 }
 
 uint8_t mysql_encode_length(uint64_t len, char *hd) {
