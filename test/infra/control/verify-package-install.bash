@@ -69,24 +69,25 @@ else
 fi
 
 # ---- Map distro name to a clean Docker image ----
-declare -A IMAGE_MAP=(
-    [ubuntu22]="ubuntu:22.04"
-    [ubuntu24]="ubuntu:24.04"
-    [debian12]="debian:bookworm-slim"
-    [debian13]="debian:trixie-slim"
-    [centos9]="quay.io/centos/centos:stream9"
-    [centos10]="quay.io/centos/centos:stream10"
-    [almalinux8]="almalinux:8"
-    [almalinux9]="almalinux:9"
-    [almalinux10]="almalinux:10"
-    [fedora42]="fedora:42"
-    [fedora43]="fedora:43"
-    [fedora44]="fedora:44"
-    [opensuse16]="opensuse/leap:16.0"
-)
-IMAGE="${IMAGE_MAP[$DISTRO]:-}"
+# A case table also works with macOS's /bin/bash 3.2 (no associative arrays).
+case "$DISTRO" in
+    ubuntu22) IMAGE="ubuntu:22.04" ;;
+    ubuntu24) IMAGE="ubuntu:24.04" ;;
+    debian12) IMAGE="debian:bookworm-slim" ;;
+    debian13) IMAGE="debian:trixie-slim" ;;
+    centos9) IMAGE="quay.io/centos/centos:stream9" ;;
+    centos10) IMAGE="quay.io/centos/centos:stream10" ;;
+    almalinux8) IMAGE="almalinux:8" ;;
+    almalinux9) IMAGE="almalinux:9" ;;
+    almalinux10) IMAGE="almalinux:10" ;;
+    fedora42) IMAGE="fedora:42" ;;
+    fedora43) IMAGE="fedora:43" ;;
+    fedora44) IMAGE="fedora:44" ;;
+    opensuse16) IMAGE="opensuse/leap:16.0" ;;
+    *) IMAGE="" ;;
+esac
 if [[ -z "$IMAGE" ]]; then
-    echo "ERROR: unknown distro '$DISTRO' — add it to IMAGE_MAP in $0" >&2
+    echo "ERROR: unknown distro '$DISTRO' — add it to the image mapping in $0" >&2
     exit 1
 fi
 
@@ -104,7 +105,8 @@ fi
 echo ""
 
 # ---- Prepare the test script that runs inside the container ----
-TEST_SCRIPT=$(cat << 'SCRIPT_BODY'
+# read avoids Bash 3.2's command-substitution/heredoc parser limitations.
+IFS= read -r -d '' TEST_SCRIPT << 'SCRIPT_BODY' || true
 #!/bin/bash
 set -euo pipefail
 PKG_TYPE="$1"
@@ -180,7 +182,6 @@ fi
 echo ""
 echo "==> Package verification PASSED"
 SCRIPT_BODY
-)
 
 # ---- Run verification in clean distro container ----
 CID="proxysql-verify-$$"

@@ -57,6 +57,22 @@ must use that same value for **all** plugins, including the WebUI plugin.
 
 ## Troubleshooting
 
+### Local build regression checks
+
+Use Homebrew GNU Make for the CI checks as well as the build: Apple's bundled
+Make is too old for some of the test Makefiles. The shell checks below also
+work with macOS's bundled Bash 3.2.
+
+```bash
+export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
+python3 -m unittest discover -s test/infra/control -p 'test_*.py'
+CI_ENGINE_REF="$(cat .github/ci-tier-engine-ref)" bash test/infra/control/run-ci-lint.bash
+```
+
+The explicit CI-engine pin keeps the paired workflow checks aligned with this
+checkout. Testing against a newer `origin/GH-Actions` catalogue can otherwise
+report missing callers that have not yet landed in the matching core revision.
+
 ### Linking Issues
 If the linker fails to find `libssl` or `libcrypto`, ensure that `OPENSSL_ROOT_DIR` and `PKG_CONFIG_PATH` are correctly set to point to your Homebrew OpenSSL installation.
 
