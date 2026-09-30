@@ -3776,7 +3776,7 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 					// the old behaviour exactly.
 					if (myds->myconn->get_status(STATUS_PGSQL_CONNECTION_LISTEN) &&
 						myds->myconn->native_mode && myds->sess->client_myds) {
-						if (myds->myconn->native_relay_async_messages(myds->sess->client_myds->PSarrayOUT) >= 0) {
+						if (myds->myconn->relay_async_messages(myds->sess->client_myds->PSarrayOUT) >= 0) {
 							return true;
 						}
 					}

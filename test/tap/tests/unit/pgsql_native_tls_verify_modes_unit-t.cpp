@@ -16,6 +16,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
 #include "PgSQL_HostGroups_Manager.h"
 
 #include <openssl/ssl.h>
@@ -29,11 +30,10 @@
 #include <unistd.h>
 
 // A connection pointed at a server row, which is all the context the builder reads.
-static PgSQL_Connection* conn_for(PgSQL_Connection::PG_Native_SSL_Mode mode) {
+static PgSQL_Connection_Native* conn_for(PgSQL_Connection_Native::PG_Native_SSL_Mode mode) {
 	char addr[] = "127.0.0.1";
 	char comment[] = "";
-	PgSQL_Connection* c = new PgSQL_Connection(false);
-	c->native_mode = true;
+	PgSQL_Connection_Native* c = new PgSQL_Connection_Native();
 	c->parent = new PgSQL_SrvC(addr, 5432, 1, MYSQL_SERVER_STATUS_ONLINE, 0, 100, 0, 1, 0, comment);
 	if (c->userinfo->username == NULL) c->userinfo->username = strdup("tlsuser");
 	c->native_ssl_mode = mode;
@@ -75,7 +75,7 @@ int main(int, char**) {
 
 	// 1. REQUIRE, the only mode use_ssl can currently produce: encrypt, do not verify.
 	{
-		PgSQL_Connection* c = conn_for(PgSQL_Connection::PG_Native_SSL_Mode::REQUIRE);
+		PgSQL_Connection_Native* c = conn_for(PgSQL_Connection_Native::PG_Native_SSL_Mode::REQUIRE);
 		SSL_CTX* ctx = c->native_create_client_ssl_ctx();
 		const int mode = ctx ? SSL_CTX_get_verify_mode(ctx) : -1;
 		ok(ctx != NULL && mode == SSL_VERIFY_NONE,
@@ -88,7 +88,7 @@ int main(int, char**) {
 	// 2. Verification asked for with no CA. Encrypting unchecked looks identical from
 	//    the outside, so it has to fail here.
 	{
-		PgSQL_Connection* c = conn_for(PgSQL_Connection::PG_Native_SSL_Mode::VERIFY_CA);
+		PgSQL_Connection_Native* c = conn_for(PgSQL_Connection_Native::PG_Native_SSL_Mode::VERIFY_CA);
 		SSL_CTX* ctx = c->native_create_client_ssl_ctx();
 		ok(ctx == NULL && c->is_error_present(),
 		   "VERIFY_CA with no CA fails closed rather than encrypting unverified (ctx=%s error=%s)",
@@ -103,7 +103,7 @@ int main(int, char**) {
 		char* saved = pgsql_thread___ssl_p2s_ca;
 		pgsql_thread___ssl_p2s_ca = strdup(ca.c_str());
 
-		PgSQL_Connection* c = conn_for(PgSQL_Connection::PG_Native_SSL_Mode::VERIFY_FULL);
+		PgSQL_Connection_Native* c = conn_for(PgSQL_Connection_Native::PG_Native_SSL_Mode::VERIFY_FULL);
 		SSL_CTX* ctx = c->native_create_client_ssl_ctx();
 		const int mode = ctx ? SSL_CTX_get_verify_mode(ctx) : -1;
 		ok(ctx != NULL && (mode & SSL_VERIFY_PEER),

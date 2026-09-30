@@ -14,6 +14,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
 #include "PgSQL_Backend_Protocol.h"
 
 #include <sys/socket.h>
@@ -35,14 +36,13 @@ static std::string auth_ok() {
 }
 
 // A connection parked mid-authentication with `msg` already waiting on its socket.
-static PgSQL_Connection* armed(const std::string& msg, int sv[2]) {
+static PgSQL_Connection_Native* armed(const std::string& msg, int sv[2]) {
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) BAIL_OUT("socketpair failed");
 	fcntl(sv[0], F_SETFL, fcntl(sv[0], F_GETFL, 0) | O_NONBLOCK);
 	if (::send(sv[1], msg.data(), msg.size(), 0) != (ssize_t)msg.size()) BAIL_OUT("send failed");
-	PgSQL_Connection* c = new PgSQL_Connection(false);
+	PgSQL_Connection_Native* c = new PgSQL_Connection_Native();
 	c->fd = sv[0];
-	c->native_mode = true;
-	c->native_st = PgSQL_Connection::PG_Native_Conn_St::AUTH;
+	c->native_st = PgSQL_Connection_Native::PG_Native_Conn_St::AUTH;
 	return c;
 }
 
@@ -57,11 +57,11 @@ int main(int, char**) {
 
 	// ---- the backend skips its half of the proof ---------------------------
 	int sv[2];
-	PgSQL_Connection* c = armed(auth_ok(), sv);
+	PgSQL_Connection_Native* c = armed(auth_ok(), sv);
 	c->native_scram = pg_scram_new();
 	if (c->native_scram == nullptr) BAIL_OUT("pg_scram_new failed");
 	// Our proof has gone out; the server owes one back, and instead says "you're in".
-	c->native_scram_step = PgSQL_Connection::PG_Native_Scram_Step::CLIENT_FINAL_SENT;
+	c->native_scram_step = PgSQL_Connection_Native::PG_Native_Scram_Step::CLIENT_FINAL_SENT;
 
 	c->native_drive_auth(0);
 
@@ -77,11 +77,11 @@ int main(int, char**) {
 	// Control: no exchange to verify, so nothing to refuse. A guard that rejected
 	// these would break every trust- or password-authenticated backend.
 	int sv2[2];
-	PgSQL_Connection* c2 = armed(auth_ok(), sv2);   // native_scram stays null
+	PgSQL_Connection_Native* c2 = armed(auth_ok(), sv2);   // native_scram stays null
 	c2->native_drive_auth(0);
 
 	ok(!c2->is_error_present() &&
-	   c2->native_st == PgSQL_Connection::PG_Native_Conn_St::STARTUP_TAIL,
+	   c2->native_st == PgSQL_Connection_Native::PG_Native_Conn_St::STARTUP_TAIL,
 	   "a backend with no SCRAM exchange (trust or password auth) is still accepted%s",
 	   c2->is_error_present() ? "  <-- the guard rejects a legitimate login" : "");
 	teardown(c2, sv2);

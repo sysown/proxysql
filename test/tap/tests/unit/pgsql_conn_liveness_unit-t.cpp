@@ -13,6 +13,8 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
+#include "PgSQL_Connection_LibPQ.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -25,11 +27,10 @@ static int open_dummy_fd() {
 
 // A connection in the state a healthy pooled one is in: open socket, login done,
 // backend last said it was idle.
-static PgSQL_Connection* make_live_native_conn() {
-	PgSQL_Connection* c = new PgSQL_Connection(false);
-	c->native_mode = true;
+static PgSQL_Connection_Native* make_live_native_conn() {
+	PgSQL_Connection_Native* c = new PgSQL_Connection_Native();
 	c->fd = open_dummy_fd();
-	c->native_st = PgSQL_Connection::PG_Native_Conn_St::DONE;
+	c->native_st = PgSQL_Connection_Native::PG_Native_Conn_St::DONE;
 	// native_connected is what marks the connection usable; native_st is set to
 	// match what a real completed login leaves behind.
 	c->native_connected = true;
@@ -39,26 +40,38 @@ static PgSQL_Connection* make_live_native_conn() {
 
 // Do what the real teardown does: close the socket and mark it not connected.
 // It leaves the transaction letter behind, and so do we -- that is the point.
-static void simulate_teardown(PgSQL_Connection* c) {
+//
+// Takes the leaf, not the base: `native_connected` is native transport state and
+// moved to PgSQL_Connection_Native in step 5b, with the base reading it from
+// PgSQL_Connection_Native::backend_is_live() rather than inlining the gate. The
+// assertions around the call still go through a base pointer on purpose -- see the
+// n/c pairs below -- so the shared API is still exercised through an upcast.
+static void simulate_teardown(PgSQL_Connection_Native* c) {
 	if (c->fd >= 0) { ::close(c->fd); c->fd = -1; }
 	c->native_connected = false;
 }
 
 static void test_live_native_conn_is_healthy() {
-	PgSQL_Connection* c = make_live_native_conn();
+	PgSQL_Connection_Native* n = make_live_native_conn();
+	PgSQL_Connection* c = n;	// deliberate upcast: the assertions go through
+	                           // the shared base API; the teardown writes native
+	                           // state, so that one call takes the leaf pointer.
 	ok(c->is_connected() == true,
 	   "live native conn: is_connected() true");
 	ok(c->get_pg_transaction_status() == PQTRANS_IDLE,
 	   "live native conn: transaction status IDLE (from the 'I' byte)");
 	ok(c->is_connection_in_reusable_state() == true,
 	   "live native conn: reusable");
-	simulate_teardown(c);
+	simulate_teardown(n);
 	delete c;
 }
 
 static void test_dead_native_conn_reports_dead() {
-	PgSQL_Connection* c = make_live_native_conn();
-	simulate_teardown(c);
+	PgSQL_Connection_Native* n = make_live_native_conn();
+	PgSQL_Connection* c = n;	// deliberate upcast: the assertions go through
+	                           // the shared base API; the teardown writes native
+	                           // state, so that one call takes the leaf pointer.
+	simulate_teardown(n);
 
 	ok(c->is_connected() == false,
 	   "torn-down native conn: is_connected() false");
@@ -77,8 +90,11 @@ static void test_dead_native_conn_reports_dead() {
 }
 
 static void test_protocol_answer_stays_unqualified() {
-	PgSQL_Connection* c = make_live_native_conn();
-	simulate_teardown(c);
+	PgSQL_Connection_Native* n = make_live_native_conn();
+	PgSQL_Connection* c = n;	// deliberate upcast: the assertions go through
+	                           // the shared base API; the teardown writes native
+	                           // state, so that one call takes the leaf pointer.
+	simulate_teardown(n);
 	ok(c->last_ready_for_query_status() == 'I',
 	   "last_ready_for_query_status() still reports the raw byte after teardown -- "
 	   "question 1 is deliberately unqualified; its callers carry their own guard");
@@ -86,12 +102,12 @@ static void test_protocol_answer_stays_unqualified() {
 }
 
 static void test_conn_that_died_after_handshake() {
-	PgSQL_Connection* c = make_live_native_conn();
+	PgSQL_Connection_Native* c = make_live_native_conn();
 	// The usual way a connection dies: it worked, then the socket went away in the
 	// middle of a result. Only the closed socket shows it, so that half of the
 	// check has to be doing its job.
 	if (c->fd >= 0) { ::close(c->fd); c->fd = -1; }
-	ok(c->native_st == PgSQL_Connection::PG_Native_Conn_St::DONE &&
+	ok(c->native_st == PgSQL_Connection_Native::PG_Native_Conn_St::DONE &&
 	   c->is_connection_in_reusable_state() == false,
 	   "conn that died after a completed handshake (fd cleared, native_st still DONE) "
 	   "is not reusable -- the fd half of the liveness gate is load-bearing");
@@ -99,22 +115,25 @@ static void test_conn_that_died_after_handshake() {
 }
 
 static void test_healthy_conn_mid_partial_send_is_live() {
-	PgSQL_Connection* c = make_live_native_conn();
+	PgSQL_Connection_Native* c = make_live_native_conn();
 	// A query too big to write in one go leaves the connection in a sending state.
 	// Nothing is wrong with it, so it must still count as usable.
-	c->native_st = PgSQL_Connection::PG_Native_Conn_St::SEND_STARTUP;
-	c->native_st_after_send = PgSQL_Connection::PG_Native_Conn_St::DONE;
+	c->native_st = PgSQL_Connection_Native::PG_Native_Conn_St::SEND_STARTUP;
+	c->native_st_after_send = PgSQL_Connection_Native::PG_Native_Conn_St::DONE;
 	ok(c->is_connected() == true && c->is_connection_in_reusable_state() == true,
 	   "healthy conn parked at SEND_STARTUP by a partial send is still live and reusable");
-	c->native_st = PgSQL_Connection::PG_Native_Conn_St::DONE;
+	c->native_st = PgSQL_Connection_Native::PG_Native_Conn_St::DONE;
 	simulate_teardown(c);
 	delete c;
 }
 
 static void test_dead_conn_that_was_in_a_transaction_still_reports_one() {
-	PgSQL_Connection* c = make_live_native_conn();
+	PgSQL_Connection_Native* n = make_live_native_conn();
+	PgSQL_Connection* c = n;	// deliberate upcast: the assertions go through
+	                           // the shared base API; the teardown writes native
+	                           // state, so that one call takes the leaf pointer.
 	c->set_ready_for_query_status('T');          // backend last said "in transaction"
-	simulate_teardown(c);
+	simulate_teardown(n);
 	// This connection died with a transaction open. If it claimed otherwise, the
 	// statement would be run again on a fresh connection, on its own, outside the
 	// transaction it belonged to.
@@ -129,8 +148,7 @@ static void test_libpq_control() {
 	// and PQtransactionStatus(NULL) is already PQTRANS_UNKNOWN, so a dead libpq conn
 	// gave these answers before the change too. Checking it here means a future edit
 	// to the gate cannot quietly alter the shipped path.
-	PgSQL_Connection* c = new PgSQL_Connection(false);
-	c->native_mode = false;
+	PgSQL_Connection* c = new PgSQL_Connection_LibPQ();
 	// pgsql_conn stays NULL -- the constructor sets it so.
 	ok(c->is_connected() == false && c->get_pg_connection_status() == CONNECTION_BAD &&
 	   c->get_pg_transaction_status() == PQTRANS_UNKNOWN,
@@ -147,7 +165,10 @@ static void test_libpq_control() {
 }
 
 static void test_live_conn_in_failed_transaction_is_still_reusable() {
-	PgSQL_Connection* c = make_live_native_conn();
+	PgSQL_Connection_Native* n = make_live_native_conn();
+	PgSQL_Connection* c = n;	// deliberate upcast: the assertions go through
+	                           // the shared base API; the teardown writes native
+	                           // state, so that one call takes the leaf pointer.
 	// A statement failed but the backend answered and is waiting for ROLLBACK. The
 	// connection itself is fine, so a liveness check must not throw it away -- this
 	// is the case an over-eager gate would break.
@@ -157,22 +178,25 @@ static void test_live_conn_in_failed_transaction_is_still_reusable() {
 	ok(c->is_connection_in_reusable_state() == true,
 	   "live native conn in a failed transaction is still reusable -- a query error "
 	   "must not be mistaken for a broken connection");
-	simulate_teardown(c);
+	simulate_teardown(n);
 	delete c;
 }
 
 static void test_conn_that_failed_login_is_not_live() {
-	PgSQL_Connection* c = make_live_native_conn();
+	PgSQL_Connection_Native* n = make_live_native_conn();
+	PgSQL_Connection* c = n;	// deliberate upcast: the assertions go through
+	                           // the shared base API; the teardown writes native
+	                           // state, so that one call takes the leaf pointer.
 	// Login failed: the socket is still open but the handshake never finished. This
 	// is the state an auth failure sits in before teardown runs, so the connected
 	// half of the check has to catch it on its own.
-	c->native_connected = false;
+	n->native_connected = false;
 	ok(c->fd >= 0 && c->is_connected() == false,
 	   "conn with an open socket that never finished login is not live -- the "
 	   "native_connected half of the gate is load-bearing");
 	ok(c->is_connection_in_reusable_state() == false,
 	   "conn that never finished login is not reusable");
-	simulate_teardown(c);
+	simulate_teardown(n);
 	delete c;
 }
 

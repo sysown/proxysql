@@ -26,6 +26,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
 
 #include <sys/socket.h>
 #include <fcntl.h>
@@ -60,7 +61,7 @@ static void append_msg(std::string& s, char type, size_t payload_len, char fill)
 // Drain every complete message the framer is holding. Returns the bytes they
 // account for and appends each one's first payload byte, which is how the test
 // checks nothing was dropped or reordered.
-static size_t drain(PgSQL_Connection* c, std::string* marks, bool* intact,
+static size_t drain(PgSQL_Connection_Native* c, std::string* marks, bool* intact,
                     size_t expect_payload = PAYLOAD) {
 	size_t bytes = 0;
 	for (;;) {
@@ -112,9 +113,8 @@ int main(int, char**) {
 	                    : "  <-- this host's socket buffer (net.core.wmem_max) is too small to hold "
 	                      "a burst plus a message; there is nothing here to test the bound against");
 
-	PgSQL_Connection* conn = new PgSQL_Connection(false);
+	PgSQL_Connection_Native* conn = new PgSQL_Connection_Native();
 	conn->fd = sv[0];
-	conn->native_mode = true;
 
 	// ---------------------------------------------------------- one pass only
 	const int r1 = conn->native_recv_into_framer();
@@ -199,9 +199,8 @@ int main(int, char**) {
 		   "queued exactly one %zu-byte read (%zu bytes in %zu messages), then closed",
 		   READBUF, w, MSGS);
 
-		PgSQL_Connection* c2 = new PgSQL_Connection(false);
+		PgSQL_Connection_Native* c2 = new PgSQL_Connection_Native();
 		c2->fd = sv2[0];
-		c2->native_mode = true;
 
 		const int r = c2->native_recv_into_framer();
 		bool intact2 = true;

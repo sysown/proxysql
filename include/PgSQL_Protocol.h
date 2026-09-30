@@ -493,8 +493,9 @@ public:
 	 * and appends it directly to the result buffer — no intermediate PGresult.
 	 *
 	 * It also updates the result flags/counters and the owning connection's
-	 * side-effect state (error_info, native_txn_status, native_params) per the
-	 * message type, mirroring the libpq add_* helpers.
+	 * side-effect state (error_info, and the native transport's native_txn_status /
+	 * native_params -- all three now owned by PgSQL_Connection_Native since step 5a-ii)
+	 * per the message type, mirroring the libpq add_* helpers.
 	 *
 	 * @param type        The backend message type byte.
 	 * @param payload     The message body (everything AFTER the 4-byte length).
@@ -716,6 +717,14 @@ private:
 
 	friend class PgSQL_Protocol;
 	friend class PgSQL_Connection;
+	// The libpq result drain moved into the LibPQ leaf in step 4 of the connection
+	// split, and it writes num_fields directly (the public accessor is a getter
+	// only, and the value has to be set without a round trip through a setter).
+	friend class PgSQL_Connection_LibPQ;
+	// Same reason, native half. The native result drive moved into the Native leaf
+	// in step 5a-ii and calls buffer_to_PSarrayOut() on the error path; only the
+	// base was a friend before, and friendship is not inherited.
+	friend class PgSQL_Connection_Native;
 };
 
 class PgSQL_Protocol : public MySQL_Protocol {

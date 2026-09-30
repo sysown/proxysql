@@ -30,6 +30,7 @@
 #include "PgSQL_Session.h"
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_LibPQ.h"
 #include "PgSQL_Backend.h"
 // Needed so PgSQL_Portal_Entry's unique_ptr<const PgSQL_Bind_Message> member has a
 // complete type to destroy -- PgSQL_Session.h only forward-declares PgSQL_Bind_Message.
@@ -68,7 +69,7 @@ static PgSQL_Session* create_test_session() {
 
 	PgSQL_Backend* be = new PgSQL_Backend();
 	PgSQL_Data_Stream* server_ds = new PgSQL_Data_Stream();
-	PgSQL_Connection* server_conn = new PgSQL_Connection(false);
+	PgSQL_Connection* server_conn = new PgSQL_Connection_LibPQ();
 	server_ds->myconn = server_conn;
 	server_ds->sess = sess;
 	be->server_myds = server_ds;
@@ -148,7 +149,7 @@ static void test_detach_other_connection_keeps_portals() {
 	PgSQL_Session_PortalTeardownTest::add_portal(sess, "p1", sess->mybe->server_myds->myconn);
 
 	PgSQL_Data_Stream* other_ds = new PgSQL_Data_Stream();
-	PgSQL_Connection* other_conn = new PgSQL_Connection(false);
+	PgSQL_Connection* other_conn = new PgSQL_Connection_LibPQ();
 	other_ds->myconn = other_conn;
 	other_ds->sess = sess;
 

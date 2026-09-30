@@ -13,6 +13,7 @@ using json = nlohmann::json;
 #include "mysqld_error.h"
 
 #include "PgSQL_Data_Stream.h"
+#include "PgSQL_Client_Connection.h"
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Query_Processor.h"
 #include "PgSQL_PreparedStatement.h"
@@ -1023,7 +1024,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				newsess->thread_session_id = __sync_fetch_and_add(&glovars.thread_id, 1);
 			}
 			newsess->status = WAITING_CLIENT_DATA;
-			PgSQL_Connection* myconn = new PgSQL_Connection(true);
+			PgSQL_Connection* myconn = new PgSQL_Client_Connection();
 			newsess->client_myds->attach_connection(myconn);
 			newsess->client_myds->myprot.init(&newsess->client_myds, newsess->client_myds->myconn->userinfo, newsess);
 			newsess->mirror = true;
@@ -1281,8 +1282,11 @@ void PgSQL_Session::handler_again___new_thread_to_cancel_query() {
 			// thread can send a raw CancelRequest instead of calling PQcancel.
 			if (myds->myconn->native_mode) {
 				backend_kill_args->native_mode = true;
-				backend_kill_args->backend_pid = myds->myconn->native_backend_pid;
-				backend_kill_args->native_secret_key = myds->myconn->native_backend_secret;
+				int backend_pid = 0;
+				int secret_key = 0;
+				myds->myconn->native_backend_key(backend_pid, secret_key);
+				backend_kill_args->backend_pid = backend_pid;
+				backend_kill_args->native_secret_key = secret_key;
 			}
 
 			pthread_attr_t attr;
@@ -3192,7 +3196,7 @@ int PgSQL_Session::RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn) {
 				uint32_t backend_stmt_id = myconn->local_stmts->generate_new_backend_stmt_id();
 				CurrentQuery.extended_query_info.stmt_backend_id = backend_stmt_id;
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session %p myconn %p pgsql_conn %p Processing STMT_PREPARE with new backend_stmt_id=%u\n", 
-					this, myconn, myconn->pgsql_conn, backend_stmt_id);
+					this, myconn, myconn->get_pg_connection(), backend_stmt_id);
 			}
 			 // this is used to generate the name of the prepared statement in the backend
 			char backend_stmt_name[32];
@@ -3701,7 +3705,7 @@ handler_again:
 					assert(myconn != NULL);
 					// In libpq mode the backend PGconn is authoritative and must be
 					// live here; in native mode pgsql_conn is PERMANENTLY NULL (the
-					// wire is driven by myconn->bp, txn-state lives in
+					// wire is driven natively, txn-state lives in
 					// native_txn_status), so the libpq-only assert must not run —
 					// it would abort on every native op under a hostgroup lock
 					// (bug #3549 follow-up). The autocommit copy itself is
@@ -3711,10 +3715,12 @@ handler_again:
 					// 'I'/'T'/'E' byte, surfaced via get_pg_transaction_status()).
 					// The copy line has been commented out for libpq since the
 					// #3549 PG port (b01792cae9), so it is dead code regardless of
-					// mode; only the mode-appropriate liveness assert remains.
-					if (!myconn->native_mode) {
-						assert(myconn->pgsql_conn != NULL);
-					}
+					// mode. The liveness assert that used to stand here is gone
+					// (plan:267): it read `assert(myconn->pgsql_conn != NULL)` under
+					// `if (!native_mode)`, and after step 5b the leaf type is that
+					// assertion -- a PgSQL_Connection_LibPQ always has a PGconn once it
+					// has connected, and the window before it does is the same window
+					// backend_is_live()'s pgsql_conn guard covers.
 					//autocommit = myconn->pgsql->server_status & SERVER_STATUS_AUTOCOMMIT;
 				}
 
@@ -3814,7 +3820,7 @@ handler_again:
 					if (pn && pn[0] != '\0') {
 						auto it = named_portals.find(pn);
 						if (it != named_portals.end()) {
-							it->second.suspended = myconn->native_last_execute_suspended;
+							it->second.suspended = myconn->last_execute_suspended();
 						}
 					}
 				}
@@ -6073,7 +6079,7 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			// extended-query cache above, this path does not test MultiplexDisabled(), so
 			// being on a LISTEN-pinned connection does not by itself keep it out.
 			if (qpo && qpo->cache_ttl > 0 && is_tuple == true &&
-				_conn->native_result_had_notification == false) { // the resultset should be cached
+				_conn->result_had_notification() == false) { // the resultset should be cached
 				
 				if (_conn->is_error_present() == false &&
 					(/* check warnings count here*/ true ||

@@ -19,6 +19,8 @@
 #include "PgSQL_Session.h"
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Client_Connection.h"
+#include "PgSQL_Connection_LibPQ.h"
 #include "PgSQL_Backend.h"
 #include "../deps/json/json.hpp"
 
@@ -281,7 +283,7 @@ static PgSQL_Session* create_test_session() {
 	// Create client data stream and connection
 	PgSQL_Data_Stream* ds = new PgSQL_Data_Stream();
 	ds->myds_type = MYDS_FRONTEND;
-	PgSQL_Connection* conn = new PgSQL_Connection(true);
+	PgSQL_Connection* conn = new PgSQL_Client_Connection();
 	ds->myconn = conn;
 
 	// Populate critical variables (indices 0..PGSQL_NAME_LAST_LOW_WM-1).
@@ -300,7 +302,7 @@ static PgSQL_Session* create_test_session() {
 	// verify_server_variables() which dereferences session->mybe->server_myds->myconn.
 	PgSQL_Backend* be = new PgSQL_Backend();
 	PgSQL_Data_Stream* server_ds = new PgSQL_Data_Stream();
-	PgSQL_Connection* server_conn = new PgSQL_Connection(false);
+	PgSQL_Connection* server_conn = new PgSQL_Connection_LibPQ();
 	// Populate server connection with same critical variables
 	for (int idx = 0; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
 		const char* def_val = pgsql_tracked_variables[idx].default_value;

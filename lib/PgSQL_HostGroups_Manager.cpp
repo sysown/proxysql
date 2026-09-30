@@ -2436,7 +2436,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 						}
 
 						// we must create a new connection
-						conn = new PgSQL_Connection(false);
+						conn = PgSQL_Connection::create_backend();
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 						conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG);
@@ -2448,7 +2448,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 					// we may consider creating a new connection
 					{
 					if (decision.create_new_connection) {
-						conn = new PgSQL_Connection(false);
+						conn = PgSQL_Connection::create_backend();
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 						conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG);
@@ -2493,7 +2493,7 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 			__sync_fetch_and_add(&PgHGM->status.server_connections_delayed, 1);
 			return NULL;
 		} else {
-			conn = new PgSQL_Connection(false);
+			conn = PgSQL_Connection::create_backend();
 			conn->parent=mysrvc;
 			// if attributes.multiplex == true , STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
 			conn->set_status(!conn->parent->myhgc->attributes.multiplex, STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG);
@@ -2604,8 +2604,11 @@ void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, boo
 					// pg_terminate_backend() path targets the correct backend.
 					if (c->native_mode) {
 						backend_kill_args->native_mode = true;
-						backend_kill_args->backend_pid = c->native_backend_pid;
-						backend_kill_args->native_secret_key = c->native_backend_secret;
+						int backend_pid = 0;
+						int secret_key = 0;
+						c->native_backend_key(backend_pid, secret_key);
+						backend_kill_args->backend_pid = backend_pid;
+						backend_kill_args->native_secret_key = secret_key;
 					}
 
 					pthread_attr_t attr;
@@ -3100,11 +3103,15 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 					char buff[32];
 					snprintf(buff, sizeof(buff), "%p", static_cast<const void*>(conn->get_pg_connection()));
 					j["address"] = buff;
-					// Native connections have pgsql_conn==NULL; the libpq
+					// Native connections have no PGconn; the libpq
 					// accessors (get_pg_user, get_pg_host, ...) call PQxxx
 					// on the null pointer and crash the stats thread. Emit a
 					// minimal "native" record instead of crashing.
-					if (conn->pgsql_conn == NULL) {
+					// plan:266: this test was `conn->pgsql_conn == NULL`; it is now the
+					// transport selector, because the handle itself moved into the LibPQ
+					// leaf in step 5b. Same answer, and the "native_mode" JSON key that
+					// three TAP tests match on is unchanged.
+					if (conn->native_mode) {
 						j["native_mode"] = true;
 						j["host"] = conn->parent ? conn->parent->address : "";
 						j["port"] = conn->parent ? conn->parent->port : 0;

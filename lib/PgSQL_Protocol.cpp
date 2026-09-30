@@ -8,6 +8,7 @@
 #include "cpp.h"
 #include "gen_utils.h"
 #include "PgSQL_Authentication.h"
+#include "PgSQL_Connection_Native.h" // add_native_backend_message() writes native transport state
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Protocol.h"
 #include "PgSQL_PreparedStatement.h"
@@ -2909,6 +2910,13 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 	const unsigned int size = 1 + 4 + payload_len;
 	const uint32_t wire_len = (uint32_t)(payload_len + 4);
 
+	// The ParameterStatus arm below writes native_params and the ErrorResponse arm
+	// parses into native error state, so both need the leaf rather than the base.
+	// Every call site is inside PgSQL_Connection_Native::native_fetch_result_cont(),
+	// so this is an identity cast; keeping it null when `conn` is null preserves the
+	// `if (conn)` guards the arms already have.
+	PgSQL_Connection_Native* native_conn = conn ? static_cast<PgSQL_Connection_Native*>(conn) : nullptr;
+
 	bool alloced_new_buffer = false;
 	unsigned char* _ptr = buffer_reserve_space(size);
 	if (_ptr == NULL) {
@@ -3002,8 +3010,8 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		break;
 	case 'E': // ErrorResponse
 		result_packet_type |= PGSQL_QUERY_RESULT_ERROR;
-		if (conn) {
-			conn->native_fill_error_from_E(payload, payload_len);
+		if (native_conn) {
+			native_conn->native_fill_error_from_E(payload, payload_len);
 			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql,
 				conn->parent->myhgc->hid, conn->parent->address, conn->parent->port, 1907);
 		}
@@ -3012,7 +3020,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		result_packet_type |= PGSQL_QUERY_RESULT_NOTICE;
 		break;
 	case 'S': { // ParameterStatus: two C-strings (name\0value\0). Track it.
-		if (conn && payload_len > 0) {
+		if (native_conn && payload_len > 0) {
 			uint32_t i = 0;
 			const unsigned char* name = payload;
 			while (i < payload_len && payload[i] != '\0') i++;
@@ -3023,7 +3031,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 				uint32_t vstart = i;
 				while (i < payload_len && payload[i] != '\0') i++;
 				std::string pvalue((const char*)value, (size_t)(i - vstart));
-				conn->native_params[pname] = pvalue;
+				native_conn->native_params[pname] = pvalue;
 			}
 		}
 		break;

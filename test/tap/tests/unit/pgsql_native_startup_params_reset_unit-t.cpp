@@ -15,6 +15,8 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Connection_Native.h"
+#include "PgSQL_Connection_LibPQ.h"
 
 #include <cstring>
 
@@ -36,8 +38,9 @@ static uint32_t hash_for(int i) { return 0x1000u + (uint32_t)i; }
 // copy_pgsql_variables_to_startup_parameters() is the same call native_send_startup()
 // reaches through build_and_record_startup_session_params().
 static PgSQL_Connection* opened(bool native) {
-	PgSQL_Connection* c = new PgSQL_Connection(false);
-	c->native_mode = native;
+	PgSQL_Connection* c = native
+		? static_cast<PgSQL_Connection*>(new PgSQL_Connection_Native())
+		: static_cast<PgSQL_Connection*>(new PgSQL_Connection_LibPQ());
 	for (int i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
 		c->variables[i].value = strdup(CRITICAL[i]);
 		c->var_hash[i] = hash_for(i);
