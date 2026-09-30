@@ -179,9 +179,17 @@ def consumer():
         if attempt>1 and not override:raise ValueError('rerun has no original consumer manifest')
         if not override:
             catalogue=json.loads((ROOT/'ci-tier-consumers.json').read_text())
+            # a file can have one row per instance (e.g. run-mysql / run-mariadb with different axes): use the
+            # rows of the requested instance. When it matches none (callers that pass no consumer_id get 'run'),
+            # the rows are only interchangeable if the dispatch supplies every axis.
+            candidates=[item for item in catalogue['consumers'] if item['file']==os.environ.get('CONSUMER_FILE')]
+            instances=sorted({item.get('instance','run') for item in candidates})
+            if instance in instances:candidates=[item for item in candidates if item.get('instance','run')==instance]
+            elif len(instances)>1 and any(not supplied.get(axis) for item in candidates for axis in item.get('axes',{})):
+                raise ValueError('ambiguous consumer instance '+instance+': pass consumer_id (one of '+', '.join(instances)+') or every axis')
             rows=[];seen=set()
-            for item in catalogue['consumers']:
-                if item['file']!=os.environ.get('CONSUMER_FILE') or item['job'] in seen:continue
+            for item in candidates:
+                if item['job'] in seen:continue
                 if supplied.get('tap_group') and supplied['tap_group'] not in item['groups']:continue
                 row=copy.deepcopy(item);row.update(workflow=workflow,automatic=True,instance=instance)
                 for axis in row.get('axes',{}):

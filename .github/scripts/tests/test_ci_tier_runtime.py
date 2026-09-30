@@ -185,25 +185,30 @@ class RuntimeTests(unittest.TestCase):
 
  def test_manual_consumer_resolves_axes_from_repository_variables(self):
   # a manual dispatch without infradb/connector: the catalogue axes are variable references, resolved from the
-  # consumer repository's variables (CI_VARIABLES), not from the producer manifest (which carries none)
-  row=dict(workflow='CI-3p-x',file='ci-3p-x.yml',job='test',automatic=False,tiers=['v40'],groups=[],cells=[],
-   axes=dict(infradb={'var':'MATRIX_3P_X_infradb_mysql'},connector={'var':'MATRIX_3P_X_connector_mysql'}),instance='run-mysql')
+  # consumer repository's variables (CI_VARIABLES), not from the producer manifest (which carries none), and
+  # from the row of the requested instance (a file has one row per instance, with the same job)
+  rows=[dict(workflow='CI-3p-x',file='ci-3p-x.yml',job='test',automatic=False,tiers=['v40'],groups=[],cells=[],
+   axes=dict(infradb={'var':'MATRIX_3P_X_infradb_'+db},connector={'var':'MATRIX_3P_X_connector_'+db}),instance='run-'+db) for db in ['mysql','mariadb']]
+  variables={'MATRIX_3P_X_INFRADB_MYSQL':"['mysql8.0','mysql8.4']",'MATRIX_3P_X_CONNECTOR_MYSQL':"['x']",
+   'MATRIX_3P_X_INFRADB_MARIADB':"['mariadb11.4']",'MATRIX_3P_X_CONNECTOR_MARIADB':"['x','y']"}
   plan=make_plan(self.ctx(),dict(tiers=['v40'],mode='normal'),{'consumers':[]})
   gh=dict(repository='consumer/tests',sha='c'*40,workflow='CI-3p-x',run_id='8',run_attempt='1')
-  for variables,expect in [({'MATRIX_3P_X_INFRADB_MYSQL':"['mysql8.0','mysql8.4']",'MATRIX_3P_X_CONNECTOR_MYSQL':"['x']"},2),({},None)]:
+  def run(instance,variables,supplied=dict(infradb='',connector='')):
    with tempfile.TemporaryDirectory() as folder:
     prior=os.getcwd();os.chdir(folder)
     try:
-     Path('ci-tier-consumers.json').write_text(json.dumps({'consumers':[row]}))
+     Path('ci-tier-consumers.json').write_text(json.dumps({'consumers':rows}))
      source=Mock();source.artifacts.return_value=[dict(name='ci-manifest-'+plan['execution_id'])];source.json_artifact.return_value=plan
-     with patch.object(runtime,'ROOT',Path(folder)),patch.object(runtime,'context',return_value=dict(self.ctx(),event='workflow_dispatch',variables=variables)),patch.object(runtime,'api_for',return_value=source),patch.object(runtime,'load_bound',return_value=plan),patch.object(runtime,'reporting_api'),patch.object(runtime,'register'),patch.object(runtime,'emit') as output,patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'PRODUCER_RUN_ID':'2','PRODUCER_ATTEMPT':'1','CONSUMER_INPUTS':json.dumps(dict(infradb='',connector='')),'CONSUMER_INSTANCE':'run-mysql','CONSUMER_FILE':'ci-3p-x.yml'}):
-      if expect is None:
-       with self.assertRaisesRegex(ValueError,'consumer matrix variable not set: MATRIX_3P_X_infradb_mysql, MATRIX_3P_X_connector_mysql'):runtime.consumer()
-      else:
-       runtime.consumer()
-       cells=output.call_args.kwargs['matrices']['test']
-       self.assertEqual(sorted(c['infradb'] for c in cells),['mysql8.0','mysql8.4'])
+     with patch.object(runtime,'ROOT',Path(folder)),patch.object(runtime,'context',return_value=dict(self.ctx(),event='workflow_dispatch',variables=variables)),patch.object(runtime,'api_for',return_value=source),patch.object(runtime,'load_bound',return_value=plan),patch.object(runtime,'reporting_api'),patch.object(runtime,'register'),patch.object(runtime,'emit') as output,patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'PRODUCER_RUN_ID':'2','PRODUCER_ATTEMPT':'1','CONSUMER_INPUTS':json.dumps(supplied),'CONSUMER_INSTANCE':instance,'CONSUMER_FILE':'ci-3p-x.yml'}):
+      runtime.consumer()
+      return sorted((c['infradb'],c['connector'],c['ci_instance']) for c in output.call_args.kwargs['matrices']['test'])
     finally:os.chdir(prior)
+  self.assertEqual(run('run-mysql',variables),[('mysql8.0','x','run-mysql'),('mysql8.4','x','run-mysql')])
+  self.assertEqual(run('run-mariadb',variables),[('mariadb11.4','x','run-mariadb'),('mariadb11.4','y','run-mariadb')])
+  # no consumer_id ('run'): only a dispatch that supplies every axis is unambiguous
+  self.assertEqual(run('run',{},dict(infradb='["mysql9.1"]',connector='["z"]')),[('mysql9.1','z','run')])
+  with self.assertRaisesRegex(ValueError,'ambiguous consumer instance run: pass consumer_id \\(one of run-mariadb, run-mysql\\)'):run('run',variables)
+  with self.assertRaisesRegex(ValueError,'consumer matrix variable not set: MATRIX_3P_X_infradb_mysql, MATRIX_3P_X_connector_mysql'):run('run-mysql',{})
 
  def test_explicit_producer_requires_an_attempt(self):
   gh=dict(repository='sysown/proxysql',run_id='8',run_attempt='1')
