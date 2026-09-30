@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 import time
 import zipfile
+import uuid
 from ci_tier_plan import validate_manifest, version_tuple
 
 class GitHubAPI:
@@ -127,25 +128,48 @@ def handoff_filter(member,dest_path):
     return filtered
 
 def binary_version(root, binary='src/proxysql'):
+    """Probe on the host, then in the build ABI, with bounded waits and cleanup."""
     root=Path(root).resolve()
     binary_path=(root/binary).resolve()
-    # The container only receives this tree; never map an unrelated host path.
-    relative=binary_path.relative_to(root)
     try:
-        result=subprocess.run([str(binary_path),'--version'],capture_output=True,text=True)
-        if result.returncode==0:return result.stdout+result.stderr
+        result=subprocess.run([str(binary_path),'--version'],capture_output=True,text=True,timeout=300)
+        if result.returncode==0:
+            return result.stdout+result.stderr
         host_error=f'exit {result.returncode}: '+result.stdout+result.stderr
+    except subprocess.TimeoutExpired as error:
+        host_error=f'timed out after {error.timeout} seconds'
     except OSError as error:
         host_error=str(error)
+    # Host probes historically accept absolute paths and external symlinks.
+    # Only the fallback is constrained to the tree mounted into the container.
+    try:
+        relative=binary_path.relative_to(root)
+    except ValueError:
+        raise RuntimeError(f'ProxySQL version probe failed. Host: {host_error}\n'
+                           f'Build container: binary {binary_path} is outside {root}') from None
     # Ubuntu 24 artifacts need their build ABI; consumers can run on Ubuntu 22.
     # Use the same packaging image as the unit runner if the host loader fails.
+    container_name='ci-version-'+uuid.uuid4().hex
     try:
-        result=subprocess.run(['docker','run','--rm','--network','none','-v',str(root)+':/opt/proxysql:ro',
+        result=subprocess.run(['docker','run','--rm','--name',container_name,'--network','none',
+            '-v',str(root)+':/opt/proxysql:ro',
             '-e','LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap:/opt/proxysql/test/tap/tap/_runtime_libs',
             'proxysql/packaging:build-ubuntu24-v4.0.0',str(Path('/opt/proxysql')/relative),'--version'],
-            capture_output=True,text=True)
-        if result.returncode==0:return result.stdout+result.stderr
+            capture_output=True,text=True,timeout=300)
+        if result.returncode==0:
+            return result.stdout+result.stderr
         container_error=f'exit {result.returncode}: '+result.stdout+result.stderr
+    except subprocess.TimeoutExpired as error:
+        container_error=f'timed out after {error.timeout} seconds'
+        # Killing the Docker CLI does not stop the container. Remove only this
+        # probe's uniquely named container, with a separate bounded wait.
+        try:
+            cleanup=subprocess.run(['docker','rm','-f',container_name],
+                                   capture_output=True,text=True,timeout=30)
+            if cleanup.returncode:
+                container_error+='; cleanup failed: '+cleanup.stdout+cleanup.stderr
+        except (OSError, subprocess.TimeoutExpired) as cleanup_error:
+            container_error+='; cleanup failed: '+str(cleanup_error)
     except OSError as error:
         container_error=str(error)
     raise RuntimeError(f'ProxySQL version probe failed. Host: {host_error}\nBuild container: {container_error}')
