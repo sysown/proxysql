@@ -179,6 +179,7 @@ class GitHubAPI:
                             download_timeout(deadline)
                             checksum.update(chunk)
                             out.write(chunk)
+                    part.unlink()
             if digest and 'sha256:'+checksum.hexdigest()!=digest.lower():
                 raise ValueError('artifact checksum mismatch')
             assembled.replace(destination)

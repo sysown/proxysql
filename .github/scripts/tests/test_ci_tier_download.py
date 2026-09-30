@@ -214,5 +214,23 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(list(Path(folder).iterdir()), [])
 
 
+    def test_assembly_reclaims_each_copied_part_before_reading_the_next(self):
+        scratch_sizes = []
+        original_open = Path.open
+        def measure_scratch(path, mode='r', *args, **kwargs):
+            if path.name.startswith('part-') and mode == 'rb':
+                scratch_sizes.append(sum(p.stat().st_size for p in path.parent.iterdir()))
+            return original_open(path, mode, *args, **kwargs)
+        with artifact_server('parallel') as (url, payload, _), tempfile.TemporaryDirectory() as folder:
+            target = Path(folder)/'handoff.zip'
+            with patch('ci_tier_artifacts.MIN_DOWNLOAD_PART_BYTES', 65536), \
+                 patch('ci_tier_artifacts.Path.open', new=measure_scratch):
+                GitHubAPI('repo', token='token').download(url, target, len(payload),
+                    digest='sha256:'+hashlib.sha256(payload).hexdigest())
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertEqual(len(scratch_sizes), 8)
+            self.assertLessEqual(max(scratch_sizes), len(payload))
+
+
 if __name__ == '__main__':
     unittest.main()
