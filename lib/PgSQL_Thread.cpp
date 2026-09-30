@@ -423,7 +423,9 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"server_encoding",
 	(char*)"keep_multiplexing_variables",
 	(char*)"kill_backend_connection_when_disconnect",
+#ifdef PROXYSQL31
 	(char*)"use_native_backend_protocol",
+#endif
 	(char*)"sessions_sort",
 #ifdef IDLE_THREADS
 	(char*)"session_idle_show_processlist",
@@ -2200,7 +2202,9 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["enforce_autocommit_on_reads"] = make_tuple(&variables.enforce_autocommit_on_reads, false);
 		VariablesPointers_bool["firewall_whitelist_enabled"] = make_tuple(&variables.firewall_whitelist_enabled, false);
 		VariablesPointers_bool["kill_backend_connection_when_disconnect"] = make_tuple(&variables.kill_backend_connection_when_disconnect, false);
+#ifdef PROXYSQL31
 		VariablesPointers_bool["use_native_backend_protocol"] = make_tuple(&variables.use_native_backend_protocol, false);
+#endif
 		VariablesPointers_bool["log_unhealthy_connections"] = make_tuple(&variables.log_unhealthy_connections, false);
 #ifdef PROXYSQLFFTO
 		VariablesPointers_bool["ffto_enabled"] = make_tuple(&variables.ffto_enabled, false);
@@ -4309,7 +4313,12 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___unshun_algorithm = GloPTH->get_variable_int((char*)"unshun_algorithm");
 	pgsql_thread___free_connections_pct = GloPTH->get_variable_int((char*)"free_connections_pct");
 	pgsql_thread___kill_backend_connection_when_disconnect = (bool)GloPTH->get_variable_int((char*)"kill_backend_connection_when_disconnect");
+#ifdef PROXYSQL31
 	pgsql_thread___use_native_backend_protocol = (bool)GloPTH->get_variable_int((char*)"use_native_backend_protocol");
+#else
+	// Stable builds do not expose this setting and always use libpq.
+	pgsql_thread___use_native_backend_protocol = false;
+#endif
 	pgsql_thread___max_allowed_packet = GloPTH->get_variable_int((char*)"max_allowed_packet");
 	pgsql_thread___set_query_lock_on_hostgroup = GloPTH->get_variable_int((char*)"set_query_lock_on_hostgroup");
 	pgsql_thread___verbose_query_error = (bool)GloPTH->get_variable_int((char*)"verbose_query_error");

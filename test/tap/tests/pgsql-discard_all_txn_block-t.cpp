@@ -56,6 +56,7 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "pgsql_native_tier.h"
 
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 CommandLine cl;
@@ -574,10 +575,16 @@ int main(int, char**) {
         if (!made) { cleanup(); BAIL_OUT("could not create the fixture table"); }
     }
 
+    const bool native_supported = pgsql_native_supported(admin);
     for (int mode = 0; mode < 2; mode++) {
         const bool native = (mode == 1);
+        if (native && !native_supported) {
+            skip((int)(sizeof(PARITY_CASES) / sizeof(PARITY_CASES[0]) + 2 + 5 * 2 * 2),
+                 "native backend protocol is unavailable in v3.0");
+            continue;
+        }
         diag("================ %s ================", MODE_NAME[mode]);
-        if (!setNativeMode(admin, native)) { cleanup(); BAIL_OUT("cannot set the backend protocol"); }
+        if (native_supported && !setNativeMode(admin, native)) { cleanup(); BAIL_OUT("cannot set the backend protocol"); }
         // Pooled connections keep the protocol they were opened with, so without this
         // the second phase would quietly re-run the first.
         if (!flushBackendPool(admin, BACKEND_HG, saved_servers)) {

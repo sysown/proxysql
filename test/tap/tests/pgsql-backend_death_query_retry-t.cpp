@@ -64,6 +64,7 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "pgsql_native_tier.h"
 #include "pgsql_mock_backend.h"
 
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
@@ -327,6 +328,10 @@ int main(int, char**) {
        admin ? "" : " (null)");
     if (!admin || PQstatus(admin.get()) != CONNECTION_OK) return exit_status();
 
+    if (pgsql_native_supported(admin.get()) &&
+        !setVar(admin.get(), "pgsql-use_native_backend_protocol", "false"))
+        BAIL_OUT("cannot select libpq for the baseline retry checks");
+
     auto backend = openBackend();
     ok(backend && PQstatus(backend.get()) == CONNECTION_OK,
        "direct backend connection created (needed to kill sessions without going through the proxy)");
@@ -467,7 +472,8 @@ int main(int, char**) {
         BAIL_OUT("cannot disable the monitor for the mock phase");
     // This defect is the libpq path; native keeps its own transaction byte and
     // never lost the retry. Pin the mode so the test says what it measured.
-    if (!setVar(admin.get(), "pgsql-use_native_backend_protocol", "false"))
+    if (pgsql_native_supported(admin.get()) &&
+        !setVar(admin.get(), "pgsql-use_native_backend_protocol", "false"))
         BAIL_OUT("cannot select the libpq backend path");
 
     PgSQL_Mock_Backend mock;
@@ -569,6 +575,10 @@ int main(int, char**) {
     // ======================================================================
     //  Phase 3 -- the same two cases on the native backend protocol
     // ======================================================================
+    if (!pgsql_native_supported(admin.get())) {
+        skip(5, "native backend protocol is unavailable in v3.0");
+        return exit_status();
+    }
     // Native never had this defect: it keeps the ReadyForQuery status byte, which
     // survives the connection dying, so it could always answer "was a transaction
     // open?" on a dead connection. This phase pins that, because the change made

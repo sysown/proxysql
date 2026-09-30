@@ -30,6 +30,7 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "pgsql_native_tier.h"
 
 CommandLine cl;
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
@@ -110,8 +111,10 @@ int main(int, char**) {
 		   << " user=" << cl.admin_username << " password=" << cl.admin_password;
 		PGConnPtr admin(PQconnectdb(as.str().c_str()), &PQfinish);
 		if (admin && PQstatus(admin.get()) == CONNECTION_OK) {
-			PQclear(PQexec(admin.get(), "SET pgsql-use_native_backend_protocol='false'"));
-			PQclear(PQexec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"));
+			if (pgsql_native_supported(admin.get())) {
+				PQclear(PQexec(admin.get(), "SET pgsql-use_native_backend_protocol='false'"));
+				PQclear(PQexec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"));
+			}
 		} else {
 			diag("could not reach admin to pin the backend protocol");
 		}

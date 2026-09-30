@@ -583,6 +583,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
 	pgsql_native_params_unit-t \
+	pgsql_native_tier_policy_unit-t \
 	pgsql_native_read_burst_unit-t \
 	pgsql_native_scram_order_unit-t \
 	pgsql_native_startup_params_reset_unit-t \
