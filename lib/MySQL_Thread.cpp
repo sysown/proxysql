@@ -5840,7 +5840,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{ // uptime
 		unsigned long long t1=monotonic_time();
 		pta[0] = (char *)"ProxySQL_Uptime";
-		sprintf(buf,"%llu",(t1-GloVars.global.start_time)/1000/1000);
+		snprintf(buf, sizeof(buf), "%llu",(t1-GloVars.global.start_time)/1000/1000);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5852,65 +5852,65 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Connections created
 		pta[0]=(char *)"Client_Connections_aborted";
-		sprintf(buf,"%lu",MyHGM->status.client_connections_aborted);
+		snprintf(buf, sizeof(buf), "%lu",MyHGM->status.client_connections_aborted);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Connections
 		pta[0]=(char *)"Client_Connections_connected";
-		sprintf(buf,"%d",MyHGM->status.client_connections);
+		snprintf(buf, sizeof(buf), "%d",MyHGM->status.client_connections);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Connections
 		pta[0]=(char *)"Client_Connections_connected_prim_pass";
-		sprintf(buf,"%d",MyHGM->status.client_connections_prim_pass);
+		snprintf(buf, sizeof(buf), "%d",MyHGM->status.client_connections_prim_pass);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Connections
 		pta[0]=(char *)"Client_Connections_connected_addl_pass";
-		sprintf(buf,"%d",MyHGM->status.client_connections_addl_pass);
+		snprintf(buf, sizeof(buf), "%d",MyHGM->status.client_connections_addl_pass);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Connections created
 		pta[0]=(char *)"Client_Connections_created";
-		sprintf(buf,"%lu",MyHGM->status.client_connections_created);
+		snprintf(buf, sizeof(buf), "%lu",MyHGM->status.client_connections_created);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Connections created using cached 'clear_text_passwords'
 		pta[0]=(char *)"Client_Connections_sha2cached";
-		sprintf(buf,"%lu",MyHGM->status.client_connections_sha2cached);
+		snprintf(buf, sizeof(buf), "%lu",MyHGM->status.client_connections_sha2cached);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0]=(char *)"Server_Connections_aborted";
-		sprintf(buf,"%lu",MyHGM->status.server_connections_aborted);
+		snprintf(buf, sizeof(buf), "%lu",MyHGM->status.server_connections_aborted);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0]=(char *)"Server_Connections_connected";
-		sprintf(buf,"%lu",MyHGM->status.server_connections_connected);
+		snprintf(buf, sizeof(buf), "%lu",MyHGM->status.server_connections_connected);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0]=(char *)"Server_Connections_created";
-		sprintf(buf,"%lu",MyHGM->status.server_connections_created);
+		snprintf(buf, sizeof(buf), "%lu",MyHGM->status.server_connections_created);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections delayed
 		pta[0]=(char *)"Server_Connections_delayed";
-		sprintf(buf,"%lu",MyHGM->status.server_connections_delayed);
+		snprintf(buf, sizeof(buf), "%lu",MyHGM->status.server_connections_delayed);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5942,73 +5942,73 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Queries autocommit
 		pta[0]=(char *)"Com_autocommit";
-		sprintf(buf,"%llu",MyHGM->status.autocommit_cnt);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.autocommit_cnt);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered autocommit
 		pta[0]=(char *)"Com_autocommit_filtered";
-		sprintf(buf,"%llu",MyHGM->status.autocommit_cnt_filtered);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.autocommit_cnt_filtered);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries commit
 		pta[0]=(char *)"Com_commit";
-		sprintf(buf,"%llu",MyHGM->status.commit_cnt);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.commit_cnt);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered commit
 		pta[0]=(char *)"Com_commit_filtered";
-		sprintf(buf,"%llu",MyHGM->status.commit_cnt_filtered);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.commit_cnt_filtered);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries rollback
 		pta[0]=(char *)"Com_rollback";
-		sprintf(buf,"%llu",MyHGM->status.rollback_cnt);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.rollback_cnt);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered rollback
 		pta[0]=(char *)"Com_rollback_filtered";
-		sprintf(buf,"%llu",MyHGM->status.rollback_cnt_filtered);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.rollback_cnt_filtered);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries backend CHANGE_USER
 		pta[0]=(char *)"Com_backend_change_user";
-		sprintf(buf,"%llu",MyHGM->status.backend_change_user);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.backend_change_user);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries backend INIT DB
 		pta[0]=(char *)"Com_backend_init_db";
-		sprintf(buf,"%llu",MyHGM->status.backend_init_db);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.backend_init_db);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries backend SET NAMES
 		pta[0]=(char *)"Com_backend_set_names";
-		sprintf(buf,"%llu",MyHGM->status.backend_set_names);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.backend_set_names);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries frontend INIT DB
 		pta[0]=(char *)"Com_frontend_init_db";
-		sprintf(buf,"%llu",MyHGM->status.frontend_init_db);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.frontend_init_db);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries frontend SET NAMES
 		pta[0]=(char *)"Com_frontend_set_names";
-		sprintf(buf,"%llu",MyHGM->status.frontend_set_names);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.frontend_set_names);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Queries frontend USE DB
 		pta[0]=(char *)"Com_frontend_use_db";
-		sprintf(buf,"%llu",MyHGM->status.frontend_use_db);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.frontend_use_db);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -6047,7 +6047,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Mirror current concurrency
 		pta[0]=(char *)"Mirror_concurrency";
-		sprintf(buf,"%u",status_variables.mirror_sessions_current);
+		snprintf(buf, sizeof(buf), "%u",status_variables.mirror_sessions_current);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -6059,7 +6059,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Queries that are SELECT for update or equivalent
 		pta[0]=(char *)"Selects_for_update__autocommit0";
-		sprintf(buf,"%llu",MyHGM->status.select_for_update_or_equivalent);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.select_for_update_or_equivalent);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -6077,19 +6077,19 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Access_Denied_Wrong_Password
 		pta[0]=(char *)"Access_Denied_Wrong_Password";
-		sprintf(buf,"%llu",MyHGM->status.access_denied_wrong_password);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.access_denied_wrong_password);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Access_Denied_Max_Connections
 		pta[0]=(char *)"Access_Denied_Max_Connections";
-		sprintf(buf,"%llu",MyHGM->status.access_denied_max_connections);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.access_denied_max_connections);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// Access_Denied_Max_User_Connections
 		pta[0]=(char *)"Access_Denied_Max_User_Connections";
-		sprintf(buf,"%llu",MyHGM->status.access_denied_max_user_connections);
+		snprintf(buf, sizeof(buf), "%llu",MyHGM->status.access_denied_max_user_connections);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
