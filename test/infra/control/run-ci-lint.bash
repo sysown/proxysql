@@ -55,6 +55,8 @@ run_check "Check ClickHouse feature propagation and platform linker flags" \
 	python3 test/infra/control/test_clickhouse_build.py
 run_check "Check configured DuckDB static archives" \
 	python3 test/infra/control/test_duckdb_archives.py
+run_check "Check Router vendored OpenSSL headers" \
+	python3 test/infra/control/test_router_openssl_build.py
 run_check "Check libusual incremental patch dependency" \
 	test/infra/control/test-libusual-incremental.bash
 run_check "Check vendored OpenSSL consumer flags" \

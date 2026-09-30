@@ -14,7 +14,9 @@ ODIR := $(PLUGIN_DIR)/obj
 PLUGIN_SO := $(PLUGIN_DIR)/proxysql_mysql_router.so
 RUNTIME_PLUGIN := $(PROXYSQL_PATH)/test/tap/tap/_runtime_libs/proxysql_mysql_router.so
 
-IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) \
+# The core exports OpenSSL symbols; compile against its matching vendored
+# headers without linking another OpenSSL implementation into this plugin.
+IDIRS := -I$(SSL_IDIR) -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) \
 	-I$(JSON_IDIR) -I$(MARIADB_IDIR) \
 	-I$(PROMETHEUS_IDIR)
 
@@ -82,7 +84,7 @@ OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 $(ODIR):
 	mkdir -p $(ODIR)
 
-$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
+$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(PLUGIN_DIR)/Makefile | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
 $(PLUGIN_SO): $(OBJS)
