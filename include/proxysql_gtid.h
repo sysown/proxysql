@@ -108,10 +108,6 @@ bool is_canonical_mariadb_domain_id(const char* id, size_t len);
 // on failure, and also when the rendered value already matches its contents.
 bool render_mariadb_domain_position(const GTID_Set& set, const char* domain_id,
                                     char* buf, size_t buf_len);
-// Parses a MariaDB `@@gtid_binlog_pos` value and renders the `domain_id`
-// portion of it. Multi-domain positions must name the domain explicitly.
-bool select_mariadb_binlog_position(const char* position, const char* domain_id,
-                                    char* buf, size_t buf_len);
 bool parse_gtid_set(const char* encoded, GTID_Set* out);
 
 #endif /* PROXYSQL_GTID */

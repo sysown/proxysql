@@ -30,6 +30,15 @@ static inline size_t str_view_len(const char *s) {
 	return s ? std::string_view{s}.size() : 0;
 }
 
+// Releases digest_text the way Query_Processor::query_parser_free() does: a digest
+// shorter than QUERY_DIGEST_BUF is stored in qp->buf, only a longer one is heap-allocated.
+static void free_digest(SQP_par_t& qp) {
+	if (qp.digest_text && qp.digest_text != qp.buf) {
+		free(qp.digest_text);
+	}
+	qp.digest_text = NULL;
+}
+
 static void test_mysql_digest_select() {
 	SQP_par_t qp;
 	memset(&qp, 0, sizeof(qp));
@@ -39,8 +48,8 @@ static void test_mysql_digest_select() {
 	ok(qp.digest != 0, "MySQL digest: SELECT produces non-zero hash");
 	if (qp.digest_text) {
 		ok(strstr(qp.digest_text, "?") != NULL, "MySQL digest: literals replaced with ?");
-		free(qp.digest_text);
 	}
+	free_digest(qp);
 }
 
 static void test_mysql_digest_insert() {
@@ -50,7 +59,7 @@ static void test_mysql_digest_insert() {
 	parsersql_digest_init_mysql(&qp, q, str_view_len(q));
 	ok(qp.digest_text != NULL, "MySQL digest: INSERT produces digest_text");
 	ok(qp.digest != 0, "MySQL digest: INSERT produces non-zero hash");
-	if (qp.digest_text) free(qp.digest_text);
+	free_digest(qp);
 }
 
 static void test_mysql_digest_same_for_different_literals() {
@@ -62,8 +71,8 @@ static void test_mysql_digest_same_for_different_literals() {
 	parsersql_digest_init_mysql(&qp1, q1, str_view_len(q1));
 	parsersql_digest_init_mysql(&qp2, q2, str_view_len(q2));
 	ok(qp1.digest == qp2.digest, "MySQL digest: same query with different literals produces same hash");
-	if (qp1.digest_text) free(qp1.digest_text);
-	if (qp2.digest_text) free(qp2.digest_text);
+	free_digest(qp1);
+	free_digest(qp2);
 }
 
 static void test_mysql_digest_different_queries() {
@@ -75,8 +84,30 @@ static void test_mysql_digest_different_queries() {
 	parsersql_digest_init_mysql(&qp1, q1, str_view_len(q1));
 	parsersql_digest_init_mysql(&qp2, q2, str_view_len(q2));
 	ok(qp1.digest != qp2.digest, "MySQL digest: different tables produce different hashes");
-	if (qp1.digest_text) free(qp1.digest_text);
-	if (qp2.digest_text) free(qp2.digest_text);
+	free_digest(qp1);
+	free_digest(qp2);
+}
+
+// The digest is stored in qp->buf when it fits, and heap-allocated otherwise;
+// callers must release it with the query_parser_free() rule (see free_digest()).
+static void test_digest_text_ownership() {
+	SQP_par_t qp;
+	memset(&qp, 0, sizeof(qp));
+	const char* short_q = "SELECT * FROM t1 WHERE id = 1";
+	parsersql_digest_init_mysql(&qp, short_q, str_view_len(short_q));
+	ok(qp.digest_text == qp.buf, "Digest shorter than QUERY_DIGEST_BUF is stored in qp->buf");
+	free_digest(qp);
+
+	std::string long_q = "SELECT ";
+	for (int i = 0; i < QUERY_DIGEST_BUF; i++) {
+		long_q += "col" + std::to_string(i) + ", ";
+	}
+	long_q += "x FROM t1";
+	memset(&qp, 0, sizeof(qp));
+	parsersql_digest_init_mysql(&qp, long_q.c_str(), long_q.size());
+	ok(qp.digest_text != NULL && qp.digest_text != qp.buf && strlen(qp.digest_text) >= QUERY_DIGEST_BUF,
+		"Digest of QUERY_DIGEST_BUF bytes or more is heap-allocated");
+	free_digest(qp);
 }
 
 static void test_pgsql_digest_select() {
@@ -86,7 +117,7 @@ static void test_pgsql_digest_select() {
 	parsersql_digest_init_pgsql(&qp, q, str_view_len(q));
 	ok(qp.digest_text != NULL, "PgSQL digest: SELECT produces digest_text");
 	ok(qp.digest != 0, "PgSQL digest: SELECT produces non-zero hash");
-	if (qp.digest_text) free(qp.digest_text);
+	free_digest(qp);
 }
 
 static void test_pgsql_digest_same_for_different_literals() {
@@ -98,8 +129,8 @@ static void test_pgsql_digest_same_for_different_literals() {
 	parsersql_digest_init_pgsql(&qp1, q1, str_view_len(q1));
 	parsersql_digest_init_pgsql(&qp2, q2, str_view_len(q2));
 	ok(qp1.digest == qp2.digest, "PgSQL digest: same query with different literals produces same hash");
-	if (qp1.digest_text) free(qp1.digest_text);
-	if (qp2.digest_text) free(qp2.digest_text);
+	free_digest(qp1);
+	free_digest(qp2);
 }
 
 static void test_mysql_command_type_select() {
@@ -793,7 +824,7 @@ static void test_user_variable_replay_context() {
 }
 
 int main() {
-	plan(202);
+	plan(204);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -801,6 +832,7 @@ int main() {
 	test_mysql_digest_insert();
 	test_mysql_digest_same_for_different_literals();
 	test_mysql_digest_different_queries();
+	test_digest_text_ownership();
 	test_pgsql_digest_select();
 	test_pgsql_digest_same_for_different_literals();
 	test_mysql_digest_empty_query();
