@@ -937,6 +937,12 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 
 ### Third-party integration (`CI-3p-*`)
 
+Callers of the `ci-3p-*` reusable workflows must allow `actions: write`,
+`checks: write`, and `contents: read`. The context job needs Actions write
+permission to cancel superseded same-repository PR runs. Test and summary
+jobs retain `actions: read`; manual and cross-repository executions do not
+use the PR cancellation guard.
+
 Sixteen workflows test ProxySQL against external client libraries, independent
 of the build cache (they build ProxySQL inline inside the workflow). They
 read their matrix from GitHub repository variables like
