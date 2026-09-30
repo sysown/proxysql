@@ -190,7 +190,8 @@ def consumer():
                         row['axes'][axis]=parse_axis(supplied[axis])
                 rows.append(row);seen.add(item['job'])
             if not rows:raise ValueError('consumer not present in this producer plan or control catalogue')
-            derived=make_plan(manifest,manifest['selection'],{'consumers':rows})
+            # axes the dispatch did not supply come from this repository's variables (the manifest has none)
+            derived=make_plan(dict(manifest,variables=ctx['variables']),manifest['selection'],{'consumers':rows})
             manifest=copy.deepcopy(manifest)
             manifest['checks']=[c for c in derived['checks'] if c['workflow']!='CI-builds']
             if not manifest['checks']:raise ValueError('manual consumer has no applicable configurations')

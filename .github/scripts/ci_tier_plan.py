@@ -56,7 +56,11 @@ def make_plan(context, selection, catalogue):
                 continue
             cells = consumer['cells']
             if consumer.get('axes'):
-                axes = {k: parse_axis({k.upper(): value for k,value in context.get('variables', {}).items()}[v['var'].upper()]) if isinstance(v,dict) else v for k,v in consumer['axes'].items()}
+                variables = {k.upper(): value for k,value in context.get('variables', {}).items()}
+                missing = [v['var'] for v in consumer['axes'].values() if isinstance(v,dict) and v['var'].upper() not in variables]
+                if missing:
+                    raise ValueError('consumer matrix variable not set: '+', '.join(missing)+' ('+consumer['workflow']+')')
+                axes = {k: parse_axis(variables[v['var'].upper()]) if isinstance(v,dict) else v for k,v in consumer['axes'].items()}
                 if any(not isinstance(v,list) or not v for v in axes.values()):
                     raise ValueError('empty/invalid configured consumer matrix: '+consumer['workflow'])
                 cells = [dict(zip(axes,values)) for values in itertools.product(*axes.values())]
