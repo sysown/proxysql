@@ -14,7 +14,7 @@ on:
         required: true
         type: string
       infradb:
-        description: 'optional JSON array overriding the catalogue infradb axis, e.g. ["mysql8.0"]'
+        description: 'optional JSON array overriding the catalogue infradb axis of the instance (consumer_id), e.g. ["mysql8.0"] or ["pgsql16"]'
         default: ''
         type: string
       connector:
