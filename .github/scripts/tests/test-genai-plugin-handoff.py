@@ -34,43 +34,14 @@ def run_script(step: dict, cwd: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-build_steps = workflow_steps(".github/workflows/ci-builds.yml", "builds")
 ai_steps = workflow_steps(".github/workflows/ci-ai-gcov.yml", "tests")
-stage = named_step(build_steps, "Stage GenAI plugin in test handoff")
 restore = named_step(ai_steps, "Restore compiled GenAI plugin from build handoff")
 verify = named_step(ai_steps, "Verify binary")
-
-assert "inputs.trusted" in stage["if"]
-assert "matrix.tier == 'v40'" in stage["if"]
-for trusted in (False, True):
-    for tier in ('v30', 'v31', 'v40'):
-        expression = stage['if'].removeprefix('${{').removesuffix('}}').strip()
-        expression = expression.replace('inputs.trusted', str(trusted)).replace('success()', 'True').replace('matrix.tier', repr(tier)).replace('&&', ' and ')
-        assert eval(expression, {'__builtins__': {}}, {}) == (trusted and tier == 'v40')
-
 
 names = [step.get("name") for step in ai_steps]
 assert names.index("Restore selected product handoff") < names.index(restore["name"])
 assert names.index(restore["name"]) < names.index(verify["name"])
 assert names.index(verify["name"]) < names.index("Start infrastructure")
-
-with tempfile.TemporaryDirectory() as directory:
-    cwd = Path(directory)
-    repo = cwd / "proxysql"
-    source = repo / "plugins/genai/ProxySQL_GenAI_Plugin.so"
-    source.parent.mkdir(parents=True)
-    source.write_bytes(b"genai-plugin")
-
-    result = run_script(stage, cwd)
-    assert result.returncode == 0, result.stdout + result.stderr
-    staged = repo / "test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so"
-    assert staged.read_bytes() == b"genai-plugin"
-
-    source.unlink()
-    staged.unlink()
-    result = run_script(stage, cwd)
-    assert result.returncode != 0
-    assert "ProxySQL_GenAI_Plugin.so" in result.stdout + result.stderr
 
 for version, payload, succeeds, restored_expected in [
     ('ProxySQL version 3.0.12', None, True, False),

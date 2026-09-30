@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[3]
 def workflow(name):return yaml.safe_load((ROOT/'.github/workflows'/name).read_text())
 class WorkflowTests(unittest.TestCase):
  def test_plugin_handoff_contracts(self):
-  for script in ['test-genai-plugin-handoff.py','test-mysqlx-runtime-handoff.py']:
+  for script in ['test-genai-plugin-handoff.py','test-runtime-handoff.py']:
    with self.subTest(script=script):
     result=subprocess.run([sys.executable,str(ROOT/'.github/scripts/tests'/script)],
                           cwd=ROOT,capture_output=True,text=True)
@@ -25,8 +25,8 @@ class WorkflowTests(unittest.TestCase):
      build_name={'ci-codeql.yml':'Build C++','ci-maketest.yml':'Make-test'}.get(item['file'],'Build selected product inside Docker')
      build=next(s for s in j['steps'] if s.get('name')==build_name)
      self.assertRegex(build.get('run',''),r'(?m)^\s*make\s+')
-     self.assertIn('PROXYSQL40',build.get('env',{}))
-     self.assertIn('PROXYSQL31',build.get('env',{}))
+     self.assertEqual(build['env']['PROXYSQL40'], "${{ matrix.tier == 'v40' && '1' || '' }}")
+     self.assertEqual(build['env']['PROXYSQL31'], "${{ matrix.tier == 'v31' && '1' || '' }}")
     else:
      self.assertTrue(any('ci_tier_runtime.py restore' in s.get('run','') for s in j['steps']))
     self.assertFalse(any('repos/${REPO}/actions/artifacts?name=' in s.get('run','') for s in j['steps']))
