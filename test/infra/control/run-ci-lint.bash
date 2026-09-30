@@ -76,4 +76,7 @@ run_check "Test paired engine-ref selection" \
 run_check "Test selected-tier fanout validator" \
     python3 -m unittest discover -s test/infra/control -p test_check_ci_tier_fanout.py
 
+run_check "Test CI skip-label gates" \
+    python3 -m unittest discover -s test/infra/control -p test_ci_skip_label.py
+
 echo ">>> CI lint suite: OK"

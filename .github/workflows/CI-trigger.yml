@@ -1,6 +1,6 @@
 name: CI-trigger
 #run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
-run-name: ${{ github.head_ref || github.ref_name }} ${{ github.workflow }} ${{ github.event.after || github.sha }}
+run-name: ${{ contains(github.event.pull_request.labels.*.name, 'ci:skip') && '[ci:skip] ' || '' }}${{ github.head_ref || github.ref_name }} ${{ github.workflow }} ${{ github.event.after || github.sha }}
 
 on:
   pull_request:
@@ -21,6 +21,6 @@ concurrency:
 
 jobs:
   run:
-    if: ${{ !github.event.pull_request || !github.event.pull_request.head.repo.fork }}
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (!github.event.pull_request || !github.event.pull_request.head.repo.fork) }}
     uses: sysown/proxysql/.github/workflows/ci-trigger.yml@GH-Actions
     secrets: inherit

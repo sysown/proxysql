@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   run:
-    if: ${{ github.event.pull_request.head.repo.fork }}
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (github.event.pull_request.head.repo.fork) }}
     # Bump, don't unpin. The pin is part of the fork isolation contract --
     # validate_fork_pr_builds.py asserts a full 40-char SHA, so the callee
     # must stay immutable. 44ff88ee4c69 (2026-08-09) was the youngest callee
