@@ -686,6 +686,46 @@
       "execution_step": "Run tests"
     },
     {
+      "workflow": "CI-3p-mariadb-connector-j",
+      "file": "ci-3p-mariadb-connector-j.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_J_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_J_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-mariadb-connector-j",
+      "file": "ci-3p-mariadb-connector-j.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_J_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_J_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
       "workflow": "CI-3p-psycopg",
       "file": "ci-3p-psycopg.yml",
       "job": "test",
