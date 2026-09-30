@@ -1909,28 +1909,42 @@ void PgSQL_HostGroups_Manager::generate_pgsql_replication_hostgroups_table() {
 	if (pgsql_thread___hostgroup_manager_verbose) {
 		proxy_info("New pgsql_replication_hostgroups table\n");
 	}
+	int cols=0;
+	int affected_rows=0;
+	auto execute = [&](const char *sql, auto bind) {
+		auto [rc, statement_unique] = mydb->prepare_v2(sql);
+		ASSERT_SQLITE_OK(rc, mydb);
+		bind(statement_unique.get());
+		char *error = NULL;
+		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
+		if (error) free(error);
+		return resultset;
+	};
 	for (std::vector<SQLite3_row *>::iterator it = incoming_replication_hostgroups->rows.begin() ; it != incoming_replication_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		char *o=NULL;
-		int comment_length=0;	// #issue #643
 		//if (r->fields[3]) { // comment is not null
 			o=escape_string_single_quotes(r->fields[3],false);
-			comment_length=strlen(o);
 		//}
-		char *query=(char *)malloc(256+comment_length);
 		//if (r->fields[3]) { // comment is not null
-			sprintf(query,"INSERT INTO pgsql_replication_hostgroups VALUES(%s,%s,'%s','%s')",r->fields[0], r->fields[1], r->fields[2], o);
+			execute(
+				"INSERT INTO pgsql_replication_hostgroups VALUES(?1,?2,?3,?4)",
+				[&](sqlite3_stmt *statement) {
+					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_text)(statement, 3, r->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+					rc = (*proxy_sqlite3_bind_text)(statement, 4, r->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+				}
+			);
 			if (o!=r->fields[3]) { // there was a copy
 				free(o);
 			}
 		//} else {
 			//sprintf(query,"INSERT INTO pgsql_replication_hostgroups VALUES(%s,%s,NULL)",r->fields[0],r->fields[1]);
 		//}
-		mydb->execute(query);
 		if (pgsql_thread___hostgroup_manager_verbose) {
 			fprintf(stderr,"writer_hostgroup: %s , reader_hostgroup: %s, check_type %s, comment: %s\n", r->fields[0],r->fields[1], r->fields[2], r->fields[3]);
 		}
-		free(query);
 	}
 	incoming_replication_hostgroups=NULL;
 }
@@ -3822,31 +3836,31 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_get";
-		sprintf(buf,"%lu",status.pgconnpoll_get);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_get);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_get_ok";
-		sprintf(buf,"%lu",status.pgconnpoll_get_ok);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_get_ok);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_push";
-		sprintf(buf,"%lu",status.pgconnpoll_push);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_push);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_destroy";
-		sprintf(buf,"%lu",status.pgconnpoll_destroy);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_destroy);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_reset";
-		sprintf(buf,"%lu",status.pgconnpoll_reset);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_reset);
 		pta[1]=buf;
 		result->add_row(pta);
 	}

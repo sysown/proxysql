@@ -4682,7 +4682,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		if (error) {
 			proxy_error("Error: %s\n", error);
 			char buf[1024];
-			sprintf(buf,"%s", error);
+			snprintf(buf,sizeof(buf),"%s", error);
 			SPA->send_error_msg_to_client(sess, buf);
 			run_query=false;
 		} else if (resultset) {

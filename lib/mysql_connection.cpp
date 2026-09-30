@@ -832,7 +832,7 @@ void MySQL_Connection::connect_start_SetAttributes() {
 		}
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "connection_creation_time", __buffer);
 		unsigned long long t1=monotonic_time();
-		sprintf(__buffer,"%llu",(t1-GloVars.global.start_time)/1000/1000);
+		snprintf(__buffer,sizeof(__buffer),"%llu",(t1-GloVars.global.start_time)/1000/1000);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_uptime", __buffer);
 		snprintf(__buffer, sizeof(__buffer), "%d", parent->myhgc->hid);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "hostgroup_id", __buffer);
