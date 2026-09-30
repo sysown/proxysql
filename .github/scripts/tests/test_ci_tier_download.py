@@ -13,7 +13,7 @@ from ci_tier_artifacts import GitHubAPI
 
 
 @contextlib.contextmanager
-def artifact_server(mode):
+def artifact_server(mode, on_api_request=None):
     payload = b'0123456789abcdef' * 131072
     requests = []
     class Handler(BaseHTTPRequestHandler):
@@ -22,6 +22,8 @@ def artifact_server(mode):
         def do_GET(self):
             requests.append((self.path, self.headers.get('Range'), self.headers.get('Authorization')))
             if self.path == '/api':
+                if on_api_request:
+                    on_api_request()
                 self.send_response(302)
                 self.send_header('Location', f'http://127.0.0.1:{self.server.server_port}/blob?secret')
                 self.end_headers()
@@ -95,9 +97,23 @@ class DownloadTests(unittest.TestCase):
                     GitHubAPI('repo', token='token').download(url, target, len(payload))
             self.assertEqual(target.read_bytes(), payload[:1048576])
 
-    def test_deadline_exhaustion_stops_without_another_retry(self):
+    def test_expired_deadline_does_not_start_api_request(self):
         with artifact_server('resume') as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
             with patch('ci_tier_artifacts.time.monotonic', side_effect=[0, 3601, 3601]):
                 with self.assertRaisesRegex(RuntimeError, 'TimeoutError'):
                     GitHubAPI('repo', token='token').download(url, Path(folder)/'handoff.zip', len(payload))
-            self.assertEqual(len(requests), 2)
+            self.assertEqual(requests, [])
+
+    def test_deadline_consumed_by_api_request_does_not_start_storage_request(self):
+        now = [0]
+        def expire_deadline():
+            now[0] = 3601
+        with artifact_server('resume', expire_deadline) as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
+            with patch('ci_tier_artifacts.time.monotonic', side_effect=lambda: now[0]):
+                with self.assertRaisesRegex(RuntimeError, 'TimeoutError'):
+                    GitHubAPI('repo', token='token').download(url, Path(folder)/'handoff.zip', len(payload))
+            self.assertEqual([path for path, _, _ in requests], ['/api'])
+
+
+if __name__ == '__main__':
+    unittest.main()

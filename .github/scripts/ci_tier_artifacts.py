@@ -67,13 +67,17 @@ class GitHubAPI:
         # A 5 GB handoff can take >15 minutes on self-hosted links. Bound the
         # whole transfer to one hour; each stalled socket still times out in 60s.
         deadline=time.monotonic()+3600
+        def request_timeout():
+            remaining=deadline-time.monotonic()
+            if remaining<=0:raise TimeoutError('download deadline')
+            return min(60,remaining)
         with Path(destination).open('w+b') as out:
             for attempt in range(6):
                 try:
                     # Signed URLs expire; resolve a fresh one for every attempt.
                     request=urllib.request.Request(url,headers={'Authorization':'Bearer '+token})
                     try:
-                        response=opener.open(request,timeout=60)
+                        response=opener.open(request,timeout=request_timeout())
                     except urllib.error.HTTPError as error:
                         if error.code!=302:raise
                         response=error
@@ -82,7 +86,7 @@ class GitHubAPI:
                         location=response.headers['Location']
                     offset=out.tell()
                     request=urllib.request.Request(location,headers={'Range':f'bytes={offset}-'})
-                    with urllib.request.urlopen(request,timeout=60) as response:
+                    with urllib.request.urlopen(request,timeout=request_timeout()) as response:
                         if response.status==200:
                             out.seek(0);out.truncate();offset=0
                         elif response.status!=206 or response.headers.get('Content-Range')!=f'bytes {offset}-{size-1}/{size}':
@@ -104,10 +108,11 @@ class GitHubAPI:
                     # Never log an exception containing a signed URL or credentials.
                     reason=f'HTTP {error.code}' if isinstance(error,urllib.error.HTTPError) else type(error).__name__
                     if isinstance(error,urllib.error.HTTPError):error.close()
-                    if attempt==5 or time.monotonic()>=deadline:
+                    remaining=deadline-time.monotonic()
+                    if attempt==5 or remaining<=0:
                         raise RuntimeError(f'Artifact download failed ({reason}); received {out.tell()}/{size} bytes') from None
                     print(f'Artifact download interrupted ({reason}); resuming at {out.tell()} bytes',flush=True)
-                    time.sleep(min(30,2**attempt))
+                    time.sleep(min(30,2**attempt,remaining))
 
     def pages(self,path,key):
         records=[]
