@@ -54,7 +54,7 @@ jobs:
           trap 'docker compose -p "$compose_project" down --volumes --remove-orphans' EXIT
           docker compose -p "$compose_project" run --rm -T \
             -e TARGET -e BUILD_JOBS ubuntu22_dbg_build \
-            bash -l -c 'cd /opt/proxysql && make cleanall && make -j"$BUILD_JOBS" "$TARGET"' \
+            bash -l -c 'git config --system --add safe.directory /opt/proxysql && cd /opt/proxysql && make cleanall && make -j"$BUILD_JOBS" "$TARGET"' \
             2>&1 | tee ../build.log
       - name: Archive build log
         if: ${{ failure() && !cancelled() }}

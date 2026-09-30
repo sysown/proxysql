@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -36,6 +37,32 @@ class MakeTestScheduleTests(unittest.TestCase):
         checkout = next(step for step in job['steps'] if 'actions/checkout@' in step.get('uses', ''))
         self.assertEqual(checkout['with']['ref'], '${{ github.sha }}')
         self.assertNotIn('coverage', job['name'])
+
+    def test_container_build_accepts_runner_owned_checkout(self):
+        """The overridden entrypoint must trust the runner-owned source mount."""
+        script = next(step['run'] for step in self.workflow['jobs']['builds']['steps']
+                      if step.get('name') == 'Build simulator configuration')
+        tokens = shlex.split(script)
+        command = tokens[tokens.index('bash') + 3]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / 'source'
+            repo.mkdir()
+            env = dict(os.environ, GIT_CONFIG_SYSTEM=str(root / 'gitconfig'),
+                       GIT_CONFIG_GLOBAL=os.devnull, TARGET='testall', BUILD_JOBS='1')
+            subprocess.run(['git', 'init', '-q', str(repo)], env=env, check=True)
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=CI test',
+                            '-c', 'user.email=ci@example.invalid', 'commit', '-q',
+                            '--allow-empty', '-m', 'fixture'], env=env, check=True)
+            (repo / 'Makefile').write_text('.PHONY: cleanall testall\ncleanall testall:\n\t@git describe --always >/dev/null\n')
+            env['GIT_TEST_ASSUME_DIFFERENT_OWNER'] = '1'
+            untrusted = subprocess.run(['git', '-C', str(repo), 'describe', '--always'],
+                                       env=env, capture_output=True, text=True)
+            self.assertNotEqual(untrusted.returncode, 0)
+            self.assertIn('dubious ownership', untrusted.stderr)
+            result = subprocess.run(['bash', '-c', command.replace('/opt/proxysql', shlex.quote(str(repo)))],
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
 
     def test_build_exit_status_logs_and_cleanup(self):
         """Compile failures survive tee, and both paths clean up the container."""
