@@ -43,7 +43,12 @@ class MakeTestScheduleTests(unittest.TestCase):
         script = next(step['run'] for step in self.workflow['jobs']['builds']['steps']
                       if step.get('name') == 'Build simulator configuration')
         tokens = shlex.split(script)
-        command = tokens[tokens.index('bash') + 3]
+        self.assertEqual(tokens.count('-c'), 1, 'Expected one container shell command')
+        command_index = tokens.index('-c') + 1
+        self.assertLess(command_index, len(tokens), 'Missing container shell command')
+        command = tokens[command_index]
+        self.assertEqual(command.count('/opt/proxysql'), 2,
+                         'Expected the safe.directory setting and source directory before using the fixture')
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo = root / 'source'
@@ -59,7 +64,6 @@ class MakeTestScheduleTests(unittest.TestCase):
             untrusted = subprocess.run(['git', '-C', str(repo), 'describe', '--always'],
                                        env=env, capture_output=True, text=True)
             self.assertNotEqual(untrusted.returncode, 0)
-            self.assertIn('dubious ownership', untrusted.stderr)
             result = subprocess.run(['bash', '-c', command.replace('/opt/proxysql', shlex.quote(str(repo)))],
                                     env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)

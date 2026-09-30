@@ -7,12 +7,14 @@ concurrency:
   cancel-in-progress: true
 jobs:
   tier-selection:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     uses: sysown/proxysql/.github/workflows/ci-tier-selection.yml@GH-Actions
     permissions:
       contents: read
       actions: read
       pull-requests: read
   build-and-unit-smoke:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     runs-on: macos-14
     timeout-minutes: 120
     steps:

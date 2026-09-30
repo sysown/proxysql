@@ -80,4 +80,7 @@ run_check "Check nightly simulator build schedule" \
 run_check "Check superseded PR cancellation trigger" \
     python3 -m unittest discover -s test/infra/control -p test_cancel_superseded.py
 
+run_check "Test CI skip-label gates" \
+    python3 -m unittest discover -s test/infra/control -p test_ci_skip_label.py
+
 echo ">>> CI lint suite: OK"
