@@ -34,7 +34,8 @@ jobs:
     # the workflow_run cascade and then executes scripts from a PR-controlled
     # checkout. Same narrow scopes as ci-ai-gcov.yml.
     permissions:
-      actions: read
+      actions: write
+      pull-requests: read
       checks: write
       contents: read
       id-token: write
