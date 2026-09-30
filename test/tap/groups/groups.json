@@ -468,6 +468,7 @@
   "reg_test_proxy_protocol_oversized_address-t" : [ "mysql84-g6","mysql95-g1" ],
   "reg_test_sql_calc_found_rows-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g2","mysql90-g2","mysql95-g2" ],
   "reg_test_stmt_close_short_packet-t" : [ "mysql84-g6","mysql95-g1" ],
+  "reg_test_stmt_execute_bind_overread-t" : [ "mysql84-g6","mysql95-g1" ],
   "reg_test_stmt_inv_param_offset-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],
   "reg_test_stmt_resultset_err_no_rows-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],
   "reg_test_stmt_resultset_err_no_rows_libmysql-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],
