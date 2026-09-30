@@ -131,7 +131,12 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
         for group in set(row['groups']+row.get('applicability_groups',[])):
             if group not in known_groups:errors.append('unknown group '+group)
         caller=callers.get(row['workflow'])
-        if not caller:errors.append('missing caller '+row['workflow']);continue
+        if caller is None:
+            # The shared catalogue also serves manual suites dispatched from
+            # other repositories. Only automatic entries require a local
+            # caller; existing local manual callers are still validated below.
+            if row['automatic'] is not False:errors.append('missing caller '+row['workflow'])
+            continue
         if row['automatic']!=is_automatic(caller):errors.append('automatic/manual mismatch '+row['workflow'])
         start_job=caller['jobs'].get(row.get('instance','run'),{})
         routes=[]

@@ -15,6 +15,28 @@ class RouteTests(unittest.TestCase):
  def test_manual_does_not_cover_automatic(self):
   rows,c,e=self.fixture();c['CI-g1']['on']={'workflow_dispatch':None}
   self.assertIn('automatic/manual mismatch CI-g1',validate_routes(rows,c,e,{'g1'},{'g1'}))
+ def test_external_manual_consumer_needs_no_local_caller(self):
+  rows,c,e=self.fixture();rows[0]['automatic']=False
+  self.assertEqual(validate_routes(rows,{},e,{'g1'},set()),[])
+ def test_automatic_consumer_still_requires_local_caller(self):
+  rows,c,e=self.fixture()
+  self.assertIn('missing caller CI-g1',validate_routes(rows,{},e,{'g1'},set()))
+ def test_external_manual_consumer_does_not_supply_migrated_coverage(self):
+  rows,c,e=self.fixture();rows[0]['automatic']=False
+  errors=validate_routes(rows,{},e,{'g1'},{'g1'})
+  for tier in ['v30','v31']:
+   self.assertIn('lower-tier coverage lost: '+tier+'/g1',errors)
+ def test_local_manual_caller_still_validates_its_route(self):
+  rows,c,e=self.fixture();rows[0]['automatic']=False
+  c['CI-g1']['on']={'workflow_dispatch':None}
+  self.assertEqual(validate_routes(rows,c,e,{'g1'},set()),[])
+  c['CI-g1']['jobs']['run']['uses']='./.github/workflows/missing.yml'
+  self.assertIn('missing reusable missing.yml',validate_routes(rows,c,e,{'g1'},set()))
+ def test_local_manual_caller_still_validates_execution(self):
+  rows,c,e=self.fixture();rows[0]['automatic']=False
+  c['CI-g1']['on']={'workflow_dispatch':None}
+  e['ci-g1.yml']['jobs']['tests']['steps'][1]['if']='${{ false }}'
+  self.assertTrue(any(error.startswith('group not executed by ') for error in validate_routes(rows,c,e,{'g1'},set())))
  def test_unknown_missing_nested_and_duplicate(self):
   rows,c,e=self.fixture();self.assertIn('missing reusable ci-g1.yml',validate_routes(rows,c,{}, {'g1'},{'g1'}))
   self.assertIn('unknown group g1',validate_routes(rows,c,e,{}, {'g1'}))
