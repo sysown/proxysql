@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(57);
+	plan(62);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -215,6 +215,33 @@ int main(int argc, char** argv) {
 	}
 	ok(one_cell(c, "SELECT COUNT(*) FROM t_mysql_timestamp") == "2",
 	   "timestamp RETURNING inserts exactly once");
+
+	{
+		ok(mysql_query(c, "CREATE OR REPLACE TABLE t_mysql_timetz(i INTEGER, t TIMETZ)") == 0,
+		   "create TIMETZ RETURNING fixture");
+		const int rc = mysql_query(c, "INSERT INTO t_mysql_timetz VALUES "
+			"(1, '12:34:56.123456+05:30'), (2, '00:00:00-03:30:45'), (3, NULL) RETURNING i, t");
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* fields = r && mysql_num_fields(r) == 2 ? mysql_fetch_fields(r) : nullptr;
+		ok(fields && fields[0].type == MYSQL_TYPE_LONG && fields[1].type == MYSQL_TYPE_VAR_STRING,
+		   "TIMETZ RETURNING retains neighboring MySQL numeric metadata");
+		const char* expected[] = { "12:34:56.123456+05:30", "00:00:00-03:30:45", nullptr };
+		bool values_ok = fields && mysql_num_rows(r) == 3;
+		for (int i = 0; values_ok && i < 3; ++i) {
+			MYSQL_ROW row = mysql_fetch_row(r);
+			values_ok = row && row[0] && std::string(row[0]) == std::to_string(i + 1) &&
+				(expected[i] ? row[1] && std::strcmp(row[1], expected[i]) == 0 : row[1] == nullptr);
+		}
+		ok(values_ok, "MySQL TIMETZ preserves fractional seconds, signed offsets and NULL");
+		if (r) mysql_free_result(r);
+		ok(one_cell(c, "SELECT COUNT(*) FROM t_mysql_timetz") == "3", "TIMETZ RETURNING inserts exactly once");
+		const int empty_rc = mysql_query(c, "SELECT i, t FROM t_mysql_timetz WHERE false");
+		r = empty_rc == 0 ? mysql_store_result(c) : nullptr;
+		fields = r && mysql_num_fields(r) == 2 ? mysql_fetch_fields(r) : nullptr;
+		ok(fields && mysql_num_rows(r) == 0 && fields[0].type == MYSQL_TYPE_LONG &&
+		   fields[1].type == MYSQL_TYPE_VAR_STRING, "empty TIMETZ results preserve MySQL column metadata");
+		if (r) mysql_free_result(r);
+	}
 
 	// NULL must arrive as a real NULL, not the string "NULL".
 	{

@@ -152,6 +152,8 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		out = format_double(static_cast<double*>(data)[row]);
 		return true;
 	// Native value conversion does not prepare or execute another statement.
+	case DUCKDB_TYPE_TIME_TZ:
+		return render_native_value(duckdb_create_time_tz_value(static_cast<duckdb_time_tz*>(data)[row]), out, error);
 	case DUCKDB_TYPE_UUID: {
 		// UUID vectors use HUGEINT storage with the upper sign bit flipped
 		// for ordering; duckdb_create_uuid expects the unsigned UUID bits.
@@ -398,6 +400,7 @@ bool duckdb_type_renders_as_text(duckdb_type t) {
 		case DUCKDB_TYPE_DOUBLE:
 		case DUCKDB_TYPE_DATE:
 		case DUCKDB_TYPE_TIME:
+		case DUCKDB_TYPE_TIME_TZ:
 		case DUCKDB_TYPE_TIMESTAMP:
 		case DUCKDB_TYPE_TIMESTAMP_S:
 		case DUCKDB_TYPE_TIMESTAMP_MS:

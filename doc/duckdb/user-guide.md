@@ -127,6 +127,9 @@ Second-, millisecond-, and nanosecond-resolution timestamps convert directly,
 including in `RETURNING` results. They retain text metadata and preserve the
 original timestamp precision without casting neighboring columns to text.
 
+`TIME WITH TIME ZONE` (`TIMETZ`) also converts directly, preserving fractional
+seconds and UTC offsets, including in `RETURNING`. It retains text metadata.
+
 UUID values also convert directly, including in `RETURNING`, as canonical
 lowercase strings with text metadata.
 

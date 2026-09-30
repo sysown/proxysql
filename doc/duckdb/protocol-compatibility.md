@@ -116,6 +116,15 @@ metadata to preserve DuckDB's precision and range; neighboring numeric columns
 keep their numeric metadata.
 Values outside DuckDB's text-formatting range return conversion errors.
 
+`TIME WITH TIME ZONE` (`TIMETZ`) converts directly using DuckDB's native
+formatter, including in DML `RETURNING`. Text metadata preserves fractional
+seconds and signed offsets, including offsets with seconds. SQL NULL and
+adjacent numeric metadata are preserved.
+
+`TIMESTAMP WITH TIME ZONE` still uses the VARCHAR fallback so DuckDB can apply
+the session timezone when formatting; direct session-aware conversion remains
+pending.
+
 UUID values convert directly to canonical lowercase strings, including in DML
 `RETURNING`. UUID columns retain text metadata; adjacent numeric columns retain
 their numeric metadata. SQL NULL remains a protocol null.

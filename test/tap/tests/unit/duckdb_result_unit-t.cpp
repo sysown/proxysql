@@ -38,7 +38,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(68);
+	plan(77);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -179,6 +179,24 @@ int main() {
 		   duckdb_type_renders_as_text(DUCKDB_TYPE_TIMESTAMP_MS) &&
 		   duckdb_type_renders_as_text(DUCKDB_TYPE_TIMESTAMP_NS),
 		   "timestamp resolutions do not require a query-wide VARCHAR wrapper");
+	}
+
+	{
+		// Catch lost offset bits, fractional seconds, sign and NULL during
+		// direct conversion of DuckDB's packed TIME_TZ vector storage.
+		const char* values[] = {
+			"12:34:56.123456+05:30", "00:00:00-03:30",
+			"23:59:59.999999+00", "12:34:56+05:30:45",
+			"12:34:56-05:30:45", "00:00:00+15:59:59", "24:00:00-15:59:59"
+		};
+		for (const char* expected : values) {
+			const std::string sql = std::string("SELECT '") + expected + "'::TIMETZ";
+			std::unique_ptr<SQLite3_result> r(run(conn, sql.c_str()));
+			ok(field_equals(r.get(), 0, 0, expected), "direct TIMETZ preserves %s", expected);
+		}
+		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT NULL::TIMETZ"));
+		ok(r && r->rows_count == 1 && !r->rows[0]->fields[0], "direct TIMETZ NULL stays NULL");
+		ok(duckdb_type_renders_as_text(DUCKDB_TYPE_TIME_TZ), "TIMETZ needs no query-wide VARCHAR wrapper");
 	}
 
 	for (const bool seconds : { true, false }) {

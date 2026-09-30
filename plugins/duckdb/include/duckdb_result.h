@@ -30,7 +30,7 @@ enum class DuckDBResultProtocol { mysql, pgsql };
 // for numeric/boolean/binary metadata and retain text metadata for other types.
 // BLOB cells use raw bytes for MySQL and hex BYTEA text for PostgreSQL.
 // BOOLEAN cells use 0/1 for MySQL and f/t for PostgreSQL.
-// Direct conversion supports scalar numeric/boolean values, DATE/TIME,
+// Direct conversion supports scalar numeric/boolean values, DATE/TIME/TIME_TZ,
 // TIMESTAMP and its S/MS/NS resolutions, INTERVAL, UUID, VARCHAR and BLOB. Timestamp
 // resolutions use native DuckDB value formatting, preserving nanoseconds,
 // negative epochs and infinities without another query.

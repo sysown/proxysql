@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(60);
+	plan(65);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -265,6 +265,34 @@ int main(int argc, char** argv) {
 		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_timestamp");
 		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
 		   std::strcmp(PQgetvalue(r, 0, 0), "2") == 0, "timestamp RETURNING inserts exactly once");
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_timetz(i INTEGER, t TIMETZ)");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create TIMETZ RETURNING fixture");
+		PQclear(r);
+		r = exec_or_bail(c, "INSERT INTO t_pg_timetz VALUES "
+			"(1, '12:34:56.123456+05:30'), (2, '00:00:00-03:30:45'), (3, NULL) RETURNING i, t");
+		const bool shape_ok = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 3 && PQnfields(r) == 2;
+		ok(shape_ok && PQftype(r, 0) == 23 && PQftype(r, 1) == 25,
+		   "TIMETZ RETURNING retains neighboring PostgreSQL numeric metadata");
+		const char* expected[] = { "12:34:56.123456+05:30", "00:00:00-03:30:45", nullptr };
+		bool values_ok = shape_ok;
+		for (int i = 0; values_ok && i < 3; ++i) {
+			values_ok = std::string(PQgetvalue(r, i, 0)) == std::to_string(i + 1) &&
+				(expected[i] ? !PQgetisnull(r, i, 1) && std::strcmp(PQgetvalue(r, i, 1), expected[i]) == 0
+				             : PQgetisnull(r, i, 1));
+		}
+		ok(values_ok, "PostgreSQL TIMETZ preserves fractional seconds, signed offsets and NULL");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_timetz");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "3") == 0, "TIMETZ RETURNING inserts exactly once");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT i, t FROM t_pg_timetz WHERE false");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 0 && PQnfields(r) == 2 &&
+		   PQftype(r, 0) == 23 && PQftype(r, 1) == 25, "empty TIMETZ results preserve PostgreSQL column metadata");
 		PQclear(r);
 	}
 
