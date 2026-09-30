@@ -347,6 +347,52 @@
       "execution_step": "Run tests"
     },
     {
+      "workflow": "CI-3p-php-mysqli",
+      "file": "ci-3p-php-mysqli.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PHP_MYSQLI_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PHP_MYSQLI_connector_mysql"
+        }
+      },
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
+    },
+    {
+      "workflow": "CI-3p-php-mysqli",
+      "file": "ci-3p-php-mysqli.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PHP_MYSQLI_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PHP_MYSQLI_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
+    },
+    {
       "workflow": "CI-3p-php-pdo-pgsql",
       "file": "ci-3p-php-pdo-pgsql.yml",
       "job": "test",
@@ -646,6 +692,52 @@
       "execution_step": "Run tests"
     },
     {
+      "workflow": "CI-3p-mariadb-connector-j",
+      "file": "ci-3p-mariadb-connector-j.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_J_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_J_connector_mysql"
+        }
+      },
+      "instance": "run-mysql",
+      "execution_step": "Run tests"
+    },
+    {
+      "workflow": "CI-3p-mariadb-connector-j",
+      "file": "ci-3p-mariadb-connector-j.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_J_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_MARIADB_CONNECTOR_J_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb",
+      "execution_step": "Run tests"
+    },
+    {
       "workflow": "CI-3p-psycopg",
       "file": "ci-3p-psycopg.yml",
       "job": "test",
@@ -663,6 +755,52 @@
         },
         "connector": {
           "var": "MATRIX_3P_PSYCOPG_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
+    },
+    {
+      "workflow": "CI-3p-node-postgres",
+      "file": "ci-3p-node-postgres.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_NODE_POSTGRES_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_NODE_POSTGRES_connector_pgsql"
+        }
+      },
+      "instance": "run-pgsql",
+      "execution_step": "Run tests"
+    },
+    {
+      "workflow": "CI-3p-pgx",
+      "file": "ci-3p-pgx.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40",
+        "v30",
+        "v31"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PGX_infradb_pgsql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PGX_connector_pgsql"
         }
       },
       "instance": "run-pgsql",

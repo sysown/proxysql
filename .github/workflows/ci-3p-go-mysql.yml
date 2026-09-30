@@ -54,6 +54,7 @@ on:
         type: string
         default: ''
       build_run_id:
+        description: 'legacy name of producer_run_id (the CI-builds run to test); needs producer_attempt too'
         type: string
         default: ''
     # Declared so that callers outside this organization can pass them explicitly: 'secrets: inherit'
@@ -65,9 +66,11 @@ on:
         type: string
         default: GH-Actions
       producer_run_id:
+        description: 'CI-builds run to test (tier consumers bind to its ci-manifest); needs producer_attempt'
         type: string
         default: ''
       producer_attempt:
+        description: 'attempt of that CI-builds run: required with producer_run_id / build_run_id, the attempt identifies the manifest'
         type: string
         default: ''
       testtree:

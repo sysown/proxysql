@@ -1,4 +1,4 @@
-name: CI-3p-mysql-connector-python
+name: CI-3p-pgx
 
 on:
   # Manual runs bind to an explicit producer (ci_tier_runtime.py consumer() requires both) and may
@@ -14,7 +14,7 @@ on:
         required: true
         type: string
       infradb:
-        description: 'optional JSON array overriding the catalogue infradb axis, e.g. ["mysql8.0"]'
+        description: 'optional JSON array overriding the catalogue infradb axis, e.g. ["pgsql16"]'
         default: ''
         type: string
       connector:
@@ -86,7 +86,7 @@ on:
 
 env:
   TESTTREE: ${{ inputs.testtree || (inputs.trigger && fromJson(inputs.trigger).event.inputs.testtree) || 'main' }}
-  TESTNAME: mysql-connector-python
+  TESTNAME: pgx
   TESTDIST: ubuntu24
   PROXYSQL_REPO: ${{ inputs.proxysql_repo || github.repository }}
   SHA: ${{ inputs.sha || inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
@@ -108,7 +108,7 @@ jobs:
       producer_attempt: ${{ inputs.producer_attempt }}
       source_repository: ${{ inputs.proxysql_repo }}
       source_sha: ${{ inputs.sha }}
-      consumer_file: ci-3p-mysql-connector-python.yml
+      consumer_file: ci-3p-pgx.yml
       consumer_inputs: ${{ toJson(inputs) }}
     secrets: inherit
   test:
