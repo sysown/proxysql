@@ -188,7 +188,18 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
                 covered[tier].update(required_groups.intersection(*per_mode))
     for tier in covered:
         for group in sorted(migrated-covered[tier]):errors.append('lower-tier coverage lost: '+tier+'/'+group)
-    for name,body in engines.items():
+    # GH-Actions also hosts reusable workflows used only by other repositories.
+    # Discover consumers from ALL local callers (not just catalogue rows), so a
+    # newly added local route still fails closed when its consumer is missing.
+    reachable=set()
+    pending=[target(job) for caller in callers.values() for job in caller.get('jobs',{}).values()]
+    while pending:
+        name=pending.pop()
+        if name in reachable or name not in engines:continue
+        reachable.add(name)
+        pending.extend(target(job) for job in engines[name].get('jobs',{}).values())
+    for name in sorted(reachable):
+        body=engines[name]
         for jobid,job in body.get('jobs',{}).items():
             if any('ci_tier_runtime.py restore' in str(s.get('run','')) or 'ci-builds-handoff-' in str(s.get('run','')) for s in job.get('steps',[])):
                 if not any(r['file']==name and r['job']==jobid for r in rows):errors.append('uncatalogued consumer '+name+'/'+jobid)

@@ -105,6 +105,7 @@ int main(int argc, char** argv) {
 		diag("Cannot continue without admin connection");
 		return exit_status();
 	}
+	const bool native_supported = pgsql_native_supported(admin.get());
 
 	// -----------------------------------------------------------------
 	// 1. Confirm pgsql_servers is set up the way the group expects:
@@ -129,7 +130,7 @@ int main(int argc, char** argv) {
 	//    Before the fix this failed at PQconnectdb with
 	//    "invalid port number: \"0\"".
 	// -----------------------------------------------------------------
-	if (pgsql_native_supported(admin.get())) {
+	if (native_supported) {
 		bool native_on = execSql(admin, "SET pgsql-use_native_backend_protocol='true'") &&
 			execSql(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 		ok(native_on, "Native backend protocol enabled for the Unix-socket query");
@@ -156,7 +157,7 @@ int main(int argc, char** argv) {
 	} else {
 		skip(3, "native backend protocol is unavailable in v3.0");
 	}
-	bool native_off = !pgsql_native_supported(admin.get()) ||
+	bool native_off = !native_supported ||
 		(execSql(admin, "SET pgsql-use_native_backend_protocol='false'") &&
 		 execSql(admin, "LOAD PGSQL VARIABLES TO RUNTIME"));
 	ok(native_off, "Native backend protocol restored after the Unix-socket query");

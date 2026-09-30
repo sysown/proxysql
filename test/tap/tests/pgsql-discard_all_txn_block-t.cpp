@@ -546,6 +546,7 @@ int main(int, char**) {
     if (!adminOwner || PQstatus(adminOwner.get()) != CONNECTION_OK)
         BAIL_OUT("cannot proceed without an admin connection");
     PGconn* admin = adminOwner.get();
+    const bool native_supported = pgsql_native_supported(admin);
 
     const std::string saved_native = adminScalar(admin,
         "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-use_native_backend_protocol'");
@@ -575,7 +576,6 @@ int main(int, char**) {
         if (!made) { cleanup(); BAIL_OUT("could not create the fixture table"); }
     }
 
-    const bool native_supported = pgsql_native_supported(admin);
     for (int mode = 0; mode < 2; mode++) {
         const bool native = (mode == 1);
         if (native && !native_supported) {
