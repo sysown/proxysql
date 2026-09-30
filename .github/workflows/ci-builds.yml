@@ -439,7 +439,7 @@ jobs:
             ls -la "$dir" || true
             return 1
           fi
-          cp -L "$src" "$dest/$soname"
+          cp -fL "$src" "$dest/$soname"
           echo "staged $soname <- $(readlink -f "$src")"
         }
 

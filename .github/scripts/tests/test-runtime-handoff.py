@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import os
+import pwd
 import subprocess
 import tempfile
 
@@ -145,28 +146,41 @@ for invalid in ('empty', 'broken-link'):
         assert result.returncode != 0, (invalid, result.stdout, result.stderr)
         assert 'empty or missing plugin' in result.stdout + result.stderr
 
-# Container builds can pre-stage root-owned files in a runner-owned directory.
-# A normal invocation models an unwritable file with mode 0444; when run as
-# root, reproduce the container ownership exactly and stage as an ordinary user.
-with tempfile.TemporaryDirectory() as directory:
-    cwd = Path(directory)
-    repo, _ = create_workspace(cwd, dynamic_libpq=False)
-    runtime_dir = repo / 'test/tap/tap/_runtime_libs'
-    runtime_dir.mkdir()
-    destination = runtime_dir / 'Example_Plugin.so'
-    destination.write_bytes(b'previous build')
-    destination.chmod(0o444)
-    credentials = {}
-    runner_uid = os.getuid()
-    if os.geteuid() == 0:
-        runner_uid = 65534
-        cwd.chmod(0o755)
-        os.chown(runtime_dir, runner_uid, runner_uid)
-        destination.chmod(0o644)
-        credentials = dict(user=runner_uid, group=runner_uid, extra_groups=[])
-    result = run_script(stage, cwd, **credentials)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert destination.read_bytes() == b'example-plugin'
-    assert destination.stat().st_uid == runner_uid
+# Exercise the same replacement rule for plugins and shared libraries.
+# Ordinary runners use read-only files; root can reproduce container ownership.
+for filename in ('Example_Plugin.so', 'libpq.so.5', 'libre2.so.10'):
+    with tempfile.TemporaryDirectory() as directory:
+        cwd = Path(directory)
+        repo, libpq = create_workspace(cwd, dynamic_libpq=True)
+        sources = {'Example_Plugin.so': repo / 'plugins/example/Example_Plugin.so',
+                   'libpq.so.5': libpq}
+        re2 = repo / 'deps/re2/re2/obj/so/libre2.so.10'
+        re2.parent.mkdir(parents=True)
+        re2.write_bytes(b're2-library')
+        sources['libre2.so.10'] = re2
+        runtime_dir = repo / 'test/tap/tap/_runtime_libs'
+        runtime_dir.mkdir()
+        destination = runtime_dir / filename
+        destination.write_bytes(b'previous build')
+        destination.chmod(0o444)
+        credentials = {}
+        runner_uid = os.getuid()
+        if os.geteuid() == 0:
+            try:
+                runner = pwd.getpwnam('nobody')
+                runner_uid = runner.pw_uid
+                assert runner_uid != 0, 'permission fixture requires an unprivileged user'
+                cwd.chmod(0o755)
+                os.chown(runtime_dir, runner_uid, runner.pw_gid)
+                destination.chmod(0o644)
+                credentials = dict(user=runner_uid, group=runner.pw_gid, extra_groups=[])
+                subprocess.run(['true'], check=True, **credentials)
+            except (KeyError, PermissionError) as error:
+                print(f'SKIP container-ownership fixture for {filename}: {error}')
+                continue
+        result = run_script(stage, cwd, **credentials)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert destination.read_bytes() == sources[filename].read_bytes()
+        assert destination.stat().st_uid == runner_uid
 
 print("Runtime handoff contract passed")
