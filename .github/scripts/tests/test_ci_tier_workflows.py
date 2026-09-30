@@ -5,13 +5,21 @@ ROOT=Path(__file__).resolve().parents[3]
 def workflow(name):return yaml.safe_load((ROOT/'.github/workflows'/name).read_text())
 class WorkflowTests(unittest.TestCase):
  def test_explicit_context_permissions_allow_stale_run_cancellation(self):
-  for file in (ROOT/'.github/workflows').glob('*.yml'):
-   doc=workflow(file.name)
+  docs={file.name:workflow(file.name) for file in (ROOT/'.github/workflows').glob('*.yml')}
+  # Include wrappers (for example ci-ai-g1 -> ci-ai-gcov -> ci-tier-context):
+  # a permission restriction at any level constrains the context's token.
+  context_callers={'ci-tier-context.yml'}
+  while True:
+   parents={name for name,doc in docs.items() if any(
+    job.get('uses','').rsplit('/',1)[-1] in context_callers for job in doc.get('jobs',{}).values())}
+   if parents<=context_callers:break
+   context_callers.update(parents)
+  for name,doc in docs.items():
    for job in doc.get('jobs',{}).values():
-    if 'ci-tier-context.yml' not in job.get('uses',''):continue
+    if job.get('uses','').rsplit('/',1)[-1] not in context_callers:continue
     permissions=job.get('permissions',doc.get('permissions'))
     if isinstance(permissions,dict):
-     with self.subTest(file=file.name):
+     with self.subTest(file=name):
       self.assertEqual(permissions.get('actions'),'write')
       self.assertEqual(permissions.get('pull-requests'),'read')
  def test_cancellation_never_executes_pr_code_or_waits_for_self_hosted(self):

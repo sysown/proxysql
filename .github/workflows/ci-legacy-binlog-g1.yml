@@ -19,7 +19,8 @@ on:
         type: string
         default: ''
 permissions:
-  actions: read
+  actions: write
+  pull-requests: read
   checks: write
   contents: read
   id-token: write
