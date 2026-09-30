@@ -107,7 +107,7 @@ remain distinct from SQL NULL.
 
 The direct conversion path supports common scalar values including booleans,
 signed and unsigned integers, floats, doubles, dates, time, timestamps,
-decimals, intervals, VARCHAR, and BLOB.
+decimals, intervals, UUID, VARCHAR, and BLOB.
 
 `TIMESTAMP_S`, `TIMESTAMP_MS`, and `TIMESTAMP_NS` convert directly using DuckDB's
 native value formatter. Nanosecond precision, pre-epoch values, infinities, and
@@ -116,6 +116,10 @@ metadata to preserve DuckDB's precision and range; neighboring numeric columns
 keep their numeric metadata.
 Values outside DuckDB's text-formatting range return conversion errors.
 
+UUID values convert directly to canonical lowercase strings, including in DML
+`RETURNING`. UUID columns retain text metadata; adjacent numeric columns retain
+their numeric metadata. SQL NULL remains a protocol null.
+
 Other DuckDB types are detected from the prepared statement before execution.
 The plugin attempts to execute a wrapper equivalent to:
 
@@ -123,7 +127,7 @@ The plugin attempts to execute a wrapper equivalent to:
 SELECT COLUMNS(*)::VARCHAR FROM (<original query>)
 ```
 
-This commonly renders `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, UUID, ENUM,
+This commonly renders `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, ENUM,
 BIT, and time-zone timestamp variants as readable text. The decision occurs
 before execution, so volatile expressions and side effects execute exactly
 once.

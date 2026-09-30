@@ -127,6 +127,9 @@ Second-, millisecond-, and nanosecond-resolution timestamps convert directly,
 including in `RETURNING` results. They retain text metadata and preserve the
 original timestamp precision without casting neighboring columns to text.
 
+UUID values also convert directly, including in `RETURNING`, as canonical
+lowercase strings with text metadata.
+
 Many DuckDB values are rendered directly. For types outside the direct
 compatibility list, the plugin prepares a wrapper that casts result columns to
 `VARCHAR` before executing the statement. This makes common nested and special

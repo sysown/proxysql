@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(55);
+	plan(60);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -345,8 +345,30 @@ int main(int argc, char** argv) {
 	}
 
 	{
+		PGresult* r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_uuid(n INTEGER, id UUID)");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create UUID RETURNING fixture");
+		PQclear(r);
+		r = exec_or_bail(c, "INSERT INTO t_pg_uuid VALUES "
+		                   "(1, '00112233-4455-6677-8899-aabbccddeeff'), (2, NULL) RETURNING n, id");
+		const bool shape_ok = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 2 && PQnfields(r) == 2;
+		ok(shape_ok, "UUID RETURNING executes");
+		ok(shape_ok && PQftype(r, 0) == 23 && PQftype(r, 1) == 25,
+		   "UUID text metadata preserves adjacent INTEGER metadata");
+		ok(shape_ok && !PQgetisnull(r, 0, 1) &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "1") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 1), "00112233-4455-6677-8899-aabbccddeeff") == 0 &&
+		   std::strcmp(PQgetvalue(r, 1, 0), "2") == 0 && PQgetisnull(r, 1, 1),
+		   "UUID RETURNING preserves canonical values and NULL");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_uuid");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "2") == 0, "UUID RETURNING inserts exactly once");
+		PQclear(r);
+	}
+
+	{
 		PGresult* r = exec_or_bail(c,
-			"CREATE OR REPLACE TABLE t_pg_returning(id UUID DEFAULT gen_random_uuid())");
+			"CREATE OR REPLACE TABLE t_pg_returning(id INTEGER[] DEFAULT [1, 2])");
 		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create unsupported RETURNING fixture");
 		PQclear(r);
 
@@ -366,8 +388,8 @@ int main(int argc, char** argv) {
 
 		r = exec_or_bail(c, "INSERT INTO t_pg_returning DEFAULT VALUES RETURNING id::VARCHAR");
 		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
-		   !PQgetisnull(r, 0, 0) && std::strlen(PQgetvalue(r, 0, 0)) == 36,
-		   "an explicit VARCHAR cast returns the UUID value");
+		   !PQgetisnull(r, 0, 0) && std::strcmp(PQgetvalue(r, 0, 0), "[1, 2]") == 0,
+		   "an explicit VARCHAR cast returns the LIST value");
 		PQclear(r);
 
 		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_returning");

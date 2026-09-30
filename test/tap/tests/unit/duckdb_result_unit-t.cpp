@@ -38,7 +38,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(64);
+	plan(68);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -75,7 +75,7 @@ int main() {
 		// review was about (a claim about test coverage that the test
 		// didn't actually assert). All four types render through
 		// direct conversion (duckdb_type_renders_as_text() allows
-		// them), unlike the nested/UUID/etc. types covered above.
+		// them), unlike the nested types covered above.
 		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT CAST(1.5 AS DOUBLE) AS d"));
 		ok(field_equals(r.get(), 0, 0, "1.5"), "float/double value renders as text");
 	}
@@ -280,24 +280,21 @@ int main() {
 	}
 
 	{
-		// UUID is a non-nested SCALAR type that is just as unrenderable as
-		// the nested types above -- it has no case in GetInternalCValue's
-		// switch either, so the direct compatibility path emits a null field for it
-		// despite the value not being SQL NULL. This is exactly the case
-		// the predicate must catch that a nested-types-only check would
-		// miss: a UUID column would otherwise reach a client as a silent,
-		// indistinguishable-from-genuine NULL.
-		duckdb_result uuid_res;
-		if (duckdb_query(conn, "SELECT gen_random_uuid() AS u", &uuid_res) != DuckDBSuccess) {
-			BAIL_OUT("could not run UUID query");
+		const char* values[] = {
+			"00000000-0000-0000-0000-000000000000",
+			"ffffffff-ffff-ffff-ffff-ffffffffffff",
+			"7fffffff-ffff-ffff-0123-456789abcdef",
+			"80000000-0000-0000-fedc-ba9876543210",
+			"00112233-4455-6677-8899-aabbccddeeff"
+		};
+		for (const char* expected : values) {
+			const std::string sql = std::string("SELECT '") + expected + "'::UUID, NULL::UUID";
+			std::unique_ptr<SQLite3_result> r(run(conn, sql.c_str()));
+			ok(r && r->rows_count == 1 && r->rows[0]->fields[0] &&
+			   std::strcmp(r->rows[0]->fields[0], expected) == 0 && !r->rows[0]->fields[1],
+			   "direct UUID conversion preserves bits and NULL: %s", expected);
 		}
-		const bool uuid_unrenderable = duckdb_result_has_unrenderable_column(&uuid_res);
-		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&uuid_res));
-		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] == nullptr,
-		   "UUID value converts to a null field on the direct compatibility path");
-		ok(uuid_unrenderable,
-		   "predicate flags the non-nested UUID column as unrenderable");
-		duckdb_destroy_result(&uuid_res);
+		ok(duckdb_type_renders_as_text(DUCKDB_TYPE_UUID), "UUID needs no VARCHAR query wrapper");
 	}
 
 	{

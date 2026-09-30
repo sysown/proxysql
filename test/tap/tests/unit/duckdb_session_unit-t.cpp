@@ -223,7 +223,7 @@ int main() {
 		duckdb_result setup;
 		for (const char* sql : {
 			"CREATE SEQUENCE rejected_returning_seq",
-			"CREATE TABLE t(id UUID DEFAULT gen_random_uuid(), "
+			"CREATE TABLE t(id INTEGER[] DEFAULT [1, 2], "
 			"n INTEGER DEFAULT nextval('rejected_returning_seq'))",
 			"INSERT INTO t(n) VALUES (99)"
 		}) {
@@ -255,7 +255,7 @@ int main() {
 			conn, "INSERT INTO t(n) VALUES (1) RETURNING id::VARCHAR");
 		std::unique_ptr<SQLite3_result> r(cast.result);
 		ok(cast.ok && cast.has_resultset && r && r->rows_count == 1 &&
-		   r->rows[0]->fields[0] && std::strlen(r->rows[0]->fields[0]) == 36 &&
+		   r->rows[0]->fields[0] && std::strcmp(r->rows[0]->fields[0], "[1, 2]") == 0 &&
 		   scalar_count(conn, "SELECT COUNT(*) FROM t") == 2,
 		   "explicit VARCHAR RETURNING preserves the value and inserts exactly once");
 
@@ -352,7 +352,7 @@ int main() {
 		// error, which -- before the fix -- silently fell back to NULL
 		// rendering for the single most common input shape there is.
 		const DuckDBExecOutcome outcome =
-			duckdb_execute_effective(conn, "SELECT gen_random_uuid() AS u;");
+			duckdb_execute_effective(conn, "SELECT [1, 2] AS u;");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
@@ -365,7 +365,7 @@ int main() {
 		// otherwise comment out the wrap's closing `)`. Confirmed by
 		// probe.
 		const DuckDBExecOutcome outcome =
-			duckdb_execute_effective(conn, "SELECT gen_random_uuid() AS u -- trailing comment");
+			duckdb_execute_effective(conn, "SELECT [1, 2] AS u -- trailing comment");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
@@ -374,7 +374,7 @@ int main() {
 
 	{
 		const DuckDBExecOutcome outcome = duckdb_execute_effective(
-			conn, "SELECT gen_random_uuid() AS u; -- trailing comment");
+			conn, "SELECT [1, 2] AS u; -- trailing comment");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
@@ -383,7 +383,7 @@ int main() {
 
 	{
 		const DuckDBExecOutcome outcome = duckdb_execute_effective(
-			conn, "SELECT gen_random_uuid() AS u; /* trailing comment */");
+			conn, "SELECT [1, 2] AS u; /* trailing comment */");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,

@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(52);
+	plan(57);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
 	ok(one_cell(c, "SELECT DATABASE()") == "memory",
 	   "SELECT DATABASE() reports memory for the default in-memory engine");
 
-	ok(mysql_query(c, "SELECT gen_random_uuid()") == 0, "UUID rewrap succeeds on the wire");
+	ok(mysql_query(c, "SELECT gen_random_uuid()") == 0, "UUID query succeeds on the wire");
 	{
 		MYSQL_RES* r = mysql_store_result(c);
 		MYSQL_ROW row = r ? mysql_fetch_row(r) : NULL;
@@ -257,8 +257,29 @@ int main(int argc, char** argv) {
 		if (r) mysql_free_result(r);
 	}
 
+	// UUID RETURNING must use direct conversion and preserve adjacent numeric metadata.
+	ok(mysql_query(c, "CREATE OR REPLACE TABLE t_mysql_uuid(n INTEGER, id UUID)") == 0,
+	   "create UUID RETURNING fixture");
+	ok(mysql_query(c, "INSERT INTO t_mysql_uuid VALUES "
+	                 "(1, '00112233-4455-6677-8899-aabbccddeeff'), (2, NULL) RETURNING n, id") == 0,
+	   "UUID RETURNING executes");
+	{
+		MYSQL_RES* r = mysql_store_result(c);
+		MYSQL_FIELD* fields = r && mysql_num_fields(r) == 2 ? mysql_fetch_fields(r) : nullptr;
+		ok(fields && fields[0].type == MYSQL_TYPE_LONG && fields[1].type == MYSQL_TYPE_VAR_STRING,
+		   "UUID text metadata preserves adjacent INTEGER metadata");
+		MYSQL_ROW row = fields ? mysql_fetch_row(r) : nullptr;
+		const bool first_ok = row && row[0] && row[1] && std::strcmp(row[0], "1") == 0 &&
+			std::strcmp(row[1], "00112233-4455-6677-8899-aabbccddeeff") == 0;
+		row = fields ? mysql_fetch_row(r) : nullptr;
+		ok(r && mysql_num_rows(r) == 2 && first_ok && row && row[0] &&
+		   std::strcmp(row[0], "2") == 0 && !row[1], "UUID RETURNING preserves canonical values and NULL");
+		if (r) mysql_free_result(r);
+	}
+	ok(one_cell(c, "SELECT COUNT(*) FROM t_mysql_uuid") == "2", "UUID RETURNING inserts exactly once");
+
 	// A failed conversion must not commit a write or fabricate a SQL NULL.
-	ok(mysql_query(c, "CREATE OR REPLACE TABLE t_mysql_returning(id UUID DEFAULT gen_random_uuid())") == 0,
+	ok(mysql_query(c, "CREATE OR REPLACE TABLE t_mysql_returning(id INTEGER[] DEFAULT [1, 2])") == 0,
 	   "create unsupported RETURNING fixture");
 	const int returning_rc = mysql_query(c, "INSERT INTO t_mysql_returning DEFAULT VALUES RETURNING id");
 	ok(returning_rc != 0 && mysql_errno(c) == 1235 &&
@@ -271,8 +292,8 @@ int main(int argc, char** argv) {
 	}
 	ok(one_cell(c, "SELECT COUNT(*) FROM t_mysql_returning") == "0",
 	   "rejected RETURNING leaves no committed row");
-	ok(one_cell(c, "INSERT INTO t_mysql_returning DEFAULT VALUES RETURNING id::VARCHAR").size() == 36,
-	   "an explicit VARCHAR cast returns the UUID value");
+	ok(one_cell(c, "INSERT INTO t_mysql_returning DEFAULT VALUES RETURNING id::VARCHAR") == "[1, 2]",
+	   "an explicit VARCHAR cast returns the LIST value");
 	ok(one_cell(c, "SELECT COUNT(*) FROM t_mysql_returning") == "1",
 	   "the supported RETURNING insert executes exactly once");
 

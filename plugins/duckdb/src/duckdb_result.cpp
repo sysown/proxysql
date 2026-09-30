@@ -32,24 +32,24 @@ std::string format_double(double v) {
 	return buf;
 }
 
-bool render_timestamp_value(duckdb_value raw, std::string& out, std::string& error) {
+bool render_native_value(duckdb_value raw, std::string& out, std::string& error) {
 	const auto destroy_value = [](duckdb_value value) { duckdb_destroy_value(&value); };
 	std::unique_ptr<std::remove_pointer_t<duckdb_value>, decltype(destroy_value)> value(raw, destroy_value);
 	if (!value) {
-		error = "failed to create DuckDB timestamp value for conversion";
+		error = "failed to create DuckDB value for conversion";
 		return false;
 	}
 	try {
 		// This C API entry point can throw when its native cast overflows.
 		std::unique_ptr<char, decltype(&duckdb_free)> text(duckdb_get_varchar(value.get()), duckdb_free);
 		if (!text) {
-			error = "failed to convert DuckDB timestamp value to text";
+			error = "failed to convert DuckDB value to text";
 			return false;
 		}
 		out = text.get();
 		return true;
 	} catch (const std::exception& exception) {
-		error = std::string("DuckDB timestamp conversion failed: ") + exception.what();
+		error = std::string("DuckDB value conversion failed: ") + exception.what();
 		return false;
 	}
 }
@@ -151,14 +151,23 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 	case DUCKDB_TYPE_DOUBLE:
 		out = format_double(static_cast<double*>(data)[row]);
 		return true;
-	// Delegate resolution, negative epochs and infinity formatting to DuckDB.
 	// Native value conversion does not prepare or execute another statement.
+	case DUCKDB_TYPE_UUID: {
+		// UUID vectors use HUGEINT storage with the upper sign bit flipped
+		// for ordering; duckdb_create_uuid expects the unsigned UUID bits.
+		const duckdb_hugeint stored = static_cast<duckdb_hugeint*>(data)[row];
+		const duckdb_uhugeint bits = {
+			stored.lower, static_cast<uint64_t>(stored.upper) ^ (uint64_t(1) << 63)
+		};
+		return render_native_value(duckdb_create_uuid(bits), out, error);
+	}
+	// Delegate resolution, negative epochs and infinity formatting to DuckDB.
 	case DUCKDB_TYPE_TIMESTAMP_S:
-		return render_timestamp_value(duckdb_create_timestamp_s(static_cast<duckdb_timestamp_s*>(data)[row]), out, error);
+		return render_native_value(duckdb_create_timestamp_s(static_cast<duckdb_timestamp_s*>(data)[row]), out, error);
 	case DUCKDB_TYPE_TIMESTAMP_MS:
-		return render_timestamp_value(duckdb_create_timestamp_ms(static_cast<duckdb_timestamp_ms*>(data)[row]), out, error);
+		return render_native_value(duckdb_create_timestamp_ms(static_cast<duckdb_timestamp_ms*>(data)[row]), out, error);
 	case DUCKDB_TYPE_TIMESTAMP_NS:
-		return render_timestamp_value(duckdb_create_timestamp_ns(static_cast<duckdb_timestamp_ns*>(data)[row]), out, error);
+		return render_native_value(duckdb_create_timestamp_ns(static_cast<duckdb_timestamp_ns*>(data)[row]), out, error);
 	case DUCKDB_TYPE_DATE: {
 		const duckdb_date value = static_cast<duckdb_date*>(data)[row];
 		if (!duckdb_is_finite_date(value)) {
@@ -399,6 +408,7 @@ bool duckdb_type_renders_as_text(duckdb_type t) {
 		case DUCKDB_TYPE_INTERVAL:
 		case DUCKDB_TYPE_VARCHAR:
 		case DUCKDB_TYPE_BLOB:
+		case DUCKDB_TYPE_UUID:
 			return true;
 		default:
 			return false;
