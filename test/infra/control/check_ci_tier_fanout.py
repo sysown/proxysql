@@ -23,13 +23,11 @@ def target(job):
 def resolve(value,inputs):
     return re.sub(r'\$\{\{\s*inputs\.([a-zA-Z0-9_]+)\s*\}\}',lambda m:str(inputs.get(m[1],m[0])),str(value))
 
-def selected_matrix(job, job_id, producer=False):
+def selected_matrix(job, job_id):
     needs=job.get('needs',[])
     needs=[needs] if isinstance(needs,str) else needs
-    dependency='plan' if producer else 'tier-context'
-    if dependency not in needs:return False
+    if 'tier-context' not in needs:return False
     matrix=job.get('strategy',{}).get('matrix')
-    if producer:return matrix=='${{ fromJson(needs.plan.outputs.matrix) }}'
     if not isinstance(matrix,dict) or set(matrix)!={'include'}:return False
     expected="${{ fromJson(needs.tier-context.outputs.matrices)['"+job_id+"'] || fromJson('[{}]') }}"
     return re.sub(r'\s+','',str(matrix['include']))==re.sub(r'\s+','',expected)
@@ -70,33 +68,27 @@ def job_reachable(body, job_id, inputs, tier, mode, consumer_job, allowed):
     return visit(job_id) == 'success'
 
 
-def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, runnable, producer):
+def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, runnable):
     """Trace matrix outputs to the enabled plan/consumer runtime step.
 
     This validates workflow wiring, not arbitrary Python semantics. The engine's
     runtime/plan tests validate the actual tier cells emitted by those commands.
     """
-    if producer:
-        source_body, source_job = body, 'plan'
-        source = body.get('jobs', {}).get('plan', {})
-        source_inputs = inputs
-        step_id, output, command = 'plan', 'matrix', 'plan'
-    else:
-        call = body.get('jobs', {}).get('tier-context', {})
-        if target(call) != 'ci-tier-context.yml':
-            return False
-        if not runnable(body, 'tier-context', inputs, tier, mode, row['job']):
-            return False
-        source_inputs = {key: resolve(value, inputs) for key, value in call.get('with', {}).items()}
-        if source_inputs.get('consumer_file') != row['file']:
-            return False
-        shared = engines.get('ci-tier-context.yml', {})
-        declared = events(shared).get('workflow_call', {}).get('outputs', {}).get('matrices', {})
-        if not same_expression(declared.get('value'), '${{ jobs.context.outputs.matrices }}'):
-            return False
-        source_body, source_job = shared, 'context'
-        source = shared.get('jobs', {}).get('context', {})
-        step_id, output, command = 'context', 'matrices', 'consumer'
+    call = body.get('jobs', {}).get('tier-context', {})
+    if target(call) != 'ci-tier-context.yml':
+        return False
+    if not runnable(body, 'tier-context', inputs, tier, mode, row['job']):
+        return False
+    source_inputs = {key: resolve(value, inputs) for key, value in call.get('with', {}).items()}
+    if source_inputs.get('consumer_file') != row['file']:
+        return False
+    shared = engines.get('ci-tier-context.yml', {})
+    declared = events(shared).get('workflow_call', {}).get('outputs', {}).get('matrices', {})
+    if not same_expression(declared.get('value'), '${{ jobs.context.outputs.matrices }}'):
+        return False
+    source_body, source_job = shared, 'context'
+    source = shared.get('jobs', {}).get('context', {})
+    step_id, output, command = 'context', 'matrices', 'consumer'
     if not runnable(source_body, source_job, source_inputs, tier, mode, row['job']):
         return False
     if not same_expression(source.get('outputs', {}).get(output),
@@ -112,7 +104,7 @@ def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, runnab
     # echo overwriting GITHUB_OUTPUT must not satisfy the output contract.
     if str(step.get('run', '')).strip() != 'python3 ci-control/.github/scripts/ci_tier_runtime.py ' + command:
         return False
-    if not producer and not same_expression(step.get('env', {}).get('CONSUMER_FILE'),
+    if not same_expression(step.get('env', {}).get('CONSUMER_FILE'),
                                             '${{ inputs.consumer_file }}'):
         return False
     return True
@@ -136,7 +128,7 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
         identity=(row['workflow'],row.get('instance','run'),row['job'])
         if identity in identities:errors.append('duplicate consumer '+str(identity))
         identities.add(identity)
-        for group in row['groups']:
+        for group in set(row['groups']+row.get('applicability_groups',[])):
             if group not in known_groups:errors.append('unknown group '+group)
         caller=callers.get(row['workflow'])
         if not caller:errors.append('missing caller '+row['workflow']);continue
@@ -150,41 +142,40 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
             for job_id,job in engines[name].get('jobs',{}).items():
                 nested={k:resolve(v,inputs) for k,v in job.get('with',{}).items()}
                 walk(target(job),nested,gates+[(engines[name],job_id,inputs)],ancestors|{name})
-        producer=row['workflow']=='CI-builds' and row['job']=='tier-units'
-        if producer:
-            body=engines.get('ci-builds.yml',{});job=body.get('jobs',{}).get('builds',{})
-            if target(start_job)=='ci-builds.yml':routes=[(start_job.get('with',{}),[(caller,row.get('instance','run'),{})])]
-        else:
-            walk(target(start_job),start_job.get('with',{}),[(caller,row.get('instance','run'),{})],set())
-            body=engines.get(row['file'],{});job=body.get('jobs',{}).get(row['job'],{})
-            if 'tier-context' not in body.get('jobs',{}):errors.append('missing tier context '+row['file'])
+        walk(target(start_job),start_job.get('with',{}),[(caller,row.get('instance','run'),{})],set())
+        body=engines.get(row['file'],{});job=body.get('jobs',{}).get(row['job'],{})
+        if 'tier-context' not in body.get('jobs',{}):errors.append('missing tier context '+row['file'])
         if not routes:errors.append('unreachable consumer '+str(identity));continue
-        if not selected_matrix(job,row['job'],producer):
+        if not selected_matrix(job,row['job']):
             errors.append('consumer matrix bypasses selected tiers: '+str(identity));continue
         required_groups=set(row['groups'])
-        for tier in set(row['tiers'])&set(covered):
+        for tier in row['tiers']:
             per_mode=[]
             for mode in ['normal','asan']:
-                wired=set()
+                wired=set();execution_ran=False
                 for inputs,gates in routes:
                     if not all(runnable(scope,job_id,values,tier,mode,row['job']) for scope,job_id,values in gates):continue
-                    if not matrix_source_allows(body,engines,row,inputs,tier,mode,allowed,runnable,producer):
+                    if not matrix_source_allows(body,engines,row,inputs,tier,mode,allowed,runnable):
                         message='matrix output source is disabled or miswired: '+str(identity)
                         if message not in errors:errors.append(message)
                         continue
-                    if not runnable(body,'builds' if producer else row['job'],inputs,tier,mode,row['job']):continue
+                    if not runnable(body,row['job'],inputs,tier,mode,row['job']):continue
                     for step in job.get('steps',[]):
                         run=resolve(step.get('run',''),inputs)
-                        executed=('ci_tier_runtime.py units' in run if producer else
-                                  'run-tests-isolated.bash' in run or 'unit-tests' in run)
+                        if (step.get('name')==row.get('execution_step') and (run.strip() or step.get('uses'))
+                            and allowed(step.get('if'),tier,mode,inputs,row['job'])):
+                            execution_ran=True
+                        executed=('run-tests-isolated.bash' in run or 'run-unit-tests-asan-coverage.bash' in run or 'unit-tests' in run)
                         if not executed or not allowed(step.get('if'),tier,mode,inputs,row['job']):continue
                         value=resolve(step.get('env',{}).get('TAP_GROUP',''),inputs)
                         if value:wired.add(value)
                         wired.update(re.findall(r"TAP_GROUP=[\"']?([a-zA-Z0-9_-]+)",run))
+                if not required_groups and not execution_ran:
+                    errors.append('consumer execution missing or disabled: '+str(identity)+' on '+tier+'/'+mode)
                 per_mode.append(wired)
                 missing=required_groups-wired
                 if missing:errors.append('group not executed by '+str(identity)+' on '+tier+'/'+mode+': '+', '.join(sorted(missing)))
-            if row['automatic'] and is_automatic(caller):
+            if tier in covered and row['automatic'] and is_automatic(caller):
                 covered[tier].update(required_groups.intersection(*per_mode))
     for tier in covered:
         for group in sorted(migrated-covered[tier]):errors.append('lower-tier coverage lost: '+tier+'/'+group)
