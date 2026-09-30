@@ -11,6 +11,7 @@ import time
 from ci_tier_plan import resolve_selection, make_plan, consumer_matrix, applicable_tests, validate_manifest, check_key
 from ci_tier_artifacts import binary_version, GitHubAPI, resolve_producer, load_manifest, select_artifact, restore_handoff, verify_binding
 from ci_tier_checks import register, publish_result, reconcile, reporting_repository
+from ci_cancel_superseded import cancel_if_superseded
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -39,6 +40,7 @@ def api_for(plan):return GitHubAPI(plan['repository'],token=os.environ.get('SOUR
 def reporting_api(plan):return GitHubAPI(reporting_repository(plan))
 def plan_command():
     ctx=context();api=api_for(ctx);trusted=os.environ.get('TRUSTED')=='true'
+    if trusted:cancel_if_superseded(ctx,api,ctx['build_id'])
     selection=resolve_selection(ctx,trusted,lambda number:api.request(f"repos/{ctx['repository']}/pulls/{number}"))
     plan=make_plan(ctx,selection,json.loads((ROOT/'ci-tier-consumers.json').read_text()) if trusted else {'consumers':[]})
     plan.pop('variables',None)
@@ -170,6 +172,8 @@ def manual_consumer_rows(workflow,instance,supplied):
 
 def consumer():
     ctx=context();api=api_for(ctx);gh=json.loads(os.environ['GITHUB_JSON'])
+    if ctx['repository']==gh['repository']:
+        cancel_if_superseded(ctx,GitHubAPI(gh['repository']),int(gh['run_id']))
     supplied=json.loads(os.environ.get('CONSUMER_INPUTS','{}'))
     instance=os.environ.get('CONSUMER_INSTANCE','run')
     # Old multi-instance callers lack consumer_id. Their stable input digest

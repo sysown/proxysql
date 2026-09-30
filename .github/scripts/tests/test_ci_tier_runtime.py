@@ -111,6 +111,21 @@ class RuntimeTests(unittest.TestCase):
    api.return_value.json_artifact.return_value=plan
    self.assertEqual(runtime.read_plan(),plan)
    api.return_value.json_artifact.assert_called_once_with(2,'ci-plan-t1-a1-b2-a1','plan.json')
+ def test_superseded_producer_stops_before_registering_checks(self):
+  api=Mock();api.repository='sysown/proxysql'
+  api.request.side_effect=[{'head':{'sha':'c'*40}},{'status':'in_progress'},{}]
+  with patch.object(runtime,'context',return_value=self.ctx()),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'register') as register,patch.dict(os.environ,{'TRUSTED':'true'}):
+   with self.assertRaisesRegex(RuntimeError,'superseded'):runtime.plan_command()
+   register.assert_not_called()
+   api.request.assert_called_with('repos/sysown/proxysql/actions/runs/2/cancel','POST')
+ def test_superseded_consumer_stops_before_any_artifact_lookup(self):
+  gh=dict(repository='sysown/proxysql',run_id='8',run_attempt='1')
+  api=Mock();api.repository=gh['repository']
+  api.request.side_effect=[{'head':{'sha':'c'*40}},{'status':'in_progress'},{}]
+  with patch.object(runtime,'context',return_value=self.ctx()),patch.object(runtime,'GitHubAPI',return_value=api),patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh)}):
+   with self.assertRaisesRegex(RuntimeError,'superseded'):runtime.consumer()
+   api.artifacts.assert_not_called();api.json_artifact.assert_not_called()
+   api.request.assert_called_with('repos/sysown/proxysql/actions/runs/8/cancel','POST')
  def test_binary_metadata_uses_actual_version(self):
   with tempfile.TemporaryDirectory() as folder:
    prior=os.getcwd();os.chdir(folder)
@@ -149,8 +164,8 @@ class RuntimeTests(unittest.TestCase):
    try:
     names=[]
     for db in ['mysql','mariadb']:
-     api=Mock();api.json_artifact.return_value=producer
-     with patch.object(runtime,'context',return_value=self.ctx()),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'load_bound',return_value=plan),patch.object(runtime,'resolve_producer',side_effect=AssertionError('mutable registration queried')),patch.object(runtime,'emit') as output,patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'CONSUMER_INPUTS':json.dumps(dict(infradb=json.dumps([db]))),'CONSUMER_INSTANCE':'run'}):
+     api=Mock();api.json_artifact.return_value=producer;api.request.return_value={'head':{'sha':self.ctx()['sha']}}
+     with patch.object(runtime,'context',return_value=self.ctx()),patch.object(runtime,'GitHubAPI',return_value=api),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'load_bound',return_value=plan),patch.object(runtime,'resolve_producer',side_effect=AssertionError('mutable registration queried')),patch.object(runtime,'emit') as output,patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'CONSUMER_INPUTS':json.dumps(dict(infradb=json.dumps([db]))),'CONSUMER_INSTANCE':'run'}):
       runtime.consumer()
       api.json_artifact.assert_called_once_with(1,'ci-accepted-producer-a1','producer.json')
       names.append(output.call_args.kwargs['binding_name'])
