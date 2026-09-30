@@ -60,7 +60,7 @@
 } while (0)
 
 int main() {
-	plan(66);
+	plan(68);
 
 	if (test_init_minimal() != 0)
 		BAIL_OUT("test_init_minimal() failed");
@@ -76,6 +76,21 @@ int main() {
 	ok(dynamic_cast<PgSQL_Connection_Native*>(conn) == nullptr &&
 	   dynamic_cast<PgSQL_Connection_LibPQ*>(conn) == nullptr,
 	   "a client connection is never one of the backend leaves");
+
+	// The two flags the leaf type does NOT settle, pinned per leaf. Everything
+	// else about a leaf is enforced by its type, which is also why the four
+	// assert(native_mode || pgsql_conn) entry points could go: "the leaf type
+	// is that assertion". These two are read outside the hierarchy to route
+	// work (the backend-kill args, the LISTEN refusal, the stats JSON key), so a
+	// ctor passing the wrong pair would misroute silently. Only the ctor expresses
+	// that pair, which is what makes this the only place it can be tested.
+	PgSQL_Connection_Native* nat = new PgSQL_Connection_Native();
+
+	ok(client->native_mode == false && pq->native_mode == false && nat->native_mode == true,
+	   "native_mode: client and libpq leaves false, native leaf true");
+	ok(client->is_client_connection == true && pq->is_client_connection == false &&
+	   nat->is_client_connection == false,
+	   "is_client_connection: only the client leaf true");
 
 	ok(conn->get_pg_connection() == nullptr,
 	   "a fresh client connection has no libpq handle (same as before the split)");
@@ -140,6 +155,7 @@ int main() {
 	// set_is_client() is exercised by the real attach path
 	// (Base_Thread.cpp shrinks its myds first), so it is not called on this bare
 	// connection: a fresh leaf has no stream attached yet.
+	delete nat;
 	delete pq;
 	delete client;
 	ok(true, "client leaf and its comparison leaf construct and destroy cleanly");

@@ -359,10 +359,11 @@ public:
 	// declared stays the one both sides add to.
 	virtual HandlerStep fetch_result_dispatch(short event, uint64_t* processed_bytes) = 0;
 	// The ASYNC_*_END states. libpq installs its notice receiver, leaves pipeline
-	// mode if the connection is in one, and asserts the two "should be NULL" postconditions
-	// that used to sit inline in the handler; native has no notice receiver and never
-	// enters pipeline mode. All five pieces of that finalization moved into
-	// PgSQL_Connection_LibPQ::on_command_end() in steps 4 and 5b.
+	// mode if the connection is in one, and asserts the two "should be NULL"
+	// postconditions that used to sit inline in the handler. Those three
+	// statements are the whole of PgSQL_Connection_LibPQ::on_command_end(); native
+	// has no notice receiver, never enters pipeline mode, and has nothing left to
+	// assert, so its override is empty.
 	virtual void on_command_end() = 0;
 	// True when this transport's handle is in the state its own state machine
 	// guarantees once the connect has started -- for libpq, that pgsql_conn exists.

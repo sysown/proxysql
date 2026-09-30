@@ -447,6 +447,15 @@ void PgSQL_Connection_LibPQ::on_command_end() {
 		}
 		exit_pipeline_mode = false;
 	}
+
+	// should be NULL
+	// The command has ended, so whatever result the command produced has already
+	// been consumed or freed by the caller and no COPY stream is still running.
+	// Both were checked here in the handler() before the split moved this call
+	// into the leaf; plan:202 puts them in on_command_end(), and they are the
+	// libpq transport's to check because both members moved here.
+	assert(!pgsql_result);
+	assert(!is_copy_out);
 }
 
 bool PgSQL_Connection_LibPQ::resync_already_synced() {
