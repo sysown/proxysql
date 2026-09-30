@@ -244,11 +244,9 @@ git push / open PR
            CI-taptests           CI-taptests-ssl     CI-taptests-asan
            CI-taptests-groups    CI-taptests-pgsql-cluster
            CI-codeql
-           CI-3p-aiomysql        CI-3p-django-framework
-           CI-3p-laravel-framework                    CI-3p-mariadb-connector-c
-           CI-3p-mysql-connector-j                    CI-3p-pgjdbc
-           CI-3p-php-pdo-mysql   CI-3p-php-pdo-pgsql  CI-3p-postgresql
-           CI-3p-sqlalchemy
+
+           (The CI-3p-* callers are not part of this cascade: they are
+           manual-only, see "Third-party integration" below.)
 ```
 
 ### Why the cascade looks the way it does
@@ -679,9 +677,24 @@ Repository branch-protection settings are unchanged.
 
 Tests still use `@proxysql_min_version` and the built binary's actual version.
 Mixed groups retain applicable lower-tier tests; empty groups are explicitly
-not applicable. Plugin-only jobs use v4.0. Coverage upload is enabled only for
-instrumented artifacts. Lower-tier `unit-tests-g1` runs within the producer,
-retaining coverage previously supplied by the sweep without enabling new events.
+not applicable, including plugin suites unavailable in the compiled product.
+All selected tiers use the same ASAN/coverage and TSAN unit workflows, rebuilt
+inside `ubuntu24_dbg_build` and executed in that same image. The producer does
+not run unit tests. Every tier uses GCOV in the shared TAP build and the same
+coverage collection steps. Only compile-time product flags and version-based
+test filtering differ; sanitizer options and test commands are shared.
+
+`CI-maketest` and CodeQL use the same producer-bound selection. Standalone
+macOS smoke, cluster simulation, and PostgreSQL compatibility workflows keep
+their existing triggers and snapshot the same tier labels once per run. Reruns
+reuse that snapshot. Cluster simulation caches and all matrix artifacts include
+the product tier; the restored simulator binary is checked against that tier.
+The fixed ASAN, TSAN, and simulator coverage configurations apply equally to
+every selected product. Manual third-party suites remain manual.
+
+Deploy the paired GH-Actions engine change before the v3.0 caller change, then
+start a new PR CI run. Existing runs retain their original manifests and build
+instrumentation; they do not acquire newly selected tiers on rerun.
 
 ### Sweep removal and coverage guard
 
@@ -882,11 +895,16 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 
 ### Third-party integration (`CI-3p-*`)
 
-Ten workflows test ProxySQL against external client libraries, independent
-of the build cache (they build ProxySQL inline inside the workflow). Each
-triggers on `workflow_run[completed]` on `CI-trigger` and reads its matrix
-from GitHub repository variables like
+Sixteen workflows test ProxySQL against external client libraries, independent
+of the build cache (they build ProxySQL inline inside the workflow). They
+read their matrix from GitHub repository variables like
 `MATRIX_3P_AIOMYSQL_infradb_mysql`.
+
+These callers are **manual-only** (`workflow_dispatch`): they do not chain off
+`CI-trigger`, and their catalogue rows in `.github/ci-tier-consumers.json` on
+`GH-Actions` are `automatic: false` (#6276), so sysown builds register no
+CI-3p checks. The suites run automatically from the cross-repository 3p
+testing caller (`ProxySQL/proxysql_3p_testing_public`).
 
 | Caller | Client | Protocols |
 |---|---|---|
@@ -900,6 +918,14 @@ from GitHub repository variables like
 | `CI-3p-php-pdo-pgsql.yml` | PHP PDO PostgreSQL | PostgreSQL |
 | `CI-3p-postgresql.yml` | libpq (native) | PostgreSQL |
 | `CI-3p-sqlalchemy.yml` | SQLAlchemy ORM | MySQL, PostgreSQL |
+| `CI-3p-pymysql.yml` | Python PyMySQL | MySQL |
+| `CI-3p-mysqlclient.yml` | Python mysqlclient | MySQL |
+| `CI-3p-mysql-connector-python.yml` | MySQL Connector/Python | MySQL |
+| `CI-3p-go-mysql.yml` | Go MySQL | MySQL |
+| `CI-3p-node-mysql2.yml` | Node.js mysql2 | MySQL |
+| `CI-3p-psycopg.yml` | Python psycopg | PostgreSQL |
+
+The last six (#6273) are catalogued for the v4.0 tier only.
 
 ### Release tarballs (generic Linux binaries)
 
