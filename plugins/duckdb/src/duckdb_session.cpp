@@ -591,7 +591,8 @@ std::string trim_trailing_semicolons(const std::string& sql) {
 // duckdb_destroy_prepare(), even when duckdb_prepare() itself failed
 // (documented in duckdb.h above duckdb_prepare()) -- every prepare below
 // is paired with a destroy on every path.
-DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective) {
+DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
+                                         DuckDBResultProtocol protocol) {
 	DuckDBExecOutcome outcome;
 	const DuckDBTxnVerb verb = classify_txn_verb(effective);
 	DuckDBSessionState& session_state = duckdb_session_state();
@@ -763,7 +764,7 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	// exactly once above, so just convert it.
 	outcome.has_resultset = true;
 	std::string conversion_error;
-	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error, &outcome.column_types);
+	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error, &outcome.column_types, protocol);
 	duckdb_destroy_result(&res);
 	if (!conversion_error.empty()) {
 		outcome.ok = false;
@@ -820,6 +821,11 @@ MySQLColumnType mysql_column_type(const DuckDBColumnType& column) {
 		out.type = MYSQL_TYPE_NEWDECIMAL; out.length = 39; out.flags |= UNSIGNED_FLAG; break;
 	case DUCKDB_TYPE_HUGEINT:
 		out.type = MYSQL_TYPE_NEWDECIMAL; out.length = 40; break;
+	case DUCKDB_TYPE_BLOB:
+		out.type = MYSQL_TYPE_LONG_BLOB;
+		out.flags = BLOB_FLAG | BINARY_FLAG;
+		out.length = UINT32_MAX;
+		break;
 	default:
 		return MySQLColumnType {};
 	}
@@ -834,6 +840,7 @@ struct PgSQLColumnType {
 
 PgSQLColumnType pgsql_column_type(const DuckDBColumnType& column) {
 	switch (column.type) {
+	case DUCKDB_TYPE_BLOB: return { 17, -1, -1 }; // bytea, hex text encoding
 	case DUCKDB_TYPE_TINYINT:
 	case DUCKDB_TYPE_SMALLINT:
 	case DUCKDB_TYPE_UTINYINT: return { 21, 2, -1 }; // int2
@@ -1108,7 +1115,9 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 	// client text), not `effective`, is what goes to duckdb_send_result:
 	// for PgSQL, SQLite3_to_Postgres derives its CommandComplete tag from
 	// the first word of whatever we pass it.
-	const DuckDBExecOutcome outcome = duckdb_execute_effective(st.conn, effective);
+	constexpr DuckDBResultProtocol protocol = std::is_same_v<S, PgSQL_Session>
+		? DuckDBResultProtocol::pgsql : DuckDBResultProtocol::mysql;
+	const DuckDBExecOutcome outcome = duckdb_execute_effective(st.conn, effective, protocol);
 	if (!outcome.ok) {
 		if constexpr (std::is_same_v<S, MySQL_Session>)
 			duckdb_send_mysql_error(sess,

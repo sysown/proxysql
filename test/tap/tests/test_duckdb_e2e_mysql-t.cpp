@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(44);
+	plan(47);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -145,6 +145,30 @@ int main(int argc, char** argv) {
 		}
 		ok(valid, "typed MySQL column packets preserve sequence IDs across wraparound");
 		if (r) mysql_free_result(r);
+	}
+
+	{
+		const int rc = mysql_query(c, "SELECT from_hex('00015CFF'), ''::BLOB, NULL::BLOB");
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* fields = r ? mysql_fetch_fields(r) : nullptr;
+		bool binary_types = r && mysql_num_fields(r) == 3;
+		if (binary_types) {
+			for (int i = 0; i < 3; ++i)
+				binary_types = binary_types && fields[i].type == MYSQL_TYPE_LONG_BLOB &&
+				               fields[i].charsetnr == 63 && (fields[i].flags & BINARY_FLAG);
+		}
+		ok(binary_types, "MySQL BLOB columns advertise binary metadata, including typed NULL");
+		MYSQL_ROW row = r ? mysql_fetch_row(r) : nullptr;
+		const unsigned long* lengths = row ? mysql_fetch_lengths(r) : nullptr;
+		const unsigned char expected[] = { 0, 1, 0x5c, 0xff };
+		ok(row && row[0] && lengths[0] == sizeof(expected) &&
+		   std::memcmp(row[0], expected, sizeof(expected)) == 0 && row[1] && lengths[1] == 0 && !row[2],
+		   "MySQL BLOB preserves arbitrary bytes, empty data and SQL NULL");
+		if (r) mysql_free_result(r);
+	}
+	{
+		const std::string value = one_cell(c, "SELECT repeat('a', 70000)::BLOB");
+		ok(value == std::string(70000, 'a'), "MySQL BLOB values larger than 64 KiB remain intact");
 	}
 
 	// NULL must arrive as a real NULL, not the string "NULL".

@@ -14,6 +14,8 @@ struct DuckDBColumnType {
 	uint8_t scale { 0 };
 };
 
+enum class DuckDBResultProtocol { mysql, pgsql };
+
 // Converts a materialised duckdb_result into the SQLite3_result that
 // core's MySQL and PostgreSQL serialisers both consume.
 //
@@ -25,7 +27,8 @@ struct DuckDBColumnType {
 // allowlist supports: both text protocols transmit values as strings.
 // Optional column_types receives the executed result's schema (including
 // decimal precision/scale) before chunk access; plugin serializers use it
-// for numeric metadata and retain text metadata for other types.
+// for numeric/binary metadata and retain text metadata for other types.
+// BLOB cells use raw bytes for MySQL and hex BYTEA text for PostgreSQL.
 // The original compatibility allowlist was verified against DuckDB
 // 1.4.5's deprecated C API (duckdb/src/include/duckdb/main/capi/cast/
 // generic.hpp, GetInternalCValue's switch on deprecated_type) -- this is
@@ -97,7 +100,8 @@ struct DuckDBColumnType {
 // non-null, conversion failures are reported there and nullptr is returned.
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res,
                                          std::string* error = nullptr,
-                                         std::vector<DuckDBColumnType>* column_types = nullptr);
+                                         std::vector<DuckDBColumnType>* column_types = nullptr,
+                                         DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql);
 
 // Appends one length-aware converted row and translates SQLite's status into
 // the converter's error contract. This keeps an oversized row from being

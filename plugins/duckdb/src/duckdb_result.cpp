@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -80,7 +81,8 @@ std::string format_uhugeint(duckdb_uhugeint h) {
 }
 #endif
 
-bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string& out) {
+bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string& out,
+                 DuckDBResultProtocol protocol, std::string& error) {
 	uint64_t* validity = duckdb_vector_get_validity(vector);
 	if (!cell_is_valid(validity, row)) return false;
 	void* data = duckdb_vector_get_data(vector);
@@ -161,9 +163,33 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		return true;
 	}
 	case DUCKDB_TYPE_VARCHAR:
-	case DUCKDB_TYPE_BLOB:
 		assign_string_t(static_cast<duckdb_string_t*>(data)[row], out);
 		return true;
+	case DUCKDB_TYPE_BLOB: {
+		duckdb_string_t value = static_cast<duckdb_string_t*>(data)[row];
+		if (protocol == DuckDBResultProtocol::mysql) {
+			assign_string_t(value, out);
+			return true;
+		}
+		// BYTEA text uses a hex prefix and two ASCII digits per byte. Encode
+		// before materialization so size failures follow the conversion-error
+		// path and cannot leave a committed RETURNING mutation behind.
+		const size_t length = duckdb_string_t_length(value);
+		if (length > static_cast<size_t>((INT_MAX - 2) / 2)) {
+			error = "DuckDB BYTEA text exceeds ProxySQL's INT_MAX row-size limit";
+			return false;
+		}
+		const auto* bytes = reinterpret_cast<const unsigned char*>(duckdb_string_t_data(&value));
+		static const char hex[] = "0123456789abcdef";
+		out.resize(2 + 2 * length);
+		out[0] = '\\';
+		out[1] = 'x';
+		for (size_t i = 0; i < length; ++i) {
+			out[2 + 2 * i] = hex[bytes[i] >> 4];
+			out[3 + 2 * i] = hex[bytes[i] & 15];
+		}
+		return true;
+	}
 	case DUCKDB_TYPE_DECIMAL: {
 		duckdb_logical_type lt = duckdb_vector_get_column_type(vector);
 		const uint8_t scale = duckdb_decimal_scale(lt);
@@ -238,7 +264,8 @@ bool duckdb_append_sqlite3_row(SQLite3_result& out, char** fields,
 }
 
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
-                                      std::vector<DuckDBColumnType>* column_types) {
+                                      std::vector<DuckDBColumnType>* column_types,
+                                      DuckDBResultProtocol protocol) {
 	if (error != nullptr) error->clear();
 	if (column_types != nullptr) column_types->clear();
 	if (res == nullptr) return nullptr;
@@ -283,16 +310,19 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
 		}
 
 		for (idx_t r = 0; r < nrows; r++) {
+			std::string row_error;
 			for (idx_t c = 0; c < ncols; c++) {
 				fields[c] = nullptr;
 				sizes[c] = 0;
 				if (!duckdb_type_renders_as_text(types[c]) || vectors[c] == nullptr) continue;
-				if (!render_cell(types[c], vectors[c], r, rendered[c])) continue;
+				if (!render_cell(types[c], vectors[c], r, rendered[c], protocol, row_error)) {
+					if (!row_error.empty()) break;
+					continue;
+				}
 				fields[c] = rendered[c].data();
 				sizes[c] = static_cast<unsigned long>(rendered[c].size());
 			}
-			std::string row_error;
-			if (!duckdb_append_sqlite3_row(*out, fields.data(), sizes.data(), row_error)) {
+			if (!row_error.empty() || !duckdb_append_sqlite3_row(*out, fields.data(), sizes.data(), row_error)) {
 				duckdb_destroy_data_chunk(&chunk);
 				delete out;
 				if (error != nullptr) *error = row_error;

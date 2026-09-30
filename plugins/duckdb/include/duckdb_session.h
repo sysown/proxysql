@@ -110,7 +110,8 @@ struct DuckDBExecOutcome {
 // executed. If neither direct conversion nor the VARCHAR wrapper can
 // represent the result, reject before execution. Otherwise execute the
 // selected prepared statement exactly once.
-DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective);
+DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
+                                         DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql);
 
 // Routes managed engine-global SET statements through DuckDBEngine's internal
 // control connection. Returns false only for a handled statement that failed;

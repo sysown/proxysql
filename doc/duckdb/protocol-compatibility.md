@@ -77,7 +77,7 @@ above is guaranteed to be absorbed or translated.
 
 ## Result metadata and conversion
 
-Numeric results carry native type metadata on both endpoints. Values still use
+Numeric and binary results carry native type metadata on both endpoints. Values still use
 the text transfer format; this does not add prepared statements or binary
 transfer support.
 
@@ -90,12 +90,19 @@ transfer support.
 | HUGEINT / UHUGEINT | NEWDECIMAL, unsigned flag for UHUGEINT | NUMERIC(39,0) |
 | FLOAT / DOUBLE | FLOAT / DOUBLE | REAL / DOUBLE PRECISION |
 | DECIMAL(p,s) | NEWDECIMAL with precision and scale | NUMERIC(p,s) |
+| BLOB | LONG_BLOB, binary charset and flag | BYTEA, hex text encoding |
 
 MySQL expression nullability is reported as unknown rather than claiming
 NOT NULL. Typed NULLs and zero-row results retain their numeric metadata.
-Boolean, temporal, binary, and other types currently retain text metadata.
+Boolean, temporal, and other unmapped types currently retain text metadata.
 If a VARCHAR wrapper is needed, metadata describes the wrapped result: all its
 columns are text, including any originally numeric columns.
+
+BLOB values preserve arbitrary bytes, including embedded NUL and non-UTF-8
+bytes. MySQL receives the raw bytes with length information. PostgreSQL receives
+the standard BYTEA text representation (`\x` followed by hexadecimal digits),
+which clients such as libpq decode with `PQunescapeBytea`. Empty binary values
+remain distinct from SQL NULL.
 
 The direct conversion path supports common scalar values including booleans,
 signed and unsigned integers, floats, doubles, dates, time, timestamps,

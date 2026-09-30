@@ -113,7 +113,8 @@ CURRENT_DATABASE()` return `memory` for `:memory:` and the configured
 ## Result values
 
 Both frontend protocols expose numeric column types, including decimal scale
-and unsigned ranges. Other columns currently use text metadata. SQL NULL is
+and unsigned ranges. BLOBs use MySQL binary metadata or PostgreSQL BYTEA with
+hex text encoding. Other columns currently use text metadata. SQL NULL is
 preserved as a real null value, and embedded NUL bytes in supported strings are
 length-aware internally. See [Protocol compatibility](protocol-compatibility.md)
 for the type mappings and text fallbacks.

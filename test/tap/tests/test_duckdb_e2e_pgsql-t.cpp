@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(47);
+	plan(50);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -203,6 +203,32 @@ int main(int argc, char** argv) {
 		   std::strcmp(PQgetvalue(r, 0, 0), "42") == 0 && std::strcmp(PQgetvalue(r, 0, 1), "text") == 0 &&
 		   std::strcmp(PQgetvalue(r, 0, 2), "1.25") == 0 && PQgetisnull(r, 0, 3),
 		   "mixed PostgreSQL column types retain their values and SQL NULL");
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "SELECT from_hex('00015CFF'), ''::BLOB, NULL::BLOB");
+		const bool shape = PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 3 && PQntuples(r) == 1;
+		ok(shape && PQftype(r, 0) == 17 && PQftype(r, 1) == 17 && PQftype(r, 2) == 17 && PQfformat(r, 0) == 0,
+		   "PostgreSQL BLOB columns advertise BYTEA text format, including typed NULL");
+		size_t size = 0;
+		unsigned char* decoded = shape ? PQunescapeBytea(
+			reinterpret_cast<const unsigned char*>(PQgetvalue(r, 0, 0)), &size) : nullptr;
+		const unsigned char expected[] = { 0, 1, 0x5c, 0xff };
+		ok(decoded && size == sizeof(expected) && std::memcmp(decoded, expected, sizeof(expected)) == 0 &&
+		   !PQgetisnull(r, 0, 1) && std::strcmp(PQgetvalue(r, 0, 1), "\\x") == 0 && PQgetisnull(r, 0, 2),
+		   "libpq decodes arbitrary bytes while distinguishing empty BYTEA from SQL NULL");
+		PQfreemem(decoded);
+		PQclear(r);
+	}
+	{
+		PGresult* r = exec_or_bail(c, "SELECT repeat('a', 70000)::BLOB");
+		size_t size = 0;
+		unsigned char* decoded = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+			? PQunescapeBytea(reinterpret_cast<const unsigned char*>(PQgetvalue(r, 0, 0)), &size) : nullptr;
+		ok(decoded && std::string(reinterpret_cast<char*>(decoded), size) == std::string(70000, 'a'),
+		   "libpq decodes BYTEA values larger than 64 KiB without truncation");
+		PQfreemem(decoded);
 		PQclear(r);
 	}
 
