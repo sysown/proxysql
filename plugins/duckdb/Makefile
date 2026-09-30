@@ -87,31 +87,11 @@ CXXFLAGS += -fstack-protector-strong
 
 .DEFAULT_GOAL := all
 
-# libduckdb_static.a alone does not satisfy DuckDB's symbols -- the vendored
-# build produces 16 static archives (src/ + 12 third_party/ + 3 extension/),
-# with circular references between them. libduckdb_static.a is kept as the
-# make PREREQUISITE that triggers the deps/duckdb build (via $(DUCKDB_AR)
-# below); DUCKDB_ARS enumerates the full set for the actual link. It's a
-# recursively-expanded (=) variable, not simply-expanded (:=), so the `find`
-# runs when the link recipe executes -- after the $(DUCKDB_AR) prerequisite
-# has forced deps/duckdb to build -- rather than at Makefile parse time, when
-# a fresh checkout wouldn't have any of these archives on disk yet.
+# DuckDB exports its configured static archive set. In particular, its
+# jemalloc extension is Linux-specific: macOS correctly produces fewer
+# archives. Validate the manifest rather than a platform-independent count.
 DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
-DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
-
-# $(DUCKDB_AR) as a prerequisite only re-triggers the deps build when
-# libduckdb_static.a itself is missing. An interrupted or partial deps/duckdb
-# build can leave that one archive present while others under third_party/ or
-# extension/ are absent or stale; `find` would then silently return a short
-# list, the -shared link below would "succeed" anyway (shared objects
-# tolerate undefined symbols), and the plugin would only fail later at
-# dlopen(RTLD_NOW) -- exactly the failure mode DUCKDB_ARS exists to avoid.
-# So: assert the count before linking. 16 is what DuckDB 1.4.5's vendored
-# CMake build produces (1 src/ + 12 third_party/ + 3 extension/ archives,
-# confirmed via `find deps/duckdb/duckdb/build/release -name '*.a'`); a
-# future DuckDB version bump that legitimately changes the archive count
-# should update this constant, not silently pass a stale check.
-DUCKDB_MIN_ARCHIVES := 16
+DUCKDB_ARCHIVE_LISTER := $(PROXYSQL_PATH)/deps/duckdb/list-static-archives.sh
 
 SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp $(PLUGIN_DIR)/src/duckdb_session.cpp $(PLUGIN_DIR)/src/duckdb_listener.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
@@ -161,7 +141,7 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) $(BUILDFLAGS_STAMP)
 
 -include $(DEPS)
 
-# The 16 vendored DuckDB archives were built by DuckDB's own CMake, not by
+# The vendored DuckDB archives were built by DuckDB's own CMake, not by
 # this Makefile, so none of their objects carry -fvisibility=hidden -- that
 # flag only applies to duckdb_plugin.o/duckdb_config.o/duckdb_engine.o
 # above. As long as no plugin code referenced any DuckDB symbol (true
@@ -186,12 +166,8 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) $(BUILDFLAGS_STAMP)
 # Neither branch changes which archives/objects get linked (unlike
 # --whole-archive or hand-listing archives).
 #
-# The Darwin branch is unverified locally (no macOS environment here); it
-# is confirmed by the first macOS CI run (CI-build-macos-macos-14-genai.yml
-# sets PROXYSQL40=1 and builds this plugin). The named symbol certainly
-# exists (it's this plugin's own extern "C" entry point), so ld64's
-# "exported symbol not found" error should not fire; if the flag is
-# otherwise wrong, CI fails loudly rather than leaking symbols silently.
+# Native macOS validation also checks that only the descriptor is exported
+# and exercises DuckDB queries after loading the plugin in a PROXYSQL40 core.
 PLUGIN_LDFLAGS :=
 PLUGIN_SYSTEM_LIBS := -lm -lpthread
 ifeq ($(UNAME_S),Darwin)
@@ -202,7 +178,7 @@ PLUGIN_SYSTEM_LIBS += -ldl
 endif
 
 # --start-group/--end-group (not --whole-archive) resolves the circular
-# references between the 16 DuckDB archives without pulling every object
+# references between the DuckDB archives without pulling every object
 # from every archive into the .so -- --whole-archive was tried and works,
 # but bloats the .so enormously since it forces in the whole set
 # unconditionally instead of just what's referenced.
@@ -219,14 +195,14 @@ DUCKDB_LINK_GROUP_START := -Wl,--start-group
 DUCKDB_LINK_GROUP_END := -Wl,--end-group
 endif
 
-$(PLUGIN_SO): $(OBJS) $(DUCKDB_AR)
-	@n=$$(echo "$(DUCKDB_ARS)" | wc -w); \
-	if [ "$$n" -lt $(DUCKDB_MIN_ARCHIVES) ]; then \
-		echo "ERROR: expected at least $(DUCKDB_MIN_ARCHIVES) DuckDB static archives under $(DUCKDB_PATH)/build/release (DuckDB 1.4.5 layout: src/ + third_party/ + extension/), found $$n. This usually means an interrupted or partial deps/duckdb build; rerun: make -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb" >&2; \
-		exit 1; \
-	fi
+.PHONY: check-duckdb-archives
+check-duckdb-archives: $(DUCKDB_AR)
+	@sh $(DUCKDB_ARCHIVE_LISTER) $(DUCKDB_PATH)/build/release >/dev/null
+
+$(PLUGIN_SO): $(OBJS) $(DUCKDB_AR) $(DUCKDB_ARCHIVE_LISTER) Makefile | check-duckdb-archives
+	@duckdb_archives=$$(sh $(DUCKDB_ARCHIVE_LISTER) $(DUCKDB_PATH)/build/release) || exit $$?; \
 	$(CXX) $(SHARED_FLAGS) -o $@ $(OBJS) $(CXXFLAGS) -pthread \
-		$(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \
+		$(DUCKDB_LINK_GROUP_START) $$duckdb_archives $(DUCKDB_LINK_GROUP_END) \
 		-L$(SSL_LDIR) -lssl -lcrypto $(PLUGIN_LDFLAGS) $(PLUGIN_SYSTEM_LIBS)
 
 .PHONY: all
