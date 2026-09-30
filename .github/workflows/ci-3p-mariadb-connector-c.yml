@@ -195,7 +195,6 @@ jobs:
         set -eo pipefail
 
         cd proxysql_3p_testing/
-        git sparse-checkout list
         ./setup.sh test_${{ env.TESTNAME }}/${{ env.TESTNAME }}
 
         sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' common/infra-docker-hoster/docker-compose.yml

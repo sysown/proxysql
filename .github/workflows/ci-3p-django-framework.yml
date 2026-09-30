@@ -210,7 +210,7 @@ jobs:
         #sed -i 's/timeout -v -s1 800 //' run-tests.bash
 
         # fix permissions
-        mkdir ${{ env.TESTNAME }}/cache
+        mkdir -p ${{ env.TESTNAME }}/cache
         chmod -R 777 ${{ env.TESTNAME }}/cache
 
         # set tested database infra
