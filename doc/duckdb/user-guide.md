@@ -112,9 +112,11 @@ CURRENT_DATABASE()` return `memory` for `:memory:` and the configured
 
 ## Result values
 
-Both frontend protocols currently describe all columns as text. SQL NULL is
+Both frontend protocols expose numeric column types, including decimal scale
+and unsigned ranges. Other columns currently use text metadata. SQL NULL is
 preserved as a real null value, and embedded NUL bytes in supported strings are
-length-aware internally.
+length-aware internally. See [Protocol compatibility](protocol-compatibility.md)
+for the type mappings and text fallbacks.
 
 Finite `DOUBLE` values are rendered with enough significant digits to preserve
 their value when parsed back as a double by a client.

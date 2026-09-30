@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(24);
+	plan(44);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -60,6 +60,91 @@ int main(int argc, char** argv) {
 		const double received = std::strtod(text.c_str(), &end);
 		ok(!text.empty() && *end == '\0' && received == value.second,
 		   "DOUBLE survives MySQL text transfer exactly: %s", value.first);
+	}
+
+	// Metadata must describe the actual result schema, including empty results.
+	const struct {
+		const char* expression;
+		enum_field_types type;
+		bool is_unsigned;
+		unsigned int scale;
+		unsigned long width;
+	} metadata_cases[] = {
+		{ "'-128'::TINYINT", MYSQL_TYPE_TINY, false, 0, 4 },
+		{ "'-32768'::SMALLINT", MYSQL_TYPE_SHORT, false, 0, 6 },
+		{ "42::INTEGER", MYSQL_TYPE_LONG, false, 0, 11 },
+		{ "9223372036854775807::BIGINT", MYSQL_TYPE_LONGLONG, false, 0, 20 },
+		{ "255::UTINYINT", MYSQL_TYPE_TINY, true, 0, 3 },
+		{ "65535::USMALLINT", MYSQL_TYPE_SHORT, true, 0, 5 },
+		{ "4294967295::UINTEGER", MYSQL_TYPE_LONG, true, 0, 10 },
+		{ "18446744073709551615::UBIGINT", MYSQL_TYPE_LONGLONG, true, 0, 20 },
+		{ "1.5::FLOAT", MYSQL_TYPE_FLOAT, false, 31, 12 },
+		{ "1.5::DOUBLE", MYSQL_TYPE_DOUBLE, false, 31, 22 },
+		{ "1.25::DECIMAL(10,2)", MYSQL_TYPE_NEWDECIMAL, false, 2, 12 },
+		{ "'-170141183460469231731687303715884105728'::HUGEINT", MYSQL_TYPE_NEWDECIMAL, false, 0, 40 },
+		{ "'340282366920938463463374607431768211455'::UHUGEINT", MYSQL_TYPE_NEWDECIMAL, true, 0, 39 },
+		{ "NULL::INTEGER", MYSQL_TYPE_LONG, false, 0, 11 }
+	};
+	for (const auto& value : metadata_cases) {
+		const std::string sql = std::string("SELECT ") + value.expression + " AS typed_value";
+		const int rc = mysql_query(c, sql.c_str());
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* f = r ? mysql_fetch_field(r) : nullptr;
+		ok(f && f->type == value.type && bool(f->flags & UNSIGNED_FLAG) == value.is_unsigned &&
+		   !(f->flags & NOT_NULL_FLAG) && f->decimals == value.scale && f->length == value.width &&
+		   std::strcmp(f->name, "typed_value") == 0,
+		   "MySQL numeric metadata preserves type, signedness and scale: %s", value.expression);
+		if (r) mysql_free_result(r);
+	}
+	{
+		const int rc = mysql_query(c, "SELECT 1.25::DECIMAL(10,2) AS amount WHERE false");
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* f = r ? mysql_fetch_field(r) : nullptr;
+		ok(f && mysql_num_rows(r) == 0 && f->type == MYSQL_TYPE_NEWDECIMAL && f->decimals == 2,
+		   "empty MySQL results retain decimal metadata");
+		if (r) mysql_free_result(r);
+	}
+	for (const char* sql : {
+		"SELECT true AS fallback",
+		"SELECT DATE '2024-01-01' AS fallback",
+		"SELECT 42 AS numeric_value, [1, 2] AS wrapped_value"
+	}) {
+		const int rc = mysql_query(c, sql);
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* f = r ? mysql_fetch_field(r) : nullptr;
+		ok(f && f->type == MYSQL_TYPE_VAR_STRING,
+		   "MySQL text fallback matches the executed result: %s", sql);
+		if (r) mysql_free_result(r);
+	}
+
+	{
+		const int rc = mysql_query(c, "SELECT 42::INTEGER, 'text', 1.25::DECIMAL(4,2), NULL::BIGINT");
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* fields = r ? mysql_fetch_fields(r) : nullptr;
+		MYSQL_ROW row = r ? mysql_fetch_row(r) : nullptr;
+		ok(r && mysql_num_fields(r) == 4 && fields[0].type == MYSQL_TYPE_LONG &&
+		   fields[1].type == MYSQL_TYPE_VAR_STRING && fields[2].type == MYSQL_TYPE_NEWDECIMAL &&
+		   fields[3].type == MYSQL_TYPE_LONGLONG && row && row[0] && row[1] && row[2] &&
+		   std::strcmp(row[0], "42") == 0 && std::strcmp(row[1], "text") == 0 &&
+		   std::strcmp(row[2], "1.25") == 0 && row[3] == nullptr,
+		   "mixed MySQL column types retain their values and SQL NULL");
+		if (r) mysql_free_result(r);
+	}
+	{
+		std::string sql = "SELECT 1::INTEGER";
+		for (int i = 1; i < 300; ++i) sql += ", 1::INTEGER";
+		const int rc = mysql_query(c, sql.c_str());
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		bool valid = r && mysql_num_fields(r) == 300;
+		if (valid) {
+			MYSQL_FIELD* fields = mysql_fetch_fields(r);
+			MYSQL_ROW row = mysql_fetch_row(r);
+			for (int i = 0; i < 300; ++i)
+				valid = valid && fields[i].type == MYSQL_TYPE_LONG && row && row[i] &&
+				        std::strcmp(row[i], "1") == 0;
+		}
+		ok(valid, "typed MySQL column packets preserve sequence IDs across wraparound");
+		if (r) mysql_free_result(r);
 	}
 
 	// NULL must arrive as a real NULL, not the string "NULL".

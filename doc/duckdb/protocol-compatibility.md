@@ -77,9 +77,25 @@ above is guaranteed to be absorbed or translated.
 
 ## Result metadata and conversion
 
-Both protocol serializers label every column as text. Applications that depend
-on numeric, timestamp, array, or binary type metadata must parse returned text
-or wait for a future typed-result implementation.
+Numeric results carry native type metadata on both endpoints. Values still use
+the text transfer format; this does not add prepared statements or binary
+transfer support.
+
+| DuckDB type | MySQL metadata | PostgreSQL metadata |
+| --- | --- | --- |
+| TINYINT / SMALLINT | TINY / SHORT | SMALLINT |
+| INTEGER / BIGINT | LONG / LONGLONG | INTEGER / BIGINT |
+| UTINYINT / USMALLINT / UINTEGER | Corresponding integer type, unsigned flag | SMALLINT / INTEGER / BIGINT |
+| UBIGINT | LONGLONG, unsigned flag | NUMERIC(20,0) |
+| HUGEINT / UHUGEINT | NEWDECIMAL, unsigned flag for UHUGEINT | NUMERIC(39,0) |
+| FLOAT / DOUBLE | FLOAT / DOUBLE | REAL / DOUBLE PRECISION |
+| DECIMAL(p,s) | NEWDECIMAL with precision and scale | NUMERIC(p,s) |
+
+MySQL expression nullability is reported as unknown rather than claiming
+NOT NULL. Typed NULLs and zero-row results retain their numeric metadata.
+Boolean, temporal, binary, and other types currently retain text metadata.
+If a VARCHAR wrapper is needed, metadata describes the wrapped result: all its
+columns are text, including any originally numeric columns.
 
 The direct conversion path supports common scalar values including booleans,
 signed and unsigned integers, floats, doubles, dates, time, timestamps,

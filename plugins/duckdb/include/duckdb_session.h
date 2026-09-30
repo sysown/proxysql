@@ -1,7 +1,7 @@
 #ifndef DUCKDB_SESSION_H
 #define DUCKDB_SESSION_H
 
-#include "duckdb.h"
+#include "duckdb_result.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -96,6 +96,7 @@ struct DuckDBExecOutcome {
 	duckdb_error_type error_type { DUCKDB_ERROR_INVALID };
 	bool has_resultset { false };        // true: `result` holds the resultset to send
 	SQLite3_result* result { nullptr };  // caller-owned when has_resultset; nullptr otherwise
+	std::vector<DuckDBColumnType> column_types; // schema of the executed result, after any VARCHAR wrapper
 	int affected_rows { 0 };             // meaningful only when ok && !has_resultset
 };
 

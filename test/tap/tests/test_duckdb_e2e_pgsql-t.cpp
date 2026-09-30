@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(28);
+	plan(47);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -144,6 +144,65 @@ int main(int argc, char** argv) {
 			exact = end != text && *end == '\0' && received == value.second;
 		}
 		ok(exact, "DOUBLE survives PostgreSQL text transfer exactly: %s", value.first);
+		PQclear(r);
+	}
+
+	const struct {
+		const char* expression;
+		Oid oid;
+		int size;
+		int modifier;
+	} metadata_cases[] = {
+		{ "'-128'::TINYINT", 21, 2, -1 },
+		{ "'-32768'::SMALLINT", 21, 2, -1 },
+		{ "42::INTEGER", 23, 4, -1 },
+		{ "9223372036854775807::BIGINT", 20, 8, -1 },
+		{ "255::UTINYINT", 21, 2, -1 },
+		{ "65535::USMALLINT", 23, 4, -1 },
+		{ "4294967295::UINTEGER", 20, 8, -1 },
+		{ "18446744073709551615::UBIGINT", 1700, -1, (20 << 16) + 4 },
+		{ "1.5::FLOAT", 700, 4, -1 },
+		{ "1.5::DOUBLE", 701, 8, -1 },
+		{ "1.25::DECIMAL(10,2)", 1700, -1, (10 << 16) + 2 + 4 },
+		{ "'-170141183460469231731687303715884105728'::HUGEINT", 1700, -1, (39 << 16) + 4 },
+		{ "'340282366920938463463374607431768211455'::UHUGEINT", 1700, -1, (39 << 16) + 4 },
+		{ "NULL::INTEGER", 23, 4, -1 }
+	};
+	for (const auto& value : metadata_cases) {
+		const std::string sql = std::string("SELECT ") + value.expression + " AS typed_value";
+		PGresult* r = exec_or_bail(c, sql.c_str());
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 1 &&
+		   PQftype(r, 0) == value.oid && PQfsize(r, 0) == value.size &&
+		   PQfmod(r, 0) == value.modifier && PQfformat(r, 0) == 0 &&
+		   std::strcmp(PQfname(r, 0), "typed_value") == 0,
+		   "PostgreSQL numeric metadata preserves type and precision: %s", value.expression);
+		PQclear(r);
+	}
+	{
+		PGresult* r = exec_or_bail(c, "SELECT 1.25::DECIMAL(10,2) AS amount WHERE false");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 0 &&
+		   PQftype(r, 0) == 1700 && PQfmod(r, 0) == (10 << 16) + 2 + 4,
+		   "empty PostgreSQL results retain decimal metadata");
+		PQclear(r);
+	}
+	for (const char* sql : {
+		"SELECT true AS fallback",
+		"SELECT DATE '2024-01-01' AS fallback",
+		"SELECT 42 AS numeric_value, [1, 2] AS wrapped_value"
+	}) {
+		PGresult* r = exec_or_bail(c, sql);
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQftype(r, 0) == 25,
+		   "PostgreSQL text fallback matches the executed result: %s", sql);
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "SELECT 42::INTEGER, 'text', 1.25::DECIMAL(4,2), NULL::BIGINT");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 4 && PQntuples(r) == 1 &&
+		   PQftype(r, 0) == 23 && PQftype(r, 1) == 25 && PQftype(r, 2) == 1700 && PQftype(r, 3) == 20 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "42") == 0 && std::strcmp(PQgetvalue(r, 0, 1), "text") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 2), "1.25") == 0 && PQgetisnull(r, 0, 3),
+		   "mixed PostgreSQL column types retain their values and SQL NULL");
 		PQclear(r);
 	}
 

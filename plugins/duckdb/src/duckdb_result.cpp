@@ -237,8 +237,10 @@ bool duckdb_append_sqlite3_row(SQLite3_result& out, char** fields,
 	return false;
 }
 
-SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error) {
+SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
+                                      std::vector<DuckDBColumnType>* column_types) {
 	if (error != nullptr) error->clear();
+	if (column_types != nullptr) column_types->clear();
 	if (res == nullptr) return nullptr;
 
 	const idx_t ncols = duckdb_column_count(res);
@@ -250,6 +252,16 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error)
 		const char* name = duckdb_column_name(res, c);
 		out->add_column_definition(SQLITE_TEXT, name != nullptr ? name : "");
 		types[c] = duckdb_column_type(res, c);
+		if (column_types != nullptr) {
+			DuckDBColumnType column { types[c] };
+			if (column.type == DUCKDB_TYPE_DECIMAL) {
+				duckdb_logical_type logical = duckdb_column_logical_type(res, c);
+				column.precision = duckdb_decimal_width(logical);
+				column.scale = duckdb_decimal_scale(logical);
+				duckdb_destroy_logical_type(&logical);
+			}
+			column_types->push_back(column);
+		}
 	}
 
 	std::vector<char*> fields(static_cast<size_t>(ncols), nullptr);

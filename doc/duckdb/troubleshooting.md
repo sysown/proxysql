@@ -108,9 +108,11 @@ as a compatibility no-op.
 
 ## Values arrive as strings
 
-This is current behavior. Both protocol serializers advertise text columns.
-Applications must parse values based on the query contract rather than rely on
-MySQL/PostgreSQL type metadata.
+Numeric columns carry MySQL/PostgreSQL type metadata, but the wire transfer
+format is still text. Client APIs such as `mysql_fetch_row` and `PQgetvalue`
+return textual values; use their column metadata to choose a conversion.
+Non-numeric columns and results requiring a VARCHAR wrapper retain text
+metadata; see [Protocol compatibility](protocol-compatibility.md).
 
 ## An unsupported result type produces SQLSTATE 0A000
 

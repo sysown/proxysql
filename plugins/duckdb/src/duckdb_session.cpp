@@ -763,7 +763,7 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	// exactly once above, so just convert it.
 	outcome.has_resultset = true;
 	std::string conversion_error;
-	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error);
+	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error, &outcome.column_types);
 	duckdb_destroy_result(&res);
 	if (!conversion_error.empty()) {
 		outcome.ok = false;
@@ -779,6 +779,92 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	return finish();
 }
 
+namespace {
+
+struct MySQLColumnType {
+	uint8_t type { MYSQL_TYPE_VAR_STRING };
+	uint16_t flags { 0 }; // expression nullability is unknown
+	uint16_t charset { 33 };
+	uint32_t length { 15 };
+	uint8_t decimals { 0x1f };
+};
+
+MySQLColumnType mysql_column_type(const DuckDBColumnType& column) {
+	MySQLColumnType out;
+	out.charset = 63;
+	out.flags = NUM_FLAG;
+	out.decimals = 0;
+	switch (column.type) {
+	case DUCKDB_TYPE_UTINYINT: out.flags |= UNSIGNED_FLAG; [[fallthrough]];
+	case DUCKDB_TYPE_TINYINT:
+		out.type = MYSQL_TYPE_TINY; out.length = out.flags & UNSIGNED_FLAG ? 3 : 4; break;
+	case DUCKDB_TYPE_USMALLINT: out.flags |= UNSIGNED_FLAG; [[fallthrough]];
+	case DUCKDB_TYPE_SMALLINT:
+		out.type = MYSQL_TYPE_SHORT; out.length = out.flags & UNSIGNED_FLAG ? 5 : 6; break;
+	case DUCKDB_TYPE_UINTEGER: out.flags |= UNSIGNED_FLAG; [[fallthrough]];
+	case DUCKDB_TYPE_INTEGER:
+		out.type = MYSQL_TYPE_LONG; out.length = out.flags & UNSIGNED_FLAG ? 10 : 11; break;
+	case DUCKDB_TYPE_UBIGINT: out.flags |= UNSIGNED_FLAG; [[fallthrough]];
+	case DUCKDB_TYPE_BIGINT:
+		out.type = MYSQL_TYPE_LONGLONG; out.length = 20; break;
+	case DUCKDB_TYPE_FLOAT:
+		out.type = MYSQL_TYPE_FLOAT; out.length = 12; out.decimals = 0x1f; break;
+	case DUCKDB_TYPE_DOUBLE:
+		out.type = MYSQL_TYPE_DOUBLE; out.length = 22; out.decimals = 0x1f; break;
+	case DUCKDB_TYPE_DECIMAL:
+		out.type = MYSQL_TYPE_NEWDECIMAL;
+		out.length = column.precision + 1 + (column.scale != 0);
+		out.decimals = column.scale;
+		break;
+	case DUCKDB_TYPE_UHUGEINT:
+		out.type = MYSQL_TYPE_NEWDECIMAL; out.length = 39; out.flags |= UNSIGNED_FLAG; break;
+	case DUCKDB_TYPE_HUGEINT:
+		out.type = MYSQL_TYPE_NEWDECIMAL; out.length = 40; break;
+	default:
+		return MySQLColumnType {};
+	}
+	return out;
+}
+
+struct PgSQLColumnType {
+	uint32_t oid { 25 }; // text
+	int16_t size { -1 };
+	int32_t modifier { -1 };
+};
+
+PgSQLColumnType pgsql_column_type(const DuckDBColumnType& column) {
+	switch (column.type) {
+	case DUCKDB_TYPE_TINYINT:
+	case DUCKDB_TYPE_SMALLINT:
+	case DUCKDB_TYPE_UTINYINT: return { 21, 2, -1 }; // int2
+	case DUCKDB_TYPE_INTEGER:
+	case DUCKDB_TYPE_USMALLINT: return { 23, 4, -1 }; // int4
+	case DUCKDB_TYPE_BIGINT:
+	case DUCKDB_TYPE_UINTEGER: return { 20, 8, -1 }; // int8
+	case DUCKDB_TYPE_FLOAT: return { 700, 4, -1 }; // float4
+	case DUCKDB_TYPE_DOUBLE: return { 701, 8, -1 }; // float8
+	case DUCKDB_TYPE_UBIGINT: return { 1700, -1, (20 << 16) + 4 };
+	case DUCKDB_TYPE_HUGEINT:
+	case DUCKDB_TYPE_UHUGEINT: return { 1700, -1, (39 << 16) + 4 };
+	case DUCKDB_TYPE_DECIMAL:
+		// PostgreSQL numeric typmod packs precision and scale, plus VARHDRSZ.
+		return { 1700, -1, (column.precision << 16) + column.scale + 4 };
+	default: return {};
+	}
+}
+
+// Core serializers enqueue descriptions separately before rows. Replace only
+// those packets, synchronously before the listener can drain the output queue.
+// Row encoding, packet sequence wrap, EOF negotiation and command tags remain
+// with the existing serializers. No SQL or wire packets are parsed here.
+void replace_packet(PtrSize_t& destination, void* data, unsigned int size) {
+	l_free(destination.size, destination.ptr);
+	destination.ptr = data;
+	destination.size = size;
+}
+
+} // namespace
+
 // --- duckdb_send_result: private overload pair -----------------------
 //
 // Declared here, above duckdb_session_handler, because the template calls
@@ -789,15 +875,31 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 // definition, not at instantiation).
 
 void duckdb_send_result(MySQL_Session* sess, SQLite3_result* r, char* err,
-                        int affected, const char* /*sql*/) {
+                        int affected, const char* /*sql*/,
+                        const std::vector<DuckDBColumnType>* columns = nullptr) {
 	const bool deprecate_eof_active =
 		sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-	sess->SQLite3_to_MySQL(r, err, affected, &sess->client_myds->myprot,
-		false, deprecate_eof_active);
+	PtrSizeArray* packets = sess->client_myds->PSarrayOUT;
+	const unsigned int first = packets->len;
+	MySQL_Protocol& protocol = sess->client_myds->myprot;
+	sess->SQLite3_to_MySQL(r, err, affected, &protocol, false, deprecate_eof_active);
+	if (!r || !columns || columns->size() != static_cast<size_t>(r->columns) ||
+	    packets->len - first < columns->size() + 1) return;
+	for (int i = 0; i < r->columns; ++i) {
+		const MySQLColumnType type = mysql_column_type((*columns)[i]);
+		void* data = nullptr;
+		unsigned int size = 0;
+		char empty[] = "";
+		protocol.generate_pkt_field(false, &data, &size, static_cast<uint8_t>(2 + i),
+			empty, empty, empty, r->column_definition[i]->name, empty,
+			type.charset, type.length, type.type, type.flags, type.decimals, false, 0, nullptr);
+		replace_packet(*packets->index(first + 1 + i), data, size);
+	}
 }
 
 void duckdb_send_result(PgSQL_Session* sess, SQLite3_result* r, char* err,
-                        int affected, const char* sql) {
+                        int affected, const char* sql,
+                        const std::vector<DuckDBColumnType>* columns = nullptr) {
 	// `sql` matters: SQLite3_to_Postgres derives the CommandComplete tag
 	// from its first whitespace-delimited word. It must always be the
 	// ORIGINAL client sql, never a rewritten/wrapped query -- callers of
@@ -807,8 +909,32 @@ void duckdb_send_result(PgSQL_Session* sess, SQLite3_result* r, char* err,
 	// so it is passed as-is: `&sess->client_myds->PSarrayOUT` would be a
 	// PtrSizeArray**, which does not convert to the PtrSizeArray*
 	// SQLite3_to_Postgres() expects.
-	SQLite3_to_Postgres(sess->client_myds->PSarrayOUT, r, err, affected, sql,
+	PtrSizeArray* packets = sess->client_myds->PSarrayOUT;
+	const unsigned int first = packets->len;
+	SQLite3_to_Postgres(packets, r, err, affected, sql,
 		true, duckdb_pgsql_transaction_status(duckdb_session_state().conn));
+	if (!r || !columns || columns->size() != static_cast<size_t>(r->columns) ||
+	    packets->len <= first) return;
+
+	PG_pkt description(64);
+	description.put_uint16(r->columns);
+	for (int i = 0; i < r->columns; ++i) {
+		const PgSQLColumnType type = pgsql_column_type((*columns)[i]);
+		description.put_string(r->column_definition[i]->name);
+		description.put_uint32(0); // no source table OID
+		description.put_uint16(0); // no source attribute number
+		description.put_uint32(type.oid);
+		description.put_uint16(type.size);
+		description.put_uint32(type.modifier);
+		description.put_uint16(0); // text transfer format
+	}
+	const auto payload = description.detach();
+	PG_pkt packet(64);
+	packet.write_generic('T', "b", reinterpret_cast<uint8_t*>(payload.first),
+		static_cast<int>(payload.second));
+	free(payload.first);
+	const auto replacement = packet.detach();
+	replace_packet(*packets->index(first), replacement.first, replacement.second);
 }
 
 // --- error emitters ----------------------------------------------------
@@ -996,7 +1122,7 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		return;
 	}
 	if (outcome.has_resultset) {
-		duckdb_send_result(sess, outcome.result, nullptr, 0, sql.c_str());
+		duckdb_send_result(sess, outcome.result, nullptr, 0, sql.c_str(), &outcome.column_types);
 		delete outcome.result;
 	} else {
 		duckdb_send_result(sess, nullptr, nullptr, outcome.affected_rows, sql.c_str());

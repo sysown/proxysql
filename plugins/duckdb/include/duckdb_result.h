@@ -4,8 +4,15 @@
 #include "duckdb.h"
 
 #include <string>
+#include <vector>
 
 class SQLite3_result;
+
+struct DuckDBColumnType {
+	duckdb_type type;
+	uint8_t precision { 0 };
+	uint8_t scale { 0 };
+};
 
 // Converts a materialised duckdb_result into the SQLite3_result that
 // core's MySQL and PostgreSQL serialisers both consume.
@@ -15,9 +22,11 @@ class SQLite3_result;
 // embedded NUL bytes that DuckDB 1.4.5's legacy result materialisation loses
 // even through duckdb_value_string().
 // This is correct on the wire for the column types the compatibility
-// allowlist supports: both text protocols
-// transmit values as strings and both serialisers label every column as
-// text anyway (MYSQL_TYPE_VAR_STRING / TEXTOID). Verified against DuckDB
+// allowlist supports: both text protocols transmit values as strings.
+// Optional column_types receives the executed result's schema (including
+// decimal precision/scale) before chunk access; plugin serializers use it
+// for numeric metadata and retain text metadata for other types.
+// The original compatibility allowlist was verified against DuckDB
 // 1.4.5's deprecated C API (duckdb/src/include/duckdb/main/capi/cast/
 // generic.hpp, GetInternalCValue's switch on deprecated_type) -- this is
 // the authoritative source, not a probed sample of types:
@@ -87,7 +96,8 @@ class SQLite3_result;
 // The caller owns the returned object and must `delete` it. When `error` is
 // non-null, conversion failures are reported there and nullptr is returned.
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res,
-                                         std::string* error = nullptr);
+                                         std::string* error = nullptr,
+                                         std::vector<DuckDBColumnType>* column_types = nullptr);
 
 // Appends one length-aware converted row and translates SQLite's status into
 // the converter's error contract. This keeps an oversized row from being
