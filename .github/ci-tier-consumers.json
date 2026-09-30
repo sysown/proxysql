@@ -347,6 +347,46 @@
       "execution_step": "Run tests"
     },
     {
+      "workflow": "CI-3p-php-mysqli",
+      "file": "ci-3p-php-mysqli.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PHP_MYSQLI_infradb_mysql"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PHP_MYSQLI_connector_mysql"
+        }
+      },
+      "instance": "run-mysql"
+    },
+    {
+      "workflow": "CI-3p-php-mysqli",
+      "file": "ci-3p-php-mysqli.yml",
+      "job": "test",
+      "automatic": false,
+      "tiers": [
+        "v40"
+      ],
+      "groups": [],
+      "cells": [],
+      "axes": {
+        "infradb": {
+          "var": "MATRIX_3P_PHP_MYSQLI_infradb_mariadb"
+        },
+        "connector": {
+          "var": "MATRIX_3P_PHP_MYSQLI_connector_mariadb"
+        }
+      },
+      "instance": "run-mariadb"
+    },
+    {
       "workflow": "CI-3p-php-pdo-pgsql",
       "file": "ci-3p-php-pdo-pgsql.yml",
       "job": "test",
