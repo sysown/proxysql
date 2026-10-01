@@ -581,9 +581,9 @@ std::string trim_trailing_semicolons(const std::string& sql) {
 // probe: preparing `SELECT [nextval('s')]` does not advance the
 // sequence) -- and only THEN execute exactly one of the two candidate
 // statements (original or wrapped), via duckdb_execute_prepared().
-// `effective` is therefore executed exactly once no matter which way
-// the decision goes, which is what makes the old lexical safety gate
-// (duckdb_is_safe_to_rewrap) unnecessary: it existed solely to stop a
+// If neither candidate can represent the result, reject without execution.
+// Otherwise the selected statement runs exactly once. This makes the old
+// lexical safety gate (duckdb_is_safe_to_rewrap) unnecessary: it existed solely to stop a
 // second execution that this design no longer performs, so it has been
 // removed rather than kept as inert legacy code.
 //
@@ -591,7 +591,8 @@ std::string trim_trailing_semicolons(const std::string& sql) {
 // duckdb_destroy_prepare(), even when duckdb_prepare() itself failed
 // (documented in duckdb.h above duckdb_prepare()) -- every prepare below
 // is paired with a destroy on every path.
-DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective) {
+DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
+                                         DuckDBResultProtocol protocol) {
 	DuckDBExecOutcome outcome;
 	const DuckDBTxnVerb verb = classify_txn_verb(effective);
 	DuckDBSessionState& session_state = duckdb_session_state();
@@ -639,7 +640,10 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	bool needs_wrap = false;
 	const idx_t ncols = duckdb_prepared_statement_column_count(stmt);
 	for (idx_t c = 0; c < ncols; c++) {
-		if (!duckdb_type_renders_as_text(duckdb_prepared_statement_column_type(stmt, c))) {
+		duckdb_logical_type logical = duckdb_prepared_statement_column_logical_type(stmt, c);
+		const bool renderable = duckdb_type_renders_as_text(duckdb_result_type_id(logical));
+		duckdb_destroy_logical_type(&logical);
+		if (!renderable) {
 			needs_wrap = true;
 			break;
 		}
@@ -673,14 +677,16 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 			duckdb_destroy_prepare(&stmt);
 			exec_stmt = wrap_stmt;
 		} else {
-			// The wrap doesn't parse (e.g. RETURNING DML, which cannot
-			// legally sit inside a FROM-clause subquery in this DuckDB
-			// grammar). Fall back to the ORIGINAL prepared statement --
-			// still not executed yet either way -- and accept the
-			// degraded (NULL-rendering) output for the unrenderable
-			// column: degraded output beats no output for a query that
-			// is about to succeed.
+			// Unsupported output must not masquerade as SQL NULL. Reject
+			// before executing the original statement, so a RETURNING
+			// mutation cannot commit or evaluate defaults on this path.
 			duckdb_destroy_prepare(&wrap_stmt);
+			duckdb_destroy_prepare(&stmt);
+			outcome.ok = false;
+			outcome.error_type = DUCKDB_ERROR_NOT_IMPLEMENTED;
+			outcome.error = "DuckDB result cannot be represented by this protocol path; "
+				"cast unsupported result expressions explicitly to VARCHAR";
+			return finish();
 		}
 	}
 
@@ -757,12 +763,11 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	}
 
 	// rtype == DUCKDB_RESULT_TYPE_QUERY_RESULT: either the original
-	// query (renderable, or unrenderable-but-fell-back-to-degraded), or
-	// the wrap (every column now VARCHAR). Either way it already ran
+	// query (renderable), or the wrap (every column now VARCHAR). It ran
 	// exactly once above, so just convert it.
 	outcome.has_resultset = true;
 	std::string conversion_error;
-	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error);
+	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error, &outcome.column_types, protocol, conn);
 	duckdb_destroy_result(&res);
 	if (!conversion_error.empty()) {
 		outcome.ok = false;
@@ -778,6 +783,101 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	return finish();
 }
 
+namespace {
+
+struct MySQLColumnType {
+	uint8_t type { MYSQL_TYPE_VAR_STRING };
+	uint16_t flags { 0 }; // expression nullability is unknown
+	uint16_t charset { 33 };
+	uint32_t length { 15 };
+	uint8_t decimals { 0x1f };
+};
+
+MySQLColumnType mysql_column_type(const DuckDBColumnType& column) {
+	MySQLColumnType out;
+	out.charset = 63;
+	out.flags = NUM_FLAG;
+	out.decimals = 0;
+	switch (column.type) {
+	case DUCKDB_TYPE_BOOLEAN:
+		out.type = MYSQL_TYPE_TINY; out.length = 1; break;
+	case DUCKDB_TYPE_UTINYINT: out.flags |= UNSIGNED_FLAG; [[fallthrough]];
+	case DUCKDB_TYPE_TINYINT:
+		out.type = MYSQL_TYPE_TINY; out.length = out.flags & UNSIGNED_FLAG ? 3 : 4; break;
+	case DUCKDB_TYPE_USMALLINT: out.flags |= UNSIGNED_FLAG; [[fallthrough]];
+	case DUCKDB_TYPE_SMALLINT:
+		out.type = MYSQL_TYPE_SHORT; out.length = out.flags & UNSIGNED_FLAG ? 5 : 6; break;
+	case DUCKDB_TYPE_UINTEGER: out.flags |= UNSIGNED_FLAG; [[fallthrough]];
+	case DUCKDB_TYPE_INTEGER:
+		out.type = MYSQL_TYPE_LONG; out.length = out.flags & UNSIGNED_FLAG ? 10 : 11; break;
+	case DUCKDB_TYPE_UBIGINT: out.flags |= UNSIGNED_FLAG; [[fallthrough]];
+	case DUCKDB_TYPE_BIGINT:
+		out.type = MYSQL_TYPE_LONGLONG; out.length = 20; break;
+	case DUCKDB_TYPE_FLOAT:
+		out.type = MYSQL_TYPE_FLOAT; out.length = 12; out.decimals = 0x1f; break;
+	case DUCKDB_TYPE_DOUBLE:
+		out.type = MYSQL_TYPE_DOUBLE; out.length = 22; out.decimals = 0x1f; break;
+	case DUCKDB_TYPE_DECIMAL:
+		out.type = MYSQL_TYPE_NEWDECIMAL;
+		out.length = column.precision + 1 + (column.scale != 0);
+		out.decimals = column.scale;
+		break;
+	case DUCKDB_TYPE_UHUGEINT:
+		out.type = MYSQL_TYPE_NEWDECIMAL; out.length = 39; out.flags |= UNSIGNED_FLAG; break;
+	case DUCKDB_TYPE_HUGEINT:
+		out.type = MYSQL_TYPE_NEWDECIMAL; out.length = 40; break;
+	case DUCKDB_TYPE_BLOB:
+		out.type = MYSQL_TYPE_LONG_BLOB;
+		out.flags = BLOB_FLAG | BINARY_FLAG;
+		out.length = UINT32_MAX;
+		break;
+	default:
+		return MySQLColumnType {};
+	}
+	return out;
+}
+
+struct PgSQLColumnType {
+	uint32_t oid { 25 }; // text
+	int16_t size { -1 };
+	int32_t modifier { -1 };
+};
+
+PgSQLColumnType pgsql_column_type(const DuckDBColumnType& column) {
+	switch (column.type) {
+	case DUCKDB_TYPE_BOOLEAN: return { 16, 1, -1 }; // bool
+	case DUCKDB_TYPE_BLOB: return { 17, -1, -1 }; // bytea, hex text encoding
+	case DUCKDB_TYPE_TINYINT:
+	case DUCKDB_TYPE_SMALLINT:
+	case DUCKDB_TYPE_UTINYINT: return { 21, 2, -1 }; // int2
+	case DUCKDB_TYPE_INTEGER:
+	case DUCKDB_TYPE_USMALLINT: return { 23, 4, -1 }; // int4
+	case DUCKDB_TYPE_BIGINT:
+	case DUCKDB_TYPE_UINTEGER: return { 20, 8, -1 }; // int8
+	case DUCKDB_TYPE_FLOAT: return { 700, 4, -1 }; // float4
+	case DUCKDB_TYPE_DOUBLE: return { 701, 8, -1 }; // float8
+	case DUCKDB_TYPE_UBIGINT: return { 1700, -1, (20 << 16) + 4 };
+	case DUCKDB_TYPE_HUGEINT:
+	case DUCKDB_TYPE_UHUGEINT: return { 1700, -1, (39 << 16) + 4 };
+	case DUCKDB_TYPE_DECIMAL:
+		// PostgreSQL numeric typmod packs precision and scale, plus VARHDRSZ.
+		return { 1700, -1, (column.precision << 16) + column.scale + 4 };
+	default: return {};
+	}
+}
+
+// Core serializers enqueue descriptions separately before rows. Replace only
+// those packets, synchronously before the listener can drain the output queue.
+// Row encoding, packet sequence wrap, EOF negotiation and command tags remain
+// with the existing serializers. No SQL or wire packets are parsed here.
+void replace_packet(PtrSize_t& destination, void* data, unsigned int size) {
+	l_free(destination.size, destination.ptr);
+	destination.ptr = data;
+	destination.size = size;
+}
+
+} // namespace
+
 // --- duckdb_send_result: private overload pair -----------------------
 //
 // Declared here, above duckdb_session_handler, because the template calls
@@ -788,15 +888,31 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 // definition, not at instantiation).
 
 void duckdb_send_result(MySQL_Session* sess, SQLite3_result* r, char* err,
-                        int affected, const char* /*sql*/) {
+                        int affected, const char* /*sql*/,
+                        const std::vector<DuckDBColumnType>* columns = nullptr) {
 	const bool deprecate_eof_active =
 		sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-	sess->SQLite3_to_MySQL(r, err, affected, &sess->client_myds->myprot,
-		false, deprecate_eof_active);
+	PtrSizeArray* packets = sess->client_myds->PSarrayOUT;
+	const unsigned int first = packets->len;
+	MySQL_Protocol& protocol = sess->client_myds->myprot;
+	sess->SQLite3_to_MySQL(r, err, affected, &protocol, false, deprecate_eof_active);
+	if (!r || !columns || columns->size() != static_cast<size_t>(r->columns) ||
+	    packets->len - first < columns->size() + 1) return;
+	for (int i = 0; i < r->columns; ++i) {
+		const MySQLColumnType type = mysql_column_type((*columns)[i]);
+		void* data = nullptr;
+		unsigned int size = 0;
+		char empty[] = "";
+		protocol.generate_pkt_field(false, &data, &size, static_cast<uint8_t>(2 + i),
+			empty, empty, empty, r->column_definition[i]->name, empty,
+			type.charset, type.length, type.type, type.flags, type.decimals, false, 0, nullptr);
+		replace_packet(*packets->index(first + 1 + i), data, size);
+	}
 }
 
 void duckdb_send_result(PgSQL_Session* sess, SQLite3_result* r, char* err,
-                        int affected, const char* sql) {
+                        int affected, const char* sql,
+                        const std::vector<DuckDBColumnType>* columns = nullptr) {
 	// `sql` matters: SQLite3_to_Postgres derives the CommandComplete tag
 	// from its first whitespace-delimited word. It must always be the
 	// ORIGINAL client sql, never a rewritten/wrapped query -- callers of
@@ -806,8 +922,32 @@ void duckdb_send_result(PgSQL_Session* sess, SQLite3_result* r, char* err,
 	// so it is passed as-is: `&sess->client_myds->PSarrayOUT` would be a
 	// PtrSizeArray**, which does not convert to the PtrSizeArray*
 	// SQLite3_to_Postgres() expects.
-	SQLite3_to_Postgres(sess->client_myds->PSarrayOUT, r, err, affected, sql,
+	PtrSizeArray* packets = sess->client_myds->PSarrayOUT;
+	const unsigned int first = packets->len;
+	SQLite3_to_Postgres(packets, r, err, affected, sql,
 		true, duckdb_pgsql_transaction_status(duckdb_session_state().conn));
+	if (!r || !columns || columns->size() != static_cast<size_t>(r->columns) ||
+	    packets->len <= first) return;
+
+	PG_pkt description(64);
+	description.put_uint16(r->columns);
+	for (int i = 0; i < r->columns; ++i) {
+		const PgSQLColumnType type = pgsql_column_type((*columns)[i]);
+		description.put_string(r->column_definition[i]->name);
+		description.put_uint32(0); // no source table OID
+		description.put_uint16(0); // no source attribute number
+		description.put_uint32(type.oid);
+		description.put_uint16(type.size);
+		description.put_uint32(type.modifier);
+		description.put_uint16(0); // text transfer format
+	}
+	const auto payload = description.detach();
+	PG_pkt packet(64);
+	packet.write_generic('T', "b", reinterpret_cast<uint8_t*>(payload.first),
+		static_cast<int>(payload.second));
+	free(payload.first);
+	const auto replacement = packet.detach();
+	replace_packet(*packets->index(first), replacement.first, replacement.second);
 }
 
 // --- error emitters ----------------------------------------------------
@@ -981,7 +1121,9 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 	// client text), not `effective`, is what goes to duckdb_send_result:
 	// for PgSQL, SQLite3_to_Postgres derives its CommandComplete tag from
 	// the first word of whatever we pass it.
-	const DuckDBExecOutcome outcome = duckdb_execute_effective(st.conn, effective);
+	constexpr DuckDBResultProtocol protocol = std::is_same_v<S, PgSQL_Session>
+		? DuckDBResultProtocol::pgsql : DuckDBResultProtocol::mysql;
+	const DuckDBExecOutcome outcome = duckdb_execute_effective(st.conn, effective, protocol);
 	if (!outcome.ok) {
 		if constexpr (std::is_same_v<S, MySQL_Session>)
 			duckdb_send_mysql_error(sess,
@@ -995,7 +1137,7 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		return;
 	}
 	if (outcome.has_resultset) {
-		duckdb_send_result(sess, outcome.result, nullptr, 0, sql.c_str());
+		duckdb_send_result(sess, outcome.result, nullptr, 0, sql.c_str(), &outcome.column_types);
 		delete outcome.result;
 	} else {
 		duckdb_send_result(sess, nullptr, nullptr, outcome.affected_rows, sql.c_str());

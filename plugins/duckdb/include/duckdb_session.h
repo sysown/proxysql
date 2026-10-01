@@ -1,7 +1,7 @@
 #ifndef DUCKDB_SESSION_H
 #define DUCKDB_SESSION_H
 
-#include "duckdb.h"
+#include "duckdb_result.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -96,6 +96,7 @@ struct DuckDBExecOutcome {
 	duckdb_error_type error_type { DUCKDB_ERROR_INVALID };
 	bool has_resultset { false };        // true: `result` holds the resultset to send
 	SQLite3_result* result { nullptr };  // caller-owned when has_resultset; nullptr otherwise
+	std::vector<DuckDBColumnType> column_types; // schema of the executed result, after any VARCHAR wrapper
 	int affected_rows { 0 };             // meaningful only when ok && !has_resultset
 };
 
@@ -106,16 +107,11 @@ struct DuckDBExecOutcome {
 // C3 is decided from a *prepared* statement's column types -- via
 // duckdb_prepared_statement_column_type() and
 // duckdb_type_renders_as_text() (duckdb_result.h) -- BEFORE anything is
-// executed, so `effective` runs exactly once no matter which way the
-// decision goes. There used to be a lexical "is this safe to run a
-// second time" gate (duckdb_is_safe_to_rewrap) here; it is gone because
-// nothing is ever run a second time any more, so it had nothing left to
-// guard -- see the long comment on duckdb_execute_effective's
-// definition for the full reasoning, including why a bare DML statement
-// can never reach the wrapped-execution path at all (it fails to
-// *parse* as `SELECT COLUMNS(*)::VARCHAR FROM (<stmt>)`, so the decision
-// falls back to the original statement before anything runs).
-DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective);
+// executed. If neither direct conversion nor the VARCHAR wrapper can
+// represent the result, reject before execution. Otherwise execute the
+// selected prepared statement exactly once.
+DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
+                                         DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql);
 
 // Routes managed engine-global SET statements through DuckDBEngine's internal
 // control connection. Returns false only for a handled statement that failed;

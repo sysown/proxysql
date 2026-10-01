@@ -77,13 +77,66 @@ above is guaranteed to be absorbed or translated.
 
 ## Result metadata and conversion
 
-Both protocol serializers label every column as text. Applications that depend
-on numeric, timestamp, array, or binary type metadata must parse returned text
-or wait for a future typed-result implementation.
+Numeric, boolean, and binary results carry native type metadata on both endpoints. Values still use
+the text transfer format; this does not add prepared statements or binary
+transfer support.
+
+| DuckDB type | MySQL metadata | PostgreSQL metadata |
+| --- | --- | --- |
+| BOOLEAN | TINYINT(1), values 0/1 | BOOLEAN, values f/t |
+| TINYINT / SMALLINT | TINY / SHORT | SMALLINT |
+| INTEGER / BIGINT | LONG / LONGLONG | INTEGER / BIGINT |
+| UTINYINT / USMALLINT / UINTEGER | Corresponding integer type, unsigned flag | SMALLINT / INTEGER / BIGINT |
+| UBIGINT | LONGLONG, unsigned flag | NUMERIC(20,0) |
+| HUGEINT / UHUGEINT | NEWDECIMAL, unsigned flag for UHUGEINT | NUMERIC(39,0) |
+| FLOAT / DOUBLE | FLOAT / DOUBLE | REAL / DOUBLE PRECISION |
+| DECIMAL(p,s) | NEWDECIMAL with precision and scale | NUMERIC(p,s) |
+| BLOB | LONG_BLOB, binary charset and flag | BYTEA, hex text encoding |
+
+MySQL expression nullability is reported as unknown rather than claiming
+NOT NULL. Typed NULLs and zero-row results retain their numeric metadata.
+Temporal and other unmapped types currently retain text metadata.
+If a VARCHAR wrapper is needed, metadata describes the wrapped result: all its
+columns are text, including any originally numeric columns.
+
+BLOB values preserve arbitrary bytes, including embedded NUL and non-UTF-8
+bytes. MySQL receives the raw bytes with length information. PostgreSQL receives
+the standard BYTEA text representation (`\x` followed by hexadecimal digits),
+which clients such as libpq decode with `PQunescapeBytea`. Empty binary values
+remain distinct from SQL NULL.
 
 The direct conversion path supports common scalar values including booleans,
 signed and unsigned integers, floats, doubles, dates, time, timestamps,
-decimals, intervals, VARCHAR, and BLOB.
+decimals, intervals, UUID, VARCHAR, and BLOB.
+
+`TIMESTAMP_S`, `TIMESTAMP_MS`, and `TIMESTAMP_NS` convert directly using DuckDB's
+native value formatter. Nanosecond precision, pre-epoch values, infinities, and
+NULL are preserved, including in DML `RETURNING`. These values retain text
+metadata to preserve DuckDB's precision and range; neighboring numeric columns
+keep their numeric metadata.
+Values outside DuckDB's text-formatting range return conversion errors.
+
+`TIME WITH TIME ZONE` (`TIMETZ`) converts directly using DuckDB's native
+formatter, including in DML `RETURNING`. Text metadata preserves fractional
+seconds and signed offsets, including offsets with seconds. SQL NULL and
+adjacent numeric metadata are preserved.
+
+`TIMESTAMP WITH TIME ZONE` (`TIMESTAMPTZ`) converts directly using the
+originating connection's native DuckDB cast. With ICU loaded, formatting respects
+the session TimeZone and Calendar, including daylight-saving transitions.
+Without ICU, DuckDB's built-in UTC formatting applies. Values retain text
+metadata, microsecond precision, infinities and NULL, including in `RETURNING`;
+adjacent numeric columns retain their numeric metadata.
+
+UUID values convert directly to canonical lowercase strings, including in DML
+`RETURNING`. UUID columns retain text metadata; adjacent numeric columns retain
+their numeric metadata. SQL NULL remains a protocol null.
+
+`TIME_NS`, `ENUM`, and `BIT` also convert directly, including DML `RETURNING`.
+`TIME_NS` preserves nanosecond precision, ENUM returns the full label (including
+empty labels and embedded NUL bytes), and BIT returns its sequence of `0`/`1`
+characters with leading zeroes intact. These columns retain text metadata;
+SQL NULL and neighboring numeric metadata are preserved.
 
 Other DuckDB types are detected from the prepared statement before execution.
 The plugin attempts to execute a wrapper equivalent to:
@@ -92,14 +145,16 @@ The plugin attempts to execute a wrapper equivalent to:
 SELECT COLUMNS(*)::VARCHAR FROM (<original query>)
 ```
 
-This commonly renders `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, UUID, ENUM,
-BIT, and specialized timestamp variants as readable text. The decision occurs
+This commonly renders `LIST`, `STRUCT`, `MAP`, `ARRAY`, and `UNION` as
+readable text. The decision occurs
 before execution, so volatile expressions and side effects execute exactly
 once.
 
-Some DML `RETURNING` statements cannot be placed in that wrapper. In that
-fallback path the original statement executes once, but an unsupported result
-column can be returned as NULL. SQL NULL itself is otherwise preserved as a
+Some DML `RETURNING` statements cannot be placed in that wrapper. If the result
+cannot be rendered, the plugin rejects the statement before execution with
+SQLSTATE `0A000` (MySQL error 1235). No mutation or default-expression evaluation
+occurs. Cast unsupported result expressions explicitly to `VARCHAR`, for
+example `INSERT INTO t VALUES (...) RETURNING id::VARCHAR`. SQL NULL remains a
 real protocol null.
 
 ## Errors

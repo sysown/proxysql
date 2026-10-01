@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <memory>
+#include <limits>
 #include <string>
 
 namespace {
@@ -37,7 +38,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(71);
+	plan(81);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -216,42 +217,91 @@ int main() {
 	}
 
 	{
-		// Regression guard for the C3 double-execution risk: INSERT ...
-		// RETURNING over a UUID column classifies as QUERY_RESULT (not
-		// CHANGED_ROWS) in DuckDB 1.4.5, and its "id" column is
-		// unrenderable, so duckdb_execute_effective() decides (from the
-		// PREPARED statement's schema, before executing anything) that
-		// this needs the rewrap. Preparing the wrap itself then fails --
-		// verified directly: in this DuckDB build, wrapping a bare
-		// INSERT in `SELECT COLUMNS(*)::VARCHAR FROM (<stmt>)` is a
-		// parser error ("syntax error at or near INTO"), since a bare
-		// DML statement is not valid FROM-clause subquery content -- so
-		// duckdb_execute_effective() falls back to the ORIGINAL prepared
-		// statement, which has not executed yet at that point either.
-		// Either way `effective` runs exactly once: assert row count,
-		// not response shape, which is what actually proves that.
+		// Unsupported RETURNING values must fail before execution. A
+		// sequence also detects execution followed by rollback, since its
+		// advance cannot be rolled back.
 		duckdb_result setup;
-		if (duckdb_query(conn,
-		        "CREATE TABLE t(id UUID DEFAULT gen_random_uuid(), n INTEGER)",
-		        &setup) != DuckDBSuccess) {
-			BAIL_OUT("could not create test table t");
+		for (const char* sql : {
+			"CREATE SEQUENCE rejected_returning_seq",
+			"CREATE TABLE t(id INTEGER[] DEFAULT [1, 2], "
+			"n INTEGER DEFAULT nextval('rejected_returning_seq'))",
+			"INSERT INTO t(n) VALUES (99)"
+		}) {
+			if (duckdb_query(conn, sql, &setup) != DuckDBSuccess) {
+				BAIL_OUT("could not set up unsupported RETURNING test");
+			}
+			duckdb_destroy_result(&setup);
 		}
+
+		for (const char* sql : {
+			"INSERT INTO t DEFAULT VALUES RETURNING id",
+			"UPDATE t SET n=100 RETURNING id",
+			"DELETE FROM t RETURNING id"
+		}) {
+			const DuckDBExecOutcome outcome = duckdb_execute_effective(conn, sql);
+			std::unique_ptr<SQLite3_result> r(outcome.result);
+			ok(!outcome.ok && outcome.error_type == DUCKDB_ERROR_NOT_IMPLEMENTED &&
+			   outcome.error.find("VARCHAR") != std::string::npos &&
+			   !outcome.has_resultset && !r,
+			   "unsupported RETURNING produces an actionable error: %s", sql);
+			ok(scalar_count(conn, "SELECT COUNT(*) FROM t") == 1 &&
+			   scalar_count(conn, "SELECT n FROM t") == 99,
+			   "rejected RETURNING leaves the table unchanged: %s", sql);
+		}
+		ok(scalar_count(conn, "SELECT nextval('rejected_returning_seq')") == 1,
+		   "rejected INSERT does not evaluate the sequence default");
+
+		const DuckDBExecOutcome cast = duckdb_execute_effective(
+			conn, "INSERT INTO t(n) VALUES (1) RETURNING id::VARCHAR");
+		std::unique_ptr<SQLite3_result> r(cast.result);
+		ok(cast.ok && cast.has_resultset && r && r->rows_count == 1 &&
+		   r->rows[0]->fields[0] && std::strcmp(r->rows[0]->fields[0], "[1, 2]") == 0 &&
+		   scalar_count(conn, "SELECT COUNT(*) FROM t") == 2,
+		   "explicit VARCHAR RETURNING preserves the value and inserts exactly once");
+
+		const DuckDBExecOutcome begin = duckdb_execute_effective(conn, "BEGIN");
+		const DuckDBExecOutcome pending = duckdb_execute_effective(conn, "INSERT INTO t(n) VALUES (2)");
+		ok(begin.ok && pending.ok, "create pending work in an explicit transaction");
+		const DuckDBExecOutcome rejected = duckdb_execute_effective(conn, "DELETE FROM t RETURNING id");
+		ok(!rejected.ok && scalar_count(conn, "SELECT COUNT(*) FROM t") == 3,
+		   "rejected RETURNING preserves earlier pending work without deleting rows");
+		const DuckDBExecOutcome rollback = duckdb_execute_effective(conn, "ROLLBACK");
+		ok(rollback.ok && duckdb_pgsql_transaction_status(conn) == 'I' &&
+		   scalar_count(conn, "SELECT COUNT(*) FROM t") == 2,
+		   "rollback after rejection discards pending work and restores idle state");
+	}
+
+	{
+		// Imported/parameter-bound timestamps can exceed the native text
+		// formatter's range. A RETURNING conversion error must undo the write.
+		duckdb_result setup;
+		for (const char* sql : { "CREATE TABLE ts_extreme_source(ts TIMESTAMP_S)",
+		                        "CREATE TABLE ts_extreme_target(ts TIMESTAMP_S)" }) {
+			if (duckdb_query(conn, sql, &setup) != DuckDBSuccess)
+				BAIL_OUT("could not create extreme timestamp tables");
+			duckdb_destroy_result(&setup);
+		}
+		duckdb_prepared_statement statement = nullptr;
+		if (duckdb_prepare(conn, "INSERT INTO ts_extreme_source VALUES (?)", &statement) != DuckDBSuccess)
+			BAIL_OUT("could not prepare extreme timestamp insert");
+		duckdb_value value = duckdb_create_timestamp_s({ std::numeric_limits<int64_t>::max() - 1 });
+		const duckdb_state bound = duckdb_bind_value(statement, 1, value);
+		duckdb_destroy_value(&value);
+		if (bound != DuckDBSuccess || duckdb_execute_prepared(statement, &setup) != DuckDBSuccess)
+			BAIL_OUT("could not populate extreme timestamp source");
 		duckdb_destroy_result(&setup);
+		duckdb_destroy_prepare(&statement);
 
-		const DuckDBExecOutcome outcome =
-			duckdb_execute_effective(conn, "INSERT INTO t(n) VALUES (1) RETURNING id");
-		ok(outcome.ok, "INSERT ... RETURNING over an unrenderable column does not error");
-
-		const int rows = scalar_count(conn, "SELECT COUNT(*) FROM t");
-		ok(rows == 1,
-		   "INSERT ... RETURNING over an unrenderable column inserts "
-		   "exactly once (not re-executed by the C3 re-query)");
-
+		const DuckDBExecOutcome outcome = duckdb_execute_effective(conn,
+			"INSERT INTO ts_extreme_target SELECT ts FROM ts_extreme_source RETURNING ts");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
-		ok(outcome.has_resultset && r && r->rows_count == 1 &&
-		   r->rows[0]->fields[0] == nullptr,
-		   "the RETURNING id is sent as NULL (degraded output) since the "
-		   "wrap could not be prepared for this statement shape");
+		ok(!outcome.ok && !outcome.has_resultset && !r &&
+		   outcome.error_type == DUCKDB_ERROR_OUT_OF_RANGE,
+		   "extreme timestamp RETURNING reports a conversion error");
+		ok(scalar_count(conn, "SELECT COUNT(*) FROM ts_extreme_target") == 0 &&
+		   scalar_count(conn, "SELECT COUNT(*) FROM ts_extreme_source") == 1 &&
+		   duckdb_pgsql_transaction_status(conn) == 'I',
+		   "timestamp conversion failure rolls back the mutation and leaves the connection usable");
 	}
 
 	{
@@ -302,7 +352,7 @@ int main() {
 		// error, which -- before the fix -- silently fell back to NULL
 		// rendering for the single most common input shape there is.
 		const DuckDBExecOutcome outcome =
-			duckdb_execute_effective(conn, "SELECT gen_random_uuid() AS u;");
+			duckdb_execute_effective(conn, "SELECT [1, 2] AS u;");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
@@ -315,7 +365,7 @@ int main() {
 		// otherwise comment out the wrap's closing `)`. Confirmed by
 		// probe.
 		const DuckDBExecOutcome outcome =
-			duckdb_execute_effective(conn, "SELECT gen_random_uuid() AS u -- trailing comment");
+			duckdb_execute_effective(conn, "SELECT [1, 2] AS u -- trailing comment");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
@@ -324,7 +374,7 @@ int main() {
 
 	{
 		const DuckDBExecOutcome outcome = duckdb_execute_effective(
-			conn, "SELECT gen_random_uuid() AS u; -- trailing comment");
+			conn, "SELECT [1, 2] AS u; -- trailing comment");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
@@ -333,7 +383,7 @@ int main() {
 
 	{
 		const DuckDBExecOutcome outcome = duckdb_execute_effective(
-			conn, "SELECT gen_random_uuid() AS u; /* trailing comment */");
+			conn, "SELECT [1, 2] AS u; /* trailing comment */");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,

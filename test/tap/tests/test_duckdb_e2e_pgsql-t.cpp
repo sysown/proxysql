@@ -3,8 +3,11 @@
 #include "command_line.h"
 
 #include <cstring>
+#include <cstdlib>
+#include <limits>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 #include <arpa/inet.h>
 #include <poll.h>
@@ -20,11 +23,14 @@ namespace {
 // instead of failing outright.
 const char* DUCKDB_PGSQL_PORT = "6034";
 
-PGconn* connect_duckdb(CommandLine& cl, const char* user, const char* pass) {
+PGconn* connect_duckdb(CommandLine& cl, const char* user, const char* pass,
+                       bool raw_protocol = false) {
 	std::string conninfo = "host=" + std::string(cl.host) +
 		" port=" + DUCKDB_PGSQL_PORT +
 		" user=" + user + " password=" + pass +
 		" dbname=main connect_timeout=10";
+	// Direct send/recv tests need plaintext frames; libpq normally negotiates TLS.
+	if (raw_protocol) conninfo += " sslmode=disable";
 	PGconn* c = PQconnectdb(conninfo.c_str());
 	if (c == nullptr) return nullptr;
 	if (PQstatus(c) != CONNECTION_OK) { PQfinish(c); return NULL; }
@@ -110,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(21);
+	plan(80);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -123,6 +129,277 @@ int main(int argc, char** argv) {
 		ok(PQnfields(r) == 1 && std::strcmp(PQfname(r, 0), "answer") == 0,
 		   "the column name is preserved");
 		PQclear(r);
+	}
+
+	for (const auto& value : {
+		std::make_pair("SELECT '1.0000000000000002'::DOUBLE", 0x1.0000000000001p0),
+		std::make_pair("SELECT '1.7976931348623157e308'::DOUBLE", std::numeric_limits<double>::max())
+	}) {
+		PGresult* r = exec_or_bail(c, value.first);
+		bool exact = false;
+		if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && !PQgetisnull(r, 0, 0)) {
+			const char* text = PQgetvalue(r, 0, 0);
+			char* end = nullptr;
+			const double received = std::strtod(text, &end);
+			exact = end != text && *end == '\0' && received == value.second;
+		}
+		ok(exact, "DOUBLE survives PostgreSQL text transfer exactly: %s", value.first);
+		PQclear(r);
+	}
+
+	const struct {
+		const char* expression;
+		Oid oid;
+		int size;
+		int modifier;
+	} metadata_cases[] = {
+		{ "'-128'::TINYINT", 21, 2, -1 },
+		{ "'-32768'::SMALLINT", 21, 2, -1 },
+		{ "42::INTEGER", 23, 4, -1 },
+		{ "9223372036854775807::BIGINT", 20, 8, -1 },
+		{ "255::UTINYINT", 21, 2, -1 },
+		{ "65535::USMALLINT", 23, 4, -1 },
+		{ "4294967295::UINTEGER", 20, 8, -1 },
+		{ "18446744073709551615::UBIGINT", 1700, -1, (20 << 16) + 4 },
+		{ "1.5::FLOAT", 700, 4, -1 },
+		{ "1.5::DOUBLE", 701, 8, -1 },
+		{ "1.25::DECIMAL(10,2)", 1700, -1, (10 << 16) + 2 + 4 },
+		{ "'-170141183460469231731687303715884105728'::HUGEINT", 1700, -1, (39 << 16) + 4 },
+		{ "'340282366920938463463374607431768211455'::UHUGEINT", 1700, -1, (39 << 16) + 4 },
+		{ "NULL::INTEGER", 23, 4, -1 }
+	};
+	for (const auto& value : metadata_cases) {
+		const std::string sql = std::string("SELECT ") + value.expression + " AS typed_value";
+		PGresult* r = exec_or_bail(c, sql.c_str());
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 1 &&
+		   PQftype(r, 0) == value.oid && PQfsize(r, 0) == value.size &&
+		   PQfmod(r, 0) == value.modifier && PQfformat(r, 0) == 0 &&
+		   std::strcmp(PQfname(r, 0), "typed_value") == 0,
+		   "PostgreSQL numeric metadata preserves type and precision: %s", value.expression);
+		PQclear(r);
+	}
+	{
+		PGresult* r = exec_or_bail(c, "SELECT 1.25::DECIMAL(10,2) AS amount WHERE false");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 0 &&
+		   PQftype(r, 0) == 1700 && PQfmod(r, 0) == (10 << 16) + 2 + 4,
+		   "empty PostgreSQL results retain decimal metadata");
+		PQclear(r);
+	}
+	for (const char* sql : {
+		"SELECT INTERVAL 1 DAY AS fallback",
+		"SELECT DATE '2024-01-01' AS fallback",
+		"SELECT 42 AS numeric_value, [1, 2] AS wrapped_value"
+	}) {
+		PGresult* r = exec_or_bail(c, sql);
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQftype(r, 0) == 25,
+		   "PostgreSQL text fallback matches the executed result: %s", sql);
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "SELECT 42::INTEGER, 'text', 1.25::DECIMAL(4,2), NULL::BIGINT");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 4 && PQntuples(r) == 1 &&
+		   PQftype(r, 0) == 23 && PQftype(r, 1) == 25 && PQftype(r, 2) == 1700 && PQftype(r, 3) == 20 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "42") == 0 && std::strcmp(PQgetvalue(r, 0, 1), "text") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 2), "1.25") == 0 && PQgetisnull(r, 0, 3),
+		   "mixed PostgreSQL column types retain their values and SQL NULL");
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "SELECT from_hex('00015CFF'), ''::BLOB, NULL::BLOB");
+		const bool shape = PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 3 && PQntuples(r) == 1;
+		ok(shape && PQftype(r, 0) == 17 && PQftype(r, 1) == 17 && PQftype(r, 2) == 17 && PQfformat(r, 0) == 0,
+		   "PostgreSQL BLOB columns advertise BYTEA text format, including typed NULL");
+		size_t size = 0;
+		unsigned char* decoded = shape ? PQunescapeBytea(
+			reinterpret_cast<const unsigned char*>(PQgetvalue(r, 0, 0)), &size) : nullptr;
+		const unsigned char expected[] = { 0, 1, 0x5c, 0xff };
+		ok(decoded && size == sizeof(expected) && std::memcmp(decoded, expected, sizeof(expected)) == 0 &&
+		   !PQgetisnull(r, 0, 1) && std::strcmp(PQgetvalue(r, 0, 1), "\\x") == 0 && PQgetisnull(r, 0, 2),
+		   "libpq decodes arbitrary bytes while distinguishing empty BYTEA from SQL NULL");
+		PQfreemem(decoded);
+		PQclear(r);
+	}
+	{
+		PGresult* r = exec_or_bail(c, "SELECT repeat('a', 70000)::BLOB");
+		size_t size = 0;
+		unsigned char* decoded = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+			? PQunescapeBytea(reinterpret_cast<const unsigned char*>(PQgetvalue(r, 0, 0)), &size) : nullptr;
+		ok(decoded && std::string(reinterpret_cast<char*>(decoded), size) == std::string(70000, 'a'),
+		   "libpq decodes BYTEA values larger than 64 KiB without truncation");
+		PQfreemem(decoded);
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "SELECT true, false, NULL::BOOLEAN");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 3 && PQntuples(r) == 1 &&
+		   PQftype(r, 0) == 16 && PQftype(r, 1) == 16 && PQftype(r, 2) == 16 && PQfsize(r, 0) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "t") == 0 && std::strcmp(PQgetvalue(r, 0, 1), "f") == 0 &&
+		   PQgetisnull(r, 0, 2), "PostgreSQL booleans carry native metadata and values while preserving NULL");
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "SELECT 42::INTEGER, '2024-01-02 03:04:05'::TIMESTAMP_S, "
+			"'2024-01-02 03:04:05.123'::TIMESTAMP_MS, '1969-12-31 23:59:59.999999999'::TIMESTAMP_NS");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 4 && PQntuples(r) == 1 &&
+		   PQftype(r, 0) == 23 && PQftype(r, 3) == 25 &&
+		   std::strcmp(PQgetvalue(r, 0, 1), "2024-01-02 03:04:05") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 2), "2024-01-02 03:04:05.123") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 3), "1969-12-31 23:59:59.999999999") == 0,
+		   "timestamp resolutions retain precision without changing adjacent PostgreSQL numeric metadata");
+		PQclear(r);
+		r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_timestamp(i INTEGER, ts TIMESTAMP_NS)");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create timestamp RETURNING fixture");
+		PQclear(r);
+		r = exec_or_bail(c, "INSERT INTO t_pg_timestamp VALUES "
+			"(1, '2024-01-02 03:04:05.123456789'), (2, NULL) RETURNING i, ts");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 2 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "1") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 1), "2024-01-02 03:04:05.123456789") == 0 &&
+		   std::strcmp(PQgetvalue(r, 1, 0), "2") == 0 && PQgetisnull(r, 1, 1),
+		   "PostgreSQL RETURNING delivers nanosecond timestamps and NULL directly");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_timestamp");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "2") == 0, "timestamp RETURNING inserts exactly once");
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_timetz(i INTEGER, t TIMETZ)");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create TIMETZ RETURNING fixture");
+		PQclear(r);
+		r = exec_or_bail(c, "INSERT INTO t_pg_timetz VALUES "
+			"(1, '12:34:56.123456+05:30'), (2, '00:00:00-03:30:45'), (3, NULL) RETURNING i, t");
+		const bool shape_ok = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 3 && PQnfields(r) == 2;
+		ok(shape_ok && PQftype(r, 0) == 23 && PQftype(r, 1) == 25,
+		   "TIMETZ RETURNING retains neighboring PostgreSQL numeric metadata");
+		const char* expected[] = { "12:34:56.123456+05:30", "00:00:00-03:30:45", nullptr };
+		bool values_ok = shape_ok;
+		for (int i = 0; values_ok && i < 3; ++i) {
+			values_ok = std::string(PQgetvalue(r, i, 0)) == std::to_string(i + 1) &&
+				(expected[i] ? !PQgetisnull(r, i, 1) && std::strcmp(PQgetvalue(r, i, 1), expected[i]) == 0
+				             : PQgetisnull(r, i, 1));
+		}
+		ok(values_ok, "PostgreSQL TIMETZ preserves fractional seconds, signed offsets and NULL");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_timetz");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "3") == 0, "TIMETZ RETURNING inserts exactly once");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT i, t FROM t_pg_timetz WHERE false");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 0 && PQnfields(r) == 2 &&
+		   PQftype(r, 0) == 23 && PQftype(r, 1) == 25, "empty TIMETZ results preserve PostgreSQL column metadata");
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_scalar(i INTEGER, t TIME_NS, b BIT, e ENUM('', 'ready', 'café'))");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create TIME_NS/BIT/ENUM RETURNING fixture");
+		PQclear(r);
+		r = exec_or_bail(c, "INSERT INTO t_pg_scalar VALUES "
+			"(1, '12:34:56.123456789', '000101001', 'café'), (2, '24:00:00', '0', ''), (3, NULL, NULL, NULL) RETURNING *");
+		const bool shape_ok = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 3 && PQnfields(r) == 4;
+		ok(shape_ok && PQftype(r, 0) == 23 && PQftype(r, 1) == 25 && PQftype(r, 2) == 25 && PQftype(r, 3) == 25,
+		   "TIME_NS/BIT/ENUM RETURNING retains neighboring PostgreSQL numeric metadata");
+		const char* expected[3][3] = {{ "12:34:56.123456789", "000101001", "café" },
+		                             { "24:00:00", "0", "" }, { nullptr, nullptr, nullptr }};
+		bool values_ok = shape_ok;
+		for (int i = 0; values_ok && i < 3; ++i) {
+			values_ok = std::string(PQgetvalue(r, i, 0)) == std::to_string(i + 1);
+			for (int j = 0; values_ok && j < 3; ++j)
+				values_ok = expected[i][j] ? !PQgetisnull(r, i, j + 1) && std::strcmp(PQgetvalue(r, i, j + 1), expected[i][j]) == 0
+				                           : PQgetisnull(r, i, j + 1);
+		}
+		ok(values_ok, "PostgreSQL preserves nanosecond time, BIT leading zeroes, ENUM labels, empty strings and NULL");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_scalar");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "3") == 0, "scalar RETURNING inserts exactly once");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT * FROM t_pg_scalar WHERE false");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 0 && PQnfields(r) == 4 &&
+		   PQftype(r, 0) == 23 && PQftype(r, 1) == 25 && PQftype(r, 2) == 25 && PQftype(r, 3) == 25,
+		   "empty scalar results preserve PostgreSQL metadata");
+		PQclear(r);
+		r = exec_or_bail(c, "UPDATE t_pg_scalar SET b='000000001' WHERE i=1 RETURNING b");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "000000001") == 0, "BIT UPDATE RETURNING preserves leading zeroes");
+		PQclear(r);
+		r = exec_or_bail(c, "DELETE FROM t_pg_scalar WHERE i=1 RETURNING e");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "café") == 0, "ENUM DELETE RETURNING preserves the label");
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_tstz(i INTEGER, t TIMESTAMPTZ)");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create TIMESTAMPTZ RETURNING fixture");
+		PQclear(r);
+		r = exec_or_bail(c, "INSERT INTO t_pg_tstz VALUES "
+			"(1, '2024-01-02 03:04:05.123456+05:30'), (2, NULL) RETURNING i, t");
+		const bool shape_ok = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 2 && PQnfields(r) == 2;
+		ok(shape_ok && PQftype(r, 0) == 23 && PQftype(r, 1) == 25,
+		   "TIMESTAMPTZ RETURNING retains neighboring PostgreSQL numeric metadata");
+		ok(shape_ok && std::strcmp(PQgetvalue(r, 0, 1), "2024-01-01 21:34:05.123456+00") == 0 && PQgetisnull(r, 1, 1),
+		   "PostgreSQL TIMESTAMPTZ preserves instant and NULL");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_tstz");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "2") == 0, "TIMESTAMPTZ RETURNING inserts exactly once");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT current_setting('enable_external_access')");
+		if (PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) != 1) BAIL_OUT("could not inspect external access setting");
+		const bool external = std::strcmp(PQgetvalue(r, 0, 0), "t") == 0;
+		PQclear(r);
+		bool have_icu = false;
+		if (external) {
+			r = exec_or_bail(c, "SELECT installed OR loaded FROM duckdb_extensions() WHERE extension_name='icu'");
+			if (PQresultStatus(r) != PGRES_TUPLES_OK || PQntuples(r) != 1) BAIL_OUT("could not inspect ICU availability");
+			have_icu = std::strcmp(PQgetvalue(r, 0, 0), "t") == 0;
+			PQclear(r);
+		}
+		if (!have_icu) {
+			skip(4, "ICU is not installed or external access is disabled on the DuckDB server");
+		} else {
+			for (const char* sql : { "LOAD icu", "SET TimeZone='America/New_York'" }) {
+				r = exec_or_bail(c, sql);
+				if (PQresultStatus(r) != PGRES_COMMAND_OK) BAIL_OUT("could not enable ICU timezone: %s", PQresultErrorMessage(r));
+				PQclear(r);
+			}
+			r = exec_or_bail(c, "SELECT '2024-01-01 12:00:00+00'::TIMESTAMPTZ, '2024-07-01 12:00:00+00'::TIMESTAMPTZ");
+			ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && PQnfields(r) == 2 &&
+			   std::strcmp(PQgetvalue(r, 0, 0), "2024-01-01 07:00:00-05") == 0 &&
+			   std::strcmp(PQgetvalue(r, 0, 1), "2024-07-01 08:00:00-04") == 0,
+			   "PostgreSQL TIMESTAMPTZ follows session timezone in winter and summer");
+			PQclear(r);
+			r = exec_or_bail(c, "UPDATE t_pg_tstz SET t='2024-03-10 07:00:00+00' WHERE i=1 RETURNING t");
+			ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+			   std::strcmp(PQgetvalue(r, 0, 0), "2024-03-10 03:00:00-04") == 0,
+			   "TIMESTAMPTZ UPDATE RETURNING uses the session DST offset");
+			PQclear(r);
+			PGconn* other = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
+			if (!other) BAIL_OUT("could not open second timezone session");
+			r = exec_or_bail(other, "SET TimeZone='Asia/Kolkata'");
+			if (PQresultStatus(r) != PGRES_COMMAND_OK) BAIL_OUT("could not set second timezone");
+			PQclear(r);
+			PGresult* second = exec_or_bail(other, "SELECT t FROM t_pg_tstz WHERE i=1");
+			r = exec_or_bail(c, "SELECT t FROM t_pg_tstz WHERE i=1");
+			ok(PQresultStatus(second) == PGRES_TUPLES_OK && PQntuples(second) == 1 &&
+			   PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+			   std::strcmp(PQgetvalue(second, 0, 0), "2024-03-10 12:30:00+05:30") == 0 &&
+			   std::strcmp(PQgetvalue(r, 0, 0), "2024-03-10 03:00:00-04") == 0,
+			   "PostgreSQL sessions independently format the same stored TIMESTAMPTZ");
+			PQclear(second);
+			PQclear(r);
+			PQfinish(other);
+			r = exec_or_bail(c, "SET TimeZone='UTC'");
+			ok(PQresultStatus(r) == PGRES_COMMAND_OK, "restore PostgreSQL session timezone");
+			PQclear(r);
+		}
 	}
 
 	{
@@ -202,6 +479,61 @@ int main(int argc, char** argv) {
 	}
 
 	{
+		PGresult* r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_uuid(n INTEGER, id UUID)");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create UUID RETURNING fixture");
+		PQclear(r);
+		r = exec_or_bail(c, "INSERT INTO t_pg_uuid VALUES "
+		                   "(1, '00112233-4455-6677-8899-aabbccddeeff'), (2, NULL) RETURNING n, id");
+		const bool shape_ok = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 2 && PQnfields(r) == 2;
+		ok(shape_ok, "UUID RETURNING executes");
+		ok(shape_ok && PQftype(r, 0) == 23 && PQftype(r, 1) == 25,
+		   "UUID text metadata preserves adjacent INTEGER metadata");
+		ok(shape_ok && !PQgetisnull(r, 0, 1) &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "1") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 1), "00112233-4455-6677-8899-aabbccddeeff") == 0 &&
+		   std::strcmp(PQgetvalue(r, 1, 0), "2") == 0 && PQgetisnull(r, 1, 1),
+		   "UUID RETURNING preserves canonical values and NULL");
+		PQclear(r);
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_uuid");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "2") == 0, "UUID RETURNING inserts exactly once");
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c,
+			"CREATE OR REPLACE TABLE t_pg_returning(id INTEGER[] DEFAULT [1, 2])");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create unsupported RETURNING fixture");
+		PQclear(r);
+
+		r = exec_or_bail(c, "INSERT INTO t_pg_returning DEFAULT VALUES RETURNING id");
+		const char* state = PQresultErrorField(r, PG_DIAG_SQLSTATE);
+		ok(PQresultStatus(r) == PGRES_FATAL_ERROR && state &&
+		   std::strcmp(state, "0A000") == 0 &&
+		   std::strstr(PQresultErrorMessage(r), "VARCHAR") != nullptr,
+		   "unsupported RETURNING reports an actionable feature-not-supported error");
+		PQclear(r);
+
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_returning");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "0") == 0,
+		   "rejected RETURNING leaves no committed row");
+		PQclear(r);
+
+		r = exec_or_bail(c, "INSERT INTO t_pg_returning DEFAULT VALUES RETURNING id::VARCHAR");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   !PQgetisnull(r, 0, 0) && std::strcmp(PQgetvalue(r, 0, 0), "[1, 2]") == 0,
+		   "an explicit VARCHAR cast returns the LIST value");
+		PQclear(r);
+
+		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_returning");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "1") == 0,
+		   "the supported RETURNING insert executes exactly once");
+		PQclear(r);
+	}
+
+	{
 		// The error must carry a syntax-error SQLSTATE, not core's
 		// hardcoded 28000 (invalid authorization).
 		PGresult* r = exec_or_bail(c, "SELECT FROM WHERE");
@@ -243,14 +575,14 @@ int main(int argc, char** argv) {
 	}
 
 	for (char type : { 'P', 'B', 'C', 'D', 'E' }) {
-		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
+		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password, true);
 		ok(extended != NULL && unsupported_message_gets_error(extended, type),
 		   "unsupported extended-query message %c gets an immediate ErrorResponse", type);
 		if (extended != NULL) PQfinish(extended);
 	}
 
 	{
-		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
+		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password, true);
 		ok(extended != NULL && extended_error_resynchronizes_on_sync(extended),
 		   "extended-query rejection emits one error, discards Flush until Sync, then sends ReadyForQuery");
 		if (extended != NULL) PQfinish(extended);

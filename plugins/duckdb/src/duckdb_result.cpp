@@ -1,11 +1,20 @@
 #include "duckdb_result.h"
 #include "sqlite3db.h"
+#include "duckdb/common/types/value.hpp"
+#include "duckdb/common/types/vector.hpp"
+#include "duckdb/main/connection.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
+#include <limits>
+#include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -22,8 +31,68 @@ std::string format_double(double v) {
 	if (std::isnan(v)) return "nan";
 	if (std::isinf(v)) return v > 0 ? "inf" : "-inf";
 	char buf[64];
-	std::snprintf(buf, sizeof(buf), "%.15g", v);
+	// Preserve the binary64 value when a client parses the text response.
+	std::snprintf(buf, sizeof(buf), "%.*g", std::numeric_limits<double>::max_digits10, v);
 	return buf;
+}
+
+bool render_native_value(duckdb_value raw, std::string& out, std::string& error) {
+	const auto destroy_value = [](duckdb_value value) { duckdb_destroy_value(&value); };
+	std::unique_ptr<std::remove_pointer_t<duckdb_value>, decltype(destroy_value)> value(raw, destroy_value);
+	if (!value) {
+		error = "failed to create DuckDB value for conversion";
+		return false;
+	}
+	try {
+		// This C API entry point can throw when its native cast overflows.
+		std::unique_ptr<char, decltype(&duckdb_free)> text(duckdb_get_varchar(value.get()), duckdb_free);
+		if (!text) {
+			error = "failed to convert DuckDB value to text";
+			return false;
+		}
+		out = text.get();
+		return true;
+	} catch (const std::exception& exception) {
+		error = std::string("DuckDB value conversion failed: ") + exception.what();
+		return false;
+	}
+}
+
+// The vendored C API represents duckdb_vector as a native Vector pointer.
+// Its enum dictionary accessor uses strdup and truncates embedded NULs, so
+// use DuckDB's length-aware native lookup. The plugin links the same vendored
+// DuckDB build; keep native dictionary access confined to this helper.
+bool render_enum_value(duckdb_vector raw, idx_t row, std::string& out, std::string& error) {
+	try {
+		auto& vector = *reinterpret_cast<duckdb::Vector*>(raw);
+		out = duckdb::EnumType::GetValue(vector.GetValue(row));
+		return true;
+	} catch (const std::exception& exception) {
+		error = std::string("DuckDB ENUM conversion failed: ") + exception.what();
+		return false;
+	}
+}
+
+// Use the same session-aware VARCHAR cast as DuckDB SQL, without preparing or
+// executing another query. In particular, ICU binds TimeZone and Calendar from
+// this connection instead of applying a context-free UTC cast.
+std::unique_ptr<duckdb::Vector> render_session_vector(duckdb_vector raw, idx_t count,
+                                                       duckdb_connection conn, std::string& error) {
+	if (!conn) {
+		error = "DuckDB TIMESTAMPTZ conversion requires the originating connection";
+		return nullptr;
+	}
+	try {
+		auto& vector = *reinterpret_cast<duckdb::Vector*>(raw);
+		auto& connection = *reinterpret_cast<duckdb::Connection*>(conn);
+		auto text = std::make_unique<duckdb::Vector>(duckdb::LogicalType(duckdb::LogicalTypeId::VARCHAR), count);
+		duckdb::VectorOperations::Cast(*connection.context, vector, *text, count);
+		text->Flatten(count);
+		return text;
+	} catch (const std::exception& exception) {
+		error = std::string("DuckDB session value conversion failed: ") + exception.what();
+		return nullptr;
+	}
 }
 
 std::string add_decimal_point(std::string digits, bool neg, uint8_t scale) {
@@ -78,7 +147,8 @@ std::string format_uhugeint(duckdb_uhugeint h) {
 }
 #endif
 
-bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string& out) {
+bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string& out,
+                 DuckDBResultProtocol protocol, std::string& error) {
 	uint64_t* validity = duckdb_vector_get_validity(vector);
 	if (!cell_is_valid(validity, row)) return false;
 	void* data = duckdb_vector_get_data(vector);
@@ -87,7 +157,10 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 	char buf[64];
 	switch (type) {
 	case DUCKDB_TYPE_BOOLEAN:
-		out = static_cast<bool*>(data)[row] ? "true" : "false";
+		if (protocol == DuckDBResultProtocol::pgsql)
+			out = static_cast<bool*>(data)[row] ? "t" : "f";
+		else
+			out = static_cast<bool*>(data)[row] ? "1" : "0";
 		return true;
 	case DUCKDB_TYPE_TINYINT:
 		out = std::to_string(static_cast<int8_t*>(data)[row]);
@@ -119,6 +192,27 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 	case DUCKDB_TYPE_DOUBLE:
 		out = format_double(static_cast<double*>(data)[row]);
 		return true;
+	// Native value conversion does not prepare or execute another statement.
+	case DUCKDB_TYPE_TIME_NS:
+		return render_native_value(duckdb_create_time_ns(static_cast<duckdb_time_ns*>(data)[row]), out, error);
+	case DUCKDB_TYPE_TIME_TZ:
+		return render_native_value(duckdb_create_time_tz_value(static_cast<duckdb_time_tz*>(data)[row]), out, error);
+	case DUCKDB_TYPE_UUID: {
+		// UUID vectors use HUGEINT storage with the upper sign bit flipped
+		// for ordering; duckdb_create_uuid expects the unsigned UUID bits.
+		const duckdb_hugeint stored = static_cast<duckdb_hugeint*>(data)[row];
+		const duckdb_uhugeint bits = {
+			stored.lower, static_cast<uint64_t>(stored.upper) ^ (uint64_t(1) << 63)
+		};
+		return render_native_value(duckdb_create_uuid(bits), out, error);
+	}
+	// Delegate resolution, negative epochs and infinity formatting to DuckDB.
+	case DUCKDB_TYPE_TIMESTAMP_S:
+		return render_native_value(duckdb_create_timestamp_s(static_cast<duckdb_timestamp_s*>(data)[row]), out, error);
+	case DUCKDB_TYPE_TIMESTAMP_MS:
+		return render_native_value(duckdb_create_timestamp_ms(static_cast<duckdb_timestamp_ms*>(data)[row]), out, error);
+	case DUCKDB_TYPE_TIMESTAMP_NS:
+		return render_native_value(duckdb_create_timestamp_ns(static_cast<duckdb_timestamp_ns*>(data)[row]), out, error);
 	case DUCKDB_TYPE_DATE: {
 		const duckdb_date value = static_cast<duckdb_date*>(data)[row];
 		if (!duckdb_is_finite_date(value)) {
@@ -158,10 +252,52 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		out = buf;
 		return true;
 	}
+	case DUCKDB_TYPE_ENUM:
+		return render_enum_value(vector, row, out, error);
+	case DUCKDB_TYPE_BIT: {
+		duckdb_string_t value = static_cast<duckdb_string_t*>(data)[row];
+		const uint64_t length = duckdb_string_t_length(value);
+		const auto* bytes = reinterpret_cast<const uint8_t*>(duckdb_string_t_data(&value));
+		// One byte stores the padding count; the remaining bytes store bits.
+		if (length < 2 || bytes[0] > 7) {
+			error = "invalid DuckDB BIT storage";
+			return false;
+		}
+		if ((length - 1) * 8 - bytes[0] >= INT_MAX) {
+			error = "DuckDB BIT text exceeds ProxySQL's INT_MAX row-size limit";
+			return false;
+		}
+		// duckdb_create_bit copies the bytes; its API takes a mutable pointer.
+		return render_native_value(duckdb_create_bit({ const_cast<uint8_t*>(bytes), length }), out, error);
+	}
 	case DUCKDB_TYPE_VARCHAR:
-	case DUCKDB_TYPE_BLOB:
 		assign_string_t(static_cast<duckdb_string_t*>(data)[row], out);
 		return true;
+	case DUCKDB_TYPE_BLOB: {
+		duckdb_string_t value = static_cast<duckdb_string_t*>(data)[row];
+		if (protocol == DuckDBResultProtocol::mysql) {
+			assign_string_t(value, out);
+			return true;
+		}
+		// BYTEA text uses a hex prefix and two ASCII digits per byte. Encode
+		// before materialization so size failures follow the conversion-error
+		// path and cannot leave a committed RETURNING mutation behind.
+		const size_t length = duckdb_string_t_length(value);
+		if (length > static_cast<size_t>((INT_MAX - 2) / 2)) {
+			error = "DuckDB BYTEA text exceeds ProxySQL's INT_MAX row-size limit";
+			return false;
+		}
+		const auto* bytes = reinterpret_cast<const unsigned char*>(duckdb_string_t_data(&value));
+		static const char hex[] = "0123456789abcdef";
+		out.resize(2 + 2 * length);
+		out[0] = '\\';
+		out[1] = 'x';
+		for (size_t i = 0; i < length; ++i) {
+			out[2 + 2 * i] = hex[bytes[i] >> 4];
+			out[3 + 2 * i] = hex[bytes[i] & 15];
+		}
+		return true;
+	}
 	case DUCKDB_TYPE_DECIMAL: {
 		duckdb_logical_type lt = duckdb_vector_get_column_type(vector);
 		const uint8_t scale = duckdb_decimal_scale(lt);
@@ -235,8 +371,21 @@ bool duckdb_append_sqlite3_row(SQLite3_result& out, char** fields,
 	return false;
 }
 
-SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error) {
+duckdb_type duckdb_result_type_id(duckdb_logical_type logical) {
+	if (!logical) return DUCKDB_TYPE_INVALID;
+	const duckdb_type type = duckdb_get_type_id(logical);
+	// DuckDB 1.4.5 omits TIME_NS from its C API logical-type mapping.
+	if (type == DUCKDB_TYPE_INVALID &&
+	    reinterpret_cast<duckdb::LogicalType*>(logical)->id() == duckdb::LogicalTypeId::TIME_NS)
+		return DUCKDB_TYPE_TIME_NS;
+	return type;
+}
+
+SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
+                                      std::vector<DuckDBColumnType>* column_types,
+                                      DuckDBResultProtocol protocol, duckdb_connection conn) {
 	if (error != nullptr) error->clear();
+	if (column_types != nullptr) column_types->clear();
 	if (res == nullptr) return nullptr;
 
 	const idx_t ncols = duckdb_column_count(res);
@@ -247,7 +396,17 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error)
 	for (idx_t c = 0; c < ncols; c++) {
 		const char* name = duckdb_column_name(res, c);
 		out->add_column_definition(SQLITE_TEXT, name != nullptr ? name : "");
-		types[c] = duckdb_column_type(res, c);
+		duckdb_logical_type logical = duckdb_column_logical_type(res, c);
+		types[c] = duckdb_result_type_id(logical);
+		if (column_types != nullptr) {
+			DuckDBColumnType column { types[c] };
+			if (column.type == DUCKDB_TYPE_DECIMAL) {
+				column.precision = duckdb_decimal_width(logical);
+				column.scale = duckdb_decimal_scale(logical);
+			}
+			column_types->push_back(column);
+		}
+		duckdb_destroy_logical_type(&logical);
 	}
 
 	std::vector<char*> fields(static_cast<size_t>(ncols), nullptr);
@@ -264,21 +423,39 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error)
 		duckdb_data_chunk chunk = duckdb_result_get_chunk(*res, chunk_index);
 		if (chunk == nullptr) break;
 		const idx_t nrows = duckdb_data_chunk_get_size(chunk);
+		// Bind ICU settings once per column/chunk, not once per cell. Keep
+		// native VARCHAR vectors alive until their rows have been copied.
+		std::vector<std::unique_ptr<duckdb::Vector>> session_text(static_cast<size_t>(ncols));
 		for (idx_t c = 0; c < ncols; c++) {
 			vectors[c] = duckdb_data_chunk_get_vector(chunk, c);
+			if (types[c] == DUCKDB_TYPE_TIMESTAMP_TZ && nrows != 0) {
+				std::string conversion_error;
+				session_text[c] = render_session_vector(vectors[c], nrows, conn, conversion_error);
+				if (!session_text[c]) {
+					duckdb_destroy_data_chunk(&chunk);
+					delete out;
+					if (error) *error = conversion_error;
+					return nullptr;
+				}
+				vectors[c] = reinterpret_cast<duckdb_vector>(session_text[c].get());
+			}
 		}
 
 		for (idx_t r = 0; r < nrows; r++) {
+			std::string row_error;
 			for (idx_t c = 0; c < ncols; c++) {
 				fields[c] = nullptr;
 				sizes[c] = 0;
 				if (!duckdb_type_renders_as_text(types[c]) || vectors[c] == nullptr) continue;
-				if (!render_cell(types[c], vectors[c], r, rendered[c])) continue;
+				const duckdb_type render_type = session_text[c] ? DUCKDB_TYPE_VARCHAR : types[c];
+				if (!render_cell(render_type, vectors[c], r, rendered[c], protocol, row_error)) {
+					if (!row_error.empty()) break;
+					continue;
+				}
 				fields[c] = rendered[c].data();
 				sizes[c] = static_cast<unsigned long>(rendered[c].size());
 			}
-			std::string row_error;
-			if (!duckdb_append_sqlite3_row(*out, fields.data(), sizes.data(), row_error)) {
+			if (!row_error.empty() || !duckdb_append_sqlite3_row(*out, fields.data(), sizes.data(), row_error)) {
 				duckdb_destroy_data_chunk(&chunk);
 				delete out;
 				if (error != nullptr) *error = row_error;
@@ -290,28 +467,11 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error)
 	return out;
 }
 
-// Mirrors -- deliberately as an allowlist, not a hand-maintained denylist
-// -- GetInternalCValue's switch on deprecated_type in
-// duckdb/src/include/duckdb/main/capi/cast/generic.hpp, the sole
-// authoritative source for which duckdb_type values duckdb_value_string()
-// can actually render (it calls through GetInternalCValue<duckdb_string,
-// ToCStringCastWrapper<StringCast>>, which uses this exact switch). Every
-// case listed there is reproduced here; anything else -- whether a type
-// this file's author thought to consider or not -- falls to `default:` in
-// both switches and is treated as unrenderable. That symmetry is the
-// point: mirroring the switch's positive list means a duckdb_type this
-// switch doesn't yet have a case for (a future DuckDB version's new type,
-// for instance) is safely treated as unrenderable by default, rather than
-// silently passing through undetected the way a denylist would.
-//
-// Confirmed against every duckdb_type enumerator DuckDB 1.4.5 defines
-// (duckdb.h:62-140, DUCKDB_TYPE_INVALID through DUCKDB_TYPE_TIME_NS) and
-// empirically: a standalone probe compiled against the built duckdb_static
-// archives confirmed duckdb_value_string() returns a null data pointer (regardless of
-// duckdb_value_is_null()) for representatives of every type NOT in this
-// list, including nested/composite types (LIST, STRUCT, MAP, ARRAY, UNION)
-// and non-nested scalars that are easy to assume "just work" (UUID, ENUM,
-// BIT, TIME_TZ, TIMESTAMP_TZ, BIGNUM, TIMESTAMP_S/MS/NS).
+// This allowlist describes direct result conversion, including the
+// session-aware TIMESTAMPTZ vector cast. The original scalar set used
+// DuckDB's legacy C result casts; vector conversion additionally supports
+// TIMESTAMP_S/MS/NS through DuckDB's native value-formatting API. Keep unknown
+// types outside the list so callers wrap or reject them before execution.
 bool duckdb_type_renders_as_text(duckdb_type t) {
 	switch (t) {
 		case DUCKDB_TYPE_BOOLEAN:
@@ -327,13 +487,22 @@ bool duckdb_type_renders_as_text(duckdb_type t) {
 		case DUCKDB_TYPE_DOUBLE:
 		case DUCKDB_TYPE_DATE:
 		case DUCKDB_TYPE_TIME:
+		case DUCKDB_TYPE_TIME_TZ:
+		case DUCKDB_TYPE_TIME_NS:
 		case DUCKDB_TYPE_TIMESTAMP:
+		case DUCKDB_TYPE_TIMESTAMP_S:
+		case DUCKDB_TYPE_TIMESTAMP_MS:
+		case DUCKDB_TYPE_TIMESTAMP_NS:
+		case DUCKDB_TYPE_TIMESTAMP_TZ:
 		case DUCKDB_TYPE_HUGEINT:
 		case DUCKDB_TYPE_UHUGEINT:
 		case DUCKDB_TYPE_DECIMAL:
 		case DUCKDB_TYPE_INTERVAL:
 		case DUCKDB_TYPE_VARCHAR:
 		case DUCKDB_TYPE_BLOB:
+		case DUCKDB_TYPE_UUID:
+		case DUCKDB_TYPE_ENUM:
+		case DUCKDB_TYPE_BIT:
 			return true;
 		default:
 			return false;
@@ -345,7 +514,10 @@ bool duckdb_result_has_unrenderable_column(duckdb_result* res) {
 
 	const idx_t ncols = duckdb_column_count(res);
 	for (idx_t c = 0; c < ncols; c++) {
-		if (!duckdb_type_renders_as_text(duckdb_column_type(res, c))) {
+		duckdb_logical_type logical = duckdb_column_logical_type(res, c);
+		const bool renderable = duckdb_type_renders_as_text(duckdb_result_type_id(logical));
+		duckdb_destroy_logical_type(&logical);
+		if (!renderable) {
 			return true;
 		}
 	}

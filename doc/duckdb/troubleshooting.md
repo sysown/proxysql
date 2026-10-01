@@ -108,17 +108,19 @@ as a compatibility no-op.
 
 ## Values arrive as strings
 
-This is current behavior. Both protocol serializers advertise text columns.
-Applications must parse values based on the query contract rather than rely on
-MySQL/PostgreSQL type metadata.
+Numeric columns carry MySQL/PostgreSQL type metadata, but the wire transfer
+format is still text. Client APIs such as `mysql_fetch_row` and `PQgetvalue`
+return textual values; use their column metadata to choose a conversion.
+Temporal, other unmapped columns, and results requiring a VARCHAR wrapper retain text
+metadata; see [Protocol compatibility](protocol-compatibility.md).
 
-## A special DuckDB value arrives as NULL
+## An unsupported result type produces SQLSTATE 0A000
 
 Most unsupported direct types are re-rendered through a VARCHAR wrapper.
-However, some DML `RETURNING` shapes cannot be wrapped. In that degraded path,
-an unsupported result type can appear as NULL even though the underlying value
-is not SQL NULL. Cast the returned expression explicitly to `VARCHAR` in the
-original SQL as a workaround:
+However, some DML `RETURNING` shapes cannot be wrapped. The plugin rejects these
+statements before execution, preserving the table and avoiding false NULL
+values. Cast the returned expression explicitly to `VARCHAR` in the original
+SQL:
 
 ```sql
 INSERT INTO t VALUES (...) RETURNING special_column::VARCHAR;
