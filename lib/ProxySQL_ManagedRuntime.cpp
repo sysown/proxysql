@@ -1,7 +1,10 @@
 #ifdef PROXYSQL40
 #include "ProxySQL_ManagedRuntime.h"
 #include "MySQL_Query_Processor.h"
+#include "PgSQL_Authentication.h"
+#include "PgSQL_Query_Processor.h"
 #include "ProxySQL_Admin_Tables_Definitions.h"
+#include "ProxySQL_ServerDiscovery.h"
 #include "cpp.h"
 #include "json.hpp"
 #include "proxysql.h"
@@ -27,6 +30,9 @@ using nlohmann::json;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_Query_Processor *GloMyQPro;
+extern PgSQL_Threads_Handler *GloPTH;
+extern PgSQL_Authentication *GloPgAuth;
+extern PgSQL_Query_Processor *GloPgQPro;
 extern pthread_mutex_t users_mutex;
 extern int admin___web_verbosity;
 extern int ProxySQL_create_or_load_TLS(bool, std::string &);
@@ -56,6 +62,14 @@ const std::pair<const char *, const char *> mysql_definitions[] = {
     {"mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS},
     {"mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS},
     {"mysql_servers_ssl_params", ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS}};
+const std::pair<const char *, const char *> pgsql_definitions[] = {
+    {"pgsql_servers", ADMIN_SQLITE_TABLE_PGSQL_SERVERS},
+    {"pgsql_users", ADMIN_SQLITE_TABLE_PGSQL_USERS},
+    {"pgsql_query_rules", ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES},
+    {"pgsql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES_FAST_ROUTING},
+    {"pgsql_hostgroup_attributes", ADMIN_SQLITE_TABLE_PGSQL_HOSTGROUP_ATTRIBUTES},
+    {"pgsql_replication_hostgroups", ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS},
+    {"pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_PGSQL_SERVERS_SSL_PARAMS}};
 std::string quote(const std::string &value) {
   std::string result = "'";
   for (char c : value) {
@@ -204,7 +218,7 @@ bool check_scope(const json &d, const Table &table, const json &row, std::string
       error = table.name + "." + kv.key() + " is outside managed hostgroup scope";
       return false;
     }
-  if (table.name == "mysql_users") {
+  if (table.name.substr(6) == "users") {
     const json key = {
         {"username", row["username"]}, {"frontend", row["frontend"]}, {"backend", row["backend"]}};
     if (!contains(scope["users"], key)) {
@@ -212,11 +226,11 @@ bool check_scope(const json &d, const Table &table, const json &row, std::string
       return false;
     }
   }
-  if (table.name == "mysql_query_rules" && !contains(scope["query_rules"], row["rule_id"])) {
+  if (table.name.substr(6) == "query_rules" && !contains(scope["query_rules"], row["rule_id"])) {
     error = "rule ID is outside managed scope";
     return false;
   }
-  if (table.name == "mysql_query_rules_fast_routing") {
+  if (table.name.substr(6) == "query_rules_fast_routing") {
     bool found = false;
     for (const auto &user : scope["users"])
       if (user["username"] == row["username"])
@@ -226,10 +240,12 @@ bool check_scope(const json &d, const Table &table, const json &row, std::string
       return false;
     }
   }
-  if (table.name == "mysql_servers_ssl_params") {
+  if (table.name.substr(6) == "servers_ssl_params") {
     bool found = false;
-    for (const auto &server : d["tables"]["mysql_servers"])
-      if (server["hostname"] == row["hostname"] && server.value("port", 3306) == row["port"])
+    for (const auto &server : d["tables"][table.name.substr(0, 6) + "servers"])
+      if (server["hostname"] == row["hostname"] &&
+          server.value("port", table.name.compare(0, 6, "pgsql_") == 0 ? 5432 : 3306) ==
+              row["port"])
         found = true;
     if (!found) {
       error = "backend TLS endpoint is outside managed server scope";
@@ -239,8 +255,9 @@ bool check_scope(const json &d, const Table &table, const json &row, std::string
   return true;
 }
 bool valid_admin_variable(const std::string &name, const std::string &value) {
-  // A managed request runs inside the serving endpoint. Its lifecycle belongs to process
-  // startup/shutdown, and the existing plugin start operation cannot rebind a live port.
+  // A managed request runs inside the serving endpoint. Its lifecycle belongs
+  // to process startup/shutdown, and the existing plugin start operation cannot
+  // rebind a live port.
   if (name == "web_enabled" || name == "web_port" || name == "restapi_enabled" ||
       name == "restapi_port")
     return false;
@@ -282,8 +299,7 @@ bool valid_admin_variable(const std::string &name, const std::string &value) {
     return number(1, 3);
   if (name == "ssl_keylog_file")
     return true;
-  static const std::set<std::string> booleans = {
-      "vacuum_stats", "read_only", "debug"};
+  static const std::set<std::string> booleans = {"vacuum_stats", "read_only", "debug"};
   return booleans.count(name) &&
          (value == "true" || value == "false" || value == "0" || value == "1");
 }
@@ -328,7 +344,8 @@ bool validate_pem(const json &tls, std::string &error) {
   X509_free(certificate);
   return error.empty();
 }
-std::string endpoint_key_path(const std::string &deployment, const json &row) {
+std::string endpoint_key_path(const std::string &deployment, const json &row,
+                              const std::string &engine) {
   const std::string identity = deployment + "\n" + row["hostname"].get<std::string>() + "\n" +
                                row["port"].dump() + "\n" + row["username"].get<std::string>();
   unsigned char digest[SHA256_DIGEST_LENGTH];
@@ -339,7 +356,7 @@ std::string endpoint_key_path(const std::string &deployment, const json &row) {
     suffix += hex[byte >> 4];
     suffix += hex[byte & 15];
   }
-  return std::string(GloVars.datadir) + "/proxysql-managed-mysql-" + suffix + "-key.pem";
+  return std::string(GloVars.datadir) + "/proxysql-managed-" + engine + "-" + suffix + "-key.pem";
 }
 bool write_material(const std::string &path, const std::string &material, std::string &error) {
   const std::string temporary = path + ".managed.XXXXXX";
@@ -373,6 +390,8 @@ bool write_material(const std::string &path, const std::string &material, std::s
 } // namespace
 struct ManagedPreparedRuntime {
   json document;
+  bool pgsql{false};
+  std::string prefix{"mysql"};
   std::vector<Table> tables;
   std::map<std::string, std::string> variables;
   std::string interfaces;
@@ -387,8 +406,8 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
     return false;
   }
   *out = nullptr;
-  if (!GloAdmin || !GloAdmin->admindb || !GloMTH) {
-    error = "MySQL configuration runtime is unavailable";
+  if (!GloAdmin || !GloAdmin->admindb) {
+    error = "configuration runtime is unavailable";
     return false;
   }
   try {
@@ -396,7 +415,8 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
     p->document = json::parse(plan.configuration_json);
     auto &d = p->document;
     if (!d.is_object() || d.size() != 6) {
-      error = "mapped configuration requires exactly identity/scope/tables/variables/tls/listeners";
+      error = "mapped configuration requires exactly "
+              "identity/scope/tables/variables/tls/listeners";
       return false;
     }
     for (const auto &key : {"identity", "scope", "tables", "variables", "tls"})
@@ -405,9 +425,17 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
         return false;
       }
     if (!d.contains("listeners") || !d["listeners"].is_array() ||
-        d["identity"].value("engine", "") != "MYSQL" || plan.deployment_id.empty() ||
+        (d["identity"].value("engine", "") != "MYSQL" &&
+         d["identity"].value("engine", "") != "POSTGRESQL") ||
+        plan.deployment_id.empty() ||
         d["identity"].value("deployment_id", "") != plan.deployment_id) {
       error = "mapped identity or listener section is invalid";
+      return false;
+    }
+    p->pgsql = d["identity"].value("engine", "") == "POSTGRESQL";
+    p->prefix = p->pgsql ? "pgsql" : "mysql";
+    if (p->pgsql ? GloPTH == nullptr : GloMTH == nullptr) {
+      error = "required engine thread handler is unavailable";
       return false;
     }
     const auto &scope = d["scope"];
@@ -432,14 +460,18 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
         error = "scope requires exact user role keys";
         return false;
       }
-    if (d["tables"].size() != std::size(mysql_definitions)) {
-      error = "complete MySQL table set is required";
+    const auto *definitions = p->pgsql ? pgsql_definitions : mysql_definitions;
+    const size_t table_count =
+        p->pgsql ? std::size(pgsql_definitions) : std::size(mysql_definitions);
+    if (d["tables"].size() != table_count) {
+      error = "complete engine table set is required";
       return false;
     }
     SQLite3DB candidate;
     candidate.open(const_cast<char *>(":memory:"),
                    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-    for (const auto &definition : mysql_definitions) {
+    for (size_t definition_index = 0; definition_index < table_count; ++definition_index) {
+      const auto &definition = definitions[definition_index];
       Table table;
       table.name = definition.first;
       table.definition = definition.second;
@@ -486,7 +518,7 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
           return false;
       }
       table.rows = rows(candidate, "SELECT * FROM " + table.name, error);
-      if (table.name == "mysql_servers_ssl_params")
+      if (table.name.substr(6) == "servers_ssl_params")
         for (const auto &row : table.rows)
           if (!row["ssl_key"].get_ref<const std::string &>().empty())
             if (!validate_pem({{"key_pem", row["ssl_key"]}}, error))
@@ -510,11 +542,11 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
       for (const auto &row : existing)
         if (!insert(combined, table, row, error))
           return false;
-      if (table.name == "mysql_servers" || table.name == "mysql_hostgroup_attributes")
+      if (table.name.substr(6) == "servers" || table.name.substr(6) == "hostgroup_attributes")
         table.removal = "hostgroup_id IN (" + number_set(scope["hostgroups"]) + ")";
-      else if (table.name == "mysql_query_rules")
+      else if (table.name.substr(6) == "query_rules")
         table.removal = "rule_id IN (" + number_set(scope["query_rules"]) + ")";
-      else if (table.name == "mysql_users") {
+      else if (table.name.substr(6) == "users") {
         for (const auto &user : scope["users"]) {
           if (!table.removal.empty())
             table.removal += " OR ";
@@ -522,17 +554,17 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
                            " AND frontend=" + std::to_string(user["frontend"].get<int>()) +
                            " AND backend=" + std::to_string(user["backend"].get<int>()) + ")";
         }
-      } else if (table.name == "mysql_query_rules_fast_routing")
+      } else if (table.name.substr(6) == "query_rules_fast_routing")
         table.removal = "username IN (" + user_set(scope) + ")";
-      else if (table.name == "mysql_servers_ssl_params") {
+      else if (table.name.substr(6) == "servers_ssl_params") {
         const auto previous =
             rows(*GloAdmin->admindb,
-                 "SELECT hostname,port FROM mysql_servers WHERE hostgroup_id IN (" +
+                 "SELECT hostname,port FROM " + p->prefix + "_servers WHERE hostgroup_id IN (" +
                      number_set(scope["hostgroups"]) + ")",
                  error);
         const auto unrelated =
             rows(*GloAdmin->admindb,
-                 "SELECT hostname,port FROM mysql_servers WHERE hostgroup_id NOT IN (" +
+                 "SELECT hostname,port FROM " + p->prefix + "_servers WHERE hostgroup_id NOT IN (" +
                      number_set(scope["hostgroups"]) + ")",
                  error);
         for (const auto &row : table.rows)
@@ -542,15 +574,18 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
               return false;
             }
         json endpoints = previous;
-        for (const auto &server : d["tables"]["mysql_servers"])
+        for (const auto &server : d["tables"][table.name.substr(0, 6) + "servers"])
           endpoints.push_back(
-              {{"hostname", server["hostname"]}, {"port", server.value("port", 3306)}});
+              {{"hostname", server["hostname"]},
+               {"port",
+                server.value("port", table.name.compare(0, 6, "pgsql_") == 0 ? 5432 : 3306)}});
         for (const auto &endpoint : endpoints) {
           for (const auto &other : unrelated)
             if (endpoint["hostname"] == other["hostname"] && endpoint["port"] == other["port"])
               for (const auto &old : existing)
                 if (old["hostname"] == endpoint["hostname"] && old["port"] == endpoint["port"]) {
-                  error = "backend TLS replacement overlaps an unrelated hostgroup endpoint";
+                  error = "backend TLS replacement overlaps an unrelated "
+                          "hostgroup endpoint";
                   return false;
                 }
           if (!table.removal.empty())
@@ -585,12 +620,13 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
         error = "variable cannot contain NUL";
         return false;
       }
-      const bool mysql = kv.key().compare(0, 6, "mysql-") == 0,
+      const bool engine = kv.key().compare(0, 6, p->prefix + "-") == 0,
                  admin = kv.key().compare(0, 6, "admin-") == 0;
       const std::string name = kv.key().substr(6);
-      if ((!mysql && !admin) || name == "threads" || name == "stacksize" || name == "interfaces" ||
-          !(mysql ? GloMTH->validate_variable(name.c_str(), value.c_str())
-                  : valid_admin_variable(name, value))) {
+      if ((!engine && !admin) || name == "threads" || name == "stacksize" || name == "interfaces" ||
+          !(engine ? (p->pgsql ? GloPTH->validate_variable(name.c_str(), value.c_str())
+                               : GloMTH->validate_variable(name.c_str(), value.c_str()))
+                   : valid_admin_variable(name, value))) {
         error = "unsupported or invalid runtime variable " + kv.key();
         return false;
       }
@@ -616,15 +652,17 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
     }
     if (!validate_pem(d["tls"], error))
       return false;
-    // A material update uses the global frontend context already shared by both engines.
+    // A material update uses the global frontend context already shared by both
+    // engines.
     if (d["tls"].contains("key_pem") != d["tls"].contains("certificate_pem")) {
       error = "TLS certificate/key material must be supplied together";
       return false;
     }
     if (!d["listeners"].empty() || !scope["listeners"].empty()) {
-      char *current = GloMTH->get_variable("interfaces");
+      char *current = p->pgsql ? GloPTH->get_variable(const_cast<char *>("interfaces"))
+                               : GloMTH->get_variable("interfaces");
       if (!current) {
-        error = "current MySQL interfaces are unavailable";
+        error = "current engine interfaces are unavailable";
         return false;
       }
       std::string existing(current);
@@ -653,12 +691,13 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
         begin = end + 1;
       }
       for (const auto &listener : d["listeners"]) {
-        if (!listener.is_object() || listener.value("protocol", "") != "MYSQL" ||
+        if (!listener.is_object() ||
+            listener.value("protocol", "") != (p->pgsql ? "POSTGRESQL" : "MYSQL") ||
             !listener.contains("address") || !listener["address"].is_string() ||
             !listener.contains("port") || !listener["port"].is_number_integer() ||
             listener["port"].get<int64_t>() <= 0 || listener["port"].get<int64_t>() > 65535 ||
             !contains(scope["listeners"], listener["address"])) {
-          error = "invalid scoped MySQL listener";
+          error = "invalid scoped engine listener";
           return false;
         }
         std::string address;
@@ -685,8 +724,10 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
 
 ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRuntime &p, uint64_t) {
   std::string error;
-  if (!GloAdmin || !GloAdmin->admindb || !MyHGM || !GloMyAuth || !GloMyQPro || !GloMTH)
-    return {false, "RuntimeUnavailable", "required MySQL modules are unavailable"};
+  if (!GloAdmin || !GloAdmin->admindb ||
+      (p.pgsql ? (!PgHGM || !GloPgAuth || !GloPgQPro || !GloPTH)
+               : (!MyHGM || !GloMyAuth || !GloMyQPro || !GloMTH)))
+    return {false, "RuntimeUnavailable", "required engine modules are unavailable"};
   try {
     const auto &tls = p.document["tls"];
     if ((tls.contains("trust_pem") || tls.contains("certificate_pem") || tls.contains("key_pem")) &&
@@ -701,17 +742,19 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
         if (!write_material(path, tls[name], error))
           return {false, "TlsApplyFailed", error};
         const std::string backend =
-            std::string(GloVars.datadir) + "/proxysql-managed-backend-" + stem + ".pem";
+            std::string(GloVars.datadir) +
+            (p.pgsql ? "/proxysql-managed-pgsql-backend-" : "/proxysql-managed-backend-") + stem +
+            ".pem";
         if (!write_material(backend, tls[name], error))
           return {false, "TlsApplyFailed", error};
-        p.variables["mysql-ssl_p2s_" + stem] = backend;
+        p.variables[p.prefix + "-ssl_p2s_" + stem] = backend;
       }
     if (tls.contains("trust_pem") || tls.contains("certificate_pem") || tls.contains("key_pem"))
       if (ProxySQL_create_or_load_TLS(false, error) != 0)
         return {false, "TlsApplyFailed", error};
     auto &db = *GloAdmin->admindb;
     const auto previous_servers =
-        rows(db, "SELECT hostgroup_id,hostname,port,status FROM mysql_servers", error);
+        rows(db, "SELECT hostgroup_id,hostname,port,status FROM " + p.prefix + "_servers", error);
     if (!error.empty())
       return {false, "MemoryApplyFailed", error};
     for (const auto &table : p.tables) {
@@ -719,16 +762,17 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
         return {false, "MemoryApplyFailed", error};
       for (auto row : table.rows) {
         if (tls.contains("frontend") && tls["frontend"].contains("require_tls") &&
-            table.name == "mysql_users" && row["frontend"] == 1)
+            table.name.substr(6) == "users" && row["frontend"] == 1)
           row["use_ssl"] = int(tls["frontend"]["require_tls"].get<bool>());
         if (tls.contains("backend") && tls["backend"].contains("require_tls") &&
-            table.name == "mysql_servers")
+            table.name.substr(6) == "servers")
           row["use_ssl"] = int(tls["backend"]["require_tls"].get<bool>());
-        if (table.name == "mysql_servers_ssl_params" &&
+        if (table.name.substr(6) == "servers_ssl_params" &&
             !row["ssl_key"].get_ref<const std::string &>().empty()) {
           if (!GloVars.datadir)
             return {false, "TlsApplyFailed", "TLS datadir is unavailable"};
-          const auto path = endpoint_key_path(p.document["identity"]["deployment_id"], row);
+          const auto path =
+              endpoint_key_path(p.document["identity"]["deployment_id"], row, p.prefix);
           if (!write_material(path, row["ssl_key"], error))
             return {false, "TlsApplyFailed", error};
           row["ssl_key"] = path;
@@ -739,7 +783,7 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
     }
     MySQL_ServerHealthPreservationKeys preserve_health;
     const auto desired_servers =
-        rows(db, "SELECT hostgroup_id,hostname,port,status FROM mysql_servers", error);
+        rows(db, "SELECT hostgroup_id,hostname,port,status FROM " + p.prefix + "_servers", error);
     if (!error.empty())
       return {false, "MemoryApplyFailed", error};
     for (const auto &desired : desired_servers)
@@ -749,26 +793,36 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
                                   desired["hostname"].get<std::string>(),
                                   desired["port"].get<unsigned int>());
     bool servers = false;
-    {
+    if (p.pgsql) {
+      GloAdmin->pgsql_servers_wrlock();
+      Unlock unlock{[] { GloAdmin->pgsql_servers_wrunlock(); }};
+      servers = GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, true, &preserve_health);
+    } else {
       GloAdmin->mysql_servers_wrlock();
       Unlock unlock{[] { GloAdmin->mysql_servers_wrunlock(); }};
       servers = GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, true, &preserve_health);
     }
-    if (!servers)
+    if (!servers) {
+      const auto &veto = GloAdmin->servers_load_veto[p.pgsql ? 1 : 0];
       return {false, "ServersApplyFailed",
-              GloAdmin->servers_load_veto[0].empty()
-                  ? "existing MySQL server loader rejected configuration"
-                  : GloAdmin->servers_load_veto[0]};
+              veto.empty() ? "existing engine server loader rejected configuration" : veto};
+    }
     auto users = std::unique_ptr<SQLite3_result>();
     char *sqlite_error = nullptr;
     int columns = 0, affected = 0;
     SQLite3_result *raw = nullptr;
-    db.execute_statement(
-        "SELECT "
-        "username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_"
-        "persistent,fast_forward,backend,frontend,max_connections,attributes,comment FROM "
-        "mysql_users WHERE active=1 ORDER BY username,backend DESC",
-        &sqlite_error, &columns, &affected, &raw);
+    const std::string user_query =
+        p.pgsql ? "SELECT "
+                  "username,password,use_ssl,default_hostgroup,transaction_"
+                  "persistent,fast_forward,backend,frontend,max_connections,"
+                  "attributes,comment FROM pgsql_users WHERE active=1 ORDER BY "
+                  "username,backend DESC"
+                : "SELECT "
+                  "username,password,use_ssl,default_hostgroup,default_schema,"
+                  "schema_locked,transaction_persistent,fast_forward,backend,"
+                  "frontend,max_connections,attributes,comment FROM "
+                  "mysql_users WHERE active=1 ORDER BY username,backend DESC";
+    db.execute_statement(user_query.c_str(), &sqlite_error, &columns, &affected, &raw);
     users.reset(raw);
     if (sqlite_error) {
       error = sqlite_error;
@@ -781,26 +835,34 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
     {
       pthread_mutex_lock(&users_mutex);
       Unlock unlock{[] { pthread_mutex_unlock(&users_mutex); }};
-      authenticated = GloAdmin->init_users_under_lock(std::move(users), error);
+      authenticated = p.pgsql ? GloAdmin->init_pgsql_users_under_lock(std::move(users), error)
+                              : GloAdmin->init_users_under_lock(std::move(users), error);
     }
     if (!authenticated)
       return {false, "UsersApplyFailed", error};
-    char *rules_error = GloAdmin->load_mysql_query_rules_to_runtime();
+    char *rules_error = p.pgsql ? GloAdmin->load_pgsql_query_rules_to_runtime()
+                                : GloAdmin->load_mysql_query_rules_to_runtime();
     if (rules_error) {
       error = rules_error;
       free(rules_error);
       return {false, "RulesApplyFailed", error};
     }
-    bool mysql_variables = false, admin_variables = false;
+    bool engine_variables = false, admin_variables = false;
     for (const auto &kv : p.variables) {
-      const bool mysql = kv.first.compare(0, 6, "mysql-") == 0;
+      const bool engine = kv.first.compare(0, 6, p.prefix + "-") == 0;
       const std::string name = kv.first.substr(6);
       bool accepted;
-      if (mysql) {
-        GloMTH->wrlock();
-        Unlock unlock{[] { GloMTH->wrunlock(); }};
-        accepted = GloMTH->set_variable(name.c_str(), kv.second.c_str());
-        mysql_variables = true;
+      if (engine) {
+        if (p.pgsql) {
+          GloPTH->wrlock();
+          Unlock unlock{[] { GloPTH->wrunlock(); }};
+          accepted = GloPTH->set_variable(const_cast<char *>(name.c_str()), kv.second.c_str());
+        } else {
+          GloMTH->wrlock();
+          Unlock unlock{[] { GloMTH->wrunlock(); }};
+          accepted = GloMTH->set_variable(name.c_str(), kv.second.c_str());
+        }
+        engine_variables = true;
       } else {
         accepted = GloAdmin->set_managed_variable_locked(name, kv.second);
         admin_variables = true;
@@ -814,7 +876,11 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
           !insert(db, globals, {{"variable_name", kv.first}, {"variable_value", kv.second}}, error))
         return {false, "VariablesApplyFailed", error};
     }
-    if (mysql_variables) {
+    if (engine_variables && p.pgsql) {
+      GloPTH->wrlock();
+      Unlock unlock{[] { GloPTH->wrunlock(); }};
+      GloPTH->commit();
+    } else if (engine_variables) {
       GloMTH->wrlock();
       Unlock unlock{[] { GloMTH->wrunlock(); }};
       const auto result = GloMTH->commit();
@@ -825,7 +891,12 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
     if (admin_variables && !GloAdmin->commit_managed_admin_variables_locked(error))
       return {false, "VariablesApplyFailed", error};
     if (p.listeners_changed) {
-      {
+      if (p.pgsql) {
+        GloPTH->wrlock();
+        Unlock unlock{[] { GloPTH->wrunlock(); }};
+        if (!GloPTH->apply_interfaces_under_lock(p.interfaces.c_str(), error))
+          return {false, "ListenersApplyFailed", error};
+      } else {
         GloMTH->wrlock();
         Unlock unlock{[] { GloMTH->wrunlock(); }};
         if (!GloMTH->apply_interfaces_under_lock(p.interfaces.c_str(), error))
@@ -833,19 +904,155 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
       }
       Table globals;
       globals.name = "global_variables";
-      if (!execute(db, "DELETE FROM global_variables WHERE variable_name='mysql-interfaces'",
+      if (!execute(db,
+                   "DELETE FROM global_variables WHERE variable_name=" +
+                       quote(p.prefix + "-interfaces"),
                    error) ||
           !insert(db, globals,
-                  {{"variable_name", "mysql-interfaces"}, {"variable_value", p.interfaces}}, error))
+                  {{"variable_name", p.prefix + "-interfaces"}, {"variable_value", p.interfaces}},
+                  error))
         return {false, "ListenersApplyFailed", error};
     }
     return {true, "", ""};
   } catch (const std::exception &) {
-    return {false, "RuntimeApplyFailed", "existing MySQL runtime operation failed"};
+    return {false, "RuntimeApplyFailed", "existing engine runtime operation failed"};
   }
 }
 void proxysql_destroy_managed_prepared_runtime(ManagedPreparedRuntime *prepared) noexcept {
   delete prepared;
+}
+bool proxysql_detect_managed_admin_memory_drift_locked(const ManagedRuntimePlan &plan,
+                                                       bool &detected,
+                                                       std::vector<std::string> &modules,
+                                                       std::string &error) {
+  detected = false;
+  modules.clear();
+  error.clear();
+  ManagedPreparedRuntime *raw = nullptr;
+  if (!proxysql_prepare_managed_runtime_locked(plan, &raw, error))
+    return false;
+  std::unique_ptr<ManagedPreparedRuntime> prepared(raw);
+  const auto &p = *prepared;
+  const auto &tls = p.document["tls"];
+  std::set<std::string> changed;
+  auto sorted = [](const json &values) {
+    std::vector<std::string> normalized;
+    for (const auto &row : values)
+      normalized.push_back(row.dump());
+    std::sort(normalized.begin(), normalized.end());
+    return normalized;
+  };
+  for (const auto &table : p.tables) {
+    auto expected = table.rows;
+    for (auto &row : expected) {
+      if (table.name.substr(6) == "users" && row["frontend"] == 1 && tls.contains("frontend") &&
+          tls["frontend"].contains("require_tls"))
+        row["use_ssl"] = int(tls["frontend"]["require_tls"].get<bool>());
+      if (table.name.substr(6) == "servers" && tls.contains("backend") &&
+          tls["backend"].contains("require_tls"))
+        row["use_ssl"] = int(tls["backend"]["require_tls"].get<bool>());
+      if (table.name.substr(6) == "servers_ssl_params" &&
+          !row["ssl_key"].get_ref<const std::string &>().empty()) {
+        if (!GloVars.datadir) {
+          error = "TLS datadir is unavailable for observation";
+          return false;
+        }
+        row["ssl_key"] = endpoint_key_path(p.document["identity"]["deployment_id"], row, p.prefix);
+      }
+    }
+    const auto actual =
+        rows(*GloAdmin->admindb, "SELECT * FROM " + table.name + " WHERE " + table.removal, error);
+    if (!error.empty())
+      return false;
+    if (sorted(expected) != sorted(actual))
+      changed.insert(table.name);
+  }
+  auto expected_variables = p.variables;
+  std::set<std::string> tls_variables;
+  for (const auto *material : {"trust_pem", "certificate_pem", "key_pem"})
+    if (tls.contains(material)) {
+      if (!GloVars.datadir) {
+        error = "TLS datadir is unavailable for observation";
+        return false;
+      }
+      const std::string stem = std::string(material) == "trust_pem"
+                                   ? "ca"
+                                   : (std::string(material) == "certificate_pem" ? "cert" : "key");
+      const std::string name = p.prefix + "-ssl_p2s_" + stem;
+      expected_variables[name] =
+          std::string(GloVars.datadir) +
+          (p.pgsql ? "/proxysql-managed-pgsql-backend-" : "/proxysql-managed-backend-") + stem +
+          ".pem";
+      tls_variables.insert(name);
+    }
+  for (const auto &variable : expected_variables) {
+    auto actual = rows(*GloAdmin->admindb,
+                       "SELECT variable_value FROM global_variables WHERE variable_name=" +
+                           quote(variable.first),
+                       error);
+    if (!error.empty())
+      return false;
+    if (actual.size() != 1 || actual[0]["variable_value"] != variable.second)
+      changed.insert(tls_variables.count(variable.first)
+                         ? p.prefix + "_tls"
+                         : (variable.first.compare(0, 6, "admin-") == 0 ? "admin_variables"
+                                                                        : p.prefix + "_variables"));
+  }
+  const auto &scope = p.document["scope"]["listeners"];
+  if (!scope.empty() || !p.document["listeners"].empty()) {
+    std::set<std::string> addresses, expected, actual;
+    for (const auto &address : scope) {
+      std::string normalized;
+      listener_address(address.get<std::string>(), normalized);
+      addresses.insert(normalized);
+    }
+    for (const auto &listener : p.document["listeners"]) {
+      std::string normalized;
+      listener_address(listener["address"], normalized);
+      expected.insert(normalized + ":" + std::to_string(listener["port"].get<int>()));
+    }
+    auto memory = rows(*GloAdmin->admindb,
+                       "SELECT variable_value FROM global_variables WHERE variable_name=" +
+                           quote(p.prefix + "-interfaces"),
+                       error);
+    if (!error.empty())
+      return false;
+    std::string source = memory.empty() ? "" : memory[0]["variable_value"].get<std::string>();
+    for (size_t begin = 0; begin < source.size();) {
+      auto end = source.find(';', begin);
+      auto item = source.substr(begin, end == std::string::npos ? end : end - begin);
+      for (const auto &address : addresses)
+        if (item == address || item.compare(0, address.size() + 1, address + ":") == 0)
+          actual.insert(item);
+      if (end == std::string::npos)
+        break;
+      begin = end + 1;
+    }
+    if (expected != actual)
+      changed.insert(p.prefix + "_listeners");
+  }
+  modules.assign(changed.begin(), changed.end());
+  detected = !modules.empty();
+  return true;
+}
+
+std::optional<std::vector<ProxySQL_ServerRow>>
+proxysql_current_server_runtime_rows(ProxySQL_ServerProtocol protocol) {
+  std::unique_ptr<SQLite3_result> runtime;
+  if (protocol == ProxySQL_ServerProtocol::mysql) {
+    if (!MyHGM)
+      return std::nullopt;
+    runtime.reset(MyHGM->dump_table_mysql("mysql_servers"));
+  } else if (protocol == ProxySQL_ServerProtocol::pgsql) {
+    if (!PgHGM)
+      return std::nullopt;
+    runtime.reset(PgHGM->dump_table_pgsql("pgsql_servers"));
+  } else {
+    return std::nullopt;
+  }
+  if (!runtime || runtime->columns != (protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11))
+    return std::nullopt;
+  return proxysql_server_runtime_snapshot_from_rows(protocol, 0, *runtime).servers;
 }
 bool ProxySQL_Admin::set_managed_variable_locked(const std::string &name,
                                                  const std::string &value) {
@@ -857,10 +1064,12 @@ bool ProxySQL_Admin::commit_managed_admin_variables_locked(std::string &error) {
   {
     wrlock();
     Unlock unlock{[this] { wrunlock(); }};
-    // Refresh the existing runtime checksum from live values without loading unrelated memory
-    // intent.
+    // Refresh the existing runtime checksum from live values without loading
+    // unrelated memory intent.
     if (!execute(*admindb,
-                 "DELETE FROM runtime_global_variables WHERE variable_name LIKE 'admin-%'", error))
+                 "DELETE FROM runtime_global_variables WHERE variable_name "
+                 "LIKE 'admin-%'",
+                 error))
       return false;
     char **names = get_variables_list();
     Unlock free_names{[names] {
@@ -882,8 +1091,9 @@ bool ProxySQL_Admin::commit_managed_admin_variables_locked(std::string &error) {
     Unlock checksum_unlock{[] { pthread_mutex_unlock(&GloVars.checksum_mutex); }};
     flush_GENERIC_variables__checksum__database_to_runtime("admin", "", 0);
   }
-  // Preparation excludes endpoint lifecycle settings. Refresh operational values without
-  // entering synchronous HTTP shutdown/start from the current managed request callback.
+  // Preparation excludes endpoint lifecycle settings. Refresh operational
+  // values without entering synchronous HTTP shutdown/start from the current
+  // managed request callback.
   admin___web_verbosity = variables.web_verbosity;
   return true;
 }

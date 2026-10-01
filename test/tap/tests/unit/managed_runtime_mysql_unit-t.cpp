@@ -3,6 +3,7 @@
 #include "ProxySQL_ConfigurationAccess.h"
 #include "ProxySQL_ManagedRuntime.h"
 #include "ProxySQL_Statistics.hpp"
+#include "ProxySQL_ServerDiscovery.h"
 #include "Web_Interface.hpp"
 #include "cpp.h"
 #include "json.hpp"
@@ -386,6 +387,36 @@ int main() {
      "runtime activation never writes or transacts on the service store");
   proxysql_destroy_managed_prepared_runtime(prepared);
 
+  bool drift = true;
+  std::vector<std::string> drift_modules;
+  std::string drift_error;
+  auto observe_drift = [&] {
+    return proxysql_detect_managed_admin_memory_drift_locked(
+        {"unit-deployment", d.dump()}, drift, drift_modules, drift_error);
+  };
+  ok(observe_drift() && !drift && drift_modules.empty(),
+     "MySQL Admin memory drift observation begins clean and ignores unrelated pending values");
+  db.execute("UPDATE mysql_servers SET max_connections=41 WHERE hostgroup_id=10");
+  db.execute("UPDATE global_variables SET variable_value='1700' WHERE variable_name='mysql-poll_timeout'");
+  GloMTH->wrlock();
+  GloMTH->set_variable("poll_timeout", "1700");
+  GloMTH->commit();
+  GloMTH->wrunlock();
+  GloAdmin->mysql_servers_wrlock();
+  GloAdmin->load_mysql_servers_to_runtime();
+  GloAdmin->mysql_servers_wrunlock();
+  ok(observe_drift() && drift &&
+         std::find(drift_modules.begin(), drift_modules.end(), "mysql_servers") != drift_modules.end() &&
+         std::find(drift_modules.begin(), drift_modules.end(), "mysql_variables") != drift_modules.end(),
+     "legacy MySQL table/variable override and LOAD is visible in scoped Admin memory");
+  prepared = nullptr;
+  const bool drift_ready = prepare(d, &prepared, error);
+  if (drift_ready)
+    result = proxysql_activate_managed_runtime_locked(*prepared, 1);
+  ok(drift_ready && result.applied && observe_drift() && !drift,
+     "MySQL API reapply clears observed Admin memory drift");
+  proxysql_destroy_managed_prepared_runtime(prepared);
+
   // Existing transient health survives when canonical status is unchanged.
   MyHGM->wrlock();
   auto *managed = MyHGM->find_server_in_hg(10, "managed.test", 3306);
@@ -421,6 +452,17 @@ int main() {
       if (std::string(row->fields[0]) == "10" && std::string(row->fields[4]) == "SHUNNED")
         runtime_shun = true;
   ok(runtime_shun, "normal HGM runtime view includes preserved SHUN");
+  const auto current_rows = proxysql_current_server_runtime_rows(ProxySQL_ServerProtocol::mysql);
+  bool current_shun = false;
+  if (current_rows)
+    for (const auto &row : *current_rows)
+      if (row.hostgroup_id == 10 && row.hostname == "managed.test" && row.status == "SHUNNED")
+        current_shun = true;
+  ok(current_shun, "copied MySQL current runtime rows preserve transient health under Admin mutex");
+  ok(observe_drift() && !drift,
+     "MySQL Admin memory drift excludes transient runtime health");
+  ok(!proxysql_current_server_runtime_rows(static_cast<ProxySQL_ServerProtocol>(255)),
+     "current runtime row helper rejects an unknown protocol");
   auto *runtime_checksum_rows = MyHGM->get_current_mysql_table("cluster_mysql_servers");
   bool checksum_intent = false;
   if (runtime_checksum_rows)

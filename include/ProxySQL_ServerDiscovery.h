@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -61,6 +62,10 @@ ProxySQL_ServerRuntimeSnapshot proxysql_server_runtime_snapshot_from_rows(
 	ProxySQL_ServerProtocol protocol, uint64_t generation, const SQLite3_result& rows);
 
 #ifdef PROXYSQL40
+// Copied native HGM runtime rows, including transient health. Safe with or without the
+// caller's Admin SQL mutex; takes only the existing HGM runtime dump lock. No Cluster projection.
+std::optional<std::vector<ProxySQL_ServerRow>> proxysql_current_server_runtime_rows(
+	ProxySQL_ServerProtocol protocol);
 bool proxysql_reconcile_mysql_server_desired_set(
 	const ProxySQL_ServerDesiredSet& desired_set, std::string& error);
 bool proxysql_reconcile_pgsql_server_desired_set(

@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 struct ManagedRuntimePlan {
  std::string deployment_id;
@@ -33,6 +34,14 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(
  ManagedPreparedRuntime& prepared, uint64_t desired_revision);
 /** @brief Release a prepared object; nullptr is allowed. */
 void proxysql_destroy_managed_prepared_runtime(ManagedPreparedRuntime*) noexcept;
+/**
+ * Observe scoped Admin memory drift under the existing configuration lock.
+ * Compares mapped rows/settings and observable TLS/listener configuration only;
+ * excludes HGM health/discovery, effective runtime and TLS file contents. Modules
+ * contain names only, never the compared values. False denotes observation failure.
+ */
+bool proxysql_detect_managed_admin_memory_drift_locked(const ManagedRuntimePlan&,
+ bool& detected, std::vector<std::string>& modules, std::string& error);
 
 // These operations perform no network calls or plugin disk transactions.
 // Preparation does not introduce an atomic runtime engine or rollback.

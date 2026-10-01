@@ -4,6 +4,7 @@
 #include "cpp.h"
 #include "proxysql_gtid.h"
 #include "proxysql_admin.h"
+#include "ProxySQL_ServerHealth.h"
 #ifdef PROXYSQL40
 #include "ProxySQL_Plugin.h"
 #endif
@@ -724,6 +725,8 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		bool only_commit_runtime_pgsql_servers = true,
 		bool update_version = false
 	);
+	bool commit(const peer_runtime_pgsql_servers_t&, const peer_pgsql_servers_v2_t&,
+		bool only_runtime, bool update_version, const PgSQL_ServerHealthPreservationKeys*);
 	/**
 	 * @brief Extracted from 'commit'. Performs the following actions:
 	 *  1. Re-generates the 'myhgm.pgsql_servers' table.
@@ -892,6 +895,8 @@ private:
 		const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
 		const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
 		bool only_commit_runtime_pgsql_servers, bool update_version);
+	bool commit_locked(const peer_runtime_pgsql_servers_t&, const peer_pgsql_servers_v2_t&,
+		bool only_runtime, bool update_version, const PgSQL_ServerHealthPreservationKeys*);
 	void finish_commit(unsigned long long started_at);
 	/**
 	 * @brief Rebuilds 'hostgroup_server_mapping' when its inputs changed.

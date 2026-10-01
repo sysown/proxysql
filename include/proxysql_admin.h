@@ -601,6 +601,8 @@ class ProxySQL_Admin {
 
 	// PostgreSQL
 	void __refresh_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	void __refresh_pgsql_users(std::unique_ptr<SQLite3_result>&&, const std::string&, time_t,
+		bool local_snapshot);
 	//void __add_active_pgsql_users(char* user = NULL);
 	//void __delete_inactive_pgsql_users();
 	void flush_pgsql_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
@@ -956,6 +958,9 @@ class ProxySQL_Admin {
 	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
 
 	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+#ifdef PROXYSQL40
+	bool init_pgsql_users_under_lock(std::unique_ptr<SQLite3_result>&&, std::string& error);
+#endif
 	void flush_pgsql_users__from_memory_to_disk();
 	void flush_pgsql_users__from_disk_to_memory();
 
@@ -963,6 +968,8 @@ class ProxySQL_Admin {
 
 	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
 		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {}, bool emit_runtime_install = true);
+	bool load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t&, const runtime_pgsql_servers_checksum_t&,
+		const pgsql_servers_v2_checksum_t&, bool emit_runtime_install, const PgSQL_ServerHealthPreservationKeys*);
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);
