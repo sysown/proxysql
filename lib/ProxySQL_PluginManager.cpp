@@ -767,7 +767,7 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	// safe via the tail-append pattern -- fields the plugin didn't define
 	// are never dereferenced (see handling of register_schemas below).
 	//
-	// abi_version carries the ABI 1..11 layout-version number in its low
+	// abi_version carries the ABI 1..12 layout-version number in its low
 	// bits and PROXYSQL_PLUGIN_ABI_DEBUG_BIT as a separate, independent
 	// tag (see the long comment on PROXYSQL_PLUGIN_ABI_DEBUG_BIT in
 	// ProxySQL_Plugin.h for the dump_pkt/DSS-offset-shift mechanism this
@@ -872,7 +872,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		//
 		// abi_version must be masked before this comparison: it carries
 		// PROXYSQL_PLUGIN_ABI_DEBUG_BIT in a high bit orthogonal to the
-		// ABI 1..11 layout-version number (see the contract comment next
+		// ABI 1..12 layout-version number (see the contract comment next
 		// to PROXYSQL_PLUGIN_ABI_DEBUG_BIT in ProxySQL_Plugin.h). A
 		// DEBUG-tagged ABI-1 descriptor has abi_version == 0x40000001,
 		// which satisfies a raw ">= 2u" and would wrongly dereference
@@ -1109,6 +1109,101 @@ bool ProxySQL_PluginManager::stop_all() {
 	}
 
 	return ok;
+}
+
+bool proxysql_validate_managed_configuration_service(
+ const ProxySQL_ManagedConfigurationServiceV1* service, std::string& error) {
+ error.clear();
+ if (service == nullptr) error = "required managed configuration service is missing";
+ else if (service->abi_version != PROXYSQL_MANAGED_CONFIGURATION_ABI)
+  error = "unsupported managed configuration service ABI";
+ else if (service->struct_size < sizeof(ProxySQL_ManagedConfigurationServiceV1))
+  error = "truncated managed configuration service";
+ else if (service->verify_sigv4 == nullptr || service->invoke == nullptr ||
+          service->bootstrap == nullptr || service->restore == nullptr)
+  error = "managed configuration service requires authentication, dispatch, bootstrap and restore callbacks";
+ return error.empty();
+}
+
+bool ProxySQL_PluginManager::check_managed_configuration_provider(std::string& error) const {
+ error.clear();
+ size_t providers = 0;
+ for (const auto& plugin : plugins_) {
+  // Never dereference the ABI12 tail of an older descriptor.
+  if (plugin_layout_version(plugin.descriptor) >= 12u &&
+      plugin.descriptor->managed_configuration_service != nullptr) ++providers;
+ }
+ if (providers != 1) {
+  error = "aws_managed requires exactly one ABI12 management provider";
+  return false;
+ }
+ return true;
+}
+
+const ProxySQL_ManagedConfigurationServiceV1*
+ProxySQL_PluginManager::managed_configuration_service(std::string& error) const {
+ if (!check_managed_configuration_provider(error)) return nullptr;
+ for (const auto& plugin : plugins_) {
+  if (plugin_layout_version(plugin.descriptor) < 12u ||
+      plugin.descriptor->managed_configuration_service == nullptr) continue;
+  if (!plugin.initialized || plugin.stopped) {
+   error = "managed configuration provider is not initialized";
+   return nullptr;
+  }
+  try {
+   const auto* service = plugin.descriptor->managed_configuration_service();
+   return proxysql_validate_managed_configuration_service(service, error) ? service : nullptr;
+  } catch (...) {
+   error = "managed configuration service accessor threw an exception";
+   return nullptr;
+  }
+ }
+ return nullptr;
+}
+
+bool proxysql_start_managed_configuration(ProxySQL_PluginManager* manager,
+ Web_Interface* web, proxysql_web_bind_managed_configuration_v1_t binder,
+ const std::string* manifest_json, std::string& error) {
+ error.clear();
+ if (manager == nullptr || web == nullptr || binder == nullptr) {
+  error = "aws_managed requires the management provider, web plugin and v1 binder";
+  return false;
+ }
+ const auto* service = manager->managed_configuration_service(error);
+ if (service == nullptr) return false;
+ try {
+  if (!binder(web, service, error)) {
+   if (error.empty()) error = "managed web binder rejected the service";
+   return false;
+  }
+  const auto result = manifest_json == nullptr ? service->restore(service->context) :
+   service->bootstrap(service->context, *manifest_json);
+  if (result.outcome != ManagedOutcome::ok) {
+   error = result.error_code + ": " + result.message;
+   return false;
+  }
+ } catch (...) {
+  error = "managed configuration startup callback threw an exception";
+  return false;
+ }
+ return true;
+}
+
+static bool stop_configured_plugins_impl(std::unique_ptr<ProxySQL_PluginManager>& manager,
+ std::string& error, Web_Interface** drained_web);
+
+bool proxysql_stop_plugins_after_web_drain(Web_Interface*& web,
+ std::unique_ptr<ProxySQL_PluginManager>& manager, std::string& error) {
+ error.clear();
+ // A stop exception gives no proof that handlers drained: retain both plugins
+ // rather than unmapping the provider underneath potentially active calls.
+ if (web != nullptr) {
+  try { web->stop(); } catch (...) {
+   error = "web stop failed to drain handlers";
+   return false;
+  }
+ }
+ return stop_configured_plugins_impl(manager, error, &web);
 }
 
 size_t ProxySQL_PluginManager::size() const {
@@ -2344,9 +2439,10 @@ bool proxysql_runtime_ready_configured_plugins(
 	return manager->runtime_ready_all(context, err);
 }
 
-bool proxysql_stop_configured_plugins(
+static bool stop_configured_plugins_impl(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
-	std::string& err
+	std::string& err,
+	Web_Interface** drained_web
 ) {
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
@@ -2359,11 +2455,13 @@ bool proxysql_stop_configured_plugins(
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);
 	}
-	if (!manager) {
-		return true;
+	const bool stop_ok = !manager || manager->stop_all();
+	// The caller has drained handlers. Stop provider controllers first, then
+	// destroy web while both DSOs are still mapped, then retire the chassis.
+	if (drained_web != nullptr) {
+		delete *drained_web;
+		*drained_web = nullptr;
 	}
-
-	const bool stop_ok = manager->stop_all();
 	// Always tear down the manager so the .so is unmapped and no stale function
 	// pointers remain reachable. stop_all() is idempotent across failure (each
 	// plugin is marked stopped after one attempt) so the destructor's stop_all()
@@ -2374,6 +2472,12 @@ bool proxysql_stop_configured_plugins(
 		return false;
 	}
 	return true;
+}
+
+
+bool proxysql_stop_configured_plugins(
+ std::unique_ptr<ProxySQL_PluginManager>& manager, std::string& err) {
+ return stop_configured_plugins_impl(manager, err, nullptr);
 }
 
 void proxysql_reset_active_manager_pin_acquisitions_for_test() {

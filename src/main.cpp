@@ -6,6 +6,8 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <thread>
 #include "btree_map.h"
 #include "proxysql.h"
@@ -116,6 +118,10 @@ void * __mysql_ldap_auth;
 
 volatile create_Web_Interface_t * create_Web_Interface = NULL;
 void * __web_interface;
+#ifdef PROXYSQL40
+static proxysql_web_bind_managed_configuration_v1_t managed_web_binder = nullptr;
+static int managed_startup_exit_code = -1;
+#endif
 
 #ifdef PROXYSQL40
 static std::unique_ptr<ProxySQL_PluginManager> GloPluginManager;
@@ -859,6 +865,12 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.sqlite3_plugin=strdup(sqlite3_plugin.c_str());
 			}
 		}
+#ifdef PROXYSQL40
+		if (root.exists("aws_managed") && !root.lookupValue("aws_managed", GloVars.aws_managed)) {
+			proxy_error("aws_managed must be a boolean\n");
+			exit(EXIT_FAILURE);
+		}
+#endif
 		if (root.exists("web_interface_plugin")==true) {
 			string web_interface_plugin;
 			bool rc;
@@ -908,6 +920,25 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			exit(EXIT_SUCCESS); // we exit gracefully to avoid restart
 		}
 	}
+#ifdef PROXYSQL40
+	if (GloVars.opt->isSet("--aws-managed-bootstrap") && GloVars.aws_managed_bootstrap.empty()) {
+		proxy_error("--aws-managed-bootstrap requires a manifest path\n");
+		exit(EXIT_FAILURE);
+	}
+	if (!GloVars.aws_managed && !GloVars.aws_managed_bootstrap.empty()) {
+		proxy_error("--aws-managed-bootstrap requires aws_managed=true\n");
+		exit(EXIT_FAILURE);
+	}
+	if (GloVars.aws_managed) {
+		std::string error;
+		if (GloVars.no_plugins || GloPluginManager == nullptr ||
+		    GloVars.web_interface_plugin == nullptr ||
+		    !GloPluginManager->check_managed_configuration_provider(error)) {
+			proxy_error("aws_managed requires the AWS management and web plugins: %s\n", error.c_str());
+			exit(EXIT_FAILURE);
+		}
+	}
+#endif
 	char *t=getcwd(NULL, 512);
 	if (GloVars.__cmd_proxysql_datadir==NULL) {
 		// datadir was not specified , try to read config file
@@ -1491,6 +1522,17 @@ static void LoadPlugins() {
 			exit(EXIT_FAILURE);
 		} else {
 			GloWebInterface = create_Web_Interface();
+#ifdef PROXYSQL40
+			if (GloVars.aws_managed) {
+				dlerror();
+				managed_web_binder = reinterpret_cast<proxysql_web_bind_managed_configuration_v1_t>(
+					dlsym(__web_interface, "proxysql_web_bind_managed_configuration_v1"));
+				if (dlerror() != nullptr || managed_web_binder == nullptr || GloWebInterface == nullptr) {
+					proxy_error("aws_managed requires the web managed configuration v1 binder\n");
+					exit(EXIT_FAILURE);
+				}
+			}
+#endif
 			if (GloWebInterface) {
 				//GloAdmin->init_WebInterfacePlugin();
 				//GloAdmin->load_ldap_variables_to_runtime();
@@ -1603,13 +1645,6 @@ static void RunConfiguredPluginsRuntimeReady() {
 	}
 }
 
-static void StopConfiguredPlugins() {
-	if (GloVars.no_plugins) return;
-	std::string plugin_error {};
-	if (!proxysql_stop_configured_plugins(GloPluginManager, plugin_error)) {
-		proxy_error("%s during shutdown\n", plugin_error.c_str());
-	}
-}
 #endif /* PROXYSQL40 */
 
 /**
@@ -1618,11 +1653,17 @@ static void StopConfiguredPlugins() {
  */
 void UnloadPlugins() {
 #ifdef PROXYSQL40
-	StopConfiguredPlugins();
-#endif /* PROXYSQL40 */
-	if (GloWebInterface) {
-		GloWebInterface->stop();
+	std::string error;
+	if (!proxysql_stop_plugins_after_web_drain(GloWebInterface, GloPluginManager, error)) {
+		proxy_error("%s during shutdown\n", error.c_str());
+		// Failure to drain cannot safely continue into core-module destruction
+		// or static plugin-manager destructors. Process exit stops all threads.
+		_Exit(EXIT_FAILURE);
 	}
+	managed_web_binder = nullptr;
+#else
+	if (GloWebInterface) GloWebInterface->stop();
+#endif
 }
 
 void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_info) {
@@ -1781,6 +1822,38 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_success) exit(EXIT_SUCCESS);
 	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_failure) exit(EXIT_FAILURE);
 	InitConfiguredPlugins();
+	if (GloVars.aws_managed) {
+		std::string manifest_json, error;
+		const std::string* manifest = nullptr;
+		if (!GloVars.aws_managed_bootstrap.empty()) {
+			std::ifstream input(GloVars.aws_managed_bootstrap);
+			if (!input) {
+				proxy_error("Cannot read managed bootstrap manifest\n");
+				managed_startup_exit_code = EXIT_FAILURE;
+				return false;
+			}
+			std::ostringstream contents;
+			contents << input.rdbuf();
+			if (input.bad()) {
+				proxy_error("Failed reading managed bootstrap manifest\n");
+				managed_startup_exit_code = EXIT_FAILURE;
+				return false;
+			}
+			manifest_json = contents.str();
+			manifest = &manifest_json;
+		}
+		if (!proxysql_start_managed_configuration(GloPluginManager.get(),
+			GloWebInterface, managed_web_binder, manifest, error)) {
+			proxy_error("Managed configuration startup failed: %s\n", error.c_str());
+			managed_startup_exit_code = EXIT_FAILURE;
+			return false;
+		}
+		if (manifest != nullptr) {
+			// A local one-shot installation exits after normal draining/teardown.
+			managed_startup_exit_code = EXIT_SUCCESS;
+			return false;
+		}
+	}
 	StartConfiguredPlugins();
 
 	// Runtime-ready callbacks run only now: HGM, Auth, QPro, and MTH all
@@ -1935,6 +2008,18 @@ void ProxySQL_Main_init_phase4___shutdown() {
 	// Stop accepting admin work and wait for all detached admin clients before
 	// the modules used by admin queries are joined or destroyed.
 	GloAdmin->shutdown_threads();
+	// Admin cannot restart HTTP after this point. Drain web handlers while
+	// the AWS service and all core runtime dependencies are still alive.
+	UnloadPlugins();
+#ifdef PROXYSQL40
+	if (managed_startup_exit_code >= 0) {
+		// A one-shot installation or failed recovery exits before
+		// start_listeners(), which normally releases these existing startup
+		// waits. Release them for teardown without opening any listeners.
+		GloMTH->bootstrapping_listeners = false;
+		GloPTH->bootstrapping_listeners = false;
+	}
+#endif
 	ProxySQL_Main_join_all_threads();
 #ifdef PROXYSQL40
 	// The locality manager can retain a provider lease between refreshes.
@@ -3377,11 +3462,13 @@ __start_label:
 	watchdog_main_loop();
 
 __shutdown:
+#ifdef PROXYSQL40
+	if (managed_startup_exit_code >= 0) {
+		__atomic_store_n(&glovars.shutdown, 1, __ATOMIC_RELEASE);
+	}
+#endif
 
 	proxy_info("Starting shutdown...\n");
-
-	// First shutdown step is to unload plugins
-	UnloadPlugins();
 
 	ProxySQL_Main_init_phase4___shutdown();
 
@@ -3414,6 +3501,9 @@ finish:
 			dlclose(__mysql_ldap_auth);
 		}
 	}
+#endif
+#ifdef PROXYSQL40
+	if (managed_startup_exit_code >= 0) return managed_startup_exit_code;
 #endif
 	return 0;
 }

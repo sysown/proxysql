@@ -682,6 +682,8 @@ include $(PROXYSQL_PATH)/test/tap/ai_genai_unit_tests.mk
 ifeq ($(PROXYSQL40),1)
 # mysqlx + plugin + test_mysqlx unit tests: always built under PROXYSQL40=1.
 UNIT_TESTS += \
+	managed_configuration_contract_unit-t \
+	managed_configuration_lifecycle_unit-t \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \
@@ -1430,7 +1432,23 @@ pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
 .SILENT: clean
 clean:
 	rm -rf $(ODIR)
-	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ROUTER_CONTRACT_FAKE_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO) \
+	rm -f $(MANAGED_FAKE_PROVIDER_SO) $(MANAGED_FAKE_PROVIDER2_SO) *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ROUTER_CONTRACT_FAKE_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO) \
 		$(FAKE_PLUGIN_ABI10_SO) $(FAKE_SERVER_MODULE_ABI11_PREFIX_SO)
 	rm -f $(STAGED_LIBPROXYSQLSO) $(addsuffix .tmp,$(STAGED_LIBPROXYSQLSO))
 	rm -f $(PROXYSQL_LDIR)/libproxysql.so
+
+MANAGED_FAKE_PROVIDER2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_managed_configuration2.so
+MANAGED_FAKE_PROVIDER_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_managed_configuration.so
+$(MANAGED_FAKE_PROVIDER_SO): $(TEST_HELPERS_DIR)/fake_managed_configuration_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS)
+
+$(MANAGED_FAKE_PROVIDER2_SO): $(TEST_HELPERS_DIR)/fake_managed_configuration_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) \
+		-DPROXYSQL_MANAGED_FAKE_NAME=\"fake_managed2\"
+
+managed_configuration_lifecycle_unit-t: managed_configuration_lifecycle_unit-t.cpp $(MANAGED_FAKE_PROVIDER_SO) $(MANAGED_FAKE_PROVIDER2_SO) $(FAKE_PLUGIN_ABI10_SO) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-DPROXYSQL_MANAGED_FAKE_PROVIDER_PATH=\"$(MANAGED_FAKE_PROVIDER_SO)\" \
+		-DPROXYSQL_MANAGED_FAKE_PROVIDER2_PATH=\"$(MANAGED_FAKE_PROVIDER2_SO)\" \
+		-DPROXYSQL_MANAGED_OLD_PLUGIN_PATH=\"$(FAKE_PLUGIN_ABI10_SO)\" \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -ldl -pthread -o $@
