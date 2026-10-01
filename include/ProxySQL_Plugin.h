@@ -56,6 +56,10 @@ namespace prometheus { class Registry; }
 //   ABI 9: appends a V2 scoped-MySQL-publication service. Its plan carries
 //          query-rule attributes separately so every ABI-8 row and callback
 //          remains byte-for-byte compatible.
+//   ABI 10: appends with_admin_db_lock, which runs a plugin callback under
+//          Admin's global SQL mutex so plugin-owned threads can run
+//          transactions on the shared admindb/statsdb connections without
+//          interleaving with Admin sessions (issue #6354).
 //
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //
@@ -125,8 +129,8 @@ namespace prometheus { class Registry; }
 // addition to) the ABI 1..9 forward-compatibility range check below.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
 
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 9u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 9u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 10u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 10u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
@@ -471,10 +475,22 @@ struct ProxySQL_PluginServices {
 	ProxySQL_PluginMysqlConfigResult (*apply_mysql_config)(
 		const ProxySQL_PluginMysqlConfigPlan& plan);
 
-	// ABI-9 final tail. ABI-8 plugins retain their original service-table
+	// ABI-9 tail. ABI-8 plugins retain their original service-table
 	// prefix and continue publishing through apply_mysql_config.
 	ProxySQL_PluginMysqlConfigResult (*apply_mysql_config_v2)(
 		const ProxySQL_PluginMysqlConfigPlanV2& plan);
+
+	// ABI-10 final tail. Runs `body(opaque)` while holding Admin's global SQL
+	// mutex -- the lock every Admin session holds while it executes statements
+	// on admindb/statsdb -- and returns body's result. admindb and statsdb are
+	// single SQLite connections shared with Admin, so transaction state is
+	// shared too: a plugin-owned thread that runs BEGIN...COMMIT on them must do
+	// so inside this callback, or its transaction can absorb or roll back an
+	// Admin session's statements (issue #6354). Returns false without calling
+	// body when Admin is unavailable (Phase B stub). body must not throw, and
+	// the caller must not already hold the mutex: Admin command handlers must
+	// first release it through ProxySQL_PluginCommandContext.
+	bool (*with_admin_db_lock)(bool (*body)(void* opaque), void* opaque);
 #endif /* PROXYSQL40 */
 };
 

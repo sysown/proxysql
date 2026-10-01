@@ -8,6 +8,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <stdexcept>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -52,6 +54,38 @@ struct TlsOptions {
 	std::string crl;
 	std::string crlpath;
 };
+
+/**
+ * @brief Runs `body` under Admin's global SQL mutex (ABI-10 with_admin_db_lock).
+ * @details admindb and statsdb are single SQLite connections shared with Admin, so a
+ *   transaction this plugin opens on them from its own thread must not interleave with
+ *   an Admin session's statements (issue #6354). Exceptions thrown by `body` are carried
+ *   across the C-style service callback and rethrown here.
+ * @return body's result.
+ */
+template <typename Body>
+bool mysql_router_with_admin_db_lock(ProxySQL_PluginServices& services, Body&& body) {
+	if (services.with_admin_db_lock == nullptr) {
+		throw std::runtime_error("the Admin DB lock service is unavailable");
+	}
+	struct Call {
+		Body* body;
+		bool result;
+		std::exception_ptr error;
+	} call { &body, false, nullptr };
+	const bool ran = services.with_admin_db_lock([](void* opaque) {
+		auto& current = *static_cast<Call*>(opaque);
+		try {
+			current.result = (*current.body)();
+		} catch (...) {
+			current.error = std::current_exception();
+		}
+		return true;
+	}, &call);
+	if (call.error) std::rethrow_exception(call.error);
+	if (!ran) throw std::runtime_error("the Admin DB lock service is not available yet");
+	return call.result;
+}
 
 /** @brief Canonical MySQL Router spelling of a metadata TLS mode (e.g. "VERIFY_CA"). */
 inline const char* metadata_tls_mode_name(MetadataTlsMode mode) {

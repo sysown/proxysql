@@ -2,6 +2,8 @@
 
 #include "ProxySQL_Plugin.h"
 
+#include <cerrno>
+#include <pthread.h>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -588,6 +590,22 @@ int main() {
 	ok(services != nullptr && services->apply_mysql_config != nullptr &&
 		services->apply_mysql_config_v2 != nullptr,
 		"the live ABI-9 service table exposes both publisher generations");
+	// Issue #6354: plugin threads serialize their admindb/statsdb transactions with
+	// Admin sessions by running them under Admin's global SQL mutex.
+	struct AdminLockProbe {
+		pthread_mutex_t* mutex;
+		bool held_during_body;
+	} admin_lock_probe { &GloAdmin->sql_query_global_mutex, false };
+	const bool admin_lock_ran = services != nullptr && services->with_admin_db_lock != nullptr &&
+		services->with_admin_db_lock([](void* opaque) {
+			auto& probe = *static_cast<AdminLockProbe*>(opaque);
+			probe.held_during_body = pthread_mutex_trylock(probe.mutex) == EBUSY;
+			return true;
+		}, &admin_lock_probe);
+	const bool admin_lock_released = pthread_mutex_trylock(&GloAdmin->sql_query_global_mutex) == 0;
+	if (admin_lock_released) pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+	ok(admin_lock_ran && admin_lock_probe.held_during_body && admin_lock_released,
+		"the ABI-10 with_admin_db_lock service holds Admin's SQL mutex only while its callback runs");
 	const auto generation_one = services != nullptr && services->apply_mysql_config != nullptr
 		? services->apply_mysql_config(generation)
 		: ProxySQL_PluginMysqlConfigResult{};

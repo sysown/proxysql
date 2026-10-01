@@ -151,7 +151,7 @@ DesiredTopology load_cached_topology(SQLite3DB& db, std::string_view topology_uu
 	return topology;
 }
 
-void persist_cached_topology(ProxySQL_PluginServices& services,
+void persist_cached_topology_locked(ProxySQL_PluginServices& services,
 	const DesiredTopology& topology) {
 	SQLite3DB* db = services.get_admindb ? services.get_admindb() : nullptr;
 	if (db == nullptr || !db->execute("BEGIN IMMEDIATE")) {
@@ -188,10 +188,18 @@ void persist_cached_topology(ProxySQL_PluginServices& services,
 	}
 }
 
-bool persist_generation(ProxySQL_PluginServices& services, const char* column,
+// Both writers below run BEGIN...COMMIT on the admindb connection Admin also uses,
+// so they run under Admin's global SQL mutex (issue #6354).
+void persist_cached_topology(ProxySQL_PluginServices& services,
+	const DesiredTopology& topology) {
+	mysql_router_with_admin_db_lock(services, [&] {
+		persist_cached_topology_locked(services, topology);
+		return true;
+	});
+}
+
+bool persist_generation_locked(ProxySQL_PluginServices& services, const char* column,
 	uint64_t generation) {
-	if (std::string_view(column) != "topology_generation" &&
-		std::string_view(column) != "user_generation") return false;
 	SQLite3DB* db = services.get_admindb ? services.get_admindb() : nullptr;
 	if (db == nullptr || !db->execute("BEGIN IMMEDIATE")) return false;
 	const std::string assignment = std::string(column) + "=" + std::to_string(generation);
@@ -201,6 +209,15 @@ bool persist_generation(ProxySQL_PluginServices& services, const char* column,
 		" WHERE singleton_id=1").c_str()) && db->execute("COMMIT");
 	if (!ok) db->execute("ROLLBACK");
 	return ok;
+}
+
+bool persist_generation(ProxySQL_PluginServices& services, const char* column,
+	uint64_t generation) {
+	if (std::string_view(column) != "topology_generation" &&
+		std::string_view(column) != "user_generation") return false;
+	return mysql_router_with_admin_db_lock(services, [&] {
+		return persist_generation_locked(services, column, generation);
+	});
 }
 
 class RuntimeBackend final : public IReconcileBackend {
@@ -651,10 +668,17 @@ public:
 				quote(kind) + "," + quote(code) + "," + quote(safe) + ",1," +
 				std::to_string(now) + "," + std::to_string(now) +
 				" WHERE changes()=0";
-			if (stats->execute("BEGIN IMMEDIATE")) {
-				if (!stats->execute(update.c_str()) || !stats->execute(insert.c_str()) ||
-					!stats->execute("COMMIT")) stats->execute("ROLLBACK");
-			}
+			// statsdb is shared with Admin like admindb (issue #6354). History is
+			// best effort: a lock-service failure must not fail the refresh.
+			try {
+				(void)mysql_router_with_admin_db_lock(services_, [&] {
+					if (stats->execute("BEGIN IMMEDIATE")) {
+						if (!stats->execute(update.c_str()) || !stats->execute(insert.c_str()) ||
+							!stats->execute("COMMIT")) stats->execute("ROLLBACK");
+					}
+					return true;
+				});
+			} catch (...) {}
 		}
 		MysqlRouterContext& context = mysql_router_context();
 		std::lock_guard<std::mutex> guard(context.status_mutex);

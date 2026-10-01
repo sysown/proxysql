@@ -113,6 +113,7 @@ The chassis is defined by **two headers** plus the loader implementation. The co
 | 7 | unchanged | encrypted secret callbacks |
 | 8 | `runtime_ready` | listener gate, scoped MySQL config publisher, live snapshots |
 | 9 | unchanged | V2 scoped MySQL publisher with a separate rule-ID attributes array |
+| 10 | unchanged | `with_admin_db_lock`: plugin transactions on admindb/statsdb under Admin's SQL mutex |
 
 The callback order is fixed: discover all configured modules, register their CLI options, perform the one definitive core parse, call `register_schemas`, materialize Admin databases, call `early_action`, then `init`, `start`, and `runtime_ready`, and finally call `stop` during teardown. An early action may request a successful or failed process exit; otherwise startup continues. `runtime_ready` runs after core runtime dependencies exist and immediately before listener validation/start. A plugin whose `init` succeeded receives exactly one `stop`, even if `start` or runtime readiness later fails.
 
@@ -156,7 +157,7 @@ startup                                                                         
 2. **Phase E writes commands_/hooks_; workers read them lock-free.** Phase E MUST complete before any worker thread reads via `proxysql_has_configured_plugin_query_hook`. If a future change moves listener startup before Phase E finishes, plain writes race plain reads. (See the publication-order comment in `ProxySQL_PluginManager::init_all()`.)
 3. **The manager pointer is published BEFORE Admin::init**. `Admin::init` reads tables via `proxysql_get_plugin_manager()`. If the publish was deferred to after Phase D, the merge would see no plugin tables. (Comment block at the top of `proxysql_load_configured_plugins`.)
 4. **`register_schemas` is only dereferenced when `abi_version >= 2`.** A v1 plugin's struct ends after `status_json`; reading past would be an out-of-bounds access. (Check at `lib/ProxySQL_PluginManager.cpp:407`.)
-5. **The descriptor and services structs are tail-extensible.** A plugin compiled against an older supported ABI still loads in an ABI-9 core (the core reads only the fields that version defines). The reverse — an ABI-9 plugin against an older core — is rejected by the version check.
+5. **The descriptor and services structs are tail-extensible.** A plugin compiled against an older supported ABI still loads in an ABI-10 core (the core reads only the fields that version defines). The reverse — an ABI-10 plugin against an older core — is rejected by the version check.
 
 ---
 

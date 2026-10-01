@@ -384,6 +384,21 @@ SQLite3DB* proxysql_plugin_get_statsdb() {
 	return GloAdmin ? GloAdmin->statsdb : nullptr;
 }
 
+// ABI-10 service: serializes a plugin's admindb/statsdb transaction with Admin
+// sessions, which hold sql_query_global_mutex for every statement they run.
+bool proxysql_plugin_with_admin_db_lock(bool (*body)(void*), void* opaque) {
+	if (body == nullptr || GloAdmin == nullptr) return false;
+	pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+	bool result = false;
+	try {
+		result = body(opaque);
+	} catch (...) {
+		result = false;
+	}
+	pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+	return result;
+}
+
 SQLite3_result* proxysql_plugin_get_mysql_users_snapshot() {
 	return GloAdmin ? GloAdmin->get_mysql_users_snapshot() : nullptr;
 }
@@ -6417,6 +6432,17 @@ std::set<std::string> interface_set(const char* value) {
 	return result;
 }
 
+/** RAII holder for ProxySQL_Admin::sql_query_global_mutex. */
+class admin_db_lock_guard {
+public:
+	explicit admin_db_lock_guard(pthread_mutex_t& mutex) : mutex_(mutex) { pthread_mutex_lock(&mutex_); }
+	~admin_db_lock_guard() { pthread_mutex_unlock(&mutex_); }
+	admin_db_lock_guard(const admin_db_lock_guard&) = delete;
+	admin_db_lock_guard& operator=(const admin_db_lock_guard&) = delete;
+private:
+	pthread_mutex_t& mutex_;
+};
+
 SQLite3_result* hgm_query(const char* sql, std::string& error) {
 	char* sqlite_error = nullptr;
 	SQLite3_result* result = MyHGM->execute_query_under_lock(sql, &sqlite_error);
@@ -6642,6 +6668,10 @@ ProxySQL_PluginMysqlConfigResult ProxySQL_Admin::apply_plugin_mysql_config(
 			this, &plugin_config_lock, &plugin_config_unlock, &plugin_config_capture,
 			&plugin_config_publish, &plugin_config_restore, &plugin_config_checkpoint
 		};
+		// Publication runs BEGIN...COMMIT on admindb from a plugin thread; hold the
+		// mutex Admin sessions hold for their statements (issue #6354). It is taken
+		// before the publication locks, the same order Admin's LOAD commands use.
+		admin_db_lock_guard admin_db_guard(sql_query_global_mutex);
 		return proxysql_apply_plugin_mysql_config(*admindb, plan, hooks);
 	} catch (...) {
 		return {false, 0, "plugin publication failed at Admin service boundary", {}};
@@ -6655,6 +6685,7 @@ ProxySQL_PluginMysqlConfigResult ProxySQL_Admin::apply_plugin_mysql_config_v2(
 			this, &plugin_config_lock, &plugin_config_unlock, &plugin_config_capture,
 			&plugin_config_publish, &plugin_config_restore, &plugin_config_checkpoint
 		};
+		admin_db_lock_guard admin_db_guard(sql_query_global_mutex);  // see apply_plugin_mysql_config
 		return proxysql_apply_plugin_mysql_config_v2(*admindb, plan, hooks);
 	} catch (...) {
 		return {false, 0, "plugin publication failed at Admin service boundary", {}};

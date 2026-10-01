@@ -812,7 +812,10 @@ uint64_t PluginBootstrapStore::publish_users_snapshot(const DesiredTopology& top
 	const uint64_t published = publish_generation(
 		topology, effective, listeners, generation, normalized.users);
 	try {
-		persist_mysql_router_users(*admindb, published, normalized.status);
+		mysql_router_with_admin_db_lock(services_, [&] {
+			persist_mysql_router_users(*admindb, published, normalized.status);
+			return true;
+		});
 	} catch (...) {
 		const std::exception_ptr persistence_failure = std::current_exception();
 		if (published == static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {

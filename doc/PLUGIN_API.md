@@ -121,7 +121,7 @@ struct ProxySQL_PluginDescriptor {
 | Field              | Type          | Description                                               |
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
-| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. The current PROXYSQL40 core accepts layout versions `[1, 9]` after masking the build-mode tag, and requires the plugin's DEBUG tag to match the core. See the ABI reference for the per-version matrix. |
+| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. The current PROXYSQL40 core accepts layout versions `[1, 10]` after masking the build-mode tag, and requires the plugin's DEBUG tag to match the core. See the ABI reference for the per-version matrix. |
 | `init`             | callback      | Phase E — called with live services; register commands, hooks, and non-persistent tables here. Persistent `config_db` tables must have been declared through `register_schemas` in Phase B. |
 | `start`            | callback      | Phase F — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
@@ -152,8 +152,8 @@ Plugins MUST assign `abi_version` from `PROXYSQL_PLUGIN_ABI_VERSION` rather
 than hard-coding either raw value. The loader first requires the DEBUG bit to
 match the running core exactly, because DEBUG-only fields change core object
 layouts. It then masks that bit and checks that the layout portion is in the
-supported `[1, 9]` range. A release plugin cannot load into a DEBUG core, or
-vice versa, even when both use layout version 9.
+supported `[1, 10]` range. A release plugin cannot load into a DEBUG core, or
+vice versa, even when both use layout version 10.
 
 Pre-chassis builds do not expose this API. Their legacy six-field descriptor
 uses `abi_version = 1`. All chassis changes since layout 2 have been tail
@@ -199,9 +199,11 @@ struct ProxySQL_PluginServices {
     bool (*set_listener_gate)(const ProxySQL_PluginListenerGate&);
     ProxySQL_PluginMysqlConfigResult (*apply_mysql_config)(
         const ProxySQL_PluginMysqlConfigPlan&);
-    // ABI 9 final tail:
+    // ABI 9 tail:
     ProxySQL_PluginMysqlConfigResult (*apply_mysql_config_v2)(
         const ProxySQL_PluginMysqlConfigPlanV2&);
+    // ABI 10 final tail:
+    bool (*with_admin_db_lock)(bool (*body)(void* opaque), void* opaque);
 };
 ```
 
@@ -223,6 +225,23 @@ warning when the staged value differs from the active listeners.
 Phase B provides a rejecting stub. ABI-8 plugins continue using the unchanged
 V1 callback; ABI-9 plugins that require attributes should fail closed rather
 than falling back and losing behavior.
+
+The publisher takes Admin's global SQL mutex before its own locks. Do not call
+it from an Admin command handler while that mutex is held. Release it first
+through `ProxySQL_PluginCommandContext::release_admin_mutex`, as
+`MYSQL ROUTER RECONCILE` does.
+
+#### `with_admin_db_lock` (ABI 10)
+
+`get_admindb()` and `get_statsdb()` return the same SQLite connections Admin
+sessions use, and SQLite transaction state belongs to the connection. A plugin
+thread that runs `BEGIN ... COMMIT` on those handles must run it inside
+`with_admin_db_lock(body, opaque)`. The service holds Admin's global SQL mutex
+while `body(opaque)` runs and returns its result. Otherwise the plugin's
+transaction can absorb or roll back statements from a concurrent Admin session.
+The callback must not throw, and it must not be called while the mutex is
+already held, for example from an Admin command that has not released it.
+Phase B provides a stub that returns false.
 
 ### Service Callbacks
 
@@ -605,7 +624,7 @@ void register_stats_table(ProxySQL_PluginServices& services,
 - **No dependency resolution**: Plugins are loaded in the order listed in
   `proxysql.cnf`. If one plugin depends on another, the dependency must be
   listed first.
-- **ABI compatibility**: The current core accepts layout versions `[1, 9]`
+- **ABI compatibility**: The current core accepts layout versions `[1, 10]`
   after masking `PROXYSQL_PLUGIN_ABI_DEBUG_BIT`, and separately requires that
   DEBUG bit to exactly match the core. Newly built plugins must set
   `abi_version = PROXYSQL_PLUGIN_ABI_VERSION`.
