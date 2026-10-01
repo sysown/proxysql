@@ -258,15 +258,16 @@ static bool session_authorizes_rowless_passthrough(
 }
 
 static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
-	const MySQL_Session *session)
+	MySQL_Session *session)
 {
 	const char *backend_username =
 		session != nullptr && session->client_myds != nullptr &&
 		session->client_myds->myconn != nullptr &&
 		session->client_myds->myconn->userinfo != nullptr
 			? session->client_myds->myconn->userinfo->username : nullptr;
-	MySQLBackendAuthPolicy policy =
-		resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
+	MySQLBackendAuthPolicy policy = session != nullptr
+		? session->backend_auth_policy_for(backend_username)
+		: resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
 	if (session_authorizes_rowless_passthrough(
 			session, backend_username, policy)) {
 		policy.type = MySQLBackendAuthType::PASSWORD;
@@ -892,6 +893,16 @@ void MySQL_Session::accept_aws_iam_completion(
 	to_process = 1;
 }
 
+const MySQLBackendAuthPolicy& MySQL_Session::backend_auth_policy_for(const char *backend_username) {
+	const char *user = backend_username != nullptr ? backend_username : "";
+	if (!cached_backend_auth_policy_valid || cached_backend_auth_policy_user != user) {
+		cached_backend_auth_policy = resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
+		cached_backend_auth_policy_user = user;
+		cached_backend_auth_policy_valid = true;
+	}
+	return cached_backend_auth_policy;
+}
+
 void MySQL_Session::cancel_aws_iam_wait() {
 	if (!aws_iam_completion_ready && aws_iam_token_source_lease &&
 		aws_iam_request_handle.value != 0) {
@@ -1153,6 +1164,7 @@ MySQL_Session::MySQL_Session() {
  */
 void MySQL_Session::reset() {
 	cancel_aws_iam_wait();
+	cached_backend_auth_policy_valid = false;
 	pending_user_variable_set.reset();
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
@@ -9631,8 +9643,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			client_myds != nullptr && client_myds->myconn != nullptr &&
 			client_myds->myconn->userinfo != nullptr
 				? client_myds->myconn->userinfo->username : nullptr;
-		MySQLBackendAuthPolicy backend_auth_policy =
-			resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
+		MySQLBackendAuthPolicy backend_auth_policy = backend_auth_policy_for(backend_username);
 		const bool force_fresh_iam_connection =
 			backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM &&
 			aws_iam_fresh_token_retry_attempted;

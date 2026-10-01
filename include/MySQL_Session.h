@@ -19,6 +19,7 @@
 #include "MySQL_User_Variables.h"
 #include "Base_Session.h"
 #include "Aws_Iam_Provider.h"
+#include "MySQL_Backend_Auth.h"
 #ifdef PROXYSQL31
 #include "PgSQL_Waiter_List.h"
 #endif // PROXYSQL31
@@ -651,6 +652,15 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	AwsIamTokenKey aws_iam_token_key {};
 	AwsIamTokenResult aws_iam_completion {};
 	MySQL_Connection *aws_iam_connection { nullptr };
+	// Backend authentication policy (mysql_users.attributes 'backend_auth') of
+	// the session's backend user. Resolved on first use and kept for the life of
+	// the session, like the credentials in client userinfo: LOAD MYSQL USERS
+	// applies to new client connections only. Resolved again only if the user
+	// itself changes (COM_CHANGE_USER).
+	MySQLBackendAuthPolicy cached_backend_auth_policy {};
+	std::string cached_backend_auth_policy_user {};
+	bool cached_backend_auth_policy_valid { false };
+	const MySQLBackendAuthPolicy& backend_auth_policy_for(const char *backend_username);
 	uint64_t aws_iam_waiter_id { 0 };
 	unsigned long long aws_iam_deadline_us { 0 };
 	bool aws_iam_completion_ready { false };
