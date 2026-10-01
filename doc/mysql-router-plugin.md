@@ -101,6 +101,18 @@ Router reconciliation. The 6450 rules do not contain the fast-forward action,
 so normal ProxySQL query processing, hostgroup selection, and transaction
 tracking remain available there.
 
+## Network partitions
+
+Each cluster member reports Group Replication health from its own point of
+view. A member cut off in a minority partition still answers queries, but it
+sees itself `ONLINE` and its peers `UNREACHABLE`, so its view has no quorum. The
+reconciler does not publish such a view while another member may still have
+quorum. It tries the other known members first and uses the first view that has
+quorum. Only if no reachable member reports quorum does it apply the cluster's
+`unreachable_quorum_allowed_traffic` policy to the view it has. This applies
+both to normal metadata reads and to the health-only fallback used while
+metadata is unavailable.
+
 ## Ownership and collisions
 
 The plugin allocates eight hostgroups for stable writer/reader routes and
