@@ -82,11 +82,22 @@ public:
 	Pcre2Regex(const Pcre2Regex&) = delete;
 	Pcre2Regex& operator=(const Pcre2Regex&) = delete;
 	bool valid() const;
+	const std::string& error() const { return error_; }
 	bool partial_match(const char* subject) const;
 	bool replace(std::string* subject, const char* legacy_rewrite, bool global) const;
 
 private:
 	pcre2_code* code_ {nullptr};
+	// Compilation diagnostic, empty when the pattern compiled.
+	std::string error_ {};
+	// Scratch state reused across calls instead of being allocated per query
+	// (issue #6321). Query rules are compiled into each worker thread's
+	// private rule copy, so an object is never used by two threads at once.
+	mutable pcre2_match_data* match_data_ {nullptr};
+	mutable std::string rewrite_source_ {};
+	mutable std::string rewrite_translated_ {};
+	mutable bool rewrite_valid_ {false};
+	mutable std::vector<PCRE2_UCHAR> output_ {};
 };
 
 Pcre2Regex::Pcre2Regex(const char* pattern, uint32_t options) {
@@ -113,30 +124,34 @@ Pcre2Regex::Pcre2Regex(const char* pattern, uint32_t options) {
 	);
 	pcre2_compile_context_free(compile_context);
 	if (code_ == nullptr) {
+		// Reported by the caller, which knows which query rule this is.
 		PCRE2_UCHAR error_message[256] {};
 		const int message_rc = pcre2_get_error_message(
 			error_code,
 			error_message,
 			sizeof(error_message) / sizeof(error_message[0])
 		);
+		char buf[sizeof(error_message) + 64];
 		if (message_rc >= 0) {
-			proxy_error(
-				"PCRE2 compilation failed at offset %zu: %s\n",
-				static_cast<size_t>(error_offset),
-				reinterpret_cast<const char*>(error_message)
-			);
+			snprintf(buf, sizeof(buf), "PCRE2 compilation failed at offset %zu: %s",
+				static_cast<size_t>(error_offset), reinterpret_cast<const char*>(error_message));
 		} else {
-			proxy_error(
-				"PCRE2 compilation failed at offset %zu: error %d (message unavailable: %d)\n",
-				static_cast<size_t>(error_offset),
-				error_code,
-				message_rc
-			);
+			snprintf(buf, sizeof(buf), "PCRE2 compilation failed at offset %zu: error %d (message unavailable: %d)",
+				static_cast<size_t>(error_offset), error_code, message_rc);
 		}
+		error_ = buf;
+		return;
+	}
+	match_data_ = pcre2_match_data_create_from_pattern(code_, nullptr);
+	if (match_data_ == nullptr) {
+		pcre2_code_free(code_);
+		code_ = nullptr;
+		error_ = "PCRE2 match data allocation failed";
 	}
 }
 
 Pcre2Regex::~Pcre2Regex() {
+	if (match_data_ != nullptr) pcre2_match_data_free(match_data_);
 	if (code_ != nullptr) pcre2_code_free(code_);
 }
 
@@ -147,19 +162,15 @@ bool Pcre2Regex::valid() const {
 bool Pcre2Regex::partial_match(const char* subject) const {
 	if (!valid() || subject == nullptr) return false;
 
-	pcre2_match_data* match_data = pcre2_match_data_create_from_pattern(code_, nullptr);
-	if (match_data == nullptr) return false;
-
 	const int rc = pcre2_match(
 		code_,
 		reinterpret_cast<PCRE2_SPTR>(subject),
 		PCRE2_ZERO_TERMINATED,
 		0,
 		0,
-		match_data,
+		match_data_,
 		nullptr
 	);
-	pcre2_match_data_free(match_data);
 	return rc >= 0;
 }
 
@@ -170,51 +181,63 @@ bool Pcre2Regex::replace(
 ) const {
 	if (!valid() || subject == nullptr || legacy_rewrite == nullptr) return false;
 
-	std::string pcre2_rewrite;
-	if (!translate_legacy_rewrite(legacy_rewrite, &pcre2_rewrite)) {
+	// A rule's replace_pattern is constant, so it is translated once and the
+	// result reused for every query the rule rewrites.
+	if (rewrite_source_.empty() || rewrite_source_ != legacy_rewrite) {
+		rewrite_source_ = legacy_rewrite;
+		rewrite_valid_ = translate_legacy_rewrite(legacy_rewrite, &rewrite_translated_);
+	}
+	if (!rewrite_valid_) {
 		proxy_error("PCRE2 replacement rejected an unsupported legacy escape\n");
 		return false;
 	}
 
 	const uint32_t substitute_options = PCRE2_SUBSTITUTE_UNSET_EMPTY |
-		(global ? PCRE2_SUBSTITUTE_GLOBAL : 0);
-	PCRE2_SIZE required_size = 0;
-	const int size_rc = pcre2_substitute(
-		code_,
-		reinterpret_cast<PCRE2_SPTR>(subject->data()),
-		subject->size(),
-		0,
-		substitute_options | PCRE2_SUBSTITUTE_OVERFLOW_LENGTH,
-		nullptr,
-		nullptr,
-		reinterpret_cast<PCRE2_SPTR>(pcre2_rewrite.data()),
-		pcre2_rewrite.size(),
-		nullptr,
-		&required_size
-	);
-	// With a zero-sized output buffer, OVERFLOW_LENGTH reports the required
-	// size (including the terminator) via PCRE2_ERROR_NOMEMORY.
-	if (size_rc != PCRE2_ERROR_NOMEMORY || required_size == PCRE2_SIZE_MAX) return false;
-
-	std::vector<PCRE2_UCHAR> output(required_size + 1);
-	PCRE2_SIZE output_size = output.size();
-	const int substitute_rc = pcre2_substitute(
-		code_,
-		reinterpret_cast<PCRE2_SPTR>(subject->data()),
-		subject->size(),
-		0,
-		substitute_options,
-		nullptr,
-		nullptr,
-		reinterpret_cast<PCRE2_SPTR>(pcre2_rewrite.data()),
-		pcre2_rewrite.size(),
-		output.data(),
-		&output_size
-	);
-	if (substitute_rc < 0) return false;
-
-	subject->assign(reinterpret_cast<const char*>(output.data()), output_size);
-	return true;
+		PCRE2_SUBSTITUTE_OVERFLOW_LENGTH | (global ? PCRE2_SUBSTITUTE_GLOBAL : 0);
+	// One substitution into a buffer reused across calls, sized for typical
+	// rewrites. Only when it is too small does PCRE2 report the exact size
+	// needed (OVERFLOW_LENGTH), and the substitution is repeated once.
+	const size_t initial_size = subject->size() + rewrite_translated_.size() + 256;
+	if (output_.size() < initial_size) {
+		output_.resize(initial_size);
+	}
+	// Don't let one very large query pin a large buffer in every rule of
+	// every worker thread.
+	struct release_large_output {
+		std::vector<PCRE2_UCHAR>& buf;
+		~release_large_output() {
+			if (buf.size() > 64 * 1024) {
+				std::vector<PCRE2_UCHAR>().swap(buf);
+			}
+		}
+	} release_guard { output_ };
+	for (int attempt = 0; attempt < 2; attempt++) {
+		PCRE2_SIZE output_size = output_.size();
+		const int substitute_rc = pcre2_substitute(
+			code_,
+			reinterpret_cast<PCRE2_SPTR>(subject->data()),
+			subject->size(),
+			0,
+			substitute_options,
+			match_data_,
+			nullptr,
+			reinterpret_cast<PCRE2_SPTR>(rewrite_translated_.data()),
+			rewrite_translated_.size(),
+			output_.data(),
+			&output_size
+		);
+		if (substitute_rc >= 0) {
+			subject->assign(reinterpret_cast<const char*>(output_.data()), output_size);
+			return true;
+		}
+		// With OVERFLOW_LENGTH, output_size now holds the required size,
+		// including the terminator.
+		if (substitute_rc != PCRE2_ERROR_NOMEMORY || output_size == PCRE2_SIZE_MAX) {
+			return false;
+		}
+		output_.resize(output_size + 1);
+	}
+	return false;
 }
 
 } // namespace
@@ -232,6 +255,26 @@ bool pcre2_query_rule_replace_for_test(
 	Pcre2Regex regex(pattern, 0);
 	*rewritten = subject;
 	return regex.replace(rewritten, legacy_rewrite, global);
+}
+
+// Runs every subject through ONE compiled regex, in order, the way a query
+// rule reuses its regex for every query: exercises the per-object scratch
+// state (match data, cached rewrite, output buffer) across calls.
+bool pcre2_query_rule_replace_sequence_for_test(
+	const char* pattern,
+	const char* legacy_rewrite,
+	bool global,
+	std::vector<std::string>* subjects
+) {
+	if (subjects == nullptr) return false;
+
+	Pcre2Regex regex(pattern, 0);
+	for (std::string& subject : *subjects) {
+		if (!regex.partial_match(subject.c_str()) || !regex.replace(&subject, legacy_rewrite, global)) {
+			return false;
+		}
+	}
+	return true;
 }
 #endif
 
@@ -589,6 +632,20 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 		} else if (i==2) {
 			r->re1=new Pcre2Regex(qr->match_pattern, options);
 		}
+	}
+	// A rule whose regex does not compile never matches, negated or not. Name
+	// the rule and the field so the broken rule can be found: RE2 runs with
+	// RE2::Quiet and reports nothing on its own (issue #6319).
+	const char *error = NULL;
+	if (r->re2 && r->re2->ok() == false) {
+		error = r->re2->error().c_str();
+	} else if (r->re1 && r->re1->valid() == false) {
+		error = r->re1->error().c_str();
+	}
+	if (error) {
+		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, the rule will never match: %s\n",
+			qr->rule_id, (i==1 ? "match_digest" : "match_pattern"), (i==1 ? qr->match_digest : qr->match_pattern),
+			(query_processor_regex==2 ? "RE2" : "PCRE2"), error);
 	}
 	return r;
 };
@@ -2489,11 +2546,13 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 					if (ret->new_query==NULL) ret->new_query=new std::string(query);
 					re2_t *re2p=(re2_t *)qr->regex_engine2;
 					if (re2p->re2) {
-						//RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+						// Replace()/GlobalReplace() are static: they must be given the
+						// compiled regex. Passing the pattern text built a temporary RE2
+						// with default options per query, ignoring CASELESS (issue #6323).
 						if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
-							re2p->re2->GlobalReplace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+							RE2::GlobalReplace(ret->new_query, *re2p->re2, qr->replace_pattern);
 						} else {
-							re2p->re2->Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+							RE2::Replace(ret->new_query, *re2p->re2, qr->replace_pattern);
 						}
 					} else {
 						re2p->re1->replace(
