@@ -8,11 +8,17 @@
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
 
+#include "gen_utils.h"
+
 #include <arpa/inet.h>
+#include <cerrno>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#include "MySQL_Thread.h"
+#include "PgSQL_Thread.h"
 
 #include <functional>
 #include <system_error>
@@ -31,6 +37,7 @@
 // way test_init.cpp declares its own Glo* externs.
 extern MySQL_Logger* GloMyLogger;
 extern PgSQL_Logger* GloPgSQL_Logger;
+extern PgSQL_Threads_Handler* GloPTH;
 
 namespace {
 
@@ -104,10 +111,27 @@ bool stays_open(int fd, int timeout_ms) {
 	return true;
 }
 
+// True if the peer closes fd within timeout_ms, discarding anything it sends
+// first (a MySQL server speaks first with its handshake, a PgSQL one does not).
+bool closed_within(int fd, int timeout_ms) {
+	const unsigned long long deadline = monotonic_time() + timeout_ms * 1000ULL;
+	while (monotonic_time() < deadline) {
+		const int remaining_ms = static_cast<int>((deadline - monotonic_time()) / 1000) + 1;
+		struct pollfd pfd { fd, POLLIN, 0 };
+		const int rc = poll(&pfd, 1, remaining_ms);
+		if (rc <= 0) return false;
+		char buf[256];
+		const ssize_t n = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+		if (n == 0) return true;
+		if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) return true; // reset by peer
+	}
+	return false;
+}
+
 } // namespace
 
 int main() {
-	plan(19);
+	plan(25);
 
 	// A connection thread's run_session() waits for GloMTH/GloMyQPro (and
 	// their PgSQL equivalents) before touching a session -- see the
@@ -249,6 +273,44 @@ int main() {
 	if (recovered_fd >= 0) close(recovered_fd);
 	listener3.stop();
 	engine3.close();
+
+	// --- unauthenticated connections are bounded (issue #6318) ----------
+	// The plugin's sessions never pass through core's process_all_sessions(),
+	// which enforces connect_timeout_client. A client that connects and never
+	// completes authentication must still be closed after that timeout, and
+	// its max_connections slot must become available again.
+	for (const bool mysql : {true, false}) {
+		const char* proto = mysql ? "MySQL" : "PgSQL";
+		const uint16_t port = mysql ? 26035 : 26036;
+		const bool timeout_set = mysql
+			? GloMTH->set_variable("connect_timeout_client", "500")
+			: GloPTH->set_variable(const_cast<char*>("connect_timeout_client"), "500");
+		DuckDBConfigStore cfg4;
+		std::string err4;
+		cfg4.set("mysql_ifaces", mysql ? "127.0.0.1:" + std::to_string(port) : "", err4);
+		cfg4.set("pgsql_ifaces", mysql ? "" : "127.0.0.1:" + std::to_string(port), err4);
+		cfg4.set("max_connections", "1", err4);
+		DuckDBEngine engine4;
+		DuckDBListener listener4;
+		ok(timeout_set && engine4.open(cfg4, err4) && listener4.start(cfg4, engine4, err4),
+		   "%s listener with max_connections=1 and a 500ms client connect timeout starts", proto);
+		const int silent_fd = connect_and_hold(port);
+		const bool slot_taken = silent_fd >= 0 &&
+			wait_until([&]() { return listener4.connection_thread_count() == 1; }, 2000);
+		ok(slot_taken && closed_within(silent_fd, 3000),
+		   "%s: a client that never authenticates is closed after connect_timeout_client", proto);
+		if (silent_fd >= 0) close(silent_fd);
+		const bool released = wait_until([&]() { return listener4.connection_thread_count() == 0; }, 2000);
+		const int next_fd = released ? connect_and_hold(port) : -1;
+		ok(released && next_fd >= 0 &&
+		   wait_until([&]() { return listener4.connection_thread_count() == 1; }, 2000),
+		   "%s: the timed-out client's slot is released and a new client is admitted", proto);
+		if (next_fd >= 0) close(next_fd);
+		listener4.stop();
+		engine4.close();
+	}
+	GloMTH->set_variable("connect_timeout_client", "10000");
+	GloPTH->set_variable(const_cast<char*>("connect_timeout_client"), "10000");
 
 	if (GloMyLogger != nullptr) { delete GloMyLogger; GloMyLogger = nullptr; }
 	if (GloPgSQL_Logger != nullptr) { delete GloPgSQL_Logger; GloPgSQL_Logger = nullptr; }
