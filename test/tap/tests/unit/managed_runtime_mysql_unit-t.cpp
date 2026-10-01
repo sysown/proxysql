@@ -3,6 +3,7 @@
 #include "ProxySQL_ConfigurationAccess.h"
 #include "ProxySQL_ManagedRuntime.h"
 #include "ProxySQL_Statistics.hpp"
+#include "Web_Interface.hpp"
 #include "cpp.h"
 #include "json.hpp"
 #include "proxysql.h"
@@ -24,8 +25,16 @@ using nlohmann::json;
 extern ProxySQL_Admin *GloAdmin;
 extern ProxySQL_Statistics *GloProxyStats;
 extern MySQL_Monitor *GloMyMon;
+extern Web_Interface *GloWebInterface;
 extern int ProxySQL_create_or_load_TLS(bool, std::string &);
 namespace {
+class ObservedWebInterface : public Web_Interface {
+public:
+  unsigned starts = 0;
+  unsigned stops = 0;
+  void start(int) override { ++starts; }
+  void stop() override { ++stops; }
+};
 const std::pair<const char *, const char *> definitions[] = {
     {"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS},
     {"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS},
@@ -270,6 +279,23 @@ int main() {
   bad = d;
   bad["variables"]["admin-refresh_interval"] = 1;
   rejected(bad, "invalid Admin range is rejected during pure preparation");
+  for (const auto *name : {"web_enabled", "restapi_enabled"}) {
+    for (bool enabled : {false, true}) {
+      bad = d;
+      bad["variables"][std::string("admin-") + name] = enabled;
+      rejected(bad, "management endpoint enablement is startup-only, in either direction");
+    }
+  }
+  for (const auto *name : {"web_port", "restapi_port"}) {
+    bad = d;
+    bad["variables"][std::string("admin-") + name] = reserve_port();
+    rejected(bad, "management endpoint port is startup-only");
+  }
+  ok(scalar(db, "SELECT count(*) FROM global_variables WHERE variable_name IN "
+                "('admin-web_enabled','admin-web_port','admin-restapi_enabled',"
+                "'admin-restapi_port')") == "0" &&
+         scalar(*GloAdmin->configdb, "SELECT count(*) FROM sqlite_master WHERE type='table'") == "0",
+     "rejected management endpoint settings leave Admin intent and service store untouched");
   bad = d;
   bad["variables"]["mysql-threads"] = 7;
   rejected(bad, "startup-only worker count is rejected explicitly");
@@ -312,11 +338,24 @@ int main() {
   prepared = nullptr;
   const bool ready = prepare(d, &prepared, error);
   ok(ready, "complete MySQL runtime input prepares: %s", error.c_str());
+  ObservedWebInterface web;
+  GloWebInterface = &web;
+  const auto *prior_web_plugin = GloVars.web_interface_plugin;
+  GloVars.web_interface_plugin = const_cast<char *>("observed-web-plugin");
+  GloAdmin->set_managed_variable_locked("web_port", std::to_string(reserve_port()));
+  GloAdmin->set_managed_variable_locked("web_enabled", "true");
+  GloAdmin->all_modules_started = true;
   ManagedRuntimeResult result;
   if (ready)
     result = proxysql_activate_managed_runtime_locked(*prepared, 1);
   ok(result.applied, "direct existing operations activate full configuration: %s",
      result.message.c_str());
+  ok(web.starts == 0 && web.stops == 0,
+     "operational Admin updates never enter management HTTP server lifecycle");
+  GloAdmin->all_modules_started = false;
+  GloAdmin->set_managed_variable_locked("web_enabled", "false");
+  GloVars.web_interface_plugin = const_cast<char *>(prior_web_plugin);
+  GloWebInterface = nullptr;
   for (const auto &table : definitions)
     ok(scalar(db, std::string("SELECT count(*) FROM ") + table.first) != "0",
        "activation populates %s", table.first);

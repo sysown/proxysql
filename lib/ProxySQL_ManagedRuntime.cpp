@@ -239,6 +239,11 @@ bool check_scope(const json &d, const Table &table, const json &row, std::string
   return true;
 }
 bool valid_admin_variable(const std::string &name, const std::string &value) {
+  // A managed request runs inside the serving endpoint. Its lifecycle belongs to process
+  // startup/shutdown, and the existing plugin start operation cannot rebind a live port.
+  if (name == "web_enabled" || name == "web_port" || name == "restapi_enabled" ||
+      name == "restapi_port")
+    return false;
   if (name.compare(0, 8, "cluster_") == 0 || name.compare(0, 9, "checksum_") == 0 ||
       name == "version" || name == "hash_passwords" || name.find("ifaces") != std::string::npos)
     return false;
@@ -265,8 +270,6 @@ bool valid_admin_variable(const std::string &name, const std::string &value) {
     return number(0, 600);
   if (name == "refresh_interval")
     return number(101, 99999);
-  if (name == "web_port" || name == "restapi_port")
-    return number(1, 65534);
   if (name == "web_verbosity")
     return number(0, 10);
   if (name == "prometheus_memory_metrics_interval")
@@ -280,7 +283,7 @@ bool valid_admin_variable(const std::string &name, const std::string &value) {
   if (name == "ssl_keylog_file")
     return true;
   static const std::set<std::string> booleans = {
-      "hash_passwords", "vacuum_stats", "restapi_enabled", "web_enabled", "read_only", "debug"};
+      "vacuum_stats", "read_only", "debug"};
   return booleans.count(name) &&
          (value == "true" || value == "false" || value == "0" || value == "1");
 }
@@ -879,8 +882,8 @@ bool ProxySQL_Admin::commit_managed_admin_variables_locked(std::string &error) {
     Unlock checksum_unlock{[] { pthread_mutex_unlock(&GloVars.checksum_mutex); }};
     flush_GENERIC_variables__checksum__database_to_runtime("admin", "", 0);
   }
-  load_http_server();
-  load_restapi_server();
+  // Preparation excludes endpoint lifecycle settings. Refresh operational values without
+  // entering synchronous HTTP shutdown/start from the current managed request callback.
   admin___web_verbosity = variables.web_verbosity;
   return true;
 }
