@@ -161,6 +161,13 @@ const PgSQL_STMT_Global_info* PgSQL_STMT_Local::find_stmt_info_from_stmt_name(co
 	return ret;
 }
 
+std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_STMT_Local::find_shared_stmt_info_from_stmt_name(const std::string& client_stmt_name) const {
+	if (auto s = stmt_name_to_global_info.find(client_stmt_name); s != stmt_name_to_global_info.end()) {
+		return s->second;
+	}
+	return nullptr;
+}
+
 bool PgSQL_STMT_Local::client_close(const std::string& client_stmt_name) {
 	if (auto s = stmt_name_to_global_info.find(client_stmt_name); s != stmt_name_to_global_info.end()) {  // found
 		const PgSQL_STMT_Global_info* stmt_info = s->second.get();
@@ -176,6 +183,17 @@ void PgSQL_STMT_Local::client_close_all() {
 		GloPgStmt->ref_count_client(global_stmt_info.get(), -1);
 	}
 	stmt_name_to_global_info.clear();
+}
+
+void PgSQL_STMT_Local::backend_close_all() {
+	// Same server-refcount release as ~PgSQL_STMT_Local()'s backend branch: one
+	// ref_count_server(-1) per backend statement. Also clears global_stmt_to_backend_ids
+	// (the destructor skips it only because the object is about to be freed).
+	for (auto& [_, global_stmt_info] : backend_stmt_to_global_info) {
+		GloPgStmt->ref_count_server(global_stmt_info.get(), -1);
+	}
+	backend_stmt_to_global_info.clear();
+	global_stmt_to_backend_ids.clear();
 }
 
 uint32_t PgSQL_STMT_Local::generate_new_backend_stmt_id() {
