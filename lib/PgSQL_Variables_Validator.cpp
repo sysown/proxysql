@@ -537,7 +537,11 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 		}
 
 		if (!first) {
-			normalized.push_back(',');
+			// ", " is how PostgreSQL itself re-renders a search_path list. Joining without
+			// the space made every value that reaches a backend as a SET come back spaced
+			// while ProxySQL kept tracking the unspaced form, so the two disagreed on a
+			// string they both considered current.
+			normalized.append(", ");
 		}
 		first = false;
 

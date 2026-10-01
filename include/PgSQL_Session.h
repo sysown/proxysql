@@ -6,6 +6,9 @@
 #include <functional>
 #include <vector>
 #include <variant>
+#include <map>
+#include <memory>
+#include <string>
 #include "proxysql.h"
 #include "Base_Session.h"
 #include "cpp.h"
@@ -130,6 +133,11 @@ enum PgSQL_Extended_Query_Flags : uint8_t {
 	PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL	= 0x01,
 	PGSQL_EXTENDED_QUERY_FLAG_SYNC				= 0x02,
 	PGSQL_EXTENDED_QUERY_FLAG_IMPLICIT_PREPARE  = 0x04,
+	// Named-portal Execute/resume (Task P2): the portal is ALREADY bound on the
+	// backend (a prior named Bind registered it), so the native Execute drive emits
+	// ONLY Execute(portal, max_rows) (+ a folded Describe('P', portal) iff requested),
+	// NOT a fresh Bind. Native-mode + named-portal only.
+	PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND = 0x08,
 };
 
 enum ExtendedQueryPhase : uint8_t {
@@ -156,9 +164,32 @@ struct PgSQL_Extended_Query_Info {
 	const PgSQL_STMT_Global_info* stmt_info;
 	uint64_t stmt_global_id;
 	uint32_t stmt_backend_id;
+	// Row limit for an Execute. Honored on the wire ONLY for NAMED portals
+	// (PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND); the unnamed portal always
+	// emits max_rows 0 (invariant 2 — inherited libpq-parity behavior). Task P2.
+	uint32_t max_rows;
 	uint8_t stmt_type;
 	uint8_t flags;
 	Parse_Param_Types parse_param_types;
+};
+
+// Named-portal registry entry (native-mode only). A named Bind is dispatched to
+// the backend immediately (unlike the single unnamed slot which is deferred),
+// and its real BindComplete is forwarded to the client. The entry owns the raw
+// Bind message bytes so a later Execute/Describe can re-read the bound params,
+// and holds a shared reference to the global statement so it survives the
+// extended-query frame that created it (portals outlive frames inside a txn).
+// Registered/cleared in lib/PgSQL_Session.cpp. See docs/superpowers/specs/
+// 2026-07-07-pgsql-native-extq-stmt-pipeline-design.md §4.
+struct PgSQL_Portal_Entry {
+	std::unique_ptr<const PgSQL_Bind_Message> bind_msg;  // owns raw bytes (param re-readers work)
+	std::shared_ptr<const PgSQL_STMT_Global_info> stmt_info;
+	bool bound_on_backend = false;   // real backend Bind completed
+	bool suspended = false;          // last Execute ended with PortalSuspended
+	// The backend connection the portal was bound on, recorded at BindComplete. Compared
+	// for identity only, never dereferenced: it says which connection's teardown takes
+	// this entry down with it.
+	const PgSQL_Connection* bound_conn = nullptr;
 };
 
 class PgSQL_Query_Info {
@@ -231,6 +262,11 @@ private:
 		std::unique_ptr<PgSQL_Close_Message>, std::unique_ptr<PgSQL_Bind_Message>, std::unique_ptr<PgSQL_Execute_Message>>;
 
 	bool extended_query_exec_qp { false };
+	// Whether a statement in the current unsynced batch has already run on the backend,
+	// which is when PostgreSQL opens the batch's implicit transaction block. Cleared
+	// everywhere extended_query_phase goes back to IDLE: miss one and the next batch's
+	// lone DISCARD ALL is refused for work an already-finished batch did.
+	bool extq_backend_used { false };
 #ifdef PROXYSQL31
 	// Candidate frame: Bind, optional Describe(portal), Execute, client Sync.
 	uint8_t extended_cache_frame_stage { 0 };
@@ -240,6 +276,35 @@ private:
 	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
+
+	// --- Named-portal registry (native-mode only, Task P1) ---
+	// portal name -> bound entry. Populated on a successful named-Bind BindComplete;
+	// cleared when a completed cycle's ReadyForQuery carried txn-state 'I' (backend
+	// destroyed all portals at txn end / implicit-txn Sync), and in reset()/destructor.
+	std::map<std::string, PgSQL_Portal_Entry> named_portals;
+	// Portals whose backend connection was taken away before the registry could be
+	// freed. The entries own the Bind bytes that CurrentQuery -- and the event logger
+	// reading it in RequestEnd() -- still points at, so they are parked here instead of
+	// destroyed, and released at the end of RequestEnd() once that read is done.
+	std::map<std::string, PgSQL_Portal_Entry> detached_portals;
+	// In-flight named Bind: holds the released Bind message + resolved global stmt
+	// while PROCESSING_STMT_BIND dispatches to the backend. Committed into
+	// named_portals only on a successful BindComplete (rc0), so a Bind that the
+	// backend rejects (e.g. 42P03 duplicate portal) leaves any existing entry intact.
+	struct {
+		std::string portal_name;
+		std::unique_ptr<const PgSQL_Bind_Message> bind_msg;
+		std::shared_ptr<const PgSQL_STMT_Global_info> stmt_info;
+		bool active = false;
+	} pending_named_bind;
+	// Portal name of an in-flight named Close('P') round-trip (PROCESSING_STMT_CLOSE):
+	// set before dispatch, consumed by the rc0 epilogue to evict the registry entry
+	// once the backend's CloseComplete '3' is forwarded. Task P2.
+	std::string closing_portal_name;
+	// Discard all named portals (backend already destroyed them at txn end).
+	void clear_named_portals();
+	// Move the in-flight named Bind into named_portals, marked bound_on_backend.
+	void commit_pending_named_bind();
 
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t*, bool*);
@@ -312,7 +377,7 @@ private:
 	int handle_post_sync_execute_message(PgSQL_Execute_Message* execute_msg);
 	void handle_post_sync_error(PGSQL_ERROR_CODES errcode, const char* errmsg, bool fatal);
 	void handle_post_sync_locked_on_hostgroup_error(const char* query, int query_len);
-	void reset_extended_query_frame();
+	void reset_extended_query_frame(bool backend_saw_error = false);
 
 
 	//void return_proxysql_internal(PtrSize_t*);
@@ -399,6 +464,9 @@ private:
 	// these functions have code that used to be inline, and split into functions for readibility
 	int handler_ProcessingQueryError_CheckBackendConnectionStatus(PgSQL_Data_Stream* myds);
 	void SetQueryTimeout();
+	// Whether the statement whose backend connection just failed may be run again on
+	// a fresh one. Shared by every path that offers a retry so they cannot drift.
+	bool query_retry_allowed(PgSQL_Data_Stream* myds);
 	bool handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds);
 	// Synthesize ErrorResponse(25P02) + NoticeResponse(backend text, no 57P01) +
 	// ReadyForQuery('E') to the client, destroy the backend pool connection, set
@@ -432,6 +500,15 @@ private:
 	void handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt);
 	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t* pkt);
 	void handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t* pkt);
+	void handler_refuse_listen(PtrSize_t* pkt);
+	bool listen_can_be_supported();
+	// Set when a LISTEN was allowed past the gate. The gate can only inspect a backend
+	// connection this session already holds; when it acquires one afterwards, that
+	// connection has to be re-checked before the LISTEN runs on it.
+	// Both gates assign it for every statement they see, so one that ends before the
+	// re-check -- served from the cache, refused by a rule -- leaves it set no longer
+	// than until the next statement arrives.
+	bool listen_pending = false;
 	void handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t* pkt);
 
 	/**
@@ -459,6 +536,11 @@ private:
 
 public:
 	void handle_transaction_state();
+
+	// Called when a backend connection is severed from this session. Named portals live
+	// on one specific connection, so the registry must stop describing the ones bound
+	// on this one.
+	void backend_connection_detached(const PgSQL_Connection* conn);
 
 	inline bool is_extended_query_frame_empty() const {
 		return extended_query_frame.empty();
@@ -671,6 +753,8 @@ private:
 	void send_parameter_error_response(const char* error_message, PGSQL_ERROR_CODES code = PGSQL_ERROR_CODES::ERRCODE_INVALID_TEXT_REPRESENTATION);
 	bool handle_kill_success(int32_t pid, int tki, const char* digest_text, PgSQL_Connection* mc, PtrSize_t* pkt);
 	bool handle_literal_kill_query(PtrSize_t* pkt, PgSQL_Connection* mc);
+
+	friend class PgSQL_Session_PortalTeardownTest;  // test/tap/tests/unit/pgsql_named_portal_teardown_unit-t.cpp
 
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>

@@ -45,11 +45,15 @@ void verify_server_variables(PgSQL_Session* session) {
 #endif
 }
 
+// Whether a transaction is open is recorded here from the FIRST WORD of each query, so it is a
+// guess. The backend's own answer can legitimately differ: a client sending "SELECT 1; BEGIN;"
+// leaves a transaction this never saw, and tracking is skipped entirely for a hostgroup-pinned
+// session and when query digests are off. The handlers below warn and give up when the two
+// disagree; they must not assert that they agree, because that aborts the proxy on ordinary SQL.
 void PgSQL_ExplicitTxnStateMgr::start_transaction() {
     if (transaction_state.empty() == false) {
         // Transaction already started, do nothing and return
 		proxy_warning("Received BEGIN command. There is already a transaction in progress\n");
-        assert(session->NumActiveTransactions() > 0);
         return;
     }
 
@@ -77,7 +81,6 @@ void PgSQL_ExplicitTxnStateMgr::start_transaction() {
 void PgSQL_ExplicitTxnStateMgr::commit() {
     if (transaction_state.empty()) {
         proxy_warning("Received COMMIT command. There is no transaction in progress\n");
-        assert(session->NumActiveTransactions() == 0);
         return;
     }
 
@@ -95,7 +98,6 @@ void PgSQL_ExplicitTxnStateMgr::rollback(bool rollback_and_chain) {
 
     if (transaction_state.empty()) {
         proxy_warning("Received ROLLBACK command. There is no transaction in progress\n");
-        assert(session->NumActiveTransactions() == 0);
         return;
     }
 
@@ -109,8 +111,10 @@ void PgSQL_ExplicitTxnStateMgr::rollback(bool rollback_and_chain) {
             uint32_t client_hash = pgsql_variables.client_get_hash(session, idx);
             uint32_t server_hash = pgsql_variables.server_get_hash(session, idx);
 
-            assert(client_hash == server_hash);
-            if (hash == client_hash)
+            // The two can differ here: a connection reset is put off while a transaction is
+            // open. ROLLBACK puts the backend back to its value at BEGIN, which is the snapshot,
+            // so both take it.
+            if (hash == client_hash && hash == server_hash)
                 continue;
 
             pgsql_variables.client_set_hash_and_value(session, idx, var_snapshot.var_value[idx], hash);
@@ -152,7 +156,6 @@ bool PgSQL_ExplicitTxnStateMgr::rollback_to_savepoint(std::string_view name) {
 	
     if (transaction_state.empty()) {
         proxy_warning("Received ROLLBACK TO SAVEPOINT '%s' command. There is no transaction in progress\n", name.data());
-        assert(session->NumActiveTransactions() == 0);
         return false;
     }
     
@@ -181,8 +184,8 @@ bool PgSQL_ExplicitTxnStateMgr::rollback_to_savepoint(std::string_view name) {
 		if (hash != 0) {
 			uint32_t client_hash = pgsql_variables.client_get_hash(session, idx);
 			uint32_t server_hash = pgsql_variables.server_get_hash(session, idx);
-			assert(client_hash == server_hash);
-			if (hash == client_hash)
+			// Can differ while a connection reset is put off; see rollback().
+			if (hash == client_hash && hash == server_hash)
 				continue;
 			pgsql_variables.client_set_hash_and_value(session, idx, var_snapshot.var_value[idx], hash);
 			pgsql_variables.server_set_hash_and_value(session, idx, var_snapshot.var_value[idx], hash);
@@ -214,7 +217,6 @@ bool PgSQL_ExplicitTxnStateMgr::release_savepoint(std::string_view name) {
 
     if (transaction_state.empty()) {
         proxy_warning("Received RELEASE SAVEPOINT '%s' command. There is no transaction in progress\n", name.data());
-        assert(session->NumActiveTransactions() == 0);
         return false;
     }
 
@@ -248,7 +250,6 @@ bool PgSQL_ExplicitTxnStateMgr::add_savepoint(std::string_view name) {
 
     if (transaction_state.empty()) {
         proxy_warning("Received SAVEPOINT '%s' command. There is no transaction in progress\n", name.data());
-        assert(session->NumActiveTransactions() == 0);
         return false;
     }
 

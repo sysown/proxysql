@@ -4,6 +4,9 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include <atomic>
+#include <string>
+
 static constexpr uint16_t PGSQL_MAX_THREADS = 255;
 
 // class PgSQL_STMT_Global_info represents information about a PgSQL Prepared Statement
@@ -70,6 +73,14 @@ public:
 	const PgSQL_STMT_Global_info* find_stmt_info_from_stmt_name(const std::string& client_stmt_name) const;
 
 	/**
+	 * Like find_stmt_info_from_stmt_name, but returns a shared_ptr so the caller can
+	 * keep the global statement alive beyond the client mapping's lifetime (used by
+	 * the named-portal registry, whose entries outlive the extended-query frame).
+	 * Returns nullptr shared_ptr if not present.
+	 */
+	std::shared_ptr<const PgSQL_STMT_Global_info> find_shared_stmt_info_from_stmt_name(const std::string& client_stmt_name) const;
+
+	/**
 	 * Close a client-side prepared statement mapping by its name.
 	 *
 	 *  - If the name exists: decrement the global statement's client refcount,
@@ -88,6 +99,16 @@ public:
 	 * and clears the stmt_name_to_global_info map.
 	 */
 	void client_close_all();
+
+	/**
+	 * Close all backend-side prepared statement mappings (is_client_ == false).
+	 *
+	 * Decrements the server refcount for each associated global statement and
+	 * clears the backend maps. Mirrors the backend branch of ~PgSQL_STMT_Local(),
+	 * for use when the backend's prepared statements are known to be gone (e.g.
+	 * after forwarding DEALLOCATE ALL) but the connection object lives on.
+	 */
+	void backend_close_all();
 
 	/**
 	 * Generate a new backend statement ID.

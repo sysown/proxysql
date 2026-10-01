@@ -33,8 +33,16 @@
 #define AUTH_PAM        111
 #define AUTH_SCRAM_SHA_256      112
 
-#define PG_PKT_STARTUP_V2  0x20000
 #define PG_PKT_STARTUP     0x30000
+
+/* Newest protocol version we implement, in the wire's major<<16|minor form. PostgreSQL puts this
+ * whole number in NegotiateProtocolVersion rather than the minor alone, and libpq compares it as a
+ * whole number, so it has to be sent that way. */
+#define PG_PROTOCOL_LATEST 0x30000
+
+/* A startup packet asking for a protocol version we do not implement, version 2 included. Not a
+ * wire value: it tells the startup handler to name the version in an error message. */
+#define PG_PKT_STARTUP_UNSUPPORTED 0xFFFFFFFF
 #define PG_PKT_CANCEL      80877102
 #define PG_PKT_SSLREQ      80877103
 #define PG_PKT_GSSENCREQ   80877104
@@ -52,6 +60,7 @@
 class ProxySQL_Admin;
 struct PgCredentials;
 struct ScramState;
+
 // Auth-method selection: map the floor (pgsql-authentication_method;
 // 1=cleartext, 2=md5, 3=scram) + the user's stored secret type (a PasswordType, as int) to the
 // AUTHENTICATION_METHOD to challenge with (as int); *reject=true when the stored secret is too weak
@@ -68,6 +77,9 @@ struct pgsql_hdr {
 	uint32_t type;
 	uint32_t len;
 	PtrSize_t data;
+	/* Protocol version the client asked for, on a startup packet only. Zero on every other
+	 * packet. Kept so the startup handler can answer a version it does not speak. */
+	uint32_t version;
 };
 
 class PG_pkt 
@@ -223,6 +235,14 @@ public:
 	void write_AuthenticationRequest(uint32_t auth_type, const uint8_t* data, int len) {
 		write_generic('R', "ib", auth_type, data, len);
 	}
+	void write_NegotiateProtocolVersion(uint32_t latest_version, const std::vector<std::string>& unsupported_options) {
+		start_packet('v');
+		put_uint32(latest_version);
+		put_uint32(unsupported_options.size());
+		for (const std::string& opt : unsupported_options)
+			put_string(opt.c_str());
+		finish_packet();
+	}
 	void write_ReadyForQuery(char txn_state = 'I') {
 		write_generic('Z', "c", txn_state);
 	}
@@ -309,6 +329,15 @@ struct ColumnMetadata {
 #define PGSQL_QUERY_RESULT_EMPTY	0x10
 #define PGSQL_QUERY_RESULT_COPY_OUT	0x20
 #define PGSQL_QUERY_RESULT_NOTICE	0x40
+// Set for a bare per-step acknowledgement that carries no other content:
+// ParseComplete ('1'), NoData ('n'), PortalSuspended ('s'). These terminate a
+// Flush-terminated native stmt-step (mid-frame extended query, e.g. a single
+// PQsendQueryParams round trip) on their own, with no 'T'/'D'/'C'/'Z' message
+// alongside them to otherwise mark the result non-empty. Without this flag,
+// PgSQL_Result_to_PgSQL_wire() sees result_packet_type == PGSQL_QUERY_RESULT_NO_DATA
+// and mistakes a successful bare-ack step for "no result, must be a connection
+// error", tripping its assert.
+#define PGSQL_QUERY_RESULT_ACK	0x80
 
 class PgSQL_Query_Result {
 public:
@@ -453,6 +482,27 @@ public:
 	 *       ready for a new query and that any previous query has completed.
 	 */
 	unsigned int add_ready_status(PGTransactionStatusType txn_status);
+
+	/**
+	 * @brief Stream a raw native backend message into the query result.
+	 *
+	 * Native backend protocol path (Task 1.6c / Phase 2). The backend→frontend
+	 * messages 'T'/'D'/'C'/'I'/'E'/'N'/'S'/'Z'/'A' (and COPY) are byte-for-byte
+	 * the same wire messages ProxySQL forwards to the client, so this method
+	 * reconstructs the raw message (type byte + big-endian int32 length + payload)
+	 * and appends it directly to the result buffer — no intermediate PGresult.
+	 *
+	 * It also updates the result flags/counters and the owning connection's
+	 * side-effect state (error_info, native_txn_status, native_params) per the
+	 * message type, mirroring the libpq add_* helpers.
+	 *
+	 * @param type        The backend message type byte.
+	 * @param payload     The message body (everything AFTER the 4-byte length).
+	 * @param payload_len The length of @p payload in bytes.
+	 *
+	 * @return The number of bytes appended to the query result.
+	 */
+	unsigned int add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len);
 
     /**
      * @brief Adds the start of a COPY OUT response to the packet.
@@ -1090,7 +1140,7 @@ public:
 	 * @return The number of bytes copied to the `PgSQL_Query_Result` object.
 	 *
 	 */
-	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, 
+	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result,
 		const PGresult* result, uint8_t stmt_type);
 
 	/**

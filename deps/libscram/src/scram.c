@@ -215,13 +215,15 @@ ScramState* scram_state_init() {
         scram_state->server_nonce = NULL;
         scram_state->server_first_message = NULL;
         scram_state->SaltedPassword = NULL;
-        scram_state->cbind_flag = '\0';
+        scram_state->cbind_flag = 'n';
         scram_state->adhoc = false;
         scram_state->iterations = 0;
         scram_state->salt = NULL;
         memset(scram_state->ClientKey, 0, sizeof(scram_state->ClientKey));
         memset(scram_state->StoredKey, 0, sizeof(scram_state->StoredKey));
         memset(scram_state->ServerKey, 0, sizeof(scram_state->ServerKey));
+        scram_state->client_cbind_input = NULL;
+        scram_state->client_cbind_input_len = 0;
     }
     return scram_state;
 }
@@ -237,6 +239,7 @@ void free_scram_state(ScramState *scram_state)
 		free(scram_state->client_final_message_without_proof);
 		free(scram_state->server_nonce);
 		free(scram_state->server_first_message);
+		free(scram_state->client_cbind_input);
 		free(scram_state->SaltedPassword);
 		free(scram_state->salt);
 		memset(scram_state, 0, sizeof(*scram_state));
@@ -499,13 +502,34 @@ char *build_client_first_message(ScramState *scram_state)
 		goto failed;
 	scram_state->client_nonce[encoded_len] = '\0';
 
-	len = 8 + strlen(scram_state->client_nonce) + 1;
-	result = malloc(len);
-	if (result == NULL)
-		goto failed;
-	snprintf(result, len, "n,,n=,r=%s", scram_state->client_nonce);
+	/* gs2 header: "n,," for plain SCRAM, "p=tls-server-end-point,," when the
+	 * caller installed a channel-binding input (SCRAM-SHA-256-PLUS). Its length
+	 * drives BOTH the allocation and the offset used to derive
+	 * client_first_message_bare, so the two cannot disagree.
+	 *
+	 * Previously the buffer was sized for the 8-char plain prefix "n,,n=,r=",
+	 * which silently truncated the 29-char channel-bound message, and the bare
+	 * message was taken as "result + 3", which skipped only 3 of the 24 header
+	 * bytes and corrupted the AuthMessage the client proof is computed over.
+	 *
+	 * The PostgreSQL convention is an empty SCRAM username (the real username
+	 * travels in the StartupMessage), hence "n=".
+	 */
+	{
+		const char *gs2 = (scram_state->client_cbind_input != NULL)
+					? "p=tls-server-end-point,," : "n,,";
+		const size_t gs2_len = strlen(gs2);
 
-	scram_state->client_first_message_bare = strdup(result + 3);
+		/* gs2 + "n=,r=" (5) + nonce + NUL. For the plain header this is
+		 * 3 + 5 + nonce + 1, identical to the previous 8 + nonce + 1. */
+		len = gs2_len + 5 + strlen(scram_state->client_nonce) + 1;
+		result = malloc(len);
+		if (result == NULL)
+			goto failed;
+		snprintf(result, len, "%sn=,r=%s", gs2, scram_state->client_nonce);
+
+		scram_state->client_first_message_bare = strdup(result + gs2_len);
+	}
 	if (scram_state->client_first_message_bare == NULL)
 		goto failed;
 
@@ -532,7 +556,24 @@ char *build_client_final_message(ScramState *scram_state,
 	uint8_t client_proof[SCRAM_KEY_LEN];
 	int enclen;
 
-	snprintf(buf, sizeof(buf), "c=biws,r=%s", server_nonce);
+	if (scram_state->client_cbind_input != NULL) {
+		/* Channel-bound client: c=base64(gs2-header || cbind-data).
+		 * The gs2 header "p=tls-server-end-point,," is 24 bytes, so the
+		 * cbind input is at most 24 + 64 (max digest we accept) = 88 bytes;
+		 * base64-encoded = 4*ceil(88/3) = 120 chars, 121 with the NUL that
+		 * is written below -- so b64[128] has 7 bytes of headroom. The full
+		 * prefix "c=<b64>,r=<server_nonce>" easily fits in 512. */
+		char b64[128];
+		int blen = pg_b64_encode(scram_state->client_cbind_input,
+					 scram_state->client_cbind_input_len,
+					 b64, sizeof(b64));
+		if (blen < 0)
+			goto failed;
+		b64[blen] = '\0';
+		snprintf(buf, sizeof(buf), "c=%s,r=%s", b64, server_nonce);
+	} else {
+		snprintf(buf, sizeof(buf), "c=biws,r=%s", server_nonce);
+	}
 
 	scram_state->client_final_message_without_proof = strdup(buf);
 	if (scram_state->client_final_message_without_proof == NULL)
@@ -1417,4 +1458,30 @@ failed:
 	free(salt);
 	free(prep_password);
 	return false;
+}
+
+/*
+ * Set the channel-binding input that will be used by build_client_first_message
+ * (gs2 header selection) and build_client_final_message (c= field composition).
+ * cbind_input must be the full "gs2-header || cbind-data" blob, e.g.
+ * "p=tls-server-end-point,," || digest. Passing NULL/0 reverts to plain SCRAM
+ * (the existing gs2 header "n,," / c="biws" path) and frees any prior input.
+ * The state owns a private copy allocated with malloc; the caller may free its
+ * own buffer after the call returns.
+ */
+void scram_state_set_cbind_input(ScramState *state,
+				 const char *cbind_input, int cbind_input_len)
+{
+	if (state == NULL) return;
+	free(state->client_cbind_input);
+	state->client_cbind_input = NULL;
+	state->client_cbind_input_len = 0;
+	state->cbind_flag = 'n';
+	if (cbind_input == NULL || cbind_input_len <= 0) return;
+	state->client_cbind_input = (char *)malloc((size_t)cbind_input_len + 1);
+	if (state->client_cbind_input == NULL) return;
+	memcpy(state->client_cbind_input, cbind_input, (size_t)cbind_input_len);
+	state->client_cbind_input[cbind_input_len] = '\0';
+	state->client_cbind_input_len = cbind_input_len;
+	state->cbind_flag = 'p';
 }

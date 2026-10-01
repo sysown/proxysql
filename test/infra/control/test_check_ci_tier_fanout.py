@@ -12,6 +12,20 @@ class RouteTests(unittest.TestCase):
  def test_good_and_missing(self):
   rows,c,e=self.fixture();self.assertEqual(validate_routes(rows,c,e,{'g1'},{'g1'}),[])
   self.assertIn('lower-tier coverage lost: v30/g1',validate_routes([],c,e,{'g1'},{'g1'}))
+ def test_external_only_consumer_does_not_require_local_catalogue_entry(self):
+  rows,c,e=self.fixture()
+  e['ci-external.yml']={'jobs':{'test':{'steps':[{'run':'download ci-builds-handoff-sha'}]}}}
+  self.assertEqual(validate_routes(rows,c,e,{'g1'},{'g1'}),[])
+ def test_uncatalogued_local_consumer_is_rejected_directly_and_through_wrappers(self):
+  for nested in [False,True]:
+   with self.subTest(nested=nested):
+    rows,c,e=self.fixture()
+    e['ci-new.yml']={'jobs':{'test':{'steps':[{'run':'download ci-builds-handoff-sha'}]}}}
+    c['CI-new']={'jobs':{'run':{'uses':'./.github/workflows/ci-new.yml'}}}
+    if nested:
+     c['CI-new']['jobs']['run']['uses']='./.github/workflows/wrapper.yml'
+     e['wrapper.yml']={'jobs':{'run':{'uses':'./.github/workflows/ci-new.yml'}}}
+    self.assertIn('uncatalogued consumer ci-new.yml/test',validate_routes(rows,c,e,{'g1'},{'g1'}))
  def test_manual_does_not_cover_automatic(self):
   rows,c,e=self.fixture();c['CI-g1']['on']={'workflow_dispatch':None}
   self.assertIn('automatic/manual mismatch CI-g1',validate_routes(rows,c,e,{'g1'},{'g1'}))

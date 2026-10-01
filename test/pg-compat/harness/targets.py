@@ -14,12 +14,10 @@ connection:
     direct_text          direct_binary
 
 Native-backend axis (spec 2.2): the two ``proxy_native_*`` targets toggle
-``pgsql-use_native_backend_protocol``. That variable does NOT exist in this
-build (PR #5882 unmerged), so ``all_targets`` probes the admin once and marks
-those two targets ``available=False`` with a reason. The differential test
-reports them as pytest SKIPS (never silent omissions, never failures); when
-#5882 merges the probe returns present and they light up with ZERO code
-changes here.
+``pgsql-use_native_backend_protocol``. Stable v3.0 builds do not register
+that variable; v3.1/v4.0 builds do. ``all_targets`` probes the admin once
+and marks unavailable native targets with a reason, reported as pytest
+SKIPS. The libpq and direct targets remain available in every tier.
 
 Env contract (see test/tap/groups/pg-compat/env.sh + run-pg-compat.bash):
 proxy = ``PGCOMPAT_PROXY_HOST``/``PGCOMPAT_PROXY_PORT`` (testuser/testuser,
@@ -35,7 +33,7 @@ from typing import Optional
 import psycopg  # noqa: F401
 
 NATIVE_VAR = "pgsql-use_native_backend_protocol"
-NATIVE_ABSENT_REASON = f"{NATIVE_VAR} absent (PR #5882 not merged)"
+NATIVE_ABSENT_REASON = f"{NATIVE_VAR} unavailable in this build (requires v3.1/v4.0)"
 
 
 def _dsn(host, port, dbname="testuser", user="testuser", pw="testuser"):
@@ -79,8 +77,8 @@ class Target:
 def native_var_present(admin):
     """True iff ProxySQL knows ``pgsql-use_native_backend_protocol``.
 
-    Probes the admin once. Absent today (PR #5882 unmerged) -> the two native
-    targets are marked unavailable.
+    Probes the admin once. An absent variable means the native targets
+    are unavailable, including on Stable v3.0 builds.
     """
     rows = admin.query(
         "SELECT count(*) FROM global_variables "

@@ -15,7 +15,7 @@ PLUGIN_SO := $(PLUGIN_DIR)/proxysql_mysql_router.so
 RUNTIME_PLUGIN := $(PROXYSQL_PATH)/test/tap/tap/_runtime_libs/proxysql_mysql_router.so
 
 IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) \
-	-I$(JSON_IDIR) -I$(MARIADB_IDIR) \
+	-I$(JSON_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) \
 	-I$(PROMETHEUS_IDIR)
 
 OPTZ ?= -O2 -ggdb
