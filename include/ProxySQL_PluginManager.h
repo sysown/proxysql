@@ -9,6 +9,7 @@
 
 #include "ProxySQL_Plugin.h"
 #include "ProxySQL_PluginCLI.h"
+#include "ProxySQL_ClusterPluginHash.h"
 
 #include <cstddef>
 #include <condition_variable>
@@ -68,6 +69,8 @@ public:
 	bool runtime_ready_all(ProxySQL_PluginRuntimeContext& context, std::string& err);
 	bool stop_all();
 	const std::vector<ProxySQL_PluginTableDef>& tables(ProxySQL_PluginDBKind kind) const;
+	// Name and ABI version of every loaded plugin, for the Cluster plugin-set guard.
+	std::vector<ProxySQL_ClusterPluginIdentity> plugin_identities() const;
 	bool dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const;
 
 	void register_table_for_test(const ProxySQL_PluginTableDef& def);
@@ -350,6 +353,7 @@ void proxysql_reset_active_manager_pin_acquisitions_for_test();
 size_t proxysql_active_manager_pin_acquisitions_for_test();
 std::vector<ProxySQL_ServerModuleTable> proxysql_active_server_module_tables(
 	ProxySQL_ServerProtocol protocol);
+std::vector<ProxySQL_ClusterPluginIdentity> proxysql_active_plugin_identities();
 bool proxysql_prepare_active_server_module_runtime(const ProxySQL_ServerModuleSnapshot& snapshot,
 	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
 void proxysql_commit_active_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation);

@@ -1106,6 +1106,17 @@ size_t ProxySQL_PluginManager::size() const {
 	return plugins_.size();
 }
 
+std::vector<ProxySQL_ClusterPluginIdentity> ProxySQL_PluginManager::plugin_identities() const {
+	std::vector<ProxySQL_ClusterPluginIdentity> identities;
+	identities.reserve(plugins_.size());
+	for (const auto& plugin : plugins_) {
+		if (plugin.descriptor == nullptr) continue;
+		identities.push_back({plugin.descriptor->name != nullptr ? plugin.descriptor->name : "",
+			plugin.descriptor->abi_version});
+	}
+	return identities;
+}
+
 const std::vector<ProxySQL_PluginTableDef>& ProxySQL_PluginManager::tables(ProxySQL_PluginDBKind kind) const {
 	static const std::vector<ProxySQL_PluginTableDef> empty_tables {};
 
@@ -2362,6 +2373,12 @@ void proxysql_reset_active_manager_pin_acquisitions_for_test() {
 
 size_t proxysql_active_manager_pin_acquisitions_for_test() {
 	return g_active_manager_pin_acquisitions_for_test.load(std::memory_order_relaxed);
+}
+
+std::vector<ProxySQL_ClusterPluginIdentity> proxysql_active_plugin_identities() {
+	ScopedActiveManagerPin pin;
+	return pin.manager() == nullptr ? std::vector<ProxySQL_ClusterPluginIdentity>{} :
+		pin.manager()->plugin_identities();
 }
 
 std::vector<ProxySQL_ServerModuleTable> proxysql_active_server_module_tables(

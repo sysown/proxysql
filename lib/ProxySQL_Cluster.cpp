@@ -20,6 +20,7 @@
 #include "PgSQL_Authentication.h"
 #include "PgSQL_Query_Processor.h"
 #include "ProxySQL_StartupGate.h"
+#include "ProxySQL_ClusterPluginHash.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -174,6 +175,7 @@ bool proxysql_cluster_monitor_should_query_checksums(bool global_checksum_change
 #endif
 }
 
+
 void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
@@ -233,7 +235,11 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
+#ifdef PROXYSQL40
+				int rc_query = mysql_query(conn, PROXYSQL_CLUSTER_PEER_IDENTITY_QUERY);
+#else
 				int rc_query = mysql_query(conn,(char *)"SELECT @@version");
+#endif /* PROXYSQL40 */
 				if (rc_query == 0) {
 					query_error = NULL;
 					query_error_counter = 0;
@@ -243,7 +249,24 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 					while ((row = mysql_fetch_row(result))) {
 						if (row[0]) {
 							const char* PROXYSQL_VERSION_ = GloMyLdapAuth == nullptr ? PROXYSQL_VERSION : PROXYSQL_VERSION"-Enterprise";
-							if (strcmp(row[0], PROXYSQL_VERSION_)==0) {
+							bool compatible_peer = strcmp(row[0], PROXYSQL_VERSION_) == 0;
+#ifdef PROXYSQL40
+							if (compatible_peer) {
+								// An older peer answers with the version column only.
+								const bool hash_published = mysql_num_fields(result) >= 2 && row[1] != nullptr;
+								const std::string local_hash = proxysql_cluster_local_plugin_set_hash();
+								const std::string peer_hash = hash_published ? row[1] : "";
+								compatible_peer = proxysql_cluster_plugin_set_compatible(
+									local_hash, hash_published, peer_hash);
+								if (!compatible_peer) {
+									proxy_warning("Cluster: different plugin set with peer %s:%d . Remote plugin-set hash: %s . Self: %s\n",
+										node->hostname, node->port,
+										hash_published ? (peer_hash.empty() ? "(not yet computed)" : peer_hash.c_str()) : "(not published)",
+										local_hash.empty() ? "(not yet computed)" : local_hash.c_str());
+								}
+							}
+#endif /* PROXYSQL40 */
+							if (compatible_peer) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Clustering with peer %s:%d . Remote version: %s . Self version: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION_);
 								proxy_info("Cluster: clustering with peer %s:%d . Remote version: %s . Self version: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION_);
 								same_version = true;
@@ -256,14 +279,14 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								proxy_info("Cluster: sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								rc_query = mysql_query(conn, q.c_str());
-							} else {
+							} else if (strcmp(row[0], PROXYSQL_VERSION_) != 0) {
 								proxy_warning("Cluster: different ProxySQL version with peer %s:%d . Remote: %s . Self: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION_);
 							}
 						}
 					}
 					mysql_free_result(result);
 					if (same_version == false) {
-						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Remote peer %s:%d proxysql version is different. Closing connection\n", node->hostname, node->port);
+						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Remote peer %s:%d proxysql version or plugin set is different. Closing connection\n", node->hostname, node->port);
 						mysql_close(conn);
 						conn = mysql_init(NULL);
 						int exit_after_N_seconds = 30; // hardcoded sleep time

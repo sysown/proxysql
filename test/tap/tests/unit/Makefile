@@ -603,7 +603,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_resolution_unit-t \
 	mariadb_tls_server_name_unit-t \
 	pgsql_variables_validator_unit-t \
-	proxysql_utils_unit-t startup_gate_unit-t \
+	proxysql_utils_unit-t startup_gate_unit-t cluster_plugin_set_hash_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
 	pgsql_txn_state_unit-t \

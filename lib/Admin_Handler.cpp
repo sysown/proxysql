@@ -132,6 +132,7 @@ extern char * proxysql_version;
 
 #include "proxysql_find_charset.h"
 #include "ProxySQL_StartupGate.h"
+#include "ProxySQL_ClusterPluginHash.h"
 
 extern int admin_load_main_;
 extern bool admin_nostart_;
@@ -4425,6 +4426,23 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			goto __run_query;
 		}
 	}
+
+#ifdef PROXYSQL40
+	// Cluster peer identity: version and plugin-set hash in one row. Must
+	// precede the "SELECT @@version" prefix match below. The hash is empty
+	// until the plugin lifecycle has finished.
+	if (query_no_space_length == sizeof(PROXYSQL_CLUSTER_PEER_IDENTITY_QUERY) - 1 &&
+		!strncasecmp(PROXYSQL_CLUSTER_PEER_IDENTITY_QUERY, query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		const std::string q = std::string("SELECT '") +
+			(GloMyLdapAuth == nullptr ? PROXYSQL_VERSION : PROXYSQL_VERSION "-Enterprise") +
+			"' AS '@@version', '" + proxysql_cluster_local_plugin_set_hash() +
+			"' AS '@@proxysql_plugin_set_hash'";
+		query = l_strdup(q.c_str());
+		query_length = q.size() + 1;
+		goto __run_query;
+	}
+#endif /* PROXYSQL40 */
 
 	if (!strncasecmp("SELECT @@version", query_no_space, sizeof("SELECT @@version") - 1)) {
 		l_free(query_length,query);

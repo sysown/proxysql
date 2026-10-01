@@ -73,6 +73,7 @@ using json = nlohmann::json;
 #ifdef DEBUG
 #include "proxy_protocol_info.h"
 #include "ProxySQL_StartupGate.h"
+#include "ProxySQL_ClusterPluginHash.h"
 #endif // DEBUG
 
 static char *make_path(const char *directory, const char *filename) {
@@ -1785,6 +1786,21 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	// Runtime-ready callbacks run only now: HGM, Auth, QPro, and MTH all
 	// exist, but no listener has yet been validated or started.
 	RunConfiguredPluginsRuntimeReady();
+
+	// The plugin set and its server-module tables are now final. Publish the
+	// plugin-set hash before Cluster peer threads (gated until the open below)
+	// can compare it: peers sync only when version and plugin set both match.
+	{
+		std::vector<ProxySQL_ServerModuleTable> module_tables =
+			proxysql_active_server_module_tables(ProxySQL_ServerProtocol::mysql);
+		std::vector<ProxySQL_ServerModuleTable> pgsql_module_tables =
+			proxysql_active_server_module_tables(ProxySQL_ServerProtocol::pgsql);
+		module_tables.insert(module_tables.end(), pgsql_module_tables.begin(), pgsql_module_tables.end());
+		const std::string plugin_set_hash = proxysql_cluster_plugin_set_hash(
+			proxysql_active_plugin_identities(), std::move(module_tables));
+		proxysql_cluster_set_local_plugin_set_hash(plugin_set_hash);
+		proxy_info("Cluster: local plugin-set hash %s\n", plugin_set_hash.c_str());
+	}
 
 	// The plugin lifecycle is complete: let Admin commands and Cluster peer
 	// threads run.
