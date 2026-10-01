@@ -354,8 +354,8 @@ int main() {
 	local->weight = 0;
 	regional->weight = 0;
 	remote->weight = 0;
-	ok(hostgroup->get_random_MySrvC(nullptr, 0, -1, session.session) != nullptr,
-		"global selection retains an eligible fallback when all configured weights are zero");
+	ok(hostgroup->get_random_MySrvC(nullptr, 0, -1, session.session) == nullptr,
+		"with all configured weights zero, locality selects no server, exactly as without locality");
 	local->weight = 10;
 	regional->weight = 20;
 	remote->weight = 30;

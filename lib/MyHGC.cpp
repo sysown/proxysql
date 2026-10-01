@@ -297,13 +297,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #ifdef PROXYSQL31
 		mysql_apply_backup_weight_threshold(this, mysrvcCandidates, num_candidates, sum, TotalUsedConn, used_backup);
 #endif
-		const uint64_t candidate_weight_sum =
-#ifdef PROXYSQL40
-			use_aws_locality ? num_candidates : static_cast<uint64_t>(sum);
-#else
-			static_cast<uint64_t>(sum);
-#endif
-		if (candidate_weight_sum == 0) {
+		if (sum==0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
 			// most of the follow code is copied from few lines above
@@ -367,13 +361,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #ifdef PROXYSQL31
 		mysql_apply_backup_weight_threshold(this, mysrvcCandidates, num_candidates, sum, TotalUsedConn, used_backup);
 #endif
-		const uint64_t candidate_weight_sum_after_retry =
-#ifdef PROXYSQL40
-			use_aws_locality ? num_candidates : static_cast<uint64_t>(sum);
-#else
-			static_cast<uint64_t>(sum);
-#endif
-		if (candidate_weight_sum_after_retry == 0) {
+		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
 #ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
@@ -405,13 +393,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 		uint64_t New_sum=sum;
 
-		const uint64_t candidate_weight_sum_post_recovery =
-#ifdef PROXYSQL40
-			use_aws_locality ? num_candidates : static_cast<uint64_t>(sum);
-#else
-			static_cast<uint64_t>(sum);
-#endif
-		if (candidate_weight_sum_post_recovery == 0) {
+		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
 #ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
@@ -472,10 +454,11 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			const uint64_t random_value =
 				(static_cast<uint64_t>(rand_fast()) << 32) |
 				static_cast<uint64_t>(rand_fast());
+			// Effective weights only scale configured weights: a weight-0 server
+			// stays at 0, and the zero-weight checks above already returned NULL
+			// for a hostgroup without weight, exactly as without locality.
 			size_t selected = num_candidates;
-			if (total_weight == 0 && num_candidates != 0) {
-				selected = random_value % num_candidates;
-			} else if (total_weight != 0) {
+			if (total_weight != 0) {
 				const uint64_t target = random_value % total_weight;
 				uint64_t cumulative = 0;
 				for (j = 0; j < num_candidates; ++j) {
