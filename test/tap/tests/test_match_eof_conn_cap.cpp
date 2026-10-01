@@ -210,7 +210,13 @@ int conn_pool_cleanup(MYSQL* admin, int tg_hg, int count) {
 
 const vector<string> test_conn_creation___mysql_config {
 	"SET mysql-connect_retries_delay=" + _TO_S(RETRIES_DELAY),
-	"SET mysql-connect_timeout_server=" + _TO_S(100),
+	// Per-attempt connect timeout. The assertions count every connect attempt as
+	// successful (ConnOK, audit, conn-match log lines). A connect to the SQLite3
+	// backend that times out is retried as a new connection instead, so the counts
+	// drift. 100ms proved too tight for a loaded host (debug build connects take
+	// tens of ms). It must stay below 'connect_timeout_server_max' so that the
+	// retry budget still bounds the number of attempts (TO_SERVER_MAX / RETRIES_DELAY).
+	"SET mysql-connect_timeout_server=" + _TO_S(1000),
 	"SET mysql-connect_timeout_server_max=" + _TO_S(TO_SERVER_MAX),
 	"LOAD MYSQL VARIABLES TO RUNTIME"
 };
