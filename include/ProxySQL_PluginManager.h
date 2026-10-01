@@ -135,6 +135,11 @@ public:
 		std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims);
 	std::vector<ProxySQL_ServerHostgroupClaim> server_hostgroup_claims(
 		ProxySQL_ServerProtocol protocol) const;
+	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims(
+		ProxySQL_ServerProtocol protocol) const;
+	bool install_managed_discovery(ProxySQL_ServerProtocol protocol, uint64_t desired_revision,
+		const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
+		uint64_t& runtime_generation_out, std::string& error);
 	SQLite3_result* server_module_runtime_table_snapshot(
 		ProxySQL_ServerProtocol protocol, const char* table_name);
 	bool unregister_server_module(ProxySQL_ServerProtocol protocol);
@@ -262,6 +267,10 @@ private:
 	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
 	std::vector<uint32_t> server_delegated_hostgroups_[2] {};
 	std::vector<ProxySQL_ServerHostgroupClaim> server_hostgroup_claims_[2] {};
+	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims_[2] {};
+	uint64_t managed_server_revisions_[2] {0, 0};
+	// Requires server_discovery_mutex_. Keeps module and managed ownership separate.
+	void rebuild_server_delegated_hostgroups(int index);
 	server_retirement_observer_for_test_cb server_retirement_observer_for_test_ { nullptr };
 	void *server_retirement_observer_opaque_for_test_ { nullptr };
 #endif /* PROXYSQL40 */

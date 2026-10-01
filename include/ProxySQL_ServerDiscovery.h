@@ -107,6 +107,14 @@ private:
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_claims(
 	ProxySQL_ServerProtocol protocol);
 uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol);
+// Caller holds the Admin SQL mutex. Publishes policy claims and a fresh runtime
+// generation from the retained configuration snapshot, never from HGM health.
+bool proxysql_install_managed_discovery_locked(ProxySQL_ServerProtocol protocol,
+ uint64_t desired_revision, const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
+ uint64_t& runtime_generation_out, std::string& error);
+std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgroup_claims(
+ ProxySQL_ServerProtocol protocol);
+void proxysql_request_server_read_only_monitor(ProxySQL_ServerProtocol protocol);
 #endif
 
 struct ProxySQL_ServerModuleTableSnapshot {

@@ -298,16 +298,16 @@ void test_abi10_fixture_and_invalid_registration() {
 	ok(abi10_fixture != nullptr && abi10_tail_called != nullptr &&
 		mgr.load(PROXYSQL_FAKE_PLUGIN_ABI10_PATH, err) && mgr.init_all(err) && mgr.start_all(err) &&
 		abi10_tail_called(),
-		"a frozen ABI-10 DSO calls its ABI-10 tail through ABI-11 loader/init lifecycle");
+		"a frozen ABI-10 DSO calls its ABI-10 tail through the current loader/init lifecycle");
 	ok(mgr.stop_all(), "ABI-10 fixture stops cleanly");
 	dlclose(abi10_fixture);
-	setenv("PROXYSQL_FAKE_PLUGIN_ABI10_FORCE_ABI12", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_ABI10_FORCE_ABI13", "1", 1);
 	ProxySQL_PluginManager newer_abi_manager;
 	ok(!newer_abi_manager.load(PROXYSQL_FAKE_PLUGIN_ABI10_PATH, err),
-		"ABI-12 descriptor is rejected by the ABI-11 core");
+		"ABI-13 descriptor is rejected by the ABI-12 core");
 	ok(err.find("ABI") != std::string::npos && newer_abi_manager.size() == 0,
-		"ABI-12 rejection does not retain a plugin handle");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI10_FORCE_ABI12");
+		"ABI-13 rejection does not retain a plugin handle");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI10_FORCE_ABI13");
 
 	ProxySQL_ServerModuleHooks no_hook {ProxySQL_ServerProtocol::mysql, {nullptr}, nullptr};
 	ProxySQL_ServerModuleHooks invalid_protocol {

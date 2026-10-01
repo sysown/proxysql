@@ -24,6 +24,7 @@
 #include <functional>
 #include <mutex>
 #include <shared_mutex>
+#include <set>
 #include <strings.h>
 
 #include <openssl/crypto.h>
@@ -1736,17 +1737,8 @@ void ProxySQL_PluginManager::commit_and_install_server_runtime_snapshot(
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 		server_snapshots_[index] = snapshot;
 		server_snapshots_present_[index] = true;
-		std::vector<uint32_t> delegated_hostgroups;
-		delegated_hostgroups.reserve(hostgroup_claims.size() * 2);
-		for (const auto& claim : hostgroup_claims) {
-			delegated_hostgroups.push_back(claim.writer_hostgroup);
-			delegated_hostgroups.push_back(claim.reader_hostgroup);
-		}
-		std::sort(delegated_hostgroups.begin(), delegated_hostgroups.end());
-		delegated_hostgroups.erase(std::unique(delegated_hostgroups.begin(),
-			delegated_hostgroups.end()), delegated_hostgroups.end());
-		server_delegated_hostgroups_[index] = std::move(delegated_hostgroups);
 		server_hostgroup_claims_[index] = std::move(hostgroup_claims);
+		rebuild_server_delegated_hostgroups(index);
 		commit_runtime = server_modules_[index].commit_runtime;
 		legacy_runtime_configuration_installed = server_modules_[index].legacy_runtime_configuration_installed;
 		module_opaque = server_modules_[index].opaque;
@@ -1791,7 +1783,85 @@ std::vector<ProxySQL_ServerHostgroupClaim> ProxySQL_PluginManager::server_hostgr
 	const int index = server_protocol_index(protocol);
 	if (index < 0) return {};
 	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-	return server_hostgroup_claims_[index];
+	auto claims = server_hostgroup_claims_[index];
+	claims.insert(claims.end(), managed_server_hostgroup_claims_[index].begin(),
+		managed_server_hostgroup_claims_[index].end());
+	return claims;
+}
+
+
+void ProxySQL_PluginManager::rebuild_server_delegated_hostgroups(int index) {
+	auto& delegated = server_delegated_hostgroups_[index];
+	delegated.clear();
+	for (const auto* claims : {&server_hostgroup_claims_[index], &managed_server_hostgroup_claims_[index]}) {
+		for (const auto& claim : *claims) {
+			delegated.push_back(claim.writer_hostgroup);
+			delegated.push_back(claim.reader_hostgroup);
+		}
+	}
+	std::sort(delegated.begin(), delegated.end());
+	delegated.erase(std::unique(delegated.begin(), delegated.end()), delegated.end());
+}
+
+std::vector<ProxySQL_ServerHostgroupClaim> ProxySQL_PluginManager::managed_server_hostgroup_claims(
+	ProxySQL_ServerProtocol protocol) const {
+	const int index = server_protocol_index(protocol);
+	if (index < 0) return {};
+	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+	return managed_server_hostgroup_claims_[index];
+}
+
+bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol protocol,
+	uint64_t desired_revision, const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
+	uint64_t& runtime_generation_out, std::string& error) {
+	runtime_generation_out = 0;
+	const int index = server_protocol_index(protocol);
+	if (index < 0 || desired_revision == 0) {
+		error = "invalid managed discovery protocol or revision";
+		return false;
+	}
+	// Same lock order as ordinary server installation and desired-set draining.
+	ScopedServerDiscoveryProtocolLock protocol_lock(protocol);
+	ProxySQL_ServerRuntimeInstallTransaction transaction(protocol, error);
+	if (!transaction) return false;
+	ProxySQL_ServerRuntimeSnapshot snapshot {};
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		if (desired_revision < managed_server_revisions_[index]) {
+			error = "stale managed discovery revision";
+			return false;
+		}
+		// Start-up may install claims before any server seed exists. Otherwise
+		// retain the last explicit configuration, including its topology owners.
+		snapshot = server_snapshots_present_[index] ? server_snapshots_[index] :
+			ProxySQL_ServerRuntimeSnapshot {protocol, 0, {}, {}};
+		std::set<uint32_t> occupied(snapshot.topology_hostgroups.begin(), snapshot.topology_hostgroups.end());
+		for (const auto& claim : server_hostgroup_claims_[index]) {
+			occupied.insert(claim.writer_hostgroup);
+			occupied.insert(claim.reader_hostgroup);
+		}
+		for (const auto& claim : claims) {
+			if (claim.writer_hostgroup == claim.reader_hostgroup ||
+				!occupied.insert(claim.writer_hostgroup).second ||
+				!occupied.insert(claim.reader_hostgroup).second) {
+				error = "overlapping or invalid managed discovery hostgroup claim";
+				return false;
+			}
+		}
+		snapshot.generation = transaction.generation();
+		managed_server_hostgroup_claims_[index] = claims;
+		managed_server_revisions_[index] = desired_revision;
+		rebuild_server_delegated_hostgroups(index);
+	}
+	// The transaction owns the protocol generation reservation. It cannot lose
+	// its CAS, and non-affiliated commit deliberately bypasses SQL module policy.
+	runtime_generation_out = snapshot.generation;
+	const bool committed = transaction.commit(std::move(snapshot), false);
+	assert(committed);
+	if (!committed) { error = "managed discovery generation commit failed"; return false; }
+	proxysql_request_server_read_only_monitor(protocol);
+	error.clear();
+	return true;
 }
 
 SQLite3_result* ProxySQL_PluginManager::server_module_runtime_table_snapshot(
@@ -1837,7 +1907,7 @@ bool ProxySQL_PluginManager::unregister_server_module(ProxySQL_ServerProtocol pr
 	retired = server_modules_[index];
 	server_modules_[index] = {};
 	server_hostgroup_claims_[index].clear();
-	server_delegated_hostgroups_[index].clear();
+	rebuild_server_delegated_hostgroups(index);
 	observer = server_retirement_observer_for_test_;
 	observer_opaque = server_retirement_observer_opaque_for_test_;
 	if (observer != nullptr) {
@@ -2558,6 +2628,27 @@ std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_clai
 	ScopedActiveManagerPin pin;
 	return pin.manager() == nullptr ? std::vector<ProxySQL_ServerHostgroupClaim>{} :
 		pin.manager()->server_hostgroup_claims(protocol);
+}
+
+
+bool proxysql_install_managed_discovery_locked(ProxySQL_ServerProtocol protocol,
+	uint64_t desired_revision, const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
+	uint64_t& runtime_generation_out, std::string& error) {
+	ScopedActiveManagerPin pin;
+	if (pin.manager() == nullptr) {
+		runtime_generation_out = 0;
+		error = "managed discovery requires the initialized plugin manager";
+		return false;
+	}
+	return pin.manager()->install_managed_discovery(protocol, desired_revision, claims,
+		runtime_generation_out, error);
+}
+
+std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgroup_claims(
+	ProxySQL_ServerProtocol protocol) {
+	ScopedActiveManagerPin pin;
+	return pin.manager() == nullptr ? std::vector<ProxySQL_ServerHostgroupClaim>{} :
+		pin.manager()->managed_server_hostgroup_claims(protocol);
 }
 
 SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(

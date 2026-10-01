@@ -168,14 +168,14 @@ const ProxySQL_PluginDescriptor descriptor {
 };
 
 const ProxySQL_PluginDescriptor unsupported_descriptor {
-	"fake_plugin_abi12", 12u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr,
+	"fake_plugin_abi13", 13u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr,
 	nullptr, nullptr, nullptr
 };
 
 } // namespace frozen_abi10
 
 extern "C" const frozen_abi10::ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
-	if (std::getenv("PROXYSQL_FAKE_PLUGIN_ABI10_FORCE_ABI12") != nullptr) {
+	if (std::getenv("PROXYSQL_FAKE_PLUGIN_ABI10_FORCE_ABI13") != nullptr) {
 		return &frozen_abi10::unsupported_descriptor;
 	}
 	return &frozen_abi10::descriptor;
