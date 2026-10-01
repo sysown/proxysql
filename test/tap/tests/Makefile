@@ -647,3 +647,6 @@ parsersql_digest_test-t: parsersql_digest_test
 
 # These tests query the target server capability before selecting native mode.
 pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t: pgsql_native_tier.h
+
+# Both engine API checks share the signed HTTPS and fixture contract.
+mysql-managed_configuration_api-t pgsql-managed_configuration_api-t: managed_configuration_api_helper.h

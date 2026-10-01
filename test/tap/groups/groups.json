@@ -687,5 +687,7 @@
   "vector_features-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "vendored_openssl_version_unit-t" : [ "unit-tests-g1" ],
   "worker_load_unit-t" : [ "unit-tests-g1" ],
-  "worker_waiter_unit-t" : [ "unit-tests-g1" ]
+  "worker_waiter_unit-t" : [ "unit-tests-g1" ],
+  "mysql-managed_configuration_api-t" : [ "aws-managed-mysql-g1","@proxysql_min_version:4.0" ],
+  "pgsql-managed_configuration_api-t" : [ "aws-managed-pgsql-g1","@proxysql_min_version:4.0" ]
 }
