@@ -4384,9 +4384,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 		myhgc->attributes.multiplex                    = multiplex;
 		myhgc->attributes.connection_warming           = connection_warming;
 		myhgc->attributes.throttle_connections_per_sec = throttle_connections_per_sec;
-		if (myhgc->attributes.init_connect != NULL)
-			free(myhgc->attributes.init_connect);
-		myhgc->attributes.init_connect = strdup(init_connect);
+		myhgc->set_attribute_init_connect(init_connect);
 		if (myhgc->attributes.comment != NULL)
 			free(myhgc->attributes.comment);
 		myhgc->attributes.comment = strdup(comment);

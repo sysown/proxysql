@@ -3068,9 +3068,9 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 						MySQL_Connection_userinfo *ui=c->userinfo;
 						KillArgs *ka = nullptr;
 						if (c->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
-							const char *region = mysrvc->myhgc != nullptr &&
-								mysrvc->myhgc->attributes.aws_iam_region != nullptr
-									? mysrvc->myhgc->attributes.aws_iam_region : "";
+							const std::string region_copy = mysrvc->myhgc != nullptr
+								? mysrvc->myhgc->attribute_aws_iam_region() : "";
+							const char *region = region_copy.c_str();
 							ka = new KillArgs(
 								ui->username, nullptr, mysrvc->address, mysrvc->port,
 								mysrvc->myhgc->hid, c->mysql->thread_id,
@@ -6747,8 +6747,7 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
  */
 void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc) {
 	const uint32_t hid = myhgc->hid;
-	free(myhgc->attributes.aws_iam_region);
-	myhgc->attributes.aws_iam_region = NULL;
+	myhgc->set_attribute_aws_iam_region(NULL);
 #ifdef PROXYSQL40
 	myhgc->attributes.aws_locality_policy = {};
 #endif
@@ -6812,7 +6811,7 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 								(c >= '0' && c <= '9') || c == '-';
 						});
 					if (valid_region) {
-						myhgc->attributes.aws_iam_region = strdup(region.c_str());
+						myhgc->set_attribute_aws_iam_region(region.c_str());
 					} else {
 						proxy_error("Invalid 'aws_iam_region' value for hostgroup %d. Value rejected.\n", hid);
 					}
@@ -6983,9 +6982,7 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		myhgc->attributes.multiplex                    = multiplex;
 		myhgc->attributes.connection_warming           = connection_warming;
 		myhgc->attributes.throttle_connections_per_sec = throttle_connections_per_sec;
-		if (myhgc->attributes.init_connect != NULL)
-			free(myhgc->attributes.init_connect);
-		myhgc->attributes.init_connect = strdup(init_connect);
+		myhgc->set_attribute_init_connect(init_connect);
 		if (myhgc->attributes.comment != NULL)
 			free(myhgc->attributes.comment);
 		myhgc->attributes.comment = strdup(comment);

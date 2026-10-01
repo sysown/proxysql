@@ -82,14 +82,12 @@ void BaseHGC<HGC>::reset_attributes() {
 #endif
 	attributes.multiplex = true;
 	attributes.connection_warming = false;
-	free(attributes.init_connect);
-	attributes.init_connect = NULL;
+	set_attribute_init_connect(NULL);
 	free(attributes.comment);
 	attributes.comment = NULL;
 	free(attributes.ignore_session_variables_text);
 	attributes.ignore_session_variables_text = NULL;
-	free(attributes.aws_iam_region);
-	attributes.aws_iam_region = NULL;
+	set_attribute_aws_iam_region(NULL);
 #ifdef PROXYSQL40
 	attributes.aws_locality_policy = {};
 #endif
@@ -97,6 +95,34 @@ void BaseHGC<HGC>::reset_attributes() {
 		delete attributes.ignore_session_variables_json;
 		attributes.ignore_session_variables_json = NULL;
 	}
+}
+
+template<typename HGC>
+std::string BaseHGC<HGC>::attribute_init_connect() const {
+	std::shared_lock<std::shared_mutex> lock(attributes_strings_lock);
+	return attributes.init_connect != NULL ? attributes.init_connect : "";
+}
+
+template<typename HGC>
+std::string BaseHGC<HGC>::attribute_aws_iam_region() const {
+	std::shared_lock<std::shared_mutex> lock(attributes_strings_lock);
+	return attributes.aws_iam_region != NULL ? attributes.aws_iam_region : "";
+}
+
+template<typename HGC>
+void BaseHGC<HGC>::set_attribute_init_connect(const char* value) {
+	char* replacement = value != NULL ? strdup(value) : NULL;
+	std::unique_lock<std::shared_mutex> lock(attributes_strings_lock);
+	free(attributes.init_connect);
+	attributes.init_connect = replacement;
+}
+
+template<typename HGC>
+void BaseHGC<HGC>::set_attribute_aws_iam_region(const char* value) {
+	char* replacement = value != NULL ? strdup(value) : NULL;
+	std::unique_lock<std::shared_mutex> lock(attributes_strings_lock);
+	free(attributes.aws_iam_region);
+	attributes.aws_iam_region = replacement;
 }
 
 template<typename HGC>
@@ -136,3 +162,12 @@ void BaseHGC<HGC>::log_num_online_server_count_error() {
 			hid, num_online_servers.load(std::memory_order_relaxed), attributes.max_num_online_servers);
 	}
 }
+
+template std::string BaseHGC<MyHGC>::attribute_init_connect() const;
+template std::string BaseHGC<MyHGC>::attribute_aws_iam_region() const;
+template void BaseHGC<MyHGC>::set_attribute_init_connect(const char*);
+template void BaseHGC<MyHGC>::set_attribute_aws_iam_region(const char*);
+template std::string BaseHGC<PgSQL_HGC>::attribute_init_connect() const;
+template std::string BaseHGC<PgSQL_HGC>::attribute_aws_iam_region() const;
+template void BaseHGC<PgSQL_HGC>::set_attribute_init_connect(const char*);
+template void BaseHGC<PgSQL_HGC>::set_attribute_aws_iam_region(const char*);

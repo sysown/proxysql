@@ -31,6 +31,8 @@ class MetricsCollector;
 #include <thread>
 #include <iostream>
 #include <mutex>
+#include <shared_mutex>
+#include <string>
 
 // Headers for declaring Prometheus counters
 #include "prometheus/counter.h"
@@ -130,6 +132,17 @@ class BaseHGC {	// MySQL Host Group Container
 		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
 		nlohmann::json * ignore_session_variables_json = nullptr; // the JSON format of ignore_session_variables
 	} attributes;
+	/**
+	 * @brief Guards the attribute strings a configuration reload replaces and
+	 *   threads outside the Hostgroup Manager lock read: worker threads read
+	 *   init_connect and aws_iam_region when they open backend connections.
+	 *   Read them through the getters (a copy); replace them through the setters.
+	 */
+	mutable std::shared_mutex attributes_strings_lock;
+	std::string attribute_init_connect() const;
+	std::string attribute_aws_iam_region() const;
+	void set_attribute_init_connect(const char* value);
+	void set_attribute_aws_iam_region(const char* value);
 	struct {
 		int64_t weight;
 		int64_t max_connections;
