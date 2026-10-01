@@ -9,107 +9,104 @@
 #include <map>
 #include <mutex>
 
-#define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V1_4 "CREATE TABLE mysql_connections (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, PRIMARY KEY (timestamp))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V1_4 = "CREATE TABLE mysql_connections (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, PRIMARY KEY (timestamp))";
 
-#define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V2_0 "CREATE TABLE mysql_connections (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, GTID_consistent_queries INT NOT NULL, PRIMARY KEY (timestamp))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V2_0 = "CREATE TABLE mysql_connections (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, GTID_consistent_queries INT NOT NULL, PRIMARY KEY (timestamp))";
 
-#define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V2_0
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS = STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V2_0;
 
-#define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_V2_4_0 "CREATE TABLE history_mysql_status_variables (timestamp INT NOT NULL , variable_id INT NOT NULL , variable_value VARCHAR NOT NULL , PRIMARY KEY (timestamp, variable_id))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_V2_4_0 = "CREATE TABLE history_mysql_status_variables (timestamp INT NOT NULL , variable_id INT NOT NULL , variable_value VARCHAR NOT NULL , PRIMARY KEY (timestamp, variable_id))";
 
-#define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_V2_4_0
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES = STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_V2_4_0;
 
-#define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_LOOKUP_V2_4_0 "CREATE TABLE  history_mysql_status_variables_lookup (variable_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, variable_name VARCHAR NOT NULL, UNIQUE (variable_name))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_LOOKUP_V2_4_0 = "CREATE TABLE  history_mysql_status_variables_lookup (variable_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, variable_name VARCHAR NOT NULL, UNIQUE (variable_name))";
 
-#define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_LOOKUP STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_LOOKUP_V2_4_0
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_LOOKUP = STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_LOOKUP_V2_4_0;
 
-#define STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL_V2_0_10 "CREATE TABLE history_stats_mysql_connection_pool (timestamp INT NOT NULL , hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Queries_GTID_sync INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT, PRIMARY KEY (timestamp, hostgroup , srv_host , srv_port))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL_V2_0_10 = "CREATE TABLE history_stats_mysql_connection_pool (timestamp INT NOT NULL , hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Queries_GTID_sync INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT, PRIMARY KEY (timestamp, hostgroup , srv_host , srv_port))";
 
-#define STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL_V2_0_10
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL = STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL_V2_0_10;
 
-#define STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_V2_0  "CREATE TABLE myhgm_connections (timestamp INT NOT NULL, MyHGM_myconnpoll_destroy INT NOT NULL, MyHGM_myconnpoll_get INT NOT NULL, MyHGM_myconnpoll_get_ok INT NOT NULL, MyHGM_myconnpoll_push INT NOT NULL, MyHGM_myconnpoll_reset INT NOT NULL, PRIMARY KEY (timestamp))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_V2_0 = "CREATE TABLE myhgm_connections (timestamp INT NOT NULL, MyHGM_myconnpoll_destroy INT NOT NULL, MyHGM_myconnpoll_get INT NOT NULL, MyHGM_myconnpoll_get_ok INT NOT NULL, MyHGM_myconnpoll_push INT NOT NULL, MyHGM_myconnpoll_reset INT NOT NULL, PRIMARY KEY (timestamp))";
 
-#define STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_V2_0
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS = STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_V2_0;
 
-#define STATSDB_SQLITE_TABLE_SYSTEM_CPU "CREATE TABLE system_cpu (timestamp INT NOT NULL, tms_utime INT NOT NULL, tms_stime INT NOT NULL, PRIMARY KEY (timestamp))"
-
-#ifndef NOJEM
-#define STATSDB_SQLITE_TABLE_SYSTEM_MEMORY "CREATE TABLE system_memory (timestamp INT NOT NULL, allocated INT NOT NULL, resident INT NOT NULL, active INT NOT NULL, mapped INT NOT NULL, metadata INT NOT NULL, retained INT NOT NULL, PRIMARY KEY (timestamp))"
-#endif
-
-#define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V1_4 "CREATE TABLE mysql_connections_hour (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, PRIMARY KEY (timestamp))"
-
-#define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V2_0 "CREATE TABLE mysql_connections_hour (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, GTID_consistent_queries INT NOT NULL, PRIMARY KEY (timestamp))"
-
-#define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V2_0
-
-#define STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_HOUR_V2_0  "CREATE TABLE myhgm_connections_hour (timestamp INT NOT NULL, MyHGM_myconnpoll_destroy INT NOT NULL, MyHGM_myconnpoll_get INT NOT NULL, MyHGM_myconnpoll_get_ok INT NOT NULL, MyHGM_myconnpoll_push INT NOT NULL, MyHGM_myconnpoll_reset INT NOT NULL, PRIMARY KEY (timestamp))"
-
-#define STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_HOUR STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_HOUR_V2_0
-
-
-
-#define STATSDB_SQLITE_TABLE_SYSTEM_CPU_HOUR "CREATE TABLE system_cpu_hour (timestamp INT NOT NULL, tms_utime INT NOT NULL, tms_stime INT NOT NULL, PRIMARY KEY (timestamp))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_SYSTEM_CPU = "CREATE TABLE system_cpu (timestamp INT NOT NULL, tms_utime INT NOT NULL, tms_stime INT NOT NULL, PRIMARY KEY (timestamp))";
 
 #ifndef NOJEM
-#define STATSDB_SQLITE_TABLE_SYSTEM_MEMORY_HOUR "CREATE TABLE system_memory_hour (timestamp INT NOT NULL, allocated INT NOT NULL, resident INT NOT NULL, active INT NOT NULL, mapped INT NOT NULL, metadata INT NOT NULL, retained INT NOT NULL, PRIMARY KEY (timestamp))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_SYSTEM_MEMORY = "CREATE TABLE system_memory (timestamp INT NOT NULL, allocated INT NOT NULL, resident INT NOT NULL, active INT NOT NULL, mapped INT NOT NULL, metadata INT NOT NULL, retained INT NOT NULL, PRIMARY KEY (timestamp))";
 #endif
 
-#define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V1_4 "CREATE TABLE mysql_connections_day (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, PRIMARY KEY (timestamp))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V1_4 = "CREATE TABLE mysql_connections_hour (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, PRIMARY KEY (timestamp))";
 
-#define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V2_0 "CREATE TABLE mysql_connections_day (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, GTID_consistent_queries INT NOT NULL, PRIMARY KEY (timestamp))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V2_0 = "CREATE TABLE mysql_connections_hour (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, GTID_consistent_queries INT NOT NULL, PRIMARY KEY (timestamp))";
 
-#define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V2_0
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR = STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V2_0;
 
-#define STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_DAY_V2_0  "CREATE TABLE myhgm_connections_day (timestamp INT NOT NULL, MyHGM_myconnpoll_destroy INT NOT NULL, MyHGM_myconnpoll_get INT NOT NULL, MyHGM_myconnpoll_get_ok INT NOT NULL, MyHGM_myconnpoll_push INT NOT NULL, MyHGM_myconnpoll_reset INT NOT NULL, PRIMARY KEY (timestamp))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_HOUR_V2_0 = "CREATE TABLE myhgm_connections_hour (timestamp INT NOT NULL, MyHGM_myconnpoll_destroy INT NOT NULL, MyHGM_myconnpoll_get INT NOT NULL, MyHGM_myconnpoll_get_ok INT NOT NULL, MyHGM_myconnpoll_push INT NOT NULL, MyHGM_myconnpoll_reset INT NOT NULL, PRIMARY KEY (timestamp))";
 
-#define STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_DAY STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_DAY_V2_0
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_HOUR = STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_HOUR_V2_0;
 
 
-#define STATSDB_SQLITE_TABLE_SYSTEM_CPU_DAY "CREATE TABLE system_cpu_day (timestamp INT NOT NULL, tms_utime INT NOT NULL, tms_stime INT NOT NULL, PRIMARY KEY (timestamp))"
+
+inline constexpr const char *STATSDB_SQLITE_TABLE_SYSTEM_CPU_HOUR = "CREATE TABLE system_cpu_hour (timestamp INT NOT NULL, tms_utime INT NOT NULL, tms_stime INT NOT NULL, PRIMARY KEY (timestamp))";
 
 #ifndef NOJEM
-#define STATSDB_SQLITE_TABLE_SYSTEM_MEMORY_DAY "CREATE TABLE system_memory_day (timestamp INT NOT NULL, allocated INT NOT NULL, resident INT NOT NULL, active INT NOT NULL, mapped INT NOT NULL, metadata INT NOT NULL, retained INT NOT NULL, PRIMARY KEY (timestamp))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_SYSTEM_MEMORY_HOUR = "CREATE TABLE system_memory_hour (timestamp INT NOT NULL, allocated INT NOT NULL, resident INT NOT NULL, active INT NOT NULL, mapped INT NOT NULL, metadata INT NOT NULL, retained INT NOT NULL, PRIMARY KEY (timestamp))";
+#endif
+
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V1_4 = "CREATE TABLE mysql_connections_day (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, PRIMARY KEY (timestamp))";
+
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V2_0 = "CREATE TABLE mysql_connections_day (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, GTID_consistent_queries INT NOT NULL, PRIMARY KEY (timestamp))";
+
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY = STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V2_0;
+
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_DAY_V2_0 = "CREATE TABLE myhgm_connections_day (timestamp INT NOT NULL, MyHGM_myconnpoll_destroy INT NOT NULL, MyHGM_myconnpoll_get INT NOT NULL, MyHGM_myconnpoll_get_ok INT NOT NULL, MyHGM_myconnpoll_push INT NOT NULL, MyHGM_myconnpoll_reset INT NOT NULL, PRIMARY KEY (timestamp))";
+
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_DAY = STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_DAY_V2_0;
+
+
+inline constexpr const char *STATSDB_SQLITE_TABLE_SYSTEM_CPU_DAY = "CREATE TABLE system_cpu_day (timestamp INT NOT NULL, tms_utime INT NOT NULL, tms_stime INT NOT NULL, PRIMARY KEY (timestamp))";
+
+#ifndef NOJEM
+inline constexpr const char *STATSDB_SQLITE_TABLE_SYSTEM_MEMORY_DAY = "CREATE TABLE system_memory_day (timestamp INT NOT NULL, allocated INT NOT NULL, resident INT NOT NULL, active INT NOT NULL, mapped INT NOT NULL, metadata INT NOT NULL, retained INT NOT NULL, PRIMARY KEY (timestamp))";
 #endif
 
 
-#define STATSDB_SQLITE_TABLE_MYSQL_QUERY_CACHE "CREATE TABLE mysql_query_cache (timestamp INT NOT NULL, count_GET INT NOT NULL, count_GET_OK INT NOT NULL, count_SET INT NOT NULL, bytes_IN INT NOT NULL, bytes_OUT INT NOT NULL, Entries_Purged INT NOT NULL, Entries_In_Cache INT NOT NULL, Memory_Bytes INT NOT NULL, PRIMARY KEY (timestamp))"
-#define STATSDB_SQLITE_TABLE_MYSQL_QUERY_CACHE_HOUR "CREATE TABLE mysql_query_cache_hour (timestamp INT NOT NULL, count_GET INT NOT NULL, count_GET_OK INT NOT NULL, count_SET INT NOT NULL, bytes_IN INT NOT NULL, bytes_OUT INT NOT NULL, Entries_Purged INT NOT NULL, Entries_In_Cache INT NOT NULL, Memory_Bytes INT NOT NULL, PRIMARY KEY (timestamp))"
-#define STATSDB_SQLITE_TABLE_MYSQL_QUERY_CACHE_DAY "CREATE TABLE mysql_query_cache_day (timestamp INT NOT NULL, count_GET INT NOT NULL, count_GET_OK INT NOT NULL, count_SET INT NOT NULL, bytes_IN INT NOT NULL, bytes_OUT INT NOT NULL, Entries_Purged INT NOT NULL, Entries_In_Cache INT NOT NULL, Memory_Bytes INT NOT NULL, PRIMARY KEY (timestamp))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_QUERY_CACHE = "CREATE TABLE mysql_query_cache (timestamp INT NOT NULL, count_GET INT NOT NULL, count_GET_OK INT NOT NULL, count_SET INT NOT NULL, bytes_IN INT NOT NULL, bytes_OUT INT NOT NULL, Entries_Purged INT NOT NULL, Entries_In_Cache INT NOT NULL, Memory_Bytes INT NOT NULL, PRIMARY KEY (timestamp))";
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_QUERY_CACHE_HOUR = "CREATE TABLE mysql_query_cache_hour (timestamp INT NOT NULL, count_GET INT NOT NULL, count_GET_OK INT NOT NULL, count_SET INT NOT NULL, bytes_IN INT NOT NULL, bytes_OUT INT NOT NULL, Entries_Purged INT NOT NULL, Entries_In_Cache INT NOT NULL, Memory_Bytes INT NOT NULL, PRIMARY KEY (timestamp))";
+inline constexpr const char *STATSDB_SQLITE_TABLE_MYSQL_QUERY_CACHE_DAY = "CREATE TABLE mysql_query_cache_day (timestamp INT NOT NULL, count_GET INT NOT NULL, count_GET_OK INT NOT NULL, count_SET INT NOT NULL, bytes_IN INT NOT NULL, bytes_OUT INT NOT NULL, Entries_Purged INT NOT NULL, Entries_In_Cache INT NOT NULL, Memory_Bytes INT NOT NULL, PRIMARY KEY (timestamp))";
 
 
 
-#define STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_V2_4_0 "CREATE TABLE history_pgsql_status_variables (timestamp INT NOT NULL , variable_id INT NOT NULL , variable_value VARCHAR NOT NULL , PRIMARY KEY (timestamp, variable_id))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_V2_4_0 = "CREATE TABLE history_pgsql_status_variables (timestamp INT NOT NULL , variable_id INT NOT NULL , variable_value VARCHAR NOT NULL , PRIMARY KEY (timestamp, variable_id))";
 
-#define STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_V2_4_0
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES = STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_V2_4_0;
 
-#define STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_LOOKUP_V2_4_0 "CREATE TABLE  history_pgsql_status_variables_lookup (variable_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, variable_name VARCHAR NOT NULL, UNIQUE (variable_name))"
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_LOOKUP_V2_4_0 = "CREATE TABLE  history_pgsql_status_variables_lookup (variable_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, variable_name VARCHAR NOT NULL, UNIQUE (variable_name))";
 
-#define STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_LOOKUP STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_LOOKUP_V2_4_0
-
-
-#define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_DIGEST "CREATE TABLE history_mysql_query_digest (dump_time INT , hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL)"
-#define STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_DIGEST "CREATE TABLE history_pgsql_query_digest (dump_time INT , hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL)"
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_LOOKUP = STATSDB_SQLITE_TABLE_HISTORY_PGSQL_STATUS_VARIABLES_LOOKUP_V2_4_0;
 
 
-#define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS "CREATE TABLE history_mysql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , schemaname TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , last_insert_id INTEGER , rows_sent INTEGER , client_stmt_id INTEGER , gtid TEXT , errno INT , error TEXT)"
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_DIGEST = "CREATE TABLE history_mysql_query_digest (dump_time INT , hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL)";
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_DIGEST = "CREATE TABLE history_pgsql_query_digest (dump_time INT , hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL)";
+
+
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS = "CREATE TABLE history_mysql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , schemaname TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , last_insert_id INTEGER , rows_sent INTEGER , client_stmt_id INTEGER , gtid TEXT , errno INT , error TEXT)";
 /**
  * @brief On-disk PostgreSQL query events table used by advanced events logging.
  */
-#define STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_EVENTS "CREATE TABLE history_pgsql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , database TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , rows_sent INTEGER , client_stmt_name TEXT , sqlstate TEXT , error TEXT)"
+inline constexpr const char *STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_EVENTS = "CREATE TABLE history_pgsql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , database TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , rows_sent INTEGER , client_stmt_name TEXT , sqlstate TEXT , error TEXT)";
 
 // Generic time-series metrics table
 #ifdef PROXYSQLTSDB
-#define STATSDB_SQLITE_TABLE_TSDB_METRICS \
-"CREATE TABLE tsdb_metrics (timestamp INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT NOT NULL DEFAULT '{}', value REAL, PRIMARY KEY (timestamp, metric_name, labels)) WITHOUT ROWID"
+inline constexpr const char *STATSDB_SQLITE_TABLE_TSDB_METRICS = "CREATE TABLE tsdb_metrics (timestamp INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT NOT NULL DEFAULT '{}', value REAL, PRIMARY KEY (timestamp, metric_name, labels)) WITHOUT ROWID";
 
 // Hourly downsampled table
-#define STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR \
-"CREATE TABLE tsdb_metrics_hour (bucket INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT NOT NULL DEFAULT '{}', avg_value REAL, max_value REAL, min_value REAL, count INT, PRIMARY KEY (bucket, metric_name, labels)) WITHOUT ROWID"
+inline constexpr const char *STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR = "CREATE TABLE tsdb_metrics_hour (bucket INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT NOT NULL DEFAULT '{}', avg_value REAL, max_value REAL, min_value REAL, count INT, PRIMARY KEY (bucket, metric_name, labels)) WITHOUT ROWID";
 
 // Backend health monitoring table
-#define STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH \
-"CREATE TABLE tsdb_backend_health (timestamp INT NOT NULL, hostgroup INT NOT NULL, hostname TEXT NOT NULL, port INT NOT NULL, probe_up INT NOT NULL, connect_ms INT, PRIMARY KEY (timestamp, hostgroup, hostname, port)) WITHOUT ROWID"
+inline constexpr const char *STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH = "CREATE TABLE tsdb_backend_health (timestamp INT NOT NULL, hostgroup INT NOT NULL, hostname TEXT NOT NULL, port INT NOT NULL, probe_up INT NOT NULL, connect_ms INT, PRIMARY KEY (timestamp, hostgroup, hostname, port)) WITHOUT ROWID";
 #endif
 
 class ProxySQL_Statistics {
