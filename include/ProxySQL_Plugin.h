@@ -18,6 +18,9 @@
 #include "ProxySQL_PluginConfig.h"
 
 #include "ProxySQL_ServerDiscovery.h"
+#include "ProxySQL_ManagedConfiguration.h"
+#include "ProxySQL_ManagedRuntime.h"
+#include "ProxySQL_ConfigurationAccess.h"
 
 class SQLite3DB;
 class SQLite3_result;
@@ -68,6 +71,9 @@ namespace prometheus { class Registry; }
 //   ABI 11: ProxySQL_PluginServices appends provider-neutral server discovery
 //          module/controller registration and desired-set submission.
 //
+//   ABI 12: appends the managed configuration service descriptor accessor
+//          and configuration-lock/runtime adapter service callbacks.
+//
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //
 // A handful of core headers add fields ONLY under `#ifdef DEBUG` --
@@ -85,8 +91,8 @@ namespace prometheus { class Registry; }
 // A plugin built without -DDEBUG, loaded into a core built with
 // -DDEBUG (or vice versa), silently disagrees with the core about these
 // offsets while still reporting a numerically "compatible" abi_version
-// under the plain ABI 1..11 scheme above (e.g. a release plugin's
-// abi_version=11 is <= a debug core's max=11, so the ordinary
+// under the plain ABI 1..12 scheme above (e.g. a release plugin's
+// abi_version=11 is <= a debug core's max=12, so the ordinary
 // forward-compatibility range check does not catch it).
 //
 // What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
@@ -128,23 +134,23 @@ namespace prometheus { class Registry; }
 //
 // PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
 // (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
-// in a numeric space (bit 30) the plain layout-version numbers (1..11,
+// in a numeric space (bit 30) the plain layout-version numbers (1..12,
 // and unlikely to reach 2^30 for a long time) never touch, so a
 // DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
 // "compatible" via ordinary integer range comparison -- the loader
 // checks this bit for an EXACT match, as a step separate from (and in
-// addition to) the ABI 1..11 forward-compatibility range check below.
+// addition to) the ABI 1..12 forward-compatibility range check below.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
 
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 11u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 11u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 12u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 12u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 #else
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
 #endif
-// Layout-only ceiling used for the ABI 1..11 range check. Callers must mask
+// Layout-only ceiling used for the ABI 1..12 range check. Callers must mask
 // off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
 // against this constant -- see lib/ProxySQL_PluginManager.cpp.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
@@ -527,6 +533,15 @@ struct ProxySQL_PluginServices {
 	proxysql_plugin_install_server_discovery_controller_cb install_server_discovery_controller;
 	proxysql_plugin_uninstall_server_discovery_controller_cb uninstall_server_discovery_controller;
 	proxysql_plugin_post_server_desired_set_cb post_server_desired_set;
+	// ABI 12: caller-held Admin mutex and thin existing-runtime adapters.
+	// No network calls or plugin transactions inside these operations.
+	void (*lock_configuration)();
+	void (*unlock_configuration)() noexcept;
+	SQLite3DB* (*configdb_locked)();
+	bool (*prepare_managed_runtime_locked)(const ManagedRuntimePlan&,
+		ManagedPreparedRuntime**, std::string&);
+	ManagedRuntimeResult (*activate_managed_runtime_locked)(ManagedPreparedRuntime&, uint64_t);
+	void (*destroy_managed_prepared_runtime)(ManagedPreparedRuntime*) noexcept;
 #endif /* PROXYSQL40 */
 };
 
@@ -598,6 +613,10 @@ struct ProxySQL_PluginDescriptor {
 	// ABI 8: invoked after core runtime dependencies exist and immediately
 	// before listener validation/start. Core reads this tail only for ABI >= 8.
 	proxysql_plugin_runtime_ready_cb runtime_ready;
+	// ABI 12: only the management provider supplies this accessor. Core reads
+	// this tail only for ABI >= 12, after successful init(). Required when
+	// aws_managed is enabled; service lifetime is the plugin lifetime.
+	const ProxySQL_ManagedConfigurationServiceV1* (*managed_configuration_service)();
 #endif /* PROXYSQL40 */
 };
 
