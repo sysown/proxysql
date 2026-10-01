@@ -274,6 +274,10 @@ private:
 	bool try_extended_query_cache(PgSQL_Execute_Message* execute_msg);
 #endif
 	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
+	// ADMIN/STATS sessions reject the extended-query protocol. Set once the
+	// rejection ErrorResponse was sent: further extended-query messages are
+	// discarded until Sync, which is answered with a single ReadyForQuery.
+	bool admin_extq_rejected { false };
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
 
