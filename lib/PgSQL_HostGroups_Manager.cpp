@@ -4,6 +4,7 @@ using json = nlohmann::json;
 
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_ServerDiscovery.h"
+#include "ProxySQL_ServerModuleCluster.h"
 #include "ConnectionPoolDecision.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -1244,6 +1245,11 @@ void PgSQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 	CUCFT1(myhash,init,"pgsql_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS]);
 	CUCFT1(myhash,init,"pgsql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::PgSQL_HOSTGROUP_ATTRIBUTES]);
 	CUCFT1(myhash,init,"pgsql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS_SSL_PARAMS]);
+#ifdef PROXYSQL40
+	// Server-module (plugin) tables belong to the same module: same checksum,
+	// version and epoch as the core servers tables.
+	proxysql_server_module_cluster_hash_loaded_tables(ProxySQL_ServerProtocol::pgsql, myhash, init);
+#endif /* PROXYSQL40 */
 }
 
 /**

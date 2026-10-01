@@ -273,6 +273,10 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 		proxy_error("Unable to collect built-in topology claims: %s\n", error.c_str());
 		return false;
 	}
+	// The tables being installed. Recorded as the loaded copy once the plugin
+	// accepts them: it is part of the *_servers_v2 Cluster checksum and is what
+	// peers are served (ProxySQL_ServerModuleCluster.h).
+	std::vector<ProxySQL_ServerModuleClusterTable> loaded_tables;
 	for (const auto& table : proxysql_active_server_module_tables(protocol)) {
 		char* error = nullptr;
 		int columns = 0;
@@ -286,6 +290,8 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 			if (rows != nullptr) delete rows;
 			return false;
 		}
+		loaded_tables.push_back({table.table_name, table.runtime_table_name, table.order_by,
+			rows != nullptr ? std::make_unique<SQLite3_result>(rows) : nullptr});
 		snapshot.module_tables.push_back({table.table_name, std::unique_ptr<SQLite3_result>(rows)});
 	}
 	std::vector<ProxySQL_ServerHostgroupClaim> claims;
@@ -293,6 +299,7 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 		proxy_error("Plugin server module rejected configuration: %s\n", error.c_str());
 		return false;
 	}
+	proxysql_server_module_cluster_set_loaded_tables(protocol, std::move(loaded_tables));
 	installed_snapshot = std::move(snapshot.runtime);
 	return true;
 #else
@@ -7578,37 +7585,14 @@ void ProxySQL_Admin::__add_active_clickhouse_users(char *__user) {
 
 void ProxySQL_Admin::dump_checksums_values_table() {
 	int rc;
-	std::vector<std::pair<std::string, std::string>> server_module_checksums;
-#ifdef PROXYSQL40
-	std::vector<std::pair<std::string, std::string>> computed_server_module_checksums;
-	for (const auto protocol : {ProxySQL_ServerProtocol::mysql, ProxySQL_ServerProtocol::pgsql}) {
-		for (const auto version : {ProxySQL_ServerModuleClusterVersion::runtime_v1,
-			ProxySQL_ServerModuleClusterVersion::memory_v2}) {
-			std::string checksum;
-			std::string error;
-			if (proxysql_server_module_cluster_poll_checksum(
-				protocol, version, *admindb, checksum, error)) {
-				computed_server_module_checksums.emplace_back(
-					proxysql_server_module_cluster_poll_name(protocol, version), checksum);
-			} else {
-				proxy_error("Cluster: withholding server-module checksum snapshot: %s\n",
-					error.empty() ? "local checksum generation failed" : error.c_str());
-			}
-		}
-	}
-	if (!proxysql_server_module_cluster_poll_snapshot_complete(
-		computed_server_module_checksums, server_module_checksums)) {
-		return;
-	}
-#endif
 	pthread_mutex_lock(&GloVars.checksum_mutex);
-#ifndef PROXYSQL40
 	if (GloVars.checksums_values.updates_cnt == GloVars.checksums_values.dumped_at) {
+		// exit immediately
 		pthread_mutex_unlock(&GloVars.checksum_mutex);
 		return;
+	} else {
+		GloVars.checksums_values.dumped_at = GloVars.checksums_values.updates_cnt;
 	}
-#endif
-	GloVars.checksums_values.dumped_at = GloVars.checksums_values.updates_cnt;
 	char *q = (char *)"REPLACE INTO runtime_checksums_values VALUES (?1 , ?2 , ?3 , ?4)";
 	auto [rc1, statement1_unique] = admindb->prepare_v2(q);
 	ASSERT_SQLITE_OK(rc1, admindb);
@@ -7720,16 +7704,6 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 2, GloVars.checksums_values.ldap_variables.version); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, GloVars.checksums_values.ldap_variables.epoch); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_bind_text)(statement1, 4, GloVars.checksums_values.ldap_variables.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-		SAFE_SQLITE3_STEP2(statement1);
-		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
-		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
-	}
-
-	for (const auto& module_checksum : server_module_checksums) {
-		rc=(*proxy_sqlite3_bind_text)(statement1, 1, module_checksum.first.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 2, 1); ASSERT_SQLITE_OK(rc, admindb);
-		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, 0); ASSERT_SQLITE_OK(rc, admindb);
-		rc=(*proxy_sqlite3_bind_text)(statement1, 4, module_checksum.second.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 		SAFE_SQLITE3_STEP2(statement1);
 		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);

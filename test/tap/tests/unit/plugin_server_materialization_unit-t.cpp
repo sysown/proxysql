@@ -33,6 +33,16 @@ extern MySQL_Monitor* GloMyMon;
 extern ProxySQL_Cluster* GloProxyCluster;
 
 namespace {
+
+// The server-module part of the *_servers_v2 checksum.
+uint64_t loaded_module_tables_hash(ProxySQL_ServerProtocol protocol) {
+	SpookyHash hash;
+	bool init = false;
+	proxysql_server_module_cluster_hash_loaded_tables(protocol, hash, init);
+	uint64_t first = 0, second = 0;
+	if (init) hash.Final(&first, &second);
+	return first;
+}
 enum class RefreshExceptionStage : int {
 	none = 0,
 	after_hgm_lock = 1,
@@ -397,15 +407,8 @@ int main() {
 	ok(pgsql_handle && manager->install_server_discovery_controller(ProxySQL_ServerProtocol::pgsql,
 		new Controller(&pgsql_acks), &destroy_controller, pgsql_handle),
 		"PostgreSQL acknowledgement observer is retained");
-	std::string mysql_module_checksum_before;
-	std::string pgsql_module_checksum_before;
-	std::string checksum_error;
-	const bool initial_module_checksums = proxysql_server_module_cluster_poll_checksum(
-		ProxySQL_ServerProtocol::mysql, ProxySQL_ServerModuleClusterVersion::memory_v2,
-		admin_db, mysql_module_checksum_before, checksum_error) &&
-		proxysql_server_module_cluster_poll_checksum(ProxySQL_ServerProtocol::pgsql,
-			ProxySQL_ServerModuleClusterVersion::memory_v2, admin_db,
-			pgsql_module_checksum_before, checksum_error);
+	const uint64_t mysql_module_hash_before = loaded_module_tables_hash(ProxySQL_ServerProtocol::mysql);
+	const uint64_t pgsql_module_hash_before = loaded_module_tables_hash(ProxySQL_ServerProtocol::pgsql);
 	ProxySQL_ServerRuntimeSnapshot mysql_installed {};
 	mysql_installed.protocol = ProxySQL_ServerProtocol::mysql;
 	ProxySQL_ServerRuntimeInstallTransaction mysql_install(mysql_installed.protocol, error);
@@ -651,19 +654,9 @@ int main() {
 	ok(set_checksums_schedules_v2("pgsql_servers_v2", pgsql_memory_peer,
 		cluster->update_mysql_servers_v2_mutex),
 		"PostgreSQL MEMORY+DISK publishes a changed v2 checksum consumed by cluster scheduling");
-	std::string mysql_module_checksum_after;
-	std::string pgsql_module_checksum_after;
-	ok(initial_module_checksums &&
-		proxysql_server_module_cluster_poll_checksum(ProxySQL_ServerProtocol::mysql,
-			ProxySQL_ServerModuleClusterVersion::memory_v2, admin_db,
-			mysql_module_checksum_after, checksum_error) &&
-		proxysql_server_module_cluster_poll_checksum(ProxySQL_ServerProtocol::pgsql,
-			ProxySQL_ServerModuleClusterVersion::memory_v2, admin_db,
-			pgsql_module_checksum_after, checksum_error) &&
-		!mysql_module_checksum_after.empty() && !pgsql_module_checksum_after.empty() &&
-		mysql_module_checksum_after == mysql_module_checksum_before &&
-		pgsql_module_checksum_after == pgsql_module_checksum_before,
-		"Task 2 module checksum path recomputes unchanged policy checksums after scoped saves");
+	ok(loaded_module_tables_hash(ProxySQL_ServerProtocol::mysql) == mysql_module_hash_before &&
+		loaded_module_tables_hash(ProxySQL_ServerProtocol::pgsql) == pgsql_module_hash_before,
+		"scoped saves leave the loaded server-module tables (part of *_servers_v2) unchanged");
 
 	admin_db.execute("DROP TABLE disk.pgsql_servers");
 	const ChecksumSnapshot pgsql_v2_before_disk_failure =

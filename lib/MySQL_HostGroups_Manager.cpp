@@ -4,6 +4,7 @@ using json = nlohmann::json;
 
 #include "MySQL_HostGroups_Manager.h"
 #include "ProxySQL_ServerDiscovery.h"
+#include "ProxySQL_ServerModuleCluster.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -1326,6 +1327,11 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 	CUCFT1(myhash,init,"mysql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::MYSQL_HOSTGROUP_ATTRIBUTES]);
 	CUCFT1(myhash,init,"mysql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS_SSL_PARAMS]);
 	CUCFT1(myhash,init,"mysql_aws_rds_bgd_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_AWS_RDS_BGD_HOSTGROUPS]);
+#ifdef PROXYSQL40
+	// Server-module (plugin) tables belong to the same module: same checksum,
+	// version and epoch as the core servers tables.
+	proxysql_server_module_cluster_hash_loaded_tables(ProxySQL_ServerProtocol::mysql, myhash, init);
+#endif /* PROXYSQL40 */
 }
 
 /**

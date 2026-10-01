@@ -29,12 +29,9 @@ extern ProxySQL_Admin* GloAdmin;
 extern ProxySQL_Cluster* GloProxyCluster;
 extern ProxySQL_Statistics* GloProxyStats;
 
-// Declared here before the production selector exists so the focused test
-// proves that the new peer-affiliation decision is really added.
-bool proxysql_server_module_peer_is_ready_for_selection(
-	const ProxySQL_Checksum_Value_2& module_state,
-	const ProxySQL_Checksum_Value_2& legacy_server_state,
-	unsigned int threshold);
+// Receiver-side *_servers_v2 fold (lib/ProxySQL_Cluster.cpp).
+uint64_t compute_servers_v2_raw_checksum(const std::vector<MYSQL_RES*>& results, size_t size,
+	const std::vector<ProxySQL_ServerModuleClusterTable>& module_tables);
 
 namespace {
 
@@ -53,123 +50,10 @@ ProxySQL_ServerModuleClusterTable table(const char* name, const char* runtime,
 	return {name, runtime, order_by, std::move(rows)};
 }
 
-class OneRowMysqlResult {
-public:
-	OneRowMysqlResult(const std::string& name, const std::string& checksum) :
-		values_ {name, "1", "0", checksum} {
-		for (size_t i = 0; i < 4; ++i) fields_[i] = values_[i].data();
-		row_.data = fields_;
-		data_.data = &row_;
-		result_.data = &data_;
-		result_.field_count = 4;
-	}
-
-	MYSQL_RES* reset() {
-		row_.next = nullptr;
-		result_.data_cursor = &row_;
-		return &result_;
-	}
-
-private:
-	std::string values_[4];
-	char* fields_[4] {};
-	MYSQL_ROWS row_ {};
-	MYSQL_DATA data_ {};
-	MYSQL_RES result_ {};
-};
-
-class TwoRowMysqlResult {
-public:
-	TwoRowMysqlResult(const std::array<std::string, 4>& first,
-		const std::array<std::string, 4>& second) : values_ {first, second} {
-		for (size_t row = 0; row < values_.size(); ++row) {
-			for (size_t field = 0; field < values_[row].size(); ++field)
-				fields_[row][field] = values_[row][field].data();
-			rows_[row].data = fields_[row].data();
-		}
-		rows_[0].next = &rows_[1];
-		data_.data = &rows_[0];
-		result_.data = &data_;
-		result_.field_count = 4;
-	}
-
-	MYSQL_RES* reset() {
-		rows_[0].next = &rows_[1];
-		rows_[1].next = nullptr;
-		result_.data_cursor = &rows_[0];
-		return &result_;
-	}
-
-private:
-	std::array<std::array<std::string, 4>, 2> values_;
-	std::array<std::array<char*, 4>, 2> fields_ {};
-	std::array<MYSQL_ROWS, 2> rows_ {};
-	MYSQL_DATA data_ {};
-	MYSQL_RES result_ {};
-};
-
-// Upper bound for work that must finish without the held mutex. A blocked
-// worker would wait for as long as the mutex is held, so this only has to be
-// generous enough to absorb scheduling delays on a loaded host.
-constexpr std::chrono::seconds kCompletionTimeout{10};
-
-bool set_checksums_finishes_while_pull_mutex_is_held(ProxySQL_Node_Entry& node,
-	MYSQL_RES* result, pthread_mutex_t& pull_mutex) {
-	std::mutex done_mutex;
-	std::condition_variable done_cv;
-	bool done = false;
-	pthread_mutex_lock(&pull_mutex);
-	std::thread worker([&] {
-		node.set_checksums(result);
-		{
-			std::lock_guard<std::mutex> lock(done_mutex);
-			done = true;
-		}
-		done_cv.notify_one();
-	});
-	std::unique_lock<std::mutex> lock(done_mutex);
-	const bool completed = done_cv.wait_for(lock, kCompletionTimeout, [&] { return done; });
-	lock.unlock();
-	pthread_mutex_unlock(&pull_mutex);
-	worker.join();
-	return completed;
-}
-
-bool simultaneous_server_module_polls_finish_after_v2_pull(
-	ProxySQL_Node_Entry& node, MYSQL_RES* result, ProxySQL_Cluster& cluster) {
-	std::mutex done_mutex;
-	std::condition_variable done_cv;
-	bool done = false;
-	pthread_mutex_lock(&cluster.update_mysql_servers_v2_mutex);
-	pthread_mutex_lock(&cluster.update_runtime_mysql_servers_mutex);
-	std::thread worker([&] {
-		node.set_checksums(result);
-		{
-			std::lock_guard<std::mutex> lock(done_mutex);
-			done = true;
-		}
-		done_cv.notify_one();
-	});
-	{
-		std::unique_lock<std::mutex> lock(done_mutex);
-		(void)done_cv.wait_for(lock, std::chrono::milliseconds(200), [&] { return done; });
-	}
-	pthread_mutex_unlock(&cluster.update_mysql_servers_v2_mutex);
-	bool completed_after_v2 = false;
-	{
-		std::unique_lock<std::mutex> lock(done_mutex);
-		completed_after_v2 = done_cv.wait_for(
-			lock, kCompletionTimeout, [&] { return done; });
-	}
-	pthread_mutex_unlock(&cluster.update_runtime_mysql_servers_mutex);
-	worker.join();
-	return completed_after_v2;
-}
-
 } // namespace
 
 int main() {
-	plan(61);
+	plan(41);
 	SQLite3DB source;
 	SQLite3DB destination;
 	source.open((char*)"file:module-cluster-source?mode=memory&cache=private", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
@@ -341,47 +225,6 @@ int main() {
 		"ProxySQL Admin Error: near \"PROXY_SELECT\": syntax error") &&
 		!proxysql_server_module_cluster_legacy_fallback_allowed(1045, "Access denied"),
 		"new receiver falls back to legacy core sync only for an old sender's exact endpoint syntax error");
-	for (const auto protocol : {ProxySQL_ServerProtocol::mysql, ProxySQL_ServerProtocol::pgsql}) {
-		for (const auto version : {ProxySQL_ServerModuleClusterVersion::runtime_v1,
-			ProxySQL_ServerModuleClusterVersion::memory_v2}) {
-			const uint64_t legacy_global_checksum = 42;
-			const std::string legacy_server_checksum = "legacy-unchanged";
-			ok(proxysql_cluster_monitor_should_query_checksums(false) &&
-				proxysql_server_module_cluster_poll_should_schedule(protocol, version, true,
-					"peer-module", true, "local-module", 2, 2) &&
-				legacy_global_checksum == 42 && legacy_server_checksum == "legacy-unchanged",
-				"actual light-check gate schedules a module-only protocol/version pull without legacy mutation");
-		}
-	}
-	ok(proxysql_server_module_cluster_poll_next_diff(true, "peer-module", true,
-		"local-module", false, 1) == 2,
-		"null-result cycles advance a supported module mismatch to its threshold");
-	ok(proxysql_server_module_cluster_poll_next_diff(true, "empty", true,
-		"empty", false, 7) == 0,
-		"unchanged supported-empty cycles reset the module diff counter");
-	std::vector<std::pair<std::string, std::string>> partial_poll_snapshot {
-		{"mysql-v1", "one"}, {"mysql-v2", "two"}, {"pgsql-v1", "three"}};
-	std::vector<std::pair<std::string, std::string>> published_poll_snapshot {
-		{"stale", "must-clear"}};
-	ok(!proxysql_server_module_cluster_poll_snapshot_complete(
-		partial_poll_snapshot, published_poll_snapshot) && published_poll_snapshot.empty(),
-		"a failed local checksum atomically withholds the entire module side-channel snapshot");
-	ok(!proxysql_server_module_cluster_poll_should_schedule(ProxySQL_ServerProtocol::mysql,
-		ProxySQL_ServerModuleClusterVersion::runtime_v1, true, "empty", true, "empty", 0, 2),
-		"supported-empty no-change does not schedule a pull");
-	ok(!proxysql_server_module_cluster_poll_should_schedule(ProxySQL_ServerProtocol::pgsql,
-		ProxySQL_ServerModuleClusterVersion::memory_v2, false, "", true, "empty", 99, 2),
-		"unsupported old-peer side channel preserves legacy scheduling");
-	ok(proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::mysql,
-		ProxySQL_ServerModuleClusterVersion::runtime_v1) !=
-		proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::mysql,
-			ProxySQL_ServerModuleClusterVersion::memory_v2) &&
-		proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::mysql,
-			ProxySQL_ServerModuleClusterVersion::memory_v2) !=
-		proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::pgsql,
-			ProxySQL_ServerModuleClusterVersion::memory_v2),
-		"periodic capability identities isolate protocol and transport version");
-
 	std::vector<ProxySQL_ServerModuleTable> mysql_disk_registry {local_registry[0]};
 	std::vector<ProxySQL_ServerModuleTable> pgsql_disk_registry {
 		{ProxySQL_ServerProtocol::pgsql, "pgsql_plugin_policy", "runtime_pgsql_plugin_policy", "writer"}
@@ -394,172 +237,52 @@ int main() {
 	ok(!proxysql_verify_server_module_tables(destination, ProxySQL_ServerProtocol::mysql,
 		mysql_disk_registry, error), "missing affiliated disk schema propagates upgrade failure");
 
-	test_init_minimal();
-	auto cluster = std::make_unique<ProxySQL_Cluster>();
-	GloProxyCluster = cluster.get();
-	cluster->cluster_mysql_servers_diffs_before_sync = 1;
-	cluster->cluster_pgsql_servers_diffs_before_sync = 1;
-	auto admin_db = std::make_unique<SQLite3DB>();
-	admin_db->open((char*)"file:module-cluster-poll?mode=memory&cache=private",
-		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
-	char* previous_statsdb_disk = GloVars.statsdb_disk;
-	char statsdb_disk[] = ":memory:";
-	GloVars.statsdb_disk = statsdb_disk;
-	ProxySQL_Statistics* proxy_stats = new ProxySQL_Statistics(); // process-scoped partial fixture
-	GloProxyStats = proxy_stats;
-	ProxySQL_Admin* admin = new ProxySQL_Admin(); // process-scoped partial fixture
-	admin->admindb = admin_db.get();
-	GloAdmin = admin;
+	// Server-module tables are part of the *_servers_v2 module: the tables as
+	// last loaded are folded into that checksum and served to peers. There is
+	// no separate checksum, version or epoch for them.
+	{
+		std::vector<ProxySQL_ServerModuleClusterTable> loaded;
+		loaded.push_back(table("mysql_plugin_zeta", "runtime_mysql_plugin_zeta", "writer,reader",
+			query(source, "SELECT * FROM mysql_plugin_zeta ORDER BY writer,reader")));
+		loaded.push_back(table("mysql_plugin_alpha", "runtime_mysql_plugin_alpha", "writer,reader",
+			query(source, "SELECT * FROM mysql_plugin_alpha ORDER BY writer,reader")));
+		proxysql_server_module_cluster_set_loaded_tables(ProxySQL_ServerProtocol::mysql, std::move(loaded));
+		auto copy = proxysql_server_module_cluster_loaded_tables(ProxySQL_ServerProtocol::mysql);
+		ok(copy.size() == 2 && copy[0].table_name == "mysql_plugin_alpha" &&
+			copy[1].table_name == "mysql_plugin_zeta" && copy[0].rows && copy[0].rows->rows_count == 1,
+			"loaded server-module tables are kept in table-name order");
+		copy[0].rows.reset();
+		ok(proxysql_server_module_cluster_loaded_tables(ProxySQL_ServerProtocol::mysql)[0].rows != nullptr,
+			"callers receive a copy and cannot alter the loaded tables");
 
-	char host[] = "127.0.0.1";
-	char comment[] = "test";
-	char ip[] = "127.0.0.1";
-	OneRowMysqlResult mysql_v1_poll(proxysql_server_module_cluster_poll_name(
-		ProxySQL_ServerProtocol::mysql, ProxySQL_ServerModuleClusterVersion::runtime_v1),
-		"0x1111111111111111");
-	cluster->cluster_mysql_servers_sync_algorithm =
-		static_cast<int>(mysql_servers_sync_algorithm::mysql_servers_v2);
-	ProxySQL_Node_Entry mysql_config_only(host, 1, 1, comment, ip);
-	ok(set_checksums_finishes_while_pull_mutex_is_held(mysql_config_only,
-		mysql_v1_poll.reset(), cluster->update_runtime_mysql_servers_mutex),
-		"MySQL config-only algorithm does not invoke the module-v1 runtime pull");
+		SpookyHash source_hash;
+		bool init = false;
+		proxysql_server_module_cluster_hash_loaded_tables(ProxySQL_ServerProtocol::mysql, source_hash, init);
+		uint64_t source_fold = 0, unused = 0;
+		if (init) source_hash.Final(&source_fold, &unused);
+		const uint64_t receiver_fold = compute_servers_v2_raw_checksum({}, 0,
+			proxysql_server_module_cluster_loaded_tables(ProxySQL_ServerProtocol::mysql));
+		ok(source_fold != 0 && source_fold == receiver_fold,
+			"the sender and the receiver fold server-module tables into *_servers_v2 identically");
 
-	cluster->cluster_mysql_servers_sync_algorithm =
-		static_cast<int>(mysql_servers_sync_algorithm::runtime_mysql_servers_and_mysql_servers_v2);
-	ProxySQL_Node_Entry mysql_runtime_enabled(host, 1, 1, comment, ip);
-	ok(!set_checksums_finishes_while_pull_mutex_is_held(mysql_runtime_enabled,
-		mysql_v1_poll.reset(), cluster->update_runtime_mysql_servers_mutex),
-		"MySQL runtime-enabled algorithm invokes the module-v1 runtime pull");
+		std::vector<ProxySQL_ServerModuleClusterTable> with_empty;
+		with_empty.push_back(table("mysql_plugin_alpha", "runtime_mysql_plugin_alpha", "writer,reader",
+			query(source, "SELECT * FROM mysql_plugin_alpha ORDER BY writer,reader")));
+		with_empty.push_back(table("mysql_plugin_zeta", "runtime_mysql_plugin_zeta", "writer,reader",
+			query(source, "SELECT * FROM mysql_plugin_zeta LIMIT 0")));
+		std::vector<ProxySQL_ServerModuleClusterTable> alpha_only;
+		alpha_only.push_back(table("mysql_plugin_alpha", "runtime_mysql_plugin_alpha", "writer,reader",
+			query(source, "SELECT * FROM mysql_plugin_alpha ORDER BY writer,reader")));
+		ok(compute_servers_v2_raw_checksum({}, 0, with_empty) ==
+			compute_servers_v2_raw_checksum({}, 0, alpha_only),
+			"an empty server-module table contributes nothing, as for the core servers tables");
 
-	OneRowMysqlResult pgsql_v1_poll(proxysql_server_module_cluster_poll_name(
-		ProxySQL_ServerProtocol::pgsql, ProxySQL_ServerModuleClusterVersion::runtime_v1),
-		"0x2222222222222222");
-	ProxySQL_Node_Entry pgsql_runtime(host, 1, 1, comment, ip);
-	ok(!set_checksums_finishes_while_pull_mutex_is_held(pgsql_runtime,
-		pgsql_v1_poll.reset(), cluster->update_runtime_mysql_servers_mutex),
-		"PGSQL keeps its existing module-v1 runtime pull contract");
-
-	GloAdmin = nullptr;
-	ProxySQL_Node_Entry unavailable_local(host, 1, 1, comment, ip);
-	unavailable_local.checksums_values.mysql_servers.version = 2;
-	unavailable_local.checksums_values.mysql_servers.epoch = 1;
-	unavailable_local.checksums_values.mysql_servers.set_checksum("0x3333333333333333");
-	const std::string legacy_selector_checksum =
-		unavailable_local.checksums_values.mysql_servers.checksum;
-	ok(set_checksums_finishes_while_pull_mutex_is_held(unavailable_local,
-		mysql_v1_poll.reset(), cluster->update_runtime_mysql_servers_mutex) &&
-		unavailable_local.checksums_values.server_module_mysql_v1.diff_check == 0,
-		"unavailable local module checksum neither advances module diff nor schedules");
-	ok(unavailable_local.checksums_values.mysql_servers.diff_check == 0 &&
-		unavailable_local.checksums_values.mysql_servers.version == 2 &&
-		unavailable_local.checksums_values.mysql_servers.epoch == 1 &&
-		std::string(unavailable_local.checksums_values.mysql_servers.checksum) == legacy_selector_checksum,
-		"unavailable local module checksum leaves the legacy Servers selector unchanged");
-
-	GloAdmin = admin;
-	cluster->cluster_mysql_servers_diffs_before_sync = 3;
-	ProxySQL_Node_Entry independent_diff(host, 1, 1, comment, ip);
-	independent_diff.set_checksums(mysql_v1_poll.reset());
-	independent_diff.set_checksums(mysql_v1_poll.reset());
-	ok(independent_diff.checksums_values.server_module_mysql_v1.diff_check == 2 &&
-		independent_diff.checksums_values.mysql_servers.diff_check == 0,
-		"valid module mismatch advances only its independent selector counter");
-	std::string local_module_checksum;
-	error.clear();
-	proxysql_server_module_cluster_poll_checksum(ProxySQL_ServerProtocol::mysql,
-		ProxySQL_ServerModuleClusterVersion::runtime_v1, *admin_db,
-		local_module_checksum, error);
-	OneRowMysqlResult matching_mysql_v1(proxysql_server_module_cluster_poll_name(
-		ProxySQL_ServerProtocol::mysql, ProxySQL_ServerModuleClusterVersion::runtime_v1),
-		local_module_checksum);
-	independent_diff.set_checksums(matching_mysql_v1.reset());
-	ok(independent_diff.checksums_values.server_module_mysql_v1.diff_check == 0 &&
-		independent_diff.checksums_values.mysql_servers.diff_check == 0,
-		"matching valid module checksum resets only its independent selector counter");
-
-	cluster->cluster_mysql_servers_diffs_before_sync = 1;
-	cluster->cluster_mysql_servers_sync_algorithm = static_cast<int>(
-		mysql_servers_sync_algorithm::runtime_mysql_servers_and_mysql_servers_v2);
-	TwoRowMysqlResult simultaneous_module_polls(
-		{proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::mysql,
-			ProxySQL_ServerModuleClusterVersion::runtime_v1), "1", "0", "peer-v1"},
-		{proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::mysql,
-			ProxySQL_ServerModuleClusterVersion::memory_v2), "1", "0", "peer-v2"});
-	ProxySQL_Node_Entry one_runtime_pull(host, 1, 1, comment, ip);
-	ok(simultaneous_server_module_polls_finish_after_v2_pull(
-		one_runtime_pull, simultaneous_module_polls.reset(), *cluster),
-		"a module-v2 pull that includes runtime suppresses a duplicate module-v1 runtime pull");
-
-	ProxySQL_Node_Entry module_v2_diagnostic(host, 1, 1, comment, ip);
-	GloVars.checksums_values.mysql_servers_v2.version = 2;
-	GloVars.checksums_values.mysql_servers_v2.epoch = 1;
-	GloVars.checksums_values.mysql_servers_v2.set_checksum("local-core-v2");
-	TwoRowMysqlResult module_and_core_v2(
-		{proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::mysql,
-			ProxySQL_ServerModuleClusterVersion::memory_v2), "1", "0", "peer-v2"},
-		{"mysql_servers_v2", "2", "1", "peer-core-v2"});
-	const double delayed_before = cluster->metrics.p_counter_array[
-		p_cluster_counter::sync_delayed_mysql_servers_version_one]->Value();
-	for (int poll = 0; poll < 10; ++poll)
-		module_v2_diagnostic.set_checksums(module_and_core_v2.reset());
-	const double delayed_after = cluster->metrics.p_counter_array[
-		p_cluster_counter::sync_delayed_mysql_servers_version_one]->Value();
-	ok(delayed_after == delayed_before,
-		"a valid module-v2 schedule never enters the legacy version-one diagnostic branch");
-
-	cluster->cluster_pgsql_servers_diffs_before_sync = 1;
-	TwoRowMysqlResult simultaneous_pgsql_module_polls(
-		{proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::pgsql,
-			ProxySQL_ServerModuleClusterVersion::runtime_v1), "1", "0", "peer-pg-v1"},
-		{proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::pgsql,
-			ProxySQL_ServerModuleClusterVersion::memory_v2), "1", "0", "peer-pg-v2"});
-	ProxySQL_Node_Entry one_pgsql_runtime_pull(host, 1, 1, comment, ip);
-	ok(simultaneous_server_module_polls_finish_after_v2_pull(
-		one_pgsql_runtime_pull, simultaneous_pgsql_module_polls.reset(), *cluster),
-		"a PostgreSQL module-v2 pull suppresses a duplicate module-v1 runtime pull");
-
-	ProxySQL_Node_Entry pgsql_module_v2_diagnostic(host, 1, 1, comment, ip);
-	GloVars.checksums_values.pgsql_servers_v2.version = 2;
-	GloVars.checksums_values.pgsql_servers_v2.epoch = 1;
-	GloVars.checksums_values.pgsql_servers_v2.set_checksum("local-pg-core-v2");
-	TwoRowMysqlResult pgsql_module_and_core_v2(
-		{proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::pgsql,
-			ProxySQL_ServerModuleClusterVersion::memory_v2), "1", "0", "peer-pg-v2"},
-		{"pgsql_servers_v2", "2", "1", "peer-pg-core-v2"});
-	const double pgsql_delayed_before = cluster->metrics.p_counter_array[
-		p_cluster_counter::sync_delayed_pgsql_servers_version_one]->Value();
-	for (int poll = 0; poll < 10; ++poll)
-		pgsql_module_v2_diagnostic.set_checksums(pgsql_module_and_core_v2.reset());
-	const double pgsql_delayed_after = cluster->metrics.p_counter_array[
-		p_cluster_counter::sync_delayed_pgsql_servers_version_one]->Value();
-	ok(pgsql_delayed_after == pgsql_delayed_before,
-		"a valid PostgreSQL module-v2 schedule never enters the legacy version-one diagnostic branch");
-
-	// A module-ready peer starts at legacy Servers version one while a competing
-	// old peer advertises a newer legacy epoch.  All four dynamic paths must use
-	// the side-channel state as their selector; legacy state only validates the
-	// selected peer's core payload.
-	ProxySQL_Checksum_Value_2 stale_legacy {};
-	stale_legacy.version = 9;
-	stale_legacy.epoch = 900;
-	stale_legacy.diff_check = 99;
-	for (const char* path : {"mysql-v1", "mysql-v2", "pgsql-v1", "pgsql-v2"}) {
-		ProxySQL_Checksum_Value_2 fresh_module {};
-		fresh_module.version = 1;
-		fresh_module.diff_check = 1;
-		const std::string message = std::string(path) +
-			" selects a fresh/version-one module peer despite conflicting legacy epoch";
-		ok(proxysql_server_module_peer_is_ready_for_selection(fresh_module, stale_legacy, 1),
-			"%s", message.c_str());
+		proxysql_server_module_cluster_set_loaded_tables(ProxySQL_ServerProtocol::pgsql, {});
+		SpookyHash pgsql_hash;
+		bool pgsql_init = false;
+		proxysql_server_module_cluster_hash_loaded_tables(ProxySQL_ServerProtocol::pgsql, pgsql_hash, pgsql_init);
+		ok(!pgsql_init, "PostgreSQL loaded tables are isolated from MySQL and empty here");
 	}
 
-	GloAdmin = nullptr;
-	admin->admindb = nullptr;
-	admin_db.reset();
-	GloProxyStats = nullptr;
-	std::remove("file:statsdb_mem?mode=memory&cache=shared");
-	GloVars.statsdb_disk = previous_statsdb_disk;
-	GloProxyCluster = nullptr;
-	cluster.reset();
 	return exit_status();
 }

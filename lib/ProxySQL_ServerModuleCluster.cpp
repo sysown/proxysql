@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <mutex>
 #include <set>
 
 namespace {
@@ -50,6 +51,65 @@ bool valid_order_by(const std::string& value) {
 }
 
 } // namespace
+
+
+namespace {
+
+// Server-module tables as installed by the last successful LOAD ... SERVERS TO
+// RUNTIME (or Cluster pull) for each protocol. They are part of the
+// *_servers_v2 module: hashed into its checksum and served to peers, so they
+// follow that module's version and epoch.
+std::mutex loaded_tables_mutex;
+std::vector<ProxySQL_ServerModuleClusterTable> loaded_tables[2];
+
+size_t protocol_index(ProxySQL_ServerProtocol protocol) {
+	return protocol == ProxySQL_ServerProtocol::mysql ? 0 : 1;
+}
+
+std::vector<ProxySQL_ServerModuleClusterTable> copy_tables(
+	const std::vector<ProxySQL_ServerModuleClusterTable>& tables) {
+	std::vector<ProxySQL_ServerModuleClusterTable> copy;
+	copy.reserve(tables.size());
+	for (const auto& table : tables) {
+		copy.push_back({table.table_name, table.runtime_table_name, table.order_by,
+			table.rows ? std::make_unique<SQLite3_result>(table.rows.get()) : nullptr});
+	}
+	return copy;
+}
+
+} // namespace
+
+void proxysql_server_module_cluster_set_loaded_tables(ProxySQL_ServerProtocol protocol,
+	std::vector<ProxySQL_ServerModuleClusterTable> tables) {
+	std::sort(tables.begin(), tables.end(), [](const auto& lhs, const auto& rhs) {
+		return lhs.table_name < rhs.table_name;
+	});
+	std::lock_guard<std::mutex> lock(loaded_tables_mutex);
+	loaded_tables[protocol_index(protocol)] = std::move(tables);
+}
+
+std::vector<ProxySQL_ServerModuleClusterTable> proxysql_server_module_cluster_loaded_tables(
+	ProxySQL_ServerProtocol protocol) {
+	std::lock_guard<std::mutex> lock(loaded_tables_mutex);
+	return copy_tables(loaded_tables[protocol_index(protocol)]);
+}
+
+void proxysql_server_module_cluster_hash_loaded_tables(ProxySQL_ServerProtocol protocol,
+	SpookyHash& hash, bool& init) {
+	// Same per-table rule as the core servers tables: a table contributes its
+	// raw checksum only when it has rows, in table-name order. The receiver
+	// folds the fetched tables the same way after the core tables.
+	std::lock_guard<std::mutex> lock(loaded_tables_mutex);
+	for (const auto& table : loaded_tables[protocol_index(protocol)]) {
+		if (!table.rows || table.rows->rows_count == 0) continue;
+		if (!init) {
+			init = true;
+			hash.Init(19, 3);
+		}
+		const uint64_t raw = table.rows->raw_checksum();
+		hash.Update(&raw, sizeof(raw));
+	}
+}
 
 bool proxysql_validate_server_module_table_registry(ProxySQL_ServerProtocol protocol,
 	std::vector<ProxySQL_ServerModuleTable>& tables, std::string& error) {
@@ -125,52 +185,6 @@ std::string proxysql_server_module_cluster_table_query(
 		std::to_string(static_cast<unsigned>(version)) + " AND table_name='" + table_name + "'";
 }
 
-std::string proxysql_server_module_cluster_poll_name(
-	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version) {
-	return std::string("proxysql_server_module_") +
-		(protocol == ProxySQL_ServerProtocol::mysql ? "mysql_" : "pgsql_") +
-		(version == ProxySQL_ServerModuleClusterVersion::runtime_v1 ? "v1" : "v2");
-}
-
-bool proxysql_server_module_cluster_poll_should_schedule(
-	ProxySQL_ServerProtocol, ProxySQL_ServerModuleClusterVersion,
-	bool peer_supported, const std::string& peer_checksum,
-	bool local_supported, const std::string& local_checksum,
-	unsigned int diff_check, unsigned int diffs_before_sync) {
-	return peer_supported && local_supported && !peer_checksum.empty() &&
-		peer_checksum != local_checksum && diffs_before_sync != 0 &&
-		diff_check >= diffs_before_sync;
-}
-
-unsigned int proxysql_server_module_cluster_poll_next_diff(
-	bool peer_supported, const std::string& peer_checksum,
-	bool local_supported, const std::string& local_checksum,
-	bool peer_checksum_changed, unsigned int current_diff) {
-	if (!peer_supported || !local_supported || peer_checksum == local_checksum) return 0;
-	if (peer_checksum_changed || current_diff == 0) return 1;
-	return current_diff + 1;
-}
-
-bool proxysql_server_module_cluster_poll_snapshot_complete(
-	const std::vector<std::pair<std::string, std::string>>& computed,
-	std::vector<std::pair<std::string, std::string>>& publishable) {
-	publishable.clear();
-	if (computed.size() != 4) return false;
-	std::set<std::string> expected;
-	for (const auto protocol : {ProxySQL_ServerProtocol::mysql, ProxySQL_ServerProtocol::pgsql}) {
-		for (const auto version : {ProxySQL_ServerModuleClusterVersion::runtime_v1,
-			ProxySQL_ServerModuleClusterVersion::memory_v2}) {
-			expected.insert(proxysql_server_module_cluster_poll_name(protocol, version));
-		}
-	}
-	for (const auto& entry : computed) {
-		if (entry.second.empty() || expected.erase(entry.first) != 1) return false;
-	}
-	if (!expected.empty()) return false;
-	publishable = computed;
-	return true;
-}
-
 ProxySQL_ServerModuleClusterEndpointResult proxysql_server_module_cluster_endpoint(
 	const std::string& query, SQLite3DB& db, std::unique_ptr<SQLite3_result>& result,
 	std::string& error) {
@@ -222,16 +236,12 @@ ProxySQL_ServerModuleClusterEndpointResult proxysql_server_module_cluster_endpoi
 						return ProxySQL_ServerModuleClusterEndpointResult::error;
 					}
 				} else {
-					char* sqlite_error = nullptr;
-					int columns = 0;
-					int affected = 0;
-					SQLite3_result* rows = nullptr;
-					const std::string sql = "SELECT * FROM main." + table.table_name + " ORDER BY " + table.order_by;
-					db.execute_statement(sql.c_str(), &sqlite_error, &columns, &affected, &rows);
-					result.reset(rows);
-					if (sqlite_error) {
-						error = sqlite_error;
-						free(sqlite_error);
+					// Memory (v2): the tables as last loaded, never live edits.
+					for (auto& loaded : proxysql_server_module_cluster_loaded_tables(protocol)) {
+						if (loaded.table_name == table.table_name) result = std::move(loaded.rows);
+					}
+					if (!result) {
+						error = "loaded server-module table unavailable";
 						return ProxySQL_ServerModuleClusterEndpointResult::error;
 					}
 				}
@@ -254,16 +264,9 @@ bool proxysql_active_server_module_cluster_tables(
 			rows.reset(proxysql_active_server_module_runtime_table_snapshot(
 				protocol, metadata.runtime_table_name.c_str()));
 		} else {
-			char* sqlite_error = nullptr;
-			int columns = 0, affected = 0;
-			SQLite3_result* raw_rows = nullptr;
-			const std::string sql = "SELECT * FROM main." + metadata.table_name + " ORDER BY " + metadata.order_by;
-			db.execute_statement(sql.c_str(), &sqlite_error, &columns, &affected, &raw_rows);
-			rows.reset(raw_rows);
-			if (sqlite_error) {
-				error = sqlite_error;
-				free(sqlite_error);
-				return false;
+			// Memory (v2): the tables as last loaded, never live edits.
+			for (auto& loaded : proxysql_server_module_cluster_loaded_tables(protocol)) {
+				if (loaded.table_name == metadata.table_name) rows = std::move(loaded.rows);
 			}
 		}
 		if (!rows) {
@@ -274,19 +277,6 @@ bool proxysql_active_server_module_cluster_tables(
 			metadata.order_by, std::move(rows)});
 	}
 	return proxysql_validate_server_module_cluster_tables(protocol, tables, error);
-}
-
-bool proxysql_server_module_cluster_poll_checksum(
-	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version,
-	SQLite3DB& db, std::string& checksum, std::string& error) {
-	std::vector<ProxySQL_ServerModuleClusterTable> tables;
-	if (!proxysql_active_server_module_cluster_tables(protocol, version, db, tables, error)) {
-		checksum.clear();
-		return false;
-	}
-	checksum = get_checksum_from_hash(proxysql_server_module_cluster_checksum(tables));
-	error.clear();
-	return true;
 }
 
 bool proxysql_validate_server_module_cluster_tables(

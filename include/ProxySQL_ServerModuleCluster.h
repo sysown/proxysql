@@ -12,6 +12,7 @@
 #include <vector>
 
 class SQLite3DB;
+class SpookyHash;
 class SQLite3_result;
 
 enum class ProxySQL_ServerModuleClusterVersion : uint8_t {
@@ -37,20 +38,23 @@ std::string proxysql_server_module_cluster_metadata_query(
 std::string proxysql_server_module_cluster_table_query(
 	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version,
 	const std::string& table_name);
-std::string proxysql_server_module_cluster_poll_name(
-	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version);
-bool proxysql_server_module_cluster_poll_should_schedule(
-	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version,
-	bool peer_supported, const std::string& peer_checksum,
-	bool local_supported, const std::string& local_checksum,
-	unsigned int diff_check, unsigned int diffs_before_sync);
-unsigned int proxysql_server_module_cluster_poll_next_diff(
-	bool peer_supported, const std::string& peer_checksum,
-	bool local_supported, const std::string& local_checksum,
-	bool peer_checksum_changed, unsigned int current_diff);
-bool proxysql_server_module_cluster_poll_snapshot_complete(
-	const std::vector<std::pair<std::string, std::string>>& computed,
-	std::vector<std::pair<std::string, std::string>>& publishable);
+/**
+ * @brief Server-module tables are part of the *_servers_v2 Cluster module.
+ *
+ * Admin records the tables it installs on every successful LOAD ... SERVERS TO
+ * RUNTIME (including Cluster pulls). That copy is hashed into the
+ * *_servers_v2 checksum by the Hostgroup Manager commit and is what peers are
+ * served, so the tables follow the module's version and epoch and never expose
+ * un-loaded edits.
+ */
+void proxysql_server_module_cluster_set_loaded_tables(ProxySQL_ServerProtocol protocol,
+	std::vector<ProxySQL_ServerModuleClusterTable> tables);
+std::vector<ProxySQL_ServerModuleClusterTable> proxysql_server_module_cluster_loaded_tables(
+	ProxySQL_ServerProtocol protocol);
+/** @brief Folds the loaded tables into a *_servers_v2 checksum, after the core tables. */
+void proxysql_server_module_cluster_hash_loaded_tables(ProxySQL_ServerProtocol protocol,
+	SpookyHash& hash, bool& init);
+
 ProxySQL_ServerModuleClusterEndpointResult proxysql_server_module_cluster_endpoint(
 	const std::string& query, SQLite3DB& db, std::unique_ptr<SQLite3_result>& result,
 	std::string& error);
@@ -58,10 +62,6 @@ bool proxysql_active_server_module_cluster_tables(
 	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version,
 	SQLite3DB& db, std::vector<ProxySQL_ServerModuleClusterTable>& tables,
 	std::string& error);
-bool proxysql_server_module_cluster_poll_checksum(
-	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version,
-	SQLite3DB& db, std::string& checksum, std::string& error);
-
 bool proxysql_validate_server_module_cluster_tables(
 	ProxySQL_ServerProtocol protocol,
 	std::vector<ProxySQL_ServerModuleClusterTable>& tables,
