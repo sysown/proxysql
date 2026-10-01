@@ -133,6 +133,9 @@ public:
 	ScopedActiveManagerPin(const ScopedActiveManagerPin&) = delete;
 	ScopedActiveManagerPin& operator=(const ScopedActiveManagerPin&) = delete;
 	ProxySQL_PluginManager *manager() const { return manager_; }
+	// True on the thread running plugin init/start, where the manager is held
+	// exclusively and is not readable: manager() is null although one exists.
+	bool exclusive_owner_bypass() const { return exclusive_owner_bypass_; }
 
 private:
 	std::shared_lock<std::shared_mutex> lock_ {};
@@ -386,7 +389,13 @@ bool install_aws_metadata_provider_service(
 		proxy_warning("AWS metadata provider installation attempted outside plugin init phase\n");
 		return false;
 	}
-	return install_global_aws_metadata_provider(provider, destroy, module_handle);
+	if (!install_global_aws_metadata_provider(provider, destroy, module_handle)) return false;
+	// Plugins install the provider after the locality manager's first refresh
+	// (at startup that refresh found no provider). Refresh now rather than after
+	// a full refresh interval.
+	if (MyHGM != nullptr && MyHGM->aws_locality_manager() != nullptr)
+		MyHGM->aws_locality_manager()->request_refresh();
+	return true;
 }
 
 void refresh_mysql_aws_locality_stats_service(SQLite3DB* statsdb) {
@@ -2391,6 +2400,13 @@ std::vector<ProxySQL_ServerModuleTable> proxysql_active_server_module_tables(
 bool proxysql_prepare_active_server_module_runtime(const ProxySQL_ServerModuleSnapshot& snapshot,
 	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error) {
 	ScopedActiveManagerPin pin;
+	if (pin.exclusive_owner_bypass()) {
+		// Plugin init/start holds the manager exclusively: server modules cannot
+		// validate the configuration now. Fail closed rather than install it
+		// unvalidated.
+		error = "server-module configuration cannot be validated during plugin init/start";
+		return false;
+	}
 	return pin.manager() == nullptr || pin.manager()->prepare_server_module_runtime(snapshot, claims, error);
 }
 
