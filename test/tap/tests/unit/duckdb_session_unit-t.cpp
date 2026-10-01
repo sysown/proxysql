@@ -51,7 +51,7 @@ std::string scalar_text(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(89);
+	plan(95);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -428,6 +428,10 @@ int main() {
 		"EXPLAIN ANALYZE SET GLOBAL memory_limit='1TB'",
 		"explain analyse verbose SET threads=64",
 		"EXPLAIN (ANALYZE, FORMAT 'json') /* c */ SET GLOBAL threads=64",
+		"EXPLAIN (ANALYZE /* ) */) SET GLOBAL memory_limit='1TB'",
+		"EXPLAIN (ANALYZE -- )\n) PRAGMA threads=64",
+		"EXPLAIN (ANALYZE -- )\r) SET GLOBAL threads=64",
+		"EXPLAIN (ANALYZE /* outer /* inner */ ) */) SET GLOBAL threads=64",
 		"EXPLAIN ANALYZE RESET GLOBAL threads",
 		"EXPLAIN ANALYZE PRAGMA threads=64",
 		"PRAGMA disable_checkpoint_on_shutdown",
@@ -456,6 +460,12 @@ int main() {
 	   "an unscoped SET of a globally-defaulted option no longer leaks to other clients");
 	const DuckDBExecOutcome explain_select = duckdb_execute_effective(managed_conn, "EXPLAIN SELECT 1");
 	ok(explain_select.ok, "EXPLAIN of an ordinary query still works (%s)", explain_select.error.c_str());
+	const DuckDBExecOutcome explain_comments = duckdb_execute_effective(managed_conn,
+		"EXPLAIN (ANALYZE /* outer /* inner */ ) */ -- )\n) SELECT 1");
+	ok(explain_comments.ok, "EXPLAIN options containing commented parentheses still work for queries (%s)",
+	   explain_comments.error.c_str());
+	const DuckDBExecOutcome session_pragma = duckdb_execute_effective(managed_conn, "PRAGMA enable_optimizer");
+	ok(session_pragma.ok, "a session-local optimizer PRAGMA is allowed (%s)", session_pragma.error.c_str());
 
 	// Binding a SET evaluates its value, so the statement must be prepared exactly
 	// once, already confined: a volatile value must be evaluated a single time.

@@ -559,17 +559,28 @@ std::string trim_trailing_semicolons(const std::string& sql) {
 // is paired with a destroy on every path.
 namespace {
 
-// Skips whitespace and SQL comments ("-- ..." to end of line, "/* ... */").
+// Skips whitespace and SQL comments ("-- ..." to end of line, nested "/* ... */").
 size_t skip_space_and_comments(const std::string& sql, size_t i) {
 	while (i < sql.size()) {
 		if (std::isspace(static_cast<unsigned char>(sql[i]))) {
 			++i;
 		} else if (sql.compare(i, 2, "--") == 0) {
-			const size_t eol = sql.find('\n', i);
+			const size_t eol = sql.find_first_of("\r\n", i);
 			i = eol == std::string::npos ? sql.size() : eol + 1;
 		} else if (sql.compare(i, 2, "/*") == 0) {
-			const size_t end = sql.find("*/", i + 2);
-			i = end == std::string::npos ? sql.size() : end + 2;
+			size_t depth = 1;
+			i += 2;
+			while (i < sql.size() && depth != 0) {
+				if (sql.compare(i, 2, "/*") == 0) {
+					++depth;
+					i += 2;
+				} else if (sql.compare(i, 2, "*/") == 0) {
+					--depth;
+					i += 2;
+				} else {
+					++i;
+				}
+			}
 		} else {
 			break;
 		}
@@ -588,10 +599,12 @@ std::string read_upper_word(const std::string& sql, size_t i) {
 }
 
 // Skips one parenthesized group starting at `i` (which must be '('), honouring
-// nesting and quoted strings/identifiers. Returns the index past the closing ')'.
+// nesting, comments and quoted strings/identifiers. Returns the index past the closing ')'.
 size_t skip_parenthesized(const std::string& sql, size_t i) {
 	size_t depth = 0;
 	while (i < sql.size()) {
+		i = skip_space_and_comments(sql, i);
+		if (i >= sql.size()) break;
 		const char c = sql[i];
 		if (c == '\'' || c == '"') {
 			const size_t close = sql.find(c, i + 1);
@@ -600,8 +613,9 @@ size_t skip_parenthesized(const std::string& sql, size_t i) {
 		}
 		if (c == '(') {
 			++depth;
-		} else if (c == ')' && --depth == 0) {
-			return i + 1;
+		} else if (c == ')') {
+			--depth;
+			if (depth == 0) return i + 1;
 		}
 		++i;
 	}

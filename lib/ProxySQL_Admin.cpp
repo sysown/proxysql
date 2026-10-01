@@ -388,14 +388,15 @@ SQLite3DB* proxysql_plugin_get_statsdb() {
 // sessions, which hold sql_query_global_mutex for every statement they run.
 bool proxysql_plugin_with_admin_db_lock(bool (*body)(void*), void* opaque) {
 	if (body == nullptr || GloAdmin == nullptr) return false;
-	pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+	pthread_mutex_t* const mutex = &GloAdmin->sql_query_global_mutex;
+	pthread_mutex_lock(mutex);
 	bool result = false;
 	try {
 		result = body(opaque);
 	} catch (...) {
 		result = false;
 	}
-	pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+	pthread_mutex_unlock(mutex);
 	return result;
 }
 
