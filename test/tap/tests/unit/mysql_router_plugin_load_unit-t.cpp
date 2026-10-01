@@ -44,7 +44,7 @@ int main() {
 	   "the real Router plugin targets chassis ABI layout 10 with the matching DEBUG tag");
 	ok(descriptor && descriptor->register_schemas && descriptor->register_cli_options &&
 	   descriptor->early_action && descriptor->runtime_ready,
-	   "the ABI-9 schema, CLI, action, and runtime-ready callbacks are present");
+	   "the schema, CLI, action, and runtime-ready descriptor callbacks are present");
 	ok(descriptor && descriptor->init && descriptor->start && descriptor->stop,
 	   "the init, start, and stop callbacks are present");
 	ok(descriptor && descriptor->status_json,

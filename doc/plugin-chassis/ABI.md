@@ -87,8 +87,8 @@ constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX =
     PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
 ```
 
-`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `9` in a release build and
-`0x40000009` in a DEBUG build. Plugins must use that constant rather than a
+`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `10` in a release build and
+`0x4000000A` in a DEBUG build. Plugins must use that constant rather than a
 literal so the loader can validate both the layout and build mode.
 
 ABI evolution so far:
@@ -334,7 +334,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // 9 release, 0x40000009 DEBUG
+    PROXYSQL_PLUGIN_ABI_VERSION,          // 10 release, 0x4000000A DEBUG
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop

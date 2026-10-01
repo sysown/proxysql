@@ -54,7 +54,7 @@ Pick one based on your time budget. Each is cumulative — the 2-hour pass conti
 Goal: convince yourself the chassis ABI and lifecycle are sane and the v3.x invisibility is real. Don't read mysqlx; trust that it's a consumer.
 
 1. Read **§3 (ABI surface)** below. Cross-check against [`ABI.md`](./ABI.md).
-2. Skim `include/ProxySQL_Plugin.h` — note `PROXYSQL_PLUGIN_ABI_VERSION = 8`, the descriptor's ABI-gated tail, and the matching service-table tail.
+2. Skim `include/ProxySQL_Plugin.h` — note `PROXYSQL_PLUGIN_ABI_VERSION = 10`, the descriptor's ABI-gated tail, and the matching service-table tail.
 3. Read **§4 (Ordered plugin lifecycle)** below.
 4. Skim `lib/ProxySQL_PluginManager.cpp` lines **324–461** (load + register_schemas + abi_version gating) and **548–576** (stop_all pairs with init).
 5. Check the v3.x invisibility claim:
@@ -93,7 +93,7 @@ The chassis is defined by **two headers** plus the loader implementation. The co
 
 **Key types (in `include/ProxySQL_Plugin.h`):**
 
-- `PROXYSQL_PLUGIN_ABI_VERSION` (currently `9`) — what newly-built plugins target. ABI 1 supplied the original six-field descriptor; later ABIs only append fields or extend compatible service contracts.
+- `PROXYSQL_PLUGIN_ABI_VERSION` (currently `10`) — what newly-built plugins target. ABI 1 supplied the original six-field descriptor; later ABIs only append fields or extend compatible service contracts.
 - `ProxySQL_PluginDescriptor` — the struct returned via `extern "C" proxysql_plugin_descriptor_v1()`. Its current tail contains schema, CLI, early-action, and runtime-ready callbacks. The single mandatory entry point a plugin must export is unchanged.
 - `ProxySQL_PluginServices` — the injected service table: registration APIs, log helper, three DB getters, live snapshots, Prometheus registry, runtime views, encrypted secrets, listener gates, and scoped MySQL configuration publication. Tail-append discipline preserves compatibility with plugins built against shorter layouts.
 
@@ -105,7 +105,7 @@ The chassis is defined by **two headers** plus the loader implementation. The co
 
 **See [`ABI.md`](./ABI.md) for the full contract**, including the tail-append rule, the Phase-B-vs-Phase-D services availability matrix, the C++-ABI coupling note (`std::string` and `prometheus-cpp` are part of the contract — plugin and core must share toolchain), and the empty-source-sync invariant.
 
-### ABI 6–9 availability matrix
+### ABI 6–10 availability matrix
 
 | ABI | Descriptor tail | Service tail |
 |---:|---|---|

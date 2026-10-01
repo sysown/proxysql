@@ -119,6 +119,7 @@ bool closed_within(int fd, int timeout_ms) {
 		const int remaining_ms = static_cast<int>((deadline - monotonic_time()) / 1000) + 1;
 		struct pollfd pfd { fd, POLLIN, 0 };
 		const int rc = poll(&pfd, 1, remaining_ms);
+		if (rc < 0 && errno == EINTR) continue;
 		if (rc <= 0) return false;
 		char buf[256];
 		const ssize_t n = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);

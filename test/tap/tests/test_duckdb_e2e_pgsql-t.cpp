@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(21);
+	plan(24);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -171,10 +171,12 @@ int main(int argc, char** argv) {
 		const bool session_ok = PQresultStatus(session_set) == PGRES_COMMAND_OK;
 		PQclear(session_set);
 		PGresult* current = exec_or_bail(c, "SELECT current_setting('threads')");
-		ok(global_refused && threads_refused && session_ok &&
-		   PQresultStatus(current) == PGRES_TUPLES_OK && PQntuples(current) == 1 &&
+		ok(global_refused, "a client SET of an engine-wide option (max_memory) is refused");
+		ok(threads_refused, "a client SET threads is refused");
+		ok(session_ok, "a client session SET (search_path) still reaches DuckDB");
+		ok(PQresultStatus(current) == PGRES_TUPLES_OK && PQntuples(current) == 1 &&
 		   threads_before == PQgetvalue(current, 0, 0),
-		   "a client cannot change engine-wide settings, but session SET still reaches DuckDB");
+		   "the engine-wide threads setting is unchanged");
 		PQclear(current);
 	}
 

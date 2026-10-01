@@ -106,7 +106,7 @@ All types are defined in `include/ProxySQL_Plugin.h`:
 ```cpp
 struct ProxySQL_PluginDescriptor {
     const char *name;                         // Human-readable plugin name
-    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (currently 9)
+    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (currently 10)
     proxysql_plugin_init_cb init;             // bool (*)(ProxySQL_PluginServices *)
     proxysql_plugin_start_cb start;           // bool (*)()
     proxysql_plugin_stop_cb stop;             // bool (*)()
@@ -142,11 +142,11 @@ ProxySQL to exit.
 
 `include/ProxySQL_Plugin.h` exposes a layout version and a build-mode tag:
 
-- `PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION` is currently `9`.
+- `PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION` is currently `10`.
 - `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` is bit 30. It is set when the plugin is
   compiled with `-DDEBUG` and clear otherwise.
 - `PROXYSQL_PLUGIN_ABI_VERSION` combines those values. Its raw value is
-  therefore `9` in a release build and `0x40000009` in a DEBUG build.
+  therefore `10` in a release build and `0x4000000A` in a DEBUG build.
 
 Plugins MUST assign `abi_version` from `PROXYSQL_PLUGIN_ABI_VERSION` rather
 than hard-coding either raw value. The loader first requires the DEBUG bit to
