@@ -62,7 +62,12 @@ jobs:
         ELIGIBLE: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
       run: |
         set -uo pipefail
-        choice='"ubuntu-22.04"'
+        # This workflow's GitHub-hosted baseline is ubuntu-24.04, NOT the
+        # 22.04 used by the other ported groups: `e2e-tests` installs the
+        # Noble-only libaio1t64 (see the MySQL 8.4 runtime step) because
+        # Oracle's mysqld needs Noble's time64 ABI. Spilling to 22.04 would
+        # fail at apt-get install.
+        choice='"ubuntu-24.04"'
         if [ "${ELIGIBLE:-}" = "true" ]; then
           POOL="${POOL_SIZE:-6}"
           # Listing runners needs repo admin, which no available token has, so
@@ -84,7 +89,11 @@ jobs:
           if [ "$err" = "0" ]; then
             for rid in ${ids:-}; do
               [ "$demand" -ge "$POOL" ] && break
-              n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length' 2>/dev/null) || n=0
+              # A failed lookup must not read as free capacity: a transient
+              # 429 or API error would otherwise make a saturated pool look
+              # empty and route work onto already-busy VMs. Saturate instead,
+              # which forces the hosted spill below.
+              n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length' 2>/dev/null) || { echo ">>> WARNING: could not read jobs for run ${rid}; assuming pool is full"; n="${POOL}"; }
               demand=$(( demand + ${n:-0} ))
             done
             free=$(( POOL - demand ))
@@ -92,7 +101,7 @@ jobs:
             if [ "${free}" -ge 1 ]; then
               choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
             else
-              choice='"ubuntu-22.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
+              choice='"ubuntu-24.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
             fi
           else
             echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1

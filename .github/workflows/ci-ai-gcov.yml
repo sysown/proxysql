@@ -78,7 +78,11 @@ jobs:
           if [ "$err" = "0" ]; then
             for rid in ${ids:-}; do
               [ "$demand" -ge "$POOL" ] && break
-              n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length' 2>/dev/null) || n=0
+              # A failed lookup must not read as free capacity: a transient
+              # 429 or API error would otherwise make a saturated pool look
+              # empty and route work onto already-busy VMs. Saturate instead,
+              # which forces the hosted spill below.
+              n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length' 2>/dev/null) || { echo ">>> WARNING: could not read jobs for run ${rid}; assuming pool is full"; n="${POOL}"; }
               demand=$(( demand + ${n:-0} ))
             done
             free=$(( POOL - demand ))
