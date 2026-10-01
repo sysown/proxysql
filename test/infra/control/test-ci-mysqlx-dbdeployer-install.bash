@@ -86,9 +86,13 @@ guard_body="$(printf '%s\n' "${step}" | awk '
 ')"
 
 printf '%s\n' "${guard_body}" | grep -Fq 'if ! command -v dbdeployer >/dev/null 2>&1; then'
-printf '%s\n' "${guard_body}" | grep -Fq "curl --fail --location --proto '=https' --tlsv1.2"
-printf '%s\n' "${guard_body}" | grep -Fq 'https://raw.githubusercontent.com/ProxySQL/dbdeployer/0982f16ad02a20df13caf02838d2722a1e304e4f/scripts/dbdeployer-install.sh'
-printf '%s\n' "${guard_body}" | grep -Fq '04ef082fb20dc3e5ad9b164dd96374e6c01034d068ccc891684fabc1be52f6b5'
-printf '%s\n' "${guard_body}" | grep -Fq 'sha256sum --check --status'
-printf '%s\n' "${guard_body}" | grep -Fq 'bash "${installer}"'
+printf '%s\n' "${guard_body}" | grep -Fq "curl --fail --show-error --location --retry 3 --proto '=https' --tlsv1.2"
+printf '%s\n' "${guard_body}" | grep -Fq 'https://github.com/ProxySQL/dbdeployer/releases/download/v${DBDEPLOYER_VERSION}/${archive}'
+printf '%s\n' "${step}" | grep -Fq "DBDEPLOYER_VERSION: '2.4.2'"
+printf '%s\n' "${step}" | grep -Fq 'DBDEPLOYER_SHA256: bfb34fea53441c274bc9892a80ccba9abc175914b0b874cf9d0471df743cb701'
+printf '%s\n' "${guard_body}" | grep -Fq 'sha256sum --check'
 printf '%s\n' "${step}" | grep -Fq 'dbdeployer --version'
+if printf '%s\n' "${step}" | grep -Eq 'releases/latest|dbdeployer-install\.sh'; then
+    echo 'dbdeployer installation must not depend on release discovery' >&2
+    exit 1
+fi
