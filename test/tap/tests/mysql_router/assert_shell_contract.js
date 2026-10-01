@@ -8,9 +8,16 @@ var session = mysql.getSession('root:' + encodeURIComponent(password) + '@' + ho
 shell.setSession(session);
 var cluster = dba.getCluster('proxysql_e2e');
 
+// Cluster.routingOptions() was removed in MySQL Shell 9.x; routerOptions()
+// reports the same effective routing options there.
+function routingOptionsFor(routerKey) {
+    if (shell.version.indexOf('Ver 8.') !== -1) return cluster.routingOptions(routerKey);
+    return cluster.routerOptions({router: routerKey});
+}
+
 var before = cluster.listRouters();
 var options = cluster.routerOptions({router: router});
-var routing = cluster.routingOptions(router);
+var routing = routingOptionsFor(router);
 cluster.setRoutingOption(router, 'read_only_targets', 'all');
 var shellAccountExists = session.runSql(
     "SELECT COUNT(*) FROM mysql.user WHERE user='shell_router_app'").fetchOne()[0] != 0;
@@ -18,7 +25,7 @@ var shellAccountOptions = {password: 'shell-router-password'};
 if (shellAccountExists) shellAccountOptions.update = true;
 cluster.setupRouterAccount('shell_router_app', shellAccountOptions);
 var after = cluster.listRouters();
-var routingAfter = cluster.routingOptions(router);
+var routingAfter = routingOptionsFor(router);
 var accountCount = session.runSql(
     "SELECT COUNT(*) FROM mysql.user WHERE user='shell_router_app'").fetchOne()[0];
 var accountGrants = session.runSql(

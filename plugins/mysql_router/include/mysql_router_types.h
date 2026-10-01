@@ -69,7 +69,26 @@ struct RouterOptions {
 	ReadOnlyTargets read_only_targets {ReadOnlyTargets::secondaries};
 	QuorumTraffic quorum_traffic {QuorumTraffic::none};
 	std::optional<uint64_t> stats_updates_frequency;
+	// A guideline option is set but the metadata cannot provide guidelines (< 2.3).
 	bool routing_guideline_unsupported {false};
+	// guideline_id selected by router_options (router > clusterset > cluster), if any.
+	std::optional<std::string> guideline_id;
+};
+
+// Active Routing Guideline document as stored in the metadata (#6145).
+struct RoutingGuidelineSource {
+	std::string guideline_id;
+	std::string name;
+	std::string document;
+};
+
+// $.router.* values from mysql_innodb_cluster_metadata.v2_routers.
+struct RouterMetadataInfo {
+	std::string hostname;
+	std::string name;
+	std::string local_cluster;
+	// tag name -> JSON text of the value
+	std::map<std::string, std::string> tags;
 };
 
 struct DesiredInstance {
@@ -89,6 +108,9 @@ struct DesiredTopology {
 	std::string group_name;
 	std::vector<DesiredInstance> instances;
 	RouterOptions options;
+	bool routing_guidelines_capable {false};
+	std::optional<RoutingGuidelineSource> guideline;
+	RouterMetadataInfo router;
 };
 
 struct ObservedMember {
@@ -97,6 +119,7 @@ struct ObservedMember {
 	uint16_t port {0};
 	HealthState state {HealthState::unreachable};
 	DesiredRole role {DesiredRole::reader};
+	std::string version;
 };
 
 struct ObservedHealth {
@@ -112,6 +135,11 @@ struct EffectiveTopology {
 	std::optional<std::string> writer;
 	std::vector<std::string> readers;
 	std::vector<std::string> excluded;
+	// server_uuid -> MEMBER_VERSION ("8.4.8") when reported by Group Replication
+	std::map<std::string, std::string> versions;
+	// Routing Guidelines view, independent of read_only_targets (which has no
+	// effect while a guideline is active): usable GR members and read replicas.
+	std::vector<std::string> guideline_candidates;
 };
 
 #endif

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# REPORT_HOST is the address Group Replication and the InnoDB Cluster metadata
+# advertise; each infra passes its own network alias.
+REPORT_HOST=${REPORT_HOST:-dbdeployer1.infra-mysql-router-ic}
+
 MYSQL_VERSION=$(find /root/opt/mysql -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | tail -1)
 if [ -z "${MYSQL_VERSION}" ]; then
     echo "ERROR: no MySQL distribution is installed" >&2
@@ -14,7 +18,7 @@ dbdeployer deploy multiple "${MYSQL_VERSION}" \
     --base-server-id=8400 \
     --remote-access='%' \
     --disable-mysqlx \
-    -c report_host=dbdeployer1.infra-mysql-router-ic \
+    -c report_host="${REPORT_HOST}" \
     -c max_connections=500 \
     -c local_infile=ON \
     -c innodb_buffer_pool_size=128M \
@@ -49,4 +53,9 @@ done
 
 mysqlsh --version
 touch /tmp/mysql_router_ic_ready
+# Images that ship a MySQL Shell request queue (infra-mysql-router-ic-rg) serve
+# it for the lifetime of the container; otherwise just stay alive.
+if [ -n "${MYSQL_SHELL_QUEUE_DIR:-}" ] && [ -x /usr/local/bin/mysqlsh-queue.sh ]; then
+    exec /usr/local/bin/mysqlsh-queue.sh
+fi
 exec sleep infinity

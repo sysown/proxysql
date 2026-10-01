@@ -67,6 +67,9 @@ SRCS := $(PLUGIN_DIR)/src/plugin.cpp \
 	$(PLUGIN_DIR)/src/user_sync.cpp \
 	$(PLUGIN_DIR)/src/reconciler.cpp \
 	$(PLUGIN_DIR)/src/reconciler_runtime.cpp \
+	$(PLUGIN_DIR)/src/guideline_runtime.cpp \
+	$(PLUGIN_DIR)/src/routing_guidelines.cpp \
+	$(PLUGIN_DIR)/src/routing_guidelines_expr.cpp \
 	$(PLUGIN_DIR)/src/status.cpp \
 	$(PLUGIN_DIR)/src/metrics.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \

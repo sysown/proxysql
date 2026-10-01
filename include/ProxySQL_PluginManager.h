@@ -67,6 +67,10 @@ public:
 	std::string resolve_alias_to_canonical(const std::string& sql) const;
 	bool register_query_hook(ProxySQL_PluginProtocol proto, proxysql_plugin_query_hook_cb cb);
 	bool has_query_hook(ProxySQL_PluginProtocol proto) const;
+	bool register_mysql_route_hook(proxysql_plugin_route_hook_cb cb);
+	bool has_mysql_route_hook() const;
+	bool dispatch_mysql_route_hook(const ProxySQL_PluginRouteHookPayload& payload,
+		ProxySQL_PluginRouteHookResult& result) const;
 	bool dispatch_query_hook(ProxySQL_PluginProtocol proto,
 	                         const ProxySQL_PluginQueryHookPayload& payload,
 	                         ProxySQL_PluginQueryHookResult& result) const;
@@ -135,6 +139,7 @@ private:
 	// At most one hook per protocol; nullptr means "no hook".
 	proxysql_plugin_query_hook_cb mysql_query_hook_ { nullptr };
 	proxysql_plugin_query_hook_cb pgsql_query_hook_ { nullptr };
+	proxysql_plugin_route_hook_cb mysql_route_hook_ { nullptr };
 
 	// Runtime-view registry: one entry per admin-side projection of
 	// module state. Stored alongside an owned table_name copy so
@@ -168,6 +173,14 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 // hook (which takes the manager lock).  Use this to elide the dispatch call
 // entirely on the no-plugin path.
 bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto);
+// ABI-10 MySQL session route hook: same locking contract as the query hook.
+// proxysql_has_configured_plugin_route_hook() is lock-free and only true after
+// every plugin started successfully.
+bool proxysql_dispatch_configured_plugin_route_hook(
+	const ProxySQL_PluginRouteHookPayload& payload,
+	ProxySQL_PluginRouteHookResult& result
+);
+bool proxysql_has_configured_plugin_route_hook();
 // Admin-side helper: consult the active plugin manager's command table and
 // return the canonical spelling of `sql` if it's a registered command or
 // alias, or an empty string otherwise.  Returns by value so callers can

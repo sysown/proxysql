@@ -31,6 +31,20 @@ struct MysqlRouterMetrics {
 	prometheus::Gauge* stale_seconds {nullptr};
 };
 
+struct CompiledGuideline;
+
+// Routing Guidelines state exposed through runtime_mysql_router_guideline* (#6145).
+struct MysqlRouterGuidelineStatus {
+	std::string state {"none"};   // none / active / stale / invalid
+	std::string guideline_id;
+	std::string name;
+	std::string version;
+	std::string error_kind;
+	std::string last_error;
+	uint64_t last_update {0};
+	std::shared_ptr<const CompiledGuideline> compiled;
+};
+
 struct MysqlRouterContext {
 	ProxySQL_PluginServices* services {nullptr};
 	std::atomic<bool> initialized {false};
@@ -41,6 +55,7 @@ struct MysqlRouterContext {
 	std::mutex projection_mutex;
 	MysqlRouterStatus status;
 	std::vector<MysqlRouterRuntimeTopologyRow> runtime_topology;
+	MysqlRouterGuidelineStatus guideline;
 	MysqlRouterMetrics metrics;
 	std::unique_ptr<IReconcileBackend> reconcile_backend;
 	std::unique_ptr<MysqlRouterReconciler> reconciler;

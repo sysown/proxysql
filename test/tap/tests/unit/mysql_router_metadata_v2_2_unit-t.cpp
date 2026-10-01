@@ -49,7 +49,10 @@ const char* kCapabilityColumns =
 	"SUM(TABLE_NAME='v2_gr_clusters' AND COLUMN_NAME='group_name') AS gr_clusters_group_name, "
 	"SUM(TABLE_NAME='v2_instances' AND COLUMN_NAME='mysql_server_uuid') AS instances_server_uuid, "
 	"SUM(TABLE_NAME='v2_instances' AND COLUMN_NAME='endpoint') AS instances_endpoint, "
-	"SUM(TABLE_NAME='v2_router_options' AND COLUMN_NAME='router_options') AS router_options "
+	"SUM(TABLE_NAME='v2_router_options' AND COLUMN_NAME='router_options') AS router_options, "
+	"SUM(TABLE_NAME='routing_guidelines' AND COLUMN_NAME='guideline') AS routing_guidelines, "
+	"SUM(TABLE_NAME='v2_routers' AND COLUMN_NAME='options') AS routers_options, "
+	"SUM(TABLE_NAME='router_stats') AS router_stats "
 	"FROM information_schema.columns WHERE TABLE_SCHEMA='mysql_innodb_cluster_metadata'";
 const char* kThisInstance =
 	"SELECT cluster_id, instance_id, instance_type, cluster_name, cluster_type "
@@ -63,6 +66,20 @@ const char* kInstances =
 const char* kRouterOptions =
 	"SELECT router_options FROM mysql_innodb_cluster_metadata.v2_router_options "
 	"WHERE router_id=?";
+const char* kRoutingGuideline =
+	"SELECT RG.guideline_id AS guideline_id, RG.name AS name, RG.guideline AS guideline "
+	"FROM mysql_innodb_cluster_metadata.routing_guidelines RG WHERE RG.guideline_id = ("
+	"SELECT COALESCE(RO.router_options->>'$.guideline', CS.router_options->>'$.guideline', "
+	"CL.router_options->>'$.guideline') "
+	"FROM mysql_innodb_cluster_metadata.v2_router_options RO "
+	"LEFT JOIN mysql_innodb_cluster_metadata.clustersets CS ON RO.clusterset_id = CS.clusterset_id "
+	"LEFT JOIN mysql_innodb_cluster_metadata.clusters CL ON RO.cluster_id = CL.cluster_id "
+	"WHERE RO.router_id = ?)";
+const char* kRouterInfo =
+	"SELECT address, router_name, attributes->>'$.LocalCluster' AS local_cluster "
+	"FROM mysql_innodb_cluster_metadata.v2_routers WHERE router_id=?";
+const char* kRouterTags =
+	"SELECT options->'$.tags' AS tags FROM mysql_innodb_cluster_metadata.v2_routers WHERE router_id=?";
 
 ScriptedMetadataSession valid_session() {
 	ScriptedMetadataSession session;
@@ -93,6 +110,8 @@ ScriptedMetadataSession valid_session() {
 		{"router_options", "{\"read_only_targets\":\"all\","
 			"\"unreachable_quorum_allowed_traffic\":\"read\","
 			"\"stats_updates_frequency\":5,\"guideline\":\"rg-main\"}"}})}}});
+	session.expected.push_back({kRouterInfo, {int64_t(42)}, {{row({
+		{"address", "proxy1.example"}, {"router_name", "proxysql1"}, {"local_cluster", std::nullopt}})}}});
 	return session;
 }
 
@@ -108,7 +127,7 @@ bool read_throws(ScriptedMetadataSession session, const char* needle) {
 } // namespace
 
 int main() {
-	plan(28);
+	plan(35);
 
 	ScriptedMetadataSession probe;
 	probe.expected.push_back({kSchemaVersion, {}, {{row({
@@ -159,12 +178,54 @@ int main() {
 	ok(old_rejected, "metadata 1.x is rejected");
 	ScriptedMetadataSession future;
 	future.expected.push_back({kSchemaVersion, {}, {{row({
-		{"major", "2"}, {"minor", "3"}, {"patch", "0"}})}}});
+		{"major", "2"}, {"minor", "5"}, {"patch", "0"}})}}});
 	bool future_rejected = false;
 	try { (void)probe_metadata(future); } catch (const std::exception& e) {
-		future_rejected = std::string(e.what()).find("2.2") != std::string::npos;
+		future_rejected = std::string(e.what()).find("2.4") != std::string::npos;
 	}
-	ok(future_rejected, "metadata 2.3 is rejected until its adapter exists");
+	ok(future_rejected, "metadata 2.5 is rejected until its adapter exists");
+
+	// Metadata 2.3 (#6145): Routing Guidelines are read with MySQL Router's selection query.
+	auto guidelines = valid_session();
+	guidelines.expected[0].result.rows[0]["minor"] = "3";
+	guidelines.expected[1].result.rows[0]["routing_guidelines"] = "1";
+	guidelines.expected[1].result.rows[0]["routers_options"] = "1";
+	guidelines.expected.push_back({kRouterTags, {int64_t(42)}, {{row({
+		{"tags", "{\"region\": \"eu\", \"tier\": 2}"}})}}});
+	guidelines.expected.push_back({kRoutingGuideline, {int64_t(42)}, {{row({
+		{"guideline_id", "rg-main"}, {"name", "rg_custom"}, {"guideline", "{\"version\":\"1.1\"}"}})}}});
+	DesiredTopology guideline_topology;
+	bool guideline_read = false;
+	try {
+		guideline_topology = MetadataV2_2::read_innodb_cluster(guidelines, "cluster-1", 42);
+		guideline_read = true;
+	} catch (const std::exception& error) {
+		diag("metadata 2.3 read failed: %s", error.what());
+	}
+	ok(guideline_read && guidelines.expected.empty(), "metadata 2.3 reads router tags and the active guideline");
+	ok(guideline_topology.routing_guidelines_capable && !guideline_topology.options.routing_guideline_unsupported,
+	   "a guideline option on metadata 2.3 is supported");
+	ok(guideline_topology.guideline && guideline_topology.guideline->guideline_id == "rg-main" &&
+	   guideline_topology.guideline->name == "rg_custom" &&
+	   guideline_topology.guideline->document == "{\"version\":\"1.1\"}",
+	   "the active guideline id, name and document are retained");
+	ok(guideline_topology.router.hostname == "proxy1.example" && guideline_topology.router.name == "proxysql1",
+	   "router hostname and name are read for $.router.*");
+	ok(guideline_topology.router.tags.size() == 2 && guideline_topology.router.tags["region"] == "\"eu\"" &&
+	   guideline_topology.router.tags["tier"] == "2", "router tags keep their JSON text representation");
+	ok(topology.router.hostname == "proxy1.example" && !topology.guideline,
+	   "metadata 2.2 reads router info but no guideline");
+
+	auto missing_guideline = valid_session();
+	missing_guideline.expected[0].result.rows[0]["minor"] = "4";
+	missing_guideline.expected[1].result.rows[0]["routing_guidelines"] = "1";
+	missing_guideline.expected.push_back({kRoutingGuideline, {int64_t(42)}, {}});
+	DesiredTopology missing_topology;
+	try { missing_topology = MetadataV2_2::read_innodb_cluster(missing_guideline, "cluster-1", 42); }
+	catch (const std::exception& error) { diag("metadata 2.4 read failed: %s", error.what()); }
+	ok(missing_topology.guideline && missing_topology.guideline->document.empty() &&
+	   missing_topology.guideline->guideline_id == "rg-main",
+	   "an option referencing a missing guideline is retained with an empty document");
 
 	auto missing_endpoint = valid_session();
 	missing_endpoint.expected[3].result.rows[0]["endpoint"] = std::nullopt;
@@ -200,15 +261,16 @@ int main() {
 	   "negative stats update frequency is rejected");
 	auto null_frequency = valid_session();
 	null_frequency.expected[4].result.rows[0]["router_options"] =
-		"{\"stats_updates_frequency\":null}";
+		"{\"stats_updates_frequency\":null,\"guideline\":\"rg-main\"}";
 	bool null_frequency_disabled = false;
 	try {
 		auto disabled_stats = MetadataV2_2::read_innodb_cluster(
 			null_frequency, "cluster-1", 42);
-		null_frequency_disabled = !disabled_stats.options.stats_updates_frequency.has_value();
+		null_frequency_disabled = !disabled_stats.options.stats_updates_frequency.has_value() &&
+			disabled_stats.options.guideline_id == std::optional<std::string>("rg-main");
 	} catch (const std::exception&) {}
 	ok(null_frequency_disabled,
-	   "a null stats update frequency disables metadata check-ins");
+	   "a null stats update frequency disables metadata check-ins and later options are still parsed");
 	auto missing_capability = valid_session();
 	missing_capability.expected[1].result.rows[0]["instances_endpoint"] = "0";
 	ok(read_throws(std::move(missing_capability), "required metadata"),

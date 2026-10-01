@@ -8,7 +8,8 @@ namespace {
 constexpr const char* kMembers =
 	"SELECT MEMBER_ID AS member_id, MEMBER_HOST AS member_host, "
 	"MEMBER_PORT AS member_port, MEMBER_STATE AS member_state, "
-	"MEMBER_ROLE AS member_role, @@global.group_replication_single_primary_mode AS single_primary "
+	"MEMBER_ROLE AS member_role, MEMBER_VERSION AS member_version, "
+	"@@global.group_replication_single_primary_mode AS single_primary "
 	"FROM performance_schema.replication_group_members "
 	"WHERE CHANNEL_NAME='group_replication_applier'";
 constexpr const char* kWritableGlobals =
@@ -70,6 +71,8 @@ ObservedHealth GrHealthReader::read(IMetadataSession& session) {
 		if (role == "PRIMARY") member.role = DesiredRole::writer;
 		else if (role == "SECONDARY") member.role = DesiredRole::reader;
 		else throw std::runtime_error("invalid GR member role");
+		auto version = row.find("member_version");
+		if (version != row.end() && version->second) member.version = *version->second;
 		bool single_primary = bool_value(row, "single_primary");
 		if (!observed.members.empty() && observed.single_primary_mode != single_primary) {
 			throw std::runtime_error("inconsistent GR single-primary mode");
@@ -97,6 +100,7 @@ EffectiveTopology evaluate_innodb_cluster(
 	if (!observed.quorum && desired.options.quorum_traffic == QuorumTraffic::none) return effective;
 	for (const DesiredInstance& instance : desired.instances) {
 		if (instance.kind == InstanceKind::read_replica) {
+			effective.guideline_candidates.push_back(instance.server_uuid);
 			if (desired.options.read_only_targets != ReadOnlyTargets::secondaries) {
 				effective.readers.push_back(instance.server_uuid);
 			}
@@ -107,13 +111,16 @@ EffectiveTopology evaluate_innodb_cluster(
 			effective.excluded.push_back(instance.server_uuid);
 			continue;
 		}
+		if (!found->second.version.empty()) effective.versions[instance.server_uuid] = found->second.version;
 		if (!observed.quorum && desired.options.quorum_traffic == QuorumTraffic::read) continue;
 		if (found->second.role == DesiredRole::writer) {
 			const bool polled_primary = observed.session_server_uuid == instance.server_uuid;
 			if (!polled_primary || (!observed.read_only && !observed.super_read_only)) {
 				effective.writer = instance.server_uuid;
+				effective.guideline_candidates.push_back(instance.server_uuid);
 			}
 		} else {
+			effective.guideline_candidates.push_back(instance.server_uuid);
 			if (desired.options.read_only_targets != ReadOnlyTargets::read_replicas) {
 				effective.readers.push_back(instance.server_uuid);
 			}

@@ -103,14 +103,68 @@ the last error. Closed listener gates reject an accepted connection before a
 session or MySQL handshake is created; they reopen only after the plugin has a
 complete usable generation.
 
+## Routing Guidelines
+
+With InnoDB Cluster metadata 2.3 or 2.4 (created by MySQL Shell 9.2 or later), the
+plugin applies MySQL Router Routing Guidelines managed with an unmodified MySQL
+Shell (`createRoutingGuideline()`, `addDestination()`, `addRoute()`,
+`setRoutingOption('guideline', ...)`). The plugin advertises
+`SupportedRoutingGuidelinesVersion` 1.1 and reports `CurrentRoutingGuideline` in
+`v2_routers`, so Shell accepts it as a Router that supports guidelines.
+
+How a guideline is applied:
+
+- The active guideline is selected like MySQL Router does (router option, then
+  ClusterSet, then Cluster) and re-read on every topology refresh.
+- Destinations (`$.server.*`) are evaluated against the live topology at every
+  refresh. Each enabled route gets three plugin-owned hostgroups in the
+  8000-8999 band (`rg:<route>:all|writer|reader`), published in the same atomic
+  generation as the rest of the Router configuration.
+- Routes (`$.session.*`, `$.router.*`) are evaluated per client session with the
+  full expression language, through the ABI-10 MySQL route hook, when the
+  session's first statement is routed. The hook only remaps the plugin's own
+  `route_writer`/`route_reader` destinations on the Router listeners; any other
+  destination selected by operator-owned `mysql_query_rules` is left unchanged,
+  and operator rules are never modified. The `route_writer`/`route_reader`
+  hostgroups are Router-managed: an operator rule that explicitly targets one of
+  them opts into Router routing, and is remapped like the plugin's own rules.
+- A session that matches no route, or whose route has no available destination,
+  gets an error for the statement (the connection stays open).
+
+Differences from MySQL Router (also reported per route in
+`runtime_mysql_router_guideline_routes.notes`):
+
+- Priority fallback uses the first destination group that has an available
+  member at the last topology refresh.
+- `round-robin` maps to equal weights and `first-available` to decreasing
+  weights on ProxySQL's weighted load balancing.
+- On the read/write split port, writes use the PRIMARY members and reads the
+  other members of the route's first group that has them.
+- `connectionSharingAllowed` is not applied; ProxySQL multiplexing rules apply.
+- Existing sessions select a route again on their next statement after the
+  guideline changes, instead of being disconnected.
+- `$.router.routeName` is not supported inside destinations.
+
+Invalid or unsupported documents never replace the last valid guideline: the
+state becomes `stale` (or `invalid` when there is no previous valid guideline)
+and the error is recorded in `stats_mysql_router_errors`. Removing the guideline
+option releases the route hostgroups and restores the baseline routing.
+
+```sql
+SELECT * FROM runtime_mysql_router_guideline;
+SELECT * FROM runtime_mysql_router_guideline_routes ORDER BY route_order, pool;
+SELECT * FROM runtime_mysql_router_guideline_destinations;
+SELECT * FROM stats_mysql_router_errors WHERE kind LIKE 'guideline_%';
+```
+
 ## Supported scope
 
-The current foundation supports InnoDB Cluster Metadata 2.2, Group Replication
-members, and MySQL Shell-managed asynchronous read replicas. Routing Guidelines
-are deliberately not imported in this change; follow-up issue
-[#6145](https://github.com/sysown/proxysql/issues/6145) tracks conversion to or
-direct use of ProxySQL-native routing policy.
+The current foundation supports InnoDB Cluster Metadata 2.2 to 2.4, Group
+Replication members, MySQL Shell-managed asynchronous read replicas, and Routing
+Guidelines on InnoDB Cluster (issue
+[#6145](https://github.com/sysown/proxysql/issues/6145)).
 
 Current exclusions are MySQL X Router endpoints, takeover of an existing MySQL
-Router deployment, InnoDB ReplicaSet, ClusterSet, and release packaging. Each
-requires its own reviewed implementation and acceptance plan.
+Router deployment, InnoDB ReplicaSet, ClusterSet (including their Routing
+Guidelines), and release packaging. Each requires its own reviewed
+implementation and acceptance plan.

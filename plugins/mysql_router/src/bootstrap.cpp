@@ -1,4 +1,5 @@
 #include "mysql_router_bootstrap.h"
+#include "mysql_router_guideline_runtime.h"
 
 #include "mysql_router_compiler.h"
 #include "mysql_router_metadata.h"
@@ -746,11 +747,23 @@ uint64_t PluginBootstrapStore::publish_generation(const DesiredTopology& topolog
 
 	CompiledMysqlConfig config = ConfigCompiler::compile_topology(
 		topology, effective, hostgroups, input);
+	// Routing Guideline route hostgroups (#6145) are part of the same atomic generation.
+	std::shared_ptr<const CompiledGuideline> guideline = mysql_router_pending_guideline();
+	std::shared_ptr<GuidelineRoutingSnapshot> routing_snapshot;
+	std::set<std::string> guideline_roles;
+	if (guideline) guideline_roles = mysql_router_guideline_roles(*guideline);
+	ManagedHostgroups guideline_hostgroups = HostgroupAllocator::load_or_allocate_guideline(
+		*db_, topology.topology_uuid, guideline_roles, allocation);
+	if (guideline) {
+		routing_snapshot = mysql_router_append_guideline_config(config, guideline,
+			guideline_hostgroups, hostgroups, topology, listeners, publish_generation);
+	}
 	const ProxySQL_PluginMysqlConfigResult published = services_.apply_mysql_config_v2(config.plan_v2());
 	if (!published.applied || published.generation != publish_generation) {
 		throw std::runtime_error(published.message.empty()
 			? "initial Router generation publication failed" : published.message);
 	}
+	mysql_router_set_guideline_snapshot(std::move(routing_snapshot));
 	return published.generation;
 }
 
