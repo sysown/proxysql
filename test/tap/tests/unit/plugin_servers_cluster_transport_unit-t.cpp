@@ -108,6 +108,11 @@ private:
 	MYSQL_RES result_ {};
 };
 
+// Upper bound for work that must finish without the held mutex. A blocked
+// worker would wait for as long as the mutex is held, so this only has to be
+// generous enough to absorb scheduling delays on a loaded host.
+constexpr std::chrono::seconds kCompletionTimeout{10};
+
 bool set_checksums_finishes_while_pull_mutex_is_held(ProxySQL_Node_Entry& node,
 	MYSQL_RES* result, pthread_mutex_t& pull_mutex) {
 	std::mutex done_mutex;
@@ -123,7 +128,7 @@ bool set_checksums_finishes_while_pull_mutex_is_held(ProxySQL_Node_Entry& node,
 		done_cv.notify_one();
 	});
 	std::unique_lock<std::mutex> lock(done_mutex);
-	const bool completed = done_cv.wait_for(lock, std::chrono::milliseconds(200), [&] { return done; });
+	const bool completed = done_cv.wait_for(lock, kCompletionTimeout, [&] { return done; });
 	lock.unlock();
 	pthread_mutex_unlock(&pull_mutex);
 	worker.join();
@@ -154,7 +159,7 @@ bool simultaneous_server_module_polls_finish_after_v2_pull(
 	{
 		std::unique_lock<std::mutex> lock(done_mutex);
 		completed_after_v2 = done_cv.wait_for(
-			lock, std::chrono::milliseconds(200), [&] { return done; });
+			lock, kCompletionTimeout, [&] { return done; });
 	}
 	pthread_mutex_unlock(&cluster.update_runtime_mysql_servers_mutex);
 	worker.join();
@@ -164,7 +169,7 @@ bool simultaneous_server_module_polls_finish_after_v2_pull(
 } // namespace
 
 int main() {
-	plan(59);
+	plan(61);
 	SQLite3DB source;
 	SQLite3DB destination;
 	source.open((char*)"file:module-cluster-source?mode=memory&cache=private", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
@@ -231,6 +236,19 @@ int main() {
 	alpha = query(destination, "SELECT label FROM mysql_plugin_alpha WHERE writer=77");
 	ok(alpha && alpha->rows_count == 1,
 		"null runtime snapshot never clears existing configuration");
+
+	// A node without server-module tables shares the admin database with other
+	// threads that run their own transactions. Applying an empty table set must
+	// not open (and therefore not collide with) a transaction of its own.
+	destination.execute("BEGIN");
+	destination.execute("INSERT INTO mysql_plugin_alpha VALUES (78,78,'outer')");
+	const std::vector<ProxySQL_ServerModuleClusterTable> no_module_tables;
+	ok(proxysql_apply_server_module_cluster_memory(destination, no_module_tables, error),
+		"empty server-module table set applies while another transaction is open");
+	destination.execute("COMMIT");
+	alpha = query(destination, "SELECT label FROM mysql_plugin_alpha WHERE writer=78");
+	ok(alpha && alpha->rows_count == 1,
+		"empty server-module table set leaves the concurrent transaction intact");
 
 	const std::string mysql_v1 = proxysql_server_module_cluster_metadata_query(
 		ProxySQL_ServerProtocol::mysql, ProxySQL_ServerModuleClusterVersion::runtime_v1);

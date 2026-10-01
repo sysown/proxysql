@@ -342,6 +342,14 @@ bool proxysql_apply_server_module_cluster_memory(
 	SQLite3DB& db,
 	const std::vector<ProxySQL_ServerModuleClusterTable>& tables,
 	std::string& error) {
+	// The peer's table set must match the local registry, so an empty set means
+	// this node has no server-module tables. Do not open a transaction then: the
+	// admin database is shared with threads running their own transactions, and
+	// a colliding BEGIN would fail the whole cluster sync for nothing.
+	if (tables.empty()) {
+		error.clear();
+		return true;
+	}
 	if (!db.execute("BEGIN IMMEDIATE")) {
 		error = "could not begin server-module table transaction";
 		return false;
