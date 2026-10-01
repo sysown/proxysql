@@ -123,6 +123,26 @@ jobs:
       COVERAGE: ${{ matrix.coverage && '1' || '0' }}
     steps:
 
+    - name: Use a job-scoped Docker config
+      # Self-hosted pool VMs keep ~/.docker/config.json between jobs. Other
+      # workflows run `docker login ghcr.io` with their job's GITHUB_TOKEN and
+      # never log out, and that token is revoked when their job ends. Docker
+      # then sends the dead credential with every later ghcr.io pull, and GHCR
+      # answers "error from registry: denied" even for the public
+      # ghcr.io/mrmohebi/docker-hoster image this job needs. This job never
+      # logs in, so give it an empty config: all of its pulls are anonymous.
+      # CLI plugins (docker compose) are linked in case they live under
+      # ~/.docker/cli-plugins rather than a system plugin directory.
+      run: |
+        DOCKER_CONFIG="${RUNNER_TEMP}/docker-config"
+        rm -rf "${DOCKER_CONFIG}"
+        mkdir -p "${DOCKER_CONFIG}"
+        if [ -d "${HOME}/.docker/cli-plugins" ]; then
+          ln -s "${HOME}/.docker/cli-plugins" "${DOCKER_CONFIG}/cli-plugins"
+        fi
+        echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "${GITHUB_ENV}"
+        DOCKER_CONFIG="${DOCKER_CONFIG}" docker compose version
+
     - name: Checkout CI control
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:

@@ -63,10 +63,9 @@ jobs:
       run: |
         set -uo pipefail
         # This workflow's GitHub-hosted baseline is ubuntu-24.04, NOT the
-        # 22.04 used by the other ported groups: `e2e-tests` installs the
-        # Noble-only libaio1t64 (see the MySQL 8.4 runtime step) because
-        # Oracle's mysqld needs Noble's time64 ABI. Spilling to 22.04 would
-        # fail at apt-get install.
+        # 22.04 used by the other ported groups. Only `soak-tests` uses this
+        # decision: `e2e-tests` installs the Noble-only libaio1t64 and is
+        # pinned to ubuntu-24.04, because the self-hosted pool runs jammy.
         choice='"ubuntu-24.04"'
         if [ "${ELIGIBLE:-}" = "true" ]; then
           POOL="${POOL_SIZE:-6}"
@@ -113,7 +112,12 @@ jobs:
         echo "runson=${choice}" >> "$GITHUB_OUTPUT"
         echo ">>> decision: runson=${choice}"
   e2e-tests:
-    runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    # Pinned to GitHub-hosted Noble, never the self-hosted pool: the MySQL 8.4
+    # runtime step installs the Noble-only libaio1t64 (Oracle's mysqld needs
+    # Noble's time64 ABI) and the pool VMs run jammy, where that apt-get
+    # install fails ("Unable to locate package libaio1t64").
+    # test-ci-mysqlx-dbdeployer-install.bash enforces this literal value.
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     permissions:
@@ -377,7 +381,6 @@ jobs:
       if: ${{ always() }}
     needs:
     - tier-context
-    - pick-runner
     name: ${{ matrix.check_name }}
     if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['e2e-tests'][0] != null }}
     strategy:
