@@ -6500,7 +6500,7 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 	}
 __exit_monitor_AWS_Aurora_thread_HG_now:
 	if (mmsd) {
-		delete (mmsd);
+		delete mmsd;
 		mmsd = NULL;
 	for (unsigned int i=0; i<N_L_ASE; i++) {
 		if (lasts_ase[i]) {

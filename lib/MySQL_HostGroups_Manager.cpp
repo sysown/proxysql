@@ -2864,11 +2864,9 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 				if (
 //					(current_replication_lag==-1 )
 //					||
-					(
 						current_replication_lag >= 0 &&
 						mysrvc->max_replication_lag > 0 && // see issue #4018
 						(current_replication_lag > (int)mysrvc->max_replication_lag)
-					)
 				) {
 					// always increase the counter
 					mysrvc->cur_replication_lag_count += 1;

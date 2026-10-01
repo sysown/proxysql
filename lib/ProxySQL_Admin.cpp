@@ -4104,44 +4104,44 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"cluster_mysql_query_rules_save_to_disk")) {
-		return strdup((variables.cluster_mysql_query_rules_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_mysql_query_rules_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"cluster_mysql_servers_save_to_disk")) {
-		return strdup((variables.cluster_mysql_servers_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_mysql_servers_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"cluster_mysql_users_save_to_disk")) {
-		return strdup((variables.cluster_mysql_users_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_mysql_users_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"cluster_proxysql_servers_save_to_disk")) {
-		return strdup((variables.cluster_proxysql_servers_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_proxysql_servers_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"cluster_mysql_variables_save_to_disk")) {
-		return strdup((variables.cluster_mysql_variables_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_mysql_variables_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"cluster_admin_variables_save_to_disk")) {
-		return strdup((variables.cluster_admin_variables_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_admin_variables_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"cluster_ldap_variables_save_to_disk")) {
-		return strdup((variables.cluster_ldap_variables_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_ldap_variables_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"cluster_pgsql_query_rules_save_to_disk")) {
-		return strdup((variables.cluster_pgsql_query_rules_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_pgsql_query_rules_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"cluster_pgsql_servers_save_to_disk")) {
-		return strdup((variables.cluster_pgsql_servers_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_pgsql_servers_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"cluster_pgsql_users_save_to_disk")) {
-		return strdup((variables.cluster_pgsql_users_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_pgsql_users_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"cluster_pgsql_variables_save_to_disk")) {
-		return strdup((variables.cluster_pgsql_variables_save_to_disk ? "true" : "false"));
+		return strdup(variables.cluster_pgsql_variables_save_to_disk ? "true" : "false");
 	}
 	if (!strcasecmp(name,"refresh_interval")) {
 		snprintf(intbuf, sizeof(intbuf),"%d",variables.refresh_interval);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"read_only")) {
-		return strdup((variables.admin_read_only ? "true" : "false"));
+		return strdup(variables.admin_read_only ? "true" : "false");
 	}
 /*
 	if (!strcasecmp(name,"hash_passwords")) {
@@ -4149,47 +4149,47 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	}
 */
 	if (!strcasecmp(name,"vacuum_stats")) {
-		return strdup((variables.vacuum_stats ? "true" : "false"));
+		return strdup(variables.vacuum_stats ? "true" : "false");
 	}
 	if (!strcasecmp(name,"checksum_mysql_query_rules")) {
-		return strdup((checksum_variables.checksum_mysql_query_rules ? "true" : "false"));
+		return strdup(checksum_variables.checksum_mysql_query_rules ? "true" : "false");
 	}
 	if (!strcasecmp(name,"checksum_mysql_servers")) {
-		return strdup((checksum_variables.checksum_mysql_servers ? "true" : "false"));
+		return strdup(checksum_variables.checksum_mysql_servers ? "true" : "false");
 	}
 	if (!strcasecmp(name,"checksum_mysql_users")) {
-		return strdup((checksum_variables.checksum_mysql_users ? "true" : "false"));
+		return strdup(checksum_variables.checksum_mysql_users ? "true" : "false");
 	}
 	if (!strcasecmp(name,"checksum_mysql_variables")) {
-		return strdup((checksum_variables.checksum_mysql_variables ? "true" : "false"));
+		return strdup(checksum_variables.checksum_mysql_variables ? "true" : "false");
 	}
 	if (!strcasecmp(name,"checksum_admin_variables")) {
-		return strdup((checksum_variables.checksum_admin_variables ? "true" : "false"));
+		return strdup(checksum_variables.checksum_admin_variables ? "true" : "false");
 	}
 	if (!strcasecmp(name,"checksum_ldap_variables")) {
-		return strdup((checksum_variables.checksum_ldap_variables ? "true" : "false"));
+		return strdup(checksum_variables.checksum_ldap_variables ? "true" : "false");
 	}
 	if (!strcasecmp(name,"checksum_pgsql_query_rules")) {
-		return strdup((checksum_variables.checksum_pgsql_query_rules ? "true" : "false"));
+		return strdup(checksum_variables.checksum_pgsql_query_rules ? "true" : "false");
 	}
 	if (!strcasecmp(name,"checksum_pgsql_servers")) {
-		return strdup((checksum_variables.checksum_pgsql_servers ? "true" : "false"));
+		return strdup(checksum_variables.checksum_pgsql_servers ? "true" : "false");
 	}
 	if (!strcasecmp(name,"checksum_pgsql_users")) {
-		return strdup((checksum_variables.checksum_pgsql_users ? "true" : "false"));
+		return strdup(checksum_variables.checksum_pgsql_users ? "true" : "false");
 	}
 	if (!strcasecmp(name,"checksum_pgsql_variables")) {
-		return strdup((checksum_variables.checksum_pgsql_variables ? "true" : "false"));
+		return strdup(checksum_variables.checksum_pgsql_variables ? "true" : "false");
 	}
 	if (!strcasecmp(name,"restapi_enabled")) {
-		return strdup((variables.restapi_enabled ? "true" : "false"));
+		return strdup(variables.restapi_enabled ? "true" : "false");
 	}
 	if (!strcasecmp(name,"restapi_port")) {
 		snprintf(intbuf, sizeof(intbuf),"%d",variables.restapi_port);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"web_enabled")) {
-		return strdup((variables.web_enabled ? "true" : "false"));
+		return strdup(variables.web_enabled ? "true" : "false");
 	}
 	if (!strcasecmp(name,"web_verbosity")) {
 		snprintf(intbuf, sizeof(intbuf), "%d", variables.web_verbosity);
@@ -4205,7 +4205,7 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
-		return strdup((variables.debug ? "true" : "false"));
+		return strdup(variables.debug ? "true" : "false");
 	}
 	if (!strcasecmp(name,"debug_output")) {
 		snprintf(intbuf, sizeof(intbuf), "%d", debug_output);

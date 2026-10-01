@@ -930,7 +930,7 @@ handler_again:
 			update_bytes_sent(5);
 		}
 		else {
-			update_bytes_sent((reset_session_in_txn == false ? (sizeof("DISCARD ALL") + 5) : (sizeof("ROLLBACK") + 5)));
+			update_bytes_sent(reset_session_in_txn == false ? (sizeof("DISCARD ALL") + 5) : (sizeof("ROLLBACK") + 5));
 		}
 		if (async_exit_status) {
 			next_event(ASYNC_RESET_SESSION_CONT);
@@ -1592,7 +1592,7 @@ void PgSQL_Connection::async_free_result() {
 	async_state_machine = ASYNC_IDLE;
 	if (query_result) {
 		if (query_result_reuse) {
-			delete (query_result_reuse);
+			delete query_result_reuse;
 		}
 		query_result_reuse = query_result;
 		query_result = NULL;
@@ -2614,7 +2614,7 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 		if (savepoint_count == 0) {
 			set_status(false, STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT);
 		} else if (savepoint_count == -1) {
-			if ((IsKnownActiveTransaction() == false) /* ||
+			if (IsKnownActiveTransaction() == false /* ||
 				(strncasecmp(query_digest_text, "COMMIT", strlen("COMMIT")) == 0) ||
 				(strncasecmp(query_digest_text, "ROLLBACK", strlen("ROLLBACK")) == 0) ||
 				(strncasecmp(query_digest_text, "ABORT", strlen("ABORT")) == 0)*/) {

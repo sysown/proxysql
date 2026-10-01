@@ -85,7 +85,7 @@ static void * ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size)
     mem_root->used=next;
     mem_root->first_block_usage= 0;
   }
-  return(point);
+  return point;
 }
 
 
@@ -2704,7 +2704,7 @@ void MySQL_Connection::async_free_result() {
 	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {
 		if (MyRS_reuse) {
-			delete (MyRS_reuse);
+			delete MyRS_reuse;
 		}
 		MyRS_reuse = MyRS;
 		MyRS=NULL;
@@ -2737,12 +2737,12 @@ bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
 	if (mysql) {
 		ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
-		if (ret == false && (mysql)->net.last_errno && unknown_transaction_status == true) {
+		if (ret == false && mysql->net.last_errno && unknown_transaction_status == true) {
 			ret = true;
 		}
 		if (ret == false) {
 			//bool r = ( mysql_thread___autocommit_false_is_transaction || mysql_thread___forward_autocommit ); // deprecated , see #3253
-			bool r = ( mysql_thread___autocommit_false_is_transaction);
+			bool r = mysql_thread___autocommit_false_is_transaction;
 			if ( r && (IsAutoCommit() == false) ) {
 				ret = true;
 			}
@@ -3205,7 +3205,7 @@ void MySQL_Connection::close_mysql() {
 	// MySQL_Data_Stream , that replaces its BIOs with memory BIOs : writing on
 	// it would never reach the socket. The check on myds->encrypted is a
 	// defensive double check for that same condition
-	if ((send_quit) && ret_mysql && (myds == NULL || myds->encrypted == false)) {
+	if (send_quit && ret_mysql && (myds == NULL || myds->encrypted == false)) {
 		proxy_mysql_send_com_quit(mysql);
 	}
 //	int rc=0;

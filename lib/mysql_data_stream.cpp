@@ -475,7 +475,7 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (myds_type==MYDS_BACKEND || myds_type==MYDS_BACKEND_NOT_CONNECTED) {
 		assert(myconn==NULL);
 	}
-	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
+	if ( myconn && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
 	if (encrypted) {
 		if (ssl) {
 			// NOTE: SSL standard requires a final 'close_notify' alert on socket
@@ -848,7 +848,7 @@ int MySQL_Data_Stream::read_from_net() {
 			if (
 				(ssl_ret == SSL_ERROR_SYSCALL) &&
 				(
-					((errno == EINTR || errno == EAGAIN))
+					(errno == EINTR || errno == EAGAIN)
 					|| (st == 0)
 				)
 			) {

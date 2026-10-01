@@ -363,7 +363,7 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 	if (myds_type == MYDS_BACKEND || myds_type == MYDS_BACKEND_NOT_CONNECTED) {
 		assert(myconn == NULL);
 	}
-	if ((myconn) && (myds_type == MYDS_FRONTEND)) { delete myconn; myconn = NULL; }
+	if (myconn && (myds_type == MYDS_FRONTEND)) { delete myconn; myconn = NULL; }
 	if (encrypted) {
 		if (ssl) {
 			// NOTE: SSL standard requires a final 'close_notify' alert on socket

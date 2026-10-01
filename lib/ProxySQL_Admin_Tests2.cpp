@@ -305,7 +305,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
 
 	for (const fast_routing_hashmap_t& hashmap : th_hashmaps) {
 		total_maps_size += hashmap.rules_fast_routing___keys_values___size;
-		total_maps_size += kh_size(hashmap.rules_fast_routing) * ((sizeof(int) + sizeof(char *) + 4));
+		total_maps_size += kh_size(hashmap.rules_fast_routing) * (sizeof(int) + sizeof(char *) + 4);
 
 		kh_destroy(khStrInt, hashmap.rules_fast_routing);
 		free(hashmap.rules_fast_routing___keys_values);
@@ -1435,7 +1435,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 					// Test monitor tasks timeout
 					// test_arg1: 1 = ON, 0 = OFF
 					char msg[256];
-					GloMyMon->proxytest_forced_timeout = (test_arg1) ? true : false;
+					GloMyMon->proxytest_forced_timeout = test_arg1 ? true : false;
 					snprintf(msg, sizeof(msg), "Monitor task timeout flag is:%s\n", GloMyMon->proxytest_forced_timeout ? "ON" : "OFF");
 					SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 					run_query = false;

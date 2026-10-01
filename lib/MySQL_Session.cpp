@@ -8616,7 +8616,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 	// handle case #1797
 	// handle case #2564
-       if ((pkt->size==SELECT_CONNECTION_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0)) {
+       if (pkt->size==SELECT_CONNECTION_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0) {
 		char buf[32];
 		char buf2[32];
 		snprintf(buf, sizeof(buf), "%u", thread_session_id);

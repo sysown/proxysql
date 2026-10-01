@@ -1360,7 +1360,7 @@ unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_async(time_t
 	}
 
 	if (purged_map_size >= DIGEST_STATS_FAST_MINSIZE) {
-		const char *cmd = (selective_purge) ? "PURGE" : "TRUNCATE";
+		const char *cmd = selective_purge ? "PURGE" : "TRUNCATE";
 
 		unsigned long long curtime2 = monotonic_time();
 		curtime1 = curtime1 / 1000;
@@ -3215,9 +3215,9 @@ SQLite3_result* Query_Processor<QP_DERIVED>::load_fast_routing(const fast_routin
 			rules_mem_used += rules_fast_routing___keys_values___size * nt; // per-thread
 		}
 		khint_t map_size = kh_size(_rules_fast_routing);
-		rules_mem_used += map_size * ((sizeof(int) + sizeof(char *) + 4 )); // not sure about memory overhead
+		rules_mem_used += map_size * (sizeof(int) + sizeof(char *) + 4 ); // not sure about memory overhead
 		if (this->query_rules_fast_routing_algorithm == 1) {
-			rules_mem_used += map_size * ((sizeof(int) + sizeof(char *) + 4 )) * nt; // not sure about memory overhead
+			rules_mem_used += map_size * (sizeof(int) + sizeof(char *) + 4 ) * nt; // not sure about memory overhead
 		}
 	}
 

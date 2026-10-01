@@ -1880,7 +1880,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 #endif /* PROXYSQLCLICKHOUSE */
 
-	if ((query_no_space_length>17) && ( (!strcasecmp("SAVE MYSQL DIGEST TO DISK", query_no_space) ) )) {
+	if ((query_no_space_length>17) && ( !strcasecmp("SAVE MYSQL DIGEST TO DISK", query_no_space)  )) {
 		proxy_info("Received %s command\n", query_no_space);
         unsigned long long curtime1=monotonic_time();
 		int r1 = SPA->FlushDigestTableToDisk<SERVER_TYPE_MYSQL>(SPA->statsdb_disk);
@@ -1892,7 +1892,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		return false;
 	}
 
-	if ((query_no_space_length > 17) && ((!strcasecmp("SAVE PGSQL DIGEST TO DISK", query_no_space)))) {
+	if ((query_no_space_length > 17) && (!strcasecmp("SAVE PGSQL DIGEST TO DISK", query_no_space))) {
 		proxy_info("Received %s command\n", query_no_space);
 		unsigned long long curtime1 = monotonic_time();
 		int r1 = SPA->FlushDigestTableToDisk<SERVER_TYPE_PGSQL>(SPA->statsdb_disk);

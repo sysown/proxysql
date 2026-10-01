@@ -357,7 +357,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 					mysql_close(conn);
 					conn = NULL;
 					int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-					usleep((ci)*1000); // remember, usleep is in us
+					usleep(ci*1000); // remember, usleep is in us
 				}
 			} else {
 				proxy_warning("Cluster: unable to connect to peer %s:%d . Error: %s\n", node->hostname, node->port, mysql_error(conn));
@@ -365,7 +365,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				mysql_close(conn);
 				conn = mysql_init(NULL);
 				int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-				usleep((ci)*1000); // remember, usleep is in us
+				usleep(ci*1000); // remember, usleep is in us
 				sleep(1); // sleep for longer
 			}
 		} else {

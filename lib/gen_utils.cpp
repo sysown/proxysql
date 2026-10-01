@@ -562,9 +562,9 @@ const char* escape_string_backslash_spaces(const char* input) {
 	int escape_count = 0;
 
 	for (c = input; *c != '\0'; c++) {
-		if ((*c == ' ')) {
+		if (*c == ' ') {
 			escape_count += 3;
-		} else if ((*c == '\\')) {
+		} else if (*c == '\\') {
 			escape_count += 2;
 		}
 		input_len++;
@@ -577,7 +577,7 @@ const char* escape_string_backslash_spaces(const char* input) {
 	char* p = output;
 
 	for (c = input; *c != '\0'; c++) {
-		if ((*c == ' ')) {
+		if (*c == ' ') {
 			memcpy(p, "\\\\", 2);
 			p += 2;
 		} else if (*c == '\\') {

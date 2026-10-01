@@ -1496,7 +1496,7 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		std::unordered_map<std::string, std::tuple<bool*, bool>>::const_iterator it = VariablesPointers_bool.find(nameS);
 		if (it != VariablesPointers_bool.end()) {
 			bool* v = std::get<0>(it->second);
-			return strdup((*v ? "true" : "false"));
+			return strdup(*v ? "true" : "false");
 		}
 	}
 
@@ -1737,7 +1737,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) {
 			if (vallen == 0) { // empty string
 				free(variables.monitor_replication_lag_use_percona_heartbeat);
-				variables.monitor_replication_lag_use_percona_heartbeat = strdup((value));
+				variables.monitor_replication_lag_use_percona_heartbeat = strdup(value);
 				return true;
 			}
 			else {
@@ -4080,7 +4080,7 @@ void PgSQL_Thread::process_all_sessions() {
 #ifdef IDLE_THREADS
 			else
 			{
-				if ((sess_time / 1000 > (unsigned long long)pgsql_thread___wait_timeout)) {
+				if (sess_time / 1000 > (unsigned long long)pgsql_thread___wait_timeout) {
 					sess->killed = true;
 					sess->to_process = 1;
 					proxy_warning("Killing client connection %s:%d because inactive for %llums\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, sess_time / 1000);

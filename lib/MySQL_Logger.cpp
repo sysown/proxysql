@@ -686,7 +686,7 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 				uint64_t curtime_mono=sess->thread->curtime;
 				uint64_t timediff = curtime_mono - sess->start_time;
 				uint64_t orig_time = curtime_real - timediff;
-				time_t timer= (orig_time)/1000/1000;
+				time_t timer= orig_time/1000/1000;
 				struct tm tm_info;
 				char buffer1[36];
 				char buffer2[64];
