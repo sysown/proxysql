@@ -18,6 +18,13 @@ database.
 Use dedicated credentials where possible, restrict endpoint reachability, and
 assume mutually untrusted users must not share this initial plugin instance.
 
+Engine-wide resource and access settings (`memory_limit`, `threads`,
+`enable_external_access`, and every other option DuckDB applies globally) can be
+changed only through the `duckdb-*` Admin variables. Client `SET` and `RESET`
+statements are confined to the client's own session. `SET GLOBAL` and
+configuration `PRAGMA`s are refused, so one client cannot raise limits or change
+access for every other client.
+
 ## Listener exposure
 
 Both listeners default to `0.0.0.0`, which exposes them on every available

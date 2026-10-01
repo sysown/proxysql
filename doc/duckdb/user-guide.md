@@ -74,13 +74,21 @@ invalidates an explicit transaction, issue `ROLLBACK` before continuing.
 
 ## Session settings
 
-DuckDB-native settings are sent to the engine. In this example, `SET` and
-`SELECT` are two separate requests:
+DuckDB session settings are sent to the engine and apply only to the client's
+own connection. In this example, `SET` and `SELECT` are two separate requests:
 
 ```sql
-SET threads=4;
-SELECT current_setting('threads');
+SET search_path='main';
+SELECT current_setting('search_path');
 ```
+
+Every client `SET` and `RESET` runs in session scope. Engine-wide settings are
+shared by all clients of the embedded database, so clients cannot change them:
+`SET GLOBAL`, engine-wide options such as `memory_limit`/`max_memory`,
+`threads`/`worker_threads`, `max_temp_directory_size` and
+`enable_external_access`, and configuration `PRAGMA`s all return an error.
+Change these through the `duckdb-*` Admin variables and
+`LOAD DUCKDB VARIABLES TO RUNTIME`. `SET VARIABLE` user variables are unaffected.
 
 Only narrow client-compatibility commands are accepted as no-ops:
 

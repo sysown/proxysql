@@ -156,13 +156,25 @@ int main(int argc, char** argv) {
 	}
 
 	{
-		PGresult* set = exec_or_bail(c, "SET threads=2");
-		const bool set_ok = PQresultStatus(set) == PGRES_COMMAND_OK;
-		PQclear(set);
+		// Issue #6320: engine-wide settings are Admin-only; session settings
+		// still reach DuckDB and apply to this connection.
+		PGresult* before = exec_or_bail(c, "SELECT current_setting('threads')");
+		const std::string threads_before = PQntuples(before) == 1 ? PQgetvalue(before, 0, 0) : "";
+		PQclear(before);
+		PGresult* global_set = exec_or_bail(c, "SET max_memory='1TB'");
+		const bool global_refused = PQresultStatus(global_set) == PGRES_FATAL_ERROR;
+		PQclear(global_set);
+		PGresult* threads_set = exec_or_bail(c, "SET threads=2");
+		const bool threads_refused = PQresultStatus(threads_set) == PGRES_FATAL_ERROR;
+		PQclear(threads_set);
+		PGresult* session_set = exec_or_bail(c, "SET search_path='main'");
+		const bool session_ok = PQresultStatus(session_set) == PGRES_COMMAND_OK;
+		PQclear(session_set);
 		PGresult* current = exec_or_bail(c, "SELECT current_setting('threads')");
-		ok(set_ok && PQresultStatus(current) == PGRES_TUPLES_OK &&
-		   PQntuples(current) == 1 && std::strcmp(PQgetvalue(current, 0, 0), "2") == 0,
-		   "DuckDB-native SET reaches the engine and changes the setting");
+		ok(global_refused && threads_refused && session_ok &&
+		   PQresultStatus(current) == PGRES_TUPLES_OK && PQntuples(current) == 1 &&
+		   threads_before == PQgetvalue(current, 0, 0),
+		   "a client cannot change engine-wide settings, but session SET still reaches DuckDB");
 		PQclear(current);
 	}
 
