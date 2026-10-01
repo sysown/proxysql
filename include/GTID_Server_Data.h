@@ -43,6 +43,10 @@ class GTID_Server_Data {
 	bool readall();
 	bool writeout();
 	bool read_next_gtid();
+	// Forgets the state tied to one reader connection (id flavor, last id,
+	// unread bytes) so a new connection starts from its own bootstrap. The
+	// executed GTID set is kept: the bootstrap re-sends it.
+	void reset_reader_stream();
 	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
 	void read_all_gtids();
 	void dump();
