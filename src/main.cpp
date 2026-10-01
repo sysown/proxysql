@@ -1764,10 +1764,14 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 	__sync_fetch_and_add(&GloPTH->status_variables.threads_initialized, 1);
 #ifdef PROXYSQL40
-	// Router bootstrap publishes interfaces through the live worker listener
-	// path, so workers must run before early actions. The plugin manager remains
-	// reader-disabled until init/start complete; workers cannot observe the
-	// command/query-hook state while those callbacks mutate it.
+	// Early actions (e.g. mysql_router --bootstrap) are one-shot configuration
+	// steps: they write configuration to disk and then exit the process here,
+	// before start_listeners() runs, so no client traffic is ever served by a
+	// bootstrap run. Plugin publication never opens or closes listeners (see
+	// plugin_config_publish in ProxySQL_Admin.cpp); a published mysql-interfaces
+	// takes effect when ProxySQL is next started normally. The plugin manager
+	// remains reader-disabled until init/start complete; workers cannot observe
+	// the command/query-hook state while those callbacks mutate it.
 	const auto early_action_result = RunConfiguredPluginEarlyActions();
 	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_success) exit(EXIT_SUCCESS);
 	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_failure) exit(EXIT_FAILURE);

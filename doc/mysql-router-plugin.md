@@ -36,7 +36,10 @@ proxysql --load-plugin=mysql_router \
 Bootstrap uses the MySQL Shell-compatible registration and account contracts,
 stores the service credential through the core encrypted-secret service, and
 publishes the first complete topology before marking local bootstrap complete.
-After bootstrap, start ProxySQL normally while continuing to load the plugin:
+Bootstrap is a one-shot configuration step: it writes the configuration to disk,
+including the Router endpoints in `mysql-interfaces`, and then exits. A bootstrap
+run never opens client listeners and never serves traffic. After bootstrap, start
+ProxySQL normally while continuing to load the plugin:
 
 ```bash
 proxysql --load-plugin=mysql_router
@@ -60,6 +63,12 @@ The port numbers above are defaults. `--conf-base-port` and the listener
 options can move the three Router endpoints; behavior follows the compiled
 endpoint intent, not a hard-coded port comparison.
 
+Like every other MySQL listener in ProxySQL, the Router endpoints are opened only
+at startup. Publication stores the Router endpoints in `mysql-interfaces` (memory
+and disk) but never opens or closes a listener at runtime. If a publication stages
+a `mysql-interfaces` value that differs from the active listeners, ProxySQL logs a
+warning, and the change takes effect at the next restart.
+
 The direct rules use the native query-rule attribute
 `{"switch_to_fast_forward":true}`. Operators can insert a lower rule ID with
 `apply=1` to override a Router default for selected users or traffic. Such
@@ -76,7 +85,8 @@ owns its five baseline rules, its three listener endpoints, and only the users
 that were successfully normalized from metadata. Ownership is recorded in the
 core plugin ledger in both memory and disk.
 
-Publication is one atomic generation across main, disk, and live runtime.
+Publication is one atomic generation across main, disk, and live runtime
+(servers, users, and query rules; listeners change only at restart).
 Unrelated operator servers, users, rules, interfaces, and attributes are not
 replaced. A collision with an operator-owned identity fails that object closed;
 the plugin reports the conflict rather than taking ownership. Explicit user

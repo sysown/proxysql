@@ -5,7 +5,6 @@
 #include "MySQL_Monitor.hpp"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Thread.h"
-#include "MySQL_Thread_test.h"
 #include "ProxySQL_PluginConfig_test.h"
 #include "ProxySQL_PluginSecrets.h"
 #include "ProxySQL_Statistics.hpp"
@@ -570,30 +569,6 @@ struct AuthMidpointThrowOnce {
 		if (self.calls++ == 0) {
 			throw std::runtime_error("injected Auth midpoint exception");
 		}
-	}
-};
-
-struct InterfaceRecoveryFailure {
-	std::string old_interface;
-	int rejected_commits {1};
-	int old_add_failures {1};
-	int old_add_attempts {0};
-
-	static bool fail_add(void* opaque, const char* iface) {
-		auto& self = *static_cast<InterfaceRecoveryFailure*>(opaque);
-		if (self.old_interface != iface) return false;
-		++self.old_add_attempts;
-		if (self.old_add_failures < 0) return true;
-		if (self.old_add_failures == 0) return false;
-		--self.old_add_failures;
-		return true;
-	}
-
-	static bool reject_commit(void* opaque) {
-		auto& self = *static_cast<InterfaceRecoveryFailure*>(opaque);
-		if (self.rejected_commits == 0) return false;
-		--self.rejected_commits;
-		return true;
 	}
 };
 
@@ -1698,30 +1673,17 @@ int main() {
 	if (new_reservation >= 0) close(new_reservation);
 	const std::string old_interface = "127.0.0.1:" + std::to_string(old_port);
 	const std::string new_interface = "127.0.0.1:" + std::to_string(new_port);
-	std::string interface_error;
 	const bool initial_interface = old_port > 0 && new_port > 0 &&
 		GloMTH->set_variable("caching_sha2_password_auto_generate_rsa_keys", "false") &&
 		GloMTH->set_variable("caching_sha2_password_private_key_path", "") &&
 		GloMTH->set_variable("caching_sha2_password_public_key_path", "") &&
 		GloMTH->set_variable("interfaces", old_interface.c_str()) &&
 		GloMTH->listener_add(old_interface.c_str()) >= 0;
-	GloMTH->wrlock();
-	const bool changed_interface = initial_interface &&
-		GloMTH->apply_interfaces_under_lock(new_interface.c_str(), interface_error);
-	GloMTH->wrunlock();
-	char* changed_value = GloMTH->get_variable("interfaces");
-	const bool changed_listener = changed_interface && changed_value != nullptr &&
-		new_interface == changed_value && !can_connect_loopback(old_port) && can_connect_loopback(new_port);
-	free(changed_value);
-	GloMTH->wrlock();
-	const bool restored_interface = changed_listener &&
-		GloMTH->apply_interfaces_under_lock(old_interface.c_str(), interface_error);
-	GloMTH->wrunlock();
-	char* restored_value = GloMTH->get_variable("interfaces");
-	ok(restored_interface && restored_value != nullptr && old_interface == restored_value &&
+	char* initial_value = GloMTH->get_variable("interfaces");
+	ok(initial_interface && initial_value != nullptr && old_interface == initial_value &&
 		can_connect_loopback(old_port) && !can_connect_loopback(new_port),
-		"initialized mysql-interfaces changes remove, add, and restore real listeners under lock");
-	free(restored_value);
+		"the startup-opened MySQL listener fixture serves only the old interface");
+	free(initial_value);
 	auto live_users = result_value(v.db,
 		"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,"
 		"transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment "
@@ -1927,10 +1889,18 @@ int main() {
 	ok(applied_servers != nullptr && result_row(applied_servers, 1, "writer-new") != nullptr &&
 		applied_rules != nullptr && applied_rules->rows_count == 3 && applied_router_rule != nullptr &&
 		applied_router_rule->fields[3] != nullptr && std::string(applied_router_rule->fields[3]) == "0" &&
-		scalar(v.db, "SELECT flagIN FROM mysql_query_rules WHERE rule_id=9000") == 0 &&
-		applied_interfaces != nullptr &&
-		new_interface == applied_interfaces && !can_connect_loopback(old_port) && can_connect_loopback(new_port),
-		"real Admin publication updates HGM, canonical QPro flagIN, and initialized MySQL listeners");
+		scalar(v.db, "SELECT flagIN FROM mysql_query_rules WHERE rule_id=9000") == 0,
+		"real Admin publication updates HGM and canonical QPro flagIN");
+	// Issue #6341: publication stages mysql-interfaces for the next startup and never
+	// opens or closes listeners, because doing so under the publication locks deadlocks
+	// the MySQL workers.
+	ok(applied_interfaces != nullptr && old_interface == applied_interfaces &&
+		can_connect_loopback(old_port) && !can_connect_loopback(new_port) &&
+		text_value(v.db, "SELECT variable_value FROM main.global_variables "
+			"WHERE variable_name='mysql-interfaces'") == new_interface &&
+		text_value(v.db, "SELECT variable_value FROM disk.global_variables "
+			"WHERE variable_name='mysql-interfaces'") == new_interface,
+		"real Admin publication stages mysql-interfaces in main and disk but leaves the active listeners untouched");
 	free(applied_interfaces);
 
 	const uint64_t stable_auth_checksum = GloMyAuth->get_current_mysql_users()->raw_checksum();
@@ -1940,54 +1910,6 @@ int main() {
 	const unsigned long long stable_users_checksum_version = GloVars.checksums_values.mysql_users.version;
 	const unsigned long long stable_users_checksum_epoch = GloVars.checksums_values.mysql_users.epoch;
 	v.plan.generation = 14;
-	int recovery_port = 0;
-	const int recovery_reservation = reserve_loopback_port(recovery_port);
-	if (recovery_reservation >= 0) close(recovery_reservation);
-	const std::string recovery_interface = "127.0.0.1:" + std::to_string(recovery_port);
-	v.interfaces[0] = recovery_interface.c_str();
-	InterfaceRecoveryFailure transient_readd {new_interface, 1, 1, 0};
-	ProxySQL_PluginMysqlConfigResult transient_recovery;
-	{
-		mysql_thread_test::scoped_interface_hooks hooks(
-			&InterfaceRecoveryFailure::fail_add, &InterfaceRecoveryFailure::reject_commit,
-			&transient_readd);
-		transient_recovery = admin->apply_plugin_mysql_config(v.plan);
-	}
-	char* transient_interfaces = GloMTH->get_variable("interfaces");
-	ok(recovery_port > 0 && !transient_recovery.applied && transient_readd.old_add_attempts >= 2 &&
-		transient_interfaces != nullptr && new_interface == transient_interfaces &&
-		can_connect_loopback(new_port) && !can_connect_loopback(recovery_port) &&
-		transient_recovery.message.find("restore failed") == std::string::npos,
-		"outer interface restore reconciles a listener missed by the rejected publish's first re-add");
-	free(transient_interfaces);
-
-	int persistent_port = 0;
-	const int persistent_reservation = reserve_loopback_port(persistent_port);
-	if (persistent_reservation >= 0) close(persistent_reservation);
-	const std::string persistent_interface = "127.0.0.1:" + std::to_string(persistent_port);
-	v.interfaces[0] = persistent_interface.c_str();
-	InterfaceRecoveryFailure persistent_readd {new_interface, 1, -1, 0};
-	ProxySQL_PluginMysqlConfigResult persistent_recovery;
-	{
-		mysql_thread_test::scoped_interface_hooks hooks(
-			&InterfaceRecoveryFailure::fail_add, &InterfaceRecoveryFailure::reject_commit,
-			&persistent_readd);
-		persistent_recovery = admin->apply_plugin_mysql_config(v.plan);
-	}
-	char* persistent_interfaces = GloMTH->get_variable("interfaces");
-	ok(persistent_port > 0 && !persistent_recovery.applied && persistent_readd.old_add_attempts >= 2 &&
-		persistent_recovery.message.find("restore failed") != std::string::npos &&
-		persistent_interfaces != nullptr && new_interface != persistent_interfaces &&
-		!can_connect_loopback(new_port) && !can_connect_loopback(persistent_port),
-		"persistent listener re-add failure is reported and never claims the old interface string was restored");
-	free(persistent_interfaces);
-	std::string recovery_error;
-	GloMTH->wrlock();
-	const bool recovered_after_injection =
-		GloMTH->apply_interfaces_under_lock(new_interface.c_str(), recovery_error);
-	GloMTH->wrunlock();
-	ok(recovered_after_injection && can_connect_loopback(new_port),
-		"listener state is repaired after persistent recovery-failure coverage");
 	v.interfaces[0] = new_interface.c_str();
 
 	v.users[0].password = "must-rollback"; // NOSONAR: synthetic rollback marker.
@@ -2003,30 +1925,11 @@ int main() {
 		GloVars.checksums_values.mysql_users.epoch == stable_users_checksum_epoch &&
 		MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() == stable_server_checksum &&
 		GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum &&
-		after_qpro_interfaces != nullptr && new_interface == after_qpro_interfaces &&
-		can_connect_loopback(new_port),
-		"a real QPro adapter failure restores exact Auth checksum state, HGM, and listeners at generation 13");
+		after_qpro_interfaces != nullptr && old_interface == after_qpro_interfaces &&
+		can_connect_loopback(old_port) && !can_connect_loopback(new_port),
+		"a real QPro adapter failure restores exact Auth checksum state and HGM at generation 13 without touching listeners");
 	free(after_qpro_interfaces);
 	ok(v.db.execute(k_fast_rules), "query processor failure fixture is repaired");
-
-	int occupied_port = 0;
-	const int occupied_fd = reserve_loopback_port(occupied_port);
-	const std::string occupied_interface = "127.0.0.1:" + std::to_string(occupied_port);
-	v.interfaces[0] = occupied_interface.c_str();
-	const auto interface_failure = admin->apply_plugin_mysql_config(v.plan);
-	char* after_interface_failure = GloMTH->get_variable("interfaces");
-	ok(occupied_fd >= 0 && !interface_failure.applied &&
-		interface_failure.message.find("cannot add MySQL listener") != std::string::npos &&
-		scalar(v.db, "SELECT generation FROM proxysql_plugin_config_generations WHERE owner='mysql_router'") == 13 &&
-		GloMyAuth->get_current_mysql_users()->raw_checksum() == stable_auth_checksum &&
-		MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() == stable_server_checksum &&
-		GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum &&
-		after_interface_failure != nullptr && new_interface == after_interface_failure &&
-		can_connect_loopback(new_port),
-		"a real interface failure reverses QPro, Auth, and HGM and restores the prior listener");
-	free(after_interface_failure);
-	if (occupied_fd >= 0) close(occupied_fd);
-	v.interfaces[0] = new_interface.c_str();
 
 	const pid_t auth_exception_pid = fork();
 	if (auth_exception_pid == 0) {

@@ -216,6 +216,10 @@ The callback is synchronous: the plugin owns the plan arrays and strings only
 until the call returns. Core copies and validates them before taking locks, then
 publishes storage and live MySQL state as one generation. Validation failure,
 runtime failure, or transaction failure leaves the previous generation active.
+Interfaces are the exception to live publication: they are merged into
+`mysql-interfaces` in main and disk, but core never opens or closes MySQL
+listeners at runtime. They take effect at the next startup, and core logs a
+warning when the staged value differs from the active listeners.
 Phase B provides a rejecting stub. ABI-8 plugins continue using the unchanged
 V1 callback; ABI-9 plugins that require attributes should fail closed rather
 than falling back and losing behavior.
