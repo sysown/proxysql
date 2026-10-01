@@ -26,7 +26,7 @@ struct ABI11Descriptor {
 };
 }
 int main() {
- plan(11); test_init_minimal();
+ plan(13); test_init_minimal();
  ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 12u, "abi12_debug_prefix_compatible: layout is ABI12");
  ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 12u,
     "ABI12 retains independent DEBUG tagging");
@@ -52,5 +52,10 @@ int main() {
  std::string manifest;
  GloVars.opt->get("--aws-managed-bootstrap")->getString(manifest);
  ok(manifest == "/tmp/local-manifest.json", "bootstrap manifest path is preserved");
+ GloVars.global.foreground = false;
+ glovars.proxy_restart_on_error = true;
+ GloVars.process_opts_pre();
+ ok(GloVars.global.foreground, "bootstrap defaults to synchronous foreground execution");
+ ok(!glovars.proxy_restart_on_error, "bootstrap defaults to one invocation without supervisor retries");
  test_cleanup_minimal(); return exit_status();
 }

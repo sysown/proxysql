@@ -23,7 +23,10 @@ ManagedResult invoke(void*, const ManagedRequest&) {
  return result;
 }
 ManagedResult bootstrap(void*, const std::string&) {
- event("bootstrap"); ManagedResult result {}; result.outcome = ManagedOutcome::ok; return result;
+ event("bootstrap"); ManagedResult result {};
+ result.outcome = std::getenv("PROXYSQL_MANAGED_FAKE_BOOTSTRAP_FAIL") ?
+  ManagedOutcome::rejected : ManagedOutcome::ok;
+ result.message = "fake bootstrap"; return result;
 }
 ManagedResult restore(void*) {
  event("restore"); ManagedResult result {};
