@@ -51,7 +51,7 @@ std::string scalar_text(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(80);
+	plan(89);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -423,6 +423,15 @@ int main() {
 		"RESET threads",
 		"PRAGMA threads=64",
 		"SET GLOBAL default_null_order='nulls_first'",
+		// EXPLAIN ANALYZE executes the wrapped statement, and DuckDB reports it as
+		// EXPLAIN rather than SET, so wrappers are refused before preparing.
+		"EXPLAIN ANALYZE SET GLOBAL memory_limit='1TB'",
+		"explain analyse verbose SET threads=64",
+		"EXPLAIN (ANALYZE, FORMAT 'json') /* c */ SET GLOBAL threads=64",
+		"EXPLAIN ANALYZE RESET GLOBAL threads",
+		"EXPLAIN ANALYZE PRAGMA threads=64",
+		"PRAGMA disable_checkpoint_on_shutdown",
+		"PRAGMA \"enable_checkpoint_on_shutdown\"",
 	};
 	for (const char* bypass : bypasses) {
 		const DuckDBExecOutcome refused = duckdb_execute_effective(managed_conn, bypass);
@@ -445,6 +454,26 @@ int main() {
 	   scalar_text(managed_conn, "SELECT current_setting('default_null_order')") == "NULLS_FIRST_ON_ASC_LAST_ON_DESC" &&
 	   scalar_text(other_conn, "SELECT current_setting('default_null_order')") == null_order_before,
 	   "an unscoped SET of a globally-defaulted option no longer leaks to other clients");
+	const DuckDBExecOutcome explain_select = duckdb_execute_effective(managed_conn, "EXPLAIN SELECT 1");
+	ok(explain_select.ok, "EXPLAIN of an ordinary query still works (%s)", explain_select.error.c_str());
+
+	// Binding a SET evaluates its value, so the statement must be prepared exactly
+	// once, already confined: a volatile value must be evaluated a single time.
+	// (In autocommit DuckDB runs SET read-only and refuses nextval() at commit, so
+	// the sequence is advanced inside an explicit transaction.)
+	const DuckDBExecOutcome seq = duckdb_execute_effective(managed_conn, "CREATE SEQUENCE set_value_once");
+	const DuckDBExecOutcome schema = duckdb_execute_effective(managed_conn, "CREATE SCHEMA set_value_other");
+	const DuckDBExecOutcome volatile_begin = duckdb_execute_effective(managed_conn, "BEGIN");
+	const DuckDBExecOutcome volatile_set = duckdb_execute_effective(managed_conn,
+		"SET search_path = CASE WHEN nextval('set_value_once') = 1 THEN 'main' ELSE 'set_value_other' END");
+	const int volatile_calls = scalar_count(managed_conn, "SELECT currval('set_value_once')");
+	const DuckDBExecOutcome volatile_commit = duckdb_execute_effective(managed_conn, "COMMIT");
+	ok(seq.ok && schema.ok && volatile_begin.ok && volatile_set.ok && volatile_commit.ok &&
+	   volatile_calls == 1 &&
+	   scalar_text(managed_conn, "SELECT current_setting('search_path')") == "main",
+	   "a volatile SET value is evaluated once (calls=%d, %s%s)", volatile_calls,
+	   volatile_set.error.c_str(), volatile_commit.error.c_str());
+
 	const DuckDBExecOutcome user_variable = duckdb_execute_effective(managed_conn, "SET VARIABLE tenant_marker = 7");
 	ok(user_variable.ok && scalar_count(managed_conn, "SELECT getvariable('tenant_marker')") == 7,
 	   "SET VARIABLE user variables are unaffected");

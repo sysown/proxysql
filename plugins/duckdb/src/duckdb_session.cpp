@@ -587,26 +587,98 @@ std::string read_upper_word(const std::string& sql, size_t i) {
 	return word;
 }
 
+// Skips one parenthesized group starting at `i` (which must be '('), honouring
+// nesting and quoted strings/identifiers. Returns the index past the closing ')'.
+size_t skip_parenthesized(const std::string& sql, size_t i) {
+	size_t depth = 0;
+	while (i < sql.size()) {
+		const char c = sql[i];
+		if (c == '\'' || c == '"') {
+			const size_t close = sql.find(c, i + 1);
+			i = close == std::string::npos ? sql.size() : close + 1;
+			continue;
+		}
+		if (c == '(') {
+			++depth;
+		} else if (c == ')' && --depth == 0) {
+			return i + 1;
+		}
+		++i;
+	}
+	return i;
+}
+
+// Reads the identifier at `i`, plain or double-quoted, and returns it lowercased.
+std::string read_lower_identifier(const std::string& sql, size_t i) {
+	std::string name;
+	if (i < sql.size() && sql[i] == '"') {
+		const size_t close = sql.find('"', i + 1);
+		name = sql.substr(i + 1, close == std::string::npos ? std::string::npos : close - i - 1);
+	} else {
+		name = read_upper_word(sql, i);
+	}
+	std::transform(name.begin(), name.end(), name.begin(),
+	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return name;
+}
+
+// PRAGMA statements (not assignments, which DuckDB turns into SET) that write
+// DBConfig, i.e. change the engine for every client.
+bool is_engine_wide_pragma(const std::string& name) {
+	return name == "enable_checkpoint_on_shutdown" || name == "disable_checkpoint_on_shutdown" ||
+	       name == "force_checkpoint";
+}
+
 /**
- * @brief Confines a client statement that DuckDB classified as SET/RESET to session scope.
+ * @brief Applies the client configuration policy to one statement before it is prepared.
  * @details All clients share one DuckDB database, so a SET or RESET that resolves to
  *   global scope changes the engine for every tenant (issue #6320). DuckDB resolves an
  *   unscoped `SET name` to session scope when the option supports a session value and
  *   to global scope otherwise. Inserting an explicit SESSION keeps the first case
  *   unchanged and makes DuckDB itself refuse the second ("cannot be set locally"),
  *   which covers every global option, its aliases and quoted spellings without a
- *   ProxySQL-side list of option names. SET GLOBAL and configuration PRAGMAs (which
- *   DuckDB also classifies as SET) are refused outright.
- * @return false with `err` set when the statement must not run; otherwise `confined`
- *   holds the statement to execute.
+ *   ProxySQL-side list of option names. SET GLOBAL is refused outright, and so is an
+ *   EXPLAIN wrapping SET, RESET or PRAGMA: EXPLAIN ANALYZE executes the wrapped
+ *   statement, and DuckDB then reports the statement type as EXPLAIN, not SET.
+ *
+ *   The policy is lexical and runs before duckdb_prepare(), because binding a SET
+ *   evaluates its value expression: the statement that runs must be prepared only
+ *   once, already confined. duckdb_execute_effective() checks the prepared statement
+ *   type afterwards and refuses any SET that was not confined here (for example a
+ *   configuration PRAGMA, which DuckDB also classifies as SET).
+ * @param confined set to true when `to_prepare` is a SET/RESET confined to session scope.
+ * @return false with `err` set when the statement must not run; otherwise `to_prepare`
+ *   holds the statement to prepare.
  */
-bool confine_set_to_session(const std::string& sql, std::string& confined, std::string& err) {
+bool apply_client_config_policy(const std::string& sql, std::string& to_prepare,
+                                bool& confined, std::string& err) {
+	confined = false;
 	const size_t keyword_at = skip_space_and_comments(sql, 0);
 	const std::string keyword = read_upper_word(sql, keyword_at);
+	if (keyword == "EXPLAIN") {
+		size_t i = keyword_at + keyword.size();
+		for (;;) {
+			i = skip_space_and_comments(sql, i);
+			if (i < sql.size() && sql[i] == '(') {
+				i = skip_parenthesized(sql, i);
+				continue;
+			}
+			const std::string modifier = read_upper_word(sql, i);
+			if (modifier != "ANALYZE" && modifier != "ANALYSE" && modifier != "VERBOSE") break;
+			i += modifier.size();
+		}
+		const std::string wrapped = read_upper_word(sql, i);
+		if (wrapped == "SET" || wrapped == "RESET" || wrapped == "PRAGMA") {
+			err = "EXPLAIN of a " + wrapped + " statement is not allowed: DuckDB configuration can only be "
+			      "changed by clients with SET SESSION or RESET SESSION";
+			return false;
+		}
+		to_prepare = sql;
+		return true;
+	}
 	if (keyword != "SET" && keyword != "RESET") {
-		err = "DuckDB configuration can only be changed by clients with SET SESSION or RESET SESSION; "
-		      "configuration PRAGMAs are not allowed";
-		return false;
+		to_prepare = sql;
+		return true;
 	}
 	const size_t scope_at = skip_space_and_comments(sql, keyword_at + keyword.size());
 	const std::string scope = read_upper_word(sql, scope_at);
@@ -616,9 +688,35 @@ bool confine_set_to_session(const std::string& sql, std::string& confined, std::
 		return false;
 	}
 	if (scope == "SESSION" || scope == "LOCAL" || scope == "VARIABLE") {
-		confined = sql;
+		to_prepare = sql;
 	} else {
-		confined = sql.substr(0, scope_at) + "SESSION " + sql.substr(scope_at);
+		to_prepare = sql.substr(0, scope_at) + "SESSION " + sql.substr(scope_at);
+	}
+	confined = true;
+	return true;
+}
+
+// Refuses a prepared statement the lexical policy could not see through: a SET that
+// was not confined (a configuration PRAGMA such as `PRAGMA threads=64`), or a PRAGMA
+// that writes engine-wide configuration.
+bool check_prepared_config_policy(const std::string& sql, duckdb_statement_type type,
+                                  bool confined, std::string& err) {
+	if (type == DUCKDB_STATEMENT_TYPE_SET && !confined) {
+		err = "DuckDB configuration can only be changed by clients with SET SESSION or RESET SESSION; "
+		      "configuration PRAGMAs are not allowed";
+		return false;
+	}
+	if (type == DUCKDB_STATEMENT_TYPE_PRAGMA) {
+		const size_t keyword_at = skip_space_and_comments(sql, 0);
+		if (read_upper_word(sql, keyword_at) == "PRAGMA") {
+			const size_t name_at = skip_space_and_comments(sql, keyword_at + 6);
+			const std::string name = read_lower_identifier(sql, name_at);
+			if (is_engine_wide_pragma(name)) {
+				err = "PRAGMA " + name + " changes engine-wide DuckDB configuration and is not allowed "
+				      "for clients";
+				return false;
+			}
+		}
 	}
 	return true;
 }
@@ -647,8 +745,19 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		return false;
 	};
 
+	// The configuration policy runs before the single prepare below: binding a SET
+	// evaluates its value, so it must be confined before it is ever prepared.
+	std::string to_prepare;
+	bool confined_set = false;
+	std::string policy_error;
+	if (!apply_client_config_policy(effective, to_prepare, confined_set, policy_error)) {
+		outcome.ok = false;
+		outcome.error = policy_error;
+		return finish();
+	}
+
 	duckdb_prepared_statement stmt = nullptr;
-	if (duckdb_prepare(conn, effective.c_str(), &stmt) != DuckDBSuccess) {
+	if (duckdb_prepare(conn, to_prepare.c_str(), &stmt) != DuckDBSuccess) {
 		// duckdb_prepare_error() must be read BEFORE duckdb_destroy_prepare()
 		// -- like duckdb_result_error(), the message lives inside the
 		// prepared statement and does not survive its destruction.
@@ -658,26 +767,16 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		duckdb_destroy_prepare(&stmt);
 		return finish();
 	}
-	duckdb_statement_type statement_type = duckdb_prepared_statement_type(stmt);
-	const bool confined_set = statement_type == DUCKDB_STATEMENT_TYPE_SET;
-	if (confined_set) {
-		std::string confined;
-		std::string confine_error;
+	const duckdb_statement_type statement_type = duckdb_prepared_statement_type(stmt);
+	if (!check_prepared_config_policy(effective, statement_type, confined_set, policy_error)) {
 		duckdb_destroy_prepare(&stmt);
-		if (!confine_set_to_session(effective, confined, confine_error)) {
-			outcome.ok = false;
-			outcome.error = confine_error;
-			return finish();
-		}
-		if (duckdb_prepare(conn, confined.c_str(), &stmt) != DuckDBSuccess) {
-			const char* msg = duckdb_prepare_error(stmt);
-			outcome.ok = false;
-			outcome.error = msg != nullptr ? msg : "DuckDB prepare failed";
-			duckdb_destroy_prepare(&stmt);
-			return finish();
-		}
-		statement_type = duckdb_prepared_statement_type(stmt);
+		outcome.ok = false;
+		outcome.error = policy_error;
+		return finish();
 	}
+	// A SET/RESET keyword prefix always parses to a SET statement; this keeps the
+	// error hint below from firing for anything else.
+	confined_set = confined_set && statement_type == DUCKDB_STATEMENT_TYPE_SET;
 	const bool mutates_rows = statement_type == DUCKDB_STATEMENT_TYPE_INSERT ||
 		statement_type == DUCKDB_STATEMENT_TYPE_UPDATE ||
 		statement_type == DUCKDB_STATEMENT_TYPE_DELETE;

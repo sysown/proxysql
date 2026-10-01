@@ -86,9 +86,13 @@ Every client `SET` and `RESET` runs in session scope. Engine-wide settings are
 shared by all clients of the embedded database, so clients cannot change them:
 `SET GLOBAL`, engine-wide options such as `memory_limit`/`max_memory`,
 `threads`/`worker_threads`, `max_temp_directory_size` and
-`enable_external_access`, and configuration `PRAGMA`s all return an error.
-Change these through the `duckdb-*` Admin variables and
-`LOAD DUCKDB VARIABLES TO RUNTIME`. `SET VARIABLE` user variables are unaffected.
+`enable_external_access`, configuration `PRAGMA`s, and `EXPLAIN` of a `SET`,
+`RESET` or `PRAGMA` statement all return an error. The settings ProxySQL
+manages are changed through their `duckdb-*` Admin variables
+(`duckdb-memory_limit`, `duckdb-threads`, `duckdb-enable_external_access`)
+followed by `LOAD DUCKDB VARIABLES TO RUNTIME`. Other engine-wide settings have
+no Admin variable and cannot be changed by clients. `SET VARIABLE` user
+variables are unaffected.
 
 Only narrow client-compatibility commands are accepted as no-ops:
 
