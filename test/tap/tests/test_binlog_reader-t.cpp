@@ -101,11 +101,27 @@ const uint32_t NUM_CHECKS = 500;
 static uint32_t WHG = 1200;
 static uint32_t RHG = 1201;
 
-map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mysql_res_row>& conn_pool_stats) {
-	uint32_t hg_whg_queries = 0;
-	uint32_t hg_whg_sync_queries = 0;
-	uint32_t hg_rhg_queries = 0;
-	uint32_t hg_rhg_sync_queries = 0;
+struct hg_pool_stats_t {
+	// Every statement sent to the hostgroup ('Queries'), including the ones
+	// ProxySQL sends on its own.
+	uint32_t queries = 0;
+	uint32_t sync_queries = 0;
+	// Client queries routed to the hostgroup (stats_mysql_query_digest).
+	uint32_t client_queries = 0;
+
+	// Statements ProxySQL sent on its own. With mysql-default_session_track_gtids
+	// =OWN_GTID it configures GTID tracking with a SET on backend connections:
+	// new ones, ones opened before the setting changed, and ones whose session
+	// state was reset. Such a SET is a GTID sync query when the session that
+	// sends it routes by GTID.
+	uint32_t internal_queries() const {
+		return queries > client_queries ? queries - client_queries : 0;
+	}
+};
+
+// Columns expected: hostgroup, Queries, Queries_GTID_sync.
+map<uint32_t, hg_pool_stats_t> extract_hosgtroups_stats(const vector<mysql_res_row>& conn_pool_stats) {
+	map<uint32_t, hg_pool_stats_t> stats { { WHG, {} }, { RHG, {} } };
 
 	for (const auto& conn_pool_stats_row : conn_pool_stats) {
 		if (conn_pool_stats_row.size() < 3) {
@@ -115,19 +131,60 @@ map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mys
 		}
 
 		const uint32_t hg = std::stol(conn_pool_stats_row[0]);
-		const uint32_t queries = std::stol(conn_pool_stats_row[1]);
-		const uint32_t queries_gtid_sync = std::stol(conn_pool_stats_row[2]);
+		if (hg != WHG && hg != RHG) {
+			continue;
+		}
+		hg_pool_stats_t& hg_stats = stats[hg];
+		hg_stats.queries += std::stol(conn_pool_stats_row[1]);
+		hg_stats.sync_queries += std::stol(conn_pool_stats_row[2]);
+	}
 
-		if (hg == WHG) {
-			hg_whg_queries += queries;
-			hg_whg_sync_queries += queries_gtid_sync;
-		} else if (hg == RHG) {
-			hg_rhg_queries += queries;
-			hg_rhg_sync_queries += queries_gtid_sync;
+	return stats;
+}
+
+/**
+ * @brief Collects per-hostgroup pool stats and the client queries routed to each hostgroup.
+ */
+int fetch_hostgroups_stats(MYSQL* proxysql_admin, map<uint32_t, hg_pool_stats_t>& hg_stats) {
+	MYSQL_QUERY(proxysql_admin, "SELECT hostgroup, queries, Queries_GTID_sync FROM stats.stats_mysql_connection_pool");
+	MYSQL_RES* myres = mysql_store_result(proxysql_admin);
+	vector<mysql_res_row> rows { extract_mysql_rows(myres) };
+	mysql_free_result(myres);
+
+	if (rows.size() == 0) {
+		const char* msg = "Invalid result received from 'stats.stats_mysql_connection_pool'";
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, msg);
+		return EXIT_FAILURE;
+	}
+	hg_stats = extract_hosgtroups_stats(rows);
+
+	MYSQL_QUERY(proxysql_admin, "SELECT hostgroup, SUM(count_star) FROM stats.stats_mysql_query_digest GROUP BY hostgroup");
+	myres = mysql_store_result(proxysql_admin);
+	rows = extract_mysql_rows(myres);
+	mysql_free_result(myres);
+	for (const auto& row : rows) {
+		if (row.size() < 2) { continue; }
+		const uint32_t hg = std::stol(row[0]);
+		if (hg == WHG || hg == RHG) {
+			hg_stats[hg].client_queries = std::stol(row[1]);
 		}
 	}
 
-	return { { WHG, { hg_whg_queries, hg_whg_sync_queries } }, { RHG, { hg_rhg_queries, hg_rhg_sync_queries } } };
+	return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Resets the pool stats and the query digests, the two sources the checks compare.
+ */
+int reset_hostgroups_stats(MYSQL* proxysql_admin) {
+	for (const char* q : { "SELECT * FROM stats.stats_mysql_connection_pool_reset", "SELECT * FROM stats.stats_mysql_query_digest_reset" }) {
+		if (mysql_query(proxysql_admin, q) != EXIT_SUCCESS) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+			return EXIT_FAILURE;
+		}
+		mysql_free_result(mysql_store_result(proxysql_admin));
+	}
+	return EXIT_SUCCESS;
 }
 
 int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
@@ -183,23 +240,14 @@ int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 }
 
 int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* proxysql_admin) {
-	// Check that all queries were routed to the correct hostgroup
-	MYSQL_QUERY(proxysql_admin, "SELECT hostgroup, queries, Queries_GTID_sync FROM stats.stats_mysql_connection_pool");
-	MYSQL_RES* conn_pool_stats_myres = mysql_store_result(proxysql_admin);
-	vector<mysql_res_row> conn_pool_stats { extract_mysql_rows(conn_pool_stats_myres) };
-	mysql_free_result(conn_pool_stats_myres);
-
-	if (conn_pool_stats.size() == 0) {
-		const char* msg = "Invalid result received from 'stats.stats_mysql_connection_pool'";
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, msg);
-		return EXIT_FAILURE;
-	}
-
-	auto hg_stats { extract_hosgtroups_stats(conn_pool_stats) };
-	uint32_t hg_whg_queries = hg_stats.at(WHG).first;
-	uint32_t hg_whg_sync_queries = hg_stats.at(WHG).second;;
-	uint32_t hg_rhg_queries = hg_stats.at(RHG).first;
-	uint32_t hg_rhg_sync_queries = hg_stats.at(RHG).second;;
+	// Check that all queries were routed to the correct hostgroup. Routing is
+	// checked on the client queries (query digests); 'Queries' and
+	// 'Queries_GTID_sync' also count the statements ProxySQL sends on its own,
+	// see hg_pool_stats_t::internal_queries().
+	map<uint32_t, hg_pool_stats_t> hg_stats {};
+	if (fetch_hostgroups_stats(proxysql_admin, hg_stats) != EXIT_SUCCESS) { return EXIT_FAILURE; }
+	const hg_pool_stats_t& whg = hg_stats.at(WHG);
+	const hg_pool_stats_t& rhg = hg_stats.at(RHG);
 
 	uint32_t hg_whg_exp_queries =
 		3 +            // Database creation + Table DROP + Table creation
@@ -207,50 +255,41 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 		NUM_CHECKS;    // Updates (matching number of checks)
 	uint32_t hg_whg_exp_sync_queries = NUM_CHECKS - 1;
 
-	bool hg_whg_checks = hg_whg_exp_queries == hg_whg_queries && hg_whg_sync_queries == hg_whg_exp_sync_queries;
-	bool hg_rhg_checks = hg_rhg_queries == NUM_CHECKS && hg_rhg_sync_queries == NUM_CHECKS;
+	bool hg_whg_checks = whg.client_queries == hg_whg_exp_queries &&
+		whg.sync_queries >= hg_whg_exp_sync_queries && whg.sync_queries <= hg_whg_exp_sync_queries + whg.internal_queries();
+	bool hg_rhg_checks = rhg.client_queries == NUM_CHECKS &&
+		rhg.sync_queries >= NUM_CHECKS && rhg.sync_queries <= NUM_CHECKS + rhg.internal_queries();
 
 	ok(
 		hg_whg_checks && hg_rhg_checks,
 		"GTID based query routing: {"
-			" hg_%d: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d },"
-			" hg_%d: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d }"
+			" hg_%d: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d, internal_queries: %d },"
+			" hg_%d: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d, internal_queries: %d }"
 		" }",
-		WHG, hg_whg_exp_queries, hg_whg_queries, hg_whg_exp_sync_queries, hg_whg_sync_queries,
-		RHG, NUM_CHECKS, hg_rhg_queries, NUM_CHECKS, hg_rhg_sync_queries
+		WHG, hg_whg_exp_queries, whg.client_queries, hg_whg_exp_sync_queries, whg.sync_queries, whg.internal_queries(),
+		RHG, NUM_CHECKS, rhg.client_queries, NUM_CHECKS, rhg.sync_queries, rhg.internal_queries()
 	);
 
-	// Reset connection pool stats
-	int rc = mysql_query(proxysql_admin, "SELECT * FROM stats.stats_mysql_connection_pool_reset");
-	if (rc != EXIT_SUCCESS) { return EXIT_FAILURE; }
-	mysql_free_result(mysql_store_result(proxysql_admin));
+	if (reset_hostgroups_stats(proxysql_admin) != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	// Perform random selects, no prior updates in the connection, no GTID tracking should take place
-	rc = perform_rnd_selects(cl, NUM_CHECKS / 5);
+	int rc = perform_rnd_selects(cl, NUM_CHECKS / 5);
 	if (rc != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
-	// Update stats
-	MYSQL_QUERY(proxysql_admin, "SELECT hostgroup, queries, Queries_GTID_sync FROM stats.stats_mysql_connection_pool");
-	conn_pool_stats_myres = mysql_store_result(proxysql_admin);
-	conn_pool_stats = extract_mysql_rows(conn_pool_stats_myres);
-	mysql_free_result(conn_pool_stats_myres);
-
-	// Extract stats
-	hg_stats = extract_hosgtroups_stats(conn_pool_stats);
-	hg_whg_queries = hg_stats.at(WHG).first;
-	hg_whg_sync_queries = hg_stats.at(WHG).second;;
-	hg_rhg_queries = hg_stats.at(RHG).first;
-	hg_rhg_sync_queries = hg_stats.at(RHG).second;;
+	if (fetch_hostgroups_stats(proxysql_admin, hg_stats) != EXIT_SUCCESS) { return EXIT_FAILURE; }
+	const hg_pool_stats_t& whg2 = hg_stats.at(WHG);
+	const hg_pool_stats_t& rhg2 = hg_stats.at(RHG);
 
 	uint32_t hg_rhg_exp_queries = NUM_CHECKS / 5;
 	ok(
-		hg_whg_queries == 0 && hg_whg_sync_queries == 0 && hg_rhg_queries == hg_rhg_exp_queries && hg_rhg_sync_queries == 0,
+		whg2.queries == 0 && whg2.sync_queries == 0 && rhg2.client_queries == hg_rhg_exp_queries && rhg2.sync_queries == 0,
 		"Queries should only be executed in 'HG %d' and no GTID sync should take place: {"
 		" hg_%d: { exp_queries: 0, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
-		" hg_%d: { exp_queries: %d, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
+		" hg_%d: { exp_queries: %d, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d, internal_queries: %d },"
 		" }",
 		RHG,
-		WHG, hg_whg_queries, hg_whg_sync_queries, RHG, hg_rhg_exp_queries, hg_rhg_queries, hg_rhg_sync_queries
+		WHG, whg2.queries, whg2.sync_queries, RHG, hg_rhg_exp_queries, rhg2.client_queries, rhg2.sync_queries,
+		rhg2.internal_queries()
 	);
 
 	return EXIT_SUCCESS;
@@ -461,6 +500,20 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "GTID query rules created for sbtest8 (WHG=%d, RHG=%d)\n", WHG, RHG);
 	}
 
+	// GTID tracking is requested by ProxySQL itself, as users configure it: the
+	// backends run with stock session-tracking defaults, so on MariaDB it is
+	// ProxySQL's SET of 'last_gtid' tracking that makes causal reads work
+	// (issue #6331). The previous value is restored on exit.
+	string orig_track_gtids {};
+	{
+		MYSQL_QUERY_T(proxysql_admin,
+			"SELECT variable_value FROM global_variables WHERE variable_name='mysql-default_session_track_gtids'");
+		MYSQL_RES* res = mysql_store_result(proxysql_admin);
+		MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
+		orig_track_gtids = (row && row[0]) ? row[0] : "OFF";
+		if (res) { mysql_free_result(res); }
+	}
+	MYSQL_QUERY_T(proxysql_admin, "SET mysql-default_session_track_gtids='OWN_GTID'");
 	MYSQL_QUERY_T(proxysql_admin, "SET mysql-session_track_variables=0");
 	MYSQL_QUERY_T(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
@@ -468,10 +521,9 @@ int main(int argc, char** argv) {
 	vector<mysql_res_row> reader_1_read {};
 	vector<mysql_res_row> reader_2_read {};
 
-	// Reset connection pool stats
-	int rc = mysql_query(proxysql_admin, "SELECT * FROM stats.stats_mysql_connection_pool_reset");
+	// Reset connection pool stats and query digests
+	int rc = reset_hostgroups_stats(proxysql_admin);
 	if (rc != EXIT_SUCCESS) { goto cleanup; }
-	mysql_free_result(mysql_store_result(proxysql_admin));
 
 	// Create testing tables
 	rc = create_testing_tables(proxysql_mysql);
@@ -543,6 +595,16 @@ int main(int argc, char** argv) {
 	}
 
 cleanup:
+
+	{
+		const string restore = "SET mysql-default_session_track_gtids='" + orig_track_gtids + "'";
+		if (mysql_query(proxysql_admin, restore.c_str()) == 0) {
+			mysql_free_result(mysql_store_result(proxysql_admin));
+			if (mysql_query(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME") == 0) {
+				mysql_free_result(mysql_store_result(proxysql_admin));
+			}
+		}
+	}
 
 	mysql_close(proxysql_mysql);
 	mysql_close(proxysql_admin);
