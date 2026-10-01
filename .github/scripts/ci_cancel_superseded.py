@@ -107,15 +107,21 @@ def cancel_superseded(api, pr_number, event_head_sha, exclude_run_id):
 
 
 def cancel_superseded_push(api, branch, event_after, exclude_run_id):
-    """Cancel cascades started by older pushes to the same branch.
+    """Cancel CI cascades started by older pushes to the same branch.
 
     Every push to a long-lived branch (v3.0, a release line) starts a fresh
     ~100-workflow cascade. Without this sweep the older cascades simply queue
     behind the newer one, so the branch accumulates work for commits it no
     longer points at -- which is what saturates the shared runner pool.
 
-    Only `push`-originated cascades on this exact branch are considered;
-    PR and manual-dispatch runs are left alone.
+    Scope is deliberately narrow: only runs that are part of a CI-trigger
+    cascade on this exact branch. Direct `push` runs of unrelated workflows
+    (CI-package-build, and any release or deploy workflow added later) are
+    NOT superseded CI and must be left running, so a direct origin has to
+    name TRIGGER_PATH just as a workflow_run child does.
+
+    Manual dispatches are excluded: workflow_dispatch is an explicit request
+    for that commit.
     """
     ref_path = f'repos/{api.repository}/commits/{branch}'
 
@@ -123,7 +129,9 @@ def cancel_superseded_push(api, branch, event_after, exclude_run_id):
         return api.request(ref_path)['sha']
 
     def belongs(run):
-        return run.get('event') == 'push' and run.get('head_branch') == branch
+        return (run.get('event') == 'push'
+                and run.get('head_branch') == branch
+                and run.get('path') == TRIGGER_PATH)
 
     return sweep(api, head_sha_now, event_after, belongs, exclude_run_id)
 

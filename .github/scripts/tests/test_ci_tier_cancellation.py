@@ -194,6 +194,19 @@ class PushSweepTests(unittest.TestCase):
         api = API(rows)
         self.assertEqual(set(cancel_superseded_push(api, 'v3.0', CURRENT, 99)), {1, 2, 3, 4, 5})
 
+    def test_unrelated_push_workflow_is_not_swept(self):
+        """Only CI-trigger cascades are superseded CI.
+
+        CI-package-build (and any release/deploy workflow added later) also
+        runs on push. Cancelling it here would abort a build for the current
+        commit just because an older commit's cascade is being pruned.
+        """
+        package = push_run(1, path='.github/workflows/CI-package-build.yml')
+        cascade = push_run(2)
+        api = API([package, cascade])
+        self.assertEqual(cancel_superseded_push(api, 'v3.0', CURRENT, 99), [2])
+        self.assertEqual(api.cancelled, [2])
+
 
 if __name__ == '__main__':
     unittest.main()

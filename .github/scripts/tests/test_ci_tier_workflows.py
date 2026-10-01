@@ -26,9 +26,14 @@ class WorkflowTests(unittest.TestCase):
   d=workflow('ci-cancel-superseded.yml');job=d['jobs']['cancel']
   self.assertEqual(d['permissions'],{'actions':'write','contents':'read','pull-requests':'read'})
   self.assertEqual(job['runs-on'],'ubuntu-24.04')
-  # Both trusted events are swept: pull_request_target for PRs, push for
-  # long-lived branches. Neither path may check out the code under test.
-  self.assertEqual(job['if'],"github.event_name == 'pull_request_target' || github.event_name == 'push'")
+# Both trusted events are swept: pull_request_target for PRs, push for
+ # long-lived branches. Neither path may check out the code under test.
+ # The final fail() clause keeps an unsupported event from silently
+ # skipping the job and reporting success.
+  guard=job['if']
+  self.assertIn("github.event_name == 'pull_request_target'",guard)
+  self.assertIn("github.event_name == 'push'",guard)
+  self.assertIn("fail('ci-cancel-superseded: unsupported event')",guard)
   checkout=job['steps'][0]
   self.assertEqual(checkout['with']['repository'],'sysown/proxysql')
   self.assertEqual(checkout['with']['ref'],'GH-Actions')
