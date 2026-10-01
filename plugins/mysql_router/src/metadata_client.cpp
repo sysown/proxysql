@@ -261,7 +261,10 @@ std::unique_ptr<ConnectorCMetadataSession> ConnectorCMetadataSession::connect(
 	//  - every mode except DISABLED must request TLS, otherwise PREFERRED never even
 	//    asks for it (mysql_ssl_set() alone is undone by an explicit ENFORCE=0);
 	//  - REQUIRED cannot rely on the connector to refuse a plaintext fallback, so the
-	//    negotiated cipher is checked after the connection is established;
+	//    negotiated cipher is checked after the connection is established. The
+	//    connector has no hook between the server greeting and authentication, so a
+	//    server without TLS has already seen the user name and the auth challenge
+	//    response by then (documented in doc/mysql-router-plugin.md);
 	//  - the VERIFY modes are enforced by the connector, which fails when the server
 	//    offers no TLS. Connector/C verifies the hostname as well, so VERIFY_CA is at
 	//    least as strict as requested.

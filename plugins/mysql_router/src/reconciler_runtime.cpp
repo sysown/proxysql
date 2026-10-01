@@ -456,6 +456,7 @@ public:
 			}
 			if (std::optional<MemberView> chosen = health_search.take()) {
 				session_ = std::move(chosen->session);
+				endpoint_ = chosen->endpoint;
 				const ObservedHealth& health = chosen->health;
 				ReconcileTopologySnapshot snapshot;
 				snapshot.metadata_available = false;
@@ -727,7 +728,14 @@ public:
 			quote(success ? "success" : "failure") + "," + std::to_string(from) + "," +
 			std::to_string(to) + "," + quote(success ? "" : "refresh_failed") + "," +
 			quote(safe) + " FROM stats_mysql_router_refresh";
-		(void)stats->execute(sql.c_str());
+		// Same rule as record_transition(): statsdb is shared with Admin (issue #6354),
+		// and refresh history is best effort.
+		try {
+			(void)mysql_router_with_admin_db_lock(services_, [&] {
+				(void)stats->execute(sql.c_str());
+				return true;
+			});
+		} catch (...) {}
 	}
 
 	ReconcileSchedule schedule() const override {

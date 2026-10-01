@@ -63,7 +63,7 @@ every later metadata, health and user-sync connection.
 |---|---|
 | `DISABLED` | Plaintext. |
 | `PREFERRED` (default) | Requests TLS, and continues in plaintext only if the server does not offer it. |
-| `REQUIRED` | Requires TLS. The connection fails if TLS is not negotiated. The certificate is not verified. |
+| `REQUIRED` | Requires TLS. The connection fails if TLS is not negotiated. The certificate is not verified. See the note below. |
 | `VERIFY_CA` | Requires TLS and verifies the server certificate against `--ssl-ca`/`--ssl-capath`. Connector/C also checks the hostname, so this is as strict as `VERIFY_IDENTITY`. |
 | `VERIFY_IDENTITY` | Requires TLS and verifies the certificate chain and the server hostname. |
 
@@ -73,6 +73,16 @@ must be given together. Configurations that break these rules are rejected
 both by bootstrap and when the reconciler loads its configuration. Deployments
 bootstrapped before these keys existed have no `metadata_ssl_*` rows and use
 `PREFERRED`.
+
+With `REQUIRED`, Connector/C 3.3 cannot refuse a server that offers no TLS
+before authenticating. ProxySQL checks for TLS once the connection is
+established and closes it if TLS was not negotiated, but by then the server has
+already received the metadata user name and the password's challenge response.
+The password itself is not sent unless the metadata account uses a cleartext
+authentication plugin. As in MySQL, `REQUIRED` does not verify the server, so
+it protects only against passive eavesdropping, not against an active attacker.
+Use `VERIFY_CA` or `VERIFY_IDENTITY` when the network path is not trusted: in
+those modes, Connector/C refuses a server without TLS before it authenticates.
 
 ## Endpoints
 

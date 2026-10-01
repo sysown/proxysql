@@ -161,6 +161,11 @@ BootstrapOptions options() {
 	result.tls.mode = MetadataTlsMode::verify_identity;
 	result.tls.ca = "/etc/proxysql/ic-ca.pem";
 	result.tls.crl = "/etc/proxysql/ic.crl";
+	result.tls.capath = "/etc/proxysql/ic-ca.d";
+	result.tls.cert = "/etc/proxysql/ic-client.pem";
+	result.tls.key = "/etc/proxysql/ic-client.key";
+	result.tls.cipher = "TLS_AES_256_GCM_SHA384";
+	result.tls.crlpath = "/etc/proxysql/ic-crl.d";
 	return result;
 }
 
@@ -210,8 +215,11 @@ int main() {
 	ok(store.identity && store.identity->user_generation > store.identity->topology_generation,
 	   "application users publish as a separate complete generation");
 	ok(store.tls && store.tls->mode == MetadataTlsMode::verify_identity &&
-	   store.tls->ca == "/etc/proxysql/ic-ca.pem" && store.tls->crl == "/etc/proxysql/ic.crl",
-	   "bootstrap persists its metadata TLS options with the local identity (issue #6352)");
+	   store.tls->ca == "/etc/proxysql/ic-ca.pem" && store.tls->crl == "/etc/proxysql/ic.crl" &&
+	   store.tls->capath == "/etc/proxysql/ic-ca.d" && store.tls->cert == "/etc/proxysql/ic-client.pem" &&
+	   store.tls->key == "/etc/proxysql/ic-client.key" && store.tls->cipher == "TLS_AES_256_GCM_SHA384" &&
+	   store.tls->crlpath == "/etc/proxysql/ic-crl.d",
+	   "bootstrap persists all its metadata TLS options with the local identity (issue #6352)");
 
 	MysqlRouterBootstrap retry(session, store, topology(), "proxy.example");
 	auto second = retry.run(options());
