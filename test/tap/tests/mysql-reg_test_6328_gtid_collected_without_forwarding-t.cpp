@@ -128,6 +128,7 @@ int main(int, char**) {
 	MYSQL* admin = mysql_init(NULL);
 	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		diag("Admin connect failed: %s", mysql_error(admin));
+		mysql_close(admin);
 		return exit_status();
 	}
 
@@ -145,6 +146,7 @@ int main(int, char**) {
 	MYSQL* proxy = mysql_init(NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		diag("Client connect failed: %s", mysql_error(proxy));
+		mysql_close(proxy);
 		set_gtid_vars(admin, orig_track_gtid, orig_from_ok);
 		mysql_close(admin);
 		return exit_status();

@@ -505,6 +505,7 @@ int main(int argc, char** argv) {
 	// ProxySQL's SET of 'last_gtid' tracking that makes causal reads work
 	// (issue #6331). The previous value is restored on exit.
 	string orig_track_gtids {};
+	bool restore_failed = false;
 	{
 		MYSQL_QUERY_T(proxysql_admin,
 			"SELECT variable_value FROM global_variables WHERE variable_name='mysql-default_session_track_gtids'");
@@ -602,12 +603,18 @@ cleanup:
 			mysql_free_result(mysql_store_result(proxysql_admin));
 			if (mysql_query(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME") == 0) {
 				mysql_free_result(mysql_store_result(proxysql_admin));
+			} else {
+				diag("Failed to load restored mysql-default_session_track_gtids: %s", mysql_error(proxysql_admin));
+				restore_failed = true;
 			}
+		} else {
+			diag("Failed to restore mysql-default_session_track_gtids: %s", mysql_error(proxysql_admin));
+			restore_failed = true;
 		}
 	}
 
 	mysql_close(proxysql_mysql);
 	mysql_close(proxysql_admin);
 
-	return exit_status();
+	return restore_failed ? EXIT_FAILURE : exit_status();
 }

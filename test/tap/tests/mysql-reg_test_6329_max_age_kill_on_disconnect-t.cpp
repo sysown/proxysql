@@ -25,6 +25,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <csignal>
 #include <string>
 #include <thread>
 #include <sys/socket.h>
@@ -194,6 +195,8 @@ static bool backend_query_killed_after_disconnect(const char* label, bool& seen_
 }
 
 int main(int, char**) {
+	// mysql_close may write COM_QUIT after the intentional socket shutdown.
+	std::signal(SIGPIPE, SIG_IGN);
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
@@ -227,6 +230,7 @@ int main(int, char**) {
 	// client disconnects. It must still be killed, not just dropped.
 	const bool max_age_set = set_vars(admin, std::to_string(MAX_AGE_MS), "true");
 	ok(max_age_set, "Set connection_max_age_ms=%d", MAX_AGE_MS);
+	seen_before = false;
 	const bool expired_killed = max_age_set && backend_query_killed_after_disconnect("max_age=1000", seen_before);
 	ok(seen_before, "The probe sees the backend thread running the query before the disconnect");
 	ok(expired_killed,

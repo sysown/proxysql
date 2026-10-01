@@ -121,7 +121,7 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
-	plan(12);
+	plan(15);
 
 	// 1. A full libpq-style batch: Parse/Bind/Describe/Execute/Sync.
 	{
@@ -169,6 +169,30 @@ int main(int, char**) {
 
 		MsgCounts after {};
 		ok(simple_select_1(*c, after), "A simple query after Sync gets its own clean response: '%s'", after.sequence.c_str());
+	}
+
+	// A simple Query inside a rejected batch must also be discarded.
+	{
+		auto c = admin_lite_connect();
+		if (!c) BAIL_OUT("Cannot connect to the PgSQL admin interface");
+		c->sendQuery("DROP TABLE IF EXISTS reg_test_6345_discarded");
+		const MsgCounts reset = drain(*c);
+		if (reset.errors || reset.ready != 1) BAIL_OUT("Cannot reset the discarded-query fixture");
+		send_parse(*c, "SELECT 1");
+		c->sendQuery("CREATE TABLE reg_test_6345_discarded (id INTEGER)");
+		c->sendSync();
+		const MsgCounts counts = drain(*c);
+		ok(counts.sequence == "EZ", "P/Q/S discards Query and returns exactly E/Z: '%s'", counts.sequence.c_str());
+
+		// If the discarded Query ran, creating the same table would fail.
+		c->sendQuery("CREATE TABLE reg_test_6345_discarded (id INTEGER)");
+		const MsgCounts created = drain(*c);
+		ok(created.errors == 0 && created.ready == 1,
+			"The discarded Query had no side effects: '%s'", created.sequence.c_str());
+		c->sendQuery("DROP TABLE IF EXISTS reg_test_6345_discarded");
+		drain(*c);
+		MsgCounts after {};
+		ok(simple_select_1(*c, after), "A simple query after P/Q/S works: '%s'", after.sequence.c_str());
 	}
 
 	// 3. A bare Sync is answered with ReadyForQuery only.

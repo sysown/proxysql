@@ -276,6 +276,9 @@ static bool rules_sort_comp_function (QP_rule_t * a, QP_rule_t * b) {
 	return (a->rule_id < b->rule_id); 
 }
 
+// Insertion-time estimate from the global rule's configured strings. Worker
+// regexes are compiled later, so the length multipliers below approximate
+// regex storage, not measured compiled-code or match-data allocations.
 static unsigned long long mem_used_rule(QP_rule_t *qr) {
 	unsigned long long s = 0;
 	if (qr->username)

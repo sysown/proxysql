@@ -2346,6 +2346,12 @@ __implicit_sync:
 					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
 						session_type == PROXYSQL_SESSION_SQLITE) {
 						c = *((unsigned char*)pkt.ptr);
+						// Recovery discards every message, including simple Query,
+						// until Sync. Terminate must still close the connection.
+						if (admin_extq_rejected && c != 'S' && c != 'X') {
+							l_free(pkt.size, pkt.ptr);
+							continue;
+						}
 						if (c == 'Q') {
 							handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
 						} else if (c == 'X') {

@@ -99,7 +99,14 @@ int main(int, char**) {
 		"SELECT variable_value FROM global_variables WHERE variable_name='mysql-query_processor_regex'");
 	diag("Original mysql-query_processor_regex=%s", orig_engine.c_str());
 
-	ok(set_regex_engine(admin, "2"), "Selected the RE2 regex engine");
+	const bool engine_selected = set_regex_engine(admin, "2");
+	ok(engine_selected, "Selected the RE2 regex engine");
+	if (!engine_selected) {
+		skip(3, "Cannot exercise RE2 rewrites without selecting RE2");
+		ok(set_regex_engine(admin, orig_engine.empty() ? "1" : orig_engine), "Restored the regex engine");
+		mysql_close(admin);
+		return exit_status();
+	}
 
 	MYSQL* proxy = mysql_init(NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {

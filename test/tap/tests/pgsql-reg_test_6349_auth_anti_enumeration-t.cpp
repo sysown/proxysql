@@ -158,7 +158,11 @@ int main(int, char**) {
 
 	for (int f = 0; f < 2; f++) {
 		if (!set_frontend_auth_method(admin, floors[f])) {
-			set_frontend_auth_method(admin, atoi(orig_floor));
+			if (!set_frontend_auth_method(admin, atoi(orig_floor))) {
+				diag("Failed to restore pgsql-authentication_method=%s after setup failure", orig_floor);
+			}
+			free(orig_floor);
+			mysql_close(admin);
 			BAIL_OUT("could not configure pgsql-authentication_method=%d", floors[f]);
 		}
 		for (const Answer& a : answers) {

@@ -169,13 +169,27 @@ int main(int, char**) {
 	ok(mariadb_form, "The collected GTID has the MariaDB domain-server-seq form: '%s'", session_gtid.c_str());
 
 	// 4. The writer's executed set learnt the server id from the OK packets.
-	const std::string writer_host = single_value(admin,
-		"SELECT hostname FROM runtime_mysql_servers WHERE hostgroup_id=" + whg + " LIMIT 1");
-	const std::string writer_port = single_value(admin,
-		"SELECT port FROM runtime_mysql_servers WHERE hostgroup_id=" + whg + " LIMIT 1");
-	const std::string executed = single_value(admin,
-		"SELECT gtid_executed FROM stats_mysql_gtid_executed WHERE hostname='" + writer_host
-		+ "' AND port=" + writer_port);
+	std::string writer_host {}, writer_port {}, executed {};
+	const std::string writer_query = "SELECT hostname,port FROM runtime_mysql_servers WHERE hostgroup_id="
+		+ whg + " AND status='ONLINE' ORDER BY hostname,port LIMIT 1";
+	if (mysql_query(admin, writer_query.c_str()) == 0) {
+		MYSQL_RES* result = mysql_store_result(admin);
+		MYSQL_ROW row = result ? mysql_fetch_row(result) : NULL;
+		if (row && row[0] && row[1]) {
+			writer_host = row[0];
+			writer_port = row[1];
+		}
+		if (result) mysql_free_result(result);
+	} else {
+		diag("Writer lookup failed: %s", mysql_error(admin));
+	}
+	if (!writer_host.empty() && !writer_port.empty()) {
+		executed = single_value(admin,
+			"SELECT gtid_executed FROM stats_mysql_gtid_executed WHERE hostname='" + writer_host
+			+ "' AND port=" + writer_port);
+	} else {
+		diag("No ONLINE writer found in hostgroup %s", whg.c_str());
+	}
 	diag("stats_mysql_gtid_executed for %s:%s = '%s'", writer_host.c_str(), writer_port.c_str(), executed.c_str());
 	std::string ex_domain {}, ex_server_id {}, ex_seq {};
 	const bool native = RE2::FullMatch(executed, "(\\d+)-(\\d+)-(\\d+)", &ex_domain, &ex_server_id, &ex_seq);

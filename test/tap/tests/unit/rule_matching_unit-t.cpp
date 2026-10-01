@@ -877,12 +877,12 @@ static void test_pcre2_rewrites() {
 		"PCRE global rewrite expands unset optional captures as empty");
 }
 
-// Issue #6321: a rule's compiled regex keeps its match data, translated
-// rewrite and output buffer across queries. Rewrites must stay exact when a
-// query needs more output than the reused buffer holds, and afterwards.
+// Issue #6321: a rule reuses its compiled regex, match data and translated
+// rewrite across queries. Each substitution allocates its own output buffer.
+// Verify reuse across small and large queries, including output-size retries.
 static void test_pcre2_rewrite_reuse() {
-	// 1000 matches outgrow the initial buffer (retry path); 30000 matches also
-	// exceed the size above which the buffer is released after use.
+	// Both 1000 and 30000 matches outgrow their call's initial output buffer
+	// and exercise the retry with the exact size reported by PCRE2.
 	const std::string x1k(1000, 'x');
 	const std::string x30k(30000, 'x');
 	auto expanded = [](size_t n) {
@@ -898,7 +898,7 @@ static void test_pcre2_rewrite_reuse() {
 	ok(subjects[0] == "<x>" && subjects[2] == "a <x> b" && subjects[4] == "<x>",
 		"small rewrites are exact before and after large ones");
 	ok(subjects[1] == expanded(1000) && subjects[3] == expanded(30000) && subjects[5] == expanded(1000),
-		"rewrites larger than the reused buffer are complete, also after it was released");
+		"large rewrites remain complete across output-size retries and match-data reuse");
 }
 #endif
 
