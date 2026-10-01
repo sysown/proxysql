@@ -2,6 +2,7 @@
 """Run-scoped GitHub API and handoff operations. Never select by newest SHA."""
 import io
 import concurrent.futures
+from contextlib import contextmanager
 import hashlib
 import re
 from threading import Event
@@ -313,13 +314,47 @@ def binary_version(root, binary='src/proxysql'):
     raise RuntimeError(f'ProxySQL version probe failed. Host: {host_error}\nBuild container: {container_error}')
 
 
+@contextmanager
+def handoff_archive(packed):
+    """Read tar through zstd without materializing another full build on disk."""
+    with subprocess.Popen(['zstd','-d','-c',str(packed)],stdout=subprocess.PIPE) as process:
+        try:
+            with tarfile.open(fileobj=process.stdout,mode='r|') as archive:
+                yield archive
+            # Tar stops at its end marker; drain padding/trailing frames and
+            # check zstd too, so corrupt input cannot look like a valid tar.
+            while process.stdout.read(1024*1024):pass
+            result=process.wait()
+            if result:raise subprocess.CalledProcessError(result,process.args)
+        finally:
+            process.stdout.close()
+            # Validation/extraction can fail before the pipe is consumed.
+            # Do not leave zstd blocked on a full pipe when Popen waits below.
+            if process.poll() is None:process.kill()
+
+
+def handoff_stream_filter(member,dest_path):
+    filtered=handoff_filter(member,dest_path)
+    if filtered is not None and filtered.islnk():
+        # os.link cannot replace a checkout file (or a previous restore).
+        # tarfile's fallback rereads the target's earlier archive bytes, which
+        # a stream cannot seek to. Remove only this validated destination so
+        # the normal hardlink operation can use the already extracted target.
+        target=Path(dest_path)/filtered.name
+        if os.path.lexists(target):target.unlink()
+    return filtered
+
+
 def restore_handoff(manifest,leg,destination,api):
     validate_manifest(manifest)
     expected=next(x for x in manifest['legs'] if x['tier']==leg['tier'])
     if leg['artifact_name']!=expected['artifact_name']:raise ValueError('wrong handoff identity')
     record=select_artifact(api.artifacts(manifest['build_id']),expected['artifact_name'])
     if expected.get('artifact_id') and record['id']!=expected['artifact_id']:raise ValueError('handoff artifact replaced')
-    with tempfile.TemporaryDirectory() as tmp:
+    # The runner clears RUNNER_TEMP at job boundaries, including after a
+    # forced cancellation that bypasses TemporaryDirectory's Python cleanup.
+    # Default /tmp scratch survived cancelled jobs on persistent pool VMs.
+    with tempfile.TemporaryDirectory(prefix='ci-handoff-',dir=os.environ.get('RUNNER_TEMP') or None) as tmp:
         downloaded=Path(tmp)/'handoff.zip'
         api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest'))
         with zipfile.ZipFile(downloaded) as archive:
@@ -327,11 +362,14 @@ def restore_handoff(manifest,leg,destination,api):
             with archive.open('cache_full.tar.zst') as source,packed.open('wb') as out:
                 shutil.copyfileobj(source,out,1024*1024)
         downloaded.unlink()
-        tarpath=Path(tmp)/'full.tar'
-        with tarpath.open('wb') as out:subprocess.run(['zstd','-d','-c',str(packed)],stdout=out,check=True)
+        # Validate every member before writing the destination, preserving
+        # the existing path/link checks. A second streaming pass costs CPU,
+        # but avoids keeping both full.tar and the extracted build on disk.
+        with handoff_archive(packed) as archive:
+            safe_members(archive.getmembers())
         destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
-        with tarfile.open(tarpath) as archive:
-            archive.extractall(destination,members=safe_members(archive.getmembers()),filter=handoff_filter)
+        with handoff_archive(packed) as archive:
+            archive.extractall(destination,filter=handoff_stream_filter)
     metadata=json.loads((destination/'src/ci-tier.json').read_text())
     for key,value in [('execution_id',manifest['execution_id']),('sha',manifest['sha']),('tier',leg['tier']),('mode',leg['mode'])]:
         if metadata.get(key)!=value:raise ValueError('restored metadata mismatch: '+key)
