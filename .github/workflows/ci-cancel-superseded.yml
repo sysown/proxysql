@@ -1,4 +1,4 @@
-name: Cancel superseded PR CI
+name: Cancel superseded CI
 
 on:
   workflow_call:
@@ -10,7 +10,13 @@ permissions:
 
 jobs:
   cancel:
-    if: github.event_name == 'pull_request_target'
+    # No event guard on purpose. `pull_request_target` executes trusted
+    # base-branch code for PRs and `push` prunes older CI cascades on the
+    # branch that was just pushed; neither path checks out the code under
+    # test. Any other event must still run so that ci_cancel_superseded.py
+    # rejects it with a ValueError -- a guard that skipped those events
+    # would report success having cancelled nothing, which is exactly the
+    # failure mode this is meant to prevent.
     # Cancellation must not wait behind the old CI jobs in the self-hosted pool.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -22,7 +28,7 @@ jobs:
         ref: GH-Actions
         sparse-checkout: .github
         persist-credentials: false
-    - name: Cancel older runs for this PR
+    - name: Cancel superseded runs
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: python3 .github/scripts/ci_cancel_superseded.py
