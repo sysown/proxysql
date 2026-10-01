@@ -618,14 +618,18 @@ static void test_reconnect_resets_reader_stream() {
 	ok(sd.gtid_flavor == GTID_ID_FLAVOR_UNKNOWN && sd.uuid_server[0] == '\0'
 	       && sd.len == 0 && sd.pos == 0,
 	   "reconnect: the reader stream state is cleared");
+	// The new connection may reach another server: nothing of the previous
+	// server's executed set may still satisfy a causal read.
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 10) == false && sd.gtid_executed_to_string().empty(),
+	   "reconnect: the previous executed set is dropped");
 
 	stuff_buffer(sd, "ST=0:1-270\n");
 	ok(sd.read_next_gtid() == true && sd.active == true
 	       && sd.gtid_flavor == GTID_ID_FLAVOR_DOMAIN,
 	   "reconnect: a bootstrap of the other flavor is accepted after the reset");
 	char domain[] = "0";
-	ok(sd.gtid_exists(domain, 270) && sd.gtid_exists(UUID_A_STRIPPED, 10),
-	   "reconnect: the executed set is kept and extended by the new bootstrap");
+	ok(sd.gtid_exists(domain, 270) && sd.gtid_exists(UUID_A_STRIPPED, 10) == false,
+	   "reconnect: the executed set is the new bootstrap's only");
 }
 
 /**
@@ -811,7 +815,7 @@ static void test_noncanonical_domain_id_disconnects() {
 }
 
 int main() {
-	plan(174);
+	plan(175);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions

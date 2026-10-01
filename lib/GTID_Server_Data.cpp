@@ -290,6 +290,11 @@ void GTID_Server_Data::reset_reader_stream() {
 	memset(uuid_server, 0, sizeof(uuid_server));
 	pos = 0;
 	len = 0;
+	// The new connection is not known to reach the same server (failover,
+	// address reassigned, server restored from a backup): keeping the old set
+	// could route a causal read to a server that lacks the GTID. Until the
+	// bootstrap re-sends the set, GTID-routed reads skip this server.
+	gtid_executed.clear();
 	pthread_rwlock_unlock(&executed_rwlock);
 }
 
