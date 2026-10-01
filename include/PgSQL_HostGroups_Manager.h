@@ -893,7 +893,16 @@ private:
 		const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
 		bool only_commit_runtime_pgsql_servers, bool update_version);
 	void finish_commit(unsigned long long started_at);
-	bool update_hostgroup_manager_mappings();
+	/**
+	 * @brief Rebuilds 'hostgroup_server_mapping' when its inputs changed.
+	 * @param commit_context true when called while installing configuration (commit or an
+	 *   equivalent table regeneration that refreshed 'table_resultset_checksum'). Only then may the
+	 *   'hgsm_*_checksum' members be advanced to the configuration checksums. Monitor actions
+	 *   ('read_only_action_v2') pass false: they rebuild only for server-module claim changes and
+	 *   leave 'hgsm_*_checksum' untouched, because those actions store the runtime checksum there as
+	 *   the signal that runtime diverged from configuration and the next commit must rebuild.
+	 */
+	bool update_hostgroup_manager_mappings(bool commit_context = true);
 	uint64_t get_pgsql_servers_checksum(SQLite3_result* runtime_pgsql_servers = nullptr);
 	uint64_t get_pgsql_servers_v2_checksum(SQLite3_result* incoming_pgsql_servers_v2 = nullptr);
 };

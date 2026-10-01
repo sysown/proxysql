@@ -1253,7 +1253,7 @@ void PgSQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
  * IMPORTANT: Make sure wrlock() is called before calling this method.
  * 
 */
-bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
+bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_context) {
 
 #ifdef PROXYSQL40
 	auto active_claims = proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql);
@@ -1263,9 +1263,10 @@ bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 	const bool server_module_claims_changed = false;
 #endif
 
-	if (hgsm_pgsql_servers_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS] ||
-		hgsm_pgsql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS] ||
-		server_module_claims_changed)
+	const bool config_changed = commit_context && (
+		hgsm_pgsql_servers_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS] ||
+		hgsm_pgsql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS]);
+	if (config_changed || server_module_claims_changed)
 	{
 		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - pgsql_servers { old: 0x%lX, new: 0x%lX }, pgsql_replication_hostgroups { old:0x%lX, new:0x%lX }\n",
 			hgsm_pgsql_servers_checksum, table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS],
@@ -1342,8 +1343,10 @@ bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 		}
 		delete resultset;
 
-		hgsm_pgsql_servers_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS];
-		hgsm_pgsql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS];
+		if (commit_context) {
+			hgsm_pgsql_servers_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS];
+			hgsm_pgsql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS];
+		}
 #ifdef PROXYSQL40
 		hgsm_server_module_claims_ = std::move(active_claims);
 #endif
@@ -3746,7 +3749,7 @@ void PgSQL_HostGroups_Manager::read_only_action_v2(
 	ScopedServerDiscoveryProtocolLock protocol_lock(ProxySQL_ServerProtocol::pgsql);
 #endif
 	wrlock();
-	if (!update_hostgroup_manager_mappings()) {
+	if (!update_hostgroup_manager_mappings(false)) {
 		wrunlock();
 		return;
 	}
