@@ -131,6 +131,7 @@ extern int admin___web_verbosity;
 extern char * proxysql_version;
 
 #include "proxysql_find_charset.h"
+#include "ProxySQL_StartupGate.h"
 
 extern int admin_load_main_;
 extern bool admin_nostart_;
@@ -782,6 +783,9 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		bool rc = false;
 
 		if (admin_nostart_) {
+			// Close the startup gate before releasing the main thread into
+			// phase 3, so no other Admin command runs during the plugin lifecycle.
+			proxysql_startup_gate_close_for_start();
 			rc = __sync_bool_compare_and_swap(&GloVars.global.nostart, 1, 0);
 		}
 
@@ -3186,6 +3190,12 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		run_query = false;
 		goto __run_query;
 	}
+
+	// Plugin init/start/runtime_ready may call back into Admin and the
+	// Hostgroup Manager. Wait for the plugin lifecycle to finish before running
+	// any command, and do so before taking sql_query_global_mutex, so a plugin
+	// callback that needs it cannot be blocked by a waiting session.
+	proxysql_startup_gate_wait_for_admin([] { return glovars.shutdown != 0; });
 
 	// add global mutex, see bug #1188
 	pthread_mutex_lock(&pa->sql_query_global_mutex);

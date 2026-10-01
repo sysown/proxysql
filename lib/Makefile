@@ -98,6 +98,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	sha256crypt.oo \
 	ProxySQL_PluginManager.oo ProxySQL_PluginCLI.oo ProxySQL_PluginSecrets.oo ProxySQL_PluginListenerGate.oo ProxySQL_PluginConfig.oo \
 	ProxySQL_ServerDiscovery.oo \
+	ProxySQL_StartupGate.oo \
 	ProxySQL_ServerModuleCluster.oo \
 	BaseSrvList.oo BaseHGC.oo Base_HostGroups_Manager.oo \
 	QP_rule_text.oo QP_query_digest_stats.oo \

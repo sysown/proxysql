@@ -72,6 +72,7 @@ using json = nlohmann::json;
 
 #ifdef DEBUG
 #include "proxy_protocol_info.h"
+#include "ProxySQL_StartupGate.h"
 #endif // DEBUG
 
 static char *make_path(const char *directory, const char *filename) {
@@ -1648,6 +1649,11 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	//   services genuinely live for early actions such as Router bootstrap,
 	//   while still running plugins before listener validation and startup.
 	RegisterConfiguredPluginSchemas();
+	// Admin commands and Cluster peer threads must not run until the plugin
+	// lifecycle (phase 3) has finished: see ProxySQL_StartupGate.h. Close the
+	// gate before the Admin listener thread starts. With --no-start, Admin
+	// commands stay allowed until PROXYSQL START.
+	proxysql_startup_gate_reset(GloVars.global.nostart);
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 #else  /* !PROXYSQL40 */
 	// v3.0/v3.1 builds: no plugin loader.  Plain admin init only.
@@ -1779,6 +1785,10 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	// Runtime-ready callbacks run only now: HGM, Auth, QPro, and MTH all
 	// exist, but no listener has yet been validated or started.
 	RunConfiguredPluginsRuntimeReady();
+
+	// The plugin lifecycle is complete: let Admin commands and Cluster peer
+	// threads run.
+	proxysql_startup_gate_open();
 #endif /* PROXYSQL40 */
 	{
 		char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
