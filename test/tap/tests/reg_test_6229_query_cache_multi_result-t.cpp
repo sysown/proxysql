@@ -2,14 +2,16 @@
  * Regression test for issue #6229: heap overflow when the query cache stores
  * the response of a text-protocol request returning more than one result set.
  *
- * A multi-statement COM_QUERY matched by a rule with cache_ttl is sent twice:
- * the first execution populates the cache, the second one may be served from
- * it. Both must return every result set with the expected values, and ProxySQL
- * must survive. Under ASAN the unfixed code aborts ProxySQL with a
+ * A CALL to a procedure returning two result sets, and a two-statement
+ * COM_QUERY, are matched by a rule with cache_ttl and executed three times,
+ * with and without CLIENT_DEPRECATE_EOF. Every execution must return every
+ * result set with the expected values, the response must not be cached, and
+ * ProxySQL must survive. Under ASAN the unfixed code aborts ProxySQL with a
  * heap-buffer-overflow in MySQL_Data_Stream::resultset2buffer().
  *
  * Requires an isolated ProxySQL: flushes the shared cache and replaces the
- * query rules while running. No backend tables are needed.
+ * query rules while running. Creates the backend database reg6229 (holding
+ * the procedure) and drops it at the end.
  */
 #include <cstdlib>
 #include <cstdio>
@@ -43,8 +45,10 @@ void restore_query_rules() {
 		"DROP TABLE reg6229_runtime_fast_rules",
 		"DROP TABLE reg6229_memory_fast_rules"}) {
 		if (mysql_query(rules_admin, sql)) {
-			fprintf(stderr, "Cannot restore query rules: %s: %s\n", sql, mysql_error(rules_admin));
+			diag("Cannot restore query rules: %s: %s", sql, mysql_error(rules_admin));
 			// Do not report a successful test or recursively invoke atexit.
+			// std::_Exit() does not flush stdio buffers.
+			fflush(stdout);
 			std::_Exit(EXIT_FAILURE);
 		}
 	}
@@ -200,6 +204,10 @@ int main() {
 		&& mysql_query(probe, "SELECT 1") == 0, "ProxySQL is still serving clients");
 	if (MYSQL_RES* res = mysql_store_result(probe)) mysql_free_result(res);
 	mysql_close(probe);
+
+	MYSQL* teardown = connect(cl, false, false);
+	query(teardown, "DROP DATABASE IF EXISTS reg6229");
+	mysql_close(teardown);
 
 	restore_query_rules();
 	mysql_close(admin);

@@ -1727,7 +1727,14 @@ unsigned char * MySQL_Data_Stream::resultset2buffer(bool del) {
 	PtrSize_t *ps;
 	for (i=0;i<resultset->len;i++) {
 		ps=resultset->index(i);
-		assert(l + ps->size <= resultset_length); // callers size the buffer, see #6229
+		// Callers size the buffer, see #6229. Compare against the remaining space,
+		// so the check cannot be defeated by unsigned wraparound.
+		assert(ps->size <= resultset_length - l);
+		if (ps->size > resultset_length - l) {
+			proxy_error("Resultset packets exceed the buffer size of %u bytes: not copying\n", resultset_length);
+			l_free(resultset_length, mybuff);
+			return NULL;
+		}
 		memcpy(mybuff+l,ps->ptr,ps->size);
 		if (del) l_free(ps->size,ps->ptr);
 		l+=ps->size;

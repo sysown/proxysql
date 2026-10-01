@@ -9329,7 +9329,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 			client_myds->resultset_length = MyRS->resultset_size;
 			unsigned char *result = client_myds->resultset2buffer(false);
 			while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1, NULL);
-			GloMyQC->set(client_myds->myconn->userinfo->hash,
+			if (result) GloMyQC->set(client_myds->myconn->userinfo->hash,
 				(const unsigned char *)CurrentQuery.stmt_cache_key, sizeof(CurrentQuery.stmt_cache_key),
 				result, client_myds->resultset_length, thread->curtime/1000, thread->curtime/1000,
 				thread->curtime/1000 + qpo->cache_ttl,
@@ -9414,7 +9414,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 						unsigned char *aa=client_myds->resultset2buffer(false);
 						while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
 						bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-						GloMyQC->set(
+						if (aa) GloMyQC->set(
 							client_myds->myconn->userinfo->hash ,
 							CurrentQuery.QueryPointer,
 							CurrentQuery.QueryLength,
