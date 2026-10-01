@@ -1,5 +1,6 @@
 #ifndef PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H
 #define PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H
+#include "ProxySQL_ServerHealth.h"
 #include "proxysql.h"
 #include "MySQL_Backend_Auth.h"
 #ifdef PROXYSQL40
@@ -946,6 +947,9 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		bool update_version = false,
 		bool acquire_lock = true
 	);
+	bool commit(const peer_runtime_mysql_servers_t&, const peer_mysql_servers_v2_t&,
+		bool only_commit_runtime_mysql_servers, bool update_version, bool acquire_lock,
+		const MySQL_ServerHealthPreservationKeys* preserve_health);
 	/**
 	 * @brief Extracted from 'commit'. Performs the following actions:
 	 *  1. Re-generates the 'myhgm.mysql_servers' table.
@@ -1303,7 +1307,8 @@ private:
 	bool commit_locked(
 		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
-		bool only_commit_runtime_mysql_servers, bool update_version);
+		bool only_commit_runtime_mysql_servers, bool update_version,
+		const MySQL_ServerHealthPreservationKeys* preserve_health = nullptr);
 	void finish_commit(unsigned long long started_at, bool acquire_lock = true);
 	GTID_Server_Data* get_or_create_gtid_server_data(MySrvC* server, const std::string& endpoint);
 	void start_gtid_reader_if_needed(MySrvC* server, GTID_Server_Data* gtid_data);

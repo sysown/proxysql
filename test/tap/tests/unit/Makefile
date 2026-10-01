@@ -686,6 +686,7 @@ UNIT_TESTS += \
 	managed_configuration_lifecycle_unit-t \
 	managed_configuration_database_unit-t \
 	managed_discovery_unit-t \
+	managed_runtime_mysql_unit-t \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \
@@ -1465,3 +1466,12 @@ managed_discovery_unit-t: managed_discovery_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# Exercise the real TLS reload operation, replacing only its generic unit stub.
+$(ODIR)/managed_runtime_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
+	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -I$(PROXYSQL_PATH)/test -Wall -DProxySQL_create_or_load_TLS=unused_managed_tls_stub
+
+managed_runtime_mysql_unit-t: managed_runtime_mysql_unit-t.cpp $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(PROXYSQL_PATH)/src/obj/proxy_tls.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(PROXYSQL_PATH)/src/obj/proxy_tls.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@

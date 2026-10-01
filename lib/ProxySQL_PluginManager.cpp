@@ -675,6 +675,9 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.lock_configuration = &proxysql_lock_configuration;
 	services_.unlock_configuration = &proxysql_unlock_configuration;
 	services_.configdb_locked = &proxysql_configdb_locked;
+	services_.prepare_managed_runtime_locked = &proxysql_prepare_managed_runtime_locked;
+	services_.activate_managed_runtime_locked = &proxysql_activate_managed_runtime_locked;
+	services_.destroy_managed_prepared_runtime = &proxysql_destroy_managed_prepared_runtime;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the

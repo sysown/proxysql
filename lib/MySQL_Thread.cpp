@@ -19,6 +19,7 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Thread.h"
+#include "proxysql_find_charset.h"
 #include "MySQL_Thread_test.h"
 #include <dirent.h>
 #include <libgen.h>
@@ -2411,6 +2412,71 @@ char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the pu
  * @param value The new value for the variable, passed as a const char pointer.
  * @return True if the variable was successfully updated, false otherwise.
  */
+bool MySQL_Threads_Handler::validate_variable(const char* name, const char* value) const {
+ if (name == nullptr || value == nullptr) return false;
+ std::string key(name);
+ std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
+ auto boolean = [&]() { return !strcasecmp(value, "true") || !strcasecmp(value, "false") || !strcmp(value, "0") || !strcmp(value, "1"); };
+ auto number = [&](long long low, long long high) {
+  char* end = nullptr; errno = 0; long long v = strtoll(value, &end, 10);
+  return value[0] && end && !*end && errno != ERANGE && v >= low && v <= high;
+ };
+ const auto integer = VariablesPointers_int.find(key);
+ if (integer != VariablesPointers_int.end() && !std::get<3>(integer->second)) {
+  if (key == "aws_blue_green_deployment_auto_discovery" && boolean()) return true;
+  return number(std::get<1>(integer->second), std::get<2>(integer->second));
+ }
+ if (VariablesPointers_bool.count(key)) return boolean();
+ if (key == "binlog_reader_connect_retry_msec") return number(200, 120000);
+ if (key == "wait_timeout") return number(0, 20LL*24*3600*1000);
+ if (key == "eventslog_format") return number(1, 2);
+ if (key == "eventslog_flush_timeout" || key == "eventslog_flush_size" ||
+     key == "auditlog_flush_timeout" || key == "auditlog_flush_size") return number(0, INT_MAX);
+ if (key == "eventslog_rate_limit") return number(1, INT_MAX);
+ if (key == "data_packets_history_size") return number(0, INT_MAX-1);
+ if (key == "server_capabilities") return number(11, UINT32_MAX);
+ if (key == "stacksize") return number(256*1024, 4*1024*1024);
+ if (key == "threads") return number(1, 255);
+ if (key == "interfaces") return value[0] && (!variables.interfaces[0] || !strcmp(value, variables.interfaces));
+ if (key == "default_session_track_gtids") return !strcasecmp(value,"OFF") || !strcasecmp(value,"OWN_GTID");
+ if (key == "default_authentication_plugin") return !strcmp(value,"mysql_native_password") || !strcmp(value,"caching_sha2_password");
+ if (key == "resolution_family") return mysql_resolution_family_is_valid(value);
+ if (key == "monitor_replication_lag_use_percona_heartbeat") {
+  if (!value[0]) return true;
+  re2::RE2::Options options(RE2::Quiet); options.set_case_sensitive(false);
+  re2::RE2 pattern("`?([a-z\\d_]+)`?\\.`?([a-z\\d_]+)`?", options);
+  return re2::RE2::FullMatch(value, pattern);
+ }
+ if (key == "monitor_username" || key == "default_schema" || key == "server_version" || key == "keep_multiplexing_variables") return value[0];
+ if (key == "default_charset") return proxysql_find_charset_name(value) != nullptr;
+ if (key == "default_collation_connection") return proxysql_find_charset_collate(value) != nullptr;
+#ifdef PROXYSQL31
+ if (key == "server_version_by_interface") return parse_mysql_server_version_by_interface(value).accepted();
+ if (key == "caching_sha2_password_private_key_path" || key == "caching_sha2_password_public_key_path") return true;
+#endif
+ if (key == "auditlog_filename" || key == "eventslog_filename") {
+  const size_t length = strlen(value);
+  if (length && value[length-1] == '/') return false;
+  if (value[0] != '/') return true;
+  std::string path(value); const auto split = path.rfind('/');
+  DIR* directory = opendir(split == 0 ? "/" : path.substr(0, split).c_str());
+  if (!directory) return false;
+  closedir(directory); return true;
+ }
+ if (key == "monitor_password" || key == "init_connect" || key == "firewall_whitelist_errormsg" ||
+     key == "ldap_user_variable" || key == "add_ldap_user_comment" || key == "passthrough_default_schema" ||
+     key == "passthrough_auth_username_pattern" || key == "proxy_protocol_networks" || key == "ssl_p2s_ca" ||
+     key == "ssl_p2s_capath" || key == "ssl_p2s_cert" || key == "ssl_p2s_key" || key == "ssl_p2s_cipher" ||
+     key == "ssl_p2s_crl" || key == "ssl_p2s_crlpath") return true;
+ if (key.compare(0,8,"default_") == 0) {
+  for (int i=0; i<SQL_NAME_LAST_LOW_WM; ++i) {
+   if (mysql_tracked_variables[i].is_global_variable &&
+       key == std::string("default_") + mysql_tracked_variables[i].internal_variable_name) return true;
+  }
+ }
+ return false;
+}
+
 bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	// this is the public function, accessible from admin
 	if (!value) return false;
 	size_t vallen=strlen(value);

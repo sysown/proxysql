@@ -1,6 +1,7 @@
 #ifndef PROXYSQL_ADMIN_H
 #define PROXYSQL_ADMIN_H
 
+#include "ProxySQL_ServerHealth.h"
 #include "prometheus/exposer.h"
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
@@ -687,6 +688,9 @@ class ProxySQL_Admin {
 		const ProxySQL_PluginMysqlUsersChecksumSnapshot* exact_checksum = nullptr);
 	ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config(const ProxySQL_PluginMysqlConfigPlan& plan);
 	ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config_v2(const ProxySQL_PluginMysqlConfigPlanV2& plan);
+	/** Apply a validated operational variable under the caller's configuration lock. */
+	bool set_managed_variable_locked(const std::string& name, const std::string& value);
+	bool commit_managed_admin_variables_locked(std::string& error);
 	SQLite3_result* get_mysql_users_snapshot();
 	SQLite3_result* get_mysql_servers_snapshot();
 	SQLite3_result* get_mysql_group_replication_hostgroups_snapshot();
@@ -769,6 +773,10 @@ class ProxySQL_Admin {
 	bool load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
 		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool hgm_acquire_lock = true,
 		bool emit_runtime_install = true);
+	bool load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
+		const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
+		const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock,
+		bool emit_runtime_install, const MySQL_ServerHealthPreservationKeys* preserve_health);
 	void save_mysql_servers_from_runtime();
 	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
