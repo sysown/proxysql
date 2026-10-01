@@ -905,6 +905,8 @@ class ProxySQL_Admin {
 	unsigned long long scheduler_run_once() { return scheduler->run_once(); }
 
 	void flush_configdb(); // 923
+	// Admin command dispatch already holds sql_query_global_mutex.
+	void flush_configdb_locked();
 
 	// Cluster
 	void load_proxysql_servers_to_runtime(bool _lock=true, const std::string& checksum = "", const time_t epoch = 0);

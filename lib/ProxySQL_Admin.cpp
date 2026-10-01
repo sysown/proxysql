@@ -511,6 +511,21 @@ SQLite3DB* proxysql_plugin_get_configdb() {
 	return GloAdmin ? GloAdmin->configdb : nullptr;
 }
 
+void proxysql_lock_configuration() {
+	assert(GloAdmin != nullptr);
+	pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+}
+
+void proxysql_unlock_configuration() noexcept {
+	assert(GloAdmin != nullptr);
+	pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+}
+
+SQLite3DB* proxysql_configdb_locked() {
+	assert(GloAdmin != nullptr);
+	return GloAdmin->configdb;
+}
+
 SQLite3DB* proxysql_plugin_get_statsdb() {
 	return GloAdmin ? GloAdmin->statsdb : nullptr;
 }
@@ -1432,6 +1447,15 @@ template query_digest_topk_result_t ProxySQL_Admin::QueryDigestTopK<(SERVER_TYPE
 );
 
 void ProxySQL_Admin::flush_configdb() { // see #923
+	pthread_mutex_lock(&sql_query_global_mutex);
+	struct Unlock {
+		pthread_mutex_t* mutex;
+		~Unlock() { pthread_mutex_unlock(mutex); }
+	} unlock { &sql_query_global_mutex };
+	flush_configdb_locked();
+}
+
+void ProxySQL_Admin::flush_configdb_locked() {
 	wrlock();
 	admindb->execute((char *)"DETACH DATABASE disk");
 	delete configdb;

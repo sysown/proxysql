@@ -490,6 +490,8 @@ struct ProxySQL_PluginServices {
 	// ABI-7 encrypted secret storage.  Phase B exposes rejecting stubs because
 	// configdb does not exist yet; early_action, init, start, and runtime use
 	// the core-owned live configdb store.
+	// These callbacks acquire the Admin SQL mutex. Callers already holding it
+	// use ProxySQL_PluginSecrets::*_locked on configdb_locked() instead.
 	ProxySQL_PluginSecretResult (*put_secret)(const char* owner, const char* name,
 		const uint8_t* bytes, size_t length);
 	ProxySQL_PluginSecretResult (*get_secret)(const char* owner, const char* name,

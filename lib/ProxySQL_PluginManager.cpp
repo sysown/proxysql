@@ -7,6 +7,7 @@
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_ServerModuleCluster.h"
 #include "ProxySQL_PluginSecrets.h"
+#include "ProxySQL_ConfigurationAccess.h"
 #include "ProxySQL_PluginListenerGate.h"
 #include "Aws_Iam_Provider.h"
 #include "Aws_Locality_Manager.h"
@@ -34,6 +35,7 @@
 
 extern ProxySQL_GlobalVariables GloVars;
 extern MySQL_Threads_Handler *GloMTH;
+extern ProxySQL_Admin* GloAdmin;
 
 
 SQLite3DB* proxysql_plugin_get_admindb();
@@ -531,23 +533,36 @@ ProxySQL_PluginSecretResult secret_erase_not_available(const char*, const char*)
 	return ProxySQL_PluginSecretResult::not_available;
 }
 
+struct ConfigurationLock {
+	ConfigurationLock() { proxysql_lock_configuration(); }
+	~ConfigurationLock() { proxysql_unlock_configuration(); }
+	ConfigurationLock(const ConfigurationLock&) = delete;
+	ConfigurationLock& operator=(const ConfigurationLock&) = delete;
+};
+
 ProxySQL_PluginSecretResult put_secret_service(const char* owner, const char* name,
 	const uint8_t* bytes, size_t length) {
-	SQLite3DB* db = proxysql_plugin_get_configdb();
+	if (GloAdmin == nullptr) return ProxySQL_PluginSecretResult::not_available;
+	ConfigurationLock lock;
+	SQLite3DB* db = proxysql_configdb_locked();
 	if (db == nullptr || GloVars.datadir == nullptr || GloVars.datadir[0] == '\0') return ProxySQL_PluginSecretResult::not_available;
 	ProxySQL_PluginSecrets store(db, GloVars.datadir);
 	return store.put(owner, name, bytes, length);
 }
 
 ProxySQL_PluginSecretResult get_secret_service(const char* owner, const char* name, std::vector<uint8_t>& plaintext) {
-	SQLite3DB* db = proxysql_plugin_get_configdb();
+	if (GloAdmin == nullptr) return secret_get_not_available(owner, name, plaintext);
+	ConfigurationLock lock;
+	SQLite3DB* db = proxysql_configdb_locked();
 	if (db == nullptr || GloVars.datadir == nullptr || GloVars.datadir[0] == '\0') return secret_get_not_available(owner, name, plaintext);
 	ProxySQL_PluginSecrets store(db, GloVars.datadir);
 	return store.get(owner, name, plaintext);
 }
 
 ProxySQL_PluginSecretResult erase_secret_service(const char* owner, const char* name) {
-	SQLite3DB* db = proxysql_plugin_get_configdb();
+	if (GloAdmin == nullptr) return ProxySQL_PluginSecretResult::not_available;
+	ConfigurationLock lock;
+	SQLite3DB* db = proxysql_configdb_locked();
 	if (db == nullptr || GloVars.datadir == nullptr || GloVars.datadir[0] == '\0') return ProxySQL_PluginSecretResult::not_available;
 	ProxySQL_PluginSecrets store(db, GloVars.datadir);
 	return store.erase(owner, name);
@@ -656,6 +671,9 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.install_server_discovery_controller = &install_server_discovery_controller_service;
 	services_.uninstall_server_discovery_controller = &uninstall_server_discovery_controller_service;
 	services_.post_server_desired_set = &post_server_desired_set_service;
+	services_.lock_configuration = &proxysql_lock_configuration;
+	services_.unlock_configuration = &proxysql_unlock_configuration;
+	services_.configdb_locked = &proxysql_configdb_locked;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
