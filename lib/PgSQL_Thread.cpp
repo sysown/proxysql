@@ -423,6 +423,9 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"server_encoding",
 	(char*)"keep_multiplexing_variables",
 	(char*)"kill_backend_connection_when_disconnect",
+#ifdef PROXYSQL31
+	(char*)"use_native_backend_protocol",
+#endif
 	(char*)"sessions_sort",
 #ifdef IDLE_THREADS
 	(char*)"session_idle_show_processlist",
@@ -1197,6 +1200,11 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.stats_time_query_processor = false;
 	variables.query_cache_stores_empty_result = true;
 	variables.kill_backend_connection_when_disconnect = true;
+#ifdef PROXYSQL31
+	variables.use_native_backend_protocol = true;
+#else
+	variables.use_native_backend_protocol = false;
+#endif
 	variables.sessions_sort = true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms = 1;
@@ -2194,6 +2202,9 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["enforce_autocommit_on_reads"] = make_tuple(&variables.enforce_autocommit_on_reads, false);
 		VariablesPointers_bool["firewall_whitelist_enabled"] = make_tuple(&variables.firewall_whitelist_enabled, false);
 		VariablesPointers_bool["kill_backend_connection_when_disconnect"] = make_tuple(&variables.kill_backend_connection_when_disconnect, false);
+#ifdef PROXYSQL31
+		VariablesPointers_bool["use_native_backend_protocol"] = make_tuple(&variables.use_native_backend_protocol, false);
+#endif
 		VariablesPointers_bool["log_unhealthy_connections"] = make_tuple(&variables.log_unhealthy_connections, false);
 #ifdef PROXYSQLFFTO
 		VariablesPointers_bool["ffto_enabled"] = make_tuple(&variables.ffto_enabled, false);
@@ -3765,6 +3776,18 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 			// this can happen, for example, with a low wait_timeout and running transaction
 			if (myds->sess->status == WAITING_CLIENT_DATA) {
 				if (myds->myconn->async_state_machine == ASYNC_IDLE) {
+					// The rule below is MySQL's: that server never speaks first, so readable
+					// bytes on an idle backend mean it died. A connection subscribed by
+					// LISTEN is the one case where PostgreSQL does speak first, and the
+					// client holding it is the one that asked for those notifications.
+					// Only that case is treated differently; every other connection keeps
+					// the old behaviour exactly.
+					if (myds->myconn->get_status(STATUS_PGSQL_CONNECTION_LISTEN) &&
+						myds->myconn->native_mode && myds->sess->client_myds) {
+						if (myds->myconn->native_relay_async_messages(myds->sess->client_myds->PSarrayOUT) >= 0) {
+							return true;
+						}
+					}
 					proxy_warning("Detected broken idle connection on %s:%d\n", myds->myconn->parent->address, myds->myconn->parent->port);
 					myds->destroy_MySQL_Connection_From_Pool(false);
 					myds->sess->set_unhealthy();
@@ -4290,6 +4313,12 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___unshun_algorithm = GloPTH->get_variable_int((char*)"unshun_algorithm");
 	pgsql_thread___free_connections_pct = GloPTH->get_variable_int((char*)"free_connections_pct");
 	pgsql_thread___kill_backend_connection_when_disconnect = (bool)GloPTH->get_variable_int((char*)"kill_backend_connection_when_disconnect");
+#ifdef PROXYSQL31
+	pgsql_thread___use_native_backend_protocol = (bool)GloPTH->get_variable_int((char*)"use_native_backend_protocol");
+#else
+	// Stable builds do not expose this setting and always use libpq.
+	pgsql_thread___use_native_backend_protocol = false;
+#endif
 	pgsql_thread___max_allowed_packet = GloPTH->get_variable_int((char*)"max_allowed_packet");
 	pgsql_thread___set_query_lock_on_hostgroup = GloPTH->get_variable_int((char*)"set_query_lock_on_hostgroup");
 	pgsql_thread___verbose_query_error = (bool)GloPTH->get_variable_int((char*)"verbose_query_error");
