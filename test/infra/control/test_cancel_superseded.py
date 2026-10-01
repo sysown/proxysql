@@ -1,4 +1,4 @@
-"""PR cancellation runs from trusted control code for every new head."""
+"""Cancellation runs from trusted control code for every new PR head and push."""
 from pathlib import Path
 import json
 import os
@@ -37,13 +37,34 @@ class CancelSupersededTests(unittest.TestCase):
     def test_every_pr_update_calls_trusted_cancellation_with_write_permission(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/CI-cancel-superseded.yml').read_text())
         events = workflow.get('on', workflow.get(True, {}))
-        self.assertEqual(events, {'pull_request_target': {'types': ['opened', 'reopened', 'synchronize']}})
+        self.assertEqual(events['pull_request_target'],
+                         {'types': ['opened', 'reopened', 'synchronize']})
         self.assertEqual(workflow['permissions'], {'actions': 'write', 'contents': 'read', 'pull-requests': 'read'})
         self.assertEqual(workflow['jobs'], {'cancel': {
             'uses': 'sysown/proxysql/.github/workflows/ci-cancel-superseded.yml@GH-Actions'}})
-        self.assertEqual(workflow['concurrency'], {
-            'group': 'cancel-superseded-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}',
-            'cancel-in-progress': True})
+
+    def test_push_sweep_mirrors_ci_trigger_filters(self):
+        """The push sweeper must fire exactly when CI-trigger starts a cascade.
+
+        Without the same branch pattern and paths-ignore, a docs-only or
+        .github-only push would run the sweeper, which would then cancel the
+        previous commit's still-relevant in-flight CI.
+        """
+        sweeper = yaml.safe_load((ROOT / '.github/workflows/CI-cancel-superseded.yml').read_text())
+        trigger = yaml.safe_load((ROOT / '.github/workflows/CI-trigger.yml').read_text())
+        sweeper_events = sweeper.get('on', sweeper.get(True, {}))
+        trigger_events = trigger.get('on', trigger.get(True, {}))
+        self.assertIn('push', sweeper_events)
+        self.assertEqual(sweeper_events['push'], trigger_events['push'])
+
+    def test_push_and_pr_sweeps_use_separate_concurrency_groups(self):
+        """A push sweep must never cancel an unrelated PR's in-flight sweep."""
+        workflow = yaml.safe_load((ROOT / '.github/workflows/CI-cancel-superseded.yml').read_text())
+        group = workflow['concurrency']['group']
+        self.assertTrue(workflow['concurrency']['cancel-in-progress'])
+        self.assertIn('github.event_name', group)
+        self.assertIn('github.event.after', group)
+        self.assertIn('github.event.pull_request.number', group)
 
 
 if __name__ == '__main__':
