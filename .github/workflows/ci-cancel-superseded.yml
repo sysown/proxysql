@@ -10,17 +10,13 @@ permissions:
 
 jobs:
   cancel:
-    # `pull_request_target` executes trusted base-branch code for PRs;
-    # `push` prunes older CI cascades on the branch that was just pushed.
-    # Neither path checks out the code under test.
-    #
-    # The else-branch is deliberate: an unsupported event (e.g. a future
-    # workflow_dispatch on the caller) must fail loudly rather than skip
-    # silently and report success having cancelled nothing.
-    if: >-
-      github.event_name == 'pull_request_target' || github.event_name == 'push'
-      || (github.event_name != 'pull_request_target' && github.event_name != 'push'
-          && (fail('ci-cancel-superseded: unsupported event')))
+    # No event guard on purpose. `pull_request_target` executes trusted
+    # base-branch code for PRs and `push` prunes older CI cascades on the
+    # branch that was just pushed; neither path checks out the code under
+    # test. Any other event must still run so that ci_cancel_superseded.py
+    # rejects it with a ValueError -- a guard that skipped those events
+    # would report success having cancelled nothing, which is exactly the
+    # failure mode this is meant to prevent.
     # Cancellation must not wait behind the old CI jobs in the self-hosted pool.
     runs-on: ubuntu-24.04
     timeout-minutes: 10

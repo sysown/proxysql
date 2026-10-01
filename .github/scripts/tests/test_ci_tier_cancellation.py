@@ -198,8 +198,8 @@ class PushSweepTests(unittest.TestCase):
         """Only CI-trigger cascades are superseded CI.
 
         CI-package-build (and any release/deploy workflow added later) also
-        runs on push. Cancelling it here would abort a build for the current
-        commit just because an older commit's cascade is being pruned.
+        runs on push. Pruning an older commit's cascade must not cancel it
+        just because it happens to share the branch and event.
         """
         package = push_run(1, path='.github/workflows/CI-package-build.yml')
         cascade = push_run(2)
