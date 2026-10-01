@@ -53,6 +53,45 @@ struct TlsOptions {
 	std::string crlpath;
 };
 
+/** @brief Canonical MySQL Router spelling of a metadata TLS mode (e.g. "VERIFY_CA"). */
+inline const char* metadata_tls_mode_name(MetadataTlsMode mode) {
+	switch (mode) {
+		case MetadataTlsMode::disabled: return "DISABLED";
+		case MetadataTlsMode::preferred: return "PREFERRED";
+		case MetadataTlsMode::required: return "REQUIRED";
+		case MetadataTlsMode::verify_ca: return "VERIFY_CA";
+		case MetadataTlsMode::verify_identity: return "VERIFY_IDENTITY";
+	}
+	return "PREFERRED";
+}
+
+/** @brief Parses a canonical metadata TLS mode name; std::nullopt for any other spelling. */
+inline std::optional<MetadataTlsMode> metadata_tls_mode_from_name(std::string_view name) {
+	for (MetadataTlsMode mode : {MetadataTlsMode::disabled, MetadataTlsMode::preferred,
+		MetadataTlsMode::required, MetadataTlsMode::verify_ca, MetadataTlsMode::verify_identity}) {
+		if (name == metadata_tls_mode_name(mode)) return mode;
+	}
+	return std::nullopt;
+}
+
+/**
+ * @brief Returns why a metadata TLS configuration is unusable, or an empty string.
+ * @details Certificate verification needs a trust anchor the operator chose: like
+ *   MySQL Router and libmysqlclient, VERIFY_CA and VERIFY_IDENTITY require a CA file
+ *   or directory instead of silently falling back to the system trust store.
+ */
+inline std::string metadata_tls_problem(const TlsOptions& tls) {
+	if ((tls.mode == MetadataTlsMode::verify_ca || tls.mode == MetadataTlsMode::verify_identity) &&
+		tls.ca.empty() && tls.capath.empty()) {
+		return std::string("TLS mode ") + metadata_tls_mode_name(tls.mode) +
+			" requires a CA certificate (ssl-ca or ssl-capath)";
+	}
+	if (tls.cert.empty() != tls.key.empty()) {
+		return "a TLS client certificate and its key must be configured together";
+	}
+	return {};
+}
+
 struct BootstrapOptions {
 	bool requested {false};
 	MetadataEndpoint seed;
@@ -148,8 +187,9 @@ public:
 	virtual uint64_t publish_users(const DesiredTopology& topology,
 		const ListenerProfile& listeners, const AccountSnapshot& snapshot,
 		std::string_view metadata_user, uint64_t generation) = 0;
+	/** Persists the local Router identity, listener profile and metadata TLS settings. */
 	virtual void save_complete(const BootstrapIdentity& identity,
-		const ListenerProfile& listeners) = 0;
+		const ListenerProfile& listeners, const TlsOptions& tls) = 0;
 };
 
 class MysqlRouterBootstrap {

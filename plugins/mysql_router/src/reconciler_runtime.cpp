@@ -238,7 +238,7 @@ public:
 		config_ = config_store_.snapshot();
 		listeners_ = {config_.bind_address, config_.rw_port, config_.ro_port,
 			config_.rw_split_port, false, false};
-		tls_.mode = config_.metadata_ssl_mode;
+		tls_ = config_.metadata_tls;
 		current_topology_ = load_cached_topology(*db_, topology_uuid_);
 		std::vector<uint8_t> password;
 		if (services_.get_secret == nullptr || services_.get_secret("mysql_router",

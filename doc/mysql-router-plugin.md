@@ -50,6 +50,30 @@ worker, and opens the Router-owned listener gates only after a complete live
 generation is available. `MYSQL ROUTER RECONCILE` requests an immediate
 reconciliation through the Admin interface.
 
+## Metadata connection TLS
+
+Bootstrap accepts the MySQL Router TLS options for the metadata connection:
+`--ssl-mode`, `--ssl-ca`, `--ssl-capath`, `--ssl-cert`, `--ssl-key`,
+`--ssl-cipher`, `--ssl-crl` and `--ssl-crlpath`. Bootstrap stores them in
+`mysql_router_config` (`metadata_ssl_mode`, `metadata_ssl_ca`, ...,
+`metadata_ssl_crlpath`). The reconciler then uses the same TLS settings for
+every later metadata, health and user-sync connection.
+
+| Mode | Behavior |
+|---|---|
+| `DISABLED` | Plaintext. |
+| `PREFERRED` (default) | Requests TLS, and continues in plaintext only if the server does not offer it. |
+| `REQUIRED` | Requires TLS. The connection fails if TLS is not negotiated. The certificate is not verified. |
+| `VERIFY_CA` | Requires TLS and verifies the server certificate against `--ssl-ca`/`--ssl-capath`. Connector/C also checks the hostname, so this is as strict as `VERIFY_IDENTITY`. |
+| `VERIFY_IDENTITY` | Requires TLS and verifies the certificate chain and the server hostname. |
+
+`VERIFY_CA` and `VERIFY_IDENTITY` require `--ssl-ca` or `--ssl-capath`. They
+never fall back to the system trust store. A client certificate and its key
+must be given together. Configurations that break these rules are rejected
+both by bootstrap and when the reconciler loads its configuration. Deployments
+bootstrapped before these keys existed have no `metadata_ssl_*` rows and use
+`PREFERRED`.
+
 ## Endpoints
 
 | Port | Behavior |

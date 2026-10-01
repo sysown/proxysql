@@ -102,6 +102,7 @@ class MemoryBootstrapStore final : public IBootstrapStore {
 public:
 	std::optional<BootstrapJournal> journal;
 	std::optional<BootstrapIdentity> identity;
+	std::optional<TlsOptions> tls;
 	std::vector<uint8_t> secret;
 	unsigned complete_writes {0};
 	unsigned publications {0};
@@ -136,8 +137,10 @@ public:
 		++user_publications;
 		return publications + user_publications;
 	}
-	void save_complete(const BootstrapIdentity& value, const ListenerProfile&) override {
+	void save_complete(const BootstrapIdentity& value, const ListenerProfile&,
+		const TlsOptions& tls_options) override {
 		identity = value;
+		tls = tls_options;
 		++complete_writes;
 	}
 };
@@ -155,6 +158,9 @@ BootstrapOptions options() {
 	result.requested = true;
 	result.router_name = "proxysql-east";
 	result.account_host = "%";
+	result.tls.mode = MetadataTlsMode::verify_identity;
+	result.tls.ca = "/etc/proxysql/ic-ca.pem";
+	result.tls.crl = "/etc/proxysql/ic.crl";
 	return result;
 }
 
@@ -166,7 +172,7 @@ ProxySQL_PluginMysqlConfigResult available_v1_publisher(
 } // namespace
 
 int main() {
-	plan(27);
+	plan(28);
 
 	BootstrapSession session;
 	MemoryBootstrapStore store;
@@ -203,6 +209,9 @@ int main() {
 	   "topology generation 1 and user generation 2 publish before local identity commit");
 	ok(store.identity && store.identity->user_generation > store.identity->topology_generation,
 	   "application users publish as a separate complete generation");
+	ok(store.tls && store.tls->mode == MetadataTlsMode::verify_identity &&
+	   store.tls->ca == "/etc/proxysql/ic-ca.pem" && store.tls->crl == "/etc/proxysql/ic.crl",
+	   "bootstrap persists its metadata TLS options with the local identity (issue #6352)");
 
 	MysqlRouterBootstrap retry(session, store, topology(), "proxy.example");
 	auto second = retry.run(options());
