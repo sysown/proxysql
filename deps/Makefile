@@ -142,7 +142,7 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 
-libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
+libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a libhttpserver/raw_request_target.patch
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-*.tar.gz
 	cd libhttpserver/libhttpserver && patch -p1 < ../noexcept.patch
@@ -151,6 +151,7 @@ libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmi
 	cd libhttpserver/libhttpserver && patch -p1 < ../empty_uri_log_crash.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../expose_raw_url.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../replace_static_global_strings.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../raw_request_target.patch
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
