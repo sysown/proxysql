@@ -760,6 +760,12 @@ class ProxySQL_Admin {
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
 	void flush_pgsql_variables__from_memory_to_disk();
+	/**
+	 * @brief Reason a server module rejected its tables in the last LOAD
+	 *   ... SERVERS TO RUNTIME ([0] MySQL, [1] PostgreSQL); empty if none.
+	 *   The core tables were installed regardless (caller holds the servers lock).
+	 */
+	std::string servers_load_veto[2];
 	bool load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
 		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool hgm_acquire_lock = true,
 		bool emit_runtime_install = true);

@@ -76,7 +76,7 @@ size_t occurrences(const std::string& value, const std::string& needle) {
 } // namespace
 
 int main() {
-	plan(38);
+	plan(39);
 	test_init_minimal();
 	char path[] = "/tmp/proxysql_server_runtime_install.XXXXXX";
 	const int fd = mkstemp(path);
@@ -477,24 +477,33 @@ int main() {
 		after_hgm_failure.abort();
 	}
 
-	// A rejected operator LOAD must unwind the Admin-selected core resultset
-	// and the install reservation, so the next ordinary LOAD can proceed.
+	// A server-module veto blocks only the plugin tables: the operator LOAD
+	// still installs the core tables (the module keeps its previous
+	// configuration), reports the veto, and the next LOAD installs everything.
 	admin_db.execute("INSERT INTO mysql_servers VALUES (17,'claim-conflict.example',3306,0,'ONLINE',1,0,100,0,1,0,'claim')");
 	const uint64_t before_rejected_load = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql);
 	const size_t before_rejected_commit = occurrences(read_log(), "server_module_commit");
 	const size_t before_rejected_controller = occurrences(read_log(), "server_controller_runtime");
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM", "1", 1);
 	admin->mysql_servers_wrlock();
-	admin->load_mysql_servers_to_runtime();
+	const bool vetoed_load = admin->load_mysql_servers_to_runtime();
+	const std::string veto = admin->servers_load_veto[0];
 	admin->mysql_servers_wrunlock();
 	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM");
+	ok(vetoed_load && !veto.empty() &&
+		proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) == before_rejected_load + 1 &&
+		occurrences(read_log(), "server_module_commit") == before_rejected_commit &&
+		occurrences(read_log(), "server_controller_runtime") == before_rejected_controller + 1,
+		"a server-module veto installs the core tables without the module and reports the veto");
 	admin->mysql_servers_wrlock();
 	admin->load_mysql_servers_to_runtime();
+	const bool veto_cleared = admin->servers_load_veto[0].empty();
 	admin->mysql_servers_wrunlock();
-	ok(proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) == before_rejected_load + 1 &&
+	ok(veto_cleared &&
+		proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) == before_rejected_load + 2 &&
 		occurrences(read_log(), "server_module_commit") == before_rejected_commit + 1 &&
-		occurrences(read_log(), "server_controller_runtime") == before_rejected_controller + 1,
-		"prepare-rejected Admin LOAD cleans its selected rows and leaves the next operator LOAD installable");
+		occurrences(read_log(), "server_controller_runtime") == before_rejected_controller + 2,
+		"after a veto the next LOAD installs the core and the module tables");
 	GloAdmin = nullptr;
 
 	(void)proxysql_stop_configured_plugins(manager, error);

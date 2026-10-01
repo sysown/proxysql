@@ -2453,9 +2453,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->pgsql_servers_wrlock();
 				SPA->load_pgsql_servers_to_runtime();
+				// A server-module veto blocked only the plugin tables: report it.
+				const std::string veto = SPA->servers_load_veto[1];
 				SPA->pgsql_servers_wrunlock();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers to RUNTIME\n");
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				const std::string veto_msg = "pgsql_servers loaded; the server module rejected its tables and keeps its previous configuration: " + veto;
+				SPA->send_ok_msg_to_client(sess, veto.empty() ? NULL : veto_msg.c_str(), 0, query_no_space);
 				return false;
 			}
 		} else {
@@ -2463,9 +2466,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->mysql_servers_wrlock();
 				SPA->load_mysql_servers_to_runtime();
+				// A server-module veto blocked only the plugin tables: report it.
+				const std::string veto = SPA->servers_load_veto[0];
 				SPA->mysql_servers_wrunlock();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				const std::string veto_msg = "mysql_servers loaded; the server module rejected its tables and keeps its previous configuration: " + veto;
+				SPA->send_ok_msg_to_client(sess, veto.empty() ? NULL : veto_msg.c_str(), 0, query_no_space);
 				return false;
 			}
 		}

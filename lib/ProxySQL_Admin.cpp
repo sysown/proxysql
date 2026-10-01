@@ -253,11 +253,23 @@ static bool save_registered_server_module_runtime_tables(SQLite3DB* db,
 #endif
 }
 
+/**
+ * @brief Prepares the runtime installation of a LOAD ... SERVERS TO RUNTIME.
+ *
+ * A server module may veto its own (plugin) tables. A veto never blocks the
+ * core tables: the module keeps its previous configuration, the core
+ * configuration is installed through a fresh transaction, and @p veto holds
+ * the module's reason for the caller to report. Only internal errors return
+ * false.
+ */
 static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	ProxySQL_ServerProtocol protocol, const SQLite3_result* core_rows,
 	const ProxySQL_ServerBuiltinTopologyInputs& topology_inputs,
 	ProxySQL_ServerRuntimeInstallTransaction& transaction,
-	ProxySQL_ServerRuntimeSnapshot& installed_snapshot) {
+	ProxySQL_ServerRuntimeSnapshot& installed_snapshot,
+	bool& commit_module, std::string& veto) {
+	commit_module = true;
+	veto.clear();
 #ifdef PROXYSQL40
 	ProxySQL_ServerModuleSnapshot snapshot {};
 	std::string error;
@@ -296,8 +308,23 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	}
 	std::vector<ProxySQL_ServerHostgroupClaim> claims;
 	if (!transaction.prepare(snapshot, claims, error)) {
-		proxy_error("Plugin server module rejected configuration: %s\n", error.c_str());
-		return false;
+		// Veto of the plugin tables only. The failed prepare aborted the
+		// transaction: install the core tables through a new one, without the
+		// module, which keeps its previous configuration (and the loaded copy
+		// stays the last accepted one).
+		proxy_warning("Server module rejected its tables, keeping its previous configuration: %s\n",
+			error.c_str());
+		veto = error;
+		std::string transaction_error;
+		transaction = ProxySQL_ServerRuntimeInstallTransaction(protocol, transaction_error);
+		if (!transaction) {
+			proxy_error("Unable to start server runtime installation: %s\n", transaction_error.c_str());
+			return false;
+		}
+		installed_snapshot = std::move(snapshot.runtime);
+		installed_snapshot.generation = transaction.generation();
+		commit_module = false;
+		return true;
 	}
 	proxysql_server_module_cluster_set_loaded_tables(protocol, std::move(loaded_tables));
 	installed_snapshot = std::move(snapshot.runtime);
@@ -9022,6 +9049,8 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::mysql;
 	ProxySQL_ServerRuntimeInstallTransaction runtime_install;
 	bool runtime_install_prepared = false;
+	bool commit_server_module = true;
+	servers_load_veto[0].clear();
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
@@ -9077,7 +9106,8 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 			topology_inputs.mysql_rds_blue_green = incoming_aws_rds_bgd_hostgroups;
 			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
 				ProxySQL_ServerProtocol::mysql, resultset_servers, topology_inputs,
-				runtime_install, installed_snapshot)) return false;
+				runtime_install, installed_snapshot, commit_server_module,
+				servers_load_veto[0])) return false;
 		}
 		runtime_install_prepared = emit_runtime_install;
 		MyHGM->servers_add(resultset_servers);
@@ -9254,7 +9284,7 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		false, true, hgm_acquire_lock
 	);
 	if (runtime_install_prepared && committed &&
-		!runtime_install.commit(std::move(installed_snapshot)))
+		!runtime_install.commit(std::move(installed_snapshot), commit_server_module))
 		proxy_error("Unable to commit MySQL server runtime installation transaction\n");
 	
 	// quering runtime table will update and return latest records, so this is not needed.
@@ -9300,6 +9330,8 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::pgsql;
 	ProxySQL_ServerRuntimeInstallTransaction runtime_install;
 	bool runtime_install_prepared = false;
+	bool commit_server_module = true;
+	servers_load_veto[1].clear();
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
@@ -9335,7 +9367,8 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 			topology_inputs.pgsql_replication = incoming_replication_hostgroups;
 			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
 				ProxySQL_ServerProtocol::pgsql, resultset_servers, topology_inputs,
-				runtime_install, installed_snapshot)) return;
+				runtime_install, installed_snapshot, commit_server_module,
+				servers_load_veto[1])) return;
 		}
 		runtime_install_prepared = emit_runtime_install;
 		PgHGM->servers_add(resultset_servers);
@@ -9417,7 +9450,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		false, true
 	);
 	if (runtime_install_prepared && runtime_hgm_committed &&
-		!runtime_install.commit(std::move(installed_snapshot)))
+		!runtime_install.commit(std::move(installed_snapshot), commit_server_module))
 		proxy_error("Unable to commit PostgreSQL server runtime installation transaction\n");
 
 	// quering runtime table will update and return latest records, so this is not needed.

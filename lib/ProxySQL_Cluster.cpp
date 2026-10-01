@@ -2839,6 +2839,12 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime MySQL Servers v2 from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: Loading to runtime MySQL Servers v2 from peer %s:%d\n", hostname, port);
 						GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
+						if (!GloAdmin->servers_load_veto[0].empty()) {
+							// The core tables were installed; only the plugin tables were rejected.
+							proxy_error("Cluster: the server module rejected the MySQL plugin tables pulled from peer %s:%d and keeps its previous configuration: %s\n",
+								hostname, port, GloAdmin->servers_load_veto[0].c_str());
+							fetch_failed = true;
+						}
 
 						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
 							bool saved = true;
@@ -4120,6 +4126,12 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 						fetch_runtime_pgsql_servers ? expected_runtime_pgsql_server : runtime_pgsql_servers_checksum_t {},
 						expected_pgsql_server_v2
 					);
+					if (!GloAdmin->servers_load_veto[1].empty()) {
+						// The core tables were installed; only the plugin tables were rejected.
+						proxy_error("Cluster: the server module rejected the PostgreSQL plugin tables pulled from peer %s:%d and keeps its previous configuration: %s\n",
+							hostname, port, GloAdmin->servers_load_veto[1].c_str());
+						fetch_failed = true;
+					}
 
 					if (GloProxyCluster->cluster_pgsql_servers_save_to_disk == true) {
 						bool saved = true;
