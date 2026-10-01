@@ -905,10 +905,17 @@ void MySQL_Session::cancel_aws_iam_wait() {
 	}
 	aws_iam_waiting_session_counted = false;
 
-	if (aws_iam_connection != nullptr && mybe != nullptr &&
-		mybe->server_myds != nullptr &&
-		mybe->server_myds->myconn == aws_iam_connection) {
-		mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+	if (aws_iam_connection != nullptr) {
+		if (mybe != nullptr && mybe->server_myds != nullptr &&
+			mybe->server_myds->myconn == aws_iam_connection) {
+			// Not yet detached (a failure before the token wait started).
+			mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+		} else {
+			// The detached reservation held during the token wait.
+			if (thread != nullptr) aws_iam_connection->last_time_used = thread->curtime;
+			aws_iam_connection->send_quit = false;
+			MyHGM->destroy_MyConn_from_pool(aws_iam_connection);
+		}
 	}
 
 	aws_iam_completion.token.clear();
@@ -996,7 +1003,7 @@ int MySQL_Session::handler_again___status_WAITING_AWS_IAM_TOKEN() {
 	if (status != WAITING_AWS_IAM_TOKEN || aws_iam_waiter_id == 0 ||
 		aws_iam_connection == nullptr || mybe == nullptr ||
 		mybe->server_myds == nullptr ||
-		mybe->server_myds->myconn != aws_iam_connection) {
+		mybe->server_myds->myconn != nullptr) {
 		fail_aws_iam_backend("invalid_wait_state");
 		return 0;
 	}
@@ -1043,6 +1050,9 @@ int MySQL_Session::handler_again___status_WAITING_AWS_IAM_TOKEN() {
 	set_status(CONNECTING_SERVER);
 	aws_iam_token_source_lease = AwsIamTokenSourceLease {};
 
+	// Attach and connect in one step, as for any other new connection: the
+	// backend stream gets the connection and its socket together.
+	mybe->server_myds->attach_connection(connection);
 	connection->attach_aws_iam_token(key, std::move(completion));
 	connection->handler(0);
 	mybe->server_myds->fd = connection->fd;
@@ -9875,6 +9885,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			}
 
 			aws_iam_token_source_lease = std::move(lease);
+			// The core invariant is that a connection attached to the backend
+			// stream has a socket. This one has none until the token arrives, so
+			// keep the reservation (it still counts against max_connections) in
+			// the session and leave the backend stream empty while waiting.
+			mybe->server_myds->detach_connection();
 			previous_status.push(CONNECTING_SERVER);
 			set_status(WAITING_AWS_IAM_TOKEN);
 			aws_iam_token_source_lease->record_waiting_session(true);

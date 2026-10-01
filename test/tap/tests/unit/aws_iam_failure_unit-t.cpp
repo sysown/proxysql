@@ -453,8 +453,10 @@ void test_fresh_retry_bypasses_local_and_global_idle_iam(MySQL_Thread& worker) {
 	fixture.run();
 	fixture.frontend_stream->active = 1;
 	fixture.backend()->active = 1;
-	MySQL_Connection *selected = fixture.backend()->myconn;
-	ok(selected != nullptr && selected->fd == -1 &&
+	// While the token is pending the new connection is a detached reservation:
+	// nothing socket-less is attached to the backend stream.
+	MySQL_Connection *selected = fixture.session->aws_iam_connection;
+	ok(selected != nullptr && selected->fd == -1 && fixture.backend()->myconn == nullptr &&
 		local->myds == nullptr &&
 		failure_server->ConnectionsFree->conns_length() == 1 &&
 		source.keys.size() == 1 && fixture.session->status == WAITING_AWS_IAM_TOKEN,

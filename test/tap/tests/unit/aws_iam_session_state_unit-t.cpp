@@ -332,9 +332,26 @@ public:
 		return session->handler();
 	}
 
-	MySQL_Connection *selected_connection() const {
+	// The connection on the backend stream. While the token is pending this is
+	// null: a connection is attached only together with its socket.
+	MySQL_Connection *attached_connection() const {
 		return session && session->mybe && session->mybe->server_myds
 			? session->mybe->server_myds->myconn : nullptr;
+	}
+
+	// The connection selected for this request: attached, or the detached
+	// reservation held while the token is pending.
+	MySQL_Connection *selected_connection() const {
+		if (MySQL_Connection *attached = attached_connection()) return attached;
+		return session ? session->aws_iam_connection : nullptr;
+	}
+
+	// True while waiting for a token: the reservation is held, nothing is
+	// attached to the backend stream, and the stream is not registered for poll.
+	bool waits_detached() const {
+		return session && session->status == WAITING_AWS_IAM_TOKEN &&
+			session->aws_iam_connection != nullptr && attached_connection() == nullptr &&
+			session->mybe->server_myds->poll_fds_idx < 0;
 	}
 
 	MySrvC *selected_server() const {
@@ -370,6 +387,8 @@ void test_immediate_cache_hit(MySQL_Thread& worker) {
 	MySrvC *server = fixture.selected_server();
 	ok(fixture.session->status == WAITING_AWS_IAM_TOKEN && selected != nullptr && source.keys.size() == 1,
 		"an immediate cache completion still enters the owner-thread waiting state");
+	ok(fixture.waits_detached(),
+		"the waiting session holds its reservation detached: no socket-less connection on the backend stream");
 	worker.drain_aws_iam_completions();
 	const int rc = fixture.run();
 	ok(rc == 0 && fixture.session->status == CONNECTING_SERVER &&
@@ -387,6 +406,8 @@ void test_delayed_completion(MySQL_Thread& worker) {
 	ok(fixture.run() == 0 &&
 		fixture.session->status == WAITING_AWS_IAM_TOKEN && source.waiting_sessions == 1,
 		"a session remains parked while its delayed token is unfinished");
+	ok(fixture.waits_detached(),
+		"a parked session has no connection on its backend stream and nothing registered for poll");
 	source.post(0, result(AwsIamStatus::OK, true));
 	ok(fixture.session->status == WAITING_AWS_IAM_TOKEN && source.waiting_sessions == 1,
 		"a queued completion leaves the live-session gauge set until owner-thread exit");
@@ -395,6 +416,9 @@ void test_delayed_completion(MySQL_Thread& worker) {
 	ok(fixture.session->status == CONNECTING_SERVER && fixture.selected_connection() == selected &&
 		source.waiting_sessions == 0,
 		"a delayed completion resumes the originally selected connection");
+	ok(fixture.attached_connection() == selected &&
+		fixture.session->mybe->server_myds->fd == selected->fd,
+		"on resume the connection is attached together with its socket");
 }
 
 void test_provider_error_is_generic(MySQL_Thread& worker) {
@@ -711,7 +735,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-	plan(27);
+	plan(30);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
