@@ -109,6 +109,8 @@ class Query_Info {
 	uint64_t last_insert_id;
 	uint64_t rows_sent;
 	uint64_t waiting_since;
+	// The request returned more than one result (multi-statement or CALL); see #6229.
+	bool multi_result;
 	std::string show_warnings_prev_query_digest;
 
 	Query_Info();

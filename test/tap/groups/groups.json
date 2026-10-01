@@ -410,6 +410,7 @@
   "reg_test_5988-caching_sha2_rsa-t" : [ "no-infra-g1","@proxysql_min_version:3.1" ],
   "reg_test_6010_admin_mysqldump_set-t" : [ "mysql84-g1" ],
   "reg_test_6153_prometheus_memory_interval-t" : [ "legacy-g8","mysql84-g8" ],
+  "reg_test_6229_query_cache_multi_result-t" : [ "legacy-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
   "reg_test_6233_stmt_execute_early_response-t" : [ "mysql84-g6","mysql95-g1" ],
   "reg_test_6233_stmt_long_data_temporal_param-t" : [ "mysql84-g6","mysql95-g1" ],
   "reg_test__ssl_client_busy_wait-t" : [ "legacy-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g2","mysql90-g2","mysql95-g2" ],
