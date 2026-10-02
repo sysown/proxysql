@@ -6058,10 +6058,11 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		const unsigned int result_begin = client_myds->PSarrayOUT->len;
 		const auto packet_type = query_result->get_result_packet_type();
 		const unsigned int num_fields = query_result->get_num_fields();
-		// Without Describe, SELECT still returns DataRow/CommandComplete, but
-		// the result builder does not set TUPLE (it is set by RowDescription).
+		// libpq marks TUPLE for a forwarded RowDescription; the native builder
+		// also marks DataRows, including executions without a client Describe.
 		const auto extended_packet_type = PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY |
-			((CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) ?
+			(((CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) ||
+				(_conn->native_mode && num_rows > 0)) ?
 				PGSQL_QUERY_RESULT_TUPLE : 0);
 #endif
 		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
