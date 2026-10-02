@@ -157,11 +157,18 @@ bool prepare_backend_protocol() {
             strcmp(PQgetvalue(result, 0, 0), "0") == 0;
         PQclear(result);
     }
-    // Attempt both restoration operations even if pool clearing failed.
-    bool restored = command("UPDATE pgsql_servers SET status=(SELECT status FROM listen_saved_servers s "
-        "WHERE s.hostgroup_id=pgsql_servers.hostgroup_id AND s.hostname=pgsql_servers.hostname AND s.port=pgsql_servers.port)");
-    restored = command("LOAD PGSQL SERVERS TO RUNTIME") && restored;
-    command("DROP TABLE listen_saved_servers");
+    // Restore even if clearing failed, but never load an unrestored configuration.
+    auto restore = [&command]() {
+        return command("UPDATE pgsql_servers SET status=(SELECT status FROM listen_saved_servers s "
+            "WHERE s.hostgroup_id=pgsql_servers.hostgroup_id AND s.hostname=pgsql_servers.hostname AND s.port=pgsql_servers.port)") &&
+            command("LOAD PGSQL SERVERS TO RUNTIME");
+    };
+    bool restored = restore();
+    if (!restored) {
+        diag("Retrying restoration of PostgreSQL server statuses");
+        restored = restore();
+    }
+    if (restored) command("DROP TABLE listen_saved_servers");
     if (!cleared || !restored) {
         PQfinish(admin);
         BAIL_OUT("Cannot clear old backend connections and restore server statuses");
