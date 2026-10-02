@@ -62,6 +62,14 @@ cat >"$FAKE_BIN/proxysql" <<'EOF'
 echo 'ProxySQL version 3.1.11'
 EOF
 
+# proxysql-cli is the same binary under a second name; the verifier checks it
+# is on PATH and dispatches to CLI mode.
+cat >"$FAKE_BIN/proxysql-cli" <<'EOF'
+#!/usr/bin/env bash
+echo 'Usage: proxysql-cli <command> [options]' >&2
+echo '  import-pgbouncer <path> [--dry-run] [--ignore-warnings]' >&2
+EOF
+
 cat >"$FAKE_BIN/od" <<'EOF'
 #!/usr/bin/env bash
 echo ' 7f 45 4c 46'
