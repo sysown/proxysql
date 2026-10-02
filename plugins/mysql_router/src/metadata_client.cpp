@@ -255,7 +255,20 @@ std::unique_ptr<ConnectorCMetadataSession> ConnectorCMetadataSession::connect(
 	set_option(impl->mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout_seconds, "connect timeout");
 	set_option(impl->mysql, MYSQL_OPT_READ_TIMEOUT, &timeout_seconds, "read timeout");
 	set_option(impl->mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout_seconds, "write timeout");
-	my_bool enforce = tls.mode != MetadataTlsMode::disabled && tls.mode != MetadataTlsMode::preferred;
+	// Connector/C semantics (plugins/auth/my_auth.c): MYSQL_OPT_SSL_ENFORCE only sets
+	// options.use_ssl, i.e. "request TLS". Without certificate verification the client
+	// silently continues in plaintext when the server does not offer TLS. So:
+	//  - every mode except DISABLED must request TLS, otherwise PREFERRED never even
+	//    asks for it (mysql_ssl_set() alone is undone by an explicit ENFORCE=0);
+	//  - REQUIRED cannot rely on the connector to refuse a plaintext fallback, so the
+	//    negotiated cipher is checked after the connection is established. The
+	//    connector has no hook between the server greeting and authentication, so a
+	//    server without TLS has already seen the user name and the auth challenge
+	//    response by then (documented in doc/mysql-router-plugin.md);
+	//  - the VERIFY modes are enforced by the connector, which fails when the server
+	//    offers no TLS. Connector/C verifies the hostname as well, so VERIFY_CA is at
+	//    least as strict as requested.
+	my_bool enforce = tls.mode != MetadataTlsMode::disabled;
 	my_bool verify = tls.mode == MetadataTlsMode::verify_ca || tls.mode == MetadataTlsMode::verify_identity;
 	if (tls.mode != MetadataTlsMode::disabled) {
 		if (mysql_ssl_set(impl->mysql,
@@ -278,6 +291,11 @@ std::unique_ptr<ConnectorCMetadataSession> ConnectorCMetadataSession::connect(
 	OPENSSL_cleanse(password_copy.data(), password_copy.size());
 	if (connected == nullptr) {
 		throw std::runtime_error(std::string("metadata connection failed: ") + mysql_error(impl->mysql));
+	}
+	if (tls.mode != MetadataTlsMode::disabled && tls.mode != MetadataTlsMode::preferred &&
+		mysql_get_ssl_cipher(impl->mysql) == nullptr) {
+		throw std::runtime_error(std::string("metadata connection failed: TLS mode ") +
+			metadata_tls_mode_name(tls.mode) + " requires TLS, but the server did not negotiate it");
 	}
 	return std::unique_ptr<ConnectorCMetadataSession>(new ConnectorCMetadataSession(std::move(impl)));
 }

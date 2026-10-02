@@ -74,13 +74,27 @@ invalidates an explicit transaction, issue `ROLLBACK` before continuing.
 
 ## Session settings
 
-DuckDB-native settings are sent to the engine. In this example, `SET` and
-`SELECT` are two separate requests:
+DuckDB session settings are sent to the engine and apply only to the client's
+own connection. In this example, `SET` and `SELECT` are two separate requests:
 
 ```sql
-SET threads=4;
-SELECT current_setting('threads');
+SET search_path='main';
+SELECT current_setting('search_path');
 ```
+
+Every client `SET` and `RESET` runs in session scope. Engine-wide settings are
+shared by all clients of the embedded database, so clients cannot change them:
+`SET GLOBAL`, engine-wide options such as `memory_limit`/`max_memory`,
+`threads`/`worker_threads`, `max_temp_directory_size` and
+`enable_external_access`, engine-wide configuration `PRAGMA`s, and `EXPLAIN` of a `SET`,
+`RESET` or `PRAGMA` statement all return an error. The settings ProxySQL
+manages are changed through their `duckdb-*` Admin variables
+(`duckdb-memory_limit`, `duckdb-threads`, `duckdb-enable_external_access`)
+followed by `LOAD DUCKDB VARIABLES TO RUNTIME`. Other engine-wide settings have
+no Admin variable and cannot be changed by clients. `SET VARIABLE` user
+variables are unaffected. Session-local `PRAGMA` commands such as
+`PRAGMA enable_optimizer` are allowed; configuration assignments written as
+`PRAGMA name=value` are refused, so use `SET SESSION` for session settings.
 
 Only narrow client-compatibility commands are accepted as no-ops:
 

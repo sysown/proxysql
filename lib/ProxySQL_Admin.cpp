@@ -7,6 +7,8 @@ using json = nlohmann::json;
 #include <fstream>
 #include <algorithm>    // std::sort
 #include <memory>
+#include <set>
+#include <cctype>
 #include <vector>       // std::vector
 #include <unordered_set>
 #include "prometheus/exposer.h"
@@ -380,6 +382,22 @@ SQLite3DB* proxysql_plugin_get_configdb() {
 
 SQLite3DB* proxysql_plugin_get_statsdb() {
 	return GloAdmin ? GloAdmin->statsdb : nullptr;
+}
+
+// ABI-10 service: serializes a plugin's admindb/statsdb transaction with Admin
+// sessions, which hold sql_query_global_mutex for every statement they run.
+bool proxysql_plugin_with_admin_db_lock(bool (*body)(void*), void* opaque) {
+	if (body == nullptr || GloAdmin == nullptr) return false;
+	pthread_mutex_t* const mutex = &GloAdmin->sql_query_global_mutex;
+	pthread_mutex_lock(mutex);
+	bool result = false;
+	try {
+		result = body(opaque);
+	} catch (...) {
+		result = false;
+	}
+	pthread_mutex_unlock(mutex);
+	return result;
 }
 
 SQLite3_result* proxysql_plugin_get_mysql_users_snapshot() {
@@ -6392,6 +6410,40 @@ SQLite3_result* plugin_query(SQLite3DB& db, const char* sql, std::string& error)
 	return result;
 }
 
+/**
+ * @brief Splits a 'mysql-interfaces' value into its set of trimmed, non-empty entries.
+ * @details Used to compare a staged value against the active listeners independently
+ *   of entry order and whitespace, matching how MySQL_Threads_Handler tokenizes it.
+ */
+std::set<std::string> interface_set(const char* value) {
+	std::set<std::string> result;
+	if (value == nullptr) return result;
+	const std::string source(value);
+	size_t start = 0;
+	while (start <= source.size()) {
+		const size_t end = source.find(';', start);
+		size_t first = start;
+		size_t last = end == std::string::npos ? source.size() : end;
+		while (first < last && std::isspace(static_cast<unsigned char>(source[first]))) ++first;
+		while (last > first && std::isspace(static_cast<unsigned char>(source[last - 1]))) --last;
+		if (last > first) result.emplace(source.substr(first, last - first));
+		if (end == std::string::npos) break;
+		start = end + 1;
+	}
+	return result;
+}
+
+/** RAII holder for ProxySQL_Admin::sql_query_global_mutex. */
+class admin_db_lock_guard {
+public:
+	explicit admin_db_lock_guard(pthread_mutex_t& mutex) : mutex_(mutex) { pthread_mutex_lock(&mutex_); }
+	~admin_db_lock_guard() { pthread_mutex_unlock(&mutex_); }
+	admin_db_lock_guard(const admin_db_lock_guard&) = delete;
+	admin_db_lock_guard& operator=(const admin_db_lock_guard&) = delete;
+private:
+	pthread_mutex_t& mutex_;
+};
+
 SQLite3_result* hgm_query(const char* sql, std::string& error) {
 	char* sqlite_error = nullptr;
 	SQLite3_result* result = MyHGM->execute_query_under_lock(sql, &sqlite_error);
@@ -6550,13 +6602,31 @@ bool plugin_config_publish(void* opaque, ProxySQL_PluginConfigStage stage, SQLit
 		return true;
 	}
 	if (stage == ProxySQL_PluginConfigStage::interfaces) {
+		// MySQL listeners are opened only at startup (MySQL_Threads_Handler::start_listeners)
+		// and 'mysql-interfaces' cannot be changed at runtime (see the 'interfaces' case of
+		// MySQL_Threads_Handler::set_variable). Plugin publication follows the same rule:
+		// the staged value is persisted in main/disk by the caller's transaction, and this
+		// stage never adds or removes listeners.
+		//
+		// Changing listeners here is unsafe: listener_add()/listener_del() spin until every
+		// worker acknowledges the change from its event loop, while this publication holds
+		// the HGM, Auth, QPro and MTH locks that workers take on that same loop (e.g. the
+		// once-per-second QPro stats read lock). That is a deadlock (issue #6341).
 		unique_ptr<SQLite3_result> value(plugin_query(db,
 			"SELECT variable_value FROM main.global_variables WHERE variable_name='mysql-interfaces'", error));
 		if (!value || value->rows.empty() || value->rows[0]->fields[0] == nullptr) {
 			if (error.empty()) error = "staged mysql-interfaces is missing";
 			return false;
 		}
-		return GloMTH->apply_interfaces_under_lock(value->rows[0]->fields[0], error);
+		const char* staged = value->rows[0]->fields[0];
+		char* active = GloMTH->get_variable("interfaces");
+		if (active != nullptr && interface_set(active) != interface_set(staged)) {
+			proxy_warning("Plugin publication staged mysql-interfaces='%s', but the active listeners are '%s'."
+				" Listener changes are applied only at startup: restart ProxySQL to apply them.\n",
+				staged, active);
+		}
+		free(active);
+		return true;
 	}
 	error = "unknown plugin publication stage";
 	return false;
@@ -6579,9 +6649,10 @@ bool plugin_config_restore(void* opaque, ProxySQL_PluginConfigStage stage,
 		const std::string checksum = query_rules_checksum(rules, fast_rules);
 		char* module_error = admin->load_mysql_query_rules_to_runtime(rules, fast_rules, checksum, 0, false);
 		if (module_error != nullptr) { error = module_error; free(module_error); return false; }
-	} else if (stage == ProxySQL_PluginConfigStage::interfaces) {
-		if (!GloMTH->apply_interfaces_under_lock(snapshot.interfaces.c_str(), error)) return false;
 	}
+	// ProxySQL_PluginConfigStage::interfaces needs no restore: its publish stage never
+	// changes the active listeners, and the staged main/disk value is rolled back by the
+	// publication transaction.
 	return true;
 }
 
@@ -6598,6 +6669,10 @@ ProxySQL_PluginMysqlConfigResult ProxySQL_Admin::apply_plugin_mysql_config(
 			this, &plugin_config_lock, &plugin_config_unlock, &plugin_config_capture,
 			&plugin_config_publish, &plugin_config_restore, &plugin_config_checkpoint
 		};
+		// Publication runs BEGIN...COMMIT on admindb from a plugin thread; hold the
+		// mutex Admin sessions hold for their statements (issue #6354). It is taken
+		// before the publication locks, the same order Admin's LOAD commands use.
+		admin_db_lock_guard admin_db_guard(sql_query_global_mutex);
 		return proxysql_apply_plugin_mysql_config(*admindb, plan, hooks);
 	} catch (...) {
 		return {false, 0, "plugin publication failed at Admin service boundary", {}};
@@ -6611,6 +6686,7 @@ ProxySQL_PluginMysqlConfigResult ProxySQL_Admin::apply_plugin_mysql_config_v2(
 			this, &plugin_config_lock, &plugin_config_unlock, &plugin_config_capture,
 			&plugin_config_publish, &plugin_config_restore, &plugin_config_checkpoint
 		};
+		admin_db_lock_guard admin_db_guard(sql_query_global_mutex);  // see apply_plugin_mysql_config
 		return proxysql_apply_plugin_mysql_config_v2(*admindb, plan, hooks);
 	} catch (...) {
 		return {false, 0, "plugin publication failed at Admin service boundary", {}};

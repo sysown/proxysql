@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(21);
+	plan(24);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -156,13 +156,27 @@ int main(int argc, char** argv) {
 	}
 
 	{
-		PGresult* set = exec_or_bail(c, "SET threads=2");
-		const bool set_ok = PQresultStatus(set) == PGRES_COMMAND_OK;
-		PQclear(set);
+		// Issue #6320: engine-wide settings are Admin-only; session settings
+		// still reach DuckDB and apply to this connection.
+		PGresult* before = exec_or_bail(c, "SELECT current_setting('threads')");
+		const std::string threads_before = PQntuples(before) == 1 ? PQgetvalue(before, 0, 0) : "";
+		PQclear(before);
+		PGresult* global_set = exec_or_bail(c, "SET max_memory='1TB'");
+		const bool global_refused = PQresultStatus(global_set) == PGRES_FATAL_ERROR;
+		PQclear(global_set);
+		PGresult* threads_set = exec_or_bail(c, "SET threads=2");
+		const bool threads_refused = PQresultStatus(threads_set) == PGRES_FATAL_ERROR;
+		PQclear(threads_set);
+		PGresult* session_set = exec_or_bail(c, "SET search_path='main'");
+		const bool session_ok = PQresultStatus(session_set) == PGRES_COMMAND_OK;
+		PQclear(session_set);
 		PGresult* current = exec_or_bail(c, "SELECT current_setting('threads')");
-		ok(set_ok && PQresultStatus(current) == PGRES_TUPLES_OK &&
-		   PQntuples(current) == 1 && std::strcmp(PQgetvalue(current, 0, 0), "2") == 0,
-		   "DuckDB-native SET reaches the engine and changes the setting");
+		ok(global_refused, "a client SET of an engine-wide option (max_memory) is refused");
+		ok(threads_refused, "a client SET threads is refused");
+		ok(session_ok, "a client session SET (search_path) still reaches DuckDB");
+		ok(PQresultStatus(current) == PGRES_TUPLES_OK && PQntuples(current) == 1 &&
+		   threads_before == PQgetvalue(current, 0, 0),
+		   "the engine-wide threads setting is unchanged");
 		PQclear(current);
 	}
 
