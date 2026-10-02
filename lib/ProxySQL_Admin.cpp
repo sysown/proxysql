@@ -513,6 +513,21 @@ SQLite3DB* proxysql_plugin_get_configdb() {
 	return GloAdmin ? GloAdmin->configdb : nullptr;
 }
 
+void proxysql_lock_configuration() {
+	assert(GloAdmin != nullptr);
+	pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+}
+
+void proxysql_unlock_configuration() noexcept {
+	assert(GloAdmin != nullptr);
+	pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+}
+
+SQLite3DB* proxysql_configdb_locked() {
+	assert(GloAdmin != nullptr);
+	return GloAdmin->configdb;
+}
+
 SQLite3DB* proxysql_plugin_get_statsdb() {
 	return GloAdmin ? GloAdmin->statsdb : nullptr;
 }
@@ -1450,6 +1465,15 @@ template query_digest_topk_result_t ProxySQL_Admin::QueryDigestTopK<(SERVER_TYPE
 );
 
 void ProxySQL_Admin::flush_configdb() { // see #923
+	pthread_mutex_lock(&sql_query_global_mutex);
+	struct Unlock {
+		pthread_mutex_t* mutex;
+		~Unlock() { pthread_mutex_unlock(mutex); }
+	} unlock { &sql_query_global_mutex };
+	flush_configdb_locked();
+}
+
+void ProxySQL_Admin::flush_configdb_locked() {
 	wrlock();
 	admindb->execute((char *)"DETACH DATABASE disk");
 	delete configdb;
@@ -6957,6 +6981,23 @@ SQLite3_result* ProxySQL_Admin::get_mysql_group_replication_hostgroups_snapshot(
 }
 #endif
 
+#ifdef PROXYSQL40
+bool ProxySQL_Admin::init_pgsql_users_under_lock(std::unique_ptr<SQLite3_result>&& input,
+ std::string& error) {
+ if (!input || input->columns != 11 || !GloPgAuth) {
+  error = "PostgreSQL users runtime input requires the canonical 11 columns and active Auth";
+  return false;
+ }
+ for (const auto* row : input->rows) {
+  if (!row || !row->fields) { error = "invalid PostgreSQL user row"; return false; }
+  for (int i : {0,2,3,4,5,6,7,8})
+   if (!row->fields[i]) { error = "invalid PostgreSQL user field"; return false; }
+ }
+ __refresh_pgsql_users(std::move(input), "", 0, true);
+ return true;
+}
+#endif
+
 void ProxySQL_Admin::init_pgsql_users(
 	unique_ptr<SQLite3_result>&& pgsql_users_resultset, const std::string& checksum, const time_t epoch
 ) {
@@ -7146,8 +7187,13 @@ void ProxySQL_Admin::__refresh_clickhouse_users() {
 #endif /* PROXYSQLCLICKHOUSE */
 
 // PostgreSQL
+void ProxySQL_Admin::__refresh_pgsql_users(std::unique_ptr<SQLite3_result>&& input,
+ const std::string& checksum, const time_t epoch) {
+ __refresh_pgsql_users(std::move(input),checksum,epoch,false);
+}
 void ProxySQL_Admin::__refresh_pgsql_users(
-	std::unique_ptr<SQLite3_result>&& pgsql_users_resultset, const std::string& checksum, const time_t epoch
+ std::unique_ptr<SQLite3_result>&& pgsql_users_resultset, const std::string& checksum,
+ const time_t epoch, bool local_snapshot
 ) {
 	bool no_resultset_supplied = pgsql_users_resultset == nullptr;
 	// Checksums are always generated - 'admin-checksum_*' deprecated
@@ -7175,7 +7221,7 @@ void ProxySQL_Admin::__refresh_pgsql_users(
 		char* buff = nullptr;
 		char buf[20] = { 0 };
 
-		if (no_resultset_supplied) {
+		if (no_resultset_supplied || local_snapshot) {
 			uint64_t hash1 = GloPgAuth->get_runtime_checksum();
 			//if (GloMyLdapAuth) {
 			//	hash1 += GloMyLdapAuth->get_ldap_mapping_runtime_checksum();
@@ -9117,9 +9163,15 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 }
 
 bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
+ const runtime_mysql_servers_checksum_t& runtime_checksum,const mysql_servers_v2_checksum_t& configuration_checksum,
+ bool hgm_acquire_lock,bool emit_runtime_install) {
+ return load_mysql_servers_to_runtime(incoming_servers,runtime_checksum,configuration_checksum,hgm_acquire_lock,emit_runtime_install,nullptr);
+}
+
+bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
 	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
 	const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock,
-	bool emit_runtime_install) {
+	bool emit_runtime_install, const MySQL_ServerHealthPreservationKeys* preserve_health) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::mysql;
@@ -9357,7 +9409,7 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	const bool committed = MyHGM->commit(
 		{ runtime_mysql_servers, peer_runtime_mysql_server },
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
-		false, true, hgm_acquire_lock
+		false, true, hgm_acquire_lock, preserve_health
 	);
 	if (runtime_install_prepared && committed &&
 		!runtime_install.commit(std::move(installed_snapshot), commit_server_module))
@@ -9395,12 +9447,18 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (resultset_mysql_servers_ssl_params) {
 		resultset_mysql_servers_ssl_params = NULL;
 	}
+	if (!first_error.empty() && servers_load_veto[0].empty()) servers_load_veto[0] = first_error;
 	return first_error.empty() && committed;
 }
 
-void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
-	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
-	bool emit_runtime_install) {
+void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& servers,
+ const runtime_pgsql_servers_checksum_t& runtime_checksum, const pgsql_servers_v2_checksum_t& config_checksum,
+ bool emit_runtime_install) {
+ (void)load_pgsql_servers_to_runtime(servers,runtime_checksum,config_checksum,emit_runtime_install,nullptr);
+}
+bool ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
+ const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
+ bool emit_runtime_install, const PgSQL_ServerHealthPreservationKeys* preserve_health) {
 	// make sure that the caller has called pgsql_servers_wrlock()
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::pgsql;
@@ -9433,6 +9491,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	}
 	//MyHGH->wrlock();
 	if (error) {
+        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
@@ -9444,7 +9503,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
 				ProxySQL_ServerProtocol::pgsql, resultset_servers, topology_inputs,
 				runtime_install, installed_snapshot, commit_server_module,
-				servers_load_veto[1])) return;
+				servers_load_veto[1])) return false;
 		}
 		runtime_install_prepared = emit_runtime_install;
 		PgHGM->servers_add(resultset_servers);
@@ -9455,6 +9514,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 	if (error) {
+        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
@@ -9476,6 +9536,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	}
 
 	if (error) {
+        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
@@ -9496,6 +9557,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		resultset_hostgroup_attributes = incoming_hostgroup_attributes;
 	}
 	if (error) {
+        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
@@ -9513,6 +9575,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		resultset_pgsql_servers_ssl_params = incoming_pgsql_servers.incoming_pgsql_servers_ssl_params;
 	}
 	if (error) {
+        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to PgHGM
@@ -9523,11 +9586,13 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	const bool runtime_hgm_committed = PgHGM->commit(
 		{ runtime_pgsql_servers, peer_runtime_pgsql_server },
 		{ incoming_pgsql_servers_v2, peer_pgsql_server_v2 },
-		false, true
+		false, true, preserve_health
 	);
-	if (runtime_install_prepared && runtime_hgm_committed &&
-		!runtime_install.commit(std::move(installed_snapshot), commit_server_module))
-		proxy_error("Unable to commit PostgreSQL server runtime installation transaction\n");
+ if (runtime_install_prepared && runtime_hgm_committed &&
+     !runtime_install.commit(std::move(installed_snapshot), commit_server_module)) {
+  servers_load_veto[1] = "Unable to commit PostgreSQL server runtime installation transaction";
+  proxy_error("%s\n",servers_load_veto[1].c_str());
+ }
 
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_pgsql_servers_runtime_to_database(true);
@@ -9542,6 +9607,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;
 	}
+ return runtime_hgm_committed && servers_load_veto[1].empty();
 }
 
 char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {

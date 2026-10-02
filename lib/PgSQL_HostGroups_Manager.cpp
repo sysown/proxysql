@@ -1601,11 +1601,15 @@ void PgSQL_HostGroups_Manager::refresh_pgsql_servers_v2_checksum() {
 	update_glovars_pgsql_servers_v2_checksum(global_checksum_v2, {}, true, true);
 }
 
+bool PgSQL_HostGroups_Manager::commit(const peer_runtime_pgsql_servers_t& runtime_servers,
+ const peer_pgsql_servers_v2_t& configuration_servers, bool only_runtime, bool update_version) {
+ return commit(runtime_servers,configuration_servers,only_runtime,update_version,nullptr);
+}
 bool PgSQL_HostGroups_Manager::commit(
-	const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
-	const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
-	bool only_commit_runtime_pgsql_servers,
-	bool update_version
+ const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
+ const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
+ bool only_commit_runtime_pgsql_servers, bool update_version,
+ const PgSQL_ServerHealthPreservationKeys* preserve_health
 ) {
 	// if only_commit_runtime_pgsql_servers is true, pgsql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_pgsql_servers) {
@@ -1617,17 +1621,21 @@ bool PgSQL_HostGroups_Manager::commit(
 	unsigned long long curtime1=monotonic_time();
 	wrlock();
 	const bool result = commit_locked(peer_runtime_pgsql_servers, peer_pgsql_servers_v2,
-		only_commit_runtime_pgsql_servers, update_version);
+		only_commit_runtime_pgsql_servers, update_version, preserve_health);
 	wrunlock();
 	finish_commit(curtime1);
 	return result;
 }
 
+bool PgSQL_HostGroups_Manager::commit_locked(const peer_runtime_pgsql_servers_t& runtime_servers,
+ const peer_pgsql_servers_v2_t& configuration_servers, bool only_runtime, bool update_version) {
+ return commit_locked(runtime_servers,configuration_servers,only_runtime,update_version,nullptr);
+}
 bool PgSQL_HostGroups_Manager::commit_locked(
-	const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
-	const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
-	bool only_commit_runtime_pgsql_servers,
-	bool update_version
+ const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
+ const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
+ bool only_commit_runtime_pgsql_servers, bool update_version,
+ const PgSQL_ServerHealthPreservationKeys* preserve_health
 ) {
 	// purge table
 	purge_pgsql_servers_table();
@@ -1737,7 +1745,8 @@ bool PgSQL_HostGroups_Manager::commit_locked(
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%ld) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]) , mysrvc->weight , atoi(r->fields[12]));
 					mysrvc->weight=atoi(r->fields[12]);
 				}
-				if (atoi(r->fields[4])!=atoi(r->fields[13])) {
+				const bool keep_health = preserve_health && preserve_health->count({mysrvc->myhgc->hid,mysrvc->address,mysrvc->port});
+				if (!keep_health && atoi(r->fields[4])!=atoi(r->fields[13])) {
 					if (GloPTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]) , mysrvc->status , atoi(r->fields[13]));
 					mysrvc->status=(MySerStatus)atoi(r->fields[13]);
@@ -1759,7 +1768,7 @@ bool PgSQL_HostGroups_Manager::commit_locked(
 					if (GloPTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing max_replication_lag for server %u:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[7]) , mysrvc->max_replication_lag , atoi(r->fields[16]));
 					mysrvc->max_replication_lag=atoi(r->fields[16]);
-					if (mysrvc->max_replication_lag == 0) { // we just changed it to 0
+					if (!keep_health && mysrvc->max_replication_lag == 0) { // we just changed it to 0
 						if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 							// the server is currently shunned due to replication lag
 							// but we reset max_replication_lag to 0

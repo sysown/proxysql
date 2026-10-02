@@ -1112,7 +1112,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		proxy_info("Received %s command\n", query_no_space);
 		proxy_warning("A misconfigured configdb will cause undefined behaviors\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		SPA->flush_configdb();
+		SPA->flush_configdb_locked();
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}

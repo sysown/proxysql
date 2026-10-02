@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -61,6 +62,10 @@ ProxySQL_ServerRuntimeSnapshot proxysql_server_runtime_snapshot_from_rows(
 	ProxySQL_ServerProtocol protocol, uint64_t generation, const SQLite3_result& rows);
 
 #ifdef PROXYSQL40
+// Copied native HGM runtime rows, including transient health. Safe with or without the
+// caller's Admin SQL mutex; takes only the existing HGM runtime dump lock. No Cluster projection.
+std::optional<std::vector<ProxySQL_ServerRow>> proxysql_current_server_runtime_rows(
+	ProxySQL_ServerProtocol protocol);
 bool proxysql_reconcile_mysql_server_desired_set(
 	const ProxySQL_ServerDesiredSet& desired_set, std::string& error);
 bool proxysql_reconcile_pgsql_server_desired_set(
@@ -107,6 +112,14 @@ private:
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_claims(
 	ProxySQL_ServerProtocol protocol);
 uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol);
+// Caller holds the Admin SQL mutex. Publishes policy claims and a fresh runtime
+// generation from the retained configuration snapshot, never from HGM health.
+bool proxysql_install_managed_discovery_locked(ProxySQL_ServerProtocol protocol,
+ uint64_t desired_revision, const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
+ uint64_t& runtime_generation_out, std::string& error);
+std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgroup_claims(
+ ProxySQL_ServerProtocol protocol);
+void proxysql_request_server_read_only_monitor(ProxySQL_ServerProtocol protocol);
 #endif
 
 struct ProxySQL_ServerModuleTableSnapshot {

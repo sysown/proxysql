@@ -10,6 +10,7 @@
 #include "ProxySQL_Plugin.h"
 #include "ProxySQL_PluginCLI.h"
 #include "ProxySQL_ClusterPluginHash.h"
+#include "Web_Interface.hpp"
 
 #include <cstddef>
 #include <condition_variable>
@@ -68,6 +69,10 @@ public:
 	bool start_all(std::string &err);
 	bool runtime_ready_all(ProxySQL_PluginRuntimeContext& context, std::string& err);
 	bool stop_all();
+	/** @brief Require exactly one ABI12 managed provider before startup. */
+	bool check_managed_configuration_provider(std::string& error) const;
+	/** @brief Borrow the initialized provider service until plugin shutdown. */
+	const ProxySQL_ManagedConfigurationServiceV1* managed_configuration_service(std::string& error) const;
 	const std::vector<ProxySQL_PluginTableDef>& tables(ProxySQL_PluginDBKind kind) const;
 	// Name and ABI version of every loaded plugin, for the Cluster plugin-set guard.
 	std::vector<ProxySQL_ClusterPluginIdentity> plugin_identities() const;
@@ -130,6 +135,11 @@ public:
 		std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims);
 	std::vector<ProxySQL_ServerHostgroupClaim> server_hostgroup_claims(
 		ProxySQL_ServerProtocol protocol) const;
+	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims(
+		ProxySQL_ServerProtocol protocol) const;
+	bool install_managed_discovery(ProxySQL_ServerProtocol protocol, uint64_t desired_revision,
+		const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
+		uint64_t& runtime_generation_out, std::string& error);
 	SQLite3_result* server_module_runtime_table_snapshot(
 		ProxySQL_ServerProtocol protocol, const char* table_name);
 	bool unregister_server_module(ProxySQL_ServerProtocol protocol);
@@ -257,6 +267,10 @@ private:
 	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
 	std::vector<uint32_t> server_delegated_hostgroups_[2] {};
 	std::vector<ProxySQL_ServerHostgroupClaim> server_hostgroup_claims_[2] {};
+	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims_[2] {};
+	uint64_t managed_server_revisions_[2] {0, 0};
+	// Requires server_discovery_mutex_. Keeps module and managed ownership separate.
+	void rebuild_server_delegated_hostgroups(int index);
 	server_retirement_observer_for_test_cb server_retirement_observer_for_test_ { nullptr };
 	void *server_retirement_observer_opaque_for_test_ { nullptr };
 #endif /* PROXYSQL40 */
@@ -362,6 +376,28 @@ void proxysql_commit_and_install_active_server_runtime_snapshot(ProxySQL_ServerR
 	std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims);
 SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
 	ProxySQL_ServerProtocol protocol, const char* table_name);
+
+/**
+ * @brief Bind the required web/provider pair and run local bootstrap or recovery.
+ * @param manager Initialized plugin chassis, required in managed mode.
+ * @param web Loaded web object, required in managed mode.
+ * @param binder Versioned web-plugin export resolved by core.
+ * @param manifest_json nullptr for restoration; owned local manifest for bootstrap.
+ * @param error Receives startup failure details.
+ * @return True only when the service reports fully applied success.
+ */
+bool proxysql_start_managed_configuration(ProxySQL_PluginManager* manager,
+ Web_Interface* web, proxysql_web_bind_managed_configuration_v1_t binder,
+ const std::string* manifest_json, std::string& error);
+/**
+ * @brief Drain HTTP, stop controllers, then destroy web and retire plugins.
+ * @param web Cleared after synchronous stop and destruction.
+ * @param manager Cleared by the existing plugin shutdown operation.
+ * @param error Receives teardown failure details.
+ * @return True if both phases finish successfully.
+ */
+bool proxysql_stop_plugins_after_web_drain(Web_Interface*& web,
+ std::unique_ptr<ProxySQL_PluginManager>& manager, std::string& error);
 
 #endif /* PROXYSQL40 */
 #endif /* PROXYSQL_PLUGIN_MANAGER_H */

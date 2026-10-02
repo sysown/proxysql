@@ -299,16 +299,16 @@ void test_abi13_fixture_and_invalid_registration() {
 	ok(abi13_fixture != nullptr && abi13_tail_called != nullptr &&
 		mgr.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err) && mgr.init_all(err) && mgr.start_all(err) &&
 		abi13_tail_called(),
-		"a frozen ABI-13 DSO calls its ABI-13 tail through ABI-14 loader/init lifecycle");
+		"a frozen ABI-13 DSO calls its ABI-13 tail through ABI-15 loader/init lifecycle");
 	ok(mgr.stop_all(), "ABI-13 fixture stops cleanly");
 	dlclose(abi13_fixture);
-	setenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI15", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI16", "1", 1);
 	ProxySQL_PluginManager newer_abi_manager;
 	ok(!newer_abi_manager.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err),
-		"ABI-15 descriptor is rejected by the ABI-14 core");
+		"ABI-16 descriptor is rejected by the ABI-15 core");
 	ok(err.find("ABI") != std::string::npos && newer_abi_manager.size() == 0,
-		"ABI-15 rejection does not retain a plugin handle");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI15");
+		"ABI-16 rejection does not retain a plugin handle");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI16");
 	for (const char *version : {"10", "11", "12", "13"}) {
 		setenv("PROXYSQL_FAKE_PLUGIN_LEGACY_AWS_ABI", version, 1);
 		ProxySQL_PluginManager legacy_aws_manager;

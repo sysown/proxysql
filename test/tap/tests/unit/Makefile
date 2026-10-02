@@ -682,6 +682,12 @@ include $(PROXYSQL_PATH)/test/tap/ai_genai_unit_tests.mk
 ifeq ($(PROXYSQL40),1)
 # mysqlx + plugin + test_mysqlx unit tests: always built under PROXYSQL40=1.
 UNIT_TESTS += \
+	managed_configuration_contract_unit-t \
+	managed_configuration_lifecycle_unit-t \
+	managed_configuration_database_unit-t \
+	managed_discovery_unit-t \
+	managed_runtime_mysql_unit-t \
+	managed_runtime_pgsql_unit-t \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \
@@ -819,6 +825,11 @@ plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		-DPROXYSQL_FAKE_PLUGIN2_PATH=\"$(FAKE_PLUGIN2_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+managed_configuration_database_unit-t: managed_configuration_database_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(HIDDEN_HOOKS_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 plugin_secrets_unit-t: plugin_secrets_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
@@ -1430,7 +1441,43 @@ pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
 .SILENT: clean
 clean:
 	rm -rf $(ODIR)
-	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ROUTER_CONTRACT_FAKE_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO) \
+	rm -f $(MANAGED_FAKE_PROVIDER_SO) $(MANAGED_FAKE_PROVIDER2_SO) *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ROUTER_CONTRACT_FAKE_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO) \
 		$(FAKE_PLUGIN_ABI13_SO) $(FAKE_SERVER_MODULE_ABI14_PREFIX_SO)
 	rm -f $(STAGED_LIBPROXYSQLSO) $(addsuffix .tmp,$(STAGED_LIBPROXYSQLSO))
 	rm -f $(PROXYSQL_LDIR)/libproxysql.so
+
+MANAGED_FAKE_PROVIDER2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_managed_configuration2.so
+MANAGED_FAKE_PROVIDER_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_managed_configuration.so
+$(MANAGED_FAKE_PROVIDER_SO): $(TEST_HELPERS_DIR)/fake_managed_configuration_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS)
+
+$(MANAGED_FAKE_PROVIDER2_SO): $(TEST_HELPERS_DIR)/fake_managed_configuration_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) \
+		-DPROXYSQL_MANAGED_FAKE_NAME=\"fake_managed2\"
+
+managed_configuration_lifecycle_unit-t: managed_configuration_lifecycle_unit-t.cpp $(MANAGED_FAKE_PROVIDER_SO) $(MANAGED_FAKE_PROVIDER2_SO) $(FAKE_PLUGIN_ABI13_SO) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-DPROXYSQL_MANAGED_FAKE_PROVIDER_PATH=\"$(MANAGED_FAKE_PROVIDER_SO)\" \
+		-DPROXYSQL_MANAGED_FAKE_PROVIDER2_PATH=\"$(MANAGED_FAKE_PROVIDER2_SO)\" \
+		-DPROXYSQL_MANAGED_OLD_PLUGIN_PATH=\"$(FAKE_PLUGIN_ABI13_SO)\" \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -ldl -pthread -o $@
+
+managed_discovery_unit-t: managed_discovery_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# Exercise the real TLS reload operation, replacing only its generic unit stub.
+$(ODIR)/managed_runtime_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
+	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -I$(PROXYSQL_PATH)/test -Wall -DProxySQL_create_or_load_TLS=unused_managed_tls_stub
+
+managed_runtime_mysql_unit-t: managed_runtime_mysql_unit-t.cpp $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/src/obj/proxy_tls.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(PROXYSQL_PATH)/src/obj/proxy_tls.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+managed_runtime_pgsql_unit-t: managed_runtime_pgsql_unit-t.cpp $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/src/obj/proxy_tls.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(PROXYSQL_PATH)/src/obj/proxy_tls.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@

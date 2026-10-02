@@ -975,6 +975,8 @@ class MySQL_Threads_Handler
 	bool set_variable(const char *name, const char *value);
 	char **get_variables_list();
 	bool has_variable(const char * name);
+	/** Validate an existing setting without changing live configuration. */
+	bool validate_variable(const char* name, const char* value) const;
 #ifdef PROXYSQL31
 	/** @brief Return the handler-owned RSA snapshot manager; ownership is not transferred. */
 	MySQL_Caching_Sha2_RSA* caching_sha2_rsa() const { return caching_sha2_rsa_manager_.get(); }

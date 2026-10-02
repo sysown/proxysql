@@ -221,6 +221,16 @@ bool ProxySQL_ServerRuntimeInstallTransaction::prepare(ProxySQL_ServerModuleSnap
 	for (uint32_t hostgroup_id : snapshot.runtime.topology_hostgroups) {
 		claimed_hostgroups.insert(hostgroup_id);
 	}
+	// A generic server LOAD must preserve explicit managed discovery ownership.
+	// Validate it against this candidate's built-in topology before staging HGM.
+	for (const auto& claim : proxysql_active_managed_server_hostgroup_claims(impl_->protocol)) {
+		if (!claimed_hostgroups.insert(claim.writer_hostgroup).second ||
+			!claimed_hostgroups.insert(claim.reader_hostgroup).second) {
+			error = "built-in topology overlaps managed discovery hostgroup claim";
+			abort();
+			return false;
+		}
+	}
 	if (!proxysql_prepare_active_server_module_runtime(snapshot, claims, error)) {
 		abort();
 		return false;
@@ -263,7 +273,7 @@ uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protoco
 	return index < 0 ? 0 : read_only_monitor_epochs[index].load(std::memory_order_acquire);
 }
 
-static void request_server_read_only_monitor(ProxySQL_ServerProtocol protocol) {
+void proxysql_request_server_read_only_monitor(ProxySQL_ServerProtocol protocol) {
 	const int index = protocol_index(protocol);
 	if (index >= 0) read_only_monitor_epochs[index].fetch_add(1, std::memory_order_release);
 }
@@ -619,7 +629,7 @@ size_t proxysql_drain_server_desired_sets() {
 		if (applied && std::any_of(queued.desired_set.servers.begin(),
 			queued.desired_set.servers.end(),
 			[](const ProxySQL_ServerRow& row) { return row.force_topology_role; })) {
-			request_server_read_only_monitor(queued.desired_set.protocol);
+			proxysql_request_server_read_only_monitor(queued.desired_set.protocol);
 		}
 		complete_accepted_server_desired_set(
 			queued.completion, queued.desired_set.generation, applied);
