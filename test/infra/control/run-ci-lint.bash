@@ -35,6 +35,8 @@ run_check "Check every TAP source is registered in groups.json" \
 	python3 test/tap/groups/check_groups.py --source
 run_check "Check cluster simulator coverage contract" \
 	test/infra/control/test-cluster-simulator-coverage.bash
+run_check "Check no-infra source asset restoration" \
+	test/infra/control/test-no-infra-source-assets.bash
 run_check "Check coverage collector invariants" \
 	test/infra/control/validate-coverage-gcov-toolchain.bash
 run_check "Check interface TAP disk-safety contract" \
