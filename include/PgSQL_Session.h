@@ -588,6 +588,8 @@ public:
 	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
 	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
 	bool tx_poisoned{ false };
+	// Backend administrative removal: drain the FATAL response before closing.
+	bool offline_fatal_pending = false;
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
 	bool last_pool_ff{ false };

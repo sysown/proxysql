@@ -543,6 +543,7 @@ PGSQL_MOCK_BACKEND_TESTS := \
 	pgsql-reg_test_6109_midresult_disconnect-t \
 	pgsql-reg_test_6110_invalid_reply_sequence-t \
 	pgsql-backend_death_query_retry-t \
+	pgsql-reg_test_6375_offline_retry-t \
 	pgsql-native_hostile_backend-t \
 	pgsql-native_scram_mechanism-t \
 	pgsql-native_notify-t
@@ -631,5 +632,5 @@ endif
 parsersql_digest_test-t: parsersql_digest_test
 	ln -fs parsersql_digest_test parsersql_digest_test-t
 
-# These tests query the target server capability before selecting native mode.
-pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t: pgsql_native_tier.h
+# These tests query the target server capability or active backend mode.
+pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t pgsql-reg_test_6375_offline_retry-t pgsql-extended_query_protocol_test-t pgsql-unsupported_feature_test-t: pgsql_native_tier.h
