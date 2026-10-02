@@ -13,12 +13,10 @@
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
-#include <arpa/inet.h>
 #include <fstream>
 #include <memory>
 #include <openssl/ssl.h>
 #include <string>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -56,32 +54,6 @@ std::string scalar(SQLite3DB &db, const std::string &sql) {
     result = reinterpret_cast<const char *>(sqlite3_column_text(statement, 0));
   sqlite3_finalize(statement);
   return result;
-}
-int reserve_port() {
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  sockaddr_in a{};
-  a.sin_family = AF_INET;
-  a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  if (fd < 0 || bind(fd, reinterpret_cast<sockaddr *>(&a), sizeof(a))) {
-    if (fd >= 0)
-      close(fd);
-    return 0;
-  }
-  socklen_t n = sizeof(a);
-  getsockname(fd, reinterpret_cast<sockaddr *>(&a), &n);
-  close(fd);
-  return ntohs(a.sin_port);
-}
-bool connects(const char *address, int port) {
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  sockaddr_in a{};
-  a.sin_family = AF_INET;
-  a.sin_port = htons(port);
-  inet_pton(AF_INET, address, &a.sin_addr);
-  bool connected = fd >= 0 && connect(fd, reinterpret_cast<sockaddr *>(&a), sizeof(a)) == 0;
-  if (fd >= 0)
-    close(fd);
-  return connected;
 }
 std::string file_contents(const std::string &path) {
   std::ifstream in(path);
@@ -289,7 +261,7 @@ int main() {
   }
   for (const auto *name : {"web_port", "restapi_port"}) {
     bad = d;
-    bad["variables"][std::string("admin-") + name] = reserve_port();
+    bad["variables"][std::string("admin-") + name] = 16080;
     rejected(bad, "management endpoint port is startup-only");
   }
   ok(scalar(db, "SELECT count(*) FROM global_variables WHERE variable_name IN "
@@ -343,7 +315,7 @@ int main() {
   GloWebInterface = &web;
   const auto *prior_web_plugin = GloVars.web_interface_plugin;
   GloVars.web_interface_plugin = const_cast<char *>("observed-web-plugin");
-  GloAdmin->set_managed_variable_locked("web_port", std::to_string(reserve_port()));
+  GloAdmin->set_managed_variable_locked("web_port", "16081");
   GloAdmin->set_managed_variable_locked("web_enabled", "true");
   GloAdmin->all_modules_started = true;
   ManagedRuntimeResult result;
@@ -488,15 +460,17 @@ int main() {
   ok(ordinary && managed->get_status() == MYSQL_SERVER_STATUS_ONLINE &&
          unrelated->get_status() == MYSQL_SERVER_STATUS_ONLINE,
      "ordinary LOAD keeps its existing status replacement behavior");
-  // Live listeners replace only addresses included in the supplied deletion scope.
-  const int old_port = reserve_port(), new_port = reserve_port(), other_port = reserve_port();
-  const std::string old_interface = "127.0.0.1:" + std::to_string(old_port),
-                    other_interface = "127.0.0.2:" + std::to_string(other_port);
-  bool listener_fixture =
-      old_port && new_port && other_port &&
-      GloMTH->set_variable("interfaces", (old_interface + ";" + other_interface).c_str()) &&
-      GloMTH->listener_add(old_interface.c_str()) >= 0 &&
-      GloMTH->listener_add(other_interface.c_str()) >= 0;
+  // MySQL interface updates stage configuration without changing the immutable
+  // runtime setting. Preserve unrelated pending intent as well as active intent.
+  const int new_port = 16034;
+  const std::string old_interface = "127.0.0.1:16033",
+                    new_interface = "127.0.0.1:16034",
+                    other_interface = "127.0.0.2:16035",
+                    pending_interface = "127.0.0.3:16036";
+  const std::string active_interfaces = old_interface + ";" + other_interface;
+  bool listener_fixture = GloMTH->set_variable("interfaces", active_interfaces.c_str()) &&
+      db.execute(("INSERT OR REPLACE INTO global_variables VALUES ('mysql-interfaces','" +
+                  active_interfaces + ";" + pending_interface + "')").c_str());
   auto listeners = d;
   listeners["scope"]["listeners"] = {"127.0.0.1"};
   listeners["listeners"] = {{{"protocol", "MYSQL"}, {"address", "127.0.0.1"}, {"port", new_port}}};
@@ -504,13 +478,17 @@ int main() {
   bool listener_ready = prepare(listeners, &prepared, error);
   if (listener_ready)
     result = proxysql_activate_managed_runtime_locked(*prepared, 4);
-  ok(listener_fixture && listener_ready && result.applied && !connects("127.0.0.1", old_port) &&
-         connects("127.0.0.1", new_port) && connects("127.0.0.2", other_port),
-     "existing live listener API replaces scoped endpoint and preserves unrelated address");
+  char *active_after_staging = GloMTH->get_variable("interfaces");
+  ok(listener_fixture && listener_ready && result.applied && active_after_staging &&
+         active_interfaces == active_after_staging &&
+         scalar(db, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'") ==
+             new_interface + ";" + other_interface + ";" + pending_interface,
+     "MySQL listener intent stages scoped replacement while preserving the runtime setting");
+  free(active_after_staging);
   ok(scalar(db,
             "SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'")
-             .find(other_interface) != std::string::npos,
-     "merged listener intent is recorded in Admin memory");
+             .find(other_interface + ";" + pending_interface) != std::string::npos,
+     "merged listener intent preserves unrelated active and pending Admin configuration");
   proxysql_destroy_managed_prepared_runtime(prepared);
   // Material is supplied as PEM and reaches the real TLS reload and backend APIs.
   auto tls = d;
@@ -557,8 +535,9 @@ int main() {
          scalar(db,
                 "SELECT count(*) FROM mysql_servers_ssl_params WHERE hostname='managed.test'") ==
              "0" &&
-         !connects("127.0.0.1", new_port) && connects("127.0.0.2", other_port),
-     "supplied deletion scope removes old managed rows and listeners while preserving unrelated "
+         scalar(db, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'") ==
+             other_interface + ";" + pending_interface,
+     "supplied deletion scope removes old managed rows and staged listener intent while preserving unrelated "
      "entries");
   proxysql_destroy_managed_prepared_runtime(prepared);
   // Removing an existing companion table exercises a real loader/database failure.

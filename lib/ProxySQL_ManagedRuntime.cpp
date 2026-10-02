@@ -667,6 +667,20 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
       }
       std::string existing(current);
       free(current);
+      bool mysql_interfaces_staged = false;
+      if (!p->pgsql) {
+        // MySQL interfaces are startup-only. Merge against Admin intent so a
+        // later scoped update preserves unrelated changes already staged there.
+        const auto staged = rows(*GloAdmin->admindb,
+            "SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'",
+            error);
+        if (!error.empty())
+          return false;
+        if (!staged.empty()) {
+          existing = staged[0]["variable_value"].get<std::string>();
+          mysql_interfaces_staged = true;
+        }
+      }
       std::set<std::string> endpoints, scoped_addresses;
       for (const auto &address : scope["listeners"]) {
         std::string normalized;
@@ -712,7 +726,7 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
           p->interfaces += ';';
         p->interfaces += endpoint;
       }
-      p->listeners_changed = p->interfaces != existing;
+      p->listeners_changed = p->interfaces != existing || (!p->pgsql && !mysql_interfaces_staged);
     }
     *out = p.release();
     return true;
@@ -896,12 +910,10 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
         Unlock unlock{[] { GloPTH->wrunlock(); }};
         if (!GloPTH->apply_interfaces_under_lock(p.interfaces.c_str(), error))
           return {false, "ListenersApplyFailed", error};
-      } else {
-        GloMTH->wrlock();
-        Unlock unlock{[] { GloMTH->wrunlock(); }};
-        if (!GloMTH->apply_interfaces_under_lock(p.interfaces.c_str(), error))
-          return {false, "ListenersApplyFailed", error};
       }
+      // MySQL stages Admin configuration only, matching native publication.
+      // Its immutable runtime interface setting and startup listener path are
+      // unchanged; the plugin owns persistence of the canonical configuration.
       Table globals;
       globals.name = "global_variables";
       if (!execute(db,

@@ -34,10 +34,24 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 	duckdb_destroy_result(&res);
 	return static_cast<int>(v);
 }
+
+// Returns the single VARCHAR value of `sql`, or "<error>".
+std::string scalar_text(duckdb_connection conn, const char* sql) {
+	duckdb_result res;
+	if (duckdb_query(conn, sql, &res) != DuckDBSuccess || duckdb_row_count(&res) != 1) {
+		duckdb_destroy_result(&res);
+		return "<error>";
+	}
+	char* value = duckdb_value_varchar(&res, 0, 0);
+	std::string out = value != nullptr ? value : "";
+	duckdb_free(value);
+	duckdb_destroy_result(&res);
+	return out;
+}
 } // namespace
 
 int main() {
-	plan(71);
+	plan(95);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -366,30 +380,114 @@ int main() {
 	if (!managed_engine.connect(&managed_conn, managed_err)) {
 		BAIL_OUT("could not connect to managed DuckDB engine");
 	}
+	duckdb_connection other_conn = nullptr;
+	if (!managed_engine.connect(&other_conn, managed_err)) {
+		BAIL_OUT("could not open a second managed DuckDB connection");
+	}
+	const int threads_before = scalar_count(managed_conn, "SELECT current_setting('threads')::INTEGER");
+	const std::string memory_before = scalar_text(managed_conn, "SELECT current_setting('memory_limit')");
+	auto engine_unchanged = [&]() {
+		return scalar_count(other_conn, "SELECT current_setting('threads')::INTEGER") == threads_before &&
+			scalar_text(other_conn, "SELECT current_setting('memory_limit')") == memory_before;
+	};
+
+	// Issue #6320: clients share one DuckDB engine, so engine-wide settings are
+	// Admin-only (duckdb-* variables). The managed names get an explicit pointer.
 	bool handled = false;
 	ok(duckdb_execute_managed_set("SET TimeZone='UTC'", managed_engine, handled, managed_err) && !handled,
 	   "an unmanaged session SET remains on the ordinary client path");
-	ok(duckdb_execute_managed_set("SET threads=5", managed_engine, handled, managed_err) && handled,
-	   "a direct managed threads SET is routed through engine control");
-	ok(duckdb_execute_managed_set("SET threads=4 -- tune analytics", managed_engine, handled, managed_err) && handled,
-	   "a managed SET with a trailing SQL comment is still routed through engine control");
-	ok(scalar_count(managed_conn, "SELECT current_setting('threads')::INTEGER") == 4,
-	   "the commented managed SET is visible on an existing client connection");
+	ok(!duckdb_execute_managed_set("SET threads=5", managed_engine, handled, managed_err) && handled &&
+	   managed_err.find("duckdb-threads") != std::string::npos,
+	   "a client threads SET is refused and points to the duckdb-threads Admin variable");
+	ok(!duckdb_execute_managed_set("SET threads=4 -- tune analytics", managed_engine, handled, managed_err) &&
+	   handled, "a commented client threads SET is refused as well");
 	ok(duckdb_execute_managed_set("SET threads=5; SELECT 1", managed_engine, handled, managed_err) && !handled,
-	   "an extra statement after SET stays on the ordinary client path");
-	ok(scalar_count(managed_conn, "SELECT current_setting('threads')::INTEGER") == 4,
-	   "an extra statement after SET does not change engine-global threads");
-	ok(duckdb_execute_managed_set("SET GLOBAL memory_limit='256MB';", managed_engine,
-	                              handled, managed_err) && handled,
-	   "a quoted direct memory SET is routed through engine control");
-	DuckDBEffectiveSettings managed_effective;
-	ok(managed_engine.effective_settings(managed_effective, managed_err) &&
-	   managed_effective.memory_limit == "244.1 MiB",
-	   "direct memory SET uses DuckDB canonical effective readback");
+	   "an extra statement after SET leaves the intercept and reaches the session-scope gate");
+	ok(!duckdb_execute_managed_set("SET GLOBAL memory_limit='256MB';", managed_engine, handled, managed_err) &&
+	   handled && managed_err.find("duckdb-memory_limit") != std::string::npos,
+	   "a client memory_limit SET is refused and points to duckdb-memory_limit");
+	ok(!duckdb_execute_managed_set("SET enable_external_access=false", managed_engine, handled, managed_err) &&
+	   handled, "a client cannot toggle external access for every tenant");
 	ok(!duckdb_execute_managed_set("SET access_mode='READ_ONLY'", managed_engine,
 	                               handled, managed_err) && handled &&
 	   managed_err.find("cannot be changed") != std::string::npos,
 	   "a direct startup-only access_mode change is rejected clearly");
+
+	// The intercept only knows four names; the session-scope gate covers every other
+	// spelling of an engine-wide setting, because DuckDB refuses them in SESSION scope.
+	const char* const bypasses[] = {
+		"SET max_memory='1TB'",
+		"SET \"memory_limit\" = '1TB'",
+		"SET worker_threads=64",
+		"set /* hidden */ max_temp_directory_size='1TB'",
+		"RESET threads",
+		"PRAGMA threads=64",
+		"SET GLOBAL default_null_order='nulls_first'",
+		// EXPLAIN ANALYZE executes the wrapped statement, and DuckDB reports it as
+		// EXPLAIN rather than SET, so wrappers are refused before preparing.
+		"EXPLAIN ANALYZE SET GLOBAL memory_limit='1TB'",
+		"explain analyse verbose SET threads=64",
+		"EXPLAIN (ANALYZE, FORMAT 'json') /* c */ SET GLOBAL threads=64",
+		"EXPLAIN (ANALYZE /* ) */) SET GLOBAL memory_limit='1TB'",
+		"EXPLAIN (ANALYZE -- )\n) PRAGMA threads=64",
+		"EXPLAIN (ANALYZE -- )\r) SET GLOBAL threads=64",
+		"EXPLAIN (ANALYZE /* outer /* inner */ ) */) SET GLOBAL threads=64",
+		"EXPLAIN ANALYZE RESET GLOBAL threads",
+		"EXPLAIN ANALYZE PRAGMA threads=64",
+		"PRAGMA disable_checkpoint_on_shutdown",
+		"PRAGMA \"enable_checkpoint_on_shutdown\"",
+	};
+	for (const char* bypass : bypasses) {
+		const DuckDBExecOutcome refused = duckdb_execute_effective(managed_conn, bypass);
+		ok(!refused.ok && engine_unchanged(), "engine-wide change is refused for a client: %s (%s)",
+		   bypass, refused.error.c_str());
+	}
+	const DuckDBExecOutcome hinted = duckdb_execute_effective(managed_conn, "SET max_memory='1TB'");
+	ok(hinted.error.find("cannot be set locally") != std::string::npos &&
+	   hinted.error.find("duckdb-*") != std::string::npos,
+	   "a refused global option explains that Admin manages it");
+
+	const DuckDBExecOutcome search_path = duckdb_execute_effective(managed_conn, "SET search_path='main'");
+	ok(search_path.ok && scalar_text(managed_conn, "SELECT current_setting('search_path')") == "main" &&
+	   scalar_text(other_conn, "SELECT current_setting('search_path')") != "main",
+	   "a session option still works and stays private to its connection");
+	const std::string null_order_before = scalar_text(other_conn, "SELECT current_setting('default_null_order')");
+	const DuckDBExecOutcome null_order = duckdb_execute_effective(managed_conn,
+		"SET default_null_order='nulls_first_on_asc_last_on_desc'");
+	ok(null_order.ok &&
+	   scalar_text(managed_conn, "SELECT current_setting('default_null_order')") == "NULLS_FIRST_ON_ASC_LAST_ON_DESC" &&
+	   scalar_text(other_conn, "SELECT current_setting('default_null_order')") == null_order_before,
+	   "an unscoped SET of a globally-defaulted option no longer leaks to other clients");
+	const DuckDBExecOutcome explain_select = duckdb_execute_effective(managed_conn, "EXPLAIN SELECT 1");
+	ok(explain_select.ok, "EXPLAIN of an ordinary query still works (%s)", explain_select.error.c_str());
+	const DuckDBExecOutcome explain_comments = duckdb_execute_effective(managed_conn,
+		"EXPLAIN (ANALYZE /* outer /* inner */ ) */ -- )\n) SELECT 1");
+	ok(explain_comments.ok, "EXPLAIN options containing commented parentheses still work for queries (%s)",
+	   explain_comments.error.c_str());
+	const DuckDBExecOutcome session_pragma = duckdb_execute_effective(managed_conn, "PRAGMA enable_optimizer");
+	ok(session_pragma.ok, "a session-local optimizer PRAGMA is allowed (%s)", session_pragma.error.c_str());
+
+	// Binding a SET evaluates its value, so the statement must be prepared exactly
+	// once, already confined: a volatile value must be evaluated a single time.
+	// (In autocommit DuckDB runs SET read-only and refuses nextval() at commit, so
+	// the sequence is advanced inside an explicit transaction.)
+	const DuckDBExecOutcome seq = duckdb_execute_effective(managed_conn, "CREATE SEQUENCE set_value_once");
+	const DuckDBExecOutcome schema = duckdb_execute_effective(managed_conn, "CREATE SCHEMA set_value_other");
+	const DuckDBExecOutcome volatile_begin = duckdb_execute_effective(managed_conn, "BEGIN");
+	const DuckDBExecOutcome volatile_set = duckdb_execute_effective(managed_conn,
+		"SET search_path = CASE WHEN nextval('set_value_once') = 1 THEN 'main' ELSE 'set_value_other' END");
+	const int volatile_calls = scalar_count(managed_conn, "SELECT currval('set_value_once')");
+	const DuckDBExecOutcome volatile_commit = duckdb_execute_effective(managed_conn, "COMMIT");
+	ok(seq.ok && schema.ok && volatile_begin.ok && volatile_set.ok && volatile_commit.ok &&
+	   volatile_calls == 1 &&
+	   scalar_text(managed_conn, "SELECT current_setting('search_path')") == "main",
+	   "a volatile SET value is evaluated once (calls=%d, %s%s)", volatile_calls,
+	   volatile_set.error.c_str(), volatile_commit.error.c_str());
+
+	const DuckDBExecOutcome user_variable = duckdb_execute_effective(managed_conn, "SET VARIABLE tenant_marker = 7");
+	ok(user_variable.ok && scalar_count(managed_conn, "SELECT getvariable('tenant_marker')") == 7,
+	   "SET VARIABLE user variables are unaffected");
+	managed_engine.disconnect(&other_conn);
 	managed_engine.disconnect(&managed_conn);
 	managed_engine.close();
 

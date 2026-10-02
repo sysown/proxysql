@@ -15,7 +15,7 @@ ManagedAuthResult verify(void*, const ManagedSignatureInput&) { return {}; }
 ManagedResult invoke(void*, const ManagedRequest&) { return {}; }
 ManagedResult bootstrap(void*, const std::string&) { return {}; }
 ManagedResult restore(void*) { return {}; }
-struct ABI11Descriptor {
+struct ABI14Descriptor {
  const char* name; uint32_t abi_version;
  proxysql_plugin_init_cb init; proxysql_plugin_start_cb start;
  proxysql_plugin_stop_cb stop; proxysql_plugin_status_json_cb status_json;
@@ -27,14 +27,14 @@ struct ABI11Descriptor {
 }
 int main() {
  plan(13); test_init_minimal();
- ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 12u, "abi12_debug_prefix_compatible: layout is ABI12");
- ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 12u,
-    "ABI12 retains independent DEBUG tagging");
- ok(offsetof(ProxySQL_PluginDescriptor, managed_configuration_service) == sizeof(ABI11Descriptor),
-    "ABI11 descriptor prefix remains byte-compatible");
+ ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 15u, "abi15_debug_prefix_compatible: layout is ABI15");
+ ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 15u,
+    "ABI15 retains independent DEBUG tagging");
+ ok(offsetof(ProxySQL_PluginDescriptor, managed_configuration_service) == sizeof(ABI14Descriptor),
+    "ABI14 descriptor prefix remains byte-compatible");
  ok(offsetof(ProxySQL_PluginServices, lock_configuration) ==
     offsetof(ProxySQL_PluginServices, post_server_desired_set) + sizeof(proxysql_plugin_post_server_desired_set_cb),
-    "ABI12 service callbacks append after the complete ABI11 prefix");
+    "ABI15 service callbacks append after the complete ABI14 prefix");
  ProxySQL_ManagedConfigurationServiceV1 service {PROXYSQL_MANAGED_CONFIGURATION_ABI,
   sizeof(ProxySQL_ManagedConfigurationServiceV1), nullptr, verify, invoke, bootstrap, restore};
  std::string error;

@@ -125,8 +125,8 @@ int main() {
  ok(stopped.find("invoke_live") != std::string::npos, "inflight handler called live AWS while draining");
  ok(drain_web == nullptr && manager == nullptr, "both plugin objects cleared after drain");
  ProxySQL_PluginManager old;
- ok(old.load(PROXYSQL_MANAGED_OLD_PLUGIN_PATH, error), "ABI10 prefix still loads with matching DEBUG tag");
- ok(!old.check_managed_configuration_provider(error), "ABI10 descriptor never read as an ABI12 provider");
+ ok(old.load(PROXYSQL_MANAGED_OLD_PLUGIN_PATH, error), "ABI13 prefix still loads with matching DEBUG tag");
+ ok(!old.check_managed_configuration_provider(error), "ABI13 descriptor never read as an ABI15 provider");
  auto multiple = provider(error);
  ok(multiple && multiple->load(PROXYSQL_MANAGED_FAKE_PROVIDER2_PATH, error), "second distinct fake provider loads");
  ok(multiple && !multiple->check_managed_configuration_provider(error), "multiple managed providers rejected before serving");

@@ -1,4 +1,5 @@
 #include "ProxySQL_Plugin.h"
+#include "plugin_services_abi_layout.h"
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "sqlite3db.h"
@@ -23,11 +24,11 @@
 #ifndef PROXYSQL_FAKE_PLUGIN2_PATH
 #error "PROXYSQL_FAKE_PLUGIN2_PATH must be defined"
 #endif
-#ifndef PROXYSQL_FAKE_PLUGIN_ABI10_PATH
-#error "PROXYSQL_FAKE_PLUGIN_ABI10_PATH must be defined"
+#ifndef PROXYSQL_FAKE_PLUGIN_ABI13_PATH
+#error "PROXYSQL_FAKE_PLUGIN_ABI13_PATH must be defined"
 #endif
-#ifndef PROXYSQL_FAKE_SERVER_MODULE_ABI11_PREFIX_PATH
-#error "PROXYSQL_FAKE_SERVER_MODULE_ABI11_PREFIX_PATH must be defined"
+#ifndef PROXYSQL_FAKE_SERVER_MODULE_ABI14_PREFIX_PATH
+#error "PROXYSQL_FAKE_SERVER_MODULE_ABI14_PREFIX_PATH must be defined"
 #endif
 
 char g_fake_admin_db = '\0';
@@ -287,27 +288,45 @@ void destroy_nested_post_controller(ProxySQL_ServerDiscoveryController *controll
 	delete nested;
 }
 
-void test_abi10_fixture_and_invalid_registration() {
+void test_abi13_fixture_and_invalid_registration() {
 	ProxySQL_PluginManager mgr;
 	std::string err;
-	void *abi10_fixture = open_retained_module(PROXYSQL_FAKE_PLUGIN_ABI10_PATH);
-	using abi10_tail_called_cb = bool (*)();
-	auto abi10_tail_called = abi10_fixture == nullptr ? nullptr :
-		reinterpret_cast<abi10_tail_called_cb>(dlsym(
-			abi10_fixture, "proxysql_fake_plugin_abi10_tail_called"));
-	ok(abi10_fixture != nullptr && abi10_tail_called != nullptr &&
-		mgr.load(PROXYSQL_FAKE_PLUGIN_ABI10_PATH, err) && mgr.init_all(err) && mgr.start_all(err) &&
-		abi10_tail_called(),
-		"a frozen ABI-10 DSO calls its ABI-10 tail through the current loader/init lifecycle");
-	ok(mgr.stop_all(), "ABI-10 fixture stops cleanly");
-	dlclose(abi10_fixture);
-	setenv("PROXYSQL_FAKE_PLUGIN_ABI10_FORCE_ABI13", "1", 1);
+	void *abi13_fixture = open_retained_module(PROXYSQL_FAKE_PLUGIN_ABI13_PATH);
+	using abi13_tail_called_cb = bool (*)();
+	auto abi13_tail_called = abi13_fixture == nullptr ? nullptr :
+		reinterpret_cast<abi13_tail_called_cb>(dlsym(
+			abi13_fixture, "proxysql_fake_plugin_abi13_tail_called"));
+	ok(abi13_fixture != nullptr && abi13_tail_called != nullptr &&
+		mgr.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err) && mgr.init_all(err) && mgr.start_all(err) &&
+		abi13_tail_called(),
+		"a frozen ABI-13 DSO calls its ABI-13 tail through ABI-15 loader/init lifecycle");
+	ok(mgr.stop_all(), "ABI-13 fixture stops cleanly");
+	dlclose(abi13_fixture);
+	setenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI16", "1", 1);
 	ProxySQL_PluginManager newer_abi_manager;
-	ok(!newer_abi_manager.load(PROXYSQL_FAKE_PLUGIN_ABI10_PATH, err),
-		"ABI-13 descriptor is rejected by the ABI-12 core");
+	ok(!newer_abi_manager.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err),
+		"ABI-16 descriptor is rejected by the ABI-15 core");
 	ok(err.find("ABI") != std::string::npos && newer_abi_manager.size() == 0,
-		"ABI-13 rejection does not retain a plugin handle");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI10_FORCE_ABI13");
+		"ABI-16 rejection does not retain a plugin handle");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI16");
+	for (const char *version : {"10", "11", "12", "13"}) {
+		setenv("PROXYSQL_FAKE_PLUGIN_LEGACY_AWS_ABI", version, 1);
+		ProxySQL_PluginManager legacy_aws_manager;
+		ok(!legacy_aws_manager.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err),
+			"reject aws ABI-%s before dispatching callbacks from a superseded layout", version);
+		ok(err.find("ABI") != std::string::npos && legacy_aws_manager.size() == 0,
+			"aws ABI-%s rejection explains the rebuild requirement and retains no handle", version);
+	}
+	unsetenv("PROXYSQL_FAKE_PLUGIN_LEGACY_AWS_ABI");
+	for (const char *version : {"11", "12"}) {
+		setenv("PROXYSQL_FAKE_PLUGIN_RESERVED_ABI", version, 1);
+		ProxySQL_PluginManager reserved_manager;
+		ok(!reserved_manager.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err),
+			"reject reserved ABI-%s even when the plugin is not named aws", version);
+		ok(err.find("unsupported plugin ABI version") != std::string::npos && reserved_manager.size() == 0,
+			"reserved ABI-%s rejection retains no handle", version);
+	}
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RESERVED_ABI");
 
 	ProxySQL_ServerModuleHooks no_hook {ProxySQL_ServerProtocol::mysql, {nullptr}, nullptr};
 	ProxySQL_ServerModuleHooks invalid_protocol {
@@ -338,28 +357,28 @@ void test_abi10_fixture_and_invalid_registration() {
 	dlclose(controller_handle);
 }
 
-void test_frozen_server_module_abi11_prefix() {
+void test_frozen_server_module_abi14_prefix() {
 	ProxySQL_PluginManager mgr;
-	void *handle = open_retained_module(PROXYSQL_FAKE_SERVER_MODULE_ABI11_PREFIX_PATH);
+	void *handle = open_retained_module(PROXYSQL_FAKE_SERVER_MODULE_ABI14_PREFIX_PATH);
 	using create_cb = ProxySQL_ServerModuleHooks *(*)();
 	using destroy_cb = void (*)(ProxySQL_ServerModuleHooks *);
 	auto create = handle == nullptr ? nullptr : reinterpret_cast<create_cb>(dlsym(handle,
-		"proxysql_fake_server_module_abi11_prefix_create"));
+		"proxysql_fake_server_module_abi14_prefix_create"));
 	auto destroy = handle == nullptr ? nullptr : reinterpret_cast<destroy_cb>(dlsym(handle,
-		"proxysql_fake_server_module_abi11_prefix_destroy"));
+		"proxysql_fake_server_module_abi14_prefix_destroy"));
 	ProxySQL_ServerModuleHooks *module = create == nullptr ? nullptr : create();
 	ok(module != nullptr && destroy != nullptr && mgr.register_server_module(module, destroy, handle),
-		"register a DSO object allocated as the frozen ABI-11 server-module prefix");
+		"register a DSO object allocated as the frozen ABI-14 server-module prefix");
 	std::vector<ProxySQL_ServerHostgroupClaim> claims;
 	std::string error;
 	ProxySQL_ServerModuleSnapshot snapshot {};
 	snapshot.runtime.protocol = ProxySQL_ServerProtocol::mysql;
 	snapshot.runtime.generation = 42;
 	ok(mgr.prepare_server_module_runtime(snapshot, claims, error),
-		"prepare does not dereference appended callbacks of frozen ABI-11 module");
+		"prepare does not dereference appended callbacks of frozen ABI-14 module");
 	mgr.commit_server_module_runtime(ProxySQL_ServerProtocol::mysql, 42);
 	ok(mgr.unregister_server_module(ProxySQL_ServerProtocol::mysql),
-		"commit and retirement complete without touching frozen ABI-11 tail");
+		"commit and retirement complete without touching frozen ABI-14 tail");
 }
 
 void test_service_phase_availability() {
@@ -747,9 +766,9 @@ void test_controller_callback_lease_barrier() {
 } // namespace
 
 int main() {
-	plan(61);
-	test_abi10_fixture_and_invalid_registration();
-	test_frozen_server_module_abi11_prefix();
+	plan(73);
+	test_abi13_fixture_and_invalid_registration();
+	test_frozen_server_module_abi14_prefix();
 	test_service_phase_availability();
 	test_steady_state_desired_set_service_lifetime();
 	test_nested_steady_state_post_during_unpublish();

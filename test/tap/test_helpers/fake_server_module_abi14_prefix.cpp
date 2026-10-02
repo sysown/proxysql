@@ -1,4 +1,4 @@
-// Deliberately allocate only the frozen ABI-11 ServerModuleHooks prefix.
+// Deliberately allocate only the frozen ABI-14 ServerModuleHooks prefix.
 // This is a DSO fixture: core must never inspect the appended affiliated
 // callbacks through the returned pointer.
 #include "ProxySQL_ServerDiscovery.h"
@@ -13,16 +13,16 @@ struct FrozenServerModuleHooks {
 	void *opaque;
 };
 static_assert(offsetof(ProxySQL_ServerModuleHooks, tables) == sizeof(FrozenServerModuleHooks),
-	"frozen ABI-11 prefix must end at tables");
+	"frozen ABI-14 prefix must end at tables");
 
 void installed(void *, ProxySQL_ServerRuntimeSnapshot) {}
 }
 
-extern "C" ProxySQL_ServerModuleHooks *proxysql_fake_server_module_abi11_prefix_create() {
+extern "C" ProxySQL_ServerModuleHooks *proxysql_fake_server_module_abi14_prefix_create() {
 	auto *prefix = new FrozenServerModuleHooks {ProxySQL_ServerProtocol::mysql, &installed, nullptr};
 	return reinterpret_cast<ProxySQL_ServerModuleHooks *>(prefix);
 }
 
-extern "C" void proxysql_fake_server_module_abi11_prefix_destroy(ProxySQL_ServerModuleHooks *module) {
+extern "C" void proxysql_fake_server_module_abi14_prefix_destroy(ProxySQL_ServerModuleHooks *module) {
 	delete reinterpret_cast<FrozenServerModuleHooks *>(module);
 }

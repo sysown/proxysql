@@ -445,8 +445,8 @@ endif
 TEST_HELPERS_DIR := $(PROXYSQL_PATH)/test/tap/test_helpers
 FAKE_PLUGIN_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin.so
 FAKE_PLUGIN2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin2.so
-FAKE_PLUGIN_ABI10_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin_abi10.so
-FAKE_SERVER_MODULE_ABI11_PREFIX_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_server_module_abi11_prefix.so
+FAKE_PLUGIN_ABI13_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin_abi13.so
+FAKE_SERVER_MODULE_ABI14_PREFIX_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_server_module_abi14_prefix.so
 ROUTER_CONTRACT_FAKE_SO := $(TEST_HELPERS_DIR)/proxysql_router_contract_fake.so
 PROXYSQL_BINARY := $(PROXYSQL_PATH)/src/proxysql
 FAKE_PLUGIN_DEBUG_MISMATCH_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin_debug_mismatch.so
@@ -528,10 +528,10 @@ $(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include
 		-DFAKE_PLUGIN_NAME=\"fake_plugin2\" \
 		-DFAKE_PLUGIN_ENV_PREFIX=\"PROXYSQL_FAKE_PLUGIN2_\"
 
-$(FAKE_PLUGIN_ABI10_SO): $(TEST_HELPERS_DIR)/fake_plugin_abi10.cpp | $(TEST_HELPERS_DIR)
+$(FAKE_PLUGIN_ABI13_SO): $(TEST_HELPERS_DIR)/fake_plugin_abi13.cpp | $(TEST_HELPERS_DIR)
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) -ldl
 
-$(FAKE_SERVER_MODULE_ABI11_PREFIX_SO): $(TEST_HELPERS_DIR)/fake_server_module_abi11_prefix.cpp $(PROXYSQL_PATH)/include/ProxySQL_ServerDiscovery.h | $(TEST_HELPERS_DIR)
+$(FAKE_SERVER_MODULE_ABI14_PREFIX_SO): $(TEST_HELPERS_DIR)/fake_server_module_abi14_prefix.cpp $(PROXYSQL_PATH)/include/ProxySQL_ServerDiscovery.h | $(TEST_HELPERS_DIR)
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS)
 
 $(ROUTER_CONTRACT_FAKE_SO): plugin_router_chassis_contract_unit-t.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
@@ -856,12 +856,12 @@ plugin_runtime_views_unit-t: plugin_runtime_views_unit-t.cpp $(ODIR)/tap.o $(ODI
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
-plugin_server_discovery_abi_unit-t: plugin_server_discovery_abi_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(FAKE_PLUGIN_ABI10_SO) $(FAKE_SERVER_MODULE_ABI11_PREFIX_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+plugin_server_discovery_abi_unit-t: plugin_server_discovery_abi_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(FAKE_PLUGIN_ABI13_SO) $(FAKE_SERVER_MODULE_ABI14_PREFIX_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		-DPROXYSQL_FAKE_PLUGIN2_PATH=\"$(FAKE_PLUGIN2_SO)\" \
-		-DPROXYSQL_FAKE_PLUGIN_ABI10_PATH=\"$(FAKE_PLUGIN_ABI10_SO)\" \
-		-DPROXYSQL_FAKE_SERVER_MODULE_ABI11_PREFIX_PATH=\"$(FAKE_SERVER_MODULE_ABI11_PREFIX_SO)\" \
+		-DPROXYSQL_FAKE_PLUGIN_ABI13_PATH=\"$(FAKE_PLUGIN_ABI13_SO)\" \
+		-DPROXYSQL_FAKE_SERVER_MODULE_ABI14_PREFIX_PATH=\"$(FAKE_SERVER_MODULE_ABI14_PREFIX_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
@@ -1442,7 +1442,7 @@ pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
 clean:
 	rm -rf $(ODIR)
 	rm -f $(MANAGED_FAKE_PROVIDER_SO) $(MANAGED_FAKE_PROVIDER2_SO) *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ROUTER_CONTRACT_FAKE_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO) \
-		$(FAKE_PLUGIN_ABI10_SO) $(FAKE_SERVER_MODULE_ABI11_PREFIX_SO)
+		$(FAKE_PLUGIN_ABI13_SO) $(FAKE_SERVER_MODULE_ABI14_PREFIX_SO)
 	rm -f $(STAGED_LIBPROXYSQLSO) $(addsuffix .tmp,$(STAGED_LIBPROXYSQLSO))
 	rm -f $(PROXYSQL_LDIR)/libproxysql.so
 
@@ -1455,11 +1455,11 @@ $(MANAGED_FAKE_PROVIDER2_SO): $(TEST_HELPERS_DIR)/fake_managed_configuration_plu
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) \
 		-DPROXYSQL_MANAGED_FAKE_NAME=\"fake_managed2\"
 
-managed_configuration_lifecycle_unit-t: managed_configuration_lifecycle_unit-t.cpp $(MANAGED_FAKE_PROVIDER_SO) $(MANAGED_FAKE_PROVIDER2_SO) $(FAKE_PLUGIN_ABI10_SO) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+managed_configuration_lifecycle_unit-t: managed_configuration_lifecycle_unit-t.cpp $(MANAGED_FAKE_PROVIDER_SO) $(MANAGED_FAKE_PROVIDER2_SO) $(FAKE_PLUGIN_ABI13_SO) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		-DPROXYSQL_MANAGED_FAKE_PROVIDER_PATH=\"$(MANAGED_FAKE_PROVIDER_SO)\" \
 		-DPROXYSQL_MANAGED_FAKE_PROVIDER2_PATH=\"$(MANAGED_FAKE_PROVIDER2_SO)\" \
-		-DPROXYSQL_MANAGED_OLD_PLUGIN_PATH=\"$(FAKE_PLUGIN_ABI10_SO)\" \
+		-DPROXYSQL_MANAGED_OLD_PLUGIN_PATH=\"$(FAKE_PLUGIN_ABI13_SO)\" \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -ldl -pthread -o $@
 
 managed_discovery_unit-t: managed_discovery_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)

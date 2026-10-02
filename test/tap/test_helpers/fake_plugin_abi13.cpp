@@ -1,7 +1,7 @@
-// Frozen ABI-10 plugin declarations.  This fixture deliberately must not
-// include ProxySQL_Plugin.h: its service layout is the ABI-10 contract a
+// Frozen ABI-13 plugin declarations.  This fixture deliberately must not
+// include ProxySQL_Plugin.h: its service layout is the ABI-13 contract a
 // separately compiled provider (e.g. the AWS IAM/locality plugin) would have
-// shipped before the ABI-11 server-discovery tail existed.  Tail callbacks the
+// shipped before the ABI-14 server-discovery tail existed.  Tail callbacks the
 // fixture never calls are declared with layout-equivalent opaque function
 // pointer types; only their position and size matter here.
 #include <cstdint>
@@ -15,7 +15,7 @@ class AwsIamTokenSource;
 class AwsMetadataProvider;
 namespace prometheus { class Registry; }
 
-namespace frozen_abi10 {
+namespace frozen_abi13 {
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -89,9 +89,9 @@ using proxysql_plugin_refresh_mysql_aws_locality_stats_cb = void (*)(SQLite3DB *
 
 using opaque_tail_cb = void (*)();
 
-// The nine chassis-base callbacks, followed by ABI 2 through ABI 10.  These
-// are the frozen, exact pre-ABI-11 declarations; no current plugin header is
-// included, so an ABI-11 tail insertion cannot accidentally mask layout skew.
+// The nine chassis-base callbacks, followed by ABI 2 through ABI 13.  These
+// are the frozen, exact pre-ABI-14 declarations; no current plugin header is
+// included, so an ABI-14 tail insertion cannot accidentally mask layout skew.
 struct ProxySQL_PluginServices {
 	proxysql_plugin_register_table_cb register_table;
 	proxysql_plugin_register_command_cb register_command;
@@ -114,7 +114,9 @@ struct ProxySQL_PluginServices {
 	opaque_tail_cb set_listener_gate;
 	opaque_tail_cb apply_mysql_config;
 	opaque_tail_cb apply_mysql_config_v2;
-	// ABI 10: AWS integration tail.
+	// ABI 10: shared Admin connection transaction serialization.
+	bool (*with_admin_db_lock)(bool (*body)(void *), void *);
+	// ABI 13: AWS integration tail.
 	proxysql_plugin_install_aws_iam_token_source_cb install_aws_iam_token_source;
 	proxysql_plugin_get_aws_iam_limits_cb get_aws_iam_limits;
 	proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
@@ -149,38 +151,60 @@ constexpr uint32_t frozen_debug_bit = 0x40000000u;
 constexpr uint32_t frozen_debug_bit = 0u;
 #endif
 
-bool abi10_tail_called = false;
+bool abi13_tail_called = false;
 
 bool init(ProxySQL_PluginServices *services) {
 	if (services == nullptr || services->uninstall_aws_iam_token_source == nullptr) return false;
-	// Calling the frozen ABI-10 tail through the real loader/init service table
-	// proves that ABI-11 appended its fields without shifting this callback.
-	abi10_tail_called = !services->uninstall_aws_iam_token_source(nullptr);
-	return abi10_tail_called;
+	// Calling the frozen ABI-13 tail through the real loader/init service table
+	// proves that ABI-14 appended its fields without shifting this callback.
+	abi13_tail_called = !services->uninstall_aws_iam_token_source(nullptr);
+	return abi13_tail_called;
 }
 bool start() { return true; }
 bool stop() { return true; }
-const char *status_json() { return "{\"name\":\"fake_plugin_abi10\"}"; }
+const char *status_json() { return "{\"name\":\"fake_plugin_abi13\"}"; }
 
 const ProxySQL_PluginDescriptor descriptor {
-	"fake_plugin_abi10", 10u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr,
-	nullptr, nullptr, nullptr
-};
-
-const ProxySQL_PluginDescriptor unsupported_descriptor {
 	"fake_plugin_abi13", 13u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr,
 	nullptr, nullptr, nullptr
 };
 
-} // namespace frozen_abi10
+const ProxySQL_PluginDescriptor unsupported_descriptor {
+	"fake_plugin_abi16", 16u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr,
+	nullptr, nullptr, nullptr
+};
 
-extern "C" const frozen_abi10::ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
-	if (std::getenv("PROXYSQL_FAKE_PLUGIN_ABI10_FORCE_ABI13") != nullptr) {
-		return &frozen_abi10::unsupported_descriptor;
+const ProxySQL_PluginDescriptor legacy_aws_descriptors[] = {
+	{"aws", 10u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr},
+	{"aws", 11u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr},
+	{"aws", 12u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr},
+	{"aws", 13u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr}
+};
+
+const ProxySQL_PluginDescriptor reserved_descriptors[] = {
+	{"reserved_layout", 11u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr},
+	{"reserved_layout", 12u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr}
+};
+
+} // namespace frozen_abi13
+
+extern "C" const frozen_abi13::ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
+	if (std::getenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI16") != nullptr) {
+		return &frozen_abi13::unsupported_descriptor;
 	}
-	return &frozen_abi10::descriptor;
+	const char *legacy = std::getenv("PROXYSQL_FAKE_PLUGIN_LEGACY_AWS_ABI");
+	if (legacy != nullptr) {
+		const int version = std::atoi(legacy);
+		if (version >= 10 && version <= 13) return &frozen_abi13::legacy_aws_descriptors[version - 10];
+	}
+	const char *reserved = std::getenv("PROXYSQL_FAKE_PLUGIN_RESERVED_ABI");
+	if (reserved != nullptr) {
+		const int version = std::atoi(reserved);
+		if (version >= 11 && version <= 12) return &frozen_abi13::reserved_descriptors[version - 11];
+	}
+	return &frozen_abi13::descriptor;
 }
 
-extern "C" bool proxysql_fake_plugin_abi10_tail_called() {
-	return frozen_abi10::abi10_tail_called;
+extern "C" bool proxysql_fake_plugin_abi13_tail_called() {
+	return frozen_abi13::abi13_tail_called;
 }

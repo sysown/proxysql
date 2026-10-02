@@ -151,7 +151,7 @@ DesiredTopology load_cached_topology(SQLite3DB& db, std::string_view topology_uu
 	return topology;
 }
 
-void persist_cached_topology(ProxySQL_PluginServices& services,
+void persist_cached_topology_locked(ProxySQL_PluginServices& services,
 	const DesiredTopology& topology) {
 	SQLite3DB* db = services.get_admindb ? services.get_admindb() : nullptr;
 	if (db == nullptr || !db->execute("BEGIN IMMEDIATE")) {
@@ -188,10 +188,18 @@ void persist_cached_topology(ProxySQL_PluginServices& services,
 	}
 }
 
-bool persist_generation(ProxySQL_PluginServices& services, const char* column,
+// Both writers below run BEGIN...COMMIT on the admindb connection Admin also uses,
+// so they run under Admin's global SQL mutex (issue #6354).
+void persist_cached_topology(ProxySQL_PluginServices& services,
+	const DesiredTopology& topology) {
+	mysql_router_with_admin_db_lock(services, [&] {
+		persist_cached_topology_locked(services, topology);
+		return true;
+	});
+}
+
+bool persist_generation_locked(ProxySQL_PluginServices& services, const char* column,
 	uint64_t generation) {
-	if (std::string_view(column) != "topology_generation" &&
-		std::string_view(column) != "user_generation") return false;
 	SQLite3DB* db = services.get_admindb ? services.get_admindb() : nullptr;
 	if (db == nullptr || !db->execute("BEGIN IMMEDIATE")) return false;
 	const std::string assignment = std::string(column) + "=" + std::to_string(generation);
@@ -201,6 +209,15 @@ bool persist_generation(ProxySQL_PluginServices& services, const char* column,
 		" WHERE singleton_id=1").c_str()) && db->execute("COMMIT");
 	if (!ok) db->execute("ROLLBACK");
 	return ok;
+}
+
+bool persist_generation(ProxySQL_PluginServices& services, const char* column,
+	uint64_t generation) {
+	if (std::string_view(column) != "topology_generation" &&
+		std::string_view(column) != "user_generation") return false;
+	return mysql_router_with_admin_db_lock(services, [&] {
+		return persist_generation_locked(services, column, generation);
+	});
 }
 
 class RuntimeBackend final : public IReconcileBackend {
@@ -238,7 +255,7 @@ public:
 		config_ = config_store_.snapshot();
 		listeners_ = {config_.bind_address, config_.rw_port, config_.ro_port,
 			config_.rw_split_port, false, false};
-		tls_.mode = config_.metadata_ssl_mode;
+		tls_ = config_.metadata_tls;
 		current_topology_ = load_cached_topology(*db_, topology_uuid_);
 		std::vector<uint8_t> password;
 		if (services_.get_secret == nullptr || services_.get_secret("mysql_router",
@@ -278,13 +295,23 @@ public:
 	}
 
 	ReconcileTopologySnapshot read_topology() override {
+		// One member's view of the cluster, held until the reconciler decides whether
+		// to trust it. Reading has no side effects; accept_view() applies them.
+		struct MemberView {
+			ReconcileTopologySnapshot snapshot;
+			ObservedHealth health;
+			MetadataEndpoint endpoint;
+			std::unique_ptr<ConnectorCMetadataSession> session;
+		};
 		auto read_metadata = [&](const MetadataEndpoint& candidate) {
-			session_ = ConnectorCMetadataSession::connect(candidate, tls_, password_,
+			MemberView view;
+			view.endpoint = candidate;
+			view.session = ConnectorCMetadataSession::connect(candidate, tls_, password_,
 				std::max<unsigned>(1, config_.connect_timeout_ms / 1000));
-			QueryResult registration = session_->query(
+			ReconcileTopologySnapshot& snapshot = view.snapshot;
+			QueryResult registration = view.session->query(
 				"SELECT router_id FROM mysql_innodb_cluster_metadata.v2_routers WHERE router_id=?",
 				{static_cast<int64_t>(router_id_)});
-			ReconcileTopologySnapshot snapshot;
 			snapshot.metadata_available = true;
 			if (mysql_router_context().metrics.metadata_available) {
 				mysql_router_context().metrics.metadata_available->Set(1);
@@ -296,10 +323,26 @@ public:
 				context.status.metadata_available = true;
 				context.status.registration_exists = false;
 				context.status.state = "registration_missing";
-				return snapshot;
+				return view;
 			}
 			snapshot.desired = MetadataV2_2::read_innodb_cluster(
-				*session_, topology_uuid_, static_cast<int64_t>(router_id_));
+				*view.session, topology_uuid_, static_cast<int64_t>(router_id_));
+			view.health = GrHealthReader::read(*view.session);
+			snapshot.effective = evaluate_innodb_cluster(snapshot.desired, view.health);
+			snapshot.identity_valid = snapshot.desired.topology_uuid == topology_uuid_;
+			snapshot.has_metadata_endpoint = !snapshot.desired.instances.empty();
+			snapshot.complete = snapshot.identity_valid && snapshot.has_metadata_endpoint;
+			snapshot.fingerprint = topology_fingerprint(snapshot.desired, snapshot.effective);
+			return view;
+		};
+		// Applies the side effects of trusting `view`: the session becomes the
+		// reconciler's metadata session, the registration is refreshed, and the topology
+		// cache, observability and status are updated. Called for exactly one view.
+		auto accept_view = [&](MemberView& view) {
+			session_ = std::move(view.session);
+			endpoint_ = view.endpoint;
+			ReconcileTopologySnapshot& snapshot = view.snapshot;
+			const ObservedHealth& health = view.health;
 			ExecResult registration_refresh = session_->execute(
 				"UPDATE mysql_innodb_cluster_metadata.v2_routers SET product_name='ProxySQL',"
 				"version='8.4.0',attributes=JSON_SET(COALESCE(attributes,JSON_OBJECT()),"
@@ -313,12 +356,6 @@ public:
 				snapshot.warning_code = "check_in_failed";
 				snapshot.warning_message = registration_refresh.error;
 			}
-			ObservedHealth health = GrHealthReader::read(*session_);
-			snapshot.effective = evaluate_innodb_cluster(snapshot.desired, health);
-			snapshot.identity_valid = snapshot.desired.topology_uuid == topology_uuid_;
-			snapshot.has_metadata_endpoint = !snapshot.desired.instances.empty();
-			snapshot.complete = snapshot.identity_valid && snapshot.has_metadata_endpoint;
-			snapshot.fingerprint = topology_fingerprint(snapshot.desired, snapshot.effective);
 			if (snapshot.complete) {
 				persist_cached_topology(services_, snapshot.desired);
 				current_topology_ = snapshot.desired;
@@ -353,39 +390,41 @@ public:
 					} else last_check_in_ms_ = now;
 				}
 			}
-			return snapshot;
+			return std::move(snapshot);
 		};
 
+		// A member in a minority partition still answers, but its view has no quorum:
+		// publishing it would empty or misroute the managed hostgroups while a healthy
+		// majority exists (issue #6351). Keep trying the other known members; use a
+		// view without quorum only when no member reports one.
 		std::exception_ptr metadata_failure;
 		std::optional<ReconcileTopologySnapshot> invalid_metadata_snapshot;
 		std::set<std::pair<std::string, uint16_t>> attempted;
-		auto attempt_metadata = [&](const MetadataEndpoint& candidate,
-			ReconcileTopologySnapshot& snapshot) {
+		AuthoritativeViewSearch<MemberView> metadata_search;
+		auto attempt_metadata = [&](const MetadataEndpoint& candidate) {
 			if (!attempted.emplace(candidate.host, candidate.port).second) return false;
 			try {
-				ReconcileTopologySnapshot candidate_snapshot = read_metadata(candidate);
-				if (candidate_snapshot.complete) {
-					snapshot = std::move(candidate_snapshot);
-					endpoint_ = candidate;
-					return true;
+				MemberView view = read_metadata(candidate);
+				const bool complete = view.snapshot.complete;
+				const bool quorum = view.health.quorum;
+				if (!complete && !invalid_metadata_snapshot) {
+					invalid_metadata_snapshot = view.snapshot;
 				}
-				if (!invalid_metadata_snapshot) {
-					invalid_metadata_snapshot = std::move(candidate_snapshot);
-				}
-				return false;
+				return metadata_search.offer(std::move(view), complete, quorum);
 			} catch (...) {
 				if (!metadata_failure) metadata_failure = std::current_exception();
 				return false;
 			}
 		};
 
-		ReconcileTopologySnapshot metadata_snapshot;
-		if (attempt_metadata(endpoint_, metadata_snapshot)) return metadata_snapshot;
-		for (const auto& instance : current_topology_.instances) {
-			MetadataEndpoint candidate {metadata_user_, instance.classic.host,
-				instance.classic.port};
-			if (attempt_metadata(candidate, metadata_snapshot)) return metadata_snapshot;
+		if (!attempt_metadata(endpoint_)) {
+			for (const auto& instance : current_topology_.instances) {
+				MetadataEndpoint candidate {metadata_user_, instance.classic.host,
+					instance.classic.port};
+				if (attempt_metadata(candidate)) break;
+			}
 		}
+		if (std::optional<MemberView> chosen = metadata_search.take()) return accept_view(*chosen);
 		if (invalid_metadata_snapshot) {
 			ReconcileTopologySnapshot invalid = std::move(*invalid_metadata_snapshot);
 			return invalid;
@@ -403,35 +442,43 @@ public:
 				if (metadata_failure) std::rethrow_exception(metadata_failure);
 				throw std::runtime_error("Router metadata endpoints are unavailable");
 			}
+			AuthoritativeViewSearch<MemberView> health_search;
 			for (const auto& instance : current_topology_.instances) {
 				try {
-					MetadataEndpoint health_endpoint {metadata_user_, instance.classic.host,
-						instance.classic.port};
-					session_ = ConnectorCMetadataSession::connect(health_endpoint, tls_, password_,
+					MemberView view;
+					view.endpoint = {metadata_user_, instance.classic.host, instance.classic.port};
+					view.session = ConnectorCMetadataSession::connect(view.endpoint, tls_, password_,
 						std::max<unsigned>(1, config_.connect_timeout_ms / 1000));
-					ObservedHealth health = GrHealthReader::read(*session_);
-					ReconcileTopologySnapshot snapshot;
-					snapshot.metadata_available = false;
-					if (mysql_router_context().metrics.metadata_available) {
-						mysql_router_context().metrics.metadata_available->Set(0);
-					}
-					snapshot.registration_exists = true;
-					snapshot.identity_valid = true;
-					snapshot.has_metadata_endpoint = true;
-					snapshot.complete = true;
-					snapshot.desired = current_topology_;
-					snapshot.effective = evaluate_innodb_cluster(current_topology_, health);
-					current_effective_ = snapshot.effective;
-					snapshot.fingerprint = topology_fingerprint(snapshot.desired, snapshot.effective);
-					update_observability(snapshot.desired, health, snapshot.effective, false);
-					{
-						MysqlRouterContext& context = mysql_router_context();
-						std::lock_guard<std::mutex> guard(context.status_mutex);
-						context.status.metadata_available = false;
-						context.status.registration_exists = true;
-					}
-					return snapshot;
+					view.health = GrHealthReader::read(*view.session);
+					const bool quorum = view.health.quorum;
+					if (health_search.offer(std::move(view), true, quorum)) break;
 				} catch (...) {}
+			}
+			if (std::optional<MemberView> chosen = health_search.take()) {
+				session_ = std::move(chosen->session);
+				endpoint_ = chosen->endpoint;
+				const ObservedHealth& health = chosen->health;
+				ReconcileTopologySnapshot snapshot;
+				snapshot.metadata_available = false;
+				if (mysql_router_context().metrics.metadata_available) {
+					mysql_router_context().metrics.metadata_available->Set(0);
+				}
+				snapshot.registration_exists = true;
+				snapshot.identity_valid = true;
+				snapshot.has_metadata_endpoint = true;
+				snapshot.complete = true;
+				snapshot.desired = current_topology_;
+				snapshot.effective = evaluate_innodb_cluster(current_topology_, health);
+				current_effective_ = snapshot.effective;
+				snapshot.fingerprint = topology_fingerprint(snapshot.desired, snapshot.effective);
+				update_observability(snapshot.desired, health, snapshot.effective, false);
+				{
+					MysqlRouterContext& context = mysql_router_context();
+					std::lock_guard<std::mutex> guard(context.status_mutex);
+					context.status.metadata_available = false;
+					context.status.registration_exists = true;
+				}
+				return snapshot;
 			}
 			if (metadata_failure) std::rethrow_exception(metadata_failure);
 			throw std::runtime_error("Router metadata endpoints are unavailable");
@@ -622,10 +669,17 @@ public:
 				quote(kind) + "," + quote(code) + "," + quote(safe) + ",1," +
 				std::to_string(now) + "," + std::to_string(now) +
 				" WHERE changes()=0";
-			if (stats->execute("BEGIN IMMEDIATE")) {
-				if (!stats->execute(update.c_str()) || !stats->execute(insert.c_str()) ||
-					!stats->execute("COMMIT")) stats->execute("ROLLBACK");
-			}
+			// statsdb is shared with Admin like admindb (issue #6354). History is
+			// best effort: a lock-service failure must not fail the refresh.
+			try {
+				(void)mysql_router_with_admin_db_lock(services_, [&] {
+					if (stats->execute("BEGIN IMMEDIATE")) {
+						if (!stats->execute(update.c_str()) || !stats->execute(insert.c_str()) ||
+							!stats->execute("COMMIT")) stats->execute("ROLLBACK");
+					}
+					return true;
+				});
+			} catch (...) {}
 		}
 		MysqlRouterContext& context = mysql_router_context();
 		std::lock_guard<std::mutex> guard(context.status_mutex);
@@ -674,7 +728,14 @@ public:
 			quote(success ? "success" : "failure") + "," + std::to_string(from) + "," +
 			std::to_string(to) + "," + quote(success ? "" : "refresh_failed") + "," +
 			quote(safe) + " FROM stats_mysql_router_refresh";
-		(void)stats->execute(sql.c_str());
+		// Same rule as record_transition(): statsdb is shared with Admin (issue #6354),
+		// and refresh history is best effort.
+		try {
+			(void)mysql_router_with_admin_db_lock(services_, [&] {
+				(void)stats->execute(sql.c_str());
+				return true;
+			});
+		} catch (...) {}
 	}
 
 	ReconcileSchedule schedule() const override {

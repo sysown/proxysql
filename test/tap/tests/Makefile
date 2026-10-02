@@ -539,6 +539,8 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-native_portal_backend_kill-t \
 	pgsql-native_extq_orphaned_sync-t \
 	pgsql-discard_all_txn_block-t \
+	pgsql-reg_test_6345_admin_extended_query_sync-t \
+	pgsql-reg_test_6349_auth_anti_enumeration-t \
 	test_ffto_pgsql_pipeline-t \
 	test_ffto_pgsql_stmt_portal-t
 
