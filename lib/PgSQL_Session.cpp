@@ -2854,6 +2854,16 @@ int PgSQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(PgS
 			retry_conn = query_retry_allowed(myds);
 			if (retry_conn) proxy_warning("Retrying query.\n");
 		}
+		if (!retry_conn) {
+			const std::string message = "Backend server went offline during query (hostgroup " +
+				std::to_string(myconn->parent->myhgc->hid) + ", " + myconn->parent->address +
+				":" + std::to_string(myconn->parent->port) + "); query cannot be retried";
+			// Administrative removal terminates the session, including any open
+			// transaction. Do not advertise a recoverable ReadyForQuery afterward.
+			client_myds->myprot.generate_error_packet(true, false, message.c_str(),
+				PGSQL_ERROR_CODES::ERRCODE_ADMIN_SHUTDOWN, true);
+			offline_fatal_pending = true;
+		}
 		if (transaction_state_manager) {
 			transaction_state_manager->reset_state();
 		}
@@ -2990,9 +3000,15 @@ bool PgSQL_Session::handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds) {
 bool PgSQL_Session::query_retry_allowed(PgSQL_Data_Stream* myds) {
 	PgSQL_Connection* myconn = (myds ? myds->myconn : NULL);
 	if (myconn == NULL || myconn->reusable == false ||
-		myconn->MultiplexDisabled() || myconn->is_pipeline_active()) {
+		myconn->MultiplexDisabled()) {
 		return false;
 	}
+	// Native unsynced work includes the current unanswered operation. It is
+	// retryable only when no earlier step was already in progress. CurrentQuery
+	// retains that operation and the remaining frame stays queued in the session.
+	// Keep the stricter libpq pipeline guard and all pooling guards unchanged.
+	if (myconn->native_mode ? myconn->native_query_started_unsynced
+		: myconn->is_pipeline_active()) return false;
 	// While the connection is alive the driver knows whether a transaction is open.
 	// Once it is dead libpq has forgotten: it reports "unknown", and believing that
 	// means refusing every retry, while ignoring it means replaying statements out
@@ -3296,6 +3312,15 @@ int PgSQL_Session::handler() {
 	bool wrong_pass = false;
 	bool in_pending_state = false;
 	if (to_process == 0) return 0; // this should be redundant if the called does the same check
+	if (offline_fatal_pending) {
+		writeout();
+		// Include encrypted bytes retained after a short write. The normal poll
+		// loop resumes draining on POLLOUT; do not process more client commands.
+		if (client_myds->net_failure) return -1;
+		return (client_myds->available_data_out() || client_myds->queueOUT.partial ||
+			client_myds->ssl_write_len || (client_myds->encrypted &&
+			BIO_ctrl_pending(client_myds->wbio_ssl))) ? 0 : -1;
+	}
 	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Processing session %p\n", this->thread, this, this);
 	//unsigned int j;
 	//unsigned char c;
@@ -3923,8 +3948,8 @@ handler_again:
 					//CurrentQuery.mysql_stmt = NULL; // immediately reset mysql_stmt
 					int rc1 = handler_ProcessingQueryError_CheckBackendConnectionStatus(myds);
 					if (rc1 == -1) {
-						handler_ret = -1;
-						return handler_ret;
+						// Re-enter only the output-draining branch, then close.
+						return handler();
 					}
 					else {
 						if (rc1 == 1)

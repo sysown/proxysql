@@ -3801,6 +3801,11 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 	// docs/superpowers/specs/2026-07-07-pgsql-native-extq-stmt-pipeline-design.md.
 	assert(native_mode || pgsql_conn);
 
+	// Capture before the offline check, including failures before the first send.
+	// Subsequent polls must retain the snapshot from before this operation.
+	if (native_mode && async_state_machine == ASYNC_IDLE)
+		native_query_started_unsynced = native_unsynced_work;
+
 	server_status = parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
 		return -1;

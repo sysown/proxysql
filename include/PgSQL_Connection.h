@@ -779,6 +779,9 @@ public:
 	// the statements took, so the connection must not be handed to anyone else. Cleared only by an
 	// actual ReadyForQuery, because that is the only thing that ends the batch.
 	bool native_unsynced_work = false;
+	// Snapshot at the start of the current async_query operation. Earlier steps
+	// cannot be replayed: their packets were consumed and replies may be forwarded.
+	bool native_query_started_unsynced = false;
 	PgSQL_Scram_State* native_scram = nullptr;       // owned; freed in destructor / teardown
 	// How far the backend SCRAM exchange has got. The message type alone does not say whether a
 	// step is legal: a backend can repeat one, or skip one. Each step below feeds state that
