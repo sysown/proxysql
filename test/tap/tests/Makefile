@@ -540,6 +540,7 @@ $(PG_LITE_CLIENT_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h $(TAP_LDIR
 # from MYLIBS, and unlike the pg_lite_client rules above there is no -lscram or
 # -lusual to create duplicate symbols, so $(ALLOW_MULTI_DEF) does not apply.
 PGSQL_MOCK_BACKEND_TESTS := \
+	pgsql-reg_test_6389_monitor_lifecycle-t \
 	pgsql-reg_test_6109_midresult_disconnect-t \
 	pgsql-reg_test_6110_invalid_reply_sequence-t \
 	pgsql-backend_death_query_retry-t \
