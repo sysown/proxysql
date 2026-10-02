@@ -386,7 +386,6 @@ class MySQL_Listeners_Manager {
 	int add(const char *iface, unsigned int num_threads, int **perthrsocks);
 	int find_idx(const char *iface);
 	int find_idx(const char *address, int port);
-	std::vector<std::string> registered_interfaces();
 	iface_info * find_iface_from_fd(int fd);
 	int get_fd(unsigned int idx);
 	void del(unsigned int idx);
@@ -1049,10 +1048,6 @@ class MySQL_Threads_Handler
 	int listener_add(const char *address, int port);
 	int listener_del(const char *iface);
 	int listener_del(const char *address, int port);
-#ifdef PROXYSQL40
-	/** Replace initialized MySQL interfaces while the caller holds the write lock. */
-	bool apply_interfaces_under_lock(const char* value, std::string& error);
-#endif
 	void start_listeners();
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);

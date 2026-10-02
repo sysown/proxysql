@@ -26,11 +26,7 @@ uint32_t parse_uint32(const std::string& value, const std::string& key,
 }
 
 MetadataTlsMode parse_config_tls_mode(const std::string& value) {
-	if (value == "DISABLED") return MetadataTlsMode::disabled;
-	if (value == "PREFERRED") return MetadataTlsMode::preferred;
-	if (value == "REQUIRED") return MetadataTlsMode::required;
-	if (value == "VERIFY_CA") return MetadataTlsMode::verify_ca;
-	if (value == "VERIFY_IDENTITY") return MetadataTlsMode::verify_identity;
+	if (const auto mode = metadata_tls_mode_from_name(value)) return *mode;
 	throw std::invalid_argument("metadata_ssl_mode has an invalid value");
 }
 
@@ -45,7 +41,15 @@ void apply_config(MysqlRouterRuntimeConfig& config, const std::string& key,
 	} else if (key == "rw_port") config.rw_port = static_cast<uint16_t>(parse_uint32(value, key, 65535));
 	else if (key == "ro_port") config.ro_port = static_cast<uint16_t>(parse_uint32(value, key, 65535));
 	else if (key == "rw_split_port") config.rw_split_port = static_cast<uint16_t>(parse_uint32(value, key, 65535));
-	else if (key == "metadata_ssl_mode") config.metadata_ssl_mode = parse_config_tls_mode(value);
+	else if (key == "metadata_ssl_mode") config.metadata_tls.mode = parse_config_tls_mode(value);
+	// Paths and the cipher list are passed to Connector/C as-is; empty means unset.
+	else if (key == "metadata_ssl_ca") config.metadata_tls.ca = value;
+	else if (key == "metadata_ssl_capath") config.metadata_tls.capath = value;
+	else if (key == "metadata_ssl_cert") config.metadata_tls.cert = value;
+	else if (key == "metadata_ssl_key") config.metadata_tls.key = value;
+	else if (key == "metadata_ssl_cipher") config.metadata_tls.cipher = value;
+	else if (key == "metadata_ssl_crl") config.metadata_tls.crl = value;
+	else if (key == "metadata_ssl_crlpath") config.metadata_tls.crlpath = value;
 	else throw std::invalid_argument("unknown mysql_router_config key: " + key);
 }
 
@@ -76,6 +80,9 @@ bool MysqlRouterConfigStore::load(SQLite3DB& db, std::string& error) {
 		}
 		if (candidate.rw_port == 0 || candidate.ro_port == 0 || candidate.rw_split_port == 0) {
 			throw std::invalid_argument("Router listener ports must be nonzero");
+		}
+		if (const std::string problem = metadata_tls_problem(candidate.metadata_tls); !problem.empty()) {
+			throw std::invalid_argument("metadata TLS configuration: " + problem);
 		}
 	} catch (const std::exception& exception) {
 		error = exception.what();

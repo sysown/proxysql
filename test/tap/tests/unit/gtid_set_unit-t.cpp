@@ -325,8 +325,33 @@ static void test_mariadb_domain_keys() {
 	ok(gs.to_string().empty() && gs.get_server_id("0") == 0, "clear drops server_id");
 }
 
+// issue #6336: the native `domain-server-seq` display is only used when it is
+// exact; an unknown server id or a gap falls back to the interval form.
+static void test_mariadb_display_is_exact() {
+	GTID_Set no_server_id;
+	no_server_id.add("0", trxid_t(1), trxid_t(79));
+	ok(no_server_id.to_display_string() == "0:1-79",
+	   "display without a known server id lists the interval (got '%s')",
+	   no_server_id.to_display_string().c_str());
+
+	GTID_Set gap;
+	gap.add("0", trxid_t(1), trxid_t(77));
+	gap.add("0", trxid_t(80));
+	gap.set_server_id("0", 1);
+	ok(gap.to_display_string() == "0:1-77:80",
+	   "display does not hide a gap behind the highest sequence (got '%s')",
+	   gap.to_display_string().c_str());
+
+	GTID_Set not_from_one;
+	not_from_one.add("0", trxid_t(5), trxid_t(9));
+	not_from_one.set_server_id("0", 1);
+	ok(not_from_one.to_display_string() == "0:5-9",
+	   "display of a set not starting at 1 lists the interval (got '%s')",
+	   not_from_one.to_display_string().c_str());
+}
+
 int main() {
-	plan(73);
+	plan(76);
 
 	test_add_interval();				          // 8 assertions
 	test_add_trxid();                             // 2 assertions
@@ -346,6 +371,7 @@ int main() {
 	test_to_string();                             // 5 assertions
 	test_copy();                                  // 5 assertions
 	test_mariadb_domain_keys();                   // 6 assertions
+	test_mariadb_display_is_exact();              // 3 assertions
 
 	return exit_status();
 }

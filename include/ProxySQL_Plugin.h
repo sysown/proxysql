@@ -61,11 +61,17 @@ namespace prometheus { class Registry; }
 //   ABI 9: appends a V2 scoped-MySQL-publication service. Its plan carries
 //          query-rule attributes separately so every ABI-8 row and callback
 //          remains byte-for-byte compatible.
-//   ABI 10: ProxySQL_PluginServices appends the AWS integration services:
+//   ABI 10: appends with_admin_db_lock, which runs a plugin callback under
+//          Admin's global SQL mutex so plugin-owned threads can run
+//          transactions on the shared admindb/statsdb connections without
+//          interleaving with Admin sessions (issue #6354).
+//   ABI 11/12: reserved for incompatible pre-integration AWS branch layouts;
+//              the loader rejects these versions.
+//   ABI 13: ProxySQL_PluginServices appends the AWS integration services:
 //          IAM token-source install/uninstall and waiter sizing, the general
 //          AWS metadata-provider install used by locality discovery, and the
 //          MySQL-owned AWS-locality stats projection callback.
-//   ABI 11: ProxySQL_PluginServices appends provider-neutral server discovery
+//   ABI 14: ProxySQL_PluginServices appends provider-neutral server discovery
 //          module/controller registration and desired-set submission.
 //
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
@@ -85,8 +91,8 @@ namespace prometheus { class Registry; }
 // A plugin built without -DDEBUG, loaded into a core built with
 // -DDEBUG (or vice versa), silently disagrees with the core about these
 // offsets while still reporting a numerically "compatible" abi_version
-// under the plain ABI 1..11 scheme above (e.g. a release plugin's
-// abi_version=11 is <= a debug core's max=11, so the ordinary
+// under the plain ABI 1..14 scheme above (e.g. a release plugin's
+// abi_version=14 is <= a debug core's max=14, so the ordinary
 // forward-compatibility range check does not catch it).
 //
 // What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
@@ -128,23 +134,23 @@ namespace prometheus { class Registry; }
 //
 // PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
 // (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
-// in a numeric space (bit 30) the plain layout-version numbers (1..11,
+// in a numeric space (bit 30) the plain layout-version numbers (1..14,
 // and unlikely to reach 2^30 for a long time) never touch, so a
 // DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
 // "compatible" via ordinary integer range comparison -- the loader
 // checks this bit for an EXACT match, as a step separate from (and in
-// addition to) the ABI 1..11 forward-compatibility range check below.
+// addition to) the ABI 1..14 forward-compatibility range check below.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
 
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 11u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 11u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 14u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 14u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 #else
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
 #endif
-// Layout-only ceiling used for the ABI 1..11 range check. Callers must mask
+// Layout-only ceiling used for the ABI 1..14 range check. Callers must mask
 // off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
 // against this constant -- see lib/ProxySQL_PluginManager.cpp.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
@@ -401,7 +407,7 @@ struct ProxySQL_PluginRuntimeView {
 using proxysql_plugin_register_runtime_view_cb =
 	bool (*)(const ProxySQL_PluginRuntimeView &);
 
-// ABI-10 extension for optional external IAM database-authentication providers.
+// ABI-13 extension for optional external IAM database-authentication providers.
 // The source is owned by core after successful installation; `module_handle`
 // is a retained dlopen() reference released only after all session leases drain.
 using proxysql_plugin_install_aws_iam_token_source_cb =
@@ -505,7 +511,19 @@ struct ProxySQL_PluginServices {
 	ProxySQL_PluginMysqlConfigResult (*apply_mysql_config_v2)(
 		const ProxySQL_PluginMysqlConfigPlanV2& plan);
 
-	// ABI-10 AWS integration tail. The IAM token-source and metadata-provider
+	// ABI-10 tail. Runs `body(opaque)` while holding Admin's global SQL
+	// mutex -- the lock every Admin session holds while it executes statements
+	// on admindb/statsdb -- and returns body's result. admindb and statsdb are
+	// single SQLite connections shared with Admin, so transaction state is
+	// shared too: a plugin-owned thread that runs BEGIN...COMMIT on them must do
+	// so inside this callback, or its transaction can absorb or roll back an
+	// Admin session's statements (issue #6354). Returns false without calling
+	// body when Admin is unavailable (Phase B stub). body must not throw, and
+	// the caller must not already hold the mutex: Admin command handlers must
+	// first release it through ProxySQL_PluginCommandContext.
+	bool (*with_admin_db_lock)(bool (*body)(void* opaque), void* opaque);
+
+	// ABI-13 AWS integration tail. The IAM token-source and metadata-provider
 	// callbacks are null outside normal plugin init(); the locality stats
 	// callback is live in Phase B and normal init and performs no I/O.
 	// uninstall_aws_iam_token_source is intended only for rollback of the same
@@ -515,7 +533,7 @@ struct ProxySQL_PluginServices {
 	proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
 	proxysql_plugin_refresh_mysql_aws_locality_stats_cb refresh_mysql_aws_locality_stats;
 	proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
-	// ABI-11 extension. Server modules can register during Phase B or normal
+	// ABI-14 extension. Server modules can register during Phase B or normal
 	// init; discovery controllers install only during normal init. Uninstall is
 	// live during normal init and the owning plugin's stop() callback so its
 	// installed controller can synchronously drain and be destroyed before

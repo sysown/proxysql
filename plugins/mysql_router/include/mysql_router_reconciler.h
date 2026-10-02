@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -25,6 +26,40 @@ struct ReconcileTopologySnapshot {
 	std::string warning_message;
 	DesiredTopology desired;
 	EffectiveTopology effective;
+};
+
+/**
+ * @brief Chooses which cluster member's topology view the reconciler may trust.
+ * @details Every member reports Group Replication health from its own point of view.
+ *   A member in a minority partition sees itself ONLINE and its peers UNREACHABLE, so
+ *   its view has no quorum. Publishing that view would empty or misroute the managed
+ *   hostgroups while a healthy majority still exists (issue #6351). Candidates are
+ *   offered one at a time. The first complete view with quorum is used immediately.
+ *   Otherwise the first complete view without quorum is kept and used only after every
+ *   candidate was tried, which is when the quorum_traffic policy legitimately applies.
+ */
+template <typename View>
+class AuthoritativeViewSearch {
+public:
+	/** Offers a candidate view; returns true when it has quorum and the search can stop. */
+	bool offer(View&& view, bool complete, bool has_quorum) {
+		if (!complete) return false;
+		if (has_quorum) {
+			chosen_.emplace(std::move(view));
+			return true;
+		}
+		if (!fallback_) fallback_.emplace(std::move(view));
+		return false;
+	}
+	/** The quorum view if one was offered, else the first complete view, else nothing. */
+	std::optional<View> take() {
+		if (chosen_) return std::move(chosen_);
+		return std::move(fallback_);
+	}
+
+private:
+	std::optional<View> chosen_;
+	std::optional<View> fallback_;
 };
 
 struct ReconcileSchedule {

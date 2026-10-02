@@ -285,7 +285,7 @@ BootstrapResult MysqlRouterBootstrap::run(const BootstrapOptions& options) {
 		}
 		completed.user_generation = store_.publish_users(topology_, options.listeners,
 			accounts, metadata_user, completed.topology_generation + 1);
-		store_.save_complete(completed, options.listeners);
+		store_.save_complete(completed, options.listeners, options.tls);
 		progress->phase = BootstrapPhase::local_configured;
 		store_.save_journal(*progress);
 		progress->phase = BootstrapPhase::complete;
@@ -626,7 +626,7 @@ public:
 		uint64_t generation);
 
 	void save_complete(const BootstrapIdentity& identity,
-		const ListenerProfile& listeners) override {
+		const ListenerProfile& listeners, const TlsOptions& tls) override {
 		if (!db_->execute("BEGIN IMMEDIATE")) throw std::runtime_error("failed to begin local bootstrap commit");
 		const std::string instance = "INSERT INTO mysql_router_instance"
 			"(singleton_id,topology_type,topology_uuid,cluster_id,clusterset_id,router_id,router_name,router_address,"
@@ -645,10 +645,18 @@ public:
 			"advertised_version=excluded.advertised_version,topology_generation=excluded.topology_generation,"
 			"user_generation=excluded.user_generation";
 		bool ok = db_->execute(instance.c_str());
-		for (const auto& item : std::array<std::pair<const char*, std::string>, 4>{{
+		// The metadata TLS settings are written in full (empty strings for unset paths) so
+		// that the runtime reconciler connects exactly as bootstrap did, and so a
+		// re-bootstrap with fewer TLS options cannot inherit stale ones (issue #6352).
+		for (const auto& item : std::array<std::pair<const char*, std::string>, 12>{{
 			{"bind_address", listeners.bind_address}, {"rw_port", std::to_string(listeners.rw_port)},
 			{"ro_port", std::to_string(listeners.ro_port)},
-			{"rw_split_port", std::to_string(listeners.rw_split_port)}}}) {
+			{"rw_split_port", std::to_string(listeners.rw_split_port)},
+			{"metadata_ssl_mode", metadata_tls_mode_name(tls.mode)},
+			{"metadata_ssl_ca", tls.ca}, {"metadata_ssl_capath", tls.capath},
+			{"metadata_ssl_cert", tls.cert}, {"metadata_ssl_key", tls.key},
+			{"metadata_ssl_cipher", tls.cipher}, {"metadata_ssl_crl", tls.crl},
+			{"metadata_ssl_crlpath", tls.crlpath}}}) {
 			const std::string config = "INSERT INTO mysql_router_config(config_key,config_value) VALUES(" +
 				sqlite_quote(item.first) + "," + sqlite_quote(item.second) + ") ON CONFLICT(config_key) "
 				"DO UPDATE SET config_value=excluded.config_value";
@@ -804,7 +812,10 @@ uint64_t PluginBootstrapStore::publish_users_snapshot(const DesiredTopology& top
 	const uint64_t published = publish_generation(
 		topology, effective, listeners, generation, normalized.users);
 	try {
-		persist_mysql_router_users(*admindb, published, normalized.status);
+		mysql_router_with_admin_db_lock(services_, [&] {
+			persist_mysql_router_users(*admindb, published, normalized.status);
+			return true;
+		});
 	} catch (...) {
 		const std::exception_ptr persistence_failure = std::current_exception();
 		if (published == static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {

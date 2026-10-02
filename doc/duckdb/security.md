@@ -18,6 +18,17 @@ database.
 Use dedicated credentials where possible, restrict endpoint reachability, and
 assume mutually untrusted users must not share this initial plugin instance.
 
+Clients cannot change engine-wide settings. The ones ProxySQL manages
+(`memory_limit`, `threads`, `enable_external_access`) are changed only through
+their `duckdb-*` Admin variables; every other option DuckDB applies globally
+cannot be changed at runtime at all. Client `SET` and `RESET` statements are
+confined to the client's own session. `SET GLOBAL`, engine-wide configuration `PRAGMA`s and
+`EXPLAIN` of a `SET`, `RESET` or `PRAGMA` statement are refused, so one client
+cannot raise limits or change access for every other client. Session-local
+`PRAGMA` commands such as `PRAGMA enable_optimizer` remain allowed. Configuration
+assignments written as `PRAGMA name=value` are refused; use `SET SESSION` for
+session settings.
+
 ## Listener exposure
 
 Both listeners default to `0.0.0.0`, which exposes them on every available

@@ -573,24 +573,63 @@ static void test_wire_mariadb_domain() {
 }
 
 /**
- * @brief Reader-fed domains display a 0 server_id sentinel.
+ * @brief Reader-fed domains display as intervals until a server_id is known.
  *
  * The wire protocol carries domain and sequence only, so a reader snapshot has
- * no server_id to remember. The stats rendering therefore shows 0-0-<end>
- * until an OK-packet observation supplies a real server_id for the domain.
+ * no server_id to remember. The stats rendering therefore shows the interval
+ * form `0:1-<end>` instead of inventing server_id 0 (issue #6336), and switches
+ * to the native `domain-server-seq` form once an OK-packet observation supplies
+ * a real server_id for the domain.
  */
-static void test_wire_mariadb_display_uses_server_id_sentinel() {
+static void test_wire_mariadb_display_without_server_id() {
 	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
 	stuff_buffer(sd, std::string("ST=0:1-270\n"));
-	ok(sd.read_next_gtid() == true, "sentinel display: ST= domain bootstrap is parsed");
+	ok(sd.read_next_gtid() == true, "display: ST= domain bootstrap is parsed");
 
-	ok(sd.gtid_executed_to_string() == "0-0-270",
-		"sentinel display: reader-fed domain renders as 0-0-270");
+	ok(sd.gtid_executed_to_string() == "0:1-270",
+		"display: reader-fed domain renders as the interval 0:1-270 (got '%s')",
+		sd.gtid_executed_to_string().c_str());
 
 	ok(sd.add_gtid_from_ok("0-1-271"),
-		"sentinel display: OK packet advances the reader-fed domain");
+		"display: OK packet advances the reader-fed domain");
 	ok(sd.gtid_executed_to_string() == "0-1-271",
-		"sentinel display: OK-packet ingestion replaces the sentinel with server_id 1");
+		"display: once server_id 1 is known the domain renders natively as 0-1-271");
+}
+
+/**
+ * @brief A new reader connection starts from its own bootstrap (issue #6334).
+ *
+ * The same GTID_Server_Data is reused across reconnects. Without resetting
+ * the per-connection state, an endpoint whose reader changed GTID flavor (a
+ * MySQL server replaced by a MariaDB one behind the same host:port) rejected
+ * every bootstrap and reconnected forever.
+ */
+static void test_reconnect_resets_reader_stream() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	stuff_buffer(sd, std::string("ST=") + UUID_A + ":1-10\n");
+	ok(sd.read_next_gtid() == true && sd.gtid_flavor == GTID_ID_FLAVOR_UUID,
+	   "reconnect: the first connection establishes the UUID flavor");
+
+	// A partial line left by the previous connection must not be glued to the
+	// first message of the next one.
+	const std::string partial = "I1=" + std::string(UUID_A_STRIPPED) + ":1";
+	stuff_buffer(sd, partial);
+	sd.reset_reader_stream();
+	ok(sd.gtid_flavor == GTID_ID_FLAVOR_UNKNOWN && sd.uuid_server[0] == '\0'
+	       && sd.len == 0 && sd.pos == 0,
+	   "reconnect: the reader stream state is cleared");
+	// The new connection may reach another server: nothing of the previous
+	// server's executed set may still satisfy a causal read.
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 10) == false && sd.gtid_executed_to_string().empty(),
+	   "reconnect: the previous executed set is dropped");
+
+	stuff_buffer(sd, "ST=0:1-270\n");
+	ok(sd.read_next_gtid() == true && sd.active == true
+	       && sd.gtid_flavor == GTID_ID_FLAVOR_DOMAIN,
+	   "reconnect: a bootstrap of the other flavor is accepted after the reset");
+	char domain[] = "0";
+	ok(sd.gtid_exists(domain, 270) && sd.gtid_exists(UUID_A_STRIPPED, 10) == false,
+	   "reconnect: the executed set is the new bootstrap's only");
 }
 
 /**
@@ -776,7 +815,7 @@ static void test_noncanonical_domain_id_disconnects() {
 }
 
 int main() {
-	plan(170);
+	plan(175);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -802,7 +841,8 @@ int main() {
 	test_gtid_snapshot_is_coherent_during_binlog_updates();
 	test_ok_mariadb_gtid();
 	test_wire_mariadb_domain();
-	test_wire_mariadb_display_uses_server_id_sentinel();
+	test_wire_mariadb_display_without_server_id();
+	test_reconnect_resets_reader_stream();
 	test_mixed_flavors_in_bootstrap_disconnects();
 	test_invalid_bootstrap_id_disconnects();
 	test_flavor_is_established_once();

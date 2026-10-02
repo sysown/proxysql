@@ -54,7 +54,7 @@ Pick one based on your time budget. Each is cumulative — the 2-hour pass conti
 Goal: convince yourself the chassis ABI and lifecycle are sane and the v3.x invisibility is real. Don't read mysqlx; trust that it's a consumer.
 
 1. Read **§3 (ABI surface)** below. Cross-check against [`ABI.md`](./ABI.md).
-2. Skim `include/ProxySQL_Plugin.h` — note `PROXYSQL_PLUGIN_ABI_VERSION = 8`, the descriptor's ABI-gated tail, and the matching service-table tail.
+2. Skim `include/ProxySQL_Plugin.h` — note `PROXYSQL_PLUGIN_ABI_VERSION = 10`, the descriptor's ABI-gated tail, and the matching service-table tail.
 3. Read **§4 (Ordered plugin lifecycle)** below.
 4. Skim `lib/ProxySQL_PluginManager.cpp` lines **324–461** (load + register_schemas + abi_version gating) and **548–576** (stop_all pairs with init).
 5. Check the v3.x invisibility claim:
@@ -93,7 +93,7 @@ The chassis is defined by **two headers** plus the loader implementation. The co
 
 **Key types (in `include/ProxySQL_Plugin.h`):**
 
-- `PROXYSQL_PLUGIN_ABI_VERSION` (currently `9`) — what newly-built plugins target. ABI 1 supplied the original six-field descriptor; later ABIs only append fields or extend compatible service contracts.
+- `PROXYSQL_PLUGIN_ABI_VERSION` (currently `10`) — what newly-built plugins target. ABI 1 supplied the original six-field descriptor; later ABIs only append fields or extend compatible service contracts.
 - `ProxySQL_PluginDescriptor` — the struct returned via `extern "C" proxysql_plugin_descriptor_v1()`. Its current tail contains schema, CLI, early-action, and runtime-ready callbacks. The single mandatory entry point a plugin must export is unchanged.
 - `ProxySQL_PluginServices` — the injected service table: registration APIs, log helper, three DB getters, live snapshots, Prometheus registry, runtime views, encrypted secrets, listener gates, and scoped MySQL configuration publication. Tail-append discipline preserves compatibility with plugins built against shorter layouts.
 
@@ -105,7 +105,7 @@ The chassis is defined by **two headers** plus the loader implementation. The co
 
 **See [`ABI.md`](./ABI.md) for the full contract**, including the tail-append rule, the Phase-B-vs-Phase-D services availability matrix, the C++-ABI coupling note (`std::string` and `prometheus-cpp` are part of the contract — plugin and core must share toolchain), and the empty-source-sync invariant.
 
-### ABI 6–9 availability matrix
+### ABI 6–10 availability matrix
 
 | ABI | Descriptor tail | Service tail |
 |---:|---|---|
@@ -113,6 +113,7 @@ The chassis is defined by **two headers** plus the loader implementation. The co
 | 7 | unchanged | encrypted secret callbacks |
 | 8 | `runtime_ready` | listener gate, scoped MySQL config publisher, live snapshots |
 | 9 | unchanged | V2 scoped MySQL publisher with a separate rule-ID attributes array |
+| 10 | unchanged | `with_admin_db_lock`: plugin transactions on admindb/statsdb under Admin's SQL mutex |
 
 The callback order is fixed: discover all configured modules, register their CLI options, perform the one definitive core parse, call `register_schemas`, materialize Admin databases, call `early_action`, then `init`, `start`, and `runtime_ready`, and finally call `stop` during teardown. An early action may request a successful or failed process exit; otherwise startup continues. `runtime_ready` runs after core runtime dependencies exist and immediately before listener validation/start. A plugin whose `init` succeeded receives exactly one `stop`, even if `start` or runtime readiness later fails.
 
@@ -156,7 +157,7 @@ startup                                                                         
 2. **Phase E writes commands_/hooks_; workers read them lock-free.** Phase E MUST complete before any worker thread reads via `proxysql_has_configured_plugin_query_hook`. If a future change moves listener startup before Phase E finishes, plain writes race plain reads. (See the publication-order comment in `ProxySQL_PluginManager::init_all()`.)
 3. **The manager pointer is published BEFORE Admin::init**. `Admin::init` reads tables via `proxysql_get_plugin_manager()`. If the publish was deferred to after Phase D, the merge would see no plugin tables. (Comment block at the top of `proxysql_load_configured_plugins`.)
 4. **`register_schemas` is only dereferenced when `abi_version >= 2`.** A v1 plugin's struct ends after `status_json`; reading past would be an out-of-bounds access. (Check at `lib/ProxySQL_PluginManager.cpp:407`.)
-5. **The descriptor and services structs are tail-extensible.** A plugin compiled against an older supported ABI still loads in an ABI-9 core (the core reads only the fields that version defines). The reverse — an ABI-9 plugin against an older core — is rejected by the version check.
+5. **The descriptor and services structs are tail-extensible.** A plugin compiled against an older supported ABI still loads in an ABI-10 core (the core reads only the fields that version defines). The reverse — an ABI-10 plugin against an older core — is rejected by the version check.
 
 ---
 

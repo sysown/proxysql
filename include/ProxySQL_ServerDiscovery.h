@@ -86,7 +86,7 @@ struct ProxySQL_ServerHostgroupClaim {
 
 #ifdef PROXYSQL40
 // Internal, lifetime-safe snapshots used by core monitor/HGM consumers. These
-// are not plugin service-table callbacks and do not change ABI-11.
+// are not plugin service-table callbacks and do not change ABI-14.
 void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
 void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
 
@@ -177,14 +177,14 @@ private:
 };
 
 struct ProxySQL_ServerModuleHooks {
-	// Keep this ABI-11 prefix immutable: retained modules compiled against the
+	// Keep this ABI-14 prefix immutable: retained modules compiled against the
 	// original callback protocol own exactly these three fields.
 	ProxySQL_ServerProtocol protocol;
 	void (*runtime_configuration_installed)(void *, ProxySQL_ServerRuntimeSnapshot) { nullptr };
 	void *opaque { nullptr };
 
 	// New affiliated modules leave the legacy callback null and populate this
-	// appended callback protocol.  Core never reads beyond the ABI-11 prefix for
+	// appended callback protocol.  Core never reads beyond the ABI-14 prefix for
 	// legacy modules, so frozen DSOs remain valid.
 	std::vector<ProxySQL_ServerModuleTable> tables;
 	bool (*prepare_runtime)(void *, const ProxySQL_ServerModuleSnapshot&,

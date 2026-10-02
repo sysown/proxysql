@@ -46,6 +46,7 @@ ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config(
 	const ProxySQL_PluginMysqlConfigPlan&);
 ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config_v2(
 	const ProxySQL_PluginMysqlConfigPlanV2&);
+bool proxysql_plugin_with_admin_db_lock(bool (*body)(void*), void* opaque);
 
 namespace {
 
@@ -68,7 +69,7 @@ struct PluginCallbackTarget {
 // server-discovery worker can retain a service callback and post after init,
 // so it must never read this plain lifecycle-only pointer.
 thread_local PluginCallbackTarget g_registry_callback_target {};
-// A plugin may retain the ABI-11 uninstall callback and invoke it from stop().
+// A plugin may retain the ABI-14 uninstall callback and invoke it from stop().
 // This target is deliberately separate from g_registry_target so stop cannot
 // reopen install/registration services, and separate from the active manager
 // because shutdown unpublishes that manager before invoking plugin callbacks.
@@ -571,6 +572,10 @@ ProxySQL_PluginMysqlConfigResult apply_mysql_config_v2_not_available(
 	return { false, 0, "MySQL configuration publication is not available", {} };
 }
 
+bool with_admin_db_lock_not_available(bool (*)(void*), void*) {
+	return false;
+}
+
 bool sql_equals_ci(const std::string& lhs, const std::string& rhs) {
 	return strcasecmp(lhs.c_str(), rhs.c_str()) == 0;
 }
@@ -647,6 +652,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.set_listener_gate = &set_listener_gate_service;
 	services_.apply_mysql_config = &proxysql_plugin_apply_mysql_config;
 	services_.apply_mysql_config_v2 = &proxysql_plugin_apply_mysql_config_v2;
+	services_.with_admin_db_lock = &proxysql_plugin_with_admin_db_lock;
 	services_.install_aws_iam_token_source = &install_aws_iam_token_source_service;
 	services_.get_aws_iam_limits = &get_aws_iam_limits_service;
 	services_.install_aws_metadata_provider = &install_aws_metadata_provider_service;
@@ -687,6 +693,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_phase_b_.set_listener_gate = &set_listener_gate_not_available;
 	services_phase_b_.apply_mysql_config = &apply_mysql_config_not_available;
 	services_phase_b_.apply_mysql_config_v2 = &apply_mysql_config_v2_not_available;
+	services_phase_b_.with_admin_db_lock = &with_admin_db_lock_not_available;
 	services_phase_b_.refresh_mysql_aws_locality_stats =
 		&refresh_mysql_aws_locality_stats_service;
 	services_phase_b_.register_server_module = &register_server_module_service;
@@ -767,7 +774,7 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	// safe via the tail-append pattern -- fields the plugin didn't define
 	// are never dereferenced (see handling of register_schemas below).
 	//
-	// abi_version carries the ABI 1..11 layout-version number in its low
+	// abi_version carries the ABI 1..14 layout-version number in its low
 	// bits and PROXYSQL_PLUGIN_ABI_DEBUG_BIT as a separate, independent
 	// tag (see the long comment on PROXYSQL_PLUGIN_ABI_DEBUG_BIT in
 	// ProxySQL_Plugin.h for the dump_pkt/DSS-offset-shift mechanism this
@@ -778,7 +785,8 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	// but still-understood ABI" situation.
 	const unsigned int layout_version = plugin_layout_version(descriptor);
 	const unsigned int debug_tag = descriptor->abi_version & PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
-	if (layout_version < 1u || layout_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX) {
+	if (layout_version < 1u || layout_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX ||
+		layout_version == 11u || layout_version == 12u) {
 		err = "unsupported plugin ABI version";
 		dlclose(handle);
 		return false;
@@ -790,6 +798,15 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 			"offsets between debug and release builds; loading this plugin would silently "
 			"corrupt memory instead of crashing predictably). Rebuild the plugin with the "
 			"same DEBUG setting as this core.";
+		dlclose(handle);
+		return false;
+	}
+
+	// The pre-integration AWS branch used ABI 10/11/12 for a different
+	// services layout. ABI 11/12 are reserved above; ABI 10 remains valid for
+	// upstream plugins, so reject the old AWS name/version combination too.
+	if (std::strcmp(descriptor->name, "aws") == 0 && layout_version < 14u) {
+		err = "plugin 'aws' requires ABI layout 14 or newer; rebuild against the integrated core headers";
 		dlclose(handle);
 		return false;
 	}
@@ -872,7 +889,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		//
 		// abi_version must be masked before this comparison: it carries
 		// PROXYSQL_PLUGIN_ABI_DEBUG_BIT in a high bit orthogonal to the
-		// ABI 1..11 layout-version number (see the contract comment next
+		// ABI 1..14 layout-version number (see the contract comment next
 		// to PROXYSQL_PLUGIN_ABI_DEBUG_BIT in ProxySQL_Plugin.h). A
 		// DEBUG-tagged ABI-1 descriptor has abi_version == 0x40000001,
 		// which satisfies a raw ">= 2u" and would wrongly dereference
@@ -1518,7 +1535,7 @@ bool ProxySQL_PluginManager::register_server_module(
 	if (module == nullptr || destroy == nullptr || module_handle == nullptr) {
 		return false;
 	}
-	// ABI-11 callback-only modules remain supported.  Do not read appended
+	// ABI-14 callback-only modules remain supported.  Do not read appended
 	// fields from their frozen allocation.
 	const bool affiliated_module = module->runtime_configuration_installed == nullptr;
 	if (affiliated_module && (module->tables.empty() || module->prepare_runtime == nullptr ||
