@@ -1,0 +1,420 @@
+# STAGED FOR GH-Actions: copy this file to .github/workflows/ci-no-infra-g1.yml
+# on GH-Actions to deploy the sparse-checkout fix for #6384. The caller on
+# v3.0 continues to use that branch; this staged copy does not change live CI.
+name: CI-no-infra-g1
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+
+      consumer_id:
+        type: string
+        default: run
+      control_ref:
+        type: string
+        default: GH-Actions
+      producer_run_id:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: ''
+env:
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Availability-aware dispatch (PROTOTYPE -- CI-legacy-g3 only for now).
+  # `runs-on` locks its pool when the job is created and never falls back, so a
+  # self-hosted-routed job queues behind the 6-VM pool even while GitHub-hosted
+  # capacity sits idle. This leading job decides the pool up front: eligible
+  # actor+workflow AND an idle proxysql-ci VM -> self-hosted; pool saturated ->
+  # SPILL to GitHub-hosted instead of queuing. Listing runners needs repo admin
+  # (GH_TOKEN_SYSOWN); if that is unavailable we fail SAFE to self-hosted so the
+  # existing offload behavior is preserved. It is a heuristic (idle-now != idle-
+  # when-the-job-lands), so it drains the tail to hosted rather than perfectly
+  # packing the VMs.
+  # ---------------------------------------------------------------------------
+  tier-context:
+    uses: ./.github/workflows/ci-tier-context.yml
+    with:
+      trigger: ${{ inputs.trigger }}
+      consumer_id: ${{ inputs.consumer_id }}
+      control_ref: ${{ inputs.control_ref }}
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_attempt: ${{ inputs.producer_attempt }}
+      consumer_file: ci-no-infra-g1.yml
+      consumer_inputs: ${{ toJson(inputs) }}
+    secrets: inherit
+  pick-runner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      actions: read          # read in-progress runs/jobs (no repo admin needed)
+    outputs:
+      runson: ${{ steps.pick.outputs.runson }}
+    steps:
+    - name: Pick runner pool
+      id: pick
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
+        ELIGIBLE: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
+      run: |
+        set -uo pipefail
+        choice='"ubuntu-22.04"'
+        if [ "${ELIGIBLE:-}" = "true" ]; then
+          POOL="${POOL_SIZE:-6}"
+          # Listing runners needs repo admin, which no available token has, so
+          # infer pool demand from job state the default token CAN read.
+          # demand = in-progress jobs carrying the 'proxysql-ci' label, i.e. the
+          # jobs actually occupying a pool VM right now.
+          #
+          # Two corrections vs the original heuristic:
+          #  - Match the 'proxysql-ci' label, not a 'ci-vm' runner_name prefix.
+          #    The prefix missed every dev128-ci-vm-* runner, so their occupancy
+          #    was invisible and the pool looked emptier than it was.
+          #  - Count in-progress jobs ONLY. Including queued jobs made the
+          #    decision self-defeating: any backlog kept demand >= POOL, which
+          #    pinned every later decider to spill regardless of real occupancy.
+          # free = POOL - demand; self-hosted iff free>=1.
+          # Early-exit once demand hits POOL.
+          demand=0; err=0
+          ids=$( gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>e1 ) || err=1
+          if [ "$err" = "0" ]; then
+            for rid in ${ids:-}; do
+              [ "$demand" -ge "$POOL" ] && break
+              # A failed lookup must not read as free capacity: a transient
+              # 429 or API error would otherwise make a saturated pool look
+              # empty and route work onto already-busy VMs. Saturate instead,
+              # which forces the hosted spill below.
+              n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length' 2>/dev/null) || { echo ">>> WARNING: could not read jobs for run ${rid}; assuming pool is full"; n="${POOL}"; }
+              demand=$(( demand + ${n:-0} ))
+            done
+            free=$(( POOL - demand ))
+            echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (in-progress on pool)"
+            if [ "${free}" -ge 1 ]; then
+              choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
+            else
+              choice='"ubuntu-22.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
+            fi
+          else
+            echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1
+            choice='["self-hosted","proxysql-ci"]'; echo ">>> failing SAFE to self-hosted (offload unchanged)"
+          fi
+        else
+          echo ">>> not eligible for self-hosted -> GitHub-hosted"
+        fi
+        echo "runson=${choice}" >> "$GITHUB_OUTPUT"
+        echo ">>> decision: runson=${choice}"
+
+  tests:
+    needs:
+    - tier-context
+    - pick-runner
+    runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    timeout-minutes: 120
+    # `write-all` grants every default GITHUB_TOKEN scope plus the
+    # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
+    # token for `use_oidc: true`. Caller workflow on v3.0 must also
+    # declare write-all for the permissions to propagate through the
+    # reusable call (permissions are intersected caller-callee).
+    permissions: write-all
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.tier-context.outputs.matrices)['tests'] || fromJson('[{}]') }}
+    env:
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src
+      MATRIX: '(${{ matrix.infradb }},genai-gcov)'
+
+      SHA: ${{ needs.tier-context.outputs.sha }}
+      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
+      CI_LEG: ${{ toJson(matrix) }}
+      TIER: ${{ matrix.tier }}
+      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
+    steps:
+
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-context.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Start selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: in_progress
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: 'proxysql'
+        # include/lib/src required so Codecov can resolve LCOV SF: paths
+        # (repo-root lib/*.cpp, include/*). Without them sparse checkout
+        # omits daemon sources, codecov-cli drops those SF: entries, and
+        # Codecov shows only test/+src/ -- the regression after #5967.
+        # Git 2.34 defaults `sparse-checkout set` to non-cone mode even
+        # when checkout's cone-mode input is true. Use explicit patterns
+        # so root assets (notably .gitignore) survive on every runner.
+        sparse-checkout-cone-mode: false
+        sparse-checkout: |
+          /*
+          !/*/
+          /include/
+          /lib/
+          /src/
+          /test/infra/
+          /test/tap/
+          /test/scripts/
+
+    - name: Restore selected product handoff
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py restore
+    - name: Verify binary
+      run: |
+        chmod +x proxysql/src/proxysql
+        file proxysql/src/proxysql
+
+    - name: Log in to GHCR and pull CI base image
+      # Both `docker login` and `docker pull` against ghcr.io have been
+      # observed to fail transiently with `net/http: request canceled
+      # (Client.Timeout exceeded while awaiting headers)`. Wrap both in
+      # a short retry loop with linear backoff so a single network blip
+      # does not red the whole TAP group.
+      env:
+        GHCR_USER: ${{ github.actor }}
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set +e
+        attempt=0
+        max_attempts=5
+        while [ $attempt -lt $max_attempts ]; do
+          attempt=$((attempt + 1))
+          echo ">>> GHCR login+pull attempt ${attempt}/${max_attempts}"
+          if echo "$GHCR_TOKEN" | docker login ghcr.io \
+              -u "$GHCR_USER" --password-stdin \
+              && docker pull ghcr.io/sysown/proxysql-ci-base:latest; then
+            echo ">>> GHCR login+pull OK on attempt ${attempt}"
+            docker tag ghcr.io/sysown/proxysql-ci-base:latest \
+                proxysql-ci-base:latest
+            exit 0
+          fi
+          if [ $attempt -lt $max_attempts ]; then
+            sleep_for=$((attempt * 10))
+            echo ">>> attempt ${attempt} failed; sleeping ${sleep_for}s"
+            sleep $sleep_for
+          fi
+        done
+        echo ">>> all ${max_attempts} GHCR attempts failed"
+        exit 1
+
+    - name: Start infrastructure
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }}"
+        export TAP_GROUP="no-infra-g1"
+        export SKIP_CLUSTER_START=1
+        test/infra/control/ensure-infras.bash
+
+    - name: Run no-infra-g1 tests
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }}"
+        export TAP_GROUP="no-infra-g1"
+        export SKIP_CLUSTER_START=1
+        export COVERAGE="${COVERAGE}"
+        test/infra/control/run-tests-isolated.bash
+
+    - name: Cleanup
+      if: always()
+      run: |
+        set +e
+        if [ ! -d proxysql ]; then
+          echo "proxysql checkout not present; skipping cleanup."
+          exit 0
+        fi
+        cd proxysql
+        export INFRA_ID="ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }}"
+        export TAP_GROUP="no-infra-g1"
+        docker logs proxysql.ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }} 2>&1 | tail -50 || true
+        test/infra/control/stop-proxysql-isolated.bash || true
+        test/infra/control/destroy-infras.bash || true
+
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: |
+        # actions/upload-artifact dies with EACCES when it scandirs into
+        # directories under ci_*_logs/ that were created inside docker
+        # build containers (root-owned). Make everything readable by the
+        # runner user before upload. sudo required because files are
+        # root-owned; 2>/dev/null + || true because the path may not
+        # exist on all failure paths (e.g. a cache-restore failure before
+        # any test even runs).
+        sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
+        path: |
+          proxysql/ci_*_logs/
+
+    - name: Archive coverage report
+      if: ${{ matrix.coverage && (!cancelled()) }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
+        path: |
+          proxysql/ci_infra_logs/ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/
+        if-no-files-found: ignore
+
+    - name: Report missing coverage file
+      if: ${{ matrix.coverage && (!cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') == '') }}
+      run: |
+        echo "No coverage report was produced; skipping Codecov upload."
+
+    - name: Upload coverage to Codecov
+      id: codecov_1
+      if: ${{ matrix.coverage && (!cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '') }}
+      continue-on-error: true
+      # Send the LCOV .info file fastcov produces in run-tests-isolated.bash
+      # (under proxysql/ci_infra_logs/ci-no-infra-g1/coverage-report/) to
+      # Codecov. The proxysql binary was built WITHGCOV=1 (-tap-genai-gcov
+      # build cache) and was the live daemon answering the no-infra-g1 TAP
+      # suite, so the report reflects production code paths exercised by
+      # integration tests, not just the lib-only unit-test slice.
+      #
+      # integration-tests merges regular-daemon TAP shards for this commit.
+      # The group-specific name remains available for diagnostics.
+      # `use_oidc: true` is mandatory -- the
+      # repo has no CODECOV_TOKEN secret and Codecov rejects tokenless
+      # legacy uploads with "branch is protected" HTTP 400.
+      #
+      # `fail_ci_if_error: true` so a Codecov outage never fails the
+      # whole TAP group; `!cancelled()` so coverage uploads even when
+      # the test step itself reported a failure (partial coverage is
+      # still useful diagnostically).
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ env.SHA }}
+        files: proxysql/ci_infra_logs/ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }}.info
+        flags: integration-tests
+        name: tap-no-infra-g1-coverage
+        use_oidc: true
+        # Upload ONLY the explicit LCOV .info file.
+        # - disable_search + plugins:noop: default plugins include gcov,
+        #   which auto-discovers leftover .gcno from the build handoff
+        #   (lib/obj/*.gcno) and polluted uploads ("Found 33 coverage
+        #   files" instead of 1).
+        # - no network_prefix: TAP LCOV SF: paths are repo-root-relative
+        #   (lib/, src/, test/tap/). network_prefix:proxysql/ created a
+        #   phantom proxysql/ namespace that never merged with unit-tests
+        #   lib/, leaving lib/MySQL_Monitor.cpp at 0% despite real hits.
+        # - root_dir:proxysql: checkout is at path:proxysql; point
+        #   codecov-cli network listing at the git root so lib/X matches.
+        # - disable_file_fixes:true: codecov-cli _get_file_fixes crashes
+        #   FileNotFoundError when sparse checkout lacks sources referenced
+        #   in the report. Aggregate coverage is unaffected.
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Wait before Codecov retry 1
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      run: |-
+        sleep 15
+
+
+    - name: Upload coverage to Codecov (retry 1)
+      id: codecov_2
+      if: ${{ matrix.coverage && (!cancelled() && steps.codecov_1.outcome == 'failure') }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ env.SHA }}
+        files: proxysql/ci_infra_logs/ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }}.info
+        flags: integration-tests
+        name: tap-no-infra-g1-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Wait before Codecov retry 2
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      run: |-
+        sleep 45
+
+
+    - name: Upload coverage to Codecov (retry 2)
+      id: codecov_3
+      if: ${{ matrix.coverage && (!cancelled() && steps.codecov_2.outcome == 'failure') }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ env.SHA }}
+        files: proxysql/ci_infra_logs/ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-no-infra-g1-${{ matrix.tier }}-${{ github.run_id }}.info
+        flags: integration-tests
+        name: tap-no-infra-g1-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Report Codecov upload failure
+      if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
+      run: |-
+        echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
+    - name: Complete selected product test check
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_JSON: ${{ toJson(github) }}
+        CHECK_KEY: ${{ matrix.check_key }}
+        CHECK_STATUS: ${{ job.status }}
+      run: |
+        python3 ci-control/.github/scripts/ci_tier_runtime.py result
+      if: ${{ always() }}
+    name: ${{ matrix.check_name }}
+    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['tests'][0] != null }}
+  tier-summary:
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+    needs:
+    - tier-context
+    - tests
+    if: ${{ always() && needs.tier-context.result == 'success' }}
+    uses: ./.github/workflows/ci-tier-summary.yml
+    with:
+      binding: ${{ needs.tier-context.outputs.binding }}
+      control_ref: ${{ needs.tier-context.outputs.control_sha }}
+    secrets: inherit
