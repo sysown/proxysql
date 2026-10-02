@@ -14,7 +14,6 @@
 #include <cerrno>
 #include <climits>
 #include <fcntl.h>
-#include <functional>
 #include <map>
 #include <memory>
 #include <openssl/pem.h>
@@ -23,6 +22,8 @@
 #include <set>
 #include <string>
 #include <sys/stat.h>
+#include <type_traits>
+#include <utility>
 #include <unistd.h>
 
 using nlohmann::json;
@@ -36,9 +37,18 @@ extern pthread_mutex_t users_mutex;
 extern int admin___web_verbosity;
 extern int ProxySQL_create_or_load_TLS(bool, std::string &);
 namespace {
-struct Unlock {
-  std::function<void()> action;
-  ~Unlock() { action(); }
+// Store the concrete cleanup callable: constructing a guard after locking must
+// not allocate, and releasing a pthread lock or owned buffer must not throw.
+template <typename Action> class Unlock {
+  static_assert(std::is_nothrow_move_constructible_v<Action>);
+  static_assert(std::is_nothrow_invocable_v<Action &>);
+  Action action_;
+
+public:
+  explicit Unlock(Action action) noexcept : action_(std::move(action)) {}
+  ~Unlock() noexcept { action_(); }
+  Unlock(const Unlock &) = delete;
+  Unlock &operator=(const Unlock &) = delete;
 };
 using Statement = std::unique_ptr<sqlite3_stmt, decltype(proxy_sqlite3_finalize)>;
 struct Column {
@@ -704,11 +714,11 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
     bool servers = false;
     if (p.pgsql) {
       GloAdmin->pgsql_servers_wrlock();
-      Unlock unlock{[] { GloAdmin->pgsql_servers_wrunlock(); }};
+      Unlock unlock{[]() noexcept { GloAdmin->pgsql_servers_wrunlock(); }};
       servers = GloAdmin->load_pgsql_servers_to_runtime_checked({}, {}, {}, true);
     } else {
       GloAdmin->mysql_servers_wrlock();
-      Unlock unlock{[] { GloAdmin->mysql_servers_wrunlock(); }};
+      Unlock unlock{[]() noexcept { GloAdmin->mysql_servers_wrunlock(); }};
       servers = GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, true);
     }
     if (!servers) {
@@ -743,7 +753,7 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
     bool authenticated = false;
     {
       pthread_mutex_lock(&users_mutex);
-      Unlock unlock{[] { pthread_mutex_unlock(&users_mutex); }};
+      Unlock unlock{[]() noexcept { pthread_mutex_unlock(&users_mutex); }};
       authenticated = p.pgsql ? GloAdmin->init_pgsql_users_under_lock(std::move(users), error)
                               : GloAdmin->init_users_under_lock(std::move(users), error);
     }
@@ -764,11 +774,11 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
       if (engine) {
         if (p.pgsql) {
           GloPTH->wrlock();
-          Unlock unlock{[] { GloPTH->wrunlock(); }};
+          Unlock unlock{[]() noexcept { GloPTH->wrunlock(); }};
           accepted = GloPTH->set_variable(const_cast<char *>(name.c_str()), kv.second.c_str());
         } else {
           GloMTH->wrlock();
-          Unlock unlock{[] { GloMTH->wrunlock(); }};
+          Unlock unlock{[]() noexcept { GloMTH->wrunlock(); }};
           accepted = GloMTH->set_variable(name.c_str(), kv.second.c_str());
         }
         engine_variables = true;
@@ -787,11 +797,11 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
     }
     if (engine_variables && p.pgsql) {
       GloPTH->wrlock();
-      Unlock unlock{[] { GloPTH->wrunlock(); }};
+      Unlock unlock{[]() noexcept { GloPTH->wrunlock(); }};
       GloPTH->commit();
     } else if (engine_variables) {
       GloMTH->wrlock();
-      Unlock unlock{[] { GloMTH->wrunlock(); }};
+      Unlock unlock{[]() noexcept { GloMTH->wrunlock(); }};
       const auto result = GloMTH->commit();
       if (!result.rejected_variables.empty())
         return {false, "VariablesApplyFailed",
@@ -910,13 +920,13 @@ proxysql_current_server_runtime_rows(ProxySQL_ServerProtocol protocol) {
 bool ProxySQL_Admin::set_managed_variable_locked(const std::string &name,
                                                  const std::string &value) {
   wrlock();
-  Unlock unlock{[this] { wrunlock(); }};
+  Unlock unlock{[this]() noexcept { wrunlock(); }};
   return set_variable(const_cast<char *>(name.c_str()), const_cast<char *>(value.c_str()), false);
 }
 bool ProxySQL_Admin::commit_managed_admin_variables_locked(std::string &error) {
   {
     wrlock();
-    Unlock unlock{[this] { wrunlock(); }};
+    Unlock unlock{[this]() noexcept { wrunlock(); }};
     // Refresh the existing runtime checksum from live values without loading
     // unrelated memory intent.
     if (!execute(*admindb,
@@ -925,7 +935,7 @@ bool ProxySQL_Admin::commit_managed_admin_variables_locked(std::string &error) {
                  error))
       return false;
     char **names = get_variables_list();
-    Unlock free_names{[names] {
+    Unlock free_names{[names]() noexcept {
       for (size_t i = 0; names[i]; ++i)
         free(names[i]);
       free(names);
@@ -941,7 +951,7 @@ bool ProxySQL_Admin::commit_managed_admin_variables_locked(std::string &error) {
         return false;
     }
     pthread_mutex_lock(&GloVars.checksum_mutex);
-    Unlock checksum_unlock{[] { pthread_mutex_unlock(&GloVars.checksum_mutex); }};
+    Unlock checksum_unlock{[]() noexcept { pthread_mutex_unlock(&GloVars.checksum_mutex); }};
     flush_GENERIC_variables__checksum__database_to_runtime("admin", "", 0);
   }
   // Preparation excludes endpoint lifecycle settings. Refresh operational
