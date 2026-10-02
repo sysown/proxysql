@@ -13,6 +13,7 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "pgsql_native_tier.h"
 
 CommandLine cl;
 
@@ -125,7 +126,7 @@ void check_copy_stdin_via_extended_query(PGconn* conn) {
     PQclear(res);
 }
 
-bool native_backend_enabled() {
+bool prepare_backend_protocol() {
     std::stringstream ss;
     ss << "host=" << cl.pgsql_admin_host << " port=" << cl.pgsql_admin_port
        << " user=" << cl.admin_username << " password=" << cl.admin_password
@@ -133,14 +134,38 @@ bool native_backend_enabled() {
     PGconn* admin = PQconnectdb(ss.str().c_str());
     if (PQstatus(admin) != CONNECTION_OK)
         BAIL_OUT("Cannot connect to admin: %s", PQerrorMessage(admin));
-    PGresult* res = PQexec(admin,
-        "SELECT variable_value FROM runtime_global_variables "
-        "WHERE variable_name='pgsql-use_native_backend_protocol'");
-    if (PQresultStatus(res) != PGRES_TUPLES_OK)
-        BAIL_OUT("Cannot read backend protocol mode: %s", PQerrorMessage(admin));
-    // The variable is absent on tiers that only implement the libpq backend.
-    const bool native = PQntuples(res) == 1 && strcmp(PQgetvalue(res, 0, 0), "true") == 0;
-    PQclear(res);
+    const bool native = pgsql_native_active(admin);
+    auto command = [admin](const char* sql) {
+        PGresult* result = PQexec(admin, sql);
+        const bool success = PQresultStatus(result) == PGRES_COMMAND_OK;
+        if (!success) diag("Admin command failed: %s: %s", sql, PQerrorMessage(admin));
+        PQclear(result);
+        return success;
+    };
+    // LOAD VARIABLES changes how new backends are created, not existing pooled
+    // backends. Preserve all configured statuses while discarding the old pool.
+    if (!command("CREATE TEMP TABLE listen_saved_servers AS SELECT hostgroup_id,hostname,port,status FROM pgsql_servers")) {
+        PQfinish(admin);
+        BAIL_OUT("Cannot save backend statuses before clearing the pool");
+    }
+    bool cleared = command("UPDATE pgsql_servers SET status='OFFLINE_HARD'") &&
+        command("LOAD PGSQL SERVERS TO RUNTIME");
+    if (cleared) {
+        PGresult* result = PQexec(admin,
+            "SELECT COALESCE(SUM(ConnFree),0) FROM stats_pgsql_connection_pool");
+        cleared = PQresultStatus(result) == PGRES_TUPLES_OK && PQntuples(result) == 1 &&
+            strcmp(PQgetvalue(result, 0, 0), "0") == 0;
+        PQclear(result);
+    }
+    // Attempt both restoration operations even if pool clearing failed.
+    bool restored = command("UPDATE pgsql_servers SET status=(SELECT status FROM listen_saved_servers s "
+        "WHERE s.hostgroup_id=pgsql_servers.hostgroup_id AND s.hostname=pgsql_servers.hostname AND s.port=pgsql_servers.port)");
+    restored = command("LOAD PGSQL SERVERS TO RUNTIME") && restored;
+    command("DROP TABLE listen_saved_servers");
+    if (!cleared || !restored) {
+        PQfinish(admin);
+        BAIL_OUT("Cannot clear old backend connections and restore server statuses");
+    }
     PQfinish(admin);
     return native;
 }
@@ -225,7 +250,7 @@ int main(int argc, char** argv) {
     if (cl.getEnv())
         return exit_status();
 
-    const bool native = native_backend_enabled();
+    const bool native = prepare_backend_protocol();
     plan(native ? 9 : 7);
     execute_tests(false, native); // without SSL
 
