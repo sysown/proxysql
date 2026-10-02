@@ -8,9 +8,12 @@
  * batch retries. This refines the issue's proposed blanket pipeline refusal:
  * only the current retained operation is replayed, never earlier completed batches.
  * libpq's existing stricter in-flight pipeline guard is intentionally unchanged.
+ * A buffered CommandComplete must prevent replay in either driver, including
+ * disconnects before ReadyForQuery and backend shutdown errors.
  */
 #include "command_line.h"
 #include "libpq-fe.h"
+#include "pgsql_mock_backend.h"
 #include "pgsql_native_tier.h"
 #include "tap.h"
 #include <arpa/inet.h>
@@ -49,12 +52,12 @@ static bool wait_locked(PGconn *db) {
 }
 int main() {
 	alarm(120);
-	plan(62);
+	plan(68);
 	if (cl.getEnv())
 		return exit_status();
 	PGconn *admin = connect(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password);
 	if (!pgsql_native_supported(admin)) {
-		skip(62, "native backend protocol is unavailable");
+		skip(68, "native backend protocol is unavailable");
 		PQfinish(admin);
 		return exit_status();
 	}
@@ -258,6 +261,57 @@ int main() {
 			PQfinish(c);
 		}
 	}
+	// A completed command is no longer an unanswered operation, even while its
+	// small response remains buffered and ReadyForQuery has not arrived. The
+	// scriptable peer makes the completion/disconnect ordering deterministic;
+	// PostgreSQL itself cannot be asked to omit its ReadyForQuery on demand.
+	const std::string oldmonitor = value(admin, "SELECT variable_value FROM global_variables WHERE "
+											 "variable_name='pgsql-monitor_enabled'");
+	value(admin, "SET pgsql-monitor_enabled='false'");
+	for (bool native : {true, false}) {
+		value(admin,
+			  std::string("SET pgsql-use_native_backend_protocol='") + (native ? "true" : "false") + "'");
+		value(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+		for (int scenario = 0; scenario < 3; ++scenario) {
+			PgSQL_Mock_Backend mock;
+			if (!mock.start())
+				BAIL_OUT("completion mock could not listen");
+			std::vector<Step> script = pgmb_script_accept_trust();
+			script.push_back(step_expect_query());
+			// The unanswered control must still retry: observing a send alone
+			// does not prove that the backend completed the current operation.
+			const bool completed = scenario != 2;
+			std::string reply = completed ? pgmb_command_complete("INSERT 0 1") : "";
+			if (scenario != 0)
+				reply += pgmb_error_response("57P01", "shutdown after command") + pgmb_ready_for_query('I');
+			script.push_back(step_send(reply));
+			if (scenario == 0)
+				script.push_back(step_close());
+			else
+				// Leave the socket usable so the error-code retry branch runs.
+				script.push_back(step_expect_message());
+			mock.set_script(script);
+			const std::string mockhost = pgmb_local_ip_towards(cl.pgsql_host, cl.pgsql_port);
+			if (mockhost.empty())
+				BAIL_OUT("cannot discover mock address");
+			value(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=6375");
+			value(admin, "INSERT INTO pgsql_servers(hostgroup_id,hostname,port) VALUES(6375,'" +
+						 mockhost + "'," + std::to_string(mock.port()) + ")");
+			value(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+			PGconn *c = connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_password);
+			PGresult *r = PQexec(c, "INSERT INTO issue6375_effects VALUES ('completion_boundary')");
+			const int expected = completed ? 1 : 2;
+			ok(mock.queries_observed() == expected,
+			   "mode=%s completion scenario=%d: %s (backend executions=%d, expected=%d)",
+			   native ? "native" : "libpq", scenario,
+			   completed ? "CommandComplete prevents replay" : "unanswered operation still retries",
+			   mock.queries_observed(), expected);
+			PQclear(r);
+			PQfinish(c);
+			mock.stop();
+		}
+	}
+	value(admin, "SET pgsql-monitor_enabled='" + oldmonitor + "'");
 	value(admin, "DELETE FROM pgsql_query_rules WHERE rule_id=6375");
 	value(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=6375");
 	value(admin, "LOAD PGSQL SERVERS TO RUNTIME");

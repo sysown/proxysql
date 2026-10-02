@@ -3023,6 +3023,16 @@ bool PgSQL_Session::query_retry_allowed(PgSQL_Data_Stream* myds) {
 		? myconn->IsActiveTransaction()
 		: (myconn->IsKnownActiveTransaction() || is_in_transaction() || locked_on_hostgroup != -1);
 	if (in_txn) return false;
+	// CommandComplete proves the backend executed the command even if its small
+	// reply is still buffered and ReadyForQuery has not arrived. Replaying it can
+	// duplicate a committed write. This guard applies to both drivers and all
+	// retry paths (offline, socket failure, and backend shutdown errors).
+	// An unanswered operation still follows the configured retry policy: absence
+	// of a reply cannot establish whether the backend committed before disconnect.
+	if (myconn->query_result &&
+		(myconn->query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_COMMAND)) {
+		return false;
+	}
 	// Part of the answer already reached the client; running the statement again
 	// would send it the rest of a different execution.
 	if (myconn->query_result && myconn->query_result->is_transfer_started()) {

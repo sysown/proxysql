@@ -543,6 +543,7 @@ PGSQL_MOCK_BACKEND_TESTS := \
 	pgsql-reg_test_6109_midresult_disconnect-t \
 	pgsql-reg_test_6110_invalid_reply_sequence-t \
 	pgsql-backend_death_query_retry-t \
+	pgsql-reg_test_6375_offline_retry-t \
 	pgsql-native_hostile_backend-t \
 	pgsql-native_scram_mechanism-t \
 	pgsql-native_notify-t
