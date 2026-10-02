@@ -1379,14 +1379,25 @@ void MySQL_Logger::audit_flush_log_unlocked() {
 }
 
 void MySQL_Logger::events_open_log_unlocked() {
-	events.log_file_id=events_find_next_id();
-	if (events.log_file_id!=0) {
-		events.log_file_id=events_find_next_id()+1;
-	} else {
-		events.log_file_id++;
+	// Check if this is a special device file like /dev/stdout or /dev/stderr
+	bool is_special_device = (strcmp(events.base_filename, "/dev/stdout") == 0 || 
+	                         strcmp(events.base_filename, "/dev/stderr") == 0);
+	
+	if (!is_special_device) {
+		events.log_file_id=events_find_next_id();
+		if (events.log_file_id!=0) {
+			events.log_file_id=events_find_next_id()+1;
+		} else {
+			events.log_file_id++;
+		}
 	}
+	
 	char *filen=NULL;
-	if (events.base_filename[0]=='/') { // absolute path
+	if (is_special_device) {
+		// For special device files, use the filename directly without rotation
+		filen=(char *)malloc(strlen(events.base_filename)+1);
+		strcpy(filen, events.base_filename);
+	} else if (events.base_filename[0]=='/') { // absolute path
 		filen=(char *)malloc(strlen(events.base_filename)+11);
 		sprintf(filen,"%s.%08d",events.base_filename,events.log_file_id);
 	} else { // relative path
@@ -1435,14 +1446,25 @@ void MySQL_Logger::events_open_log_unlocked() {
 };
 
 void MySQL_Logger::audit_open_log_unlocked() {
-	audit.log_file_id=audit_find_next_id();
-	if (audit.log_file_id!=0) {
-		audit.log_file_id=audit_find_next_id()+1;
-	} else {
-		audit.log_file_id++;
+	// Check if this is a special device file like /dev/stdout or /dev/stderr
+	bool is_special_device = (strcmp(audit.base_filename, "/dev/stdout") == 0 || 
+	                         strcmp(audit.base_filename, "/dev/stderr") == 0);
+	
+	if (!is_special_device) {
+		audit.log_file_id=audit_find_next_id();
+		if (audit.log_file_id!=0) {
+			audit.log_file_id=audit_find_next_id()+1;
+		} else {
+			audit.log_file_id++;
+		}
 	}
+	
 	char *filen=NULL;
-	if (audit.base_filename[0]=='/') { // absolute path
+	if (is_special_device) {
+		// For special device files, use the filename directly without rotation
+		filen=(char *)malloc(strlen(audit.base_filename)+1);
+		strcpy(filen, audit.base_filename);
+	} else if (audit.base_filename[0]=='/') { // absolute path
 		filen=(char *)malloc(strlen(audit.base_filename)+11);
 		sprintf(filen,"%s.%08d",audit.base_filename,audit.log_file_id);
 	} else { // relative path
