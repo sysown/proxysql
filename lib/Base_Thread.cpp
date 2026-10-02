@@ -215,9 +215,11 @@ void Base_Thread::check_timing_out_session(unsigned int n) {
 	auto* _sess = _myds->sess;
 	if (!_sess) return;
 
-	// Generic timeout checks (wait_until or pause_until)
-	if ((_myds->wait_until && curtime > _myds->wait_until) ||
-		(_sess->pause_until && curtime > _sess->pause_until)) {
+	// A deadline is due at equality. BeforePoll only schedules future
+	// deadlines; skipping this boundary would fall back to the full poll
+	// interval and delay query cancellation (see #6385).
+	if ((_myds->wait_until && curtime >= _myds->wait_until) ||
+		(_sess->pause_until && curtime >= _sess->pause_until)) {
 		_sess->to_process = 1;
 	}
 
