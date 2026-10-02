@@ -2550,7 +2550,7 @@ static void run_pgsql_monitor(PgSQL_Thread* pgsql_thread, unsigned int& variable
 			proxy_debug(PROXY_DEBUG_MONITOR, 5,
 				"Scheduling interval   time=%lu delta=%lu ping=%lu connect=%lu readonly=%lu repl_lag=%lu\n",
 				cur_intv_start,
-				cur_intv_start - closest_intv,
+				cur_intv_start >= closest_intv ? cur_intv_start - closest_intv : 0,
 				next_intvs.next_ping_at,
 				next_intvs.next_connect_at,
 				next_intvs.next_readonly_at,

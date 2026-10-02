@@ -89,7 +89,7 @@ int main() {
 	PGconn *admin = PQconnectdbParams(keys, values, 0);
 	if (PQstatus(admin) != CONNECTION_OK)
 		BAIL_OUT("admin connect: %s", PQerrorMessage(admin));
-	plan(10);
+	plan(11);
 
 	const std::vector<std::string> names = {"monitor_enabled", "monitor_connect_interval",
 											"monitor_ping_interval", "monitor_threads"};
@@ -155,7 +155,7 @@ int main() {
 	query(admin, "SET pgsql-monitor_enabled=false");
 	query(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 	// Keep disabled long enough for the scheduler to observe the transition.
-	wait_stopped(admin);
+	ok(wait_stopped(admin), "monitor becomes idle after disabling the stalled backend");
 	query(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=6389");
 	query(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 	query(admin, "SET pgsql-monitor_enabled=true");
