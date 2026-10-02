@@ -27,6 +27,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <unistd.h>
 
@@ -80,10 +81,27 @@ static long long gtid_session_collected(MYSQL* admin) {
 }
 
 static bool set_gtid_vars(MYSQL* admin, const std::string& track_gtid, const std::string& from_ok) {
-	return admin_exec(admin, "SET mysql-client_session_track_gtid='" + track_gtid + "'")
-		&& admin_exec(admin, "SET mysql-update_gtid_from_ok='" + from_ok + "'")
-		&& admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	bool result = admin_exec(admin, "SET mysql-client_session_track_gtid='" + track_gtid + "'");
+	result = admin_exec(admin, "SET mysql-update_gtid_from_ok='" + from_ok + "'") && result;
+	return admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME") && result;
 }
+
+struct RestoreGtidVars {
+	MYSQL* admin;
+	std::string track_gtid;
+	std::string from_ok;
+	bool active = true;
+
+	bool restore() {
+		if (!active) return true;
+		active = false;
+		return set_gtid_vars(admin, track_gtid, from_ok);
+	}
+
+	~RestoreGtidVars() {
+		if (!restore()) diag("Failed to restore the original GTID settings during cleanup");
+	}
+};
 
 /**
  * @brief Returns the GTID stored for the first backend in 'PROXYSQL INTERNAL SESSION'
@@ -125,30 +143,41 @@ int main(int, char**) {
 
 	plan(5);
 
-	MYSQL* admin = mysql_init(NULL);
+	std::unique_ptr<MYSQL, decltype(&mysql_close)> admin_owner(mysql_init(NULL), mysql_close);
+	MYSQL* admin = admin_owner.get();
 	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		diag("Admin connect failed: %s", mysql_error(admin));
-		mysql_close(admin);
 		return exit_status();
 	}
 
 	const std::string orig_track_gtid = global_var(admin, "mysql-client_session_track_gtid");
 	const std::string orig_from_ok = global_var(admin, "mysql-update_gtid_from_ok");
+	if (orig_track_gtid.empty() || orig_from_ok.empty()) {
+		diag("Cannot save the original GTID settings; leaving configuration unchanged");
+		return EXIT_FAILURE;
+	}
 	diag("Original values: mysql-client_session_track_gtid='%s' mysql-update_gtid_from_ok='%s'",
 		orig_track_gtid.c_str(), orig_from_ok.c_str());
+	// Declared after the Admin owner so cleanup also covers macro returns,
+	// and always runs before the Admin connection is closed.
+	RestoreGtidVars restore_gtid_vars { admin, orig_track_gtid, orig_from_ok };
 
 	// Both settings that only control what is done *with* a collected GTID are off.
-	ok(set_gtid_vars(admin, "false", "false"),
+	const bool configured = set_gtid_vars(admin, "false", "false");
+	ok(configured,
 		"Disabled mysql-client_session_track_gtid and mysql-update_gtid_from_ok");
+	if (!configured) {
+		skip(3, "Cannot exercise GTID collection without configuring both variables");
+		ok(restore_gtid_vars.restore(), "Restored the original GTID settings");
+		return exit_status();
+	}
 	// Let the worker threads pick up the new thread-local values.
 	usleep(500 * 1000);
 
-	MYSQL* proxy = mysql_init(NULL);
+	std::unique_ptr<MYSQL, decltype(&mysql_close)> proxy_owner(mysql_init(NULL), mysql_close);
+	MYSQL* proxy = proxy_owner.get();
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		diag("Client connect failed: %s", mysql_error(proxy));
-		mysql_close(proxy);
-		set_gtid_vars(admin, orig_track_gtid, orig_from_ok);
-		mysql_close(admin);
 		return exit_status();
 	}
 
@@ -191,10 +220,9 @@ int main(int, char**) {
 		"The GTID is not forwarded to the client while mysql-client_session_track_gtid=false");
 
 	MYSQL_QUERY_T(proxy, "DROP TABLE IF EXISTS test.reg_test_6328");
-	mysql_close(proxy);
+	proxy_owner.reset();
 
-	ok(set_gtid_vars(admin, orig_track_gtid, orig_from_ok), "Restored the original GTID settings");
-	mysql_close(admin);
+	ok(restore_gtid_vars.restore(), "Restored the original GTID settings");
 
 	return exit_status();
 }
