@@ -19,6 +19,8 @@
 #include "QP_rule_text.h"
 
 #include <cstring>
+#include <string>
+#include <vector>
 
 #ifdef DEBUG
 // Debug-only seam implemented in Query_Processor.cpp. It keeps the adapter and
@@ -29,6 +31,12 @@ extern bool pcre2_query_rule_replace_for_test(
 	const char* legacy_rewrite,
 	bool global,
 	std::string* rewritten
+);
+extern bool pcre2_query_rule_replace_sequence_for_test(
+	const char* pattern,
+	const char* legacy_rewrite,
+	bool global,
+	std::vector<std::string>* subjects
 );
 #endif
 
@@ -334,6 +342,32 @@ static void test_cidr_requires_parsed_address() {
 	r.client_addr = const_cast<char *>("0.0.0.0/0");
 	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "/0 resolves");
 	ok(!match_client_addr(&r, "10.1.2.3", nullptr), "CIDR criterion rejects a null sockaddr");
+}
+
+// Issue #6316: an IPv4 client can reach ProxySQL as an IPv4-mapped IPv6
+// address (::ffff:a.b.c.d), e.g. through a dual-stack PROXY protocol load
+// balancer. IPv4 prefixes must match it by its embedded IPv4 address.
+static void test_cidr_ipv4_mapped_client() {
+	QP_rule_t r = make_rule();
+	r.client_addr = const_cast<char *>("10.0.0.0/8");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "IPv4 /8 resolves");
+
+	struct sockaddr_storage mapped_in = make_sa("::ffff:10.1.2.3");
+	struct sockaddr_storage mapped_out = make_sa("::ffff:11.1.2.3");
+	struct sockaddr_storage v6 = make_sa("2001:db8::a01:203");
+	ok(match_client_addr(&r, "::ffff:10.1.2.3", (struct sockaddr *)&mapped_in),
+		"IPv4 prefix matches an IPv4-mapped client inside it");
+	ok(!match_client_addr(&r, "::ffff:11.1.2.3", (struct sockaddr *)&mapped_out),
+		"IPv4 prefix rejects an IPv4-mapped client outside it");
+	ok(!match_client_addr(&r, "2001:db8::a01:203", (struct sockaddr *)&v6),
+		"IPv4 prefix still rejects a native IPv6 client");
+
+	// The mapped form stays an IPv6 address for IPv6 prefixes.
+	QP_rule_t r6 = make_rule();
+	r6.client_addr = const_cast<char *>("::ffff:0:0/96");
+	ok(qp_addr_predicate_init(&r6.client_addr_pred, r6.client_addr, QP_ADDR_FIELD_CLIENT), "IPv6 mapped /96 resolves");
+	ok(match_client_addr(&r6, "::ffff:10.1.2.3", (struct sockaddr *)&mapped_in),
+		"IPv6 mapped /96 matches an IPv4-mapped client");
 }
 
 // Acceptance criterion 6: the pre-existing forms keep their behaviour, and a
@@ -727,6 +761,24 @@ static void test_invalid_negated_pcre2_pattern() {
 		"invalid PCRE2 pattern does not match a negated rule");
 }
 
+// Issue #6319: an invalid regex makes the rule inert with both engines, so a
+// negated rule does not turn the compile failure into "matches everything".
+static void test_invalid_re2_pattern() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("(");
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"invalid RE2 pattern safely returns no match");
+	r.negate_match_pattern = true;
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"invalid RE2 pattern does not match a negated rule");
+}
+
 static void test_match_pattern() {
 	QP_rule_t r = make_rule();
 	r.match_pattern = const_cast<char *>("SELECT .* FROM orders");
@@ -824,6 +876,30 @@ static void test_pcre2_rewrites() {
 	ok(rc && rewritten == "XY XY",
 		"PCRE global rewrite expands unset optional captures as empty");
 }
+
+// Issue #6321: a rule reuses its compiled regex, match data and translated
+// rewrite across queries. Each substitution allocates its own output buffer.
+// Verify reuse across small and large queries, including output-size retries.
+static void test_pcre2_rewrite_reuse() {
+	// Both 1000 and 30000 matches outgrow their call's initial output buffer
+	// and exercise the retry with the exact size reported by PCRE2.
+	const std::string x1k(1000, 'x');
+	const std::string x30k(30000, 'x');
+	auto expanded = [](size_t n) {
+		std::string out {};
+		for (size_t i = 0; i < n; i++) {
+			out += "<x>";
+		}
+		return out;
+	};
+	std::vector<std::string> subjects { "x", x1k, "a x b", x30k, "x", x1k };
+	const bool rc = pcre2_query_rule_replace_sequence_for_test("(x)", "<\\1>", true, &subjects);
+	ok(rc, "one compiled regex rewrites a sequence of queries");
+	ok(subjects[0] == "<x>" && subjects[2] == "a <x> b" && subjects[4] == "<x>",
+		"small rewrites are exact before and after large ones");
+	ok(subjects[1] == expanded(1000) && subjects[3] == expanded(30000) && subjects[5] == expanded(1000),
+		"large rewrites remain complete across output-size retries and match-data reuse");
+}
 #endif
 
 // ============================================================================
@@ -867,9 +943,9 @@ static void test_null_rule() {
 
 int main() {
 #ifdef DEBUG
-	plan(200);
+	plan(211);
 #else
-	plan(193);
+	plan(201);
 #endif
 
 	test_init_minimal();
@@ -885,6 +961,7 @@ int main() {
 	test_cidr_ipv6();
 	test_cidr_mixed_families();
 	test_cidr_requires_parsed_address();
+	test_cidr_ipv4_mapped_client();
 	test_addr_predicate_mode_selection();
 	test_cidr_ipv6_embedded_dotted_quad();
 	test_bare_underscore_wildcard_matches();
@@ -899,12 +976,14 @@ int main() {
 	test_match_digest_pcre2_lookaround_reset_start();
 	test_invalid_pcre2_pattern();
 	test_invalid_negated_pcre2_pattern();
+	test_invalid_re2_pattern();
 	test_match_pattern();
 	test_negate_match_pattern();
 	test_caseless_modifier();
 	test_rewritten_query();
 #ifdef DEBUG
 	test_pcre2_rewrites();
+	test_pcre2_rewrite_reuse();
 #endif
 	test_combined_criteria();
 	test_null_rule();

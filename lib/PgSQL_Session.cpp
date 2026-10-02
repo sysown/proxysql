@@ -2346,6 +2346,12 @@ __implicit_sync:
 					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
 						session_type == PROXYSQL_SESSION_SQLITE) {
 						c = *((unsigned char*)pkt.ptr);
+						// Recovery discards every message, including simple Query,
+						// until Sync. Terminate must still close the connection.
+						if (admin_extq_rejected && c != 'S' && c != 'X') {
+							l_free(pkt.size, pkt.ptr);
+							continue;
+						}
 						if (c == 'Q') {
 							handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
 						} else if (c == 'X') {
@@ -2354,23 +2360,35 @@ __implicit_sync:
 							l_free(pkt.size, pkt.ptr);
 							handler_ret = -1;
 							return handler_ret;
-						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E' ||
-						           ((c == 'H' || c == 'S') && session_type == PROXYSQL_SESSION_SQLITE)) {
+						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E' || c == 'H' || c == 'S') {
 							if (session_type == PROXYSQL_SESSION_SQLITE) {
 								// Plugin-backed sessions get the message so the plugin can
 								// return its protocol-specific error and transaction state.
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
 							} else {
 								// ADMIN/STATS do not implement the extended-query protocol.
-								// A silent drop leaves libpq waiting forever for ParseComplete;
-								// reject it immediately with a complete error response instead.
-								client_myds->setDSS_STATE_QUERY_SENT_NET();
-								client_myds->myprot.generate_error_packet(true, true,
-									"PostgreSQL extended-query protocol is not supported on the admin interface",
-									PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+								// Reject it the way PostgreSQL reports an error inside an
+								// extended-query batch (issue #6345):
+								//  - one ErrorResponse, sent with the first unsupported
+								//    message so a client waiting after Flush is not stuck;
+								//  - every further message up to Sync is discarded;
+								//  - Sync is answered with a single ReadyForQuery.
+								// Answering each message with ErrorResponse+ReadyForQuery
+								// desynchronises libpq, which expects one ReadyForQuery
+								// per Sync.
+								if (c == 'S') {
+									admin_extq_rejected = false;
+									client_myds->myprot.generate_ready_for_query_packet(true, 'I');
+								} else if (c != 'H' && admin_extq_rejected == false) {
+									PtrSize_t err_pkt {};
+									client_myds->myprot.generate_error_packet(false, false,
+										"PostgreSQL extended-query protocol is not supported on the admin interface",
+										PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, &err_pkt);
+									client_myds->PSarrayOUT->add(err_pkt.ptr, err_pkt.size);
+									admin_extq_rejected = true;
+								}
 								l_free(pkt.size, pkt.ptr);
-								client_myds->DSS = STATE_SLEEP;
-								return handler_ret;
+								continue;
 							}
 						} else {
 							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);

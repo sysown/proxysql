@@ -10,5 +10,5 @@ export DEFAULT_MYSQL_INFRA="infra-dbdeployer-mariadb10-binlog"
 # not implement; the test probes for it, finds it absent, and then fails hard
 # with 11 of its 14 cases unrun rather than skipping. It still runs on the
 # MySQL binlog groups (legacy-binlog-g1, mysql84/90/95-binlog-g1, mysql84-g5).
-# A MariaDB equivalent against gtid_strict_mode / gtid_binlog_pos is still to
-# be written; until then this group covers the reader only.
+# Its MariaDB counterpart is test_gtid_from_ok_mariadb-t, which covers
+# ProxySQL's own 'last_gtid' tracking and the MariaDB update_gtid_from_ok path.

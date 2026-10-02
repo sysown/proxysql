@@ -3351,18 +3351,50 @@ bool MySQL_Connection::collect_gtid_to_buff(char *buff) {
 	return true;
 }
 
+// Finds the value of the tracked system variable 'last_gtid' in the OK packet
+// (the last occurrence, as get_variables() would keep). The tracked variables
+// come as alternating name/value entries. Scanning them in place avoids building
+// a map of every tracked variable on each OK packet (issue #6337).
+static bool find_tracked_last_gtid(MYSQL *mysql, const char **value, size_t *value_len) {
+	static const char LAST_GTID[] = "last_gtid";
+	const char *data = nullptr;
+	size_t length = 0;
+	bool found = false;
+	if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) != 0) {
+		return false;
+	}
+	bool is_last_gtid = (length == sizeof(LAST_GTID) - 1 && memcmp(data, LAST_GTID, length) == 0);
+	bool expect_value = true;
+	while (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0) {
+		if (expect_value) {
+			if (is_last_gtid) {
+				*value = data;
+				*value_len = length;
+				found = true;
+			}
+		} else {
+			is_last_gtid = (length == sizeof(LAST_GTID) - 1 && memcmp(data, LAST_GTID, length) == 0);
+		}
+		expect_value = !expect_value;
+	}
+	return found;
+}
+
 bool MySQL_Connection::get_gtid_from_session_tracking(char *buff) {
 	const char *gtids = nullptr;
 	size_t gtids_len = 0;
-	if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &gtids, &gtids_len) == 0
-			&& gtids_len == 0) {
+	if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &gtids, &gtids_len) != 0) {
 		gtids = nullptr;
+		gtids_len = 0;
 	}
-	std::unordered_map<std::string, std::string> variables;
-	if (gtids == nullptr) {
-		get_variables(variables);
+	const char *last_gtid = nullptr;
+	size_t last_gtid_len = 0;
+	// Only MariaDB reports its own GTID as 'last_gtid'; MySQL uses SESSION_TRACK_GTIDS.
+	if (gtids_len == 0 && mysql->server_version != nullptr
+			&& strstr(mysql->server_version, "MariaDB") != nullptr) {
+		find_tracked_last_gtid(mysql, &last_gtid, &last_gtid_len);
 	}
-	if (!select_session_gtid(gtids, gtids_len, variables, gtid_uuid, sizeof(gtid_uuid))) {
+	if (!select_session_gtid(gtids, gtids_len, last_gtid, last_gtid_len, gtid_uuid, sizeof(gtid_uuid))) {
 		return false;
 	}
 	return collect_gtid_to_buff(buff);
@@ -3373,9 +3405,11 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	if (buff == NULL || trx_id == NULL) {
 		return false;
 	}
-	if (!mysql_thread___update_gtid_from_ok && !mysql_thread___client_session_track_gtid) {
-		return false;
-	}
+	// Collection must not depend on mysql-update_gtid_from_ok or
+	// mysql-client_session_track_gtid: those only control what is done with
+	// the GTID afterwards. The collected value is also what query rules with
+	// gtid_from_hostgroup read for causal routing (issue #6328). Collection is
+	// passive: it only parses the session-tracking data of the OK packet.
 	if (mysql == NULL || mysql->net.last_errno != 0) { // only if there is no error
 		return false;
 	}

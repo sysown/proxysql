@@ -337,13 +337,22 @@ bool ip_cidr_contains(const IP_CIDR_t *cidr, const struct sockaddr *sa) {
 	if (cidr == NULL || sa == NULL || cidr->family == 0) {
 		return false;
 	}
-	// An IPv4 prefix must not match an IPv6 client, or the reverse.
-	if (sa->sa_family != cidr->family) {
-		return false;
-	}
 
 	const unsigned char *client_addr = NULL;
-	if (cidr->family == AF_INET) {
+	// An IPv4 client can reach ProxySQL as an IPv4-mapped IPv6 address
+	// (::ffff:a.b.c.d), e.g. from a dual-stack load balancer through the PROXY
+	// protocol. It is still that IPv4 client, so an IPv4 prefix is matched
+	// against its embedded IPv4 address (issue #6316).
+	if (cidr->family == AF_INET && sa->sa_family == AF_INET6) {
+		const struct in6_addr *a6 = &((const struct sockaddr_in6 *)sa)->sin6_addr;
+		if (IN6_IS_ADDR_V4MAPPED(a6) == 0) {
+			return false;
+		}
+		client_addr = a6->s6_addr + 12;
+	} else if (sa->sa_family != cidr->family) {
+		// Otherwise an IPv4 prefix must not match an IPv6 client, or the reverse.
+		return false;
+	} else if (cidr->family == AF_INET) {
 		client_addr = (const unsigned char *)&((const struct sockaddr_in *)sa)->sin_addr;
 	} else if (cidr->family == AF_INET6) {
 		// s6_addr is a macro relative to struct in6_addr, so it is reached
