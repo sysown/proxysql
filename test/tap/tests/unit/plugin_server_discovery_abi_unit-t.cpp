@@ -65,7 +65,8 @@ void retirement_observer(ProxySQL_ServerProtocol protocol, bool controller, void
 void make_log_path() {
 	char path[] = "/tmp/proxysql_server_discovery_abi.XXXXXX";
 	int fd = mkstemp(path);
-	if (fd >= 0) close(fd);
+	if (fd < 0) BAIL_OUT("cannot create private server discovery log");
+	close(fd);
 	g_log_path = path;
 	setenv("PROXYSQL_FAKE_PLUGIN_LOG", g_log_path.c_str(), 1);
 	setenv("PROXYSQL_FAKE_PLUGIN2_LOG", g_log_path.c_str(), 1);

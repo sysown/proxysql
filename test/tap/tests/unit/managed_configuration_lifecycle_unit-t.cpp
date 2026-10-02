@@ -71,7 +71,9 @@ std::unique_ptr<ProxySQL_PluginManager> provider(std::string& error) {
 int main() {
  plan(28); test_init_minimal();
  char path[] = "/tmp/proxysql_managed_lifecycle.XXXXXX";
- int fd = mkstemp(path); if (fd >= 0) close(fd);
+ int fd = mkstemp(path);
+ if (fd < 0) BAIL_OUT("cannot create private managed lifecycle log");
+ close(fd);
  events_path = path; setenv("PROXYSQL_MANAGED_FAKE_LOG", path, 1);
  std::string error;
  FakeWeb web;

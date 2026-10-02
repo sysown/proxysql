@@ -80,7 +80,8 @@ int main() {
 	test_init_minimal();
 	char path[] = "/tmp/proxysql_server_runtime_install.XXXXXX";
 	const int fd = mkstemp(path);
-	if (fd >= 0) close(fd);
+	if (fd < 0) BAIL_OUT("cannot create private server runtime install log");
+	close(fd);
 	g_log_path = path;
 	setenv("PROXYSQL_FAKE_PLUGIN_LOG", g_log_path.c_str(), 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
