@@ -89,7 +89,10 @@ jobs:
               # 429 or API error would otherwise make a saturated pool look
               # empty and route work onto already-busy VMs. Saturate instead,
               # which forces the hosted spill below.
-              n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length' 2>/dev/null) || { echo ">>> WARNING: could not read jobs for run ${rid}; assuming pool is full"; n="${POOL}"; }
+              # gh emits one count per page; sum them before comparing capacity.
+              # pipefail preserves a failed later page instead of using a partial count.
+              n=$(gh api --paginate "repos/${REPO}/actions/runs/${rid}/jobs?per_page=100" --jq '[.jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length' 2>/dev/null |
+                awk '{total += $1} END {print total+0}') || { echo ">>> WARNING: could not read jobs for run ${rid}; assuming pool is full"; n="${POOL}"; }
               demand=$(( demand + ${n:-0} ))
             done
             free=$(( POOL - demand ))
@@ -158,6 +161,7 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         path: 'proxysql'
+        persist-credentials: false
         # include/lib/src required so Codecov can resolve LCOV SF: paths
         # (repo-root lib/*.cpp, include/*). Without them sparse checkout
         # omits daemon sources, codecov-cli drops those SF: entries, and
@@ -297,10 +301,10 @@ jobs:
       # repo has no CODECOV_TOKEN secret and Codecov rejects tokenless
       # legacy uploads with "branch is protected" HTTP 400.
       #
-      # `fail_ci_if_error: true` so a Codecov outage never fails the
-      # whole TAP group; `!cancelled()` so coverage uploads even when
-      # the test step itself reported a failure (partial coverage is
-      # still useful diagnostically).
+      # `continue-on-error: true` keeps upload failures from failing the TAP
+      # group. `fail_ci_if_error: true` exposes a failed step outcome so the
+      # retry conditions can detect it. `!cancelled()` permits uploads even
+      # after test failures (partial coverage is still useful diagnostically).
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
