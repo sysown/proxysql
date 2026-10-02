@@ -580,6 +580,7 @@ $(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
 # ===========================================================================
 
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
+	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \

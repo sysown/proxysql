@@ -660,8 +660,11 @@ void set_finish_st(state_t& st, ASYNC_ST new_st, op_result_t res = {}) {
 short handle_async_check_cont(state_t& st, short _) {
 	pgsql_conn_t& pgconn { st.conn };
 
-	// Single command queries; 'PQisBusy' and 'PQconsumeInput' not required
+	// PQgetResult can block on an incomplete response; worker teardown retains
+	// a cancellation fallback for an unresponsive backend.
 	PGresult* res { PQgetResult(pgconn.conn) };
+	// Draining the trailing result can block; release this result on worker cancellation too.
+	unique_ptr<PGresult, decltype(&PQclear)> result_guard { res, &PQclear };
 
 	// Wait for the result asynchronously
 	if (res == NULL) {
@@ -747,9 +750,6 @@ short handle_async_check_cont(state_t& st, short _) {
 			}
 		}
 	}
-
-	// Clear always; we assume no resultset on ping
-	PQclear(res);
 
 	return POLLIN;
 }
@@ -1284,6 +1284,11 @@ struct task_queue_t {
 	task_queue_t() {
 		int rc = pipe(comm_fd);
 		assert(rc == 0 && "Failed to create pipe for Monitor worker thread");
+	}
+
+	~task_queue_t() {
+		close(comm_fd[0]);
+		close(comm_fd[1]);
 	}
 };
 
@@ -2042,6 +2047,18 @@ void add_scheduler_comm_task(const task_queue_t& tasks_queue, task_poll_t& task_
 
 const uint64_t MAX_CHECK_DELAY_US { 500000 };
 
+// Run on both cooperative exit and cancellation while libpq is waiting for a
+// backend response. Only [1, size) owns connections; slot 0 is the signal pipe
+// and removed slots may still contain aliases after rm_task_fast().
+static void cleanup_worker_connections(void* arg) {
+	// This is the worker's final cleanup. Do not interrupt PQfinish midway.
+	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, nullptr);
+	auto& task_poll = *static_cast<task_poll_t*>(arg);
+	for (size_t i = 1; i < task_poll.size; ++i) {
+		PQfinish(task_poll.tasks[i].conn.conn);
+	}
+}
+
 void* worker_thread(void* args) {
 	pair<task_queue_t, result_queue_t>* queues {
 		static_cast<pair<task_queue_t, result_queue_t>*>(args)
@@ -2070,6 +2087,7 @@ void* worker_thread(void* args) {
 
 	// Insert dummy task for scheduler comms
 	add_scheduler_comm_task(tasks_queue, task_poll);
+	pthread_cleanup_push(cleanup_worker_connections, &task_poll);
 
 	while (recv_stop_signal == false) {
 		// Process wakeup signal from scheduler
@@ -2138,6 +2156,7 @@ void* worker_thread(void* args) {
 			// Acquire new conn, update task on failure
 			uint64_t t1 { monotonic_time() };
 			pgsql_conn_t conn { create_conn(task) };
+			unique_ptr<PGconn, decltype(&PQfinish)> conn_guard { conn.conn, &PQfinish };
 			task.op_st.exec_time += monotonic_time() - t1;
 
 			state_t init_st { std::move(conn), std::move(task) };
@@ -2151,6 +2170,7 @@ void* worker_thread(void* args) {
 #endif
 
 			add_task(task_poll, POLLOUT, std::move(init_st));
+			conn_guard.release(); // The active poll slot now owns the connection.
 		}
 
 		uint64_t next_timeout_at = ULLONG_MAX;
@@ -2207,13 +2227,14 @@ void* worker_thread(void* args) {
 					task_poll.tasks[i].conn.last_used = task_poll.tasks[i].task.start;
 
 					put_conn(mon_conn_pool, srv, std::move(task_poll.tasks[i].conn));
+					task_poll.tasks[i].conn.conn = nullptr; // Ownership passed to the pool.
 
 					proxy_debug(PROXY_DEBUG_MONITOR, 5,
 						"Succeed task conn returned to pool   fd=%d conn_st=%d\n",
 						conn.fd, conn.state
 					);
 				} else {
-					PQfinish(task_poll.tasks[i].conn.conn);
+					PQfinish(std::exchange(task_poll.tasks[i].conn.conn, nullptr));
 					proxy_debug(PROXY_DEBUG_MONITOR, 5,
 						"Failed task conn killed   fd=%d conn_st=%d\n", conn.fd, conn.state
 					);
@@ -2265,6 +2286,7 @@ void* worker_thread(void* args) {
 
 	CHECK_HOST_ERR_LIMIT_STMT.reset();
 	FETCH_HOST_LATENCY_STMT.reset();
+	pthread_cleanup_pop(1);
 
 	return NULL;
 }
@@ -2478,24 +2500,13 @@ tasks_intvs_t compute_next_intvs(
 	return upd_intvs;
 }
 
-void* PgSQL_monitor_scheduler_thread() {
-	proxy_info("Started Monitor scheduler thread for PgSQL servers\n");
-
-	// Quick exit during shutdown/restart
-	if (!GloPTH) { return NULL; }
-
-	// Initial Monitor thread variables version
-	unsigned int PgSQL_Thread__variables_version = GloPTH->get_global_version();
-	// PgSQL thread structure used for variable refreshing
-	unique_ptr<PgSQL_Thread> pgsql_thread { init_pgsql_thread_struct() };
-
-	task_queue_t conn_tasks {};
-	result_queue_t conn_results {};
-
+// One enabled period. All workers, queued tasks and pooled connections are
+// released before returning to the controller's disabled/configuration loop.
+static void run_pgsql_monitor(PgSQL_Thread* pgsql_thread, unsigned int& variables_version) {
 	uint32_t worker_threads_count = pgsql_thread___monitor_threads;
 	vector<worker_thread_t> workers {};
 
-	// TODO: Threads are right now fixed on startup.
+	// Worker-count changes take effect on the next enable.
 	for (uint32_t i = 0; i < worker_threads_count; i++) {
 		unique_ptr<worker_queue_t> worker_queue { new worker_queue_t {} };
 		auto [err, th] { create_thread(2048 * 1024, worker_thread, worker_queue.get()) };
@@ -2512,7 +2523,18 @@ void* PgSQL_monitor_scheduler_thread() {
 		ProxySQL_ServerProtocol::pgsql);
 #endif
 
-	while (GloPgMon->shutdown.load(std::memory_order_acquire) == false && pgsql_thread___monitor_enabled == true) {
+	while (GloPgMon->shutdown.load(std::memory_order_acquire) == false) {
+		if (!GloPTH) { break; }
+		// Observe disable/configuration changes even when the next check is far
+		// in the future. Do not dispatch another batch after observing disable.
+		const unsigned int glover = GloPTH->get_global_version();
+		const bool vars_refreshed = variables_version < glover;
+		if (vars_refreshed) {
+			variables_version = glover;
+			pgsql_thread->refresh_variables();
+		}
+		if (!pgsql_thread___monitor_enabled) { break; }
+
 		cur_intv_start = monotonic_time();
 
 #ifdef PROXYSQL40
@@ -2533,28 +2555,16 @@ void* PgSQL_monitor_scheduler_thread() {
 			})
 		};
 
-		if (cur_intv_start >= closest_intv)	 {
+		if (vars_refreshed || cur_intv_start >= closest_intv) {
 			proxy_debug(PROXY_DEBUG_MONITOR, 5,
 				"Scheduling interval   time=%lu delta=%lu ping=%lu connect=%lu readonly=%lu repl_lag=%lu\n",
 				cur_intv_start,
-				cur_intv_start - closest_intv,
+				cur_intv_start >= closest_intv ? cur_intv_start - closest_intv : 0,
 				next_intvs.next_ping_at,
 				next_intvs.next_connect_at,
 				next_intvs.next_readonly_at,
 				next_intvs.next_repl_lag_at
 			);
-
-			// Quick exit during shutdown/restart
-			if (!GloPTH) { return NULL; }
-
-			// Check variable version changes; refresh if needed
-			unsigned int glover = GloPTH->get_global_version();
-			bool vars_refreshed = false;
-			if (PgSQL_Thread__variables_version < glover) {
-				PgSQL_Thread__variables_version = glover;
-				pgsql_thread->refresh_variables();
-				vars_refreshed = true;
-			}
 
 			// Fetch config for next task scheduling
 			tasks_conf_t tasks_conf { fetch_updated_conf(GloPgMon, PgHGM) };
@@ -2702,7 +2712,7 @@ void* PgSQL_monitor_scheduler_thread() {
 		}
 	}
 
-	proxy_info("Exiting PgSQL_Monitor scheduling thread\n");
+	proxy_info("Stopping PgSQL Monitor workers\n");
 
 	// Wakeup workers for shutdown
 	{
@@ -2710,10 +2720,9 @@ void* PgSQL_monitor_scheduler_thread() {
 			write_signal(worker.second->first.comm_fd[1], 1);
 		}
 
-		// Give some time for a clean exit
+		// Allow a cooperative exit, then interrupt workers stuck in libpq (for
+		// example, a backend withholding ReadyForQuery). Both paths run cleanup.
 		usleep(500 * 1000);
-
-		// Force the exit on the remaining threads
 		for (worker_thread_t& worker : workers) {
 			pthread_cancel(worker.first);
 		}
@@ -2731,7 +2740,28 @@ void* PgSQL_monitor_scheduler_thread() {
 		}
 		mon_conn_pool.conn_map.clear();
 	}
+}
 
+void* PgSQL_monitor_scheduler_thread() {
+	proxy_info("Started Monitor scheduler thread for PgSQL servers\n");
+	if (!GloPTH) { return nullptr; }
+
+	unsigned int variables_version = GloPTH->get_global_version();
+	unique_ptr<PgSQL_Thread> pgsql_thread { init_pgsql_thread_struct() };
+	while (!GloPgMon->shutdown.load(std::memory_order_acquire)) {
+		if (!GloPTH) { break; }
+		variables_version = GloPTH->get_global_version();
+		pgsql_thread->refresh_variables();
+		if (pgsql_thread___monitor_enabled) {
+			run_pgsql_monitor(pgsql_thread.get(), variables_version);
+		} else {
+			// Stay alive when initially disabled as well as after a runtime
+			// disable. Refresh on wakeup and exit promptly during shutdown.
+			usleep(MAX_CHECK_DELAY_US);
+		}
+	}
+
+	proxy_info("Exiting PgSQL_Monitor scheduling thread\n");
 	return nullptr;
 }
 

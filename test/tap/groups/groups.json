@@ -297,6 +297,8 @@
   "pgsql-reg_test_6197_ps_name_collision-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-reg_test_6345_admin_extended_query_sync-t" : [ "legacy-g4" ],
   "pgsql-reg_test_6349_auth_anti_enumeration-t" : [ "legacy-g4" ],
+  "pgsql-reg_test_6375_offline_retry-t" : [ "legacy-g4" ],
+  "pgsql-reg_test_6389_monitor_lifecycle-t" : [ "legacy-g4" ],
   "pgsql-retry_guard_in_txn_on_broken_backend-t" : [ "legacy-g2" ],
   "pgsql-scram_cache_invalidation-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-scram_reload_midhandshake-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
@@ -700,5 +702,6 @@
   "vector_features-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "vendored_openssl_version_unit-t" : [ "unit-tests-g1" ],
   "worker_load_unit-t" : [ "unit-tests-g1" ],
+  "worker_timeout_unit-t" : [ "unit-tests-g1" ],
   "worker_waiter_unit-t" : [ "unit-tests-g1" ]
 }
