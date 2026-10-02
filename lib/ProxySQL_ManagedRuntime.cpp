@@ -11,7 +11,6 @@
 #include "proxysql_admin.h"
 #include "sqlite3db.h"
 #include <algorithm>
-#include <arpa/inet.h>
 #include <cerrno>
 #include <climits>
 #include <fcntl.h>
@@ -163,26 +162,6 @@ bool insert(SQLite3DB &db, const Table &table, const json &row, std::string &err
     error = table.name + ": " + (*proxy_sqlite3_errmsg)(db.get_db());
     return false;
   }
-  return true;
-}
-bool listener_address(const std::string &address, std::string &normalized) {
-  if (address.empty() || address.find('\0') != std::string::npos)
-    return false;
-  std::string host = address;
-  if (host.front() == '[' && host.back() == ']')
-    host = host.substr(1, host.size() - 2);
-  if (host.find(':') != std::string::npos) {
-    in6_addr ipv6{};
-    if (inet_pton(AF_INET6, host.c_str(), &ipv6) != 1)
-      return false;
-    normalized = "[" + host + "]";
-    return true;
-  }
-  if (!std::all_of(host.begin(), host.end(), [](unsigned char c) {
-        return std::isalnum(c) || c == '.' || c == '-' || c == '_';
-      }))
-    return false;
-  normalized = host;
   return true;
 }
 bool contains(const json &array, const json &value) {
@@ -394,8 +373,6 @@ struct ManagedPreparedRuntime {
   std::string prefix{"mysql"};
   std::vector<Table> tables;
   std::map<std::string, std::string> variables;
-  std::string interfaces;
-  bool listeners_changed{false};
 };
 
 bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
@@ -414,9 +391,9 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
     auto p = std::make_unique<ManagedPreparedRuntime>();
     p->document = json::parse(plan.configuration_json);
     auto &d = p->document;
-    if (!d.is_object() || d.size() != 6) {
+    if (!d.is_object() || d.size() != 5) {
       error = "mapped configuration requires exactly "
-              "identity/scope/tables/variables/tls/listeners";
+              "identity/scope/tables/variables/tls";
       return false;
     }
     for (const auto &key : {"identity", "scope", "tables", "variables", "tls"})
@@ -424,12 +401,11 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
         error = std::string("invalid mapped ") + key;
         return false;
       }
-    if (!d.contains("listeners") || !d["listeners"].is_array() ||
-        (d["identity"].value("engine", "") != "MYSQL" &&
+    if ((d["identity"].value("engine", "") != "MYSQL" &&
          d["identity"].value("engine", "") != "POSTGRESQL") ||
         plan.deployment_id.empty() ||
         d["identity"].value("deployment_id", "") != plan.deployment_id) {
-      error = "mapped identity or listener section is invalid";
+      error = "mapped identity is invalid";
       return false;
     }
     p->pgsql = d["identity"].value("engine", "") == "POSTGRESQL";
@@ -439,7 +415,11 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
       return false;
     }
     const auto &scope = d["scope"];
-    for (const auto &key : {"hostgroups", "users", "query_rules", "listeners"})
+    if (scope.size() != 3) {
+      error = "scope requires exactly hostgroups/users/query_rules";
+      return false;
+    }
+    for (const auto &key : {"hostgroups", "users", "query_rules"})
       if (!scope.contains(key) || !scope[key].is_array()) {
         error = "complete managed scope is required";
         return false;
@@ -658,76 +638,6 @@ bool proxysql_prepare_managed_runtime_locked(const ManagedRuntimePlan &plan,
       error = "TLS certificate/key material must be supplied together";
       return false;
     }
-    if (!d["listeners"].empty() || !scope["listeners"].empty()) {
-      char *current = p->pgsql ? GloPTH->get_variable(const_cast<char *>("interfaces"))
-                               : GloMTH->get_variable("interfaces");
-      if (!current) {
-        error = "current engine interfaces are unavailable";
-        return false;
-      }
-      std::string existing(current);
-      free(current);
-      bool mysql_interfaces_staged = false;
-      if (!p->pgsql) {
-        // MySQL interfaces are startup-only. Merge against Admin intent so a
-        // later scoped update preserves unrelated changes already staged there.
-        const auto staged = rows(*GloAdmin->admindb,
-            "SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'",
-            error);
-        if (!error.empty())
-          return false;
-        if (!staged.empty()) {
-          existing = staged[0]["variable_value"].get<std::string>();
-          mysql_interfaces_staged = true;
-        }
-      }
-      std::set<std::string> endpoints, scoped_addresses;
-      for (const auto &address : scope["listeners"]) {
-        std::string normalized;
-        if (!address.is_string() || !listener_address(address.get<std::string>(), normalized)) {
-          error = "listener scope must contain valid addresses";
-          return false;
-        }
-        scoped_addresses.insert(normalized);
-      }
-      size_t begin = 0;
-      while (begin < existing.size()) {
-        size_t end = existing.find(';', begin);
-        auto endpoint = existing.substr(begin, end == std::string::npos ? end : end - begin);
-        bool scoped = false;
-        for (const auto &prefix : scoped_addresses)
-          if (endpoint == prefix || endpoint.compare(0, prefix.size() + 1, prefix + ":") == 0)
-            scoped = true;
-        if (!scoped)
-          endpoints.insert(endpoint);
-        if (end == std::string::npos)
-          break;
-        begin = end + 1;
-      }
-      for (const auto &listener : d["listeners"]) {
-        if (!listener.is_object() ||
-            listener.value("protocol", "") != (p->pgsql ? "POSTGRESQL" : "MYSQL") ||
-            !listener.contains("address") || !listener["address"].is_string() ||
-            !listener.contains("port") || !listener["port"].is_number_integer() ||
-            listener["port"].get<int64_t>() <= 0 || listener["port"].get<int64_t>() > 65535 ||
-            !contains(scope["listeners"], listener["address"])) {
-          error = "invalid scoped engine listener";
-          return false;
-        }
-        std::string address;
-        if (!listener_address(listener["address"].get<std::string>(), address)) {
-          error = "invalid listener address";
-          return false;
-        }
-        endpoints.insert(address + ":" + std::to_string(listener["port"].get<int>()));
-      }
-      for (const auto &endpoint : endpoints) {
-        if (!p->interfaces.empty())
-          p->interfaces += ';';
-        p->interfaces += endpoint;
-      }
-      p->listeners_changed = p->interfaces != existing || (!p->pgsql && !mysql_interfaces_staged);
-    }
     *out = p.release();
     return true;
   } catch (const std::exception &) {
@@ -767,10 +677,6 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
       if (ProxySQL_create_or_load_TLS(false, error) != 0)
         return {false, "TlsApplyFailed", error};
     auto &db = *GloAdmin->admindb;
-    const auto previous_servers =
-        rows(db, "SELECT hostgroup_id,hostname,port,status FROM " + p.prefix + "_servers", error);
-    if (!error.empty())
-      return {false, "MemoryApplyFailed", error};
     for (const auto &table : p.tables) {
       if (!execute(db, "DELETE FROM " + table.name + " WHERE " + table.removal, error))
         return {false, "MemoryApplyFailed", error};
@@ -795,26 +701,15 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
           return {false, "MemoryApplyFailed", error};
       }
     }
-    MySQL_ServerHealthPreservationKeys preserve_health;
-    const auto desired_servers =
-        rows(db, "SELECT hostgroup_id,hostname,port,status FROM " + p.prefix + "_servers", error);
-    if (!error.empty())
-      return {false, "MemoryApplyFailed", error};
-    for (const auto &desired : desired_servers)
-      for (const auto &prior : previous_servers)
-        if (desired == prior)
-          preserve_health.emplace(desired["hostgroup_id"].get<unsigned int>(),
-                                  desired["hostname"].get<std::string>(),
-                                  desired["port"].get<unsigned int>());
     bool servers = false;
     if (p.pgsql) {
       GloAdmin->pgsql_servers_wrlock();
       Unlock unlock{[] { GloAdmin->pgsql_servers_wrunlock(); }};
-      servers = GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, true, &preserve_health);
+      servers = GloAdmin->load_pgsql_servers_to_runtime_checked({}, {}, {}, true);
     } else {
       GloAdmin->mysql_servers_wrlock();
       Unlock unlock{[] { GloAdmin->mysql_servers_wrunlock(); }};
-      servers = GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, true, &preserve_health);
+      servers = GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, true);
     }
     if (!servers) {
       const auto &veto = GloAdmin->servers_load_veto[p.pgsql ? 1 : 0];
@@ -904,27 +799,6 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
     }
     if (admin_variables && !GloAdmin->commit_managed_admin_variables_locked(error))
       return {false, "VariablesApplyFailed", error};
-    if (p.listeners_changed) {
-      if (p.pgsql) {
-        GloPTH->wrlock();
-        Unlock unlock{[] { GloPTH->wrunlock(); }};
-        if (!GloPTH->apply_interfaces_under_lock(p.interfaces.c_str(), error))
-          return {false, "ListenersApplyFailed", error};
-      }
-      // MySQL stages Admin configuration only, matching native publication.
-      // Its immutable runtime interface setting and startup listener path are
-      // unchanged; the plugin owns persistence of the canonical configuration.
-      Table globals;
-      globals.name = "global_variables";
-      if (!execute(db,
-                   "DELETE FROM global_variables WHERE variable_name=" +
-                       quote(p.prefix + "-interfaces"),
-                   error) ||
-          !insert(db, globals,
-                  {{"variable_name", p.prefix + "-interfaces"}, {"variable_value", p.interfaces}},
-                  error))
-        return {false, "ListenersApplyFailed", error};
-    }
     return {true, "", ""};
   } catch (const std::exception &) {
     return {false, "RuntimeApplyFailed", "existing engine runtime operation failed"};
@@ -1009,39 +883,6 @@ bool proxysql_detect_managed_admin_memory_drift_locked(const ManagedRuntimePlan 
                          ? p.prefix + "_tls"
                          : (variable.first.compare(0, 6, "admin-") == 0 ? "admin_variables"
                                                                         : p.prefix + "_variables"));
-  }
-  const auto &scope = p.document["scope"]["listeners"];
-  if (!scope.empty() || !p.document["listeners"].empty()) {
-    std::set<std::string> addresses, expected, actual;
-    for (const auto &address : scope) {
-      std::string normalized;
-      listener_address(address.get<std::string>(), normalized);
-      addresses.insert(normalized);
-    }
-    for (const auto &listener : p.document["listeners"]) {
-      std::string normalized;
-      listener_address(listener["address"], normalized);
-      expected.insert(normalized + ":" + std::to_string(listener["port"].get<int>()));
-    }
-    auto memory = rows(*GloAdmin->admindb,
-                       "SELECT variable_value FROM global_variables WHERE variable_name=" +
-                           quote(p.prefix + "-interfaces"),
-                       error);
-    if (!error.empty())
-      return false;
-    std::string source = memory.empty() ? "" : memory[0]["variable_value"].get<std::string>();
-    for (size_t begin = 0; begin < source.size();) {
-      auto end = source.find(';', begin);
-      auto item = source.substr(begin, end == std::string::npos ? end : end - begin);
-      for (const auto &address : addresses)
-        if (item == address || item.compare(0, address.size() + 1, address + ":") == 0)
-          actual.insert(item);
-      if (end == std::string::npos)
-        break;
-      begin = end + 1;
-    }
-    if (expected != actual)
-      changed.insert(p.prefix + "_listeners");
   }
   modules.assign(changed.begin(), changed.end());
   detected = !modules.empty();

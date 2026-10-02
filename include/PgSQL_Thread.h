@@ -809,9 +809,6 @@ public:
 	iface_info* find_iface_from_fd(int fd);
 	int get_fd(unsigned int idx);
 	void del(unsigned int idx);
-#ifdef PROXYSQL40
-	std::vector<std::string> registered_interfaces() const;
-#endif
 };
 
 /*struct p_th_counter {
@@ -1354,8 +1351,6 @@ public:
 #ifdef PROXYSQL40
 	// Read existing metadata/validators without invoking runtime setters.
 	bool validate_variable(const char* name, const char* value) const;
-	// Caller holds the thread handler write lock; uses existing listener operations.
-	bool apply_interfaces_under_lock(const char* value, std::string& error);
 #endif
 
 	/**

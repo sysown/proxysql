@@ -12,11 +12,9 @@
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
-#include <arpa/inet.h>
 #include <fstream>
 #include <memory>
 #include <openssl/ssl.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 using nlohmann::json;
@@ -42,12 +40,10 @@ json configuration() {
             {"scope",
              {{"hostgroups", {10, 11}},
               {"users", {{{"username", "managed"}, {"frontend", 1}, {"backend", 1}}}},
-              {"query_rules", {100}},
-              {"listeners", json::array()}}},
+              {"query_rules", {100}}}},
             {"tables", json::object()},
             {"variables", json::object()},
-            {"tls", json::object()},
-            {"listeners", json::array()}};
+            {"tls", json::object()}};
   for (const auto &t : pgsql_definitions)
     d["tables"][t.first] = json::array();
   d["tables"]["pgsql_servers"] = {
@@ -100,32 +96,6 @@ void rejected(const json &d, const char *reason) {
   bool accepted = prepare(d, &p, error);
   ok(!accepted && !p && !error.empty(), "%s", reason);
   proxysql_destroy_managed_prepared_runtime(p);
-}
-int reserve_port() {
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  sockaddr_in a{};
-  a.sin_family = AF_INET;
-  a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  if (fd < 0 || bind(fd, reinterpret_cast<sockaddr *>(&a), sizeof(a))) {
-    if (fd >= 0)
-      close(fd);
-    return 0;
-  }
-  socklen_t n = sizeof(a);
-  getsockname(fd, reinterpret_cast<sockaddr *>(&a), &n);
-  close(fd);
-  return ntohs(a.sin_port);
-}
-bool connects(const char *address, int port) {
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  sockaddr_in a{};
-  a.sin_family = AF_INET;
-  a.sin_port = htons(port);
-  inet_pton(AF_INET, address, &a.sin_addr);
-  bool result = fd >= 0 && connect(fd, reinterpret_cast<sockaddr *>(&a), sizeof(a)) == 0;
-  if (fd >= 0)
-    close(fd);
-  return result;
 }
 std::string contents(const std::string &path) {
   std::ifstream in(path);
@@ -192,6 +162,12 @@ int main() {
   ok(scalar(db, "SELECT count(*) FROM pgsql_servers") == "1",
      "pure PostgreSQL preparation leaves Admin intent untouched");
   auto bad = d;
+  bad["unsupported_section"] = json::array();
+  rejected(bad, "unknown managed configuration sections are rejected");
+  bad = d;
+  bad["scope"]["unsupported_scope"] = json::array();
+  rejected(bad, "unknown managed scope sections are rejected");
+  bad = d;
   bad["tables"]["pgsql_users"][0]["default_schema"] = "mysql-only";
   rejected(bad, "PostgreSQL uses its own user schema");
   bad = d;
@@ -324,72 +300,6 @@ int main() {
   result = activate_document(d, 1);
   ok(result.applied && observe_drift() && !drift,
      "PostgreSQL API reapply clears observed Admin memory drift");
-  PgHGM->wrlock();
-  auto *managed = PgHGM->find_server_in_hg(10, "managed.test", 5432);
-  auto *unrelated = PgHGM->find_server_in_hg(99, "unrelated.test", 5432);
-  if (managed) {
-    managed->status = MYSQL_SERVER_STATUS_SHUNNED;
-    managed->shunned_automatic = true;
-    managed->time_last_detected_error = 123;
-  }
-  if (unrelated) {
-    unrelated->status = MYSQL_SERVER_STATUS_SHUNNED;
-    unrelated->shunned_automatic = true;
-    unrelated->time_last_detected_error = 456;
-  }
-  PgHGM->wrunlock();
-  result = activate_document(d, 2);
-  ok(result.applied && managed && unrelated && managed->status == MYSQL_SERVER_STATUS_SHUNNED &&
-         unrelated->status == MYSQL_SERVER_STATUS_SHUNNED && managed->shunned_automatic &&
-         unrelated->shunned_automatic && managed->time_last_detected_error == 123 &&
-         unrelated->time_last_detected_error == 456,
-     "unchanged canonical PostgreSQL status retains managed/unrelated transient health metadata");
-  auto live = proxysql_current_server_runtime_rows(ProxySQL_ServerProtocol::pgsql);
-  bool shun = false;
-  if (live)
-    for (const auto &row : *live)
-      if (row.hostgroup_id == 10 && row.hostname == "managed.test" && row.status == "SHUNNED")
-        shun = true;
-  ok(shun, "current PostgreSQL runtime snapshot preserves actual SHUN under caller Admin mutex");
-  ok(observe_drift() && !drift,
-     "PostgreSQL Admin memory drift excludes transient runtime health");
-  proxysql_unlock_configuration();
-  auto unlocked = proxysql_current_server_runtime_rows(ProxySQL_ServerProtocol::pgsql);
-  proxysql_lock_configuration();
-  ok(live && unlocked && unlocked->size() == live->size(),
-     "copied PostgreSQL runtime snapshot is usable without caller Admin mutex");
-  ok(scalar(db, "SELECT status FROM pgsql_servers WHERE hostgroup_id=10") == "ONLINE",
-     "monitor health does not overwrite PostgreSQL Admin intent");
-  auto changed = d;
-  changed["tables"]["pgsql_servers"][0]["status"] = "OFFLINE_SOFT";
-  result = activate_document(changed, 3);
-  ok(result.applied && managed->status == MYSQL_SERVER_STATUS_OFFLINE_SOFT &&
-         unrelated->status == MYSQL_SERVER_STATUS_SHUNNED,
-     "explicit managed PostgreSQL status applies while unrelated health remains");
-  ok(shun && live->at(0).status != "OFFLINE_SOFT", "earlier runtime snapshot owns copied values");
-  db.execute("UPDATE pgsql_servers SET status='ONLINE'");
-  GloAdmin->pgsql_servers_wrlock();
-  GloAdmin->load_pgsql_servers_to_runtime();
-  GloAdmin->pgsql_servers_wrunlock();
-  ok(managed->status == MYSQL_SERVER_STATUS_ONLINE &&
-         unrelated->status == MYSQL_SERVER_STATUS_ONLINE,
-     "ordinary PostgreSQL LOAD keeps native status reset behavior");
-  int old_port = reserve_port(), new_port = reserve_port(), other_port = reserve_port();
-  auto old_iface = "127.0.0.1:" + std::to_string(old_port),
-       other_iface = "127.0.0.2:" + std::to_string(other_port);
-  bool fixture = old_port && new_port && other_port &&
-                 GloPTH->set_variable(const_cast<char *>("interfaces"),
-                                      (old_iface + ";" + other_iface).c_str()) &&
-                 GloPTH->listener_add(old_iface.c_str()) >= 0 &&
-                 GloPTH->listener_add(other_iface.c_str()) >= 0;
-  auto listeners = d;
-  listeners["scope"]["listeners"] = {"127.0.0.1"};
-  listeners["listeners"] = {
-      {{"protocol", "POSTGRESQL"}, {"address", "127.0.0.1"}, {"port", new_port}}};
-  result = activate_document(listeners, 4);
-  ok(fixture && result.applied && !connects("127.0.0.1", old_port) &&
-         connects("127.0.0.1", new_port) && connects("127.0.0.2", other_port),
-     "native live PostgreSQL listener replacement preserves unrelated address");
   auto tls = d;
   tls["tls"] = {{"trust_pem", contents(std::string(GloVars.datadir) + "/proxysql-ca.pem")},
                 {"certificate_pem", contents(std::string(GloVars.datadir) + "/proxysql-cert.pem")},
@@ -419,28 +329,9 @@ int main() {
   ok(proxysql_detect_managed_admin_memory_drift_locked(
          {"pgsql-unit",tls.dump()},tls_drift,drift_modules,drift_error) && !tls_drift,
      "Admin memory observation normalizes applied PostgreSQL require_tls and PEM material paths");
-  auto listener_drift=listeners;
-  listener_drift["tls"]=tls["tls"];
-  listener_drift["tables"]=tls["tables"];
-  // The listener remains from its earlier successful apply; unrelated addresses are excluded.
-  ok(proxysql_detect_managed_admin_memory_drift_locked(
-         {"pgsql-unit",listener_drift.dump()},tls_drift,drift_modules,drift_error) && !tls_drift,
-     "Admin memory observation compares only owned PostgreSQL listener addresses");
-  const int busy_port=reserve_port();
-  const int busy_fd=socket(AF_INET,SOCK_STREAM,0);
-  sockaddr_in busy_address{};busy_address.sin_family=AF_INET;
-  busy_address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);busy_address.sin_port=htons(busy_port);
-  const bool busy_bound=busy_fd>=0 && bind(busy_fd,reinterpret_cast<sockaddr*>(&busy_address),sizeof(busy_address))==0;
-  auto busy=listeners;busy["listeners"][0]["port"]=busy_port;
-  result=activate_document(busy,6);
-  ok(busy_bound && !result.applied && result.error_code=="ListenersApplyFailed" &&
-         connects("127.0.0.1",new_port) && connects("127.0.0.2",other_port),
-     "real PostgreSQL bind failure is reported without claiming successful activation");
-  if(busy_fd>=0)close(busy_fd);
   auto empty = d;
   for (const auto &t : pgsql_definitions)
     empty["tables"][t.first] = json::array();
-  empty["scope"]["listeners"] = {"127.0.0.1"};
   result = activate_document(empty, 6);
   ok(result.applied, "empty desired PostgreSQL arrays activate supplied removal scope");
   ok(scalar(db, "SELECT count(*) FROM pgsql_servers WHERE hostgroup_id=10") == "0" &&
@@ -448,8 +339,6 @@ int main() {
          scalar(db, "SELECT count(*) FROM pgsql_users WHERE username='managed'") == "0" &&
          scalar(db, "SELECT count(*) FROM pgsql_query_rules WHERE rule_id=100") == "0",
      "supplied scope removes owned PostgreSQL rows while preserving unrelated rows");
-  ok(!connects("127.0.0.1", new_port) && connects("127.0.0.2", other_port),
-     "empty desired PostgreSQL listeners remove owned addresses only");
   proxysql_unlock_configuration();
   return exit_status();
 }

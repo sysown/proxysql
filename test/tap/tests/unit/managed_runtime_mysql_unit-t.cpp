@@ -76,12 +76,10 @@ json configuration() {
             {"scope",
              {{"hostgroups", {10, 11, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29}},
               {"users", {{{"username", "managed"}, {"frontend", 1}, {"backend", 1}}}},
-              {"query_rules", {100}},
-              {"listeners", json::array()}}},
+              {"query_rules", {100}}}},
             {"tables", json::object()},
             {"variables", json::object()},
-            {"tls", json::object()},
-            {"listeners", json::array()}};
+            {"tls", json::object()}};
   for (const auto &table : definitions)
     d["tables"][table.first] = json::array();
   d["tables"]["mysql_servers"] = {{{"hostgroup_id", 10},
@@ -205,6 +203,14 @@ int main() {
   ok(sqlite3_get_autocommit(GloAdmin->configdb->get_db()) == 1,
      "prepare does not start a store transaction");
   proxysql_destroy_managed_prepared_runtime(prepared);
+  {
+    auto bad = d;
+    bad["unsupported_section"] = json::array();
+    rejected(bad, "unknown managed configuration sections are rejected");
+    bad = d;
+    bad["scope"]["unsupported_scope"] = json::array();
+    rejected(bad, "unknown managed scope sections are rejected");
+  }
   for (const auto &table : definitions) {
     auto bad = d;
     bad["tables"].erase(table.first);
@@ -234,21 +240,6 @@ int main() {
   bad = d;
   bad["tables"]["mysql_servers_ssl_params"][0]["hostname"] = "unrelated.test";
   rejected(bad, "TLS rows cannot escape managed server endpoints");
-  bad = d;
-  bad["scope"]["listeners"] = {"invalid address"};
-  rejected(bad, "listener address syntax is validated before persistence");
-  bad = d;
-  bad["scope"]["listeners"] = {"127.0.0.1"};
-  bad["listeners"] = {{{"protocol", "POSTGRESQL"}, {"address", "127.0.0.1"}, {"port", 3306}}};
-  rejected(bad, "listener protocol must match the configured engine");
-  auto ipv6 = d;
-  ipv6["scope"]["listeners"] = {"::1"};
-  ipv6["listeners"] = {{{"protocol", "MYSQL"}, {"address", "::1"}, {"port", 3306}}};
-  ManagedPreparedRuntime *ipv6_prepared = nullptr;
-  std::string ipv6_error;
-  ok(prepare(ipv6, &ipv6_prepared, ipv6_error),
-     "raw IPv6 addresses project to existing bracketed listener syntax without binding in prepare");
-  proxysql_destroy_managed_prepared_runtime(ipv6_prepared);
   bad = d;
   bad["variables"]["admin-refresh_interval"] = 1;
   rejected(bad, "invalid Admin range is rejected during pure preparation");
@@ -389,107 +380,6 @@ int main() {
      "MySQL API reapply clears observed Admin memory drift");
   proxysql_destroy_managed_prepared_runtime(prepared);
 
-  // Existing transient health survives when canonical status is unchanged.
-  MyHGM->wrlock();
-  auto *managed = MyHGM->find_server_in_hg(10, "managed.test", 3306);
-  auto *unrelated = MyHGM->find_server_in_hg(99, "unrelated.test", 3306);
-  if (managed) {
-    managed->set_status(MYSQL_SERVER_STATUS_SHUNNED);
-    managed->shunned_automatic = true;
-    managed->time_last_detected_error = 123;
-  }
-  if (unrelated) {
-    unrelated->set_status(MYSQL_SERVER_STATUS_SHUNNED);
-    unrelated->shunned_automatic = true;
-    unrelated->time_last_detected_error = 456;
-  }
-  MyHGM->wrunlock();
-  prepared = nullptr;
-  bool health_ready = prepare(d, &prepared, error);
-  if (health_ready)
-    result = proxysql_activate_managed_runtime_locked(*prepared, 2);
-  ok(health_ready && result.applied && managed && unrelated &&
-         managed->get_status() == MYSQL_SERVER_STATUS_SHUNNED &&
-         unrelated->get_status() == MYSQL_SERVER_STATUS_SHUNNED && managed->shunned_automatic &&
-         unrelated->shunned_automatic && managed->time_last_detected_error == 123 &&
-         unrelated->time_last_detected_error == 456,
-     "managed and unrelated transient health and recovery metadata survive unchanged canonical "
-     "status");
-  ok(scalar(db, "SELECT status FROM mysql_servers WHERE hostgroup_id=10") == "ONLINE",
-     "monitor health never replaces Admin configuration intent");
-  auto runtime = std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql("mysql_servers"));
-  bool runtime_shun = false;
-  if (runtime)
-    for (const auto *row : runtime->rows)
-      if (std::string(row->fields[0]) == "10" && std::string(row->fields[4]) == "SHUNNED")
-        runtime_shun = true;
-  ok(runtime_shun, "normal HGM runtime view includes preserved SHUN");
-  const auto current_rows = proxysql_current_server_runtime_rows(ProxySQL_ServerProtocol::mysql);
-  bool current_shun = false;
-  if (current_rows)
-    for (const auto &row : *current_rows)
-      if (row.hostgroup_id == 10 && row.hostname == "managed.test" && row.status == "SHUNNED")
-        current_shun = true;
-  ok(current_shun, "copied MySQL current runtime rows preserve transient health under Admin mutex");
-  ok(observe_drift() && !drift,
-     "MySQL Admin memory drift excludes transient runtime health");
-  ok(!proxysql_current_server_runtime_rows(static_cast<ProxySQL_ServerProtocol>(255)),
-     "current runtime row helper rejects an unknown protocol");
-  auto *runtime_checksum_rows = MyHGM->get_current_mysql_table("cluster_mysql_servers");
-  bool checksum_intent = false;
-  if (runtime_checksum_rows)
-    for (const auto *row : runtime_checksum_rows->rows)
-      if (std::string(row->fields[0]) == "10" && std::string(row->fields[4]) == "ONLINE")
-        checksum_intent = true;
-  ok(checksum_intent, "native Cluster checksum projection continues to normalize transient health");
-  proxysql_destroy_managed_prepared_runtime(prepared);
-  auto changed = d;
-  changed["tables"]["mysql_servers"][0]["status"] = "OFFLINE_SOFT";
-  prepared = nullptr;
-  bool status_ready = prepare(changed, &prepared, error);
-  if (status_ready)
-    result = proxysql_activate_managed_runtime_locked(*prepared, 3);
-  ok(status_ready && result.applied && managed->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT &&
-         unrelated->get_status() == MYSQL_SERVER_STATUS_SHUNNED,
-     "explicit managed status change applies while unrelated health remains");
-  proxysql_destroy_managed_prepared_runtime(prepared);
-  db.execute("UPDATE mysql_servers SET status='ONLINE'");
-  GloAdmin->mysql_servers_wrlock();
-  bool ordinary = GloAdmin->load_mysql_servers_to_runtime();
-  GloAdmin->mysql_servers_wrunlock();
-  ok(ordinary && managed->get_status() == MYSQL_SERVER_STATUS_ONLINE &&
-         unrelated->get_status() == MYSQL_SERVER_STATUS_ONLINE,
-     "ordinary LOAD keeps its existing status replacement behavior");
-  // MySQL interface updates stage configuration without changing the immutable
-  // runtime setting. Preserve unrelated pending intent as well as active intent.
-  const int new_port = 16034;
-  const std::string old_interface = "127.0.0.1:16033",
-                    new_interface = "127.0.0.1:16034",
-                    other_interface = "127.0.0.2:16035",
-                    pending_interface = "127.0.0.3:16036";
-  const std::string active_interfaces = old_interface + ";" + other_interface;
-  bool listener_fixture = GloMTH->set_variable("interfaces", active_interfaces.c_str()) &&
-      db.execute(("INSERT OR REPLACE INTO global_variables VALUES ('mysql-interfaces','" +
-                  active_interfaces + ";" + pending_interface + "')").c_str());
-  auto listeners = d;
-  listeners["scope"]["listeners"] = {"127.0.0.1"};
-  listeners["listeners"] = {{{"protocol", "MYSQL"}, {"address", "127.0.0.1"}, {"port", new_port}}};
-  prepared = nullptr;
-  bool listener_ready = prepare(listeners, &prepared, error);
-  if (listener_ready)
-    result = proxysql_activate_managed_runtime_locked(*prepared, 4);
-  char *active_after_staging = GloMTH->get_variable("interfaces");
-  ok(listener_fixture && listener_ready && result.applied && active_after_staging &&
-         active_interfaces == active_after_staging &&
-         scalar(db, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'") ==
-             new_interface + ";" + other_interface + ";" + pending_interface,
-     "MySQL listener intent stages scoped replacement while preserving the runtime setting");
-  free(active_after_staging);
-  ok(scalar(db,
-            "SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'")
-             .find(other_interface + ";" + pending_interface) != std::string::npos,
-     "merged listener intent preserves unrelated active and pending Admin configuration");
-  proxysql_destroy_managed_prepared_runtime(prepared);
   // Material is supplied as PEM and reaches the real TLS reload and backend APIs.
   auto tls = d;
   tls["tls"] = {
@@ -523,7 +413,6 @@ int main() {
   auto empty = d;
   for (const auto &table : definitions)
     empty["tables"][table.first] = json::array();
-  empty["scope"]["listeners"] = {"127.0.0.1"};
   prepared = nullptr;
   bool empty_ready = prepare(empty, &prepared, error);
   if (empty_ready)
@@ -534,10 +423,8 @@ int main() {
          scalar(db, "SELECT count(*) FROM mysql_query_rules WHERE rule_id=100") == "0" &&
          scalar(db,
                 "SELECT count(*) FROM mysql_servers_ssl_params WHERE hostname='managed.test'") ==
-             "0" &&
-         scalar(db, "SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'") ==
-             other_interface + ";" + pending_interface,
-     "supplied deletion scope removes old managed rows and staged listener intent while preserving unrelated "
+             "0",
+     "supplied deletion scope removes old managed rows while preserving unrelated "
      "entries");
   proxysql_destroy_managed_prepared_runtime(prepared);
   // Removing an existing companion table exercises a real loader/database failure.

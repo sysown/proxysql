@@ -1709,18 +1709,12 @@ bool MySQL_HostGroups_Manager::commit() {
 	return commit({},{});
 }
 
-bool MySQL_HostGroups_Manager::commit(const peer_runtime_mysql_servers_t& runtime_servers,
- const peer_mysql_servers_v2_t& configuration_servers,bool only_runtime,bool update_version,bool acquire_lock) {
- return commit(runtime_servers,configuration_servers,only_runtime,update_version,acquire_lock,nullptr);
-}
-
 bool MySQL_HostGroups_Manager::commit(
 	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 	bool only_commit_runtime_mysql_servers,
 	bool update_version,
-	bool acquire_lock,
-	const MySQL_ServerHealthPreservationKeys* preserve_health
+	bool acquire_lock
 ) {
 	// if only_commit_runtime_mysql_servers is true, mysql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_mysql_servers) {
@@ -1732,7 +1726,7 @@ bool MySQL_HostGroups_Manager::commit(
 	unsigned long long curtime1=monotonic_time();
 	if (acquire_lock) wrlock();
 	const bool result = commit_locked(peer_runtime_mysql_servers, peer_mysql_servers_v2,
-		only_commit_runtime_mysql_servers, update_version, preserve_health);
+		only_commit_runtime_mysql_servers, update_version);
 	if (acquire_lock) wrunlock();
 	finish_commit(curtime1, acquire_lock);
 	return result;
@@ -1742,8 +1736,7 @@ bool MySQL_HostGroups_Manager::commit_locked(
 	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 	bool only_commit_runtime_mysql_servers,
-	bool update_version,
-	const MySQL_ServerHealthPreservationKeys* preserve_health
+	bool update_version
 ) {
 	// purge table
 	purge_mysql_servers_table();
@@ -1854,7 +1847,6 @@ bool MySQL_HostGroups_Manager::commit_locked(
 			} else {
 				bool run_update=false;
 				MySrvC *mysrvc=(MySrvC *)ptr;
-				const bool keep_health = preserve_health && preserve_health->count({mysrvc->myhgc->hid, mysrvc->address, mysrvc->port});
 				// carefully increase the 2nd index by 1 for every new column added
 				if (atoi(r->fields[3])!=atoi(r->fields[13])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
@@ -1867,7 +1859,7 @@ bool MySQL_HostGroups_Manager::commit_locked(
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%ld) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]) , mysrvc->weight , atoi(r->fields[14]));
 					mysrvc->weight=atoi(r->fields[14]);
 				}
-				if (!keep_health && atoi(r->fields[5])!=atoi(r->fields[15])) {
+				if (atoi(r->fields[5])!=atoi(r->fields[15])) {
 					bool change_server_status = true;
 					if (GloMTH->variables.evaluate_replication_lag_on_servers_load == 1) {
 						if (mysrvc->get_status() == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG && // currently server is shunned due to replication lag
@@ -1905,7 +1897,7 @@ bool MySQL_HostGroups_Manager::commit_locked(
 					if (GloMTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing max_replication_lag for server %u:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[8]) , mysrvc->max_replication_lag , atoi(r->fields[18]));
 					mysrvc->max_replication_lag=atoi(r->fields[18]);
-					if (!keep_health && mysrvc->max_replication_lag == 0) { // we just changed it to 0
+					if (mysrvc->max_replication_lag == 0) { // we just changed it to 0
 						if (mysrvc->get_status() == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 							// the server is currently shunned due to replication lag
 							// but we reset max_replication_lag to 0

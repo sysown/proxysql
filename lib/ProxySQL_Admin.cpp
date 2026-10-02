@@ -9163,15 +9163,9 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 }
 
 bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
- const runtime_mysql_servers_checksum_t& runtime_checksum,const mysql_servers_v2_checksum_t& configuration_checksum,
- bool hgm_acquire_lock,bool emit_runtime_install) {
- return load_mysql_servers_to_runtime(incoming_servers,runtime_checksum,configuration_checksum,hgm_acquire_lock,emit_runtime_install,nullptr);
-}
-
-bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
 	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
 	const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock,
-	bool emit_runtime_install, const MySQL_ServerHealthPreservationKeys* preserve_health) {
+	bool emit_runtime_install) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::mysql;
@@ -9409,7 +9403,7 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	const bool committed = MyHGM->commit(
 		{ runtime_mysql_servers, peer_runtime_mysql_server },
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
-		false, true, hgm_acquire_lock, preserve_health
+		false, true, hgm_acquire_lock
 	);
 	if (runtime_install_prepared && committed &&
 		!runtime_install.commit(std::move(installed_snapshot), commit_server_module))
@@ -9454,11 +9448,11 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& servers,
  const runtime_pgsql_servers_checksum_t& runtime_checksum, const pgsql_servers_v2_checksum_t& config_checksum,
  bool emit_runtime_install) {
- (void)load_pgsql_servers_to_runtime(servers,runtime_checksum,config_checksum,emit_runtime_install,nullptr);
+ (void)load_pgsql_servers_to_runtime_checked(servers,runtime_checksum,config_checksum,emit_runtime_install);
 }
-bool ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
+bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_servers_t& incoming_pgsql_servers,
  const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
- bool emit_runtime_install, const PgSQL_ServerHealthPreservationKeys* preserve_health) {
+ bool emit_runtime_install) {
 	// make sure that the caller has called pgsql_servers_wrlock()
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::pgsql;
@@ -9586,7 +9580,7 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	const bool runtime_hgm_committed = PgHGM->commit(
 		{ runtime_pgsql_servers, peer_runtime_pgsql_server },
 		{ incoming_pgsql_servers_v2, peer_pgsql_server_v2 },
-		false, true, preserve_health
+		false, true
 	);
  if (runtime_install_prepared && runtime_hgm_committed &&
      !runtime_install.commit(std::move(installed_snapshot), commit_server_module)) {

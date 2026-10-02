@@ -1,7 +1,6 @@
 #ifndef PROXYSQL_ADMIN_H
 #define PROXYSQL_ADMIN_H
 
-#include "ProxySQL_ServerHealth.h"
 #include "prometheus/exposer.h"
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
@@ -775,10 +774,6 @@ class ProxySQL_Admin {
 	bool load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
 		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool hgm_acquire_lock = true,
 		bool emit_runtime_install = true);
-	bool load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
-		const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
-		const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock,
-		bool emit_runtime_install, const MySQL_ServerHealthPreservationKeys* preserve_health);
 	void save_mysql_servers_from_runtime();
 	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
@@ -968,8 +963,8 @@ class ProxySQL_Admin {
 
 	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
 		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {}, bool emit_runtime_install = true);
-	bool load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t&, const runtime_pgsql_servers_checksum_t&,
-		const pgsql_servers_v2_checksum_t&, bool emit_runtime_install, const PgSQL_ServerHealthPreservationKeys*);
+	bool load_pgsql_servers_to_runtime_checked(const incoming_pgsql_servers_t&, const runtime_pgsql_servers_checksum_t&,
+		const pgsql_servers_v2_checksum_t&, bool emit_runtime_install);
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);

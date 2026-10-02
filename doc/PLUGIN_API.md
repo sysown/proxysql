@@ -235,12 +235,9 @@ for layout 15 or newer; the separate `ProxySQL_ManagedConfigurationServiceV1`
 contract stays at version 1. Rebuild both plugins against the matching core
 headers and DEBUG setting.
 
-Managed MySQL listener edits follow the upstream startup-only listener policy:
-the plugin persists their canonical intent and the adapter stages
-`mysql-interfaces` in Admin memory, without rebinding sockets. Managed restore
-runs after core has loaded native startup interfaces, so restoring canonical
-intent alone does not activate new endpoints on restart. Operators must supply
-the corresponding native startup configuration; automatic activation is deferred.
+Managed configuration does not include listener addresses or ports. Listener
+configuration remains part of ordinary ProxySQL startup configuration; the
+management adapter does not rebind, stage, persist, or restart listeners.
 
 #### `apply_mysql_config_v2` (ABI 9)
 

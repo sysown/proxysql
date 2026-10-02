@@ -29,7 +29,6 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 #include "PgSQL_Variables_Validator.h"
 #include <fcntl.h>
-#include <set>
 #include <cerrno>
 #include <climits>
 
@@ -1316,50 +1315,6 @@ int PgSQL_Threads_Handler::listener_del(const char* iface) {
 	}
 	return 0;
 }
-
-#ifdef PROXYSQL40
-std::vector<std::string> PgSQL_Listeners_Manager::registered_interfaces() const {
- std::vector<std::string> result;
- for (unsigned int i=0; i<ifaces->len; ++i) {
-  const auto* info = static_cast<iface_info*>(ifaces->index(i));
-  if (info && std::find(result.begin(),result.end(),info->iface) == result.end())
-   result.emplace_back(info->iface);
- }
- return result;
-}
-bool PgSQL_Threads_Handler::apply_interfaces_under_lock(const char* value, std::string& error) {
- if (!value) { error = "pgsql-interfaces cannot be null"; return false; }
- std::set<std::string> desired;
- std::string source(value);
- for (size_t begin=0; begin<source.size();) {
-  const auto end = source.find(';',begin);
-  auto item = source.substr(begin,end == std::string::npos ? end : end-begin);
-  if (!item.empty()) desired.insert(item);
-  if (end == std::string::npos) break;
-  begin = end+1;
- }
- auto save_actual = [&]() {
-  std::string actual;
-  for (const auto &iface : MLM->registered_interfaces()) {
-   if (!actual.empty()) actual += ';';
-   actual += iface;
-  }
-  free(variables.interfaces); variables.interfaces = strdup(actual.c_str());
-  commit();
- };
- const auto original = MLM->registered_interfaces();
- for (const auto &iface : desired) {
-  if (std::find(original.begin(),original.end(),iface) != original.end()) continue;
-  if (listener_add(iface.c_str()) < 0) {
-   save_actual(); error = "cannot add PostgreSQL listener " + iface; return false;
-  }
- }
- for (const auto &iface : original)
-  if (!desired.count(iface)) listener_del(iface.c_str());
- save_actual();
- return true;
-}
-#endif
 
 void PgSQL_Threads_Handler::wrlock() {
 	pthread_rwlock_wrlock(&rwlock);
