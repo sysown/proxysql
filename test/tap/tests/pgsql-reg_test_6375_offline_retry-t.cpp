@@ -52,12 +52,12 @@ static bool wait_locked(PGconn *db) {
 }
 int main() {
 	alarm(120);
-	plan(68);
+	plan(69);
 	if (cl.getEnv())
 		return exit_status();
 	PGconn *admin = connect(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password);
 	if (!pgsql_native_supported(admin)) {
-		skip(68, "native backend protocol is unavailable");
+		skip(69, "native backend protocol is unavailable");
 		PQfinish(admin);
 		return exit_status();
 	}
@@ -311,6 +311,14 @@ int main() {
 			mock.stop();
 		}
 	}
+	const std::string old_ping_interval = value(admin,
+		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-monitor_ping_interval'");
+	const std::string ping_counter_query =
+		"SELECT Variable_Value FROM stats_pgsql_global WHERE Variable_Name='PgSQL_Monitor_ping_check_OK'";
+	const long pings_before_restore = std::stol(value(admin, ping_counter_query));
+	// Bound the restoration check independently of the suite's normal interval.
+	if (oldmonitor == "true")
+		value(admin, "SET pgsql-monitor_ping_interval=100");
 	value(admin, "SET pgsql-monitor_enabled='" + oldmonitor + "'");
 	value(admin, "DELETE FROM pgsql_query_rules WHERE rule_id=6375");
 	value(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=6375");
@@ -319,6 +327,21 @@ int main() {
 	value(admin, "SET pgsql-use_native_backend_protocol='" + oldmode + "'");
 	value(admin, "SET pgsql-query_retries_on_failure='" + oldretries + "'");
 	value(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	if (oldmonitor == "true") {
+		bool resumed = false;
+		for (int i = 0; i < 100; ++i) {
+			if (std::stol(value(admin, ping_counter_query)) > pings_before_restore) {
+				resumed = true;
+				break;
+			}
+			usleep(100000);
+		}
+		ok(resumed, "restoring monitor_enabled resumes successful monitoring checks (#6389)");
+		value(admin, "SET pgsql-monitor_ping_interval='" + old_ping_interval + "'");
+		value(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	} else {
+		skip(1, "monitoring was disabled before this test");
+	}
 	value(db, "DROP TABLE issue6375_lock");
 	value(db, "DROP TABLE issue6375_effects");
 	PQfinish(db);
