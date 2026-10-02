@@ -166,19 +166,13 @@ jobs:
         # (repo-root lib/*.cpp, include/*). Without them sparse checkout
         # omits daemon sources, codecov-cli drops those SF: entries, and
         # Codecov shows only test/+src/ -- the regression after #5967.
-        # Git 2.34 defaults `sparse-checkout set` to non-cone mode even
-        # when checkout's cone-mode input is true. Use explicit patterns
-        # so root assets (notably .gitignore) survive on every runner.
-        sparse-checkout-cone-mode: false
         sparse-checkout: |
-          /*
-          !/*/
-          /include/
-          /lib/
-          /src/
-          /test/infra/
-          /test/tap/
-          /test/scripts/
+          include
+          lib
+          src
+          test/infra
+          test/tap
+          test/scripts
 
     - name: Restore selected product handoff
       env:
