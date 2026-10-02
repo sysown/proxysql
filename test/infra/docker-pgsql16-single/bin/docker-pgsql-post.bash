@@ -4,7 +4,22 @@ set -o pipefail
 . constants
 
 CONTAINER="${COMPOSE_PROJECT}-pgdb1-1"
-PGUSERS="root testuser monitor"
+# authtrust / authpw / authreject back the native backend-protocol auth matrix
+# (pgsql-native_auth_matrix-t): pg_hba.conf grants each of them exactly one
+# authentication METHOD (trust / password / reject) via a username-scoped rule
+# placed above the scram-sha-256 catch-alls, so the native path's
+# AuthenticationOk, AuthenticationCleartextPassword and ErrorResponse-during-auth
+# branches can each be reached against a REAL PostgreSQL. md5 is covered by the
+# pre-existing 'md5user' role, which needs no rule here. 'authscram' needs no
+# rule either -- it falls through to the scram-sha-256 catch-all -- but it does
+# need to be a role of its OWN rather than reusing 'testuser', because the
+# matrix rewrites each role's pgsql_users row and 'testuser' is seeded by
+# conf/proxysql/config.sql for the whole suite.
+#
+# All four are created exactly like every other role (password == username);
+# for 'authtrust' the password is irrelevant by construction, which is what lets
+# the test prove trust semantics by presenting a deliberately wrong one.
+PGUSERS="root testuser monitor authtrust authpw authreject authscram"
 
 printf "[$(date)] PgSQL Provisioning (Container: ${CONTAINER}) ..."
 

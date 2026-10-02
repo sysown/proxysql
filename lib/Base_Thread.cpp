@@ -215,9 +215,11 @@ void Base_Thread::check_timing_out_session(unsigned int n) {
 	auto* _sess = _myds->sess;
 	if (!_sess) return;
 
-	// Generic timeout checks (wait_until or pause_until)
-	if ((_myds->wait_until && curtime > _myds->wait_until) ||
-		(_sess->pause_until && curtime > _sess->pause_until)) {
+	// A deadline is due at equality. BeforePoll only schedules future
+	// deadlines; skipping this boundary would fall back to the full poll
+	// interval and delay query cancellation (see #6385).
+	if ((_myds->wait_until && curtime >= _myds->wait_until) ||
+		(_sess->pause_until && curtime >= _sess->pause_until)) {
 		_sess->to_process = 1;
 	}
 
@@ -498,7 +500,7 @@ void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
 		if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END && myds->myconn) {
 			thr->mypolls.fds[n].events = POLLIN;
 			if constexpr (std::is_same_v<T, PgSQL_Thread>) {
-				if (myds->myconn->async_exit_status & PG_EVENT_WRITE)
+				if (myds->myconn->needs_pollout())
 					thr->mypolls.fds[n].events |= POLLOUT;
 			} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 				if (myds->myconn->async_exit_status & MYSQL_WAIT_WRITE)

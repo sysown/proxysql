@@ -168,6 +168,12 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(COREDUMPER_LDIR)/libcoredumper.a
 endif
 
+# NOTE: vec.o is appended to STATIC_LIBS once, after the PROXYSQL40
+# autodetection block below (search for "vec.o"). It must NOT be added here
+# too — listing the same object twice on the link line produces ~98
+# duplicate-symbol errors and breaks every unit test under PROXYSQL40.
+
+
 # ===========================================================================
 # Linker flags — platform-specific
 # ===========================================================================
@@ -546,12 +552,14 @@ $(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
 # ===========================================================================
 
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
+	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
+	pgsql_backend_framing-t pgsql_backend_auth-t pgsql_backend_extq-t \
 	pgsql_command_complete_unit-t \
 	ffto_protocol_unit-t \
 	server_selection_unit-t \
@@ -571,8 +579,21 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
 	pgsql_txn_state_unit-t \
+	pgsql_midbatch_reset_refused_unit-t \
+	pgsql_conn_liveness_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
+	pgsql_native_params_unit-t \
+	pgsql_native_tier_policy_unit-t \
+	pgsql_native_read_burst_unit-t \
+	pgsql_native_scram_order_unit-t \
+	pgsql_native_startup_params_reset_unit-t \
+	pgsql_native_teardown_state_unit-t \
+	pgsql_named_portal_teardown_unit-t \
+	pgsql_native_tls_verify_modes_unit-t \
+	pgsql_native_unix_endpoint_unit-t \
+	pgsql_native_cancel_endpoint_unit-t \
+	pgsql_native_tls_handover_unit-t \
 	charset_find_unit-t \
 	config_validation_unit-t \
 	config_write_unit-t \
@@ -602,8 +623,8 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_resultset_framer_traffic_unit-t \
 	pgsql_response_framer_unit-t \
 	pgsql_response_framer_traffic_unit-t \
-	ffto_state_machine_unit-t \
 	pgsql_reconcile_unit-t \
+	ffto_state_machine_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \

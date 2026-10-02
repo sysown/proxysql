@@ -23,6 +23,8 @@ run_check() {
 
 run_check "Lint groups.json format" \
 	python3 test/tap/groups/lint_groups_json.py
+run_check "Test staged CI workflow behavior" \
+	python3 -m unittest discover -s .github/scripts/tests
 run_check "Check AI TAP shard split" \
 	python3 test/tap/groups/test_ai_group_shards.py
 run_check "Check MySQLX unit group registration" \
@@ -51,6 +53,8 @@ run_check "Check system OpenSSL audit regressions" \
 	test/infra/control/test-no-system-openssl-links-regressions.bash
 run_check "Check RE2 platform and unit linker flags" \
 	test/infra/control/test-re2-platform-link.bash
+run_check "Check DuckDB platform archive completeness" \
+	test/infra/control/test-duckdb-platform-archives.bash
 run_check "Check libusual incremental patch dependency" \
 	test/infra/control/test-libusual-incremental.bash
 run_check "Check vendored OpenSSL consumer flags" \

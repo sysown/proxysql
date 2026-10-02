@@ -88,7 +88,7 @@ CXXFLAGS += -fstack-protector-strong
 .DEFAULT_GOAL := all
 
 # libduckdb_static.a alone does not satisfy DuckDB's symbols -- the vendored
-# build produces 16 static archives (src/ + 12 third_party/ + 3 extension/),
+# build produces 15 archives on macOS and 16 on Linux,
 # with circular references between them. libduckdb_static.a is kept as the
 # make PREREQUISITE that triggers the deps/duckdb build (via $(DUCKDB_AR)
 # below); DUCKDB_ARS enumerates the full set for the actual link. It's a
@@ -106,12 +106,13 @@ DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
 # list, the -shared link below would "succeed" anyway (shared objects
 # tolerate undefined symbols), and the plugin would only fail later at
 # dlopen(RTLD_NOW) -- exactly the failure mode DUCKDB_ARS exists to avoid.
-# So: assert the count before linking. 16 is what DuckDB 1.4.5's vendored
-# CMake build produces (1 src/ + 12 third_party/ + 3 extension/ archives,
-# confirmed via `find deps/duckdb/duckdb/build/release -name '*.a'`); a
-# future DuckDB version bump that legitimately changes the archive count
-# should update this constant, not silently pass a stale check.
+# DuckDB 1.4.5 produces 1 core + 12 third-party + 2 extension archives
+# on macOS. Linux also builds the jemalloc extension. Keep the partial-build
+# guard aligned with that platform difference (extension/extension_config.cmake).
 DUCKDB_MIN_ARCHIVES := 16
+ifeq ($(UNAME_S),Darwin)
+DUCKDB_MIN_ARCHIVES := 15
+endif
 
 SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp $(PLUGIN_DIR)/src/duckdb_session.cpp $(PLUGIN_DIR)/src/duckdb_listener.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
@@ -161,7 +162,7 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) $(BUILDFLAGS_STAMP)
 
 -include $(DEPS)
 
-# The 16 vendored DuckDB archives were built by DuckDB's own CMake, not by
+# The vendored DuckDB archives were built by DuckDB's own CMake, not by
 # this Makefile, so none of their objects carry -fvisibility=hidden -- that
 # flag only applies to duckdb_plugin.o/duckdb_config.o/duckdb_engine.o
 # above. As long as no plugin code referenced any DuckDB symbol (true
@@ -202,7 +203,7 @@ PLUGIN_SYSTEM_LIBS += -ldl
 endif
 
 # --start-group/--end-group (not --whole-archive) resolves the circular
-# references between the 16 DuckDB archives without pulling every object
+# references between the DuckDB archives without pulling every object
 # from every archive into the .so -- --whole-archive was tried and works,
 # but bloats the .so enormously since it forces in the whole set
 # unconditionally instead of just what's referenced.

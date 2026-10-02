@@ -122,6 +122,15 @@ assert_no_system_openssl() {
 }
 
 for platform in Linux Darwin FreeBSD; do
+	# Router sources use OpenSSL directly; macOS has no system headers to
+	# mask a missing vendored include directory in the plugin's compile flags.
+	for source in bootstrap_options metadata_client bootstrap user_sync; do
+		router_output=$(dry_run "${repo_root}/plugins/mysql_router" \
+			"${repo_root}/plugins/mysql_router/obj/${source}.o" "${platform}")
+		assert_contains "${router_output}" "-I${openssl_root}/include" "MySQL Router ${source}/${platform}"
+		assert_no_system_openssl "${router_output}" "MySQL Router ${source}/${platform}"
+	done
+
 	curl_output=$(dry_run "${repo_root}/deps" curl "${platform}")
 	assert_vendored_first "${curl_output}" './configure' "curl/${platform}"
 	assert_contains "${curl_output}" "CPPFLAGS=-I${openssl_root}/include" "curl/${platform}"

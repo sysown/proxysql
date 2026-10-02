@@ -136,12 +136,18 @@ int main() {
 	               "WHERE variable_name='duckdb-memory_limit'");
 	execute(admin, "UPDATE global_variables SET variable_value='" + desired +
 	               "' WHERE variable_name='duckdb-threads'");
-	ok(execute(first, "SET threads=3") &&
-	   cell(second, "SELECT current_setting('threads')") == "3",
-	   "direct managed SET uses global engine control and reaches an existing connection");
-	ok(cell(admin, "SELECT variable_value FROM runtime_global_variables "
+	// Issue #6320: engine-wide settings are shared by every client, so only
+	// Admin may change them; a client SET is refused and changes nothing.
+	ok(!execute(first, "SET threads=3") && !execute(first, "SET worker_threads=3") &&
+	   cell(second, "SELECT current_setting('threads')") == desired,
+	   "a client cannot change engine-wide threads, by name or alias");
+	ok(execute(admin, "UPDATE global_variables SET variable_value='3' "
+	                  "WHERE variable_name='duckdb-threads'") &&
+	   execute(admin, "LOAD DUCKDB VARIABLES TO RUNTIME") &&
+	   cell(second, "SELECT current_setting('threads')") == "3" &&
+	   cell(admin, "SELECT variable_value FROM runtime_global_variables "
 	               "WHERE variable_name='duckdb-threads'") == "3",
-	   "Runtime refresh observes a permitted direct client SET");
+	   "Admin LOAD changes engine-wide threads for existing connections");
 
 	ok(execute(admin, "UPDATE global_variables SET variable_value='/tmp/not-opened.db' "
 	                  "WHERE variable_name='duckdb-database_path'") &&

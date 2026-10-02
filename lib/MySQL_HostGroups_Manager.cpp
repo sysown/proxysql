@@ -2692,12 +2692,17 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
 	if (c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE && c->send_quit &&
-		c->is_expired(monotonic_time()) == false &&
 		queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			// overall, the backend seems healthy and so it is the connection. Try to reset it
 			int myerr=mysql_errno(c->mysql);
-			if (myerr >= 2000 && myerr < 3000) {
+			if (c->is_expired(monotonic_time())) {
+				// Older than mysql-connection_max_age_ms: don't recycle it through
+				// the reset queue, let it be destroyed. Only the reset path checks
+				// the age: a busy connection must still reach the KILL below
+				// (issue #6329).
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset expired MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
+			} else if (myerr >= 2000 && myerr < 3000) {
 				// client library error . We must not try to save the connection
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset MySQL_Connection %p, server %s:%d . Error code %d\n", c, mysrvc->address, mysrvc->port, myerr);
 			} else {

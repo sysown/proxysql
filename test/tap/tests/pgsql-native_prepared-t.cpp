@@ -1,0 +1,1461 @@
+/**
+ * @file pgsql-native_prepared-t.cpp
+ * @brief Differential test: native vs libpq for prepared statements.
+ *
+ * PURPOSE
+ * -------
+ * Exercises prepared statements through ProxySQL twice:
+ *   1. with `pgsql-use_native_backend_protocol='false'`  -> the libpq ORACLE
+ *   2. with `pgsql-use_native_backend_protocol='true'`   -> the NATIVE path
+ *
+ * Byte-equality between the two runs is required for EVERY case in both
+ * sub-suites below — there is no "expected gap" escape hatch left. The
+ * libpq run is the oracle; any divergence is a hard failure.
+ *
+ * Two sub-suites:
+ *
+ * SQL-SIDE (cases P0-P9): `PREPARE` / `EXECUTE` / `DEALLOCATE` issued as
+ * simple Query messages. These are simple queries on the wire, so the native
+ * path handles them. We expect 100% native coverage here.
+ *
+ * EXTENDED-QUERY (cases P10 onward): client-driven Parse / Bind / Describe /
+ * Execute / Close / Sync cycle using libpq's `PQsendPrepare`,
+ * `PQsendQueryPrepared`, and `PQsendQueryParams`. As of the native-drive
+ * stmt-pipeline work (see
+ * docs/superpowers/specs/2026-07-07-pgsql-native-extq-stmt-pipeline-design.md
+ * and lib/PgSQL_Connection.cpp:3032-3043), the native path drives the full
+ * extended-query cycle itself — ProxySQL's prepared-statement bookkeeping
+ * (GloPgStmt global cache, per-connection local_stmts, backend-id reuse, ack
+ * synthesis) is shared between the native and libpq wire layers, so both
+ * paths are expected to be byte-identical AND fully native (no libpq
+ * fallback) for every case here. The coverage summary reports the per-kind
+ * native rate as a regression signal.
+ *
+ * Beyond the single Parse+Bind+Execute cycle, this file also covers:
+ *   - EXT_MULTI_CYCLE: two independent extended-query cycles on one session.
+ *   - EXT_REUSE: the same client-visible statement name re-prepared (with a
+ *     different query) after an explicit DEALLOCATE, exercising the
+ *     backend-stmt-id reuse decision (lib/PgSQL_Session.cpp:~3444-3477).
+ *   - EXT_GLOBAL_DEDUP: two distinct sessions preparing byte-identical query
+ *     text under different local names, exercising the global prepared-
+ *     statement cache dedup path (lib/PgSQL_PreparedStatement.cpp
+ *     `add_prepared_statement`).
+ *   - EXT_PARSE_ERR_MIDFRAME: `PQsendQueryParams` sends Parse/Bind/Describe/
+ *     Execute/Sync as ONE client frame (unlike `PQsendPrepare` +
+ *     `PQsendQueryPrepared`, which are each their own Sync-terminated
+ *     frame). With invalid SQL, the backend's Parse fails while
+ *     Bind/Describe/Execute are already queued behind it in the same
+ *     received frame, so ProxySQL dispatches the Parse as Flush- (not
+ *     Sync-) terminated and must inject its own Sync to resynchronize the
+ *     backend (lib/PgSQL_Connection.cpp:~2803-2825). This is the only
+ *     flagship native-drive recovery mechanism not otherwise exercised by
+ *     this file.
+ *
+ * KNOWN ISSUES (discovered by this test)
+ * --------------------------------------
+ * 1. P8 (PREPARE/EXECUTE inside a transaction): the session-state divergence
+ *    identified by `pgsql-native_transactions-t` also affects SQL-side
+ *    prepared statements that run inside a BEGIN/COMMIT block. The same
+ *    fix will repair both.
+ *
+ * INFRA: legacy-g1 (docker-pgsql16-single, scram-sha-256). The corpus runs once
+ * per transport: plaintext, then TLS on both the client and backend legs
+ * (see pgsql-native_transport.h).
+ */
+
+#include <string>
+#include <sstream>
+#include <vector>
+#include <memory>
+#include <fstream>
+#include <regex>
+#include <chrono>
+#include <unistd.h>
+#include <cstring>
+#include <cerrno>
+#include <sys/select.h>
+#include "libpq-fe.h"
+#include "command_line.h"
+#include "tap.h"
+#include "utils.h"
+#include "pgsql-native_tracking.h"
+#include "pgsql-native_transport.h"
+
+CommandLine cl;
+static const int BACKEND_HG = 0;
+static std::fstream f_proxysql_log{};
+using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
+
+static std::string make_table_name() {
+	return "pgsql_native_prep_" + std::string(native_transport_name()) + "_" +
+	       std::to_string(getpid()) + "_" + std::to_string(time(nullptr));
+}
+
+static PGConnPtr open_admin_conn() {
+	std::stringstream ss;
+	ss << "host=" << cl.pgsql_admin_host
+	   << " port=" << cl.pgsql_admin_port
+	   << " user=" << cl.admin_username
+	   << " password=" << cl.admin_password;
+	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
+}
+
+static PGConnPtr open_client_conn(const std::string& extra_opts = "") {
+	std::stringstream ss;
+	ss << "host=" << cl.pgsql_host
+	   << " port=" << cl.pgsql_port
+	   << " user=" << cl.pgsql_username
+	   << " password=" << cl.pgsql_password
+	   << " dbname=" << cl.pgsql_username
+	   << " sslmode=" << native_client_sslmode();
+	if (!extra_opts.empty()) ss << " " << extra_opts;
+	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
+}
+
+static bool execAdmin(PGconn* admin, const std::string& q) {
+	PGresult* res = PQexec(admin, q.c_str());
+	ExecStatusType st = PQresultStatus(res);
+	bool good = (st == PGRES_COMMAND_OK || st == PGRES_TUPLES_OK);
+	if (!good) diag("admin failed: %s -- %s", q.c_str(), PQerrorMessage(admin));
+	PQclear(res);
+	return good;
+}
+
+static bool setNativeMode(PGconn* admin, bool on) {
+	std::string v = on ? "true" : "false";
+	return execAdmin(admin, "SET pgsql-use_native_backend_protocol='" + v + "'") &&
+	       execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+}
+
+struct ServerRow { std::string hostname, port, max_connections, comment; };
+
+static std::vector<ServerRow> readServers(PGconn* admin, int hg) {
+	std::vector<ServerRow> rows;
+	PGresult* res = PQexec(admin,
+	    ("SELECT hostname, port, max_connections, comment FROM pgsql_servers "
+	     "WHERE hostgroup_id=" + std::to_string(hg)).c_str());
+	if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+		for (int i = 0; i < PQntuples(res); i++) {
+			ServerRow r;
+			r.hostname = PQgetvalue(res, i, 0);
+			r.port = PQgetvalue(res, i, 1);
+			r.max_connections = PQgetvalue(res, i, 2);
+			r.comment = PQgetisnull(res, i, 3) ? "" : PQgetvalue(res, i, 3);
+			rows.push_back(std::move(r));
+		}
+	}
+	PQclear(res);
+	return rows;
+}
+
+static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>& saved) {
+	if (saved.empty()) return false;
+	if (!execAdmin(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg))) return false;
+	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
+	for (const auto& r : saved) {
+		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment) VALUES ("
+			+ std::to_string(hg) + ",'" + r.hostname + "'," + r.port + ","
+			+ (r.max_connections.empty() ? std::string("1000") : r.max_connections)
+			+ "," + std::to_string(native_backend_use_ssl()) + ",'" + r.comment + "')";
+		if (!execAdmin(admin, ins)) return false;
+	}
+	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
+	usleep(200000);
+	return true;
+}
+
+static bool nativeFallbackObserved() {
+	// Deliberately broad: matches the connection-level auth-capability-gap
+	// fallback (lib/PgSQL_Connection.cpp:1475) AND any future
+	// extended-query-specific "falling back to libpq" warning, without
+	// hardcoding today's exact wording. Now that the native path drives the
+	// full extended-query cycle itself (stmt-pipeline work), any case in
+	// this file matching this regex is a regression tripwire — every
+	// EXT_*/PREPARE_SQL case here is expected to be fully native.
+	const std::string re = ".*falling back to libpq.*";
+	return wait_for_log_match(f_proxysql_log, re, 1000, 100);
+}
+
+static void drainLogToNow() {
+	get_matching_lines(f_proxysql_log, "__no_such_marker_line__");
+}
+
+// Single-pass scan of the proxysql log for BOTH the libpq-fallback tripwire
+// and the injected-Sync recovery warning. Needed because wait_for_log_match /
+// get_matching_lines consume the stream forward: two sequential scans for two
+// different regexes would each miss lines the other already read past. Polls
+// until the injected-Sync line is seen or `wait_ms` elapses; the fallback
+// flag reflects everything read either way.
+static void scanNativePhaseLog(bool& fell_back, bool& resync_logged, uint32_t wait_ms) {
+	const std::regex re_fallback(".*falling back to libpq.*");
+	const std::regex re_resync(".*native extq: mid-frame stmt-step error.*");
+	fell_back = false;
+	resync_logged = false;
+	uint32_t elapsed = 0;
+	while (true) {
+		// Clear eof/fail so getline() can read bytes appended since the last scan
+		// (same trick as wait_for_log_match).
+		f_proxysql_log.clear(f_proxysql_log.rdstate() &
+		                     ~std::ios_base::eofbit & ~std::ios_base::failbit);
+		std::string line;
+		while (std::getline(f_proxysql_log, line)) {
+			if (!fell_back && std::regex_match(line, re_fallback)) fell_back = true;
+			if (!resync_logged && std::regex_match(line, re_resync)) resync_logged = true;
+		}
+		if (resync_logged || elapsed >= wait_ms) return;
+		usleep(100000);
+		elapsed += 100;
+	}
+}
+
+static std::string substitute_table(const std::string& q, const std::string& tbl) {
+	std::string out;
+	size_t pos = 0;
+	while (pos < q.size()) {
+		if (pos + 2 < q.size() && q[pos] == '{' && q[pos+1] == 'T' && q[pos+2] == '}') {
+			out += tbl; pos += 3;
+		} else {
+			out += q[pos++];
+		}
+	}
+	return out;
+}
+
+// Capture a deterministic snapshot of a PGresult. NULL values become "\\N".
+static std::string serialize_result(PGresult* res) {
+	if (!res) return "<null>";
+	std::stringstream ss;
+	ExecStatusType st = PQresultStatus(res);
+	ss << "st=" << (int)st << " ";
+	if (st == PGRES_TUPLES_OK) {
+		int nf = PQnfields(res);
+		int nr = PQntuples(res);
+		ss << "nf=" << nf << " nr=" << nr << " ";
+		for (int c = 0; c < nf; c++) {
+			ss << "c" << c << "=" << (PQfname(res, c) ? PQfname(res, c) : "") << ":" << PQftype(res, c) << ";";
+		}
+		for (int r = 0; r < nr; r++) {
+			ss << "R" << r << ":";
+			for (int c = 0; c < nf; c++) {
+				if (PQgetisnull(res, r, c)) ss << "\\N|";
+				else ss << PQgetvalue(res, r, c) << "|";
+			}
+			ss << ";";
+		}
+	} else if (st == PGRES_COMMAND_OK) {
+		const char* ct = PQcmdStatus(res);
+		ss << "tag=" << (ct ? ct : "") << " ";
+	} else if (st == PGRES_FATAL_ERROR) {
+		const char* sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+		ss << "sqlstate=" << (sqlstate ? sqlstate : "") << " ";
+		const char* msg = PQresultErrorMessage(res);
+		ss << "msg=" << (msg ? msg : "") << " ";
+	}
+	return ss.str();
+}
+
+// ===========================================================================
+// SQL-side prepared statements (cases P0-P9). Each is a list of simple
+// queries. We capture the result of each and compare across libpq/native.
+// ===========================================================================
+struct SqlCase {
+	std::string label, kind;
+	std::string setup;       // {T} substituted
+	std::vector<std::string> queries;  // {T} substituted
+};
+
+// Each result entry is the serialized form of the corresponding PGresult.
+struct SqlCaseResult {
+	std::vector<std::string> serials;  // per-query serials
+	bool all_ok = true;
+	std::string err_sqlstate;
+};
+static SqlCaseResult run_sql_case(PGconn* c, const std::vector<std::string>& qs) {
+	SqlCaseResult r;
+	for (const auto& q : qs) {
+		PGresult* res = PQexec(c, q.c_str());
+		r.serials.push_back(serialize_result(res));
+		ExecStatusType st = PQresultStatus(res);
+		if (st == PGRES_FATAL_ERROR) {
+			r.all_ok = false;
+			const char* ss = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+			if (ss) r.err_sqlstate = ss;
+		}
+		PQclear(res);
+	}
+	return r;
+}
+
+static std::vector<SqlCase> build_sql_cases() {
+	std::vector<SqlCase> v;
+	// P0: simple prepare+execute+deallocate
+	v.push_back({"P0: PREPARE p AS SELECT 42; EXECUTE p; DEALLOCATE p", "PREPARE_SQL", "",
+		{"PREPARE p AS SELECT 42", "EXECUTE p", "DEALLOCATE p"}});
+	// P1: prepare with $1, execute with various params
+	v.push_back({"P1: PREPARE p AS SELECT $1::int + $1; EXECUTE p(5); EXECUTE p(7); DEALLOCATE", "PREPARE_SQL", "",
+		{"PREPARE p AS SELECT $1::int + $1", "EXECUTE p(5)", "EXECUTE p(7)", "DEALLOCATE p"}});
+	// P2: prepare with no params
+	v.push_back({"P2: PREPARE p AS SELECT 1+1; EXECUTE p; DEALLOCATE", "PREPARE_SQL", "",
+		{"PREPARE p AS SELECT 1+1", "EXECUTE p", "DEALLOCATE p"}});
+	// P3: prepare, execute with NULL
+	v.push_back({"P3: PREPARE p AS SELECT $1::int IS NULL; EXECUTE p(NULL); DEALLOCATE", "PREPARE_SQL", "",
+		{"PREPARE p AS SELECT $1::int IS NULL", "EXECUTE p(NULL)", "DEALLOCATE p"}});
+	// P4: text result type
+	v.push_back({"P4: PREPARE p AS SELECT $1::text; EXECUTE p('hello'); DEALLOCATE", "PREPARE_SQL", "",
+		{"PREPARE p AS SELECT $1::text", "EXECUTE p('hello')", "DEALLOCATE p"}});
+	// P5: re-prepare same name (overwrite)
+	v.push_back({"P5: PREPARE p AS SELECT 1; PREPARE p AS SELECT 2; EXECUTE p; DEALLOCATE", "PREPARE_SQL", "",
+		{"PREPARE p AS SELECT 1", "PREPARE p AS SELECT 2", "EXECUTE p", "DEALLOCATE p"}});
+	// P6: execute of unknown name -> error
+	v.push_back({"P6: EXECUTE no_such_prepared (error path)", "PREPARE_SQL", "",
+		{"EXECUTE no_such_prepared"}});
+	// P7: deallocate of unknown name -> error
+	v.push_back({"P7: DEALLOCATE no_such_prepared (error path)", "PREPARE_SQL", "",
+		{"DEALLOCATE no_such_prepared"}});
+	// P8: prepare in a transaction
+	v.push_back({"P8: BEGIN; PREPARE; EXECUTE; COMMIT", "PREPARE_SQL", "",
+		{"BEGIN", "PREPARE p AS SELECT $1::int + $1", "EXECUTE p(5)", "DEALLOCATE p", "COMMIT"}});
+	// P9: prepare + DML with RETURNING
+	v.push_back({"P9: PREPARE ins AS INSERT INTO {T} VALUES ($1, $2) RETURNING *; EXECUTE ins(99, 'z'); DEALLOCATE",
+	             "PREPARE_SQL",
+	             "CREATE TABLE {T} (id int, name text)",
+	             // {T} substitution happens in run_case; we keep the raw form.
+	             {"PREPARE ins AS INSERT INTO {T} VALUES ($1, $2) RETURNING *",
+	              "EXECUTE ins(99, 'z')", "DEALLOCATE ins"}});
+	return v;
+}
+
+struct SqlCaseRunResult { bool result_match; bool fell_back; std::string detail; };
+
+static SqlCaseRunResult run_sql(PGconn* admin, const SqlCase& tc,
+                                const std::vector<ServerRow>& saved) {
+	std::string tbl = make_table_name();
+	std::string tbl_n = tbl + "_n";
+	// Substitute {T} in the queries.
+	std::vector<std::string> qs_lp, qs_nt;
+	for (const auto& q : tc.queries) qs_lp.push_back(substitute_table(q, tbl));
+	for (const auto& q : tc.queries) qs_nt.push_back(substitute_table(q, tbl_n));
+	std::string setup_lp = substitute_table(tc.setup, tbl);
+	std::string setup_nt = substitute_table(tc.setup, tbl_n);
+
+	// ---- libpq control ----
+	if (!setNativeMode(admin, false) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set libpq mode failed"};
+	}
+	PGConnPtr lp = open_client_conn();
+	if (!lp || PQstatus(lp.get()) != CONNECTION_OK) return {false, false, "libpq conn failed"};
+	if (!setup_lp.empty()) { PGresult* sr = PQexec(lp.get(), setup_lp.c_str()); PQclear(sr); }
+	SqlCaseResult lp_r = run_sql_case(lp.get(), qs_lp);
+
+	// ---- native candidate ----
+	if (!setNativeMode(admin, true) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set native mode failed"};
+	}
+	drainLogToNow();
+	PGConnPtr nt = open_client_conn();
+	if (!nt || PQstatus(nt.get()) != CONNECTION_OK) return {false, false, "native conn failed"};
+	if (!setup_nt.empty()) { PGresult* sr = PQexec(nt.get(), setup_nt.c_str()); PQclear(sr); }
+	SqlCaseResult nt_r = run_sql_case(nt.get(), qs_nt);
+	bool fell_back = nativeFallbackObserved();
+
+	bool result_match = (lp_r.serials == nt_r.serials) && (lp_r.all_ok == nt_r.all_ok);
+	std::stringstream det;
+	det << "n_queries=" << tc.queries.size();
+	if (!result_match) {
+		det << " (mismatch; sqlstate lp='" << lp_r.err_sqlstate << "' nt='" << nt_r.err_sqlstate << "')";
+	}
+	setNativeMode(admin, false);
+	flushBackendPool(admin, BACKEND_HG, saved);
+	return {result_match, fell_back, det.str()};
+}
+
+// ===========================================================================
+// Extended-query (cases P10 onward). We use libpq's PQsendPrepare +
+// PQsendQueryPrepared + PQdescribePrepared + PQclosePrepared to drive the
+// extended-query cycle. Both the libpq path and the native path drive this
+// cycle to completion themselves now (native-drive stmt-pipeline work); the
+// result is required to be byte-equal.
+// ===========================================================================
+struct ExtQCase {
+	std::string label, kind;
+	std::string stmt_name;       // "" => unnamed
+	std::string query;           // SQL with $1, $2, ...
+	std::vector<std::string> param_types;  // OID names like "23", "25" — empty for inference
+	struct BindStep {
+		std::string portal;     // "" => unnamed
+		std::vector<std::string> param_values;
+		std::vector<int> param_lengths;  // -1 => text, else binary length
+		std::vector<int> param_formats;  // 0=text, 1=binary
+		int result_format;      // 0=text, 1=binary
+	};
+	std::vector<BindStep> bind_steps;
+	bool describe_after_bind;    // true => Describe portal after each Bind
+	bool describe_stmt;          // true => Describe statement ('S') before Bind
+	bool close_stmt;             // true => send Close('S', stmt_name) at end
+	bool close_portal;           // true => send Close('P', portal) at end
+	bool expect_error;           // true => we expect an ErrorResponse in the cycle
+	std::string expect_sqlstate; // if !empty => assert exact SQLSTATE on error
+};
+
+// Run an extended-query cycle. Returns a single string that's the
+// concatenation of every PGresult returned by PQgetResult, serialized.
+static std::string run_extq_cycle(PGconn* c, const ExtQCase& tc) {
+	std::string out;
+	// PQsendPrepare takes `const Oid *paramTypes`. Convert our string-form
+	// OID list ("23"=int4, "25"=text) to actual Oid values.
+	Oid paramOids[16] = {0};
+	for (size_t i = 0; i < tc.param_types.size() && i < 16; i++) {
+		paramOids[i] = (Oid)atoi(tc.param_types[i].c_str());
+	}
+	// Parse phase: PQsendPrepare.
+	const char* stmt_name = tc.stmt_name.empty() ? NULL : tc.stmt_name.c_str();
+	if (PQsendPrepare(c, stmt_name, tc.query.c_str(), (int)tc.param_types.size(), paramOids) == 0) {
+		out += "PQsendPrepare:fail:" + std::string(PQerrorMessage(c)) + ";";
+		return out;
+	}
+	// Drain ParseComplete.
+	PGresult* res;
+	while ((res = PQgetResult(c)) != NULL) {
+		out += "Parse:" + serialize_result(res) + ";";
+		PQclear(res);
+	}
+	// Optional Describe statement.
+	if (tc.describe_stmt && stmt_name) {
+		PGresult* dr = PQdescribePrepared(c, stmt_name);
+		out += "DescribeStmt:" + serialize_result(dr) + ";";
+		PQclear(dr);
+	}
+	// Bind+Execute steps.
+	for (const auto& bs : tc.bind_steps) {
+		// Build param arrays.
+		const char* paramValues[16] = {0};
+		int paramLengths[16] = {0};
+		int paramFormats[16] = {0};
+		int n_params = (int)bs.param_values.size();
+		for (int i = 0; i < n_params && i < 16; i++) {
+			paramValues[i] = bs.param_values[i].data();
+			paramLengths[i] = bs.param_lengths.empty() ? (int)bs.param_values[i].size() : bs.param_lengths[i];
+			paramFormats[i] = bs.param_formats.empty() ? 0 : bs.param_formats[i];
+		}
+		if (PQsendQueryPrepared(c, stmt_name, n_params, paramValues, paramLengths, paramFormats, bs.result_format) == 0) {
+			out += "PQsendQueryPrepared:fail:" + std::string(PQerrorMessage(c)) + ";";
+			return out;
+		}
+		// Drain.
+		while ((res = PQgetResult(c)) != NULL) {
+			out += "Execute:" + serialize_result(res) + ";";
+			PQclear(res);
+		}
+	}
+	// Optional Close statement: PQclosePrepared is not in this libpq version;
+	// use the SQL DEALLOCATE path (which is itself a simple query — not
+	// strictly extended-query, but tests the same prepared-statement removal
+	// observable).
+	if (tc.close_stmt && stmt_name) {
+		std::string dealloc = "DEALLOCATE \"" + std::string(stmt_name) + "\"";
+		PGresult* dr = PQexec(c, dealloc.c_str());
+		out += "Deallocate:" + serialize_result(dr) + ";";
+		PQclear(dr);
+	}
+	return out;
+}
+
+static std::vector<ExtQCase> build_extq_cases() {
+	std::vector<ExtQCase> v;
+	// P10: Parse unnamed + Bind + Execute + Sync, simple
+	v.push_back({"P10: unnamed Parse+Bind+Execute (text)", "EXT_EXECUTE",
+		"", "SELECT $1::int",
+		{}, {{"", {"42"}, {}, {}, 0}}, false, false, false, false, false, ""});
+	// P11: named statement
+	v.push_back({"P11: named Parse+Bind+Execute 's1'", "EXT_PARSE",
+		"s1", "SELECT $1::int",
+		{}, {{"", {"42"}, {}, {}, 0}}, false, false, true, false, false, ""});
+	// P12: multiple params, mixed types
+	v.push_back({"P12: 3-param text Parse+Bind+Execute", "EXT_EXECUTE",
+		"", "SELECT $1::int, $2::text, $3::bool",
+		{}, {{"", {"1", "a", "t"}, {}, {}, 0}}, false, false, false, false, false, ""});
+	// P13: binary result format
+	v.push_back({"P13: binary result format (int4)", "EXT_EXECUTE",
+		"", "SELECT $1::int",
+		{}, {{"", {"1"}, {}, {}, 1}}, false, false, false, false, false, ""});
+	// P14: re-execute same named statement 3x
+	v.push_back({"P14: re-execute same statement 3 times", "EXT_EXECUTE",
+		"s2", "SELECT $1::int + 1",
+		{},
+		{{"", {"1"}, {}, {}, 0}, {"", {"2"}, {}, {}, 0}, {"", {"3"}, {}, {}, 0}},
+		false, false, true, false, false, ""});
+	// P15: close statement
+	v.push_back({"P15: Parse 's3' + Close 's3'", "EXT_PARSE",
+		"s3", "SELECT 1", {}, {}, false, false, true, false, false, ""});
+	// P16: bad SQL in Parse -> error
+	v.push_back({"P16: Parse with bad SQL (error path)", "EXT_PARSE",
+		"", "NOT VALID SQL", {}, {{"", {}, {}, {}, 0}}, false, false, false, false, true, "42601"});
+	// P17: divide by zero
+	v.push_back({"P17: Execute with divide-by-zero (error path)", "EXT_EXECUTE",
+		"", "SELECT 1/0", {}, {{"", {}, {}, {}, 0}}, false, false, false, false, true, "22012"});
+	// P18: EmptyStatement (empty query string)
+	v.push_back({"P18: Parse with empty query (EmptyQueryResponse)", "EXT_PARSE",
+		"", "", {}, {}, false, false, false, false, false, ""});
+	// (P19 used to be a dead "multiple Parse+Execute" placeholder — real
+	// coverage for that now lives in the EXT_MULTI_CYCLE case run separately
+	// in main(), since it needs two independent cycles on one connection,
+	// which doesn't fit the single-cycle-per-case shape of run_extq().)
+	// P20: Parse with type OIDs
+	v.push_back({"P20: Parse with explicit type OIDs {23, 25}", "EXT_PARSE",
+		"", "SELECT $1::int, $2::text",
+		{"23", "25"},
+		{{"", {"5", "hello"}, {}, {}, 0}}, false, false, false, false, false, ""});
+	return v;
+}
+
+struct ExtQCaseRunResult { bool result_match; bool fell_back; std::string detail; };
+
+static ExtQCaseRunResult run_extq(PGconn* admin, const ExtQCase& tc,
+                                  const std::vector<ServerRow>& saved) {
+	// ---- libpq control ----
+	if (!setNativeMode(admin, false) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set libpq mode failed"};
+	}
+	PGConnPtr lp = open_client_conn();
+	if (!lp || PQstatus(lp.get()) != CONNECTION_OK) return {false, false, "libpq conn failed"};
+	std::string lp_out = run_extq_cycle(lp.get(), tc);
+
+	// ---- native candidate ----
+	if (!setNativeMode(admin, true) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set native mode failed"};
+	}
+	drainLogToNow();
+	PGConnPtr nt = open_client_conn();
+	if (!nt || PQstatus(nt.get()) != CONNECTION_OK) return {false, false, "native conn failed"};
+	std::string nt_out = run_extq_cycle(nt.get(), tc);
+	bool fell_back = nativeFallbackObserved();
+
+	// Byte-equality is required for every case — no escape hatch. The native
+	// path drives the full extended-query cycle itself now, so a mismatch is
+	// a real regression, not an expected/documented gap.
+	bool result_match = (lp_out == nt_out);
+	std::stringstream det;
+	det << "n_steps=" << tc.bind_steps.size();
+	if (!result_match) {
+		// Truncate the diff for readability.
+		det << " (mismatch; lp_out_size=" << lp_out.size() << " nt_out_size=" << nt_out.size() << ")";
+	}
+	setNativeMode(admin, false);
+	flushBackendPool(admin, BACKEND_HG, saved);
+	return {result_match, fell_back, det.str()};
+}
+
+// ===========================================================================
+// EXT_MULTI_CYCLE / EXT_REUSE / EXT_GLOBAL_DEDUP: cases that need more than
+// the single-cycle-per-connection shape of run_extq() above. `seq` is a list
+// of independent extended-query cycles, run either all on ONE connection
+// (same_connection=true — multi-cycle / re-prepare-after-DEALLOCATE) or each
+// on its OWN connection (same_connection=false — global-cache dedup across
+// distinct sessions). Outputs from every cycle are concatenated in order and
+// compared byte-for-byte between libpq and native, exactly like run_extq().
+// ===========================================================================
+static ExtQCaseRunResult run_extq_sequence(PGconn* admin, const std::vector<ExtQCase>& seq,
+                                           bool same_connection,
+                                           const std::vector<ServerRow>& saved) {
+	// ---- libpq control ----
+	if (!setNativeMode(admin, false) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set libpq mode failed"};
+	}
+	std::string lp_out;
+	if (same_connection) {
+		PGConnPtr c = open_client_conn();
+		if (!c || PQstatus(c.get()) != CONNECTION_OK) return {false, false, "libpq conn failed"};
+		for (const auto& tc : seq) lp_out += run_extq_cycle(c.get(), tc);
+	} else {
+		for (const auto& tc : seq) {
+			PGConnPtr c = open_client_conn();
+			if (!c || PQstatus(c.get()) != CONNECTION_OK) return {false, false, "libpq conn failed"};
+			lp_out += run_extq_cycle(c.get(), tc);
+		}
+	}
+
+	// ---- native candidate ----
+	if (!setNativeMode(admin, true) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set native mode failed"};
+	}
+	drainLogToNow();
+	std::string nt_out;
+	if (same_connection) {
+		PGConnPtr c = open_client_conn();
+		if (!c || PQstatus(c.get()) != CONNECTION_OK) return {false, false, "native conn failed"};
+		for (const auto& tc : seq) nt_out += run_extq_cycle(c.get(), tc);
+	} else {
+		for (const auto& tc : seq) {
+			PGConnPtr c = open_client_conn();
+			if (!c || PQstatus(c.get()) != CONNECTION_OK) return {false, false, "native conn failed"};
+			nt_out += run_extq_cycle(c.get(), tc);
+		}
+	}
+	bool fell_back = nativeFallbackObserved();
+
+	bool result_match = (lp_out == nt_out);
+	std::stringstream det;
+	det << "n_cycles=" << seq.size() << (same_connection ? " (same conn)" : " (per-conn)");
+	if (!result_match) {
+		det << " (mismatch; lp_out_size=" << lp_out.size() << " nt_out_size=" << nt_out.size() << ")";
+	}
+	setNativeMode(admin, false);
+	flushBackendPool(admin, BACKEND_HG, saved);
+	return {result_match, fell_back, det.str()};
+}
+
+// ===========================================================================
+// ADDITION 1 (Task C review): the injected-Sync error-recovery path.
+// `PQsendQueryParams` sends Parse/Bind/Describe/Execute/Sync as ONE client
+// frame/flush (unlike `PQsendPrepare` + `PQsendQueryPrepared`, which are two
+// independently Sync-terminated frames — each drains to 'Z' before the next
+// is sent). With syntactically invalid SQL, the backend's Parse fails while
+// Bind/Describe/Execute are already queued behind it in the SAME received
+// frame; ProxySQL's native drive therefore dispatches the Parse as
+// Flush-terminated (more stmt-step messages are already pending in the
+// frame), and the backend sends no 'Z' after the 'E' until it receives a
+// Sync. The native path must inject that Sync itself to resynchronize
+// (lib/PgSQL_Connection.cpp:~2803-2825, `native_stmt_error_resync`). This is
+// the only flagship native-drive recovery mechanism not otherwise exercised
+// by this file. The case POSITIVELY asserts the branch ran by scraping the
+// proxysql log for its once-per-connection proxy_warning (the native phase
+// always runs on a fresh backend connection — see the comment in
+// run_midframe_err — so the once-per-connection dedup cannot hide the line).
+// ===========================================================================
+static std::string run_midframe_err_case(PGconn* c, const std::string& bad_sql) {
+	std::string out;
+	if (PQsendQueryParams(c, bad_sql.c_str(), 0, NULL, NULL, NULL, NULL, 0) == 0) {
+		out += "PQsendQueryParams:fail:" + std::string(PQerrorMessage(c)) + ";";
+		return out;
+	}
+	PGresult* res;
+	while ((res = PQgetResult(c)) != NULL) {
+		out += "Ext:" + serialize_result(res) + ";";
+		PQclear(res);
+	}
+	// The connection must be usable afterwards: run a follow-up query in the
+	// same phase and fold its result into the comparable output.
+	PGresult* fr = PQexec(c, "SELECT 1");
+	out += "Follow:" + serialize_result(fr) + ";";
+	PQclear(fr);
+	return out;
+}
+
+static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_sql,
+                                          const std::vector<ServerRow>& saved) {
+	// ---- libpq control ----
+	if (!setNativeMode(admin, false) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set libpq mode failed"};
+	}
+	PGConnPtr lp = open_client_conn();
+	if (!lp || PQstatus(lp.get()) != CONNECTION_OK) return {false, false, "libpq conn failed"};
+	std::string lp_out = run_midframe_err_case(lp.get(), bad_sql);
+
+	// ---- native candidate ----
+	// flushBackendPool() drops every pooled backend connection (servers are
+	// removed with OFFLINE_HARD, then re-added), so this phase runs on a FRESH
+	// backend connection: the once-per-connection guard on the injected-Sync
+	// warning (PgSQL_Connection::native_stmt_resync_logged) cannot have been
+	// consumed by an earlier case, and the positive log assertion below is
+	// guaranteed to see the line if (and only if) the branch runs.
+	if (!setNativeMode(admin, true) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set native mode failed"};
+	}
+	drainLogToNow();
+	PGConnPtr nt = open_client_conn();
+	if (!nt || PQstatus(nt.get()) != CONNECTION_OK) return {false, false, "native conn failed"};
+	std::string nt_out = run_midframe_err_case(nt.get(), bad_sql);
+	// Single combined scan: the fallback tripwire AND a POSITIVE assertion that
+	// the injected-Sync error-recovery branch actually ran in the native phase
+	// (lib/PgSQL_Connection.cpp native_fetch_result_cont, native_stmt_error_resync).
+	bool fell_back = false;
+	bool resync_logged = false;
+	scanNativePhaseLog(fell_back, resync_logged, 2000);
+
+	// Explicit SQLSTATE assertion (42601 = syntax_error), in addition to the
+	// full byte-equality check below — guards against both sides agreeing on
+	// the WRONG code.
+	bool sqlstate_ok = (nt_out.find("sqlstate=42601") != std::string::npos);
+
+	bool result_match = (lp_out == nt_out) && sqlstate_ok && resync_logged;
+	std::stringstream det;
+	det << "midframe error-recovery; sqlstate_ok=" << (sqlstate_ok ? "yes" : "no")
+	    << "; injected_sync_observed=" << (resync_logged ? "yes" : "no");
+	if (!resync_logged) {
+		det << " (injected-Sync branch not observed in proxysql.log)";
+	}
+	if (lp_out != nt_out) {
+		det << " (mismatch; lp_out='" << lp_out << "' nt_out='" << nt_out << "')";
+	}
+	setNativeMode(admin, false);
+	flushBackendPool(admin, BACKEND_HG, saved);
+	return {result_match, fell_back, det.str()};
+}
+
+// ===========================================================================
+// EXT_DESCRIBE_AFTER_DDL: a statement-level Describe must not replay metadata
+// captured before the table changed.
+//
+// ProxySQL used to keep the Describe answer on the global statement, keyed by
+// user, database, query text and parameter types, set once and never
+// invalidated, and serve it to any later session in both backend modes. The
+// key is not enough to identify the columns -- search_path and per-session
+// temp schemas change what the same text resolves to -- so a binary-format
+// client could read a float8 column through a float4 description and get a
+// wrong number with no error anywhere. The cache was removed.
+//
+// serialize_describe() captures the FULL Describe metadata (result status,
+// param OIDs and every RowDescription column field), so any byte difference in
+// the 't'/'T' payload surfaces as a serial mismatch.
+// ===========================================================================
+static std::string serialize_describe(PGresult* r) {
+	if (!r) return "<null>";
+	std::stringstream ss;
+	ss << "st=" << (int)PQresultStatus(r) << " ";
+	int np = PQnparams(r);
+	ss << "np=" << np << " ";
+	for (int i = 0; i < np; i++) ss << "p" << i << "=" << PQparamtype(r, i) << ";";
+	int nf = PQnfields(r);
+	ss << "nf=" << nf << " ";
+	for (int c = 0; c < nf; c++) {
+		ss << "f" << c << "=" << (PQfname(r, c) ? PQfname(r, c) : "")
+		   << ":tbl=" << PQftable(r, c) << ":col=" << PQftablecol(r, c)
+		   << ":oid=" << PQftype(r, c) << ":sz=" << PQfsize(r, c)
+		   << ":mod=" << PQfmod(r, c) << ":fmt=" << PQfformat(r, c) << ";";
+	}
+	return ss.str();
+}
+
+// A statement-level Describe must never be answered with a description taken before the
+// table changed. ProxySQL used to cache that description per SQL text and replay it to any
+// session, which handed a binary-format client the wrong column types; the cache is gone and
+// this case keeps it gone.
+//
+// conn A prepares and describes one table shape, the table is reshaped, then conn B prepares
+// the byte-identical text on a fresh connection and describes it. B may see the new shape, or
+// an error from the backend -- the connection it lands on can still hold A's prepared
+// statement, which PostgreSQL refuses once the result type changed. Both are acceptable; what
+// B must never get is A's description back, so that is what is asserted. Two connections
+// because one would not tell a per-connection cache apart from a process-wide one.
+static ExtQCaseRunResult run_describe_after_ddl(PGconn* admin, bool native,
+                                                const std::string& name_suffix,
+                                                const std::vector<ServerRow>& saved) {
+	// Put the proxy back in libpq mode on every exit path. An early return that left it in
+	// native mode would change what the rest of the run sees.
+	struct ModeRestore {
+		PGconn* admin;
+		const std::vector<ServerRow>& saved;
+		// Both helpers can throw; an exception leaving a destructor calls std::terminate.
+		~ModeRestore() {
+			try {
+				setNativeMode(admin, false);
+				flushBackendPool(admin, BACKEND_HG, saved);
+			} catch (...) {}
+		}
+	} mode_restore{admin, saved};
+
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: set mode failed"};
+	}
+	const std::string tbl = make_table_name() + "_" + name_suffix;
+	const std::string stmt_name = "dcddl_" + name_suffix;
+	const std::string q = "SELECT * FROM " + tbl;
+	drainLogToNow();
+
+	PGConnPtr c1 = open_client_conn();
+	if (!c1 || PQstatus(c1.get()) != CONNECTION_OK) return {false, false, "first conn failed"};
+
+	// Three float4 columns, then five float8 ones -- the shapes from the report. The column
+	// count changes, so a stale description makes a client send one result format per column
+	// it thinks exists and the backend rejects the Bind; the types change too, so a stale
+	// description also makes a binary-format client read a float8 through a float4.
+	PGresult* r = PQexec(c1.get(), ("CREATE TABLE " + tbl + " (c1 real, c2 real, c3 real)").c_str());
+	bool create_a_ok = (PQresultStatus(r) == PGRES_COMMAND_OK);
+	PQclear(r);
+	if (!create_a_ok) return {false, false, "CREATE TABLE (shape A, 3 float4 cols) failed"};
+
+	if (PQsendPrepare(c1.get(), stmt_name.c_str(), q.c_str(), 0, NULL) == 0) {
+		return {false, false, "PQsendPrepare (conn A) failed: " + std::string(PQerrorMessage(c1.get()))};
+	}
+	while ((r = PQgetResult(c1.get())) != NULL) PQclear(r);
+	PGresult* d1 = PQdescribePrepared(c1.get(), stmt_name.c_str());
+	const std::string d1_serial = serialize_describe(d1);
+	const int d1_nf = PQnfields(d1);
+	const bool d1_ok = (PQresultStatus(d1) == PGRES_COMMAND_OK) && (d1_nf == 3);
+	PQclear(d1);
+	// Nothing below means anything unless conn A really saw the pre-DDL shape.
+	if (!d1_ok) return {false, false, "conn A describe did not return the pre-DDL shape: " + d1_serial};
+
+	// Reshape the table under the statement, then drop conn A so nothing of its session
+	// survives except what the proxy chose to keep.
+	r = PQexec(c1.get(), ("DROP TABLE " + tbl).c_str());
+	PQclear(r);
+	r = PQexec(c1.get(), ("CREATE TABLE " + tbl +
+		" (c1 float8, c2 float8, c3 float8, c4 float8, c5 float8)").c_str());
+	bool create_b_ok = (PQresultStatus(r) == PGRES_COMMAND_OK);
+	PQclear(r);
+	if (!create_b_ok) return {false, false, "CREATE TABLE (shape B, 5 float8 cols) failed"};
+	c1.reset();
+
+	// Drop every pooled backend connection. Backend prepared statements outlive the client
+	// that created them, so without this conn B can land on the connection that still holds
+	// conn A's statement and the backend rejects the Describe for its own reasons. The global
+	// statement -- and any metadata cached on it -- survives this flush untouched, so what is
+	// under test here is unaffected.
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		return {false, false, "admin: flush between connections failed"};
+	}
+
+	// Same user, database, query text and parameter types as conn A, so the proxy resolves it
+	// to the same global statement and sends no Parse of its own. That dedup is deliberate.
+	PGConnPtr c2 = open_client_conn();
+	if (!c2 || PQstatus(c2.get()) != CONNECTION_OK) return {false, false, "second conn failed"};
+	if (PQsendPrepare(c2.get(), stmt_name.c_str(), q.c_str(), 0, NULL) == 0) {
+		return {false, false, "PQsendPrepare (conn B) failed: " + std::string(PQerrorMessage(c2.get()))};
+	}
+	while ((r = PQgetResult(c2.get())) != NULL) PQclear(r);
+	PGresult* d2 = PQdescribePrepared(c2.get(), stmt_name.c_str());
+	const std::string d2_serial = serialize_describe(d2);
+	const int d2_nf = PQnfields(d2);
+	const bool d2_errored = (PQresultStatus(d2) == PGRES_FATAL_ERROR);
+	// The backend refuses a prepared statement whose result type changed under it. That is
+	// the statement's own lifetime showing, not a metadata problem, so it is an accepted
+	// outcome here.
+	const bool d2_stale_plan = d2_errored &&
+		(std::string(PQresultErrorField(d2, PG_DIAG_SQLSTATE) ? PQresultErrorField(d2, PG_DIAG_SQLSTATE) : "") == "0A000");
+	PQclear(d2);
+
+	// Reference: the same table described through a statement the proxy has never seen. The
+	// text differs by a comment, so it is a different global statement and the description is
+	// necessarily the table's current one.
+	const std::string ref_q = q + " /*ref*/";
+	if (PQsendPrepare(c2.get(), "dcref", ref_q.c_str(), 0, NULL) == 0) {
+		return {false, false, "PQsendPrepare (reference) failed: " + std::string(PQerrorMessage(c2.get()))};
+	}
+	while ((r = PQgetResult(c2.get())) != NULL) PQclear(r);
+	PGresult* dr = PQdescribePrepared(c2.get(), "dcref");
+	const std::string ref_serial = serialize_describe(dr);
+	const int ref_nf = PQnfields(dr);
+	PQclear(dr);
+
+	r = PQexec(c2.get(), ("DROP TABLE IF EXISTS " + tbl).c_str());
+	PQclear(r);
+
+	// In native mode the phase must have stayed native; the libpq case is libpq by construction.
+	const bool fell_back = native ? nativeFallbackObserved() : true;
+
+	// A prepared statement outlives the schema it was prepared against, and the proxy shares
+	// one global statement per SQL text across sessions, so the second connection is asking
+	// about the statement the first one created. Three answers follow from that and are all
+	// accepted: the table's current description, the description the statement was prepared
+	// with, or the backend refusing a statement whose result type changed. Anything else --
+	// a description belonging to neither -- is metadata from some other statement and fails.
+	const bool d2_is_current = (d2_serial == ref_serial);
+	const bool d2_is_original = (d2_serial == d1_serial);
+	const bool result_match = d2_is_current || d2_is_original || d2_stale_plan;
+
+	std::stringstream det;
+	det << (native ? "native" : "libpq")
+	    << "; D1 (as prepared, " << d1_nf << " cols)='" << d1_serial << "'"
+	    << "; current (" << ref_nf << " cols)='" << ref_serial << "'"
+	    << "; D2=" << (d2_is_current ? "current" : d2_is_original ? "as-prepared"
+	                  : d2_stale_plan ? "backend refused the stale plan" : "UNRELATED")
+	    << " (" << (d2_errored ? "backend error" : std::to_string(d2_nf) + " cols") << ")";
+	if (!result_match) det << " -- D2='" << d2_serial << "' matches neither";
+	return {result_match, fell_back, det.str()};
+}
+
+// ===========================================================================
+// DEALLOCATE-forwarding regression (ABSOLUTE, not differential).
+//
+// ProxySQL used to intercept every single-statement DEALLOCATE and resolve the
+// name only against local_stmts -- which tracks extended-query (binary)
+// prepares. A name from a SQL-level PREPARE is never in that map, so ProxySQL
+// answered with a fabricated "prepared statement does not exist" and never
+// forwarded the command, even though the statement was alive on the backend.
+//
+// The differential P0/P7 cases above cannot catch this: the interception lives
+// in the protocol-independent client handler, so libpq-through-ProxySQL and
+// native-through-ProxySQL are affected identically and still match each other.
+// These checks assert the real-PostgreSQL outcome directly. Driven on the
+// native path here; the libpq-path equivalent lives in
+// pgsql-extended_query_protocol_test-t (test_deallocate_sql_prepared_via_simple_query).
+// ===========================================================================
+static const int N_DEALLOC_REG_PER_MODE = 10;
+
+static void run_dealloc_regression(PGconn* admin, bool native,
+                                   const std::vector<ServerRow>& saved) {
+	const char* m = native ? "native" : "libpq";
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		for (int i = 0; i < N_DEALLOC_REG_PER_MODE; i++)
+			ok(false, "[%s] dealloc-regression: admin setup failed", m);
+		return;
+	}
+	PGConnPtr c = open_client_conn();
+	if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+		for (int i = 0; i < N_DEALLOC_REG_PER_MODE; i++)
+			ok(false, "[%s] dealloc-regression: client connect failed", m);
+		return;
+	}
+	PGconn* cc = c.get();
+
+	// 0. On a fresh, unpinned connection, a DEALLOCATE of an unknown name is
+	//    answered locally (no SQL PREPARE happened, so it cannot exist) rather
+	//    than acquiring a backend connection just to fail.
+	{ PGresult* r = PQexec(cc, "DEALLOCATE dealloc_reg_unpinned");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] DEALLOCATE of an unknown name on a fresh connection errors -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 1. A SQL-level PREPARE succeeds (forwarded to the backend as usual).
+	{ PGresult* r = PQexec(cc, "PREPARE dealloc_reg AS SELECT 42");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] SQL PREPARE dealloc_reg -> %s", m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 2. EXECUTE returns the row: the statement is genuinely live on the backend.
+	{ PGresult* r = PQexec(cc, "EXECUTE dealloc_reg");
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "42";
+	  ok(good, "[%s] EXECUTE dealloc_reg returns 42", m);
+	  PQclear(r); }
+
+	// 3. THE FIX: DEALLOCATE of a SQL-prepared statement is forwarded and
+	//    succeeds, instead of a fabricated "does not exist" error.
+	{ PGresult* r = PQexec(cc, "DEALLOCATE dealloc_reg");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] DEALLOCATE dealloc_reg succeeds (forwarded, not fabricated) -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 4. It really was deallocated on the backend: a second EXECUTE now fails.
+	{ PGresult* r = PQexec(cc, "EXECUTE dealloc_reg");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] EXECUTE after DEALLOCATE fails, statement is gone -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 5. A mistyped/unknown name returns the backend's real error (not silent OK).
+	{ PGresult* r = PQexec(cc, "DEALLOCATE dealloc_reg_never_prepared");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] DEALLOCATE of an unknown name errors -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 6. ...and the session is still usable afterwards: a typo must not wedge it
+	//    or lock the connection onto a hostgroup.
+	{ PGresult* r = PQexec(cc, "SELECT 1");
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "1";
+	  ok(good, "[%s] session still usable after a bogus DEALLOCATE", m);
+	  PQclear(r); }
+
+	// 7-9. ALL-prefix guard: a statement whose name starts with "all" must be
+	//      treated as a normal DEALLOCATE (forwarded), not mistaken for
+	//      DEALLOCATE ALL. Without the exact-match fix, DEALLOCATE all_users
+	//      returns the tag "DEALLOCATE ALL" and never frees the statement.
+	{ PGresult* r = PQexec(cc, "PREPARE all_users AS SELECT 7");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] PREPARE all_users", m);
+	  PQclear(r); }
+	{ PGresult* r = PQexec(cc, "DEALLOCATE all_users");
+	  const char* tag = PQcmdStatus(r);
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK && tag && strcmp(tag, "DEALLOCATE") == 0,
+	     "[%s] DEALLOCATE all_users -> tag '%s' (a normal DEALLOCATE, not DEALLOCATE ALL)",
+	     m, tag ? tag : "");
+	  PQclear(r); }
+	{ PGresult* r = PQexec(cc, "EXECUTE all_users");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] EXECUTE all_users after DEALLOCATE errors, so it was really deallocated -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+}
+
+// ===========================================================================
+// Cross-protocol DEALLOCATE (the tracked side of the same fix).
+//
+// A statement prepared via the EXTENDED (binary) protocol -- PQprepare -- is
+// tracked by ProxySQL in local_stmts and RENAMED on the backend
+// (proxysql_ps_<id>). A SQL-text DEALLOCATE of its client name must therefore
+// stay handled LOCALLY (client_close finds it) and must NOT be forwarded:
+// forwarding the client name would fail on the backend, which knows it only by
+// the renamed name. This guards that the DEALLOCATE-forwarding fix draws the
+// line at the tracked/untracked boundary, not at "any DEALLOCATE".
+// ===========================================================================
+static const int N_DEALLOC_XPROTO_PER_MODE = 5;
+
+static void run_dealloc_xproto_regression(PGconn* admin, bool native,
+                                          const std::vector<ServerRow>& saved) {
+	const char* m = native ? "native" : "libpq";
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		for (int i = 0; i < N_DEALLOC_XPROTO_PER_MODE; i++)
+			ok(false, "[%s] xproto-dealloc: admin setup failed", m);
+		return;
+	}
+	PGConnPtr c = open_client_conn();
+	if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+		for (int i = 0; i < N_DEALLOC_XPROTO_PER_MODE; i++)
+			ok(false, "[%s] xproto-dealloc: client connect failed", m);
+		return;
+	}
+	PGconn* cc = c.get();
+
+	// 1. Named binary prepare (extended protocol): ProxySQL tracks it and renames
+	//    it on the backend.
+	{ PGresult* r = PQprepare(cc, "xp_bp", "SELECT 77", 0, nullptr);
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] binary PQprepare xp_bp -> %s", m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 2. Binary execute returns the row.
+	{ PGresult* r = PQexecPrepared(cc, "xp_bp", 0, nullptr, nullptr, nullptr, 0);
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "77";
+	  ok(good, "[%s] binary EXECUTE xp_bp returns 77", m);
+	  PQclear(r); }
+
+	// 3. SQL-text DEALLOCATE of the binary name is handled locally and succeeds
+	//    -- it must NOT be forwarded (the backend name differs).
+	{ PGresult* r = PQexec(cc, "DEALLOCATE xp_bp");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] SQL DEALLOCATE of a binary-prepared name succeeds (handled locally) -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 4. It is really gone: re-executing the binary statement now fails.
+	{ PGresult* r = PQexecPrepared(cc, "xp_bp", 0, nullptr, nullptr, nullptr, 0);
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] binary EXECUTE after DEALLOCATE fails, statement is gone -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 5. Session still usable.
+	{ PGresult* r = PQexec(cc, "SELECT 1");
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "1";
+	  ok(good, "[%s] session still usable after cross-protocol DEALLOCATE", m);
+	  PQclear(r); }
+}
+
+// ===========================================================================
+// DEALLOCATE ALL matrix.
+//
+// DEALLOCATE ALL now forwards to the pinned backend and releases ProxySQL's
+// backend-side statement bookkeeping (backend_close_all), so SQL-level PREPARE
+// statements are actually freed while binary statements and the shared global
+// statement cache stay consistent. Scenarios:
+//   S1 SQL-only            S2 binary-only         S3 mixed (SQL + binary)
+//   S4 nothing prepared    S5 cross-connection isolation   S6 repeated cycles
+//   S7 aborted-txn (DEALLOCATE ALL rejected -> statements survive, guard keeps tracking)
+// ===========================================================================
+static const int N_DALLALL_MATRIX = 36;
+
+static bool exec_ok(PGconn* c, const char* q) {
+	PGresult* r = PQexec(c, q);
+	bool good = PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK;
+	PQclear(r);
+	return good;
+}
+static bool val_is(PGresult* r, const char* v) {
+	return PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	       && std::string(PQgetvalue(r, 0, 0)) == v;
+}
+
+static void run_dealloc_all_matrix(PGconn* admin, bool native,
+                                   const std::vector<ServerRow>& saved) {
+	const char* m = native ? "native" : "libpq";
+	auto fail = [&](int n, const char* why) {
+		for (int i = 0; i < n; i++) ok(false, "[%s] dealloc-all matrix: %s", m, why);
+	};
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		fail(N_DALLALL_MATRIX, "admin setup failed");
+		return;
+	}
+
+	// ---- S1: SQL-only. Pinned by SQL PREPARE -> DEALLOCATE ALL forwards; the
+	//          statements are actually freed on the backend. ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(5, "S1 conn failed"); }
+		else {
+			PGresult* r;
+			r = PQexec(cc, "PREPARE s1 AS SELECT 1"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S1 PREPARE s1", m); PQclear(r);
+			r = PQexec(cc, "PREPARE s2 AS SELECT 2"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S1 PREPARE s2", m); PQclear(r);
+			(void)exec_ok(cc, "DEALLOCATE ALL");
+			r = PQexec(cc, "EXECUTE s1"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S1 EXECUTE s1 freed -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexec(cc, "EXECUTE s2"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S1 EXECUTE s2 freed -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexec(cc, "PREPARE s1 AS SELECT 1"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S1 re-PREPARE s1 (backend cleared) -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+		}
+	}
+
+	// ---- S2: binary-only. Not pinned -> DEALLOCATE ALL stays local; the client
+	//          name is dropped, but the cached statement is reusable (no desync). ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(5, "S2 conn failed"); }
+		else {
+			PGresult* r;
+			r = PQprepare(cc, "b1", "SELECT 88", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S2 binary prepare b1", m); PQclear(r);
+			r = PQexecPrepared(cc, "b1", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S2 EXECUTE b1 = 88", m); PQclear(r);
+			(void)exec_ok(cc, "DEALLOCATE ALL");
+			r = PQexecPrepared(cc, "b1", 0, nullptr, nullptr, nullptr, 0); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S2 EXECUTE b1 after DEALLOCATE ALL fails -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQprepare(cc, "b2", "SELECT 88", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S2 re-prepare same-hash b2 (no desync)", m); PQclear(r);
+			r = PQexecPrepared(cc, "b2", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S2 EXECUTE b2 = 88", m); PQclear(r);
+		}
+	}
+
+	// ---- S3: mixed. SQL PREPARE pins the connection; a binary prepare then lands
+	//          on it. DEALLOCATE ALL forwards + backend_close_all: the SQL stmt is
+	//          freed and the binary bookkeeping stays consistent (same-hash reuse
+	//          still works). ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(7, "S3 conn failed"); }
+		else {
+			PGresult* r;
+			r = PQexec(cc, "PREPARE sp AS SELECT 5"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S3 SQL PREPARE sp", m); PQclear(r);
+			r = PQprepare(cc, "bp", "SELECT 88", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S3 binary prepare bp", m); PQclear(r);
+			r = PQexecPrepared(cc, "bp", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S3 EXECUTE bp = 88", m); PQclear(r);
+			(void)exec_ok(cc, "DEALLOCATE ALL");
+			r = PQexec(cc, "EXECUTE sp"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S3 EXECUTE sp freed -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexec(cc, "PREPARE sp AS SELECT 5"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S3 re-PREPARE sp (backend cleared) -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQprepare(cc, "bp2", "SELECT 88", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S3 re-prepare same-hash bp2 (no desync after backend_close_all)", m); PQclear(r);
+			r = PQexecPrepared(cc, "bp2", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S3 EXECUTE bp2 = 88", m); PQclear(r);
+		}
+	}
+
+	// ---- S4: nothing prepared. DEALLOCATE ALL on a fresh connection is harmless
+	//          and the session stays usable. ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(2, "S4 conn failed"); }
+		else {
+			ok(exec_ok(cc, "DEALLOCATE ALL"), "[%s] S4 DEALLOCATE ALL on fresh connection ok", m);
+			PGresult* r = PQexec(cc, "SELECT 1"); ok(val_is(r, "1"), "[%s] S4 session usable after DEALLOCATE ALL", m); PQclear(r);
+		}
+	}
+
+	// ---- S5: cross-connection isolation. connA holds a binary statement X; connB
+	//          (mixed) does DEALLOCATE ALL, which forwards and releases connB's copy
+	//          of X. connA's X must be untouched -- proof the shared cache/refcounts
+	//          are not corrupted. ----
+	{
+		PGConnPtr ca = open_client_conn(); PGconn* a = ca.get();
+		PGConnPtr cb = open_client_conn(); PGconn* b = cb.get();
+		if (!ca || PQstatus(a) != CONNECTION_OK || !cb || PQstatus(b) != CONNECTION_OK) { fail(5, "S5 conn failed"); }
+		else {
+			PGresult* r;
+			r = PQprepare(a, "X", "SELECT 42", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S5 connA prepare X", m); PQclear(r);
+			r = PQexecPrepared(a, "X", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "42"), "[%s] S5 connA EXECUTE X = 42", m); PQclear(r);
+			r = PQexec(b, "PREPARE spB AS SELECT 1"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S5 connB SQL PREPARE spB (pins)", m); PQclear(r);
+			r = PQprepare(b, "X", "SELECT 42", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S5 connB prepare X (same hash)", m); PQclear(r);
+			(void)exec_ok(b, "DEALLOCATE ALL"); // connB forwards + backend_close_all
+			r = PQexecPrepared(a, "X", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "42"), "[%s] S5 connA EXECUTE X still = 42 (no corruption) -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+		}
+	}
+
+	// ---- S6: repeated PREPARE + DEALLOCATE ALL cycles. Each cycle must re-prepare
+	//          cleanly (no lingering 42P05), and the refcounts must stay balanced. ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(4, "S6 conn failed"); }
+		else {
+			for (int i = 1; i <= 3; i++) {
+				PGresult* r = PQexec(cc, "PREPARE cyc AS SELECT 1");
+				ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S6 cycle %d PREPARE cyc -> %s", m, i, PQresStatus(PQresultStatus(r)));
+				PQclear(r);
+				(void)exec_ok(cc, "DEALLOCATE ALL");
+			}
+			PGresult* r = PQexec(cc, "EXECUTE cyc"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S6 EXECUTE cyc after last DEALLOCATE ALL fails -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+		}
+	}
+
+	// ---- S7: aborted transaction. DEALLOCATE ALL inside an aborted txn is rejected
+	//          by the backend, so every statement survives. The aborted-txn guard
+	//          must keep our tracking intact (no optimistic client/backend clear) so
+	//          both the SQL PREPARE and the binary prepare are still usable after
+	//          ROLLBACK -- byte-for-byte what real PostgreSQL does. ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(8, "S7 conn failed"); }
+		else {
+			PGresult* r;
+			r = PQexec(cc, "PREPARE sp AS SELECT 5"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S7 SQL PREPARE sp (pins)", m); PQclear(r);
+			r = PQprepare(cc, "bp", "SELECT 88", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S7 binary prepare bp", m); PQclear(r);
+			r = PQexecPrepared(cc, "bp", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S7 EXECUTE bp = 88", m); PQclear(r);
+			(void)exec_ok(cc, "BEGIN");
+			r = PQexec(cc, "SELECT 1/0"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S7 SELECT 1/0 aborts txn -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexec(cc, "DEALLOCATE ALL"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S7 DEALLOCATE ALL rejected in aborted txn -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			(void)exec_ok(cc, "ROLLBACK");
+			r = PQexec(cc, "EXECUTE sp"); ok(val_is(r, "5"), "[%s] S7 SQL sp survives (guard kept tracking) -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexecPrepared(cc, "bp", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S7 binary bp survives (guard kept tracking) -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexec(cc, "SELECT 99"); ok(val_is(r, "99"), "[%s] S7 session usable after aborted-txn DEALLOCATE ALL", m); PQclear(r);
+		}
+	}
+
+}
+
+// ===========================================================================
+// Variable-sync reuse regression (native path)
+// ===========================================================================
+// This case guards a hang that used to make a client session wait forever with no
+// error and no timeout. The fix is the end-state pin in ASYNC_QUERY_START in
+// lib/PgSQL_Connection.cpp, and the full write-up is in
+// docs/superpowers/specs/2026-09-01-pgsql-native-varsync-reuse-hang.md.
+//
+// The bug worked like this. When a client used a prepared statement, the backend
+// connection was left marked as ending in ASYNC_STMT_EXECUTE_END. Nothing cleared that
+// mark when the connection went back into the pool, so the next session inherited it.
+// If that next client happened to want a different client_encoding, ProxySQL sent it a
+// "SET client_encoding" to bring the connection into line, and the reply to that SET
+// was dispatched using the stale mark. The code driving the SET only ever accepted
+// ASYNC_QUERY_END, so it decided the SET had not finished and kept waiting.
+//
+// The test therefore does two things in order. It opens a client that asks for LATIN1
+// and runs a prepared statement, which leaves the mark behind, then closes it so the
+// connection returns to the pool. It then opens a second client asking for UTF8, which
+// is what forces ProxySQL to issue the SET on that same pooled connection.
+//
+// Both details matter. If the second client asked for the same encoding as the first,
+// ProxySQL would send no SET at all and the test would prove nothing. And the pool has
+// to be flushed beforehand, otherwise the second client may be handed some other clean
+// connection instead of the one this test just dirtied.
+//
+// Finally, this case brings its own deadline, built on libpq's async API and select(),
+// rather than calling PQexec. The failure being tested for is an unbounded hang, and a
+// plain PQexec would simply stop the whole TAP suite instead of reporting a failure.
+// That is also why it runs before the DEALLOCATE blocks further down, none of which
+// have a deadline of their own.
+static const int N_VARSYNC_REUSE = 4;
+
+// Runs `sql` on `c` under a hard wall-clock deadline.
+// Returns 1 = completed (result in *out, caller PQclears), 0 = deadline expired,
+// -1 = transport/libpq error. Never blocks past `timeout_ms`.
+static int exec_with_deadline(PGconn* c, const char* sql, int timeout_ms, PGresult** out) {
+	*out = nullptr;
+	if (PQsendQuery(c, sql) == 0) {
+		diag("varsync: PQsendQuery failed: %s", PQerrorMessage(c));
+		return -1;
+	}
+	const int sock = PQsocket(c);
+	if (sock < 0) return -1;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+	while (PQisBusy(c)) {
+		const auto now = std::chrono::steady_clock::now();
+		if (now >= deadline) return 0;
+		const long long left_us =
+			std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+		fd_set rfds;
+		FD_ZERO(&rfds);
+		FD_SET(sock, &rfds);
+		struct timeval tv;
+		tv.tv_sec = (time_t)(left_us / 1000000);
+		tv.tv_usec = (suseconds_t)(left_us % 1000000);
+		const int rc = select(sock + 1, &rfds, nullptr, nullptr, &tv);
+		if (rc < 0) {
+			if (errno == EINTR) continue;
+			diag("varsync: select() failed: %s", strerror(errno));
+			return -1;
+		}
+		if (rc == 0) return 0; // deadline
+		if (PQconsumeInput(c) == 0) {
+			diag("varsync: PQconsumeInput failed: %s", PQerrorMessage(c));
+			return -1;
+		}
+	}
+	*out = PQgetResult(c);
+	// Drain any trailing results, but only while libpq guarantees PQgetResult
+	// will not block -- never trade one hang for another.
+	while (!PQisBusy(c)) {
+		PGresult* extra = PQgetResult(c);
+		if (extra == nullptr) break;
+		PQclear(extra);
+	}
+	return 1;
+}
+
+static void run_varsync_reuse_regression(PGconn* admin, const std::vector<ServerRow>& saved) {
+	auto fail = [&](int n, const char* why) {
+		for (int i = 0; i < n; i++) ok(false, "[native] varsync-reuse: %s", why);
+	};
+	if (!setNativeMode(admin, true) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		fail(N_VARSYNC_REUSE, "admin setup failed");
+		return;
+	}
+
+	// --- seed: an extended-query cycle leaves ASYNC_STMT_EXECUTE_END pinned on
+	//     the backend connection, which then goes back to the pool. ---
+	{
+		PGConnPtr seed = open_client_conn("options='-c client_encoding=LATIN1'");
+		if (!seed || PQstatus(seed.get()) != CONNECTION_OK) {
+			fail(N_VARSYNC_REUSE, "seed conn failed");
+			return;
+		}
+		PGconn* sc = seed.get();
+		PGresult* r = PQprepare(sc, "vsb", "SELECT 88", 0, nullptr);
+		bool prepared = PQresultStatus(r) == PGRES_COMMAND_OK;
+		PQclear(r);
+		r = PQexecPrepared(sc, "vsb", 0, nullptr, nullptr, nullptr, 0);
+		ok(prepared && val_is(r, "88"),
+		   "[native] varsync-reuse: seed binary prepare+execute = 88 (pins stmt end state on the pooled conn)");
+		PQclear(r);
+	} // PQfinish -> the dirty connection returns to the pool
+
+	// --- reuse: a different client_encoding forces the variable-sync SET that
+	//     used to wedge in SETTING_VARIABLE forever. ---
+	PGConnPtr reuse = open_client_conn("options='-c client_encoding=UTF8'");
+	ok(reuse && PQstatus(reuse.get()) == CONNECTION_OK,
+	   "[native] varsync-reuse: reusing client (client_encoding=UTF8) connected");
+	if (!reuse || PQstatus(reuse.get()) != CONNECTION_OK) {
+		fail(2, "reuse conn failed");
+		return;
+	}
+
+	PGresult* res = nullptr;
+	const int rc = exec_with_deadline(reuse.get(), "SELECT 1", 10000, &res);
+	ok(rc == 1,
+	   "[native] varsync-reuse: SELECT 1 on the reused conn completed within 10s (rc=%d; 0 = the SETTING_VARIABLE hang)",
+	   rc);
+	ok(rc == 1 && val_is(res, "1"),
+	   "[native] varsync-reuse: SELECT 1 returned 1");
+	if (res) PQclear(res);
+}
+
+int main(int /*argc*/, char** /*argv*/) {
+	auto sql_cases = build_sql_cases();
+	auto extq_cases = build_extq_cases();
+	const int n_extra_cases = 6; // EXT_MULTI_CYCLE, EXT_REUSE, EXT_GLOBAL_DEDUP, EXT_PARSE_ERR_MIDFRAME, 2x EXT_DESCRIBE_CACHED
+	int n_cases = (int)(sql_cases.size() + extq_cases.size()) + n_extra_cases;
+	const int n_dealloc_reg = N_DEALLOC_REG_PER_MODE;      // SQL DEALLOCATE forwarding, native path
+	const int n_dealloc_xproto = N_DEALLOC_XPROTO_PER_MODE; // binary-prepare + SQL DEALLOCATE, native path
+	const int n_dealloc_all = N_DALLALL_MATRIX;           // DEALLOCATE ALL matrix, native path
+	const int n_varsync = N_VARSYNC_REUSE;                // variable-sync reuse hang, native path
+	// Everything below runs once per transport, each pass adding the transport check.
+	const int per_transport = n_cases + 1 + n_varsync + n_dealloc_reg + n_dealloc_xproto + n_dealloc_all;
+	plan((int)NATIVE_TRANSPORT_COUNT * (per_transport + NATIVE_TRANSPORT_CHECKS));
+	if (cl.getEnv()) return exit_status();
+
+	std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
+	if (open_file_and_seek_end(log_path, f_proxysql_log) != EXIT_SUCCESS) {
+		BAIL_OUT("Cannot open ProxySQL log at %s", log_path.c_str());
+		return exit_status();
+	}
+	PGConnPtr admin = open_admin_conn();
+	if (!admin || PQstatus(admin.get()) != CONNECTION_OK) {
+		BAIL_OUT("admin connect failed");
+		return exit_status();
+	}
+	std::vector<ServerRow> saved = readServers(admin.get(), BACKEND_HG);
+	if (saved.empty()) {
+		BAIL_OUT("No pgsql_servers in hostgroup %d", BACKEND_HG);
+		return exit_status();
+	}
+	diag("Backend under test (hg %d): %s:%s", BACKEND_HG,
+	     saved[0].hostname.c_str(), saved[0].port.c_str());
+
+	// The whole corpus runs once per transport (plain, then TLS on both legs).
+	for (size_t transport = 0; transport < NATIVE_TRANSPORT_COUNT; transport++) {
+		native_transport_select(transport);
+		ok_native_transport(admin.get(), BACKEND_HG,
+			[&] { return setNativeMode(admin.get(), true) && flushBackendPool(admin.get(), BACKEND_HG, saved); },
+			[] { return open_client_conn(); }, /*check_client*/ true);
+
+		CoverageRecorder cov;
+		diag("=== SQL-side prepared statements (cases P0-P9) ===");
+		for (const auto& tc : sql_cases) {
+			SqlCaseRunResult cr = run_sql(admin.get(), tc, saved);
+			cov.record({native_transport_label(tc.label), tc.kind, cr.result_match, !cr.fell_back, cr.detail});
+		}
+		diag("=== Extended-query prepared statements (cases P10-P29) ===");
+		for (const auto& tc : extq_cases) {
+			ExtQCaseRunResult cr = run_extq(admin.get(), tc, saved);
+			cov.record({native_transport_label(tc.label), tc.kind, cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_MULTI_CYCLE: two independent extended-query cycles, one session ===");
+		{
+			std::vector<ExtQCase> seq;
+			seq.push_back({"mc1", "EXT_MULTI_CYCLE",
+				"mc1", "SELECT $1::int + 1",
+				{}, {{"", {"10"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			seq.push_back({"mc2", "EXT_MULTI_CYCLE",
+				"mc2", "SELECT $1::text || '!'",
+				{}, {{"", {"hi"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/true, saved);
+			cov.record({native_transport_label("P21: EXT_MULTI_CYCLE (mc1, mc2 in one session)"), "EXT_MULTI_CYCLE",
+				cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_REUSE: same statement name re-prepared after DEALLOCATE ===");
+		{
+			std::vector<ExtQCase> seq;
+			seq.push_back({"ru1-first", "EXT_REUSE",
+				"ru1", "SELECT $1::int + 1",
+				{}, {{"", {"1"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			seq.push_back({"ru1-reprepared", "EXT_REUSE",
+				"ru1", "SELECT $1::int + 100", // different query text, same client name
+				{}, {{"", {"2"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/true, saved);
+			cov.record({native_transport_label("P22: EXT_REUSE ('ru1' re-prepared after DEALLOCATE)"), "EXT_REUSE",
+				cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_GLOBAL_DEDUP: two sessions, identical query text ===");
+		{
+			std::vector<ExtQCase> seq;
+			seq.push_back({"gd1", "EXT_GLOBAL_DEDUP",
+				"gd1", "SELECT $1::int * 2",
+				{}, {{"", {"21"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			seq.push_back({"gd2", "EXT_GLOBAL_DEDUP",
+				"gd2", "SELECT $1::int * 2", // identical text, different session+name
+				{}, {{"", {"5"}, {}, {}, 0}}, false, false, true, false, false, ""});
+			ExtQCaseRunResult cr = run_extq_sequence(admin.get(), seq, /*same_connection=*/false, saved);
+			cov.record({native_transport_label("P23: EXT_GLOBAL_DEDUP (gd1, gd2 identical query, distinct sessions)"), "EXT_GLOBAL_DEDUP",
+				cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_PARSE_ERR_MIDFRAME: injected-Sync error-recovery (PQsendQueryParams) ===");
+		{
+			ExtQCaseRunResult cr = run_midframe_err(admin.get(), "NOT VALID SQL AT ALL", saved);
+			cov.record({native_transport_label("P24: EXT_PARSE_ERR_MIDFRAME (mid-frame Parse error, connection reused after)"),
+				"EXT_PARSE_ERR_MIDFRAME", cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_DESCRIBE_AFTER_DDL (libpq): Describe never replays the pre-DDL description ===");
+		{
+			ExtQCaseRunResult cr = run_describe_after_ddl(admin.get(), /*native=*/false, "dc25", saved);
+			cov.record({native_transport_label("P25: EXT_DESCRIBE_AFTER_DDL (libpq; Describe does not replay the pre-DDL description)"),
+				"EXT_DESCRIBE_AFTER_DDL", cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_DESCRIBE_AFTER_DDL (native): Describe never replays the pre-DDL description ===");
+		{
+			ExtQCaseRunResult cr = run_describe_after_ddl(admin.get(), /*native=*/true, "dc26", saved);
+			cov.record({native_transport_label("P26: EXT_DESCRIBE_AFTER_DDL (native; Describe does not replay the pre-DDL description)"),
+				"EXT_DESCRIBE_AFTER_DDL", cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		cov.emit_tap();
+
+		// Runs first among the absolute-check blocks: it is the only one with its own
+		// deadline, so a regression here reports a clean failure instead of letting the
+		// deadline-less DEALLOCATE cases wedge the whole run.
+		diag("=== Variable-sync reuse regression (native path; 10s deadline) ===");
+		run_varsync_reuse_regression(admin.get(), saved);
+
+		diag("=== DEALLOCATE-forwarding regression (native path; absolute checks) ===");
+		run_dealloc_regression(admin.get(), /*native=*/true, saved);
+
+		diag("=== Cross-protocol DEALLOCATE: binary prepare + SQL DEALLOCATE (native path) ===");
+		run_dealloc_xproto_regression(admin.get(), /*native=*/true, saved);
+
+		diag("=== DEALLOCATE ALL matrix (native path) ===");
+		run_dealloc_all_matrix(admin.get(), /*native=*/true, saved);
+	}
+
+	native_transport_select(0);
+	flushBackendPool(admin.get(), BACKEND_HG, saved);
+	setNativeMode(admin.get(), false); // leave the proxy in the default mode
+
+	return exit_status();
+}
