@@ -2165,12 +2165,15 @@ __exit_monitor_group_replication_thread:
 		char buf[128];
 		char *s=NULL;
 		int l=strlen(mmsd->hostname);
+		size_t s_size;
 		if (l<110) {
 			s=buf;
+			s_size=sizeof(buf);
 		}	else {
 			s=(char *)malloc(l+16);
+			s_size=l+16;
 		}
-		snprintf(s,(l<110 ? sizeof(buf) : l+16),"%s:%d",mmsd->hostname,mmsd->port);
+		snprintf(s,s_size,"%s:%d",mmsd->hostname,mmsd->port);
 		bool viable_candidate=false;
 		bool read_only=true;
 		int num_timeouts = 0;
@@ -2555,12 +2558,15 @@ __exit_monitor_galera_thread:
 		char buf[128];
 		char *s=NULL;
 		int l=strlen(mmsd->hostname);
+		size_t s_size;
 		if (l<110) {
 			s=buf;
+			s_size=sizeof(buf);
 		}	else {
 			s=(char *)malloc(l+16);
+			s_size=l+16;
 		}
-		snprintf(s,(l<110 ? sizeof(buf) : l+16),"%s:%d",mmsd->hostname,mmsd->port);
+		snprintf(s,s_size,"%s:%d",mmsd->hostname,mmsd->port);
 		bool primary_partition = false;
 		bool read_only=true;
 		bool wsrep_desync = true;
@@ -6373,12 +6379,15 @@ __exit_monitor_aws_aurora_HG_thread:
 			char buf[128];
 			char *s=NULL;
 			int l=strlen(mmsd->hostname);
+			size_t s_size;
 			if (l<110) {
 				s=buf;
+				s_size=sizeof(buf);
 			}	else {
 				s=(char *)malloc(l+16);
+				s_size=l+16;
 			}
-			snprintf(s,(l<110 ? sizeof(buf) : l+16),"%s:%d",mmsd->hostname,mmsd->port);
+			snprintf(s,s_size,"%s:%d",mmsd->hostname,mmsd->port);
 			unsigned long long time_now=realtime_time();
 			time_now=time_now-(mmsd->t2 - start_time);
 			//AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
@@ -9427,12 +9436,15 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vec
 		char buf[128];
 		char* s = NULL;
 		int l = strlen(mmsd->hostname);
+		size_t s_size;
 		if (l < 110) {
 			s = buf;
+			s_size = sizeof(buf);
 		} else {
 			s = (char*)malloc(l + 16);
+			s_size = l + 16;
 		}
-		snprintf(s, (l < 110 ? sizeof(buf) : l + 16), "%s:%d", mmsd->hostname, mmsd->port);
+		snprintf(s, s_size, "%s:%d", mmsd->hostname, mmsd->port);
 		bool viable_candidate = false;
 		bool read_only = true;
 		int num_timeouts = 0;
@@ -9922,12 +9934,15 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 		char buf[128];
 		char* s = NULL;
 		int l = strlen(mmsd->hostname);
+		size_t s_size;
 		if (l < 110) {
 			s = buf;
+			s_size = sizeof(buf);
 		} else {
 			s = (char*)malloc(l + 16);
+			s_size = l + 16;
 		}
-		snprintf(s, (l < 110 ? sizeof(buf) : l + 16), "%s:%d", mmsd->hostname, mmsd->port);
+		snprintf(s, s_size, "%s:%d", mmsd->hostname, mmsd->port);
 		bool primary_partition = false;
 		bool read_only = true;
 		bool wsrep_desync = true;

@@ -1922,26 +1922,18 @@ void PgSQL_HostGroups_Manager::generate_pgsql_replication_hostgroups_table() {
 	};
 	for (std::vector<SQLite3_row *>::iterator it = incoming_replication_hostgroups->rows.begin() ; it != incoming_replication_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		char *o=NULL;
-		//if (r->fields[3]) { // comment is not null
-			o=escape_string_single_quotes(r->fields[3],false);
-		//}
-		//if (r->fields[3]) { // comment is not null
-			execute(
-				"INSERT INTO pgsql_replication_hostgroups VALUES(?1,?2,?3,?4)",
-				[&](sqlite3_stmt *statement) {
-					int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, mydb);
-					rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, mydb);
-					rc = (*proxy_sqlite3_bind_text)(statement, 3, r->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-					rc = (*proxy_sqlite3_bind_text)(statement, 4, r->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-				}
-			);
-			if (o!=r->fields[3]) { // there was a copy
-				free(o);
+		// NOTE: 'comment' is bound as-is now that we no longer concatenate it into a statement.
+		// A SQL NULL would reach us as a NULL pointer and, because the column is NOT NULL, would
+		// abort the INSERT instead of storing the empty default; map it back explicitly.
+		execute(
+			"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (?1,?2,?3,?4)",
+			[&](sqlite3_stmt *statement) {
+				int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_text)(statement, 3, r->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_text)(statement, 4, r->fields[3] ? r->fields[3] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 			}
-		//} else {
-			//sprintf(query,"INSERT INTO pgsql_replication_hostgroups VALUES(%s,%s,NULL)",r->fields[0],r->fields[1]);
-		//}
+		);
 		if (pgsql_thread___hostgroup_manager_verbose) {
 			fprintf(stderr,"writer_hostgroup: %s , reader_hostgroup: %s, check_type %s, comment: %s\n", r->fields[0],r->fields[1], r->fields[2], r->fields[3]);
 		}
