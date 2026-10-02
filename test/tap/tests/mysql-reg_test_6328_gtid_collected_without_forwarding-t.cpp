@@ -94,8 +94,9 @@ struct RestoreGtidVars {
 
 	bool restore() {
 		if (!active) return true;
+		if (!set_gtid_vars(admin, track_gtid, from_ok)) return false;
 		active = false;
-		return set_gtid_vars(admin, track_gtid, from_ok);
+		return true;
 	}
 
 	~RestoreGtidVars() {
