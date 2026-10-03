@@ -658,7 +658,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
 	mcp_client_unit-t \
-	pgsql_waiter_list_unit-t
+	pgsql_waiter_list_unit-t pgsql_lsn_manager_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
 UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t
@@ -809,6 +809,11 @@ hostgroup_pool_stats_unit-t: hostgroup_pool_stats_unit-t.cpp $(ODIR)/tap.o $(ODI
 
 pgsql_waiter_list_unit-t: pgsql_waiter_list_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+pgsql_lsn_manager_unit-t: pgsql_lsn_manager_unit-t.cpp $(PROXYSQL_PATH)/lib/PgSQL_LSN_Manager.cpp $(PROXYSQL_PATH)/include/PgSQL_LSN_Manager.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/PgSQL_LSN_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 

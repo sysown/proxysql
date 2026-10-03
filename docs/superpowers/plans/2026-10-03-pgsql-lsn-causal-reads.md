@@ -117,7 +117,7 @@ void invalidate_endpoint(const pgsql_lsn::Endpoint&, pgsql_lsn::Reason);
 pgsql_lsn::GroupSnapshot snapshot(pgsql_lsn::GroupId) const;
 ```
 
-- [ ] **Write deterministic TAP cases** using actual manager methods, explicit synthetic tokens and barriers. No wall-clock sleeps. Assert these outcomes using `ok(...)`:
+- [x] **Write deterministic TAP cases** using actual manager methods, explicit synthetic tokens and barriers. No wall-clock sleeps. Assert these outcomes using `ok(...)`:
 
   ```cpp
   ok(!parse_lsn("0/100000000"), "reject over-wide low half");
@@ -130,10 +130,10 @@ pgsql_lsn::GroupSnapshot snapshot(pgsql_lsn::GroupId) const;
   ```
 
   Also test null/empty/overflow positions, legitimate zero, failed probe retry, late retry result rejection, fixed resolved targets, many completions sharing one batch, generation invalidation, replica-only restart, mismatching backend stamps, unchanged-weight reload, and reference release. Establish fixture variables directly through the public API. Verify two unresolved batch objects maximum and no chain of prior dependencies after repeated writes.
-- [ ] **Run the new standalone target and observe failure:** `make -C test/tap/tests/unit pgsql_lsn_manager_unit-t`. The first failure is the missing manager contract; after compiling, the assertions must expose missing behavior.
-- [ ] **Implement the contract.** Use short per-group locking to serialize enrollment and rotation. Never acquire a hostgroup, monitor or worker lock while holding it. Publish snapshots and notify after releasing it. Latest pending batches can supersede earlier dependencies only through the ordered single-writer sampling sequence; retain the resolved floor. Reject ambiguous mappings atomically. Zero/multiple current writers disable certification. Different replicas have different postmaster start times: compare their WAL history with the writer, and compare their individual incarnation with the selected backend. `invalidate_endpoint(..., NoSafeBackend)` withdraws certification on a transient probe/connect failure; it does not declare the writer history changed. An observed writer incarnation change invalidates the group; an observed replica change invalidates only that endpoint.
-- [ ] **Add build registration and run the target:** follow the standalone waiter-list Makefile rule, linking the new manager source, TAP and pthread directly. Expected: every assertion passes without a running proxy or PostgreSQL. Run a sanitizer build of this target for reference lifetime and concurrent enrollment/publication.
-- [ ] **Commit only these paths:** `feat(pgsql): add LSN dependency and batch manager`.
+- [x] **Run the new standalone target and observe failure:** `make -C test/tap/tests/unit pgsql_lsn_manager_unit-t`. The first failure is the missing manager contract; after compiling, the assertions must expose missing behavior.
+- [x] **Implement the contract.** Use short per-group locking to serialize enrollment and rotation. Never acquire a hostgroup, monitor or worker lock while holding it. Publish snapshots and notify after releasing it. Latest pending batches can supersede earlier dependencies only through the ordered single-writer sampling sequence; retain the resolved floor. Reject ambiguous mappings atomically. Zero/multiple current writers disable certification. Different replicas have different postmaster start times: compare their WAL history with the writer, and compare their individual incarnation with the selected backend. `invalidate_endpoint(..., NoSafeBackend)` withdraws certification on a transient probe/connect failure; it does not declare the writer history changed. An observed writer incarnation change invalidates the group; an observed replica change invalidates only that endpoint.
+- [x] **Add build registration and run the target:** follow the standalone waiter-list Makefile rule, linking the new manager source, TAP and pthread directly. Expected: every assertion passes without a running proxy or PostgreSQL. Run a sanitizer build of this target for reference lifetime and concurrent enrollment/publication.
+- [x] **Commit only these paths:** `feat(pgsql): add LSN dependency and batch manager`.
 
 ## Task 2: Wire configuration and manager ownership
 
@@ -241,4 +241,4 @@ pgsql_lsn::GroupSnapshot snapshot(pgsql_lsn::GroupId) const;
 
 Tasks 1–3 establish ordered dependencies, configuration and certification; Task 4 makes completion capture precede client acknowledgement; Task 5 enforces the guarantee across snapshots, caches and all pool paths; Tasks 6–8 supply observability, adversarial system tests and measured bounds. The spec's eleven acceptance categories are covered by Task 1 ordering tests, Tasks 3–5 component tests and the Task 7/8 live matrix.
 
-Implementation has not started. Review this plan before execution. The interfaces are tightly coupled across monitor, protocol and routing; native execution in this session with a final independent branch review is the suggested approach. Subagent-per-task implementation and review is the alternative if that review cadence is preferred.
+Implementation is in progress on the dedicated feature branch; checked steps have execution evidence in the task ledger. The interfaces are tightly coupled across monitor, protocol and routing; native execution in this session with a final independent branch review is the suggested approach. Subagent-per-task implementation and review is the alternative if that review cadence is preferred.
