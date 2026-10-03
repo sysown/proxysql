@@ -661,7 +661,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_waiter_list_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
-UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t
+UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
@@ -1404,8 +1404,9 @@ aws_iam_kill_helper_unit-t: ALLOW_MULTI_DEF += \
 # AWS IAM wrap tests also need the static archive for their --wrap link flags
 # to reach core-library calls (same requirement as caching_sha2_rsa_unit-t).
 worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
+server_runtime_load_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN40ProxySQL_ServerRuntimeInstallTransaction6commitE30ProxySQL_ServerRuntimeSnapshotb
 
-STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t \
+STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
