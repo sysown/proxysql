@@ -679,5 +679,16 @@ void ProxySQL_Admin::disk_upgrade_pgsql_replication_hostgroups() {
 		);
 	}
 
+	if (configdb->check_table_structure(
+		const_cast<char*>("pgsql_replication_hostgroups"),
+		const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS_V3_0_2))) {
+		proxy_warning("Upgrading 'pgsql_replication_hostgroups' with LSN causal reads disabled by default\n");
+		configdb->execute("DROP TABLE IF EXISTS pgsql_replication_hostgroups_v302");
+		configdb->execute("ALTER TABLE pgsql_replication_hostgroups RENAME TO pgsql_replication_hostgroups_v302");
+		configdb->build_table(const_cast<char*>("pgsql_replication_hostgroups"),
+			const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS), false);
+		configdb->execute("INSERT INTO pgsql_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type,comment)"
+			" SELECT writer_hostgroup,reader_hostgroup,check_type,comment FROM pgsql_replication_hostgroups_v302");
+	}
 	configdb->execute("PRAGMA foreign_keys = ON");
 }

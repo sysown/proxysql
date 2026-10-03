@@ -263,7 +263,7 @@ int main() {
 	admin_db.execute("INSERT INTO mysql_aws_rds_bgd_hostgroups VALUES (81,82,NULL,0,1,0,1000,100,'rds blue green')");
 	admin_db.execute("INSERT INTO mysql_aws_rds_bgd_hostgroups VALUES (181,182,183,184,0,0,1000,100,'inactive rds blue green')");
 	admin_db.execute("INSERT INTO pgsql_servers VALUES (41,'pgsql-load.example',5432,'ONLINE',1,0,100,0,1,0,'admin')");
-	admin_db.execute("INSERT INTO pgsql_replication_hostgroups VALUES (31,32,'read_only','runtime fixture')");
+	admin_db.execute("INSERT INTO pgsql_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type,comment) VALUES (31,32,'read_only','runtime fixture')");
 	std::vector<uint32_t> mysql_topology;
 	std::vector<uint32_t> pgsql_topology;
 	ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
@@ -416,7 +416,7 @@ int main() {
 	admin->load_pgsql_servers_to_runtime(clear_pgsql_topology, {}, {}, false);
 	admin->pgsql_servers_wrunlock();
 	admin_db.execute("INSERT INTO mysql_replication_hostgroups VALUES (31,32,'read_only','MEMORY only')");
-	admin_db.execute("INSERT INTO pgsql_replication_hostgroups VALUES (31,32,'read_only','MEMORY only')");
+	admin_db.execute("INSERT INTO pgsql_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type,comment) VALUES (31,32,'read_only','MEMORY only')");
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM", "1", 1);
 	auto mysql_false_conflict_tables = module_tables(ProxySQL_ServerProtocol::mysql);
 	ok(proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::mysql,

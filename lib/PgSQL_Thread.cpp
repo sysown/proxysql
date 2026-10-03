@@ -1,3 +1,4 @@
+#include <charconv>
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -320,6 +321,8 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"interfaces",
 	(char*)"monitor_enabled",
 	(char*)"monitor_history",
+	(char*)"lsn_poll_interval",
+	(char*)"lsn_wait_timeout",
 	(char*)"monitor_connect_interval",
 	(char*)"monitor_connect_interval_window",
 	(char*)"monitor_connect_timeout",
@@ -1068,6 +1071,8 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.connect_retries_delay = 1;
 	variables.monitor_enabled = true;
 	variables.monitor_history = 7200000; // changed in 2.6.0 : was 600000
+	variables.lsn_poll_interval = 10;
+	variables.lsn_wait_timeout = 100;
 	variables.monitor_connect_interval = 120000;
 	variables.monitor_connect_interval_window = 50;
 	variables.monitor_connect_timeout = 600;
@@ -1728,6 +1733,14 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		// integer variable ?
 		std::unordered_map<std::string, std::tuple<int*, int, int, bool>>::const_iterator it = VariablesPointers_int.find(nameS);
 		if (it != VariablesPointers_int.end()) {
+			if (nameS == "lsn_poll_interval" || nameS == "lsn_wait_timeout") {
+				int parsed = 0;
+				auto result = std::from_chars(value, value + vallen, parsed);
+				if (result.ec != std::errc() || result.ptr != value + vallen
+					|| parsed < std::get<1>(it->second) || parsed > std::get<2>(it->second)) return false;
+				*std::get<0>(it->second) = parsed;
+				return true;
+			}
 			// Log warnings for variables with possibly wrong values
 			if (nameS == "auto_increment_delay_multiplex_timeout_ms") {
 				int intv = atoi(value);
@@ -2312,6 +2325,8 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["authentication_method"] = make_tuple(&variables.authentication_method, 1, 3, false);
 		// Monitor variables
 		VariablesPointers_int["monitor_history"] = make_tuple(&variables.monitor_history, 1000, 7 * 24 * 3600 * 1000, false);
+		VariablesPointers_int["lsn_poll_interval"] = make_tuple(&variables.lsn_poll_interval, 1, 60000, false);
+		VariablesPointers_int["lsn_wait_timeout"] = make_tuple(&variables.lsn_wait_timeout, 0, 600000, false);
 
 		VariablesPointers_int["monitor_connect_interval"] = make_tuple(&variables.monitor_connect_interval, 100, 7 * 24 * 3600 * 1000, false);
 		VariablesPointers_int["monitor_connect_interval_window"] = make_tuple(&variables.monitor_connect_interval_window, 0, 100, false);
@@ -4431,6 +4446,8 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___monitor_writer_is_also_reader = (bool)GloPTH->get_variable_int((char*)"monitor_writer_is_also_reader");
 	pgsql_thread___monitor_enabled = (bool)GloPTH->get_variable_int((char*)"monitor_enabled");
 	pgsql_thread___monitor_history = GloPTH->get_variable_int((char*)"monitor_history");
+	pgsql_thread___lsn_poll_interval = GloPTH->get_variable_int((char*)"lsn_poll_interval");
+	pgsql_thread___lsn_wait_timeout = GloPTH->get_variable_int((char*)"lsn_wait_timeout");
 	pgsql_thread___monitor_connect_interval = GloPTH->get_variable_int((char*)"monitor_connect_interval");
 	pgsql_thread___monitor_connect_interval_window = GloPTH->get_variable_int((char*)"monitor_connect_interval_window");
 	pgsql_thread___monitor_connect_timeout = GloPTH->get_variable_int((char*)"monitor_connect_timeout");

@@ -244,7 +244,7 @@ from a server that previously occupied the endpoint. If validation fails or
 privileges are missing, report it and withhold replica eligibility.
 
 Only one LSN probe may be outstanding for an endpoint. Both commands share the
-existing `pgsql-monitor_query_timeout` budget; connection setup uses the existing
+existing `pgsql-monitor_replication_lag_timeout` budget; connection setup uses the existing
 monitor connection timeout. Keep this monitor connection pool separate from
 ordinary SQL monitor connections because their startup modes differ.
 

@@ -9021,45 +9021,26 @@ bool ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	if (resultset) delete resultset;
 	resultset = NULL;
 
-	// dump pgsql_replication_hostgroups
-	if (_runtime) {
-		query = (char*)"DELETE FROM main.runtime_pgsql_replication_hostgroups";
-	}
-	else {
-		query = (char*)"DELETE FROM main.pgsql_replication_hostgroups";
-	}
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute(query);
+	// Export all replication fields together; binding preserves arbitrary comments.
+	const std::string replication_table = _runtime ? "runtime_pgsql_replication_hostgroups" : "pgsql_replication_hostgroups";
+	admindb->execute(("DELETE FROM main." + replication_table).c_str());
 	resultset = PgHGM->dump_table_pgsql("pgsql_replication_hostgroups");
 	if (resultset) {
-		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-			SQLite3_row* r = *it;
-			int l = 0;
-			if (r->fields[3]) l = strlen(r->fields[3]);
-			char* q = NULL;
-			if (_runtime) {
-				q = (char*)"INSERT INTO runtime_pgsql_replication_hostgroups VALUES(%s,%s,'%s','%s')";
+		const std::string insert = "INSERT INTO " + replication_table +
+			" (writer_hostgroup,reader_hostgroup,check_type,comment,lsn_causal_reads) VALUES (?1,?2,?3,?4,?5)";
+		auto [rc, statement] = admindb->prepare_v2(insert.c_str());
+		ASSERT_SQLITE_OK(rc, admindb);
+		for (auto* row : resultset->rows) {
+			for (int field = 0; field < 5; ++field) {
+				rc = (*proxy_sqlite3_bind_text)(statement.get(), field + 1, row->fields[field] ? row->fields[field] : "", -1, SQLITE_TRANSIENT);
+				ASSERT_SQLITE_OK(rc, admindb);
 			}
-			else {
-				q = (char*)"INSERT INTO pgsql_replication_hostgroups VALUES(%s,%s,'%s','%s')";
-			}
-			char* query = (char*)malloc(strlen(q) + strlen(r->fields[0]) + strlen(r->fields[1]) + strlen(r->fields[2]) + 16 + l);
-			if (r->fields[3]) {
-				char* o = escape_string_single_quotes(r->fields[3], false);
-				snprintf(query, strlen(q) + strlen(r->fields[0]) + strlen(r->fields[1]) + strlen(r->fields[2]) + 16 + l, q, r->fields[0], r->fields[1], r->fields[2], o);
-				if (o != r->fields[3]) { // there was a copy
-					free(o);
-				}
-				//} else {
-					//sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
-			}
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-			admindb->execute(query);
-			free(query);
+			SAFE_SQLITE3_STEP2(statement.get());
+			rc = (*proxy_sqlite3_reset)(statement.get()); ASSERT_SQLITE_OK(rc, admindb);
 		}
+		delete resultset;
+		resultset = nullptr;
 	}
-	if (resultset) delete resultset;
-	resultset = NULL;
 
 	// dump pgsql_hostgroup_attributes
 
@@ -9486,6 +9467,22 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	SQLite3_result* incoming_replication_hostgroups = incoming_pgsql_servers.incoming_replication_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_pgsql_servers.incoming_hostgroup_attributes;
 	SQLite3_result* incoming_pgsql_servers_v2 = incoming_pgsql_servers.incoming_pgsql_servers_v2;
+
+	// Validate the complete incoming mapping before mutating staged or runtime
+	// server state. The legacy overlap filter below must not silently disable
+	// protection by dropping an enabled row.
+	std::unique_ptr<SQLite3_result> lsn_validation_rows;
+	const SQLite3_result* lsn_rows = incoming_replication_hostgroups;
+	if (!lsn_rows) {
+		lsn_validation_rows.reset(admindb->execute_statement(
+			"SELECT writer_hostgroup,reader_hostgroup,check_type,comment,lsn_causal_reads FROM pgsql_replication_hostgroups", &error));
+		lsn_rows = lsn_validation_rows.get();
+	}
+	if (error || !PgSQL_HostGroups_Manager::validate_lsn_replication_rows(lsn_rows, servers_load_veto[1])) {
+		if (error) { servers_load_veto[1] = error; free(error); }
+		proxy_error("PostgreSQL servers LOAD rejected: %s\n", servers_load_veto[1].c_str());
+		return false;
+	}
 
 	const char* query = (char*)"SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.pgsql_servers ORDER BY hostgroup_id, hostname, port";
 	if (runtime_pgsql_servers == nullptr) {

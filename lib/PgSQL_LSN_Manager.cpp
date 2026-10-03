@@ -68,10 +68,14 @@ bool replica_satisfies(const DependencyView& dependency, const Progress& progres
 		&& *progress.replay_lsn >= *dependency.required_lsn;
 }
 bool validate_lsn_groups(const std::vector<GroupConfig>& groups, std::string& error) {
-	std::set<uint32_t> used;
+	std::map<uint32_t, size_t> memberships;
+	for (const auto& g : groups) {
+		++memberships[g.writer_hostgroup];
+		++memberships[g.reader_hostgroup];
+	}
 	for (const auto& g : groups) {
 		if (!g.enabled) continue;
-		if (!used.insert(g.writer_hostgroup).second || !used.insert(g.reader_hostgroup).second) {
+		if (memberships[g.writer_hostgroup] != 1 || memberships[g.reader_hostgroup] != 1) {
 			error = "LSN causal hostgroups must have disjoint writer and reader membership";
 			return false;
 		}

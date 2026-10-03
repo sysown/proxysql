@@ -1519,8 +1519,8 @@ void update_pgsql_replication_hostgroups(SQLite3_result* resultset) {
 	}
 
 	const char* q =
-		"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment)"
-		" VALUES (?1, ?2, ?3, ?4)";
+		"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment, lsn_causal_reads)"
+		" VALUES (?1, ?2, ?3, ?4, ?5)";
 
 	auto [rc1, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
 	ASSERT_SQLITE_OK(rc1, GloAdmin->admindb);
@@ -1532,6 +1532,8 @@ void update_pgsql_replication_hostgroups(SQLite3_result* resultset) {
 		rc = (*proxy_sqlite3_bind_int64)(statement1, 2, atoll(row->fields[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 		rc = (*proxy_sqlite3_bind_text)(statement1, 3, row->fields[2] ? row->fields[2] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 		rc = (*proxy_sqlite3_bind_text)(statement1, 4, row->fields[3] ? row->fields[3] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+		rc = (*proxy_sqlite3_bind_int)(statement1, 5, atoi(row->fields[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 
 		SAFE_SQLITE3_STEP2(statement1);
 		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
@@ -4029,6 +4031,14 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					fetching_error = true;
 					fetch_failed = true;
 					break;
+				}
+			}
+
+			if (!fetching_error) {
+				MYSQL_FIELD* fields = results[1] ? mysql_fetch_fields(results[1]) : nullptr;
+				if (!results[1] || mysql_num_fields(results[1]) != 5 || !fields || strcmp(fields[4].name, "lsn_causal_reads")) {
+					proxy_error("Cluster: PostgreSQL replication synchronization from %s:%d requires lsn_causal_reads support\n", hostname, port);
+					fetching_error = fetch_failed = true;
 				}
 			}
 

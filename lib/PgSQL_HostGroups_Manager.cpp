@@ -1627,6 +1627,13 @@ bool PgSQL_HostGroups_Manager::commit_locked(
  const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
  bool only_commit_runtime_pgsql_servers, bool update_version
 ) {
+	if (incoming_replication_hostgroups) {
+		std::string error;
+		if (!validate_lsn_replication_rows(incoming_replication_hostgroups, error)) {
+			proxy_error("PostgreSQL hostgroup commit rejected: %s\n", error.c_str());
+			return false;
+		}
+	}
 	// purge table
 	purge_pgsql_servers_table();
 
@@ -1854,6 +1861,8 @@ bool PgSQL_HostGroups_Manager::commit_locked(
 		update_glovars_pgsql_servers_checksum(new_checksum, peer_runtime_pgsql_servers.checksum, update_version);
 		pthread_mutex_unlock(&GloVars.checksum_mutex);
 	}
+
+	refresh_lsn_groups();
 
 	// fill Hostgroup_Manager_Mapping with latest records
 	update_hostgroup_manager_mappings();
@@ -2083,6 +2092,66 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 	delete lst;
 }
 
+bool PgSQL_HostGroups_Manager::validate_lsn_replication_rows(const SQLite3_result* rows, std::string& error) {
+	if (!rows || rows->columns != 5 || strcmp(rows->column_definition[4]->name, "lsn_causal_reads")) {
+		error = "Incompatible PostgreSQL replication configuration: peer must support lsn_causal_reads";
+		return false;
+	}
+	std::vector<pgsql_lsn::GroupConfig> groups;
+	for (auto* row : rows->rows) {
+		if (!row->fields[0] || !row->fields[1] || !row->fields[4]
+			|| (strcmp(row->fields[4], "0") && strcmp(row->fields[4], "1"))) {
+			error = "Invalid PostgreSQL LSN causal hostgroup configuration";
+			return false;
+		}
+		groups.push_back({static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10)),
+			static_cast<uint32_t>(strtoul(row->fields[1], nullptr, 10)), row->fields[4][0] == '1', {}, {}});
+	}
+	return pgsql_lsn::validate_lsn_groups(groups, error);
+}
+
+void PgSQL_HostGroups_Manager::refresh_lsn_groups() {
+	char* error = nullptr;
+	std::unique_ptr<SQLite3_result> mappings(mydb->execute_statement(
+		"SELECT writer_hostgroup,reader_hostgroup,check_type,comment,lsn_causal_reads FROM pgsql_replication_hostgroups", &error));
+	std::string validation;
+	if (error || !validate_lsn_replication_rows(mappings.get(), validation)) {
+		proxy_error("Cannot refresh LSN causal groups: %s\n", error ? error : validation.c_str());
+		free(error);
+		lsn_manager_.reconcile_groups({});
+		return;
+	}
+	std::unique_ptr<SQLite3_result> servers(mydb->execute_statement(
+		"SELECT hostgroup_id,hostname,port FROM pgsql_servers WHERE status != 3", &error));
+	if (error || !servers) {
+		proxy_error("Cannot refresh LSN causal servers: %s\n", error ? error : "no result");
+		free(error);
+		lsn_manager_.reconcile_groups({});
+		return;
+	}
+	std::vector<pgsql_lsn::GroupConfig> groups;
+	for (auto* row : mappings->rows) {
+		if (row->fields[4][0] != '1') continue;
+		pgsql_lsn::GroupConfig group;
+		group.writer_hostgroup = strtoul(row->fields[0], nullptr, 10);
+		group.reader_hostgroup = strtoul(row->fields[1], nullptr, 10);
+		group.enabled = true;
+		for (auto* server : servers->rows) {
+			const auto hostgroup = strtoul(server->fields[0], nullptr, 10);
+			pgsql_lsn::Endpoint endpoint {server->fields[1], static_cast<uint16_t>(atoi(server->fields[2]))};
+			if (hostgroup == group.writer_hostgroup) group.writers.push_back(endpoint);
+			if (hostgroup == group.reader_hostgroup) group.readers.push_back(endpoint);
+		}
+		// monitor_writer_is_also_reader can duplicate a writer in the reader pool.
+		// It has one identity and must not be probed as a physical replica.
+		group.readers.erase(std::remove_if(group.readers.begin(), group.readers.end(), [&](const pgsql_lsn::Endpoint& e) {
+			return std::find(group.writers.begin(), group.writers.end(), e) != group.writers.end();
+		}), group.readers.end());
+		groups.push_back(std::move(group));
+	}
+	lsn_manager_.reconcile_groups(groups);
+}
+
 void PgSQL_HostGroups_Manager::generate_pgsql_replication_hostgroups_table() {
 	if (incoming_replication_hostgroups==NULL)
 		return;
@@ -2109,12 +2178,13 @@ void PgSQL_HostGroups_Manager::generate_pgsql_replication_hostgroups_table() {
 		// A SQL NULL would reach us as a NULL pointer and, because the column is NOT NULL, would
 		// abort the INSERT instead of storing the empty default; map it back explicitly.
 		execute(
-			"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (?1,?2,?3,?4)",
+			"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment, lsn_causal_reads) VALUES (?1,?2,?3,?4,?5)",
 			[&](sqlite3_stmt *statement) {
 				int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, mydb);
 				rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, mydb);
 				rc = (*proxy_sqlite3_bind_text)(statement, 3, r->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 				rc = (*proxy_sqlite3_bind_text)(statement, 4, r->fields[3] ? r->fields[3] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_int)(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, mydb);
 			}
 		);
 		if (pgsql_thread___hostgroup_manager_verbose) {
@@ -2170,7 +2240,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql_locked(const string& name) {
 	char * query = (char *)"";
 	if (name == "pgsql_replication_hostgroups") {
-		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM pgsql_replication_hostgroups";
+		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment, lsn_causal_reads FROM pgsql_replication_hostgroups";
 	} else if (name == "pgsql_hostgroup_attributes") {
 		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM pgsql_hostgroup_attributes ORDER BY hostgroup_id";
 	} else if (name == "pgsql_servers") {
@@ -3898,6 +3968,7 @@ void PgSQL_HostGroups_Manager::read_only_action_v2(
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
 	}
+	if (update_pgsql_servers_table) refresh_lsn_groups();
 	wrunlock();
 	unsigned long long curtime2 = monotonic_time();
 	curtime1 = curtime1 / 1000;

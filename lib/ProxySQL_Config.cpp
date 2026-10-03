@@ -2111,6 +2111,7 @@ int ProxySQL_Config::Write_PgSQL_Servers_to_configfile(std::string& data) {
 			addField(data, "reader_hostgroup", r->fields[1], "");
 			addField(data, "check_type", r->fields[2]);
 			addField(data, "comment", r->fields[3]);
+			addField(data, "lsn_causal_reads", r->fields[4], "");
 
 			data += "\t}";
 			isNext = true;
@@ -2275,11 +2276,17 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 	if (root.exists("pgsql_replication_hostgroups") == true) {
 		const Setting& pgsql_replication_hostgroups = root["pgsql_replication_hostgroups"];
 		int count = pgsql_replication_hostgroups.getLength();
-		char* q = (char*)"INSERT OR REPLACE INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment, check_type) VALUES (%d, %d, '%s', '%s')";
+		char* q = (char*)"INSERT OR REPLACE INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment, check_type, lsn_causal_reads) VALUES (%d, %d, '%s', '%s', %d)";
 		for (i = 0; i < count; i++) {
 			const Setting& line = pgsql_replication_hostgroups[i];
 			int writer_hostgroup;
 			int reader_hostgroup;
+			int lsn_causal_reads = 0;
+			if (line.exists("lsn_causal_reads") &&
+				(!line.lookupValue("lsn_causal_reads", lsn_causal_reads) || (lsn_causal_reads != 0 && lsn_causal_reads != 1))) {
+				error = "pgsql_replication_hostgroups.lsn_causal_reads must be integer 0 or 1";
+				return -1;
+			}
 			std::string comment = "";
 			std::string check_type = "";
 			if (line.lookupValue("writer_hostgroup", writer_hostgroup) == false) {
@@ -2310,7 +2317,7 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			const size_t safe_check_type_len = safe_strlen(safe_check_type);
 			const size_t query_len = query_base_len + safe_comment_len + safe_check_type_len + 32;
 			char* query = (char*)l_alloc(query_len);
-				format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
+				format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type, lsn_causal_reads);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);

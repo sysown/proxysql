@@ -3458,6 +3458,11 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		string tn = "";
 		if (!strncasecmp(CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS, query_no_space, sizeof(CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS) - 1)) {
 			tn = "cluster_pgsql_servers";
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS_LEGACY, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS_LEGACY) - 1)) {
+			admin_send_resultset(sess, nullptr,
+				const_cast<char*>("PostgreSQL replication synchronization requires peer support for lsn_causal_reads"), 0);
+			run_query = false;
+			goto __run_query;
 		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS) - 1)) {
 			tn = "pgsql_replication_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES) - 1)) {

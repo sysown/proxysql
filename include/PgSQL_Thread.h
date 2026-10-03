@@ -952,6 +952,8 @@ public:
 	struct {
 		int authentication_method;
 		int monitor_history;
+		int lsn_poll_interval;
+		int lsn_wait_timeout;
 		int monitor_connect_interval;
 		int monitor_connect_interval_window;
 		int monitor_connect_timeout;

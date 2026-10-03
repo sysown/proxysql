@@ -140,6 +140,8 @@ int main() {
 	auto overlap = config(); overlap.writer_hostgroup = 20; overlap.reader_hostgroup = 30;
 	ok(!validate_lsn_groups({config(), overlap}, error), "overlapping enabled mappings rejected");
 	ok(!error.empty(), "invalid mapping explains rejection");
+	auto disabled = config(); disabled.enabled = false;
+	ok(!validate_lsn_groups({disabled, overlap}, error), "disabled mapping cannot shadow protected hostgroup");
 	auto independent = config(); independent.writer_hostgroup = 30; independent.reader_hostgroup = 40;
 	ok(validate_lsn_groups({config(), independent}, error), "independent groups accepted");
 	PgSQL_LSN_Manager ambiguous;

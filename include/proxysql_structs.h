@@ -1262,6 +1262,8 @@ __thread int pgsql_thread___query_processor_parser;
 
 __thread bool pgsql_thread___monitor_enabled;
 __thread int pgsql_thread___monitor_history;
+__thread int pgsql_thread___lsn_poll_interval;
+__thread int pgsql_thread___lsn_wait_timeout;
 __thread int pgsql_thread___monitor_connect_interval;
 __thread int pgsql_thread___monitor_connect_interval_window;
 __thread int pgsql_thread___monitor_connect_timeout;
@@ -1623,6 +1625,8 @@ extern __thread int pgsql_thread___query_processor_parser;
 
 extern __thread bool pgsql_thread___monitor_enabled;
 extern __thread int pgsql_thread___monitor_history;
+extern __thread int pgsql_thread___lsn_poll_interval;
+extern __thread int pgsql_thread___lsn_wait_timeout;
 extern __thread int pgsql_thread___monitor_connect_interval;
 extern __thread int pgsql_thread___monitor_connect_interval_window;
 extern __thread int pgsql_thread___monitor_connect_timeout;
