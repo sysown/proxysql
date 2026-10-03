@@ -1532,7 +1532,7 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 					new_cur_pos += 1;
 				}
 
-				while ((new_cur_pos < digest_end)) {
+				while (new_cur_pos < digest_end) {
 					if (*new_cur_pos == '?' && *(new_cur_pos+1) == ',') {
 						new_cur_pos += 2;
 					} else {

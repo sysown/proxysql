@@ -1249,7 +1249,7 @@ unsigned int PgSQL_Threads_Handler::get_global_version() {
 
 int PgSQL_Threads_Handler::listener_add(const char* address, int port) {
 	char* s = (char*)malloc(strlen(address) + 32);
-	sprintf(s, "%s:%d", address, port);
+	snprintf(s, strlen(address) + 32, "%s:%d", address, port);
 	int ret = listener_add((const char*)s);
 	free(s);
 	return ret;
@@ -1506,7 +1506,7 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		std::unordered_map<std::string, std::tuple<bool*, bool>>::const_iterator it = VariablesPointers_bool.find(nameS);
 		if (it != VariablesPointers_bool.end()) {
 			bool* v = std::get<0>(it->second);
-			return strdup((*v ? "true" : "false"));
+			return strdup(*v ? "true" : "false");
 		}
 	}
 
@@ -1808,7 +1808,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) {
 			if (vallen == 0) { // empty string
 				free(variables.monitor_replication_lag_use_percona_heartbeat);
-				variables.monitor_replication_lag_use_percona_heartbeat = strdup((value));
+				variables.monitor_replication_lag_use_percona_heartbeat = strdup(value);
 				return true;
 			}
 			else {
@@ -2472,7 +2472,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 	size_t fv = 0;
 	for (i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
 		char* m = (char*)malloc(strlen(pgsql_tracked_variables[i].internal_variable_name) + 1 + strlen((char*)"default_"));
-		sprintf(m, "default_%s", pgsql_tracked_variables[i].internal_variable_name);
+		snprintf(m, strlen(pgsql_tracked_variables[i].internal_variable_name) + 1 + strlen((char*)"default_"), "default_%s", pgsql_tracked_variables[i].internal_variable_name);
 		ret[fv] = m;
 		fv++;
 	}
@@ -4166,7 +4166,7 @@ void PgSQL_Thread::process_all_sessions() {
 #ifdef IDLE_THREADS
 			else
 			{
-				if ((sess_time / 1000 > (unsigned long long)pgsql_thread___wait_timeout)) {
+				if (sess_time / 1000 > (unsigned long long)pgsql_thread___wait_timeout) {
 					sess->killed = true;
 					sess->to_process = 1;
 					proxy_warning("Killing client connection %s:%d because inactive for %llums\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, sess_time / 1000);
@@ -4812,7 +4812,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{ // uptime
 		unsigned long long t1 = monotonic_time();
 		pta[0] = (char*)"ProxySQL_Uptime";
-		sprintf(buf, "%llu", (t1 - GloVars.global.start_time) / 1000 / 1000);
+		snprintf(buf, sizeof(buf), "%llu", (t1 - GloVars.global.start_time) / 1000 / 1000);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4845,47 +4845,47 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Connections created
 		pta[0] = (char*)"Client_Connections_aborted";
-		sprintf(buf, "%lu", PgHGM->status.client_connections_aborted);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.client_connections_aborted);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Connections
 		pta[0] = (char*)"Client_Connections_connected";
-		sprintf(buf, "%d", PgHGM->status.client_connections);
+		snprintf(buf, sizeof(buf), "%d", PgHGM->status.client_connections);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Connections created
 		pta[0] = (char*)"Client_Connections_created";
-		sprintf(buf, "%lu", PgHGM->status.client_connections_created);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.client_connections_created);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0] = (char*)"Server_Connections_aborted";
-		sprintf(buf, "%lu", PgHGM->status.server_connections_aborted);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.server_connections_aborted);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0] = (char*)"Server_Connections_connected";
-		sprintf(buf, "%lu", PgHGM->status.server_connections_connected);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.server_connections_connected);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0] = (char*)"Server_Connections_created";
-		sprintf(buf, "%lu", PgHGM->status.server_connections_created);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.server_connections_created);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections delayed
 		pta[0] = (char*)"Server_Connections_delayed";
-		sprintf(buf, "%lu", PgHGM->status.server_connections_delayed);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.server_connections_delayed);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4929,31 +4929,31 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}*/
 	{	// Queries commit
 		pta[0] = (char*)"Commit";
-		sprintf(buf, "%llu", PgHGM->status.commit_cnt);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.commit_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered commit
 		pta[0] = (char*)"Commit_filtered";
-		sprintf(buf, "%llu", PgHGM->status.commit_cnt_filtered);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.commit_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries rollback
 		pta[0] = (char*)"Rollback";
-		sprintf(buf, "%llu", PgHGM->status.rollback_cnt);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.rollback_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered rollback
 		pta[0] = (char*)"Rollback_filtered";
-		sprintf(buf, "%llu", PgHGM->status.rollback_cnt_filtered);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.rollback_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries backend RESET_CONNECTION
 		pta[0] = (char*)"Backend_reset_connection";
-		sprintf(buf, "%llu", PgHGM->status.backend_reset_connection);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.backend_reset_connection);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4965,7 +4965,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}*/
 	{	// Queries backend SET client_encoding 
 		pta[0] = (char*)"Backend_set_client_encoding";
-		sprintf(buf, "%llu", PgHGM->status.backend_set_client_encoding);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.backend_set_client_encoding);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4977,7 +4977,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}*/
 	{	// Queries frontend SET client_encoding 
 		pta[0] = (char*)"Frontend_set_client_encoding";
-		sprintf(buf, "%llu", PgHGM->status.frontend_set_client_encoding);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.frontend_set_client_encoding);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -5036,7 +5036,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Queries that are SELECT for update or equivalent
 		pta[0] = (char*)"Selects_for_update__autocommit0";
-		sprintf(buf, "%llu", PgHGM->status.select_for_update_or_equivalent);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.select_for_update_or_equivalent);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -5054,19 +5054,19 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Access_Denied_Wrong_Password
 		pta[0] = (char*)"Access_Denied_Wrong_Password";
-		sprintf(buf, "%llu", PgHGM->status.access_denied_wrong_password);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.access_denied_wrong_password);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Access_Denied_Max_Connections
 		pta[0] = (char*)"Access_Denied_Max_Connections";
-		sprintf(buf, "%llu", PgHGM->status.access_denied_max_connections);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.access_denied_max_connections);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Access_Denied_Max_User_Connections
 		pta[0] = (char*)"Access_Denied_Max_User_Connections";
-		sprintf(buf, "%llu", PgHGM->status.access_denied_max_user_connections);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.access_denied_max_user_connections);
 		pta[1] = buf;
 		result->add_row(pta);
 	}

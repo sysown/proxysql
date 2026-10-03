@@ -2201,7 +2201,7 @@ bool SQLite3_Server::has_variable(const char *name) {
 char * SQLite3_Server::get_variable(char *name) {
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
 	if (!strcasecmp(name,"read_only")) {
-		return strdup((variables.read_only ? "true" : "false"));
+		return strdup(variables.read_only ? "true" : "false");
 	}
 	return NULL;
 }

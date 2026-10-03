@@ -616,24 +616,22 @@ int SQLite3DB::return_one_int(const char *str) {
  */
 int SQLite3DB::check_table_structure(const char *table_name, const char *table_def) {
 	if (db == NULL || quarantined) return 0;
-	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=\"%s\" AND sql=\"%s\"";
+	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=?1 AND sql=?2";
 	int count=0;
-	int l=strlen(q1)+strlen(table_name)+strlen(table_def)+1;
-	sqlite3_stmt *statement;
-	char *buff=(char *)calloc(1,l);
-	sprintf(buff, q1, table_name , table_def);
-	if((*proxy_sqlite3_prepare_v2)(db, buff, -1, &statement, 0) != SQLITE_OK) {
-	  proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on (*proxy_sqlite3_prepare_v2)() running query \"%s\" : %s\n", buff, (*proxy_sqlite3_errmsg)(db));
+	sqlite3_stmt *statement=NULL;
+	if((*proxy_sqlite3_prepare_v2)(db, q1, -1, &statement, 0) != SQLITE_OK) {
+	  proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on (*proxy_sqlite3_prepare_v2)() running query \"%s\" : %s\n", q1, (*proxy_sqlite3_errmsg)(db));
 	  (*proxy_sqlite3_finalize)(statement);
-	  free(buff);
 	  assert(0);
+	  return 0;
 	}
+	int rc=(*proxy_sqlite3_bind_text)(statement, 1, table_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, this);
+	rc=(*proxy_sqlite3_bind_text)(statement, 2, table_def, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, this);
 	int result=0;
 	while ((result=(*proxy_sqlite3_step)(statement))==SQLITE_ROW) {
 	  count+=(*proxy_sqlite3_column_int)(statement,0);
 	}
 	(*proxy_sqlite3_finalize)(statement);
-	free(buff);
 	return count;
 }
 

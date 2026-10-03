@@ -137,7 +137,7 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 		PROXY_TRACE2();
 		// if the backend server has CLIENT_DEPRECATE_EOF enabled, and the client does not support
 		// CLIENT_DEPRECATE_EOF, warning_count will be excluded from the intermediate EOF packet
-		add_eof((mysql->server_capabilities & CLIENT_DEPRECATE_EOF));
+		add_eof(mysql->server_capabilities & CLIENT_DEPRECATE_EOF);
 	}
 }
 

@@ -1756,7 +1756,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			Hdr.pkt_length=pkt_2.size-5;
 			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
 			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
-			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
+			memcpy((char *)pkt_2.ptr+5, "SET NAMES ", sizeof("SET NAMES ") - 1);
 			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
 			l_free(pkt->size,pkt->ptr);
 			pkt->size=pkt_2.size;
@@ -1780,7 +1780,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			Hdr.pkt_length=pkt_2.size-5;
 			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
 			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
-			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
+			memcpy((char *)pkt_2.ptr+5, "SET NAMES ", sizeof("SET NAMES ") - 1);
 			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
 			l_free(pkt->size,pkt->ptr);
 			pkt->size=pkt_2.size;
@@ -4775,7 +4775,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					string nqn = string((char *)CurrentQuery.QueryPointer,l);
 					char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 					char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
+					snprintf(buf, strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 					RequestEnd(NULL, 9005, buf);
@@ -5009,7 +5009,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					string nqn = string((char *)CurrentQuery.stmt_info->query,l);
 					char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 					char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
+					snprintf(buf, strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 					RequestEnd_and_free_pkt(&pkt, 9005, buf);
@@ -6078,7 +6078,7 @@ __get_pkts_from_client:
 												string nqn = string((char *)CurrentQuery.QueryPointer,l);
 												char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
 												char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
-sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
+snprintf(buf, strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 												client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 												thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 												RequestEnd(NULL, 9005, buf);
@@ -7770,7 +7770,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n", this, client_myds, client_myds->myconn->userinfo->username, used_users);
 					char *a=(char *)"User '%s' has exceeded the 'max_user_connections' resource (current value: %d)";
 					char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username)+16);
-					sprintf(b,a,client_myds->myconn->userinfo->username,used_users);
+					snprintf(b,strlen(a)+strlen(client_myds->myconn->userinfo->username)+16,a,client_myds->myconn->userinfo->username,used_users);
 					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL, b);
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1226,(char *)"42000", b, true);
 					proxy_warning("User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n",client_myds->myconn->userinfo->username,used_users);
@@ -7838,7 +7838,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					} else {
 						char *a=(char *)"User '%s' can only connect locally";
 						char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username));
-						sprintf(b,a,client_myds->myconn->userinfo->username);
+						snprintf(b,strlen(a)+strlen(client_myds->myconn->userinfo->username),a,client_myds->myconn->userinfo->username);
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL, b);
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, _pid, 1040,(char *)"42000", b, true);
 						free(b);
@@ -7865,7 +7865,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 
 						char *_a=(char *)"ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required";
 						char *_s=(char *)malloc(strlen(_a)+strlen(client_myds->myconn->userinfo->username)+32);
-						sprintf(_s, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+						snprintf(_s, strlen(_a)+strlen(client_myds->myconn->userinfo->username)+32, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, _pid, 1045,(char *)"28000", _s, true);
 						proxy_error("ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required\n", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Access denied for user '%s' (using password: %s). SSL is required\n", this, client_myds, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
@@ -8825,11 +8825,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							if (value2.length()) {
 								m=(char *)"Unknown character set '%s' or collation '%s'";
 								errmsg=(char *)malloc(value1.length() + value2.length() + strlen(m));
-								sprintf(errmsg,m,value1.c_str(), value2.c_str());
+								snprintf(errmsg,value1.length() + value2.length() + strlen(m),m,value1.c_str(), value2.c_str());
 							} else {
 								m=(char *)"Unknown character set: '%s'";
 								errmsg=(char *)malloc(value1.length()+strlen(m));
-								sprintf(errmsg,m,value1.c_str());
+								snprintf(errmsg,value1.length()+strlen(m),m,value1.c_str());
 							}
 							client_myds->DSS=STATE_QUERY_SENT_NET;
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg, true);
@@ -9125,7 +9125,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					char *errmsg = NULL;
 					m=(char *)"Unknown character set: '%s'";
 					errmsg=(char *)malloc(charset.length()+strlen(m));
-					sprintf(errmsg,m,charset.c_str());
+					snprintf(errmsg,charset.length()+strlen(m),m,charset.c_str());
 					client_myds->DSS=STATE_QUERY_SENT_NET;
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg, true);
 					client_myds->DSS=STATE_SLEEP;
@@ -9161,7 +9161,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 	// handle case #1797
 	// handle case #2564
-       if ((pkt->size==SELECT_CONNECTION_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0)) {
+       if (pkt->size==SELECT_CONNECTION_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0) {
 		char buf[32];
 		char buf2[32];
 		snprintf(buf, sizeof(buf), "%u", thread_session_id);
@@ -10509,7 +10509,7 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	char *fe=client_myds->myconn->userinfo->fe_username;
 	char *a = (char *)" /* %s=%s */";
 	char *b = (char *)malloc(strlen(a)+strlen(fe)+strlen(mysql_thread___add_ldap_user_comment));
-	sprintf(b,a,mysql_thread___add_ldap_user_comment,fe);
+	snprintf(b,strlen(a)+strlen(fe)+strlen(mysql_thread___add_ldap_user_comment),a,mysql_thread___add_ldap_user_comment,fe);
 	PtrSize_t _new_pkt;
 	_new_pkt.ptr = malloc(strlen(b) + _pkt->size);
 	memcpy(_new_pkt.ptr , _pkt->ptr, 5);
@@ -10875,7 +10875,7 @@ char* MySQL_Session::get_current_query(int max_length) {
 			memcpy(res, query_ptr, cp_len);
 			memcpy(res + cp_len, "...", 3);
 		} else {
-			strncpy(res, query_ptr, query_len);
+			memcpy(res, query_ptr, query_len);
 		}
 		res[query_len] = '\0';
 	}
