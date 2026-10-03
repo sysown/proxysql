@@ -1405,6 +1405,10 @@ aws_iam_kill_helper_unit-t: ALLOW_MULTI_DEF += \
 # to reach core-library calls (same requirement as caching_sha2_rsa_unit-t).
 worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
 server_runtime_load_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN40ProxySQL_ServerRuntimeInstallTransaction6commitE30ProxySQL_ServerRuntimeSnapshotb
+ifeq ($(PROXYSQL40),1)
+server_runtime_load_unit-t: $(FAKE_PLUGIN_SO)
+server_runtime_load_unit-t: IDIRS += -DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\"
+endif
 
 STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
