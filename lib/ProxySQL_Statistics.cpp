@@ -568,18 +568,20 @@ bool ProxySQL_Statistics::system_memory_timetoget(unsigned long long curtime) {
 }
 #endif
 
-// NOTE: the callers' format strings use '%d' because the statsdb 'timestamp'
-// columns are declared INT, but 'start'/'end' are time_t (64-bit on Linux).
-// Passing a time_t straight to a '%d' placeholder is a varargs type mismatch,
-// so narrow explicitly at this single shared point.
+// NOTE: the statsdb 'timestamp' columns are populated with sqlite3_bind_int64
+// and SQLite stores INT as 64-bit, so the bounds must stay 64-bit end to end:
+// narrowing to 'int' here would wrap the range negative after 2038-01-19 and
+// silently return no recent statistics. The callers' format strings therefore
+// use '%ld', matching the 'long' arguments below.
 static char *format_timestamp_query(const char *format, time_t start, time_t end) {
-	const int start_i = static_cast<int>(start);
-	const int end_i = static_cast<int>(end);
-	const int length = snprintf(NULL, 0, format, start_i, end_i);
+	const long start_l = static_cast<long>(start);
+	const long end_l = static_cast<long>(end);
+	const int length = snprintf(NULL, 0, format, start_l, end_l);
 	assert(length >= 0);
 	const size_t query_size = static_cast<size_t>(length) + 1;
 	char *query = (char *)malloc(query_size);
-	snprintf(query, query_size, format, start_i, end_i);
+	assert(query != NULL);
+	snprintf(query, query_size, format, start_l, end_l);
 	return query;
 }
 
@@ -589,8 +591,8 @@ SQLite3_result * ProxySQL_Statistics::get_mysql_metrics(int interval) {
 	int affected_rows;
 	char *error = NULL;
 	char *query = NULL;
-	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, Client_Connections_aborted, Client_Connections_connected, Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, Server_Connections_created, ConnPool_get_conn_failure, ConnPool_get_conn_immediate, ConnPool_get_conn_success, Questions, Slow_queries, GTID_consistent_queries FROM mysql_connections WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
-	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, Client_Connections_aborted, Client_Connections_connected, Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, Server_Connections_created, ConnPool_get_conn_failure, ConnPool_get_conn_immediate, ConnPool_get_conn_success, Questions, Slow_queries, GTID_consistent_queries FROM mysql_connections_hour WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, Client_Connections_aborted, Client_Connections_connected, Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, Server_Connections_created, ConnPool_get_conn_failure, ConnPool_get_conn_immediate, ConnPool_get_conn_success, Questions, Slow_queries, GTID_consistent_queries FROM mysql_connections WHERE timestamp BETWEEN %ld AND %ld ORDER BY timestamp";
+	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, Client_Connections_aborted, Client_Connections_connected, Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, Server_Connections_created, ConnPool_get_conn_failure, ConnPool_get_conn_immediate, ConnPool_get_conn_success, Questions, Slow_queries, GTID_consistent_queries FROM mysql_connections_hour WHERE timestamp BETWEEN %ld AND %ld ORDER BY timestamp";
 	time_t ts = time(NULL);
 	switch (interval) {
 		case 1800:
@@ -642,8 +644,8 @@ SQLite3_result * ProxySQL_Statistics::get_myhgm_metrics(int interval) {
 	int affected_rows;
 	char *error = NULL;
 	char *query = NULL;
-	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, MyHGM_myconnpoll_destroy, MyHGM_myconnpoll_get, MyHGM_myconnpoll_get_ok, MyHGM_myconnpoll_push, MyHGM_myconnpoll_reset FROM myhgm_connections WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
-	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, MyHGM_myconnpoll_destroy, MyHGM_myconnpoll_get, MyHGM_myconnpoll_get_ok, MyHGM_myconnpoll_push, MyHGM_myconnpoll_reset FROM myhgm_connections_hour WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, MyHGM_myconnpoll_destroy, MyHGM_myconnpoll_get, MyHGM_myconnpoll_get_ok, MyHGM_myconnpoll_push, MyHGM_myconnpoll_reset FROM myhgm_connections WHERE timestamp BETWEEN %ld AND %ld ORDER BY timestamp";
+	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, MyHGM_myconnpoll_destroy, MyHGM_myconnpoll_get, MyHGM_myconnpoll_get_ok, MyHGM_myconnpoll_push, MyHGM_myconnpoll_reset FROM myhgm_connections_hour WHERE timestamp BETWEEN %ld AND %ld ORDER BY timestamp";
 	time_t ts = time(NULL);
 	switch (interval) {
 		case 1800:
@@ -683,8 +685,8 @@ SQLite3_result * ProxySQL_Statistics::get_MySQL_Query_Cache_metrics(int interval
 	int affected_rows;
 	char *error = NULL;
 	char *query = NULL;
-	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, count_GET, count_GET_OK, count_SET, bytes_IN, bytes_OUT, Entries_Purged, Entries_In_Cache, Memory_Bytes FROM mysql_query_cache WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
-	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, count_GET, count_GET_OK, count_SET, bytes_IN, bytes_OUT, Entries_Purged, Entries_In_Cache, Memory_Bytes FROM mysql_query_cache_hour WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, count_GET, count_GET_OK, count_SET, bytes_IN, bytes_OUT, Entries_Purged, Entries_In_Cache, Memory_Bytes FROM mysql_query_cache WHERE timestamp BETWEEN %ld AND %ld ORDER BY timestamp";
+	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, count_GET, count_GET_OK, count_SET, bytes_IN, bytes_OUT, Entries_Purged, Entries_In_Cache, Memory_Bytes FROM mysql_query_cache_hour WHERE timestamp BETWEEN %ld AND %ld ORDER BY timestamp";
 	time_t ts = time(NULL);
 	switch (interval) {
 		case 1800:
@@ -726,8 +728,8 @@ SQLite3_result * ProxySQL_Statistics::get_system_memory_metrics(int interval) {
 	int affected_rows;
 	char *error = NULL;
 	char *query = NULL;
-	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, allocated, resident, active, mapped, metadata, retained FROM system_memory WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
-	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, allocated, resident, active, mapped, metadata, retained FROM system_memory_hour WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, allocated, resident, active, mapped, metadata, retained FROM system_memory WHERE timestamp BETWEEN %ld AND %ld ORDER BY timestamp";
+	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, allocated, resident, active, mapped, metadata, retained FROM system_memory_hour WHERE timestamp BETWEEN %ld AND %ld ORDER BY timestamp";
 	time_t ts = time(NULL);
 	switch (interval) {
 		case 1800:
@@ -769,8 +771,8 @@ SQLite3_result * ProxySQL_Statistics::get_system_cpu_metrics(int interval) {
 	int affected_rows;
 	char *error = NULL;
 	char *query = NULL;
-	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, tms_utime, tms_stime FROM system_cpu WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
-	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, tms_utime, tms_stime FROM system_cpu_hour WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, tms_utime, tms_stime FROM system_cpu WHERE timestamp BETWEEN %ld AND %ld ORDER BY timestamp";
+	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, tms_utime, tms_stime FROM system_cpu_hour WHERE timestamp BETWEEN %ld AND %ld ORDER BY timestamp";
 	time_t ts = time(NULL);
 	switch (interval) {
 		case 1800:
