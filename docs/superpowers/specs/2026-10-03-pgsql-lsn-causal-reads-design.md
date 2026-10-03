@@ -1,7 +1,7 @@
 # PostgreSQL LSN Causal Reads Design
 
-Status: Draft for review. This document specifies behavior; it does not describe
-an implemented or benchmarked feature.
+Status: Accepted for implementation planning. This document specifies behavior;
+it does not describe an implemented or benchmarked feature.
 
 ProxySQL will provide session read-your-writes consistency across a PostgreSQL
 writer and its physical replicas using background LSN sampling. Applications
@@ -11,7 +11,7 @@ satisfies the session's dependency; otherwise they wait briefly or use the write
 
 The two agreed tuning variables are `pgsql-lsn_poll_interval` and
 `pgsql-lsn_wait_timeout`. This draft proposes activation on a writer/reader
-hostgroup pair. That choice remains subject to design review.
+hostgroup pair, with protection disabled by default.
 
 ## Scope and guarantee
 
