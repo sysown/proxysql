@@ -9417,6 +9417,9 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		const char* install_error = "Unable to commit MySQL server runtime installation transaction";
 		proxy_error("%s\n", install_error);
 		if (first_error.empty()) first_error = install_error;
+		// A module veto is advisory when the core-only installation succeeds.
+		// On commit failure, callers need the installation error instead.
+		servers_load_veto[0] = install_error;
 	}
 	
 	// quering runtime table will update and return latest records, so this is not needed.
