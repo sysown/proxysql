@@ -272,15 +272,15 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	bool& commit_module, std::string& veto) {
 	commit_module = true;
 	veto.clear();
-#ifdef PROXYSQL40
-	ProxySQL_ServerModuleSnapshot snapshot {};
-	std::string error;
-	snapshot.runtime.protocol = protocol;
 	const int expected_core_columns = protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11;
 	if (core_rows == nullptr || core_rows->columns != expected_core_columns) {
 		proxy_error("Malformed core server snapshot while preparing plugin runtime\n");
 		return false;
 	}
+#ifdef PROXYSQL40
+	ProxySQL_ServerModuleSnapshot snapshot {};
+	std::string error;
+	snapshot.runtime.protocol = protocol;
 	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *core_rows);
 	if (!proxysql_collect_active_builtin_server_topology(*db, protocol, topology_inputs,
 		snapshot.runtime.topology_hostgroups, error)) {
@@ -332,7 +332,14 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	installed_snapshot = std::move(snapshot.runtime);
 	return true;
 #else
-	(void)db; (void)protocol; (void)core_rows; (void)topology_inputs; (void)transaction; (void)installed_snapshot;
+	(void)db;
+	(void)topology_inputs;
+	installed_snapshot = proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *core_rows);
+	std::string error;
+	if (!transaction.prepare(installed_snapshot, error)) {
+		proxy_error("Unable to prepare server runtime installation: %s\n", error.c_str());
+		return false;
+	}
 	return true;
 #endif
 }
@@ -9406,8 +9413,14 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		false, true, hgm_acquire_lock
 	);
 	if (runtime_install_prepared && committed &&
-		!runtime_install.commit(std::move(installed_snapshot), commit_server_module))
-		proxy_error("Unable to commit MySQL server runtime installation transaction\n");
+		!runtime_install.commit(std::move(installed_snapshot), commit_server_module)) {
+		const char* install_error = "Unable to commit MySQL server runtime installation transaction";
+		proxy_error("%s\n", install_error);
+		if (first_error.empty()) first_error = install_error;
+		// A module veto is advisory when the core-only installation succeeds.
+		// On commit failure, callers need the installation error instead.
+		servers_load_veto[0] = install_error;
+	}
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);

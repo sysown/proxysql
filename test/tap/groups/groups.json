@@ -478,6 +478,7 @@
   "rule_matching_unit-t" : [ "unit-tests-g1" ],
   "savepoint-3749-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],
   "savepoint-948-t" : [ "legacy-g7","mariadb10-galera-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql84-gr-g7","mysql90-g2","mysql95-g2" ],
+  "server_runtime_load_unit-t" : [ "unit-tests-g1" ],
   "server_selection_unit-t" : [ "unit-tests-g1" ],
   "set_character_set-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2","set_parser_algorithm_3-g1" ],
   "set_testing-240-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2","set_parser_algorithm_3-g1" ],

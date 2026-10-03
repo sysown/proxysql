@@ -256,6 +256,7 @@ public:
 	~MySQL_Monitor_Connection_Pool() {
 		purge_all_connections();
 #ifdef DEBUG
+		delete conns;
 		pthread_mutex_destroy(&m2);
 #endif // DEBUG
 	}
