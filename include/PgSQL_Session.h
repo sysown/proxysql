@@ -13,6 +13,7 @@
 #include "Base_Session.h"
 #include "cpp.h"
 #include "PgSQL_Error_Helper.h"
+#include "PgSQL_LSN_Manager.h"
 #include "PgSQL_Variables.h"
 #include "PgSQL_Variables_Validator.h"
 #ifdef PROXYSQL31
@@ -691,6 +692,9 @@ public:
 	enum pgsql_variable_name changing_variable_idx;
 
 	PgSQL_Session();
+	std::unordered_map<pgsql_lsn::GroupId, pgsql_lsn::Dependency> lsn_dependencies;
+	std::unordered_map<pgsql_lsn::GroupId, pgsql_lsn::Reason> lsn_errors;
+	void lsn_on_idle_boundary(const PgSQL_Connection&);
 	~PgSQL_Session();
 
 	//void set_unhealthy();

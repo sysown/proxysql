@@ -658,7 +658,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
 	mcp_client_unit-t \
-	pgsql_waiter_list_unit-t pgsql_lsn_manager_unit-t pgsql_lsn_config_unit-t pgsql_lsn_probe_unit-t pgsql_lsn_monitor_unit-t
+	pgsql_waiter_list_unit-t pgsql_lsn_manager_unit-t pgsql_lsn_config_unit-t pgsql_lsn_probe_unit-t pgsql_lsn_monitor_unit-t pgsql_lsn_completion_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
 UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t
@@ -1494,6 +1494,10 @@ managed_runtime_pgsql_unit-t: managed_runtime_pgsql_unit-t.cpp $(ODIR)/tap.o $(O
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 pgsql_lsn_config_unit-t: pgsql_lsn_config_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+pgsql_lsn_completion_unit-t: pgsql_lsn_completion_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 

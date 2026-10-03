@@ -362,6 +362,7 @@
   "pgsql_lsn_config_unit-t" : [ "unit-tests-g1" ],
   "pgsql_lsn_probe_unit-t" : [ "unit-tests-g1" ],
   "pgsql_lsn_monitor_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_lsn_completion_unit-t" : [ "unit-tests-g1" ],
   "plugin_cli_unit-t" : [ "mysqlx-g1","mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
   "plugin_config_unit-t" : [ "mysqlx-g1","mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
   "plugin_dispatch_unit-t" : [ "mysqlx-g1","mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],

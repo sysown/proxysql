@@ -481,7 +481,7 @@ public:
 	 * @note This method is used to signal to the client that the server is
 	 *       ready for a new query and that any previous query has completed.
 	 */
-	unsigned int add_ready_status(PGTransactionStatusType txn_status);
+	unsigned int add_ready_status(PGTransactionStatusType txn_status, bool backend_boundary = true);
 
 	/**
 	 * @brief Stream a raw native backend message into the query result.

@@ -3000,6 +3000,10 @@ bool PgSQL_Session::handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds) {
 // would make is_in_transaction() below report false for a session that is in one.
 bool PgSQL_Session::query_retry_allowed(PgSQL_Data_Stream* myds) {
 	PgSQL_Connection* myconn = (myds ? myds->myconn : NULL);
+	if (myconn && myconn->lsn_outcome_unknown) return false;
+	// A protected writer may have committed an unanswered application cycle.
+	if (myconn && myconn->lsn_stamp && myconn->lsn_stamp->role == pgsql_lsn::Role::Writer &&
+		myconn->lsn_application_cycle_active) return false;
 	if (myconn == NULL || myconn->reusable == false ||
 		myconn->MultiplexDisabled()) {
 		return false;
@@ -3437,6 +3441,16 @@ handler_again:
 				}
 			}
 #endif
+			// Temporary COPY forwarding bypasses PgSQL_Query_Result. Record its
+			// actual idle boundary before copying any completion to client output.
+			if (mybe->server_myds->myconn->lsn_stamp) {
+				for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; ++i) {
+					const auto& packet = mybe->server_myds->PSarrayIN->pdata[i];
+					const auto* bytes = static_cast<const unsigned char*>(packet.ptr);
+					if (packet.size == 6 && bytes[0] == 'Z' && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0 && bytes[4] == 5)
+						mybe->server_myds->myconn->set_ready_for_query_status(bytes[5]);
+				}
+			}
 			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 
 		constexpr unsigned char ready_packet[] = { 0x5A, 0x00, 0x00, 0x00, 0x05 };
@@ -3505,7 +3519,8 @@ handler_again:
 			mybe->server_myds->max_connect_time = 0;
 		}
 
-		bool conn_active = (mybe->server_myds->myconn != NULL) && (mybe->server_myds->myconn->async_state_machine != ASYNC_IDLE);
+		bool conn_active = (mybe->server_myds->myconn != NULL) &&
+			(mybe->server_myds->myconn->async_state_machine != ASYNC_IDLE || mybe->server_myds->myconn->lsn_bootstrap_active);
 		bool query_timed_out = conn_active && mybe->server_myds->wait_until && (thread->curtime >= mybe->server_myds->wait_until);
 		bool query_cancelled = conn_active && mybe->server_myds->cancel_query;
 
@@ -3722,6 +3737,19 @@ handler_again:
 						goto __exit_DSS__STATE_NOT_INITIALIZED;
 					}
 
+					// COPY does not call async_query(), so bootstrap its application
+					// socket before handing that socket to the forwarding path.
+					if (!myconn->lsn_bootstrap_active) SetQueryTimeout();
+					myds->DSS = STATE_MARIADB_QUERY;
+					const int validation = myconn->async_validate_lsn_incarnation(myds->revents);
+					if (validation > 0) return 0;
+					if (validation < 0) {
+						client_myds->myprot.generate_error_packet(true, true, myconn->get_error_message().c_str(),
+							myconn->get_error_code(), false, true);
+						RequestEnd(myds, true);
+						myds->destroy_MySQL_Connection_From_Pool(false);
+						goto __exit_DSS__STATE_NOT_INITIALIZED;
+					}
 					if (!switch_normal_to_fast_forward_mode(pkt, std::string_view(matched.data(), matched.size()), SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT)) {
 						// Failed to switch to fast forward mode due to pending packets
 						client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -3735,7 +3763,7 @@ handler_again:
 				}
 			}
 
-			if (myconn->async_state_machine == ASYNC_IDLE) {
+			if (myconn->async_state_machine == ASYNC_IDLE && !myconn->lsn_bootstrap_active) {
 				SetQueryTimeout();
 			}
 			int rc;
@@ -7118,6 +7146,7 @@ bool PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 	set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
 
 	mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+	if (mybe->server_myds->myconn->lsn_stamp) mybe->server_myds->myconn->lsn_begin_application_cycle();
 
 	// as we are in FAST_FORWARD mode, we directly send the packet to the backend.
 	// need to reset mysql_real_query
@@ -8176,6 +8205,9 @@ void PgSQL_Session::clear_named_portals() {
 // in RequestEnd(), which on several teardown paths runs after the connection is gone.
 // detached_portals is emptied at the end of RequestEnd(), past that read.
 void PgSQL_Session::backend_connection_detached(const PgSQL_Connection* conn) {
+	if (conn && conn->lsn_stamp && conn->lsn_stamp->role == pgsql_lsn::Role::Writer &&
+		(conn->lsn_application_cycle_active || conn->last_ready_for_query_status() != 'I'))
+		lsn_errors[conn->lsn_stamp->group] = pgsql_lsn::Reason::HistoryChanged;
 	if (named_portals.empty() || conn == NULL) return;
 	unsigned long moved = 0;
 	for (auto it = named_portals.begin(); it != named_portals.end(); ) {
@@ -8771,3 +8803,12 @@ void PgSQL_Session::observe_ffto_server_packet(const PtrSize_t& pkt) {
 	m_ffto->on_server_data((const char*)pkt.ptr, pkt.size);
 }
 #endif
+
+void PgSQL_Session::lsn_on_idle_boundary(const PgSQL_Connection& connection) {
+	if (!PgHGM || !connection.lsn_stamp || connection.lsn_stamp->role != pgsql_lsn::Role::Writer) return;
+	const auto& source = *connection.lsn_stamp;
+	const auto group = PgHGM->lsn_manager().snapshot(source.group);
+	if (!group.config.enabled) return;
+	auto& previous = lsn_dependencies[source.group];
+	previous = PgHGM->lsn_manager().observe_completion(source, previous);
+}

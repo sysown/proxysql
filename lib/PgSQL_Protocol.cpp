@@ -2902,7 +2902,9 @@ unsigned int PgSQL_Query_Result::add_empty_query_response(const PGresult* result
 	return bytes;
 }
 
-unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_status) {
+unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_status, bool backend_boundary) {
+	if (backend_boundary && conn && txn_status != PQTRANS_UNKNOWN && txn_status != PQTRANS_ACTIVE)
+		conn->lsn_on_ready_for_query(txn_status == PQTRANS_IDLE ? 'I' : txn_status == PQTRANS_INTRANS ? 'T' : 'E');
 	const unsigned int bytes = proto->copy_ready_status_to_PgSQL_Query_Result(false, this, txn_status);
 	buffer_to_PSarrayOut();
 	result_packet_type |= PGSQL_QUERY_RESULT_READY;
@@ -2910,6 +2912,8 @@ unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_st
 }
 
 unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len) {
+	// Enrollment must precede even buffer_reserve_space(), which can flush.
+	if (type == 'Z' && conn && payload_len == 1) conn->lsn_on_ready_for_query((char)payload[0]);
 	// Reconstruct the raw client-wire message: type(1) + be32 length(4) + payload.
 	// The length field is (payload_len + 4) per the PostgreSQL wire protocol (it
 	// counts itself but not the type byte).
