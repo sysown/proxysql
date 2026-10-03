@@ -1668,8 +1668,9 @@ bool PgSQL_HostGroups_Manager::commit_locked(
 			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
 			mysrvc->ConnectionsFree->drop_all_connections();
 			char *q1=(char *)"DELETE FROM pgsql_servers WHERE mem_pointer=%lld";
-			char *q2=(char *)malloc(strlen(q1)+32);
-			sprintf(q2,q1,ptr);
+			const size_t q2_size = static_cast<size_t>(snprintf(NULL, 0, q1, ptr)) + 1;
+			char *q2=(char *)malloc(q2_size);
+			snprintf(q2, q2_size, q1, ptr);
 			mydb->execute(q2);
 			free(q2);
 		}
@@ -2057,8 +2058,10 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 			mydb->execute_statement((char *)"SELECT hostgroup_id hid, hostname, port, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM pgsql_servers", &error , &cols , &affected_rows , &resultset);
 		} else {
 			int hidonly=*_onlyhg;
-			char *q1 = (char *)malloc(256);
-			sprintf(q1,"SELECT hostgroup_id hid, hostname, port, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM pgsql_servers WHERE hostgroup_id=%d" , hidonly);
+			const char *query_format = "SELECT hostgroup_id hid, hostname, port, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM pgsql_servers WHERE hostgroup_id=%d";
+			const size_t q1_size = static_cast<size_t>(snprintf(NULL, 0, query_format, hidonly)) + 1;
+			char *q1 = (char *)malloc(q1_size);
+			snprintf(q1, q1_size, query_format, hidonly);
 			mydb->execute_statement(q1, &error , &cols , &affected_rows , &resultset);
 			free(q1);
 		}
@@ -2086,28 +2089,37 @@ void PgSQL_HostGroups_Manager::generate_pgsql_replication_hostgroups_table() {
 	if (pgsql_thread___hostgroup_manager_verbose) {
 		proxy_info("New pgsql_replication_hostgroups table\n");
 	}
+	int cols=0;
+	int affected_rows=0;
+	auto execute = [&](const char *sql, auto bind) {
+		auto [rc, statement_unique] = mydb->prepare_v2(sql);
+		ASSERT_SQLITE_OK(rc, mydb);
+		bind(statement_unique.get());
+		char *error = NULL;
+		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
+		return resultset;
+	};
 	for (std::vector<SQLite3_row *>::iterator it = incoming_replication_hostgroups->rows.begin() ; it != incoming_replication_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		char *o=NULL;
-		int comment_length=0;	// #issue #643
-		//if (r->fields[3]) { // comment is not null
-			o=escape_string_single_quotes(r->fields[3],false);
-			comment_length=strlen(o);
-		//}
-		char *query=(char *)malloc(256+comment_length);
-		//if (r->fields[3]) { // comment is not null
-			sprintf(query,"INSERT INTO pgsql_replication_hostgroups VALUES(%s,%s,'%s','%s')",r->fields[0], r->fields[1], r->fields[2], o);
-			if (o!=r->fields[3]) { // there was a copy
-				free(o);
+		// NOTE: 'comment' is bound as-is now that we no longer concatenate it into a statement.
+		// A SQL NULL would reach us as a NULL pointer and, because the column is NOT NULL, would
+		// abort the INSERT instead of storing the empty default; map it back explicitly.
+		execute(
+			"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (?1,?2,?3,?4)",
+			[&](sqlite3_stmt *statement) {
+				int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_text)(statement, 3, r->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_text)(statement, 4, r->fields[3] ? r->fields[3] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 			}
-		//} else {
-			//sprintf(query,"INSERT INTO pgsql_replication_hostgroups VALUES(%s,%s,NULL)",r->fields[0],r->fields[1]);
-		//}
-		mydb->execute(query);
+		);
 		if (pgsql_thread___hostgroup_manager_verbose) {
 			fprintf(stderr,"writer_hostgroup: %s , reader_hostgroup: %s, check_type %s, comment: %s\n", r->fields[0],r->fields[1], r->fields[2], r->fields[3]);
 		}
-		free(query);
 	}
 	incoming_replication_hostgroups=NULL;
 }
@@ -3026,11 +3038,9 @@ void PgSQL_HostGroups_Manager::replication_lag_action_inner(PgSQL_HGC *myhgc, co
 				if (
 //					(current_replication_lag==-1 )
 //					||
-					(
 						current_replication_lag>=0 &&
 						mysrvc->max_replication_lag > 0 && // see issue #4018
 						((unsigned int)current_replication_lag > mysrvc->max_replication_lag)
-					)
 				) {
 					// always increase the counter
 					mysrvc->cur_replication_lag_count += 1;
@@ -4035,31 +4045,31 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_get";
-		sprintf(buf,"%lu",status.pgconnpoll_get);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_get);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_get_ok";
-		sprintf(buf,"%lu",status.pgconnpoll_get_ok);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_get_ok);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_push";
-		sprintf(buf,"%lu",status.pgconnpoll_push);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_push);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_destroy";
-		sprintf(buf,"%lu",status.pgconnpoll_destroy);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_destroy);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_reset";
-		sprintf(buf,"%lu",status.pgconnpoll_reset);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_reset);
 		pta[1]=buf;
 		result->add_row(pta);
 	}

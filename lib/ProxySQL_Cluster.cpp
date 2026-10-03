@@ -385,7 +385,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 					mysql_close(conn);
 					conn = NULL;
 					int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-					usleep((ci)*1000); // remember, usleep is in us
+					usleep(ci*1000); // remember, usleep is in us
 				}
 			} else {
 				proxy_warning("Cluster: unable to connect to peer %s:%d . Error: %s\n", node->hostname, node->port, mysql_error(conn));
@@ -393,7 +393,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				mysql_close(conn);
 				conn = mysql_init(NULL);
 				int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-				usleep((ci)*1000); // remember, usleep is in us
+				usleep(ci*1000); // remember, usleep is in us
 				sleep(1); // sleep for longer
 			}
 		} else {
@@ -2548,86 +2548,91 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_info("Cluster: Writing mysql_servers table\n");
 						GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_SERVERS);
 						MYSQL_ROW row;
-						char* q = (char*)"INSERT INTO mysql_servers (hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (%s, \"%s\", %s, %s, \"%s\", %s, %s, %s, %s, %s, %s, '%s')";
-						while ((row = mysql_fetch_row(results[0]))) {
-							int l = 0;
-							for (int i = 0; i < 11; i++) {
-								l += strlen(row[i]);
+						auto execute = [&](const char *sql, auto bind) {
+							auto [rc, statement_unique] = GloAdmin->admindb->prepare_v2(sql);
+							ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+							bind(statement_unique.get());
+							char *error = NULL;
+							int cols = 0;
+							int affected_rows = 0;
+							SQLite3_result *resultset = GloAdmin->admindb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
+							if (error) {
+								proxy_error("SQLITE error: %s --- %s\n", error, sql);
+								free(error);
 							}
-							char* o = escape_string_single_quotes(row[11], false);
-							char* query = (char*)malloc(strlen(q) + l + strlen(o) + 64);
-
+							return resultset;
+						};
+						while ((row = mysql_fetch_row(results[0]))) {
 							const char *status = row[4];
 							if (strcmp(status, "SHUNNED") == 0 || strcmp(status, "SHUNNED_AWS_BGD") == 0) {
 								status = "ONLINE";
-							}
-							sprintf(query, q, row[0], row[1], row[2], row[3], status, row[5], row[6], row[7], row[8], row[9], row[10], o);
-							if (o != row[11]) { // there was a copy
-								free(o);
-							}
-							GloAdmin->admindb->execute(query);
-							free(query);
+						}
+							execute(
+								"INSERT INTO mysql_servers (hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+								[&](sqlite3_stmt *statement) {
+									int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_text)(statement, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 3, atol(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 4, atol(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_text)(statement, 5, status, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 6, atol(row[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 7, atol(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 8, atol(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 9, atol(row[8])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 10, atol(row[9])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 11, atol(row[10])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_text)(statement, 12, row[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								}
+							);
 						}
 
 						// sync mysql_replication_hostgroups
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Writing mysql_replication_hostgroups table\n");
 						proxy_info("Cluster: Writing mysql_replication_hostgroups table\n");
 						GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_REPLICATION_HOSTGROUPS);
-						q = (char*)"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (%s, %s, '%s', '%s')";
 						while ((row = mysql_fetch_row(results[1]))) {
-							int l = 0;
-							for (int i = 0; i < 3; i++) {
-								l += strlen(row[i]);
-							}
-							char* o = escape_string_single_quotes(row[3], false);
-							char* query = (char*)malloc(strlen(q) + l + strlen(o) + 64);
-							sprintf(query, q, row[0], row[1], row[2], o);
-							if (o != row[3]) { // there was a copy
-								free(o);
-							}
-							GloAdmin->admindb->execute(query);
-							free(query);
+							execute(
+								"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (?1, ?2, ?3, ?4)",
+								[&](sqlite3_stmt *statement) {
+									int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 2, atol(row[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_text)(statement, 3, row[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_text)(statement, 4, row[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								}
+							);
 						}
 
 						// sync mysql_group_replication_hostgroups
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Writing mysql_group_replication_hostgroups table\n");
 						proxy_info("Cluster: Writing mysql_group_replication_hostgroups table\n");
 						GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
-						q = (char*)"INSERT INTO mysql_group_replication_hostgroups ( "
-							"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, "
-							"max_writers, writer_is_also_reader, max_transactions_behind, comment) ";
 						char* error = NULL;
 						int cols = 0;
 						int affected_rows = 0;
 						SQLite3_result* resultset = NULL;
 						while ((row = mysql_fetch_row(results[2]))) {
-							int l = 0;
-							for (int i = 0; i < 8; i++) {
-								l += strlen(row[i]);
-							}
-							char* o = nullptr;
-							char* query = nullptr;
-							std::string fqs = q;
-
-							if (row[8] != nullptr) {
-								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '%s')";
-								o = escape_string_single_quotes(row[8], false);
-								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen(o) + 64);
-								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
-								// free in case of 'o' being a copy
-								if (o != row[8]) {
-									free(o);
+							execute(
+								"INSERT INTO mysql_group_replication_hostgroups ( "
+									"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, "
+									"max_writers, writer_is_also_reader, max_transactions_behind, comment) "
+								"VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+								[&](sqlite3_stmt *statement) {
+									int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 2, atol(row[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 3, atol(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 4, atol(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 5, atol(row[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 6, atol(row[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 7, atol(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 8, atol(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									// in case of comment being null, bind a NULL instead of an empty string
+									if (row[8] != nullptr) {
+										rc = (*proxy_sqlite3_bind_text)(statement, 9, row[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									} else {
+										rc = (*proxy_sqlite3_bind_null)(statement, 9); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 								}
-							} else {
-								// In case of comment being null, placeholder must not have ''
-								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)";
-								o = const_cast<char*>("NULL");
-								query = (char*)malloc(strlen(fqs.c_str()) + strlen("NULL") + l + 64);
-								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 							}
-
-							GloAdmin->admindb->execute(query);
-							free(query);
+							);
 						}
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Dumping fetched 'mysql_group_replication_hostgroups'\n");
 						proxy_info("Dumping fetched 'mysql_group_replication_hostgroups'\n");
@@ -2639,37 +2644,29 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Writing mysql_galera_hostgroups table\n");
 						proxy_info("Cluster: Writing mysql_galera_hostgroups table\n");
 						GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_GALERA_HOSTGROUPS);
-						q = (char*)"INSERT INTO mysql_galera_hostgroups ( "
-							"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, "
-							"max_writers, writer_is_also_reader, max_transactions_behind, comment) ";
 						while ((row = mysql_fetch_row(results[3]))) {
-							int l = 0;
-							for (int i = 0; i < 8; i++) {
-								l += strlen(row[i]);
-							}
-							char* o = nullptr;
-							char* query = nullptr;
-							std::string fqs = q;
-
-							if (row[8] != nullptr) {
-								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '%s')";
-								o = escape_string_single_quotes(row[8], false);
-								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen(o) + 64);
-								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
-								// free in case of 'o' being a copy
-								if (o != row[8]) {
-									free(o);
+							execute(
+								"INSERT INTO mysql_galera_hostgroups ( "
+									"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, "
+									"max_writers, writer_is_also_reader, max_transactions_behind, comment) "
+								"VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+								[&](sqlite3_stmt *statement) {
+									int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 2, atol(row[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 3, atol(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 4, atol(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 5, atol(row[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 6, atol(row[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 7, atol(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 8, atol(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									// in case of comment being null, bind a NULL instead of an empty string
+									if (row[8] != nullptr) {
+										rc = (*proxy_sqlite3_bind_text)(statement, 9, row[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									} else {
+										rc = (*proxy_sqlite3_bind_null)(statement, 9); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 								}
-							} else {
-								// In case of comment being null, placeholder must not have ''
-								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)";
-								o = const_cast<char*>("NULL");
-								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen("NULL") + 64);
-								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 							}
-
-							GloAdmin->admindb->execute(query);
-							free(query);
+							);
 						}
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Dumping fetched 'mysql_galera_hostgroups'\n");
 						proxy_info("Dumping fetched 'mysql_galera_hostgroups'\n");
@@ -2681,37 +2678,35 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Writing mysql_aws_aurora_hostgroups table\n");
 						proxy_info("Cluster: Writing mysql_aws_aurora_hostgroups table\n");
 						GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_AWS_AURORA_HOSTGROUPS);
-						q = (char*)"INSERT INTO mysql_aws_aurora_hostgroups ( "
-							"writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
-							"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment) ";
 						while ((row = mysql_fetch_row(results[4]))) {
-							int l = 0;
-							for (int i = 0; i < 14; i++) {
-								l += strlen(row[i]);
-							}
-							char* o = nullptr;
-							char* query = nullptr;
-							std::string fqs = q;
-
-							if (row[14] != nullptr) {
-								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, '%s')";
-								o = escape_string_single_quotes(row[14], false);
-								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen(o) + 64);
-								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], row[13], o);
-								// free in case of 'o' being a copy
-								if (o != row[14]) {
-									free(o);
+							execute(
+								"INSERT INTO mysql_aws_aurora_hostgroups ( "
+								"writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
+								"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment) "
+								"VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+								[&](sqlite3_stmt *statement) {
+									int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 2, atol(row[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 3, atol(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 4, atol(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_text)(statement, 5, row[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 6, atol(row[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 7, atol(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 8, atol(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 9, atol(row[8])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 10, atol(row[9])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 11, atol(row[10])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 12, atol(row[11])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 13, atol(row[12])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 14, atol(row[13])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									// in case of comment being null, bind a NULL instead of an empty string
+									if (row[14] != nullptr) {
+										rc = (*proxy_sqlite3_bind_text)(statement, 15, row[14], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									} else {
+										rc = (*proxy_sqlite3_bind_null)(statement, 15); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 								}
-							} else {
-								// In case of comment being null, placeholder must not have ''
-								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
-								o = const_cast<char*>("NULL");
-								query = (char*)malloc(strlen(fqs.c_str()) + l + strlen("NULL") + 64);
-								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], row[13], o);
 							}
-
-							GloAdmin->admindb->execute(query);
-							free(query);
+							);
 						}
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Dumping fetched 'mysql_aws_aurora_hostgroups'\n");
 						proxy_info("Dumping fetched 'mysql_aws_aurora_hostgroups'\n");
@@ -3172,20 +3167,30 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 					if (computed_cks == expected_checksum) {
 						mysql_data_seek(result,0);
 						GloAdmin->admindb->execute("DELETE FROM proxysql_servers");
-						char *q=(char *)"INSERT INTO proxysql_servers (hostname, port, weight, comment) VALUES (\"%s\", %s, %s, '%s')";
+						auto execute = [&](const char *sql, auto bind) {
+							auto [rc, statement_unique] = GloAdmin->admindb->prepare_v2(sql);
+							ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+							bind(statement_unique.get());
+							char *error = NULL;
+							int cols = 0;
+							int affected_rows = 0;
+							SQLite3_result *resultset = GloAdmin->admindb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
+							if (error) {
+								proxy_error("SQLITE error: %s --- %s\n", error, sql);
+								free(error);
+							}
+							return resultset;
+						};
 						while (MYSQL_ROW row = mysql_fetch_row(result)) {
-							int l=0;
-							for (int i=0; i<3; i++) {
-								l+=strlen(row[i]);
+							execute(
+								"INSERT INTO proxysql_servers (hostname, port, weight, comment) VALUES (?1, ?2, ?3, ?4)",
+								[&](sqlite3_stmt *statement) {
+									int rc = (*proxy_sqlite3_bind_text)(statement, 1, row[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 2, atol(row[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_int64)(statement, 3, atol(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc = (*proxy_sqlite3_bind_text)(statement, 4, row[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 							}
-							char *o=escape_string_single_quotes(row[3],false);
-							char *query = (char *)malloc(strlen(q)+l+strlen(o)+64);
-							sprintf(query,q,row[0],row[1],row[2],o);
-							if (o!=row[3]) { // there was a copy
-								free(o);
-							}
-							GloAdmin->admindb->execute(query);
-							free(query);
+							);
 						}
 
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Dumping fetched 'proxysql_servers'\n");

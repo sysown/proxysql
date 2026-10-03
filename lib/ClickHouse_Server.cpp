@@ -756,7 +756,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
             	goto __run_query_sqlite;
 			}
 			if (
-				(query_no_space_length==strlen("SHOW ENGINES") && !strncasecmp("SHOW ENGINES",query_no_space, query_no_space_length))
+				query_no_space_length==strlen("SHOW ENGINES") && !strncasecmp("SHOW ENGINES",query_no_space, query_no_space_length)
 			) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT * FROM show_engines");
@@ -765,7 +765,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
             	goto __run_query_sqlite;
 			}
 			if (
-				(pkt->size==(strlen("show charset")+5) && strncasecmp((char *)"show charset",(char *)pkt->ptr+5,pkt->size-5)==0)
+				pkt->size==(strlen("show charset")+5) && strncasecmp((char *)"show charset",(char *)pkt->ptr+5,pkt->size-5)==0
 			) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT Charset, Collation AS 'Default collation' FROM mysql_collations WHERE `Default`='Yes'");
@@ -774,7 +774,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 				goto __run_query_sqlite;
 			}
 			if (
-				(pkt->size==(strlen("show collation")+5) && strncasecmp((char *)"show collation",(char *)pkt->ptr+5,pkt->size-5)==0)
+				pkt->size==(strlen("show collation")+5) && strncasecmp((char *)"show collation",(char *)pkt->ptr+5,pkt->size-5)==0
 			) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT * FROM mysql_collations");
@@ -783,7 +783,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 				goto __run_query_sqlite;
 			}
 			if (
-				(pkt->size==(strlen("SHOW FULL TABLES FROM `default`")+5) && strncasecmp((char *)"SHOW FULL TABLES FROM `default`",(char *)pkt->ptr+5,pkt->size-5)==0)
+				pkt->size==(strlen("SHOW FULL TABLES FROM `default`")+5) && strncasecmp((char *)"SHOW FULL TABLES FROM `default`",(char *)pkt->ptr+5,pkt->size-5)==0
 			) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT name, 'BASE TABLE' AS Table_type FROM system.tables WHERE database = 'default'");
@@ -793,7 +793,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 			}
 		}
 		if (
-			(pkt->size==(strlen("SELECT * FROM INFORMATION_SCHEMA.CHARACTER_SETS")+5) && strncasecmp((char *)"SELECT * FROM INFORMATION_SCHEMA.CHARACTER_SETS",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT * FROM INFORMATION_SCHEMA.CHARACTER_SETS")+5) && strncasecmp((char *)"SELECT * FROM INFORMATION_SCHEMA.CHARACTER_SETS",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT Charset AS CHARACTER_SET_NAME , Collation AS DEFAULT_COLLATE_NAME, 'UTF-8 Unicode' AS DESCRIPTION , 3 AS LEN FROM mysql_collations WHERE `Default`='Yes'");
@@ -803,7 +803,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 		}
 
 		if (
-			(pkt->size==(strlen("SELECT @@character_set_results")+5) && strncasecmp((char *)"SELECT @@character_set_results",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT @@character_set_results")+5) && strncasecmp((char *)"SELECT @@character_set_results",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT 'utf8' AS '@@character_set_results'");
@@ -812,7 +812,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 				goto __run_query_sqlite;
 		}
 		if (
-			(pkt->size==(strlen("SELECT @@collation_server")+5) && strncasecmp((char *)"SELECT @@collation_server",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT @@collation_server")+5) && strncasecmp((char *)"SELECT @@collation_server",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT 'utf8_general_ci' AS '@@collation_server'");
@@ -821,7 +821,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 				goto __run_query_sqlite;
 		}
 		if (
-			(pkt->size==(strlen("SELECT @@have_profiling")+5) && strncasecmp((char *)"SELECT @@have_profiling",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT @@have_profiling")+5) && strncasecmp((char *)"SELECT @@have_profiling",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT 'NO' AS '@@have_profiling'");
@@ -830,7 +830,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 				goto __run_query_sqlite;
 		}
 		if (
-			(pkt->size==(strlen("SELECT @@lower_case_table_names")+5) && strncasecmp((char *)"SELECT @@lower_case_table_names",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT @@lower_case_table_names")+5) && strncasecmp((char *)"SELECT @@lower_case_table_names",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT '0' AS '@@lower_case_table_names'");
@@ -839,7 +839,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 				goto __run_query_sqlite;
 		}
 		if (
-			(pkt->size==(strlen("SELECT @@version, @@version_comment")+5) && strncasecmp((char *)"SELECT @@version, @@version_comment",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT @@version, @@version_comment")+5) && strncasecmp((char *)"SELECT @@version, @@version_comment",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT '5.7.19-ProxySQL-ClickHouse' AS '@@version', '(ProxySQL-ClickHouse)' AS '@@version_comment'");
@@ -848,7 +848,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 				goto __run_query_sqlite;
 		}
 		if (
-			(pkt->size==(strlen("SELECT @@storage_engine")+5) && strncasecmp((char *)"SELECT @@storage_engine",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT @@storage_engine")+5) && strncasecmp((char *)"SELECT @@storage_engine",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT 'MergeTree' AS '@@storage_engine'");
@@ -885,7 +885,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 		}
 
 		if (
-			(pkt->size==(strlen("SELECT * FROM INFORMATION_SCHEMA.COLLATIONS")+5) && strncasecmp((char *)"SELECT * FROM INFORMATION_SCHEMA.COLLATIONS",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT * FROM INFORMATION_SCHEMA.COLLATIONS")+5) && strncasecmp((char *)"SELECT * FROM INFORMATION_SCHEMA.COLLATIONS",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT Collation AS COLLATION_NAME, Charset AS CHARACTER_SET_NAME, Id AS ID, 'Default' AS IS_DEFAULT, 'Yes' AS IS_COMPILED, '3' AS SORTLEN FROM mysql_collations");
@@ -912,7 +912,6 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
             goto __run_query_sqlite;
 		}
 		if (
-			(
 				(query_no_space_length > 50) &&
 				//(strncasecmp("SELECT \*,\n       ",query_no_space,strlen("SELECT \*,\n       ") == 0)) &&
 				(strstr(query_no_space,"CAST(BIN_NAME AS CHAR CHARACTER SET utf8) AS SCHEMA_NAME")) &&
@@ -920,7 +919,6 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 				(strstr(query_no_space,"s.DEFAULT_COLLATION_NAME")) &&
 				(strstr(query_no_space,"FROM `information_schema`.SCHEMATA s")) &&
 				(strstr(query_no_space,"GROUP BY BINARY s.SCHEMA_NAME, s.DEFAULT_COLLATION_NAME"))
-			)
 		) {
 			l_free(query_length,query);
 			query=l_strdup("SELECT name AS BIN_NAME, 'utf8_general_ci' AS DEFAULT_COLLATION_NAME, name AS SCHEMA_NAME FROM system.databases");
@@ -929,7 +927,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 		}
 
 		if (
-			(pkt->size==(strlen("SELECT `SCHEMA_NAME` FROM `INFORMATION_SCHEMA`.`SCHEMATA`")+5) && strncasecmp((char *)"SELECT `SCHEMA_NAME` FROM `INFORMATION_SCHEMA`.`SCHEMATA`",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT `SCHEMA_NAME` FROM `INFORMATION_SCHEMA`.`SCHEMATA`")+5) && strncasecmp((char *)"SELECT `SCHEMA_NAME` FROM `INFORMATION_SCHEMA`.`SCHEMATA`",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 			l_free(query_length,query);
 			query=l_strdup("SELECT name AS SCHEMA_NAME FROM system.databases");
@@ -938,7 +936,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 		}
 
 		if (
-			(pkt->size==(strlen("SELECT version()")+5) && strncasecmp((char *)"SELECT version()",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT version()")+5) && strncasecmp((char *)"SELECT version()",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 			l_free(query_length,query);
 			char *q=(char *)malloc(query_length+256);
@@ -950,7 +948,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
             goto __run_query_sqlite;	
 		}
 		if (
-			(pkt->size==(strlen("select name, type FROM mysql.proc where db='default'")+5) && strncasecmp((char *)"select name, type FROM mysql.proc where db='default'",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("select name, type FROM mysql.proc where db='default'")+5) && strncasecmp((char *)"select name, type FROM mysql.proc where db='default'",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 			l_free(query_length,query);
 			char *q=(char *)malloc(query_length+256);
@@ -962,7 +960,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
             goto __run_query_sqlite;	
 		}
 		if (
-			(pkt->size==(strlen((char *)"SELECT logfile_group_name FROM information_schema.FILES")+5) && strncasecmp((char *)"SELECT logfile_group_name FROM information_schema.FILES",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen((char *)"SELECT logfile_group_name FROM information_schema.FILES")+5) && strncasecmp((char *)"SELECT logfile_group_name FROM information_schema.FILES",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 			l_free(query_length,query);
 			char *q=(char *)"SELECT ' ' AS logfile_group_name FROM global_variables WHERE 1=0";
@@ -972,7 +970,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
             goto __run_query_sqlite;
 		}
 		if (
-			(pkt->size==(strlen((char *)"SELECT tablespace_name FROM information_schema.FILES")+5) && strncasecmp((char *)"SELECT tablespace_name FROM information_schema.FILES",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen((char *)"SELECT tablespace_name FROM information_schema.FILES")+5) && strncasecmp((char *)"SELECT tablespace_name FROM information_schema.FILES",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 			l_free(query_length,query);
 			char *q=(char *)"SELECT ' ' AS tablespace_name FROM global_variables WHERE 1=0";
@@ -982,7 +980,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
             goto __run_query_sqlite;
 		}
 		if (
-			(pkt->size==(strlen("SELECT CONNECTION_ID()")+5) && strncasecmp((char *)"SELECT CONNECTION_ID()",(char *)pkt->ptr+5,pkt->size-5)==0)
+			pkt->size==(strlen("SELECT CONNECTION_ID()")+5) && strncasecmp((char *)"SELECT CONNECTION_ID()",(char *)pkt->ptr+5,pkt->size-5)==0
 		) {
 			char buf[16];
 			snprintf(buf, sizeof(buf), "%u", sess->thread_session_id);
@@ -1130,7 +1128,7 @@ __end_show_commands:
 
 	if ((query_no_space_length>50) && (!strncasecmp("SELECT TABLE_NAME ", query_no_space, 18))) {
 		if (
-			(strstr(query_no_space,"information_schema.VIEWS"))
+			strstr(query_no_space,"information_schema.VIEWS")
 		) {
 			l_free(query_length,query);
 			char *q=(char *)"SELECT name AS TABLE_NAME FROM system.tables WHERE 1=0";
@@ -1790,7 +1788,7 @@ char * ClickHouse_Server::get_variable(char *name) {
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"read_only")) {
-		return strdup((variables.read_only ? "true" : "false"));
+		return strdup(variables.read_only ? "true" : "false");
 	}
 	return NULL;
 }

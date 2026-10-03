@@ -86,7 +86,7 @@ static void * ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size)
     mem_root->used=next;
     mem_root->first_block_usage= 0;
   }
-  return(point);
+  return point;
 }
 
 
@@ -323,36 +323,34 @@ void MySQL_Connection::compute_unknown_transaction_status() {
  * @return Returns the computed hash value.
  */
 uint64_t MySQL_Connection_userinfo::compute_hash() {
-	int l=0;
-	if (username)
-		l+=strlen(username);
-	if (password)
-		l+=strlen(password);
-	if (schemaname)
-		l+=strlen(schemaname);
+	size_t l=0;
+	const size_t username_len = username ? strlen(username) : 0;
+	const size_t password_len = password ? strlen(password) : 0;
+	const size_t schemaname_len = schemaname ? strlen(schemaname) : 0;
 // two random seperator
 #define _COMPUTE_HASH_DEL1_	"-ujhtgf76y576574fhYTRDF345wdt-"
 #define _COMPUTE_HASH_DEL2_	"-8k7jrhtrgJHRgrefgreyhtRFewg6-"
-	l+=strlen(_COMPUTE_HASH_DEL1_);
-	l+=strlen(_COMPUTE_HASH_DEL2_);
+	const size_t delimiter1_len = strlen(_COMPUTE_HASH_DEL1_);
+	const size_t delimiter2_len = strlen(_COMPUTE_HASH_DEL2_);
+	l = username_len + password_len + schemaname_len + delimiter1_len + delimiter2_len;
 	char *buf=(char *)malloc(l+1);
 	l=0;
 	if (username) {
-		strcpy(buf+l,username);
-		l+=strlen(username);
+		memcpy(buf+l, username, username_len);
+		l+=username_len;
 	}
-	strcpy(buf+l,_COMPUTE_HASH_DEL1_);
-	l+=strlen(_COMPUTE_HASH_DEL1_);
+	memcpy(buf+l, _COMPUTE_HASH_DEL1_, delimiter1_len);
+	l+=delimiter1_len;
 	if (password) {
-		strcpy(buf+l,password);
-		l+=strlen(password);
+		memcpy(buf+l, password, password_len);
+		l+=password_len;
 	}
 	if (schemaname) {
-		strcpy(buf+l,schemaname);
-		l+=strlen(schemaname);
+		memcpy(buf+l, schemaname, schemaname_len);
+		l+=schemaname_len;
 	}
-	strcpy(buf+l,_COMPUTE_HASH_DEL2_);
-	l+=strlen(_COMPUTE_HASH_DEL2_);
+	memcpy(buf+l, _COMPUTE_HASH_DEL2_, delimiter2_len);
+	l+=delimiter2_len;
 	hash=SpookyHash::Hash64(buf,l,0);
 	OPENSSL_cleanse(buf, l);
 	free(buf);
@@ -923,7 +921,7 @@ void MySQL_Connection::connect_start_SetAttributes() {
 		}
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "connection_creation_time", __buffer);
 		unsigned long long t1=monotonic_time();
-		sprintf(__buffer,"%llu",(t1-GloVars.global.start_time)/1000/1000);
+		snprintf(__buffer,sizeof(__buffer),"%llu",(t1-GloVars.global.start_time)/1000/1000);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_uptime", __buffer);
 		snprintf(__buffer, sizeof(__buffer), "%d", parent->myhgc->hid);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "hostgroup_id", __buffer);
@@ -2842,7 +2840,7 @@ void MySQL_Connection::async_free_result() {
 	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {
 		if (MyRS_reuse) {
-			delete (MyRS_reuse);
+			delete MyRS_reuse;
 		}
 		MyRS_reuse = MyRS;
 		MyRS=NULL;
@@ -2875,12 +2873,12 @@ bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
 	if (mysql) {
 		ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
-		if (ret == false && (mysql)->net.last_errno && unknown_transaction_status == true) {
+		if (ret == false && mysql->net.last_errno && unknown_transaction_status == true) {
 			ret = true;
 		}
 		if (ret == false) {
 			//bool r = ( mysql_thread___autocommit_false_is_transaction || mysql_thread___forward_autocommit ); // deprecated , see #3253
-			bool r = ( mysql_thread___autocommit_false_is_transaction);
+			bool r = mysql_thread___autocommit_false_is_transaction;
 			if ( r && (IsAutoCommit() == false) ) {
 				ret = true;
 			}
@@ -3343,7 +3341,7 @@ void MySQL_Connection::close_mysql() {
 	// MySQL_Data_Stream , that replaces its BIOs with memory BIOs : writing on
 	// it would never reach the socket. The check on myds->encrypted is a
 	// defensive double check for that same condition
-	if ((send_quit) && ret_mysql && (myds == NULL || myds->encrypted == false)) {
+	if (send_quit && ret_mysql && (myds == NULL || myds->encrypted == false)) {
 		proxy_mysql_send_com_quit(mysql);
 	}
 //	int rc=0;

@@ -1140,7 +1140,7 @@ int Query_Processor<QP_DERIVED>::search_rules_fast_routing_dest_hg(
 	if (keylen >= sizeof(keybuf)) {
 		keybuf_ptr = (char *)malloc(keylen);
 	}
-	sprintf(keybuf_ptr,"%s%s%s---%d", u, rand_del, s, flagIN);
+	snprintf(keybuf_ptr,keylen,"%s%s%s---%d", u, rand_del, s, flagIN);
 
 	if (lock) {
 		rdlock();
@@ -1406,7 +1406,7 @@ unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_async(time_t
 	}
 
 	if (purged_map_size >= DIGEST_STATS_FAST_MINSIZE) {
-		const char *cmd = (selective_purge) ? "PURGE" : "TRUNCATE";
+		const char *cmd = selective_purge ? "PURGE" : "TRUNCATE";
 
 		unsigned long long curtime2 = monotonic_time();
 		curtime1 = curtime1 / 1000;
@@ -3226,7 +3226,7 @@ fast_routing_hashmap_t Query_Processor<QP_DERIVED>::create_fast_routing_hashmap(
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			sprintf(ptr,"%s%s%s---%s",r->fields[0],rand_del,r->fields[1],r->fields[2]);
+			snprintf(ptr,strlen(r->fields[0])+rand_del_size+strlen(r->fields[1])+strlen(r->fields[2])+4,"%s%s%s---%s",r->fields[0],rand_del,r->fields[1],r->fields[2]);
 			int destination_hostgroup = atoi(r->fields[3]);
 			int ret;
 			khiter_t k = kh_put(khStrInt, fast_routing, ptr, &ret); // add the key
@@ -3266,9 +3266,9 @@ SQLite3_result* Query_Processor<QP_DERIVED>::load_fast_routing(const fast_routin
 			rules_mem_used += rules_fast_routing___keys_values___size * nt; // per-thread
 		}
 		khint_t map_size = kh_size(_rules_fast_routing);
-		rules_mem_used += map_size * ((sizeof(int) + sizeof(char *) + 4 )); // not sure about memory overhead
+		rules_mem_used += map_size * (sizeof(int) + sizeof(char *) + 4 ); // not sure about memory overhead
 		if (this->query_rules_fast_routing_algorithm == 1) {
-			rules_mem_used += map_size * ((sizeof(int) + sizeof(char *) + 4 )) * nt; // not sure about memory overhead
+			rules_mem_used += map_size * (sizeof(int) + sizeof(char *) + 4 ) * nt; // not sure about memory overhead
 		}
 	}
 
@@ -3296,7 +3296,7 @@ int Query_Processor<QP_DERIVED>::testing___find_HG_in_mysql_query_rules_fast_rou
 		if (keylen > 250) {
 			keybuf_ptr = (char *)malloc(keylen);
 		}
-		sprintf(keybuf_ptr,"%s%s%s---%d", username, rand_del, schemaname, flagIN);
+		snprintf(keybuf_ptr,keylen,"%s%s%s---%d", username, rand_del, schemaname, flagIN);
 		khiter_t k = kh_get(khStrInt, rules_fast_routing, keybuf_ptr);
 		if (k == kh_end(rules_fast_routing)) {
 		} else {

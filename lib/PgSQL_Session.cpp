@@ -2626,7 +2626,7 @@ __implicit_sync:
 											string nqn = string((char*)CurrentQuery.QueryPointer, l);
 											const char* err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
 											char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
-											sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+											snprintf(buf, strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 											client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
 												false, true);
 											thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
@@ -4338,7 +4338,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n", this, client_myds, client_myds->myconn->userinfo->username, used_users);
 				char* a = (char*)"User '%s' has exceeded the 'max_user_connections' resource (current value: %d)";
 				char* b = (char*)malloc(strlen(a) + strlen(client_myds->myconn->userinfo->username) + 16);
-				sprintf(b, a, client_myds->myconn->userinfo->username, used_users);
+				snprintf(b, strlen(a) + strlen(client_myds->myconn->userinfo->username) + 16, a, client_myds->myconn->userinfo->username, used_users);
 				GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL, b);
 				client_myds->myprot.generate_error_packet(true, false, b, PGSQL_ERROR_CODES::ERRCODE_TOO_MANY_CONNECTIONS,
 					true, true);
@@ -4414,7 +4414,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				else {
 					char* a = (char*)"User '%s' can only connect locally";
 					char* b = (char*)malloc(strlen(a) + strlen(client_myds->myconn->userinfo->username));
-					sprintf(b, a, client_myds->myconn->userinfo->username);
+					snprintf(b, strlen(a) + strlen(client_myds->myconn->userinfo->username), a, client_myds->myconn->userinfo->username);
 					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL, b);
 					client_myds->myprot.generate_error_packet(true, false, b, PGSQL_ERROR_CODES::ERRCODE_SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
 						true, true);
@@ -4429,7 +4429,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 
 					char* _a = (char*)"ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required";
 					char* _s = (char*)malloc(strlen(_a) + strlen(client_myds->myconn->userinfo->username) + 32);
-					sprintf(_s, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+					snprintf(_s, strlen(_a) + strlen(client_myds->myconn->userinfo->username) + 32, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 					client_myds->myprot.generate_error_packet(true, false, _s, PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION,
 							true, true);
 					proxy_error("ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required\n", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
@@ -4509,7 +4509,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Error: Access denied for user '%s'@'%s' . No password. Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr);
 			}
 #endif // DEBUG
-			sprintf(_s, "ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+			snprintf(_s, strlen(client_myds->myconn->userinfo->username) + 100 + strlen(client_addr), "ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 			client_myds->myprot.generate_error_packet(true, false, _s, PGSQL_ERROR_CODES::ERRCODE_INVALID_PASSWORD, true, true);
 			proxy_error("%s\n", _s);
 			free(_s);
@@ -5000,7 +5000,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 						proxy_error("invalid value for parameter \"%s\": \"%s\"\n", pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
 						m = (char*)"invalid value for parameter \"%s\": \"%s\"";
 						errmsg = (char*)malloc(value1.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m));
-						sprintf(errmsg, m, pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
+						snprintf(errmsg, value1.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m), m, pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
 
 						client_myds->DSS = STATE_QUERY_SENT_NET;
 
@@ -7173,7 +7173,7 @@ void PgSQL_Session::handle_post_sync_locked_on_hostgroup_error(const char* query
 	std::string nqn = string(query, l); // truncate string to 253 characters
 	const char* err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
 	char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
-	sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+	snprintf(buf, strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 	client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
 		false, true);
 	free(buf);
