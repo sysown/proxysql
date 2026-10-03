@@ -2264,7 +2264,10 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							int cols = 0;
 							int affected_rows = 0;
 							SQLite3_result *resultset = GloAdmin->admindb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-							if (error) free(error);
+							if (error) {
+								proxy_error("SQLITE error: %s --- %s\n", error, sql);
+								free(error);
+							}
 							return resultset;
 						};
 						while ((row = mysql_fetch_row(results[0]))) {
@@ -2871,7 +2874,10 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 							int cols = 0;
 							int affected_rows = 0;
 							SQLite3_result *resultset = GloAdmin->admindb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-							if (error) free(error);
+							if (error) {
+								proxy_error("SQLITE error: %s --- %s\n", error, sql);
+								free(error);
+							}
 							return resultset;
 						};
 						while (MYSQL_ROW row = mysql_fetch_row(result)) {

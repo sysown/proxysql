@@ -2117,7 +2117,10 @@ void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 		bind(statement_unique.get());
 		char *error = NULL;
 		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-		if (error) free(error);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
 		return resultset;
 	};
 	for (std::vector<SQLite3_row *>::iterator it = incoming_replication_hostgroups->rows.begin() ; it != incoming_replication_hostgroups->rows.end(); ++it) {
@@ -4453,7 +4456,10 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 		bind(statement_unique.get());
 		char *error = NULL;
 		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-		if (error) free(error);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
 		return resultset;
 	};
 	SQLite3_result *resultset = execute(
@@ -4565,7 +4571,10 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 		bind(statement_unique.get());
 		char *error = NULL;
 		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-		if (error) free(error);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
 		return resultset;
 	};
 	SQLite3_result *resultset = execute(
@@ -4693,7 +4702,10 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 		bind(statement_unique.get());
 		char *error = NULL;
 		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-		if (error) free(error);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
 		return resultset;
 	};
 	SQLite3_result *resultset = execute(
@@ -4919,7 +4931,10 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 			bind(statement_unique.get());
 			char *error = NULL;
 			SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-			if (error) free(error);
+			if (error) {
+				proxy_error("SQLITE error: %s --- %s\n", error, sql);
+				free(error);
+			}
 			return resultset;
 		};
 		// We are required to consider both 'ONLINE' and 'SHUNNED' servers for 'backup_writer_hostgroup'
@@ -5288,7 +5303,10 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 		bind(statement_unique.get());
 		char *error = NULL;
 		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-		if (error) free(error);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
 		return resultset;
 	};
 	SQLite3_result *resultset = execute(
@@ -5480,7 +5498,10 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 		bind(statement_unique.get());
 		char *error = NULL;
 		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-		if (error) free(error);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
 		return resultset;
 	};
 	SQLite3_result *resultset = execute(
@@ -5595,7 +5616,10 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 		bind(statement_unique.get());
 		char *error = NULL;
 		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-		if (error) free(error);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
 		return resultset;
 	};
 	SQLite3_result *resultset = execute(
@@ -5846,7 +5870,10 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 			bind(statement_unique.get());
 			char *error = NULL;
 			SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-			if (error) free(error);
+			if (error) {
+				proxy_error("SQLITE error: %s --- %s\n", error, sql);
+				free(error);
+			}
 			return resultset;
 		};
 		SQLite3_result *resultset=execute(
@@ -7269,7 +7296,10 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 		bind(statement_unique.get());
 		char *error = NULL;
 		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-		if (error) free(error);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
 		return resultset;
 	};
 
@@ -7548,7 +7578,10 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 		bind(statement_unique.get());
 		char *error = NULL;
 		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-		if (error) free(error);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
 		return resultset;
 	};
 	int _writer_hostgroup = _whid;

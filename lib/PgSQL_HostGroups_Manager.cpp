@@ -1917,7 +1917,10 @@ void PgSQL_HostGroups_Manager::generate_pgsql_replication_hostgroups_table() {
 		bind(statement_unique.get());
 		char *error = NULL;
 		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
-		if (error) free(error);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
 		return resultset;
 	};
 	for (std::vector<SQLite3_row *>::iterator it = incoming_replication_hostgroups->rows.begin() ; it != incoming_replication_hostgroups->rows.end(); ++it) {
