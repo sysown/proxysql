@@ -9993,6 +9993,12 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			__reset_rules(&prev_rules_data.query_rules);
 		}
 	}
+	// SQL errors bypass the successful transfer to QPro. Release only results
+	// queried here; supplied snapshots remain owned by the caller on failure.
+	if (error != nullptr || error2 != nullptr) {
+		if (SQLite3_query_rules_resultset == nullptr) delete resultset;
+		if (SQLite3_query_rules_fast_routing_resultset == nullptr) delete resultset2;
+	}
 	// Legacy callers historically receive only log-based error reporting and
 	// do not own a returned SQLite allocation. The atomic publisher disables
 	// lock acquisition and needs the error text to reject/roll back its plan.

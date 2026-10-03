@@ -1667,8 +1667,18 @@ void UnloadPlugins() {
 }
 
 void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_info) {
+	// The first reload replaces the context created by SSL-module startup,
+	// before any modules or listeners can borrow it. Release only that initial
+	// owning reference; later restart/reload passes retain the existing lifetime
+	// policy because runtime code can hold borrowed context pointers.
+	static bool first_start = true;
+	SSL_CTX* startup_ssl_ctx = first_start ? GloVars.global.ssl_ctx : nullptr;
+	first_start = false;
 	std::string msg;
 	ProxySQL_create_or_load_TLS(false, msg);
+	if (startup_ssl_ctx && startup_ssl_ctx != GloVars.global.ssl_ctx) {
+		SSL_CTX_free(startup_ssl_ctx);
+	}
 
 	LoadPlugins();
 
