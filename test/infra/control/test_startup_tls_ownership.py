@@ -21,6 +21,7 @@ import time
 
 
 def main():
+    """Run the isolated daemon probe, or return 77 for unsupported builds."""
     if sys.platform != "linux":
         print("# SKIP startup TLS ownership regression requires Linux LeakSanitizer")
         return 77

@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/** Run the daemon TLS probe as one TAP check, propagating unsupported-build skips. */
 int main(int argc, char** argv) {
 	plan(1);
 	// Resolve assets beside the restored executable rather than embedding the

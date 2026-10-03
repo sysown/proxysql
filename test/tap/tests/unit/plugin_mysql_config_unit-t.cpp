@@ -574,6 +574,7 @@ struct AuthMidpointThrowOnce {
 
 } // namespace
 
+/** Exercise plugin publication, rollback, and result ownership through TAP. */
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(NO_PLAN);
@@ -1939,14 +1940,13 @@ int main() {
 		auto supplied_fast_rules = std::make_unique<SQLite3_result>(5);
 		ok(v.db.execute("ALTER TABLE main.mysql_query_rules RENAME TO mysql_query_rules_error_fixture"),
 			"the first query-rule SELECT can fail without discarding configured rules");
-		char* rules_error = admin->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, false);
-		ok(rules_error && std::string(rules_error).find("mysql_query_rules") != std::string::npos,
+		std::unique_ptr<char, decltype(&std::free)> rules_error(
+			admin->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, false), &std::free);
+		ok(rules_error && std::string(rules_error.get()).find("mysql_query_rules") != std::string::npos,
 			"first SELECT failure returns its SQL error after querying fast-routing rules");
-		free(rules_error);
-		rules_error = admin->load_mysql_query_rules_to_runtime(nullptr, supplied_fast_rules.get(), "", 0, false);
+		rules_error.reset(admin->load_mysql_query_rules_to_runtime(nullptr, supplied_fast_rules.get(), "", 0, false));
 		ok(rules_error && supplied_fast_rules->columns == 5 && supplied_fast_rules->rows_count == 0,
 			"first SELECT failure preserves the caller-owned fast-routing result");
-		free(rules_error);
 		ok(admin->load_mysql_query_rules_to_runtime() == nullptr &&
 			GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum,
 			"legacy first SELECT failure leaves live query rules unchanged");
@@ -1954,14 +1954,12 @@ int main() {
 			"the first query-rule input table is restored");
 		ok(v.db.execute("ALTER TABLE main.mysql_query_rules_fast_routing RENAME TO mysql_fast_rules_error_fixture"),
 			"the second query-rule SELECT can fail independently");
-		rules_error = admin->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, false);
-		ok(rules_error && std::string(rules_error).find("mysql_query_rules_fast_routing") != std::string::npos,
+		rules_error.reset(admin->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, false));
+		ok(rules_error && std::string(rules_error.get()).find("mysql_query_rules_fast_routing") != std::string::npos,
 			"second SELECT failure returns its SQL error after querying ordinary rules");
-		free(rules_error);
-		rules_error = admin->load_mysql_query_rules_to_runtime(supplied_rules.get(), nullptr, "", 0, false);
+		rules_error.reset(admin->load_mysql_query_rules_to_runtime(supplied_rules.get(), nullptr, "", 0, false));
 		ok(rules_error && supplied_rules->raw_checksum() == stable_rule_checksum,
 			"second SELECT failure preserves the caller-owned ordinary-rule result");
-		free(rules_error);
 		ok(admin->load_mysql_query_rules_to_runtime() == nullptr &&
 			GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum,
 			"legacy second SELECT failure leaves live query rules unchanged");

@@ -41,6 +41,7 @@ extern void proxysql_wake_server_discovery_admin();
 // can run the real destructor without joining a nonexistent Admin thread.
 class TestDiskUpgrade {
 public:
+	/** Return an owned, constructor-only Admin prepared for real destruction. */
 	static std::unique_ptr<ProxySQL_Admin> make_admin() {
 		auto admin = std::make_unique<ProxySQL_Admin>();
 		admin->main_shutdown = 0;
@@ -48,9 +49,9 @@ public:
 		admin->main_poll_nfds = 0;
 		admin->main_poll_fds = nullptr;
 		admin->main_callback_func = nullptr;
-		admin->tables_defs_admin = new std::vector<table_def_t*>();
-		admin->tables_defs_stats = new std::vector<table_def_t*>();
-		admin->tables_defs_config = new std::vector<table_def_t*>();
+		admin->tables_defs_admin = std::make_unique<std::vector<table_def_t*>>().release();
+		admin->tables_defs_stats = std::make_unique<std::vector<table_def_t*>>().release();
+		admin->tables_defs_config = std::make_unique<std::vector<table_def_t*>>().release();
 		admin->AdminHTTPServer = nullptr;
 		admin->AdminRestApiServer = nullptr;
 		return admin;
@@ -325,6 +326,7 @@ ProxySQL_ServerDesiredSet pgsql_desired(uint64_t generation,
 
 } // namespace
 
+/** Check server reconciliation and teardown of constructor-only Admin fixtures. */
 int main() {
 	plan(85);
 	proxysql_server_discovery_after_final_revalidation_for_test = &after_final_revalidation_hook;

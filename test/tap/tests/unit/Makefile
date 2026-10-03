@@ -476,7 +476,14 @@ $(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEA
 $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
 
-startup_tls_ownership_unit-t: startup_tls_ownership_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/test/infra/control/test_startup_tls_ownership.py
+# The daemon probe skips before inspecting its binary outside Linux.
+# Keep that skip independent of the platform's daemon build requirements.
+STARTUP_TLS_BINARY :=
+ifeq ($(UNAME_S),Linux)
+STARTUP_TLS_BINARY := $(PROXYSQL_BINARY)
+endif
+
+startup_tls_ownership_unit-t: startup_tls_ownership_unit-t.cpp $(STARTUP_TLS_BINARY) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/test/infra/control/test_startup_tls_ownership.py
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -o $@
 
@@ -571,12 +578,13 @@ $(LIBPROXYSQLAR): FORCE
 		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) \
 		$(LIB_OPTZ_ARG) CC=$(CC) CXX=$(CXX)
 
-$(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
+# Delegate source freshness to src/Makefile even if only daemon sources change.
+$(PROXYSQL_BINARY): $(LIBPROXYSQLAR) FORCE
 	$(MAKE) -C $(PROXYSQL_PATH)/src proxysql \
 		PROXYSQL40=$(PROXYSQL40) PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) \
 		PROXYSQL31=$(PROXYSQL31) \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
-		PROXYSQLED25519=$(PROXYSQLED25519) CC=$(CC) CXX=$(CXX)
+		PROXYSQLED25519=$(PROXYSQLED25519) $(LIB_OPTZ_ARG) CC=$(CC) CXX=$(CXX)
 
 
 # ===========================================================================
