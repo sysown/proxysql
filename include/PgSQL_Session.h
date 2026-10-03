@@ -14,6 +14,7 @@
 #include "cpp.h"
 #include "PgSQL_Error_Helper.h"
 #include "PgSQL_LSN_Manager.h"
+#include "PgSQL_LSN_Waiter_List.h"
 #include "PgSQL_Variables.h"
 #include "PgSQL_Variables_Validator.h"
 #ifdef PROXYSQL31
@@ -21,6 +22,7 @@
 #endif // PROXYSQL31
 
 class PgSQL_Query_Result;
+class PgSQL_SrvC;
 class PgSQL_ExplicitTxnStateMgr;
 class PgSQL_Parse_Message;
 class PgSQL_Describe_Message;
@@ -695,6 +697,16 @@ public:
 	std::unordered_map<pgsql_lsn::GroupId, pgsql_lsn::Dependency> lsn_dependencies;
 	std::unordered_map<pgsql_lsn::GroupId, pgsql_lsn::Reason> lsn_errors;
 	void lsn_on_idle_boundary(const PgSQL_Connection&);
+	uint64_t lsn_birth_epoch = 0;
+	PgSQL_LSN_Request lsn_request;
+	PgSQL_LSN_Waiter_Node lsn_waiter_node;
+	LsnAdmission lsn_admit(uint32_t destination_hostgroup, pgsql_lsn::Micros now);
+	bool lsn_server_allowed(const PgSQL_SrvC&) const;
+	bool lsn_backend_allowed(const PgSQL_Connection&, bool allow_unstamped = false) const;
+	bool lsn_cache_allowed(int destination_hostgroup) const;
+	void lsn_finish_request();
+	const PgSQL_Connection* lsn_pinned_backend() const;
+	bool lsn_route_request();
 	~PgSQL_Session();
 
 	//void set_unhealthy();
@@ -765,6 +777,7 @@ private:
 	bool handle_literal_kill_query(PtrSize_t* pkt, PgSQL_Connection* mc);
 
 	friend class PgSQL_Session_PortalTeardownTest;  // test/tap/tests/unit/pgsql_named_portal_teardown_unit-t.cpp
+	friend class PgSQL_LSN_Admission_Test; // actual cache admission in the LSN unit test
 
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>

@@ -434,7 +434,7 @@ handler_again:
 			assert(0); // shouldn't ever reach here, we have messed up the state machine
 		
 		if (get_pg_ssl_in_use()) {
-			if (myds && myds->sess && myds->sess->session_fast_forward) {
+			if (myds && myds->sess && myds->sess->session_fast_forward && !myds->sess->lsn_request.group) {
 				// Native connections come through here too. adopt_backend_tls() shares this
 				// connection's own memory BIOs with the stream instead of installing a new
 				// pair, so nothing the connection still uses gets freed underneath it.

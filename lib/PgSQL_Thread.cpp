@@ -3199,6 +3199,7 @@ void PgSQL_Thread::drop_from_poll(PgSQL_Data_Stream *ds) {
 #endif // PROXYSQL31
 void PgSQL_Thread::unregister_session(int idx) {
 	if (mysql_sessions == NULL) return;
+	lsn_waiter_leave(static_cast<PgSQL_Session*>(mysql_sessions->index(idx)));
 #ifdef PROXYSQL31
 	PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(idx);
 	leave_waiter(sess, false);
@@ -3418,6 +3419,7 @@ void PgSQL_Thread::run() {
 #else
 		int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
 #endif // PROXYSQL31
+		ttw = lsn_poll_timeout(ttw, curtime);
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events, 0, sizeof(struct epoll_event) * MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -4131,6 +4133,7 @@ void PgSQL_Thread::apt_update_window() {
 
 #endif // PROXYSQL31
 void PgSQL_Thread::process_all_sessions() {
+	process_lsn_waiters(curtime);
 	unsigned int n;
 	unsigned int total_active_transactions_ = 0;
 #ifdef IDLE_THREADS
@@ -6206,6 +6209,7 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 	PgSQL_Connection* c = NULL;
 	for (i = 0; i < cached_connections->len; i++) {
 		c = (PgSQL_Connection*)cached_connections->index(i);
+		if (!sess->lsn_backend_allowed(*c,true)) continue;
 		if (c->parent->myhgc->hid == _hid && sess->client_myds->myconn->has_same_connection_options(c)) { // options are all identical
 			if (
 				(gtid_uuid == NULL) || // gtid_uuid is not used

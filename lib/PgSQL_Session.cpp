@@ -298,6 +298,7 @@ void PgSQL_Session::set_status(enum session_status e) {
 
 
 PgSQL_Session::PgSQL_Session() {
+	lsn_birth_epoch = PgHGM ? PgHGM->lsn_manager().configuration_epoch() : 0;
 	thread = nullptr;
 	user_max_connections = 0;
 	previous_hostgroup = -1;
@@ -417,6 +418,7 @@ void PgSQL_Session::reset() {
 }
 
 PgSQL_Session::~PgSQL_Session() {
+	if (thread) thread->lsn_waiter_leave(this);
 #ifdef PROXYSQL31
 	if (thread) {
 		thread->leave_waiter(this);
@@ -1585,6 +1587,7 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 }
 
 bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
+	if (!lsn_route_request()) { *_rc=1; return false; }
 	//fprintf(stderr,"CONNECTING_SERVER\n");
 	unsigned long long curtime = monotonic_time();
 	thread->atomic_curtime = curtime;
@@ -2791,6 +2794,8 @@ __implicit_sync:
 			}
 			break;
 			case FAST_FORWARD:
+				if (mybe->server_myds->myconn && mybe->server_myds->myconn->lsn_stamp)
+					mybe->server_myds->myconn->lsn_begin_application_cycle();
 #ifdef PROXYSQLFFTO
 				observe_ffto_client_packet(pkt);
 #endif
@@ -2882,6 +2887,10 @@ int PgSQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(PgS
 }
 
 void PgSQL_Session::SetQueryTimeout() {
+	if (lsn_request.group) {
+		mybe->server_myds->wait_until=lsn_request.query_deadline;
+		return;
+	}
 	mybe->server_myds->wait_until = 0;
 	if (qpo) {
 		if (qpo->timeout > 0) {
@@ -3426,6 +3435,31 @@ handler_again:
 		break;
 	case FAST_FORWARD:
 	{
+			// Certify a permanent writer relay before releasing its queued first
+			// packet. Until this completes, the connection owns its TLS transport
+			// and the worker leaves IO to its asynchronous bootstrap.
+			if (lsn_request.group && !mybe->server_myds->myconn->lsn_stamp) {
+				if (!lsn_route_request()) goto __exit_DSS__STATE_NOT_INITIALIZED;
+				auto* stream=mybe->server_myds;
+				auto* conn=stream->myconn;
+				stream->DSS=STATE_MARIADB_QUERY;
+				const int validation=conn->async_validate_lsn_incarnation(stream->revents);
+				if (validation > 0) {
+					lsn_request.waiting_for_pool=true;
+					thread->lsn_waiter_enter(this);
+					return 0;
+				}
+				if (validation < 0 || !stream->adopt_backend_tls()) {
+					lsn_request.error=PgHGM->lsn_manager().snapshot(*lsn_request.group).generation != lsn_request.snapshot.generation ?
+						pgsql_lsn::Reason::HistoryChanged : pgsql_lsn::Reason::NoSafeBackend;
+					lsn_request.cancelled=stream->cancel_query;
+					lsn_route_request();
+					goto __exit_DSS__STATE_NOT_INITIALIZED;
+				}
+				conn->lsn_begin_application_cycle();
+				stream->DSS=STATE_SLEEP;
+				lsn_finish_request();
+			}
 			if (mybe->server_myds->mypolls == NULL) {
 				// register the PgSQL_Data_Stream
 				thread->mypolls.add(POLLIN | POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
@@ -3506,6 +3540,7 @@ handler_again:
 	case PROCESSING_STMT_BIND:
 	case PROCESSING_STMT_CLOSE:
 	case PROCESSING_QUERY: {
+		if (!lsn_route_request()) goto __exit_DSS__STATE_NOT_INITIALIZED;
 		//fprintf(stderr,"PROCESSING_QUERY\n");
 		if (pause_until > thread->curtime) {
 			handler_ret = 0;
@@ -3569,6 +3604,27 @@ handler_again:
 		} else {
 			PgSQL_Data_Stream* myds = mybe->server_myds;
 			PgSQL_Connection* myconn = myds->myconn;
+			if (lsn_request.group && myconn->async_state_machine == ASYNC_IDLE) {
+				if (!myconn->lsn_bootstrap_active) SetQueryTimeout();
+				const int validation=myconn->async_validate_lsn_incarnation(myds->revents);
+				if (validation > 0) {
+					lsn_request.waiting_for_pool=true;
+					myds->DSS=STATE_MARIADB_QUERY;
+					thread->lsn_waiter_enter(this);
+					return 0;
+				}
+				if (validation < 0) {
+					lsn_request.error=PgHGM->lsn_manager().snapshot(*lsn_request.group).generation != lsn_request.snapshot.generation ?
+						pgsql_lsn::Reason::HistoryChanged : pgsql_lsn::Reason::NoSafeBackend;
+					lsn_request.cancelled=myds->cancel_query;
+					lsn_route_request();
+					goto __exit_DSS__STATE_NOT_INITIALIZED;
+				}
+				if (!lsn_route_request()) goto __exit_DSS__STATE_NOT_INITIALIZED;
+				if (mybe->server_myds != myds || myds->myconn != myconn) goto handler_again;
+				lsn_request.waiting_for_pool=false;
+				thread->lsn_waiter_leave(this);
+			}
 			bool processing_extended_query = (status == PROCESSING_STMT_PREPARE ||
 											  status == PROCESSING_STMT_EXECUTE ||
 											  status == PROCESSING_STMT_DESCRIBE ||
@@ -5705,6 +5761,14 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_Q
 		return false;
 	}
 
+	// Resolve the actual destination before either query-cache path examines it.
+	if (qpo->destination_hostgroup >= 0 && transaction_persistent_hostgroup == -1)
+		current_hostgroup=qpo->destination_hostgroup;
+	if (const auto* pinned=lsn_pinned_backend()) {
+		const auto group=PgHGM->lsn_manager().group_for_hostgroup(current_hostgroup);
+		if (group && *group==pinned->lsn_stamp->group) current_hostgroup=pinned->parent->myhgc->hid;
+	}
+
 	// Exit early for specific statement types
 	switch (stmt_type) {
 	case PGSQL_EXTENDED_QUERY_TYPE_NOT_SET:
@@ -5735,7 +5799,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_Q
 	}
 
 	// Query cache handling
-	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET) {
+	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET && lsn_cache_allowed(current_hostgroup)) {
 		const std::shared_ptr<PgSQL_QC_entry_t> pgsql_qc_entry = GloPgQC->get(
 			client_myds->myconn->userinfo->hash,
 			(const unsigned char*)CurrentQuery.QueryPointer,
@@ -5765,10 +5829,6 @@ __exit_set_destination_hostgroup:
 	// Set query flags and hostgroups
 	if (qpo->next_query_flagIN >= 0) {
 		next_query_flagIN = qpo->next_query_flagIN;
-	}
-
-	if (qpo->destination_hostgroup >= 0 && transaction_persistent_hostgroup == -1) {
-		current_hostgroup = qpo->destination_hostgroup;
 	}
 
 	// Hostgroup locking check
@@ -6020,6 +6080,7 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif
 	if (mc) {
 		mybe->server_myds->attach_connection(mc);
+		if (lsn_request.group) lsn_request.waiting_for_pool=!mc->lsn_stamp;
 		thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
 #ifdef PROXYSQL31
 		pause_until = 0;
@@ -6028,8 +6089,12 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 	}
 	else {
 		thread->status_variables.stvar[st_var_ConnPool_get_conn_failure]++;
+		if (lsn_request.group) {
+			lsn_request.waiting_for_pool=true;
+			thread->lsn_waiter_enter(this);
+		}
 #ifdef PROXYSQL31
-		thread->enter_waiter(this, mybe->hostgroup_id);
+		else thread->enter_waiter(this, mybe->hostgroup_id);
 #endif // PROXYSQL31
 	}
 	if (qpo->max_lag_ms >= 0) {
@@ -6141,6 +6206,7 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		}
 		if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.stmt_cache_valid &&
 			!transfer_started && resultset_completed && !_conn->is_error_present() &&
+			lsn_cache_allowed(current_hostgroup) &&
 			num_fields > 0 && !_conn->MultiplexDisabled(false) &&
 			!_conn->IsActiveTransaction() && !_conn->processing_multi_statement &&
 			!(_conn->options.init_connect && _conn->options.init_connect[0]) &&
@@ -6178,7 +6244,7 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			// to every later client hitting this entry for the whole TTL. Unlike the
 			// extended-query cache above, this path does not test MultiplexDisabled(), so
 			// being on a LISTEN-pinned connection does not by itself keep it out.
-			if (qpo && qpo->cache_ttl > 0 && is_tuple == true &&
+			if (qpo && qpo->cache_ttl > 0 && is_tuple == true && lsn_cache_allowed(current_hostgroup) &&
 				_conn->native_result_had_notification == false) { // the resultset should be cached
 				
 				if (_conn->is_error_present() == false &&
@@ -6410,6 +6476,7 @@ void PgSQL_Session::handle_transaction_state() {
 }
 
 void PgSQL_Session::RequestEnd(PgSQL_Data_Stream* myds, bool called_on_failure) {
+	lsn_finish_request();
 #ifdef PROXYSQL31
 	hostgroup_pool_wait.finish(thread ? thread->curtime : monotonic_time());
 #endif
@@ -6881,7 +6948,8 @@ void PgSQL_Session::finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* mycon
 		!multiplex_disabled_by_status && multiplex_delayed && pgsql_thread___auto_increment_delay_multiplex_timeout_ms > 0;
 
 	const bool multiplex_disabled = !multiplex_disabled_by_status && (!multiplex_delayed || multiplex_delayed_with_timeout);
-	const bool conn_is_reusable = myds->myconn->reusable == true && !is_active_transaction && multiplex_disabled;
+	const bool conn_is_reusable = myds->myconn->reusable == true && !is_active_transaction && multiplex_disabled &&
+		lsn_pinned_backend() != myconn;
 
 	if (pgsql_thread___multiplexing && conn_is_reusable) {
 		if ((pgsql_thread___connection_delay_multiplex_ms || multiplex_delayed_with_timeout) && mirror == false) {
@@ -7893,6 +7961,7 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 #ifdef PROXYSQL31
 bool PgSQL_Session::try_extended_query_cache(PgSQL_Execute_Message* execute_msg) {
 	CurrentQuery.stmt_cache_valid = false;
+	if (!lsn_cache_allowed(current_hostgroup)) return false;
 	const auto* stmt = CurrentQuery.extended_query_info.stmt_info;
 	if (!extended_cache_frame_eligible || !extended_query_frame.empty() ||
 		!bind_waiting_for_execute ||

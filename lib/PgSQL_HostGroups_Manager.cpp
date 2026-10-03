@@ -2353,6 +2353,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 		//int j=0;
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
+			if (sess && !sess->lsn_server_allowed(*mysrvc)) continue;
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
@@ -2512,6 +2513,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 			}
 			for (j=0; j<l; j++) {
 				mysrvc=mysrvs->idx(j);
+				if (sess && !sess->lsn_server_allowed(*mysrvc)) continue;
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED && mysrvc->shunned_automatic==true) {
 					if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
 						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
@@ -2952,6 +2954,14 @@ void PgSQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	}
 }
 
+int PgSQL_HostGroups_Manager::lsn_query_timeout(unsigned int hostgroup) {
+	wrlock();
+	const auto* group=MyHGC_find(hostgroup);
+	const int result=group ? static_cast<int>(group->attributes.default_query_timeout) : -1;
+	wrunlock();
+	return result;
+}
+
 PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, PgSQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	PgSQL_Connection * conn=NULL;
 	wrlock();
@@ -2963,7 +2973,16 @@ PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 #endif // TEST_AURORA
 	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a PgSQL_SrvC exists. If not, we return NULL = no targets
+		unsigned remaining=mysrvc->ConnectionsFree->conns_length()+1;
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
+		// A certificate can change while idle sockets remain in the shared pool.
+		// Retire stale sockets, then consider another free or newly opened one.
+		while (conn && sess && !sess->lsn_backend_allowed(*conn,true)) {
+			mysrvc->ConnectionsUsed->add(conn);
+			conn->send_quit=false;
+			destroy_MyConn_from_pool(conn,false);
+			conn=--remaining ? mysrvc->ConnectionsFree->get_random_MyConn(sess,ff) : nullptr;
+		}
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
 			status.pgconnpoll_get_ok++;

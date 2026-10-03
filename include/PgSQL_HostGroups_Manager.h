@@ -709,6 +709,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	wqueue<PgSQL_Connection *> queue;
 
 	PgSQL_LSN_Manager& lsn_manager() { return lsn_manager_; }
+	int lsn_query_timeout(unsigned int hostgroup);
 	static bool validate_lsn_replication_rows(const SQLite3_result*, std::string& error);
 	PgSQL_HostGroups_Manager();
 	~PgSQL_HostGroups_Manager();
