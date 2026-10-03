@@ -52,7 +52,7 @@ index 38a28e0..0d62bf3 100644
  
  #include <algorithm>
  #include <iterator>
-@@ -63,4 +64,28 @@ detail::Endpoint& Exposer::GetEndpointForUri(const std::string& uri) {
+@@ -64,4 +65,28 @@ detail::Endpoint& Exposer::GetEndpointForUri(const std::string& uri) {
    return *endpoints_.back().get();
  }
  
@@ -85,7 +85,7 @@ diff --git a/pull/src/handler.cc b/pull/src/handler.cc
 index 5a55001..b6ffa85 100644
 --- a/pull/src/handler.cc
 +++ b/pull/src/handler.cc
-@@ -172,5 +172,124 @@ void MetricsHandler::CleanupStalePointers(
+@@ -178,5 +178,124 @@ void MetricsHandler::CleanupStalePointers(
                       }),
        std::end(collectables));
  }
