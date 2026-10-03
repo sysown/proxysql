@@ -7,6 +7,7 @@ using json = nlohmann::json;
 #include <fstream>
 #include <algorithm>    // std::sort
 #include <memory>
+#include <mutex>
 #include <set>
 #include <cctype>
 #include <vector>       // std::vector
@@ -21,6 +22,8 @@ using json = nlohmann::json;
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_ServerModuleCluster.h"
+#include "ProxySQL_ServerDiscovery.h"
 #include "ProxySQL_PluginConfig.h"
 #include "ProxySQL_PluginSecrets.h"
 #include "mysql.h"
@@ -208,6 +211,132 @@ static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, con
 	}
 }
 
+// Server-module tables are ordinary configuration tables.  The registry is
+// intentionally queried at the operation boundary so an unloaded plugin has
+// no schema affiliation and a MySQL operation cannot see PostgreSQL tables.
+static bool copy_registered_server_module_tables(SQLite3DB* db,
+	ProxySQL_ServerProtocol protocol, const char* destination, const char* source) {
+#ifdef PROXYSQL40
+	const auto tables = proxysql_active_server_module_tables(protocol);
+	if (tables.empty()) return true;
+	if (!db->execute("BEGIN")) return false;
+	for (const auto& table : tables) {
+		const std::string delete_sql = std::string("DELETE FROM ") + destination + "." + table.table_name;
+		auto [delete_rc, delete_statement] = db->prepare_v2(delete_sql.c_str());
+		if (delete_rc != SQLITE_OK || (*proxy_sqlite3_step)(delete_statement.get()) != SQLITE_DONE) {
+			db->execute("ROLLBACK"); return false;
+		}
+		const std::string insert_sql = std::string("INSERT INTO ") + destination + "." + table.table_name +
+			" SELECT * FROM " + source + "." + table.table_name;
+		auto [insert_rc, insert_statement] = db->prepare_v2(insert_sql.c_str());
+		if (insert_rc != SQLITE_OK || (*proxy_sqlite3_step)(insert_statement.get()) != SQLITE_DONE) {
+			db->execute("ROLLBACK"); return false;
+		}
+	}
+	if (!db->execute("COMMIT")) { db->execute("ROLLBACK"); return false; }
+	return true;
+#else
+	(void)db; (void)protocol; (void)destination; (void)source; return true;
+#endif
+}
+
+// Runtime tables are plugin-owned projections.  SAVE ... FROM RUNTIME asks
+// the module for a snapshot and writes that snapshot to its normal MEMORY
+// configuration table; core never persists a runtime projection directly.
+static bool save_registered_server_module_runtime_tables(SQLite3DB* db,
+	ProxySQL_ServerProtocol protocol) {
+#ifdef PROXYSQL40
+	std::string error;
+	const bool ok = proxysql_save_active_server_module_runtime_tables(*db, protocol, error);
+	if (!ok) proxy_error("Saving server-module runtime tables failed: %s\n", error.c_str());
+	return ok;
+#else
+	(void)db; (void)protocol; return true;
+#endif
+}
+
+/**
+ * @brief Prepares the runtime installation of a LOAD ... SERVERS TO RUNTIME.
+ *
+ * A server module may veto its own (plugin) tables. A veto never blocks the
+ * core tables: the module keeps its previous configuration, the core
+ * configuration is installed through a fresh transaction, and @p veto holds
+ * the module's reason for the caller to report. Only internal errors return
+ * false.
+ */
+static bool prepare_registered_server_module_runtime(SQLite3DB* db,
+	ProxySQL_ServerProtocol protocol, const SQLite3_result* core_rows,
+	const ProxySQL_ServerBuiltinTopologyInputs& topology_inputs,
+	ProxySQL_ServerRuntimeInstallTransaction& transaction,
+	ProxySQL_ServerRuntimeSnapshot& installed_snapshot,
+	bool& commit_module, std::string& veto) {
+	commit_module = true;
+	veto.clear();
+#ifdef PROXYSQL40
+	ProxySQL_ServerModuleSnapshot snapshot {};
+	std::string error;
+	snapshot.runtime.protocol = protocol;
+	const int expected_core_columns = protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11;
+	if (core_rows == nullptr || core_rows->columns != expected_core_columns) {
+		proxy_error("Malformed core server snapshot while preparing plugin runtime\n");
+		return false;
+	}
+	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *core_rows);
+	if (!proxysql_collect_active_builtin_server_topology(*db, protocol, topology_inputs,
+		snapshot.runtime.topology_hostgroups, error)) {
+		proxy_error("Unable to collect built-in topology claims: %s\n", error.c_str());
+		return false;
+	}
+	// The tables being installed. Recorded as the loaded copy once the plugin
+	// accepts them: it is part of the *_servers_v2 Cluster checksum and is what
+	// peers are served (ProxySQL_ServerModuleCluster.h).
+	std::vector<ProxySQL_ServerModuleClusterTable> loaded_tables;
+	for (const auto& table : proxysql_active_server_module_tables(protocol)) {
+		char* error = nullptr;
+		int columns = 0;
+		int affected_rows = 0;
+		SQLite3_result* rows = nullptr;
+		const std::string sql = "SELECT * FROM main." + table.table_name + " ORDER BY " + table.order_by;
+		db->execute_statement(sql.c_str(), &error, &columns, &affected_rows, &rows);
+		if (error != nullptr) {
+			proxy_error("Error preparing plugin server table %s: %s\n", table.table_name.c_str(), error);
+			free(error);
+			if (rows != nullptr) delete rows;
+			return false;
+		}
+		loaded_tables.push_back({table.table_name, table.runtime_table_name, table.order_by,
+			rows != nullptr ? std::make_unique<SQLite3_result>(rows) : nullptr});
+		snapshot.module_tables.push_back({table.table_name, std::unique_ptr<SQLite3_result>(rows)});
+	}
+	std::vector<ProxySQL_ServerHostgroupClaim> claims;
+	if (!transaction.prepare(snapshot, claims, error)) {
+		// Veto of the plugin tables only. The failed prepare aborted the
+		// transaction: install the core tables through a new one, without the
+		// module, which keeps its previous configuration (and the loaded copy
+		// stays the last accepted one).
+		proxy_warning("Server module rejected its tables, keeping its previous configuration: %s\n",
+			error.c_str());
+		veto = error;
+		std::string transaction_error;
+		transaction = ProxySQL_ServerRuntimeInstallTransaction(protocol, transaction_error);
+		if (!transaction) {
+			proxy_error("Unable to start server runtime installation: %s\n", transaction_error.c_str());
+			return false;
+		}
+		installed_snapshot = std::move(snapshot.runtime);
+		installed_snapshot.generation = transaction.generation();
+		commit_module = false;
+		return true;
+	}
+	proxysql_server_module_cluster_set_loaded_tables(protocol, std::move(loaded_tables));
+	installed_snapshot = std::move(snapshot.runtime);
+	return true;
+#else
+	(void)db; (void)protocol; (void)core_rows; (void)topology_inputs; (void)transaction; (void)installed_snapshot;
+	return true;
+#endif
+}
+
 
 static int round_intv_to_time_interval(const char* name, int _intv) {
 	int intv = _intv;
@@ -355,6 +484,10 @@ extern MySQL_Authentication *GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
+
+namespace {
+std::mutex server_discovery_admin_wake_mutex;
+}
 extern MySQL_Query_Processor* GloMyQPro;
 extern PgSQL_Query_Processor* GloPgQPro;
 extern MySQL_Threads_Handler *GloMTH;
@@ -378,6 +511,21 @@ SQLite3DB* proxysql_plugin_get_admindb() {
 
 SQLite3DB* proxysql_plugin_get_configdb() {
 	return GloAdmin ? GloAdmin->configdb : nullptr;
+}
+
+void proxysql_lock_configuration() {
+	assert(GloAdmin != nullptr);
+	pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+}
+
+void proxysql_unlock_configuration() noexcept {
+	assert(GloAdmin != nullptr);
+	pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+}
+
+SQLite3DB* proxysql_configdb_locked() {
+	assert(GloAdmin != nullptr);
+	return GloAdmin->configdb;
 }
 
 SQLite3DB* proxysql_plugin_get_statsdb() {
@@ -1317,6 +1465,15 @@ template query_digest_topk_result_t ProxySQL_Admin::QueryDigestTopK<(SERVER_TYPE
 );
 
 void ProxySQL_Admin::flush_configdb() { // see #923
+	pthread_mutex_lock(&sql_query_global_mutex);
+	struct Unlock {
+		pthread_mutex_t* mutex;
+		~Unlock() { pthread_mutex_unlock(mutex); }
+	} unlock { &sql_query_global_mutex };
+	flush_configdb_locked();
+}
+
+void ProxySQL_Admin::flush_configdb_locked() {
 	wrlock();
 	admindb->execute((char *)"DETACH DATABASE disk");
 	delete configdb;
@@ -1712,10 +1869,11 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	}
 #ifdef PROXYSQL40
 	// Plugin-registered runtime views: if the query references any chassis-
-	// registered runtime view (e.g. runtime_mysqlx_users), refresh it on
-	// the admin path BEFORE the SELECT runs against admindb. We always
-	// invoke the dispatcher when the session is on the admin port; the
-	// chassis itself decides whether to fire any plugin's refresh
+	// registered runtime view (e.g. runtime_mysqlx_users or an on-demand stats
+	// table), refresh it BEFORE the SELECT runs. Admin sessions can project all
+	// three DB kinds; stats sessions receive only the stats handle, so they cannot
+	// trigger an admin/config projection. The chassis decides whether to fire any
+	// plugin's refresh
 	// callback by per-view substring match against query_no_space, so a
 	// query that touches no registered view is a cheap no-op (one shared
 	// lock + N substring scans, N == registered-view count).
@@ -1727,9 +1885,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	// that touches only a plugin view (e.g. SELECT * FROM runtime_mysqlx_
 	// users with no other runtime_* mention) still gets its projection
 	// fired.
-	if (admin) {
-		proxysql_refresh_configured_plugin_runtime_views(query_no_space, admindb, configdb, statsdb);
-	}
+	proxysql_refresh_configured_plugin_runtime_views(query_no_space,
+		admin ? admindb : nullptr, admin ? configdb : nullptr, statsdb);
 #endif /* PROXYSQL40 */
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
@@ -2626,6 +2783,13 @@ void * admin_main_loop(void *arg) {
 			__atomic_load_n(shutdown, __ATOMIC_ACQUIRE) != 0) {
 			break;
 		}
+		if (rc > 0 && (fds[0].revents & POLLIN) != 0) {
+			unsigned char wake = 0;
+			const ssize_t ignored = read(fds[0].fd, &wake, sizeof(wake));
+			(void)ignored;
+			fds[0].revents = 0;
+			GloAdmin->drain_server_discovery_updates();
+		}
 		if ((rc == -1 && errno == EINTR) || rc==0) {
 			// poll() timeout, try again
 			goto __end_while_pool;
@@ -2943,6 +3107,11 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	serial_exposer(std::function<void()> { update_modules_metrics })
 {
 	admin_threads_shutdown = false;
+	pipefd[0] = -1;
+	pipefd[1] = -1;
+#ifdef PROXYSQL40
+	proxysql_reopen_server_desired_sets();
+#endif
 #ifdef DEBUG
 		debugdb_disk = NULL;
 		if (glovars.has_debug==false) {
@@ -3341,6 +3510,7 @@ void ProxySQL_Admin::shutdown_threads() {
 		return;
 	}
 	admin_threads_shutdown = true;
+	shutdown_server_discovery_updates();
 	__atomic_store_n(&main_shutdown, 1, __ATOMIC_RELEASE);
 
 	if (Admin_HTTP_Server) {
@@ -3391,10 +3561,7 @@ void ProxySQL_Admin::admin_shutdown() {
 	delete tables_defs_stats;
 	drop_tables_defs(tables_defs_config);
 	delete tables_defs_config;
-	shutdown(pipefd[0],SHUT_RDWR);
-	shutdown(pipefd[1],SHUT_RDWR);
-	close(pipefd[0]);
-	close(pipefd[1]);
+	close_server_discovery_wake_pipe();
 
 	// delete the scheduler
 	delete scheduler;
@@ -3457,6 +3624,73 @@ void ProxySQL_Admin::dump_mysql_collations() {
 //	admindb->execute("DELETE FROM disk.mysql_collations");
 //	admindb->execute("INSERT INTO disk.mysql_collations SELECT * FROM main.mysql_collations");
 }
+
+size_t ProxySQL_Admin::drain_server_discovery_updates() {
+#ifdef PROXYSQL40
+	unsigned char wake = 0;
+	if (pipefd[0] >= 0) {
+		const int flags = fcntl(pipefd[0], F_GETFL, 0);
+		if (flags >= 0) {
+			fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+			while (read(pipefd[0], &wake, sizeof(wake)) > 0) {}
+			fcntl(pipefd[0], F_SETFL, flags);
+		}
+	}
+	return proxysql_drain_server_desired_sets();
+#else
+	return 0;
+#endif
+}
+
+void ProxySQL_Admin::shutdown_server_discovery_updates() {
+#ifdef PROXYSQL40
+	proxysql_shutdown_server_desired_sets();
+#endif
+}
+
+void ProxySQL_Admin::close_server_discovery_wake_pipe() {
+	std::lock_guard<std::mutex> lock(server_discovery_admin_wake_mutex);
+	const int read_fd = pipefd[0];
+	const int write_fd = pipefd[1];
+	pipefd[0] = -1;
+	pipefd[1] = -1;
+	if (GloAdmin == this) GloAdmin = nullptr;
+	if (read_fd >= 0) {
+		shutdown(read_fd, SHUT_RDWR);
+		close(read_fd);
+	}
+	if (write_fd >= 0) {
+		shutdown(write_fd, SHUT_RDWR);
+		close(write_fd);
+	}
+}
+
+#ifdef PROXYSQL40
+bool proxysql_server_discovery_admin_available() {
+	std::lock_guard<std::mutex> lock(server_discovery_admin_wake_mutex);
+	return GloAdmin != nullptr && GloAdmin->pipefd[1] >= 0;
+}
+
+void proxysql_wake_server_discovery_admin() {
+	std::lock_guard<std::mutex> lock(server_discovery_admin_wake_mutex);
+	if (GloAdmin == nullptr || GloAdmin->pipefd[1] < 0) return;
+	const unsigned char wake = 1;
+	const ssize_t ignored = write(GloAdmin->pipefd[1], &wake, sizeof(wake));
+	(void)ignored;
+}
+
+void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol) {
+	if (GloAdmin == nullptr) return;
+	if (protocol == ProxySQL_ServerProtocol::mysql) GloAdmin->mysql_servers_wrlock();
+	else if (protocol == ProxySQL_ServerProtocol::pgsql) GloAdmin->pgsql_servers_wrlock();
+}
+
+void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol) {
+	if (GloAdmin == nullptr) return;
+	if (protocol == ProxySQL_ServerProtocol::mysql) GloAdmin->mysql_servers_wrunlock();
+	else if (protocol == ProxySQL_ServerProtocol::pgsql) GloAdmin->pgsql_servers_wrunlock();
+}
+#endif
 
 void ProxySQL_Admin::dump_ssl_ciphers() {
 	char buf[1024];
@@ -6097,11 +6331,13 @@ int ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *db) {
 void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
+	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "main", "disk");
 	BQE1(admindb, mysql_query_rules_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 
 	BQE1(admindb, pgsql_servers_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
+	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "main", "disk");
 	BQE1(admindb, pgsql_query_rules_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 	admindb->execute("INSERT OR REPLACE INTO main.pgsql_users SELECT * FROM disk.pgsql_users");
 	BQE1(admindb, pgsql_firewall_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
@@ -6203,6 +6439,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "disk", "main");
 	BQE1(admindb, mysql_query_rules_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
@@ -6212,6 +6449,7 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	BQE1(admindb, proxysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 
 	BQE1(admindb, pgsql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "disk", "main");
 	BQE1(admindb, pgsql_query_rules_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.pgsql_users SELECT * FROM main.pgsql_users");
 	BQE1(admindb, pgsql_firewall_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
@@ -6303,21 +6541,27 @@ void ProxySQL_Admin::flush_clickhouse_users__from_memory_to_disk() {
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
-void ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& direction) {
+bool ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& direction) {
 	assert(direction == "disk_to_memory" || direction == "memory_to_disk");
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	auto it = module_tablenames.find(name);
 	assert(it != module_tablenames.end());
+	bool module_copy_ok = true;
 	if (direction == "disk_to_memory") {
 		BQE1(admindb, it->second, "DELETE FROM main.", "INSERT INTO main.", " SELECT * FROM disk.");
+		if (name == "mysql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "main", "disk");
+		if (name == "pgsql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "main", "disk");
 	} else if (direction == "memory_to_disk") {
 		BQE1(admindb, it->second, "DELETE FROM disk.", "INSERT INTO disk.", " SELECT * FROM main.");
+		if (name == "mysql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "disk", "main");
+		if (name == "pgsql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "disk", "main");
 	} else {
 		assert(0);
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
+	return module_copy_ok;
 }
 
 void ProxySQL_Admin::flush_mysql_variables__from_memory_to_disk() {
@@ -6456,6 +6700,10 @@ SQLite3_result* hgm_query(const char* sql, std::string& error) {
 	return result;
 }
 
+// Taken just before MyHGM so the plugin publication path keeps the canonical
+// "runtime install -> HGM" order used by load_mysql_servers_to_runtime().
+thread_local std::unique_ptr<ProxySQL_ServerRuntimeInstallLock> plugin_config_install_lock;
+
 bool plugin_config_lock(void* opaque, ProxySQL_PluginConfigLock which, std::string& error) {
 	auto* admin = static_cast<ProxySQL_Admin*>(opaque);
 	switch (which) {
@@ -6464,6 +6712,8 @@ bool plugin_config_lock(void* opaque, ProxySQL_PluginConfigLock which, std::stri
 			return true;
 		case ProxySQL_PluginConfigLock::hostgroups:
 			if (MyHGM == nullptr) { error = "MySQL hostgroup manager is not available"; return false; }
+			plugin_config_install_lock.reset(
+				new ProxySQL_ServerRuntimeInstallLock(ProxySQL_ServerProtocol::mysql));
 			MyHGM->wrlock();
 			return true;
 		case ProxySQL_PluginConfigLock::auth:
@@ -6487,7 +6737,10 @@ void plugin_config_unlock(void* opaque, ProxySQL_PluginConfigLock which) {
 	auto* admin = static_cast<ProxySQL_Admin*>(opaque);
 	switch (which) {
 		case ProxySQL_PluginConfigLock::admin: admin->mysql_servers_wrunlock(); break;
-		case ProxySQL_PluginConfigLock::hostgroups: MyHGM->wrunlock(); break;
+		case ProxySQL_PluginConfigLock::hostgroups:
+			MyHGM->wrunlock();
+			plugin_config_install_lock.reset();
+			break;
 		case ProxySQL_PluginConfigLock::auth: pthread_mutex_unlock(&users_mutex); break;
 		case ProxySQL_PluginConfigLock::query_processor: GloMyQPro->wrunlock(); break;
 		case ProxySQL_PluginConfigLock::mysql_threads: GloMTH->wrunlock(); break;
@@ -6728,6 +6981,23 @@ SQLite3_result* ProxySQL_Admin::get_mysql_group_replication_hostgroups_snapshot(
 }
 #endif
 
+#ifdef PROXYSQL40
+bool ProxySQL_Admin::init_pgsql_users_under_lock(std::unique_ptr<SQLite3_result>&& input,
+ std::string& error) {
+ if (!input || input->columns != 11 || !GloPgAuth) {
+  error = "PostgreSQL users runtime input requires the canonical 11 columns and active Auth";
+  return false;
+ }
+ for (const auto* row : input->rows) {
+  if (!row || !row->fields) { error = "invalid PostgreSQL user row"; return false; }
+  for (int i : {0,2,3,4,5,6,7,8})
+   if (!row->fields[i]) { error = "invalid PostgreSQL user field"; return false; }
+ }
+ __refresh_pgsql_users(std::move(input), "", 0, true);
+ return true;
+}
+#endif
+
 void ProxySQL_Admin::init_pgsql_users(
 	unique_ptr<SQLite3_result>&& pgsql_users_resultset, const std::string& checksum, const time_t epoch
 ) {
@@ -6917,8 +7187,13 @@ void ProxySQL_Admin::__refresh_clickhouse_users() {
 #endif /* PROXYSQLCLICKHOUSE */
 
 // PostgreSQL
+void ProxySQL_Admin::__refresh_pgsql_users(std::unique_ptr<SQLite3_result>&& input,
+ const std::string& checksum, const time_t epoch) {
+ __refresh_pgsql_users(std::move(input),checksum,epoch,false);
+}
 void ProxySQL_Admin::__refresh_pgsql_users(
-	std::unique_ptr<SQLite3_result>&& pgsql_users_resultset, const std::string& checksum, const time_t epoch
+ std::unique_ptr<SQLite3_result>&& pgsql_users_resultset, const std::string& checksum,
+ const time_t epoch, bool local_snapshot
 ) {
 	bool no_resultset_supplied = pgsql_users_resultset == nullptr;
 	// Checksums are always generated - 'admin-checksum_*' deprecated
@@ -6946,7 +7221,7 @@ void ProxySQL_Admin::__refresh_pgsql_users(
 		char* buff = nullptr;
 		char buf[20] = { 0 };
 
-		if (no_resultset_supplied) {
+		if (no_resultset_supplied || local_snapshot) {
 			uint64_t hash1 = GloPgAuth->get_runtime_checksum();
 			//if (GloMyLdapAuth) {
 			//	hash1 += GloMyLdapAuth->get_ldap_mapping_runtime_checksum();
@@ -8083,7 +8358,189 @@ void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 	free(args);
 }
 
-void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
+namespace {
+
+int bind_mysql_server_row(sqlite3_stmt* statement, int base,
+	const SQLite3_row& row, bool runtime) {
+	const char* status = row.fields[4];
+	if (!runtime && (strcmp(status, "SHUNNED") == 0 || strcmp(status, "SHUNNED_AWS_BGD") == 0))
+		status = "ONLINE";
+	const int values[] = {atoi(row.fields[0]), atoi(row.fields[2]), atoi(row.fields[3]),
+		atoi(row.fields[5]), atoi(row.fields[6]), atoi(row.fields[7]), atoi(row.fields[8]),
+		atoi(row.fields[9]), atoi(row.fields[10])};
+	int rc = (*proxy_sqlite3_bind_int64)(statement, base + 1, values[0]);
+	if (rc == SQLITE_OK) rc = (*proxy_sqlite3_bind_text)(statement, base + 2, row.fields[1], -1, SQLITE_TRANSIENT);
+	if (rc == SQLITE_OK) rc = (*proxy_sqlite3_bind_int64)(statement, base + 3, values[1]);
+	if (rc == SQLITE_OK) rc = (*proxy_sqlite3_bind_int64)(statement, base + 4, values[2]);
+	if (rc == SQLITE_OK) rc = (*proxy_sqlite3_bind_text)(statement, base + 5, status, -1, SQLITE_TRANSIENT);
+	for (int column = 0; rc == SQLITE_OK && column < 6; ++column)
+		rc = (*proxy_sqlite3_bind_int64)(statement, base + 6 + column, values[3 + column]);
+	if (rc == SQLITE_OK) rc = (*proxy_sqlite3_bind_text)(statement, base + 12, row.fields[11], -1, SQLITE_TRANSIENT);
+	return rc;
+}
+
+int bind_pgsql_server_row(sqlite3_stmt* statement, int base,
+	const SQLite3_row& row, bool runtime) {
+	const char* status = !runtime && strcmp(row.fields[3], "SHUNNED") == 0 ? "ONLINE" : row.fields[3];
+	const int values[] = {atoi(row.fields[0]), atoi(row.fields[2]), atoi(row.fields[4]),
+		atoi(row.fields[5]), atoi(row.fields[6]), atoi(row.fields[7]), atoi(row.fields[8]),
+		atoi(row.fields[9])};
+	int rc = (*proxy_sqlite3_bind_int64)(statement, base + 1, values[0]);
+	if (rc == SQLITE_OK) rc = (*proxy_sqlite3_bind_text)(statement, base + 2, row.fields[1], -1, SQLITE_TRANSIENT);
+	if (rc == SQLITE_OK) rc = (*proxy_sqlite3_bind_int64)(statement, base + 3, values[1]);
+	if (rc == SQLITE_OK) rc = (*proxy_sqlite3_bind_text)(statement, base + 4, status, -1, SQLITE_TRANSIENT);
+	for (int column = 0; rc == SQLITE_OK && column < 6; ++column)
+		rc = (*proxy_sqlite3_bind_int64)(statement, base + 5 + column, values[2 + column]);
+	if (rc == SQLITE_OK) rc = (*proxy_sqlite3_bind_text)(statement, base + 11, row.fields[10], -1, SQLITE_TRANSIENT);
+	return rc;
+}
+
+std::vector<uint32_t> normalized_hostgroups(const std::vector<uint32_t>& hostgroups) {
+	std::vector<uint32_t> normalized = hostgroups;
+	std::sort(normalized.begin(), normalized.end());
+	normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+	return normalized;
+}
+
+std::string hostgroup_predicate(const std::vector<uint32_t>& hostgroups) {
+	std::string predicate = "(";
+	for (size_t index = 0; index < hostgroups.size(); ++index) {
+		if (index) predicate.push_back(',');
+		predicate += std::to_string(hostgroups[index]);
+	}
+	predicate.push_back(')');
+	return predicate;
+}
+
+bool execute_done(SQLite3DB* db, const std::string& sql) {
+	auto [rc, statement] = db->prepare_v2(sql.c_str());
+	return rc == SQLITE_OK && (*proxy_sqlite3_step)(statement.get()) == SQLITE_DONE;
+}
+
+bool save_runtime_server_rows_scoped(SQLite3DB* db, const char* table,
+	std::unique_ptr<SQLite3_result> rows, const std::vector<uint32_t>& requested_hostgroups,
+	bool mysql) {
+	const std::vector<uint32_t> hostgroups = normalized_hostgroups(requested_hostgroups);
+	if (hostgroups.empty()) return true;
+	if (!rows || rows->columns != (mysql ? 12 : 11)) return false;
+	const std::set<uint32_t> selected(hostgroups.begin(), hostgroups.end());
+	const std::string predicate = hostgroup_predicate(hostgroups);
+	const std::string delete_sql = std::string("DELETE FROM main.") + table +
+		" WHERE hostgroup_id IN " + predicate;
+	const std::string insert_sql = std::string("INSERT INTO main.") + table + " VALUES (" +
+		(mysql ? "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12" :
+			"?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11") + ")";
+	db->wrlock();
+	if (!db->execute("BEGIN IMMEDIATE")) { db->wrunlock(); return false; }
+	auto rollback = [&] {
+		db->execute("ROLLBACK");
+		db->wrunlock();
+		return false;
+	};
+	if (!execute_done(db, delete_sql)) return rollback();
+	auto [prepare_rc, statement] = db->prepare_v2(insert_sql.c_str());
+	if (prepare_rc != SQLITE_OK) return rollback();
+	for (const auto* row : rows->rows) {
+		if (!row || !row->fields || selected.count(static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10))) == 0)
+			continue;
+		const int bind_rc = mysql ? bind_mysql_server_row(statement.get(), 0, *row, false) :
+			bind_pgsql_server_row(statement.get(), 0, *row, false);
+		if (bind_rc != SQLITE_OK || (*proxy_sqlite3_step)(statement.get()) != SQLITE_DONE ||
+			(*proxy_sqlite3_clear_bindings)(statement.get()) != SQLITE_OK ||
+			(*proxy_sqlite3_reset)(statement.get()) != SQLITE_OK) return rollback();
+	}
+	if (!db->execute("COMMIT")) return rollback();
+	db->wrunlock();
+	return true;
+}
+
+bool save_memory_server_rows_to_disk_scoped(SQLite3DB* db, const char* table,
+	const std::vector<uint32_t>& requested_hostgroups) {
+	const std::vector<uint32_t> hostgroups = normalized_hostgroups(requested_hostgroups);
+	if (hostgroups.empty()) return true;
+	const std::string predicate = hostgroup_predicate(hostgroups);
+	const std::string delete_sql = std::string("DELETE FROM disk.") + table +
+		" WHERE hostgroup_id IN " + predicate;
+	const std::string insert_sql = std::string("INSERT INTO disk.") + table +
+		" SELECT * FROM main." + table + " WHERE hostgroup_id IN " + predicate;
+	db->wrlock();
+	db->execute("PRAGMA foreign_keys = OFF");
+	if (!db->execute("BEGIN IMMEDIATE")) {
+		db->execute("PRAGMA foreign_keys = ON");
+		db->wrunlock();
+		return false;
+	}
+	auto finish = [&](bool committed) {
+		if (!committed) db->execute("ROLLBACK");
+		db->execute("PRAGMA foreign_keys = ON");
+		db->wrunlock();
+		return committed;
+	};
+	if (!execute_done(db, delete_sql) || !execute_done(db, insert_sql)) return finish(false);
+	return finish(db->execute("COMMIT"));
+}
+
+} // namespace
+
+bool ProxySQL_Admin::save_mysql_servers_runtime_to_database_scoped(
+	const std::vector<uint32_t>& hostgroups) {
+	if (hostgroups.empty()) return true;
+	if (admindb == nullptr || MyHGM == nullptr) return false;
+	if (!save_runtime_server_rows_scoped(admindb, "mysql_servers",
+		std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql("mysql_servers")), hostgroups, true))
+		return false;
+	MyHGM->refresh_mysql_servers_v2_checksum();
+	return true;
+}
+
+bool ProxySQL_Admin::save_mysql_servers_memory_to_disk_scoped(
+	const std::vector<uint32_t>& hostgroups) {
+	if (hostgroups.empty()) return true;
+	if (admindb == nullptr) return false;
+	return save_memory_server_rows_to_disk_scoped(admindb, "mysql_servers", hostgroups);
+}
+
+bool ProxySQL_Admin::save_pgsql_servers_runtime_to_database_scoped(
+	const std::vector<uint32_t>& hostgroups) {
+	if (hostgroups.empty()) return true;
+	if (admindb == nullptr || PgHGM == nullptr) return false;
+	if (!save_runtime_server_rows_scoped(admindb, "pgsql_servers",
+		std::unique_ptr<SQLite3_result>(PgHGM->dump_table_pgsql("pgsql_servers")), hostgroups, false))
+		return false;
+	PgHGM->refresh_pgsql_servers_v2_checksum();
+	return true;
+}
+
+bool ProxySQL_Admin::save_pgsql_servers_memory_to_disk_scoped(
+	const std::vector<uint32_t>& hostgroups) {
+	if (hostgroups.empty()) return true;
+	if (admindb == nullptr) return false;
+	return save_memory_server_rows_to_disk_scoped(admindb, "pgsql_servers", hostgroups);
+}
+
+#ifdef PROXYSQL40
+bool proxysql_materialize_server_desired_set(const ProxySQL_ServerDesiredSet& desired_set) {
+	if (desired_set.persistence == ProxySQL_ServerPersistence::runtime_only) return true;
+	if (GloAdmin == nullptr) return false;
+	if (desired_set.protocol == ProxySQL_ServerProtocol::mysql) {
+		if (!GloAdmin->save_mysql_servers_runtime_to_database_scoped(
+			desired_set.delegated_hostgroups)) return false;
+		return desired_set.persistence != ProxySQL_ServerPersistence::memory_and_disk ||
+			GloAdmin->save_mysql_servers_memory_to_disk_scoped(
+				desired_set.delegated_hostgroups);
+	}
+	if (desired_set.protocol == ProxySQL_ServerProtocol::pgsql) {
+		if (!GloAdmin->save_pgsql_servers_runtime_to_database_scoped(
+			desired_set.delegated_hostgroups)) return false;
+		return desired_set.persistence != ProxySQL_ServerPersistence::memory_and_disk ||
+			GloAdmin->save_pgsql_servers_memory_to_disk_scoped(
+				desired_set.delegated_hostgroups);
+	}
+	return false;
+}
+#endif
+
+bool ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *query=NULL;
 	string StrQuery;
@@ -8123,42 +8580,18 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		max_bulk_row_idx=max_bulk_row_idx*32;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r1=*it;
-			const char *status = r1->fields[4];
-			if (_runtime == false && (strcmp(status,"SHUNNED") == 0 || strcmp(status,"SHUNNED_AWS_BGD") == 0)) {
-				status = "ONLINE";
-			}
 			int idx=row_idx%32;
 			if (row_idx<max_bulk_row_idx) { // bulk
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+5, status, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+11, atoi(r1->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = bind_mysql_server_row(statement32, idx * 12, *r1, _runtime);
+				ASSERT_SQLITE_OK(rc, admindb);
 				if (idx==31) {
 					SAFE_SQLITE3_STEP2(statement32);
 					rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, admindb);
 					rc=(*proxy_sqlite3_reset)(statement32); ASSERT_SQLITE_OK(rc, admindb);
 				}
 			} else { // single row
-				rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_text)(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_text)(statement1, 5, status, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement1, 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement1, 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement1, 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement1, 11, atoi(r1->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_text)(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = bind_mysql_server_row(statement1, 0, *r1, _runtime);
+				ASSERT_SQLITE_OK(rc, admindb);
 				SAFE_SQLITE3_STEP2(statement1);
 				rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
@@ -8506,9 +8939,13 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
+	if (_runtime == false) {
+		return save_registered_server_module_runtime_tables(admindb, ProxySQL_ServerProtocol::mysql);
+	}
+	return true;
 }
 
-void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
+bool ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	// make sure that the caller has called pgsql_servers_wrlock()
 	char* query = NULL;
 	string StrQuery;
@@ -8556,17 +8993,8 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 			SQLite3_row* r1 = *it;
 			int idx = row_idx % 32;
 			if (row_idx < max_bulk_row_idx) { // bulk
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 4, (_runtime ? r1->fields[3] : (strcmp(r1->fields[3], "SHUNNED") == 0 ? "ONLINE" : r1->fields[3])), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 11) + 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement32,  (idx * 11) + 11, r1->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = bind_pgsql_server_row(statement32, idx * 11, *r1, _runtime);
+				ASSERT_SQLITE_OK(rc, admindb);
 				if (idx == 31) {
 					SAFE_SQLITE3_STEP2(statement32);
 					rc = (*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, admindb);
@@ -8574,17 +9002,8 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 				}
 			}
 			else { // single row
-				rc = (*proxy_sqlite3_bind_int64)(statement1, 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement1,  2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement1,  4, (_runtime ? r1->fields[3] : (strcmp(r1->fields[3], "SHUNNED") == 0 ? "ONLINE" : r1->fields[3])), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement1, 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement1, 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement1, 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement1, 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement1, 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_int64)(statement1, 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
-				rc = (*proxy_sqlite3_bind_text)(statement1,  11, r1->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc = bind_pgsql_server_row(statement1, 0, *r1, _runtime);
+				ASSERT_SQLITE_OK(rc, admindb);
 				SAFE_SQLITE3_STEP2(statement1);
 				rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 				rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
@@ -8720,6 +9139,10 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
+	if (_runtime == false) {
+		return save_registered_server_module_runtime_tables(admindb, ProxySQL_ServerProtocol::pgsql);
+	}
+	return true;
 }
 
 
@@ -8741,13 +9164,21 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 
 bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
 	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
-	const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock) {
+	const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock,
+	bool emit_runtime_install) {
 	// make sure that the caller has called mysql_servers_wrlock()
+	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
+	installed_snapshot.protocol = ProxySQL_ServerProtocol::mysql;
+	ProxySQL_ServerRuntimeInstallTransaction runtime_install;
+	bool runtime_install_prepared = false;
+	bool commit_server_module = true;
+	servers_load_veto[0].clear();
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	SQLite3_result *resultset_servers=NULL;
+	std::unique_ptr<SQLite3_result> local_resultset_servers;
 	SQLite3_result *resultset_replication=NULL;
 	SQLite3_result *resultset_group_replication=NULL;
 	SQLite3_result *resultset_galera=NULL;
@@ -8779,20 +9210,29 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (runtime_mysql_servers == nullptr) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_servers);
+		local_resultset_servers.reset(resultset_servers);
 	} else {
 		resultset_servers = runtime_mysql_servers;
 	}
 	//MyHGH->wrlock();
 	if (consume_error(query)) {
 	} else {
-		MyHGM->servers_add(resultset_servers);
-	}
-	// memory leak was detected here. The following few lines fix that
-	if (runtime_mysql_servers == nullptr) {   
-		if (resultset_servers != nullptr) {
-			delete resultset_servers;
-			resultset_servers = nullptr;
+		if (emit_runtime_install) {
+			std::string install_error;
+			runtime_install = ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerProtocol::mysql, install_error);
+			ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
+			topology_inputs.mysql_replication = incoming_replication_hostgroups;
+			topology_inputs.mysql_group_replication = incoming_group_replication_hostgroups;
+			topology_inputs.mysql_galera = incoming_galera_hostgroups;
+			topology_inputs.mysql_aurora = incoming_aurora_hostgroups;
+			topology_inputs.mysql_rds_blue_green = incoming_aws_rds_bgd_hostgroups;
+			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
+				ProxySQL_ServerProtocol::mysql, resultset_servers, topology_inputs,
+				runtime_install, installed_snapshot, commit_server_module,
+				servers_load_veto[0])) return false;
 		}
+		runtime_install_prepared = emit_runtime_install;
+		MyHGM->servers_add(resultset_servers);
 	}
 	resultset=NULL;
 
@@ -8965,6 +9405,9 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
 		false, true, hgm_acquire_lock
 	);
+	if (runtime_install_prepared && committed &&
+		!runtime_install.commit(std::move(installed_snapshot), commit_server_module))
+		proxy_error("Unable to commit MySQL server runtime installation transaction\n");
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);
@@ -8998,17 +9441,31 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (resultset_mysql_servers_ssl_params) {
 		resultset_mysql_servers_ssl_params = NULL;
 	}
+	if (!first_error.empty() && servers_load_veto[0].empty()) servers_load_veto[0] = first_error;
 	return first_error.empty() && committed;
 }
 
-void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
-	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2) {
+void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& servers,
+ const runtime_pgsql_servers_checksum_t& runtime_checksum, const pgsql_servers_v2_checksum_t& config_checksum,
+ bool emit_runtime_install) {
+ (void)load_pgsql_servers_to_runtime_checked(servers,runtime_checksum,config_checksum,emit_runtime_install);
+}
+bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_servers_t& incoming_pgsql_servers,
+ const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
+ bool emit_runtime_install) {
 	// make sure that the caller has called pgsql_servers_wrlock()
+	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
+	installed_snapshot.protocol = ProxySQL_ServerProtocol::pgsql;
+	ProxySQL_ServerRuntimeInstallTransaction runtime_install;
+	bool runtime_install_prepared = false;
+	bool commit_server_module = true;
+	servers_load_veto[1].clear();
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
 	SQLite3_result* resultset = NULL;
 	SQLite3_result* resultset_servers = NULL;
+	std::unique_ptr<SQLite3_result> local_resultset_servers;
 	SQLite3_result* resultset_replication = NULL;
 	SQLite3_result* resultset_hostgroup_attributes = NULL;
 
@@ -9021,23 +9478,29 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	if (runtime_pgsql_servers == nullptr) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_servers);
+		local_resultset_servers.reset(resultset_servers);
 	}
 	else {
 		resultset_servers = runtime_pgsql_servers;
 	}
 	//MyHGH->wrlock();
 	if (error) {
+        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
-		PgHGM->servers_add(resultset_servers);
-	}
-	// memory leak was detected here. The following few lines fix that
-	if (runtime_pgsql_servers == nullptr) {
-		if (resultset_servers != nullptr) {
-			delete resultset_servers;
-			resultset_servers = nullptr;
+		if (emit_runtime_install) {
+			std::string install_error;
+			runtime_install = ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerProtocol::pgsql, install_error);
+			ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
+			topology_inputs.pgsql_replication = incoming_replication_hostgroups;
+			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
+				ProxySQL_ServerProtocol::pgsql, resultset_servers, topology_inputs,
+				runtime_install, installed_snapshot, commit_server_module,
+				servers_load_veto[1])) return false;
 		}
+		runtime_install_prepared = emit_runtime_install;
+		PgHGM->servers_add(resultset_servers);
 	}
 	resultset = NULL;
 
@@ -9045,6 +9508,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 	if (error) {
+        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
@@ -9066,6 +9530,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	}
 
 	if (error) {
+        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
@@ -9086,6 +9551,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		resultset_hostgroup_attributes = incoming_hostgroup_attributes;
 	}
 	if (error) {
+        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
@@ -9103,6 +9569,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		resultset_pgsql_servers_ssl_params = incoming_pgsql_servers.incoming_pgsql_servers_ssl_params;
 	}
 	if (error) {
+        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to PgHGM
@@ -9110,11 +9577,16 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	}
 
 	// commit all the changes
-	PgHGM->commit(
+	const bool runtime_hgm_committed = PgHGM->commit(
 		{ runtime_pgsql_servers, peer_runtime_pgsql_server },
 		{ incoming_pgsql_servers_v2, peer_pgsql_server_v2 },
 		false, true
 	);
+ if (runtime_install_prepared && runtime_hgm_committed &&
+     !runtime_install.commit(std::move(installed_snapshot), commit_server_module)) {
+  servers_load_veto[1] = "Unable to commit PostgreSQL server runtime installation transaction";
+  proxy_error("%s\n",servers_load_veto[1].c_str());
+ }
 
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_pgsql_servers_runtime_to_database(true);
@@ -9129,6 +9601,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;
 	}
+ return runtime_hgm_committed && servers_load_veto[1].empty();
 }
 
 char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {

@@ -330,6 +330,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->add((const char *)"",0,0,0,(const char *)"Do not check for the latest version of ProxySQL",(const char *)"--no-version-check");
 #ifdef PROXYSQL40
 	opt->add((const char *)"",0,0,0,(const char *)"Bypass plugin chassis: do not load any plugin .so listed in the config file. Useful as a kill switch when a plugin misbehaves.",(const char *)"--no-plugins");
+	opt->add((const char *)"",0,1,0,(const char *)"Bootstrap an aws_managed deployment from a local manifest",(const char *)"--aws-managed-bootstrap");
 	opt->add((const char *)"",0,1,0,(const char *)"Directory containing named ProxySQL plugin modules",(const char *)"--plugin-dir");
 	opt->add((const char *)"",0,1,0,(const char *)"Load a named plugin or an explicit absolute .so path; may be repeated",(const char *)"--load-plugin");
 #endif /* PROXYSQL40 */
@@ -383,7 +384,27 @@ void ProxySQL_GlobalVariables::install_signal_handler() {
 }
 
 void ProxySQL_GlobalVariables::parse(int argc, const char * argv[]) {
+#ifdef PROXYSQL40
+	// ezOptionParser matches whole arguments. Support the documented equals
+	// spelling of this local-installation option without changing other CLI
+	// parsing or any plugin's option registration.
+	std::vector<std::string> normalized;
+	const std::string prefix = "--aws-managed-bootstrap=";
+	for (int i = 0; i < argc; ++i) {
+		const std::string argument = argv[i] == nullptr ? "" : argv[i];
+		if (argument.compare(0, prefix.size(), prefix) == 0) {
+			normalized.emplace_back("--aws-managed-bootstrap");
+			normalized.push_back(argument.substr(prefix.size()));
+		} else {
+			normalized.push_back(argument);
+		}
+	}
+	std::vector<const char*> parsed;
+	for (const auto& argument : normalized) parsed.push_back(argument.c_str());
+	opt->parse(static_cast<int>(parsed.size()), parsed.data());
+#else
 	opt->parse(argc, argv);
+#endif
 };
 
 void update_string_var_if_set(char** cur_val, ez::ezOptionParser* opt, const char* cmd_opt) {
@@ -476,6 +497,13 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		glovars.version_check=false;
 	}
 #ifdef PROXYSQL40
+	if (opt->isSet("--aws-managed-bootstrap")) {
+		opt->get("--aws-managed-bootstrap")->getString(aws_managed_bootstrap);
+		// Local installation must report its result to the invoking process,
+		// preserve relative manifest paths, and never retry through the angel.
+		global.foreground = true;
+		glovars.proxy_restart_on_error = false;
+	}
 	// Plugin chassis kill switch. Priority: CLI flag wins, then env var,
 	// otherwise leaves the default (false → load plugins normally).
 	// Setting this here in process_opts_pre means LoadConfiguredPlugins

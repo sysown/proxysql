@@ -54,6 +54,7 @@ for patch_name in \
 	mariadb_async.c.patch \
 	ma_password.c.patch \
 	mysql.h.patch \
+	tls_server_name.patch \
 	ma_priv.h.patch \
 	ma_alloc.c.patch \
 	ma_charset.c.patch \

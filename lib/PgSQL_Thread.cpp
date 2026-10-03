@@ -29,6 +29,8 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 #include "PgSQL_Variables_Validator.h"
 #include <fcntl.h>
+#include <cerrno>
+#include <climits>
 
 using std::vector;
 using std::function;
@@ -1644,6 +1646,67 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 }
 
 
+
+#ifdef PROXYSQL40
+bool PgSQL_Threads_Handler::validate_variable(const char* name, const char* value) const {
+ if (!name || !value) return false;
+ std::string key(name);
+ std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
+ auto boolean = [&]() { return !strcasecmp(value,"true") || !strcasecmp(value,"false") || !strcmp(value,"0") || !strcmp(value,"1"); };
+ auto number = [&](long long low, long long high) {
+  char* end = nullptr; errno = 0; long long v = strtoll(value,&end,10);
+  return value[0] && end && !*end && errno != ERANGE && v >= low && v <= high;
+ };
+ auto integer = VariablesPointers_int.find(key);
+ if (integer != VariablesPointers_int.end() && !std::get<3>(integer->second))
+  return number(std::get<1>(integer->second),std::get<2>(integer->second));
+ if (VariablesPointers_bool.count(key)) return boolean();
+ if (key == "binlog_reader_connect_retry_msec") return number(200,120000);
+ if (key == "wait_timeout") return number(0,20LL*24*3600*1000);
+ if (key == "eventslog_format") return number(1,2);
+ if (key == "eventslog_flush_timeout" || key == "eventslog_flush_size" ||
+     key == "auditlog_flush_timeout" || key == "auditlog_flush_size") return number(0,INT_MAX);
+ if (key == "eventslog_rate_limit") return number(1,INT_MAX);
+ if (key == "data_packets_history_size") return number(0,INT_MAX-1);
+ if (key == "stacksize") return number(256*1024,4*1024*1024);
+ if (key == "threads") return number(1,255);
+ if (key == "interfaces") return value[0] && (!variables.interfaces[0] || !strcmp(value,variables.interfaces));
+ if (key == "server_encoding") return value[0] && PgSQL_Connection::char_to_encoding(value) != -1;
+ if (key == "monitor_replication_lag_use_percona_heartbeat") {
+  if (!value[0]) return true;
+  re2::RE2::Options options(RE2::Quiet); options.set_case_sensitive(false);
+  re2::RE2 pattern("`?([a-z\\d_]+)`?\\.`?([a-z\\d_]+)`?",options);
+  return re2::RE2::FullMatch(value,pattern);
+ }
+ if (key == "monitor_username" || key == "default_schema" || key == "server_version" ||
+     key == "keep_multiplexing_variables") return value[0];
+ if (key == "auditlog_filename" || key == "eventslog_filename") {
+  const size_t n = strlen(value);
+  if (n && value[n-1] == '/') return false;
+  if (value[0] != '/') return true;
+  std::string path(value); const auto split = path.rfind('/');
+  DIR* directory = opendir(split == 0 ? "/" : path.substr(0,split).c_str());
+  if (!directory) return false;
+  closedir(directory); return true;
+ }
+ if (key == "monitor_password" || key == "monitor_dbname" || key == "init_connect" ||
+     key == "firewall_whitelist_errormsg" || key == "ldap_user_variable" || key == "add_ldap_user_comment" ||
+     key == "ssl_p2s_ca" || key == "ssl_p2s_capath" || key == "ssl_p2s_cert" || key == "ssl_p2s_key" ||
+     key == "ssl_p2s_cipher" || key == "ssl_p2s_crl" || key == "ssl_p2s_crlpath") return true;
+ if (key.compare(0,8,"default_") == 0) {
+  for (int i=0; i<PGSQL_NAME_LAST_LOW_WM; ++i) {
+   const auto &variable = pgsql_tracked_variables[i];
+   if (key != std::string("default_") + variable.internal_variable_name) continue;
+   char* transformed = nullptr;
+   bool accepted = !variable.validator || !variable.validator->validate ||
+      (*variable.validator->validate)(value,&variable.validator->params,nullptr,&transformed);
+   free(transformed);
+   return accepted;
+  }
+ }
+ return false;
+}
+#endif
 
 bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// this is the public function, accessible from admin
 	// IN:

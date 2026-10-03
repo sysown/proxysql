@@ -1,0 +1,83 @@
+--- a/src/httpserver/http_request.hpp
++++ b/src/httpserver/http_request.hpp
+@@ -56,6 +56,18 @@
+         **/
+         const std::string get_user() const;
+ 
++        // The exact target received by MHD's URI logger, including the query.
++        const std::string& get_raw_request_target() const { return raw_request_target; }
++
++        // Preserve MHD's order, spelling and repeated header values for signing.
++        const std::vector<std::pair<std::string, std::string>>& get_raw_headers() const
++        {
++            return raw_headers;
++        }
++
++        // Unlike content_too_large(), an exactly-full body is not overflow.
++        bool body_limit_exceeded() const { return content_overflow; }
++
+         /**
+          * Method used to get the username extracted from a digest authentication
+          * @return the username
+@@ -245,6 +257,8 @@
+             underlying_connection(underlying_connection),
+             unescaper(unescaper)
+         {
++            MHD_get_connection_values(underlying_connection, MHD_HEADER_KIND,
++                &collect_raw_header, &raw_headers);
+         }
+ 
+         /**
+@@ -269,6 +283,19 @@
+ 
+         unescaper_ptr unescaper = 0x0;
+ 
++        std::string raw_request_target;
++        std::vector<std::pair<std::string, std::string>> raw_headers;
++        bool content_overflow = false;
++
++
++        static MHD_Result collect_raw_header(void* cls, enum MHD_ValueKind,
++                const char* key, const char* value)
++        {
++            auto* headers = static_cast<std::vector<std::pair<std::string, std::string>>*>(cls);
++            headers->emplace_back(key ? key : "", value ? value : "");
++            return MHD_YES;
++        }
++
+         static MHD_Result build_request_header(void *cls, enum MHD_ValueKind kind,
+                 const char *key, const char *value
+         );
+@@ -308,6 +335,7 @@
+         **/
+         void set_content(const std::string& content)
+         {
++            content_overflow = content_overflow || content.size() > content_size_limit;
+             this->content = content.substr(0,content_size_limit);
+         }
+ 
+@@ -327,11 +355,9 @@
+         **/
+         void grow_content(const char* content, size_t size)
+         {
+-            this->content.append(content, size);
+-            if (this->content.size() > content_size_limit)
+-            {
+-                this->content.resize (content_size_limit);
+-            }
++            const size_t remaining = content_size_limit - this->content.size();
++            content_overflow = content_overflow || size > remaining;
++            this->content.append(content, std::min(size, remaining));
+         }
+ 
+         /**
+--- a/src/webserver.cpp
++++ b/src/webserver.cpp
+@@ -527,6 +527,7 @@
+ {
+     mr->second = true;
+     mr->dhr = new http_request(connection, unescaper);
++    mr->dhr->raw_request_target = *mr->complete_uri;
+ 
+     if (!mr->has_body)
+     {

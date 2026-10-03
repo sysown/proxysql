@@ -40,6 +40,7 @@ using json = nlohmann::json;
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
+#include "ProxySQL_ServerModuleCluster.h"
 #include "ProxySQL_Statistics.hpp"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
@@ -130,6 +131,8 @@ extern int admin___web_verbosity;
 extern char * proxysql_version;
 
 #include "proxysql_find_charset.h"
+#include "ProxySQL_StartupGate.h"
+#include "ProxySQL_ClusterPluginHash.h"
 
 extern int admin_load_main_;
 extern bool admin_nostart_;
@@ -546,7 +549,10 @@ template <typename S>
 bool FlushCommandWrapper(S* sess, const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length, const string& name, const string& direction) {
 	if ( is_admin_command_or_alias(cmds, query_no_space, query_no_space_length) ) {
 		ProxySQL_Admin *SPA = GloAdmin;
-		SPA->flush_GENERIC__from_to(name, direction);
+		if (!SPA->flush_GENERIC__from_to(name, direction)) {
+			SPA->send_error_msg_to_client(sess, (char*)"Server-module table copy failed");
+			return true;
+		}
 #ifdef DEBUG
 		string msg = "Loaded " + name + " ";
 		if (direction == "memory_to_disk")
@@ -778,6 +784,9 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		bool rc = false;
 
 		if (admin_nostart_) {
+			// Close the startup gate before releasing the main thread into
+			// phase 3, so no other Admin command runs during the plugin lifecycle.
+			proxysql_startup_gate_close_for_start();
 			rc = __sync_bool_compare_and_swap(&GloVars.global.nostart, 1, 0);
 		}
 
@@ -1103,7 +1112,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		proxy_info("Received %s command\n", query_no_space);
 		proxy_warning("A misconfigured configdb will cause undefined behaviors\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		SPA->flush_configdb();
+		SPA->flush_configdb_locked();
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
@@ -2444,9 +2453,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->pgsql_servers_wrlock();
 				SPA->load_pgsql_servers_to_runtime();
+				// A server-module veto blocked only the plugin tables: report it.
+				const std::string veto = SPA->servers_load_veto[1];
 				SPA->pgsql_servers_wrunlock();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers to RUNTIME\n");
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				const std::string veto_msg = "pgsql_servers loaded; the server module rejected its tables and keeps its previous configuration: " + veto;
+				SPA->send_ok_msg_to_client(sess, veto.empty() ? NULL : veto_msg.c_str(), 0, query_no_space);
 				return false;
 			}
 		} else {
@@ -2454,9 +2466,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->mysql_servers_wrlock();
 				SPA->load_mysql_servers_to_runtime();
+				// A server-module veto blocked only the plugin tables: report it.
+				const std::string veto = SPA->servers_load_veto[0];
 				SPA->mysql_servers_wrunlock();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				const std::string veto_msg = "mysql_servers loaded; the server module rejected its tables and keeps its previous configuration: " + veto;
+				SPA->send_ok_msg_to_client(sess, veto.empty() ? NULL : veto_msg.c_str(), 0, query_no_space);
 				return false;
 			}
 		}
@@ -2513,8 +2528,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(SAVE_PGSQL_SERVERS_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->pgsql_servers_wrlock();
-				SPA->save_pgsql_servers_runtime_to_database(false);
+				const bool saved = SPA->save_pgsql_servers_runtime_to_database(false);
 				SPA->pgsql_servers_wrunlock();
+				if (!saved) {
+					SPA->send_error_msg_to_client(sess, (char*)"Server-module runtime snapshot save failed");
+					return false;
+				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved pgsql servers from RUNTIME\n");
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
@@ -2523,8 +2542,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(SAVE_MYSQL_SERVERS_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->mysql_servers_wrlock();
-				SPA->save_mysql_servers_runtime_to_database(false);
+				const bool saved = SPA->save_mysql_servers_runtime_to_database(false);
 				SPA->mysql_servers_wrunlock();
+				if (!saved) {
+					SPA->send_error_msg_to_client(sess, (char*)"Server-module runtime snapshot save failed");
+					return false;
+				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers from RUNTIME\n");
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
@@ -3175,6 +3198,12 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	// Plugin init/start/runtime_ready may call back into Admin and the
+	// Hostgroup Manager. Wait for the plugin lifecycle to finish before running
+	// any command, and do so before taking sql_query_global_mutex, so a plugin
+	// callback that needs it cannot be blocked by a waiting session.
+	proxysql_startup_gate_wait_for_admin([] { return glovars.shutdown != 0; });
+
 	// add global mutex, see bug #1188
 	pthread_mutex_lock(&pa->sql_query_global_mutex);
 
@@ -3335,6 +3364,31 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query
+
+#ifdef PROXYSQL40
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
+		std::unique_ptr<SQLite3_result> module_result;
+		std::string module_error;
+		const auto endpoint = proxysql_server_module_cluster_endpoint(
+			query_no_space, *GloAdmin->admindb, module_result, module_error);
+		if (endpoint == ProxySQL_ServerModuleClusterEndpointResult::handled) {
+			if constexpr (std::is_same_v<S, MySQL_Session>) {
+				sess->SQLite3_to_MySQL(module_result.get(), nullptr, 0,
+					&sess->client_myds->myprot);
+			} else {
+				SQLite3_to_Postgres(sess->client_myds->PSarrayOUT,
+					module_result.get(), nullptr, 0, query);
+			}
+			run_query = false;
+			goto __run_query;
+		}
+		if (endpoint == ProxySQL_ServerModuleClusterEndpointResult::error) {
+			SPA->send_error_msg_to_client(sess, const_cast<char*>(module_error.c_str()));
+			run_query = false;
+			goto __run_query;
+		}
+	}
+#endif
 
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			string tn = "";
@@ -4378,6 +4432,23 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			goto __run_query;
 		}
 	}
+
+#ifdef PROXYSQL40
+	// Cluster peer identity: version and plugin-set hash in one row. Must
+	// precede the "SELECT @@version" prefix match below. The hash is empty
+	// until the plugin lifecycle has finished.
+	if (query_no_space_length == sizeof(PROXYSQL_CLUSTER_PEER_IDENTITY_QUERY) - 1 &&
+		!strncasecmp(PROXYSQL_CLUSTER_PEER_IDENTITY_QUERY, query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		const std::string q = std::string("SELECT '") +
+			(GloMyLdapAuth == nullptr ? PROXYSQL_VERSION : PROXYSQL_VERSION "-Enterprise") +
+			"' AS '@@version', '" + proxysql_cluster_local_plugin_set_hash() +
+			"' AS '@@proxysql_plugin_set_hash'";
+		query = l_strdup(q.c_str());
+		query_length = q.size() + 1;
+		goto __run_query;
+	}
+#endif /* PROXYSQL40 */
 
 	if (!strncasecmp("SELECT @@version", query_no_space, sizeof("SELECT @@version") - 1)) {
 		l_free(query_length,query);
