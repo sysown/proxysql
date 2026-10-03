@@ -2591,13 +2591,6 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_info("Cluster: Writing mysql_replication_hostgroups table\n");
 						GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_REPLICATION_HOSTGROUPS);
 						while ((row = mysql_fetch_row(results[1]))) {
-							// NOTE: 'row[3]' is only present when the peer answered the 4-column form of
-							// CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS. A peer still running the older
-							// 3-column query returns NULL there, so skip the row instead of dereferencing it.
-							if (row[3] == nullptr) {
-								proxy_warning("Cluster: skipping mysql_replication_hostgroups row %s/%s from peer %s:%d : peer did not return 'check_type' and 'comment'\n", row[0], row[1], hostname, port);
-								continue;
-							}
 							execute(
 								"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (?1, ?2, ?3, ?4)",
 								[&](sqlite3_stmt *statement) {

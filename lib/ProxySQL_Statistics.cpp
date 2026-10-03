@@ -568,12 +568,18 @@ bool ProxySQL_Statistics::system_memory_timetoget(unsigned long long curtime) {
 }
 #endif
 
+// NOTE: the callers' format strings use '%d' because the statsdb 'timestamp'
+// columns are declared INT, but 'start'/'end' are time_t (64-bit on Linux).
+// Passing a time_t straight to a '%d' placeholder is a varargs type mismatch,
+// so narrow explicitly at this single shared point.
 static char *format_timestamp_query(const char *format, time_t start, time_t end) {
-	const int length = snprintf(NULL, 0, format, start, end);
+	const int start_i = static_cast<int>(start);
+	const int end_i = static_cast<int>(end);
+	const int length = snprintf(NULL, 0, format, start_i, end_i);
 	assert(length >= 0);
 	const size_t query_size = static_cast<size_t>(length) + 1;
 	char *query = (char *)malloc(query_size);
-	snprintf(query, query_size, format, start, end);
+	snprintf(query, query_size, format, start_i, end_i);
 	return query;
 }
 
