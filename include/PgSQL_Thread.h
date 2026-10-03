@@ -1348,6 +1348,10 @@ public:
 	 *
 	 */
 	bool set_variable(char* name, const char* value);
+#ifdef PROXYSQL40
+	// Read existing metadata/validators without invoking runtime setters.
+	bool validate_variable(const char* name, const char* value) const;
+#endif
 
 	/**
 	 * @brief Returns a list of all available thread variables.

@@ -8,6 +8,7 @@
 // abi_version values it doesn't understand.
 #ifdef PROXYSQL40
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -16,8 +17,15 @@
 #include "ProxySQL_PluginListenerGate.h"
 #include "ProxySQL_PluginConfig.h"
 
+#include "ProxySQL_ServerDiscovery.h"
+#include "ProxySQL_ManagedConfiguration.h"
+#include "ProxySQL_ManagedRuntime.h"
+#include "ProxySQL_ConfigurationAccess.h"
+
 class SQLite3DB;
 class SQLite3_result;
+class AwsIamTokenSource;
+class AwsMetadataProvider;
 namespace prometheus { class Registry; }
 
 // Descriptor ABI version the plugin was compiled for.  Plugins set
@@ -60,6 +68,17 @@ namespace prometheus { class Registry; }
 //          Admin's global SQL mutex so plugin-owned threads can run
 //          transactions on the shared admindb/statsdb connections without
 //          interleaving with Admin sessions (issue #6354).
+//   ABI 11/12: reserved for incompatible pre-integration AWS branch layouts;
+//              the loader rejects these versions.
+//   ABI 13: ProxySQL_PluginServices appends the AWS integration services:
+//          IAM token-source install/uninstall and waiter sizing, the general
+//          AWS metadata-provider install used by locality discovery, and the
+//          MySQL-owned AWS-locality stats projection callback.
+//   ABI 14: ProxySQL_PluginServices appends provider-neutral server discovery
+//          module/controller registration and desired-set submission.
+//
+//   ABI 15: appends the managed configuration service descriptor accessor
+//          and configuration-lock/runtime adapter service callbacks.
 //
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //
@@ -78,8 +97,8 @@ namespace prometheus { class Registry; }
 // A plugin built without -DDEBUG, loaded into a core built with
 // -DDEBUG (or vice versa), silently disagrees with the core about these
 // offsets while still reporting a numerically "compatible" abi_version
-// under the plain ABI 1..10 scheme above (e.g. a release plugin's
-// abi_version=10 is <= a debug core's max=10, so the ordinary
+// under the plain ABI 1..15 scheme above (e.g. a release plugin's
+// abi_version=14 is <= a debug core's max=15, so the ordinary
 // forward-compatibility range check does not catch it).
 //
 // What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
@@ -121,23 +140,23 @@ namespace prometheus { class Registry; }
 //
 // PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
 // (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
-// in a numeric space (bit 30) the plain layout-version numbers (1..10,
+// in a numeric space (bit 30) the plain layout-version numbers (1..15,
 // and unlikely to reach 2^30 for a long time) never touch, so a
 // DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
 // "compatible" via ordinary integer range comparison -- the loader
 // checks this bit for an EXACT match, as a step separate from (and in
-// addition to) the ABI 1..10 forward-compatibility range check below.
+// addition to) the ABI 1..15 forward-compatibility range check below.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
 
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 10u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 10u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 15u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 15u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 #else
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
 #endif
-// Layout-only ceiling used for the ABI 1..10 range check. Callers must mask
+// Layout-only ceiling used for the ABI 1..15 range check. Callers must mask
 // off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
 // against this constant -- see lib/ProxySQL_PluginManager.cpp.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
@@ -393,6 +412,24 @@ struct ProxySQL_PluginRuntimeView {
 
 using proxysql_plugin_register_runtime_view_cb =
 	bool (*)(const ProxySQL_PluginRuntimeView &);
+
+// ABI-13 extension for optional external IAM database-authentication providers.
+// The source is owned by core after successful installation; `module_handle`
+// is a retained dlopen() reference released only after all session leases drain.
+using proxysql_plugin_install_aws_iam_token_source_cb =
+	bool (*)(AwsIamTokenSource *, void (*)(AwsIamTokenSource *), void *module_handle);
+
+using proxysql_plugin_uninstall_aws_iam_token_source_cb =
+	bool (*)(AwsIamTokenSource *expected_source);
+
+using proxysql_plugin_get_aws_iam_limits_cb =
+	void (*)(size_t *max_total_waiters, size_t *max_waiters_per_key);
+
+using proxysql_plugin_install_aws_metadata_provider_cb =
+	bool (*)(AwsMetadataProvider *, void (*)(AwsMetadataProvider *), void *module_handle);
+
+using proxysql_plugin_refresh_mysql_aws_locality_stats_cb =
+	void (*)(SQLite3DB *);
 #endif /* PROXYSQL40 */
 
 // Services provided to plugins across the six-phase lifecycle.
@@ -459,6 +496,8 @@ struct ProxySQL_PluginServices {
 	// ABI-7 encrypted secret storage.  Phase B exposes rejecting stubs because
 	// configdb does not exist yet; early_action, init, start, and runtime use
 	// the core-owned live configdb store.
+	// These callbacks acquire the Admin SQL mutex. Callers already holding it
+	// use ProxySQL_PluginSecrets::*_locked on configdb_locked() instead.
 	ProxySQL_PluginSecretResult (*put_secret)(const char* owner, const char* name,
 		const uint8_t* bytes, size_t length);
 	ProxySQL_PluginSecretResult (*get_secret)(const char* owner, const char* name,
@@ -480,7 +519,7 @@ struct ProxySQL_PluginServices {
 	ProxySQL_PluginMysqlConfigResult (*apply_mysql_config_v2)(
 		const ProxySQL_PluginMysqlConfigPlanV2& plan);
 
-	// ABI-10 final tail. Runs `body(opaque)` while holding Admin's global SQL
+	// ABI-10 tail. Runs `body(opaque)` while holding Admin's global SQL
 	// mutex -- the lock every Admin session holds while it executes statements
 	// on admindb/statsdb -- and returns body's result. admindb and statsdb are
 	// single SQLite connections shared with Admin, so transaction state is
@@ -491,6 +530,38 @@ struct ProxySQL_PluginServices {
 	// the caller must not already hold the mutex: Admin command handlers must
 	// first release it through ProxySQL_PluginCommandContext.
 	bool (*with_admin_db_lock)(bool (*body)(void* opaque), void* opaque);
+
+	// ABI-13 AWS integration tail. The IAM token-source and metadata-provider
+	// callbacks are null outside normal plugin init(); the locality stats
+	// callback is live in Phase B and normal init and performs no I/O.
+	// uninstall_aws_iam_token_source is intended only for rollback of the same
+	// plugin's partially installed IAM provider.
+	proxysql_plugin_install_aws_iam_token_source_cb install_aws_iam_token_source;
+	proxysql_plugin_get_aws_iam_limits_cb get_aws_iam_limits;
+	proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
+	proxysql_plugin_refresh_mysql_aws_locality_stats_cb refresh_mysql_aws_locality_stats;
+	proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
+	// ABI-14 extension. Server modules can register during Phase B or normal
+	// init; discovery controllers install only during normal init. Uninstall is
+	// live during normal init and the owning plugin's stop() callback so its
+	// installed controller can synchronously drain and be destroyed before
+	// stop returns. A plugin cannot uninstall another plugin's controller.
+	// A plugin may retain post_server_desired_set and call it from start or
+	// steady-state workers. The callback pins the active manager through the
+	// synchronous acknowledgement and fails closed after manager unpublication.
+	proxysql_plugin_register_server_module_cb register_server_module;
+	proxysql_plugin_install_server_discovery_controller_cb install_server_discovery_controller;
+	proxysql_plugin_uninstall_server_discovery_controller_cb uninstall_server_discovery_controller;
+	proxysql_plugin_post_server_desired_set_cb post_server_desired_set;
+	// ABI 15: caller-held Admin mutex and thin existing-runtime adapters.
+	// No network calls or plugin transactions inside these operations.
+	void (*lock_configuration)();
+	void (*unlock_configuration)() noexcept;
+	SQLite3DB* (*configdb_locked)();
+	bool (*prepare_managed_runtime_locked)(const ManagedRuntimePlan&,
+		ManagedPreparedRuntime**, std::string&);
+	ManagedRuntimeResult (*activate_managed_runtime_locked)(ManagedPreparedRuntime&, uint64_t);
+	void (*destroy_managed_prepared_runtime)(ManagedPreparedRuntime*) noexcept;
 #endif /* PROXYSQL40 */
 };
 
@@ -562,6 +633,10 @@ struct ProxySQL_PluginDescriptor {
 	// ABI 8: invoked after core runtime dependencies exist and immediately
 	// before listener validation/start. Core reads this tail only for ABI >= 8.
 	proxysql_plugin_runtime_ready_cb runtime_ready;
+	// ABI 15: only the management provider supplies this accessor. Core reads
+	// this tail only for ABI >= 15, after successful init(). Required when
+	// aws_managed is enabled; service lifetime is the plugin lifetime.
+	const ProxySQL_ManagedConfigurationServiceV1* (*managed_configuration_service)();
 #endif /* PROXYSQL40 */
 };
 

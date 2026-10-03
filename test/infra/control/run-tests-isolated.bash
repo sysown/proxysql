@@ -76,6 +76,18 @@ if [ "${COVERAGE_MODE}" = "1" ]; then
     fi
 fi
 
+# The no-infra PostgreSQL user-sync asset test checks the repository's ignore
+# rule. Sparse CI workspaces may omit this root file, and the build handoff
+# contains only source/test subtrees. Restore the tested revision's asset.
+if [ "${TAP_GROUP:-}" = "no-infra-g1" ] && [ ! -f "${WORKSPACE}/.gitignore" ]; then
+    if ! git -C "${WORKSPACE}" cat-file -e HEAD:.gitignore 2>/dev/null; then
+        echo ">>> ERROR: no-infra-g1 requires .gitignore tracked at HEAD" >&2
+        exit 1
+    fi
+    git -C "${WORKSPACE}" show HEAD:.gitignore > "${WORKSPACE}/.gitignore"
+    echo ">>> Materialized .gitignore from HEAD for no-infra source asset tests"
+fi
+
 # 1. Determine Required Infras
 INFRAS_TO_CHECK=""
 BASE_GROUP=$(echo "${TAP_GROUP}" | sed -E "s/[-_]g[0-9]+.*//") # Strip -g1, -g2, _g1, _g2 etc.

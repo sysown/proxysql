@@ -63,7 +63,10 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 - `descriptor->name` is non-null and non-empty. Else: load fails.
 - `descriptor->abi_version` has its `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` masked;
   the remaining layout must be in `[1, PROXYSQL_PLUGIN_ABI_VERSION_MAX]`.
+  ABI 11 and 12 are reserved and rejected with the same error.
   Else: load fails with "unsupported plugin ABI version".
+- The plugin named `aws` must use layout 14 or newer. Older AWS binaries used
+  conflicting service offsets and must be rebuilt before loading.
 - The descriptor's DEBUG tag must exactly match the running core. A release
   plugin cannot load into a DEBUG core, or vice versa.
 - `descriptor->register_schemas`, if read at all, is read only when the
@@ -73,8 +76,8 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 
 ```cpp
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 10u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 10u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 15u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 15u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION =
@@ -87,8 +90,8 @@ constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX =
     PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
 ```
 
-`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `10` in a release build and
-`0x4000000A` in a DEBUG build. Plugins must use that constant rather than a
+`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `15` in a release build and
+`0x4000000F` in a DEBUG build. Plugins must use that constant rather than a
 literal so the loader can validate both the layout and build mode.
 
 ABI evolution so far:
@@ -118,6 +121,18 @@ ABI evolution so far:
   are single SQLite connections shared with Admin sessions, so a plugin thread
   must run any `BEGIN ... COMMIT` on them inside this callback (issue #6354).
   Scoped MySQL publication takes the same mutex internally.
+- **ABI 11 and ABI 12:** reserved and rejected. Earlier AWS branch builds used
+  these numbers for a services layout incompatible with upstream ABI 10.
+- **ABI 10 → ABI 13:** appends the AWS integration services to the services
+  table: IAM token-source install/uninstall and waiter sizing, the AWS
+  metadata-provider install used by locality discovery, and the MySQL-owned
+  AWS-locality statistics projection callback.
+- **ABI 13 → ABI 14:** appends the provider-neutral server-module/controller
+  registration, runtime snapshot, and desired-set submission services.
+- **ABI 14 → ABI 15:** appends the managed-configuration descriptor accessor
+  and caller-held configuration lock, database and runtime-adapter callbacks.
+  Descriptor accessor reads require layout 15 or newer. The separate managed
+  service descriptor remains version 1.
 
 Future ABI versions append fields. The chassis bumps the layout/version
 constants and gates each new field's read on the masked layout version being
@@ -334,7 +349,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // 10 release, 0x4000000A DEBUG
+    PROXYSQL_PLUGIN_ABI_VERSION,          // 15 release, 0x4000000F DEBUG
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop

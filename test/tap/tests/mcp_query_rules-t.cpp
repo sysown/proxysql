@@ -24,19 +24,19 @@ static const char* k_auth_profile_id = "tap_mcp_rules_auth";
 // Helper Functions
 // ============================================================================
 
-std::string escape_sql_literal(const char* input) {
-	std::string escaped = input ? input : "";
-	size_t pos = 0;
-	while ((pos = escaped.find('\'', pos)) != std::string::npos) {
-		escaped.insert(pos, 1, '\'');
-		pos += 2;
-	}
+std::string escape_sql_literal(MYSQL* admin, const char* input) {
+	if (input == nullptr) return {};
+	const size_t input_length = std::strlen(input);
+	std::string escaped(input_length * 2 + 1, '\0');
+	const unsigned long escaped_length = mysql_real_escape_string(
+		admin, escaped.data(), input, static_cast<unsigned long>(input_length));
+	escaped.resize(escaped_length);
 	return escaped;
 }
 
 bool configure_mcp_for_rules_test(MYSQL* admin, const CommandLine& cl) {
 	diag("Configuring MCP for rules test");
-	const std::string auth_token = escape_sql_literal(cl.mcp_auth_token);
+	const std::string auth_token = escape_sql_literal(admin, cl.mcp_auth_token);
 
 	run_q(admin, ("SET mcp-port=" + std::to_string(cl.mcp_port)).c_str());
 	run_q(admin, "SET mcp-use_ssl=false");
