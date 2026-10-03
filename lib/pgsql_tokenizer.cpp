@@ -2253,7 +2253,7 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 					new_cur_pos += 1;
 				}
 
-				while ((new_cur_pos < digest_end)) {
+				while (new_cur_pos < digest_end) {
 					if (*new_cur_pos == '?' && *(new_cur_pos+1) == ',') {
 						new_cur_pos += 2;
 					} else {
@@ -3338,4 +3338,13 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	*shared_st.res_cur_pos = 0;
 
 	return res;
+}
+
+bool pgsql_stmt_first_keyword_is(const char* text, const char* keyword) {
+	if (text == NULL || keyword == NULL) return false;
+	const size_t klen = strlen(keyword);
+	if (klen == 0) return false;
+	if (strncasecmp(text, keyword, klen) != 0) return false;
+	const char c = text[klen];
+	return !(isalnum((unsigned char)c) || c == '_' || c == '$');
 }

@@ -571,6 +571,7 @@ class ProxySQL_Admin {
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
+	bool verify_registered_server_module_tables_after_upgrade();
 	void disk_upgrade_mysql_users();
 	void disk_upgrade_scheduler();
 	void disk_upgrade_rest_api_routes();
@@ -599,6 +600,8 @@ class ProxySQL_Admin {
 
 	// PostgreSQL
 	void __refresh_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	void __refresh_pgsql_users(std::unique_ptr<SQLite3_result>&&, const std::string&, time_t,
+		bool local_snapshot);
 	//void __add_active_pgsql_users(char* user = NULL);
 	//void __delete_inactive_pgsql_users();
 	void flush_pgsql_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
@@ -643,13 +646,15 @@ class ProxySQL_Admin {
 	bool all_modules_started;
 	ProxySQL_Admin();
 	~ProxySQL_Admin();
-	SQLite3DB *admindb;	// in memory
-	SQLite3DB *statsdb;	// in memory
-	SQLite3DB *configdb; // on disk
-	SQLite3DB *monitordb;	// in memory
-	SQLite3DB *statsdb_disk; // on disk
+	// Null until init(): callers such as get_mysql_servers_v2() test
+	// `GloAdmin->admindb` before use, which requires a defined value.
+	SQLite3DB *admindb {nullptr};	// in memory
+	SQLite3DB *statsdb {nullptr};	// in memory
+	SQLite3DB *configdb {nullptr}; // on disk
+	SQLite3DB *monitordb {nullptr};	// in memory
+	SQLite3DB *statsdb_disk {nullptr}; // on disk
 #ifdef DEBUG
-	SQLite3DB *debugdb_disk; // on disk for debug
+	SQLite3DB *debugdb_disk {nullptr}; // on disk for debug
 	int debug_output;
 #endif
 	int pipefd[2];
@@ -684,6 +689,9 @@ class ProxySQL_Admin {
 		const ProxySQL_PluginMysqlUsersChecksumSnapshot* exact_checksum = nullptr);
 	ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config(const ProxySQL_PluginMysqlConfigPlan& plan);
 	ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config_v2(const ProxySQL_PluginMysqlConfigPlanV2& plan);
+	/** Apply a validated operational variable under the caller's configuration lock. */
+	bool set_managed_variable_locked(const std::string& name, const std::string& value);
+	bool commit_managed_admin_variables_locked(std::string& error);
 	SQLite3_result* get_mysql_users_snapshot();
 	SQLite3_result* get_mysql_servers_snapshot();
 	SQLite3_result* get_mysql_group_replication_hostgroups_snapshot();
@@ -717,7 +725,14 @@ class ProxySQL_Admin {
 	 *   admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
 	 *   ```
 	 */
-	void save_mysql_servers_runtime_to_database(bool _runtime);
+	bool save_mysql_servers_runtime_to_database(bool _runtime);
+	bool save_mysql_servers_runtime_to_database_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	bool save_mysql_servers_memory_to_disk_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	size_t drain_server_discovery_updates();
+	void shutdown_server_discovery_updates();
+	void close_server_discovery_wake_pipe();
 	void admin_shutdown();
 	void shutdown_threads();
 	bool is_command(std::string);
@@ -739,7 +754,7 @@ class ProxySQL_Admin {
 	void save_debug_from_runtime();
 #endif // DEBUG
 
-	void flush_GENERIC__from_to(const std::string&, const std::string&);
+	bool flush_GENERIC__from_to(const std::string&, const std::string&);
 
 	void flush_mysql_users__from_memory_to_disk();
 	void flush_mysql_users__from_disk_to_memory();
@@ -750,8 +765,15 @@ class ProxySQL_Admin {
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
 	void flush_pgsql_variables__from_memory_to_disk();
+	/**
+	 * @brief Reason a server module rejected its tables in the last LOAD
+	 *   ... SERVERS TO RUNTIME ([0] MySQL, [1] PostgreSQL); empty if none.
+	 *   The core tables were installed regardless (caller holds the servers lock).
+	 */
+	std::string servers_load_veto[2];
 	bool load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
-		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool hgm_acquire_lock = true);
+		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool hgm_acquire_lock = true,
+		bool emit_runtime_install = true);
 	void save_mysql_servers_from_runtime();
 	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
@@ -888,6 +910,8 @@ class ProxySQL_Admin {
 	unsigned long long scheduler_run_once() { return scheduler->run_once(); }
 
 	void flush_configdb(); // 923
+	// Admin command dispatch already holds sql_query_global_mutex.
+	void flush_configdb_locked();
 
 	// Cluster
 	void load_proxysql_servers_to_runtime(bool _lock=true, const std::string& checksum = "", const time_t epoch = 0);
@@ -929,18 +953,27 @@ class ProxySQL_Admin {
 	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
 
 	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+#ifdef PROXYSQL40
+	bool init_pgsql_users_under_lock(std::unique_ptr<SQLite3_result>&&, std::string& error);
+#endif
 	void flush_pgsql_users__from_memory_to_disk();
 	void flush_pgsql_users__from_disk_to_memory();
 
 	void save_pgsql_users_runtime_to_database(bool _runtime);
 
 	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
-		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {});
+		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {}, bool emit_runtime_install = true);
+	bool load_pgsql_servers_to_runtime_checked(const incoming_pgsql_servers_t&, const runtime_pgsql_servers_checksum_t&,
+		const pgsql_servers_v2_checksum_t&, bool emit_runtime_install);
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);
 
-	void save_pgsql_servers_runtime_to_database(bool _runtime);
+	bool save_pgsql_servers_runtime_to_database(bool _runtime);
+	bool save_pgsql_servers_runtime_to_database_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	bool save_pgsql_servers_memory_to_disk_scoped(
+		const std::vector<uint32_t>& hostgroups);
 	void save_pgsql_firewall_from_runtime(bool);
 	void save_pgsql_query_rules_from_runtime(bool);
 	void save_pgsql_query_rules_fast_routing_from_runtime(bool);

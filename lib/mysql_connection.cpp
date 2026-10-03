@@ -10,6 +10,7 @@ using json = nlohmann::json;
 #include <sstream>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
+#include <errmsg.h>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -85,7 +86,7 @@ static void * ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size)
     mem_root->used=next;
     mem_root->first_block_usage= 0;
   }
-  return(point);
+  return point;
 }
 
 
@@ -322,36 +323,34 @@ void MySQL_Connection::compute_unknown_transaction_status() {
  * @return Returns the computed hash value.
  */
 uint64_t MySQL_Connection_userinfo::compute_hash() {
-	int l=0;
-	if (username)
-		l+=strlen(username);
-	if (password)
-		l+=strlen(password);
-	if (schemaname)
-		l+=strlen(schemaname);
+	size_t l=0;
+	const size_t username_len = username ? strlen(username) : 0;
+	const size_t password_len = password ? strlen(password) : 0;
+	const size_t schemaname_len = schemaname ? strlen(schemaname) : 0;
 // two random seperator
 #define _COMPUTE_HASH_DEL1_	"-ujhtgf76y576574fhYTRDF345wdt-"
 #define _COMPUTE_HASH_DEL2_	"-8k7jrhtrgJHRgrefgreyhtRFewg6-"
-	l+=strlen(_COMPUTE_HASH_DEL1_);
-	l+=strlen(_COMPUTE_HASH_DEL2_);
+	const size_t delimiter1_len = strlen(_COMPUTE_HASH_DEL1_);
+	const size_t delimiter2_len = strlen(_COMPUTE_HASH_DEL2_);
+	l = username_len + password_len + schemaname_len + delimiter1_len + delimiter2_len;
 	char *buf=(char *)malloc(l+1);
 	l=0;
 	if (username) {
-		strcpy(buf+l,username);
-		l+=strlen(username);
+		memcpy(buf+l, username, username_len);
+		l+=username_len;
 	}
-	strcpy(buf+l,_COMPUTE_HASH_DEL1_);
-	l+=strlen(_COMPUTE_HASH_DEL1_);
+	memcpy(buf+l, _COMPUTE_HASH_DEL1_, delimiter1_len);
+	l+=delimiter1_len;
 	if (password) {
-		strcpy(buf+l,password);
-		l+=strlen(password);
+		memcpy(buf+l, password, password_len);
+		l+=password_len;
 	}
 	if (schemaname) {
-		strcpy(buf+l,schemaname);
-		l+=strlen(schemaname);
+		memcpy(buf+l, schemaname, schemaname_len);
+		l+=schemaname_len;
 	}
-	strcpy(buf+l,_COMPUTE_HASH_DEL2_);
-	l+=strlen(_COMPUTE_HASH_DEL2_);
+	memcpy(buf+l, _COMPUTE_HASH_DEL2_, delimiter2_len);
+	l+=delimiter2_len;
 	hash=SpookyHash::Hash64(buf,l,0);
 	OPENSSL_cleanse(buf, l);
 	free(buf);
@@ -518,6 +517,7 @@ MySQL_Connection::MySQL_Connection() {
 
 MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
+	clear_aws_iam_handshake_secret();
 	if (options.server_version) free(options.server_version);
 	if (options.init_connect) free(options.init_connect);
 	if (options.ldap_user_variable) free(options.ldap_user_variable);
@@ -584,6 +584,79 @@ MySQL_Connection::~MySQL_Connection() {
 		ssl_params = NULL;
 	}
 };
+
+void MySQL_Connection::set_backend_auth_type(MySQLBackendAuthType type) {
+	if (type != MySQLBackendAuthType::AWS_IAM) {
+		clear_aws_iam_handshake_secret();
+		aws_iam_identity_.reset();
+	}
+	if (type != MySQLBackendAuthType::PASSWORD) {
+		rowless_passthrough_authorized_ = false;
+	}
+	backend_auth_type_ = type;
+}
+
+MySQLBackendAuthType MySQL_Connection::backend_auth_type() const {
+	return backend_auth_type_;
+}
+
+void MySQL_Connection::set_rowless_passthrough_authorized(bool authorized) {
+	rowless_passthrough_authorized_ =
+		authorized && backend_auth_type_ == MySQLBackendAuthType::PASSWORD;
+}
+
+bool MySQL_Connection::can_reset_for_backend_auth_policy(
+	const MySQLBackendAuthPolicy& policy) const
+{
+	if (backend_auth_type_ != MySQLBackendAuthType::PASSWORD) return false;
+	if (policy.type == MySQLBackendAuthType::PASSWORD) return true;
+	return rowless_passthrough_authorized_ &&
+		policy.type == MySQLBackendAuthType::INVALID &&
+		policy.failure_code == "backend_user_not_found";
+}
+
+void MySQL_Connection::attach_aws_iam_token(
+	const AwsIamTokenKey& key, AwsIamTokenResult&& result)
+{
+	clear_aws_iam_handshake_secret();
+	auto identity = std::make_unique<MySQLAwsIamIdentity>();
+	identity->key = key;
+	identity->token_generation = result.generation;
+	identity->handshake_token = std::move(result.token);
+	aws_iam_identity_ = std::move(identity);
+}
+
+void MySQL_Connection::clear_aws_iam_handshake_secret() {
+	if (mysql != nullptr && mysql->passwd != nullptr &&
+		aws_iam_connector_secret_active_) {
+		OPENSSL_cleanse(mysql->passwd, strlen(mysql->passwd));
+		free(mysql->passwd);
+		mysql->passwd = nullptr;
+	}
+
+	// Connector/C's nonblocking coroutine retains the original passwd pointer
+	// across yields. Destroy the suspended operation before cleansing that
+	// caller-owned buffer so no later mysql_real_connect_cont() can dereference
+	// it. mysql_close_no_command() also destroys the async context without
+	// attempting a blocking COM_QUIT.
+	if (mysql != nullptr && aws_iam_connector_secret_active_ &&
+		aws_iam_async_connect_pending_) {
+		mysql_close_no_command(mysql);
+		mysql = nullptr;
+		ret_mysql = nullptr;
+		fd = -1;
+	}
+
+	if (aws_iam_identity_) {
+		aws_iam_identity_->handshake_token.clear();
+	}
+	aws_iam_connector_secret_active_ = false;
+	aws_iam_async_connect_pending_ = false;
+}
+
+bool MySQL_Connection::has_aws_iam_handshake_secret() const {
+	return aws_iam_identity_ && !aws_iam_identity_->handshake_token.empty();
+}
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting autocommit %d\n", _ac);
@@ -671,11 +744,25 @@ bool MySQL_Connection::get_status_sql_log_bin0() {
 	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
 
-bool MySQL_Connection::requires_CHANGE_USER(const MySQL_Connection *client_conn) {
-	char *username = client_conn->userinfo->username;
-	if (strcmp(userinfo->username,username)) {
+bool MySQL_Connection::backend_auth_compatible(
+	const char *requested_username, MySQLBackendAuthType requested_type) const
+{
+	return requested_username != nullptr && userinfo != nullptr &&
+		userinfo->username != nullptr &&
+		backend_auth_type_ == requested_type &&
+		strcmp(userinfo->username, requested_username) == 0;
+}
+
+bool MySQL_Connection::requires_CHANGE_USER(
+	const MySQL_Connection *client_conn,
+	MySQLBackendAuthType requested_type) const
+{
+	const char *username = client_conn != nullptr && client_conn->userinfo != nullptr
+		? client_conn->userinfo->username : nullptr;
+	if (!backend_auth_compatible(username, requested_type)) {
 		// the two connections use different usernames
-		// The connection need to be reset with CHANGE_USER
+		// or authentication modes. The caller decides whether CHANGE_USER is
+		// permitted for that mode.
 		return true;
 	}
 	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
@@ -834,7 +921,7 @@ void MySQL_Connection::connect_start_SetAttributes() {
 		}
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "connection_creation_time", __buffer);
 		unsigned long long t1=monotonic_time();
-		sprintf(__buffer,"%llu",(t1-GloVars.global.start_time)/1000/1000);
+		snprintf(__buffer,sizeof(__buffer),"%llu",(t1-GloVars.global.start_time)/1000/1000);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_uptime", __buffer);
 		snprintf(__buffer, sizeof(__buffer), "%d", parent->myhgc->hid);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "hostgroup_id", __buffer);
@@ -1085,6 +1172,32 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 #endif
+	if (backend_auth_type_ == MySQLBackendAuthType::AWS_IAM) {
+		const bool valid_iam_handshake = parent->port != 0 && aws_iam_identity_ &&
+			!aws_iam_identity_->handshake_token.empty();
+		if (!valid_iam_handshake) {
+			mysql->net.last_errno = CR_CONNECTION_ERROR;
+			std::snprintf(mysql->net.last_error, sizeof(mysql->net.last_error),
+				"AWS IAM backend authentication requires a TCP endpoint and handshake token");
+			std::strncpy(mysql->net.sqlstate, "HY000", sizeof(mysql->net.sqlstate));
+			mysql->net.sqlstate[sizeof(mysql->net.sqlstate) - 1] = '\0';
+			ret_mysql = nullptr;
+			async_exit_status = 0;
+			fd = mysql_get_socket(mysql);
+			return;
+		}
+
+		auth_password = const_cast<char *>(aws_iam_identity_->handshake_token.c_str());
+		my_bool enabled = 1;
+		my_bool reconnect = 0;
+		mysql_options(mysql, MYSQL_OPT_SSL_ENFORCE, &enabled);
+		mysql_options(mysql, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &enabled);
+		mysql_options(mysql, MYSQL_ENABLE_CLEARTEXT_PLUGIN, &enabled);
+		mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
+		mysql_options(mysql, MARIADB_OPT_TLS_SERVER_NAME,
+			aws_iam_identity_->key.endpoint.c_str());
+		aws_iam_connector_secret_active_ = true;
+	}
 	if (parent->port) {
 		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
@@ -1094,6 +1207,9 @@ void MySQL_Connection::connect_start() {
 			client_flags &= ~(CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM); // disabling compression for regular connections made via Unix socket
 		}
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
+	}
+	if (aws_iam_connector_secret_active_) {
+		aws_iam_async_connect_pending_ = async_exit_status != 0;
 	}
 	fd=mysql_get_socket(mysql);
 //	{
@@ -1113,10 +1229,18 @@ void MySQL_Connection::connect_start() {
 void MySQL_Connection::connect_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, mysql_status(event, true));
+	if (aws_iam_connector_secret_active_) {
+		aws_iam_async_connect_pending_ = async_exit_status != 0;
+	}
 }
 
 void MySQL_Connection::change_user_start() {
 	PROXY_TRACE();
+	// IAM credentials exist only for the initial TLS handshake. Reaching this
+	// path with an IAM identity would turn an ephemeral token into a reusable
+	// password; all session/reset callers must replace the connection instead.
+	assert(backend_auth_type_ != MySQLBackendAuthType::AWS_IAM);
+	assert(!has_aws_iam_handshake_secret());
 	//fprintf(stderr,"change_user_start FD %d\n", fd);
 	MySQL_Connection_userinfo *_ui = NULL;
 	if (myds->sess->client_myds == NULL) {
@@ -1333,6 +1457,8 @@ handler_again:
     break;
 			break;
 		case ASYNC_CONNECT_END:
+			aws_iam_async_connect_pending_ = false;
+			clear_aws_iam_handshake_secret();
 			if (myds) {
 				if (myds->sess) {
 					if (myds->sess->thread) {
@@ -1343,7 +1469,11 @@ handler_again:
 			}
 			if (!ret_mysql) {
 				int myerr = mysql_errno(mysql);
-				if (ssl_params != NULL && myerr == 2026) {
+				if (backend_auth_type_ == MySQLBackendAuthType::AWS_IAM) {
+					proxy_error("Failed to connect IAM backend on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: authentication details redacted.\n",
+						parent->myhgc->hid, parent->address, parent->port,
+						mysql->net.fd, myds->fd, myerr);
+				} else if (ssl_params != NULL && myerr == 2026) {
 					proxy_error("Failed to mysql_real_connect() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s. SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
 						parent->myhgc->hid, parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql),
 						ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
@@ -1433,10 +1563,14 @@ handler_again:
 			parent->connect_error(mysql_errno(mysql));
 			break;
 		case ASYNC_CONNECT_TIMEOUT:
+			{
+			const int myerr = mysql != nullptr ? mysql_errno(mysql) : CR_CONNECTION_ERROR;
+			clear_aws_iam_handshake_secret();
 			//proxy_error("Connect timeout on %s:%d : %llu - %llu = %llu\n",  parent->address, parent->port, myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
 			proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(mysql));
-			parent->connect_error(mysql_errno(mysql));
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, myerr);
+			parent->connect_error(myerr);
+			}
 			break;
 		case ASYNC_CHANGE_USER_START:
 			change_user_start();
@@ -2706,7 +2840,7 @@ void MySQL_Connection::async_free_result() {
 	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {
 		if (MyRS_reuse) {
-			delete (MyRS_reuse);
+			delete MyRS_reuse;
 		}
 		MyRS_reuse = MyRS;
 		MyRS=NULL;
@@ -2739,12 +2873,12 @@ bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
 	if (mysql) {
 		ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
-		if (ret == false && (mysql)->net.last_errno && unknown_transaction_status == true) {
+		if (ret == false && mysql->net.last_errno && unknown_transaction_status == true) {
 			ret = true;
 		}
 		if (ret == false) {
 			//bool r = ( mysql_thread___autocommit_false_is_transaction || mysql_thread___forward_autocommit ); // deprecated , see #3253
-			bool r = ( mysql_thread___autocommit_false_is_transaction);
+			bool r = mysql_thread___autocommit_false_is_transaction;
 			if ( r && (IsAutoCommit() == false) ) {
 				ret = true;
 			}
@@ -3207,7 +3341,7 @@ void MySQL_Connection::close_mysql() {
 	// MySQL_Data_Stream , that replaces its BIOs with memory BIOs : writing on
 	// it would never reach the socket. The check on myds->encrypted is a
 	// defensive double check for that same condition
-	if ((send_quit) && ret_mysql && (myds == NULL || myds->encrypted == false)) {
+	if (send_quit && ret_mysql && (myds == NULL || myds->encrypted == false)) {
 		proxy_mysql_send_com_quit(mysql);
 	}
 //	int rc=0;
@@ -3351,18 +3485,50 @@ bool MySQL_Connection::collect_gtid_to_buff(char *buff) {
 	return true;
 }
 
+// Finds the value of the tracked system variable 'last_gtid' in the OK packet
+// (the last occurrence, as get_variables() would keep). The tracked variables
+// come as alternating name/value entries. Scanning them in place avoids building
+// a map of every tracked variable on each OK packet (issue #6337).
+static bool find_tracked_last_gtid(MYSQL *mysql, const char **value, size_t *value_len) {
+	static const char LAST_GTID[] = "last_gtid";
+	const char *data = nullptr;
+	size_t length = 0;
+	bool found = false;
+	if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) != 0) {
+		return false;
+	}
+	bool is_last_gtid = (length == sizeof(LAST_GTID) - 1 && memcmp(data, LAST_GTID, length) == 0);
+	bool expect_value = true;
+	while (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0) {
+		if (expect_value) {
+			if (is_last_gtid) {
+				*value = data;
+				*value_len = length;
+				found = true;
+			}
+		} else {
+			is_last_gtid = (length == sizeof(LAST_GTID) - 1 && memcmp(data, LAST_GTID, length) == 0);
+		}
+		expect_value = !expect_value;
+	}
+	return found;
+}
+
 bool MySQL_Connection::get_gtid_from_session_tracking(char *buff) {
 	const char *gtids = nullptr;
 	size_t gtids_len = 0;
-	if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &gtids, &gtids_len) == 0
-			&& gtids_len == 0) {
+	if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &gtids, &gtids_len) != 0) {
 		gtids = nullptr;
+		gtids_len = 0;
 	}
-	std::unordered_map<std::string, std::string> variables;
-	if (gtids == nullptr) {
-		get_variables(variables);
+	const char *last_gtid = nullptr;
+	size_t last_gtid_len = 0;
+	// Only MariaDB reports its own GTID as 'last_gtid'; MySQL uses SESSION_TRACK_GTIDS.
+	if (gtids_len == 0 && mysql->server_version != nullptr
+			&& strstr(mysql->server_version, "MariaDB") != nullptr) {
+		find_tracked_last_gtid(mysql, &last_gtid, &last_gtid_len);
 	}
-	if (!select_session_gtid(gtids, gtids_len, variables, gtid_uuid, sizeof(gtid_uuid))) {
+	if (!select_session_gtid(gtids, gtids_len, last_gtid, last_gtid_len, gtid_uuid, sizeof(gtid_uuid))) {
 		return false;
 	}
 	return collect_gtid_to_buff(buff);
@@ -3373,9 +3539,11 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	if (buff == NULL || trx_id == NULL) {
 		return false;
 	}
-	if (!mysql_thread___update_gtid_from_ok && !mysql_thread___client_session_track_gtid) {
-		return false;
-	}
+	// Collection must not depend on mysql-update_gtid_from_ok or
+	// mysql-client_session_track_gtid: those only control what is done with
+	// the GTID afterwards. The collected value is also what query rules with
+	// gtid_from_hostgroup read for causal routing (issue #6328). Collection is
+	// passive: it only parses the session-tracking data of the OK packet.
 	if (mysql == NULL || mysql->net.last_errno != 0) { // only if there is no error
 		return false;
 	}

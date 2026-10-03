@@ -342,11 +342,11 @@ void test_config_variable_integration() {
 	// the same configuration this test inherited.
 	// Keep these as independent statements: cleanup must still attempt model
 	// and timeout if an earlier provider restore fails.
-	const bool provider_restored = !orig_provider.empty() &&
+	const bool provider_restored =
 		set_nl2sql_variable("provider", orig_provider.c_str());
-	const bool model_restored = !orig_model.empty() &&
+	const bool model_restored =
 		set_nl2sql_variable("provider_model", orig_model.c_str());
-	const bool timeout_restored = !orig_timeout.empty() &&
+	const bool timeout_restored =
 		set_nl2sql_variable("timeout_ms", orig_timeout.c_str());
 	const bool restored = provider_restored && model_restored && timeout_restored;
 	ok(restored,

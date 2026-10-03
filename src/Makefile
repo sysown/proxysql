@@ -1,5 +1,6 @@
 #!/bin/make -f
 
+.DEFAULT_GOAL := default
 
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
@@ -157,7 +158,6 @@ endif
 ifeq ($(CENTOSVER),6)
 	MYLIBS += -lgcrypt
 endif
-
 SQLITE_VEC_OBJ := $(DEPS_PATH)/sqlite3/sqlite3/vec.o
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
@@ -193,7 +193,9 @@ EXECUTABLE := proxysql
 _OBJ := main.o proxysql_global.o SQLite3_Server.o proxy_tls.o
 OBJ := $(patsubst %,$(ODIR)/%,$(_OBJ))
 
-$(ODIR)/%.o: %.cpp
+HEADERS := ../include/*.h ../include/*.hpp
+
+$(ODIR)/%.o: %.cpp $(HEADERS)
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR) $(CURL_AR) $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)

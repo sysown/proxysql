@@ -94,9 +94,13 @@ MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(
 default: libproxysql.a
 .PHONY: default
 
-_OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo MySQL_Passthrough_Auth_Cache.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo MySQL_Query_Processor.oo PgSQL_Query_Processor.oo  ProxySQL_Admin.oo ProxySQL_Config.oo ProxySQL_Restapi.oo MySQL_Monitor.oo MySQL_Logger.oo log_utils.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo MySQL_Variables.oo MySQL_User_Variables.oo c_tokenizer.oo proxysql_utils.oo proxysql_coredump.oo proxysql_sslkeylog.oo \
+_OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo MySQL_Backend_Auth.oo Aws_Iam_Provider.oo Aws_Locality_Manager.oo MySQL_Passthrough_Auth_Cache.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo MySQL_Query_Processor.oo PgSQL_Query_Processor.oo  ProxySQL_Admin.oo ProxySQL_Config.oo ProxySQL_Restapi.oo MySQL_Monitor.oo MySQL_Logger.oo log_utils.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo MySQL_Variables.oo MySQL_User_Variables.oo c_tokenizer.oo proxysql_utils.oo proxysql_coredump.oo proxysql_sslkeylog.oo \
 	sha256crypt.oo \
-	ProxySQL_PluginManager.oo ProxySQL_PluginCLI.oo ProxySQL_PluginSecrets.oo ProxySQL_PluginListenerGate.oo ProxySQL_PluginConfig.oo \
+	ProxySQL_PluginManager.oo ProxySQL_PluginCLI.oo ProxySQL_PluginSecrets.oo ProxySQL_PluginListenerGate.oo ProxySQL_PluginConfig.oo ProxySQL_ManagedRuntime.oo \
+	ProxySQL_ServerDiscovery.oo \
+	ProxySQL_StartupGate.oo \
+	ProxySQL_ClusterPluginHash.oo \
+	ProxySQL_ServerModuleCluster.oo \
 	BaseSrvList.oo BaseHGC.oo Base_HostGroups_Manager.oo \
 	QP_rule_text.oo QP_query_digest_stats.oo \
 	GTID_Server_Data.oo MyHGC.oo MySrvConnList.oo MySrvC.oo \
@@ -107,7 +111,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	proxysql_gtid.oo \
 	proxy_protocol_info.oo \
 	proxysql_find_charset.oo ProxySQL_Poll.oo \
-	PgSQL_Protocol.oo PgSQL_Thread.oo PgSQL_Data_Stream.oo PgSQL_Session.oo PgSQL_Variables.oo PgSQL_HostGroups_Manager.oo PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo PgSQL_Error_Helper.oo \
+	PgSQL_Protocol.oo PgSQL_Thread.oo PgSQL_Data_Stream.oo PgSQL_Session.oo PgSQL_Variables.oo PgSQL_HostGroups_Manager.oo PgSQL_Connection.oo PgSQL_Backend.oo PgSQL_Logger.oo PgSQL_Authentication.oo PgSQL_Error_Helper.oo PgSQL_Backend_Protocol.oo PgSQL_Backend_Auth.oo \
 	MySQL_Query_Cache.oo PgSQL_Query_Cache.oo PgSQL_Monitor.oo DNS_Cache.oo \
 	MySQL_Set_Stmt_Parser.oo PgSQL_Set_Stmt_Parser.oo \
 	PgSQL_Variables_Validator.oo PgSQL_ExplicitTxnStateMgr.oo \
@@ -154,6 +158,11 @@ HEADERS := ../include/*.h ../include/*.hpp
 
 $(ODIR)/proxy_sqlite3_symbols.oo: proxy_sqlite3_symbols.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -DSQLITE_CORE -DSQLITE_VEC_STATIC
+
+# Keep the ABI-9 server-discovery registry object fresh when its public
+# contract changes; this is intentionally explicit despite $(HEADERS), as
+# external plugin builds consume this header directly.
+$(ODIR)/ProxySQL_PluginManager.oo: ../include/ProxySQL_ServerDiscovery.h
 
 $(ODIR)/%.oo: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)

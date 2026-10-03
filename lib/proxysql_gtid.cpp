@@ -335,11 +335,21 @@ const std::string GTID_Set::to_display_string(void) {
 				out << ":" << itr->to_string();
 			}
 		} else {
-			trxid_t max_end = 0;
-			for (const auto& interval : it->second) {
-				max_end = std::max(max_end, interval.end);
+			// The native MariaDB `domain-server-seq` form is used only when it is
+			// exact: one interval starting at 1 and a known server id. The binlog
+			// reader sends no server id, and a gap must not be hidden behind the
+			// highest sequence, so otherwise the intervals are listed as for
+			// MySQL, e.g. `0:1-77:80` (issue #6336).
+			const auto server_id = last_server_id.find(uuid);
+			if (it->second.size() == 1 && it->second.front().start == 1 &&
+					server_id != last_server_id.end()) {
+				out << uuid << "-" << server_id->second << "-" << it->second.front().end;
+			} else {
+				out << uuid;
+				for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
+					out << ":" << itr->to_string();
+				}
 			}
-			out << uuid << "-" << get_server_id(uuid) << "-" << max_end;
 		}
 		first = false;
 	}
@@ -515,44 +525,38 @@ bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
 
 bool select_session_gtid(
 	const char* session_track_gtids, size_t gtids_len,
-	const std::unordered_map<std::string, std::string>& sysvars,
+	const char* last_gtid, size_t last_gtid_len,
 	char* buf, size_t buf_len) {
 	if (buf == nullptr || buf_len == 0) {
 		return false;
 	}
 
-	std::string selected;
+	const char* selected = nullptr;
+	size_t selected_len = 0;
 	if (gtids_len > 0) {
-		if (session_track_gtids == nullptr) {
-			return false;
-		}
-		selected.assign(session_track_gtids, gtids_len);
+		selected = session_track_gtids;
+		selected_len = gtids_len;
 	} else {
 		// MariaDB reports the GTID of the session's own last transaction as the
 		// tracked system variable 'last_gtid', the equivalent of MySQL's OWN_GTID.
-		auto last_gtid = sysvars.find("last_gtid");
-		auto binlog_pos = sysvars.find("gtid_binlog_pos");
-		if (last_gtid != sysvars.end() && !last_gtid->second.empty()) {
-			selected = last_gtid->second;
-		} else if (binlog_pos != sysvars.end() && !binlog_pos->second.empty()) {
-			selected = binlog_pos->second;
-		} else {
-			auto current_pos = sysvars.find("gtid_current_pos");
-			if (current_pos != sysvars.end() && !current_pos->second.empty()) {
-				selected = current_pos->second;
-			}
+		// It is a single GTID: a list can only be a global position, which would
+		// break causal routing (issue #6335).
+		selected = last_gtid;
+		selected_len = last_gtid_len;
+		if (selected != nullptr && memchr(selected, ',', selected_len) != nullptr) {
+			return false;
 		}
 	}
 
-	if (selected.empty() || selected.size() >= buf_len) {
+	if (selected == nullptr || selected_len == 0 || selected_len >= buf_len) {
 		return false;
 	}
-	if (strncmp(selected.c_str(), buf, selected.size()) == 0
-			&& buf[selected.size()] == '\0') {
+	if (strncmp(selected, buf, selected_len) == 0 && buf[selected_len] == '\0') {
 		return false;
 	}
 
-	memcpy(buf, selected.c_str(), selected.size() + 1);
+	memcpy(buf, selected, selected_len);
+	buf[selected_len] = '\0';
 	return true;
 }
 
@@ -573,149 +577,5 @@ bool is_canonical_mariadb_domain_id(const char* id, size_t len) {
 			return false;
 		}
 	}
-	return true;
-}
-
-bool render_mariadb_domain_position(const GTID_Set& set, const char* domain_id,
-                                    char* buf, size_t buf_len) {
-	if (buf == nullptr || buf_len == 0 || set.map.empty()) {
-		return false;
-	}
-
-	std::string domain;
-	if (domain_id != nullptr && domain_id[0] != '\0') {
-		// A canonical MariaDB domain id spans at most 10 decimal digits, so the
-		// NUL is looked for within that bound instead of walking an unbounded
-		// caller-supplied C string. A longer spelling is rejected either way,
-		// because is_canonical_mariadb_domain_id() stops at UINT32_MAX.
-		const char* const domain_end =
-			static_cast<const char*>(memchr(domain_id, '\0', MARIADB_DOMAIN_ID_MAX_DIGITS + 1));
-		if (domain_end == nullptr ||
-				!is_canonical_mariadb_domain_id(domain_id, static_cast<size_t>(domain_end - domain_id))) {
-			return false;
-		}
-		domain.assign(domain_id);
-	} else if (set.map.size() == 1) {
-		// No domain was reported: a single-domain position is unambiguous only
-		// when its key is a canonical MariaDB domain id. A single key coming from
-		// a malformed position (a MySQL UUID, for instance) must not be rendered
-		// as 'uuid-server-seq', so it fails closed like the multi-domain case.
-		domain = set.map.begin()->first;
-		if (!is_canonical_mariadb_domain_id(domain.c_str(), domain.size())) {
-			return false;
-		}
-	} else {
-		return false;
-	}
-
-	auto entry = set.map.find(domain);
-	if (entry == set.map.end() || entry->second.empty()) {
-		return false;
-	}
-
-	trxid_t max_end = entry->second.front().end;
-	for (const auto& iv : entry->second) {
-		if (iv.end > max_end) {
-			max_end = iv.end;
-		}
-	}
-	if (max_end <= 0) {
-		return false;
-	}
-
-	std::string rendered = domain + "-" + std::to_string(set.get_server_id(domain)) + "-" +
-	                       std::to_string(max_end);
-	if (rendered.size() >= buf_len) {
-		return false;
-	}
-	if (strncmp(rendered.c_str(), buf, rendered.size()) == 0 &&
-			buf[rendered.size()] == '\0') {
-		return false;
-	}
-
-	memcpy(buf, rendered.c_str(), rendered.size() + 1);
-	return true;
-}
-
-static bool add_mysql_gtid_token(GTID_Set& set, const char* token, size_t len) {
-	if (token == nullptr || len == 0) {
-		return false;
-	}
-
-	const char* colon = static_cast<const char*>(memchr(token, ':', len));
-	if (colon == nullptr || colon == token) {
-		return false;
-	}
-
-	std::string id;
-	if (!normalize_mysql_uuid(token, static_cast<size_t>(colon - token), id)) {
-		return false;
-	}
-
-	const char* p = colon + 1;
-	const char* end = token + len;
-	bool any = false;
-	for (;;) {
-		const char* next = p < end ? static_cast<const char*>(memchr(p, ':', static_cast<size_t>(end - p))) : nullptr;
-		const char* iv_end = next ? next : end;
-		if (iv_end == p) {
-			// empty interval, including the empty one left by a trailing colon
-			return false;
-		}
-		std::string ivs(p, static_cast<size_t>(iv_end - p));
-		TrxId_Interval iv(trxid_t(0));
-		if (!TrxId_Interval::parse(ivs.c_str(), &iv)) {
-			return false;
-		}
-		set.add(id, iv);
-		any = true;
-		if (next == nullptr) {
-			break;
-		}
-		p = next + 1;
-	}
-
-	return any;
-}
-
-bool parse_gtid_set(const char* encoded, GTID_Set* out) {
-	if (encoded == nullptr || out == nullptr || encoded[0] == '\0') {
-		return false;
-	}
-
-	const bool mysql = strchr(encoded, ':') != nullptr;
-	GTID_Set tmp;
-	const char* const encoded_end = encoded + strlen(encoded); // NOSONAR(cpp:S5813): `encoded` is a NUL-terminated C string by contract, and this single scan replaces a per-token strlen.
-	const char* p = encoded;
-	while (*p) {
-		const char* comma = strchr(p, ',');
-		size_t len = comma ? static_cast<size_t>(comma - p)
-		                   : static_cast<size_t>(encoded_end - p);
-		if (len == 0) {
-			return false;
-		}
-		if (mysql) {
-			if (!add_mysql_gtid_token(tmp, p, len)) {
-				return false;
-			}
-		} else {
-			std::string token(p, len);
-			ParsedGTID parsed;
-			if (!parse_gtid(token.c_str(), &parsed) || !parsed.mariadb) {
-				return false;
-			}
-			tmp.add(parsed.id, trxid_t(1), parsed.trxid);
-			tmp.set_server_id(parsed.id, parsed.server_id);
-		}
-		if (comma == nullptr) {
-			break;
-		}
-		p = comma + 1;
-		if (*p == '\0') {
-			return false;
-		}
-	}
-
-	*out = tmp;
 	return true;
 }

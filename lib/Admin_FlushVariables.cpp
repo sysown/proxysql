@@ -628,7 +628,18 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 			flush_GENERIC_variables__checksum__database_to_runtime("mysql", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
+#ifdef PROXYSQL40
+		const bool aws_locality_awareness_enabled =
+			GloMTH->get_variable_int("aws_locality_awareness") != 0;
+#endif
 		GloMTH->wrunlock();
+
+#ifdef PROXYSQL40
+		if (MyHGM != nullptr) {
+			MyHGM->set_aws_locality_awareness_enabled(
+				aws_locality_awareness_enabled);
+		}
+#endif
 
 		/**
 		 * @brief Check and warn if TCP keepalive is disabled for MySQL connections.

@@ -26,6 +26,11 @@ enum class ProxySQL_PluginSecretResult : uint8_t {
 // table-definition path before live plugin services are exposed.
 const char* proxysql_plugin_secrets_table_definition();
 
+enum class SecretTransactionMode : uint8_t {
+	own_transaction,
+	existing_transaction,
+};
+
 class ProxySQL_PluginSecrets {
 public:
 	ProxySQL_PluginSecrets(SQLite3DB* configdb, std::string datadir);
@@ -35,6 +40,16 @@ public:
 	ProxySQL_PluginSecretResult get(const char* owner, const char* name,
 		std::vector<uint8_t>& plaintext);
 	ProxySQL_PluginSecretResult erase(const char* owner, const char* name);
+
+	// The caller owns the Admin SQL mutex for a shared configdb. These methods
+	// never acquire it. Existing-transaction writes neither begin nor end the
+	// caller's transaction, including on failure.
+	ProxySQL_PluginSecretResult put_locked(const char* owner, const char* name,
+		const uint8_t* bytes, size_t length, SecretTransactionMode mode);
+	ProxySQL_PluginSecretResult get_locked(const char* owner, const char* name,
+		std::vector<uint8_t>& plaintext);
+	ProxySQL_PluginSecretResult erase_locked(const char* owner, const char* name,
+		SecretTransactionMode mode);
 
 private:
 	bool ensure_schema() const;

@@ -9,12 +9,14 @@ env:
   RUNTIME_CACHE_DIR: .cluster-simulator-runtime
 jobs:
   tier-selection:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     uses: sysown/proxysql/.github/workflows/ci-tier-selection.yml@GH-Actions
     permissions:
       contents: read
       actions: read
       pull-requests: read
   build:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     name: build / ${{ matrix.tier }}
     runs-on: ubuntu-22.04
     timeout-minutes: 120
@@ -86,6 +88,7 @@ jobs:
     env:
       BUILD_CACHE_KEY: cluster-simulator-v3-ubuntu24-${{ matrix.tier }}-${{ github.sha }}
   test:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     name: test / ${{ matrix.tier }} / ${{ matrix.group }}
     needs:
     - tier-selection

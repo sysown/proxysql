@@ -148,10 +148,10 @@ int main() {
 	ok(execute_admin(admin, "LOAD GENAI VARIABLES FROM DISK"), "load cache threshold from disk");
 	expect_variable(admin, threshold_name, "90");
 
-	const bool restored =
-		set_variable(admin, threshold_name, original_threshold) &&
-		execute_admin(admin, "LOAD GENAI VARIABLES TO RUNTIME") &&
-		execute_admin(admin, "SAVE GENAI VARIABLES TO DISK");
+	const bool memory_restored = set_variable(admin, threshold_name, original_threshold);
+	const bool runtime_restored = execute_admin(admin, "LOAD GENAI VARIABLES TO RUNTIME");
+	const bool disk_restored = execute_admin(admin, "SAVE GENAI VARIABLES TO DISK");
+	const bool restored = memory_restored && runtime_restored && disk_restored;
 	ok(restored, "restore original cache threshold in memory, runtime, and disk");
 
 	mysql_close(admin);

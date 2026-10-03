@@ -2,6 +2,8 @@
 
 #include "ProxySQL_Plugin.h"
 
+#include <cerrno>
+#include <pthread.h>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -491,21 +493,32 @@ int main() {
 		accept_worker = std::make_unique<MySQL_Thread>();
 		if (accept_worker->init()) GloMTH->mysql_threads[0].worker = accept_worker.get();
 	}
-	std::string operator_interface_error;
-	GloMTH->wrlock();
-	const bool listener_ready = modules_ready && accept_worker != nullptr &&
+	// Listeners are opened only at startup (start_listeners), never by plugin
+	// publication (issue #6341). Model a restart after bootstrap: the persisted
+	// mysql-interfaces already holds both the operator and the plugin endpoint,
+	// and both listeners are opened before the plugin publishes.
+	const std::string startup_interfaces = operator_interface + ";" + fake_interface;
+	const bool variables_ready = modules_ready && accept_worker != nullptr &&
 		GloMTH->set_variable("caching_sha2_password_auto_generate_rsa_keys", "false") &&
 		GloMTH->set_variable("caching_sha2_password_private_key_path", "") &&
-		GloMTH->set_variable("caching_sha2_password_public_key_path", "") &&
-		GloMTH->apply_interfaces_under_lock(operator_interface.c_str(), operator_interface_error);
-	GloMTH->wrunlock();
+		GloMTH->set_variable("caching_sha2_password_public_key_path", "");
+	// set_variable() refuses to change an initialized mysql-interfaces (the Admin
+	// fixture already loaded the default), exactly as at runtime; assign the value
+	// a startup would have read from disk.
+	if (variables_ready) {
+		free(GloMTH->variables.interfaces);
+		GloMTH->variables.interfaces = strdup(startup_interfaces.c_str());
+	}
 	GloMTH->bootstrapping_listeners = false;
-	const bool operator_notification_drained = listener_ready && drain_listener_add(*accept_worker);
-	ok(listener_ready && find_registered_loopback_listener(operator_port) >= 0 &&
-		operator_notification_drained &&
-		accept_worker->mypolls.find_index(find_registered_loopback_listener(operator_port)) >= 0,
-		"real Auth, HGM, QPro, initialized MTH worker, monitor, and operator listener initialize "
-		"(err='%s')", operator_interface_error.c_str());
+	const bool operator_notification_drained = variables_ready &&
+		GloMTH->listener_add(operator_interface.c_str()) >= 0 && drain_listener_add(*accept_worker);
+	const bool fake_startup_drained = operator_notification_drained &&
+		GloMTH->listener_add(fake_interface.c_str()) >= 0 && drain_listener_add(*accept_worker);
+	ok(fake_startup_drained && find_registered_loopback_listener(operator_port) >= 0 &&
+		accept_worker->mypolls.find_index(find_registered_loopback_listener(operator_port)) >= 0 &&
+		find_registered_loopback_listener(fake_port) >= 0 &&
+		accept_worker->mypolls.find_index(find_registered_loopback_listener(fake_port)) >= 0,
+		"real Auth, HGM, QPro, initialized MTH worker, monitor, and startup operator and plugin listeners initialize");
 
 	auto live_users = result_value(admindb,
 		"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,"
@@ -577,16 +590,36 @@ int main() {
 	ok(services != nullptr && services->apply_mysql_config != nullptr &&
 		services->apply_mysql_config_v2 != nullptr,
 		"the live ABI-9 service table exposes both publisher generations");
+	// Issue #6354: plugin threads serialize their admindb/statsdb transactions with
+	// Admin sessions by running them under Admin's global SQL mutex.
+	struct AdminLockProbe {
+		pthread_mutex_t* mutex;
+		bool held_during_body;
+	} admin_lock_probe { &GloAdmin->sql_query_global_mutex, false };
+	const bool admin_lock_ran = services != nullptr && services->with_admin_db_lock != nullptr &&
+		services->with_admin_db_lock([](void* opaque) {
+			auto& probe = *static_cast<AdminLockProbe*>(opaque);
+			probe.held_during_body = pthread_mutex_trylock(probe.mutex) == EBUSY;
+			return true;
+		}, &admin_lock_probe);
+	const bool admin_lock_released = pthread_mutex_trylock(&GloAdmin->sql_query_global_mutex) == 0;
+	if (admin_lock_released) pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+	ok(admin_lock_ran && admin_lock_probe.held_during_body && admin_lock_released,
+		"the ABI-10 with_admin_db_lock service holds Admin's SQL mutex only while its callback runs");
 	const auto generation_one = services != nullptr && services->apply_mysql_config != nullptr
 		? services->apply_mysql_config(generation)
 		: ProxySQL_PluginMysqlConfigResult{};
-	const bool fake_notification_drained = generation_one.applied && drain_listener_add(*accept_worker);
 	ok(generation_one.applied && generation_one.generation == 1,
 		"the fake consumes the live service table to publish generation 1 (message='%s')",
 		generation_one.message.c_str());
-	ok(fake_notification_drained && find_registered_loopback_listener(fake_port) >= 0 &&
+	char* published_interfaces = GloMTH->get_variable("interfaces");
+	ok(__sync_add_and_fetch(&accept_worker->mypolls.pending_listener_add, 0) == 0 &&
+		__sync_add_and_fetch(&accept_worker->mypolls.pending_listener_del, 0) == 0 &&
+		published_interfaces != nullptr && startup_interfaces == published_interfaces &&
+		find_registered_loopback_listener(fake_port) >= 0 &&
 		accept_worker->mypolls.find_index(find_registered_loopback_listener(fake_port)) >= 0,
-		"generation 1 reaches the initialized worker's real listener poll set");
+		"generation 1 posts no listener change and the startup plugin listener stays in the worker's poll set");
+	free(published_interfaces);
 
 	const ProxySQL_PluginListenerGate closed_gate {
 		"router_contract_fake", "127.0.0.1", static_cast<uint16_t>(fake_port),

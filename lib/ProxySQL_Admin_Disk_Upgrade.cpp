@@ -1,5 +1,26 @@
 #include "cpp.h"
 #include "ProxySQL_Admin_Tables_Definitions.h"
+#include "ProxySQL_PluginManager.h"
+#include "ProxySQL_ServerDiscovery.h"
+#include "ProxySQL_ServerModuleCluster.h"
+
+// Called after the normal Admin bootstrap has materialized generic plugin
+// table definitions.  Probe both server protocols so a missing affiliated
+// schema becomes a startup failure instead of a warning after upgrade.
+bool ProxySQL_Admin::verify_registered_server_module_tables_after_upgrade() {
+#ifdef PROXYSQL40
+	for (const auto protocol : {ProxySQL_ServerProtocol::mysql, ProxySQL_ServerProtocol::pgsql}) {
+		const auto tables = proxysql_active_server_module_tables(protocol);
+		if (tables.empty()) continue;
+		std::string error;
+		if (!proxysql_verify_server_module_tables(*configdb, protocol, tables, error)) {
+			proxy_error("Plugin server table upgrade preservation failed: %s\n", error.c_str());
+			return false;
+		}
+	}
+#endif
+	return true;
+}
 
 void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 	// this function is called only for configdb table
@@ -550,7 +571,6 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		);
 	}
 	configdb->execute("PRAGMA foreign_keys = ON");
-
 }
 
 

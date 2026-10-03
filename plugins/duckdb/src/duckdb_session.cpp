@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <climits>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -151,60 +150,27 @@ bool duckdb_execute_managed_set(const std::string& sql, DuckDBEngine& engine,
 	}
 
 	size_t separator = statement.find('=');
-	bool is_to_separator = false;
-	if (separator == std::string::npos) {
-		separator = find_to_keyword(statement);
-		is_to_separator = (separator != std::string::npos);
-	}
+	if (separator == std::string::npos) separator = find_to_keyword(statement);
 	if (separator == std::string::npos) return true;
 	const std::string name = lower(trim(statement.substr(0, separator)));
 	if (name != "memory_limit" && name != "threads" &&
 	    name != "enable_external_access" && name != "access_mode") return true;
 	handled = true;
-	// A TO separator points at the 't'; skip the two keyword characters
-	// and let trim() absorb any surrounding whitespace run.
-	std::string value = is_to_separator ? trim(statement.substr(separator + 2))
-	                                    : trim(statement.substr(separator + 1));
-	if (value.size() >= 2 && ((value.front() == '\'' && value.back() == '\'') ||
-	                        (value.front() == '"' && value.back() == '"'))) {
-		const char quote = value.front();
-		value = value.substr(1, value.size() - 2);
-		if (quote == '\'') {
-			for (size_t pos = 0; (pos = value.find("''", pos)) != std::string::npos;) {
-				value.replace(pos, 2, "'");
-				++pos;
-			}
-		}
-	}
+	(void)engine;
 	if (name == "access_mode") {
 		err = "duckdb-access_mode cannot be changed while the database is open; "
 		      "configure duckdb-read_only and reopen the DuckDB plugin";
 		return false;
 	}
-
-	DuckDBLiveSettings desired;
-	if (name == "memory_limit") {
-		desired.memory_limit = value;
-	} else if (name == "threads") {
-		try {
-			size_t used = 0;
-			const long parsed = std::stol(value, &used);
-			if (used != value.size() || parsed < 1 || parsed > INT_MAX) throw std::out_of_range("threads");
-			desired.threads = static_cast<int>(parsed);
-		} catch (...) {
-			err = "invalid duckdb-threads value: expected an integer greater than zero";
-			return false;
-		}
-	} else {
-		const std::string boolean = lower(value);
-		if (boolean == "true" || boolean == "1" || boolean == "on") desired.enable_external_access = true;
-		else if (boolean == "false" || boolean == "0" || boolean == "off") desired.enable_external_access = false;
-		else {
-			err = "invalid duckdb-enable_external_access value: expected a boolean";
-			return false;
-		}
-	}
-	return engine.apply_live_settings(desired, err);
+	// These are engine-wide settings shared by every client of the single DuckDB
+	// database. Letting any client change them let one tenant lift the memory cap,
+	// spawn unbounded threads or disable external access for everyone (issue #6320),
+	// so only the Admin interface may change them. Every other engine-global setting
+	// (including aliases such as max_memory/worker_threads) is refused by the
+	// session-scope gate in duckdb_execute_effective().
+	err = name + " is an engine-wide DuckDB setting managed by ProxySQL; change duckdb-" + name +
+	      " through the ProxySQL Admin interface and run LOAD DUCKDB VARIABLES TO RUNTIME";
+	return false;
 }
 
 DuckDBIntercept duckdb_classify_query(const char* sql, size_t len) {
@@ -591,6 +557,186 @@ std::string trim_trailing_semicolons(const std::string& sql) {
 // duckdb_destroy_prepare(), even when duckdb_prepare() itself failed
 // (documented in duckdb.h above duckdb_prepare()) -- every prepare below
 // is paired with a destroy on every path.
+namespace {
+
+// Skips whitespace and SQL comments ("-- ..." to end of line, nested "/* ... */").
+size_t skip_space_and_comments(const std::string& sql, size_t i) {
+	while (i < sql.size()) {
+		if (std::isspace(static_cast<unsigned char>(sql[i]))) {
+			++i;
+		} else if (sql.compare(i, 2, "--") == 0) {
+			const size_t eol = sql.find_first_of("\r\n", i);
+			i = eol == std::string::npos ? sql.size() : eol + 1;
+		} else if (sql.compare(i, 2, "/*") == 0) {
+			size_t depth = 1;
+			i += 2;
+			while (i < sql.size() && depth != 0) {
+				if (sql.compare(i, 2, "/*") == 0) {
+					++depth;
+					i += 2;
+				} else if (sql.compare(i, 2, "*/") == 0) {
+					--depth;
+					i += 2;
+				} else {
+					++i;
+				}
+			}
+		} else {
+			break;
+		}
+	}
+	return i;
+}
+
+// Reads an unquoted identifier/keyword at `i` and returns it uppercased.
+std::string read_upper_word(const std::string& sql, size_t i) {
+	std::string word;
+	while (i < sql.size() && (std::isalnum(static_cast<unsigned char>(sql[i])) || sql[i] == '_')) {
+		word.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(sql[i]))));
+		++i;
+	}
+	return word;
+}
+
+// Skips one parenthesized group starting at `i` (which must be '('), honouring
+// nesting, comments and quoted strings/identifiers. Returns the index past the closing ')'.
+size_t skip_parenthesized(const std::string& sql, size_t i) {
+	size_t depth = 0;
+	while (i < sql.size()) {
+		i = skip_space_and_comments(sql, i);
+		if (i >= sql.size()) break;
+		const char c = sql[i];
+		if (c == '\'' || c == '"') {
+			const size_t close = sql.find(c, i + 1);
+			i = close == std::string::npos ? sql.size() : close + 1;
+			continue;
+		}
+		if (c == '(') {
+			++depth;
+		} else if (c == ')') {
+			--depth;
+			if (depth == 0) return i + 1;
+		}
+		++i;
+	}
+	return i;
+}
+
+// Reads the identifier at `i`, plain or double-quoted, and returns it lowercased.
+std::string read_lower_identifier(const std::string& sql, size_t i) {
+	std::string name;
+	if (i < sql.size() && sql[i] == '"') {
+		const size_t close = sql.find('"', i + 1);
+		name = sql.substr(i + 1, close == std::string::npos ? std::string::npos : close - i - 1);
+	} else {
+		name = read_upper_word(sql, i);
+	}
+	std::transform(name.begin(), name.end(), name.begin(),
+	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return name;
+}
+
+// PRAGMA statements (not assignments, which DuckDB turns into SET) that write
+// DBConfig, i.e. change the engine for every client.
+bool is_engine_wide_pragma(const std::string& name) {
+	return name == "enable_checkpoint_on_shutdown" || name == "disable_checkpoint_on_shutdown" ||
+	       name == "force_checkpoint";
+}
+
+/**
+ * @brief Applies the client configuration policy to one statement before it is prepared.
+ * @details All clients share one DuckDB database, so a SET or RESET that resolves to
+ *   global scope changes the engine for every tenant (issue #6320). DuckDB resolves an
+ *   unscoped `SET name` to session scope when the option supports a session value and
+ *   to global scope otherwise. Inserting an explicit SESSION keeps the first case
+ *   unchanged and makes DuckDB itself refuse the second ("cannot be set locally"),
+ *   which covers every global option, its aliases and quoted spellings without a
+ *   ProxySQL-side list of option names. SET GLOBAL is refused outright, and so is an
+ *   EXPLAIN wrapping SET, RESET or PRAGMA: EXPLAIN ANALYZE executes the wrapped
+ *   statement, and DuckDB then reports the statement type as EXPLAIN, not SET.
+ *
+ *   The policy is lexical and runs before duckdb_prepare(), because binding a SET
+ *   evaluates its value expression: the statement that runs must be prepared only
+ *   once, already confined. duckdb_execute_effective() checks the prepared statement
+ *   type afterwards and refuses any SET that was not confined here (for example a
+ *   configuration PRAGMA, which DuckDB also classifies as SET).
+ * @param confined set to true when `to_prepare` is a SET/RESET confined to session scope.
+ * @return false with `err` set when the statement must not run; otherwise `to_prepare`
+ *   holds the statement to prepare.
+ */
+bool apply_client_config_policy(const std::string& sql, std::string& to_prepare,
+                                bool& confined, std::string& err) {
+	confined = false;
+	const size_t keyword_at = skip_space_and_comments(sql, 0);
+	const std::string keyword = read_upper_word(sql, keyword_at);
+	if (keyword == "EXPLAIN") {
+		size_t i = keyword_at + keyword.size();
+		for (;;) {
+			i = skip_space_and_comments(sql, i);
+			if (i < sql.size() && sql[i] == '(') {
+				i = skip_parenthesized(sql, i);
+				continue;
+			}
+			const std::string modifier = read_upper_word(sql, i);
+			if (modifier != "ANALYZE" && modifier != "ANALYSE" && modifier != "VERBOSE") break;
+			i += modifier.size();
+		}
+		const std::string wrapped = read_upper_word(sql, i);
+		if (wrapped == "SET" || wrapped == "RESET" || wrapped == "PRAGMA") {
+			err = "EXPLAIN of a " + wrapped + " statement is not allowed: DuckDB configuration can only be "
+			      "changed by clients with SET SESSION or RESET SESSION";
+			return false;
+		}
+		to_prepare = sql;
+		return true;
+	}
+	if (keyword != "SET" && keyword != "RESET") {
+		to_prepare = sql;
+		return true;
+	}
+	const size_t scope_at = skip_space_and_comments(sql, keyword_at + keyword.size());
+	const std::string scope = read_upper_word(sql, scope_at);
+	if (scope == "GLOBAL") {
+		err = keyword + " GLOBAL is not allowed: engine-wide DuckDB settings are managed through "
+		      "the ProxySQL Admin interface (duckdb-* variables)";
+		return false;
+	}
+	if (scope == "SESSION" || scope == "LOCAL" || scope == "VARIABLE") {
+		to_prepare = sql;
+	} else {
+		to_prepare = sql.substr(0, scope_at) + "SESSION " + sql.substr(scope_at);
+	}
+	confined = true;
+	return true;
+}
+
+// Refuses a prepared statement the lexical policy could not see through: a SET that
+// was not confined (a configuration PRAGMA such as `PRAGMA threads=64`), or a PRAGMA
+// that writes engine-wide configuration.
+bool check_prepared_config_policy(const std::string& sql, duckdb_statement_type type,
+                                  bool confined, std::string& err) {
+	if (type == DUCKDB_STATEMENT_TYPE_SET && !confined) {
+		err = "DuckDB configuration can only be changed by clients with SET SESSION or RESET SESSION; "
+		      "configuration PRAGMAs are not allowed";
+		return false;
+	}
+	if (type == DUCKDB_STATEMENT_TYPE_PRAGMA) {
+		const size_t keyword_at = skip_space_and_comments(sql, 0);
+		if (read_upper_word(sql, keyword_at) == "PRAGMA") {
+			const size_t name_at = skip_space_and_comments(sql, keyword_at + 6);
+			const std::string name = read_lower_identifier(sql, name_at);
+			if (is_engine_wide_pragma(name)) {
+				err = "PRAGMA " + name + " changes engine-wide DuckDB configuration and is not allowed "
+				      "for clients";
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+} // namespace
+
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective) {
 	DuckDBExecOutcome outcome;
 	const DuckDBTxnVerb verb = classify_txn_verb(effective);
@@ -613,8 +759,19 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		return false;
 	};
 
+	// The configuration policy runs before the single prepare below: binding a SET
+	// evaluates its value, so it must be confined before it is ever prepared.
+	std::string to_prepare;
+	bool confined_set = false;
+	std::string policy_error;
+	if (!apply_client_config_policy(effective, to_prepare, confined_set, policy_error)) {
+		outcome.ok = false;
+		outcome.error = policy_error;
+		return finish();
+	}
+
 	duckdb_prepared_statement stmt = nullptr;
-	if (duckdb_prepare(conn, effective.c_str(), &stmt) != DuckDBSuccess) {
+	if (duckdb_prepare(conn, to_prepare.c_str(), &stmt) != DuckDBSuccess) {
 		// duckdb_prepare_error() must be read BEFORE duckdb_destroy_prepare()
 		// -- like duckdb_result_error(), the message lives inside the
 		// prepared statement and does not survive its destruction.
@@ -625,6 +782,15 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		return finish();
 	}
 	const duckdb_statement_type statement_type = duckdb_prepared_statement_type(stmt);
+	if (!check_prepared_config_policy(effective, statement_type, confined_set, policy_error)) {
+		duckdb_destroy_prepare(&stmt);
+		outcome.ok = false;
+		outcome.error = policy_error;
+		return finish();
+	}
+	// A SET/RESET keyword prefix always parses to a SET statement; this keeps the
+	// error hint below from firing for anything else.
+	confined_set = confined_set && statement_type == DUCKDB_STATEMENT_TYPE_SET;
 	const bool mutates_rows = statement_type == DUCKDB_STATEMENT_TYPE_INSERT ||
 		statement_type == DUCKDB_STATEMENT_TYPE_UPDATE ||
 		statement_type == DUCKDB_STATEMENT_TYPE_DELETE;
@@ -725,6 +891,11 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		outcome.error = msg != nullptr ? msg : "DuckDB query failed";
 		outcome.error_type = duckdb_result_error_type(&res);
 		duckdb_destroy_result(&res);
+		if (confined_set && (outcome.error.find("cannot be set locally") != std::string::npos ||
+			outcome.error.find("cannot be reset locally") != std::string::npos)) {
+			outcome.error += " (engine-wide DuckDB settings are managed through the ProxySQL Admin "
+			                 "interface: duckdb-* variables)";
+		}
 		if (owns_transaction) {
 			DuckDBExecOutcome execution_error = outcome;
 			(void)run_control("ROLLBACK");
@@ -892,7 +1063,7 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		switch (hdr.type) {
 		case 'Q':
 			break;
-		case PG_PKT_STARTUP_V2:
+		case PG_PKT_STARTUP_UNSUPPORTED:
 		case PG_PKT_STARTUP:
 		case PG_PKT_CANCEL:
 		case PG_PKT_SSLREQ:

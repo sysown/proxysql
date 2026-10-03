@@ -46,22 +46,11 @@ for PORT in 3306 3307 3308; do
     fi
 done
 
-# Report each session's own GTID in the OK packet, as the MySQL binlog infras do
-# with session_track_gtids=OWN_GTID. MariaDB has no SESSION_TRACK_GTIDS; its
-# equivalent is tracking the 'last_gtid' system variable. Applies to connections
-# opened from now on, i.e. before ProxySQL is configured.
-for PORT in 3306 3307 3308; do
-    docker exec "${CONTAINER}" mysql -h127.0.0.1 -P${PORT} -uroot -p"${ROOT_PASSWORD}" -e \
-        "SET GLOBAL session_track_system_variables = CONCAT_WS(',', NULLIF(@@global.session_track_system_variables, ''), 'last_gtid')" 2>/dev/null
-    TRACKED=$(docker exec "${CONTAINER}" mysql -h127.0.0.1 -P${PORT} -uroot -p"${ROOT_PASSWORD}" -N -B \
-        -e "SELECT FIND_IN_SET('last_gtid', @@global.session_track_system_variables)" 2>/dev/null)
-    if [ "${TRACKED:-0}" -gt 0 ]; then
-        echo "MariaDB ${PORT}: last_gtid session tracking enabled"
-    else
-        echo "ERROR: MariaDB ${PORT} does not track last_gtid"
-        exit 1
-    fi
-done
+# The servers keep MariaDB's stock session-tracking defaults, which do not
+# include 'last_gtid'. Reporting each session's own GTID in the OK packet is
+# ProxySQL's job: with mysql-default_session_track_gtids=OWN_GTID it adds
+# 'last_gtid' to every backend connection's session_track_system_variables.
+# Enabling it globally here would hide a broken ProxySQL path (issue #6331).
 
 # Verify replication is working on nodes 2 and 3.
 # MariaDB reports this through SHOW SLAVE STATUS (it has no Replica_*_Running

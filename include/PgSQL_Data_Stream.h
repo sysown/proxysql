@@ -146,6 +146,14 @@ public:
 	bool auth_received_startup = false;
 	unsigned char tmp_login_salt[4];
 	ScramState* scram_state;
+	// The stored secret of a login still in progress. SCRAM takes two packets and the credential is
+	// looked up again on the second, so a reload in between would otherwise change it mid-login.
+	// It covers that gap only. The earlier lookup that picks the authentication method is not held,
+	// so a reload before the first password packet still breaks the login -- it fails, which is safe.
+	char* pending_auth_secret = nullptr;
+	// Wipes and releases that secret. Called on every outcome that ends the login, and again from
+	// the destructor, so a rejected or stalled client leaves no stored password on the heap.
+	void clear_pending_auth_secret();
 
 	unsigned int connect_tries;
 	int query_retries_on_failure;
@@ -215,6 +223,7 @@ public:
 	// so every caller must give up instead of carrying on.
 	bool adopt_backend_tls();
 	void release_backend_tls();
+	void refuse_reuse_on_stranded_tls();
 
 	// safe way to attach a PgSQL Connection
 	void attach_connection(PgSQL_Connection* mc) {
@@ -228,6 +237,10 @@ public:
 		//
 		// we have a similar code in MySQL_Connection
 		// in case of ASYNC_CONNECT_SUCCESSFUL
+		//
+		// For futher details:
+		// - without ssl: we use the file descriptor from pgsql connection
+		// - with ssl: we use the SSL structure from pgsql connection
 		if (sess != NULL && sess->session_fast_forward) {
 			// Relaying without the backend's TLS would put plaintext on an encrypted
 			// socket. Close the session instead; the connection is already flagged.
@@ -243,6 +256,9 @@ public:
 		// Give the TLS back while we still hold the connection, fast forward flag or
 		// not: a COPY clears that flag before the connection is pooled.
 		release_backend_tls();
+		// The session's named portals lived on this connection; they died with it. Done
+		// before myconn is cleared, because the session matches them by that pointer.
+		if (sess) sess->backend_connection_detached(myconn);
 		myconn->myds = NULL;
 		myconn = NULL;
 	}

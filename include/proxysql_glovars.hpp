@@ -217,6 +217,12 @@ class ProxySQL_GlobalVariables {
 	void process_opts_post();
 	void parse(int argc, const char * argv[]);
 	void install_signal_handler();
+#ifdef PROXYSQL40
+	// Append managed startup fields to preserve the older public data prefix.
+	// The profile only selects startup configuration/lifecycle.
+	bool aws_managed{false};
+	std::string aws_managed_bootstrap;
+#endif
 };
 
 #ifdef PROXYSQL40

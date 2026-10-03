@@ -1,7 +1,6 @@
 #include <iostream>     // std::cout
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
-#include <random>
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -871,9 +870,7 @@ ProxySQL_HTTP_Server::ProxySQL_HTTP_Server() {
 
 namespace {
 char random_hex_char() {
-	thread_local std::mt19937 rng(std::random_device{}());
-	thread_local std::uniform_int_distribution<int> dist(0, 15);
-	return "0123456789abcdef"[dist(rng)];
+	return "0123456789abcdef"[rand_fast() & 0x0f];
 }
 } // namespace
 

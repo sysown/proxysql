@@ -1,6 +1,6 @@
 # ProxySQL CI Architecture
 
-**Last updated:** 2026-09-29
+**Last updated:** 2026-09-30
 
 This document is the authoritative reference for ProxySQL's GitHub Actions CI
 setup. It covers the two-branch workflow split, the trigger chain, the test
@@ -113,7 +113,7 @@ concurrency:
 
 jobs:
   run:
-    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    if: ${{ (!github.event.workflow_run || !startsWith(github.event.workflow_run.display_title, '[ci:skip] ')) && (github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run) }}
     uses: sysown/proxysql/.github/workflows/ci-legacy-g1.yml@GH-Actions
     secrets: inherit
     with:
@@ -335,6 +335,37 @@ The build matrix (historical):
 | `ubuntu22, -tap` | `make ubuntu22-dbg` | debug + TAP test binaries | most test workflows |
 | `debian12, -dbg` | `make debian12-dbg` | debug | 3p integration workflows |
 | `ubuntu24, -tap-genai-gcov` | `make ubuntu24-dbg` | `PROXYSQLGENAI=1` + `WITHGCOV=1` | `CI-legacy-g2-genai` only |
+
+### Pause PR CI with `ci:skip`
+
+Add the `ci:skip` label to an early PR to skip automatic build/test jobs and
+standalone PR checks on subsequent pushes. Remove the label and push again to
+resume. Labels are read from the triggering PR event; adding or removing this
+label alone does not start build/test jobs or cancel runs. PR-triggered runs
+retain their event's labels on rerun. Manual dispatches, schedules, release
+builds, explicit bot mentions, and external apps such as CodeRabbit are
+unaffected.
+
+`CI-trigger` records the decision by prefixing its run title with `[ci:skip] `.
+Every `workflow_run` caller checks that prefix before invoking its reusable.
+This is necessary even when the trigger's own job is skipped: a completed
+trigger can still emit a downstream event. Preserve this guard when adding
+callers. Direct PR jobs check the label themselves, including fork builds.
+
+`CI-lint-groups-json` also listens to pushes. Its small, read-only `push-label`
+job checks current labels on open PRs for the exact pushed repository and
+branch before allowing the lint suite to start, including on reruns. This
+applies to any branch that heads a labeled PR. An API failure fails that job and blocks lint rather
+than treating unknown labels as permission to run. Skipped workflow/check
+records and this metadata job can still appear in Actions; this label suppresses
+the substantive jobs, not the creation of workflow records. Skipped jobs are
+not evidence that tests passed; branch-protection settings are unchanged.
+
+Rollout: merge these caller changes into `v3.0`, then update existing feature
+branches from `v3.0` before relying on the label. `workflow_run` callers come
+from the default branch, while push/PR workflows need the updated feature-branch
+files. No `GH-Actions` change is needed. Until both sides are updated, retain
+`[skip ci]` in commits that must not start CI.
 
 ### Opt-in TAP ASAN
 
@@ -684,7 +715,10 @@ not run unit tests. Every tier uses GCOV in the shared TAP build and the same
 coverage collection steps. Only compile-time product flags and version-based
 test filtering differ; sanitizer options and test commands are shared.
 
-`CI-maketest` and CodeQL use the same producer-bound selection. Standalone
+CodeQL uses the same producer-bound selection. `CI-maketest` compiles the six
+simulator targets independently at 02:17 UTC nightly (v4.0), or by manual
+dispatch with v4.0, v3.1, or v3.0 selected. It no longer runs in the PR cascade
+or consumes producer artifacts; actual simulator test runs remain in PR CI. Standalone
 macOS smoke, cluster simulation, and PostgreSQL compatibility workflows keep
 their existing triggers and snapshot the same tier labels once per run. Reruns
 reuse that snapshot. Cluster simulation caches and all matrix artifacts include
@@ -843,10 +877,19 @@ All `CI-*.yml` files on `v3.0` as of 2026-04-11. Status is as observed on
 
 ### Orchestration
 
+On each PR open, reopen, or new head, `CI-cancel-superseded` runs trusted
+`GH-Actions` control code on a GitHub-hosted runner to cancel older CI for that
+PR. It follows downstream runs back to their originating trigger and checks
+the current PR head before cancellation. Producers and consumers also reject
+superseded PR work before registering checks or reading artifacts. Label-only
+changes do not trigger the sweep. Deploy the engine reusable before the caller.
+
 | Caller (v3.0) | Reusable (GH-Actions) | Trigger | Purpose | Status |
 |---|---|---|---|---|
 | `CI-trigger.yml` | `ci-trigger.yml` | `push`, `pull_request`, `workflow_dispatch` | Anchor PR `head_sha`, block on `CI-builds` | ✅ |
 | `CI-builds.yml` | `ci-builds.yml` | `workflow_run[in_progress]` on `CI-trigger` | Build the handoff, publish the artifact | ✅ |
+| `CI-cancel-superseded.yml` | `ci-cancel-superseded.yml` | `pull_request_target`: opened, reopened, synchronize | Cancel superseded PR runs without waiting for self-hosted runners | ✅ |
+| `CI-maketest.yml` | *(inline, no reusable)* | Nightly 02:17 UTC; `workflow_dispatch` | Compile six simulator targets independently of PR CI | ✅ |
 | `CI-lint-groups-json.yml` | *(inline, no reusable)* | `push`, `pull_request` on `groups.json` only | Lint `test/tap/groups/groups.json` format | ✅ |
 
 ### TAP test groups (dedicated-reusable pattern)
@@ -857,7 +900,6 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 |---|---|---|---|---|---|
 | `CI-basictests.yml` | `ci-basictests.yml` | `basictests` | mysql57 | `ubuntu22-tap_src` | ✅ |
 | `CI-selftests.yml` | `ci-selftests.yml` | — (no group) | — | `ubuntu22-tap_src` | ✅ |
-| `CI-maketest.yml` | `ci-maketest.yml` | — (runs `make test` in Docker) | mysql57 | `ubuntu22-tap_src` | ✅ |
 | `CI-legacy-g1.yml` | `ci-legacy-g1.yml` | `legacy-g1` | mysql57, mariadb10, pgsql16 | `ubuntu22-tap_src` + `_test` | ✅ (new, PR #5597) |
 | `CI-legacy-g2.yml` | `ci-legacy-g2.yml` | `legacy-g2` | mysql57, mariadb10, pgsql16, clickhouse23 | `ubuntu22-tap_src` + `_test` | ✅ |
 | `CI-legacy-g2-genai.yml` | `ci-legacy-g2-genai.yml` | `legacy-g2` | mysql57, mariadb10, pgsql16, clickhouse23 | `ubuntu24-tap-genai-gcov_src` + `_test` | ✅ |
@@ -894,6 +936,12 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 | `CI-package-arm64-tarball.yml` | *(self-contained)* | `workflow_dispatch` | Build generic Linux `.tar.gz` (arm64, all tiers) | ✅ |
 
 ### Third-party integration (`CI-3p-*`)
+
+Callers of the `ci-3p-*` reusable workflows must allow `actions: write`,
+`pull-requests: read`, `checks: write`, and `contents: read`. The context job needs Actions write
+permission to cancel superseded same-repository PR runs. Test and summary
+jobs retain `actions: read`; manual and cross-repository executions do not
+use the PR cancellation guard.
 
 Sixteen workflows test ProxySQL against external client libraries, independent
 of the build cache (they build ProxySQL inline inside the workflow). They
@@ -1224,6 +1272,11 @@ binary directly and print a summary.
 ---
 
 ## Understanding GitHub Actions vocabulary — read this first if confused
+
+The `CI-maketest` examples below describe its historical PR caller/reusable
+structure. It now runs as an inline nightly/manual workflow; see the workflow
+catalogue above for its current triggers. The naming and matrix concepts still
+apply to the other caller/reusable workflow pairs.
 
 This section is the long-form explanation of the terminology. If you just
 want a word defined quickly, skip to the [compact glossary](#glossary-quick-reference)

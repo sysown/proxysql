@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   run:
-    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    if: ${{ (!github.event.workflow_run || !startsWith(github.event.workflow_run.display_title, '[ci:skip] ')) && (github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run) }}
     # The shared ubuntu24 PROXYSQL40+GCOV handoff builds every chassis plugin.
     # mysql_router stages its real .so in test/tap/tap/_runtime_libs so this
     # group does not depend on the GenAI-only restore destination.

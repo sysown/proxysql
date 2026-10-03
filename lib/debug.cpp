@@ -224,7 +224,7 @@ extern "C" void proxy_debug_func(
 		va_start(ap, fmt);
 		vsnprintf(origdebugbuff, DEBUG_MSG_MAXSIZE,fmt,ap);
 		va_end(ap);
-		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d#%s LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, GloVars.global.gdbg_lvl[module].name, verbosity, origdebugbuff);
+		snprintf(longdebugbuff, sizeof(longdebugbuff), "%llu(%llu): %d:%s:%d:%s(): MOD#%d#%s LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, GloVars.global.gdbg_lvl[module].name, verbosity, origdebugbuff);
 	}
 #ifdef __GLIBC__
 	if (GloVars.global.gdbg_lvl[module].verbosity>=10) {

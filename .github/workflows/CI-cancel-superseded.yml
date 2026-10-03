@@ -1,0 +1,35 @@
+name: CI-cancel-superseded
+run-name: >-
+  ${{ github.event_name == 'push'
+      && format('Cancel superseded CI on {0}', github.ref_name)
+      || format('Cancel superseded CI for PR {0}', github.event.pull_request.number) }}
+
+on:
+  # Execute trusted base-branch control code only; never check out PR code.
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  push:
+    # Mirror CI-trigger exactly. Without the same filters the sweeper would
+    # fire on pushes that start no cascade, and would then cancel the
+    # previous commit's in-flight CI over a docs-only change.
+    branches:
+    - 'v[0-9].[0-9x]+.?[0-9xy]?[0-9]?'
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+concurrency:
+  # A delayed event for an old head must not cancel the new head's sweep.
+  # PR and push sweeps are kept in separate groups so a push can never
+  # cancel an unrelated PR's sweep.
+  group: cancel-superseded-${{ github.event_name == 'push' && format('push-{0}-{1}', github.ref_name, github.event.after) || format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
+  cancel-in-progress: true
+
+jobs:
+  cancel:
+    uses: sysown/proxysql/.github/workflows/ci-cancel-superseded.yml@GH-Actions
