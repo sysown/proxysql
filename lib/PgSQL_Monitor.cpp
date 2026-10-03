@@ -1,5 +1,6 @@
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Monitor.hpp"
+#include "PgSQL_LSN_Monitor.h"
 #include "PgSQL_Thread.h"
 #include "ProxySQL_ServerDiscovery.h"
 
@@ -2505,6 +2506,30 @@ tasks_intvs_t compute_next_intvs(
 static void run_pgsql_monitor(PgSQL_Thread* pgsql_thread, unsigned int& variables_version) {
 	uint32_t worker_threads_count = pgsql_thread___monitor_threads;
 	vector<worker_thread_t> workers {};
+	std::map<pgsql_lsn::Endpoint, mon_srv_t> lsn_servers;
+	unsigned int lsn_servers_version = 0;
+	bool lsn_config_loaded = false;
+	PgSQL_LSN_Monitor lsn_monitor(PgHGM->lsn_manager(), [&](const pgsql_lsn::Endpoint& endpoint)
+		-> std::optional<std::string> {
+		auto server = lsn_servers.find(endpoint);
+		if (server == lsn_servers.end()) return {};
+		task_st_t task{};
+		task.op_st.srv_info = server->second;
+		task.op_st.user_info = {
+			pgsql_thread___monitor_username ? pgsql_thread___monitor_username : "",
+			pgsql_thread___monitor_password ? pgsql_thread___monitor_password : "",
+			pgsql_thread___monitor_dbname ? pgsql_thread___monitor_dbname : "postgres"};
+		std::ostringstream conninfo;
+		conninfo << build_conn_str(task) << "replication=database ";
+		if (endpoint.address.empty() || endpoint.address[0] != '/') {
+			const auto address = PgSQL_Monitor::dns_lookup(endpoint.address, false);
+			// PQconnectStart resolves hostnames synchronously. Let the existing
+			// DNS cache supply hostaddr so this scheduler cannot block on DNS.
+			if (address.empty()) return {};
+			append_conninfo_param(conninfo, "hostaddr", address);
+		}
+		return conninfo.str();
+	});
 
 	// Worker-count changes take effect on the next enable.
 	for (uint32_t i = 0; i < worker_threads_count; i++) {
@@ -2536,6 +2561,21 @@ static void run_pgsql_monitor(PgSQL_Thread* pgsql_thread, unsigned int& variable
 		if (!pgsql_thread___monitor_enabled) { break; }
 
 		cur_intv_start = monotonic_time();
+		const unsigned int servers_version = PgHGM->get_servers_table_version();
+		if (!lsn_config_loaded || vars_refreshed || servers_version != lsn_servers_version) {
+			lsn_monitor.reset();
+			lsn_servers.clear();
+			for (const auto& server : ext_srvs(fetch_hgm_srvs_conf(PgHGM,
+				"SELECT hostgroup_id,hostname,port,use_ssl FROM pgsql_servers WHERE status<>3")))
+				lsn_servers[{server.addr, server.port}] = server;
+			lsn_servers_version = servers_version;
+			lsn_config_loaded = true;
+			GloPTH->signal_all_threads(0);
+		}
+		if (lsn_monitor.tick(cur_intv_start, uint64_t(pgsql_thread___lsn_poll_interval) * 1000,
+			uint64_t(pgsql_thread___monitor_connect_timeout) * 1000,
+			uint64_t(pgsql_thread___monitor_replication_lag_timeout) * 1000))
+			GloPTH->signal_all_threads(0);
 
 #ifdef PROXYSQL40
 		const uint64_t current_wake_epoch = proxysql_server_read_only_monitor_epoch(
@@ -2708,10 +2748,12 @@ static void run_pgsql_monitor(PgSQL_Thread* pgsql_thread, unsigned int& variable
 			const uint64_t next_intv_diff { upd_closest_intv < curtime ? 0 : upd_closest_intv - curtime };
 			const uint64_t sched_wait_us { std::min({ batches_max_wait, next_intv_diff }) };
 
-			usleep(sched_wait_us > MAX_CHECK_DELAY_US ? MAX_CHECK_DELAY_US : sched_wait_us);
+			lsn_monitor.wait(std::min<uint64_t>(sched_wait_us, MAX_CHECK_DELAY_US));
 		}
 	}
 
+	lsn_monitor.reset();
+	if (GloPTH) GloPTH->signal_all_threads(0);
 	proxy_info("Stopping PgSQL Monitor workers\n");
 
 	// Wakeup workers for shutdown
