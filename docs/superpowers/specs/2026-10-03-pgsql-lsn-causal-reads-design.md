@@ -1,5 +1,17 @@
 # PostgreSQL LSN Causal Reads Design
 
+> Architecture correction approved on 2026-10-04: LSN tracking is keyed solely
+> by `hostname:port`. A physical server has one progress record, one probe
+> connection, and one open/sealed completion batch pair, regardless of its
+> hostgroup memberships. Tokens and dependencies contain no hostgroup IDs.
+> Probes discover recovery role from PostgreSQL. Hostgroups are routing policy
+> only; they select candidates and a fallback destination outside the tracker.
+> `stats_pgsql_lsn` contains exactly `hostname`, `port`, and `lsn`, with SQL NULL
+> for an unknown or withdrawn position. Incarnation checks remain internal.
+> The design below incorporates this correction. Implementation and validation
+> progress are recorded separately in the implementation plan.
+
+
 Status: Accepted for implementation planning. This document specifies behavior;
 it does not describe an implemented or benchmarked feature.
 
@@ -93,20 +105,21 @@ waiting requests retain their policy until they complete or are cancelled.
 ## Components and ownership
 
 Introduce `PgSQL_LSN_Manager` with small, testable types for positions, batch
-state, server progress, and eligibility. It owns group generations and monitor
+state, server progress, and eligibility. It owns physical server generations and monitor
 publication. It performs no blocking database or network operations.
 
 | Owner | State and responsibility |
 | --- | --- |
-| Group | Writer identity, generation, one open batch, at most one sealed unresolved batch, reader membership. |
-| Frontend session | Per-group dependency: generation, source writer incarnation, maximum resolved required LSN, reference to latest pending batch. |
+| Physical server (`hostname:port`) | Identity, generation, one progress record, one open batch and at most one sealed unresolved batch. |
+| Hostgroup manager | Activation, candidate membership and fallback routing; no per-hostgroup copy of LSN state. |
+| Frontend session | Per-originating-server dependency: generation, source writer incarnation, maximum resolved required LSN, reference to latest pending batch. |
 | Monitor | Dedicated connections, sampling cadence, probe deadlines, role and identity validation, immutable progress publication. |
-| Server progress | System identifier, timeline, postmaster start time, monitor connection generation, replay LSN, role, validity, last sample times and error. |
+| Server progress | System identifier, timeline, postmaster start time, monitor connection generation, replay LSN, role, validity and internal sample ordering. |
 | Worker thread | Request deadlines, pending reads, connection eligibility checks and wakeups. |
 
 Store LSNs as validated unsigned 64-bit values; format them as PostgreSQL `X/Y`
 only at SQL and diagnostic boundaries. A missing or malformed LSN is unknown,
-not zero. Compare numeric positions only after matching group, identity, and
+not zero. Compare numeric positions only after matching physical server certificates, WAL identity, and
 timeline requirements.
 
 Session dependencies survive backend multiplexing, ordinary transaction
@@ -116,8 +129,8 @@ dependencies. A new frontend connection starts a new consistency scope.
 ## Writer batching and the ordering proof
 
 All writer completion events and batch rotation are serialized under a small
-per-group lock. A completion event is tagged with its actual source backend's
-writer incarnation and group generation.
+per-server lock. A completion event is tagged with its actual source backend's
+writer incarnation and physical server generation.
 
 1. At a safe completed writer boundary, attach the session to the current open
    batch before exposing the completed idle boundary to the frontend. Forward
@@ -151,7 +164,7 @@ operation. Unrelated later polling cannot advance an already resolved batch.
 
 If a probe fails transiently, retain its sealed batch for a later retry on the
 same writer incarnation. Later operations join the open batch while it waits.
-There remain at most two unresolved batch objects per group. After successful
+There remain at most two unresolved batch objects per physical writer. After successful
 resolution, a subsequent probe can seal the accumulated open batch. Disconnects
 release session references; no monitor task retains a raw session pointer.
 Resolved objects remain alive only while referenced. Generation invalidation
@@ -202,28 +215,26 @@ validation path; version one must report that limitation rather than silently
 fall back to unqualified numeric LSN comparisons.
 
 On connection establishment, run `IDENTIFY_SYSTEM` to obtain the system identifier
-and current timeline. A normal probe then executes a role-appropriate SQL query:
+and current timeline. Discover the server's role in the sample itself; hostgroup
+membership never tells the sampler whether a server is a writer or replica:
 
 ```sql
--- Writer sample, sent after sealing its batch.
-SELECT pg_catalog.pg_postmaster_start_time(),
+SELECT (EXTRACT(EPOCH FROM pg_catalog.pg_postmaster_start_time())*1000000)::bigint,
        pg_catalog.pg_is_in_recovery(),
-       CASE WHEN NOT pg_catalog.pg_is_in_recovery()
-            THEN pg_catalog.pg_current_wal_insert_lsn()
+       CASE WHEN pg_catalog.pg_is_in_recovery()
+            THEN pg_catalog.pg_last_wal_replay_lsn()
+            ELSE pg_catalog.pg_current_wal_insert_lsn()
        END;
-
--- Replica sample.
-SELECT pg_catalog.pg_postmaster_start_time(),
-       pg_catalog.pg_is_in_recovery(),
-       pg_catalog.pg_last_wal_replay_lsn();
 ```
+
+Seal any pending writer batch before sending this query.
 
 Follow each SQL sample with `IDENTIFY_SYSTEM` on that same uninterrupted
 connection. Publish only when the identity matches the preceding identity check,
-the role is appropriate, and the connection, postmaster, and group generations
+the role is appropriate, and the connection, postmaster, and physical server generations
 are unchanged. The previous identity response acts as the first side of this
 check; it is not a timestamp-based inference. A mismatch discards the sample
-and invokes the relevant endpoint or writer-group invalidation before further
+and invokes the relevant physical endpoint invalidation before further
 publication. Establish a fresh initial identity check before resuming probes.
 
 This means two commands per regular probe plus initialization. At a 10 ms
@@ -318,7 +329,7 @@ portal affinity that prevent a safe route cause an error rather than a stale rea
 | Writer sample timeout | Keep the batch unresolved. Reads may still use the validated originating writer. |
 | Monitor connection reconnect | Invalidate that endpoint's certification and revalidate before reuse. Never combine identity from one connection with a sample from another. |
 | Replica restart or replacement | Discard its old replay watermark, invalidate its backend connection tags, then validate fresh progress. Other replicas can remain eligible. |
-| Writer replacement, restart, or timeline change | Advance the group generation and invalidate existing dependencies; never transplant them onto the new writer. |
+| Writer replacement, restart, or timeline change | Advance that physical server generation and invalidate existing dependencies; never transplant them onto the new writer. |
 | Replica on a different timeline | Exclude it in version one even if its numeric LSN is larger. |
 | Late monitor reply from an old generation | Discard it. It cannot resolve a batch or make a server eligible. |
 | Mapping removed or made ambiguous | Invalidate pending requests for the affected mapping. Weight-only changes preserve identity and dependencies. |
@@ -334,28 +345,19 @@ an application error.
 
 ## Observability and configuration lifecycle
 
-Expose `stats_pgsql_lsn` as one current row per monitored group/server with
-endpoint, role, group generation, system identifier, timeline, postmaster start,
-last insert or replay LSN, validity, sample age, last duration, and last error.
-Expose per-session required LSN, pending batch ID, generation, and wait state
-through existing internal session diagnostics. LSNs and batch IDs are not
-Prometheus labels.
+Expose `stats_pgsql_lsn` with exactly three columns:
 
-Add counters for writer batches and completions covered, successful and failed
-probes, replica reads, writer fallbacks, wait timeouts, cancellations, and history
-errors. Report current waiter count and total causal wait time. Keep operational
-probe history bounded by existing monitor history policy; avoid an SQLite write
-on every high-frequency successful probe when current state and counters suffice.
+| Column | Value |
+| --- | --- |
+| `hostname` | Configured server address. |
+| `port` | Configured server port. |
+| `lsn` | Last usable insertion LSN on a writer or replay LSN on a replica, formatted as `X/Y`; SQL NULL while unknown or withdrawn. |
 
-Include the activation column and variables in runtime load/save, disk upgrade,
-configuration import/export, admin validation, and ProxySQL Cluster checksums and
-sync. Upgrade old configurations with protection disabled. Mixed-version cluster
-peers must not silently lose an enabled flag: block incompatible synchronization
-of this configuration until peers understand the column.
-
-Live dependencies and batches are process-local and are never synchronized
-between ProxySQL instances. A proxy restart ends its frontend connections and
-therefore their in-process consistency scopes.
+There is one row per tracked physical endpoint, regardless of hostgroup
+memberships. It is a current-position snapshot, with no history rows or probe
+log fields. Identity, role, generations and sample ordering remain internal
+correctness data. Build the table on demand from copied server snapshots;
+monitor probes do not write SQLite rows.
 
 ## Repository integration
 

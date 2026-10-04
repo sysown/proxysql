@@ -1,6 +1,7 @@
 #ifndef PROXYSQL_PGSQL_HOSTGROUPS_MANAGER_H
 #define PROXYSQL_PGSQL_HOSTGROUPS_MANAGER_H
 #include "PgSQL_LSN_Manager.h"
+#include "PgSQL_LSN_Routing.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_gtid.h"
@@ -411,6 +412,9 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 #endif // 0
 	private:
 	PgSQL_LSN_Manager lsn_manager_;
+	mutable std::mutex lsn_policy_mutex_;
+	std::map<uint32_t, PgSQL_LSN_Policy> lsn_policies_;
+	std::atomic<uint64_t> lsn_policy_epoch_{0};
 	void refresh_lsn_groups(); // Caller holds the hostgroup write lock.
 	enum HGM_TABLES {
 		PgSQL_SERVERS_V2 = 0,
@@ -709,6 +713,9 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	wqueue<PgSQL_Connection *> queue;
 
 	PgSQL_LSN_Manager& lsn_manager() { return lsn_manager_; }
+	void reconcile_lsn_policies(const std::vector<PgSQL_LSN_Policy>&);
+	std::optional<PgSQL_LSN_Policy> lsn_policy_for_hostgroup(uint32_t) const;
+	uint64_t lsn_policy_epoch() const { return lsn_policy_epoch_.load(); }
 	int lsn_query_timeout(unsigned int hostgroup);
 	static bool validate_lsn_replication_rows(const SQLite3_result*, std::string& error);
 	PgSQL_HostGroups_Manager();

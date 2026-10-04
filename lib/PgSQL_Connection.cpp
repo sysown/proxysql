@@ -434,7 +434,7 @@ handler_again:
 			assert(0); // shouldn't ever reach here, we have messed up the state machine
 		
 		if (get_pg_ssl_in_use()) {
-			if (myds && myds->sess && myds->sess->session_fast_forward && !myds->sess->lsn_request.group) {
+			if (myds && myds->sess && myds->sess->session_fast_forward && !myds->sess->lsn_request.policy) {
 				// Native connections come through here too. adopt_backend_tls() shares this
 				// connection's own memory BIOs with the stream instead of installing a new
 				// pair, so nothing the connection still uses gets freed underneath it.
@@ -6261,6 +6261,12 @@ void PgSQL_Connection::lsn_on_ready_for_query(char status) {
 }
 
 void PgSQL_Connection::lsn_begin_application_cycle() {
+	// Retain the route before dispatch, including when the writer disappears
+	// before any idle completion can be acknowledged.
+	if (lsn_stamp && lsn_stamp->role == pgsql_lsn::Role::Writer && PgHGM && parent && parent->myhgc && myds && myds->sess) {
+		const auto policy = PgHGM->lsn_policy_for_hostgroup(parent->myhgc->hid);
+		if (policy) myds->sess->lsn_route_sources[policy->writer_hostgroup] = lsn_stamp->endpoint;
+	}
 	if (!lsn_application_cycle_active) {
 		++lsn_application_cycle_serial;
 		lsn_application_owner = myds ? myds->sess : nullptr;
@@ -6273,7 +6279,7 @@ void PgSQL_Connection::lsn_connection_lost() {
 		(lsn_application_cycle_active || native_txn_status != 'I')) {
 		lsn_outcome_unknown = true;
 		if (myds && myds->sess)
-			myds->sess->lsn_errors[lsn_stamp->group] = pgsql_lsn::Reason::HistoryChanged;
+			myds->sess->lsn_errors[lsn_stamp->endpoint] = pgsql_lsn::Reason::HistoryChanged;
 	}
 	lsn_stamp.reset();
 	lsn_bootstrap_active = false;
@@ -6286,11 +6292,8 @@ int PgSQL_Connection::async_validate_lsn_incarnation(short event) {
 	auto& manager = PgHGM->lsn_manager();
 	const Endpoint endpoint{parent->address, parent->port};
 	auto current_certificate = [&]() -> std::optional<ServerToken> {
-		auto id = manager.group_for_hostgroup(parent->myhgc->hid);
-		if (!id) return {};
-		const auto group = manager.snapshot(*id);
-		for (const auto& progress : group.servers)
-			if (progress.valid && progress.server.endpoint == endpoint) return progress.server;
+		const auto server = manager.snapshot(endpoint);
+		if (server.progress && server.progress->valid) return server.progress->server;
 		return {};
 	};
 	auto fail = [&](Reason reason, const char* detail) {
@@ -6332,8 +6335,9 @@ int PgSQL_Connection::async_validate_lsn_incarnation(short event) {
 
 	const Micros now = monotonic_time();
 	if (!lsn_bootstrap_active) {
-		const auto id = manager.group_for_hostgroup(parent->myhgc->hid);
-		if (!id || !manager.snapshot(*id).config.enabled) return 0;
+		const bool protected_request = myds && myds->sess && myds->sess->lsn_request.policy;
+		if (!protected_request && !PgHGM->lsn_policy_for_hostgroup(parent->myhgc->hid)) return 0;
+		if (!manager.snapshot(endpoint).generation) return fail(Reason::NoSafeBackend, "backend is no longer tracked");
 		const auto certificate = current_certificate();
 		if (!certificate) return fail(Reason::NoSafeBackend, "backend has no current monitor certification");
 		if (lsn_stamp && *lsn_stamp == *certificate) return 0;

@@ -1,10 +1,33 @@
 # PostgreSQL LSN Causal Reads Implementation Plan
 
+> Architecture correction approved on 2026-10-04: LSN tracking is keyed solely
+> by `hostname:port`. A physical server has one progress record, one probe
+> connection, and one open/sealed completion batch pair, regardless of its
+> hostgroup memberships. Tokens and dependencies contain no hostgroup IDs.
+> Probes discover recovery role from PostgreSQL. Hostgroups are routing policy
+> only; they select candidates and a fallback destination outside the tracker.
+> `stats_pgsql_lsn` contains exactly `hostname`, `port`, and `lsn`, with SQL NULL
+> for an unknown or withdrawn position. Incarnation checks remain internal.
+> This correction supersedes the group-owned model and diagnostic schema below;
+> earlier task checkmarks describe the superseded implementation, not validation
+> of the corrected architecture.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Endpoint correction checkpoint, 2026-10-04:** The tracker, probe and monitor now
+contain no hostgroup keys. Routing policy remains in HGM. Verification passed:
+526 TAP unit assertions, five build-system tests, a PROXYSQL31 debug build, and
+71 manager assertions under ASan/UBSan. The explicit smoke test
+`python3 test/tap/tests/pgsql_lsn_endpoint_smoke.py` passed 18 live checks on a
+writer and two PostgreSQL 17 replicas across native/libpq backend modes,
+including one monitor connection per physical endpoint across three policies.
+The wider lifecycle, TLS, extended-protocol, non-PROXYSQL31 and benchmark work
+below remains pending; these smoke checks do not mark that matrix complete.
 
 **Goal:** Provide session read-your-writes consistency on PostgreSQL physical replicas using shared background LSN sampling and bounded asynchronous waits.
 
-**Architecture:** A hostgroup-owned manager batches observed writer completions and publishes immutable dependency and server-progress snapshots. Dedicated monitor connections certify WAL identity and progress; session and pool admission check those snapshots before acquiring a read snapshot. The frontend owns its dependencies across multiplexing.
+**Architecture:** An endpoint-owned manager batches observed writer completions and publishes immutable dependency and server-progress snapshots. Dedicated monitor connections certify WAL identity and progress; session and pool admission check those snapshots before acquiring a read snapshot. The frontend owns its dependencies across multiplexing.
 
 **Tech Stack:** C++17, existing PostgreSQL native and libpq backend paths, asynchronous monitor and worker infrastructure, SQLite admin configuration, TAP unit/integration tests, isolated PostgreSQL 17 containers.
 
@@ -195,11 +218,11 @@ pgsql_lsn::GroupSnapshot snapshot(pgsql_lsn::GroupId) const;
 
 **Files:** Modify `include/ProxySQL_Admin_Tables_Definitions.h`, `include/proxysql_admin.h`, `lib/ProxySQL_Admin.cpp`, `lib/ProxySQL_Admin_Stats.cpp`, `lib/PgSQL_HostGroups_Manager.cpp`, `lib/PgSQL_Thread.cpp`, `lib/PgSQL_Session.cpp`; create `docs/pgsql-lsn-causal-reads.md`; extend `test/tap/tests/unit/pgsql_lsn_config_unit-t.cpp`.
 
-**Interfaces:** Consume manager snapshots and worker/session state; add the admin table `stats_pgsql_lsn` and fields to existing session diagnostics. Publish one row per group/endpoint with writer/reader hostgroups, hostname/port, role, generation, system identifier, timeline, postmaster start, insert/replay LSN, validity, sample age, duration and error. Store unsigned identifiers and LSNs as lossless text at the SQLite boundary; absent progress is SQL NULL.
+**Interfaces (corrected 2026-10-04):** Materialize `stats_pgsql_lsn(hostname,port,lsn)` from physical server snapshots. One row per endpoint, irrespective of hostgroup membership. SQL NULL means no usable position. No hostgroup, generation, identity, timing or error columns; no additional counters or session diagnostic expansion in this change.
 
-- [ ] **Write export assertions** for unknown vs zero LSN, `UINT64_MAX`, invalidation, age/duration and error clearing. Assert diagnostics contain required LSN, pending batch ID, generation and wait state. Counters must distinguish covered completions, writer batches, successful/failed probes, replica reads, writer fallback, wait timeout, cancellation and history errors; expose waiter count and cumulative wait time.
-- [ ] **Run the config target to observe missing-schema/export failures.** Include the actual stats materialization path in the fixture.
-- [ ] **Implement current-state export and counters.** Snapshot under short locks, materialize SQLite rows outside manager locks, and avoid an SQLite write for every successful probe. Bound error/history storage using existing policy. Do not make LSNs, session identifiers or batch IDs Prometheus labels.
+- [x] **Write export assertions** for duplicate hostgroup memberships, unknown vs zero LSN, `UINT64_MAX`, withdrawal, recertification and removal.
+- [x] **Observe materializer failures**, then implement bound SQLite insertion outside tracker locks and hook on-demand stats refresh.
+- [x] **Run the config/export target:** 58 assertions passed after materialization was implemented.
 - [ ] **Write the operator document.** Include exact activation/knob SQL, monitor permissions and WAL sender capacity, one-writer/direct-endpoint requirements, zero-timeout behavior, cache bypass, existing-session activation error, timeline/restart behavior and mixed-version sync refusal. At 10 ms, explain the ceiling of 100 probes/~200 commands per continuously polled server per proxy; demand/backpressure can lower it. State that this is per-frontend read-your-writes, and reconnect does not certify lost writes survived failover.
 - [ ] **Run config/export tests and `git diff --check`; commit:** `feat(pgsql): expose LSN routing diagnostics`.
 
@@ -232,7 +255,7 @@ pgsql_lsn::GroupSnapshot snapshot(pgsql_lsn::GroupId) const;
 
 - [ ] **Run all new unit targets and the affected existing PostgreSQL protocol/cache/waiter targets.** Repeat the original 5 build-system checks. Build without `PROXYSQL31` in a separate disposable build worktree if necessary to verify compile guards; never reuse incompatible object files. Run ASan/UBSan on cancellation, connection loss, portal teardown and monitor shutdown paths, and a supported thread-sanitized pure-manager stress test for enrollment/publication races.
 - [ ] **Run live acceptance tests with release and debug builds.** Record exact command, backend mode, TAP counts and exit status. Any unavailable environment or unsupported sanitizer must be reported explicitly, not counted as passing. A missing required correctness run blocks a claim that the feature is validated.
-- [ ] **Measure disabled baseline and enabled 1/10/100 ms cases.** Keep data, concurrency and workload constant, include sustained unrelated writes and a paused replica, then disconnect clients to measure idle backoff. Assert no more than one active probe/endpoint, no accumulated overdue probes, two unresolved batches/group maximum, and no growing waiter/reference count after teardown. With identical sustained demand, more completions must increase batching rather than add a per-commit query. Report commit latency separately from first-read wait; defaults remain 10/100 unless measured evidence justifies a separately reviewed design change.
+- [ ] **Measure disabled baseline and enabled 1/10/100 ms cases.** Keep data, concurrency and workload constant, include sustained unrelated writes and a paused replica, then disconnect clients to measure idle backoff. Assert no more than one active probe/endpoint, no accumulated overdue probes, two unresolved batches/physical writer maximum, and no growing waiter/reference count after teardown. With identical sustained demand, more completions must increase batching rather than add a per-commit query. Report commit latency separately from first-read wait; defaults remain 10/100 unless measured evidence justifies a separately reviewed design change.
 - [ ] **Write measured results and limitations in the validation document.** No invented throughput targets; correctness and bounds above are mandatory, while latency/CPU observations inform future tuning. Distinguish actual test evidence from expected behavior.
 - [ ] **Run `git diff --check`, inspect the complete branch diff, and obtain the selected execution workflow's final code review.** Resolve material review findings and rerun affected checks before marking implementation complete.
 - [ ] **Commit validation artifacts:** `docs(pgsql): record LSN causal read validation`. Verify `git branch --contains dac3d99fa` and the final feature commit still exclude `v3.0`; leave the worktree/branch available for review. Do not merge or publish without the user's instruction.

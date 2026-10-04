@@ -2097,7 +2097,7 @@ bool PgSQL_HostGroups_Manager::validate_lsn_replication_rows(const SQLite3_resul
 		error = "Incompatible PostgreSQL replication configuration: peer must support lsn_causal_reads";
 		return false;
 	}
-	std::vector<pgsql_lsn::GroupConfig> groups;
+	std::vector<PgSQL_LSN_Policy> groups;
 	for (auto* row : rows->rows) {
 		if (!row->fields[0] || !row->fields[1] || !row->fields[4]
 			|| (strcmp(row->fields[4], "0") && strcmp(row->fields[4], "1"))) {
@@ -2107,7 +2107,16 @@ bool PgSQL_HostGroups_Manager::validate_lsn_replication_rows(const SQLite3_resul
 		groups.push_back({static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10)),
 			static_cast<uint32_t>(strtoul(row->fields[1], nullptr, 10)), row->fields[4][0] == '1', {}, {}});
 	}
-	return pgsql_lsn::validate_lsn_groups(groups, error);
+	std::map<uint32_t, unsigned> memberships;
+	for (const auto& group : groups) { ++memberships[group.writer_hostgroup]; ++memberships[group.reader_hostgroup]; }
+	for (const auto& group : groups) {
+		if (group.enabled && (memberships[group.writer_hostgroup] != 1 || memberships[group.reader_hostgroup] != 1)) {
+			error = "LSN causal hostgroups must have disjoint writer and reader membership";
+			return false;
+		}
+	}
+	error.clear();
+	return true;
 }
 
 void PgSQL_HostGroups_Manager::refresh_lsn_groups() {
@@ -2118,7 +2127,7 @@ void PgSQL_HostGroups_Manager::refresh_lsn_groups() {
 	if (error || !validate_lsn_replication_rows(mappings.get(), validation)) {
 		proxy_error("Cannot refresh LSN causal groups: %s\n", error ? error : validation.c_str());
 		free(error);
-		lsn_manager_.reconcile_groups({});
+		reconcile_lsn_policies({});
 		return;
 	}
 	std::unique_ptr<SQLite3_result> servers(mydb->execute_statement(
@@ -2126,13 +2135,13 @@ void PgSQL_HostGroups_Manager::refresh_lsn_groups() {
 	if (error || !servers) {
 		proxy_error("Cannot refresh LSN causal servers: %s\n", error ? error : "no result");
 		free(error);
-		lsn_manager_.reconcile_groups({});
+		reconcile_lsn_policies({});
 		return;
 	}
-	std::vector<pgsql_lsn::GroupConfig> groups;
+	std::vector<PgSQL_LSN_Policy> groups;
 	for (auto* row : mappings->rows) {
 		if (row->fields[4][0] != '1') continue;
-		pgsql_lsn::GroupConfig group;
+		PgSQL_LSN_Policy group;
 		group.writer_hostgroup = strtoul(row->fields[0], nullptr, 10);
 		group.reader_hostgroup = strtoul(row->fields[1], nullptr, 10);
 		group.enabled = true;
@@ -2142,14 +2151,43 @@ void PgSQL_HostGroups_Manager::refresh_lsn_groups() {
 			if (hostgroup == group.writer_hostgroup) group.writers.push_back(endpoint);
 			if (hostgroup == group.reader_hostgroup) group.readers.push_back(endpoint);
 		}
-		// monitor_writer_is_also_reader can duplicate a writer in the reader pool.
-		// It has one identity and must not be probed as a physical replica.
-		group.readers.erase(std::remove_if(group.readers.begin(), group.readers.end(), [&](const pgsql_lsn::Endpoint& e) {
-			return std::find(group.writers.begin(), group.writers.end(), e) != group.writers.end();
-		}), group.readers.end());
 		groups.push_back(std::move(group));
 	}
-	lsn_manager_.reconcile_groups(groups);
+	reconcile_lsn_policies(groups);
+}
+
+void PgSQL_HostGroups_Manager::reconcile_lsn_policies(const std::vector<PgSQL_LSN_Policy>& policies) {
+	std::lock_guard<std::mutex> lock(lsn_policy_mutex_);
+	std::map<uint32_t, PgSQL_LSN_Policy> next;
+	std::vector<pgsql_lsn::Endpoint> endpoints;
+	for (auto policy : policies) {
+		if (!policy.enabled) continue;
+		auto normalize = [](auto& list) { std::sort(list.begin(),list.end()); list.erase(std::unique(list.begin(),list.end()),list.end()); };
+		normalize(policy.writers); normalize(policy.readers);
+		const auto old = lsn_policies_.find(policy.writer_hostgroup);
+		if (old == lsn_policies_.end()) {
+			policy.activation_epoch = policy.version = ++lsn_policy_epoch_;
+		} else {
+			policy.activation_epoch = old->second.activation_epoch;
+			policy.version = old->second.version;
+			if (old->second.reader_hostgroup != policy.reader_hostgroup || old->second.writers != policy.writers ||
+				old->second.readers != policy.readers) policy.version = ++lsn_policy_epoch_;
+		}
+		endpoints.insert(endpoints.end(),policy.writers.begin(),policy.writers.end());
+		endpoints.insert(endpoints.end(),policy.readers.begin(),policy.readers.end());
+		next.emplace(policy.writer_hostgroup,std::move(policy));
+	}
+	for (const auto& old : lsn_policies_) if (!next.count(old.first)) ++lsn_policy_epoch_;
+	lsn_manager_.reconcile_endpoints(endpoints);
+	lsn_policies_ = std::move(next);
+}
+std::optional<PgSQL_LSN_Policy> PgSQL_HostGroups_Manager::lsn_policy_for_hostgroup(uint32_t hostgroup) const {
+	std::lock_guard<std::mutex> lock(lsn_policy_mutex_);
+	for (const auto& item : lsn_policies_) {
+		const auto& policy = item.second;
+		if (hostgroup == policy.writer_hostgroup || hostgroup == policy.reader_hostgroup) return policy;
+	}
+	return {};
 }
 
 void PgSQL_HostGroups_Manager::generate_pgsql_replication_hostgroups_table() {

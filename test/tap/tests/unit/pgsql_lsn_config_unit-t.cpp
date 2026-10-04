@@ -131,8 +131,8 @@ int main() {
 		bool loaded = GloAdmin->load_pgsql_servers_to_runtime_checked({}, {}, {}, false);
 		GloAdmin->pgsql_servers_wrunlock();
 		ok(loaded, "valid enabled mapping loads to runtime");
-		ok(PgHGM->lsn_manager().group_for_hostgroup(20) == 10, "reader hostgroup maps to protected writer");
-		ok(PgHGM->lsn_manager().snapshot(10).config.writers.size() == 1, "runtime topology supplies exact writer endpoint");
+		ok(PgHGM->lsn_policy_for_hostgroup(20) && PgHGM->lsn_policy_for_hostgroup(20)->writer_hostgroup == 10, "reader hostgroup maps to protected writer");
+		ok(PgHGM->lsn_policy_for_hostgroup(20)->writers.size() == 1, "runtime topology supplies exact writer endpoint");
 		std::unique_ptr<SQLite3_result> runtime(PgHGM->dump_table_pgsql("pgsql_replication_hostgroups"));
 		ok(runtime && runtime->columns == 5 && runtime->rows_count == 2 && !strcmp(runtime->rows[0]->fields[4], "1"), "internal runtime retains opt-in column");
 		GloAdmin->save_pgsql_servers_runtime_to_database(true);
@@ -144,6 +144,42 @@ int main() {
 		ok(!loaded, "ambiguous protected mapping rejects LOAD atomically");
 		runtime.reset(PgHGM->dump_table_pgsql("pgsql_replication_hostgroups"));
 		ok(runtime && runtime->rows_count == 2, "rejected LOAD preserves prior runtime mappings");
+	}
+	{
+		using namespace pgsql_lsn;
+		GloAdmin->statsdb=memory_db();
+		auto& stats=*GloAdmin->statsdb;
+		stats.execute(STATS_SQLITE_TABLE_PGSQL_LSN);
+		auto& manager=PgHGM->lsn_manager();
+		Endpoint writer_endpoint{"quoted'writer",5432}, replica_endpoint{"replica",5432};
+		PgHGM->reconcile_lsn_policies({{100,101,true,{writer_endpoint},{replica_endpoint,writer_endpoint}},
+			{200,201,true,{writer_endpoint},{replica_endpoint}}});
+		GloAdmin->stats___pgsql_lsn();
+		ok(scalar(stats,"SELECT COUNT(*) FROM pragma_table_info('stats_pgsql_lsn')")=="3","LSN stats exposes only hostname, port and lsn");
+		ok(scalar(stats,"SELECT COUNT(*) FROM stats_pgsql_lsn")=="2","two policies sharing physical servers expose two rows");
+		ok(scalar(stats,"SELECT COUNT(*) FROM stats_pgsql_lsn WHERE lsn IS NULL")=="2","unsampled positions export as SQL NULL");
+		ServerToken writer{manager.snapshot(writer_endpoint).generation,writer_endpoint,{{123,1},1000},Role::Writer};
+		ServerToken replica{manager.snapshot(replica_endpoint).generation,replica_endpoint,{{123,1},2000},Role::Replica};
+		manager.publish_progress({writer,1,0,{},true,1,1,{}});
+		manager.publish_progress({replica,1,{},UINT64_MAX,true,1,1,{}});
+		GloAdmin->stats___pgsql_lsn();
+		ok(scalar(stats,"SELECT lsn FROM stats_pgsql_lsn WHERE hostname != 'replica'")=="0/0","zero insertion LSN is known, not NULL");
+		ok(scalar(stats,"SELECT lsn FROM stats_pgsql_lsn WHERE hostname='replica'")=="FFFFFFFF/FFFFFFFF","maximum replay LSN exports losslessly");
+		ok(scalar(stats,"SELECT hostname FROM stats_pgsql_lsn WHERE hostname != 'replica'")=="quoted'writer","stats binds endpoint text without SQL interpolation");
+		auto dependency=manager.observe_completion(writer,{});
+		PgHGM->reconcile_lsn_policies({{200,201,true,{writer_endpoint},{replica_endpoint}}});
+		GloAdmin->stats___pgsql_lsn();
+		ok(scalar(stats,"SELECT COUNT(*) FROM stats_pgsql_lsn")=="2" && manager.resolve(dependency).state==DependencyState::Pending,
+			"removing one hostgroup mapping preserves shared rows and pending completion");
+		manager.invalidate_endpoint(replica.endpoint,Reason::NoSafeBackend,1);
+		GloAdmin->stats___pgsql_lsn();
+		ok(scalar(stats,"SELECT lsn IS NULL FROM stats_pgsql_lsn WHERE hostname='replica'")=="1","withdrawn position exports as SQL NULL");
+		manager.publish_progress({replica,2,{},UINT64_MAX,true,2,1,{}});
+		GloAdmin->stats___pgsql_lsn();
+		ok(scalar(stats,"SELECT lsn FROM stats_pgsql_lsn WHERE hostname='replica'")=="FFFFFFFF/FFFFFFFF","recertification restores the shared current position");
+		manager.reconcile_endpoints({});
+		GloAdmin->stats___pgsql_lsn();
+		ok(scalar(stats,"SELECT COUNT(*) FROM stats_pgsql_lsn")=="0","removed endpoints do not leave historical rows");
 	}
 	return exit_status();
 }

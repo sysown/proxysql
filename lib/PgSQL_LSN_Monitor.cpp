@@ -15,13 +15,6 @@ Micros clock_us() {
 	return std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-struct Target {
-	GroupId group;
-	Generation generation;
-	Role role;
-	bool demand;
-	std::optional<SampleTicket> ticket;
-};
 struct Entry {
 	PGconn* conn = nullptr;
 	uint64_t connection_generation = 0;
@@ -29,9 +22,10 @@ struct Entry {
 	short events = POLLIN;
 	Micros deadline = 0, started = 0;
 	ProbeCadence cadence;
-	std::optional<Incarnation> identity;
+	std::optional<ServerToken> identity;
+	Generation generation = 0;
 	std::unique_ptr<PgSQL_LSN_Probe> probe;
-	std::vector<Target> targets;
+	std::optional<SampleTicket> ticket;
 	ProbeRows rows;
 	unsigned results = 0;
 	~Entry() { if (conn) PQfinish(conn); }
@@ -47,13 +41,12 @@ struct PgSQL_LSN_Monitor::Impl {
 	Impl(PgSQL_LSN_Manager& m, Conninfo c) : manager(m), conninfo(std::move(c)) {}
 
 	void retire(const Endpoint& endpoint, Entry& e, const std::string& error, Reason reason) {
-		for (auto& target : e.targets)
-			if (target.ticket) manager.fail_writer_sample(*target.ticket, error);
+		if (e.ticket) manager.fail_writer_sample(*e.ticket, error);
 		manager.invalidate_endpoint(endpoint, reason, e.connection_generation);
 		if (e.conn) PQfinish(e.conn);
 		e.conn = nullptr;
 		e.connecting = e.flushing = false;
-		e.probe.reset(); e.identity.reset(); e.targets.clear(); e.rows.clear(); e.results = 0;
+		e.probe.reset(); e.identity.reset(); e.ticket.reset(); e.rows.clear(); e.results = 0;
 		e.cadence.finished();
 		changed = true;
 	}
@@ -70,12 +63,10 @@ struct PgSQL_LSN_Monitor::Impl {
 	bool start_probe(const Endpoint& endpoint, Entry& e, Micros now, Micros query_timeout) {
 		e.started = now; e.deadline = now + query_timeout;
 		// Seal before sending any command, including discovery IDENTIFY_SYSTEM.
-		for (auto& target : e.targets)
-			if (target.role == Role::Writer) target.ticket = manager.seal_writer_batch(target.group);
-		const auto& target = e.targets.front();
-		e.probe.reset(new PgSQL_LSN_Probe(target.group, target.generation, endpoint, target.role,
+		e.ticket = manager.seal_writer_batch(endpoint);
+		e.probe.reset(new PgSQL_LSN_Probe(e.generation, endpoint,
 			e.identity, e.connection_generation, now,
-			e.identity ? std::optional<History>{e.identity->history} : std::nullopt));
+			e.identity ? std::optional<History>{e.identity->incarnation.history} : std::nullopt));
 		return send(e);
 	}
 	void advance(const Endpoint& endpoint, Entry& e, Micros now, Micros query_timeout) {
@@ -139,14 +130,11 @@ struct PgSQL_LSN_Monitor::Impl {
 				return;
 			}
 			progress->duration_us = now - e.started;
-			e.identity = progress->server.incarnation;
-			for (auto& target : e.targets) {
-				progress->server.group = target.group; progress->server.generation = target.generation;
-				manager.publish_progress(*progress);
-				if (target.ticket && !manager.complete_writer_sample(*target.ticket, *progress))
-					manager.fail_writer_sample(*target.ticket, "LSN publication rejected");
-			}
-			e.probe.reset(); e.targets.clear(); e.cadence.finished(); changed = true;
+			e.identity = progress->server;
+			manager.publish_progress(*progress);
+			if (e.ticket && !manager.complete_writer_sample(*e.ticket, *progress))
+				manager.fail_writer_sample(*e.ticket, "LSN publication rejected");
+			e.probe.reset(); e.ticket.reset(); e.cadence.finished(); changed = true;
 			return;
 		}
 	}
@@ -157,22 +145,9 @@ PgSQL_LSN_Monitor::~PgSQL_LSN_Monitor() { reset(); }
 
 bool PgSQL_LSN_Monitor::tick(Micros now, Micros interval, Micros connect_timeout, Micros query_timeout) {
 	auto& impl = *impl_; impl.changed = false; impl.interval = interval;
-	std::map<Endpoint, std::vector<Target>> desired;
-	for (const auto& group : impl.manager.snapshots()) {
-		if (!group.config.enabled || group.config.writers.size() != 1) continue;
-		auto add = [&](const Endpoint& endpoint, Role role) {
-			const Progress* progress = nullptr;
-			for (const auto& p : group.servers) if (p.server.endpoint == endpoint && p.valid) progress = &p;
-			bool demand = !progress || group.has_pending;
-			if (role == Role::Replica && progress) {
-				demand |= group.writer && !(group.writer->incarnation.history == progress->server.incarnation.history);
-				demand |= group.required_lsn && (!progress->replay_lsn || *progress->replay_lsn < *group.required_lsn);
-			}
-			desired[endpoint].push_back({group.config.writer_hostgroup, group.generation, role, demand, {}});
-		};
-		add(group.config.writers.front(), Role::Writer);
-		for (const auto& endpoint : group.config.readers) add(endpoint, Role::Replica);
-	}
+	const auto snapshots = impl.manager.snapshots();
+	std::map<Endpoint, ServerSnapshot> desired;
+	for (const auto& server : snapshots) desired.emplace(server.endpoint, server);
 	for (auto it = impl.entries.begin(); it != impl.entries.end();) {
 		if (!desired.count(it->first)) {
 			impl.retire(it->first, it->second, "LSN endpoint removed", Reason::NoSafeBackend);
@@ -181,16 +156,19 @@ bool PgSQL_LSN_Monitor::tick(Micros now, Micros interval, Micros connect_timeout
 	}
 	for (auto& item : desired) {
 		auto& e = impl.entries[item.first];
-		const bool conflict = std::any_of(item.second.begin(), item.second.end(), [&](const Target& t) {
-			return t.role != item.second.front().role;
-		});
-		if (conflict) {
-			if (e.conn) impl.retire(item.first, e, "Conflicting endpoint roles", Reason::NoSafeBackend);
-			continue;
+		const auto& server = item.second;
+		bool demand = !server.progress || !server.progress->valid || server.has_pending;
+		if (server.progress && server.progress->server.role == Role::Replica) {
+			for (const auto& origin : snapshots) {
+				if (!origin.progress || !(origin.progress->server.incarnation.history ==
+					server.progress->server.incarnation.history)) continue;
+				demand |= origin.has_pending || (origin.required_lsn &&
+					(!server.progress->replay_lsn || *server.progress->replay_lsn < *origin.required_lsn));
+			}
 		}
-		const bool demand = std::any_of(item.second.begin(), item.second.end(), [](const Target& t) { return t.demand; });
+
 		if (!e.connecting && !e.probe && e.cadence.due(now, interval, demand)) {
-			e.cadence.started(now); e.targets = item.second;
+			e.cadence.started(now); e.generation = server.generation;
 			if (!e.conn) {
 				e.connection_generation = ++connection_sequence;
 				auto conninfo = impl.conninfo(item.first);

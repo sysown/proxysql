@@ -8,10 +8,10 @@ bool ProbeCadence::due(Micros now, Micros interval, bool demand) const {
 void ProbeCadence::started(Micros now) { last_start_ = now; active_ = true; }
 void ProbeCadence::finished() { active_ = false; }
 
-PgSQL_LSN_Probe::PgSQL_LSN_Probe(GroupId group, Generation generation, Endpoint endpoint, Role role,
-	std::optional<Incarnation> expected, uint64_t connection_generation, Micros started_at,
+PgSQL_LSN_Probe::PgSQL_LSN_Probe(Generation generation, Endpoint endpoint,
+	std::optional<ServerToken> expected, uint64_t connection_generation, Micros started_at,
 	std::optional<History> preceding_identity) : expected_(expected), identity_(preceding_identity) {
-	result_.server = {group, generation, std::move(endpoint), {}, role};
+	result_.server = {generation, std::move(endpoint), {}, Role::Replica};
 	result_.connection_generation = connection_generation;
 	result_.sampled_at_us = started_at;
 	if (identity_) stage_ = Stage::Sample;
@@ -23,9 +23,8 @@ std::optional<std::string> PgSQL_LSN_Probe::next_command() {
 	if (stage_ == Stage::InitialIdentity || stage_ == Stage::FinalIdentity) return "IDENTIFY_SYSTEM";
 	const std::string prefix = "SELECT (EXTRACT(EPOCH FROM pg_catalog.pg_postmaster_start_time())*1000000)::bigint, "
 		"pg_catalog.pg_is_in_recovery(), ";
-	if (result_.server.role == Role::Writer)
-		return prefix + "CASE WHEN NOT pg_catalog.pg_is_in_recovery() THEN pg_catalog.pg_current_wal_insert_lsn() END";
-	return prefix + "pg_catalog.pg_last_wal_replay_lsn()";
+	return prefix + "CASE WHEN pg_catalog.pg_is_in_recovery() THEN pg_catalog.pg_last_wal_replay_lsn() "
+		"ELSE pg_catalog.pg_current_wal_insert_lsn() END";
 }
 
 namespace {
@@ -51,7 +50,7 @@ bool PgSQL_LSN_Probe::consume_result(const ProbeRows& rows, std::string& error) 
 		History history;
 		if (row.size() != 4 || !number(row[0], history.system_id) || !number(row[1], history.timeline))
 			return reject("Invalid IDENTIFY_SYSTEM result");
-		if ((identity_ && !(*identity_ == history)) || (expected_ && !(expected_->history == history)))
+		if ((identity_ && !(*identity_ == history)) || (expected_ && !(expected_->incarnation.history == history)))
 			return reject("LSN_HISTORY_CHANGED: system identifier or timeline changed", Reason::HistoryChanged);
 		identity_ = history;
 		if (stage_ == Stage::InitialIdentity) stage_ = Stage::Sample;
@@ -66,11 +65,12 @@ bool PgSQL_LSN_Probe::consume_result(const ProbeRows& rows, std::string& error) 
 			return reject("Invalid LSN sample: expected postmaster start, recovery role and position");
 		if (*row[1] != "t" && *row[1] != "f") return reject("Invalid recovery role in LSN sample");
 		const bool replica = *row[1] == "t";
-		if (replica != (result_.server.role == Role::Replica) || (expected_ && expected_->postmaster_start_us != start))
+		if (expected_ && (replica != (expected_->role == Role::Replica) || expected_->incarnation.postmaster_start_us != start))
 			return reject("LSN_HISTORY_CHANGED: role or postmaster incarnation changed", Reason::HistoryChanged);
 		auto position = row[2] ? parse_lsn(*row[2]) : std::nullopt;
 		if (!position) return reject("Invalid WAL position in LSN sample");
 		result_.server.incarnation.postmaster_start_us = start;
+		result_.server.role = replica ? Role::Replica : Role::Writer;
 		if (replica) result_.replay_lsn = position;
 		else result_.insert_lsn = position;
 		stage_ = Stage::FinalIdentity;

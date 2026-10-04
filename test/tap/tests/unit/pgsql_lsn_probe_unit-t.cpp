@@ -9,7 +9,7 @@ static ProbeRows sample(const char* role = "f", const char* lsn = "0/123", const
 	return {{{start}, {role}, lsn ? std::optional<std::string>(lsn) : std::nullopt}};
 }
 static PgSQL_LSN_Probe writer(std::optional<Incarnation> expected = {}, std::optional<History> previous = {}) {
-	return {10, 1, {"writer", 5432}, Role::Writer, expected, 7, 100, previous};
+	return {1, {"writer", 5432}, expected ? std::optional<ServerToken>{{1, {"writer",5432}, *expected, Role::Writer}} : std::nullopt, 7, 100, previous};
 }
 int main() {
 	plan(NO_PLAN);
@@ -63,7 +63,7 @@ int main() {
 	demoted.next_command();
 	demoted.consume_result(sample("t", nullptr), error);
 	ok(demoted.failure_reason() == Reason::HistoryChanged, "writer becoming standby is detected even with NULL insertion position");
-	PgSQL_LSN_Probe replica(10, 1, {"reader", 5432}, Role::Replica, {}, 8, 100);
+	PgSQL_LSN_Probe replica(1, {"reader", 5432}, {}, 8, 100);
 	replica.next_command(); replica.consume_result(identity(), error);
 	sql = replica.next_command();
 	ok(sql && sql->find("pg_last_wal_replay_lsn()") != std::string::npos, "replica samples replay position");

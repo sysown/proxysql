@@ -13,7 +13,6 @@ class PgSQL_LSN_Manager;
 
 namespace pgsql_lsn {
 using Lsn = uint64_t;
-using GroupId = uint32_t;
 using Generation = uint64_t;
 using Micros = uint64_t;
 
@@ -37,13 +36,12 @@ struct Incarnation {
 };
 enum class Role { Writer, Replica };
 struct ServerToken {
-	GroupId group = 0;
 	Generation generation = 0;
 	Endpoint endpoint;
 	Incarnation incarnation;
 	Role role = Role::Replica;
 	bool operator==(const ServerToken& rhs) const {
-		return group == rhs.group && generation == rhs.generation && endpoint == rhs.endpoint
+		return generation == rhs.generation && endpoint == rhs.endpoint
 			&& incarnation == rhs.incarnation && role == rhs.role;
 	}
 };
@@ -58,12 +56,6 @@ struct DependencyView {
 	Reason reason = Reason::None;
 	uint64_t batch_id = 0;
 };
-struct GroupConfig {
-	GroupId writer_hostgroup = 0;
-	uint32_t reader_hostgroup = 0;
-	bool enabled = false;
-	std::vector<Endpoint> writers, readers;
-};
 struct Progress {
 	ServerToken server;
 	uint64_t connection_generation = 0;
@@ -73,13 +65,13 @@ struct Progress {
 	std::string error;
 };
 
-struct GroupState;
+struct ServerState;
 struct Batch;
 
 // Handles carry frontend demand across pool changes. They never own a session.
 class Dependency {
 	friend class ::PgSQL_LSN_Manager;
-	std::shared_ptr<GroupState> group_;
+	std::shared_ptr<ServerState> server_;
 	std::shared_ptr<Batch> batch_;
 	std::optional<ServerToken> source_;
 	std::optional<Lsn> floor_;
@@ -90,12 +82,10 @@ class SampleTicket {
 	ServerToken source_;
 	uint64_t batch_ = 0, attempt_ = 0;
 };
-struct GroupSnapshot {
-	GroupConfig config;
+struct ServerSnapshot {
+	Endpoint endpoint;
 	Generation generation = 0;
-	uint64_t revision = 0, activation_epoch = 0;
-	std::optional<ServerToken> writer;
-	std::vector<Progress> servers;
+	std::optional<Progress> progress;
 	bool has_pending = false;
 	std::optional<Lsn> required_lsn;
 	size_t live_batches = 0, unresolved_batches = 0;
@@ -105,7 +95,6 @@ struct GroupSnapshot {
 std::optional<Lsn> parse_lsn(std::string_view text);
 std::string format_lsn(Lsn value);
 bool replica_satisfies(const DependencyView&, const Progress&, const ServerToken& backend);
-bool validate_lsn_groups(const std::vector<GroupConfig>&, std::string& error);
 } // namespace pgsql_lsn
 
 class PgSQL_LSN_Manager {
@@ -114,20 +103,19 @@ public:
 	~PgSQL_LSN_Manager();
 	PgSQL_LSN_Manager(const PgSQL_LSN_Manager&) = delete;
 	PgSQL_LSN_Manager& operator=(const PgSQL_LSN_Manager&) = delete;
-	void reconcile_groups(const std::vector<pgsql_lsn::GroupConfig>&);
+	void reconcile_endpoints(const std::vector<pgsql_lsn::Endpoint>&);
 	pgsql_lsn::Dependency observe_completion(const pgsql_lsn::ServerToken&,
 		const pgsql_lsn::Dependency& previous);
 	pgsql_lsn::DependencyView resolve(const pgsql_lsn::Dependency&) const;
-	std::optional<pgsql_lsn::SampleTicket> seal_writer_batch(pgsql_lsn::GroupId);
+	std::optional<pgsql_lsn::SampleTicket> seal_writer_batch(const pgsql_lsn::Endpoint&);
 	bool complete_writer_sample(const pgsql_lsn::SampleTicket&, const pgsql_lsn::Progress&);
 	void fail_writer_sample(const pgsql_lsn::SampleTicket&, const std::string& error);
 	void publish_progress(const pgsql_lsn::Progress&);
 	void invalidate_endpoint(const pgsql_lsn::Endpoint&, pgsql_lsn::Reason,
 		uint64_t retired_connection_generation = 0);
-	pgsql_lsn::GroupSnapshot snapshot(pgsql_lsn::GroupId) const;
-	std::vector<pgsql_lsn::GroupSnapshot> snapshots() const;
-	std::optional<pgsql_lsn::GroupId> group_for_hostgroup(uint32_t hostgroup) const;
-	uint64_t configuration_epoch() const;
+	pgsql_lsn::ServerSnapshot snapshot(const pgsql_lsn::Endpoint&) const;
+	std::vector<pgsql_lsn::ServerSnapshot> snapshots() const;
+	uint64_t revision() const;
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl_;

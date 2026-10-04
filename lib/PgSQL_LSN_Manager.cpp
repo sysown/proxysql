@@ -1,5 +1,4 @@
 #include "PgSQL_LSN_Manager.h"
-
 #include <algorithm>
 #include <atomic>
 #include <charconv>
@@ -7,8 +6,6 @@
 #include <map>
 #include <mutex>
 #include <set>
-#include <stdexcept>
-
 using namespace pgsql_lsn;
 
 namespace pgsql_lsn {
@@ -17,20 +14,19 @@ struct Batch {
 	bool in_flight = false;
 	std::optional<Lsn> lsn;
 };
-struct GroupState {
+struct ServerState {
 	mutable std::mutex mutex;
-	GroupConfig config;
+	Endpoint endpoint;
+	bool tracked = true;
 	Generation generation = 0;
-	uint64_t revision = 1, activation_epoch = 0, next_batch = 1;
-	uint64_t completions = 0, batches = 0;
+	uint64_t next_batch = 1, completions = 0, batches = 0;
+	uint64_t retired_connection = 0;
 	std::optional<ServerToken> writer;
 	std::optional<Lsn> last_insert;
-	std::map<Endpoint, Progress> servers;
-	std::map<Endpoint, uint64_t> retired_connections;
+	std::optional<Progress> progress;
 	std::shared_ptr<Batch> open, sealed;
 	std::vector<std::weak_ptr<Batch>> resolved;
 };
-
 std::optional<Lsn> parse_lsn(std::string_view text) {
 	const auto slash = text.find('/');
 	if (slash == std::string_view::npos || slash == 0 || slash > 8
@@ -63,150 +59,84 @@ bool replica_satisfies(const DependencyView& dependency, const Progress& progres
 		|| !dependency.required_lsn || !progress.valid || !progress.replay_lsn
 		|| backend.role != Role::Replica || !(backend == progress.server)) return false;
 	const auto& source = *dependency.source;
-	return source.group == backend.group && source.generation == backend.generation
-		&& source.incarnation.history == backend.incarnation.history
+	return source.incarnation.history == backend.incarnation.history
 		&& *progress.replay_lsn >= *dependency.required_lsn;
-}
-bool validate_lsn_groups(const std::vector<GroupConfig>& groups, std::string& error) {
-	std::map<uint32_t, size_t> memberships;
-	for (const auto& g : groups) {
-		++memberships[g.writer_hostgroup];
-		++memberships[g.reader_hostgroup];
-	}
-	for (const auto& g : groups) {
-		if (!g.enabled) continue;
-		if (memberships[g.writer_hostgroup] != 1 || memberships[g.reader_hostgroup] != 1) {
-			error = "LSN causal hostgroups must have disjoint writer and reader membership";
-			return false;
-		}
-	}
-	error.clear();
-	return true;
 }
 } // namespace pgsql_lsn
 
 struct PgSQL_LSN_Manager::Impl {
-	// Lock order: registry -> group. No callback or external lock under either.
+	// Lock order: endpoint registry -> individual server. No external callbacks.
 	mutable std::mutex mutex;
-	std::map<GroupId, std::shared_ptr<GroupState>> groups;
+	std::map<Endpoint, std::shared_ptr<ServerState>> servers;
 	std::atomic<Generation> next_generation{1};
-	uint64_t config_epoch = 0;
-	std::shared_ptr<GroupState> find(GroupId id) const {
+	std::atomic<uint64_t> revision{1};
+	std::shared_ptr<ServerState> find(const Endpoint& endpoint) const {
 		std::lock_guard<std::mutex> lock(mutex);
-		auto it = groups.find(id);
-		return it == groups.end() ? nullptr : it->second;
+		auto it = servers.find(endpoint);
+		return it == servers.end() ? nullptr : it->second;
 	}
-	void invalidate(GroupState& g) {
-		g.generation = next_generation.fetch_add(1);
-		++g.revision;
-		g.writer.reset();
-		g.last_insert.reset();
-		g.open.reset();
-		g.sealed.reset();
-		g.resolved.clear();
-		g.servers.clear();
-		g.retired_connections.clear();
+	void invalidate(ServerState& s) {
+		s.generation = next_generation.fetch_add(1);
+		s.writer.reset(); s.last_insert.reset(); s.progress.reset();
+		s.open.reset(); s.sealed.reset(); s.resolved.clear();
+		++revision;
 	}
 };
-
 namespace {
-bool contains(const std::vector<Endpoint>& endpoints, const Endpoint& endpoint) {
-	return std::find(endpoints.begin(), endpoints.end(), endpoint) != endpoints.end();
-}
 void maximum(std::optional<Lsn>& value, std::optional<Lsn> candidate) {
 	if (candidate && (!value || *candidate > *value)) value = candidate;
 }
-bool acceptable_progress(const GroupState& g, const Progress& p) {
-	if (!g.config.enabled || g.generation != p.server.generation
-		|| p.server.group != g.config.writer_hostgroup || !p.valid
-		|| !p.server.incarnation.history.system_id || !p.server.incarnation.history.timeline
+bool acceptable_progress(const ServerState& s, const Progress& p) {
+	if (!s.tracked || s.generation != p.server.generation || !(s.endpoint == p.server.endpoint)
+		|| !p.valid || !p.server.incarnation.history.system_id || !p.server.incarnation.history.timeline
 		|| !p.server.incarnation.postmaster_start_us) return false;
-	if (p.server.role == Role::Writer) {
-		if (g.config.writers.size() != 1 || !(g.config.writers[0] == p.server.endpoint) || !p.insert_lsn)
-			return false;
-	} else if (!contains(g.config.readers, p.server.endpoint) || !p.replay_lsn) return false;
-	auto retired = g.retired_connections.find(p.server.endpoint);
-	if (retired != g.retired_connections.end() && p.connection_generation <= retired->second) return false;
-	auto it = g.servers.find(p.server.endpoint);
-	if (it != g.servers.end()) {
-		const auto& prev = it->second;
-		if (p.connection_generation < prev.connection_generation) return false;
-		if (p.connection_generation == prev.connection_generation && p.sampled_at_us < prev.sampled_at_us)
-			return false;
+	if (p.server.role == Role::Writer ? !p.insert_lsn : !p.replay_lsn) return false;
+	if (s.retired_connection && p.connection_generation <= s.retired_connection) return false;
+	if (s.progress) {
+		if (p.connection_generation < s.progress->connection_generation) return false;
+		if (p.connection_generation == s.progress->connection_generation &&
+			p.sampled_at_us < s.progress->sampled_at_us) return false;
 	}
 	return true;
 }
-GroupSnapshot copy_snapshot(GroupState& g) {
-	GroupSnapshot result;
-	result.config = g.config;
-	result.generation = g.generation;
-	result.revision = g.revision;
-	result.activation_epoch = g.activation_epoch;
-	result.writer = g.writer;
-	result.completions = g.completions;
-	result.batches = g.batches;
-	for (const auto& entry : g.servers) result.servers.push_back(entry.second);
-	for (const auto* batch : {&g.open, &g.sealed}) {
+ServerSnapshot copy_snapshot(ServerState& s) {
+	ServerSnapshot result;
+	result.endpoint = s.endpoint; result.generation = s.generation; result.progress = s.progress;
+	result.completions = s.completions; result.batches = s.batches;
+	for (const auto* batch : {&s.open, &s.sealed}) {
 		if (!*batch) continue;
 		++result.unresolved_batches;
-		if (batch->use_count() > 1) {
-			++result.live_batches;
-			result.has_pending = true;
-		}
+		if (batch->use_count() > 1) { ++result.live_batches; result.has_pending = true; }
 	}
-	g.resolved.erase(std::remove_if(g.resolved.begin(), g.resolved.end(), [&](const std::weak_ptr<Batch>& weak) {
+	s.resolved.erase(std::remove_if(s.resolved.begin(), s.resolved.end(), [&](const std::weak_ptr<Batch>& weak) {
 		auto batch = weak.lock();
 		if (!batch) return true;
-		++result.live_batches;
-		maximum(result.required_lsn, batch->lsn);
+		++result.live_batches; maximum(result.required_lsn, batch->lsn);
 		return false;
-	}), g.resolved.end());
+	}), s.resolved.end());
 	return result;
 }
 } // namespace
 
 PgSQL_LSN_Manager::PgSQL_LSN_Manager() : impl_(new Impl) {}
 PgSQL_LSN_Manager::~PgSQL_LSN_Manager() = default;
-
-void PgSQL_LSN_Manager::reconcile_groups(const std::vector<GroupConfig>& configs) {
-	std::string error;
-	if (!validate_lsn_groups(configs, error)) throw std::invalid_argument(error);
+void PgSQL_LSN_Manager::reconcile_endpoints(const std::vector<Endpoint>& endpoints) {
+	const std::set<Endpoint> keep(endpoints.begin(), endpoints.end());
 	std::lock_guard<std::mutex> registry(impl_->mutex);
-	std::set<GroupId> keep;
-	for (auto config : configs) {
-		if (!config.enabled) continue;
-		std::sort(config.writers.begin(), config.writers.end());
-		std::sort(config.readers.begin(), config.readers.end());
-		keep.insert(config.writer_hostgroup);
-		auto& group = impl_->groups[config.writer_hostgroup];
-		if (!group) {
-			group = std::make_shared<GroupState>();
-			group->generation = impl_->next_generation.fetch_add(1);
-			group->activation_epoch = ++impl_->config_epoch;
-		}
-		std::lock_guard<std::mutex> lock(group->mutex);
-		const auto& old = group->config;
-		if (old.enabled && (old.reader_hostgroup != config.reader_hostgroup || old.writers != config.writers)) {
-			impl_->invalidate(*group);
-			++impl_->config_epoch;
-		} else if (old.readers != config.readers) {
-			for (auto it = group->servers.begin(); it != group->servers.end();) {
-				if (it->second.server.role == Role::Replica && !contains(config.readers, it->first))
-					it = group->servers.erase(it);
-				else ++it;
-			}
-			++group->revision;
-		}
-		group->config = std::move(config);
+	for (const auto& endpoint : keep) {
+		auto& server = impl_->servers[endpoint];
+		if (server) continue;
+		server = std::make_shared<ServerState>();
+		server->endpoint = endpoint;
+		server->generation = impl_->next_generation.fetch_add(1);
+		++impl_->revision;
 	}
-	for (auto it = impl_->groups.begin(); it != impl_->groups.end();) {
+	for (auto it = impl_->servers.begin(); it != impl_->servers.end();) {
 		if (keep.count(it->first)) { ++it; continue; }
-		auto retired = it->second; // Own the mutex until its guard is destroyed.
+		auto retired = it->second; // Keep the mutex alive through guard destruction.
 		std::lock_guard<std::mutex> lock(retired->mutex);
-		impl_->invalidate(*retired);
-		retired->config.enabled = false;
-		++impl_->config_epoch;
-		it = impl_->groups.erase(it);
+		impl_->invalidate(*retired); retired->tracked = false;
+		it = impl_->servers.erase(it);
 	}
 }
 
@@ -218,10 +148,10 @@ Dependency PgSQL_LSN_Manager::observe_completion(const ServerToken& source, cons
 		dependency.error_ = prior.reason;
 		return dependency;
 	}
-	auto group = impl_->find(source.group);
-	if (!group) { dependency.error_ = Reason::HistoryChanged; return dependency; }
-	std::lock_guard<std::mutex> lock(group->mutex);
-	if (!group->writer || !(*group->writer == source) || group->config.writers.size() != 1) {
+	auto server = impl_->find(source.endpoint);
+	if (!server) { dependency.error_ = Reason::HistoryChanged; return dependency; }
+	std::lock_guard<std::mutex> lock(server->mutex);
+	if (!server->writer || !(*server->writer == source) || !server->tracked) {
 		dependency.error_ = Reason::HistoryChanged;
 		return dependency;
 	}
@@ -229,15 +159,15 @@ Dependency PgSQL_LSN_Manager::observe_completion(const ServerToken& source, cons
 		dependency.error_ = Reason::HistoryChanged;
 		return dependency;
 	}
-	if (!group->open) {
-		group->open = std::make_shared<Batch>();
-		group->open->id = group->next_batch++;
+	if (!server->open) {
+		server->open = std::make_shared<Batch>();
+		server->open->id = server->next_batch++;
 	}
-	dependency.group_ = group;
-	dependency.batch_ = group->open;
+	dependency.server_ = server;
+	dependency.batch_ = server->open;
 	dependency.floor_ = prior.required_lsn;
-	++group->completions;
-	++group->revision;
+	++server->completions;
+	++impl_->revision;
 	return dependency;
 }
 
@@ -247,11 +177,11 @@ DependencyView PgSQL_LSN_Manager::resolve(const Dependency& dependency) const {
 	if (dependency.error_ != Reason::None) {
 		result.state = DependencyState::Invalid; result.reason = dependency.error_; return result;
 	}
-	if (!dependency.group_) return result;
-	std::lock_guard<std::mutex> lock(dependency.group_->mutex);
-	const auto& group = *dependency.group_;
-	result.revision = group.revision;
-	if (!group.config.enabled || !result.source || result.source->generation != group.generation) {
+	if (!dependency.server_) return result;
+	std::lock_guard<std::mutex> lock(dependency.server_->mutex);
+	const auto& server = *dependency.server_;
+	result.revision = impl_->revision.load();
+	if (!server.tracked || !result.source || result.source->generation != server.generation) {
 		result.state = DependencyState::Invalid; result.reason = Reason::HistoryChanged; return result;
 	}
 	result.batch_id = dependency.batch_->id;
@@ -261,130 +191,102 @@ DependencyView PgSQL_LSN_Manager::resolve(const Dependency& dependency) const {
 	return result;
 }
 
-std::optional<SampleTicket> PgSQL_LSN_Manager::seal_writer_batch(GroupId id) {
-	auto group = impl_->find(id);
-	if (!group) return {};
-	std::lock_guard<std::mutex> lock(group->mutex);
-	if (!group->writer || group->config.writers.size() != 1) return {};
-	if (group->sealed && group->sealed->in_flight) return {};
-	if (group->sealed && group->sealed.use_count() == 1) group->sealed.reset();
-	if (!group->sealed) {
-		if (!group->open || group->open.use_count() == 1) { group->open.reset(); return {}; }
-		group->sealed = std::move(group->open);
-		++group->batches;
+std::optional<SampleTicket> PgSQL_LSN_Manager::seal_writer_batch(const Endpoint& endpoint) {
+	auto server = impl_->find(endpoint);
+	if (!server) return {};
+	std::lock_guard<std::mutex> lock(server->mutex);
+	if (!server->writer || !server->tracked) return {};
+	if (server->sealed && server->sealed->in_flight) return {};
+	if (server->sealed && server->sealed.use_count() == 1) server->sealed.reset();
+	if (!server->sealed) {
+		if (!server->open || server->open.use_count() == 1) { server->open.reset(); return {}; }
+		server->sealed = std::move(server->open);
+		++server->batches;
 	}
-	group->sealed->in_flight = true;
+	server->sealed->in_flight = true;
 	SampleTicket ticket;
-	ticket.source_ = *group->writer;
-	ticket.batch_ = group->sealed->id;
-	ticket.attempt_ = ++group->sealed->attempt;
-	++group->revision;
+	ticket.source_ = *server->writer;
+	ticket.batch_ = server->sealed->id;
+	ticket.attempt_ = ++server->sealed->attempt;
+	++impl_->revision;
 	return ticket;
 }
 
 bool PgSQL_LSN_Manager::complete_writer_sample(const SampleTicket& ticket, const Progress& progress) {
-	auto group = impl_->find(ticket.source_.group);
-	if (!group) return false;
-	std::lock_guard<std::mutex> lock(group->mutex);
-	auto& batch = group->sealed;
+	auto server = impl_->find(ticket.source_.endpoint);
+	if (!server) return false;
+	std::lock_guard<std::mutex> lock(server->mutex);
+	auto& batch = server->sealed;
 	if (!batch || !batch->in_flight || batch->id != ticket.batch_ || batch->attempt != ticket.attempt_
-		|| !(progress.server == ticket.source_) || !acceptable_progress(*group, progress)
-		|| (group->last_insert && *progress.insert_lsn < *group->last_insert)) return false;
+		|| !(progress.server == ticket.source_) || !acceptable_progress(*server, progress)
+		|| (server->last_insert && *progress.insert_lsn < *server->last_insert)) return false;
 	batch->lsn = progress.insert_lsn;
 	batch->in_flight = false;
-	group->last_insert = progress.insert_lsn;
-	group->servers[progress.server.endpoint] = progress;
-	group->resolved.erase(std::remove_if(group->resolved.begin(), group->resolved.end(),
-		[](const std::weak_ptr<Batch>& b) { return b.expired(); }), group->resolved.end());
-	group->resolved.emplace_back(batch);
+	server->last_insert = progress.insert_lsn;
+	server->progress = progress;
+	server->resolved.erase(std::remove_if(server->resolved.begin(), server->resolved.end(),
+		[](const std::weak_ptr<Batch>& b) { return b.expired(); }), server->resolved.end());
+	server->resolved.emplace_back(batch);
 	batch.reset();
-	++group->revision;
+	++impl_->revision;
 	return true;
 }
 
 void PgSQL_LSN_Manager::fail_writer_sample(const SampleTicket& ticket, const std::string& error) {
-	auto group = impl_->find(ticket.source_.group);
-	if (!group) return;
-	std::lock_guard<std::mutex> lock(group->mutex);
-	auto& batch = group->sealed;
-	if (group->generation != ticket.source_.generation || !batch || batch->id != ticket.batch_
+	auto server = impl_->find(ticket.source_.endpoint);
+	if (!server) return;
+	std::lock_guard<std::mutex> lock(server->mutex);
+	auto& batch = server->sealed;
+	if (server->generation != ticket.source_.generation || !batch || batch->id != ticket.batch_
 		|| batch->attempt != ticket.attempt_ || !batch->in_flight) return;
 	batch->in_flight = false;
-	auto it = group->servers.find(ticket.source_.endpoint);
-	if (it != group->servers.end()) { it->second.valid = false; it->second.error = error; }
-	++group->revision;
+	if (server->progress) { server->progress->valid = false; server->progress->error = error; }
+	++impl_->revision;
 }
 
 void PgSQL_LSN_Manager::publish_progress(const Progress& progress) {
-	auto group = impl_->find(progress.server.group);
-	if (!group) return;
-	std::lock_guard<std::mutex> lock(group->mutex);
-	if (!acceptable_progress(*group, progress)) return;
-	if (progress.server.role == Role::Writer) {
-		if (group->writer && !(*group->writer == progress.server)) {
-			impl_->invalidate(*group);
-			return; // Revalidate in the new generation; never transplant dependencies.
-		}
-		if (group->last_insert && *progress.insert_lsn < *group->last_insert) return;
-		group->writer = progress.server;
-		group->last_insert = progress.insert_lsn;
+	auto server = impl_->find(progress.server.endpoint);
+	if (!server) return;
+	std::lock_guard<std::mutex> lock(server->mutex);
+	if (!acceptable_progress(*server, progress)) return;
+	if (server->progress && !(server->progress->server == progress.server)) {
+		impl_->invalidate(*server);
+		return; // Revalidate in a new generation; never transplant dependencies.
 	}
-	group->servers[progress.server.endpoint] = progress;
-	++group->revision;
+	if (progress.server.role == Role::Writer) {
+		if (server->last_insert && *progress.insert_lsn < *server->last_insert) return;
+		server->writer = progress.server; server->last_insert = progress.insert_lsn;
+	}
+	server->progress = progress;
+	++impl_->revision;
 }
-
 void PgSQL_LSN_Manager::invalidate_endpoint(const Endpoint& endpoint, Reason reason,
 	uint64_t retired_connection_generation) {
-	std::vector<std::shared_ptr<GroupState>> groups;
+	auto server = impl_->find(endpoint);
+	if (!server) return;
+	std::lock_guard<std::mutex> lock(server->mutex);
+	server->retired_connection = std::max(server->retired_connection, retired_connection_generation);
+	if (reason == Reason::HistoryChanged) { impl_->invalidate(*server); return; }
+	if (server->progress) { server->progress->valid = false; server->progress->error = reason_code(reason); }
+	++impl_->revision;
+}
+ServerSnapshot PgSQL_LSN_Manager::snapshot(const Endpoint& endpoint) const {
+	auto server = impl_->find(endpoint);
+	if (!server) return {};
+	std::lock_guard<std::mutex> lock(server->mutex);
+	return copy_snapshot(*server);
+}
+std::vector<ServerSnapshot> PgSQL_LSN_Manager::snapshots() const {
+	std::vector<std::shared_ptr<ServerState>> servers;
 	{
 		std::lock_guard<std::mutex> registry(impl_->mutex);
-		for (const auto& entry : impl_->groups) groups.push_back(entry.second);
+		for (const auto& entry : impl_->servers) servers.push_back(entry.second);
 	}
-	for (auto& group : groups) {
-		std::lock_guard<std::mutex> lock(group->mutex);
-		if (retired_connection_generation && (contains(group->config.writers, endpoint) || contains(group->config.readers, endpoint)))
-			group->retired_connections[endpoint] = std::max(group->retired_connections[endpoint], retired_connection_generation);
-		if (reason == Reason::HistoryChanged && group->writer && group->writer->endpoint == endpoint) {
-			impl_->invalidate(*group);
-			continue;
-		}
-		auto it = group->servers.find(endpoint);
-		if (it == group->servers.end()) continue;
-		it->second.valid = false;
-		it->second.error = reason_code(reason);
-		++group->revision;
-	}
-}
-
-GroupSnapshot PgSQL_LSN_Manager::snapshot(GroupId id) const {
-	auto group = impl_->find(id);
-	if (!group) return {};
-	std::lock_guard<std::mutex> lock(group->mutex);
-	return copy_snapshot(*group);
-}
-std::vector<GroupSnapshot> PgSQL_LSN_Manager::snapshots() const {
-	std::vector<std::shared_ptr<GroupState>> groups;
-	{
-		std::lock_guard<std::mutex> registry(impl_->mutex);
-		for (const auto& entry : impl_->groups) groups.push_back(entry.second);
-	}
-	std::vector<GroupSnapshot> result;
-	for (auto& group : groups) {
-		std::lock_guard<std::mutex> lock(group->mutex);
-		result.push_back(copy_snapshot(*group));
+	std::vector<ServerSnapshot> result;
+	for (auto& server : servers) {
+		std::lock_guard<std::mutex> lock(server->mutex);
+		result.push_back(copy_snapshot(*server));
 	}
 	return result;
 }
-std::optional<GroupId> PgSQL_LSN_Manager::group_for_hostgroup(uint32_t hostgroup) const {
-	std::lock_guard<std::mutex> registry(impl_->mutex);
-	for (const auto& entry : impl_->groups) {
-		std::lock_guard<std::mutex> lock(entry.second->mutex);
-		if (entry.second->config.writer_hostgroup == hostgroup || entry.second->config.reader_hostgroup == hostgroup)
-			return entry.first;
-	}
-	return {};
-}
-uint64_t PgSQL_LSN_Manager::configuration_epoch() const {
-	std::lock_guard<std::mutex> registry(impl_->mutex);
-	return impl_->config_epoch;
-}
+uint64_t PgSQL_LSN_Manager::revision() const { return impl_->revision.load(); }

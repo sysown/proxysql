@@ -8,12 +8,13 @@
 
 using namespace pgsql_lsn;
 
-static GroupConfig config() {
-	return {10, 20, true, {{"writer", 5432}}, {{"reader1", 5432}, {"reader2", 5432}}};
+static const Endpoint writer_endpoint{"writer", 5432};
+static std::vector<Endpoint> endpoints() {
+	return {writer_endpoint, {"reader1",5432}, {"reader2",5432}};
 }
 
 static ServerToken token(Generation generation, Role role = Role::Writer) {
-	return {10, generation, {role == Role::Writer ? "writer" : "reader1", 5432},
+	return {generation, {role == Role::Writer ? "writer" : "reader1", 5432},
 		{{12345, 1}, role == Role::Writer ? 1000 : 2000}, role};
 }
 
@@ -29,8 +30,8 @@ static Progress progress(ServerToken server, Lsn lsn, uint64_t connection = 1) {
 }
 
 static ServerToken initialize(PgSQL_LSN_Manager& manager) {
-	manager.reconcile_groups({config()});
-	auto writer = token(manager.snapshot(10).generation);
+	manager.reconcile_endpoints(endpoints());
+	auto writer = token(manager.snapshot(writer_endpoint).generation);
 	manager.publish_progress(progress(writer, 0));
 	return writer;
 }
@@ -49,13 +50,13 @@ int main() {
 	PgSQL_LSN_Manager manager;
 	auto writer = initialize(manager);
 	ok(manager.resolve({}).state == DependencyState::Clean, "new frontend is clean");
-	ok(!manager.seal_writer_batch(10), "idle writer needs no position sample");
+	ok(!manager.seal_writer_batch(writer_endpoint), "idle writer needs no position sample");
 	auto before = manager.observe_completion(writer, {});
 	auto peer = manager.observe_completion(writer, {});
-	auto first = manager.seal_writer_batch(10);
+	auto first = manager.seal_writer_batch(writer_endpoint);
 	ok(first.has_value(), "completions create a sealable batch");
 	if (!first) return exit_status();
-	ok(!manager.seal_writer_batch(10), "only one writer probe can be in flight");
+	ok(!manager.seal_writer_batch(writer_endpoint), "only one writer probe can be in flight");
 	auto after = manager.observe_completion(writer, {});
 	ok(manager.complete_writer_sample(*first, progress(writer, 0x100)), "publish sealed sample");
 	ok(manager.resolve(before).required_lsn == 0x100, "pre-seal completion resolved");
@@ -63,30 +64,30 @@ int main() {
 	ok(manager.resolve(after).state == DependencyState::Pending, "post-seal completion still pending");
 	ok(!manager.complete_writer_sample(*first, progress(writer, 0x200)), "sample cannot resolve twice");
 	ok(manager.resolve(before).required_lsn == 0x100, "resolved target is immutable");
-	auto second = manager.seal_writer_batch(10);
+	auto second = manager.seal_writer_batch(writer_endpoint);
 	ok(second.has_value(), "next sample covers the later completion");
 	if (!second) return exit_status();
 	manager.fail_writer_sample(*second, "timeout");
 	auto newer = manager.observe_completion(writer, before);
-	ok(manager.snapshot(10).unresolved_batches == 2, "retry and new completions use two unresolved batches");
-	auto retry = manager.seal_writer_batch(10);
+	ok(manager.snapshot(writer_endpoint).unresolved_batches == 2, "retry and new completions use two unresolved batches");
+	auto retry = manager.seal_writer_batch(writer_endpoint);
 	ok(retry.has_value(), "failed sealed batch is retried");
 	if (!retry) return exit_status();
 	ok(!manager.complete_writer_sample(*second, progress(writer, 0x300)), "late reply from failed attempt rejected");
 	ok(manager.complete_writer_sample(*retry, progress(writer, 0x200)), "retry resolves same sealed batch");
 	ok(manager.resolve(after).required_lsn == 0x200, "retry covers its original member");
 	ok(manager.resolve(newer).state == DependencyState::Pending, "retry never covers later operations");
-	auto third = manager.seal_writer_batch(10);
+	auto third = manager.seal_writer_batch(writer_endpoint);
 	if (!third) return exit_status();
 	ok(!manager.complete_writer_sample(*third, progress(writer, 0x100)), "regressing writer sample rejected");
 	manager.fail_writer_sample(*third, "regression");
-	third = manager.seal_writer_batch(10);
+	third = manager.seal_writer_batch(writer_endpoint);
 	if (!third) return exit_status();
 	ok(manager.complete_writer_sample(*third, progress(writer, 0x400)), "new dependency resolved");
 	ok(manager.resolve(before).required_lsn == 0x100, "unrelated sampling cannot move old target");
 
 	auto required = manager.resolve(newer);
-	auto reader = token(writer.generation, Role::Replica);
+	auto reader = token(manager.snapshot({"reader1",5432}).generation, Role::Replica);
 	auto replay = progress(reader, 0x400);
 	ok(replica_satisfies(required, replay, reader), "replica caught up with different postmaster time");
 	replay.replay_lsn = 0x3ff;
@@ -107,76 +108,71 @@ int main() {
 
 	manager.publish_progress(progress(reader, 0x400, 2));
 	manager.publish_progress(progress(reader, 0x900, 1));
-	auto servers = manager.snapshot(10).servers;
-	auto reader_progress = std::find_if(servers.begin(), servers.end(), [&](const Progress& p) { return p.server.endpoint == reader.endpoint; });
-	ok(reader_progress != servers.end() && reader_progress->connection_generation == 2, "old connection publication rejected");
+	auto reader_progress = manager.snapshot(reader.endpoint).progress;
+	ok(reader_progress && reader_progress->connection_generation == 2, "old connection publication rejected");
 	manager.invalidate_endpoint(reader.endpoint, Reason::NoSafeBackend);
 	ok(manager.resolve(newer).state == DependencyState::Ready, "replica outage preserves frontend dependency");
 	reader.incarnation.postmaster_start_us++;
 	manager.publish_progress(progress(reader, 0x400, 3));
+	reader.generation = manager.snapshot(reader.endpoint).generation;
+	manager.publish_progress(progress(reader, 0x400, 3));
 	ok(manager.resolve(newer).state == DependencyState::Ready, "replica restart does not invalidate writer history");
 	manager.invalidate_endpoint(reader.endpoint, Reason::NoSafeBackend, 3);
 	manager.publish_progress(progress(reader, 0xffff, 3));
-	servers = manager.snapshot(10).servers;
-	reader_progress = std::find_if(servers.begin(), servers.end(), [&](const Progress& p) { return p.server.endpoint == reader.endpoint; });
-	ok(reader_progress != servers.end() && !reader_progress->valid, "retired connection cannot recertify endpoint");
+	reader_progress = manager.snapshot(reader.endpoint).progress;
+	ok(reader_progress && !reader_progress->valid, "retired connection cannot recertify endpoint");
 	manager.publish_progress(progress(reader, 0x400, 4));
-	manager.reconcile_groups({config()});
-	ok(manager.resolve(newer).state == DependencyState::Ready, "unchanged mapping preserves dependency");
+	manager.reconcile_endpoints(endpoints());
+	ok(manager.resolve(newer).state == DependencyState::Ready, "unchanged endpoint set preserves dependency");
 	manager.invalidate_endpoint(writer.endpoint, Reason::NoSafeBackend);
 	ok(manager.resolve(newer).state == DependencyState::Ready, "temporary writer outage preserves history");
 	auto pending = manager.observe_completion(writer, newer);
-	auto stale_ticket = manager.seal_writer_batch(10);
+	auto stale_ticket = manager.seal_writer_batch(writer_endpoint);
 	auto replacement = writer; replacement.incarnation.postmaster_start_us++;
 	manager.publish_progress(progress(replacement, 0xffff, 4));
 	ok(manager.resolve(newer).state == DependencyState::Invalid, "writer restart invalidates resolved dependency");
 	ok(manager.resolve(pending).state == DependencyState::Invalid, "writer restart invalidates open dependency");
 	if (stale_ticket) ok(!manager.complete_writer_sample(*stale_ticket, progress(writer, 0xffff)), "old generation reply rejected");
-	ok(manager.snapshot(10).generation != writer.generation, "writer restart advances group generation");
+	ok(manager.snapshot(writer_endpoint).generation != writer.generation, "writer restart advances server generation");
 	ok(manager.resolve(manager.observe_completion(writer, {})).state == DependencyState::Invalid,
 		"old backend cannot establish a new dependency");
 
-	std::string error;
-	auto overlap = config(); overlap.writer_hostgroup = 20; overlap.reader_hostgroup = 30;
-	ok(!validate_lsn_groups({config(), overlap}, error), "overlapping enabled mappings rejected");
-	ok(!error.empty(), "invalid mapping explains rejection");
-	auto disabled = config(); disabled.enabled = false;
-	ok(!validate_lsn_groups({disabled, overlap}, error), "disabled mapping cannot shadow protected hostgroup");
-	auto independent = config(); independent.writer_hostgroup = 30; independent.reader_hostgroup = 40;
-	ok(validate_lsn_groups({config(), independent}, error), "independent groups accepted");
-	PgSQL_LSN_Manager ambiguous;
-	auto ambiguous_config = config();
-	ambiguous_config.writers.push_back({"other-writer", 5432});
-	ambiguous.reconcile_groups({ambiguous_config});
-	auto ambiguous_writer = token(ambiguous.snapshot(10).generation);
-	ambiguous.publish_progress(progress(ambiguous_writer, 100));
-	ok(!ambiguous.snapshot(10).writer, "multiple writers cannot establish a history");
-	ok(ambiguous.resolve(ambiguous.observe_completion(ambiguous_writer, {})).state == DependencyState::Invalid,
-		"ambiguous group cannot track a completion");
-	ambiguous_config.writers.clear();
-	ambiguous.reconcile_groups({ambiguous_config});
-	ok(!ambiguous.seal_writer_batch(10), "writerless group cannot sample");
+	PgSQL_LSN_Manager shared_server;
+	auto sw = initialize(shared_server);
+	auto shared_dep = shared_server.observe_completion(sw, {});
+	shared_server.reconcile_endpoints({writer_endpoint, writer_endpoint, {"reader1",5432}, {"reader2",5432}});
+	ok(shared_server.snapshots().size() == 3, "duplicate endpoint registrations share one tracker");
+	ok(shared_server.snapshot(writer_endpoint).generation == sw.generation,
+		"hostgroup multiplicity cannot change server generation");
+	auto shared_peer = shared_server.observe_completion(sw, {});
+	ok(shared_server.resolve(shared_dep).batch_id == shared_server.resolve(shared_peer).batch_id,
+		"duplicate endpoint registrations share the same completion batch");
+	shared_server.reconcile_endpoints({writer_endpoint});
+	ok(shared_server.resolve(shared_dep).state == DependencyState::Pending,
+		"removing other registrations preserves surviving endpoint dependencies");
+	ok(shared_server.snapshot(writer_endpoint).completions == 2,
+		"completion counters belong to the physical endpoint");
 	PgSQL_LSN_Manager removed;
 	auto removed_writer = initialize(removed);
 	auto removed_dep = removed.observe_completion(removed_writer, {});
-	removed.reconcile_groups({});
+	removed.reconcile_endpoints({});
 	ok(removed.resolve(removed_dep).state == DependencyState::Invalid, "removal invalidates live handles");
-	removed.reconcile_groups({config()});
-	ok(removed.snapshot(10).generation != removed_writer.generation, "readdition never reuses generation");
+	removed.reconcile_endpoints(endpoints());
+	ok(removed.snapshot(writer_endpoint).generation != removed_writer.generation, "readdition never reuses generation");
 
 	PgSQL_LSN_Manager bounded;
 	auto bw = initialize(bounded);
 	Dependency only;
 	for (unsigned i = 1; i <= 1000; ++i) {
 		only = bounded.observe_completion(bw, only);
-		auto ticket = bounded.seal_writer_batch(10);
+		auto ticket = bounded.seal_writer_batch(writer_endpoint);
 		if (ticket) bounded.complete_writer_sample(*ticket, progress(bw, i));
 	}
 	ok(bounded.resolve(only).required_lsn == 1000, "repeated frontend writes advance dependency");
-	ok(bounded.snapshot(10).live_batches == 1, "no chain of historical batch references");
+	ok(bounded.snapshot(writer_endpoint).live_batches == 1, "no chain of historical batch references");
 	only = {};
-	ok(bounded.snapshot(10).live_batches == 0, "disconnect releases resolved demand");
-	ok(!bounded.snapshot(10).required_lsn, "idle group has no replay demand");
+	ok(bounded.snapshot(writer_endpoint).live_batches == 0, "disconnect releases resolved demand");
+	ok(!bounded.snapshot(writer_endpoint).required_lsn, "idle server has no replay demand");
 
 	PgSQL_LSN_Manager concurrent;
 	auto cw = initialize(concurrent);
@@ -189,29 +185,29 @@ int main() {
 	});
 	go.store(true);
 	for (auto& worker : workers) worker.join();
-	auto shared = concurrent.seal_writer_batch(10);
+	auto shared = concurrent.seal_writer_batch(writer_endpoint);
 	if (!shared) return exit_status();
 	concurrent.complete_writer_sample(*shared, progress(cw, 42));
 	bool all = true;
 	for (const auto& d : deps) all &= concurrent.resolve(d).required_lsn == 42;
 	ok(all, "concurrent frontend completions share the sealed batch");
-	ok(concurrent.snapshot(10).completions == 64 && concurrent.snapshot(10).batches == 1,
+	ok(concurrent.snapshot(writer_endpoint).completions == 64 && concurrent.snapshot(writer_endpoint).batches == 1,
 		"sample count grows with batches rather than completions");
 	deps.clear();
-	ok(concurrent.snapshot(10).live_batches == 0, "concurrent handles release all demand");
+	ok(concurrent.snapshot(writer_endpoint).live_batches == 0, "concurrent handles release all demand");
 
 	std::atomic<uint64_t> commit_sequence{42};
 	std::atomic<bool> finished{false};
 	std::atomic<unsigned> violations{0};
 	std::thread sampler([&] {
 		while (!finished.load()) {
-			auto ticket = concurrent.seal_writer_batch(10);
+			auto ticket = concurrent.seal_writer_batch(writer_endpoint);
 			if (ticket) {
 				const auto sampled_lsn = commit_sequence.load();
 				std::this_thread::yield(); // More completions may arrive before the reply.
 				if (!concurrent.complete_writer_sample(*ticket, progress(cw, sampled_lsn))) ++violations;
 			}
-			if (concurrent.snapshot(10).unresolved_batches > 2) ++violations;
+			if (concurrent.snapshot(writer_endpoint).unresolved_batches > 2) ++violations;
 			std::this_thread::yield();
 		}
 	});
@@ -231,6 +227,6 @@ int main() {
 	finished.store(true);
 	sampler.join();
 	ok(violations.load() == 0, "concurrent sealing/publication never certifies a later commit with earlier LSN");
-	ok(concurrent.snapshot(10).live_batches == 0, "concurrent publication and teardown release demand");
+	ok(concurrent.snapshot(writer_endpoint).live_batches == 0, "concurrent publication and teardown release demand");
 	return exit_status();
 }

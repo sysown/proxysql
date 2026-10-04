@@ -356,6 +356,7 @@ inline constexpr const char *ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_REPLICATION_HOSTGR
 
 inline constexpr const char *STATS_SQLITE_TABLE_PGSQL_GLOBAL = "CREATE TABLE stats_pgsql_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)";
 inline constexpr const char *STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL = "CREATE TABLE stats_pgsql_connection_pool (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)";
+inline constexpr const char *STATS_SQLITE_TABLE_PGSQL_LSN = "CREATE TABLE stats_pgsql_lsn (hostname VARCHAR NOT NULL, port INT NOT NULL, lsn VARCHAR, PRIMARY KEY(hostname,port))";
 inline constexpr const char *STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL_RESET = "CREATE TABLE stats_pgsql_connection_pool_reset (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)";
 #ifdef PROXYSQL31
 inline constexpr char STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL[] = "CREATE TABLE stats_pgsql_hostgroup_connection_pool (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)";

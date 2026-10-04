@@ -124,7 +124,7 @@ int main() {
 	ScriptedServer server;
 	Endpoint endpoint{"127.0.0.1", server.port};
 	PgSQL_LSN_Manager manager;
-	manager.reconcile_groups({{10, 20, true, {endpoint}, {}}});
+	manager.reconcile_endpoints({endpoint, endpoint});
 	PgSQL_LSN_Monitor monitor(manager, [&](const Endpoint& e) -> std::optional<std::string> {
 		return "hostaddr=127.0.0.1 port=" + std::to_string(e.port) +
 			" user=test dbname=postgres sslmode=disable gssencmode=disable replication=database";
@@ -136,12 +136,12 @@ int main() {
 	};
 	ok(until([&] { return server.waiting.load(); }), "real libpq receives partial identity response");
 	for (int i = 0; i < 10; ++i) { monitor.tick(now_us(), 1000, 1000000, 1000000); monitor.wait(1000); }
-	ok(!manager.snapshot(10).writer, "withheld ReadyForQuery neither blocks scheduler nor certifies identity");
+	ok(!manager.snapshot(endpoint).progress, "withheld ReadyForQuery neither blocks scheduler nor certifies identity");
 	server.release();
-	ok(until([&] { return manager.snapshot(10).writer.has_value(); }), "complete identity sandwich certifies writer");
+	ok(until([&] { return manager.snapshot(endpoint).progress.has_value(); }), "complete identity sandwich certifies writer");
 	ok(server.replication_mode, "dedicated connection starts in database replication mode");
-	if (!manager.snapshot(10).writer) return exit_status();
-	const auto writer = *manager.snapshot(10).writer;
+	if (!manager.snapshot(endpoint).progress) return exit_status();
+	const auto writer = manager.snapshot(endpoint).progress->server;
 	const auto initial_commands = server.commands.load();
 	for (int i = 0; i < 10; ++i) { monitor.tick(now_us(), 1000, 1000000, 1000000); monitor.wait(1000); }
 	ok(server.commands == initial_commands && initial_commands == 3, "certified idle writer sends no position probes");
@@ -156,27 +156,27 @@ int main() {
 	ok(server.commands == initial_commands + 2, "continuous connection needs only SQL and final identity");
 	monitor.reset();
 	ok(manager.resolve(before).state == DependencyState::Ready, "monitor reset preserves known writer history");
-	bool certified = false;
-	for (const auto& p : manager.snapshot(10).servers) certified |= p.valid;
+	const auto p = manager.snapshot(endpoint).progress;
+	bool certified = p && p->valid;
 	ok(!certified, "monitor reset withdraws all endpoint certification");
 	{
 		ScriptedServer blocked, healthy;
 		healthy.release();
 		Endpoint slow{"127.0.0.1", blocked.port}, fast{"127.0.0.1", healthy.port};
 		PgSQL_LSN_Manager peers;
-		peers.reconcile_groups({{10,20,true,{slow},{}},{30,40,true,{fast},{}},{50,60,true,{fast},{}}});
+		peers.reconcile_endpoints({slow, fast, fast});
 		PgSQL_LSN_Monitor driver(peers, [&](const Endpoint& e) -> std::optional<std::string> {
 			return "hostaddr=127.0.0.1 port=" + std::to_string(e.port) +
 				" user=test dbname=postgres sslmode=disable gssencmode=disable replication=database";
 		});
 		const auto deadline = now_us() + 2000000;
-		while (!peers.snapshot(30).writer && now_us() < deadline) {
+		while (!peers.snapshot(fast).progress && now_us() < deadline) {
 			driver.tick(now_us(), 1000, 1000000, 1000000); driver.wait(1000);
 		}
-		ok(blocked.waiting && peers.snapshot(30).writer, "partial response on one endpoint cannot block another");
-		ok(peers.snapshot(50).writer && healthy.commands == 3, "groups sharing an endpoint share one probe connection");
+		ok(blocked.waiting && peers.snapshot(fast).progress, "partial response on one endpoint cannot block another");
+		ok(peers.snapshots().size() == 2 && peers.snapshot(fast).progress && healthy.commands == 3, "duplicate endpoints share one tracker and probe connection");
 		driver.tick(now_us() + 2000000, 1000, 1000000, 1000000);
-		ok(!peers.snapshot(10).writer, "probe timeout cannot publish partial certification");
+		ok(!peers.snapshot(slow).progress, "probe timeout cannot publish partial certification");
 		const auto begin_reset = now_us();
 		driver.reset();
 		ok(now_us() - begin_reset < 100000, "shutdown closes withheld responses without waiting for server");

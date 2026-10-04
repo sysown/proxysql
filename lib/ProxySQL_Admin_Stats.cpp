@@ -1306,6 +1306,33 @@ void ProxySQL_Admin::stats___pgsql_connection_pool(bool _reset) {
 	delete resultset;
 }
 
+void ProxySQL_Admin::stats___pgsql_lsn() {
+	if (!PgHGM) return;
+	// Copy once; SQLite materialization never holds tracker locks.
+	const auto servers = PgHGM->lsn_manager().snapshots();
+	auto [rc, statement] = statsdb->prepare_v2("INSERT INTO stats_pgsql_lsn(hostname,port,lsn) VALUES(?1,?2,?3)");
+	ASSERT_SQLITE_OK(rc, statsdb);
+	auto* row = statement.get();
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_pgsql_lsn");
+	for (const auto& server : servers) {
+		rc = (*proxy_sqlite3_bind_text)(row, 1, server.endpoint.address.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+		rc = (*proxy_sqlite3_bind_int)(row, 2, server.endpoint.port); ASSERT_SQLITE_OK(rc, statsdb);
+		std::optional<pgsql_lsn::Lsn> lsn;
+		if (server.progress && server.progress->valid)
+			lsn = server.progress->server.role == pgsql_lsn::Role::Writer ? server.progress->insert_lsn : server.progress->replay_lsn;
+		if (lsn) {
+			const auto text = pgsql_lsn::format_lsn(*lsn);
+			rc = (*proxy_sqlite3_bind_text)(row, 3, text.c_str(), -1, SQLITE_TRANSIENT);
+		} else rc = (*proxy_sqlite3_bind_null)(row, 3);
+		ASSERT_SQLITE_OK(rc, statsdb);
+		SAFE_SQLITE3_STEP2(row);
+		rc = (*proxy_sqlite3_clear_bindings)(row); ASSERT_SQLITE_OK(rc, statsdb);
+		rc = (*proxy_sqlite3_reset)(row); ASSERT_SQLITE_OK(rc, statsdb);
+	}
+	statsdb->execute("COMMIT");
+}
+
 #ifdef PROXYSQL31
 void ProxySQL_Admin::stats___pgsql_hostgroup_connection_pool(bool reset) {
 	if (!PgHGM) return;

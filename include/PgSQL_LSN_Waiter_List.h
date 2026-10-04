@@ -1,6 +1,7 @@
 #ifndef PGSQL_LSN_WAITER_LIST_H
 #define PGSQL_LSN_WAITER_LIST_H
 #include "PgSQL_LSN_Manager.h"
+#include "PgSQL_LSN_Routing.h"
 #include "PgSQL_Waiter_List.h"
 
 // Independent worker-owned lists and nodes reuse the established intrusive
@@ -14,8 +15,10 @@ struct PgSQL_LSN_Request {
 	bool cancelled = false;
 	uint32_t requested_hostgroup = 0, route_hostgroup = 0;
 	pgsql_lsn::Micros entered_at = 0, deadline = 0, query_deadline = 0;
-	std::optional<pgsql_lsn::GroupId> group;
-	pgsql_lsn::GroupSnapshot snapshot;
+	std::optional<PgSQL_LSN_Policy> policy;
+	std::vector<pgsql_lsn::Progress> servers;
+	std::optional<pgsql_lsn::ServerToken> writer;
+	uint64_t revision = 0, policy_epoch = 0;
 	pgsql_lsn::Dependency dependency;
 	pgsql_lsn::DependencyView view;
 	pgsql_lsn::Reason error = pgsql_lsn::Reason::None;

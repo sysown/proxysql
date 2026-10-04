@@ -980,6 +980,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_global", STATS_SQLITE_TABLE_PGSQL_GLOBAL);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_connection_pool", STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL);
+	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_lsn", STATS_SQLITE_TABLE_PGSQL_LSN);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_connection_pool_reset", STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL_RESET);
 #ifdef PROXYSQL31
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_hostgroup_connection_pool", STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL);

@@ -694,8 +694,11 @@ public:
 	enum pgsql_variable_name changing_variable_idx;
 
 	PgSQL_Session();
-	std::unordered_map<pgsql_lsn::GroupId, pgsql_lsn::Dependency> lsn_dependencies;
-	std::unordered_map<pgsql_lsn::GroupId, pgsql_lsn::Reason> lsn_errors;
+	std::map<pgsql_lsn::Endpoint, pgsql_lsn::Dependency> lsn_dependencies;
+	std::map<pgsql_lsn::Endpoint, pgsql_lsn::Reason> lsn_errors;
+	// Remember routing origins separately so policy changes cannot erase an
+	// earlier writer dependency. The tracker itself never sees these IDs.
+	std::map<uint32_t, pgsql_lsn::Endpoint> lsn_route_sources;
 	void lsn_on_idle_boundary(const PgSQL_Connection&);
 	uint64_t lsn_birth_epoch = 0;
 	PgSQL_LSN_Request lsn_request;

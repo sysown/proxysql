@@ -1557,6 +1557,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	bool stats_pgsql_global = false;
 	bool stats_pgsql_connection_pool = false;
+	bool stats_pgsql_lsn = false;
 	bool stats_pgsql_connection_pool_reset = false;
 #ifdef PROXYSQL31
 	bool stats_pgsql_hostgroup_connection_pool = false;
@@ -1691,6 +1692,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		stats_mysql_hostgroup_connection_pool=true; refresh=true;
 	}
 #endif
+	if (strstr(query_no_space, "stats_pgsql_lsn")) { stats_pgsql_lsn=true; refresh=true; }
 	if (strstr(query_no_space, "stats_pgsql_connection_pool_reset")) {
 		stats_pgsql_connection_pool_reset = true; refresh = true;
 	} else {
@@ -1941,6 +1943,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_hostgroup_connection_pool(false);
 		}
 #endif
+		if (stats_pgsql_lsn) stats___pgsql_lsn();
 		if (stats_pgsql_connection_pool_reset) {
 			stats___pgsql_connection_pool(true);
 		} else {

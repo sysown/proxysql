@@ -11,6 +11,7 @@
 #include "PgSQL_Query_Cache.h"
 #include "PgSQL_Query_Processor.h"
 #include "PgSQL_Extended_Query_Message.h"
+#include "PgSQL_ExplicitTxnStateMgr.h"
 extern PgSQL_HostGroups_Manager* PgHGM;
 extern PgSQL_Logger* GloPgSQL_Logger;
 extern PgSQL_Threads_Handler* GloPTH;
@@ -48,9 +49,9 @@ int main() {
 	Endpoint writer{"writer",5432}, replica{"replica",5432};
 	PgSQL_Session old;
 	old.connections_handler = false;
-	manager.reconcile_groups({{10,20,true,{writer},{replica}}});
-	ServerToken source{10,manager.snapshot(10).generation,writer,{{123,1},1000},Role::Writer};
-	ServerToken reader{10,source.generation,replica,{{123,1},2000},Role::Replica};
+	PgHGM->reconcile_lsn_policies({{10,20,true,{writer},{replica}}});
+	ServerToken source{manager.snapshot(writer).generation,writer,{{123,1},1000},Role::Writer};
+	ServerToken reader{manager.snapshot(replica).generation,replica,{{123,1},2000},Role::Replica};
 	manager.publish_progress({source,1,0x100,{},true,1,1,{}});
 	manager.publish_progress({reader,1,{},0x100,true,1,1,{}});
 	pgsql_thread___lsn_wait_timeout = 100;
@@ -60,17 +61,43 @@ int main() {
 		"session predating activation cannot use untracked history");
 	ok(!old.lsn_cache_allowed(20), "activation guard applies before cache lookup");
 	{
+		PgHGM->reconcile_lsn_policies({{10,20,true,{writer},{replica}},
+			{30,40,true,{writer},{replica}},{50,60,true,{writer},{writer,replica}}});
+		PgSQL_Session shared; shared.connections_handler=false;
+		shared.lsn_dependencies[writer]=manager.observe_completion(source,{});
+		ok(manager.snapshots().size()==2,"three hostgroup policies share two physical trackers");
+		ok(shared.lsn_admit(40,1000)==LsnAdmission::Wait,
+			"dependency follows physical writer into a different hostgroup policy");
+		shared.lsn_finish_request();
+		ok(shared.lsn_admit(60,1000)==LsnAdmission::Proceed,
+			"originating physical writer remains eligible when listed in a reader hostgroup");
+		shared.lsn_finish_request();
+		Endpoint replacement{"replacement",5432};
+		PgHGM->reconcile_lsn_policies({{10,20,true,{writer},{replica}},
+			{30,40,true,{replacement},{replica}},{50,60,true,{writer},{writer,replica}}});
+		ServerToken changed{manager.snapshot(replacement).generation,replacement,{{123,2},3000},Role::Writer};
+		manager.publish_progress({changed,1,0x500,{},true,1,1,{}});
+		ok(!shared.lsn_cache_allowed(40),"membership change cannot erase shared dependency before cache lookup");
+		ok(shared.lsn_admit(40,1001)==LsnAdmission::Error && shared.lsn_request.error==Reason::HistoryChanged,
+			"policy retains an inferred physical source when its writer membership changes");
+		shared.lsn_finish_request();
+		PgHGM->reconcile_lsn_policies({{10,20,true,{writer},{replica}}});
+		ok(manager.resolve(shared.lsn_dependencies.at(writer)).state==DependencyState::Pending &&
+			manager.snapshot(writer).generation==source.generation,
+			"removing duplicate policies preserves server generation and dependency");
+	}
+	{
 		PgSQL_Session session; session.connections_handler = false;
 		ok(session.lsn_admit(20,1000) == LsnAdmission::Proceed, "new clean session can use a certified reader");
 		ok(session.lsn_cache_allowed(20), "clean session keeps ordinary cache eligibility");
 		session.lsn_finish_request();
-		session.lsn_dependencies[10] = manager.observe_completion(source, {});
+		session.lsn_dependencies[writer] = manager.observe_completion(source, {});
 		ok(!session.lsn_cache_allowed(20), "unresolved dependency bypasses cache");
 		ok(session.lsn_admit(20,1000) == LsnAdmission::Wait, "reader request waits for sealed writer sample");
 		const auto deadline = session.lsn_request.deadline;
 		ok(deadline == 101000 && session.lsn_admit(20,50000) == LsnAdmission::Wait && session.lsn_request.deadline == deadline,
 			"admission retries retain one monotonic deadline");
-		auto ticket = manager.seal_writer_batch(10);
+		auto ticket = manager.seal_writer_batch(writer);
 		manager.complete_writer_sample(*ticket, {source,1,0x200,{},true,2,1,{}});
 		ok(session.lsn_admit(20,60000) == LsnAdmission::Wait, "resolved target still waits for replay");
 		manager.publish_progress({reader,1,{},0x200,true,3,1,{}});
@@ -133,14 +160,15 @@ int main() {
 		session.session_fast_forward=SESSION_FORWARD_TYPE_NONE;
 		session.lsn_finish_request();
 		session.lsn_admit(20,400000);
-		manager.reconcile_groups({});
+		PgHGM->reconcile_lsn_policies({});
 		ok(session.lsn_admit(20,400001)==LsnAdmission::Error, "disable cannot silently relax an in-flight protected request");
 		session.lsn_finish_request();
 		ok(session.lsn_admit(20,400002)==LsnAdmission::Proceed && session.lsn_cache_allowed(20),
 			"new request observes disabled policy");
 	}
-	manager.reconcile_groups({{10,20,true,{writer},{replica}}});
-	source.generation = reader.generation = manager.snapshot(10).generation;
+	PgHGM->reconcile_lsn_policies({{10,20,true,{writer},{replica}}});
+	source.generation = manager.snapshot(writer).generation;
+	reader.generation = manager.snapshot(replica).generation;
 	manager.publish_progress({source,1,0x300,{},true,7,1,{}});
 	manager.publish_progress({reader,1,{},0x100,true,7,1,{}});
 	{
@@ -149,7 +177,7 @@ int main() {
 		worker.curtime=1000000;
 		pgsql_thread___lsn_wait_timeout=100;
 		auto* first = new PgSQL_Session(); first->thread=&worker;
-		first->lsn_dependencies[10]=manager.observe_completion(source,{});
+		first->lsn_dependencies[writer]=manager.observe_completion(source,{});
 		first->lsn_admit(20,worker.curtime);
 		first->to_process=0;
 		worker.lsn_waiter_enter(first);
@@ -165,7 +193,7 @@ int main() {
 		second->lsn_dependencies=first->lsn_dependencies;
 		second->lsn_admit(20,worker.curtime);
 		second->to_process=0;
-		auto ticket=manager.seal_writer_batch(10);
+		auto ticket=manager.seal_writer_batch(writer);
 		manager.complete_writer_sample(*ticket,{source,1,0x300,{},true,8,1,{}});
 		worker.lsn_waiter_enter(second);
 		ok(second->to_process==1, "register then recheck catches publication before insertion");
@@ -189,7 +217,7 @@ int main() {
 		session.client_myds->myconn=new PgSQL_Connection(true);
 		session.client_myds->myconn->userinfo->username=strdup("unit");
 		session.client_myds->myconn->userinfo->set_dbname("unit");
-		session.lsn_dependencies[10]=manager.observe_completion(source,{});
+		session.lsn_dependencies[writer]=manager.observe_completion(source,{});
 		session.lsn_admit(20,worker.curtime);
 		auto* checked=PgHGM->get_MyConn_from_pool(20,&session,false,nullptr,0,-1);
 		ok(!checked,"shared pool cannot create a socket on an ineligible replica");
@@ -203,7 +231,7 @@ int main() {
 		checked=worker.get_MyConn_local(20,&session,nullptr,0,-1);
 		ok(!checked,"worker-local checkout rejects unresolved LSN dependency");
 		if (checked) worker.push_MyConn_local(checked);
-		ticket=manager.seal_writer_batch(10);
+		ticket=manager.seal_writer_batch(writer);
 		manager.complete_writer_sample(*ticket,{source,1,0x400,{},true,9,1,{}});
 		manager.publish_progress({reader,1,{},0x400,true,9,1,{}});
 		session.lsn_admit(20,worker.curtime+1);
@@ -245,6 +273,39 @@ int main() {
 			ok(PgSQL_LSN_Admission_Test::cache(clean,packet) && clean.client_myds->PSarrayOUT->len>0,
 				"independent clean frontend can hit the same cache entry");
 		}
+		PgHGM->wrlock();
+		PgHGM->create_new_server_in_hg(10,{"writer",5432,"unit"},{1,100,0});
+		auto* writer_server=PgHGM->find_server_in_hg(10,"writer",5432);
+		PgHGM->wrunlock();
+		for (bool explicit_txn : {true,false}) {
+			PgSQL_Session guarded; guarded.thread=&worker;
+			guarded.client_myds=new PgSQL_Data_Stream(); guarded.client_myds->init(MYDS_FRONTEND,&guarded,-1);
+			guarded.client_myds->myconn=new PgSQL_Connection(true);
+			guarded.client_myds->myconn->userinfo->set(session.client_myds->myconn->userinfo);
+			guarded.client_myds->myprot.init(&guarded.client_myds,guarded.client_myds->myconn->userinfo,&guarded);
+			guarded.mybe=guarded.find_or_create_backend(10);
+			auto* stream=guarded.mybe->server_myds;
+			auto* active=new PgSQL_Connection(false); active->parent=writer_server; active->myds=stream;
+			active->native_mode=true; active->native_connected=true; active->healthy=true; active->async_state_machine=ASYNC_IDLE;
+			active->lsn_stamp=source; active->set_ready_for_query_status(explicit_txn ? 'T' : 'I');
+			active->native_unsynced_work=!explicit_txn;
+			writer_server->ConnectionsUsed->add(active); stream->myconn=active;
+			packet=cache_query(guarded); guarded.current_hostgroup=10; guarded.status=PROCESSING_QUERY;
+			manager.invalidate_endpoint(writer,Reason::NoSafeBackend);
+			ok(!guarded.lsn_route_request(),"withdrawn certification refuses a pinned %s",explicit_txn ? "transaction" : "extended cycle");
+			ok(!stream->myconn && guarded.tx_poisoned==explicit_txn,
+				"causal refusal discards uncommitted work and preserves explicit aborted-transaction state");
+			char ready=0;
+			for (unsigned i=0;i<guarded.client_myds->PSarrayOUT->len;++i) {
+				auto* output=guarded.client_myds->PSarrayOUT->index(i);
+				const auto* bytes=static_cast<const unsigned char*>(output->ptr);
+				if (output->size>=6 && bytes[output->size-6]=='Z') ready=bytes[output->size-1];
+			}
+			ok(ready==(explicit_txn ? 'E' : 'I'),"causal refusal reports the correct ReadyForQuery transaction state");
+			l_free(packet.size,packet.ptr);
+			manager.publish_progress({source,1,0x400,{},true,10,1,{}});
+		}
+
 	}
 	}
 	delete GloPgQC; GloPgQC=nullptr;

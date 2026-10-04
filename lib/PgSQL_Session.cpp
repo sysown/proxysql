@@ -298,7 +298,7 @@ void PgSQL_Session::set_status(enum session_status e) {
 
 
 PgSQL_Session::PgSQL_Session() {
-	lsn_birth_epoch = PgHGM ? PgHGM->lsn_manager().configuration_epoch() : 0;
+	lsn_birth_epoch = PgHGM ? PgHGM->lsn_policy_epoch() : 0;
 	thread = nullptr;
 	user_max_connections = 0;
 	previous_hostgroup = -1;
@@ -2887,7 +2887,7 @@ int PgSQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(PgS
 }
 
 void PgSQL_Session::SetQueryTimeout() {
-	if (lsn_request.group) {
+	if (lsn_request.policy) {
 		mybe->server_myds->wait_until=lsn_request.query_deadline;
 		return;
 	}
@@ -3438,7 +3438,7 @@ handler_again:
 			// Certify a permanent writer relay before releasing its queued first
 			// packet. Until this completes, the connection owns its TLS transport
 			// and the worker leaves IO to its asynchronous bootstrap.
-			if (lsn_request.group && !mybe->server_myds->myconn->lsn_stamp) {
+			if (lsn_request.policy && !mybe->server_myds->myconn->lsn_stamp) {
 				if (!lsn_route_request()) goto __exit_DSS__STATE_NOT_INITIALIZED;
 				auto* stream=mybe->server_myds;
 				auto* conn=stream->myconn;
@@ -3450,7 +3450,7 @@ handler_again:
 					return 0;
 				}
 				if (validation < 0 || !stream->adopt_backend_tls()) {
-					lsn_request.error=PgHGM->lsn_manager().snapshot(*lsn_request.group).generation != lsn_request.snapshot.generation ?
+					lsn_request.error=PgHGM->lsn_manager().resolve(lsn_request.dependency).state == pgsql_lsn::DependencyState::Invalid ?
 						pgsql_lsn::Reason::HistoryChanged : pgsql_lsn::Reason::NoSafeBackend;
 					lsn_request.cancelled=stream->cancel_query;
 					lsn_route_request();
@@ -3604,7 +3604,7 @@ handler_again:
 		} else {
 			PgSQL_Data_Stream* myds = mybe->server_myds;
 			PgSQL_Connection* myconn = myds->myconn;
-			if (lsn_request.group && myconn->async_state_machine == ASYNC_IDLE) {
+			if (lsn_request.policy && myconn->async_state_machine == ASYNC_IDLE) {
 				if (!myconn->lsn_bootstrap_active) SetQueryTimeout();
 				const int validation=myconn->async_validate_lsn_incarnation(myds->revents);
 				if (validation > 0) {
@@ -3614,7 +3614,7 @@ handler_again:
 					return 0;
 				}
 				if (validation < 0) {
-					lsn_request.error=PgHGM->lsn_manager().snapshot(*lsn_request.group).generation != lsn_request.snapshot.generation ?
+					lsn_request.error=PgHGM->lsn_manager().resolve(lsn_request.dependency).state == pgsql_lsn::DependencyState::Invalid ?
 						pgsql_lsn::Reason::HistoryChanged : pgsql_lsn::Reason::NoSafeBackend;
 					lsn_request.cancelled=myds->cancel_query;
 					lsn_route_request();
@@ -5765,8 +5765,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_Q
 	if (qpo->destination_hostgroup >= 0 && transaction_persistent_hostgroup == -1)
 		current_hostgroup=qpo->destination_hostgroup;
 	if (const auto* pinned=lsn_pinned_backend()) {
-		const auto group=PgHGM->lsn_manager().group_for_hostgroup(current_hostgroup);
-		if (group && *group==pinned->lsn_stamp->group) current_hostgroup=pinned->parent->myhgc->hid;
+		const auto policy=PgHGM->lsn_policy_for_hostgroup(current_hostgroup);
+		const auto pinned_hg=pinned->parent->myhgc->hid;
+		if (policy && (pinned_hg==policy->writer_hostgroup || pinned_hg==policy->reader_hostgroup))
+			current_hostgroup=pinned_hg;
 	}
 
 	// Exit early for specific statement types
@@ -6080,7 +6082,7 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif
 	if (mc) {
 		mybe->server_myds->attach_connection(mc);
-		if (lsn_request.group) lsn_request.waiting_for_pool=!mc->lsn_stamp;
+		if (lsn_request.policy) lsn_request.waiting_for_pool=!mc->lsn_stamp;
 		thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
 #ifdef PROXYSQL31
 		pause_until = 0;
@@ -6089,7 +6091,7 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 	}
 	else {
 		thread->status_variables.stvar[st_var_ConnPool_get_conn_failure]++;
-		if (lsn_request.group) {
+		if (lsn_request.policy) {
 			lsn_request.waiting_for_pool=true;
 			thread->lsn_waiter_enter(this);
 		}
@@ -8276,7 +8278,7 @@ void PgSQL_Session::clear_named_portals() {
 void PgSQL_Session::backend_connection_detached(const PgSQL_Connection* conn) {
 	if (conn && conn->lsn_stamp && conn->lsn_stamp->role == pgsql_lsn::Role::Writer &&
 		(conn->lsn_application_cycle_active || conn->last_ready_for_query_status() != 'I'))
-		lsn_errors[conn->lsn_stamp->group] = pgsql_lsn::Reason::HistoryChanged;
+		lsn_errors[conn->lsn_stamp->endpoint] = pgsql_lsn::Reason::HistoryChanged;
 	if (named_portals.empty() || conn == NULL) return;
 	unsigned long moved = 0;
 	for (auto it = named_portals.begin(); it != named_portals.end(); ) {
@@ -8876,8 +8878,10 @@ void PgSQL_Session::observe_ffto_server_packet(const PtrSize_t& pkt) {
 void PgSQL_Session::lsn_on_idle_boundary(const PgSQL_Connection& connection) {
 	if (!PgHGM || !connection.lsn_stamp || connection.lsn_stamp->role != pgsql_lsn::Role::Writer) return;
 	const auto& source = *connection.lsn_stamp;
-	const auto group = PgHGM->lsn_manager().snapshot(source.group);
-	if (!group.config.enabled) return;
-	auto& previous = lsn_dependencies[source.group];
+	if (connection.parent && connection.parent->myhgc) {
+		const auto policy = PgHGM->lsn_policy_for_hostgroup(connection.parent->myhgc->hid);
+		if (policy) lsn_route_sources[policy->writer_hostgroup] = source.endpoint;
+	}
+	auto& previous = lsn_dependencies[source.endpoint];
 	previous = PgHGM->lsn_manager().observe_completion(source, previous);
 }

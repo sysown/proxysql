@@ -861,6 +861,7 @@ class ProxySQL_Admin {
 	void stats___pgsql_users();
 	void stats___pgsql_free_connections();
 	void stats___pgsql_connection_pool(bool _reset);
+	void stats___pgsql_lsn();
 #ifdef PROXYSQL31
 	void stats___pgsql_hostgroup_connection_pool(bool reset);
 #endif
