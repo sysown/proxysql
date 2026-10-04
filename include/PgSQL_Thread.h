@@ -18,7 +18,6 @@
 #include "prometheus_helpers.h"
 
 #include "PgSQL_Set_Stmt_Parser.h"
-#include "PgSQL_LSN_Waiter_List.h"
 #ifdef PROXYSQL31
 #include "PgSQL_Waiter_List.h"
 #endif // PROXYSQL31
@@ -222,12 +221,6 @@ public:
 	void* gen_args;	// this is a generic pointer to create any sort of structure
 
 	ProxySQL_Poll<PgSQL_Data_Stream> mypolls;
-	PgSQL_LSN_Waiter_List lsn_waiters;
-	size_t lsn_waiter_count = 0;
-	void lsn_waiter_enter(PgSQL_Session*);
-	void lsn_waiter_leave(PgSQL_Session*);
-	void process_lsn_waiters(pgsql_lsn::Micros now);
-	int lsn_poll_timeout(int current_ms, pgsql_lsn::Micros now) const;
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Lists waiter_lists;
 	unsigned long long last_b_rearm_us = 0;
@@ -959,8 +952,11 @@ public:
 	struct {
 		int authentication_method;
 		int monitor_history;
-		int lsn_poll_interval;
-		int lsn_wait_timeout;
+#ifdef PROXYSQL31
+		int monitor_lsn_poll_interval;
+		int monitor_lsn_poll_timeout;
+		int monitor_lsn_history;
+#endif
 		int monitor_connect_interval;
 		int monitor_connect_interval_window;
 		int monitor_connect_timeout;

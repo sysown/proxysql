@@ -1,7 +1,10 @@
 #ifndef PROXYSQL_PGSQL_HOSTGROUPS_MANAGER_H
 #define PROXYSQL_PGSQL_HOSTGROUPS_MANAGER_H
+#ifdef PROXYSQL31
 #include "PgSQL_LSN_Manager.h"
 #include "PgSQL_LSN_Routing.h"
+#include <set>
+#endif
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_gtid.h"
@@ -52,7 +55,7 @@
 #define MYHGM_PgSQL_SERVERS_INCOMING "CREATE TABLE pgsql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 5432 , weight INT NOT NULL DEFAULT 1 , status INT NOT NULL DEFAULT 0 , compression INT NOT NULL DEFAULT 0 , max_connections INT NOT NULL DEFAULT 1000 , max_replication_lag INT NOT NULL DEFAULT 0 , use_ssl INT NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port))"
 #endif /* DEBUG */
 #define MYHGM_PgSQL_SERVERS_SSL_PARAMS "CREATE TABLE pgsql_servers_ssl_params (hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 5432 , username VARCHAR NOT NULL DEFAULT '' , ssl_ca VARCHAR NOT NULL DEFAULT '' , ssl_cert VARCHAR NOT NULL DEFAULT '' , ssl_key VARCHAR NOT NULL DEFAULT '' , ssl_crl VARCHAR NOT NULL DEFAULT '' , ssl_crlpath VARCHAR NOT NULL DEFAULT '' , ssl_protocol_version_range VARCHAR NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port, username) )"
-#define MYHGM_PgSQL_REPLICATION_HOSTGROUPS "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , lsn_causal_reads INT NOT NULL DEFAULT 0 CHECK(lsn_causal_reads IN (0,1)) , UNIQUE (reader_hostgroup))"
+#define MYHGM_PgSQL_REPLICATION_HOSTGROUPS "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
 
 #define PGHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname, port"
 
@@ -411,11 +414,14 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	pthread_mutex_t lock;
 #endif // 0
 	private:
+#ifdef PROXYSQL31
 	PgSQL_LSN_Manager lsn_manager_;
-	mutable std::mutex lsn_policy_mutex_;
-	std::map<uint32_t, PgSQL_LSN_Policy> lsn_policies_;
-	std::atomic<uint64_t> lsn_policy_epoch_{0};
+	mutable std::mutex lsn_interest_mutex_;
+	std::vector<PgSQL_LSN_Interest> lsn_interests_;
+	std::vector<pgsql_lsn::Endpoint> lsn_endpoints_;
+	std::map<uint32_t, std::set<pgsql_lsn::Endpoint>> lsn_memberships_;
 	void refresh_lsn_groups(); // Caller holds the hostgroup write lock.
+#endif
 	enum HGM_TABLES {
 		PgSQL_SERVERS_V2 = 0,
 		PgSQL_REPLICATION_HOSTGROUPS,
@@ -712,12 +718,12 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 
 	wqueue<PgSQL_Connection *> queue;
 
+#ifdef PROXYSQL31
 	PgSQL_LSN_Manager& lsn_manager() { return lsn_manager_; }
-	void reconcile_lsn_policies(const std::vector<PgSQL_LSN_Policy>&);
-	std::optional<PgSQL_LSN_Policy> lsn_policy_for_hostgroup(uint32_t) const;
-	uint64_t lsn_policy_epoch() const { return lsn_policy_epoch_.load(); }
-	int lsn_query_timeout(unsigned int hostgroup);
-	static bool validate_lsn_replication_rows(const SQLite3_result*, std::string& error);
+	void replace_lsn_interests(const std::vector<PgSQL_LSN_Interest>&);
+	std::vector<pgsql_lsn::Endpoint> lsn_endpoints() const;
+	void prune_lsn_history(pgsql_lsn::Micros cutoff);
+#endif
 	PgSQL_HostGroups_Manager();
 	~PgSQL_HostGroups_Manager();
 	void init();

@@ -174,7 +174,12 @@ static char* commands_counters_desc[PGSQL_QUERY___NONE] = {
 };
 
 PgSQL_Rule_Text::PgSQL_Rule_Text(const PgSQL_Query_Processor_Rule_t* pqr) {
-	num_fields = 35; // this count the number of fields
+#ifdef PROXYSQL31
+ num_fields = 36;
+#else
+ num_fields = 35;
+#endif
+ // The result includes the full rule schema and hit counter.
 	pta = NULL;
 	pta = (char**)malloc(sizeof(char*) * num_fields);
 	itostr(pta[0], (long long)pqr->rule_id);
@@ -227,11 +232,20 @@ PgSQL_Rule_Text::PgSQL_Rule_Text(const PgSQL_Query_Processor_Rule_t* pqr) {
 	itostr(pta[28], (long long)pqr->sticky_conn);
 	itostr(pta[29], (long long)pqr->multiplex);
 
+#ifdef PROXYSQL31
+ itostr(pta[30], (long long)pqr->lsn_from_hostgroup);
+	itostr(pta[31], (long long)pqr->log);
+	itostr(pta[32], (long long)pqr->apply);
+	pta[33] = strdup_null(pqr->attributes);
+	pta[34] = strdup_null(pqr->comment); // issue #643
+	itostr(pta[35], (long long)pqr->hits);
+#else
 	itostr(pta[30], (long long)pqr->log);
 	itostr(pta[31], (long long)pqr->apply);
 	pta[32] = strdup_null(pqr->attributes);
 	pta[33] = strdup_null(pqr->comment); // issue #643
 	itostr(pta[34], (long long)pqr->hits);
+#endif
 }
 
 PgSQL_Query_Processor::PgSQL_Query_Processor() : 
@@ -324,7 +338,11 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(int rule_id,
 	const char* proxy_addr, int proxy_port, const char* digest, const char* match_digest, const char* match_pattern, bool negate_match_pattern,
 	const char* re_modifiers, int flagOUT, const char* replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result,
 	int cache_timeout, int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT,
-	int mirror_hostgroup, const char* error_msg, const char* OK_msg, int sticky_conn, int multiplex, int log,
+	int mirror_hostgroup, const char* error_msg, const char* OK_msg, int sticky_conn, int multiplex,
+#ifdef PROXYSQL31
+ int lsn_from_hostgroup,
+#endif
+ int log,
 	bool apply, const char* attributes, const char* comment) {
 
 	PgSQL_Query_Processor_Rule_t* newQR = (PgSQL_Query_Processor_Rule_t*)malloc(sizeof(PgSQL_Query_Processor_Rule_t));
@@ -368,6 +386,9 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(int rule_id,
 	newQR->OK_msg = (OK_msg ? strdup(OK_msg) : NULL);
 	newQR->sticky_conn = sticky_conn;
 	newQR->multiplex = multiplex;
+#ifdef PROXYSQL31
+ newQR->lsn_from_hostgroup = lsn_from_hostgroup;
+#endif
 	newQR->apply = apply;
 	newQR->attributes = (attributes ? strdup(attributes) : NULL);
 	newQR->comment = (comment ? strdup(comment) : NULL); // see issue #643
@@ -499,6 +520,9 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 	newQR->OK_msg = (pqr->OK_msg ? strdup(pqr->OK_msg) : NULL);
 	newQR->sticky_conn = pqr->sticky_conn;
 	newQR->multiplex = pqr->multiplex;
+#ifdef PROXYSQL31
+ newQR->lsn_from_hostgroup = pqr->lsn_from_hostgroup;
+#endif
 	newQR->apply = pqr->apply;
 	newQR->attributes = (pqr->attributes ? strdup(pqr->attributes) : NULL);
 	newQR->comment = (pqr->comment ? strdup(pqr->comment) : NULL); // see issue #643
@@ -569,7 +593,11 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 
 SQLite3_result* PgSQL_Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result* result = new SQLite3_result(35);
+#ifdef PROXYSQL31
+ SQLite3_result* result = new SQLite3_result(36);
+#else
+ SQLite3_result* result = new SQLite3_result(35);
+#endif
 	PgSQL_Query_Processor_Rule_t* qr1;
 	rdlock();
 	result->add_column_definition(SQLITE_TEXT, "rule_id");
@@ -602,6 +630,9 @@ SQLite3_result* PgSQL_Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT, "OK_msg");
 	result->add_column_definition(SQLITE_TEXT, "sticky_conn");
 	result->add_column_definition(SQLITE_TEXT, "multiplex");
+#ifdef PROXYSQL31
+ result->add_column_definition(SQLITE_TEXT, "lsn_from_hostgroup");
+#endif
 	result->add_column_definition(SQLITE_TEXT, "log");
 	result->add_column_definition(SQLITE_TEXT, "apply");
 	result->add_column_definition(SQLITE_TEXT, "attributes");

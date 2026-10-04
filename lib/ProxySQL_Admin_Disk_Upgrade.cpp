@@ -679,16 +679,30 @@ void ProxySQL_Admin::disk_upgrade_pgsql_replication_hostgroups() {
 		);
 	}
 
-	if (configdb->check_table_structure(
-		const_cast<char*>("pgsql_replication_hostgroups"),
-		const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS_V3_0_2))) {
-		proxy_warning("Upgrading 'pgsql_replication_hostgroups' with LSN causal reads disabled by default\n");
-		configdb->execute("DROP TABLE IF EXISTS pgsql_replication_hostgroups_v302");
-		configdb->execute("ALTER TABLE pgsql_replication_hostgroups RENAME TO pgsql_replication_hostgroups_v302");
-		configdb->build_table(const_cast<char*>("pgsql_replication_hostgroups"),
-			const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS), false);
-		configdb->execute("INSERT INTO pgsql_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type,comment)"
-			" SELECT writer_hostgroup,reader_hostgroup,check_type,comment FROM pgsql_replication_hostgroups_v302");
-	}
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
+
+#ifdef PROXYSQL31
+void ProxySQL_Admin::disk_upgrade_pgsql_query_rules() {
+ if (!configdb->check_table_structure(const_cast<char*>("pgsql_query_rules"), const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES_V3_0))) return;
+ const char* legacy_columns = "rule_id,active,username,database,flagIN,client_addr,proxy_addr,proxy_port,digest,match_digest,match_pattern,negate_match_pattern,re_modifiers,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,cache_empty_result,cache_timeout,reconnect,timeout,retries,delay,next_query_flagIN,mirror_flagOUT,mirror_hostgroup,error_msg,OK_msg,sticky_conn,multiplex,log,apply,attributes,comment";
+ std::string create = ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES;
+ create.replace(create.find("pgsql_query_rules"), strlen("pgsql_query_rules"), "pgsql_query_rules_lsn_upgrade");
+ const std::string copy = std::string("INSERT INTO pgsql_query_rules_lsn_upgrade(") + legacy_columns + ",lsn_from_hostgroup) SELECT " + legacy_columns + ",NULL FROM pgsql_query_rules";
+ if (!configdb->execute("BEGIN IMMEDIATE")) return;
+ bool success = configdb->execute(create.c_str()) && configdb->execute(copy.c_str()) &&
+  configdb->execute("UPDATE sqlite_sequence SET seq=MAX(seq,COALESCE((SELECT seq FROM sqlite_sequence WHERE name='pgsql_query_rules'),0)) WHERE name='pgsql_query_rules_lsn_upgrade'") &&
+  configdb->execute("DROP TABLE pgsql_query_rules") &&
+  // ALTER TABLE RENAME rewrites sqlite_master with a quoted table name.
+  // Generic schema verification compares exact DDL, so create the final
+  // canonical definition rather than allowing it to replace migrated rows.
+  configdb->execute(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES) &&
+  configdb->execute((std::string("INSERT INTO pgsql_query_rules(") + legacy_columns + ",lsn_from_hostgroup) SELECT " + legacy_columns + ",lsn_from_hostgroup FROM pgsql_query_rules_lsn_upgrade").c_str()) &&
+  configdb->execute("UPDATE sqlite_sequence SET seq=MAX(seq,COALESCE((SELECT seq FROM sqlite_sequence WHERE name='pgsql_query_rules_lsn_upgrade'),0)) WHERE name='pgsql_query_rules'") &&
+  configdb->execute("DROP TABLE pgsql_query_rules_lsn_upgrade");
+ if (!success || !configdb->execute("COMMIT")) {
+  configdb->execute("ROLLBACK");
+  proxy_error("PostgreSQL query-rule schema upgrade failed; legacy table retained\n");
+ } else proxy_warning("Upgraded PostgreSQL query rules with ordered lsn_from_hostgroup column\n");
+}
+#endif

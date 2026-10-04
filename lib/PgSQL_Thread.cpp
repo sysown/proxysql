@@ -1,4 +1,6 @@
+#ifdef PROXYSQL31
 #include <charconv>
+#endif
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -321,8 +323,11 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"interfaces",
 	(char*)"monitor_enabled",
 	(char*)"monitor_history",
-	(char*)"lsn_poll_interval",
-	(char*)"lsn_wait_timeout",
+#ifdef PROXYSQL31
+	(char*)"monitor_lsn_poll_interval",
+	(char*)"monitor_lsn_poll_timeout",
+	(char*)"monitor_lsn_history",
+#endif
 	(char*)"monitor_connect_interval",
 	(char*)"monitor_connect_interval_window",
 	(char*)"monitor_connect_timeout",
@@ -1071,8 +1076,11 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.connect_retries_delay = 1;
 	variables.monitor_enabled = true;
 	variables.monitor_history = 7200000; // changed in 2.6.0 : was 600000
-	variables.lsn_poll_interval = 10;
-	variables.lsn_wait_timeout = 100;
+#ifdef PROXYSQL31
+	variables.monitor_lsn_poll_interval = 10;
+	variables.monitor_lsn_poll_timeout = 100;
+	variables.monitor_lsn_history = 60000;
+#endif
 	variables.monitor_connect_interval = 120000;
 	variables.monitor_connect_interval_window = 50;
 	variables.monitor_connect_timeout = 600;
@@ -1733,7 +1741,8 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		// integer variable ?
 		std::unordered_map<std::string, std::tuple<int*, int, int, bool>>::const_iterator it = VariablesPointers_int.find(nameS);
 		if (it != VariablesPointers_int.end()) {
-			if (nameS == "lsn_poll_interval" || nameS == "lsn_wait_timeout") {
+#ifdef PROXYSQL31
+			if (nameS == "monitor_lsn_poll_interval" || nameS == "monitor_lsn_poll_timeout" || nameS == "monitor_lsn_history") {
 				int parsed = 0;
 				auto result = std::from_chars(value, value + vallen, parsed);
 				if (result.ec != std::errc() || result.ptr != value + vallen
@@ -1741,6 +1750,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 				*std::get<0>(it->second) = parsed;
 				return true;
 			}
+#endif
 			// Log warnings for variables with possibly wrong values
 			if (nameS == "auto_increment_delay_multiplex_timeout_ms") {
 				int intv = atoi(value);
@@ -2325,8 +2335,11 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["authentication_method"] = make_tuple(&variables.authentication_method, 1, 3, false);
 		// Monitor variables
 		VariablesPointers_int["monitor_history"] = make_tuple(&variables.monitor_history, 1000, 7 * 24 * 3600 * 1000, false);
-		VariablesPointers_int["lsn_poll_interval"] = make_tuple(&variables.lsn_poll_interval, 1, 60000, false);
-		VariablesPointers_int["lsn_wait_timeout"] = make_tuple(&variables.lsn_wait_timeout, 0, 600000, false);
+#ifdef PROXYSQL31
+		VariablesPointers_int["monitor_lsn_poll_interval"] = make_tuple(&variables.monitor_lsn_poll_interval, 1, 60000, false);
+		VariablesPointers_int["monitor_lsn_poll_timeout"] = make_tuple(&variables.monitor_lsn_poll_timeout, 1, 600000, false);
+		VariablesPointers_int["monitor_lsn_history"] = make_tuple(&variables.monitor_lsn_history, 1000, 604800000, false);
+#endif
 
 		VariablesPointers_int["monitor_connect_interval"] = make_tuple(&variables.monitor_connect_interval, 100, 7 * 24 * 3600 * 1000, false);
 		VariablesPointers_int["monitor_connect_interval_window"] = make_tuple(&variables.monitor_connect_interval_window, 0, 100, false);
@@ -3199,7 +3212,6 @@ void PgSQL_Thread::drop_from_poll(PgSQL_Data_Stream *ds) {
 #endif // PROXYSQL31
 void PgSQL_Thread::unregister_session(int idx) {
 	if (mysql_sessions == NULL) return;
-	lsn_waiter_leave(static_cast<PgSQL_Session*>(mysql_sessions->index(idx)));
 #ifdef PROXYSQL31
 	PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(idx);
 	leave_waiter(sess, false);
@@ -3419,7 +3431,6 @@ void PgSQL_Thread::run() {
 #else
 		int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
 #endif // PROXYSQL31
-		ttw = lsn_poll_timeout(ttw, curtime);
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events, 0, sizeof(struct epoll_event) * MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -4133,7 +4144,6 @@ void PgSQL_Thread::apt_update_window() {
 
 #endif // PROXYSQL31
 void PgSQL_Thread::process_all_sessions() {
-	process_lsn_waiters(curtime);
 	unsigned int n;
 	unsigned int total_active_transactions_ = 0;
 #ifdef IDLE_THREADS
@@ -4314,7 +4324,7 @@ void PgSQL_Thread::process_all_sessions() {
 					// A checkout timeout can finish the request without a connection.
 					// Restore the client so its error response and next query can flow.
 					leave_waiter(sess);
-				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
+				} else if (!sess->lsn_has_dependency() && vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
 					break;
 				}
 				n = next;
@@ -4449,8 +4459,11 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___monitor_writer_is_also_reader = (bool)GloPTH->get_variable_int((char*)"monitor_writer_is_also_reader");
 	pgsql_thread___monitor_enabled = (bool)GloPTH->get_variable_int((char*)"monitor_enabled");
 	pgsql_thread___monitor_history = GloPTH->get_variable_int((char*)"monitor_history");
-	pgsql_thread___lsn_poll_interval = GloPTH->get_variable_int((char*)"lsn_poll_interval");
-	pgsql_thread___lsn_wait_timeout = GloPTH->get_variable_int((char*)"lsn_wait_timeout");
+#ifdef PROXYSQL31
+	pgsql_thread___monitor_lsn_poll_interval = GloPTH->get_variable_int((char*)"monitor_lsn_poll_interval");
+	pgsql_thread___monitor_lsn_poll_timeout = GloPTH->get_variable_int((char*)"monitor_lsn_poll_timeout");
+	pgsql_thread___monitor_lsn_history = GloPTH->get_variable_int((char*)"monitor_lsn_history");
+#endif
 	pgsql_thread___monitor_connect_interval = GloPTH->get_variable_int((char*)"monitor_connect_interval");
 	pgsql_thread___monitor_connect_interval_window = GloPTH->get_variable_int((char*)"monitor_connect_interval_window");
 	pgsql_thread___monitor_connect_timeout = GloPTH->get_variable_int((char*)"monitor_connect_timeout");
@@ -6209,7 +6222,9 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 	PgSQL_Connection* c = NULL;
 	for (i = 0; i < cached_connections->len; i++) {
 		c = (PgSQL_Connection*)cached_connections->index(i);
-		if (!sess->lsn_backend_allowed(*c,true)) continue;
+#ifdef PROXYSQL31
+		if (!sess->lsn_backend_allowed(*c)) continue;
+#endif
 		if (c->parent->myhgc->hid == _hid && sess->client_myds->myconn->has_same_connection_options(c)) { // options are all identical
 			if (
 				(gtid_uuid == NULL) || // gtid_uuid is not used

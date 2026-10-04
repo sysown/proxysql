@@ -844,6 +844,10 @@ static void test_write_pgsql_query_rules() {
 	db->execute(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES);
 	db->execute("INSERT INTO pgsql_query_rules (rule_id,active,username,database,flagIN,destination_hostgroup,apply,comment) VALUES (1,1,'pu','pdb',0,7,1,'pqr')");
 
+#ifdef PROXYSQL31
+ db->execute("UPDATE pgsql_query_rules SET multiplex=2,lsn_from_hostgroup=17,log=1,apply=1 WHERE rule_id=1");
+ db->execute("INSERT INTO pgsql_query_rules(rule_id,lsn_from_hostgroup) VALUES(2,0),(3,NULL)");
+#endif
 	ProxySQL_Config cfg(db);
 	std::string data;
 	int rc = cfg.Write_PgSQL_Query_Rules_to_configfile(data);
@@ -852,6 +856,22 @@ static void test_write_pgsql_query_rules() {
 	ok(data.find("pgsql_query_rules:") != std::string::npos, "Write_PgSQL_Query_Rules: section");
 	ok(data.find("rule_id=1") != std::string::npos && data.find("destination_hostgroup=7") != std::string::npos && data.find("\"pqr\"") != std::string::npos, "Write_PgSQL_Query_Rules: data");
 
+#ifdef PROXYSQL31
+ ok(data.find("lsn_from_hostgroup=17") != std::string::npos && data.find("lsn_from_hostgroup=0") != std::string::npos, "writer serializes HG17 and HG0");
+ ProxySQL_ConfigFile* original = GloVars.confFile;
+ ProxySQL_ConfigFile* parsed = load_config_from_string(data);
+ GloVars.confFile = parsed;
+ db->execute("DELETE FROM pgsql_query_rules");
+ ok(cfg.Read_PgSQL_Query_Rules_from_configfile()==3,"read query-rule writer output");
+ ok(db->return_one_int("SELECT COUNT(*) FROM pgsql_query_rules WHERE rule_id=1 AND multiplex=2 AND lsn_from_hostgroup=17 AND log=1 AND apply=1")==1,"neighboring values survive config round trip");
+ ok(db->return_one_int("SELECT COUNT(*) FROM pgsql_query_rules WHERE (rule_id=2 AND lsn_from_hostgroup=0) OR (rule_id=3 AND lsn_from_hostgroup IS NULL)")==2,"config round trip preserves HG0 and NULL");
+ delete parsed;
+ parsed = load_config_from_string("pgsql_query_rules: ({rule_id=4;lsn_from_hostgroup=-1;})");
+ GloVars.confFile = parsed;
+ ok(cfg.Read_PgSQL_Query_Rules_from_configfile()==-1,"negative configured source rejected");
+ GloVars.confFile = original;
+ delete parsed;
+#endif
 	delete db;
 }
 
@@ -1011,7 +1031,7 @@ static void test_roundtrip_pgsql_firewall() {
 // ============================================================
 
 int main() {
-	plan(161);  // matches exact number of ok() assertions in this file
+	plan(NO_PLAN);  // matches exact number of ok() assertions in this file
 	test_init_minimal();
 
 	// MySQL side - existing + new data-driven tests

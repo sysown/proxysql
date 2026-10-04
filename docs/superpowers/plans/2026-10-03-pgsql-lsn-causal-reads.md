@@ -1,5 +1,18 @@
 # PostgreSQL LSN Causal Reads Implementation Plan
 
+> **SUPERSEDED — do not execute this plan.** Use the
+> [timestamp and query-rule implementation plan](2026-10-04-pgsql-lsn-query-rules.md)
+> and [revised design](../specs/2026-10-04-pgsql-lsn-query-rules-design.md).
+> Earlier task checkmarks and test results below describe the rejected design;
+> they are not validation of its replacement.
+
+> Scope correction, 2026-10-04: native application connections only. Remove the
+> application identity bootstrap completely. LSN/identity SQL belongs solely
+> to the background monitor; the application path performs in-memory checks
+> and observes existing protocol completions. Earlier bootstrap/libpq validation
+> records below are historical and do not define the corrected implementation.
+
+
 > Architecture correction approved on 2026-10-04: LSN tracking is keyed solely
 > by `hostname:port`. A physical server has one progress record, one probe
 > connection, and one open/sealed completion batch pair, regardless of its
@@ -29,7 +42,7 @@ below remains pending; these smoke checks do not mark that matrix complete.
 
 **Architecture:** An endpoint-owned manager batches observed writer completions and publishes immutable dependency and server-progress snapshots. Dedicated monitor connections certify WAL identity and progress; session and pool admission check those snapshots before acquiring a read snapshot. The frontend owns its dependencies across multiplexing.
 
-**Tech Stack:** C++17, existing PostgreSQL native and libpq backend paths, asynchronous monitor and worker infrastructure, SQLite admin configuration, TAP unit/integration tests, isolated PostgreSQL 17 containers.
+**Tech Stack:** C++17, PostgreSQL native application connections, asynchronous monitor and worker infrastructure, SQLite admin configuration, TAP unit/integration tests, isolated PostgreSQL 17 containers.
 
 **Spec:** [PostgreSQL LSN Causal Reads Design](../specs/2026-10-03-pgsql-lsn-causal-reads-design.md). Read both documents before execution.
 
@@ -77,7 +90,7 @@ Results: 5 Python tests and 39 TAP assertions passed. No feature implementation,
 | New `include/PgSQL_LSN_Manager.h`, `lib/PgSQL_LSN_Manager.cpp` | Validated positions, identities, batches, generations, immutable views, demand and eligibility. No sockets or session pointers. |
 | New `include/PgSQL_LSN_Probe.h`, `lib/PgSQL_LSN_Probe.cpp` | Identity/sample/identity probe state and strict result validation. |
 | `include/PgSQL_Monitor.hpp`, `lib/PgSQL_Monitor.cpp` | Dedicated asynchronous connections, cadence, deadlines, publication and worker notification. |
-| PostgreSQL connection, protocol and session files | Backend identity bootstrap, real completion boundaries, frontend dependency ownership and request admission. |
+| PostgreSQL connection, protocol and session files | Cached monitor token attachment, real completion boundaries, frontend dependency ownership and request admission. |
 | PostgreSQL hostgroup and thread files; new `include/PgSQL_LSN_Waiter_List.h` | Common pool eligibility, manager lifetime, separate worker-owned LSN wait queues. |
 | Admin/configuration/cluster files in Task 2 | Activation and variable lifecycle, migration, compatibility checks. |
 | Stats files and new `docs/pgsql-lsn-causal-reads.md` | Current-state diagnostics, bounded counters and operator instructions. |
@@ -186,16 +199,16 @@ pgsql_lsn::GroupSnapshot snapshot(pgsql_lsn::GroupId) const;
 - [x] **Run manager and probe targets.** Expected: all pass; no networking on the worker path; monitor error states leave unavailable certification. Live credentials/restart and permission cases run in Task 7.
 - [x] **Commit the task paths:** `feat(pgsql): monitor certified WAL positions`.
 
-## Task 4: Track real application completions on validated backends
+## Task 4: Track native application completions using cached monitor progress
 
 **Files:** Modify `include/PgSQL_Connection.h`, `include/PgSQL_Session.h`, `lib/PgSQL_Connection.cpp`, `lib/PgSQL_Protocol.cpp`, `lib/PgSQL_Session.cpp`; create `test/tap/tests/unit/pgsql_lsn_completion_unit-t.cpp`; modify `test/tap/tests/unit/Makefile`.
 
-**Interfaces:** Add an optional `pgsql_lsn::ServerToken` stamp to each backend connection. Add `int PgSQL_Connection::async_validate_lsn_incarnation(short revents)` using existing asynchronous return conventions. Add `void PgSQL_Session::lsn_on_idle_boundary(const PgSQL_Connection&)`; consume `observe_completion(source, previous)` and maintain `std::unordered_map<pgsql_lsn::GroupId, pgsql_lsn::Dependency>` on the frontend. Track application-cycle serial and origin separately from raw ReadyForQuery status.
+**Interfaces:** Add an optional `pgsql_lsn::ServerToken` stamp to each backend connection. Add `bool PgSQL_Connection::lsn_use_monitor_progress()` which copies a cached endpoint token without network I/O, protocol-state changes or deadline changes. Add `void PgSQL_Session::lsn_on_idle_boundary(const PgSQL_Connection&)`; consume `observe_completion(source, previous)` and maintain `std::unordered_map<pgsql_lsn::GroupId, pgsql_lsn::Dependency>` on the frontend. Track application-cycle serial and origin separately from raw ReadyForQuery status.
 
-- [x] **Write completion tests feeding real response handlers.** Assert one enrollment before idle completion becomes client-visible for libpq and native paths, including suppressed native `Z`. Assert no enrollment for internal setup/probes, duplicate status updates, active/failed transactions, Execute or Flush before Sync. Assert retained dependencies on rollback, `DISCARD ALL`, backend release/reuse and error recovery. Include a multi-statement cycle with an earlier commit and a later error. Test hidden bootstrap messages never enter client output.
+- [x] **Write completion tests feeding real response handlers.** Assert one enrollment before idle completion becomes client-visible for native paths, including suppressed native `Z`. Assert no enrollment for internal setup/probes, duplicate status updates, active/failed transactions, Execute or Flush before Sync. Assert retained dependencies on rollback, `DISCARD ALL`, backend release/reuse and error recovery. Include a multi-statement cycle with an earlier commit and a later error. Assert token attachment sends zero bytes on the application socket and leaves connection setup intact.
 - [x] **Run the new completion target and observe the missing enrollment/ordering failures.** Reuse packet builders and connection fixtures from `pgsql_command_complete_unit-t.cpp` and response-framer tests, not a parallel model of the new code.
-- [x] **Implement one-time asynchronous backend bootstrap before protected use.** Match endpoint postmaster start and recovery role to the monitor's validated incarnation; require an uninterrupted connection and current group generation. Store the stamp only after successful verification. Reconnect/reset of the physical socket clears it; an ordinary SQL pool reset cannot clear frontend dependencies. A bootstrap mismatch withholds eligibility and triggers endpoint revalidation.
-- [x] **Normalize actual idle boundaries in both result paths before output release.** Hook libpq completion before `add_ready_status()` can expose idle; hook native ReadyForQuery before copying/flushing it to client buffers, including paths suppressing that packet. Conservatively enroll every application cycle returning to idle on the writer. Keep COPY, procedures with transaction control, COMMIT PREPARED and Sync error recovery covered by the same cycle boundary. Unknown commit outcome preserves existing error behavior, invalidates the affected dependency if the frontend survives, and never authorizes a write retry.
+- [ ] **Replace application bootstrap with cached monitor progress.** Remove the SQL, response parser, timeout, asynchronous state and all call sites. Attach the endpoint token locally before dispatch and reject previously attached tokens that no longer match. Keep server identity discovery entirely in the background monitor. Direct stable endpoints and external HA fencing remain required. Test fresh and pooled native connections and initial session settings. Record regression results after the replacement build.
+- [x] **Normalize actual native idle boundaries before output release.** Hook native ReadyForQuery before copying/flushing it to client buffers, including paths suppressing that packet. Conservatively enroll every application cycle returning to idle on the writer. Keep COPY, procedures with transaction control, COMMIT PREPARED and Sync error recovery covered by the same cycle boundary. Unknown commit outcome preserves existing error behavior, invalidates the affected dependency if the frontend survives, and never authorizes a write retry.
 - [x] **Run completion and existing command-complete, response-framer and named-portal teardown unit targets.** Expected: new enrollment assertions and existing protocol lifecycle assertions pass. Tests verify the boundary hook order, not just final dependency state.
 - [x] **Commit the task paths:** `feat(pgsql): capture writer completion dependencies`.
 
@@ -207,7 +220,7 @@ pgsql_lsn::GroupSnapshot snapshot(pgsql_lsn::GroupId) const;
 
 - [ ] **Write admission and worker lifecycle tests.** Assert waiting through unresolved batches; fixed resolved target; all pool paths reject a lagging or mismatched replica; timeout zero immediately chooses a valid writer; elapsed retries never renew the deadline; one fallback maximum. Use an injected monotonic clock, for example `ok(deadline_after_retry == deadline_at_entry, "single causal deadline")`. Exercise notification-before-register, notification-after-register, cancel, disconnect, group removal and shutdown. Verify `ok(waiter_count == 0, "teardown unlinks waiter")` and bounded handle counts. An unready LSN waiter must not block ready requests or ordinary pool waiters.
 - [ ] **Run admission and worker-waiter targets; record expected missing-gate/lifecycle failures.** Add direct tests of actual local and shared pool checkout, attached backend reuse and new-connection paths, not only the pure predicate.
-- [ ] **Move effective-group resolution before cache lookup and gate before snapshot acquisition.** Apply to simple and extended paths, including Parse/Bind as necessary before any snapshot-taking operation, not merely Execute. Carry the immutable eligibility context through primary/backup server weighting, connection creation and local/shared checkout. Recheck current generation and backend stamp immediately before dispatch. Bootstrap unvalidated connections asynchronously using Task 4.
+- [ ] **Move effective-group resolution before cache lookup and gate before snapshot acquisition.** Apply to simple and extended paths, including Parse/Bind as necessary before any snapshot-taking operation, not merely Execute. Carry the immutable eligibility context through primary/backup server weighting, connection creation and local/shared checkout. Recheck current generation and backend stamp immediately before dispatch. Attach cached endpoint tokens locally using Task 4, with no application-side SQL or validation wait.
 - [ ] **Implement per-request waits and deadline behavior.** Use a separate intrusive LSN waiter list, preserving vanilla pool waiter order. Register then recheck revision to prevent lost wakeups. Worker poll timers honor the earlier existing request deadline; notifications are coalesced. Cancellation unlinks only that request. After the causal deadline, route once to the validated originating writer subject to ordinary routing/health/connection rules and normal query timeouts. Unknown history or no safe route gives `55000` with `LSN_HISTORY_CHANGED`, `LSN_TRACKING_NOT_INITIALIZED`, or `LSN_NO_SAFE_BACKEND` as applicable.
 - [ ] **Preserve transaction and session semantics.** Pin an active transaction, unsynchronized extended cycle, COMMIT AND CHAIN and live portal to its backend even when ordinary transaction persistence is disabled. Do not move an existing snapshot. Reject incompatible session affinity. Compare session creation/activation epochs before using a newly enabled pair; conservative reconnect-required error is acceptable for all pre-existing sessions. Disabling applies to new requests, while in-flight waiters retain their captured policy. Reject fast-forward routing to readers in enabled pairs and keep writer fast-forward affinity.
 - [ ] **Bypass both query-cache lookup and insertion for any pending/resolved dependency.** Include simple and extended cache paths; clean sessions retain existing behavior. Test stale preseeded entries, multiplexed clients with different dependencies, old attached connections, activation and disable-during-wait.

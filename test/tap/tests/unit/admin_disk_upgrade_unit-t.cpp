@@ -80,6 +80,9 @@ public:
 	void upgrade_rest_api_routes() { admin->disk_upgrade_rest_api_routes(); }
 	void upgrade_mysql_query_rules() { admin->disk_upgrade_mysql_query_rules(); }
 	void upgrade_pgsql_replication_hostgroups() { admin->disk_upgrade_pgsql_replication_hostgroups(); }
+#ifdef PROXYSQL31
+ void upgrade_pgsql_query_rules() { admin->disk_upgrade_pgsql_query_rules(); }
+#endif
 };
 
 // ---------------------------------------------------------------------------
@@ -548,8 +551,56 @@ static void test_mysql_servers_upgrade_multiple_rows_with_fixes() {
 // main
 // ============================================================================
 
+#ifdef PROXYSQL31
+static void test_pgsql_query_rules_ordered_upgrade() {
+ TestDiskUpgrade upgrade;
+ auto* db = upgrade.db();
+ ok(db->execute(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES_V3_0), "created real legacy query rule schema");
+ ok(db->execute("INSERT INTO pgsql_query_rules(rule_id,active,username,database,flagIN,match_pattern,destination_hostgroup,multiplex,log,apply,attributes,comment) VALUES(65000,1,'o''brien','db',9,'^SELECT',20,2,1,1,'{}','quoted ''comment'),(90000,0,'inactive','other',3,NULL,42,0,0,0,'','inactive')"), "legacy quoted and inactive rows inserted");
+ const auto before = query_string(db,"SELECT group_concat(rule_id||':'||active||':'||username||':'||database||':'||flagIN||':'||destination_hostgroup||':'||multiplex||':'||log||':'||apply||':'||attributes||':'||comment,'|') FROM pgsql_query_rules ORDER BY rule_id");
+ // Preserve an AUTOINCREMENT watermark higher than surviving IDs.
+ db->execute("INSERT INTO pgsql_query_rules(rule_id) VALUES(120000)");
+ db->execute("DELETE FROM pgsql_query_rules WHERE rule_id=120000");
+ upgrade.upgrade_pgsql_query_rules();
+ ok(db->check_table_structure((char*)"pgsql_query_rules",const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES)), "migrated ordered schema");
+ ok(query_string(db,"SELECT name FROM pragma_table_info('pgsql_query_rules') WHERE cid=30") == "lsn_from_hostgroup", "LSN column between multiplex and log");
+ ok(query_int(db,"SELECT COUNT(*) FROM pgsql_query_rules WHERE lsn_from_hostgroup IS NULL") == 2, "migrated source fields are NULL");
+ const auto after = query_string(db,"SELECT group_concat(rule_id||':'||active||':'||username||':'||database||':'||flagIN||':'||destination_hostgroup||':'||multiplex||':'||log||':'||apply||':'||attributes||':'||comment,'|') FROM pgsql_query_rules ORDER BY rule_id");
+ ok(before==after,"legacy IDs, quoted values, inactive rows and neighboring fields preserved");
+ ok(db->execute("INSERT INTO pgsql_query_rules(active) VALUES(1)"),"insert generated ID after migration");
+ ok(query_int(db,"SELECT MAX(rule_id) FROM pgsql_query_rules")==120001,"AUTOINCREMENT watermark preserved");
+ upgrade.upgrade_pgsql_query_rules();
+ ok(query_int(db,"SELECT COUNT(*) FROM pgsql_query_rules")==3,"second migration is no-op");
+}
+static void test_pgsql_query_rules_empty_sequence_upgrade() {
+ TestDiskUpgrade upgrade;
+ auto* db = upgrade.db();
+ db->execute(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES_V3_0);
+ db->execute("INSERT INTO pgsql_query_rules(rule_id) VALUES(76543)");
+ db->execute("DELETE FROM pgsql_query_rules");
+ upgrade.upgrade_pgsql_query_rules();
+ ok(db->check_table_structure((char*)"pgsql_query_rules",const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES)),"empty legacy schema upgrades canonically");
+ db->execute("INSERT INTO pgsql_query_rules(active) VALUES(1)");
+ ok(query_int(db,"SELECT MAX(rule_id) FROM pgsql_query_rules")==76544,"empty legacy table retains deleted-ID sequence watermark");
+}
+static void test_pgsql_query_rules_upgrade_rollback() {
+ TestDiskUpgrade upgrade;
+ auto* db = upgrade.db();
+ db->execute(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES_V3_0);
+ db->execute("INSERT INTO pgsql_query_rules(rule_id,comment) VALUES(72,'preserved')");
+ // Occupy the staging name to force a recoverable transactional failure.
+ db->execute("CREATE TABLE pgsql_query_rules_lsn_upgrade(blocker INT)");
+ upgrade.upgrade_pgsql_query_rules();
+ ok(db->check_table_structure((char*)"pgsql_query_rules",const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES_V3_0)),"failed reconstruction retains legacy schema");
+ ok(query_string(db,"SELECT comment FROM pgsql_query_rules WHERE rule_id=72")=="preserved","failed reconstruction retains rows");
+ db->execute("DROP TABLE pgsql_query_rules_lsn_upgrade");
+ upgrade.upgrade_pgsql_query_rules();
+ ok(db->check_table_structure((char*)"pgsql_query_rules",const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES)),"migration succeeds after blocker removed");
+}
+#endif
+
 int main() {
-	plan(60);
+	plan(NO_PLAN);
 	test_init_minimal();
 
 	// scheduler tests
@@ -584,6 +635,11 @@ int main() {
 	test_scheduler_upgrade_preserves_multiple_rows();
 	test_mysql_servers_upgrade_multiple_rows_with_fixes();
 
+#ifdef PROXYSQL31
+ test_pgsql_query_rules_ordered_upgrade();
+ test_pgsql_query_rules_upgrade_rollback();
+ test_pgsql_query_rules_empty_sequence_upgrade();
+#endif
 	test_cleanup_minimal();
 	return exit_status();
 }

@@ -9,15 +9,12 @@
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
+#include <algorithm>
 #include <memory>
 
 extern PgSQL_Threads_Handler* GloPTH;
 extern ProxySQL_Admin* GloAdmin;
 extern ProxySQL_Statistics* GloProxyStats;
-class TestDiskUpgrade {
-public:
-	static void pgsql(ProxySQL_Admin& admin) { admin.disk_upgrade_pgsql_replication_hostgroups(); }
-};
 static SQLite3DB* memory_db() {
 	auto* db = new SQLite3DB();
 	db->open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -40,14 +37,85 @@ static std::string variable(const char* name) {
 	free(value);
 	return result;
 }
+static bool set_setting(const char* name, const char* value) {
+	return GloPTH->set_variable(const_cast<char*>(name), value);
+}
+static bool load_servers() {
+	GloAdmin->pgsql_servers_wrlock();
+	bool loaded = GloAdmin->load_pgsql_servers_to_runtime_checked({}, {}, {}, false);
+	GloAdmin->pgsql_servers_wrunlock();
+	return loaded;
+}
+#ifdef PROXYSQL31
+static void test_retention(SQLite3DB& db) {
+	using namespace pgsql_lsn;
+	const Endpoint source{"source",5432}, peer{"source-peer",5432}, b{"destination-b",5432}, c{"destination-c",5432};
+	db.execute("INSERT INTO pgsql_servers(hostgroup_id,hostname) VALUES(10,'source'),(10,'source-peer'),(40,'source'),(20,'destination-b'),(30,'destination-c')");
+	db.execute("UPDATE pgsql_servers SET status='OFFLINE_SOFT' WHERE hostname='source-peer'");
+	ok(load_servers(), "server memberships load without replication activation");
+	PgHGM->replace_lsn_interests({{10,{20},false},{40,{30},false}});
+	ok(PgHGM->lsn_endpoints().size() == 4, "shared source membership deduplicates endpoints and includes offline-soft members");
+	auto& manager = PgHGM->lsn_manager();
+	auto publish = [&](const Endpoint& endpoint, Micros time, Lsn lsn, History identity = History{123,1}) {
+		manager.publish({endpoint,identity,1000,{time,lsn},true});
+	};
+	auto target = [&](Micros completion) {
+		const auto result = manager.lookup_after(source, completion);
+		return result.required ? result.required->lsn : UINT64_MAX;
+	};
+	for (unsigned i=1; i<=4; ++i) publish(source,i*100,i*100);
+	publish(peer,400,250);
+	publish(b,400,400);
+	publish(c,400,150);
+	PgHGM->prune_lsn_history(0);
+	ok(target(50) == 100, "shared source considers destinations from both source hostgroups");
+	publish(c,500,400);
+	PgHGM->prune_lsn_history(0);
+	ok(target(50) == 200, "source peers also constrain the minimum progress floor");
+	publish(peer,500,400);
+	PgHGM->prune_lsn_history(0);
+	ok(target(50) == 300 && target(300) == 400, "progress pruning retains the real strict predecessor and its timestamp");
+	publish(source,500,500);
+	publish(source,600,600);
+	manager.withdraw(c);
+	PgHGM->prune_lsn_history(550);
+	ok(target(50) == 500 && target(500) == 600, "down destination blocks only progress pruning while age pruning keeps one boundary sample");
+	PgHGM->replace_lsn_interests({{10,{20,99},false},{40,{30},false}});
+	publish(source,700,700);
+	publish(source,800,800);
+	PgHGM->prune_lsn_history(0);
+	ok(target(50) == 500, "unknown destination hostgroup cannot fabricate a progress floor");
+	PgHGM->prune_lsn_history(750);
+	ok(target(50) == 700, "unknown relationships cannot block age cleanup");
+	publish(c,900,1000,{999,1});
+	publish(source,900,900);
+	PgHGM->replace_lsn_interests({{10,{20},false},{40,{30},false}});
+	PgHGM->prune_lsn_history(950);
+	ok(target(50) == 900, "incompatible WAL history and expired unchanged progress permit age cleanup");
+	ok(manager.lookup_after(source,900).state == LookupState::Pending, "expired samples never invent a later timestamp");
+	db.execute("DELETE FROM pgsql_servers WHERE hostname='destination-c'");
+	db.execute("INSERT INTO pgsql_servers(hostgroup_id,hostname) VALUES(30,'replacement')");
+	ok(load_servers(), "server reload recomputes rule memberships");
+	const auto endpoints = PgHGM->lsn_endpoints();
+	ok(endpoints.size() == 4 && std::find(endpoints.begin(),endpoints.end(),Endpoint{"replacement",5432}) != endpoints.end()
+		&& std::find(endpoints.begin(),endpoints.end(),c) == endpoints.end(), "membership reload replaces physical destination endpoint");
+	PgHGM->replace_lsn_interests({{10,{},true}});
+	ok(PgHGM->lsn_endpoints().size() == 4, "unspecified destinations conservatively include configured hostgroups");
+	PgHGM->replace_lsn_interests({});
+	ok(PgHGM->lsn_endpoints().empty() && manager.latest_all().empty(), "removed rule interests retire monitor membership");
+}
+#endif
 int main() {
 	plan(NO_PLAN);
 	test_init_minimal();
 	test_init_query_processor();
 	test_init_hostgroups();
+	auto* previous_statsdb_path = GloVars.statsdb_disk;
 	GloVars.statsdb_disk = const_cast<char*>(":memory:");
-	GloProxyStats = new ProxySQL_Statistics();
+	auto statistics = std::make_unique<ProxySQL_Statistics>();
+	GloProxyStats = statistics.get();
 	GloProxyStats->init();
+	// The partial admin fixture cannot run the production thread-shutdown destructor.
 	GloAdmin = new ProxySQL_Admin();
 	GloAdmin->admindb = memory_db();
 	GloAdmin->configdb = memory_db();
@@ -57,129 +125,46 @@ int main() {
 		ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_SERVERS, ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_REPLICATION_HOSTGROUPS,
 		ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_HOSTGROUP_ATTRIBUTES, ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_SERVERS_SSL_PARAMS,
 		ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES, ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES}) db.execute(schema);
-	const bool has_flag = db.execute("INSERT INTO pgsql_replication_hostgroups(writer_hostgroup,reader_hostgroup,lsn_causal_reads) VALUES(10,20,1)");
-	ok(has_flag, "activation column accepts enabled pair");
-	db.execute("INSERT INTO pgsql_replication_hostgroups(writer_hostgroup,reader_hostgroup) VALUES(30,40)");
-	ok(scalar(db, "SELECT lsn_causal_reads FROM pgsql_replication_hostgroups WHERE writer_hostgroup=30") == "0", "protection defaults off");
-	ok(!db.execute("UPDATE pgsql_replication_hostgroups SET lsn_causal_reads=2"), "activation rejects value two");
-	ok(!db.execute("UPDATE pgsql_replication_hostgroups SET lsn_causal_reads=NULL"), "activation rejects NULL");
-	ok(variable("lsn_poll_interval") == "10", "polling defaults to ten milliseconds");
-	ok(variable("lsn_wait_timeout") == "100", "waiting defaults to one hundred milliseconds");
-	for (const auto* name : {"lsn_poll_interval", "lsn_wait_timeout"}) {
-		for (const auto* value : {"", "word", "10garbage", "99999999999999999999", "-1"})
-			ok(!GloPTH->set_variable(const_cast<char*>(name), value), "reject %s=%s", name, value);
+	ok(scalar(db,"SELECT COUNT(*) FROM pragma_table_info('pgsql_replication_hostgroups')") == "4", "replication hostgroups retain four columns");
+	ok(scalar(db,"SELECT COUNT(*) FROM pragma_table_info('pgsql_replication_hostgroups') WHERE name='lsn_causal_reads'") == "0", "rejected replication activation is absent");
+	for (const auto* name : {"lsn_poll_interval","lsn_wait_timeout"})
+		ok(variable(name) == "<missing>" && !set_setting(name,"10"), "old %s variable has no alias",name);
+#ifdef PROXYSQL31
+	struct Setting {const char* name;const char* initial;const char* low;const char* high;const char* below;const char* above;};
+	const Setting settings[] = {
+		{"monitor_lsn_poll_interval","10","1","60000","0","60001"},
+		{"monitor_lsn_poll_timeout","100","1","600000","0","600001"},
+		{"monitor_lsn_history","60000","1000","604800000","999","604800001"}
+	};
+	for (const auto& setting : settings) {
+		ok(variable(setting.name) == setting.initial,"%s default is %s ms",setting.name,setting.initial);
+		for (const auto* value : {"","word","10garbage","99999999999999999999","-1",setting.below,setting.above})
+			ok(!set_setting(setting.name,value),"reject %s=%s",setting.name,value);
+		ok(set_setting(setting.name,setting.low),"accept %s lower boundary",setting.name);
+		ok(set_setting(setting.name,setting.high),"accept %s upper boundary",setting.name);
+		ok(!set_setting(setting.name,setting.above) && variable(setting.name) == setting.high,"rejection preserves %s",setting.name);
 	}
-	ok(!GloPTH->set_variable(const_cast<char*>("lsn_poll_interval"), "0"), "zero cannot disable polling");
-	ok(!GloPTH->set_variable(const_cast<char*>("lsn_poll_interval"), "60001"), "poll limit enforced");
-	ok(GloPTH->set_variable(const_cast<char*>("lsn_poll_interval"), "60000"), "poll upper boundary accepted");
-	ok(GloPTH->set_variable(const_cast<char*>("lsn_poll_interval"), "1"), "poll lower boundary accepted");
-	ok(GloPTH->set_variable(const_cast<char*>("lsn_wait_timeout"), "0"), "zero selects immediate writer fallback");
-	ok(GloPTH->set_variable(const_cast<char*>("lsn_wait_timeout"), "600000"), "wait upper boundary accepted");
-	ok(!GloPTH->set_variable(const_cast<char*>("lsn_wait_timeout"), "600001"), "wait limit enforced");
-	ok(variable("lsn_wait_timeout") == "600000", "rejected setting preserves prior value");
-	db.execute("INSERT INTO global_variables VALUES('pgsql-lsn_poll_interval','17'),('pgsql-lsn_wait_timeout','0')");
+	db.execute("INSERT INTO global_variables VALUES('pgsql-monitor_lsn_poll_interval','17'),('pgsql-monitor_lsn_poll_timeout','19'),('pgsql-monitor_lsn_history','2000')");
 	auto flushed = GloAdmin->load_pgsql_variables_to_runtime();
-	ok(flushed.rejected == 0 && variable("lsn_poll_interval") == "17" && variable("lsn_wait_timeout") == "0", "LOAD PGSQL VARIABLES installs LSN settings");
+	ok(flushed.rejected == 0 && variable("monitor_lsn_poll_interval") == "17" && variable("monitor_lsn_poll_timeout") == "19"
+		&& variable("monitor_lsn_history") == "2000", "runtime variable reload installs all three monitor settings");
 	GloAdmin->save_pgsql_variables_from_runtime();
-	ok(scalar(db, "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-lsn_poll_interval'") == "17", "SAVE FROM RUNTIME preserves LSN setting");
-	for (const auto* schema : {ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS_V3_0_1,
-		ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS_V3_0_2}) {
-		delete GloAdmin->configdb;
-		GloAdmin->configdb = memory_db();
-		auto& disk = *GloAdmin->configdb;
-		disk.execute(schema);
-		disk.execute("INSERT INTO pgsql_replication_hostgroups(writer_hostgroup,reader_hostgroup,comment) VALUES(10,20,'old ''comment'),(30,40,'second')");
-		TestDiskUpgrade::pgsql(*GloAdmin);
-		ok(scalar(disk, "SELECT SUM(lsn_causal_reads) FROM pgsql_replication_hostgroups") == "0", "legacy migration disables LSN protection");
-		ok(scalar(disk, "SELECT COUNT(*) FROM pgsql_replication_hostgroups") == "2", "migration preserves both rows");
-		ok(scalar(disk, "SELECT comment FROM pgsql_replication_hostgroups WHERE writer_hostgroup=10") == "old 'comment", "migration preserves quoted comment");
-		ok(scalar(disk, "SELECT check_type FROM pgsql_replication_hostgroups WHERE writer_hostgroup=10") == "read_only", "migration preserves or supplies check_type");
-		if (scalar(disk, "SELECT lsn_causal_reads FROM pgsql_replication_hostgroups LIMIT 1") != "<error>") {
-			disk.execute("UPDATE pgsql_replication_hostgroups SET lsn_causal_reads=1 WHERE writer_hostgroup=10");
-			TestDiskUpgrade::pgsql(*GloAdmin);
-			ok(scalar(disk, "SELECT lsn_causal_reads FROM pgsql_replication_hostgroups WHERE writer_hostgroup=10") == "1", "repeated upgrade preserves explicit opt-in");
-		}
-	}
-	if (has_flag) {
-		ProxySQL_Config exporter(&db);
-		std::string serialized;
-		exporter.Write_PgSQL_Servers_to_configfile(serialized);
-		ProxySQL_ConfigFile parsed;
-		parsed.cfg.readString(serialized.c_str());
-		auto* saved_config = GloVars.confFile;
-		GloVars.confFile = &parsed;
-		std::unique_ptr<SQLite3DB> imported(memory_db());
-		for (const auto* schema : {ADMIN_SQLITE_TABLE_PGSQL_SERVERS, ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS,
-			ADMIN_SQLITE_TABLE_PGSQL_HOSTGROUP_ATTRIBUTES, ADMIN_SQLITE_TABLE_PGSQL_SERVERS_SSL_PARAMS}) imported->execute(schema);
-		ProxySQL_Config importer(imported.get());
-		std::string error;
-		ok(importer.Read_PgSQL_Servers_from_configfile(error) >= 0, "configuration roundtrip parses");
-		ok(scalar(*imported, "SELECT lsn_causal_reads FROM pgsql_replication_hostgroups WHERE writer_hostgroup=10") == "1", "configuration roundtrip preserves opt-in");
-		GloVars.confFile = saved_config;
-		for (const auto* bad : {"2", "\"yes\""}) {
-			ProxySQL_ConfigFile invalid;
-			invalid.cfg.readString((std::string("pgsql_replication_hostgroups=({writer_hostgroup=60;reader_hostgroup=70;lsn_causal_reads=") + bad + ";});").c_str());
-			GloVars.confFile = &invalid;
-			error.clear();
-			ok(importer.Read_PgSQL_Servers_from_configfile(error) < 0 && !error.empty(), "invalid config activation %s is rejected explicitly", bad);
-			GloVars.confFile = saved_config;
-		}
-		std::unique_ptr<SQLite3_result> legacy(db.execute_statement("SELECT writer_hostgroup,reader_hostgroup,check_type,comment FROM pgsql_replication_hostgroups", nullptr));
-		ok(!PgSQL_HostGroups_Manager::validate_lsn_replication_rows(legacy.get(), error), "legacy cluster projection cannot silently lose activation");
-		db.execute("INSERT INTO pgsql_servers(hostgroup_id,hostname) VALUES(10,'writer'),(20,'reader')");
-		GloAdmin->pgsql_servers_wrlock();
-		bool loaded = GloAdmin->load_pgsql_servers_to_runtime_checked({}, {}, {}, false);
-		GloAdmin->pgsql_servers_wrunlock();
-		ok(loaded, "valid enabled mapping loads to runtime");
-		ok(PgHGM->lsn_policy_for_hostgroup(20) && PgHGM->lsn_policy_for_hostgroup(20)->writer_hostgroup == 10, "reader hostgroup maps to protected writer");
-		ok(PgHGM->lsn_policy_for_hostgroup(20)->writers.size() == 1, "runtime topology supplies exact writer endpoint");
-		std::unique_ptr<SQLite3_result> runtime(PgHGM->dump_table_pgsql("pgsql_replication_hostgroups"));
-		ok(runtime && runtime->columns == 5 && runtime->rows_count == 2 && !strcmp(runtime->rows[0]->fields[4], "1"), "internal runtime retains opt-in column");
-		GloAdmin->save_pgsql_servers_runtime_to_database(true);
-		ok(scalar(db, "SELECT lsn_causal_reads FROM runtime_pgsql_replication_hostgroups WHERE writer_hostgroup=10") == "1", "runtime admin export retains opt-in");
-		db.execute("INSERT INTO pgsql_replication_hostgroups(writer_hostgroup,reader_hostgroup,lsn_causal_reads) VALUES(20,50,1)");
-		GloAdmin->pgsql_servers_wrlock();
-		loaded = GloAdmin->load_pgsql_servers_to_runtime_checked({}, {}, {}, false);
-		GloAdmin->pgsql_servers_wrunlock();
-		ok(!loaded, "ambiguous protected mapping rejects LOAD atomically");
-		runtime.reset(PgHGM->dump_table_pgsql("pgsql_replication_hostgroups"));
-		ok(runtime && runtime->rows_count == 2, "rejected LOAD preserves prior runtime mappings");
-	}
-	{
-		using namespace pgsql_lsn;
-		GloAdmin->statsdb=memory_db();
-		auto& stats=*GloAdmin->statsdb;
-		stats.execute(STATS_SQLITE_TABLE_PGSQL_LSN);
-		auto& manager=PgHGM->lsn_manager();
-		Endpoint writer_endpoint{"quoted'writer",5432}, replica_endpoint{"replica",5432};
-		PgHGM->reconcile_lsn_policies({{100,101,true,{writer_endpoint},{replica_endpoint,writer_endpoint}},
-			{200,201,true,{writer_endpoint},{replica_endpoint}}});
-		GloAdmin->stats___pgsql_lsn();
-		ok(scalar(stats,"SELECT COUNT(*) FROM pragma_table_info('stats_pgsql_lsn')")=="3","LSN stats exposes only hostname, port and lsn");
-		ok(scalar(stats,"SELECT COUNT(*) FROM stats_pgsql_lsn")=="2","two policies sharing physical servers expose two rows");
-		ok(scalar(stats,"SELECT COUNT(*) FROM stats_pgsql_lsn WHERE lsn IS NULL")=="2","unsampled positions export as SQL NULL");
-		ServerToken writer{manager.snapshot(writer_endpoint).generation,writer_endpoint,{{123,1},1000},Role::Writer};
-		ServerToken replica{manager.snapshot(replica_endpoint).generation,replica_endpoint,{{123,1},2000},Role::Replica};
-		manager.publish_progress({writer,1,0,{},true,1,1,{}});
-		manager.publish_progress({replica,1,{},UINT64_MAX,true,1,1,{}});
-		GloAdmin->stats___pgsql_lsn();
-		ok(scalar(stats,"SELECT lsn FROM stats_pgsql_lsn WHERE hostname != 'replica'")=="0/0","zero insertion LSN is known, not NULL");
-		ok(scalar(stats,"SELECT lsn FROM stats_pgsql_lsn WHERE hostname='replica'")=="FFFFFFFF/FFFFFFFF","maximum replay LSN exports losslessly");
-		ok(scalar(stats,"SELECT hostname FROM stats_pgsql_lsn WHERE hostname != 'replica'")=="quoted'writer","stats binds endpoint text without SQL interpolation");
-		auto dependency=manager.observe_completion(writer,{});
-		PgHGM->reconcile_lsn_policies({{200,201,true,{writer_endpoint},{replica_endpoint}}});
-		GloAdmin->stats___pgsql_lsn();
-		ok(scalar(stats,"SELECT COUNT(*) FROM stats_pgsql_lsn")=="2" && manager.resolve(dependency).state==DependencyState::Pending,
-			"removing one hostgroup mapping preserves shared rows and pending completion");
-		manager.invalidate_endpoint(replica.endpoint,Reason::NoSafeBackend,1);
-		GloAdmin->stats___pgsql_lsn();
-		ok(scalar(stats,"SELECT lsn IS NULL FROM stats_pgsql_lsn WHERE hostname='replica'")=="1","withdrawn position exports as SQL NULL");
-		manager.publish_progress({replica,2,{},UINT64_MAX,true,2,1,{}});
-		GloAdmin->stats___pgsql_lsn();
-		ok(scalar(stats,"SELECT lsn FROM stats_pgsql_lsn WHERE hostname='replica'")=="FFFFFFFF/FFFFFFFF","recertification restores the shared current position");
-		manager.reconcile_endpoints({});
-		GloAdmin->stats___pgsql_lsn();
-		ok(scalar(stats,"SELECT COUNT(*) FROM stats_pgsql_lsn")=="0","removed endpoints do not leave historical rows");
-	}
+	ok(scalar(db,"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-monitor_lsn_history'") == "2000", "runtime export retains history retention setting");
+	test_retention(db);
+#else
+	for (const auto* name : {"monitor_lsn_poll_interval","monitor_lsn_poll_timeout","monitor_lsn_history"})
+		ok(variable(name) == "<missing>" && !set_setting(name,"1000"),"v3.0 omits %s",name);
+#endif
+	delete GloAdmin->admindb;
+	delete GloAdmin->configdb;
+	GloAdmin->admindb = nullptr;
+	GloAdmin->configdb = nullptr;
+	GloAdmin = nullptr;
+	GloProxyStats = nullptr;
+	statistics.reset();
+	GloVars.statsdb_disk = previous_statsdb_path;
+	test_cleanup_hostgroups();
+	test_cleanup_query_processor();
+	test_cleanup_minimal();
 	return exit_status();
 }

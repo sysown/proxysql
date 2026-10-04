@@ -224,6 +224,9 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 			MYSQL* rc_conn = mysql_real_connect(conn, node->get_host_address(), creds.user.c_str(), creds.pass.c_str(), NULL, node->port, NULL, 0);
 
 			if (rc_conn) {
+#ifdef PROXYSQL31
+ bool pgsql_query_rules_only = false;
+#endif
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
 #ifdef PROXYSQL40
@@ -270,7 +273,18 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								proxy_info("Cluster: sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								rc_query = mysql_query(conn, q.c_str());
-							} else if (strcmp(row[0], PROXYSQL_VERSION_) != 0) {
+							}
+#ifdef PROXYSQL31
+       else if (proxysql_cluster_pgsql_query_rules_cross_tier(PROXYSQL_VERSION_, row[0])) {
+        // This connection may exchange only the versioned built-in PostgreSQL
+        // rules. It cannot become a source for variables, server topology,
+        // MySQL rules, users or plugin-backed modules.
+        pgsql_query_rules_only = true;
+        same_version = true;
+        proxy_info("Cluster: PostgreSQL query-rules-only peer %s:%d . Remote: %s . Self: %s\n", node->hostname,node->port,row[0],PROXYSQL_VERSION_);
+       }
+#endif
+       else if (strcmp(row[0], PROXYSQL_VERSION_) != 0) {
 								proxy_warning("Cluster: different ProxySQL version with peer %s:%d . Remote: %s . Self: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION_);
 							}
 						}
@@ -288,6 +302,14 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						rc_query = 1;
 					}
 				}
+#ifdef PROXYSQL31
+    // Publish donor restrictions before the first checksum fetch. Otherwise a
+    // failed fetch after a peer binary replacement could leave stale full-module
+    // eligibility visible to another monitor thread selecting a donor.
+    if (rc_query == 0) {
+     rc_bool = GloProxyCluster->Update_Node_Sync_Capability(node->hostname,node->port,pgsql_query_rules_only);
+    }
+#endif
 				while ( glovars.shutdown == 0 && rc_query == 0 && rc_bool == true) {
 					unsigned long long start_time=monotonic_time();
 
@@ -310,7 +332,11 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								query_error = NULL;
 								query_error_counter = 0;
 								MYSQL_RES *result = mysql_store_result(conn);
-								rc_bool = GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, result);
+								rc_bool = GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, result
+#ifdef PROXYSQL31
+ , pgsql_query_rules_only
+#endif
+ );
 								mysql_free_result(result);
 							} else {
 								query_error = query3;
@@ -325,7 +351,11 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 							}
 						} else {
-							GloProxyCluster->Update_Node_Checksums(node->hostname, node->port);
+							GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, nullptr
+#ifdef PROXYSQL31
+ , pgsql_query_rules_only
+#endif
+ );
 						}
 						if (rc_query == 0) {
 							cluster_check_status_frequency_count++;
@@ -657,7 +687,33 @@ static void process_component_checksum(
 }
 
 
-void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
+#ifdef PROXYSQL31
+void ProxySQL_Node_Entry::set_sync_capability(bool pgsql_query_rules_only) {
+ if (pgsql_query_rules_only_peer == pgsql_query_rules_only) return;
+ pgsql_query_rules_only_peer = pgsql_query_rules_only;
+ // Every module snapshot belongs to the previous peer capability, including
+ // PostgreSQL rules. An equal GLOBAL_CHECKSUM still requires a fresh snapshot.
+ global_checksum = 0;
+ checksum_snapshot_required = true;
+ for (auto* value : {&checksums_values.admin_variables,&checksums_values.mysql_variables,
+   &checksums_values.ldap_variables,&checksums_values.mysql_query_rules,&checksums_values.mysql_servers,
+   &checksums_values.mysql_users,&checksums_values.proxysql_servers,&checksums_values.mysql_servers_v2,
+   &checksums_values.pgsql_query_rules,&checksums_values.pgsql_servers,&checksums_values.pgsql_users,
+   &checksums_values.pgsql_servers_v2,&checksums_values.pgsql_variables}) {
+  value->version=0; value->epoch=0; value->diff_check=0; value->checksum[0]='\0';
+ }
+}
+#endif
+
+void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r
+#ifdef PROXYSQL31
+ , bool pgsql_query_rules_only
+#endif
+ ) {
+#ifdef PROXYSQL31
+ set_sync_capability(pgsql_query_rules_only);
+ if (_r) checksum_snapshot_required = false;
+#endif
 	MYSQL_ROW row;
 	time_t now = time(NULL);
 
@@ -724,9 +780,26 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		 static_cast<int>(p_cluster_counter::sync_delayed_pgsql_variables_version_one), nullptr, nullptr}
 	};
 
+#ifdef PROXYSQL31
+ if (pgsql_query_rules_only_peer) {
+  // Clear stale module eligibility if this endpoint used to have a fully
+  // compatible binary; ignoring new rows alone would leave old checksums.
+  for (const auto& module : modules) {
+   if (!supports_sync_module(module.module_name)) {
+    module.local_checksum->version = 0;
+    module.local_checksum->epoch = 0;
+    module.local_checksum->diff_check = 0;
+    module.local_checksum->checksum[0] = '\0';
+   }
+  }
+ }
+#endif
 	while ( _r && (row = mysql_fetch_row(_r))) {
 		// Data-driven approach: find the matching module and process it
 		for (const auto& module : modules) {
+#ifdef PROXYSQL31
+   if (!supports_sync_module(module.module_name)) continue;
+#endif
 			if (strcmp(row[0], module.module_name) == 0) {
 				// Skip module if not enabled (for modules with optional dependencies like LDAP)
 				if (module.enabled_check && !module.enabled_check()) {
@@ -757,6 +830,9 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		// Update diff_check counters for all modules using data-driven approach
 		size_t module_count = sizeof(modules) / sizeof(modules[0]);
 		for (size_t i = 0; i < module_count; i++) {
+#ifdef PROXYSQL31
+   if (!supports_sync_module(modules[i].module_name)) continue;
+#endif
 			ProxySQL_Checksum_Value_2* local_v = modules[i].local_checksum;
 			ProxySQL_Checksum_Value* global_v = modules[i].global_checksum;
 
@@ -786,6 +862,9 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 
 	// Process sync decisions for modules that need special sync processing
 	for (const auto& module : modules) {
+#ifdef PROXYSQL31
+  if (!supports_sync_module(module.module_name)) continue;
+#endif
 		// Only process modules that are in the sync_enabled_modules set
 		if (sync_enabled_modules.find(module.module_name) == sync_enabled_modules.end()) {
 			continue;
@@ -1519,8 +1598,8 @@ void update_pgsql_replication_hostgroups(SQLite3_result* resultset) {
 	}
 
 	const char* q =
-		"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment, lsn_causal_reads)"
-		" VALUES (?1, ?2, ?3, ?4, ?5)";
+		"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment)"
+		" VALUES (?1, ?2, ?3, ?4)";
 
 	auto [rc1, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
 	ASSERT_SQLITE_OK(rc1, GloAdmin->admindb);
@@ -1532,8 +1611,6 @@ void update_pgsql_replication_hostgroups(SQLite3_result* resultset) {
 		rc = (*proxy_sqlite3_bind_int64)(statement1, 2, atoll(row->fields[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 		rc = (*proxy_sqlite3_bind_text)(statement1, 3, row->fields[2] ? row->fields[2] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 		rc = (*proxy_sqlite3_bind_text)(statement1, 4, row->fields[3] ? row->fields[3] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
-
-		rc = (*proxy_sqlite3_bind_int)(statement1, 5, atoi(row->fields[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 
 		SAFE_SQLITE3_STEP2(statement1);
 		rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
@@ -3643,6 +3720,14 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 				std::unique_ptr<SQLite3_result> query_rules_resultset { get_SQLite3_resulset(query_rules_result) };
 				std::unique_ptr<SQLite3_result> fast_routing_resultset { get_SQLite3_resulset(fast_routing_result) };
 
+    std::string projection_error;
+    if (!ProxySQL_Admin::validate_pgsql_query_rules_projection(*query_rules_resultset, projection_error)) {
+     proxy_error("Cluster: rejecting PostgreSQL query rules from %s:%d: %s\n", hostname, port, projection_error.c_str());
+     mysql_free_result(query_rules_result);
+     mysql_free_result(fast_routing_result);
+     metrics.p_counter_array[p_cluster_counter::pulled_pgsql_query_rules_failure]->Increment();
+     goto __exit_pull_pgsql_query_rules_from_peer;
+    }
 				const uint64_t rules_raw_checksum =
 					query_rules_resultset->raw_checksum() + fast_routing_resultset->raw_checksum();
 
@@ -3658,12 +3743,20 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 					proxy_info("Cluster: Loading to runtime PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 
 					pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
-					GloAdmin->load_pgsql_query_rules_to_runtime(
-						query_rules_resultset.release(),
-						fast_routing_resultset.release(),
+					char* load_error = GloAdmin->load_pgsql_query_rules_to_runtime(
+						query_rules_resultset.get(),
+						fast_routing_resultset.get(),
 						expected_checksum,
 						epoch
 					);
+     if (load_error) {
+      proxy_error("Cluster: loading PostgreSQL query rules failed: %s\n", load_error);
+      pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+      metrics.p_counter_array[p_cluster_counter::pulled_pgsql_query_rules_failure]->Increment();
+      goto __exit_pull_pgsql_query_rules_from_peer;
+     }
+     query_rules_resultset.release();
+     fast_routing_resultset.release();
 					GloAdmin->save_pgsql_query_rules_from_runtime(false);
 					GloAdmin->save_pgsql_query_rules_fast_routing_from_runtime(false);
 					if (GloProxyCluster->cluster_pgsql_query_rules_save_to_disk == true) {
@@ -4031,14 +4124,6 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					fetching_error = true;
 					fetch_failed = true;
 					break;
-				}
-			}
-
-			if (!fetching_error) {
-				MYSQL_FIELD* fields = results[1] ? mysql_fetch_fields(results[1]) : nullptr;
-				if (!results[1] || mysql_num_fields(results[1]) != 5 || !fields || strcmp(fields[4].name, "lsn_causal_reads")) {
-					proxy_error("Cluster: PostgreSQL replication synchronization from %s:%d requires lsn_causal_reads support\n", hostname, port);
-					fetching_error = fetch_failed = true;
 				}
 			}
 
@@ -4435,19 +4520,38 @@ void ProxySQL_Cluster_Nodes::load_servers_list(SQLite3_result *resultset, bool _
 }
 
 // if it returns false , the node doesn't exist anymore and the monitor should stop
-bool ProxySQL_Cluster_Nodes::Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r) {
+bool ProxySQL_Cluster_Nodes::Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r
+#ifdef PROXYSQL31
+ , bool pgsql_query_rules_only
+#endif
+ ) {
 	bool ret = false;
 	uint64_t hash_ = generate_hash(_h, _p);
 	pthread_mutex_lock(&mutex);
 	std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator ite = umap_proxy_nodes.find(hash_);
 	if (ite != umap_proxy_nodes.end()) {
 		ProxySQL_Node_Entry * node = ite->second;
-		node->set_checksums(_r);
+		node->set_checksums(_r
+#ifdef PROXYSQL31
+ , pgsql_query_rules_only
+#endif
+ );
 		ret = true;
 	}
 	pthread_mutex_unlock(&mutex);
 	return ret;
 }
+#ifdef PROXYSQL31
+bool ProxySQL_Cluster_Nodes::Update_Node_Sync_Capability(char* hostname,uint16_t port,bool pgsql_query_rules_only) {
+ pthread_mutex_lock(&mutex);
+ const auto found=umap_proxy_nodes.find(generate_hash(hostname,port));
+ const bool exists=found!=umap_proxy_nodes.end();
+ if (exists) found->second->set_sync_capability(pgsql_query_rules_only);
+ pthread_mutex_unlock(&mutex);
+ return exists;
+}
+#endif
+
 // if it returns true , the checksum changed
 bool ProxySQL_Cluster_Nodes::Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r) {
 	bool ret = true;
@@ -4461,7 +4565,11 @@ bool ProxySQL_Cluster_Nodes::Update_Global_Checksum(char * _h, uint16_t _p, MYSQ
 		//pthread_mutex_lock(&GloVars.checksum_mutex);
 		while ((row = mysql_fetch_row(_r))) {
 			unsigned long long v = atoll(row[0]);
-			if (v == node->global_checksum) {
+			if (v == node->global_checksum
+#ifdef PROXYSQL31
+    && !node->needs_checksum_snapshot()
+#endif
+   ) {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Global checksum 0x%llX for peer %s:%d matches\n", v, node->get_hostname(), node->get_port());
 				ret = false;
 			} else {
@@ -4671,6 +4779,9 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* modul
 
 	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
 		ProxySQL_Node_Entry * node = it->second;
+#ifdef PROXYSQL31
+  if (!node->supports_sync_module(module_name)) { ++it; continue; }
+#endif
 		// Use function pointer to access the correct checksum field
 		ProxySQL_Checksum_Value_2 * v = config->checksum_getter(node);
 

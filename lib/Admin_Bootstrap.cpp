@@ -980,7 +980,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_global", STATS_SQLITE_TABLE_PGSQL_GLOBAL);
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_connection_pool", STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL);
-	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_lsn", STATS_SQLITE_TABLE_PGSQL_LSN);
+
+#ifdef PROXYSQL31
+ insert_into_tables_defs(tables_defs_stats,"stats_pgsql_lsn", STATS_SQLITE_TABLE_PGSQL_LSN);
+#endif
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_connection_pool_reset", STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL_RESET);
 #ifdef PROXYSQL31
 	insert_into_tables_defs(tables_defs_stats,"stats_pgsql_hostgroup_connection_pool", STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL);
@@ -1067,6 +1070,13 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 	// upgrade pgsql_replication_hostgroups if needed (upgrade from previous version)
 	disk_upgrade_pgsql_replication_hostgroups();
+#ifdef PROXYSQL31
+ disk_upgrade_pgsql_query_rules();
+ if (configdb->check_table_structure(const_cast<char*>("pgsql_query_rules"), const_cast<char*>(ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES_V3_0))) {
+  proxy_error("Cannot continue with unmigrated PostgreSQL query rules\n");
+  return false;
+ }
+#endif
 
 	if (!check_and_build_standard_tables(admindb, tables_defs_admin) ||
 		!check_and_build_standard_tables(configdb, tables_defs_config) ||

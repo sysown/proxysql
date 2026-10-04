@@ -2111,7 +2111,6 @@ int ProxySQL_Config::Write_PgSQL_Servers_to_configfile(std::string& data) {
 			addField(data, "reader_hostgroup", r->fields[1], "");
 			addField(data, "check_type", r->fields[2]);
 			addField(data, "comment", r->fields[3]);
-			addField(data, "lsn_causal_reads", r->fields[4], "");
 
 			data += "\t}";
 			isNext = true;
@@ -2276,17 +2275,11 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 	if (root.exists("pgsql_replication_hostgroups") == true) {
 		const Setting& pgsql_replication_hostgroups = root["pgsql_replication_hostgroups"];
 		int count = pgsql_replication_hostgroups.getLength();
-		char* q = (char*)"INSERT OR REPLACE INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment, check_type, lsn_causal_reads) VALUES (%d, %d, '%s', '%s', %d)";
+		char* q = (char*)"INSERT OR REPLACE INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment, check_type) VALUES (%d, %d, '%s', '%s')";
 		for (i = 0; i < count; i++) {
 			const Setting& line = pgsql_replication_hostgroups[i];
 			int writer_hostgroup;
 			int reader_hostgroup;
-			int lsn_causal_reads = 0;
-			if (line.exists("lsn_causal_reads") &&
-				(!line.lookupValue("lsn_causal_reads", lsn_causal_reads) || (lsn_causal_reads != 0 && lsn_causal_reads != 1))) {
-				error = "pgsql_replication_hostgroups.lsn_causal_reads must be integer 0 or 1";
-				return -1;
-			}
 			std::string comment = "";
 			std::string check_type = "";
 			if (line.lookupValue("writer_hostgroup", writer_hostgroup) == false) {
@@ -2317,7 +2310,7 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			const size_t safe_check_type_len = safe_strlen(safe_check_type);
 			const size_t query_len = query_base_len + safe_comment_len + safe_check_type_len + 32;
 			char* query = (char*)l_alloc(query_len);
-				format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type, lsn_causal_reads);
+				format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);
@@ -2607,10 +2600,18 @@ int ProxySQL_Config::Write_PgSQL_Query_Rules_to_configfile(std::string& data) {
 				addField(data, "OK_msg", r->fields[27]);
 				addField(data, "sticky_conn", r->fields[28], "");
 				addField(data, "multiplex", r->fields[29], "");
+#ifdef PROXYSQL31
+				addField(data, "lsn_from_hostgroup", r->fields[30], "");
+				addField(data, "log", r->fields[31], "");
+				addField(data, "apply", r->fields[32], "");
+				addField(data, "attributes", r->fields[33]);
+				addField(data, "comment", r->fields[34]);
+#else
 				addField(data, "log", r->fields[30], "");
 				addField(data, "apply", r->fields[31], "");
 				addField(data, "attributes", r->fields[32]);
 				addField(data, "comment", r->fields[33]);
+#endif
 
 				data += "\t}";
 				isNext = true;
@@ -2635,7 +2636,11 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 	int i;
 	int rows = 0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
+#ifdef PROXYSQL31
+	char* q = (char*)"INSERT OR REPLACE INTO pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, lsn_from_hostgroup, log, apply, attributes, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s)";
+#else
 	char* q = (char*)"INSERT OR REPLACE INTO pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, attributes, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s)";
+#endif
 	for (i = 0; i < count; i++) {
 		const Setting& rule = pgsql_query_rules[i];
 		int rule_id;
@@ -2692,6 +2697,9 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 
 		int sticky_conn = -1;
 		int multiplex = -1;
+#ifdef PROXYSQL31
+ int lsn_from_hostgroup = -1;
+#endif
 
 		// variable for parsing log
 		int log = -1;
@@ -2748,6 +2756,13 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 
 		rule.lookupValue("sticky_conn", sticky_conn);
 		rule.lookupValue("multiplex", multiplex);
+#ifdef PROXYSQL31
+ if (rule.exists("lsn_from_hostgroup") && (!rule.lookupValue("lsn_from_hostgroup", lsn_from_hostgroup) || lsn_from_hostgroup < 0)) {
+  proxy_error("pgsql_query_rules.lsn_from_hostgroup must be a nonnegative integer\n");
+  admindb->execute("PRAGMA foreign_keys = ON");
+  return -1;
+ }
+#endif
 
 		rule.lookupValue("log", log);
 
@@ -2811,6 +2826,9 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			(OK_msg_exists ? OK_msg.size() : 0) + 4 +
 			sticky_conn_str.size() + 4 +
 			multiplex_str.size() + 4 +
+#ifdef PROXYSQL31
+ std::to_string(lsn_from_hostgroup).size() + 4 +
+#endif
 			log_str.size() + 4 +
 			apply_str.size() + 4 +
 			(attributes_exists ? attributes.size() : 0) + 4 +
@@ -2903,6 +2921,9 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			OK_msg.c_str(),
 			(sticky_conn >= 0 ? std::to_string(sticky_conn).c_str() : "NULL"),
 			(multiplex >= 0 ? std::to_string(multiplex).c_str() : "NULL"),
+#ifdef PROXYSQL31
+ (lsn_from_hostgroup >= 0 ? std::to_string(lsn_from_hostgroup).c_str() : "NULL"),
+#endif
 			(log >= 0 ? std::to_string(log).c_str() : "NULL"),
 			(apply == 0 ? 0 : 1),
 			attributes.c_str(),

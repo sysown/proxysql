@@ -1,13 +1,19 @@
 #ifndef PGSQL_LSN_ROUTING_H
 #define PGSQL_LSN_ROUTING_H
+#ifdef PROXYSQL31
 #include "PgSQL_LSN_Manager.h"
+#include <cstdint>
+#include <vector>
 
-// Routing configuration belongs to the hostgroup manager. It does not own LSN
-// progress, probe connections, completion batches, or server generations.
-struct PgSQL_LSN_Policy {
-	uint32_t writer_hostgroup = 0, reader_hostgroup = 0;
-	bool enabled = false;
-	std::vector<pgsql_lsn::Endpoint> writers, readers;
-	uint64_t version = 0, activation_epoch = 0;
+class SQLite3_result;
+
+// Rule relationships expand physical monitor membership outside the query path.
+struct PgSQL_LSN_Interest {
+	uint32_t source_hostgroup = 0;
+	std::vector<uint32_t> destination_hostgroups;
+	bool any_destination = false;
 };
+std::vector<PgSQL_LSN_Interest> collect_pgsql_lsn_interests(
+	const SQLite3_result& rules, const SQLite3_result& fast_routes);
+#endif // PROXYSQL31
 #endif

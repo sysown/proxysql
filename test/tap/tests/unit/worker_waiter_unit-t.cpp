@@ -113,6 +113,27 @@ void test_protocol(const char *name) {
 		close(first_peer);
 		close(second_peer);
 	}
+	if constexpr (std::is_same<Session, PgSQL_Session>::value) {
+		int causal_peer, ordinary_peer;
+		auto* causal = new_waiter<Worker, Session, Stream>(worker, causal_peer);
+		causal->lsn_request.initialized = true;
+		causal->lsn_request.source = {{"source", 5432}, 1};
+		new_waiter<Worker, Session, Stream>(worker, ordinary_peer);
+		subject = causal;
+		outcome = Outcome::wait;
+		other_calls = 0;
+		worker.process_all_sessions();
+		ok(other_calls == 1, "pgsql: a pending LSN head does not stop ordinary destination waiters");
+		ok(worker.mysql_sessions->len == 2 && !worker.waiter_lists.empty(),
+			"pgsql: causal acquisition retains ordinary retry waiters without an LSN wait list");
+		while (worker.mysql_sessions->len) {
+			auto* sess = static_cast<Session*>(worker.mysql_sessions->index(0));
+			worker.unregister_session(0);
+			delete sess;
+		}
+		close(causal_peer);
+		close(ordinary_peer);
+	}
 	int killed_peer;
 	auto *killed = new_waiter<Worker, Session, Stream>(worker, killed_peer);
 	killed->pause_until = worker.curtime + 10000000;
@@ -363,7 +384,7 @@ static void test_stable_tier() {
 
 int main() {
 #ifdef PROXYSQL31
-	plan(65);
+	plan(67);
 #else
 	plan(19);
 #endif

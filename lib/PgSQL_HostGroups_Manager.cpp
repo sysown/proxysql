@@ -1627,13 +1627,6 @@ bool PgSQL_HostGroups_Manager::commit_locked(
  const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
  bool only_commit_runtime_pgsql_servers, bool update_version
 ) {
-	if (incoming_replication_hostgroups) {
-		std::string error;
-		if (!validate_lsn_replication_rows(incoming_replication_hostgroups, error)) {
-			proxy_error("PostgreSQL hostgroup commit rejected: %s\n", error.c_str());
-			return false;
-		}
-	}
 	// purge table
 	purge_pgsql_servers_table();
 
@@ -1862,7 +1855,9 @@ bool PgSQL_HostGroups_Manager::commit_locked(
 		pthread_mutex_unlock(&GloVars.checksum_mutex);
 	}
 
+#ifdef PROXYSQL31
 	refresh_lsn_groups();
+#endif
 
 	// fill Hostgroup_Manager_Mapping with latest records
 	update_hostgroup_manager_mappings();
@@ -2092,103 +2087,121 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 	delete lst;
 }
 
-bool PgSQL_HostGroups_Manager::validate_lsn_replication_rows(const SQLite3_result* rows, std::string& error) {
-	if (!rows || rows->columns != 5 || strcmp(rows->column_definition[4]->name, "lsn_causal_reads")) {
-		error = "Incompatible PostgreSQL replication configuration: peer must support lsn_causal_reads";
-		return false;
+#ifdef PROXYSQL31
+void PgSQL_HostGroups_Manager::replace_lsn_interests(const std::vector<PgSQL_LSN_Interest>& interests) {
+	wrlock();
+	{
+		std::lock_guard<std::mutex> guard(lsn_interest_mutex_);
+		lsn_interests_ = interests;
 	}
-	std::vector<PgSQL_LSN_Policy> groups;
-	for (auto* row : rows->rows) {
-		if (!row->fields[0] || !row->fields[1] || !row->fields[4]
-			|| (strcmp(row->fields[4], "0") && strcmp(row->fields[4], "1"))) {
-			error = "Invalid PostgreSQL LSN causal hostgroup configuration";
-			return false;
-		}
-		groups.push_back({static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10)),
-			static_cast<uint32_t>(strtoul(row->fields[1], nullptr, 10)), row->fields[4][0] == '1', {}, {}});
-	}
-	std::map<uint32_t, unsigned> memberships;
-	for (const auto& group : groups) { ++memberships[group.writer_hostgroup]; ++memberships[group.reader_hostgroup]; }
-	for (const auto& group : groups) {
-		if (group.enabled && (memberships[group.writer_hostgroup] != 1 || memberships[group.reader_hostgroup] != 1)) {
-			error = "LSN causal hostgroups must have disjoint writer and reader membership";
-			return false;
-		}
-	}
-	error.clear();
-	return true;
+	refresh_lsn_groups();
+	wrunlock();
 }
 
 void PgSQL_HostGroups_Manager::refresh_lsn_groups() {
 	char* error = nullptr;
-	std::unique_ptr<SQLite3_result> mappings(mydb->execute_statement(
-		"SELECT writer_hostgroup,reader_hostgroup,check_type,comment,lsn_causal_reads FROM pgsql_replication_hostgroups", &error));
-	std::string validation;
-	if (error || !validate_lsn_replication_rows(mappings.get(), validation)) {
-		proxy_error("Cannot refresh LSN causal groups: %s\n", error ? error : validation.c_str());
-		free(error);
-		reconcile_lsn_policies({});
-		return;
-	}
 	std::unique_ptr<SQLite3_result> servers(mydb->execute_statement(
+		// OFFLINE_HARD rows may be retired pool objects kept while sockets drain.
 		"SELECT hostgroup_id,hostname,port FROM pgsql_servers WHERE status != 3", &error));
 	if (error || !servers) {
-		proxy_error("Cannot refresh LSN causal servers: %s\n", error ? error : "no result");
+		proxy_error("Cannot refresh PostgreSQL LSN membership: %s\n", error ? error : "no result");
 		free(error);
-		reconcile_lsn_policies({});
 		return;
 	}
-	std::vector<PgSQL_LSN_Policy> groups;
-	for (auto* row : mappings->rows) {
-		if (row->fields[4][0] != '1') continue;
-		PgSQL_LSN_Policy group;
-		group.writer_hostgroup = strtoul(row->fields[0], nullptr, 10);
-		group.reader_hostgroup = strtoul(row->fields[1], nullptr, 10);
-		group.enabled = true;
-		for (auto* server : servers->rows) {
-			const auto hostgroup = strtoul(server->fields[0], nullptr, 10);
-			pgsql_lsn::Endpoint endpoint {server->fields[1], static_cast<uint16_t>(atoi(server->fields[2]))};
-			if (hostgroup == group.writer_hostgroup) group.writers.push_back(endpoint);
-			if (hostgroup == group.reader_hostgroup) group.readers.push_back(endpoint);
-		}
-		groups.push_back(std::move(group));
+	std::map<uint32_t, std::set<pgsql_lsn::Endpoint>> groups;
+	for (auto* row : servers->rows) {
+		groups[static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10))].insert(
+			{row->fields[1], static_cast<uint16_t>(atoi(row->fields[2]))});
 	}
-	reconcile_lsn_policies(groups);
+	std::lock_guard<std::mutex> guard(lsn_interest_mutex_);
+	lsn_memberships_ = std::move(groups);
+	std::set<pgsql_lsn::Endpoint> endpoints;
+	const bool monitor_all = std::any_of(lsn_interests_.begin(), lsn_interests_.end(),
+		[](const PgSQL_LSN_Interest& interest) { return interest.any_destination; });
+	if (monitor_all) {
+		for (const auto& group : lsn_memberships_) endpoints.insert(group.second.begin(), group.second.end());
+	} else {
+		for (const auto& interest : lsn_interests_) {
+			auto add_group = [&](uint32_t hostgroup) {
+				const auto group = lsn_memberships_.find(hostgroup);
+				if (group != lsn_memberships_.end()) endpoints.insert(group->second.begin(), group->second.end());
+			};
+			add_group(interest.source_hostgroup);
+			for (auto destination : interest.destination_hostgroups) add_group(destination);
+		}
+	}
+	lsn_endpoints_.assign(endpoints.begin(), endpoints.end());
+	lsn_manager_.reconcile_endpoints(lsn_endpoints_);
 }
 
-void PgSQL_HostGroups_Manager::reconcile_lsn_policies(const std::vector<PgSQL_LSN_Policy>& policies) {
-	std::lock_guard<std::mutex> lock(lsn_policy_mutex_);
-	std::map<uint32_t, PgSQL_LSN_Policy> next;
-	std::vector<pgsql_lsn::Endpoint> endpoints;
-	for (auto policy : policies) {
-		if (!policy.enabled) continue;
-		auto normalize = [](auto& list) { std::sort(list.begin(),list.end()); list.erase(std::unique(list.begin(),list.end()),list.end()); };
-		normalize(policy.writers); normalize(policy.readers);
-		const auto old = lsn_policies_.find(policy.writer_hostgroup);
-		if (old == lsn_policies_.end()) {
-			policy.activation_epoch = policy.version = ++lsn_policy_epoch_;
-		} else {
-			policy.activation_epoch = old->second.activation_epoch;
-			policy.version = old->second.version;
-			if (old->second.reader_hostgroup != policy.reader_hostgroup || old->second.writers != policy.writers ||
-				old->second.readers != policy.readers) policy.version = ++lsn_policy_epoch_;
+std::vector<pgsql_lsn::Endpoint> PgSQL_HostGroups_Manager::lsn_endpoints() const {
+	std::lock_guard<std::mutex> guard(lsn_interest_mutex_);
+	return lsn_endpoints_;
+}
+
+void PgSQL_HostGroups_Manager::prune_lsn_history(pgsql_lsn::Micros cutoff) {
+	std::lock_guard<std::mutex> guard(lsn_interest_mutex_);
+	if (!lsn_interests_.empty()) {
+		struct Summary {
+			bool known = false;
+			pgsql_lsn::History history;
+			pgsql_lsn::Lsn floor = 0;
+		};
+		std::map<pgsql_lsn::Endpoint, pgsql_lsn::Observation> progress;
+		for (const auto& observation : lsn_manager_.latest_all()) progress.emplace(observation.endpoint, observation);
+		auto summarize = [&](const auto& members) {
+			Summary summary;
+			for (const auto& endpoint : members) {
+				const auto latest = progress.find(endpoint);
+				if (latest == progress.end() || !latest->second.valid) return Summary{};
+				if (!summary.known) {
+					summary = {true, latest->second.history, latest->second.sample.lsn};
+				} else {
+					if (!(summary.history == latest->second.history)) return Summary{};
+					summary.floor = std::min(summary.floor, latest->second.sample.lsn);
+				}
+			}
+			return summary;
+		};
+		auto combine = [](Summary& summary, const Summary& next) {
+			if (!summary.known || !next.known || !(summary.history == next.history)) {
+				summary.known = false;
+			} else {
+				summary.floor = std::min(summary.floor, next.floor);
+			}
+		};
+		// Each membership list is scanned once, regardless of its source endpoint count.
+		std::map<uint32_t, Summary> groups;
+		for (const auto& group : lsn_memberships_) groups.emplace(group.first, summarize(group.second));
+		const bool any_destination = std::any_of(lsn_interests_.begin(), lsn_interests_.end(),
+			[](const PgSQL_LSN_Interest& interest) { return interest.any_destination; });
+		const Summary all = any_destination ? summarize(lsn_endpoints_) : Summary{};
+		std::map<pgsql_lsn::Endpoint, Summary> floors;
+		for (const auto& interest : lsn_interests_) {
+			const auto source = lsn_memberships_.find(interest.source_hostgroup);
+			if (source == lsn_memberships_.end()) continue;
+			auto summary = groups.at(interest.source_hostgroup);
+			if (interest.any_destination) {
+				combine(summary, all);
+			} else {
+				for (auto destination : interest.destination_hostgroups) {
+					const auto group = groups.find(destination);
+					combine(summary, group != groups.end() ? group->second : Summary{});
+				}
+			}
+			for (const auto& endpoint : source->second) {
+				auto inserted = floors.emplace(endpoint, summary);
+				if (!inserted.second) combine(inserted.first->second, summary);
+			}
 		}
-		endpoints.insert(endpoints.end(),policy.writers.begin(),policy.writers.end());
-		endpoints.insert(endpoints.end(),policy.readers.begin(),policy.readers.end());
-		next.emplace(policy.writer_hostgroup,std::move(policy));
+		for (const auto& source : floors) {
+			if (source.second.known) lsn_manager_.retain_predecessor(source.first, source.second.floor);
+		}
 	}
-	for (const auto& old : lsn_policies_) if (!next.count(old.first)) ++lsn_policy_epoch_;
-	lsn_manager_.reconcile_endpoints(endpoints);
-	lsn_policies_ = std::move(next);
+	// Failed probes and unresolved relationships never prevent age cleanup.
+	lsn_manager_.prune_before(cutoff);
 }
-std::optional<PgSQL_LSN_Policy> PgSQL_HostGroups_Manager::lsn_policy_for_hostgroup(uint32_t hostgroup) const {
-	std::lock_guard<std::mutex> lock(lsn_policy_mutex_);
-	for (const auto& item : lsn_policies_) {
-		const auto& policy = item.second;
-		if (hostgroup == policy.writer_hostgroup || hostgroup == policy.reader_hostgroup) return policy;
-	}
-	return {};
-}
+#endif // PROXYSQL31
 
 void PgSQL_HostGroups_Manager::generate_pgsql_replication_hostgroups_table() {
 	if (incoming_replication_hostgroups==NULL)
@@ -2216,13 +2229,12 @@ void PgSQL_HostGroups_Manager::generate_pgsql_replication_hostgroups_table() {
 		// A SQL NULL would reach us as a NULL pointer and, because the column is NOT NULL, would
 		// abort the INSERT instead of storing the empty default; map it back explicitly.
 		execute(
-			"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment, lsn_causal_reads) VALUES (?1,?2,?3,?4,?5)",
+			"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (?1,?2,?3,?4)",
 			[&](sqlite3_stmt *statement) {
 				int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, mydb);
 				rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, mydb);
 				rc = (*proxy_sqlite3_bind_text)(statement, 3, r->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 				rc = (*proxy_sqlite3_bind_text)(statement, 4, r->fields[3] ? r->fields[3] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-				rc = (*proxy_sqlite3_bind_int)(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, mydb);
 			}
 		);
 		if (pgsql_thread___hostgroup_manager_verbose) {
@@ -2278,7 +2290,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql_locked(const string& name) {
 	char * query = (char *)"";
 	if (name == "pgsql_replication_hostgroups") {
-		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment, lsn_causal_reads FROM pgsql_replication_hostgroups";
+		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM pgsql_replication_hostgroups";
 	} else if (name == "pgsql_hostgroup_attributes") {
 		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM pgsql_hostgroup_attributes ORDER BY hostgroup_id";
 	} else if (name == "pgsql_servers") {
@@ -2391,7 +2403,9 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 		//int j=0;
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
-			if (sess && !sess->lsn_server_allowed(*mysrvc)) continue;
+#ifdef PROXYSQL31
+			if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE && sess && !sess->lsn_server_allowed(*mysrvc)) continue;
+#endif
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
@@ -2465,7 +2479,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 								}
 								// if a server is taken back online, consider it immediately
 #ifdef PROXYSQL31
-								if ( pgsql_recovered_candidate_eligible(mysrvc) && mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
+								if ( pgsql_recovered_candidate_eligible(mysrvc) && (!sess || sess->lsn_server_allowed(*mysrvc)) && mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 #else
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 #endif
@@ -2551,7 +2565,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 			}
 			for (j=0; j<l; j++) {
 				mysrvc=mysrvs->idx(j);
-				if (sess && !sess->lsn_server_allowed(*mysrvc)) continue;
+
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED && mysrvc->shunned_automatic==true) {
 					if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
 						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
@@ -2560,7 +2574,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 						mysrvc->time_last_detected_error=0;
 						// if a server is taken back online, consider it immediately
 #ifdef PROXYSQL31
-						if ( pgsql_recovered_candidate_eligible(mysrvc) && mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
+						if ( pgsql_recovered_candidate_eligible(mysrvc) && (!sess || sess->lsn_server_allowed(*mysrvc)) && mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 #else
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
 #endif
@@ -2992,14 +3006,6 @@ void PgSQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	}
 }
 
-int PgSQL_HostGroups_Manager::lsn_query_timeout(unsigned int hostgroup) {
-	wrlock();
-	const auto* group=MyHGC_find(hostgroup);
-	const int result=group ? static_cast<int>(group->attributes.default_query_timeout) : -1;
-	wrunlock();
-	return result;
-}
-
 PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, PgSQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	PgSQL_Connection * conn=NULL;
 	wrlock();
@@ -3011,16 +3017,14 @@ PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 #endif // TEST_AURORA
 	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a PgSQL_SrvC exists. If not, we return NULL = no targets
-		unsigned remaining=mysrvc->ConnectionsFree->conns_length()+1;
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
-		// A certificate can change while idle sockets remain in the shared pool.
-		// Retire stale sockets, then consider another free or newly opened one.
-		while (conn && sess && !sess->lsn_backend_allowed(*conn,true)) {
-			mysrvc->ConnectionsUsed->add(conn);
-			conn->send_quit=false;
-			destroy_MyConn_from_pool(conn,false);
-			conn=--remaining ? mysrvc->ConnectionsFree->get_random_MyConn(sess,ff) : nullptr;
+#ifdef PROXYSQL31
+		// Recheck after checkout: a concurrent monitor failure may withdraw progress.
+		if (conn && sess && !sess->lsn_backend_allowed(*conn)) {
+			mysrvc->ConnectionsFree->add(conn);
+			conn = nullptr;
 		}
+#endif
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
 			status.pgconnpoll_get_ok++;
@@ -4025,7 +4029,9 @@ void PgSQL_HostGroups_Manager::read_only_action_v2(
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}
 	}
+#ifdef PROXYSQL31
 	if (update_pgsql_servers_table) refresh_lsn_groups();
+#endif
 	wrunlock();
 	unsigned long long curtime2 = monotonic_time();
 	curtime1 = curtime1 / 1000;

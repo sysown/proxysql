@@ -5,7 +5,6 @@
 #include "cpp.h"
 #include "PgSQL_Error_Helper.h"
 #include "PgSQL_Backend_Protocol.h"
-#include "PgSQL_LSN_Manager.h"
 #include <sys/socket.h>
 #include <map>
 #include <string>
@@ -393,16 +392,12 @@ public:
 	int async_ping(short event);
 	int async_reset_session(short event);
 	int async_send_simple_command(short event, char* stmt, unsigned long length); // no result set expected
-	std::optional<pgsql_lsn::ServerToken> lsn_stamp;
-	uint64_t lsn_application_cycle_serial = 0;
+#ifdef PROXYSQL31
 	bool lsn_application_cycle_active = false;
-	bool lsn_outcome_unknown = false;
 	PgSQL_Session* lsn_application_owner = nullptr;
 	void lsn_begin_application_cycle();
 	void lsn_on_ready_for_query(char status);
-	void lsn_connection_lost();
-	int async_validate_lsn_incarnation(short event);
-	bool lsn_bootstrap_active = false;
+#endif
 	int async_perform_resync(short event);
 
 	void next_event(PG_ASYNC_ST new_st);
@@ -599,7 +594,9 @@ public:
 	// reuse check sees a connection that is unusable with nothing recorded against it and aborts
 	// the whole proxy, on a byte the backend chose.
 	inline void set_ready_for_query_status(char st) {
+#ifdef PROXYSQL31
 		lsn_on_ready_for_query(st);
+#endif
 		native_txn_status = st;
 		native_unsynced_work = false;   // the backend concluded the batch
 		if (st != 'I' && st != 'T' && st != 'E') {
@@ -1057,11 +1054,6 @@ public:
 	bool unknown_transaction_status;
 
 private:
-	std::optional<pgsql_lsn::ServerToken> lsn_bootstrap_expected;
-	pgsql_lsn::Micros lsn_bootstrap_deadline = 0;
-	pgsql_lsn::Micros lsn_saved_query_deadline = 0;
-	unsigned int lsn_bootstrap_stage = 0;
-	std::vector<std::string> lsn_bootstrap_row;
 	// The one place that decides whether this connection can still be used. Every
 	// answer about the connection's health is built on it.
 	bool backend_is_live() const;

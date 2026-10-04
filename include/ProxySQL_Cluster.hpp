@@ -16,6 +16,17 @@
 #define PROXYSQL_NODE_METRICS_LEN	5
 
 class SQLite3_result;
+#ifdef PROXYSQL31
+// Only the extended PostgreSQL query-rule module has a cross-release-tier
+// contract. Exact version/plugin-set checks remain in force for other modules.
+inline bool proxysql_cluster_pgsql_query_rules_cross_tier(const char* local, const char* peer) {
+ if (!local || !peer) return false;
+ const auto is31 = [](const char* version) { return strncmp(version,"3.1.",4)==0; };
+ const auto is40 = [](const char* version) { return strncmp(version,"4.0.",4)==0; };
+ return (is31(local) && is40(peer)) || (is40(local) && is31(peer));
+}
+#endif
+
 
 #ifdef PROXYSQL40
 // Shared final step of the v1 runtime-server pulls. `commit_core_rows` takes
@@ -210,7 +221,14 @@ bool proxysql_snapshot_installed_builtin_server_topology(
  * @see runtime_pgsql_query_rules
  * @see pull_pgsql_query_rules_from_peer()
  */
+#define CLUSTER_QUERY_PGSQL_QUERY_RULES_LEGACY "PROXY_SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, attributes, comment FROM runtime_pgsql_query_rules ORDER BY rule_id"
+#ifdef PROXYSQL31
+#define CLUSTER_QUERY_PGSQL_QUERY_RULES "PROXY_SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, lsn_from_hostgroup, log, apply, attributes, comment FROM runtime_pgsql_query_rules ORDER BY rule_id"
+#define CLUSTER_QUERY_PGSQL_QUERY_RULES_INCOMPATIBLE CLUSTER_QUERY_PGSQL_QUERY_RULES_LEGACY
+#else
 #define CLUSTER_QUERY_PGSQL_QUERY_RULES "PROXY_SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, attributes, comment FROM runtime_pgsql_query_rules ORDER BY rule_id"
+#define CLUSTER_QUERY_PGSQL_QUERY_RULES_INCOMPATIBLE "PROXY_SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, lsn_from_hostgroup, log, apply, attributes, comment FROM runtime_pgsql_query_rules ORDER BY rule_id"
+#endif
 
 /**
  * @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_pgsql_query_rules_fast_routing'.
@@ -235,8 +253,7 @@ bool proxysql_snapshot_installed_builtin_server_topology(
 
 #define CLUSTER_QUERY_PGSQL_VARIABLES "PROXY_SELECT variable_name, variable_value FROM runtime_pgsql_variables ORDER BY variable_name"
 
-#define CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS_LEGACY "PROXY_SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM runtime_pgsql_replication_hostgroups ORDER BY writer_hostgroup"
-#define CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, check_type, comment, lsn_causal_reads FROM runtime_pgsql_replication_hostgroups ORDER BY writer_hostgroup"
+#define CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM runtime_pgsql_replication_hostgroups ORDER BY writer_hostgroup"
 #define CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES "PROXY_SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM runtime_pgsql_hostgroup_attributes ORDER BY hostgroup_id"
 
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
@@ -296,6 +313,10 @@ class ProxySQL_Node_Entry {
 	char* ip_addr;
 	uint64_t generate_hash();
 	bool active;
+#ifdef PROXYSQL31
+ bool pgsql_query_rules_only_peer = false;
+ bool checksum_snapshot_required = false;
+#endif
 	int metrics_idx_prev;
 	int metrics_idx;
 	ProxySQL_Node_Metrics **metrics;
@@ -318,7 +339,18 @@ class ProxySQL_Node_Entry {
 	}
 	void set_comment(char *a); // note, this is strdup()
 	void set_metrics(MYSQL_RES *_r, unsigned long long _response_time);
-	void set_checksums(MYSQL_RES *_r);
+	void set_checksums(MYSQL_RES *_r
+#ifdef PROXYSQL31
+ , bool pgsql_query_rules_only = false
+#endif
+ );
+#ifdef PROXYSQL31
+ void set_sync_capability(bool pgsql_query_rules_only);
+ bool needs_checksum_snapshot() const { return checksum_snapshot_required; }
+ bool supports_sync_module(const char* module) const {
+  return !pgsql_query_rules_only_peer || strcmp(module,"pgsql_query_rules")==0;
+ }
+#endif
 	char *get_hostname() { // note, NO strdup()
 		return hostname;
 	}
@@ -427,7 +459,14 @@ class ProxySQL_Cluster_Nodes {
 	void load_servers_list(SQLite3_result *, bool _lock);
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time);
 	bool Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r);
-	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r);
+	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r
+#ifdef PROXYSQL31
+ , bool pgsql_query_rules_only = false
+#endif
+ );
+#ifdef PROXYSQL31
+ bool Update_Node_Sync_Capability(char* hostname, uint16_t port, bool pgsql_query_rules_only);
+#endif
 	void Reset_Global_Checksums(bool lock);
 	void update_prometheus_nodes_metrics();
 	SQLite3_result * dump_table_proxysql_servers();
@@ -676,9 +715,22 @@ public:
 	bool Update_Global_Checksum(char* _h, uint16_t _p, MYSQL_RES* _r) {
 		return nodes.Update_Global_Checksum(_h, _p, _r);
 	}
-	bool Update_Node_Checksums(char* _h, uint16_t _p, MYSQL_RES* _r = NULL) {
-		return nodes.Update_Node_Checksums(_h, _p, _r);
-	}
+	bool Update_Node_Checksums(char* _h, uint16_t _p, MYSQL_RES* _r = NULL
+#ifdef PROXYSQL31
+ , bool pgsql_query_rules_only = false
+#endif
+ ) {
+  return nodes.Update_Node_Checksums(_h, _p, _r
+#ifdef PROXYSQL31
+   , pgsql_query_rules_only
+#endif
+  );
+ }
+#ifdef PROXYSQL31
+ bool Update_Node_Sync_Capability(char* hostname, uint16_t port, bool pgsql_query_rules_only) {
+  return nodes.Update_Node_Sync_Capability(hostname,port,pgsql_query_rules_only);
+ }
+#endif
 	void Reset_Global_Checksums(bool lock) {
 		nodes.Reset_Global_Checksums(lock);
 	}

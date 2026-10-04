@@ -658,13 +658,13 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
 	mcp_client_unit-t \
-	pgsql_waiter_list_unit-t pgsql_lsn_manager_unit-t pgsql_lsn_config_unit-t pgsql_lsn_probe_unit-t pgsql_lsn_monitor_unit-t pgsql_lsn_completion_unit-t pgsql_lsn_admission_unit-t
+	pgsql_waiter_list_unit-t pgsql_lsn_query_rules_unit-t pgsql_lsn_config_unit-t pgsql_lsn_completion_unit-t pgsql_lsn_admission_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
 UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t
 
 ifeq ($(PROXYSQL31),1)
-UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
+UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t pgsql_lsn_manager_unit-t pgsql_lsn_probe_unit-t pgsql_lsn_monitor_unit-t
 endif
 
 ifeq ($(PROXYSQLED25519),1)
@@ -815,7 +815,7 @@ pgsql_waiter_list_unit-t: pgsql_waiter_list_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap
 pgsql_lsn_manager_unit-t: pgsql_lsn_manager_unit-t.cpp $(PROXYSQL_PATH)/lib/PgSQL_LSN_Manager.cpp $(PROXYSQL_PATH)/include/PgSQL_LSN_Manager.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(PROXYSQL_PATH)/lib/PgSQL_LSN_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
-		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+		$(STDCPP) -DPROXYSQL31 -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
 mcp_client_unit-t: mcp_client_unit-t.cpp $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
@@ -1503,11 +1503,11 @@ pgsql_lsn_completion_unit-t: pgsql_lsn_completion_unit-t.cpp $(TEST_HELPERS_OBJ)
 
 pgsql_lsn_probe_unit-t: pgsql_lsn_probe_unit-t.cpp $(PROXYSQL_PATH)/lib/PgSQL_LSN_Probe.cpp $(PROXYSQL_PATH)/lib/PgSQL_LSN_Manager.cpp $(PROXYSQL_PATH)/include/PgSQL_LSN_Probe.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(PROXYSQL_PATH)/lib/PgSQL_LSN_Probe.cpp $(PROXYSQL_PATH)/lib/PgSQL_LSN_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb $(WASAN) -lpthread -o $@
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -DPROXYSQL31 -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
 pgsql_lsn_monitor_unit-t: pgsql_lsn_monitor_unit-t.cpp $(PROXYSQL_PATH)/lib/PgSQL_LSN_Monitor.cpp $(PROXYSQL_PATH)/lib/PgSQL_LSN_Probe.cpp $(PROXYSQL_PATH)/lib/PgSQL_LSN_Manager.cpp $(PROXYSQL_PATH)/include/PgSQL_LSN_Monitor.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(PROXYSQL_PATH)/lib/PgSQL_LSN_Monitor.cpp $(PROXYSQL_PATH)/lib/PgSQL_LSN_Probe.cpp $(PROXYSQL_PATH)/lib/PgSQL_LSN_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(POSTGRESQL_IDIR) $(STDCPP) -O0 -ggdb $(WASAN) $(LDIRS) -lpq $(POSTGRESQL_PATH)/common/libpgcommon.a $(POSTGRESQL_PATH)/port/libpgport.a -lssl -lcrypto -pthread -o $@
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(POSTGRESQL_IDIR) $(STDCPP) -DPROXYSQL31 -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(LDIRS) -lpq $(POSTGRESQL_PATH)/common/libpgcommon.a $(POSTGRESQL_PATH)/port/libpgport.a -lssl -lcrypto -pthread -o $@
 
 pgsql_lsn_admission_unit-t: pgsql_lsn_admission_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \

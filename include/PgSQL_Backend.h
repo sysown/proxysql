@@ -2,6 +2,9 @@
 #define PROXYSQL_PGSQL_BACKEND_H
 #include "proxysql.h"
 #include "cpp.h"
+#ifdef PROXYSQL31
+#include "PgSQL_LSN_Manager.h"
+#endif
 
 /*
  * @brief A backend class handling connections and data streams for PostgreSQL clients.
@@ -13,6 +16,10 @@ class PgSQL_Backend
 	void operator delete(void *);
 	int hostgroup_id; //< The ID of the host group this connection belongs to. Set to -1 if uninitialized
 	PgSQL_Data_Stream *server_myds;
+#ifdef PROXYSQL31
+	// Frontend history outlives any physical connection attached to this backend.
+	pgsql_lsn::LastExecution last_execution;
+#endif
 	//  mysql_cp_entry_t *server_mycpe;
 	bytes_stats_t server_bytes_at_cmd; //< A structure storing the number of bytes received and sent
 	//MySQL_Hostgroup_Entry *mshge;

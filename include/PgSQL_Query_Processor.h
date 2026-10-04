@@ -6,8 +6,18 @@
 #include "query_processor.h"
 
 class Command_Counter;
-struct PgSQL_Query_Processor_Rule_t : public QP_rule_t {};
-class PgSQL_Query_Processor_Output : public Query_Processor_Output {};
+struct PgSQL_Query_Processor_Rule_t : public QP_rule_t {
+#ifdef PROXYSQL31
+ int lsn_from_hostgroup = -1;
+#endif
+};
+class PgSQL_Query_Processor_Output : public Query_Processor_Output {
+public:
+#ifdef PROXYSQL31
+ int lsn_from_hostgroup = -1;
+ void init() { Query_Processor_Output::init(); lsn_from_hostgroup = -1; }
+#endif
+};
 
 class PgSQL_Rule_Text : public QP_rule_text {
 public:
@@ -32,9 +42,18 @@ public:
 		const char* proxy_addr, int proxy_port, const char* digest, const char* match_digest, const char* match_pattern, bool negate_match_pattern,
 		const char* re_modifiers, int flagOUT, const char* replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result,
 		int cache_timeout, int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, 
-		int mirror_hostgroup, const char* error_msg, const char* OK_msg, int sticky_conn, int multiplex, int log,
+		int mirror_hostgroup, const char* error_msg, const char* OK_msg, int sticky_conn, int multiplex,
+#ifdef PROXYSQL31
+ int lsn_from_hostgroup,
+#endif
+ int log,
 		bool apply, const char* attributes, const char* comment);
 
+#ifdef PROXYSQL31
+ void process_query_extended(PgSQL_Query_Processor_Output* output, const PgSQL_Query_Processor_Rule_t* rule) {
+  if (rule->lsn_from_hostgroup >= 0) output->lsn_from_hostgroup = rule->lsn_from_hostgroup;
+ }
+#endif
 private:
 	Command_Counter* commands_counters[PGSQL_QUERY___NONE];
 	static PgSQL_Query_Processor_Rule_t* new_query_rule(const PgSQL_Query_Processor_Rule_t* mqr);

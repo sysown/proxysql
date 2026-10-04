@@ -576,6 +576,9 @@ class ProxySQL_Admin {
 	void disk_upgrade_scheduler();
 	void disk_upgrade_rest_api_routes();
 	void disk_upgrade_pgsql_replication_hostgroups();
+#ifdef PROXYSQL31
+ void disk_upgrade_pgsql_query_rules();
+#endif
 
 #ifdef DEBUG
 	template<enum SERVER_TYPE>
@@ -861,7 +864,9 @@ class ProxySQL_Admin {
 	void stats___pgsql_users();
 	void stats___pgsql_free_connections();
 	void stats___pgsql_connection_pool(bool _reset);
-	void stats___pgsql_lsn();
+#ifdef PROXYSQL31
+ void stats___pgsql_lsn();
+#endif
 #ifdef PROXYSQL31
 	void stats___pgsql_hostgroup_connection_pool(bool reset);
 #endif
@@ -967,6 +972,7 @@ class ProxySQL_Admin {
 	bool load_pgsql_servers_to_runtime_checked(const incoming_pgsql_servers_t&, const runtime_pgsql_servers_checksum_t&,
 		const pgsql_servers_v2_checksum_t&, bool emit_runtime_install);
 
+	static bool validate_pgsql_query_rules_projection(const SQLite3_result&, std::string&);
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);
 

@@ -13,12 +13,19 @@
 #include "Base_Session.h"
 #include "cpp.h"
 #include "PgSQL_Error_Helper.h"
-#include "PgSQL_LSN_Manager.h"
-#include "PgSQL_LSN_Waiter_List.h"
 #include "PgSQL_Variables.h"
 #include "PgSQL_Variables_Validator.h"
 #ifdef PROXYSQL31
 #include "PgSQL_Waiter_List.h"
+#include "PgSQL_LSN_Manager.h"
+enum class PgSQL_LSN_PrepareResult { Disabled, Ready, Pending, Error };
+struct PgSQL_LSN_Request {
+	bool initialized = false;
+	int source_hostgroup = -1;
+	pgsql_lsn::LastExecution source;
+	std::optional<pgsql_lsn::RequiredLsn> required;
+	const char* error = nullptr;
+};
 #endif // PROXYSQL31
 
 class PgSQL_Query_Result;
@@ -694,22 +701,17 @@ public:
 	enum pgsql_variable_name changing_variable_idx;
 
 	PgSQL_Session();
-	std::map<pgsql_lsn::Endpoint, pgsql_lsn::Dependency> lsn_dependencies;
-	std::map<pgsql_lsn::Endpoint, pgsql_lsn::Reason> lsn_errors;
-	// Remember routing origins separately so policy changes cannot erase an
-	// earlier writer dependency. The tracker itself never sees these IDs.
-	std::map<uint32_t, pgsql_lsn::Endpoint> lsn_route_sources;
-	void lsn_on_idle_boundary(const PgSQL_Connection&);
-	uint64_t lsn_birth_epoch = 0;
+#ifdef PROXYSQL31
 	PgSQL_LSN_Request lsn_request;
-	PgSQL_LSN_Waiter_Node lsn_waiter_node;
-	LsnAdmission lsn_admit(uint32_t destination_hostgroup, pgsql_lsn::Micros now);
+	void record_lsn_completion(const PgSQL_Connection&, pgsql_lsn::Micros completed_at);
+	PgSQL_LSN_PrepareResult lsn_prepare_request();
+	bool lsn_has_dependency() const { return lsn_request.source.completed_at != 0; }
 	bool lsn_server_allowed(const PgSQL_SrvC&) const;
-	bool lsn_backend_allowed(const PgSQL_Connection&, bool allow_unstamped = false) const;
-	bool lsn_cache_allowed(int destination_hostgroup) const;
-	void lsn_finish_request();
-	const PgSQL_Connection* lsn_pinned_backend() const;
+	bool lsn_backend_allowed(const PgSQL_Connection&) const;
 	bool lsn_route_request();
+	const PgSQL_Connection* lsn_pinned_backend() const;
+	void lsn_fail_request(const char* message, bool cancelled = false);
+#endif
 	~PgSQL_Session();
 
 	//void set_unhealthy();
@@ -780,7 +782,7 @@ private:
 	bool handle_literal_kill_query(PtrSize_t* pkt, PgSQL_Connection* mc);
 
 	friend class PgSQL_Session_PortalTeardownTest;  // test/tap/tests/unit/pgsql_named_portal_teardown_unit-t.cpp
-	friend class PgSQL_LSN_Admission_Test; // actual cache admission in the LSN unit test
+	friend class PgSQL_LSN_Admission_Test;
 
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>

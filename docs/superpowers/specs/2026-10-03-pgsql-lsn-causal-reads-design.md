@@ -1,5 +1,11 @@
 # PostgreSQL LSN Causal Reads Design
 
+> **SUPERSEDED — do not implement this document.** The accepted conversation
+> replaced its batching, replication pairing and client wait/fallback model.
+> See [the timestamp and query-rule design](2026-10-04-pgsql-lsn-query-rules-design.md)
+> and [its implementation plan](../plans/2026-10-04-pgsql-lsn-query-rules.md).
+> Everything below is historical, including earlier approval/status statements.
+
 > Architecture correction approved on 2026-10-04: LSN tracking is keyed solely
 > by `hostname:port`. A physical server has one progress record, one probe
 > connection, and one open/sealed completion batch pair, regardless of its
@@ -8,6 +14,9 @@
 > only; they select candidates and a fallback destination outside the tracker.
 > `stats_pgsql_lsn` contains exactly `hostname`, `port`, and `lsn`, with SQL NULL
 > for an unknown or withdrawn position. Incarnation checks remain internal.
+> Application connections use native protocol only. All LSN and identity SQL
+> runs on background monitor connections. No additional SQL, round trip, or
+> identity-validation wait is allowed on the application execution path.
 > The design below incorporates this correction. Implementation and validation
 > progress are recorded separately in the implementation plan.
 
@@ -188,7 +197,7 @@ explicit commit can be remembered earlier, but version one can delay enrollment
 until the cycle ends because it must not move the cycle to a replica meanwhile.
 COMMIT AND CHAIN remains pinned until an idle boundary.
 
-Apply this normalization to both native and libpq backend paths. COPY completion,
+Apply this normalization to the native backend path. COPY completion,
 simple multi-statement messages, procedures containing transaction control, and
 error recovery must produce the same conservative outcome. PREPARE TRANSACTION
 does not make its changes visible; a subsequent COMMIT PREPARED observed by this
@@ -247,12 +256,18 @@ the dependency precede an acknowledged commit. Use replay position for a replica
 the flush position returned by `IDENTIFY_SYSTEM` is identity metadata here and
 must never substitute for replay progress.
 
-New application backend connections used for protected traffic need a one-time
-internal bootstrap check of postmaster start time and recovery role against
-the monitor's endpoint identity. Tag validated connections with that incarnation;
-check the tag on checkout and before dispatch. This avoids reusing progress
-from a server that previously occupied the endpoint. If validation fails or
-privileges are missing, report it and withhold replica eligibility.
+Application connections send no LSN or identity SQL, including at first use,
+pool checkout, reconnect, COPY, or forwarding. Admission reads cached endpoint
+progress published by the background monitor. Before application dispatch, an
+unstamped native connection records that cached endpoint token locally; this
+operation does not modify protocol state, initialization, deadlines or buffers.
+An existing token must still match the current monitor token. It is not an
+independent identity check of the application socket. Stable direct endpoints
+and external HA fencing are therefore prerequisites; the monitor discovers
+identity and role changes asynchronously. An independently retargeted endpoint
+cannot be certified through its application connection by this feature.
+Worker progress lookups must not scan retained completion batches; demand
+aggregation belongs to the background scheduler.
 
 Only one LSN probe may be outstanding for an endpoint. Both commands share the
 existing `pgsql-monitor_replication_lag_timeout` budget; connection setup uses the existing
@@ -378,7 +393,7 @@ boundaries, then integrate admission, administration, and system tests.
 
 Use deterministic unit tests for ordering and state transitions, plus live
 PostgreSQL tests with one writer and two physical replicas. Exercise native and
-libpq backend paths where both are supported.
+native backend paths. Legacy libpq application connections are outside scope.
 
 1. Pause replay while WAL reception continues. A read following an acknowledged
    write must never return the old row from the paused replica. Verify another
@@ -403,7 +418,7 @@ libpq backend paths where both are supported.
    writer identity; deliver old-generation probe results. Larger unrelated LSNs
    must not satisfy old dependencies, and writer fallback must not mask lost data.
 9. Validate monitor permissions, identity checks on both sides of samples,
-   bootstrap incarnation matching, and refusal of invalid activation mappings.
+   zero additional application SQL, cached history checks, and refusal of invalid activation mappings.
 10. Verify variables and the flag through admin load/save, disk migration,
     runtime reload, feature activation on existing sessions, and cluster sync.
 11. Measure commit latency, first-read latency, polling QPS, CPU, waiter memory,

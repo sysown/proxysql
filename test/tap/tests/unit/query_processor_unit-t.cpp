@@ -144,7 +144,11 @@ static PgSQL_Query_Processor_Rule_t *pgsql_simple_rule(
 		-1, -1, -1, -1,        // reconnect, timeout, retries, delay
 		-1, -1, -1,            // next_query_flagIN, mirror_flagOUT, mirror_hostgroup
 		nullptr, nullptr,       // error_msg, OK_msg
-		-1, -1,                 // sticky_conn, multiplex
+		-1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+                 // sticky_conn, multiplex
 		-1,                     // log
 		apply,                  // apply
 		nullptr, nullptr        // attributes, comment
@@ -697,7 +701,11 @@ static void test_pgsql_rule_creation_all_fields() {
 		"blocked",              // error_msg
 		"done",                 // OK_msg
 		1,                      // sticky_conn
-		2,                      // multiplex
+		2,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+                      // multiplex
 		1,                      // log
 		true,                   // apply
 		nullptr,                // attributes
@@ -779,7 +787,11 @@ static void test_pgsql_client_addr_wildcard() {
 		"%",                    // client_addr = catch-all
 		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ -1, false, nullptr, nullptr);
 	ok(r1->client_addr_pred.match == QP_ADDR_MATCH_WILDCARD,
 		"PgSQL QP: client_addr catch-all '%' selects wildcard matching");
 	free(r1->client_addr);
@@ -791,7 +803,11 @@ static void test_pgsql_client_addr_wildcard() {
 		"192.168.1.1",          // no wildcard
 		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ -1, false, nullptr, nullptr);
 	ok(r2->client_addr_pred.match == QP_ADDR_MATCH_EXACT,
 		"PgSQL QP: client_addr without a wildcard is matched exactly");
 	free(r2->client_addr);
@@ -803,7 +819,11 @@ static void test_pgsql_client_addr_wildcard() {
 		nullptr,                // no client_addr
 		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ -1, false, nullptr, nullptr);
 	ok(r3->client_addr == nullptr,
 		"PgSQL QP: null client_addr is stored as null");
 	ok(r3->client_addr_pred.match == QP_ADDR_MATCH_NONE,
@@ -816,7 +836,11 @@ static void test_pgsql_client_addr_wildcard() {
 		"10.0.128.0/20",        // client_addr = CIDR
 		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ -1, false, nullptr, nullptr);
 	ok(r4->client_addr_pred.match == QP_ADDR_MATCH_CIDR,
 		"PgSQL QP: client_addr with a CIDR prefix selects CIDR matching");
 	ok(r4->client_addr_pred.cidr_count == 1,
@@ -832,7 +856,11 @@ static void test_pgsql_client_addr_wildcard() {
 		"10.0.0.0/33",          // prefix length out of range for IPv4
 		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ -1, false, nullptr, nullptr);
 	ok(r5->client_addr_pred.match == QP_ADDR_MATCH_NONE,
 		"PgSQL QP: malformed CIDR leaves the address criterion inert");
 	ok(r5->client_addr_pred.cidr_count == 0,
@@ -848,7 +876,11 @@ static void test_pgsql_client_addr_wildcard() {
 		"10.0.1_.5",            // bare '_', no '%'
 		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ -1, false, nullptr, nullptr);
 	ok(r6->client_addr_pred.match == QP_ADDR_MATCH_WILDCARD,
 		"PgSQL QP: bare '_' selects wildcard matching");
 	free(r6->client_addr);
@@ -863,7 +895,11 @@ static void test_pgsql_client_addr_wildcard() {
 		"/tmp/proxysql.sock",   // Unix listener path
 		0, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ -1, false, nullptr, nullptr);
 	ok(r7->proxy_addr_pred.match == QP_ADDR_MATCH_EXACT,
 		"PgSQL QP: Unix socket path in proxy_addr stays exact, not CIDR");
 	free(r7->proxy_addr);
@@ -887,7 +923,11 @@ static void test_pgsql_rule_attributes_flagouts() {
 		50, true, nullptr, nullptr, 0,
 		nullptr, nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, -1, false, attrs, nullptr);
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ -1, false, attrs, nullptr);
 
 	ok(rule->flagOUT_ids != nullptr,
 		"PgSQL QP: flagOUT_ids parsed from attributes");
@@ -1016,7 +1056,11 @@ static void test_pgsql_get_current_query_rules_columns() {
 		nullptr, nullptr, -1, nullptr, nullptr, "^SELECT", false,
 		"CASELESS,GLOBAL",
 		-1, nullptr, 7, -1, -1, -1, -1, 3000, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, 1, true, nullptr, "test comment");
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ 1, true, nullptr, "test comment");
 	GloPgQPro->insert((QP_rule_t *)rule);
 	GloPgQPro->sort();
 	GloPgQPro->commit();
@@ -1024,7 +1068,14 @@ static void test_pgsql_get_current_query_rules_columns() {
 	SQLite3_result *result = GloPgQPro->get_current_query_rules();
 	ok(result != nullptr, "PgSQL QP: get_current_query_rules returns non-null");
 	if (result != nullptr) {
-		ok(result->columns == 35,
+		#ifdef PROXYSQL31
+ constexpr int pg_columns = 36;
+ constexpr int pg_shift = 1;
+#else
+ constexpr int pg_columns = 35;
+ constexpr int pg_shift = 0;
+#endif
+ ok(result->columns == pg_columns,
 			"PgSQL QP: result has 35 columns");
 		ok(result->rows_count == 1,
 			"PgSQL QP: result has 1 row");
@@ -1051,11 +1102,11 @@ static void test_pgsql_get_current_query_rules_columns() {
 				"PgSQL QP: destination_hostgroup field is '7'");
 			ok(strcmp(fields[20], "3000") == 0,
 				"PgSQL QP: timeout field is '3000'");
-			ok(strcmp(fields[30], "1") == 0,
+			ok(strcmp(fields[30 + pg_shift], "1") == 0,
 				"PgSQL QP: log field is '1'");
-			ok(strcmp(fields[31], "1") == 0,
+			ok(strcmp(fields[31 + pg_shift], "1") == 0,
 				"PgSQL QP: apply field is '1'");
-			ok(fields[33] != nullptr && strcmp(fields[33], "test comment") == 0,
+			ok(fields[33 + pg_shift] != nullptr && strcmp(fields[33 + pg_shift], "test comment") == 0,
 				"PgSQL QP: comment field is 'test comment'");
 		} else {
 			for (int i = 0; i < 13; i++) {
@@ -1130,14 +1181,22 @@ static void test_pgsql_flag_chaining() {
 		nullptr, nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		1,                      // flagOUT
 		nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ -1, false, nullptr, nullptr);
 	auto *r2 = PgSQL_Query_Processor::new_query_rule(
 		20, true, nullptr, nullptr,
 		1,                      // flagIN = prev flagOUT
 		nullptr, nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1,                     // flagOUT (terminal)
 		nullptr, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-		nullptr, nullptr, -1, -1, -1, true, nullptr, nullptr);
+		nullptr, nullptr, -1, -1,
+#ifdef PROXYSQL31
+ -1, // lsn_from_hostgroup
+#endif
+ -1, true, nullptr, nullptr);
 
 	GloPgQPro->insert((QP_rule_t *)r1);
 	GloPgQPro->insert((QP_rule_t *)r2);

@@ -4,7 +4,6 @@
 #include <sstream>
 #include <atomic>
 #include <memory>
-#include <charconv>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -434,7 +433,7 @@ handler_again:
 			assert(0); // shouldn't ever reach here, we have messed up the state machine
 		
 		if (get_pg_ssl_in_use()) {
-			if (myds && myds->sess && myds->sess->session_fast_forward && !myds->sess->lsn_request.policy) {
+			if (myds && myds->sess && myds->sess->session_fast_forward) {
 				// Native connections come through here too. adopt_backend_tls() shares this
 				// connection's own memory BIOs with the stream instead of installing a new
 				// pair, so nothing the connection still uses gets freed underneath it.
@@ -825,13 +824,6 @@ handler_again:
 		// exit_pipeline_mode means an async_perform_resync left the result empty on purpose.
 		if (exit_pipeline_mode == false) {
 			reject_result_without_outcome();
-		}
-		// A real backend boundary may be suppressed from the frontend's frame.
-		// In pipeline mode a per-command NULL is not a ReadyForQuery; wait for Sync.
-		if (!is_pipeline_active() || exit_pipeline_mode) {
-			const auto txn = PQtransactionStatus(pgsql_conn);
-			if (txn != PQTRANS_ACTIVE && txn != PQTRANS_UNKNOWN)
-				lsn_on_ready_for_query(txn == PQTRANS_IDLE ? 'I' : txn == PQTRANS_INTRANS ? 'T' : 'E');
 		}
 
 		if (fetch_result_end_st != ASYNC_QUERY_END) {
@@ -1346,9 +1338,6 @@ bool PgSQL_Connection::build_and_record_startup_session_params(std::string& clie
 
 void PgSQL_Connection::connect_start() {
 	PROXY_TRACE();
-	lsn_stamp.reset();
-	lsn_bootstrap_active = lsn_application_cycle_active = lsn_outcome_unknown = false;
-	lsn_application_owner = nullptr;
 	assert(pgsql_conn == NULL); // already there is a connection
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
@@ -1757,14 +1746,17 @@ void PgSQL_Connection::native_result_protocol_violation(const char* message) {
 		query_result->add_error(NULL);
 		query_result->add_ready_status(
 			(native_txn_status == 'T' || native_txn_status == 'E')
-				? PQTRANS_INERROR : PQTRANS_IDLE, false);
+				? PQTRANS_INERROR : PQTRANS_IDLE);
 	}
 	// The backend owes us nothing further: the cycle is over as far as this connection goes.
 	native_unsynced_work = false;
 }
 
 void PgSQL_Connection::native_teardown() {
-	lsn_connection_lost();
+#ifdef PROXYSQL31
+	lsn_application_cycle_active = false;
+	lsn_application_owner = nullptr;
+#endif
 	if (native_scram) {
 		pg_scram_free(native_scram);
 		native_scram = nullptr;
@@ -3827,17 +3819,6 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 			myds->DSS = STATE_MARIADB_QUERY;
 		}
 	}
-	if (async_state_machine == ASYNC_IDLE) {
-		const int validation = async_validate_lsn_incarnation(event);
-		if (validation != 0) {
-			if (validation < 0) {
-				init_query_result();
-				query_result->add_error(nullptr);
-				query_result->add_ready_status(PQTRANS_IDLE, false);
-			}
-			return validation;
-		}
-	}
 	switch (async_state_machine) {
 	case ASYNC_STMT_EXECUTE_END:
 	case ASYNC_QUERY_END:
@@ -3845,7 +3826,6 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 		return 0;
 		break;
 	case ASYNC_IDLE:
-		if (lsn_stamp) lsn_begin_application_cycle();
 		if (myds && myds->sess) {
 			if (myds->sess->active_transactions == 0) {
 				// every time we start a query (no matter if COM_QUERY, STMT_PREPARE or otherwise)
@@ -6250,184 +6230,19 @@ __exit:
 	return NULL;
 }
 
+#ifdef PROXYSQL31
+void PgSQL_Connection::lsn_begin_application_cycle() {
+	if (!native_mode || !myds || !myds->sess || myds->sess->connections_handler || myds->sess->mirror)
+		return;
+	lsn_application_cycle_active = true;
+	lsn_application_owner = myds->sess;
+}
+
 void PgSQL_Connection::lsn_on_ready_for_query(char status) {
-	if (status != 'I' && status != 'T' && status != 'E') return;
-	if (lsn_stamp) native_txn_status = status;
-	if (!lsn_application_cycle_active) return;
-	if (status == 'I' && myds && myds->sess && myds->sess == lsn_application_owner)
-		myds->sess->lsn_on_idle_boundary(*this);
+	if (!lsn_application_cycle_active || (status != 'I' && status != 'T' && status != 'E')) return;
+	if (myds && myds->sess == lsn_application_owner)
+		lsn_application_owner->record_lsn_completion(*this, monotonic_time());
 	lsn_application_cycle_active = false;
 	lsn_application_owner = nullptr;
 }
-
-void PgSQL_Connection::lsn_begin_application_cycle() {
-	// Retain the route before dispatch, including when the writer disappears
-	// before any idle completion can be acknowledged.
-	if (lsn_stamp && lsn_stamp->role == pgsql_lsn::Role::Writer && PgHGM && parent && parent->myhgc && myds && myds->sess) {
-		const auto policy = PgHGM->lsn_policy_for_hostgroup(parent->myhgc->hid);
-		if (policy) myds->sess->lsn_route_sources[policy->writer_hostgroup] = lsn_stamp->endpoint;
-	}
-	if (!lsn_application_cycle_active) {
-		++lsn_application_cycle_serial;
-		lsn_application_owner = myds ? myds->sess : nullptr;
-	}
-	lsn_application_cycle_active = true;
-}
-
-void PgSQL_Connection::lsn_connection_lost() {
-	if (lsn_stamp && lsn_stamp->role == pgsql_lsn::Role::Writer &&
-		(lsn_application_cycle_active || native_txn_status != 'I')) {
-		lsn_outcome_unknown = true;
-		if (myds && myds->sess)
-			myds->sess->lsn_errors[lsn_stamp->endpoint] = pgsql_lsn::Reason::HistoryChanged;
-	}
-	lsn_stamp.reset();
-	lsn_bootstrap_active = false;
-}
-
-
-int PgSQL_Connection::async_validate_lsn_incarnation(short event) {
-	using namespace pgsql_lsn;
-	if (!PgHGM || !parent || !parent->myhgc) return 0;
-	auto& manager = PgHGM->lsn_manager();
-	const Endpoint endpoint{parent->address, parent->port};
-	auto current_certificate = [&]() -> std::optional<ServerToken> {
-		const auto server = manager.snapshot(endpoint);
-		if (server.progress && server.progress->valid) return server.progress->server;
-		return {};
-	};
-	auto fail = [&](Reason reason, const char* detail) {
-		std::string message = std::string(reason_code(reason)) + ": " + detail;
-		set_error(PGSQL_ERROR_CODES::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, message.c_str(), false);
-		manager.invalidate_endpoint(endpoint, reason);
-		lsn_stamp.reset(); lsn_bootstrap_active = false;
-		lsn_bootstrap_expected.reset(); lsn_bootstrap_row.clear();
-		reusable = false; healthy = false;
-		async_exit_status = PG_EVENT_NONE; wait_events = 0;
-		if (myds) myds->wait_until = lsn_saved_query_deadline;
-		return -1;
-	};
-	auto pending = [&]() {
-		wait_events = POLLIN;
-		if (needs_pollout()) wait_events |= POLLOUT;
-		return 1;
-	};
-	auto finish = [&]() {
-		int64_t start = 0;
-		if (lsn_bootstrap_row.size() != 2) return fail(Reason::NoSafeBackend, "invalid backend identity row");
-		const auto& value = lsn_bootstrap_row[0];
-		const auto parsed = std::from_chars(value.data(), value.data() + value.size(), start);
-		const auto& role = lsn_bootstrap_row[1];
-		if (parsed.ec != std::errc() || parsed.ptr != value.data() + value.size() || start <= 0 ||
-			(role != "t" && role != "f")) return fail(Reason::NoSafeBackend, "invalid backend identity fields");
-		if (!lsn_bootstrap_expected || start != lsn_bootstrap_expected->incarnation.postmaster_start_us ||
-			(role == "t") != (lsn_bootstrap_expected->role == Role::Replica))
-			return fail(Reason::HistoryChanged, "backend incarnation differs from monitor certification");
-		const auto certificate = current_certificate();
-		if (!certificate || !(*certificate == *lsn_bootstrap_expected))
-			return fail(Reason::NoSafeBackend, "monitor certification changed during backend bootstrap");
-		lsn_stamp = lsn_bootstrap_expected;
-		lsn_bootstrap_expected.reset(); lsn_bootstrap_row.clear(); lsn_bootstrap_active = false;
-		async_exit_status = PG_EVENT_NONE; wait_events = 0;
-		if (myds) myds->wait_until = lsn_saved_query_deadline;
-		return 0;
-	};
-
-	const Micros now = monotonic_time();
-	if (!lsn_bootstrap_active) {
-		const bool protected_request = myds && myds->sess && myds->sess->lsn_request.policy;
-		if (!protected_request && !PgHGM->lsn_policy_for_hostgroup(parent->myhgc->hid)) return 0;
-		if (!manager.snapshot(endpoint).generation) return fail(Reason::NoSafeBackend, "backend is no longer tracked");
-		const auto certificate = current_certificate();
-		if (!certificate) return fail(Reason::NoSafeBackend, "backend has no current monitor certification");
-		if (lsn_stamp && *lsn_stamp == *certificate) return 0;
-		if (is_pipeline_active() || get_pg_transaction_status() != PQTRANS_IDLE)
-			return fail(Reason::HistoryChanged, "cannot bootstrap a backend with an existing transaction or extended cycle");
-		lsn_bootstrap_expected = certificate;
-		lsn_bootstrap_active = true; lsn_bootstrap_stage = 0; lsn_bootstrap_row.clear();
-		lsn_bootstrap_deadline = now + uint64_t(pgsql_thread___connect_timeout_server > 0 ?
-			pgsql_thread___connect_timeout_server : 1000) * 1000;
-		lsn_saved_query_deadline = myds ? myds->wait_until : 0;
-		if (myds && (!myds->wait_until || myds->wait_until > lsn_bootstrap_deadline))
-			myds->wait_until = lsn_bootstrap_deadline;
-		static const char sql[] = "SELECT (EXTRACT(EPOCH FROM pg_catalog.pg_postmaster_start_time())*1000000)::bigint, "
-			"pg_catalog.pg_is_in_recovery()";
-		if (native_mode) {
-			pg_append_typed_msg(native_outbuf, 'Q', reinterpret_cast<const unsigned char*>(sql), sizeof(sql));
-			if (!native_send_or_buffer(PG_Native_Conn_St::DONE))
-				return fail(Reason::NoSafeBackend, "cannot send backend identity query");
-		} else {
-			PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
-			if (!PQsendQuery(pgsql_conn, sql)) return fail(Reason::NoSafeBackend, "cannot send backend identity query");
-		}
-	}
-	if (now >= lsn_bootstrap_deadline) return fail(Reason::NoSafeBackend, "backend identity query timed out");
-	if (myds && (myds->cancel_query || myds->killed_at)) {
-		const int result = fail(Reason::NoSafeBackend, "backend identity query cancelled");
-		set_error(PGSQL_ERROR_CODES::ERRCODE_QUERY_CANCELED, "Query execution was interrupted", false);
-		return result;
-	}
-	if (!native_mode) {
-		const int flushed = PQflush(pgsql_conn);
-		if (flushed < 0) return fail(Reason::NoSafeBackend, "cannot flush backend identity query");
-		async_exit_status = PG_EVENT_READ | (flushed ? PG_EVENT_WRITE : 0);
-		if ((event & POLLIN) && !PQconsumeInput(pgsql_conn)) return fail(Reason::NoSafeBackend, "cannot read backend identity query");
-		if (flushed) return pending();
-		while (!PQisBusy(pgsql_conn)) {
-			PGresult* result = PQgetResult(pgsql_conn);
-			if (!result) {
-				if (lsn_bootstrap_stage != 3 || PQtransactionStatus(pgsql_conn) != PQTRANS_IDLE)
-					return fail(Reason::NoSafeBackend, "incomplete backend identity response");
-				return finish();
-			}
-			const bool valid = lsn_bootstrap_stage == 0 && PQresultStatus(result) == PGRES_TUPLES_OK &&
-				PQntuples(result) == 1 && PQnfields(result) == 2 &&
-				!PQgetisnull(result, 0, 0) && !PQgetisnull(result, 0, 1);
-			if (valid) {
-				for (int i = 0; i < 2; ++i)
-					lsn_bootstrap_row.emplace_back(PQgetvalue(result, 0, i), PQgetlength(result, 0, i));
-				lsn_bootstrap_stage = 3;
-			}
-			PQclear(result);
-			if (!valid) return fail(Reason::NoSafeBackend, "unexpected backend identity result");
-		}
-		return pending();
-	}
-	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
-		if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) return fail(Reason::NoSafeBackend, "cannot flush backend identity query");
-		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) return pending();
-	}
-	for (;;) {
-		PgSQL_Backend_Msg message;
-		const auto framed = native_framer.next(message);
-		if (framed == FRAME_ERROR) return fail(Reason::NoSafeBackend, "malformed backend identity response");
-		if (framed == FRAME_NEED_MORE) {
-			const int received = native_recv_into_framer();
-			if (received < 0) return fail(Reason::NoSafeBackend, "backend closed during identity query");
-			if (!received) { async_exit_status = PG_EVENT_READ; return pending(); }
-			continue;
-		}
-		if (message.type == 'N') continue;
-		if (message.type == 'S') { native_track_parameter_status(message.payload, message.payload_len); continue; }
-		if (message.type == 'T' && lsn_bootstrap_stage == 0 && message.payload_len >= 2 &&
-			message.payload[0] == 0 && message.payload[1] == 2) { lsn_bootstrap_stage = 1; continue; }
-		if (message.type == 'D' && lsn_bootstrap_stage == 1 && message.payload_len >= 2 &&
-			message.payload[0] == 0 && message.payload[1] == 2) {
-			size_t offset = 2;
-			for (int i = 0; i < 2; ++i) {
-				if (offset + 4 > message.payload_len) return fail(Reason::NoSafeBackend, "truncated backend identity row");
-				const uint32_t length = pg_read_be32(message.payload + offset); offset += 4;
-				if (length > 32 || length > message.payload_len - offset)
-					return fail(Reason::NoSafeBackend, "invalid backend identity field length");
-				lsn_bootstrap_row.emplace_back(reinterpret_cast<const char*>(message.payload + offset), length);
-				offset += length;
-			}
-			if (offset != message.payload_len) return fail(Reason::NoSafeBackend, "unexpected trailing backend identity data");
-			lsn_bootstrap_stage = 2; continue;
-		}
-		if (message.type == 'C' && lsn_bootstrap_stage == 2) { lsn_bootstrap_stage = 3; continue; }
-		if (message.type == 'Z' && lsn_bootstrap_stage == 3 && message.payload_len == 1 && message.payload[0] == 'I')
-			return finish();
-		return fail(Reason::NoSafeBackend, "unexpected backend identity response");
-	}
-}
+#endif

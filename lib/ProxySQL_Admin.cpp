@@ -9,6 +9,11 @@ using json = nlohmann::json;
 #include <memory>
 #include <mutex>
 #include <set>
+#include <map>
+#include <climits>
+#ifdef PROXYSQL31
+#include "PgSQL_LSN_Routing.h"
+#endif
 #include <cctype>
 #include <vector>       // std::vector
 #include <unordered_set>
@@ -1557,7 +1562,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	bool stats_pgsql_global = false;
 	bool stats_pgsql_connection_pool = false;
-	bool stats_pgsql_lsn = false;
+#ifdef PROXYSQL31
+ bool stats_pgsql_lsn = false;
+#endif
 	bool stats_pgsql_connection_pool_reset = false;
 #ifdef PROXYSQL31
 	bool stats_pgsql_hostgroup_connection_pool = false;
@@ -1692,7 +1699,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		stats_mysql_hostgroup_connection_pool=true; refresh=true;
 	}
 #endif
-	if (strstr(query_no_space, "stats_pgsql_lsn")) { stats_pgsql_lsn=true; refresh=true; }
+
+#ifdef PROXYSQL31
+ if (strstr(query_no_space, "stats_pgsql_lsn")) { stats_pgsql_lsn=true; refresh=true; }
+#endif
 	if (strstr(query_no_space, "stats_pgsql_connection_pool_reset")) {
 		stats_pgsql_connection_pool_reset = true; refresh = true;
 	} else {
@@ -1943,7 +1953,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_hostgroup_connection_pool(false);
 		}
 #endif
-		if (stats_pgsql_lsn) stats___pgsql_lsn();
+
+#ifdef PROXYSQL31
+ if (stats_pgsql_lsn) stats___pgsql_lsn();
+#endif
 		if (stats_pgsql_connection_pool_reset) {
 			stats___pgsql_connection_pool(true);
 		} else {
@@ -5722,15 +5735,28 @@ void ProxySQL_Admin::save_pgsql_query_rules_from_runtime(bool _runtime) {
 	//char *a=(char *)"INSERT INTO pgsql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
 	char* a = NULL;
 	if (_runtime) {
+#ifdef PROXYSQL31
+		a = (char*)"INSERT INTO runtime_pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, lsn_from_hostgroup, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+#else
 		a = (char*)"INSERT INTO runtime_pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+#endif
 	} else {
+#ifdef PROXYSQL31
+		a = (char*)"INSERT INTO pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, lsn_from_hostgroup, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+#else
 		a = (char*)"INSERT INTO pgsql_query_rules (rule_id, active, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, log, apply, attributes, comment) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+#endif
 	}
 	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 		SQLite3_row* r = *it;
 		int arg_len = 0;
-		char* buffs[34]; // number of fields
-		for (int i = 0; i < 34; i++) {
+		#ifdef PROXYSQL31
+ constexpr int rule_columns = 35;
+#else
+ constexpr int rule_columns = 34;
+#endif
+ char* buffs[rule_columns]; // number of fields
+		for (int i = 0; i < rule_columns; i++) {
 			if (r->fields[i]) {
 				char* o = escape_string_single_quotes(r->fields[i], false);
 				int l = strlen(o) + 4;
@@ -5781,14 +5807,22 @@ void ProxySQL_Admin::save_pgsql_query_rules_from_runtime(bool _runtime) {
 			buffs[27], // OK_msg
 			(strcmp(r->fields[28], "-1") == 0 ? "NULL" : r->fields[28]), // sticky_conn
 			(strcmp(r->fields[29], "-1") == 0 ? "NULL" : r->fields[29]), // multiplex
+#ifdef PROXYSQL31
+			(strcmp(r->fields[30], "-1") == 0 ? "NULL" : r->fields[30]), // lsn_from_hostgroup
+			(strcmp(r->fields[31], "-1") == 0 ? "NULL" : r->fields[31]), // log
+			(strcmp(r->fields[32], "-1") == 0 ? "NULL" : r->fields[32]), // apply
+			buffs[33], // attributes
+			buffs[34]  // comment
+#else
 			(strcmp(r->fields[30], "-1") == 0 ? "NULL" : r->fields[30]), // log
 			(strcmp(r->fields[31], "-1") == 0 ? "NULL" : r->fields[31]), // apply
 			buffs[32], // attributes
 			buffs[33]  // comment
+#endif
 		);
 		//fprintf(stderr,"%s\n",query);
 		admindb->execute(query);
-		for (int i = 0; i < 34; i++) {
+		for (int i = 0; i < rule_columns; i++) {
 			free(buffs[i]);
 		}
 		free(query);
@@ -9024,26 +9058,45 @@ bool ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	if (resultset) delete resultset;
 	resultset = NULL;
 
-	// Export all replication fields together; binding preserves arbitrary comments.
-	const std::string replication_table = _runtime ? "runtime_pgsql_replication_hostgroups" : "pgsql_replication_hostgroups";
-	admindb->execute(("DELETE FROM main." + replication_table).c_str());
+	// dump pgsql_replication_hostgroups
+	if (_runtime) {
+		query = (char*)"DELETE FROM main.runtime_pgsql_replication_hostgroups";
+	}
+	else {
+		query = (char*)"DELETE FROM main.pgsql_replication_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
 	resultset = PgHGM->dump_table_pgsql("pgsql_replication_hostgroups");
 	if (resultset) {
-		const std::string insert = "INSERT INTO " + replication_table +
-			" (writer_hostgroup,reader_hostgroup,check_type,comment,lsn_causal_reads) VALUES (?1,?2,?3,?4,?5)";
-		auto [rc, statement] = admindb->prepare_v2(insert.c_str());
-		ASSERT_SQLITE_OK(rc, admindb);
-		for (auto* row : resultset->rows) {
-			for (int field = 0; field < 5; ++field) {
-				rc = (*proxy_sqlite3_bind_text)(statement.get(), field + 1, row->fields[field] ? row->fields[field] : "", -1, SQLITE_TRANSIENT);
-				ASSERT_SQLITE_OK(rc, admindb);
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			int l = 0;
+			if (r->fields[3]) l = strlen(r->fields[3]);
+			char* q = NULL;
+			if (_runtime) {
+				q = (char*)"INSERT INTO runtime_pgsql_replication_hostgroups VALUES(%s,%s,'%s','%s')";
 			}
-			SAFE_SQLITE3_STEP2(statement.get());
-			rc = (*proxy_sqlite3_reset)(statement.get()); ASSERT_SQLITE_OK(rc, admindb);
+			else {
+				q = (char*)"INSERT INTO pgsql_replication_hostgroups VALUES(%s,%s,'%s','%s')";
+			}
+			char* query = (char*)malloc(strlen(q) + strlen(r->fields[0]) + strlen(r->fields[1]) + strlen(r->fields[2]) + 16 + l);
+			if (r->fields[3]) {
+				char* o = escape_string_single_quotes(r->fields[3], false);
+				snprintf(query, strlen(q) + strlen(r->fields[0]) + strlen(r->fields[1]) + strlen(r->fields[2]) + 16 + l, q, r->fields[0], r->fields[1], r->fields[2], o);
+				if (o != r->fields[3]) { // there was a copy
+					free(o);
+				}
+				//} else {
+					//sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
+			}
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+			admindb->execute(query);
+			free(query);
 		}
-		delete resultset;
-		resultset = nullptr;
 	}
+	if (resultset) delete resultset;
+	resultset = NULL;
 
 	// dump pgsql_hostgroup_attributes
 
@@ -9470,22 +9523,6 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	SQLite3_result* incoming_replication_hostgroups = incoming_pgsql_servers.incoming_replication_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_pgsql_servers.incoming_hostgroup_attributes;
 	SQLite3_result* incoming_pgsql_servers_v2 = incoming_pgsql_servers.incoming_pgsql_servers_v2;
-
-	// Validate the complete incoming mapping before mutating staged or runtime
-	// server state. The legacy overlap filter below must not silently disable
-	// protection by dropping an enabled row.
-	std::unique_ptr<SQLite3_result> lsn_validation_rows;
-	const SQLite3_result* lsn_rows = incoming_replication_hostgroups;
-	if (!lsn_rows) {
-		lsn_validation_rows.reset(admindb->execute_statement(
-			"SELECT writer_hostgroup,reader_hostgroup,check_type,comment,lsn_causal_reads FROM pgsql_replication_hostgroups", &error));
-		lsn_rows = lsn_validation_rows.get();
-	}
-	if (error || !PgSQL_HostGroups_Manager::validate_lsn_replication_rows(lsn_rows, servers_load_veto[1])) {
-		if (error) { servers_load_veto[1] = error; free(error); }
-		proxy_error("PostgreSQL servers LOAD rejected: %s\n", servers_load_veto[1].c_str());
-		return false;
-	}
 
 	const char* query = (char*)"SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.pgsql_servers ORDER BY hostgroup_id, hostname, port";
 	if (runtime_pgsql_servers == nullptr) {
@@ -10014,6 +10051,116 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	return NULL;
 }
 
+#ifdef PROXYSQL31
+std::vector<PgSQL_LSN_Interest> collect_pgsql_lsn_interests(const SQLite3_result& rules, const SQLite3_result& fast_routes) {
+ std::map<uint32_t, PgSQL_LSN_Interest> interests;
+ for (const auto* row : rules.rows) {
+  if (!row->fields[29]) continue;
+  const uint32_t source = static_cast<uint32_t>(strtoul(row->fields[29], nullptr, 10));
+  auto& interest = interests[source];
+  interest.source_hostgroup = source;
+  // SQL comments can override even a terminal explicit destination. Retain
+  // the wildcard while that mode is disabled too, because variables can be
+  // reloaded without reloading rules. Explicit relationships remain useful
+  // metadata, while age cleanup independently bounds retained history.
+  interest.any_destination = true;
+  // Continued flag chains and session/default destinations also cannot be
+  // resolved statically in general.
+  const bool terminal = row->fields[31] && atoi(row->fields[31]) == 1;
+  if (terminal && row->fields[14] && atoi(row->fields[14]) >= 0) {
+   const uint32_t destination = static_cast<uint32_t>(strtoul(row->fields[14], nullptr, 10));
+   if (std::find(interest.destination_hostgroups.begin(), interest.destination_hostgroups.end(), destination) == interest.destination_hostgroups.end())
+    interest.destination_hostgroups.push_back(destination);
+  } else {
+   interest.any_destination = true;
+   for (const auto* route : fast_routes.rows) {
+    const uint32_t destination = static_cast<uint32_t>(strtoul(route->fields[3], nullptr, 10));
+    if (std::find(interest.destination_hostgroups.begin(), interest.destination_hostgroups.end(), destination) == interest.destination_hostgroups.end())
+     interest.destination_hostgroups.push_back(destination);
+   }
+  }
+ }
+ std::vector<PgSQL_LSN_Interest> result;
+ for (auto& entry : interests) result.push_back(std::move(entry.second));
+ return result;
+}
+#endif
+
+bool ProxySQL_Admin::validate_pgsql_query_rules_projection(const SQLite3_result& result, std::string& error) {
+ const char* expected[] = {"rule_id", "username", "database", "flagIN", "client_addr", "proxy_addr", "proxy_port", "digest", "match_digest", "match_pattern", "negate_match_pattern", "re_modifiers", "flagOUT", "replace_pattern", "destination_hostgroup", "cache_ttl", "cache_empty_result", "cache_timeout", "reconnect", "timeout", "retries", "delay", "next_query_flagIN", "mirror_flagOUT", "mirror_hostgroup", "error_msg", "ok_msg", "sticky_conn", "multiplex",
+#ifdef PROXYSQL31
+ "lsn_from_hostgroup",
+#endif
+ "log", "apply", "attributes", "comment"};
+ const size_t count = sizeof(expected) / sizeof(expected[0]);
+ if (result.columns != static_cast<int>(count) || result.column_definition.size() != count) {
+  error = "Incompatible PostgreSQL query rules projection column count"; return false;
+ }
+ for (size_t i = 0; i < count; ++i) {
+  if (!result.column_definition[i] || !result.column_definition[i]->name || strcasecmp(result.column_definition[i]->name, expected[i])) {
+   error = "Incompatible PostgreSQL query rules projection column order"; return false;
+  }
+ }
+ auto hostgroup = [](const char* text) {
+  if (!text || !*text) return false;
+  unsigned long long value = 0;
+  for (const char* p = text; *p; ++p) {
+   if (*p < '0' || *p > '9') return false;
+   value = value * 10 + (*p - '0');
+   if (value > INT_MAX) return false;
+  }
+  return true;
+ };
+  auto integer = [](const char* value, long long minimum, long long maximum, bool nullable) {
+   if (!value) return nullable;
+   if (!*value) return false;
+   const char* digit = value;
+   if (*digit == '-') ++digit;
+   if (!*digit) return false;
+   for (const char* p = digit; *p; ++p) if (*p < '0' || *p > '9') return false;
+   errno = 0;
+   char* end = nullptr;
+   const long long number = strtoll(value, &end, 10);
+   return !errno && end && !*end && number >= minimum && number <= maximum;
+  };
+ std::set<int> ids;
+ for (const auto* row : result.rows) {
+  if (!integer(row->fields[0], INT_MIN, INT_MAX, false) || !ids.insert(atoi(row->fields[0])).second) {
+   error = "Invalid or duplicate PostgreSQL query rule ID"; return false;
+  }
+#ifdef PROXYSQL31
+  if (row->fields[29] && !hostgroup(row->fields[29])) {
+   error = "lsn_from_hostgroup must be NULL or a nonnegative integer hostgroup"; return false;
+  }
+  constexpr int tail_shift = 1;
+#else
+  constexpr int tail_shift = 0;
+#endif
+
+  const struct { int column; long long minimum; long long maximum; bool nullable; } constraints[] = {
+   {3,0,INT_MAX,false}, {6,0,65535,true}, {10,0,1,false}, {12,0,INT_MAX,true},
+   {14,INT_MIN,INT_MAX,true}, {15,1,INT_MAX,true}, {16,0,1,true}, {17,0,INT_MAX,true},
+   {18,0,1,true}, {19,0,INT_MAX,true}, {20,0,1000,true}, {21,0,INT_MAX,true},
+   {22,INT_MIN,INT_MAX,true}, {23,INT_MIN,INT_MAX,true}, {24,INT_MIN,INT_MAX,true},
+   {27,0,1,true}, {28,0,2,true}, {29+tail_shift,0,1,true}, {30+tail_shift,0,1,false}
+  };
+  for (const auto& constraint : constraints) {
+   if (!integer(row->fields[constraint.column],constraint.minimum,constraint.maximum,constraint.nullable)) {
+    error = std::string("Invalid PostgreSQL query rule value: ") + expected[constraint.column]; return false;
+   }
+  }
+  if (!row->fields[31+tail_shift] || (*row->fields[31+tail_shift] && !json::accept(row->fields[31+tail_shift]))) {
+   error = "Invalid PostgreSQL query rule attributes"; return false;
+  }
+  if ((row->fields[13] && !row->fields[9]) ||
+      !validate_qp_addr_value(row->fields[0], QP_ADDR_FIELD_CLIENT, row->fields[4]) ||
+      !validate_qp_addr_value(row->fields[0], QP_ADDR_FIELD_PROXY, row->fields[5])) {
+   error = "Invalid PostgreSQL query rule pattern or address"; return false;
+  }
+ }
+ error.clear(); return true;
+}
+
 char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch) {
 	// About the queries used here, see notes about CLUSTER_QUERY_PGSQL_QUERY_RULES and
 	// CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING in ProxySQL_Cluster.hpp
@@ -10022,7 +10169,11 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	int affected_rows = 0;
 	if (GloPgQPro == NULL) return (char*)"Global Query Processor not started: command impossible to run";
 	SQLite3_result* resultset = NULL;
+#ifdef PROXYSQL31
+	char* query = (char*)"SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, lsn_from_hostgroup, log, apply, attributes, comment FROM main.pgsql_query_rules WHERE active=1 ORDER BY rule_id";
+#else
 	char* query = (char*)"SELECT rule_id, username, database, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, attributes, comment FROM main.pgsql_query_rules WHERE active=1 ORDER BY rule_id";
+#endif
 	if (SQLite3_query_rules_resultset == NULL) {
 		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 	}
@@ -10044,6 +10195,12 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 		// the process and therefore there is no need to run any query
 		resultset2 = SQLite3_query_rules_fast_routing_resultset;
 	}
+	std::string projection_error;
+ if (!error && !error2 && (!resultset || !validate_pgsql_query_rules_projection(*resultset, projection_error))) {
+  if (!SQLite3_query_rules_resultset) delete resultset;
+  if (!SQLite3_query_rules_fast_routing_resultset) delete resultset2;
+  return strdup(projection_error.empty() ? "Missing PostgreSQL query rules projection" : projection_error.c_str());
+ }
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	}
@@ -10158,10 +10315,18 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 					r->fields[26], // OK_msg
 					(r->fields[27] == NULL ? -1 : atol(r->fields[27])),	// sticky_conn
 					(r->fields[28] == NULL ? -1 : atol(r->fields[28])),	// multiplex
+#ifdef PROXYSQL31
+					(r->fields[29] == NULL ? -1 : atoi(r->fields[29])), // lsn_from_hostgroup
+					(r->fields[30] == NULL ? -1 : atol(r->fields[30])),	// log
+					(atoi(r->fields[31]) == 1 ? true : false),
+					r->fields[32], // attributes
+					r->fields[33]  // comment
+#else
 					(r->fields[29] == NULL ? -1 : atol(r->fields[29])),	// log
 					(atoi(r->fields[30]) == 1 ? true : false),
 					r->fields[31], // attributes
 					r->fields[32]  // comment
+#endif
 				);
 				GloPgQPro->insert(nqpr, false);
 			}
@@ -10178,6 +10343,9 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			SQLite3_result* prev_fast_routing_resultset = GloPgQPro->load_fast_routing(fast_routing_hashmap);
 #endif // BENCHMARK_FASTROUTING_LOAD
 			GloPgQPro->commit();
+#ifdef PROXYSQL31
+ if (PgHGM) PgHGM->replace_lsn_interests(collect_pgsql_lsn_interests(*resultset, *resultset2));
+#endif
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		}
 #endif // BENCHMARK_FASTROUTING_LOAD
@@ -10202,6 +10370,8 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	}
 	// if (resultset) delete resultset; // never delete it. GloPgQPro saves it
 	// if (resultset2) delete resultset2; // never delete it. GloPgQPro saves it
+	if (error) { if (error2) free(error2); return error; }
+	if (error2) return error2;
 	return NULL;
 }
 
