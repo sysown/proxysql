@@ -499,8 +499,8 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 #ifdef PROXYSQL40
 	if (opt->isSet("--aws-managed-bootstrap")) {
 		opt->get("--aws-managed-bootstrap")->getString(aws_managed_bootstrap);
-		// Local installation must report its result to the invoking process,
-		// preserve relative manifest paths, and never retry through the angel.
+		// Local bootstrap stays in the foreground, preserves relative manifest
+		// paths, and never retries a failed request through the angel.
 		global.foreground = true;
 		glovars.proxy_restart_on_error = false;
 	}

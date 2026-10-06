@@ -1846,15 +1846,11 @@ bool ProxySQL_Main_init_phase3___start_all() {
 			manifest_json = contents.str();
 			manifest = &manifest_json;
 		}
-		if (!proxysql_start_managed_configuration(GloPluginManager.get(),
-			GloWebInterface, managed_web_binder, manifest, error)) {
+		if (proxysql_run_managed_configuration_startup(GloPluginManager.get(),
+			GloWebInterface, managed_web_binder, manifest, error) ==
+			ProxySQL_ManagedStartupDisposition::exit_failure) {
 			proxy_error("Managed configuration startup failed: %s\n", error.c_str());
 			managed_startup_exit_code = EXIT_FAILURE;
-			return false;
-		}
-		if (manifest != nullptr) {
-			// A local one-shot installation exits after normal draining/teardown.
-			managed_startup_exit_code = EXIT_SUCCESS;
 			return false;
 		}
 	}
@@ -2017,7 +2013,7 @@ void ProxySQL_Main_init_phase4___shutdown() {
 	UnloadPlugins();
 #ifdef PROXYSQL40
 	if (managed_startup_exit_code >= 0) {
-		// A one-shot installation or failed recovery exits before
+		// A failed managed bootstrap or recovery exits before
 		// start_listeners(), which normally releases these existing startup
 		// waits. Release them for teardown without opening any listeners.
 		GloMTH->bootstrapping_listeners = false;

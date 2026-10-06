@@ -1228,6 +1228,15 @@ bool proxysql_start_managed_configuration(ProxySQL_PluginManager* manager,
  return true;
 }
 
+ProxySQL_ManagedStartupDisposition proxysql_run_managed_configuration_startup(
+ ProxySQL_PluginManager* manager, Web_Interface* web,
+ proxysql_web_bind_managed_configuration_v1_t binder,
+ const std::string* manifest_json, std::string& error) {
+ return proxysql_start_managed_configuration(manager, web, binder, manifest_json, error) ?
+  ProxySQL_ManagedStartupDisposition::continue_startup :
+  ProxySQL_ManagedStartupDisposition::exit_failure;
+}
+
 static bool stop_configured_plugins_impl(std::unique_ptr<ProxySQL_PluginManager>& manager,
  std::string& error, Web_Interface** drained_web);
 
