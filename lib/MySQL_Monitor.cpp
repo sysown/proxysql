@@ -661,6 +661,23 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task
 	t2 = 0;
 }
 
+/**
+ * @brief Returns the replication status statement supported by the connected backend.
+ * @details 'SHOW REPLICA STATUS' is available since MySQL 8.0.22 and MariaDB 10.5.1. MariaDB reports
+ *  versions >= 10.0 (100000), so a plain numeric '>= 80023' check would send 'SHOW REPLICA STATUS' to
+ *  MariaDB 10.0 - 10.5.0, which reject it with a syntax error and break replication lag monitoring.
+ *
+ * @param mysql Established backend connection.
+ * @return Either "SHOW SLAVE STATUS" or "SHOW REPLICA STATUS".
+ */
+static const char* get_replica_status_query(MYSQL* mysql) {
+	const unsigned long server_version = mysql_get_server_version(mysql);
+	const bool is_mariadb = mysql->server_version && strcasestr(mysql->server_version, "MariaDB") != NULL;
+	const unsigned long min_version = is_mariadb ? 100501 : 80023;
+
+	return server_version < min_version ? "SHOW SLAVE STATUS" : "SHOW REPLICA STATUS";
+}
+
 MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
 	if (hostname) {
 		free(hostname);
@@ -774,11 +791,7 @@ void MySQL_Monitor_State_Data::init_async() {
 			query_ = "SELECT MAX(ROUND(TIMESTAMPDIFF(MICROSECOND, ts, SYSDATE(6))/1000000)) AS Seconds_Behind_Master FROM ";
 			query_ += mysql_thread___monitor_replication_lag_use_percona_heartbeat;
 		} else {
-			if (mysql_get_server_version(mysql) < 80023) {
-				query_ = "SHOW SLAVE STATUS";
-			} else {
-				query_ = "SHOW REPLICA STATUS";
-			}
+			query_ = get_replica_status_query(mysql);
 		}
 		if (strcasestr(mysql->server_version, (const char *)SERVER_VERSION_READYSET) != NULL) {
 			query_ = "SHOW READYSET STATUS";
@@ -2883,10 +2896,7 @@ void * monitor_replication_lag_thread(const std::vector<MySQL_Monitor_State_Data
 		}
 	}
 	if (use_percona_heartbeat == false) {
-		query = "SHOW SLAVE STATUS";
-		if (mysql_get_server_version(mmsd->mysql) >= 80023) {
-			query = "SHOW REPLICA STATUS";
-		}
+		query = get_replica_status_query(mmsd->mysql);
 	}
 	if (strcasestr(server_version.c_str(), (const char *)SERVER_VERSION_READYSET) != NULL) {
 		query = "SHOW READYSET STATUS";
