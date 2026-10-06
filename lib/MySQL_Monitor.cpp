@@ -666,13 +666,15 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task
  * @details 'SHOW REPLICA STATUS' is available since MySQL 8.0.22 and MariaDB 10.5.1. MariaDB reports
  *  versions >= 10.0 (100000), so a plain numeric '>= 80023' check would send 'SHOW REPLICA STATUS' to
  *  MariaDB 10.0 - 10.5.0, which reject it with a syntax error and break replication lag monitoring.
+ *  MariaDB is detected with the connector's own 'mariadb_connection()', which also recognizes the
+ *  '-maria-' version string form; it doesn't check for a NULL 'server_version', hence the guard.
  *
  * @param mysql Established backend connection.
  * @return Either "SHOW SLAVE STATUS" or "SHOW REPLICA STATUS".
  */
 static const char* get_replica_status_query(MYSQL* mysql) {
 	const unsigned long server_version = mysql_get_server_version(mysql);
-	const bool is_mariadb = mysql->server_version && strcasestr(mysql->server_version, "MariaDB") != NULL;
+	const bool is_mariadb = mysql->server_version && mariadb_connection(mysql);
 	const unsigned long min_version = is_mariadb ? 100501 : 80023;
 
 	return server_version < min_version ? "SHOW SLAVE STATUS" : "SHOW REPLICA STATUS";
