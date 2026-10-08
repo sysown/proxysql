@@ -8477,7 +8477,8 @@ void PgSQL_Session::extq_buffer_message() {
 		} else {
 			// A Describe of the unnamed portal with no Execute right after it. The portal is bound
 			// only when its Execute is sent, so the Bind goes out ahead of the Describe.
-			e.stmt = extq_find_stmt(bind_waiting_for_execute->data().stmt_name);
+			e.name = bind_waiting_for_execute->data().stmt_name;
+			e.stmt = extq_find_stmt(e.name.c_str());
 			const PtrSize_t& raw = bind_waiting_for_execute->get_raw_pkt();
 			e.bind_bytes.assign((const char*)raw.ptr, raw.size);
 		}
@@ -8535,6 +8536,9 @@ void PgSQL_Session::extq_buffer_message() {
 		e.info.extended_query_info.stmt_client_portal_name = e.portal.c_str();
 		e.info.extended_query_info.stmt_client_name = e.name.c_str();
 		e.info.extended_query_info.bind_msg = nullptr;
+	} else if (e.type == 'D' && e.target == 'P') {
+		// The name pointed into the unnamed Bind, which a later Bind in the unit frees.
+		e.info.extended_query_info.stmt_client_name = e.name.c_str();
 	}
 	GloPgQPro->delete_QP_out(qpo);
 	previous_hostgroup = current_hostgroup;

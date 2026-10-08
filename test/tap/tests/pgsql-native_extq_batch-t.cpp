@@ -199,7 +199,7 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(35);
+	plan(36);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
@@ -559,6 +559,37 @@ int main(int, char**) {
 	}
 	ok(r[1] == "1 2 D=12 C T D=13 C Z(I)", "implicit Sync: one ReadyForQuery, after the simple Query [%s]", r[1].c_str());
 	ok(r[0] == r[1], "implicit Sync: same replies as libpq [libpq: %s]", r[0].c_str());
+
+	// --- A Describe of the unnamed portal logs the statement it described, though a later Bind in the
+	// unit replaces that portal before the Describe's reply arrives.
+	{
+		const std::string def_log = execScalar(admin.get(), "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-eventslog_default_log'");
+		const std::string buf_size = execScalar(admin.get(), "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-eventslog_buffer_history_size'");
+		exec(admin.get(), "SET pgsql-eventslog_default_log=1");
+		exec(admin.get(), "SET pgsql-eventslog_buffer_history_size=100000");
+		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+		setNativeMode(admin.get(), true);
+		const std::string sql = "SELECT 21 AS dsc_a_" + tag;
+		r[1] = run([&]() {
+			auto c = client();
+			c->prepareStatement("s_dsc_a", sql, false);
+			c->prepareStatement("s_dsc_b", "SELECT 22 AS dsc_b_" + tag, false);
+			c->bindStatement("s_dsc_a", "", {}, {}, false);
+			c->describePortal("", false);
+			c->bindStatement("s_dsc_b", "", {}, {}, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			return replies(*c);
+		});
+		exec(admin.get(), "DUMP PGSQL EVENTSLOG FROM BUFFER TO MEMORY");
+		// The Parse and the Describe of the first statement, both under its name.
+		r[1] += " | " + execScalar(admin.get(), "SELECT group_concat(client_stmt_name, ' ') FROM (SELECT client_stmt_name "
+			"FROM stats_pgsql_query_events WHERE query = '" + sql + "' ORDER BY event_type)");
+		exec(admin.get(), "SET pgsql-eventslog_default_log=" + (def_log.empty() ? "0" : def_log));
+		exec(admin.get(), "SET pgsql-eventslog_buffer_history_size=" + (buf_size.empty() ? "0" : buf_size));
+		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+	}
+	ok(r[1] == "1 1 2 T 2 D=22 C Z(I) | s_dsc_a s_dsc_a", "unnamed-portal Describe: logged under its own statement [%s]", r[1].c_str());
 
 	dropRules(admin.get());
 	setNativeMode(admin.get(), false);
