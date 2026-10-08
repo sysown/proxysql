@@ -6139,6 +6139,8 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			(query_result->get_result_packet_type() == (PGSQL_QUERY_RESULT_NOTICE | PGSQL_QUERY_RESULT_TUPLE | PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY))
 			);
 		const uint64_t num_rows  = query_result->get_num_rows();
+		// Read before get_resultset(), which resets the counters.
+		const bool multi_result = query_result->has_multiple_results();
 		const uint64_t resultset_size = query_result->get_resultset_size();
 		const auto _affected_rows = query_result->get_affected_rows();
 		if (_affected_rows != static_cast<unsigned long long>(-1)) {
@@ -6150,11 +6152,11 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		const unsigned int result_begin = client_myds->PSarrayOUT->len;
 		const auto packet_type = query_result->get_result_packet_type();
 		const unsigned int num_fields = query_result->get_num_fields();
-		// Without Describe, SELECT still returns DataRow/CommandComplete, but
-		// the result builder does not set TUPLE (it is set by RowDescription).
-		const auto extended_packet_type = PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY |
-			((CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) ?
-				PGSQL_QUERY_RESULT_TUPLE : 0);
+		// Without Describe there is no RowDescription: libpq leaves TUPLE unset, the native
+		// builder sets it on a DataRow, and only a RowDescription gives it a field count.
+		const bool described = (CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0;
+		const bool extended_shape_ok = (packet_type & ~PGSQL_QUERY_RESULT_TUPLE) == (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY) &&
+			(!described || (packet_type & PGSQL_QUERY_RESULT_TUPLE)) && (num_fields > 0 || !described);
 #endif
 		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
 #ifdef PROXYSQL31
@@ -6168,10 +6170,9 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		}
 		if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.stmt_cache_valid &&
 			!transfer_started && resultset_completed && !_conn->is_error_present() &&
-			num_fields > 0 && !_conn->MultiplexDisabled(false) &&
+			extended_shape_ok && !_conn->MultiplexDisabled(false) &&
 			!_conn->IsActiveTransaction() && !_conn->processing_multi_statement &&
 			!(_conn->options.init_connect && _conn->options.init_connect[0]) &&
-			packet_type == extended_packet_type &&
 			qpo && qpo->cache_ttl > 0 && resultset_size <= UINT32_MAX &&
 			(qpo->cache_empty_result == 1 || num_rows ||
 				(qpo->cache_empty_result == -1 && thread->variables.query_cache_stores_empty_result))) {
@@ -6205,7 +6206,9 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			// to every later client hitting this entry for the whole TTL. Unlike the
 			// extended-query cache above, this path does not test MultiplexDisabled(), so
 			// being on a LISTEN-pinned connection does not by itself keep it out.
+			// The native path has no multi-statement flag; several replies in one result mean one.
 			if (qpo && qpo->cache_ttl > 0 && is_tuple == true &&
+				multi_result == false &&
 				_conn->native_result_had_notification == false) { // the resultset should be cached
 				
 				if (_conn->is_error_present() == false &&
@@ -7950,6 +7953,7 @@ bool PgSQL_Session::try_extended_query_cache(PgSQL_Execute_Message* execute_msg)
 		NumActiveTransactions() != 0 || transaction_persistent_hostgroup != -1 ||
 		(pgsql_thread___init_connect && pgsql_thread___init_connect[0]) ||
 		!stmt || stmt->PgQueryCmd != PGSQL_QUERY_SELECT || !stmt->digest_text ||
+		strcasestr(stmt->digest_text, " INTO ") ||
 		strcasestr(stmt->digest_text, " FOR UPDATE") || strcasestr(stmt->digest_text, " FOR SHARE") ||
 		strcasestr(stmt->digest_text, " FOR NO KEY UPDATE") || strcasestr(stmt->digest_text, " FOR KEY SHARE"))
 		return false;

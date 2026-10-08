@@ -2770,6 +2770,7 @@ PgSQL_Query_Result::PgSQL_Query_Result() {
 	buffer_used = 0;
 	resultset_size = 0;
 	num_fields = 0;
+	native_command_count = 0;
 	num_rows = 0;
 	pkt_count = 0;
 	affected_rows = -1;
@@ -2973,6 +2974,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		// trailing number in "SELECT <rows>" is a returned-row count, not affected
 		// rows, so we leave affected_rows at its sentinel (-1).
 		const bool had_tuple = (result_packet_type & PGSQL_QUERY_RESULT_TUPLE) != 0;
+		native_command_count++;
 		result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
 		// Parse the trailing integer of the tag for affected rows. For INSERT the
 		// tag is "INSERT <oid> <rows>" (rows is the 2nd/last number); for UPDATE/
@@ -2998,6 +3000,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		break;
 	}
 	case 'I': // EmptyQueryResponse
+		native_command_count++;
 		result_packet_type |= PGSQL_QUERY_RESULT_EMPTY;
 		break;
 	case 'E': // ErrorResponse
@@ -3174,6 +3177,7 @@ unsigned char* PgSQL_Query_Result::buffer_reserve_space(unsigned int size) {
 void PgSQL_Query_Result::reset() {
 	resultset_size = 0;
 	num_fields = 0;
+	native_command_count = 0;
 	num_rows = 0;
 	pkt_count = 0;
 	affected_rows = -1;
