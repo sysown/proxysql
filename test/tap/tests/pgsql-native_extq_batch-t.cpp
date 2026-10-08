@@ -199,7 +199,7 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(33);
+	plan(35);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
@@ -485,6 +485,25 @@ int main(int, char**) {
 		});
 	}
 	ok(r[0] == r[1], "client Flush: same replies as libpq [native: %s] [libpq: %s]", r[1].c_str(), r[0].c_str());
+
+	// --- A statement ProxySQL answers itself, reached after a Parse already went to the backend: the
+	// batch is cut short there and the rest of the unit runs on the same connection. The session must
+	// stay up and answer like libpq.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "s_kill", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid = $1::int AND application_name = $2 /* kill_" + tag + "_" + mode_name[m] + " */",
+				{ text("2147483647"), text("no_such_application_" + tag) });
+			c->sendSync();
+			std::string out = replies(*c);
+			c->sendQuery("SELECT 1");
+			return out + " | " + replies(*c);
+		});
+	}
+	ok(r[1].size() > 0 && r[1].find("threw") == std::string::npos && r[1].substr(r[1].size() - 12) == "T D=1 C Z(I)",
+		"special statement after a sent Parse: the session survives [%s]", r[1].c_str());
+	ok(r[0] == r[1], "special statement after a sent Parse: same replies as libpq [native: %s] [libpq: %s]", r[1].c_str(), r[0].c_str());
 
 	// --- A large unit: a thousand INSERTs in one batch, all applied in order.
 	{
