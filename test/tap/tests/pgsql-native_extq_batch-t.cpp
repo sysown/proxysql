@@ -1,0 +1,518 @@
+/**
+ * @file pgsql-native_extq_batch-t.cpp
+ * @brief Native extended-query batching: from the first message of a unit bound for the backend,
+ *        ProxySQL buffers the unit and sends it in one write at the Sync, matching the replies in
+ *        order. Each scenario runs the same frame with libpq, whose one-message-at-a-time path is the
+ *        reference, and with the native protocol, compares what the client receives, and checks
+ *        what only the batch changes.
+ *
+ * Needs a hostgroup 0 with one PostgreSQL server and an admin user able to edit pgsql_query_rules.
+ */
+
+#include <chrono>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <unistd.h>
+#include "libpq-fe.h"
+#include "pg_lite_client.h"  // raw frontend messages (MUST precede utils.h: mysql.h clash)
+#include "command_line.h"
+#include "tap.h"
+#include "utils.h"
+
+using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
+CommandLine cl;
+
+static const int HG = 0;
+static std::string tag;   // per run, so statement texts are new to the global statement cache
+
+static PGConnPtr openConn(const char* host, int port, const char* user, const char* pass, const char* db) {
+	std::stringstream ss;
+	ss << "host=" << host << " port=" << port << " user=" << user << " password=" << pass;
+	if (db && *db) ss << " dbname=" << db;
+	ss << " sslmode=disable";
+	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
+}
+static bool exec(PGconn* c, const std::string& q) {
+	PGresult* r = PQexec(c, q.c_str());
+	const bool good = (PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK);
+	if (!good) diag("query failed: %s -- %s", q.c_str(), PQerrorMessage(c));
+	PQclear(r);
+	return good;
+}
+static std::string execScalar(PGconn* c, const std::string& q) {
+	PGresult* r = PQexec(c, q.c_str());
+	std::string v = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) > 0 && !PQgetisnull(r, 0, 0))
+		? PQgetvalue(r, 0, 0) : "";
+	PQclear(r);
+	return v;
+}
+static long execLong(PGconn* c, const std::string& q) {
+	const std::string v = execScalar(c, q);
+	return v.empty() ? -1 : atol(v.c_str());
+}
+
+// Taking the servers down and back drops every pooled connection: a pooled one keeps the protocol it
+// was opened with, so without this a scenario could run on the other mode's connection.
+static void resetPool(PGconn* admin) {
+	const std::string hg = std::to_string(HG);
+	if (!exec(admin, "UPDATE pgsql_servers SET status='OFFLINE_HARD' WHERE hostgroup_id=" + hg)
+	    || !exec(admin, "LOAD PGSQL SERVERS TO RUNTIME"))
+		BAIL_OUT("could not take hostgroup %s down", hg.c_str());
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	while (std::chrono::steady_clock::now() < deadline) {
+		if (execLong(admin, "SELECT COALESCE(SUM(ConnUsed+ConnFree),0) FROM stats_pgsql_connection_pool WHERE hostgroup=" + hg) == 0) break;
+		usleep(100000);
+	}
+	if (!exec(admin, "UPDATE pgsql_servers SET status='ONLINE' WHERE hostgroup_id=" + hg)
+	    || !exec(admin, "LOAD PGSQL SERVERS TO RUNTIME"))
+		BAIL_OUT("could not bring hostgroup %s back", hg.c_str());
+	usleep(200000);
+}
+
+static void setNativeMode(PGconn* admin, bool on, bool reset_pool = true) {
+	const std::string want = on ? "true" : "false";
+	if (!exec(admin, "SET pgsql-use_native_backend_protocol='" + want + "'")
+	    || !exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME"))
+		BAIL_OUT("could not set pgsql-use_native_backend_protocol");
+	const std::string got = execScalar(admin,
+		"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-use_native_backend_protocol'");
+	if (got != want)
+		BAIL_OUT("pgsql-use_native_backend_protocol did not take: wanted '%s', runtime says '%s'", want.c_str(), got.c_str());
+	if (reset_pool) resetPool(admin);
+}
+
+static long pooled(PGconn* admin) {
+	return execLong(admin, "SELECT COALESCE(SUM(ConnUsed+ConnFree),0) FROM stats_pgsql_connection_pool WHERE hostgroup=" + std::to_string(HG));
+}
+static long connUsed(PGconn* admin) {
+	return execLong(admin, "SELECT COALESCE(SUM(ConnUsed),0) FROM stats_pgsql_connection_pool WHERE hostgroup=" + std::to_string(HG));
+}
+static long connOK(PGconn* admin) {
+	return execLong(admin, "SELECT COALESCE(SUM(ConnOK),0) FROM stats_pgsql_connection_pool WHERE hostgroup=" + std::to_string(HG));
+}
+
+static std::string errorSqlstate(const std::vector<uint8_t>& payload) {
+	size_t i = 0;
+	while (i < payload.size() && payload[i] != 0) {
+		const char code = (char)payload[i++];
+		const size_t start = i;
+		while (i < payload.size() && payload[i] != 0) i++;
+		if (code == 'C') return std::string((const char*)payload.data() + start, i - start);
+		if (i < payload.size()) i++;
+	}
+	return "";
+}
+
+// What the client receives up to the ReadyForQuery, one token per message: "1 2 D=42 C Z(I)". A
+// DataRow shows its first column, an error its SQLSTATE, a ReadyForQuery its status.
+static std::string replies(PgConnection& c) {
+	std::string out;
+	for (;;) {
+		char type = 0;
+		std::vector<uint8_t> buf;
+		c.readMessage(type, buf);
+		if (type == 'N' || type == 'S') continue;   // notices and parameter changes answer nothing
+		if (!out.empty()) out += ' ';
+		out += type;
+		if (type == 'D' && buf.size() >= 6) {
+			const int32_t len = (int32_t)((buf[2] << 24) | (buf[3] << 16) | (buf[4] << 8) | buf[5]);
+			out += "=" + (len < 0 ? std::string("NULL") : std::string((const char*)buf.data() + 6, len));
+		} else if (type == 'E') {
+			out += "(" + errorSqlstate(buf) + ")";
+		} else if (type == 'Z' && buf.size() >= 1) {
+			out += std::string("(") + (char)buf[0] + ")";
+			break;
+		}
+	}
+	return out;
+}
+
+static PgConnection::Param text(const std::string& v) { return PgConnection::Param{ v, 0 }; }
+
+// Parse + Bind + Execute of one statement, no Sync.
+static void pbe(PgConnection& c, const std::string& name, const std::string& sql, const std::vector<PgConnection::Param>& params = {}) {
+	c.prepareStatement(name, sql, false);
+	c.bindStatement(name, "", params, {}, false);
+	c.executePortal("", 0, false);
+}
+
+static std::unique_ptr<PgConnection> client() {
+	std::unique_ptr<PgConnection> c(new PgConnection(5000));
+	c->connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+	return c;
+}
+
+// Runs a scenario and returns what it reports; an exception (a timeout, a closed connection) is
+// reported instead of escaping.
+template <typename F>
+static std::string run(F f) {
+	try {
+		return f();
+	} catch (const PgException& e) {
+		return std::string("threw: ") + e.what();
+	}
+}
+
+static long ruleHits(PGconn* admin, int rule_id) {
+	return execLong(admin, "SELECT hits FROM stats_pgsql_query_rules WHERE rule_id=" + std::to_string(rule_id));
+}
+// Hits reach the stats table on the worker's housekeeping pass: wait until they stop moving.
+static long settledHits(PGconn* admin, int rule_id, long before) {
+	long last = ruleHits(admin, rule_id), stable_since = 0;
+	for (int i = 0; i < 60; i++) {
+		usleep(100000);
+		const long now = ruleHits(admin, rule_id);
+		if (now != last) { last = now; stable_since = 0; continue; }
+		if (last > before && ++stable_since >= 10) break;
+	}
+	return last;
+}
+
+// A rule on the digest; column/value add one action, e.g. "multiplex", "0".
+static bool addRule(PGconn* admin, int id, const std::string& digest, const std::string& column = "", const std::string& value = "") {
+	const std::string extra_col = column.empty() ? "" : ", " + column;
+	const std::string extra_val = column.empty() ? "" : ", " + value;
+	return exec(admin, "INSERT INTO pgsql_query_rules (rule_id, active, match_digest, apply" + extra_col + ") VALUES ("
+			+ std::to_string(id) + ", 1, '" + digest + "', 1" + extra_val + ")")
+		&& exec(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+}
+static void dropRules(PGconn* admin) {
+	exec(admin, "DELETE FROM pgsql_query_rules WHERE rule_id BETWEEN 7700 AND 7799");
+	exec(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+}
+
+int main(int, char**) {
+	if (cl.getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		return EXIT_FAILURE;
+	}
+	plan(31);
+	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
+
+	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
+	PGConnPtr be = openConn(cl.pgsql_server_host, cl.pgsql_server_port, cl.pgsql_server_username, cl.pgsql_server_password, cl.pgsql_username);
+	if (PQstatus(admin.get()) != CONNECTION_OK || PQstatus(be.get()) != CONNECTION_OK)
+		BAIL_OUT("cannot reach the admin interface or the backend");
+	dropRules(admin.get());
+	const char* mode_name[2] = { "libpq", "native" };
+	std::string r[2];
+
+	// --- A statement no backend has prepared goes out with its Bind and Execute; the next unit reuses it.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "s_new", "SELECT $1::int + 1 AS new_" + tag + "_" + mode_name[m], { text("41") });
+			c->sendSync();
+			std::string out = replies(*c);
+			c->bindStatement("s_new", "", { text("1") }, {}, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			return out + " | " + replies(*c);
+		});
+	}
+	ok(r[1] == "1 2 D=42 C Z(I) | 2 D=2 C Z(I)", "new statement: Parse, Bind and Execute in one unit, reused by the next [%s]", r[1].c_str());
+	ok(r[0] == r[1], "new statement: same replies as libpq [libpq: %s]", r[0].c_str());
+
+	// --- ProxySQL's own reply waits for the replies before it: P2 is known, so its ParseComplete is
+	// answered locally, yet it must come after E1's rows.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		r[m] = run([&]() {
+			auto c = client();
+			const std::string known = "SELECT 'b' || $1 AS known_" + tag;
+			c->prepareStatement("s_warm", known, false); c->sendSync();   // makes the text known
+			replies(*c);
+			pbe(*c, "s_a", "SELECT 'a' || $1 AS order_" + tag + "_" + mode_name[m], { text("1") });
+			pbe(*c, "s_b", known, { text("2") });
+			c->sendSync();
+			return replies(*c);
+		});
+	}
+	ok(r[1] == "1 2 D=a1 C 1 2 D=b2 C Z(I)", "ordering: a local ParseComplete waits for the Execute before it [%s]", r[1].c_str());
+	ok(r[0] == r[1], "ordering: same replies as libpq [libpq: %s]", r[0].c_str());
+
+	// --- An error skips what follows, ProxySQL's own replies included, and commits none of it: the
+	// skipped Parse's name is still free afterwards.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		r[m] = run([&]() {
+			auto c = client();
+			const std::string known = "SELECT 2 AS late_" + tag;
+			c->prepareStatement("s_warm2", known, false); c->sendSync();
+			replies(*c);
+			pbe(*c, "s_err", "SELECT 1 / $1::int AS div_" + tag + "_" + mode_name[m], { text("0") });
+			pbe(*c, "s_late", known);
+			c->sendSync();
+			std::string out = replies(*c);
+			c->prepareStatement("s_late", "SELECT 3", false); c->sendSync();
+			return out + " | " + replies(*c);
+		});
+	}
+	ok(r[1] == "1 2 E(22012) Z(I) | 1 Z(I)", "error: the rest of the unit is skipped and its Parse never took the name [%s]", r[1].c_str());
+	ok(r[0] == r[1], "error: same replies as libpq [libpq: %s]", r[0].c_str());
+
+	// --- A multiplex=0 rule pins the connection to the session after a batched unit.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		addRule(admin.get(), 7701, "mux_" + tag, "multiplex", "0");
+		long used = -2;
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "s_mux", "SELECT 1 AS mux_" + tag + "_" + mode_name[m]);
+			c->sendSync();
+			const std::string out = replies(*c);
+			usleep(300000);
+			used = connUsed(admin.get());   // the client is still connected
+			return out;
+		});
+		r[m] += " used=" + std::to_string(used);
+		dropRules(admin.get());
+	}
+	ok(r[1] == "1 2 D=1 C Z(I) used=1", "multiplex=0 rule: the connection stays with the session [%s]", r[1].c_str());
+	ok(r[0] == r[1], "multiplex=0 rule: as with libpq [libpq: %s]", r[0].c_str());
+
+	// --- Rule hits count each message once, and an OK rule answers its Execute in place.
+	long hits[2] = { 0, 0 }, ok_hits[2] = { 0, 0 };
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		addRule(admin.get(), 7702, "hits_" + tag);
+		const long before = ruleHits(admin.get(), 7702);
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "s_h1", "SELECT 1 AS hits_" + tag);
+			pbe(*c, "s_h2", "SELECT 2 AS hits_" + tag + "_2");
+			c->sendSync();
+			return replies(*c);
+		});
+		hits[m] = settledHits(admin.get(), 7702, before) - before;
+		dropRules(admin.get());
+		addRule(admin.get(), 7703, "okrule_" + tag, "OK_msg", "'okay'");
+		const long ok_before = ruleHits(admin.get(), 7703);
+		r[m] += " | " + run([&]() {
+			auto c = client();
+			pbe(*c, "s_p", "SELECT 5 AS plain_" + tag + "_" + mode_name[m]);
+			pbe(*c, "s_ok", "SELECT 6 AS okrule_" + tag);
+			c->sendSync();
+			return replies(*c);
+		});
+		ok_hits[m] = settledHits(admin.get(), 7703, ok_before) - ok_before;
+		dropRules(admin.get());
+	}
+	ok(hits[1] > 0 && hits[1] == hits[0], "rule hits: each message counted once, as with libpq [native %ld, libpq %ld]", hits[1], hits[0]);
+	ok(ok_hits[1] > 0 && ok_hits[1] == ok_hits[0], "OK rule hits: as with libpq [native %ld, libpq %ld]", ok_hits[1], ok_hits[0]);
+	ok(r[1].find(" | 1 2 D=5 C 1 2 C") != std::string::npos, "OK rule: its Execute is answered in place, after the rows before it [%s]", r[1].c_str());
+
+	// --- A SET in the unit: the statement before it runs under the old value, the next unit under the new.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "s_before", "SELECT current_setting('extra_float_digits') AS before_" + tag + "_" + mode_name[m]);
+			pbe(*c, "s_set", "SET extra_float_digits TO 3");
+			c->sendSync();
+			std::string out = replies(*c);
+			pbe(*c, "s_after", "SELECT current_setting('extra_float_digits') AS after_" + tag + "_" + mode_name[m]);
+			c->sendSync();
+			return out + " | " + replies(*c);
+		});
+	}
+	ok(r[1].rfind("1 2 D=1 C", 0) == 0 && r[1].find(" | 1 2 D=3 C Z(I)") != std::string::npos,
+		"SET in a unit: the statement before it sees the old value, the next unit the new [%s]", r[1].c_str());
+	ok(r[0] == r[1], "SET in a unit: same replies as libpq [libpq: %s]", r[0].c_str());
+
+	// --- An error rule after buffered work: the earlier rows, then the error, then ReadyForQuery.
+	{
+		setNativeMode(admin.get(), true);
+		addRule(admin.get(), 7704, "errrule_" + tag, "error_msg", "'refused by rule'");
+		const long ok_before = connOK(admin.get());
+		r[1] = run([&]() {
+			auto c = client();
+			pbe(*c, "s_fine", "SELECT 7 AS fine_" + tag);
+			pbe(*c, "s_refused", "SELECT 8 AS errrule_" + tag);
+			c->sendSync();
+			std::string out = replies(*c);
+			c->sendQuery("SELECT 9");
+			return out + " | " + replies(*c);
+		});
+		dropRules(admin.get());
+		const long opened = connOK(admin.get()) - ok_before;
+		ok(r[1] == "1 2 D=7 C E(42501) Z(I) | T D=9 C Z(I)", "error rule after buffered work: rows, error, ReadyForQuery, session usable [%s]", r[1].c_str());
+		ok(opened == 2, "error rule after buffered work: the connection holding the unsynced work is closed, so the next statement opens another [opened %ld]", opened);
+	}
+
+	// --- ProxySQL's own error after buffered work inside a transaction block: the work is rolled
+	// back with the connection, and the client is in a failed transaction until it rolls back.
+	{
+		setNativeMode(admin.get(), true);
+		const std::string tbl = "extq_batch_" + tag;
+		exec(be.get(), "CREATE TABLE " + tbl + " (a int)");
+		r[1] = run([&]() {
+			auto c = client();
+			c->sendQuery("BEGIN");
+			std::string out = replies(*c);
+			pbe(*c, "s_ins", "INSERT INTO " + tbl + " VALUES (1)");
+			c->bindStatement("s_missing", "", {}, {}, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			out += " | " + replies(*c);
+			c->sendQuery("SELECT 1");
+			out += " | " + replies(*c);
+			c->sendQuery("ROLLBACK");
+			out += " | " + replies(*c);
+			return out;
+		});
+		ok(r[1].find(" | 1 2 C E(26000) Z(E) | ") != std::string::npos,
+			"local error in a transaction: the error, then ReadyForQuery 'E' [%s]", r[1].c_str());
+		ok(r[1].find(" | E(25P02) Z(E) | ") != std::string::npos && r[1].size() > 7 && r[1].substr(r[1].size() - 7) == " C Z(I)",
+			"local error in a transaction: the next statement is refused until ROLLBACK, which ends it [%s]", r[1].c_str());
+		ok(execLong(be.get(), "SELECT count(*) FROM " + tbl) == 0, "local error in a transaction: the buffered INSERT was rolled back");
+		exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
+	}
+
+	// --- A unit ProxySQL answers entirely by itself takes no connection.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		const std::string known = "SELECT 1 AS cached_" + tag;
+		r[m] = run([&]() { auto c = client(); c->prepareStatement("s_c", known, false); c->sendSync(); return replies(*c); });
+		resetPool(admin.get());
+		const long before = connOK(admin.get());
+		r[m] += " | " + run([&]() { auto c = client(); c->prepareStatement("s_c2", known, false); c->sendSync(); return replies(*c); });
+		r[m] += " opened=" + std::to_string(connOK(admin.get()) - before) + " pooled=" + std::to_string(pooled(admin.get()));
+	}
+	ok(r[1] == "1 Z(I) | 1 Z(I) opened=0 pooled=0", "cached Parse only: answered without a connection [%s]", r[1].c_str());
+	ok(r[0] == r[1], "cached Parse only: as with libpq [libpq: %s]", r[0].c_str());
+
+	// --- Two Executes of the unnamed portal: the same answer as the one-message path.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		r[m] = run([&]() {
+			auto c = client();
+			c->prepareStatement("s_twice", "SELECT 4 AS twice_" + tag + "_" + mode_name[m], false);
+			c->bindStatement("s_twice", "", {}, {}, false);
+			c->executePortal("", 0, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			std::string out = replies(*c);
+			c->sendQuery("SELECT 1");
+			return out + " | " + replies(*c);
+		});
+	}
+	ok(r[0] == r[1], "Bind Execute Execute: same replies as libpq [native: %s] [libpq: %s]", r[1].c_str(), r[0].c_str());
+
+	// --- ProxySQL's own Parse fails (the table is gone): the error belongs to the client's Execute.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		const std::string tbl = "extq_gone_" + tag + "_" + mode_name[m];
+		exec(be.get(), "CREATE TABLE " + tbl + " (a int)");
+		r[m] = run([&]() {
+			auto c = client();
+			c->prepareStatement("s_gone", "SELECT a FROM " + tbl, false);
+			c->bindStatement("s_gone", "", {}, {}, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			std::string out = replies(*c);
+			exec(be.get(), "DROP TABLE " + tbl);
+			resetPool(admin.get());   // the next connection lacks the statement
+			c->bindStatement("s_gone", "", {}, {}, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			return out + " | " + replies(*c);
+		});
+	}
+	ok(r[1] == "1 2 C Z(I) | 2 E(42P01) Z(I)", "own Parse fails: the client's Execute gets the error [%s]", r[1].c_str());
+	ok(r[0] == r[1], "own Parse fails: same replies as libpq [libpq: %s]", r[0].c_str());
+
+	// --- A connection pooled before the native protocol was turned on is replaced, not used.
+	{
+		setNativeMode(admin.get(), false);
+		const std::string pre = run([&]() { auto c = client(); c->sendQuery("SELECT 1"); return replies(*c); });
+		usleep(300000);
+		const long pooled_before = pooled(admin.get());
+		setNativeMode(admin.get(), true, false);   // the libpq connection stays pooled
+		const long ok_before = connOK(admin.get());
+		r[1] = run([&]() {
+			auto c = client();
+			pbe(*c, "s_stale", "SELECT 3 AS stale_" + tag);
+			c->sendSync();
+			return replies(*c);
+		});
+		const long opened = connOK(admin.get()) - ok_before;
+		ok(pre == "T D=1 C Z(I)" && pooled_before == 1, "stale libpq connection: one is pooled before the switch [%s, pooled %ld]", pre.c_str(), pooled_before);
+		ok(r[1] == "1 2 D=3 C Z(I)" && opened == 1,
+			"stale libpq connection: the unit opens a native connection instead of using it [%s, opened %ld]", r[1].c_str(), opened);
+	}
+
+	// --- A client Flush: the same answer as before the batch path existed.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "s_flush", "SELECT 1 AS flush_" + tag + "_" + mode_name[m]);
+			c->sendMessage('H', {});
+			return replies(*c);
+		});
+	}
+	ok(r[0] == r[1], "client Flush: same replies as libpq [native: %s] [libpq: %s]", r[1].c_str(), r[0].c_str());
+
+	// --- A large unit: a thousand INSERTs in one batch, all applied in order.
+	{
+		setNativeMode(admin.get(), true);
+		const std::string tbl = "extq_many_" + tag;
+		exec(be.get(), "CREATE TABLE " + tbl + " (a int)");
+		r[1] = run([&]() {
+			auto c = client();
+			c->prepareStatement("s_many", "INSERT INTO " + tbl + " VALUES ($1::int)", false);
+			for (int i = 0; i < 1000; i++) {
+				c->bindStatement("s_many", "", { text(std::to_string(i)) }, {}, false);
+				c->executePortal("", 0, false);
+			}
+			c->sendSync();
+			const std::string out = replies(*c);
+			size_t completes = 0;
+			for (size_t p = out.find('C'); p != std::string::npos; p = out.find('C', p + 1)) completes++;
+			return std::to_string(completes) + " " + out.substr(out.size() - 4);
+		});
+		ok(r[1] == "1000 Z(I)", "large unit: every Execute answered [%s]", r[1].c_str());
+		ok(execLong(be.get(), "SELECT count(*) FROM " + tbl) == 1000 && execLong(be.get(), "SELECT sum(a) FROM " + tbl) == 499500,
+			"large unit: every row written");
+		exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
+	}
+
+	// --- A large result inside a unit is passed on as it arrives, and the unit after it is unaffected.
+	{
+		setNativeMode(admin.get(), true);
+		r[1] = run([&]() {
+			auto c = client();
+			pbe(*c, "s_big", "SELECT repeat('x', 1000) FROM generate_series(1, 20000) AS big_" + tag);
+			pbe(*c, "s_after_big", "SELECT 11 AS after_big_" + tag);
+			c->sendSync();
+			const std::string out = replies(*c);
+			size_t rows = 0;
+			for (size_t p = out.find("D="); p != std::string::npos; p = out.find("D=", p + 1)) rows++;
+			const std::string tail = " C 1 2 D=11 C Z(I)";
+			const bool tail_ok = out.size() > tail.size() && out.compare(out.size() - tail.size(), tail.size(), tail) == 0;
+			return std::to_string(rows) + (tail_ok ? " tail ok" : " tail: " + out.substr(out.size() > 40 ? out.size() - 40 : 0));
+		});
+		ok(r[1] == "20001 tail ok", "large result: all rows, then the next statement's [%s]", r[1].c_str());
+	}
+
+	// --- Implicit Sync: a simple Query right after an extended unit without Sync.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "s_impl", "SELECT 12 AS implicit_" + tag + "_" + mode_name[m]);
+			c->sendQuery("SELECT 13");
+			return replies(*c);
+		});
+	}
+	ok(r[1] == "1 2 D=12 C T D=13 C Z(I)", "implicit Sync: one ReadyForQuery, after the simple Query [%s]", r[1].c_str());
+	ok(r[0] == r[1], "implicit Sync: same replies as libpq [libpq: %s]", r[0].c_str());
+
+	dropRules(admin.get());
+	setNativeMode(admin.get(), false);
+	return exit_status();
+}
