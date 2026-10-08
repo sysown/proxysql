@@ -198,6 +198,14 @@ struct PgSQL_Portal_Entry {
 	const PgSQL_Connection* bound_conn = nullptr;
 };
 
+// A portal as a message being handled finds it: opened by a Bind earlier in the unit being
+// buffered, or held in named_portals. 'name' is the map's key, which outlives the message.
+struct PgSQL_Portal_Ref {
+	const char* name = nullptr;
+	const PgSQL_Bind_Message* bind = nullptr;
+	std::shared_ptr<const PgSQL_STMT_Global_info> stmt;
+};
+
 class PgSQL_Query_Info {
 public:
 	unsigned long long start_time;
@@ -293,7 +301,7 @@ private:
 	// registry matches the replies. Replies ProxySQL gives itself meanwhile wait in the registry, and
 	// what they change waits until they settle.
 	struct PgSQL_Extq_Entry {
-		char type = 0;                    // 'P', 'D' or 'E' when sent; 0 for ProxySQL's own reply
+		char type = 0;                    // 'P', 'B', 'D', 'E' or 'C' when sent; 0 for ProxySQL's own reply
 		char target = 0;                  // Describe: 'S' or 'P'
 		char commit = 0;                  // once it succeeds: 'I' adds name to the client's statements, 'C' removes it
 		bool describe_portal = false;     // Execute: the client's Describe('P') goes with it
@@ -301,6 +309,8 @@ private:
 		std::string local;                // ProxySQL's own reply, or its error when 'error' is set
 		bool error = false;
 		std::string name;                 // the client's statement name
+		std::string portal;               // a named portal: its Bind, Close, Execute or Describe
+		uint32_t max_rows = 0;            // a named Execute: its row limit
 		std::shared_ptr<const PgSQL_STMT_Global_info> stmt;
 		std::unique_ptr<const PgSQL_Bind_Message> bind;  // Execute: the client's Bind, which it carries
 		std::string bind_bytes;           // Describe('P'): the Bind of the portal, sent before it
@@ -329,6 +339,7 @@ private:
 	PgSQL_Extended_Query_Info extq_eqi {};
 	std::map<std::string, std::shared_ptr<const PgSQL_STMT_Global_info>> extq_names;  // Parsed in this unit (null: closed)
 	std::map<uint64_t, std::shared_ptr<const PgSQL_STMT_Global_info>> extq_new_stmts; // texts no backend had, by hash
+	std::map<std::string, PgSQL_Extq_Entry*> extq_portals;  // opened (the Bind's entry) or closed (null) in this unit
 	PgSQL_Extq_Commit extq_pending;       // what the reply a handler just gave commits once it settles
 	unsigned long long extq_last_settle = 0;
 	int extq_swapped = -1;                // entry whose query info the error path is holding in CurrentQuery
@@ -429,6 +440,7 @@ private:
 	bool extq_can_buffer();
 	bool extq_must_stop(const PktType& msg);
 	std::shared_ptr<const PgSQL_STMT_Global_info> extq_find_stmt(const char* name);
+	bool extq_find_portal(const char* name, PgSQL_Portal_Ref& ref);
 	void extq_buffer_message();
 	int extq_after_message(int rc, unsigned int out_before, enum session_status st_before);
 	int extq_finish(bool synced);

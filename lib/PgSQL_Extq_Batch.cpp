@@ -13,6 +13,7 @@ void PgSQL_Extq_Registry::clear() {
 	saw_param_desc_ = false;
 	rows_ = 0;
 	affected_rows_ = UINT64_MAX;
+	suspended_ = false;
 }
 
 bool PgSQL_Extq_Registry::needs_backend() const {
@@ -42,7 +43,8 @@ void PgSQL_Extq_Registry::event(const Extq_Slot& s, Extq_Outcome o) {
 		return;   // a Sync answers no client message the session has to settle
 	}
 	const bool own = (o == Extq_Outcome::OK || o == Extq_Outcome::ERROR);
-	events_.push_back({ s.entry, s.kind, s.reply, o, own ? rows_ : 0, own ? affected_rows_ : UINT64_MAX });
+	events_.push_back({ s.entry, s.kind, s.reply, o, own ? rows_ : 0, own ? affected_rows_ : UINT64_MAX,
+		own && suspended_ });
 }
 
 // ProxySQL's own replies go out as soon as everything before them is answered, never earlier:
@@ -81,6 +83,7 @@ Extq_Verdict PgSQL_Extq_Registry::complete_head(std::string& out) {
 	slots_.pop_front();
 	rows_ = 0;
 	affected_rows_ = UINT64_MAX;
+	suspended_ = false;
 	saw_param_desc_ = false;
 	emit_due(out);
 	return reply == Extq_Reply::DROP ? Extq_Verdict::DROP : Extq_Verdict::RELAY;
@@ -97,6 +100,7 @@ void PgSQL_Extq_Registry::on_error() {
 	slots_.pop_front();
 	rows_ = 0;
 	affected_rows_ = UINT64_MAX;
+	suspended_ = false;
 	while (slots_.empty() == false && slots_.front().kind != Extq_Kind::SYNC) {
 		event(slots_.front(), Extq_Outcome::SKIPPED);
 		slots_.pop_front();
@@ -167,7 +171,11 @@ Extq_Verdict PgSQL_Extq_Registry::on_message(char type, const unsigned char* pay
 			affected_rows_ = r.is_select ? UINT64_MAX : r.rows;
 			return complete_head(out);
 		}
-		if (type == 'I' || type == 's') return complete_head(out);
+		if (type == 's') {
+			suspended_ = true;
+			return complete_head(out);
+		}
+		if (type == 'I') return complete_head(out);
 		break;
 	case Extq_Kind::SYNC:
 		if (type == 'Z') {

@@ -37,6 +37,7 @@ struct Extq_Event {
 	Extq_Outcome outcome;
 	uint64_t rows;           // DataRows of an Execute
 	uint64_t affected_rows;  // from an Execute's CommandComplete; UINT64_MAX when it has none
+	bool suspended;          // an Execute that stopped at its row limit (PortalSuspended)
 };
 
 enum class Extq_Verdict : uint8_t { RELAY, DROP, BAD };
@@ -78,6 +79,7 @@ private:
 	bool saw_param_desc_ = false;
 	uint64_t rows_ = 0;
 	uint64_t affected_rows_ = UINT64_MAX;
+	bool suspended_ = false;
 };
 
 #endif // __CLASS_PGSQL_EXTQ_BATCH_H

@@ -3641,7 +3641,8 @@ handler_again:
 					// Unix-socket server, or a connection pooled before the native protocol was turned on):
 					// a pooled one is swapped for a native one, otherwise the unit runs one message at a time.
 					if (extq_allowed && extq_buffering == false && (status == PROCESSING_STMT_PREPARE ||
-						status == PROCESSING_STMT_DESCRIBE || status == PROCESSING_STMT_EXECUTE)) {
+						status == PROCESSING_STMT_DESCRIBE || status == PROCESSING_STMT_EXECUTE ||
+						status == PROCESSING_STMT_BIND || status == PROCESSING_STMT_CLOSE)) {
 						if (myconn->native_mode) {
 							extq_buffering = true;
 							extq_buffer_message();
@@ -7501,8 +7502,8 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 			}
 			// Registry lookup: a missing portal returns the same UNDEFINED_CURSOR bytes as
 			// the unnamed path, now with the real name.
-			auto it = named_portals.find(describe_data.stmt_name);
-			if (it == named_portals.end()) {
+			PgSQL_Portal_Ref portal;
+			if (!extq_find_portal(describe_data.stmt_name, portal)) {
 				const std::string& errmsg = "portal \"" + std::string(describe_data.stmt_name) + "\" does not exist";
 				handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_UNDEFINED_CURSOR, errmsg.c_str(), false);
 				return 2;
@@ -7519,9 +7520,9 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 					}
 				}
 			}
-			portal_name = it->first.c_str(); // STABLE registry key (describe_msg is freed later)
-			stmt_client_name = it->second.bind_msg->data().stmt_name;
-			named_portal_stmt_info = it->second.stmt_info.get();
+			portal_name = portal.name; // STABLE registry key (describe_msg is freed later)
+			stmt_client_name = portal.bind->data().stmt_name;
+			named_portal_stmt_info = portal.stmt.get();
 			break;
 		}
 
@@ -7679,8 +7680,8 @@ int PgSQL_Session::handle_post_sync_close_message(PgSQL_Close_Message* close_msg
 				handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "only unnamed portals are supported", false);
 				return 2;
 			}
-			auto it = named_portals.find(close_data.stmt_name);
-			if (it == named_portals.end()) {
+			PgSQL_Portal_Ref portal;
+			if (!extq_find_portal(close_data.stmt_name, portal)) {
 				// Portal we never registered. PostgreSQL's Close is idempotent — it
 				// returns a bare CloseComplete for a non-existent portal. We have no
 				// registry record and thus no guaranteed backend holding it, so we
@@ -7696,12 +7697,12 @@ int PgSQL_Session::handle_post_sync_close_message(PgSQL_Close_Message* close_msg
 			// the entry on rc0. Source the resolved statement from the registry entry so
 			// process_query / logging / the epilogue have a valid stmt_info (the CLOSE_P
 			// wire drive itself needs only the portal name).
-			closing_portal_name = it->first;
-			const PgSQL_STMT_Global_info* stmt_info = it->second.stmt_info.get();
+			closing_portal_name = portal.name;
+			const PgSQL_STMT_Global_info* stmt_info = portal.stmt.get();
 			assert(stmt_info);
 			PgSQL_Extended_Query_Info& extended_query_info = CurrentQuery.extended_query_info;
 			extended_query_info.stmt_client_portal_name = closing_portal_name.c_str(); // stable session-owned
-			extended_query_info.stmt_client_name = it->second.bind_msg->data().stmt_name;
+			extended_query_info.stmt_client_name = portal.bind->data().stmt_name;
 			extended_query_info.stmt_global_id = stmt_info->statement_id;
 			extended_query_info.stmt_info = stmt_info;
 			extended_query_info.stmt_type = 'P';
@@ -7809,7 +7810,7 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 	std::shared_ptr<const PgSQL_STMT_Global_info> stmt_info_sp;
 	const PgSQL_STMT_Global_info* stmt_info;
 	if (is_named_portal) {
-		stmt_info_sp = client_myds->myconn->local_stmts->find_shared_stmt_info_from_stmt_name(stmt_client_name);
+		stmt_info_sp = extq_find_stmt(stmt_client_name);
 		stmt_info = stmt_info_sp.get();
 	} else {
 		stmt_info = extq_buffering ? extq_find_stmt(stmt_client_name).get() :
@@ -8028,24 +8029,23 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 		}
 		// Registry lookup: a missing portal returns the same ERRCODE_UNDEFINED_CURSOR
 		// "portal \"X\" does not exist" bytes as the unnamed path, now with the real name.
-		auto it = named_portals.find(portal_name);
-		if (it == named_portals.end()) {
+		PgSQL_Portal_Ref portal;
+		if (!extq_find_portal(portal_name, portal)) {
 			const std::string& errmsg = "portal \"" + std::string(portal_name) + "\" does not exist";
 			handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_UNDEFINED_CURSOR, errmsg.c_str(), false);
 			return 2;
 		}
-		PgSQL_Portal_Entry& entry = it->second;
-		stmt_info = entry.stmt_info.get();
+		stmt_info = portal.stmt.get();
 		assert(stmt_info); // a registered portal always carries its resolved global stmt
 		// The portal is ALREADY bound on the backend: the native drive skips Bind and
 		// emits only Execute(portal, max_rows) (+ folded Describe('P') iff requested).
 		// stmt_client_portal_name points at the STABLE map key (execute_msg is freed at
 		// pgsql_real_query.end(); the key lives with the registry entry).
-		extended_query_info.stmt_client_portal_name = it->first.c_str();
-		extended_query_info.stmt_client_name = entry.bind_msg->data().stmt_name;
+		extended_query_info.stmt_client_portal_name = portal.name;
+		extended_query_info.stmt_client_name = portal.bind->data().stmt_name;
 		extended_query_info.stmt_global_id = stmt_info->statement_id;
 		extended_query_info.stmt_info = stmt_info;
-		extended_query_info.bind_msg = entry.bind_msg.get();
+		extended_query_info.bind_msg = portal.bind;
 		// max_rows honored on the wire for NAMED portals only (unnamed forces 0 below —
 		// invariant 2). Resume after PortalSuspended is just another Execute here.
 		extended_query_info.max_rows = execute_data.max_rows;
@@ -8358,22 +8358,23 @@ bool PgSQL_Session::extq_can_buffer() {
 	return true;
 }
 
-// A message the batch cannot carry: one naming a portal (named portals keep the one-message path),
-// or a statement the session handles itself.
+// A message the batch cannot carry: a statement the session handles itself, run by a Parse or by an
+// Execute of the unnamed portal or of a named one.
 bool PgSQL_Session::extq_must_stop(const PktType& msg) {
 	return std::visit([&](auto&& m) -> bool {
 		using T = std::decay_t<decltype(m)>;
 		if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Parse_Message>>) {
 			return extq_special_text(m->data().query_string);
-		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Bind_Message>>) {
-			return m->data().portal_name[0] != '\0';
 		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Execute_Message>>) {
-			if (m->data().portal_name[0] != '\0') return true;
+			if (m->data().portal_name[0] != '\0') {
+				PgSQL_Portal_Ref portal;
+				return extq_find_portal(m->data().portal_name, portal) && extq_special_stmt(*portal.stmt);
+			}
 			if (!bind_waiting_for_execute) return false;
 			const auto s = extq_find_stmt(bind_waiting_for_execute->data().stmt_name);
 			return s && extq_special_stmt(*s);
-		} else {   // Describe, Close
-			return m->data().stmt_type == 'P' && m->data().stmt_name[0] != '\0';
+		} else {   // Bind, Describe, Close
+			return false;
 		}
 	}, msg);
 }
@@ -8390,9 +8391,34 @@ std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_Session::extq_find_stmt(cons
 	return client_myds->myconn->local_stmts->find_shared_stmt_info_from_stmt_name(name);
 }
 
-// The message the handler has just readied for the backend (status PROCESSING_STMT_PREPARE, _DESCRIBE
-// or _EXECUTE, as it left it) joins the batch instead of being sent. Its query info and rule result
-// wait in the entry until its replies settle.
+// The portal a client name refers to. While a unit is buffered, a portal bound or closed earlier in
+// the unit counts as it will be once those replies settle. False when there is none.
+bool PgSQL_Session::extq_find_portal(const char* name, PgSQL_Portal_Ref& ref) {
+	if (extq_buffering) {
+		const auto it = extq_portals.find(name);
+		if (it != extq_portals.end()) {
+			if (it->second == nullptr) {
+				return false;
+			}
+			ref.name = it->first.c_str();
+			ref.bind = it->second->bind.get();
+			ref.stmt = it->second->stmt;
+			return true;
+		}
+	}
+	const auto it = named_portals.find(name);
+	if (it == named_portals.end()) {
+		return false;
+	}
+	ref.name = it->first.c_str();
+	ref.bind = it->second.bind_msg.get();
+	ref.stmt = it->second.stmt_info;
+	return true;
+}
+
+// The message the handler has just readied for the backend (status PROCESSING_STMT_PREPARE, _BIND,
+// _DESCRIBE, _EXECUTE or _CLOSE, as it left it) joins the batch instead of being sent. Its query info
+// and rule result wait in the entry until its replies settle.
 void PgSQL_Session::extq_buffer_message() {
 	extq_entries.emplace_back();
 	PgSQL_Extq_Entry& e = extq_entries.back();
@@ -8437,6 +8463,13 @@ void PgSQL_Session::extq_buffer_message() {
 		e.target = eqi.stmt_type;
 		if (e.target == 'S') {
 			e.stmt = extq_find_stmt(eqi.stmt_client_name);
+		} else if (eqi.stmt_client_portal_name && eqi.stmt_client_portal_name[0] != '\0') {
+			// A named portal, opened earlier in the unit or before it: described by name.
+			PgSQL_Portal_Ref portal;
+			extq_find_portal(eqi.stmt_client_portal_name, portal);
+			e.portal = eqi.stmt_client_portal_name;
+			e.name = eqi.stmt_client_name;
+			e.stmt = portal.stmt;
 		} else {
 			// A Describe of the unnamed portal with no Execute right after it. The portal is bound
 			// only when its Execute is sent, so the Bind goes out ahead of the Describe.
@@ -8446,17 +8479,59 @@ void PgSQL_Session::extq_buffer_message() {
 		}
 		break;
 	case PROCESSING_STMT_EXECUTE:
-		// The Execute carries the client's Bind, as on the one-message path.
 		e.type = 'E';
-		e.bind = std::move(bind_waiting_for_execute);
-		e.stmt = extq_find_stmt(e.bind->data().stmt_name);
 		e.describe_portal = (eqi.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0;
+		if (eqi.flags & PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND) {
+			// A named portal: run by name, with its row limit and no Bind.
+			PgSQL_Portal_Ref portal;
+			extq_find_portal(eqi.stmt_client_portal_name, portal);
+			e.portal = eqi.stmt_client_portal_name;
+			e.name = eqi.stmt_client_name;
+			e.stmt = portal.stmt;
+			e.max_rows = eqi.max_rows;
+		} else {
+			// The Execute carries the client's Bind, as on the one-message path.
+			e.bind = std::move(bind_waiting_for_execute);
+			e.stmt = extq_find_stmt(e.bind->data().stmt_name);
+		}
 		break;
+	case PROCESSING_STMT_BIND:
+		// A named Bind. The portal counts as open for the rest of the unit; named_portals gets it
+		// when its BindComplete settles, so a Bind the backend refuses leaves no trace.
+		e.type = 'B';
+		e.portal = pending_named_bind.portal_name;
+		e.bind = std::move(pending_named_bind.bind_msg);
+		e.stmt = std::move(pending_named_bind.stmt_info);
+		e.name = e.bind->data().stmt_name;
+		pending_named_bind.portal_name.clear();
+		pending_named_bind.active = false;
+		extq_portals[e.portal] = &e;
+		break;
+	case PROCESSING_STMT_CLOSE: {
+		// A named Close. The portal counts as closed for the rest of the unit; named_portals drops it
+		// when its CloseComplete settles.
+		PgSQL_Portal_Ref portal;
+		extq_find_portal(closing_portal_name.c_str(), portal);
+		e.type = 'C';
+		e.portal = std::move(closing_portal_name);
+		closing_portal_name.clear();
+		e.name = eqi.stmt_client_name;
+		e.stmt = portal.stmt;
+		extq_portals[e.portal] = nullptr;
+		break;
+	}
 	default:
 		assert(0);
 	}
 	e.info.sess = this;
 	e.info.swap(CurrentQuery);
+	if (e.portal.empty() == false) {
+		// The query info pointed at names inside the portal's Bind, which a Close later in the unit
+		// can free before this entry is logged: point it at the entry's own copies.
+		e.info.extended_query_info.stmt_client_portal_name = e.portal.c_str();
+		e.info.extended_query_info.stmt_client_name = e.name.c_str();
+		e.info.extended_query_info.bind_msg = nullptr;
+	}
 	GloPgQPro->delete_QP_out(qpo);
 	previous_hostgroup = current_hostgroup;
 }
@@ -8598,6 +8673,9 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 			if (e.target == 'S') {
 				pg_build_describe(extq_out, 'S', backend_name(e, i));
 				extq_registry.push({ Extq_Kind::DESCRIBE_S, Extq_Reply::RELAY, i, std::string() });
+			} else if (e.portal.empty() == false) {
+				pg_build_describe(extq_out, 'P', e.portal.c_str());
+				extq_registry.push({ Extq_Kind::DESCRIBE_P, Extq_Reply::RELAY, i, std::string() });
 			} else {
 				if (!pg_build_bind_rename(extq_out, (const unsigned char*)e.bind_bytes.data(), e.bind_bytes.size(), backend_name(e, i))) {
 					return false;
@@ -8608,6 +8686,16 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 			}
 			break;
 		case 'E': {
+			if (e.portal.empty() == false) {
+				// Bound already, earlier in the unit or before it: only the Execute goes.
+				if (e.describe_portal) {
+					pg_build_describe(extq_out, 'P', e.portal.c_str());
+					extq_registry.push({ Extq_Kind::DESCRIBE_P, Extq_Reply::RELAY, i, std::string() });
+				}
+				pg_build_execute(extq_out, e.portal.c_str(), e.max_rows);
+				extq_registry.push({ Extq_Kind::EXECUTE, Extq_Reply::RELAY, i, std::string() });
+				break;
+			}
 			// Its BindComplete was given to the client when the Bind was handled.
 			const PtrSize_t& raw = e.bind->get_raw_pkt();
 			if (!pg_build_bind_rename(extq_out, (const unsigned char*)raw.ptr, raw.size, backend_name(e, i))) {
@@ -8622,6 +8710,20 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 			extq_registry.push({ Extq_Kind::EXECUTE, Extq_Reply::RELAY, i, std::string() });
 			break;
 		}
+		case 'B': {
+			// The client's own Bind, with the connection's name for the statement; the client gets
+			// the backend's BindComplete.
+			const PtrSize_t& raw = e.bind->get_raw_pkt();
+			if (!pg_build_bind_rename(extq_out, (const unsigned char*)raw.ptr, raw.size, backend_name(e, i))) {
+				return false;
+			}
+			extq_registry.push({ Extq_Kind::BIND, Extq_Reply::RELAY, i, std::string() });
+			break;
+		}
+		case 'C':
+			pg_build_close(extq_out, 'P', e.portal.c_str());
+			extq_registry.push({ Extq_Kind::CLOSE, Extq_Reply::RELAY, i, std::string() });
+			break;
 		}
 	}
 	if (extq_sync) {
@@ -8763,14 +8865,32 @@ void PgSQL_Session::extq_settle(PgSQL_Data_Stream* myds) {
 			// Only a statement's last reply settles it: not ProxySQL's own Parse, not the Bind an
 			// Execute carries, not a Describe that goes with an Execute or its Bind.
 			const bool last = (e.type == 'P' && ev.kind == Extq_Kind::PARSE) ||
+				(e.type == 'B' && ev.kind == Extq_Kind::BIND) ||
+				(e.type == 'C' && ev.kind == Extq_Kind::CLOSE) ||
 				(e.type == 'D' && (ev.kind == Extq_Kind::DESCRIBE_S || ev.kind == Extq_Kind::DESCRIBE_P)) ||
 				(e.type == 'E' && ev.kind == Extq_Kind::EXECUTE);
 			if (last == false) {
 				continue;
 			}
 			extq_commit(e);
-			if (e.type == 'E') {
+			if (e.type == 'B') {
+				// The portal is open on this connection now.
+				PgSQL_Portal_Entry& p = named_portals[e.portal];
+				p.bind_msg = std::move(e.bind);
+				p.stmt_info = e.stmt;
+				p.bound_on_backend = true;
+				p.suspended = false;
+				p.bound_conn = myconn;
+			} else if (e.type == 'C') {
+				named_portals.erase(e.portal);
+			} else if (e.type == 'E') {
 				extq_backend_used = true;
+				if (e.portal.empty() == false) {
+					const auto it = named_portals.find(e.portal);
+					if (it != named_portals.end()) {
+						it->second.suspended = ev.suspended;
+					}
+				}
 			}
 		} else if (ev.kind != Extq_Kind::PARSE &&
 			myconn->get_error_code() == PGSQL_ERROR_CODES::ERRCODE_INVALID_SQL_STATEMENT_NAME) {
@@ -8894,6 +9014,7 @@ void PgSQL_Session::extq_clear() {
 	extq_eqi = {};
 	extq_names.clear();
 	extq_new_stmts.clear();
+	extq_portals.clear();
 	extq_pending = {};
 	extq_swapped = -1;
 }
