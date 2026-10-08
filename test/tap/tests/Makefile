@@ -523,6 +523,7 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-native_portal_backend_kill-t \
 	pgsql-native_extq_orphaned_sync-t \
 	pgsql-native_extq_batch-t \
+	pgsql-native_extq_named_portals-t \
 	pgsql-discard_all_txn_block-t \
 	test_ffto_pgsql_pipeline-t \
 	test_ffto_pgsql_stmt_portal-t
@@ -548,6 +549,13 @@ PGSQL_MOCK_BACKEND_TESTS := \
 
 $(PGSQL_MOCK_BACKEND_TESTS): %: %.cpp pgsql_mock_backend.cpp pgsql_mock_backend.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< pgsql_mock_backend.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
+# Tests that drive the mock backend with raw extended-query messages need both.
+PG_LITE_CLIENT_MOCK_BACKEND_TESTS := \
+	pgsql-native_extq_named_portals_mock-t
+
+$(PG_LITE_CLIENT_MOCK_BACKEND_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h pgsql_mock_backend.cpp pgsql_mock_backend.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< pg_lite_client.cpp pgsql_mock_backend.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
 
 MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)

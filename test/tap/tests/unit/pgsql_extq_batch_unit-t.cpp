@@ -233,8 +233,31 @@ static void test_all_local() {
 	ok(out == PARSE_OK + CLOSE_OK && reg.complete(), "all local: every reply out at start");
 }
 
+// B(p1) E(p1,1) E(p1,0) S: an Execute that stops at max_rows ends on PortalSuspended, and its
+// event says so; one that runs to the end does not.
+static void test_suspended_execute() {
+	PgSQL_Extq_Registry reg;
+	reg.push(slot(Extq_Kind::BIND, Extq_Reply::RELAY, 0));
+	reg.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 1));
+	reg.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 2));
+	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 3));
+	std::string out;
+	reg.start(out);
+	feed(reg, '2', "", out);
+	ok(feed(reg, 'D', "x", out) == Extq_Verdict::RELAY && feed(reg, 's', "", out) == Extq_Verdict::RELAY,
+		"suspended: DataRow and PortalSuspended relayed");
+	feed(reg, 'D', "y", out);
+	feed(reg, 'C', std::string("SELECT 1\0", 9), out);
+	ok(feed(reg, 'Z', "T", out) == Extq_Verdict::RELAY && reg.complete(), "suspended: complete at ReadyForQuery");
+	auto ev = events(reg);
+	ok(ev.size() == 3 && ev[1].rows == 1 && ev[1].suspended == true && ev[1].outcome == Extq_Outcome::OK,
+		"suspended: first Execute reports PortalSuspended");
+	ok(ev.size() == 3 && ev[2].rows == 1 && ev[2].suspended == false && ev[2].outcome == Extq_Outcome::OK,
+		"suspended: second Execute ran to the end");
+}
+
 int main() {
-	plan(42);
+	plan(46);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 	test_plain_unit();             // 9
@@ -246,6 +269,7 @@ int main() {
 	test_local_error();            // 4
 	test_passthrough_and_bad();    // 5
 	test_all_local();              // 2
+	test_suspended_execute();      // 4
 	test_cleanup_minimal();
 	return exit_status();
 }
