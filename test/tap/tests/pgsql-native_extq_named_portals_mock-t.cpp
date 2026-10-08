@@ -12,6 +12,7 @@
  * this one only checks how the unit travels.
  */
 
+#include <ctime>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -114,6 +115,11 @@ static std::string replies(PgConnection& c) {
 	return out;
 }
 
+static std::string simple(PgConnection& c, const std::string& sql) {
+	c.sendQuery(sql);
+	return replies(c);
+}
+
 // One case: the mock answers the warm-up, then each unit with the reply given for it. The
 // client sends the warm-up and then the units, and reports all it received, " | " between units.
 struct Unit {
@@ -169,6 +175,9 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 	plan(11);
+	// Statement texts new to the proxy on every run, for the cases whose canned replies need the
+	// client's own Parses to reach the backend (a Parse of a known text is answered by ProxySQL).
+	const std::string tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr adminOwner = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
 	PGconn* admin = adminOwner.get();
@@ -248,9 +257,9 @@ int main(int, char**) {
 	// M5: a named portal run while the unnamed portal waits for its Execute. The unnamed Bind goes
 	// out with its Execute, and its BindComplete is ProxySQL's own, so the backend's is dropped.
 	runCase(admin, mock, ip, "M5 named and unnamed portals interleaved", {
-		{ [](PgConnection& c) {
-			c.prepareStatement("s1", "SELECT 7 AS n", false);
-			c.prepareStatement("s2", "SELECT 8 AS n", false);
+		{ [&](PgConnection& c) {
+			c.prepareStatement("s1", "SELECT 7 AS m5a_" + tag, false);
+			c.prepareStatement("s2", "SELECT 8 AS m5b_" + tag, false);
 			c.bindStatement("s1", "p1", {}, {}, false);
 			c.bindStatement("s2", "", {}, {}, false);
 			c.executePortal("p1", 0, false);
@@ -260,34 +269,41 @@ int main(int, char**) {
 		     + BIND_OK + pgmb_data_row_1col("8") + pgmb_command_complete("SELECT 1") + pgmb_ready_for_query('I') } },
 		"1 1 2 2 D=7 C D=8 C Z(I)");
 
-	// M4: the backend reads a unit that opens a portal and then drops the connection. The client
-	// gets an error, not a hang, and the portal never opened: the next Execute of it is refused.
+	// M4: inside a transaction, the backend answers a unit's Parse and Bind and then drops the
+	// connection. ProxySQL keeps the client's session in a failed transaction (the replies that came
+	// before the drop are not passed on), and the portal the Bind opened went with the connection:
+	// after ROLLBACK, an Execute of it is refused by ProxySQL itself. Were the portal still
+	// registered, the Execute would go to a new backend connection.
 	{
 		if (!resetMockPool(admin, ip, mock.port())) BAIL_OUT("could not reset the mock pool");
 		mock.set_script({ step_expect_startup(), step_send(handshake()),
 		                  step_expect_query(), step_send(pgmb_simple_result("c", "1", 1)),
-		                  step_expect_sync(), step_close() });
+		                  step_expect_query(true), step_send(pgmb_command_complete("BEGIN") + pgmb_ready_for_query('T')),
+		                  step_expect_sync(), step_send(PARSE_OK + BIND_OK), step_close() });
 		mock.reset_stats();
-		std::string first, second;
+		std::string got;
 		try {
 			PgConnection c(3000);
 			c.connect(cl.pgsql_host, cl.pgsql_port, MOCK_USER, MOCK_USER, MOCK_PASS);
 			c.sendQuery("SELECT 1");
 			replies(c);
-			c.prepareStatement("s", "SELECT 7 AS n", false);
+			got = simple(c, "BEGIN");
+			c.prepareStatement("s", "SELECT 7 AS m4_" + tag, false);
 			c.bindStatement("s", "p1", {}, {}, false);
 			c.executePortal("p1", 0, false);
 			c.sendSync();
-			first = replies(c);
+			got += " | " + replies(c);
+			got += " | " + simple(c, "ROLLBACK");
 			c.executePortal("p1", 0, false);
 			c.sendSync();
-			second = replies(c);
+			got += " | " + replies(c);
 		} catch (const PgException& e) {
-			(first.empty() ? first : second) = std::string("threw: ") + e.what();
+			got += std::string(" | threw: ") + e.what();
 		}
-		ok(first.rfind("E(", 0) == 0 && second == "E(34000) Z(I)",
-		   "M4 backend drops after a unit that opens a portal: error, then the portal is unknown [%s | %s]",
-		   first.c_str(), second.c_str());
+		const std::string expected = "C Z(T) | E(25P02) Z(E) | C Z(I) | E(34000) Z(I)";
+		ok(got == expected && mock.connections_accepted() == 1,
+		   "M4 backend drops mid-unit in a transaction: failed transaction, then the portal is unknown "
+		   "[%s] expected [%s], backend connections %d (expected 1)", got.c_str(), expected.c_str(), mock.connections_accepted());
 	}
 
 	mock.stop();
