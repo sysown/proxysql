@@ -174,7 +174,7 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(11);
+	plan(15);
 	// Statement texts new to the proxy on every run, for the cases whose canned replies need the
 	// client's own Parses to reach the backend (a Parse of a known text is answered by ProxySQL).
 	const std::string tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
@@ -305,6 +305,52 @@ int main(int, char**) {
 		   "M4 backend drops mid-unit in a transaction: failed transaction, then the portal is unknown "
 		   "[%s] expected [%s], backend connections %d (expected 1)", got.c_str(), expected.c_str(), mock.connections_accepted());
 	}
+
+	// M6, M7: ProxySQL refuses a message itself inside a transaction. The backend must still fail
+	// its transaction there, so ProxySQL sends it a statement that cannot parse, then a Sync, and the
+	// client gets ProxySQL's own error in place of the backend's. M6: the refused message comes
+	// first; M7: after work buffered in the same unit.
+	auto txnCase = [&](const char* label, const std::function<void(PgConnection&)>& send, const std::string& backend_reply,
+	                   const std::string& expected, const std::string& wire) {
+		if (!resetMockPool(admin, ip, mock.port())) BAIL_OUT("could not reset the mock pool");
+		mock.set_script({ step_expect_startup(), step_send(handshake()),
+		                  step_expect_query(), step_send(pgmb_simple_result("c", "1", 1)),
+		                  step_expect_query(true), step_send(pgmb_command_complete("BEGIN") + pgmb_ready_for_query('T')),
+		                  step_expect_sync(), step_send(backend_reply), step_sleep(3000) });
+		mock.reset_stats();
+		std::string got;
+		try {
+			PgConnection c(3000);
+			c.connect(cl.pgsql_host, cl.pgsql_port, MOCK_USER, MOCK_USER, MOCK_PASS);
+			c.sendQuery("SELECT 1");
+			replies(c);
+			c.sendQuery("BEGIN");
+			replies(c);
+			send(c);
+			got = replies(c);
+		} catch (const PgException& e) {
+			got = std::string("threw: ") + e.what();
+		}
+		const std::vector<std::string> seen = mock.unit_types();
+		ok(got == expected, "%s: client got [%s] expected [%s]", label, got.c_str(), expected.c_str());
+		ok(seen.size() == 1 && seen[0] == wire, "%s: backend read [%s] expected [%s]", label,
+		   seen.empty() ? "" : seen[0].c_str(), wire.c_str());
+	};
+	const std::string syntax_error = pgmb_error_response("42601", "syntax error") + pgmb_ready_for_query('E');
+	txnCase("M6 refused first message in a transaction", [&](PgConnection& c) {
+		c.bindStatement("none_" + tag, "", {}, {}, false);
+		c.executePortal("", 0, false);
+		c.sendSync();
+	}, syntax_error, "E(26000) Z(E)", "PS");
+	txnCase("M7 refused message after buffered work in a transaction", [&](PgConnection& c) {
+		c.prepareStatement("s", "SELECT 7 AS m7_" + tag, false);
+		c.bindStatement("s", "", {}, {}, false);
+		c.executePortal("", 0, false);
+		c.bindStatement("none_" + tag, "", {}, {}, false);
+		c.executePortal("", 0, false);
+		c.sendSync();
+	}, PARSE_OK + BIND_OK + pgmb_data_row_1col("7") + pgmb_command_complete("SELECT 1") + syntax_error,
+	   "1 2 D=7 C E(26000) Z(E)", "PBEPS");
 
 	mock.stop();
 	return exit_status();

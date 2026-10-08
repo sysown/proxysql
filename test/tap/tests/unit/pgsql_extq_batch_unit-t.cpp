@@ -256,8 +256,34 @@ static void test_suspended_execute() {
 		"suspended: second Execute ran to the end");
 }
 
+// P(relayed) then ProxySQL's own failing Parse in place of its own error, then Sync: the backend's
+// error is swapped for ProxySQL's, the backend's ReadyForQuery reaches the client.
+static void test_substitute() {
+	PgSQL_Extq_Registry reg;
+	const std::string own_error("E\0\0\0\x0bS26000\0\0", 12);
+	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::RELAY, 0));
+	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::SUBSTITUTE, 1, own_error));
+	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 2));
+	ok(reg.needs_backend(), "substitute: needs the backend");
+	std::string out;
+	reg.start(out);
+	ok(out.empty() && feed(reg, '1', "", out) == Extq_Verdict::RELAY, "substitute: the earlier ParseComplete is relayed");
+	ok(feed(reg, 'E', "backend error", out) == Extq_Verdict::DROP && out == own_error,
+		"substitute: the backend's error is dropped, ProxySQL's own goes out in its place");
+	out.clear();
+	ok(feed(reg, 'Z', "E", out) == Extq_Verdict::RELAY && reg.complete() && out.empty(),
+		"substitute: the backend's ReadyForQuery is relayed and ends the batch");
+	auto ev = events(reg);
+	ok(ev.size() == 2 && ev[1].reply == Extq_Reply::SUBSTITUTE && ev[1].outcome == Extq_Outcome::ERROR,
+		"substitute: its event is an error ProxySQL gave");
+	PgSQL_Extq_Registry reg2;
+	reg2.push(slot(Extq_Kind::PARSE, Extq_Reply::SUBSTITUTE, 0, own_error));
+	reg2.start(out);
+	ok(feed(reg2, '1', "", out) == Extq_Verdict::BAD, "substitute: a failing Parse that succeeds is a protocol violation");
+}
+
 int main() {
-	plan(46);
+	plan(52);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 	test_plain_unit();             // 9
@@ -270,6 +296,7 @@ int main() {
 	test_passthrough_and_bad();    // 5
 	test_all_local();              // 2
 	test_suspended_execute();      // 4
+	test_substitute();             // 6
 	test_cleanup_minimal();
 	return exit_status();
 }

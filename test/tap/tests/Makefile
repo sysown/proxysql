@@ -524,6 +524,7 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-native_extq_orphaned_sync-t \
 	pgsql-native_extq_batch-t \
 	pgsql-native_extq_named_portals-t \
+	pgsql-extq_local_error_in_txn-t \
 	pgsql-discard_all_txn_block-t \
 	test_ffto_pgsql_pipeline-t \
 	test_ffto_pgsql_stmt_portal-t
