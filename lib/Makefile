@@ -118,6 +118,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	TransactionState.oo \
 	HostgroupRouting.oo \
 	PgSQLCommandComplete.oo \
+	PgSQL_Extq_Batch.oo \
 	PgSQLErrorFields.oo \
 	MySQLProtocolUtils.oo \
 	PgSQLErrorClassifier.oo \

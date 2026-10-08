@@ -197,6 +197,12 @@ void pg_build_bind(std::string& out, const char* portal, const char* stmt_name,
                    const char* const* param_values, const int32_t* param_lengths, uint16_t n_params,
                    const uint16_t* result_formats, uint16_t n_result_formats);
 
+// Copy a client's Bind ('B') message for the backend with the statement name replaced. bind is
+// the whole message, type byte and length included; everything after the statement name is copied
+// as it is, so parameters are never decoded. Returns false, leaving out untouched, when bind is not
+// a well-formed Bind.
+bool pg_build_bind_rename(std::string& out, const unsigned char* bind, size_t len, const char* stmt_name);
+
 // Build a frontend Describe ('D') message. kind is 'S' (statement) or 'P' (portal).
 // Layout: len(4) | kind(1) | name\0.
 void pg_build_describe(std::string& out, char kind, const char* name);

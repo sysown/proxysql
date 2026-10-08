@@ -212,6 +212,19 @@ void PgSQL_STMT_Local::backend_insert(std::shared_ptr<const PgSQL_STMT_Global_in
 	global_stmt_to_backend_ids.emplace(stmt_info->statement_id, backend_stmt_id);
 }
 
+void PgSQL_STMT_Local::backend_erase(uint64_t global_id) {
+	const auto g = global_stmt_to_backend_ids.find(global_id);
+	if (g == global_stmt_to_backend_ids.end()) {
+		return;
+	}
+	const auto b = backend_stmt_to_global_info.find(g->second);
+	if (b != backend_stmt_to_global_info.end()) {
+		GloPgStmt->ref_count_server(b->second.get(), -1);
+		backend_stmt_to_global_info.erase(b);
+	}
+	global_stmt_to_backend_ids.erase(g);
+}
+
 uint32_t PgSQL_STMT_Local::find_backend_stmt_id_from_global_id(uint64_t global_id) const {
 	if (auto s = global_stmt_to_backend_ids.find(global_id); s != global_stmt_to_backend_ids.end()) {
 		return s->second;

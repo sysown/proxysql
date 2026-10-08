@@ -822,7 +822,8 @@ public:
 	// '3' is forwarded to the client. RESYNC is a bare Sync sent to conclude a batch the
 	// client already believes finished; it matches none of the per-step branches, so it
 	// skips NONE's bare-ReadyForQuery protocol-violation check that a resync would trip.
-	enum class PG_Native_Stmt_Step { NONE, PARSE, DESCRIBE_S, DESCRIBE_P, EXECUTE, BIND, CLOSE_P, RESYNC };
+	// BATCH sends a whole buffered unit at once; its registry judges every reply.
+	enum class PG_Native_Stmt_Step { NONE, PARSE, DESCRIBE_S, DESCRIBE_P, EXECUTE, BIND, CLOSE_P, RESYNC, BATCH };
 	PG_Native_Stmt_Step native_stmt_step = PG_Native_Stmt_Step::NONE;
 	// True when the current ASYNC_STMT_EXECUTE_* dispatch is actually a named-portal
 	// Bind (PGSQL_EXTENDED_QUERY_TYPE_BIND), so stmt_execute_start() emits a Bind-only
@@ -890,6 +891,8 @@ public:
 	// Adds up the bytes it hands to query_result in *processed_bytes, so the
 	// caller can apply the same fetch-pause rule the libpq loop uses.
 	void native_fetch_result_cont(short event, uint64_t* processed_bytes = nullptr);
+	// Adds ProxySQL's own replies (complete wire messages) to the result. Returns the bytes added.
+	unsigned int add_local_replies(const std::string& bytes);
 	// Finish sending a reset command and consume its reply up to ReadyForQuery.
 	// The reply is discarded; a connection being reset has no client to send it to.
 	void native_reset_session_cont();

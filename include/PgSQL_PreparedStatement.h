@@ -127,6 +127,13 @@ public:
 	void backend_insert(std::shared_ptr<const PgSQL_STMT_Global_info>& stmt_info, uint32_t backend_stmt_id);
 
 	/**
+	 * @brief Forget a statement the backend no longer holds, releasing its server reference.
+	 *
+	 * Does nothing when the map does not hold it.
+	 */
+	void backend_erase(uint64_t global_id);
+
+	/**
 	 * @brief Find backend statement ID from global statement ID.
 	 *
 	 * Looks up the backend statement ID associated with the given global statement ID.

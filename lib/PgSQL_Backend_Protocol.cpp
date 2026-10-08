@@ -172,6 +172,25 @@ void pg_build_bind(std::string& out, const char* portal, const char* stmt_name,
 	pg_native_patch_be32(out, len_pos, (uint32_t)(out.size() - len_pos));
 }
 
+bool pg_build_bind_rename(std::string& out, const unsigned char* bind, size_t len, const char* stmt_name) {
+	if (len < 5 || bind[0] != 'B') return false;
+	const unsigned char* end = bind + len;
+	const unsigned char* portal = bind + 5;
+	const unsigned char* portal_end = (const unsigned char*)memchr(portal, 0, end - portal);
+	if (portal_end == nullptr) return false;
+	const unsigned char* name = portal_end + 1;
+	const unsigned char* name_end = (const unsigned char*)memchr(name, 0, end - name);
+	if (name_end == nullptr) return false;
+	const unsigned char* rest = name_end + 1;
+	const size_t name_len = strlen(stmt_name);
+	out.push_back('B');
+	pg_native_append_be32(out, (uint32_t)(4 + (portal_end - portal + 1) + name_len + 1 + (end - rest)));
+	out.append((const char*)portal, portal_end - portal + 1);
+	out.append(stmt_name, name_len + 1);
+	out.append((const char*)rest, end - rest);
+	return true;
+}
+
 void pg_build_describe(std::string& out, char kind, const char* name) {
 	out.push_back('D');
 	size_t len_pos = out.size();
