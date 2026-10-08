@@ -8961,6 +8961,9 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 	if (extq_sync == false && backend_error == false) {
 		// Cut short before a message the batch cannot carry: the rest of the unit runs one message at
 		// a time, on the same connection, which still holds the batch's unsynced work.
+#ifdef DEBUG
+		dbg_extended_query_backend_conn = myconn;   // the debug check that one connection serves the whole unit
+#endif
 		RequestEnd(myds, false);
 		finishQuery(myds, myconn, true);
 		extq_clear();
