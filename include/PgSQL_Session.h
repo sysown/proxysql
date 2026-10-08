@@ -308,6 +308,7 @@ private:
 		bool logged = false;
 		std::string local;                // ProxySQL's own reply, or its error when 'error' is set
 		bool error = false;
+		bool fail_on_backend = false;     // ProxySQL's own error, to be made the backend's too (inside a transaction)
 		std::string name;                 // the client's statement name
 		std::string portal;               // a named portal: its Bind, Close, Execute or Describe
 		uint32_t max_rows = 0;            // a named Execute: its row limit
@@ -442,7 +443,9 @@ private:
 	std::shared_ptr<const PgSQL_STMT_Global_info> extq_find_stmt(const char* name);
 	bool extq_find_portal(const char* name, PgSQL_Portal_Ref& ref);
 	void extq_buffer_message();
+	std::string extq_take_replies(unsigned int out_before, bool& error);
 	int extq_after_message(int rc, unsigned int out_before, enum session_status st_before);
+	int extq_fail_on_backend(unsigned int out_before);
 	int extq_finish(bool synced);
 	bool extq_render(PgSQL_Connection* myconn);
 	void extq_settle(PgSQL_Data_Stream* myds);

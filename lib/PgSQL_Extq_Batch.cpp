@@ -18,7 +18,7 @@ void PgSQL_Extq_Registry::clear() {
 
 bool PgSQL_Extq_Registry::needs_backend() const {
 	for (const Extq_Slot& s : slots_) {
-		if (s.reply == Extq_Reply::RELAY || s.reply == Extq_Reply::DROP) {
+		if (s.reply != Extq_Reply::LOCAL && s.reply != Extq_Reply::LOCAL_ERROR) {
 			return true;
 		}
 	}
@@ -134,6 +134,14 @@ Extq_Verdict PgSQL_Extq_Registry::on_message(char type, const unsigned char* pay
 	}
 	if (slots_.empty()) {
 		return Extq_Verdict::BAD;
+	}
+	if (slots_.front().reply == Extq_Reply::SUBSTITUTE) {
+		if (type != 'E') {
+			return Extq_Verdict::BAD;   // the message sent to fail did not
+		}
+		out += slots_.front().bytes;
+		on_error();
+		return Extq_Verdict::DROP;
 	}
 	if (type == 'E') {
 		on_error();

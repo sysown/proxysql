@@ -18,13 +18,15 @@ enum class Extq_Kind : uint8_t { PARSE, BIND, DESCRIBE_S, DESCRIBE_P, EXECUTE, C
 //   LOCAL        ProxySQL's own reply, in bytes, sent once every earlier slot is answered
 //   LOCAL_ERROR  ProxySQL's own error, due the same way; nothing after it is answered. Its bytes
 //                are not appended to the output: the session sends them once the batch is over.
-enum class Extq_Reply : uint8_t { RELAY, DROP, LOCAL, LOCAL_ERROR };
+//   SUBSTITUTE   ProxySQL's own message, sent to fail on the backend: the backend's error is
+//                replaced by these bytes, ProxySQL's own error, and the rest is skipped as usual.
+enum class Extq_Reply : uint8_t { RELAY, DROP, LOCAL, LOCAL_ERROR, SUBSTITUTE };
 
 struct Extq_Slot {
 	Extq_Kind kind;
 	Extq_Reply reply;
 	uint32_t entry;       // the client message the slot belongs to
-	std::string bytes;    // LOCAL and LOCAL_ERROR: complete wire messages
+	std::string bytes;    // LOCAL, LOCAL_ERROR and SUBSTITUTE: complete wire messages
 };
 
 enum class Extq_Outcome : uint8_t { OK, ERROR, SKIPPED };
