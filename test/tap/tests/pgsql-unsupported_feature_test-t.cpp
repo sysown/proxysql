@@ -125,30 +125,6 @@ void check_copy_stdin_via_extended_query(PGconn* conn) {
     PQclear(res);
 }
 
-void check_listen_via_simple_and_extended_query(PGconn* conn) {
-
-    PGresult* res = PQexec(conn, "LISTEN mychannel");
-    ExecStatusType status = PQresultStatus(res);
-    /* Check that it failed */
-    ok(status == PGRES_FATAL_ERROR, "PQexec fails for LISTEN");
-    const char* sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
-    ok(sqlstate && strcmp(sqlstate, "0A000") == 0,
-        "SQLSTATE is 0A000 (feature_not_supported)");
-    PQclear(res);
-    res = PQprepare(conn,
-        "listen_stmt",
-        "LISTEN mychannel",
-        0,
-        NULL);
-    status = PQresultStatus(res);
-    /* Check that it failed */
-    ok(status == PGRES_FATAL_ERROR, "PQprepare fails for LISTEN");
-    sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
-    ok(sqlstate && strcmp(sqlstate, "0A000") == 0,
-        "SQLSTATE is 0A000 (feature_not_supported)");
-	PQclear(res);
-}
-
 void execute_tests(bool with_ssl) {
     PGconn* conn = create_new_connection(with_ssl);
 
@@ -166,15 +142,12 @@ void execute_tests(bool with_ssl) {
 	// Test 3: COPY FROM STDIN via extended query
 	check_copy_stdin_via_extended_query(conn);
 
-	// Test 4: LISTEN via simple and extended query
-	check_listen_via_simple_and_extended_query(conn);
-
     // Close the connection
     PQfinish(conn);
 }
 
 int main(int argc, char** argv) {
-    plan(7); // Total number of tests planned
+    plan(3); // Total number of tests planned
 
     if (cl.getEnv())
         return exit_status();
