@@ -1058,7 +1058,9 @@ static ResyncFailureProbe runResyncFailure(PGconn* admin, PGconn* be_db, const s
 		// the backend connection whether or not the resync disowned it.
 		r.pool_live = pooledConnsWithin(admin, r.pool_baseline, 5);
 	} catch (const PgException& e) {
-		r.told_failure = true;
+		// Only a closed connection tells the client; a read timeout means ProxySQL went silent.
+		const std::string what = e.what();
+		r.told_failure = what.find("closed by peer") != std::string::npos || what.find("Socket read failed") != std::string::npos;
 		r.pool_live = pooledConnsWithin(admin, r.pool_baseline, 5);
 		r.detail = std::string("frame threw: ") + e.what();
 	}
