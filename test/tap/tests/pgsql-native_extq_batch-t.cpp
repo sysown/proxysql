@@ -188,7 +188,7 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(31);
+	plan(33);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
@@ -215,6 +215,25 @@ int main(int, char**) {
 	}
 	ok(r[1] == "1 2 D=42 C Z(I) | 2 D=2 C Z(I)", "new statement: Parse, Bind and Execute in one unit, reused by the next [%s]", r[1].c_str());
 	ok(r[0] == r[1], "new statement: same replies as libpq [libpq: %s]", r[0].c_str());
+
+	// --- The same new text Parsed twice in a unit under two names: one Parse reaches the backend.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		r[m] = run([&]() {
+			auto c = client();
+			const std::string sql = "SELECT $1::int AS dup_" + tag + "_" + mode_name[m];
+			pbe(*c, "s_d1", sql, { text("5") });
+			pbe(*c, "s_d2", sql, { text("6") });
+			c->sendSync();
+			std::string out = replies(*c);
+			c->bindStatement("s_d2", "", { text("7") }, {}, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			return out + " | " + replies(*c);
+		});
+	}
+	ok(r[1] == "1 2 D=5 C 1 2 D=6 C Z(I) | 2 D=7 C Z(I)", "same text Parsed twice: both names usable [%s]", r[1].c_str());
+	ok(r[0] == r[1], "same text Parsed twice: same replies as libpq [libpq: %s]", r[0].c_str());
 
 	// --- ProxySQL's own reply waits for the replies before it: P2 is known, so its ParseComplete is
 	// answered locally, yet it must come after E1's rows.

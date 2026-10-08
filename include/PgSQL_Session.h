@@ -432,7 +432,7 @@ private:
 	void extq_buffer_message();
 	int extq_after_message(int rc, unsigned int out_before, enum session_status st_before);
 	int extq_finish(bool synced);
-	void extq_render(PgSQL_Connection* myconn);
+	bool extq_render(PgSQL_Connection* myconn);
 	void extq_settle(PgSQL_Data_Stream* myds);
 	void extq_commit(PgSQL_Extq_Entry& e);
 	void extq_log(PgSQL_Extq_Entry& e, const Extq_Event& ev, PgSQL_Data_Stream* myds);

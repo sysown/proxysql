@@ -3745,11 +3745,18 @@ handler_again:
 
 			const bool batch = (status == PROCESSING_EXTQ_BATCH);
 			if (myconn->async_state_machine == ASYNC_IDLE) {
-				if (batch && myconn->native_mode == false) {
-					// A retry landed on a libpq connection (a Unix-socket server), which cannot carry
-					// the batch. Nothing was sent: the unit fails, as when no connection can be had.
-					client_myds->myprot.generate_error_packet(true, true, "Lost connection to PostgreSQL server during query",
-						PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE, false);
+				const bool libpq_retry = batch && myconn->native_mode == false;
+				if (batch && (libpq_retry || extq_render(myconn) == false)) {
+					// Nothing was sent, and the batch cannot be: a retry landed on a libpq connection (a
+					// Unix-socket server), which cannot carry it, or a message cannot be encoded for the
+					// backend. The unit fails, as when no connection can be had.
+					if (libpq_retry) {
+						client_myds->myprot.generate_error_packet(true, true, "Lost connection to PostgreSQL server during query",
+							PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE, false);
+					} else {
+						client_myds->myprot.generate_error_packet(true, true, "invalid Bind message",
+							PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, false);
+					}
 					RequestEnd(myds, true);
 					finishQuery(myds, myconn, false);
 					reset_extended_query_frame(true);
@@ -3757,7 +3764,6 @@ handler_again:
 					goto __exit_DSS__STATE_NOT_INITIALIZED;
 				}
 				if (batch) {
-					extq_render(myconn);
 					extq_arm_timeout();
 				} else {
 					SetQueryTimeout();
@@ -8538,7 +8544,8 @@ int PgSQL_Session::extq_finish(bool synced) {
 // Builds the bytes and the expected replies for the connection about to carry the batch: which
 // statements it holds decides which Parses ProxySQL adds. Runs again for a new connection when the
 // batch is retried before any of it was sent.
-void PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
+// Returns false when a message cannot be encoded for the backend; nothing is then sent.
+bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 	if (extq_swapped >= 0) {
 		// A failed attempt lent this statement's query info to the error path; it is retried.
 		CurrentQuery.swap(extq_entries[extq_swapped].info);
@@ -8579,14 +8586,22 @@ void PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 			extq_registry.push({ Extq_Kind::EXECUTE, e.error ? Extq_Reply::LOCAL_ERROR : Extq_Reply::LOCAL, i, e.local });
 			break;
 		case 'P':
-			parse(e, i, Extq_Reply::RELAY);
+			if (prepared.count(e.stmt.get())) {
+				// The same text Parsed earlier in this batch under another name: the connection
+				// already holds it, so this Parse is answered here once the earlier one succeeds.
+				extq_registry.push({ Extq_Kind::PARSE, Extq_Reply::LOCAL, i, std::string("1\0\0\0\4", 5) });
+			} else {
+				parse(e, i, Extq_Reply::RELAY);
+			}
 			break;
 		case 'D':
 			if (e.target == 'S') {
 				pg_build_describe(extq_out, 'S', backend_name(e, i));
 				extq_registry.push({ Extq_Kind::DESCRIBE_S, Extq_Reply::RELAY, i, std::string() });
 			} else {
-				pg_build_bind_rename(extq_out, (const unsigned char*)e.bind_bytes.data(), e.bind_bytes.size(), backend_name(e, i));
+				if (!pg_build_bind_rename(extq_out, (const unsigned char*)e.bind_bytes.data(), e.bind_bytes.size(), backend_name(e, i))) {
+					return false;
+				}
 				extq_registry.push({ Extq_Kind::BIND, Extq_Reply::DROP, i, std::string() });
 				pg_build_describe(extq_out, 'P', "");
 				extq_registry.push({ Extq_Kind::DESCRIBE_P, Extq_Reply::RELAY, i, std::string() });
@@ -8595,7 +8610,9 @@ void PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 		case 'E': {
 			// Its BindComplete was given to the client when the Bind was handled.
 			const PtrSize_t& raw = e.bind->get_raw_pkt();
-			pg_build_bind_rename(extq_out, (const unsigned char*)raw.ptr, raw.size, backend_name(e, i));
+			if (!pg_build_bind_rename(extq_out, (const unsigned char*)raw.ptr, raw.size, backend_name(e, i))) {
+				return false;
+			}
 			extq_registry.push({ Extq_Kind::BIND, Extq_Reply::DROP, i, std::string() });
 			if (e.describe_portal) {
 				pg_build_describe(extq_out, 'P', "");
@@ -8619,6 +8636,7 @@ void PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 	extq_eqi.flags = PGSQL_EXTENDED_QUERY_FLAG_SYNC;
 	extq_eqi.batch_out = &extq_out;
 	extq_eqi.batch_registry = &extq_registry;
+	return true;
 }
 
 // PostgreSQL sends a batch's replies when its send buffer fills or at the Sync, not as each statement
@@ -8775,7 +8793,8 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 		myconn->query_result->get_resultset(client_myds->PSarrayOUT);
 	}
 	extq_settle(myds);
-	if (killed) {
+	if (myconn->is_error_present() && killed == true &&
+		myconn->get_error_code() == PGSQL_ERROR_CODES::ERRCODE_QUERY_CANCELED) {
 		return -1;
 	}
 	const bool backend_error = myconn->is_error_present();
