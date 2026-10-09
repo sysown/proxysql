@@ -608,7 +608,9 @@ bool ip_cidr_list_is_valid(const char *spec);
  * @brief Numeric containment test: is @p sa inside @p cidr ?
  *
  * A prefix never matches an address of the other family, so an IPv4 rule
- * cannot match an IPv6 client and vice versa.
+ * cannot match an IPv6 client and vice versa. The one exception is an
+ * IPv4-mapped IPv6 client (::ffff:a.b.c.d): it is an IPv4 client, and an IPv4
+ * prefix is matched against its embedded IPv4 address.
  */
 bool ip_cidr_contains(const IP_CIDR_t *cidr, const struct sockaddr *sa);
 

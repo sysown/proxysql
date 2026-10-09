@@ -292,6 +292,10 @@ private:
 	bool try_extended_query_cache(PgSQL_Execute_Message* execute_msg);
 #endif
 	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
+	// ADMIN/STATS sessions reject the extended-query protocol. Set once the
+	// rejection ErrorResponse was sent: further extended-query messages are
+	// discarded until Sync, which is answered with a single ReadyForQuery.
+	bool admin_extq_rejected { false };
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
 
@@ -669,6 +673,8 @@ public:
 	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
 	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
 	bool tx_poisoned{ false };
+	// Backend administrative removal: drain the FATAL response before closing.
+	bool offline_fatal_pending = false;
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
 	bool last_pool_ff{ false };

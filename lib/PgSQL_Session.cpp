@@ -1346,10 +1346,11 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent = true;
 		char* tmp_init_connect = pgsql_thread___init_connect;
-		char* init_connect_hg = mybe->server_myds->myconn->parent->myhgc->attributes.init_connect;
-		if (init_connect_hg != NULL && strlen(init_connect_hg) != 0) {
+		// A copy: a concurrent reload may replace the hostgroup attribute.
+		const std::string init_connect_hg = mybe->server_myds->myconn->parent->myhgc->attribute_init_connect();
+		if (!init_connect_hg.empty()) {
 			// mysql_hostgroup_attributes takes priority
-			tmp_init_connect = init_connect_hg;
+			tmp_init_connect = const_cast<char*>(init_connect_hg.c_str());
 		}
 		if (tmp_init_connect) {
 			// we send init connect queries only if set
@@ -2371,6 +2372,12 @@ __implicit_sync:
 					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
 						session_type == PROXYSQL_SESSION_SQLITE) {
 						c = *((unsigned char*)pkt.ptr);
+						// Recovery discards every message, including simple Query,
+						// until Sync. Terminate must still close the connection.
+						if (admin_extq_rejected && c != 'S' && c != 'X') {
+							l_free(pkt.size, pkt.ptr);
+							continue;
+						}
 						if (c == 'Q') {
 							handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
 						} else if (c == 'X') {
@@ -2379,23 +2386,35 @@ __implicit_sync:
 							l_free(pkt.size, pkt.ptr);
 							handler_ret = -1;
 							return handler_ret;
-						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E' ||
-						           ((c == 'H' || c == 'S') && session_type == PROXYSQL_SESSION_SQLITE)) {
+						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E' || c == 'H' || c == 'S') {
 							if (session_type == PROXYSQL_SESSION_SQLITE) {
 								// Plugin-backed sessions get the message so the plugin can
 								// return its protocol-specific error and transaction state.
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
 							} else {
 								// ADMIN/STATS do not implement the extended-query protocol.
-								// A silent drop leaves libpq waiting forever for ParseComplete;
-								// reject it immediately with a complete error response instead.
-								client_myds->setDSS_STATE_QUERY_SENT_NET();
-								client_myds->myprot.generate_error_packet(true, true,
-									"PostgreSQL extended-query protocol is not supported on the admin interface",
-									PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+								// Reject it the way PostgreSQL reports an error inside an
+								// extended-query batch (issue #6345):
+								//  - one ErrorResponse, sent with the first unsupported
+								//    message so a client waiting after Flush is not stuck;
+								//  - every further message up to Sync is discarded;
+								//  - Sync is answered with a single ReadyForQuery.
+								// Answering each message with ErrorResponse+ReadyForQuery
+								// desynchronises libpq, which expects one ReadyForQuery
+								// per Sync.
+								if (c == 'S') {
+									admin_extq_rejected = false;
+									client_myds->myprot.generate_ready_for_query_packet(true, 'I');
+								} else if (c != 'H' && admin_extq_rejected == false) {
+									PtrSize_t err_pkt {};
+									client_myds->myprot.generate_error_packet(false, false,
+										"PostgreSQL extended-query protocol is not supported on the admin interface",
+										PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, &err_pkt);
+									client_myds->PSarrayOUT->add(err_pkt.ptr, err_pkt.size);
+									admin_extq_rejected = true;
+								}
 								l_free(pkt.size, pkt.ptr);
-								client_myds->DSS = STATE_SLEEP;
-								return handler_ret;
+								continue;
 							}
 						} else {
 							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);
@@ -2632,7 +2651,7 @@ __implicit_sync:
 											string nqn = string((char*)CurrentQuery.QueryPointer, l);
 											const char* err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
 											char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
-											sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+											snprintf(buf, strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 											client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
 												false, true);
 											thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
@@ -2861,6 +2880,16 @@ int PgSQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(PgS
 			retry_conn = query_retry_allowed(myds);
 			if (retry_conn) proxy_warning("Retrying query.\n");
 		}
+		if (!retry_conn) {
+			const std::string message = "Backend server went offline during query (hostgroup " +
+				std::to_string(myconn->parent->myhgc->hid) + ", " + myconn->parent->address +
+				":" + std::to_string(myconn->parent->port) + "); query cannot be retried";
+			// Administrative removal terminates the session, including any open
+			// transaction. Do not advertise a recoverable ReadyForQuery afterward.
+			client_myds->myprot.generate_error_packet(true, false, message.c_str(),
+				PGSQL_ERROR_CODES::ERRCODE_ADMIN_SHUTDOWN, true);
+			offline_fatal_pending = true;
+		}
 		if (transaction_state_manager) {
 			transaction_state_manager->reset_state();
 		}
@@ -2997,9 +3026,15 @@ bool PgSQL_Session::handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds) {
 bool PgSQL_Session::query_retry_allowed(PgSQL_Data_Stream* myds) {
 	PgSQL_Connection* myconn = (myds ? myds->myconn : NULL);
 	if (myconn == NULL || myconn->reusable == false ||
-		myconn->MultiplexDisabled() || myconn->is_pipeline_active()) {
+		myconn->MultiplexDisabled()) {
 		return false;
 	}
+	// Native unsynced work includes the current unanswered operation. It is
+	// retryable only when no earlier step was already in progress. CurrentQuery
+	// retains that operation and the remaining frame stays queued in the session.
+	// Keep the stricter libpq pipeline guard and all pooling guards unchanged.
+	if (myconn->native_mode ? myconn->native_query_started_unsynced
+		: myconn->is_pipeline_active()) return false;
 	// While the connection is alive the driver knows whether a transaction is open.
 	// Once it is dead libpq has forgotten: it reports "unknown", and believing that
 	// means refusing every retry, while ignoring it means replaying statements out
@@ -3014,6 +3049,16 @@ bool PgSQL_Session::query_retry_allowed(PgSQL_Data_Stream* myds) {
 		? myconn->IsActiveTransaction()
 		: (myconn->IsKnownActiveTransaction() || is_in_transaction() || locked_on_hostgroup != -1);
 	if (in_txn) return false;
+	// CommandComplete proves the backend executed the command even if its small
+	// reply is still buffered and ReadyForQuery has not arrived. Replaying it can
+	// duplicate a committed write. This guard applies to both drivers and all
+	// retry paths (offline, socket failure, and backend shutdown errors).
+	// An unanswered operation still follows the configured retry policy: absence
+	// of a reply cannot establish whether the backend committed before disconnect.
+	if (myconn->query_result &&
+		(myconn->query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_COMMAND)) {
+		return false;
+	}
 	// Part of the answer already reached the client; running the statement again
 	// would send it the rest of a different execution.
 	if (myconn->query_result && myconn->query_result->is_transfer_started()) {
@@ -3308,6 +3353,15 @@ int PgSQL_Session::handler() {
 	bool wrong_pass = false;
 	bool in_pending_state = false;
 	if (to_process == 0) return 0; // this should be redundant if the called does the same check
+	if (offline_fatal_pending) {
+		writeout();
+		// Include encrypted bytes retained after a short write. The normal poll
+		// loop resumes draining on POLLOUT; do not process more client commands.
+		if (client_myds->net_failure) return -1;
+		return (client_myds->available_data_out() || client_myds->queueOUT.partial ||
+			client_myds->ssl_write_len || (client_myds->encrypted &&
+			BIO_ctrl_pending(client_myds->wbio_ssl))) ? 0 : -1;
+	}
 	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Processing session %p\n", this->thread, this, this);
 	//unsigned int j;
 	//unsigned char c;
@@ -4012,8 +4066,8 @@ handler_again:
 					//CurrentQuery.mysql_stmt = NULL; // immediately reset mysql_stmt
 					int rc1 = handler_ProcessingQueryError_CheckBackendConnectionStatus(myds);
 					if (rc1 == -1) {
-						handler_ret = -1;
-						return handler_ret;
+						// Re-enter only the output-draining branch, then close.
+						return handler();
 					}
 					else {
 						if (rc1 == 1)
@@ -4394,7 +4448,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n", this, client_myds, client_myds->myconn->userinfo->username, used_users);
 				char* a = (char*)"User '%s' has exceeded the 'max_user_connections' resource (current value: %d)";
 				char* b = (char*)malloc(strlen(a) + strlen(client_myds->myconn->userinfo->username) + 16);
-				sprintf(b, a, client_myds->myconn->userinfo->username, used_users);
+				snprintf(b, strlen(a) + strlen(client_myds->myconn->userinfo->username) + 16, a, client_myds->myconn->userinfo->username, used_users);
 				GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL, b);
 				client_myds->myprot.generate_error_packet(true, false, b, PGSQL_ERROR_CODES::ERRCODE_TOO_MANY_CONNECTIONS,
 					true, true);
@@ -4470,7 +4524,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				else {
 					char* a = (char*)"User '%s' can only connect locally";
 					char* b = (char*)malloc(strlen(a) + strlen(client_myds->myconn->userinfo->username));
-					sprintf(b, a, client_myds->myconn->userinfo->username);
+					snprintf(b, strlen(a) + strlen(client_myds->myconn->userinfo->username), a, client_myds->myconn->userinfo->username);
 					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL, b);
 					client_myds->myprot.generate_error_packet(true, false, b, PGSQL_ERROR_CODES::ERRCODE_SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
 						true, true);
@@ -4485,7 +4539,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 
 					char* _a = (char*)"ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required";
 					char* _s = (char*)malloc(strlen(_a) + strlen(client_myds->myconn->userinfo->username) + 32);
-					sprintf(_s, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+					snprintf(_s, strlen(_a) + strlen(client_myds->myconn->userinfo->username) + 32, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 					client_myds->myprot.generate_error_packet(true, false, _s, PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION,
 							true, true);
 					proxy_error("ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required\n", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
@@ -4565,7 +4619,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Error: Access denied for user '%s'@'%s' . No password. Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr);
 			}
 #endif // DEBUG
-			sprintf(_s, "ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+			snprintf(_s, strlen(client_myds->myconn->userinfo->username) + 100 + strlen(client_addr), "ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 			client_myds->myprot.generate_error_packet(true, false, _s, PGSQL_ERROR_CODES::ERRCODE_INVALID_PASSWORD, true, true);
 			proxy_error("%s\n", _s);
 			free(_s);
@@ -5056,7 +5110,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 						proxy_error("invalid value for parameter \"%s\": \"%s\"\n", pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
 						m = (char*)"invalid value for parameter \"%s\": \"%s\"";
 						errmsg = (char*)malloc(value1.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m));
-						sprintf(errmsg, m, pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
+						snprintf(errmsg, value1.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m), m, pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
 
 						client_myds->DSS = STATE_QUERY_SENT_NET;
 
@@ -6152,11 +6206,12 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		const unsigned int result_begin = client_myds->PSarrayOUT->len;
 		const auto packet_type = query_result->get_result_packet_type();
 		const unsigned int num_fields = query_result->get_num_fields();
-		// Without Describe there is no RowDescription: libpq leaves TUPLE unset, the native
-		// builder sets it on a DataRow, and only a RowDescription gives it a field count.
-		const bool described = (CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0;
-		const bool extended_shape_ok = (packet_type & ~PGSQL_QUERY_RESULT_TUPLE) == (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY) &&
-			(!described || (packet_type & PGSQL_QUERY_RESULT_TUPLE)) && (num_fields > 0 || !described);
+		// libpq marks TUPLE for a forwarded RowDescription; the native builder
+		// also marks DataRows, including executions without a client Describe.
+		const auto extended_packet_type = PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY |
+			(((CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) ||
+				(_conn->native_mode && num_rows > 0)) ?
+				PGSQL_QUERY_RESULT_TUPLE : 0);
 #endif
 		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
 #ifdef PROXYSQL31
@@ -6170,9 +6225,10 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		}
 		if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.stmt_cache_valid &&
 			!transfer_started && resultset_completed && !_conn->is_error_present() &&
-			extended_shape_ok && !_conn->MultiplexDisabled(false) &&
+			num_fields > 0 && !_conn->MultiplexDisabled(false) &&
 			!_conn->IsActiveTransaction() && !_conn->processing_multi_statement &&
 			!(_conn->options.init_connect && _conn->options.init_connect[0]) &&
+			packet_type == extended_packet_type &&
 			qpo && qpo->cache_ttl > 0 && resultset_size <= UINT32_MAX &&
 			(qpo->cache_empty_result == 1 || num_rows ||
 				(qpo->cache_empty_result == -1 && thread->variables.query_cache_stores_empty_result))) {
@@ -7232,7 +7288,7 @@ void PgSQL_Session::handle_post_sync_locked_on_hostgroup_error(const char* query
 	std::string nqn = string(query, l); // truncate string to 253 characters
 	const char* err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
 	char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
-	sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+	snprintf(buf, strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 	client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
 		false, true);
 	free(buf);

@@ -398,6 +398,22 @@ test_ignore_min_gtid-t: test_ignore_min_gtid-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT
 test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
+# Keep the IAM observability contract deterministic and independent of an
+# external provider while exercising the production admin/process-global
+# integrations through the platform-aware unit-test linker configuration.
+.PHONY: test_aws_iam_metrics-t
+test_aws_iam_metrics-t:
+	$(MAKE) -C unit PROXYSQL40=$(PROXYSQL40) test_aws_iam_metrics-t
+	ln -fs unit/test_aws_iam_metrics-t $@
+
+# Build the controlled server first, then use the component-test linker so the
+# production MySQL_Connection path can run without a daemon or external provider.
+.PHONY: test_aws_iam_backend_auth-t
+test_aws_iam_backend_auth-t:
+	$(MAKE) -C $(PROXYSQL_PATH)/test/deps/aws_iam_mysql_server PROXYSQL40=$(PROXYSQL40)
+	$(MAKE) -C unit PROXYSQL40=$(PROXYSQL40) test_aws_iam_backend_auth-t
+	ln -fs unit/test_aws_iam_backend_auth-t $@
+
 create_connection_annotation: test_connection_annotation-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) -DTEST_AURORA $< $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o $@
 
@@ -526,6 +542,8 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-native_extq_named_portals-t \
 	pgsql-extq_local_error_in_txn-t \
 	pgsql-discard_all_txn_block-t \
+	pgsql-reg_test_6345_admin_extended_query_sync-t \
+	pgsql-reg_test_6349_auth_anti_enumeration-t \
 	test_ffto_pgsql_pipeline-t \
 	test_ffto_pgsql_stmt_portal-t
 
@@ -541,9 +559,11 @@ $(PG_LITE_CLIENT_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h $(TAP_LDIR
 # from MYLIBS, and unlike the pg_lite_client rules above there is no -lscram or
 # -lusual to create duplicate symbols, so $(ALLOW_MULTI_DEF) does not apply.
 PGSQL_MOCK_BACKEND_TESTS := \
+	pgsql-reg_test_6389_monitor_lifecycle-t \
 	pgsql-reg_test_6109_midresult_disconnect-t \
 	pgsql-reg_test_6110_invalid_reply_sequence-t \
 	pgsql-backend_death_query_retry-t \
+	pgsql-reg_test_6375_offline_retry-t \
 	pgsql-native_hostile_backend-t \
 	pgsql-native_scram_mechanism-t \
 	pgsql-native_notify-t
@@ -639,5 +659,5 @@ endif
 parsersql_digest_test-t: parsersql_digest_test
 	ln -fs parsersql_digest_test parsersql_digest_test-t
 
-# These tests query the target server capability before selecting native mode.
-pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t: pgsql_native_tier.h
+# These tests query the target server capability or active backend mode.
+pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t pgsql-reg_test_6375_offline_retry-t pgsql-extended_query_protocol_test-t pgsql-unsupported_feature_test-t: pgsql_native_tier.h

@@ -19,6 +19,7 @@
 #include "noise_utils.h"
 #include "tap.h"
 #include "utils.h"
+#include "pgsql_native_tier.h"
 
 CommandLine cl;
 
@@ -5269,16 +5270,7 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	// v3.0 omits this variable and uses libpq; native-capable tiers expose
-	// the runtime setting, which also permits running this suite in libpq mode.
-	PGResultPtr backend_mode(PQexec(admin_conn.get(),
-		"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-use_native_backend_protocol'"), &PQclear);
-	if (PQresultStatus(backend_mode.get()) != PGRES_TUPLES_OK) {
-		BAIL_OUT("Failed to read PostgreSQL backend protocol mode: %s", PQerrorMessage(admin_conn.get()));
-		return exit_status();
-	}
-	const bool native_backend = PQntuples(backend_mode.get()) == 1 &&
-		strcmp(PQgetvalue(backend_mode.get(), 0, 0), "true") == 0;
+	const bool native_backend = pgsql_native_active(admin_conn.get());
 
 	try {
 		// Parse Prepared Statement

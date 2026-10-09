@@ -31,8 +31,8 @@
 
 // GloMTH is declared extern in include/proxysql_utils.h, which
 // wait_for_glo_mth() (also declared there) reads. GloPTH has no such
-// central declaration, but this file never needs it directly: per the
-// task brief, waiting on GloMTH alone is the documented readiness gate
+// central declaration; this file only reads PgSQL's connect_timeout_client
+// through it (declared below). Waiting on GloMTH alone is the documented readiness gate
 // for both protocols here (GloMTH and GloPTH are constructed back to
 // back, on the same thread, in ProxySQL_Main_init_main_modules() --
 // src/main.cpp -- so one becoming visible is a reasonable proxy for the
@@ -62,6 +62,7 @@ class MySQL_Query_Processor;
 class PgSQL_Query_Processor;
 extern MySQL_Query_Processor* GloMyQPro;
 extern PgSQL_Query_Processor* GloPgQPro;
+extern PgSQL_Threads_Handler* GloPTH;
 
 namespace {
 
@@ -518,6 +519,22 @@ void DuckDBListener::run_session(int client_fd) {
 		sess->status = CONNECTING_CLIENT;
 	}
 
+	// Core closes clients that do not finish authenticating within
+	// mysql-/pgsql-connect_timeout_client, but only from
+	// MySQL_Thread/PgSQL_Thread::process_all_sessions(), which never runs for
+	// these plugin-owned sessions. Without the same bound here, a client that
+	// connects and never authenticates holds a duckdb-max_connections slot, an
+	// OS thread and a DuckDB connection until it disconnects (issue #6318).
+	// The value is read once per connection: it only bounds this handshake.
+	unsigned long long connect_timeout_ms = 0;
+	if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
+		connect_timeout_ms = static_cast<unsigned long long>(GloMTH->get_variable_int("connect_timeout_client"));
+	} else {
+		connect_timeout_ms = GloPTH != nullptr
+			? static_cast<unsigned long long>(GloPTH->get_variable_int("connect_timeout_client")) : 0;
+	}
+	const unsigned long long handshake_start = monotonic_time();
+
 	struct pollfd fds[1];
 	fds[0].fd = client_fd;
 
@@ -549,6 +566,13 @@ void DuckDBListener::run_session(int client_fd) {
 		}
 		sess->to_process = 1;
 		if (sess->handler() == -1) break;
+		if (sess->status == CONNECTING_CLIENT && connect_timeout_ms > 0 &&
+			thr->curtime - handshake_start > connect_timeout_ms * 1000ULL) {
+			proxy_warning("Closing not established DuckDB client connection %s:%d after %llums\n",
+				myds->addr.addr ? myds->addr.addr : "unknown", myds->addr.port,
+				(thr->curtime - handshake_start) / 1000);
+			break;
+		}
 	}
 
 	engine_->disconnect(&st.conn);

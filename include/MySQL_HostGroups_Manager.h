@@ -1,6 +1,11 @@
 #ifndef PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H
 #define PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H
 #include "proxysql.h"
+#include "MySQL_Backend_Auth.h"
+#ifdef PROXYSQL40
+#include "Aws_Locality_Manager.h"
+#include "ProxySQL_Plugin.h"
+#endif
 #include "cpp.h"
 #include "proxysql_gtid.h"
 
@@ -185,8 +190,9 @@ class MySrvConnList {
 		conns->remove_index_fast((unsigned int)i);
 	}
 	MySQL_Connection *remove(int);
-	MySQL_Connection * get_random_MyConn(MySQL_Session *sess, bool ff);
-	void get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn);
+	MySQL_Connection * get_random_MyConn(
+		MySQL_Session *sess, bool ff, MySQLBackendAuthType requested_type);
+	void get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn, MySQLBackendAuthType requested_type);
 	unsigned int conns_length() { return conns->len; }
 	void drop_all_connections();
 	void mark_connections_unhealthy();
@@ -632,6 +638,9 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *  present, distinguishing between 'READER' and 'WRITER' hostgroups.
 	 */
 	std::unordered_map<std::string, std::unique_ptr<HostGroup_Server_Mapping>> hostgroup_server_mapping;
+#ifdef PROXYSQL40
+	std::unique_ptr<MySQLAwsLocalityManager> aws_locality_manager_;
+#endif
 	/**
 	 * @brief Holds the previous computed checksum for 'mysql_servers'.
 	 * @details Used to check if the servers checksums has changed during 'commit', if a change is detected,
@@ -647,6 +656,10 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *   and 'hostgroup_server_mapping' should be rebuild.
 	 */
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
+#ifdef PROXYSQL40
+	// Exact affiliated-module claims used to invalidate the derived role map.
+	std::vector<ProxySQL_ServerHostgroupClaim> hgsm_server_module_claims_ {};
+#endif
 
 
 #if 0
@@ -899,6 +912,17 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
 	void init();
+#ifdef PROXYSQL40
+	void refresh_aws_locality_configuration(bool acquire_lock = true);
+	void set_aws_locality_awareness_enabled(bool enabled);
+	void refresh_aws_locality_stats(SQLite3DB* statsdb) const;
+	static bool project_aws_locality_stats(
+		SQLite3DB* statsdb,
+		const std::vector<AwsLocalitySnapshotEntry>& rows);
+	MySQLAwsLocalityManager* aws_locality_manager() const {
+		return aws_locality_manager_.get();
+	}
+#endif
 #if 0
 	void wrlock();
 	void wrunlock();
@@ -913,6 +937,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @return Checksum computed using the provided hash, and 'mysql_servers' config tables hashes.
 	 */
 	std::string gen_global_mysql_servers_v2_checksum(uint64_t servers_v2_hash);
+	void refresh_mysql_servers_v2_checksum();
 	bool commit();
 	bool commit(
 		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
@@ -1006,6 +1031,10 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @return The generated resultset.
 	 */
 	SQLite3_result* dump_table_mysql(const string&);
+#ifdef PROXYSQL40
+	bool reconcile_server_desired_set(
+		const ProxySQL_ServerDesiredSet& desired_set, std::string& error);
+#endif
 
 	/**
 	 * @brief Update the public member resulset 'mysql_servers_to_monitor'. This resulset should contain the latest
@@ -1051,7 +1080,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 */
 	int remove_server_in_hg(uint32_t hid, const string& addr, uint16_t port);
 
-	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
+	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQLBackendAuthType requested_type = MySQLBackendAuthType::PASSWORD);
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
@@ -1064,6 +1093,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 
 	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int, bool);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
+	SQLite3_result* get_read_only_servers(char** error = nullptr);
 	/**
 	 * @brief Reconcile writer/reader hostgroup placement from read_only monitor results.
 	 *
@@ -1269,9 +1299,24 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	MySQLServers_SslParams * get_Server_SSL_Params(char *hostname, int port, char *username);
 
 private:
+	SQLite3_result* dump_table_mysql_locked(const string&);
+	bool commit_locked(
+		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
+		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
+		bool only_commit_runtime_mysql_servers, bool update_version);
+	void finish_commit(unsigned long long started_at, bool acquire_lock = true);
 	GTID_Server_Data* get_or_create_gtid_server_data(MySrvC* server, const std::string& endpoint);
 	void start_gtid_reader_if_needed(MySrvC* server, GTID_Server_Data* gtid_data);
-	void update_hostgroup_manager_mappings();
+	/**
+	 * @brief Rebuilds 'hostgroup_server_mapping' when its inputs changed.
+	 * @param commit_context true when called while installing configuration (commit or an
+	 *   equivalent table regeneration that refreshed 'table_resultset_checksum'). Only then may the
+	 *   'hgsm_*_checksum' members be advanced to the configuration checksums. Monitor actions
+	 *   ('read_only_action_v2') pass false: they rebuild only for server-module claim changes and
+	 *   leave 'hgsm_*_checksum' untouched, because those actions store the runtime checksum there as
+	 *   the signal that runtime diverged from configuration and the next commit must rebuild.
+	 */
+	bool update_hostgroup_manager_mappings(bool commit_context = true);
 	uint64_t get_mysql_servers_checksum(SQLite3_result* runtime_mysql_servers = nullptr);
 	uint64_t get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2 = nullptr);
 };

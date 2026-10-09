@@ -1090,7 +1090,7 @@ handler_again:
 			update_bytes_sent(5);
 		}
 		else {
-			update_bytes_sent((reset_session_in_txn == false ? (sizeof("DISCARD ALL") + 5) : (sizeof("ROLLBACK") + 5)));
+			update_bytes_sent(reset_session_in_txn == false ? (sizeof("DISCARD ALL") + 5) : (sizeof("ROLLBACK") + 5));
 		}
 		if (async_exit_status) {
 			next_event(ASYNC_RESET_SESSION_CONT);
@@ -3500,6 +3500,17 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 			// simple query, which keeps the original 'Z'-only completion below.
 			if (native_stmt_step != PG_Native_Stmt_Step::NONE) {
 				const char t = msg.type;
+				// An unnamed Execute always describes the portal, as libpq does, so
+				// empty rowsets can be distinguished from command-only results.
+				// Keep that metadata without adding an unrequested Describe response
+				// to the client stream (or the cached wire bytes).
+				if (native_stmt_step == PG_Native_Stmt_Step::EXECUTE &&
+					(t == 'T' || t == 'n') &&
+					(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) == 0) {
+					query_result->num_fields = (t == 'T' && msg.payload_len >= 2) ?
+						((unsigned int)msg.payload[0] << 8) | msg.payload[1] : 0;
+					continue;
+				}
 
 				// BindComplete: for the unnamed portal the session synthesized it at
 				// Bind intake, so suppress the backend copy. For a named-portal Bind
@@ -3654,6 +3665,14 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 					}
 				}
 				continue;
+			}
+
+			// Native simple queries collect all results through ReadyForQuery.
+			// A second CommandComplete means this is a multi-statement response,
+			// which must not be admitted to the single-result query cache.
+			if (msg.type == 'C' &&
+				(query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_COMMAND)) {
+				processing_multi_statement = true;
 			}
 
 			// The same refusal, before the ReadyForQuery joins the result.
@@ -3830,7 +3849,7 @@ void PgSQL_Connection::async_free_result() {
 	async_state_machine = ASYNC_IDLE;
 	if (query_result) {
 		if (query_result_reuse) {
-			delete (query_result_reuse);
+			delete query_result_reuse;
 		}
 		query_result_reuse = query_result;
 		query_result = NULL;
@@ -3854,6 +3873,11 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 	// ack synthesis) is shared with the libpq path. See
 	// docs/superpowers/specs/2026-07-07-pgsql-native-extq-stmt-pipeline-design.md.
 	assert(native_mode || pgsql_conn);
+
+	// Capture before the offline check, including failures before the first send.
+	// Subsequent polls must retain the snapshot from before this operation.
+	if (native_mode && async_state_machine == ASYNC_IDLE)
+		native_query_started_unsynced = native_unsynced_work;
 
 	server_status = parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
@@ -4680,15 +4704,10 @@ void PgSQL_Connection::stmt_execute_start() {
 			result_formats.empty() ? nullptr : result_formats.data(),
 			static_cast<uint16_t>(result_formats.size()));
 
-		// Fold in a Describe('P') on the unnamed portal exactly when the libpq path
-		// would forward the portal's RowDescription — i.e. when the client asked for
-		// it (recorded as PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL). When it did not,
-		// no Describe is sent, the backend emits no 'T'/'n', and the client sees only
-		// '2'(suppressed)/'D'*/'C' — byte-identical to the libpq path, which sends the
-		// Describe but does not forward the RowDescription.
-		if ((extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
-			pg_build_describe(native_outbuf, 'P', "");
-		}
+		// Match libpq's implicit Describe: even an empty execution needs column
+		// metadata for cache admission. The drain suppresses T/n when the client
+		// did not ask for Describe, preserving its original response shape.
+		pg_build_describe(native_outbuf, 'P', "");
 
 		pg_build_execute(native_outbuf, "", 0); // unnamed portal, max_rows 0 (parity phase)
 
@@ -5430,7 +5449,7 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 		if (savepoint_count == 0) {
 			set_status(false, STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT);
 		} else if (savepoint_count == -1) {
-			if ((IsKnownActiveTransaction() == false) /* ||
+			if (IsKnownActiveTransaction() == false /* ||
 				(strncasecmp(query_digest_text, "COMMIT", strlen("COMMIT")) == 0) ||
 				(strncasecmp(query_digest_text, "ROLLBACK", strlen("ROLLBACK")) == 0) ||
 				(strncasecmp(query_digest_text, "ABORT", strlen("ABORT")) == 0)*/) {

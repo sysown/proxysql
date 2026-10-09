@@ -90,24 +90,19 @@ bool parse_gtid(const char* s, ParsedGTID* out);
 bool parse_gtid(const char* s, size_t len, ParsedGTID* out);
 bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
                             uint64_t* trxid);
+// Selects the GTID of the session's own last transaction from an OK packet:
+// the SESSION_TRACK_GTIDS payload (MySQL), or else the tracked 'last_gtid'
+// system variable (MariaDB). Global positions such as 'gtid_binlog_pos' are
+// never used: they describe the whole server and can be multi-domain lists.
+// `buf` is left untouched on failure, and also when the value is unchanged.
 bool select_session_gtid(
 	const char* session_track_gtids, size_t gtids_len,
-	const std::unordered_map<std::string, std::string>& sysvars,
+	const char* last_gtid, size_t last_gtid_len,
 	char* buf, size_t buf_len);
-// A MariaDB domain id is a uint32, so its canonical decimal spelling is at most
-// 10 digits long. Callers that must bound a scan over a domain id use this.
-static const size_t MARIADB_DOMAIN_ID_MAX_DIGITS = 10;
 
 // Accepts only the canonical decimal spelling of a MariaDB domain id: digits
 // only, no leading zero unless the id is exactly "0" (so that `0` and `00`
 // cannot name the same domain), and a value representable as a uint32.
 bool is_canonical_mariadb_domain_id(const char* id, size_t len);
-// Renders the native MariaDB `domain-server-seq` position of a single domain.
-// `domain_id` selects the domain; when it is NULL or empty the set must hold
-// exactly one domain, otherwise the call fails closed. `buf` is left untouched
-// on failure, and also when the rendered value already matches its contents.
-bool render_mariadb_domain_position(const GTID_Set& set, const char* domain_id,
-                                    char* buf, size_t buf_len);
-bool parse_gtid_set(const char* encoded, GTID_Set* out);
 
 #endif /* PROXYSQL_GTID */

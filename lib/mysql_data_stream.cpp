@@ -475,7 +475,7 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (myds_type==MYDS_BACKEND || myds_type==MYDS_BACKEND_NOT_CONNECTED) {
 		assert(myconn==NULL);
 	}
-	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
+	if ( myconn && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
 	if (encrypted) {
 		if (ssl) {
 			// NOTE: SSL standard requires a final 'close_notify' alert on socket
@@ -848,7 +848,7 @@ int MySQL_Data_Stream::read_from_net() {
 			if (
 				(ssl_ret == SSL_ERROR_SYSCALL) &&
 				(
-					((errno == EINTR || errno == EAGAIN))
+					(errno == EINTR || errno == EAGAIN)
 					|| (st == 0)
 				)
 			) {
@@ -1366,7 +1366,7 @@ int MySQL_Data_Stream::buffer2array() {
 							PROXY_info = new ProxyProtocolInfo(ppi);
 							// we take a copy of old address/port
 							if (addr.addr) {
-								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
+								snprintf(PROXY_info->proxy_address, sizeof(PROXY_info->proxy_address), "%s", addr.addr);
 								free(addr.addr);
 							}
 							PROXY_info->proxy_port = addr.port;
@@ -1387,7 +1387,7 @@ int MySQL_Data_Stream::buffer2array() {
 							// upstream LB consistently across all branches.
 							PROXY_info = new ProxyProtocolInfo(ppi);
 							if (addr.addr) {
-								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
+								snprintf(PROXY_info->proxy_address, sizeof(PROXY_info->proxy_address), "%s", addr.addr);
 							}
 							PROXY_info->proxy_port = addr.port;
 							if (addr.addr) {
@@ -1727,6 +1727,14 @@ unsigned char * MySQL_Data_Stream::resultset2buffer(bool del) {
 	PtrSize_t *ps;
 	for (i=0;i<resultset->len;i++) {
 		ps=resultset->index(i);
+		// Callers size the buffer, see #6229. Compare against the remaining space,
+		// so the check cannot be defeated by unsigned wraparound.
+		assert(ps->size <= resultset_length - l);
+		if (ps->size > resultset_length - l) {
+			proxy_error("Resultset packets exceed the buffer size of %u bytes: not copying\n", resultset_length);
+			l_free(resultset_length, mybuff);
+			return NULL;
+		}
 		memcpy(mybuff+l,ps->ptr,ps->size);
 		if (del) l_free(ps->size,ps->ptr);
 		l+=ps->size;

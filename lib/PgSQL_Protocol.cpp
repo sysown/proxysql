@@ -448,6 +448,12 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 				if (_attr) free(_attr);
 			}
 			// unknown user: `selected` stays = floor; the response handler detects the miss and mocks.
+			// Known limitation (#6349): with a floor below SCRAM, a known user whose stored secret
+			// maps to a different method than the floor (a SCRAM verifier under an md5/cleartext
+			// floor, an md5 hash under a cleartext floor) is challenged differently from an unknown
+			// user, so the first server message can reveal that the user exists. PostgreSQL has the
+			// same property (unknown roles get the password_encryption method). Not reachable with
+			// the default SCRAM floor, nor when every stored secret follows the floor.
 		}
 	}
 
@@ -1130,8 +1136,9 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			}
 
 			if (!pass || *pass == '\0') {
+				// No dedicated error here: it would only be sent for known users, and so tell them
+				// apart from unknown ones (anti-enumeration, #6349). Fail like a wrong password.
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds)->sess, (*myds), user);
-				generate_error_packet(true, false, "empty password returned by client", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 				break;
 			}
 
@@ -1163,7 +1170,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				snprintf(&md5_string[j], 3, "%02x", (unsigned int)md5_digest[i]);
 			}
 
-			if (strlen(md5_string) == pass_len && strcmp(md5_string, pass) == 0) {
+			if (strlen(md5_string) == pass_len && CRYPTO_memcmp(md5_string, pass, pass_len) == 0) {
 				ret = EXECUTION_STATE::SUCCESSFUL;
 			}
 		}
@@ -1176,12 +1183,12 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			if (mock) break; // anti-enum: unknown/too-weak user — consume the response, fail generically
 
 			if (!pass || *pass == '\0') {
+				// Same as the MD5 branch: fail like a wrong password, no dedicated error (#6349).
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds)->sess, (*myds), user);
-				generate_error_packet(true, false, "empty password returned by client", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 				break;
 			}
 
-			if (strlen(password) == pass_len && strcmp(password, pass) == 0) {
+			if (strlen(password) == pass_len && CRYPTO_memcmp(password, pass, pass_len) == 0) {
 				ret = EXECUTION_STATE::SUCCESSFUL;
 			}
 		}
@@ -1380,7 +1387,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					proxy_error("invalid value for parameter \"%s\": \"%s\"\n", param_name.c_str(), param_val.c_str());
 					m = (char*)"invalid value for parameter \"%s\": \"%s\"";
 					errmsg = (char*)malloc(param_val.length() + param_name.length() + strlen(m));
-					sprintf(errmsg, m, param_name.c_str(), param_val.c_str());
+					snprintf(errmsg, param_val.length() + param_name.length() + strlen(m), m, param_name.c_str(), param_val.c_str());
 					generate_error_packet(true, false, errmsg, PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, true);
 					free(errmsg);	
 					ret = EXECUTION_STATE::FAILED;
@@ -1460,7 +1467,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					proxy_error("invalid value for parameter \"%s\": \"%s\"\n", pgsql_tracked_variables[idx].set_variable_name, value_copy.c_str());
 					m = (char*)"invalid value for parameter \"%s\": \"%s\"";
 					errmsg = (char*)malloc(value_copy.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m));
-					sprintf(errmsg, m, pgsql_tracked_variables[idx].set_variable_name, value_copy.c_str());
+					snprintf(errmsg, value_copy.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m), m, pgsql_tracked_variables[idx].set_variable_name, value_copy.c_str());
 					generate_error_packet(true, false, errmsg, PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, true);
 					free(errmsg);
 					ret = EXECUTION_STATE::FAILED;

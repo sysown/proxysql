@@ -467,7 +467,7 @@ void PgSQL_Event::write_auth(LogBuffer *f, PgSQL_Session *sess) {
 				uint64_t curtime_mono=sess->thread->curtime;
 				uint64_t timediff = curtime_mono - sess->start_time;
 				uint64_t orig_time = curtime_real - timediff;
-				time_t timer= (orig_time)/1000/1000;
+				time_t timer= orig_time/1000/1000;
 				struct tm tm_info;
 				char buffer1[36];
 				char buffer2[64];
@@ -865,11 +865,13 @@ void PgSQL_Logger::events_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (events.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(events.base_filename)+11);
-		sprintf(filen,"%s.%08d",events.base_filename,events.log_file_id);
+		const size_t filen_size = strlen(events.base_filename)+13;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s.%08d",events.base_filename,events.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(events.datadir)+strlen(events.base_filename)+11);
-		sprintf(filen,"%s/%s.%08d",events.datadir,events.base_filename,events.log_file_id);
+		const size_t filen_size = strlen(events.datadir)+strlen(events.base_filename)+14;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s/%s.%08d",events.datadir,events.base_filename,events.log_file_id);
 	}
 	events.logfile=new std::fstream();
 	events.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
@@ -898,11 +900,13 @@ void PgSQL_Logger::audit_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (audit.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(audit.base_filename)+11);
-		sprintf(filen,"%s.%08d",audit.base_filename,audit.log_file_id);
+		const size_t filen_size = strlen(audit.base_filename)+13;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s.%08d",audit.base_filename,audit.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(audit.datadir)+strlen(audit.base_filename)+11);
-		sprintf(filen,"%s/%s.%08d",audit.datadir,audit.base_filename,audit.log_file_id);
+		const size_t filen_size = strlen(audit.datadir)+strlen(audit.base_filename)+14;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s/%s.%08d",audit.datadir,audit.base_filename,audit.log_file_id);
 	}
 	audit.logfile=new std::fstream();
 	audit.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
@@ -1008,8 +1012,9 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+9);
-		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+		const size_t ca_size = cl+9;
+		ca=(char *)malloc(ca_size);
+		snprintf(ca, ca_size, "%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
 	PGSQL_LOG_EVENT_TYPE let = PGSQL_LOG_EVENT_TYPE::SIMPLE_QUERY; // default
@@ -1125,8 +1130,9 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	}
 	sl+=strlen(sa);
 	if (sl && myds->myconn->parent->port) {
-		sa=(char *)malloc(sl+9);
-		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
+		const size_t sa_size = sl+9;
+		sa=(char *)malloc(sa_size);
+		snprintf(sa, sa_size, "%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
 	if (sl) {
@@ -1247,8 +1253,9 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+9);
-		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+		const size_t ca_size = cl+9;
+		ca=(char *)malloc(ca_size);
+		snprintf(ca, ca_size, "%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
 
@@ -1284,8 +1291,9 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 	}
 	sl+=strlen(sa);
 	if (sl && myds->myconn->parent->port) {
-		sa=(char *)malloc(sl+9);
-		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
+		const size_t sa_size = sl+9;
+		sa=(char *)malloc(sa_size);
+		snprintf(sa, sa_size, "%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
 

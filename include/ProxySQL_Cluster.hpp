@@ -4,13 +4,33 @@
 #include "cpp.h"
 #include "thread.h"
 #include "wqueue.h"
+#include "ProxySQL_ServerDiscovery.h"
+#include "ProxySQL_ServerModuleCluster.h"
 #include <vector>
 #include <atomic>
+#include <functional>
 
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
 #define PROXYSQL_NODE_METRICS_LEN	5
+
+class SQLite3_result;
+
+#ifdef PROXYSQL40
+// Shared final step of the v1 runtime-server pulls. `commit_core_rows` takes
+// ownership of `core_rows`; old peers bypass affiliated callbacks but still
+// publish their committed core snapshot to the local controller.
+bool proxysql_cluster_install_v1_runtime_post_fetch(
+	ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
+	bool module_runtime_supported,
+	const std::vector<ProxySQL_ServerModuleClusterTable>& module_tables,
+	const std::function<void(SQLite3_result*)>& stage_core_rows,
+	const std::function<bool(SQLite3_result*)>& commit_core_rows);
+bool proxysql_snapshot_installed_builtin_server_topology(
+	ProxySQL_ServerProtocol protocol, std::vector<uint32_t>& hostgroups,
+	std::string& error);
+#endif
 
 /**
  * @file ProxySQL_Cluster.hpp
@@ -55,7 +75,7 @@
 #define CLUSTER_QUERY_MYSQL_SERVERS_V2 "PROXY_SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_v2 WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_replication_hostgroups'. See top comment for details. */
-#define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups ORDER BY writer_hostgroup"
+#define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM runtime_mysql_replication_hostgroups ORDER BY writer_hostgroup"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_group_replication_hostgroups'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment FROM runtime_mysql_group_replication_hostgroups ORDER BY writer_hostgroup"

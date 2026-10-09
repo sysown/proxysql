@@ -23,6 +23,7 @@ using json = nlohmann::json;
 #include "MySQL_Protocol.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"
+#include "ProxySQL_ServerDiscovery.h"
 #include "ProxySQL_Cluster.hpp"
 #include "proxysql.h"
 #include "cpp.h"
@@ -255,6 +256,7 @@ public:
 	~MySQL_Monitor_Connection_Pool() {
 		purge_all_connections();
 #ifdef DEBUG
+		delete conns;
 		pthread_mutex_destroy(&m2);
 #endif // DEBUG
 	}
@@ -1638,7 +1640,7 @@ bool MySQL_Monitor_State_Data::set_wait_timeout() {
 	char *qt=(char *)"SET wait_timeout=%d";
 	int wait_timeout=mysql_thread___monitor_ping_interval*10/1000;	// convert to second and multiply by 10
 	query=(char *)malloc(strlen(qt)+32);
-	sprintf(query,qt,wait_timeout);
+	snprintf(query,strlen(qt)+32,qt,wait_timeout);
 	t1=monotonic_time();
 	async_exit_status=mysql_query_start(&interr,mysql,query);
 	while (async_exit_status) {
@@ -1750,7 +1752,7 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 		if (rc==false) {
 			unsigned long long now=monotonic_time();
 			char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
-			sprintf(new_error,"timeout on creating new connection: %s",mmsd->mysql_error_msg);
+			snprintf(new_error,50+strlen(mmsd->mysql_error_msg),"timeout on creating new connection: %s",mmsd->mysql_error_msg);
 			free(mmsd->mysql_error_msg);
 			mmsd->mysql_error_msg = new_error;
 			proxy_error("Timeout on read_only check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
@@ -2165,12 +2167,15 @@ __exit_monitor_group_replication_thread:
 		char buf[128];
 		char *s=NULL;
 		int l=strlen(mmsd->hostname);
+		size_t s_size;
 		if (l<110) {
 			s=buf;
+			s_size=sizeof(buf);
 		}	else {
 			s=(char *)malloc(l+16);
+			s_size=l+16;
 		}
-		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+		snprintf(s,s_size,"%s:%d",mmsd->hostname,mmsd->port);
 		bool viable_candidate=false;
 		bool read_only=true;
 		int num_timeouts = 0;
@@ -2424,7 +2429,7 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 		if (rc==false) {
 			unsigned long long now=monotonic_time();
 			char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
-			sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
+			snprintf(new_error,50+strlen(mmsd->mysql_error_msg),"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
 			free(mmsd->mysql_error_msg);
 			mmsd->mysql_error_msg = new_error;
 			proxy_error("Error on Galera check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
@@ -2555,12 +2560,15 @@ __exit_monitor_galera_thread:
 		char buf[128];
 		char *s=NULL;
 		int l=strlen(mmsd->hostname);
+		size_t s_size;
 		if (l<110) {
 			s=buf;
+			s_size=sizeof(buf);
 		}	else {
 			s=(char *)malloc(l+16);
+			s_size=l+16;
 		}
-		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+		snprintf(s,s_size,"%s:%d",mmsd->hostname,mmsd->port);
 		bool primary_partition = false;
 		bool read_only=true;
 		bool wsrep_desync = true;
@@ -3697,6 +3705,10 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
 	int topology_loop = 0;
+#ifdef PROXYSQL40
+	uint64_t read_only_wake_epoch = proxysql_server_read_only_monitor_epoch(
+		ProxySQL_ServerProtocol::mysql);
+#endif
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 		int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
@@ -3706,8 +3718,17 @@ void * MySQL_Monitor::monitor_read_only() {
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)SELECT_SERVERS_FOR_READ_ONLY;
+		const char* query = "read-only monitor server enumeration";
 		t1=monotonic_time();
+
+#ifdef PROXYSQL40
+		const uint64_t current_wake_epoch = proxysql_server_read_only_monitor_epoch(
+			ProxySQL_ServerProtocol::mysql);
+		if (current_wake_epoch != read_only_wake_epoch) {
+			read_only_wake_epoch = current_wake_epoch;
+			next_loop_at = 0;
+		}
+#endif
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 		glover=GloMTH->get_global_version();
@@ -3721,8 +3742,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			goto __sleep_monitor_read_only;
 		}
 		next_loop_at=t1+1000*mysql_thread___monitor_read_only_interval;
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-		resultset = MyHGM->execute_query(query, &error);
+		resultset = MyHGM->get_read_only_servers(&error);
 		assert(resultset);
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
@@ -6268,7 +6288,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 				if (strncmp(mmsd->mysql_error_msg,(char *)"Access denied for user",strlen((char *)"Access denied for user"))==0) {
 					access_denied = true;
 				}
-				sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
+				snprintf(new_error,50+strlen(mmsd->mysql_error_msg),"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
 				free(mmsd->mysql_error_msg);
 				mmsd->mysql_error_msg = new_error;
 				proxy_error("Error on AWS Aurora check for %s:%d after %lldms. Unable to create a connection. %sError: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, (access_denied ? "" : "If the server is overload, increase mysql-monitor_connect_timeout. " ) , new_error);
@@ -6373,12 +6393,15 @@ __exit_monitor_aws_aurora_HG_thread:
 			char buf[128];
 			char *s=NULL;
 			int l=strlen(mmsd->hostname);
+			size_t s_size;
 			if (l<110) {
 				s=buf;
+				s_size=sizeof(buf);
 			}	else {
 				s=(char *)malloc(l+16);
+				s_size=l+16;
 			}
-			sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+			snprintf(s,s_size,"%s:%d",mmsd->hostname,mmsd->port);
 			unsigned long long time_now=realtime_time();
 			time_now=time_now-(mmsd->t2 - start_time);
 			//AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
@@ -6500,7 +6523,7 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 	}
 __exit_monitor_AWS_Aurora_thread_HG_now:
 	if (mmsd) {
-		delete (mmsd);
+		delete mmsd;
 		mmsd = NULL;
 	for (unsigned int i=0; i<N_L_ASE; i++) {
 		if (lasts_ase[i]) {
@@ -9427,12 +9450,15 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vec
 		char buf[128];
 		char* s = NULL;
 		int l = strlen(mmsd->hostname);
+		size_t s_size;
 		if (l < 110) {
 			s = buf;
+			s_size = sizeof(buf);
 		} else {
 			s = (char*)malloc(l + 16);
+			s_size = l + 16;
 		}
-		sprintf(s, "%s:%d", mmsd->hostname, mmsd->port);
+		snprintf(s, s_size, "%s:%d", mmsd->hostname, mmsd->port);
 		bool viable_candidate = false;
 		bool read_only = true;
 		int num_timeouts = 0;
@@ -9922,12 +9948,15 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 		char buf[128];
 		char* s = NULL;
 		int l = strlen(mmsd->hostname);
+		size_t s_size;
 		if (l < 110) {
 			s = buf;
+			s_size = sizeof(buf);
 		} else {
 			s = (char*)malloc(l + 16);
+			s_size = l + 16;
 		}
-		sprintf(s, "%s:%d", mmsd->hostname, mmsd->port);
+		snprintf(s, s_size, "%s:%d", mmsd->hostname, mmsd->port);
 		bool primary_partition = false;
 		bool read_only = true;
 		bool wsrep_desync = true;
