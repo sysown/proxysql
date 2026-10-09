@@ -206,7 +206,7 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(45);
+	plan(50);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
@@ -290,6 +290,61 @@ int main(int, char**) {
 	}
 	ok(r[1] == "1 2 E(22012) Z(I) | 1 Z(I)", "error: the rest of the unit is skipped and its Parse never took the name [%s]", r[1].c_str());
 	ok(r[0] == r[1], "error: same replies as libpq [libpq: %s]", r[0].c_str());
+
+	// --- A query rule's timeout bounds each statement of a unit: the slow first statement is cancelled
+	// at the rule's 1 s, as one statement at a time does. A batch could only give the whole unit one
+	// deadline, the sum of its statements' (3 s here), and the 2.5 s statement would finish.
+	double tmo_secs[2] = { 0, 0 };
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		addRule(admin.get(), 7705, "tmo_" + tag, "timeout", "1000");
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "", "SELECT pg_sleep(2.5) AS tmo_" + tag + "_" + mode_name[m]);
+			pbe(*c, "", "SELECT 1 AS tmo_b_" + tag);
+			pbe(*c, "", "SELECT 2 AS tmo_c_" + tag);
+			const auto t0 = std::chrono::steady_clock::now();
+			c->sendSync();
+			const std::string out = replies(*c);
+			tmo_secs[m] = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+			return out;
+		});
+		dropRules(admin.get());
+	}
+	ok(r[1] == "1 2 E(57014) Z(I)" && tmo_secs[1] < 2.0,
+		"timeout rule on a unit: its slow statement is cancelled at the rule's timeout [%s, %.1f s]", r[1].c_str(), tmo_secs[1]);
+	ok(r[0] == r[1], "timeout rule on a unit: same replies as libpq [libpq: %s, %.1f s]", r[0].c_str(), tmo_secs[0]);
+
+	// --- Only a rule timeout keeps a unit from being batched. With no rule, or a rule whose actions do
+	// not include a timeout, the unit runs as one batch: the processlist says "Execute batch" while its
+	// slow first statement runs. With a timeout rule (long enough not to fire) it runs one message at a
+	// time: "Execute". The client gets the same replies every time.
+	{
+		setNativeMode(admin.get(), true);
+		const char* label[3] = { "no rule", "rule without a timeout", "rule with a timeout" };
+		const char* want_command[3] = { "Execute batch", "Execute batch", "Execute" };
+		for (int k = 0; k < 3; k++) {
+			const std::string mark = "batchmode_" + tag + "_" + std::to_string(k);
+			if (k == 1) addRule(admin.get(), 7706, mark, "retries", "3");
+			if (k == 2) addRule(admin.get(), 7706, mark, "timeout", "10000");
+			std::string command;
+			const std::string out = run([&]() {
+				auto c = client();
+				pbe(*c, "", "SELECT pg_sleep(1.5) AS " + mark);
+				pbe(*c, "", "SELECT 1 AS " + mark + "_b");
+				c->sendSync();
+				usleep(600000);
+				const std::string pid = execScalar(be.get(), "SELECT pid FROM pg_stat_activity WHERE query LIKE '%" + mark
+					+ "%' AND pid <> pg_backend_pid()");
+				command = pid.empty() ? "no backend found" :
+					execScalar(admin.get(), "SELECT command FROM stats_pgsql_processlist WHERE backend_pid=" + pid);
+				return replies(*c);
+			});
+			dropRules(admin.get());
+			ok(command == want_command[k] && out == "1 2 D= C 1 2 D=1 C Z(I)",
+				"%s: the unit runs as \"%s\" [%s, %s]", label[k], want_command[k], command.c_str(), out.c_str());
+		}
+	}
 
 	// --- A multiplex=0 rule pins the connection to the session after a batched unit.
 	for (int m = 0; m < 2; m++) {
