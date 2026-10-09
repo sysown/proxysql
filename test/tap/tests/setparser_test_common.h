@@ -79,6 +79,14 @@ struct Test {
 };
 
 static Test sql_mode[] = {
+  // MySQL LOCAL is a SESSION synonym, including after a comma (#6397).
+  { "SET LOCAL innodb_lock_wait_timeout=5", { Expected("innodb_lock_wait_timeout", {"5"}) } },
+  { "set local innodb_lock_wait_timeout = 5;", { Expected("innodb_lock_wait_timeout", {"5"}) } },
+  { "SET LOCAL `innodb_lock_wait_timeout`=5", { Expected("innodb_lock_wait_timeout", {"5"}) } },
+  { "SET LOCAL innodb_lock_wait_timeout=5, LOCAL sql_safe_updates=1", {
+      Expected("innodb_lock_wait_timeout", {"5"}), Expected("sql_safe_updates", {"1"}) } },
+  { "SET SESSION innodb_lock_wait_timeout=5, LOCAL sql_safe_updates=1", {
+      Expected("innodb_lock_wait_timeout", {"5"}), Expected("sql_safe_updates", {"1"}) } },
   { "SET @@sql_mode = 'TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
   { "SET SESSION sql_mode = 'TRADITIONAL'", { Expected("sql_mode", {"TRADITIONAL"}) } },
   { "SET @@session.sql_mode = 'TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
