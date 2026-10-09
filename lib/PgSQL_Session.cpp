@@ -3690,6 +3690,12 @@ handler_again:
 							}
 						}
 					}
+					// A query rule's timeout bounds each statement. A batch's replies come back together at
+					// its end, so one deadline could only bound the whole unit: such a unit runs one
+					// message at a time instead. The rules ran on the unit's first message already.
+					if (extq_allowed && extq_buffering == false && qpo->timeout > 0) {
+						extq_allowed = false;
+					}
 					// The first message of a unit that may be buffered, now that it has a connection: from
 					// here on the unit goes out in one batch. A libpq connection cannot carry one (a
 					// Unix-socket server, or a connection pooled before the native protocol was turned on):
