@@ -206,7 +206,7 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(44);
+	plan(45);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
@@ -745,6 +745,54 @@ int main(int, char**) {
 		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
 	}
 	ok(r[1] == "1 1 2 T 2 D=22 C Z(I) | s_dsc_a s_dsc_a", "unnamed-portal Describe: logged under its own statement [%s]", r[1].c_str());
+
+	// --- The backend dies mid-batch inside a transaction: the session is kept in a failed transaction
+	// and the first statement not yet answered, a named Bind, is logged on the way out. A Bind has no
+	// text of its own, so the record must carry its statement's, not what the Parse before it left
+	// behind (freed by then). Command stats are off: with them on, that leftover is cleared first.
+	{
+		const auto var = [&](const char* n) {
+			return execScalar(admin.get(), std::string("SELECT variable_value FROM global_variables WHERE variable_name='") + n + "'");
+		};
+		const std::string def_log = var("pgsql-eventslog_default_log");
+		const std::string buf_size = var("pgsql-eventslog_buffer_history_size");
+		const std::string cmd_stats = var("pgsql-commands_stats");
+		exec(admin.get(), "SET pgsql-eventslog_default_log=1");
+		exec(admin.get(), "SET pgsql-eventslog_buffer_history_size=100000");
+		exec(admin.get(), "SET pgsql-commands_stats='false'");
+		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+		setNativeMode(admin.get(), true);
+		const std::string known = "SELECT 4 AS failed_bind_" + tag;
+		const std::string name = "s_fb_" + tag;
+		r[1] = run([&]() {
+			auto w = client();
+			w->prepareStatement("s_fb_warm", known, false);   // the unit's Parse of this text is then answered locally
+			w->sendSync();
+			replies(*w);
+			auto c = client();
+			c->sendQuery("BEGIN");
+			std::string out = replies(*c);
+			pbe(*c, "", "SELECT pg_sleep(3) AS fb_sleep_" + tag);
+			c->prepareStatement(name, known, false);
+			c->bindStatement(name, "p_fb", {}, {}, false);
+			c->sendSync();
+			usleep(1000000);
+			exec(be.get(), "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE query LIKE '%fb_sleep_" + tag
+				+ "%' AND pid <> pg_backend_pid()");
+			return out + " | " + replies(*c);
+		});
+		exec(admin.get(), "DUMP PGSQL EVENTSLOG FROM BUFFER TO MEMORY");
+		const std::string failed = "FROM stats_pgsql_query_events WHERE client_stmt_name='" + name + "' AND event_type=0";
+		const long records = execLong(admin.get(), "SELECT count(*) " + failed);
+		const long with_text = execLong(admin.get(), "SELECT count(*) " + failed + " AND instr(query, 'failed_bind_" + tag + "') > 0");
+		exec(admin.get(), "SET pgsql-eventslog_default_log=" + (def_log.empty() ? "0" : def_log));
+		exec(admin.get(), "SET pgsql-eventslog_buffer_history_size=" + (buf_size.empty() ? "0" : buf_size));
+		exec(admin.get(), "SET pgsql-commands_stats='" + (cmd_stats.empty() ? std::string("true") : cmd_stats) + "'");
+		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+		ok(r[1] == "C Z(T) | E(25P02) Z(E)" && records == 1 && with_text == 1,
+			"backend dies mid-batch: the unanswered Bind is logged with its statement's text [%s, records %ld, with text %ld]",
+			r[1].c_str(), records, with_text);
+	}
 
 	dropRules(admin.get());
 	setNativeMode(admin.get(), false);
