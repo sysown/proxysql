@@ -53,6 +53,13 @@ static long execLong(PGconn* c, const std::string& q) {
 	return v.empty() ? -1 : atol(v.c_str());
 }
 
+// Tables are made over the direct backend connection, as the server's superuser in Docker, and used
+// through the proxy as the test user: without the grant every statement on them fails with 42501.
+static void createTable(PGconn* be, const std::string& tbl) {
+	exec(be, "CREATE TABLE " + tbl + " (a int)");
+	exec(be, "GRANT ALL ON " + tbl + " TO " + std::string(cl.pgsql_username));
+}
+
 // Taking the servers down and back drops every pooled connection: a pooled one keeps the protocol it
 // was opened with, so without this a scenario could run on the other mode's connection.
 static void resetPool(PGconn* admin) {
@@ -199,7 +206,7 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(36);
+	plan(43);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
@@ -370,7 +377,125 @@ int main(int, char**) {
 		dropRules(admin.get());
 		const long opened = connOK(admin.get()) - ok_before;
 		ok(r[1] == "1 2 D=7 C E(42501) Z(I) | T D=9 C Z(I)", "error rule after buffered work: rows, error, ReadyForQuery, session usable [%s]", r[1].c_str());
-		ok(opened >= 2, "error rule after buffered work: the connection holding the unsynced work is closed, so the next statement opens another [opened %ld]", opened);
+		ok(opened == 1, "error rule after buffered work: the backend fails the work and the connection is kept [opened %ld]", opened);
+	}
+
+	// --- ProxySQL's own error after a BEGIN in the same unit: the BEGIN has not run when the error is
+	// found, yet the transaction must fail as on PostgreSQL, so INSERT 2 is refused and COMMIT rolls
+	// back. Again with a SET that cuts the unit short first, after which the connection's last status
+	// still says idle.
+	for (int cut = 0; cut < 2; cut++) {
+		setNativeMode(admin.get(), true);
+		const std::string tbl = "extq_begin_" + tag + "_" + std::to_string(cut);
+		createTable(be.get(), tbl);
+		r[1] = run([&]() {
+			auto c = client();
+			pbe(*c, "", "BEGIN");
+			pbe(*c, "", "INSERT INTO " + tbl + " VALUES (1)");
+			if (cut) pbe(*c, "", "SET application_name TO 'extq_begin_" + tag + "'");
+			c->bindStatement("s_missing", "", {}, {}, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			std::string out = replies(*c);
+			c->sendQuery("INSERT INTO " + tbl + " VALUES (2)");
+			out += " | " + replies(*c);
+			c->sendQuery("COMMIT");
+			return out + " | " + replies(*c);
+		});
+		const std::string want = std::string(cut ? "1 2 C 1 2 C 1 2 C" : "1 2 C 1 2 C") + " E(26000) Z(E) | E(25P02) Z(E) | C Z(I)";
+		ok(r[1] == want, "own error after a BEGIN in the unit%s: failed transaction, COMMIT rolls back [%s]",
+			cut ? ", cut short by SET" : "", r[1].c_str());
+		ok(execLong(be.get(), "SELECT count(*) FROM " + tbl) == 0, "own error after a BEGIN in the unit%s: nothing committed",
+			cut ? ", cut short by SET" : "");
+		exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
+	}
+
+	// --- No transaction, a SET cuts the unit short, then ProxySQL's own error: the INSERT before it is
+	// rolled back as on PostgreSQL, and the connection that held it is kept for the next statement.
+	{
+		setNativeMode(admin.get(), true);
+		const std::string tbl = "extq_cutnotx_" + tag;
+		createTable(be.get(), tbl);
+		const long ok_before = connOK(admin.get());
+		r[1] = run([&]() {
+			auto c = client();
+			pbe(*c, "", "INSERT INTO " + tbl + " VALUES (1)");
+			pbe(*c, "", "SET application_name TO 'extq_cutnotx_" + tag + "'");
+			c->bindStatement("s_missing", "", {}, {}, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			std::string out = replies(*c);
+			c->sendQuery("SELECT 9");
+			return out + " | " + replies(*c);
+		});
+		const long opened = connOK(admin.get()) - ok_before;
+		const long rows = execLong(be.get(), "SELECT count(*) FROM " + tbl);
+		ok(r[1] == "1 2 C 1 2 C E(26000) Z(I) | T D=9 C Z(I)" && rows == 0 && opened == 1,
+			"own error after a SET cut, no transaction: the INSERT is rolled back and the connection kept [%s, rows %ld, opened %ld]",
+			r[1].c_str(), rows, opened);
+		exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
+	}
+
+	// --- BEGIN, INSERT, SAVEPOINT, INSERT and then ProxySQL's own error, all in one unit, the way pgjdbc
+	// sends autosave: ROLLBACK TO SAVEPOINT must keep the INSERT made before the savepoint.
+	{
+		setNativeMode(admin.get(), true);
+		const std::string tbl = "extq_sp_" + tag;
+		createTable(be.get(), tbl);
+		r[1] = run([&]() {
+			auto c = client();
+			pbe(*c, "", "BEGIN");
+			pbe(*c, "", "INSERT INTO " + tbl + " VALUES (1)");
+			pbe(*c, "", "SAVEPOINT sp");
+			pbe(*c, "", "INSERT INTO " + tbl + " VALUES (2)");
+			c->bindStatement("s_missing", "", {}, {}, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			std::string out = replies(*c);
+			c->sendQuery("ROLLBACK TO SAVEPOINT sp");
+			out += " | " + replies(*c);
+			c->sendQuery("INSERT INTO " + tbl + " VALUES (3)");
+			out += " | " + replies(*c);
+			c->sendQuery("COMMIT");
+			return out + " | " + replies(*c);
+		});
+		const std::string kept = execScalar(be.get(), "SELECT string_agg(a::text, ',' ORDER BY a) FROM " + tbl);
+		ok(r[1] == "1 2 C 1 2 C 1 2 C 1 2 C E(26000) Z(E) | C Z(T) | C Z(T) | C Z(I)" && kept == "1,3",
+			"own error after a SAVEPOINT in the unit: ROLLBACK TO SAVEPOINT keeps the work before it [%s, rows %s]",
+			r[1].c_str(), kept.c_str());
+		exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
+	}
+
+	// --- A SET ProxySQL cannot parse pins the session to its hostgroup, and from then on ProxySQL does not
+	// track BEGIN and COMMIT itself. Its own error inside the transaction must still fail it.
+	{
+		setNativeMode(admin.get(), true);
+		const std::string lock_on = execScalar(admin.get(),
+			"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-set_query_lock_on_hostgroup'");
+		const std::string tbl = "extq_lock_" + tag;
+		createTable(be.get(), tbl);
+		r[1] = run([&]() {
+			auto c = client();
+			c->sendQuery("SET extq_batch.flag = 'x'");
+			std::string out = replies(*c);
+			c->sendQuery("BEGIN");
+			out += " | " + replies(*c);
+			c->sendQuery("INSERT INTO " + tbl + " VALUES (1)");
+			out += " | " + replies(*c);
+			c->bindStatement("s_missing", "", {}, {}, false);
+			c->executePortal("", 0, false);
+			c->sendSync();
+			out += " | " + replies(*c);
+			c->sendQuery("INSERT INTO " + tbl + " VALUES (2)");
+			out += " | " + replies(*c);
+			c->sendQuery("COMMIT");
+			return out + " | " + replies(*c);
+		});
+		const long rows = execLong(be.get(), "SELECT count(*) FROM " + tbl);
+		ok(lock_on == "1" && r[1] == "C Z(I) | C Z(T) | C Z(T) | E(26000) Z(E) | E(25P02) Z(E) | C Z(I)" && rows == 0,
+			"own error in a transaction on a hostgroup-locked session: the transaction fails, nothing committed [lock=%s, %s, rows %ld]",
+			lock_on.c_str(), r[1].c_str(), rows);
+		exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
 	}
 
 	// --- ProxySQL's own error after buffered work inside a transaction block: the work is rolled
@@ -378,7 +503,7 @@ int main(int, char**) {
 	{
 		setNativeMode(admin.get(), true);
 		const std::string tbl = "extq_batch_" + tag;
-		exec(be.get(), "CREATE TABLE " + tbl + " (a int)");
+		createTable(be.get(), tbl);
 		r[1] = run([&]() {
 			auto c = client();
 			c->sendQuery("BEGIN");
@@ -436,7 +561,7 @@ int main(int, char**) {
 	for (int m = 0; m < 2; m++) {
 		setNativeMode(admin.get(), m == 1);
 		const std::string tbl = "extq_gone_" + tag + "_" + mode_name[m];
-		exec(be.get(), "CREATE TABLE " + tbl + " (a int)");
+		createTable(be.get(), tbl);
 		r[m] = run([&]() {
 			auto c = client();
 			c->prepareStatement("s_gone", "SELECT a FROM " + tbl, false);
@@ -509,7 +634,7 @@ int main(int, char**) {
 	{
 		setNativeMode(admin.get(), true);
 		const std::string tbl = "extq_many_" + tag;
-		exec(be.get(), "CREATE TABLE " + tbl + " (a int)");
+		createTable(be.get(), tbl);
 		r[1] = run([&]() {
 			auto c = client();
 			c->prepareStatement("s_many", "INSERT INTO " + tbl + " VALUES ($1::int)", false);
