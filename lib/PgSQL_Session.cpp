@@ -8356,6 +8356,11 @@ void PgSQL_Session::commit_pending_named_bind() {
 // kept as entries instead of being sent one at a time with a Flush. At the Sync the entries go out in
 // one write, built for the connection that carries them, and PgSQL_Extq_Registry matches the replies.
 
+// Every buffered message keeps its query info and packet until its reply settles. A larger unit goes
+// out in batches of this many, each ending in a Flush, so a client sending one Sync after thousands
+// of messages cannot make ProxySQL hold all of them at once.
+static const size_t EXTQ_BATCH_MAX_ENTRIES = 1024;
+
 // The statements the session handles itself, which need everything before them to have run. The
 // one-message path handles them: SET, RESET, DISCARD, DEALLOCATE and pg_backend_pid() at Execute,
 // LISTEN and COPY at Parse. Leading whitespace and comments are skipped, as a digest has none.
@@ -8656,6 +8661,12 @@ int PgSQL_Session::extq_after_message(int rc, unsigned int out_before, enum sess
 	if (extended_query_frame.empty()) {
 		return extq_finish(true);
 	}
+	if (extq_entries.size() >= EXTQ_BATCH_MAX_ENTRIES) {
+		// This much goes now, ending in a Flush so its replies come back; the rest of the unit is
+		// buffered once they have. A Sync here would commit this part on its own.
+		extq_resume = true;
+		return extq_finish(false);
+	}
 	return 0;
 }
 
@@ -8687,8 +8698,9 @@ int PgSQL_Session::extq_fail_on_backend(unsigned int out_before) {
 	return extq_finish(true);
 }
 
-// The walk over the unit is done: at its Sync, or cut short by a message the batch cannot carry or
-// by ProxySQL's own error. The batch goes to the backend: status PROCESSING_EXTQ_BATCH, returns 1.
+// The walk over the unit is done: at its Sync, or cut short by a message the batch cannot carry, by
+// the batch's size or by ProxySQL's own error. The batch goes to the backend: status
+// PROCESSING_EXTQ_BATCH, returns 1.
 int PgSQL_Session::extq_finish(bool synced) {
 	extq_buffering = false;
 	extq_sync = synced;
@@ -9038,14 +9050,17 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 	}
 	qpo->log = 0;   // each statement was logged as its reply settled
 	if (extq_sync == false && backend_error == false) {
-		// Cut short before a message the batch cannot carry: the rest of the unit runs one message at
-		// a time, on the same connection, which still holds the batch's unsynced work.
+		// Cut short: the rest of the unit goes on the same connection, which still holds the batch's
+		// unsynced work. After a size cut it is buffered again; before a message the batch cannot
+		// carry it runs one message at a time.
 #ifdef DEBUG
 		dbg_extended_query_backend_conn = myconn;   // the debug check that one connection serves the whole unit
 #endif
+		const bool resume = extq_resume;
 		RequestEnd(myds, false);
 		finishQuery(myds, myconn, true);
 		extq_clear();
+		extq_allowed = resume;
 		return 1;
 	}
 	if (extq_sync == false) {
@@ -9098,6 +9113,7 @@ void PgSQL_Session::extq_unit_failed(PgSQL_Data_Stream* myds) {
 void PgSQL_Session::extq_clear() {
 	extq_allowed = false;
 	extq_buffering = false;
+	extq_resume = false;
 	extq_entries.clear();
 	extq_registry.clear();
 	extq_out.clear();

@@ -337,6 +337,7 @@ private:
 	bool extq_allowed = false;            // this unit may be buffered; decided at its Sync
 	bool extq_buffering = false;
 	bool extq_sync = false;               // the batch ends in a Sync; false when cut short (ends in Flush)
+	bool extq_resume = false;             // cut short by its size: the rest of the unit is buffered again
 	std::deque<PgSQL_Extq_Entry> extq_entries;
 	PgSQL_Extq_Registry extq_registry;
 	std::string extq_out;
