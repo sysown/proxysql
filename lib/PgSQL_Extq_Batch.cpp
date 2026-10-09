@@ -8,21 +8,10 @@ void PgSQL_Extq_Registry::clear() {
 	aborted_ = false;
 	need_sync_ = false;
 	sync_sent_ = false;
-	local_error_ = false;
-	local_error_bytes_.clear();
 	saw_param_desc_ = false;
 	rows_ = 0;
 	affected_rows_ = UINT64_MAX;
 	suspended_ = false;
-}
-
-bool PgSQL_Extq_Registry::needs_backend() const {
-	for (const Extq_Slot& s : slots_) {
-		if (s.reply != Extq_Reply::LOCAL && s.reply != Extq_Reply::LOCAL_ERROR) {
-			return true;
-		}
-	}
-	return false;
 }
 
 void PgSQL_Extq_Registry::start(std::string& out) {
@@ -57,18 +46,6 @@ void PgSQL_Extq_Registry::emit_due(std::string& out) {
 			event(s, Extq_Outcome::OK);
 			slots_.pop_front();
 			continue;
-		}
-		if (s.reply == Extq_Reply::LOCAL_ERROR) {
-			local_error_bytes_ = s.bytes;
-			event(s, Extq_Outcome::ERROR);
-			slots_.pop_front();
-			local_error_ = true;
-			while (slots_.empty() == false) {
-				event(slots_.front(), Extq_Outcome::SKIPPED);
-				slots_.pop_front();
-			}
-			complete_ = true;
-			return;
 		}
 		break;
 	}

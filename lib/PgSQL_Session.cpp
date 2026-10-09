@@ -8647,14 +8647,11 @@ int PgSQL_Session::extq_after_message(int rc, unsigned int out_before, enum sess
 		e.stmt = std::move(pending.stmt);
 	}
 	if (error) {
-		// ProxySQL's own error: PostgreSQL would skip the rest of the unit. Inside a transaction block
-		// it would also fail the transaction, so the backend is made to fail it at this same point.
+		// ProxySQL's own error: PostgreSQL would skip the rest of the unit and fail its transaction,
+		// explicit or implicit. The backend is made to fail at this same point, so the work before it
+		// ends as it would there, including a BEGIN earlier in this unit that has not run yet.
 		reset_extended_query_frame(true);
-		if (is_in_transaction()) {
-			extq_entries.back().fail_on_backend = true;
-			return extq_finish(true);
-		}
-		return extq_finish(false);
+		return extq_finish(true);
 	}
 	if (extended_query_frame.empty()) {
 		return extq_finish(true);
@@ -8662,19 +8659,17 @@ int PgSQL_Session::extq_after_message(int rc, unsigned int out_before, enum sess
 	return 0;
 }
 
-// ProxySQL's own error in a unit that is not being buffered, inside a transaction block. PostgreSQL
-// would fail the transaction, but the backend never saw the error: it goes to the connection that
-// holds the transaction as a one-entry batch that fails there, so savepoints and ROLLBACK work as
-// usual. Returns 2, the error staying local, when no native connection holds the transaction.
+// ProxySQL's own error in a unit that is not being buffered. The backend never saw it, so it goes as a
+// one-entry batch that fails on the connection holding a transaction or this unit's unsynced work,
+// whose status still says idle until its ReadyForQuery. Returns 2, the error staying local, when
+// no native connection holds either.
 int PgSQL_Session::extq_fail_on_backend(unsigned int out_before) {
-	if (is_in_transaction() == false) {
-		return 2;
-	}
 	PgSQL_Backend* holder = nullptr;
 	for (unsigned int i = 0; i < mybes->len && holder == nullptr; i++) {
 		PgSQL_Backend* be = (PgSQL_Backend*)mybes->index(i);
 		PgSQL_Connection* c = (be && be->server_myds) ? be->server_myds->myconn : nullptr;
-		if (c && c->native_mode && c->get_transaction_status_char() != 'I' && c->get_transaction_status_char() != 'U') {
+		if (c && c->native_mode && (c->is_pipeline_active() ||
+			c->get_transaction_status_char() == 'T' || c->get_transaction_status_char() == 'E')) {
 			holder = be;
 		}
 	}
@@ -8688,7 +8683,6 @@ int PgSQL_Session::extq_fail_on_backend(unsigned int out_before) {
 	PgSQL_Extq_Entry& e = extq_entries.back();
 	e.local = std::move(bytes);
 	e.error = true;
-	e.fail_on_backend = true;
 	current_hostgroup = holder->hostgroup_id;
 	return extq_finish(true);
 }
@@ -8762,7 +8756,7 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 		e.parse_id = 0;
 		switch (e.type) {
 		case 0:
-			if (e.fail_on_backend) {
+			if (e.error) {
 				// A statement that cannot parse fails the backend's transaction where ProxySQL's own
 				// error is; the client gets ProxySQL's error in place of the backend's.
 				pg_build_parse(extq_out, "", "PROXYSQL_FAILED_STATEMENT", nullptr, 0);
@@ -8770,7 +8764,7 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 				break;
 			}
 			// The kind is not used for ProxySQL's own replies.
-			extq_registry.push({ Extq_Kind::EXECUTE, e.error ? Extq_Reply::LOCAL_ERROR : Extq_Reply::LOCAL, i, e.local });
+			extq_registry.push({ Extq_Kind::EXECUTE, Extq_Reply::LOCAL, i, e.local });
 			break;
 		case 'P':
 			if (prepared.count(e.stmt.get())) {
@@ -8944,7 +8938,7 @@ void PgSQL_Session::extq_settle(PgSQL_Data_Stream* myds) {
 	Extq_Event ev;
 	while (extq_registry.next_event(ev)) {
 		PgSQL_Extq_Entry& e = extq_entries[ev.entry];
-		if (ev.reply == Extq_Reply::LOCAL || ev.reply == Extq_Reply::LOCAL_ERROR || ev.reply == Extq_Reply::SUBSTITUTE) {
+		if (ev.reply == Extq_Reply::LOCAL || ev.reply == Extq_Reply::SUBSTITUTE) {
 			if (ev.outcome == Extq_Outcome::OK) {
 				extq_commit(e);
 			}
@@ -9043,28 +9037,6 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 		}
 	}
 	qpo->log = 0;   // each statement was logged as its reply settled
-	if (extq_registry.ended_on_local_error()) {
-		// ProxySQL's own error ended the unit, outside a transaction block. The backend still holds the
-		// batch's work, unconcluded: closing it makes PostgreSQL roll that work back, as an error
-		// there would have.
-		const std::string& error = extq_registry.local_error_bytes();
-		RequestEnd(myds, true);
-		reset_extended_query_frame();   // destroys the connection: it holds unsynced work
-		active_transactions = NumActiveTransactions();
-		if (active_transactions == 0) {
-			transaction_started_at = 0;
-			transaction_persistent_hostgroup = -1;   // the destroyed connection was what pinned the route
-			if (transaction_state_manager) {
-				transaction_state_manager->reset_state();
-			}
-		}
-		void* buf = l_alloc(error.size());
-		memcpy(buf, error.data(), error.size());
-		client_myds->PSarrayOUT->add(buf, error.size());
-		client_myds->myprot.generate_ready_for_query_packet(true, active_transactions ? 'T' : 'I');
-		extq_clear();
-		return 0;
-	}
 	if (extq_sync == false && backend_error == false) {
 		// Cut short before a message the batch cannot carry: the rest of the unit runs one message at
 		// a time, on the same connection, which still holds the batch's unsynced work.

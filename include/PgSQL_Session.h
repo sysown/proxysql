@@ -311,8 +311,7 @@ private:
 		bool describe_portal = false;     // Execute: the client's Describe('P') goes with it
 		bool logged = false;
 		std::string local;                // ProxySQL's own reply, or its error when 'error' is set
-		bool error = false;
-		bool fail_on_backend = false;     // ProxySQL's own error, to be made the backend's too (inside a transaction)
+		bool error = false;               // made the backend's error too, by a Parse that fails there
 		std::string name;                 // the client's statement name
 		std::string portal;               // a named portal: its Bind, Close, Execute or Describe
 		uint32_t max_rows = 0;            // a named Execute: its row limit

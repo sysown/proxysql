@@ -878,10 +878,11 @@ static LockedResetProbe runLockedResetScenario(PGconn* admin, PGconn* be_db,
 	return r;
 }
 
-// Refused frames destroy their backend connection. Destroying on a path that runs per query is how
-// pool slots leak, and nothing else here would notice: every other assertion is about one frame, and
-// a leak only shows up as a number that never comes back down. Several frames in a row, so a leak of
-// one per refusal is unmistakable rather than a rounding difference.
+// Refused frames destroy their backend connection (libpq) or keep it (native). Losing one on a
+// path that runs per query is how pool slots leak, and nothing else here would notice: every other
+// assertion is about one frame, and a leak only shows up as a number that never comes back down.
+// Several frames in a row, so a leak of one per refusal is unmistakable rather than a rounding
+// difference.
 static const int DISCARD_LEAK_ROUNDS = 3;
 
 static bool runLeakRounds(const std::string& base, PGconn* be_db, bool* reached_backend) {
@@ -1402,16 +1403,19 @@ int main(int, char**) {
 		const long gauge_baseline = connectedGauge(admin.get());
 		bool reached = false;
 		const bool rejected = runLeakRounds(base + "_" + label, be_db.get(), &reached);
-		const long gauge_end = connectedGaugeWithin(admin.get(), gauge_baseline, 15);
+		// libpq destroys the connection on each refusal. Native makes the backend fail the frame and
+		// keeps the connection, so every round reuses the same one: one more, never one per round.
+		const long gauge_want = gauge_baseline + (native ? 1 : 0);
+		const long gauge_end = connectedGaugeWithin(admin.get(), gauge_want, 15);
 		// gauge_baseline >= 0 is not decoration: both reads return -1 if the admin query fails, and
 		// -1 == -1 would pass this while measuring nothing at all. `reached` is the other half of
 		// that: zero to zero also describes rounds that never opened a backend connection.
-		ok(rejected && reached && gauge_baseline >= 0 && gauge_end == gauge_baseline,
-		   "%s: %d refused frames in a row leave the connected-backend count where it started -- "
-		   "discarding a connection per refusal is exactly how pool slots leak [baseline=%ld, "
+		ok(rejected && reached && gauge_baseline >= 0 && gauge_end == gauge_want,
+		   "%s: %d refused frames in a row leave the connected-backend count at %s -- "
+		   "a connection per refusal is exactly how pool slots leak [baseline=%ld, "
 		   "end=%ld, all rejected=%s, reached a backend=%s]",
-		   label, DISCARD_LEAK_ROUNDS, gauge_baseline, gauge_end, rejected ? "yes" : "no",
-		   reached ? "yes" : "no");
+		   label, DISCARD_LEAK_ROUNDS, native ? "one connection, reused" : "where it started",
+		   gauge_baseline, gauge_end, rejected ? "yes" : "no", reached ? "yes" : "no");
 	}
 
 	// --- a SUCCEEDED frame whose Sync never reached the backend (PJ1) ----------------------------

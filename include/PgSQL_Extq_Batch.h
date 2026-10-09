@@ -16,17 +16,15 @@ enum class Extq_Kind : uint8_t { PARSE, BIND, DESCRIBE_S, DESCRIBE_P, EXECUTE, C
 //   RELAY        the backend's reply goes to the client
 //   DROP         ProxySQL's own message: success is dropped, an error goes to the client
 //   LOCAL        ProxySQL's own reply, in bytes, sent once every earlier slot is answered
-//   LOCAL_ERROR  ProxySQL's own error, due the same way; nothing after it is answered. Its bytes
-//                are not appended to the output: the session sends them once the batch is over.
 //   SUBSTITUTE   ProxySQL's own message, sent to fail on the backend: the backend's error is
 //                replaced by these bytes, ProxySQL's own error, and the rest is skipped as usual.
-enum class Extq_Reply : uint8_t { RELAY, DROP, LOCAL, LOCAL_ERROR, SUBSTITUTE };
+enum class Extq_Reply : uint8_t { RELAY, DROP, LOCAL, SUBSTITUTE };
 
 struct Extq_Slot {
 	Extq_Kind kind;
 	Extq_Reply reply;
 	uint32_t entry;       // the client message the slot belongs to
-	std::string bytes;    // LOCAL, LOCAL_ERROR and SUBSTITUTE: complete wire messages
+	std::string bytes;    // LOCAL and SUBSTITUTE: complete wire messages
 };
 
 enum class Extq_Outcome : uint8_t { OK, ERROR, SKIPPED };
@@ -48,8 +46,6 @@ class PgSQL_Extq_Registry {
 public:
 	void clear();
 	void push(Extq_Slot slot) { slots_.push_back(std::move(slot)); }
-	// Whether any slot waits for the backend. When none does, start() answers everything.
-	bool needs_backend() const;
 	// Appends to out ProxySQL's replies that come before any backend reply.
 	void start(std::string& out);
 	// Judges one backend message. ProxySQL's replies that became due after it are appended to
@@ -61,9 +57,6 @@ public:
 	// gets one, so the caller sends a Sync and then calls sync_sent().
 	bool needs_sync() const { return need_sync_ && !sync_sent_; }
 	void sync_sent() { sync_sent_ = true; }
-	// The batch ended on ProxySQL's own error; these are its bytes.
-	bool ended_on_local_error() const { return local_error_; }
-	const std::string& local_error_bytes() const { return local_error_bytes_; }
 private:
 	void emit_due(std::string& out);
 	void on_error();
@@ -76,8 +69,6 @@ private:
 	bool aborted_ = false;       // an ErrorResponse came; only ReadyForQuery may follow
 	bool need_sync_ = false;
 	bool sync_sent_ = false;
-	bool local_error_ = false;
-	std::string local_error_bytes_;
 	bool saw_param_desc_ = false;
 	uint64_t rows_ = 0;
 	uint64_t affected_rows_ = UINT64_MAX;

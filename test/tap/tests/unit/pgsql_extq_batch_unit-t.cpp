@@ -38,7 +38,6 @@ static void test_plain_unit() {
 	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::LOCAL, 0, PARSE_OK));
 	reg.push(slot(Extq_Kind::BIND, Extq_Reply::RELAY, 1));
 	reg.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 2));
-	ok(reg.needs_backend(), "plain: needs the backend");
 	std::string out;
 	reg.start(out);
 	ok(out == PARSE_OK, "plain: local ParseComplete due before any backend reply");
@@ -178,29 +177,19 @@ static void test_flush_ended() {
 	ok(feed(reg3, 'Z', "I", out) == Extq_Verdict::RELAY && reg3.complete(), "flush-ended error: the injected Sync's ReadyForQuery is relayed");
 }
 
-// ProxySQL's own error after buffered work: sent after the earlier replies, ends the batch.
-static void test_local_error() {
+// An earlier backend error skips ProxySQL's own failing Parse: the client gets only the first error.
+static void test_substitute_skipped() {
 	PgSQL_Extq_Registry reg;
-	const std::string err("Eerr", 4);
 	reg.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 0));
-	reg.push(slot(Extq_Kind::BIND, Extq_Reply::LOCAL_ERROR, 1, err));
+	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::SUBSTITUTE, 1, std::string("Eown", 4)));
+	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 2));
 	std::string out;
 	reg.start(out);
-	ok(out.empty(), "local error: waits for earlier replies");
-	feed(reg, 'C', std::string("UPDATE 1\0", 9), out);
-	ok(out.empty() && reg.local_error_bytes() == err && reg.complete() && reg.ended_on_local_error(),
-		"local error: due after the Execute, kept apart from the relayed bytes, batch complete");
+	const bool relayed = feed(reg, 'E', "backend err", out) == Extq_Verdict::RELAY &&
+		feed(reg, 'Z', "I", out) == Extq_Verdict::RELAY;
 	auto ev = events(reg);
-	ok(ev.size() == 2 && ev[1].outcome == Extq_Outcome::ERROR && ev[1].reply == Extq_Reply::LOCAL_ERROR,
-		"local error: reported as an error event");
-
-	PgSQL_Extq_Registry reg2;
-	reg2.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 0));
-	reg2.push(slot(Extq_Kind::BIND, Extq_Reply::LOCAL_ERROR, 1, err));
-	out.clear();
-	reg2.start(out);
-	feed(reg2, 'E', "backend err", out);
-	ok(reg2.needs_sync() && reg2.ended_on_local_error() == false, "local error: skipped when an earlier backend error came first");
+	ok(relayed && out.empty() && reg.complete() && ev.size() == 2 && ev[1].outcome == Extq_Outcome::SKIPPED,
+		"substitute: skipped when an earlier backend error came first");
 }
 
 // Messages that answer nothing, and messages that fit no slot.
@@ -222,12 +211,11 @@ static void test_passthrough_and_bad() {
 	ok(feed(reg2, 'Z', "I", out) == Extq_Verdict::BAD, "a second ReadyForQuery fits no slot");
 }
 
-// A batch of only ProxySQL's own replies never needs the backend.
+// A batch of only ProxySQL's own replies is answered at the start.
 static void test_all_local() {
 	PgSQL_Extq_Registry reg;
 	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::LOCAL, 0, PARSE_OK));
 	reg.push(slot(Extq_Kind::CLOSE, Extq_Reply::LOCAL, 1, CLOSE_OK));
-	ok(reg.needs_backend() == false, "all local: no backend needed");
 	std::string out;
 	reg.start(out);
 	ok(out == PARSE_OK + CLOSE_OK && reg.complete(), "all local: every reply out at start");
@@ -264,7 +252,6 @@ static void test_substitute() {
 	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::RELAY, 0));
 	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::SUBSTITUTE, 1, own_error));
 	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 2));
-	ok(reg.needs_backend(), "substitute: needs the backend");
 	std::string out;
 	reg.start(out);
 	ok(out.empty() && feed(reg, '1', "", out) == Extq_Verdict::RELAY, "substitute: the earlier ParseComplete is relayed");
@@ -283,20 +270,20 @@ static void test_substitute() {
 }
 
 int main() {
-	plan(52);
+	plan(46);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
-	test_plain_unit();             // 9
+	test_plain_unit();             // 8
 	test_local_reply_ordering();   // 3
 	test_error_skips_rest();       // 5
 	test_own_parse();              // 5
 	test_implicit_sync();          // 3
 	test_flush_ended();            // 5
-	test_local_error();            // 4
+	test_substitute_skipped();     // 1
 	test_passthrough_and_bad();    // 5
-	test_all_local();              // 2
+	test_all_local();              // 1
 	test_suspended_execute();      // 4
-	test_substitute();             // 6
+	test_substitute();             // 5
 	test_cleanup_minimal();
 	return exit_status();
 }
