@@ -656,10 +656,6 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *   and 'hostgroup_server_mapping' should be rebuild.
 	 */
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
-#ifdef PROXYSQL40
-	// Exact affiliated-module claims used to invalidate the derived role map.
-	std::vector<ProxySQL_ServerHostgroupClaim> hgsm_server_module_claims_ {};
-#endif
 
 
 #if 0
@@ -1093,7 +1089,6 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 
 	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int, bool);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
-	SQLite3_result* get_read_only_servers(char** error = nullptr);
 	/**
 	 * @brief Reconcile writer/reader hostgroup placement from read_only monitor results.
 	 *
@@ -1308,15 +1303,9 @@ private:
 	GTID_Server_Data* get_or_create_gtid_server_data(MySrvC* server, const std::string& endpoint);
 	void start_gtid_reader_if_needed(MySrvC* server, GTID_Server_Data* gtid_data);
 	/**
-	 * @brief Rebuilds 'hostgroup_server_mapping' when its inputs changed.
-	 * @param commit_context true when called while installing configuration (commit or an
-	 *   equivalent table regeneration that refreshed 'table_resultset_checksum'). Only then may the
-	 *   'hgsm_*_checksum' members be advanced to the configuration checksums. Monitor actions
-	 *   ('read_only_action_v2') pass false: they rebuild only for server-module claim changes and
-	 *   leave 'hgsm_*_checksum' untouched, because those actions store the runtime checksum there as
-	 *   the signal that runtime diverged from configuration and the next commit must rebuild.
+	 * @brief Rebuilds 'hostgroup_server_mapping' when its explicit replication inputs changed.
 	 */
-	bool update_hostgroup_manager_mappings(bool commit_context = true);
+	bool update_hostgroup_manager_mappings();
 	uint64_t get_mysql_servers_checksum(SQLite3_result* runtime_mysql_servers = nullptr);
 	uint64_t get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2 = nullptr);
 };

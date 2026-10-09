@@ -28,9 +28,6 @@ void (*proxysql_servers_v2_refresh_exception_for_test)(int, int) = nullptr;
 namespace {
 std::atomic<uint64_t> mysql_generation {0};
 std::atomic<uint64_t> pgsql_generation {0};
-#ifdef PROXYSQL40
-std::atomic<uint64_t> read_only_monitor_epochs[2] {{0}, {0}};
-#endif
 std::mutex mysql_install_mutex;
 std::mutex pgsql_install_mutex;
 thread_local bool install_reservation[2] {false, false};
@@ -266,18 +263,6 @@ uint64_t proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol prot
 		? mysql_generation : pgsql_generation;
 	return generation.load(std::memory_order_relaxed) + 1;
 }
-
-#ifdef PROXYSQL40
-uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol) {
-	const int index = protocol_index(protocol);
-	return index < 0 ? 0 : read_only_monitor_epochs[index].load(std::memory_order_acquire);
-}
-
-void proxysql_request_server_read_only_monitor(ProxySQL_ServerProtocol protocol) {
-	const int index = protocol_index(protocol);
-	if (index >= 0) read_only_monitor_epochs[index].fetch_add(1, std::memory_order_release);
-}
-#endif
 
 bool ProxySQL_ServerRuntimeInstallTransaction::commit(
 	ProxySQL_ServerRuntimeSnapshot snapshot, bool commit_affiliated_module) {
@@ -527,25 +512,18 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 
 	for (const auto& desired_entry : desired_by_endpoint) {
 		const auto current_it = current_by_endpoint.find(desired_entry.first);
-		const bool force_role = std::any_of(desired_entry.second.begin(), desired_entry.second.end(),
-			[](const ProxySQL_ServerRow& row) { return row.force_topology_role; });
-		if (current_it == current_by_endpoint.end() || force_role) {
-			merged.insert(merged.end(), desired_entry.second.begin(), desired_entry.second.end());
-			continue;
-		}
-		for (const auto& current_row : current_it->second) {
-			const auto exact = std::find_if(desired_entry.second.begin(), desired_entry.second.end(),
-				[&](const ProxySQL_ServerRow& row) {
-					return row.hostgroup_id == current_row.hostgroup_id;
-				});
-			ProxySQL_ServerRow row = exact != desired_entry.second.end() ? *exact :
-				desired_entry.second.front();
-			row.hostgroup_id = current_row.hostgroup_id;
-			row.hostname = current_row.hostname;
-			row.port = current_row.port;
-			row.status = current_row.status;
-			row.topology_role_epoch = 0;
-			row.force_topology_role = false;
+		for (auto row : desired_entry.second) {
+			if (current_it != current_by_endpoint.end()) {
+				// The plugin owns membership and configured options. Core owns runtime health.
+				// Preserve health from the exact row, or from the same endpoint during a role move.
+				const auto exact = std::find_if(current_it->second.begin(), current_it->second.end(),
+					[&](const ProxySQL_ServerRow& current_row) {
+						return current_row.hostgroup_id == row.hostgroup_id;
+					});
+				const auto& health_source = exact != current_it->second.end() ?
+					*exact : current_it->second.front();
+				row.status = health_source.status;
+			}
 			merged.push_back(std::move(row));
 		}
 	}
@@ -625,11 +603,6 @@ size_t proxysql_drain_server_desired_sets() {
 				applied = false;
 				error = "unknown reconciliation failure";
 			}
-		}
-		if (applied && std::any_of(queued.desired_set.servers.begin(),
-			queued.desired_set.servers.end(),
-			[](const ProxySQL_ServerRow& row) { return row.force_topology_role; })) {
-			proxysql_request_server_read_only_monitor(queued.desired_set.protocol);
 		}
 		complete_accepted_server_desired_set(
 			queued.completion, queued.desired_set.generation, applied);

@@ -17,7 +17,6 @@
 #include <cstdlib>
 #include <dlfcn.h>
 #include <fcntl.h>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -232,52 +231,25 @@ std::vector<ProxySQL_ServerHostgroupClaim> large_hostgroup_claim_set() {
 	return claims;
 }
 
-template <typename HGM>
-bool execute_hgm_statement(HGM* hgm, const char* sql) {
+std::unique_ptr<SQLite3_result> mysql_readonly_servers() {
 	char* error = nullptr;
-	std::unique_ptr<SQLite3_result> ignored(hgm->execute_query(const_cast<char*>(sql), &error));
-	const bool ok = error == nullptr;
+	std::unique_ptr<SQLite3_result> result(
+		MyHGM->execute_query(const_cast<char*>(SELECT_SERVERS_FOR_READ_ONLY), &error));
 	if (error != nullptr) free(error);
-	return ok;
+	return result;
 }
 
-struct PublicationRaceState {
-	std::mutex mutex;
-	std::condition_variable cv;
-	bool monitor_started {false};
-	bool monitor_done {false};
-};
-
-bool run_claim_publication_race(ProxySQL_ServerProtocol protocol,
-	const std::function<bool()>& mutate_hgm, const std::function<bool()>& publish_claims,
-	const std::function<void()>& monitor_action) {
-	PublicationRaceState state;
-	proxysql_lock_server_discovery_protocol(protocol);
-	const bool hgm_committed = mutate_hgm();
-	std::thread monitor([&] {
-		{
-			std::lock_guard<std::mutex> lock(state.mutex);
-			state.monitor_started = true;
-			state.cv.notify_all();
-		}
-		monitor_action();
-		{
-			std::lock_guard<std::mutex> lock(state.mutex);
-			state.monitor_done = true;
-			state.cv.notify_all();
-		}
-	});
-	bool completed_before_publication = false;
-	{
-		std::unique_lock<std::mutex> lock(state.mutex);
-		state.cv.wait(lock, [&] { return state.monitor_started; });
-		completed_before_publication = state.cv.wait_for(lock, std::chrono::milliseconds(100),
-			[&] { return state.monitor_done; });
-	}
-	const bool install_committed = hgm_committed && publish_claims();
-	proxysql_unlock_server_discovery_protocol(protocol);
-	monitor.join();
-	return install_committed && !completed_before_publication;
+std::unique_ptr<SQLite3_result> pgsql_readonly_servers() {
+	char* error = nullptr;
+	const char query[] =
+		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
+		" FROM pgsql_servers JOIN pgsql_replication_hostgroups"
+			" ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
+		" WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
+	std::unique_ptr<SQLite3_result> result(
+		PgHGM->execute_query(const_cast<char*>(query), &error));
+	if (error != nullptr) free(error);
+	return result;
 }
 
 size_t ack_count(AckState& state, uint64_t generation, bool applied) {
@@ -304,7 +276,7 @@ ProxySQL_ServerDesiredSet pgsql_desired(uint64_t generation,
 } // namespace
 
 int main() {
-	plan(84);
+	plan(75);
 	proxysql_server_discovery_after_final_revalidation_for_test = &after_final_revalidation_hook;
 	proxysql_server_reconcile_after_hgm_snapshot_for_test = &after_hgm_snapshot_hook;
 	proxysql_server_discovery_retirement_attempt_for_test = &retirement_attempt_hook;
@@ -467,58 +439,39 @@ int main() {
 		"real MySQL HGM fixture starts without configured replication rows");
 	std::unique_ptr<SQLite3_result> mysql_replication_table(
 		MyHGM->dump_table_mysql("mysql_replication_hostgroups"));
-	std::unique_ptr<SQLite3_result> mysql_readonly(MyHGM->get_read_only_servers());
+	std::unique_ptr<SQLite3_result> mysql_readonly(mysql_readonly_servers());
+	MyHGM->read_only_action_v2({{"second-writer.example", 3306, 1}});
 	ok(mysql_replication_table && mysql_replication_table->rows_count == 0 && mysql_readonly &&
-		has_readonly_endpoint(*mysql_readonly, 0, "old.example", 3306) &&
-		has_readonly_endpoint(*mysql_readonly, 0, "reader.example", 3306) &&
-		has_readonly_endpoint(*mysql_readonly, 0, "second-writer.example", 3306) &&
-		has_readonly_endpoint(*mysql_readonly, 0, "second-reader.example", 3306) &&
-		!has_readonly_endpoint(*mysql_readonly, 0, "unrelated.example", 3306),
-		"MySQL readonly enumeration unions both plugin claim pairs without table rows");
+		mysql_readonly->rows_count == 0 &&
+		find_row(*runtime_rows(), 27, "second-writer.example", 3306) != nullptr &&
+		find_row(*runtime_rows(), 28, "second-writer.example", 3306) == nullptr,
+		"MySQL plugin claims do not enroll endpoints in read-only monitoring");
 	manager->commit_and_install_server_runtime_snapshot(installed, large_hostgroup_claim_set());
-	mysql_readonly.reset(MyHGM->get_read_only_servers());
+	mysql_readonly = mysql_readonly_servers();
 	MyHGM->read_only_action_v2({{"second-writer.example", 3306, 1}});
 	ok(proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql).size() == 500 &&
-		mysql_readonly && has_readonly_endpoint(*mysql_readonly, 0,
-			"second-writer.example", 3306) &&
-		find_row(*runtime_rows(), 28, "second-writer.example", 3306) != nullptr,
-		"MySQL enumerates and maps endpoints with 500 active claims and no replication rows");
-	manager->commit_and_install_server_runtime_snapshot(installed, mysql_claims);
-	MyHGM->read_only_action_v2({{"second-writer.example", 3306, 0}});
-	const bool mysql_table_hidden = execute_hgm_statement(MyHGM,
-		"ALTER TABLE mysql_replication_hostgroups RENAME TO mysql_replication_hostgroups_hidden");
-	manager->commit_and_install_server_runtime_snapshot(installed, large_hostgroup_claim_set());
-	char* mysql_enumeration_error = nullptr;
-	mysql_readonly.reset(MyHGM->get_read_only_servers(&mysql_enumeration_error));
-	MyHGM->read_only_action_v2({{"second-writer.example", 3306, 1}});
-	const bool mysql_failed_refresh_untouched =
-		find_row(*runtime_rows(), 27, "second-writer.example", 3306) != nullptr;
-	const bool mysql_table_restored = execute_hgm_statement(MyHGM,
-		"ALTER TABLE mysql_replication_hostgroups_hidden RENAME TO mysql_replication_hostgroups");
-	MyHGM->read_only_action_v2({{"second-writer.example", 3306, 1}});
-	ok(mysql_table_hidden && mysql_readonly && mysql_readonly->rows_count == 0 &&
-		mysql_enumeration_error != nullptr && mysql_failed_refresh_untouched &&
-		mysql_table_restored &&
-		find_row(*runtime_rows(), 28, "second-writer.example", 3306) != nullptr,
-		"MySQL query failures return an empty set, do not act, and preserve retryable mappings");
-	if (mysql_enumeration_error != nullptr) free(mysql_enumeration_error);
+		mysql_readonly && mysql_readonly->rows_count == 0 &&
+		find_row(*runtime_rows(), 27, "second-writer.example", 3306) != nullptr &&
+		find_row(*runtime_rows(), 28, "second-writer.example", 3306) == nullptr,
+		"MySQL read-only monitoring remains independent with 500 active claims");
 	manager->commit_and_install_server_runtime_snapshot(installed, {{0, 1}});
 	const ProxySQL_ServerDesiredSet mysql_zero_scope {ProxySQL_ServerProtocol::mysql,
 		generation, {0, 1}, {}, ProxySQL_ServerPersistence::runtime_only};
 	const bool mysql_zero_revalidated = manager->revalidate_server_desired_set(
 		ProxySQL_ServerProtocol::mysql, mysql_controller, mysql_zero_scope);
-	mysql_readonly.reset(MyHGM->get_read_only_servers());
+	mysql_readonly = mysql_readonly_servers();
 	MyHGM->read_only_action_v2({{"zero-writer.example", 3306, 1}});
-	const bool mysql_zero_mapped =
-		find_row(*runtime_rows(), 1, "zero-writer.example", 3306) != nullptr;
+	const bool mysql_zero_unchanged =
+		find_row(*runtime_rows(), 0, "zero-writer.example", 3306) != nullptr &&
+		find_row(*runtime_rows(), 1, "zero-writer.example", 3306) == nullptr;
 	const bool mysql_zero_applied = manager->post_server_desired_set(mysql_zero_scope) &&
 		admin->drain_server_discovery_updates() == 1 &&
 		ack_count(acks, generation, true) == 1;
 	ok(mysql_zero_revalidated && mysql_zero_applied && mysql_readonly &&
-		has_readonly_endpoint(*mysql_readonly, 0, "zero-writer.example", 3306) &&
-		has_readonly_endpoint(*mysql_readonly, 0, "zero-reader.example", 3306) &&
-		mysql_zero_mapped,
-		"MySQL desired-set subset and monitor mapping treat hostgroup 0 as an ordinary claim");
+		mysql_readonly->rows_count == 0 && mysql_zero_unchanged &&
+		find_row(*runtime_rows(), 0, "zero-writer.example", 3306) == nullptr &&
+		find_row(*runtime_rows(), 1, "zero-reader.example", 3306) == nullptr,
+		"MySQL desired-set authority treats hostgroup 0 as an ordinary claim");
 	clear_acks(acks);
 	manager->commit_and_install_server_runtime_snapshot(installed, mysql_claims);
 	std::atomic<unsigned int> concurrent_posts {0};
@@ -600,13 +553,9 @@ int main() {
 
 	ProxySQL_ServerRow malformed {77, "outside.example", 3306};
 	malformed.force_topology_role = true;
-	const uint64_t rejected_wake_epoch = proxysql_server_read_only_monitor_epoch(
-		ProxySQL_ServerProtocol::mysql);
 	ok(manager->post_server_desired_set(desired(generation, {malformed})) &&
 		admin->drain_server_discovery_updates() == 1 && ack_count(acks, generation, false) == 1,
 		"non-delegated desired rows are rejected with one false acknowledgement");
-	ok(proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol::mysql) == rejected_wake_epoch,
-		"rejected out-of-claim forced roles do not wake the read-only monitor");
 	ProxySQL_ServerRow duplicate {17, "duplicate.example", 3306};
 	ok(manager->post_server_desired_set(desired(generation, {duplicate, duplicate})) &&
 		admin->drain_server_discovery_updates() == 1 && ack_count(acks, generation, false) == 2,
@@ -629,42 +578,29 @@ int main() {
 	ProxySQL_ServerRow hinted_writer {17, "role.example", 3306, 0, "ONLINE", 41, 0, 121, 0, 1, 0, "writer"};
 	hinted_writer.topology_role_epoch = 10;
 	hinted_writer.force_topology_role = true;
-	uint64_t role_wake_epoch = proxysql_server_read_only_monitor_epoch(
-		ProxySQL_ServerProtocol::mysql);
 	ok(manager->post_server_desired_set(desired(generation, {hinted_writer})) &&
+		admin->drain_server_discovery_updates() == 1 &&
+		find_row(*runtime_rows(), 17, "role.example", 3306) != nullptr,
+		"deprecated topology fields do not prevent authoritative writer placement");
+	ProxySQL_ServerRow desired_reader = hinted_writer;
+	desired_reader.hostgroup_id = 18;
+	desired_reader.weight = 42;
+	desired_reader.force_topology_role = false;
+	ok(manager->post_server_desired_set(desired(generation, {desired_reader})) &&
 		admin->drain_server_discovery_updates() == 1,
-		"newly discovered member is accepted with a forced role hint");
-	ok(proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol::mysql) == role_wake_epoch + 1,
-		"successful forced MySQL placement requests exactly one immediate read-only cycle");
-	role_wake_epoch += 1;
+		"a desired set with force_topology_role=false remains authoritative");
 	auto writer_rows = runtime_rows();
-	ok(find_row(*writer_rows, 17, "role.example", 3306) != nullptr,
-		"new member is placed in the supplied writer hostgroup");
-
-	MyHGM->read_only_action_v2({{"role.example", 3306, 1}});
+	const SQLite3_row* reader_row = find_row(*writer_rows, 18, "role.example", 3306);
+	ok(reader_row != nullptr && std::string(reader_row->fields[5]) == "42" &&
+		find_row(*writer_rows, 17, "role.example", 3306) == nullptr,
+		"the desired set moves the endpoint even when its topology epoch is unchanged");
 	hinted_writer.force_topology_role = false;
-	hinted_writer.weight = 42;
+	hinted_writer.weight = 43;
 	ok(manager->post_server_desired_set(desired(generation, {hinted_writer})) &&
-		admin->drain_server_discovery_updates() == 1,
-		"unchanged topology epoch is reconciled after a monitor role move");
-	ok(proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol::mysql) == role_wake_epoch,
-		"unchanged MySQL role placement does not wake the read-only monitor");
-	auto preserved_role = runtime_rows();
-	const SQLite3_row* preserved_reader = find_row(*preserved_role, 18, "role.example", 3306);
-	ok(preserved_reader != nullptr && std::string(preserved_reader->fields[5]) == "42" &&
-		find_row(*preserved_role, 17, "role.example", 3306) == nullptr,
-		"unchanged hint preserves monitor role while applying same-endpoint configured options");
-	hinted_writer.topology_role_epoch = 11;
-	hinted_writer.force_topology_role = true;
-	ok(manager->post_server_desired_set(desired(generation, {hinted_writer})) &&
-		admin->drain_server_discovery_updates() == 1,
-		"changed topology epoch requests one forced placement update");
-	ok(proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol::mysql) == role_wake_epoch + 1,
-		"changed MySQL role placement requests one additional read-only cycle");
-	auto forced_role = runtime_rows();
-	ok(find_row(*forced_role, 17, "role.example", 3306) != nullptr &&
-		find_row(*forced_role, 18, "role.example", 3306) == nullptr,
-		"changed hint forces the member back to the writer role");
+		admin->drain_server_discovery_updates() == 1 &&
+		find_row(*runtime_rows(), 17, "role.example", 3306) != nullptr &&
+		find_row(*runtime_rows(), 18, "role.example", 3306) == nullptr,
+		"the next accepted desired set moves the endpoint back without a force hint");
 
 	ProxySQL_ServerRow both_writer = hinted_writer;
 	both_writer.force_topology_role = true;
@@ -686,20 +622,24 @@ int main() {
 		admin->drain_server_discovery_updates() == 1 &&
 		MyHGM->shun_and_killall(const_cast<char*>(shunned.hostname.c_str()), shunned.port),
 		"fixture creates monitor-controlled status on an existing discovered member");
-	MySrvC* shunned_pool = MyHGM->find_server_in_hg(17, shunned.hostname, shunned.port);
+	shunned.hostgroup_id = 18;
 	shunned.force_topology_role = false;
 	shunned.weight = 88;
 	ok(manager->post_server_desired_set(desired(generation, {shunned})) &&
 		admin->drain_server_discovery_updates() == 1,
-		"existing member options reconcile without a forced topology role");
+		"an accepted desired set moves a monitor-shunned member without a force hint");
 	auto shunned_rows = runtime_rows();
-	const SQLite3_row* shunned_row = find_row(*shunned_rows, 17, "shunned.example", 3306);
+	const SQLite3_row* shunned_row = find_row(*shunned_rows, 18, "shunned.example", 3306);
 	ok(shunned_row != nullptr && std::string(shunned_row->fields[4]) == "SHUNNED" &&
-		std::string(shunned_row->fields[5]) == "88",
-		"reconcile preserves monitor status while applying configured options");
-	ok(shunned_pool != nullptr &&
-		MyHGM->find_server_in_hg(17, shunned.hostname, shunned.port) == shunned_pool,
-		"ordinary same-key runtime reconciliation preserves the existing connection pool object");
+		std::string(shunned_row->fields[5]) == "88" &&
+		find_row(*shunned_rows, 17, "shunned.example", 3306) == nullptr,
+		"authoritative placement preserves monitor-owned health status");
+	MySrvC* shunned_pool = MyHGM->find_server_in_hg(18, shunned.hostname, shunned.port);
+	shunned.weight = 89;
+	ok(manager->post_server_desired_set(desired(generation, {shunned})) &&
+		admin->drain_server_discovery_updates() == 1 && shunned_pool != nullptr &&
+		MyHGM->find_server_in_hg(18, shunned.hostname, shunned.port) == shunned_pool,
+		"same-key reconciliation preserves the existing connection pool object");
 
 	ProxySQL_ServerDesiredSet stale = desired(generation, {shunned});
 	ok(manager->post_server_desired_set(stale), "currently valid generation queues successfully");
@@ -724,61 +664,41 @@ int main() {
 	ok(PgHGM->commit(), "real PostgreSQL HGM fixture starts with unrelated runtime state");
 	manager->commit_and_install_server_runtime_snapshot(pgsql_installed,
 		large_hostgroup_claim_set());
-	std::unique_ptr<SQLite3_result> large_pgsql_readonly(PgHGM->get_read_only_servers());
+	std::unique_ptr<SQLite3_result> large_pgsql_readonly(pgsql_readonly_servers());
 	PgHGM->read_only_action_v2({{"pgsql-old.example", 5432, 1}}, false);
 	auto large_pgsql_runtime = std::unique_ptr<SQLite3_result>(
 		PgHGM->dump_table_pgsql("pgsql_servers"));
 	ok(proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql).size() == 500 &&
-		large_pgsql_readonly && has_readonly_endpoint(*large_pgsql_readonly, 1,
-			"pgsql-old.example", 5432) && large_pgsql_runtime &&
-		find_row(*large_pgsql_runtime, 18, "pgsql-old.example", 5432) != nullptr,
-		"PostgreSQL enumerates and maps endpoints with 500 active claims and no replication rows");
-	manager->commit_and_install_server_runtime_snapshot(pgsql_installed, pgsql_claims);
-	PgHGM->read_only_action_v2({{"pgsql-old.example", 5432, 0}}, false);
-	const bool pgsql_table_hidden = execute_hgm_statement(PgHGM,
-		"ALTER TABLE pgsql_replication_hostgroups RENAME TO pgsql_replication_hostgroups_hidden");
-	manager->commit_and_install_server_runtime_snapshot(pgsql_installed, large_hostgroup_claim_set());
-	char* pgsql_enumeration_error = nullptr;
-	large_pgsql_readonly.reset(PgHGM->get_read_only_servers(&pgsql_enumeration_error));
-	PgHGM->read_only_action_v2({{"pgsql-old.example", 5432, 1}}, false);
-	large_pgsql_runtime.reset(PgHGM->dump_table_pgsql("pgsql_servers"));
-	const bool pgsql_failed_refresh_untouched = large_pgsql_runtime &&
-		find_row(*large_pgsql_runtime, 17, "pgsql-old.example", 5432) != nullptr;
-	const bool pgsql_table_restored = execute_hgm_statement(PgHGM,
-		"ALTER TABLE pgsql_replication_hostgroups_hidden RENAME TO pgsql_replication_hostgroups");
-	PgHGM->read_only_action_v2({{"pgsql-old.example", 5432, 1}}, false);
-	large_pgsql_runtime.reset(PgHGM->dump_table_pgsql("pgsql_servers"));
-	ok(pgsql_table_hidden && large_pgsql_readonly && large_pgsql_readonly->rows_count == 0 &&
-		pgsql_enumeration_error != nullptr && pgsql_failed_refresh_untouched &&
-		pgsql_table_restored && large_pgsql_runtime &&
-		find_row(*large_pgsql_runtime, 18, "pgsql-old.example", 5432) != nullptr,
-		"PostgreSQL query failures return an empty set, do not act, and preserve retryable mappings");
-	if (pgsql_enumeration_error != nullptr) free(pgsql_enumeration_error);
+		large_pgsql_readonly && large_pgsql_readonly->rows_count == 0 && large_pgsql_runtime &&
+		find_row(*large_pgsql_runtime, 17, "pgsql-old.example", 5432) != nullptr &&
+		find_row(*large_pgsql_runtime, 18, "pgsql-old.example", 5432) == nullptr,
+		"PostgreSQL plugin claims do not enroll endpoints in read-only monitoring");
 	manager->commit_and_install_server_runtime_snapshot(pgsql_installed, {{1, 0}});
 	const ProxySQL_ServerDesiredSet pgsql_zero_scope {ProxySQL_ServerProtocol::pgsql,
 		pgsql_generation, {0, 1}, {}, ProxySQL_ServerPersistence::runtime_only};
 	const bool pgsql_zero_revalidated = manager->revalidate_server_desired_set(
 		ProxySQL_ServerProtocol::pgsql, pgsql_controller, pgsql_zero_scope);
-	large_pgsql_readonly.reset(PgHGM->get_read_only_servers());
+	large_pgsql_readonly = pgsql_readonly_servers();
 	PgHGM->read_only_action_v2({{"pgsql-zero-writer.example", 5432, 1}}, false);
 	large_pgsql_runtime.reset(PgHGM->dump_table_pgsql("pgsql_servers"));
-	const bool pgsql_zero_mapped = large_pgsql_runtime &&
-		find_row(*large_pgsql_runtime, 0, "pgsql-zero-writer.example", 5432) != nullptr;
+	const bool pgsql_zero_unchanged = large_pgsql_runtime &&
+		find_row(*large_pgsql_runtime, 1, "pgsql-zero-writer.example", 5432) != nullptr &&
+		find_row(*large_pgsql_runtime, 0, "pgsql-zero-writer.example", 5432) == nullptr;
 	const bool pgsql_zero_applied = manager->post_server_desired_set(pgsql_zero_scope) &&
 		admin->drain_server_discovery_updates() == 1 &&
 		ack_count(pgsql_acks, pgsql_generation, true) == 1;
+	auto pgsql_zero_after = std::unique_ptr<SQLite3_result>(
+		PgHGM->dump_table_pgsql("pgsql_servers"));
 	ok(pgsql_zero_revalidated && pgsql_zero_applied && large_pgsql_readonly &&
-		has_readonly_endpoint(*large_pgsql_readonly, 1, "pgsql-zero-writer.example", 5432) &&
-		has_readonly_endpoint(*large_pgsql_readonly, 1, "pgsql-zero-reader.example", 5432) &&
-		pgsql_zero_mapped,
-		"PostgreSQL desired-set subset and monitor mapping treat hostgroup 0 as an ordinary claim");
+		large_pgsql_readonly->rows_count == 0 && pgsql_zero_unchanged && pgsql_zero_after &&
+		find_row(*pgsql_zero_after, 1, "pgsql-zero-writer.example", 5432) == nullptr &&
+		find_row(*pgsql_zero_after, 0, "pgsql-zero-reader.example", 5432) == nullptr,
+		"PostgreSQL desired-set authority treats hostgroup 0 as an ordinary claim");
 	clear_acks(pgsql_acks);
 	manager->commit_and_install_server_runtime_snapshot(pgsql_installed, pgsql_claims);
 	ProxySQL_ServerRow pgsql_new {18, "pgsql-new.example", 5432, 0, "ONLINE", 71, 0, 141, 0, 1, 0, "new"};
 	pgsql_new.topology_role_epoch = 3;
 	pgsql_new.force_topology_role = true;
-	const uint64_t pgsql_wake_epoch = proxysql_server_read_only_monitor_epoch(
-		ProxySQL_ServerProtocol::pgsql);
 	ok(manager->post_server_desired_set(pgsql_desired(pgsql_generation, {pgsql_new})) &&
 		admin->drain_server_discovery_updates() == 1,
 		"shared owner queue drains a PostgreSQL desired set through its 11-column adapter");
@@ -789,17 +709,14 @@ int main() {
 		"PostgreSQL replacement preserves unrelated rows and acknowledges exactly once");
 	std::unique_ptr<SQLite3_result> pgsql_replication_table(
 		PgHGM->dump_table_pgsql("pgsql_replication_hostgroups"));
-	std::unique_ptr<SQLite3_result> pgsql_readonly(PgHGM->get_read_only_servers());
-	ok(pgsql_replication_table && pgsql_replication_table->rows_count == 0 && pgsql_readonly &&
-		has_readonly_endpoint(*pgsql_readonly, 1, "pgsql-new.example", 5432) &&
-		proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol::pgsql) ==
-			pgsql_wake_epoch + 1,
-		"PostgreSQL plugin endpoint is enumerated without table rows and forced placement wakes once");
+	std::unique_ptr<SQLite3_result> pgsql_readonly(pgsql_readonly_servers());
 	PgHGM->read_only_action_v2({{"pgsql-new.example", 5432, 0}}, false);
 	pgsql_runtime.reset(PgHGM->dump_table_pgsql("pgsql_servers"));
-	ok(find_row(*pgsql_runtime, 17, "pgsql-new.example", 5432) != nullptr &&
-		find_row(*pgsql_runtime, 18, "pgsql-new.example", 5432) == nullptr,
-		"PostgreSQL read-only result maps a plugin-owned endpoint within its claim pair");
+	ok(pgsql_replication_table && pgsql_replication_table->rows_count == 0 && pgsql_readonly &&
+		pgsql_readonly->rows_count == 0 &&
+		find_row(*pgsql_runtime, 18, "pgsql-new.example", 5432) != nullptr &&
+		find_row(*pgsql_runtime, 17, "pgsql-new.example", 5432) == nullptr,
+		"PostgreSQL claims stay outside read-only monitoring and keep desired placement");
 
 	ProxySQL_ServerRow pgsql_retirement = pgsql_new;
 	pgsql_retirement.weight = 72;
@@ -858,7 +775,7 @@ int main() {
 	ok(admin->drain_server_discovery_updates() == 256,
 		"owner drains the full mixed-key queue after coalescing");
 	auto ordered_rows = runtime_rows();
-	const SQLite3_row* ordered_row = find_row(*ordered_rows, 17, "ordering.example", 3306);
+	const SQLite3_row* ordered_row = find_row(*ordered_rows, 18, "ordering.example", 3306);
 	ok(ordered_row != nullptr && std::string(ordered_row->fields[5]) == "203",
 		"newest accepted same-key replacement remains last in FIFO application order");
 
@@ -902,7 +819,7 @@ int main() {
 	ok(reloaded_post && duplicate_admin->drain_server_discovery_updates() == 1,
 		"completed shutdown reopens the empty inbox once without losing accepted work");
 	auto reloaded_rows = runtime_rows();
-	ok(find_row(*reloaded_rows, 17, "reloaded.example", 3306) != nullptr,
+	ok(find_row(*reloaded_rows, 18, "reloaded.example", 3306) != nullptr,
 		"post-shutdown Admin lifecycle applies newly accepted runtime work");
 	duplicate_admin->shutdown_server_discovery_updates();
 	ok(!manager->post_server_desired_set(desired(newer_generation, {shunned})),
@@ -928,40 +845,16 @@ int main() {
 	inactive_pgsql.protocol = ProxySQL_ServerProtocol::pgsql;
 	ProxySQL_ServerRuntimeInstallTransaction inactive_pgsql_install(
 		ProxySQL_ServerProtocol::pgsql, error);
-	auto inactive_mysql_rows = mysql_rows({
-		{17, "inactive-mysql.example", 3306, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "race"}});
-	const bool inactive_mysql_race = inactive_mysql_install.prepare(inactive_mysql, error) &&
-		run_claim_publication_race(ProxySQL_ServerProtocol::mysql,
-			[&] {
-				MyHGM->servers_add(inactive_mysql_rows.get());
-				return MyHGM->commit();
-			},
-			[&] { return inactive_mysql_install.commit(inactive_mysql); },
-			[&] { MyHGM->read_only_action_v2({{"inactive-mysql.example", 3306, 1}}); });
-	ok(inactive_mysql_race &&
+	const bool inactive_mysql_committed = inactive_mysql_install.prepare(inactive_mysql, error) &&
+		inactive_mysql_install.commit(inactive_mysql);
+	ok(inactive_mysql_committed &&
 		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql).empty(),
-		"MySQL monitor waits across HGM mutation until inactive claims are published");
-	auto inactive_pgsql_rows = pgsql_rows({
-		{18, "inactive-pgsql.example", 5432, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "race"}});
-	const bool inactive_pgsql_race = inactive_pgsql_install.prepare(inactive_pgsql, error) &&
-		run_claim_publication_race(ProxySQL_ServerProtocol::pgsql,
-			[&] {
-				PgHGM->servers_add(inactive_pgsql_rows.get());
-				return PgHGM->commit();
-			},
-			[&] { return inactive_pgsql_install.commit(inactive_pgsql); },
-			[&] { PgHGM->read_only_action_v2({{"inactive-pgsql.example", 5432, 0}}, false); });
-	ok(inactive_pgsql_race &&
+		"MySQL module publication can clear all active claims");
+	const bool inactive_pgsql_committed = inactive_pgsql_install.prepare(inactive_pgsql, error) &&
+		inactive_pgsql_install.commit(inactive_pgsql);
+	ok(inactive_pgsql_committed &&
 		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql).empty(),
-		"PostgreSQL monitor waits across HGM mutation until inactive claims are published");
-	auto inactive_pgsql_runtime = std::unique_ptr<SQLite3_result>(
-		PgHGM->dump_table_pgsql("pgsql_servers"));
-	ok(find_row(*runtime_rows(), 17, "inactive-mysql.example", 3306) != nullptr &&
-		find_row(*runtime_rows(), 18, "inactive-mysql.example", 3306) == nullptr &&
-		inactive_pgsql_runtime &&
-		find_row(*inactive_pgsql_runtime, 18, "inactive-pgsql.example", 5432) != nullptr &&
-		find_row(*inactive_pgsql_runtime, 17, "inactive-pgsql.example", 5432) == nullptr,
-		"inactive claims remove stale MySQL and PostgreSQL role mappings before monitor action");
+		"PostgreSQL module publication can clear all active claims");
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM", "1", 1);
 	ProxySQL_ServerRuntimeSnapshot restored_mysql {};
@@ -976,23 +869,16 @@ int main() {
 		restored_mysql_install.commit(restored_mysql) &&
 		restored_pgsql_install.prepare(restored_pgsql, error) &&
 		restored_pgsql_install.commit(restored_pgsql);
-	MyHGM->read_only_action_v2({{"inactive-mysql.example", 3306, 0}});
-	PgHGM->read_only_action_v2({{"inactive-pgsql.example", 5432, 1}}, false);
+	ok(restored_claims &&
+		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql).size() == 2 &&
+		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql).size() == 2,
+		"module publication restores independent MySQL and PostgreSQL claims");
 	const bool modules_unregistered =
 		manager->unregister_server_module(ProxySQL_ServerProtocol::mysql) &&
 		manager->unregister_server_module(ProxySQL_ServerProtocol::pgsql);
-	MyHGM->read_only_action_v2({{"inactive-mysql.example", 3306, 1}});
-	PgHGM->read_only_action_v2({{"inactive-pgsql.example", 5432, 0}}, false);
-	auto unregistered_pgsql_runtime = std::unique_ptr<SQLite3_result>(
-		PgHGM->dump_table_pgsql("pgsql_servers"));
 	ok(restored_claims && modules_unregistered &&
 		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql).empty() &&
-		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql).empty() &&
-		find_row(*runtime_rows(), 17, "inactive-mysql.example", 3306) != nullptr &&
-		find_row(*runtime_rows(), 18, "inactive-mysql.example", 3306) == nullptr &&
-		unregistered_pgsql_runtime &&
-		find_row(*unregistered_pgsql_runtime, 18, "inactive-pgsql.example", 5432) != nullptr &&
-		find_row(*unregistered_pgsql_runtime, 17, "inactive-pgsql.example", 5432) == nullptr,
+		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql).empty(),
 		"module uninstall removes restored active claim snapshots");
 
 	auto configured_mysql = mysql_rows({
@@ -1007,8 +893,8 @@ int main() {
 	PgHGM->servers_add(configured_pgsql.get());
 	ok(MyHGM->commit({}, {}, false) && PgHGM->commit({}, {}, false),
 		"configured replication-pair control fixture commits after plugin retirement");
-	mysql_readonly.reset(MyHGM->get_read_only_servers());
-	pgsql_readonly.reset(PgHGM->get_read_only_servers());
+	mysql_readonly = mysql_readonly_servers();
+	pgsql_readonly = pgsql_readonly_servers();
 	MyHGM->read_only_action_v2({{"configured-mysql.example", 3306, 1}});
 	PgHGM->read_only_action_v2({{"configured-pgsql.example", 5432, 1}}, false);
 	auto configured_pgsql_runtime = std::unique_ptr<SQLite3_result>(

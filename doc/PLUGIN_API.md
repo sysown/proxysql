@@ -226,6 +226,34 @@ struct ProxySQL_PluginServices {
 };
 ```
 
+#### Server discovery ownership (ABI 14+)
+
+A server module can claim writer and reader hostgroups during
+`prepare_runtime`. An accepted claim gives that module exclusive authority over
+server membership in those hostgroups for the selected protocol. Core rejects
+overlapping claims from other topology providers.
+
+After the runtime configuration is committed, the discovery controller can
+send a `ProxySQL_ServerDesiredSet` through `post_server_desired_set`. The
+`delegated_hostgroups` field identifies the claimed hostgroups changed by that
+set. It must be nonempty, sorted, unique, and contained in the controller's
+active claims. Every server row must belong to one of those hostgroups.
+
+An accepted desired set is authoritative within its declared hostgroups. Core
+replaces their server membership with the supplied rows and preserves rows
+outside that scope. Core also preserves runtime health state, such as
+`SHUNNED`, when the same endpoint moves between claimed hostgroups.
+
+`ProxySQL_ServerRow::force_topology_role` and `topology_role_epoch` remain in
+the ABI for binary compatibility. They are deprecated and do not change how
+core applies a desired set.
+
+Claims do not create implicit rows in `mysql_replication_hostgroups` or
+`pgsql_replication_hostgroups`. Therefore, claimed endpoints are not enrolled
+in the generic read-only topology monitor unless the user separately configures
+an explicit replication-hostgroup rule. Core health monitoring, including ping,
+connectivity, shunning, and connection-pool state, continues to apply.
+
 #### Managed configuration (ABI 15)
 
 ABI 15 appends the management-provider descriptor accessor and the configuration

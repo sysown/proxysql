@@ -31,8 +31,8 @@ struct ProxySQL_ServerRow {
 	int32_t use_ssl {1};
 	int64_t max_latency_ms {0};
 	std::string comment;
-	// Transient reconciliation metadata. These fields are consumed by the
-	// owner-thread adapter and are never projected into a Servers table.
+	// Deprecated ABI fields. Core ignores them when applying desired host-group
+	// membership. Keep both fields in place for ABI compatibility.
 	uint64_t topology_role_epoch {0};
 	bool force_topology_role {false};
 };
@@ -111,7 +111,6 @@ private:
 
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_claims(
 	ProxySQL_ServerProtocol protocol);
-uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol);
 // Caller holds the Admin SQL mutex. Publishes policy claims and a fresh runtime
 // generation from the retained configuration snapshot, never from HGM health.
 bool proxysql_install_managed_discovery_locked(ProxySQL_ServerProtocol protocol,
@@ -119,7 +118,6 @@ bool proxysql_install_managed_discovery_locked(ProxySQL_ServerProtocol protocol,
  uint64_t& runtime_generation_out, std::string& error);
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgroup_claims(
  ProxySQL_ServerProtocol protocol);
-void proxysql_request_server_read_only_monitor(ProxySQL_ServerProtocol protocol);
 #endif
 
 struct ProxySQL_ServerModuleTableSnapshot {
