@@ -206,7 +206,7 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(43);
+	plan(44);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
@@ -630,7 +630,7 @@ int main(int, char**) {
 		"special statement after a sent Parse: the session survives [%s]", r[1].c_str());
 	ok(r[0] == r[1], "special statement after a sent Parse: same replies as libpq [native: %s] [libpq: %s]", r[1].c_str(), r[0].c_str());
 
-	// --- A large unit: a thousand INSERTs in one batch, all applied in order.
+	// --- A large unit: a thousand INSERTs, more than one batch holds, all applied in order.
 	{
 		setNativeMode(admin.get(), true);
 		const std::string tbl = "extq_many_" + tag;
@@ -651,6 +651,36 @@ int main(int, char**) {
 		ok(r[1] == "1000 Z(I)", "large unit: every Execute answered [%s]", r[1].c_str());
 		ok(execLong(be.get(), "SELECT count(*) FROM " + tbl) == 1000 && execLong(be.get(), "SELECT sum(a) FROM " + tbl) == 499500,
 			"large unit: every row written");
+		exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
+	}
+
+	// --- A unit several batches long fails in its third: the batches before it end in a Flush, not a
+	// Sync, so the whole unit is one transaction and none of it stays, as on PostgreSQL.
+	{
+		setNativeMode(admin.get(), true);
+		const std::string tbl = "extq_chunkerr_" + tag;
+		createTable(be.get(), tbl);
+		exec(be.get(), "ALTER TABLE " + tbl + " ADD CHECK (a <> 1500)");
+		r[1] = run([&]() {
+			auto c = client();
+			c->prepareStatement("s_chunk", "INSERT INTO " + tbl + " VALUES ($1::int)", false);
+			for (int i = 0; i < 2500; i++) {
+				c->bindStatement("s_chunk", "", { text(std::to_string(i)) }, {}, false);
+				c->executePortal("", 0, false);
+			}
+			c->sendSync();
+			const std::string out = replies(*c);
+			size_t completes = 0;
+			for (size_t p = out.find(" C"); p != std::string::npos; p = out.find(" C", p + 1)) completes++;
+			const size_t err = out.find("E(");
+			std::string tail = err == std::string::npos ? "no error" : out.substr(err);
+			c->sendQuery("SELECT 9");
+			return std::to_string(completes) + " " + tail + " | " + replies(*c);
+		});
+		const long rows = execLong(be.get(), "SELECT count(*) FROM " + tbl);
+		ok(r[1] == "1500 E(23514) Z(I) | T D=9 C Z(I)" && rows == 0,
+			"unit over several batches, error in the third: nothing after it answered, none of it kept [%s, rows %ld]",
+			r[1].c_str(), rows);
 		exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
 	}
 
