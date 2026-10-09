@@ -53,6 +53,8 @@ public:
 	Extq_Verdict on_message(char type, const unsigned char* payload, uint32_t len, std::string& out);
 	bool next_event(Extq_Event& ev);
 	bool complete() const { return complete_; }
+	// Whether anything was answered yet, by the backend or by ProxySQL's own replies.
+	bool answered() const { return answered_; }
 	// An error came back in a batch sent without a Sync. The backend skips everything until it
 	// gets one, so the caller sends a Sync and then calls sync_sent().
 	bool needs_sync() const { return need_sync_ && !sync_sent_; }
@@ -66,6 +68,7 @@ private:
 	std::deque<Extq_Slot> slots_;
 	std::deque<Extq_Event> events_;
 	bool complete_ = false;
+	bool answered_ = false;
 	bool aborted_ = false;       // an ErrorResponse came; only ReadyForQuery may follow
 	bool need_sync_ = false;
 	bool sync_sent_ = false;

@@ -8717,7 +8717,7 @@ int PgSQL_Session::extq_finish(bool synced) {
 
 // Builds the bytes and the expected replies for the connection about to carry the batch: which
 // statements it holds decides which Parses ProxySQL adds. Runs again for a new connection when the
-// batch is retried before any of it was sent.
+// batch is retried.
 // Returns false when a message cannot be encoded for the backend; nothing is then sent.
 bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 	if (extq_swapped >= 0) {
@@ -9071,8 +9071,16 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 // generic error path then reports the first statement whose reply had not settled.
 void PgSQL_Session::extq_unit_failed(PgSQL_Data_Stream* myds) {
 	extq_settle(myds);
-	// Once any of the batch was written it is never sent again: the backend may have run it.
-	if (myds->myconn && myds->myconn->async_state_machine != ASYNC_IDLE) {
+	// A sent batch is not sent again once the backend replied to any of it. Until its Sync it runs as
+	// one transaction that is rolled back when the connection dies, so one Execute is as safe to resend
+	// as one statement; with more, an earlier one may have committed on its own (a COMMIT, or a command
+	// such as CREATE DATABASE). A batch that was never sent is always safe to send.
+	int executes = 0;
+	for (const PgSQL_Extq_Entry& e : extq_entries) {
+		executes += (e.type == 'E');
+	}
+	if (myds->myconn && myds->myconn->async_state_machine != ASYNC_IDLE &&
+		(extq_registry.answered() || executes > 1)) {
 		myds->query_retries_on_failure = 0;
 	}
 	for (uint32_t i = 0; i < extq_entries.size(); i++) {

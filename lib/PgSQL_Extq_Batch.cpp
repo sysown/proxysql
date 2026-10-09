@@ -5,6 +5,7 @@ void PgSQL_Extq_Registry::clear() {
 	slots_.clear();
 	events_.clear();
 	complete_ = false;
+	answered_ = false;
 	aborted_ = false;
 	need_sync_ = false;
 	sync_sent_ = false;
@@ -45,6 +46,7 @@ void PgSQL_Extq_Registry::emit_due(std::string& out) {
 			out += s.bytes;
 			event(s, Extq_Outcome::OK);
 			slots_.pop_front();
+			answered_ = true;
 			continue;
 		}
 		break;
@@ -95,6 +97,7 @@ Extq_Verdict PgSQL_Extq_Registry::on_message(char type, const unsigned char* pay
 	if (type == 'N' || type == 'S' || type == 'A') {
 		return Extq_Verdict::RELAY;
 	}
+	answered_ = true;
 	if (aborted_) {
 		// After an error only the ReadyForQuery that ends the batch may come. The client gets it:
 		// it follows the error the client was given.
