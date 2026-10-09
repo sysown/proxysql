@@ -8601,6 +8601,13 @@ void PgSQL_Session::extq_buffer_message() {
 		// The name pointed into the unnamed Bind, which a later Bind in the unit frees.
 		e.info.extended_query_info.stmt_client_name = e.name.c_str();
 	}
+	if (e.type != 'P' && e.stmt) {
+		// Only a Parse carries its own text. The others kept whatever text the message before them
+		// left, often a Parse already freed, and logging the entry would read it: use the
+		// statement's, which the entry keeps alive.
+		e.info.QueryPointer = (unsigned char*)e.stmt->query;
+		e.info.QueryLength = e.stmt->query_length;
+	}
 	GloPgQPro->delete_QP_out(qpo);
 	previous_hostgroup = current_hostgroup;
 }
