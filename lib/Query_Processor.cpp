@@ -122,7 +122,73 @@ pcre2_code* pcre2_compile_rule_regex(const char* pattern, uint32_t options, std:
 	return code;
 }
 
-bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, const char* subject) {
+// PCRE2 keeps its backtracking frames on the heap and caches them in the
+// match data; because a rule's match data lives for as long as the rule,
+// a single oversized query would otherwise pin hundreds of MiB per worker
+// thread, and PCRE2's out-of-the-box limits (heap ~19 GB, match/depth 10M)
+// let one query spend seconds of CPU (issue #6423). The values below cap
+// what one DONE query can allocate and how far one match may backtrack;
+// they are fixed constants, deliberately not runtime variables, so the
+// denial-of-service surface is independent of any configuration mistake.
+//   heap limit: 64 MiB in KiB
+//   depth/match limits: 1% of the defaults, still several orders of
+//   magnitude above what a legitimate query-rule pattern needs.
+static constexpr uint32_t PCRE2_RULE_HEAP_LIMIT_KIB = 64u * 1024u;
+static constexpr uint32_t PCRE2_RULE_DEPTH_LIMIT = 100000u;
+static constexpr uint32_t PCRE2_RULE_MATCH_LIMIT = 100000u;
+// Recreating the match data releases the cached frames; a threshold keeps
+// the hot path free of work for normal-sized queries, per #6423.
+static constexpr size_t PCRE2_RULE_HEAPFRAMES_RELEASE_THRESHOLD = (1u << 20);
+
+// Limit hits mean "an input too big for a query rule", not a match: treat
+// them as a negative code so callers keep their existing negative-rc
+// handling, and log rate-limited so admins can find rules like
+// '(.|\n)*' that should be rewritten to '[\s\S]*'.
+static void pcre2_rule_match_context_create(pcre2_match_data* match_data,
+                                            pcre2_match_context** out_mctx) {
+	if (out_mctx == nullptr) return;
+	*out_mctx = nullptr;
+	if (match_data == nullptr) return;
+	pcre2_match_context* mctx = pcre2_match_context_create(nullptr);
+	if (mctx == nullptr) return;
+	// Allocation failures of the context itself leave the limits at PCRE2
+	// defaults rather than disabling the parent feature.
+	if (pcre2_set_heap_limit(mctx, PCRE2_RULE_HEAP_LIMIT_KIB) != 0) {
+		pcre2_match_context_free(mctx);
+		return;
+	}
+	if (pcre2_set_depth_limit(mctx, PCRE2_RULE_DEPTH_LIMIT) != 0) {
+		pcre2_match_context_free(mctx);
+		return;
+	}
+	pcre2_set_match_limit(mctx, PCRE2_RULE_MATCH_LIMIT);
+	*out_mctx = mctx;
+}
+
+// Releases PCRE2 heapframes that a big subject pinned in @p md, so one
+// oversized match does not keep its memory allocated in the worker thread
+// for the lifetime of the rule. Recreating the match data keeps future
+// matches reusing one block, as the hot-path optimisation intended.
+static void pcre2_rule_release_pinned_heapframes(pcre2_match_data** md,
+                                                 const pcre2_code* code) {
+	if (md == nullptr || code == nullptr || *md == nullptr) {
+		return;
+	}
+	if (pcre2_get_match_data_heapframes_size(*md) <=
+			PCRE2_RULE_HEAPFRAMES_RELEASE_THRESHOLD) {
+		return;
+	}
+	pcre2_match_data* fresh = pcre2_match_data_create_from_pattern(code, nullptr);
+	if (fresh == nullptr) {
+		// Keep the oversized block rather than losing the rule's ability to
+		// match; the memory is released when the rules are recompiled.
+		return;
+	}
+	pcre2_match_data_free(*md);
+	*md = fresh;
+}
+
+bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, pcre2_match_context* match_context, const char* subject) {
 	if (code == nullptr || match_data == nullptr || subject == nullptr) return false;
 	const int rc = pcre2_match(
 		code,
@@ -131,7 +197,7 @@ bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, c
 		0,
 		0,
 		match_data,
-		nullptr
+		match_context
 	);
 	return rc >= 0;
 }
@@ -143,6 +209,7 @@ bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, c
 bool pcre2_replace(
 	const pcre2_code* code,
 	pcre2_match_data* match_data,
+	pcre2_match_context* match_context,
 	const char* rewrite,
 	size_t rewrite_len,
 	bool global,
@@ -162,7 +229,7 @@ bool pcre2_replace(
 			0,
 			substitute_options,
 			match_data,
-			nullptr,
+			match_context,
 			reinterpret_cast<PCRE2_SPTR>(rewrite),
 			rewrite_len,
 			reinterpret_cast<PCRE2_UCHAR*>(&output[0]),
@@ -199,11 +266,14 @@ bool pcre2_query_rule_replace_for_test(
 	pcre2_code* code = pcre2_compile_rule_regex(pattern, 0, &error);
 	if (code == nullptr) return false;
 	pcre2_match_data* match_data = pcre2_match_data_create_from_pattern(code, nullptr);
+	pcre2_match_context* match_context = nullptr;
+	if (match_data != nullptr) pcre2_rule_match_context_create(match_data, &match_context);
 	std::string translated {};
 	const bool translated_ok = legacy_rewrite != nullptr && translate_legacy_rewrite(legacy_rewrite, &translated);
 	*rewritten = subject;
 	const bool rc = translated_ok &&
-		pcre2_replace(code, match_data, translated.data(), translated.size(), global, rewritten);
+		pcre2_replace(code, match_data, match_context, translated.data(), translated.size(), global, rewritten);
+	if (match_context != nullptr) pcre2_match_context_free(match_context);
 	pcre2_match_data_free(match_data);
 	pcre2_code_free(code);
 	return rc;
@@ -223,13 +293,17 @@ bool pcre2_query_rule_replace_sequence_for_test(
 	pcre2_code* code = pcre2_compile_rule_regex(pattern, 0, &error);
 	if (code == nullptr) return false;
 	pcre2_match_data* match_data = pcre2_match_data_create_from_pattern(code, nullptr);
+	pcre2_match_context* match_context = nullptr;
+	if (match_data != nullptr) pcre2_rule_match_context_create(match_data, &match_context);
 	std::string translated {};
 	bool rc = translate_legacy_rewrite(legacy_rewrite, &translated);
 	for (std::string& subject : *subjects) {
 		if (!rc) break;
-		rc = pcre2_partial_match(code, match_data, subject.c_str()) &&
-			pcre2_replace(code, match_data, translated.data(), translated.size(), global, &subject);
+		rc = pcre2_partial_match(code, match_data, match_context, subject.c_str()) &&
+			pcre2_replace(code, match_data, match_context, translated.data(), translated.size(), global, &subject);
+		pcre2_rule_release_pinned_heapframes(&match_data, code);
 	}
+	if (match_context != nullptr) pcre2_match_context_free(match_context);
 	pcre2_match_data_free(match_data);
 	pcre2_code_free(code);
 	return rc;
@@ -260,6 +334,9 @@ struct __RE2_objects_t {
 	// PCRE2 engine (query_processor_regex=3, PROXYSQL31/PROXYSQL40 only)
 	pcre2_code* pcre2;
 	pcre2_match_data* pcre2_md;
+	// Match context with the heap/depth/match limits, shared by the
+	// rule's matches and rewrites (issue #6423).
+	pcre2_match_context* pcre2_mctx;
 	// replace_pattern translated to PCRE2 syntax once, at compile time; NULL
 	// when the rule has no replace_pattern or it cannot be translated.
 	char* pcre2_rewrite;
@@ -718,6 +795,7 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 	r->re1=NULL;
 	r->pcre2=NULL;
 	r->pcre2_md=NULL;
+	r->pcre2_mctx=NULL;
 	r->pcre2_rewrite=NULL;
 	r->pcre2_rewrite_len=0;
 	r->opt2=NULL;
@@ -745,6 +823,8 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 				pcre2_code_free(r->pcre2);
 				r->pcre2 = NULL;
 				pcre2_error = "PCRE2 match data allocation failed";
+			} else {
+				pcre2_rule_match_context_create(r->pcre2_md, &r->pcre2_mctx);
 			}
 		}
 		if (r->pcre2 && i==2 && qr->replace_pattern) {
@@ -792,6 +872,7 @@ static void free_compiled_query_rule(re2_t *r) {
 	if (r == NULL) return;
 	if (r->opt1) { delete r->opt1; r->opt1=NULL; }
 	if (r->re1) { delete r->re1; r->re1=NULL; }
+	if (r->pcre2_mctx) { pcre2_match_context_free(r->pcre2_mctx); r->pcre2_mctx=NULL; }
 	if (r->pcre2_md) { pcre2_match_data_free(r->pcre2_md); r->pcre2_md=NULL; }
 	if (r->pcre2) { pcre2_code_free(r->pcre2); r->pcre2=NULL; }
 	if (r->pcre2_rewrite) { free(r->pcre2_rewrite); r->pcre2_rewrite=NULL; }
@@ -827,7 +908,10 @@ static bool rule_matches_regex(
 			}
 		} else if (compiled_regex->pcre2) {
 			regex_is_valid = true;
-			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md, subject);
+			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md, compiled_regex->pcre2_mctx, subject);
+			// One oversized subject must not pin its backtracking frames in
+			// the worker thread until the rules are recompiled (#6423).
+			pcre2_rule_release_pinned_heapframes(&compiled_regex->pcre2_md, compiled_regex->pcre2);
 		} else if (compiled_regex->re1) {
 			regex_is_valid = true;
 			rc = compiled_regex->re1->PartialMatch(subject);
@@ -2728,14 +2812,26 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 							re2p->re1->Replace(qr->replace_pattern, ret->new_query);
 						}
 					} else if (re2p->pcre2_rewrite) {
-						pcre2_replace(
+						const bool replaced = pcre2_replace(
 							re2p->pcre2,
 							re2p->pcre2_md,
+							re2p->pcre2_mctx,
 							re2p->pcre2_rewrite,
 							re2p->pcre2_rewrite_len,
 							(qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL,
 							ret->new_query
 						);
+						// A rewrite that hit a limit must not pin frames either.
+						pcre2_rule_release_pinned_heapframes(&re2p->pcre2_md, re2p->pcre2);
+						if (replaced == false) {
+							static std::atomic<time_t> pcre2_limit_log_ts{0};
+							const time_t limit_log_now = time(NULL);
+							if (limit_log_now - pcre2_limit_log_ts.load(std::memory_order_relaxed) >= 10) {
+								pcre2_limit_log_ts.store(limit_log_now, std::memory_order_relaxed);
+								proxy_warning("Query rule %d: replace_pattern stopped because the PCRE2 heap/depth/match limit was reached; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*' (issue #6423)\n",
+									qr->rule_id);
+							}
+						}
 					}
 				}
 			}
