@@ -21,3 +21,23 @@ export MCP_PGSQL_HOSTGROUP_ID="${MCP_PGSQL_HOSTGROUP_ID:-9200}"
 # Test data database name
 export MYSQL_DATABASE="${MYSQL_DATABASE:-test}"
 export PGSQL_DATABASE="${PGSQL_DATABASE:-postgres}"
+
+# Plugin availability follows the executable restored for this product tier,
+# not the source branch or the caller's build flags. Older products still run
+# their eligible TSDB/config tests with the generic daemon configuration.
+_ai_product_version="$("${WORKSPACE}/src/proxysql" --version)" || return 1
+_ai_product_major="$(printf '%s\n' "${_ai_product_version}" | sed -n 's/^ProxySQL version \([0-9][0-9]*\)\..*/\1/p')"
+case "${_ai_product_major}" in
+    ''|*[!0-9]*)
+        echo "ERROR: Cannot determine the compiled ProxySQL version for AI setup" >&2
+        return 1
+        ;;
+esac
+if [ "${_ai_product_major}" -ge 4 ]; then
+    export PROXYSQL_LOAD_GENAI_PLUGIN=1
+    export PROXYSQL_CONFIG_OVERRIDE="${WORKSPACE}/test/tap/groups/ai/proxysql-ci.cnf"
+else
+    export PROXYSQL_LOAD_GENAI_PLUGIN=0
+    export PROXYSQL_CONFIG_OVERRIDE="${WORKSPACE}/test/infra/control/proxysql-ci.cnf"
+fi
+unset _ai_product_version _ai_product_major

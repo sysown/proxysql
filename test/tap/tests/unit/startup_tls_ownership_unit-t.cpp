@@ -11,7 +11,13 @@ int main(int argc, char** argv) {
 	plan(1);
 	// Resolve assets beside the restored executable rather than embedding the
 	// producer's build path, which can differ from the CI consumer's checkout.
-	auto repo = std::filesystem::canonical(argv[0]);
+	std::error_code path_error;
+	auto repo = std::filesystem::canonical(argv[0], path_error);
+	if (path_error) {
+		diag("Cannot resolve test executable path: %s", path_error.message().c_str());
+		ok(false, "cannot resolve test executable path");
+		return exit_status();
+	}
 	for (int i = 0; i < 5; ++i) repo = repo.parent_path();
 	const std::string script = (repo / "test/infra/control/test_startup_tls_ownership.py").string();
 	const std::string binary = argc > 1 ? argv[1] : (repo / "src/proxysql").string();

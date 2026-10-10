@@ -4,7 +4,9 @@
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -106,6 +108,64 @@ class AiGroupShardTest(unittest.TestCase):
             for item in result.stdout.decode().split("\0")
             if "=" in item
         )
+
+    def test_plugin_configuration_follows_the_compiled_product(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "src").mkdir()
+            shutil.copytree(AI_GROUP_DIR, workspace / "test/tap/groups/ai")
+            binary = workspace / "src/proxysql"
+            for version in ("3.0.9", "3.1.6", "4.0.0"):
+                binary.write_text(
+                    f"#!/bin/sh\nprintf '%s\\n' 'ProxySQL version {version}_DEBUG'\n",
+                    encoding="utf-8",
+                )
+                binary.chmod(0o755)
+                for group in ("ai", "ai-g1", "ai-g2"):
+                    with self.subTest(version=version, group=group):
+                        # Source the real environment while supplying a restored
+                        # product binary at a different workspace path.
+                        result = subprocess.run(
+                            ["sh", "-c", 'set -e; . "$1"; env -0', "sh",
+                             str(ROOT / "test/tap/groups" / group / "env.sh")],
+                            env={"PATH": os.environ["PATH"], "WORKSPACE": str(workspace),
+                                 "PROXYSQL_LOAD_GENAI_PLUGIN": "1"},
+                            text=True, capture_output=True, check=True,
+                        )
+                        environment = dict(item.split("=", 1)
+                                           for item in result.stdout.split("\0") if "=" in item)
+                        supported = version.startswith("4.")
+                        self.assertEqual(environment["PROXYSQL_LOAD_GENAI_PLUGIN"],
+                                         "1" if supported else "0")
+                        relative = ("test/tap/groups/ai/proxysql-ci.cnf" if supported
+                                    else "test/infra/control/proxysql-ci.cnf")
+                        self.assertEqual(environment["PROXYSQL_CONFIG_OVERRIDE"],
+                                         str(workspace / relative))
+
+    def test_lower_tier_setup_seeds_backends_without_configuring_mcp(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            capture = directory / "docker.calls"
+            docker = directory / "docker"
+            docker.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$*" >> "$DOCKER_CAPTURE"\n'
+                'cat >> "$DOCKER_CAPTURE"\n', encoding="utf-8",
+            )
+            docker.chmod(0o755)
+            subprocess.run(
+                ["bash", str(AI_GROUP_DIR / "setup-infras.bash")],
+                env={"PATH": f"{directory}:{os.environ['PATH']}",
+                     "DOCKER_CAPTURE": str(capture), "WORKSPACE": str(ROOT),
+                     "INFRA_ID": "tier-contract", "DEFAULT_MYSQL_INFRA": "infra-mysql84",
+                     "DEFAULT_PGSQL_INFRA": "docker-pgsql16-single",
+                     "PROXYSQL_LOAD_GENAI_PLUGIN": "0"},
+                stdin=subprocess.DEVNULL, capture_output=True, check=True,
+            )
+            calls = capture.read_text(encoding="utf-8")
+            self.assertNotIn("SET mcp-", calls)
+            self.assertNotIn("LOAD MCP", calls)
+            self.assertIn("infra-mysql84-tier-contract-mysql1-1", calls)
+            self.assertIn("docker-pgsql16-single-tier-contract-pgdb1-1", calls)
 
     def test_groups_are_balanced_and_disjoint(self):
         g1 = self.members("ai-g1")
