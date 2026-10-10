@@ -1637,7 +1637,7 @@ bool PgSQL_Connection::native_ssl_pump_wbio_to_fd(bool& would_block) {
 	}
 	// Now flush native_ssl_outbuf to the socket.
 	while (!native_ssl_outbuf.empty()) {
-		ssize_t n = ::send(fd, native_ssl_outbuf.data(), native_ssl_outbuf.size(), 0);
+		ssize_t n = ::send(fd, native_ssl_outbuf.data(), native_ssl_outbuf.size(), MSG_NOSIGNAL);
 		if (n > 0) {
 			native_ssl_outbuf.erase(0, (size_t)n);
 			continue;
@@ -1702,7 +1702,7 @@ bool PgSQL_Connection::native_flush_outbuf() {
 
 	// Plaintext path (1.6a): native_outbuf holds raw bytes for the socket.
 	while (!native_outbuf.empty()) {
-		ssize_t n = ::send(fd, native_outbuf.data(), native_outbuf.size(), 0);
+		ssize_t n = ::send(fd, native_outbuf.data(), native_outbuf.size(), MSG_NOSIGNAL);
 		if (n > 0) {
 			native_outbuf.erase(0, (size_t)n);
 			continue;
@@ -1881,6 +1881,9 @@ void PgSQL_Connection::native_connect_start() {
 			::close(sock); sock = -1; continue;
 		}
 		{ int one = 1; setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)); }
+		// libpq's default (keepalives=1): the OS eventually notices a peer that vanished
+		// while the connection sat idle in the pool. Best-effort, as for TCP_NODELAY.
+		{ int one = 1; setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)); }
 		int rc = ::connect(sock, ai->ai_addr, ai->ai_addrlen);
 		if (rc == 0 || errno == EINPROGRESS || errno == EWOULDBLOCK || errno == EINTR) {
 			break; // connect in progress (or immediately done)
