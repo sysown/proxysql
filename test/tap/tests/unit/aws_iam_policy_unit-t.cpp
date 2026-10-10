@@ -79,12 +79,22 @@ static void test_aws_iam_policy() {
 }
 
 static void test_invalid_attribute_shapes() {
+	// 'mysql_users.attributes' only has to satisfy JSON_VALID(attributes) OR
+	// attributes='', so valid-but-non-object values ('"value"', '[]') are
+	// storable and were harmless before this policy existed. They must keep
+	// working after an upgrade, so they select plain password authentication.
 	const MySQLBackendAuthPolicy scalar = parse_mysql_backend_auth_policy("db_user", "\"value\"", false);
-	ok(scalar.type == MySQLBackendAuthType::INVALID && scalar.failure_code == "attributes_not_object",
-		"scalar attributes are rejected without parsing credentials");
+	ok(scalar.type == MySQLBackendAuthType::PASSWORD && scalar.failure_code.empty(),
+		"scalar attributes fall back to password authentication");
 	const MySQLBackendAuthPolicy array = parse_mysql_backend_auth_policy("db_user", "[]", false);
-	ok(array.type == MySQLBackendAuthType::INVALID && array.failure_code == "attributes_not_object",
-		"array attributes are rejected without parsing credentials");
+	ok(array.type == MySQLBackendAuthType::PASSWORD && array.failure_code.empty(),
+		"array attributes fall back to password authentication");
+	// A non-object value that actually mentions backend_auth is still rejected:
+	// it cannot silently degrade into password authentication.
+	const MySQLBackendAuthPolicy scalar_iam = parse_mysql_backend_auth_policy(
+		"db_user", "\"backend_auth\"", false);
+	ok(scalar_iam.type == MySQLBackendAuthType::INVALID && scalar_iam.failure_code == "attributes_not_object",
+		"non-object attributes mentioning backend_auth are rejected");
 	const MySQLBackendAuthPolicy malformed = parse_mysql_backend_auth_policy(
 		"db_user", "{\"backend_auth\":FAKE_AWS_SECRET}", false);
 	ok(malformed.type == MySQLBackendAuthType::INVALID && malformed.failure_code == "attributes_not_object",
@@ -141,18 +151,24 @@ static void test_resolver_uses_backend_account_only() {
 		"resolver preserves username and ignores the backend password for IAM");
 }
 
-static void test_resolver_rejects_missing_or_inactive_backend_account() {
+static void test_resolver_falls_back_to_password_for_rowless_backend_account() {
+	// A '{frontend=1, backend=0}' row is the documented way to express "this
+	// user authenticates to ProxySQL". Before the backend_auth policy existed
+	// this path never consulted 'creds_backends' and connected with the
+	// credentials captured at frontend authentication, so the absence of a
+	// backend row must select PASSWORD, not INVALID. Reporting INVALID here
+	// made every query fail with ERROR 9002 for ordinary split-row users.
 	const MySQLBackendAuthPolicy missing = resolve_mysql_backend_auth_policy(*GloMyAuth, "missing_backend");
-	ok(missing.type == MySQLBackendAuthType::INVALID && missing.failure_code == "backend_user_not_found",
-		"resolver rejects a missing backend account");
+	ok(missing.type == MySQLBackendAuthType::PASSWORD && missing.failure_code.empty(),
+		"resolver falls back to password authentication for a rowless backend account");
 
 	ok(add_backend_user("inactive_backend", "password", ""),
 		"inactive backend fixture is added");
 	GloMyAuth->set_all_inactive(USERNAME_BACKEND);
 	GloMyAuth->remove_inactives(USERNAME_BACKEND);
 	const MySQLBackendAuthPolicy inactive = resolve_mysql_backend_auth_policy(*GloMyAuth, "inactive_backend");
-	ok(inactive.type == MySQLBackendAuthType::INVALID && inactive.failure_code == "backend_user_not_found",
-		"resolver rejects an inactive backend account after runtime removal");
+	ok(inactive.type == MySQLBackendAuthType::PASSWORD && inactive.failure_code.empty(),
+		"resolver falls back to password authentication after runtime removal");
 }
 
 static void test_resolver_rejects_malformed_loaded_backend_attributes() {
@@ -180,7 +196,7 @@ static void test_rejected_backend_policy_does_not_emit_iam_password_warning() {
 }
 
 int main() {
-	plan(31);
+	plan(32);
 	test_init_minimal();
 	test_init_auth();
 
@@ -191,7 +207,7 @@ int main() {
 	test_invalid_type_values();
 	test_diagnostics_do_not_leak_attributes();
 	test_resolver_uses_backend_account_only();
-	test_resolver_rejects_missing_or_inactive_backend_account();
+	test_resolver_falls_back_to_password_for_rowless_backend_account();
 	test_resolver_rejects_malformed_loaded_backend_attributes();
 	test_rejected_backend_policy_does_not_emit_iam_password_warning();
 
