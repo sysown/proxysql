@@ -692,6 +692,11 @@ class ProxySQL_Admin {
 	/** Apply a validated operational variable under the caller's configuration lock. */
 	bool set_managed_variable_locked(const std::string& name, const std::string& value);
 	bool commit_managed_admin_variables_locked(std::string& error);
+	/** @brief Refresh the engine half of the managed activation: rebuild the
+	 *  'runtime_global_variables' projection and the '<engine>_variables'
+	 *  checksum from live values. Without this a managed node looks in-sync to
+	 *  its Cluster peers while silently diverging, and no pull is triggered. */
+	void commit_managed_engine_variables_projection(bool pgsql);
 	SQLite3_result* get_mysql_users_snapshot();
 	SQLite3_result* get_mysql_servers_snapshot();
 	SQLite3_result* get_mysql_group_replication_hostgroups_snapshot();
@@ -799,7 +804,13 @@ class ProxySQL_Admin {
 	 *
 	 * @return Error message in case of not being able to perform the operation, 'NULL' otherwise.
 	 */
-	char* load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset=NULL, SQLite3_result* SQLite3_query_rules_fast_routing_resultset=NULL, const std::string& checksum = "", const time_t epoch = 0, bool acquire_lock = true);
+	/**
+	 * @brief If non-NULL, receives a summary of the rules skipped during the
+	 *   load because of an invalid client_addr/proxy_addr (issue #6426). The
+	 *   load itself still succeeds; the caller shows the summary as the OK
+	 *   packet's warning message.
+	 */
+	char* load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset=NULL, SQLite3_result* SQLite3_query_rules_fast_routing_resultset=NULL, const std::string& checksum = "", const time_t epoch = 0, bool acquire_lock = true, std::string* skipped_rules_warning = nullptr);
 	void save_mysql_query_rules_from_runtime(bool);
 	void save_mysql_query_rules_fast_routing_from_runtime(bool);
 	char* load_mysql_firewall_to_runtime();
@@ -967,7 +978,7 @@ class ProxySQL_Admin {
 		const pgsql_servers_v2_checksum_t&, bool emit_runtime_install);
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
-		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);
+		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0, std::string* skipped_rules_warning = nullptr);
 
 	bool save_pgsql_servers_runtime_to_database(bool _runtime);
 	bool save_pgsql_servers_runtime_to_database_scoped(

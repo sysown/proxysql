@@ -16,6 +16,7 @@ using json = nlohmann::json;
 #include "re2/regexp.h"
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
+#include "pcrecpp.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -121,7 +122,73 @@ pcre2_code* pcre2_compile_rule_regex(const char* pattern, uint32_t options, std:
 	return code;
 }
 
-bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, const char* subject) {
+// PCRE2 keeps its backtracking frames on the heap and caches them in the
+// match data; because a rule's match data lives for as long as the rule,
+// a single oversized query would otherwise pin hundreds of MiB per worker
+// thread, and PCRE2's out-of-the-box limits (heap ~19 GB, match/depth 10M)
+// let one query spend seconds of CPU (issue #6423). The values below cap
+// what one DONE query can allocate and how far one match may backtrack;
+// they are fixed constants, deliberately not runtime variables, so the
+// denial-of-service surface is independent of any configuration mistake.
+//   heap limit: 64 MiB in KiB
+//   depth/match limits: 1% of the defaults, still several orders of
+//   magnitude above what a legitimate query-rule pattern needs.
+static constexpr uint32_t PCRE2_RULE_HEAP_LIMIT_KIB = 64u * 1024u;
+static constexpr uint32_t PCRE2_RULE_DEPTH_LIMIT = 100000u;
+static constexpr uint32_t PCRE2_RULE_MATCH_LIMIT = 100000u;
+// Recreating the match data releases the cached frames; a threshold keeps
+// the hot path free of work for normal-sized queries, per #6423.
+static constexpr size_t PCRE2_RULE_HEAPFRAMES_RELEASE_THRESHOLD = (1u << 20);
+
+// Limit hits mean "an input too big for a query rule", not a match: treat
+// them as a negative code so callers keep their existing negative-rc
+// handling, and log rate-limited so admins can find rules like
+// '(.|\n)*' that should be rewritten to '[\s\S]*'.
+static void pcre2_rule_match_context_create(pcre2_match_data* match_data,
+                                            pcre2_match_context** out_mctx) {
+	if (out_mctx == nullptr) return;
+	*out_mctx = nullptr;
+	if (match_data == nullptr) return;
+	pcre2_match_context* mctx = pcre2_match_context_create(nullptr);
+	if (mctx == nullptr) return;
+	// Allocation failures of the context itself leave the limits at PCRE2
+	// defaults rather than disabling the parent feature.
+	if (pcre2_set_heap_limit(mctx, PCRE2_RULE_HEAP_LIMIT_KIB) != 0) {
+		pcre2_match_context_free(mctx);
+		return;
+	}
+	if (pcre2_set_depth_limit(mctx, PCRE2_RULE_DEPTH_LIMIT) != 0) {
+		pcre2_match_context_free(mctx);
+		return;
+	}
+	pcre2_set_match_limit(mctx, PCRE2_RULE_MATCH_LIMIT);
+	*out_mctx = mctx;
+}
+
+// Releases PCRE2 heapframes that a big subject pinned in @p md, so one
+// oversized match does not keep its memory allocated in the worker thread
+// for the lifetime of the rule. Recreating the match data keeps future
+// matches reusing one block, as the hot-path optimisation intended.
+static void pcre2_rule_release_pinned_heapframes(pcre2_match_data** md,
+                                                 const pcre2_code* code) {
+	if (md == nullptr || code == nullptr || *md == nullptr) {
+		return;
+	}
+	if (pcre2_get_match_data_heapframes_size(*md) <=
+			PCRE2_RULE_HEAPFRAMES_RELEASE_THRESHOLD) {
+		return;
+	}
+	pcre2_match_data* fresh = pcre2_match_data_create_from_pattern(code, nullptr);
+	if (fresh == nullptr) {
+		// Keep the oversized block rather than losing the rule's ability to
+		// match; the memory is released when the rules are recompiled.
+		return;
+	}
+	pcre2_match_data_free(*md);
+	*md = fresh;
+}
+
+bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, pcre2_match_context* match_context, const char* subject) {
 	if (code == nullptr || match_data == nullptr || subject == nullptr) return false;
 	const int rc = pcre2_match(
 		code,
@@ -130,7 +197,7 @@ bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, c
 		0,
 		0,
 		match_data,
-		nullptr
+		match_context
 	);
 	return rc >= 0;
 }
@@ -142,6 +209,7 @@ bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, c
 bool pcre2_replace(
 	const pcre2_code* code,
 	pcre2_match_data* match_data,
+	pcre2_match_context* match_context,
 	const char* rewrite,
 	size_t rewrite_len,
 	bool global,
@@ -161,7 +229,7 @@ bool pcre2_replace(
 			0,
 			substitute_options,
 			match_data,
-			nullptr,
+			match_context,
 			reinterpret_cast<PCRE2_SPTR>(rewrite),
 			rewrite_len,
 			reinterpret_cast<PCRE2_UCHAR*>(&output[0]),
@@ -198,11 +266,14 @@ bool pcre2_query_rule_replace_for_test(
 	pcre2_code* code = pcre2_compile_rule_regex(pattern, 0, &error);
 	if (code == nullptr) return false;
 	pcre2_match_data* match_data = pcre2_match_data_create_from_pattern(code, nullptr);
+	pcre2_match_context* match_context = nullptr;
+	if (match_data != nullptr) pcre2_rule_match_context_create(match_data, &match_context);
 	std::string translated {};
 	const bool translated_ok = legacy_rewrite != nullptr && translate_legacy_rewrite(legacy_rewrite, &translated);
 	*rewritten = subject;
 	const bool rc = translated_ok &&
-		pcre2_replace(code, match_data, translated.data(), translated.size(), global, rewritten);
+		pcre2_replace(code, match_data, match_context, translated.data(), translated.size(), global, rewritten);
+	if (match_context != nullptr) pcre2_match_context_free(match_context);
 	pcre2_match_data_free(match_data);
 	pcre2_code_free(code);
 	return rc;
@@ -222,13 +293,17 @@ bool pcre2_query_rule_replace_sequence_for_test(
 	pcre2_code* code = pcre2_compile_rule_regex(pattern, 0, &error);
 	if (code == nullptr) return false;
 	pcre2_match_data* match_data = pcre2_match_data_create_from_pattern(code, nullptr);
+	pcre2_match_context* match_context = nullptr;
+	if (match_data != nullptr) pcre2_rule_match_context_create(match_data, &match_context);
 	std::string translated {};
 	bool rc = translate_legacy_rewrite(legacy_rewrite, &translated);
 	for (std::string& subject : *subjects) {
 		if (!rc) break;
-		rc = pcre2_partial_match(code, match_data, subject.c_str()) &&
-			pcre2_replace(code, match_data, translated.data(), translated.size(), global, &subject);
+		rc = pcre2_partial_match(code, match_data, match_context, subject.c_str()) &&
+			pcre2_replace(code, match_data, match_context, translated.data(), translated.size(), global, &subject);
+		pcre2_rule_release_pinned_heapframes(&match_data, code);
 	}
+	if (match_context != nullptr) pcre2_match_context_free(match_context);
 	pcre2_match_data_free(match_data);
 	pcre2_code_free(code);
 	return rc;
@@ -249,10 +324,19 @@ __thread bool _thr_SQP_have_cidr_proxy_addr;
 
 // A compiled query rule regex, one per rule in each worker thread's private
 // rule copy, so the PCRE2 match data is never used by two threads at once.
+// Three regex engines share this struct (issue #6411): engine 1 is PCRE
+// (pcrecpp, the semantics every released 3.x tag shipped), engine 2 is RE2,
+// and engine 3 -- opt-in, v3.1/v4.0 only -- is PCRE2.
 struct __RE2_objects_t {
-	// PCRE2 engine (query_processor_regex=1)
+	// PCRE1 engine (query_processor_regex=1)
+	pcrecpp::RE_Options* opt1;
+	pcrecpp::RE* re1;
+	// PCRE2 engine (query_processor_regex=3, PROXYSQL31/PROXYSQL40 only)
 	pcre2_code* pcre2;
 	pcre2_match_data* pcre2_md;
+	// Match context with the heap/depth/match limits, shared by the
+	// rule's matches and rewrites (issue #6423).
+	pcre2_match_context* pcre2_mctx;
 	// replace_pattern translated to PCRE2 syntax once, at compile time; NULL
 	// when the rule has no replace_pattern or it cannot be translated.
 	char* pcre2_rewrite;
@@ -310,6 +394,129 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 	return s;
 }
 
+/**
+ * @brief Is @p value a CIDR prefix list for @p field, rather than a plain value?
+ *
+ * The two fields accept deliberately different forms, so the decision is
+ * field-aware and MUST be the single decision both the admin validator and the
+ * runtime predicate consult -- otherwise the two disagree and a rule behaves
+ * differently depending on which side classified it:
+ *
+ *  - client_addr is always a rendered peer address, so any non-leading '/'
+ *    can only be a prefix list (issue #6426: the previous field-blind helper
+ *    tripped on this assumption for proxy_addr).
+ *  - proxy_addr is the listener's configured string, and for a Unix listener
+ *    that is a socket path, which may be relative: './proxysql.sock' or
+ *    'run/proxysql.sock' contain '/' but are paths, while '10.0.0.0/8' is a
+ *    prefix list. The list form is taken only when the text before the first
+ *    '/' -- cut at the first ',' and trimmed -- is an inet_pton-valid IPv4 or
+ *    IPv6 literal. A malformed list whose head is a valid literal
+ *    ('10.0.0.0/8,garbage', '10.0.0.0/33') still enters the CIDR branch so the
+ *    existing rejection paths keep catching typos.
+ */
+bool qp_addr_value_is_cidr(const char *value, qp_addr_field_t field) {
+	if (value == NULL || *value == '\0') {
+		return false;
+	}
+	const char *slash = strchr(value, '/');
+	if (slash == NULL) {
+		return false;
+	}
+	if (field == QP_ADDR_FIELD_CLIENT) {
+		// client_addr can never be a filesystem path.
+		return (*value != '/');
+	}
+	// proxy_addr: only a valid IP literal before the first '/' makes the value
+	// a prefix list. An empty head (leading '/') is a socket path.
+	std::string head(value, slash - value);
+	size_t comma = head.find(',');
+	if (comma != std::string::npos) {
+		head.resize(comma);
+	}
+	const size_t first = head.find_first_not_of(" \t");
+	if (first == std::string::npos) {
+		return false;
+	}
+	const size_t last = head.find_last_not_of(" \t");
+	head = head.substr(first, last - first + 1);
+	if (head.empty()) {
+		return false;
+	}
+	if (head.find(':') != std::string::npos) {
+		struct in6_addr tmp;
+		return inet_pton(AF_INET6, head.c_str(), &tmp) == 1;
+	}
+	struct in_addr tmp;
+	return inet_pton(AF_INET, head.c_str(), &tmp) == 1;
+}
+
+/**
+ * @brief Validate a query rule address value before it is installed to runtime.
+ *
+ * Three forms are accepted:
+ *  - an exact address, compared byte for byte against the rendered text;
+ *  - a textual wildcard ('%' or '_'), where '%' may only be the last character;
+ *  - a comma-separated list of CIDR prefixes, matched numerically.
+ *
+ * Which one applies is decided by qp_addr_value_is_cidr(), which also keeps a
+ * Unix listener string such as "/tmp/proxysql.sock" -- or a relative one, for
+ * example "run/proxysql.sock" -- on the literal path: proxy_addr is how a Unix
+ * listener identifies itself, and those rules have always worked.
+ *
+ * The length cap and the '%'-position rule constrain a *rendered address*, so
+ * they are applied to client_addr only. A listener path is neither: a socket
+ * path may legitimately exceed INET6_ADDRSTRLEN or contain a '%', and capping
+ * it would skip a rule the listener can still satisfy. client_addr cannot be a
+ * path, so a leading '/' there is rejected instead of being quietly installed
+ * as a criterion that could never match.
+ *
+ * A malformed prefix is rejected on both fields so a rule is never installed in
+ * a state where it can only ever fail to match -- previously such a value
+ * loaded cleanly and then silently matched nothing.
+ *
+ * @param rule_id    Rule id, for the error message.
+ * @param field      Which field @p value came from, see qp_addr_field_t.
+ * @param value      Configured value; NULL and "" both mean "no criterion".
+ * @return true when the value is usable.
+ */
+bool validate_qp_addr_value(const char *rule_id, const qp_addr_field_t field, const char *value) {
+	if (value == NULL || *value == '\0') {
+		return true;
+	}
+	const char *field_name = (field == QP_ADDR_FIELD_PROXY) ? "proxy_addr" : "client_addr";
+
+	if (qp_addr_value_is_cidr(value, field) == true) {
+		if (strnlen(value, MAX_CIDR_LIST_VALUE_LEN + 1) > MAX_CIDR_LIST_VALUE_LEN ||
+			ip_cidr_list_is_valid(value) == false) {
+			proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+			return false;
+		}
+		return true;
+	}
+	if (field == QP_ADDR_FIELD_PROXY) {
+		// A listener path or a plain address: nothing here constrains its
+		// length or its characters.
+		return true;
+	}
+	if (*value == '/') {
+		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+		return false;
+	}
+	if (strnlen(value, INET6_ADDRSTRLEN) >= INET6_ADDRSTRLEN) {
+		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+		return false;
+	}
+	// mywildcmp() would honour a '%' anywhere in the pattern, but a '%' in the
+	// middle of an address is far more likely a typo than an intent.
+	const char *pct = strchr(value, '%');
+	if (pct != NULL && pct[1] != '\0') {
+		proxy_error("Query rule with rule_id=%s has a wildcard that is not at the end of %s: %s\n",
+			rule_id, field_name, value);
+		return false;
+	}
+	return true;
+}
+
 bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, qp_addr_field_t field) {
 	if (pred == NULL) {
 		return false;
@@ -330,10 +537,12 @@ bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, qp_add
 	if (allow_path == false && *value == '/') {
 		return false;
 	}
-	if (ip_cidr_spec_looks_like_prefix(value) == true) {
+	if (qp_addr_value_is_cidr(value, field) == true) {
 		if (ip_cidr_parse_list(value, pred->cidrs, MAX_CIDR_PREFIXES_PER_RULE, &pred->cidr_count) == false) {
 			// Leave the predicate inert so a rule that somehow reaches the
 			// runtime unvalidated can never match on a half-parsed prefix list.
+			// qp_addr_predicate_matches() returns false for MATCH_NONE; it
+			// deliberately does NOT fall through to a strcmp of the raw values.
 			pred->match = QP_ADDR_MATCH_NONE;
 			pred->cidr_count = 0;
 			return false;
@@ -404,6 +613,10 @@ static bool qp_addr_predicate_matches(const qp_addr_predicate_t *pred, const cha
 	case QP_ADDR_MATCH_WILDCARD:
 		return mywildcmp(ruleval, sessval) == true;
 	case QP_ADDR_MATCH_NONE:
+		// An inert predicate (an unparseable prefix list that bypassed the
+		// admin validation) must never match. Falling through to a strcmp of
+		// the raw values would resurrect a rule the admin layer rejected.
+		return false;
 	case QP_ADDR_MATCH_EXACT:
 	default:
 		return strcmp(ruleval, sessval) == 0;
@@ -578,8 +791,11 @@ static bool query_digest_text_matches(
 
 static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
+	r->opt1=NULL;
+	r->re1=NULL;
 	r->pcre2=NULL;
 	r->pcre2_md=NULL;
+	r->pcre2_mctx=NULL;
 	r->pcre2_rewrite=NULL;
 	r->pcre2_rewrite_len=0;
 	r->opt2=NULL;
@@ -595,7 +811,7 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 		} else if (i==2) {
 			r->re2=new RE2(qr->match_pattern, *r->opt2);
 		}
-	} else {
+	} else if (query_processor_regex==3) {
 		uint32_t options = 0;
 		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
 			options |= PCRE2_CASELESS;
@@ -607,6 +823,8 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 				pcre2_code_free(r->pcre2);
 				r->pcre2 = NULL;
 				pcre2_error = "PCRE2 match data allocation failed";
+			} else {
+				pcre2_rule_match_context_create(r->pcre2_md, &r->pcre2_mctx);
 			}
 		}
 		if (r->pcre2 && i==2 && qr->replace_pattern) {
@@ -619,6 +837,19 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 					qr->rule_id, qr->replace_pattern);
 			}
 		}
+	} else {
+		// query_processor_regex==1 (the default, and every other accepted
+		// value on a tier where engine 3 does not exist): PCRE 8.45 via
+		// pcrecpp, the semantics every released 3.x tag shipped (issue #6411).
+		r->opt1=new pcrecpp::RE_Options();
+		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
+			r->opt1->set_caseless(true);
+		}
+		if (i==1) {
+			r->re1=new pcrecpp::RE(qr->match_digest, *r->opt1);
+		} else if (i==2) {
+			r->re1=new pcrecpp::RE(qr->match_pattern, *r->opt1);
+		}
 	}
 	// A rule whose regex does not compile never matches, negated or not. Name
 	// the rule and the field so the broken rule can be found: RE2 runs with
@@ -626,19 +857,22 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 	const char *error = NULL;
 	if (r->re2 && r->re2->ok() == false) {
 		error = r->re2->error().c_str();
-	} else if (query_processor_regex!=2 && r->pcre2 == NULL) {
+	} else if (query_processor_regex==3 && r->pcre2 == NULL) {
 		error = pcre2_error.c_str();
 	}
 	if (error) {
 		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, the rule will never match: %s\n",
 			qr->rule_id, (i==1 ? "match_digest" : "match_pattern"), (i==1 ? qr->match_digest : qr->match_pattern),
-			(query_processor_regex==2 ? "RE2" : "PCRE2"), error);
+			(query_processor_regex==2 ? "RE2" : (query_processor_regex==3 ? "PCRE2" : "PCRE1")), error);
 	}
 	return r;
 };
 
 static void free_compiled_query_rule(re2_t *r) {
 	if (r == NULL) return;
+	if (r->opt1) { delete r->opt1; r->opt1=NULL; }
+	if (r->re1) { delete r->re1; r->re1=NULL; }
+	if (r->pcre2_mctx) { pcre2_match_context_free(r->pcre2_mctx); r->pcre2_mctx=NULL; }
 	if (r->pcre2_md) { pcre2_match_data_free(r->pcre2_md); r->pcre2_md=NULL; }
 	if (r->pcre2) { pcre2_code_free(r->pcre2); r->pcre2=NULL; }
 	if (r->pcre2_rewrite) { free(r->pcre2_rewrite); r->pcre2_rewrite=NULL; }
@@ -674,7 +908,13 @@ static bool rule_matches_regex(
 			}
 		} else if (compiled_regex->pcre2) {
 			regex_is_valid = true;
-			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md, subject);
+			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md, compiled_regex->pcre2_mctx, subject);
+			// One oversized subject must not pin its backtracking frames in
+			// the worker thread until the rules are recompiled (#6423).
+			pcre2_rule_release_pinned_heapframes(&compiled_regex->pcre2_md, compiled_regex->pcre2);
+		} else if (compiled_regex->re1) {
+			regex_is_valid = true;
+			rc = compiled_regex->re1->PartialMatch(subject);
 		}
 	}
 
@@ -1738,7 +1978,15 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 			digest_umap_aux.insert(element);
 		}
 	}
-	digest_text_umap_aux.insert(digest_text_umap_aux_2.begin(), digest_text_umap_aux_2.end());
+	// A digest present both before the first swap and queried during the dump
+	// window exists in both maps. unordered_map::insert() drops the *source*
+	// pair for an already-present key, so the strdup()'ed text would leak on
+	// every such fold-back. Free the skipped duplicates explicitly.
+	for (auto& element : digest_text_umap_aux_2) {
+		if (!digest_text_umap_aux.emplace(element.first, element.second).second) {
+			free(element.second);
+		}
+	}
 	digest_umap_aux_2.clear();
 	digest_text_umap_aux_2.clear();
 
@@ -1767,7 +2015,13 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 			digest_umap.insert(element);
 		}
 	}
-	digest_text_umap.insert(digest_text_umap_aux.begin(), digest_text_umap_aux.end());
+	// Same duplicate-key leak as the fold-back above: the live map may already
+	// hold the text for a digest queried during the dump window.
+	for (auto& element : digest_text_umap_aux) {
+		if (!digest_text_umap.emplace(element.first, element.second).second) {
+			free(element.second);
+		}
+	}
 	pthread_rwlock_unlock(&digest_rwlock);
 	digest_umap_aux.clear();
 	digest_text_umap_aux.clear();
@@ -2546,15 +2800,38 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 						} else {
 							RE2::Replace(ret->new_query, *re2p->re2, qr->replace_pattern);
 						}
+					} else if (re2p->re1) {
+						// PCRE1 semantics: the legacy rewrite string is used
+						// verbatim (\1..\9), exactly as every released 3.x tag
+						// did. Note the argument order: pcrecpp binds caller
+						// arguments right-to-left, so the rewrite comes first
+						// and the query last (issue #6411).
+						if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+							re2p->re1->GlobalReplace(qr->replace_pattern, ret->new_query);
+						} else {
+							re2p->re1->Replace(qr->replace_pattern, ret->new_query);
+						}
 					} else if (re2p->pcre2_rewrite) {
-						pcre2_replace(
+						const bool replaced = pcre2_replace(
 							re2p->pcre2,
 							re2p->pcre2_md,
+							re2p->pcre2_mctx,
 							re2p->pcre2_rewrite,
 							re2p->pcre2_rewrite_len,
 							(qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL,
 							ret->new_query
 						);
+						// A rewrite that hit a limit must not pin frames either.
+						pcre2_rule_release_pinned_heapframes(&re2p->pcre2_md, re2p->pcre2);
+						if (replaced == false) {
+							static std::atomic<time_t> pcre2_limit_log_ts{0};
+							const time_t limit_log_now = time(NULL);
+							if (limit_log_now - pcre2_limit_log_ts.load(std::memory_order_relaxed) >= 10) {
+								pcre2_limit_log_ts.store(limit_log_now, std::memory_order_relaxed);
+								proxy_warning("Query rule %d: replace_pattern stopped because the PCRE2 heap/depth/match limit was reached; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*' (issue #6423)\n",
+									qr->rule_id);
+							}
+						}
 					}
 				}
 			}

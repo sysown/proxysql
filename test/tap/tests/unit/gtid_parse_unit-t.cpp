@@ -37,8 +37,65 @@ static void test_session_tracking_reset() {
 	}
 }
 
+static void test_own_gtid_sets_for_routing() {
+	// Issue #6415: MySQL OWN_GTID tracking delivers a GTID SET in a single OK
+	// packet (multiple commits in a procedure, multi-statement COM_QUERY,
+	// implicit DDL commits, and concurrent gaps). Routing must parse those
+	// forms and route to the highest transaction id instead of silently
+	// dropping the causal constraint.
+	char id[64];
+	uint64_t trx = 0;
+
+	ok(parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:582-584",
+		id, sizeof(id), &trx), "a tracked range set is accepted");
+	ok(trx == 584 && strcmp(id, "aaaaaaaa000011112222aaaaaaaaaaaa") == 0,
+		"uuid:582-584 routes to the highest transaction id");
+
+	ok(parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:636:638",
+		id, sizeof(id), &trx), "a tracked gap set is accepted");
+	ok(trx == 638, "uuid:636:638 routes to the highest transaction id");
+
+	ok(parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1-5:7-9",
+		id, sizeof(id), &trx), "multiple intervals in one block are accepted");
+	ok(trx == 9, "uuid:1-5:7-9 routes to the highest interval end");
+
+	// MariaDB's tracked last_gtid is NOT a set: the strict single-GTID
+	// grammar must keep owning it, otherwise every MariaDB causal read would
+	// fall into the fail-closed branch of the new parser.
+	ok(parse_gtid_set_for_routing("0-1-100", id, sizeof(id), &trx),
+		"MariaDB last_gtid still routes");
+	ok(trx == 100 && strcmp(id, "0") == 0,
+		"MariaDB last_gtid routes on its domain id, like parse_gtid_for_routing");
+
+	// Tagged GTIDs (MySQL 8.4+) cannot be honoured by routing and must FAIL,
+	// so callers fail closed instead of dropping the constraint.
+	ok(!parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:tag:5",
+		id, sizeof(id), &trx), "a tagged GTID is rejected");
+
+	// Multi-UUID sets cannot be expressed by the single (uuid, trxid) pool
+	// filter: rejected rather than honouring one block.
+	{
+		std::map<std::string, std::vector<TrxId_Interval>> set_parsed;
+		const char two_uuids[] = "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:581,"
+			"bbbbbbbb-0000-1111-2222-aaaaaaaaaaaa:42";
+		ok(parse_gtid_set(two_uuids, sizeof(two_uuids) - 1, &set_parsed),
+			"multi-UUID sets parse at the grammar level");
+		ok(set_parsed.size() == 2, "both UUID blocks are recorded");
+		ok(!parse_gtid_set_for_routing(two_uuids, id, sizeof(id), &trx),
+			"routing fails closed on a multi-UUID set");
+	}
+
+	// Garbage keeps failing; single GTID and single-interval forms route.
+	ok(!parse_gtid_set_for_routing("nope", id, sizeof(id), &trx), "garbage is rejected");
+	ok(!parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:", id, sizeof(id), &trx),
+		"a trailing empty interval component is rejected");
+	ok(parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42",
+		id, sizeof(id), &trx) && trx == 42,
+		"a plain single-GTID tracked value still routes");
+}
+
 int main() {
-	plan(32);
+	plan(51);
 	ok(test_init_minimal() == 0, "test_init_minimal() succeeds");
 	ParsedGTID p;
 
@@ -167,6 +224,8 @@ int main() {
 	                       session_gtid, sizeof(session_gtid))
 	       && strcmp(session_gtid, "0-1-77") == 0,
 	   "select session GTID copies exactly the reported length");
+
+	test_own_gtid_sets_for_routing();
 
 	test_session_tracking_reset();
 	test_cleanup_minimal();

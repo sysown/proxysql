@@ -210,10 +210,22 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 }
 
 ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
+	// Join the listener's request threads FIRST: they hold
+	// 'runtime_dependencies_mutex' in shared mode while executing, so taking
+	// the exclusive side before they are done could deadlock.
 	stop();
 
-	// Clean up all tool handlers stored in the handler object
-	if (handler) {
+	// The tool handlers below are reachable from the Admin projection refresh
+	// path (refresh_stats_mcp_query_digest and friends), which takes only the
+	// SHARED side of 'runtime_dependencies_mutex' and then dereferences
+	// handler->query_tool_handler / the catalog. Taking the exclusive lock
+	// here makes destruction mutually exclusive with those readers; without it
+	// a concurrent "SELECT ... FROM stats_mcp_query_digest" during an MCP
+	// reload frees memory out from under a live reader.
+	{
+		std::unique_lock<GenAIRWLock> runtime_guard(genai_context().runtime_dependencies_mutex);
+		// Clean up all tool handlers stored in the handler object
+		if (handler) {
 
 		// Clean up MySQL Tool Handler
 		if (handler->mysql_tool_handler) {
@@ -270,6 +282,7 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 			delete handler->rag_tool_handler;
 			handler->rag_tool_handler = NULL;
 		}
+		} // end exclusive runtime_dependencies_mutex scope
 	}
 }
 

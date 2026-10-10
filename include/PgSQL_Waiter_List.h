@@ -15,7 +15,7 @@ struct PgSQL_Waiter_Node {
 };
 
 class PgSQL_Waiter_Lists {
-	struct List { PgSQL_Waiter_Node *head = nullptr, *tail = nullptr; };
+	struct List { PgSQL_Waiter_Node *head = nullptr, *tail = nullptr; size_t size = 0; };
 	std::map<unsigned, List> by_hid;
 public:
 	void push_back(PgSQL_Waiter_Node& n) {
@@ -30,6 +30,7 @@ public:
 			L.head = &n;
 		}
 		L.tail = &n;
+		L.size++;
 	}
 
 	void unlink(PgSQL_Waiter_Node& n) {
@@ -57,6 +58,8 @@ public:
 		n.owner = nullptr;
 		if (L.head == nullptr) {
 			by_hid.erase(it);
+		} else {
+			L.size--;
 		}
 	}
 
@@ -72,6 +75,10 @@ public:
 
 	bool empty() const { return by_hid.empty(); }
 
+	/** @brief Calls f(hid, head, size) once per non-empty waiter list. 'size' is the
+	 *  exact number of waiters in that list: use it to bound a scan so no waiter is
+	 *  permanently skipped, instead of a fixed constant that starves the tail once a
+	 *  list grows past it. */
 	template<class F>
 	void for_each_hid(F f) {
 		std::vector<unsigned> hids;
@@ -84,7 +91,7 @@ public:
 		for (unsigned hid : hids) {
 			auto it = by_hid.find(hid);
 			if (it != by_hid.end() && it->second.head) {
-				f(hid, it->second.head);
+				f(hid, it->second.head, it->second.size);
 			}
 		}
 	}

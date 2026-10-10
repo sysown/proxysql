@@ -206,20 +206,59 @@ enum qp_addr_field_t {
 };
 
 /**
+ * @brief Is @p value a CIDR prefix list for @p field, or a plain value?
+ *
+ * Field-aware by design so the admin validator (validate_qp_addr_value) and the
+ * runtime predicate (qp_addr_predicate_init) cannot disagree:
+ *
+ *  - client_addr is always a rendered address: any value holding a '/' that
+ *    does not start with one is a CIDR list.
+ *  - proxy_addr is the listener's configured string, which for a Unix listener
+ *    is a socket path that may be relative ('./proxysql.sock',
+ *    'run/proxysql.sock'). The CIDR form is taken only when the text before
+ *    the first '/' -- cut at the first ',' and trimmed -- is an inet_pton
+ *    valid IPv4 or IPv6 literal; everything else is a path or a plain
+ *    address and is compared exactly.
+ */
+bool qp_addr_value_is_cidr(const char *value, qp_addr_field_t field);
+
+/**
  * @brief Resolve @p value into @p pred, deciding the comparison mode.
  *
- * A value holding a '/' is a comma-separated CIDR list when it does not start
- * with one; a NULL or empty value leaves the predicate in QP_ADDR_MATCH_NONE.
- * A value containing '%' or '_' is a textual wildcard, for client_addr only.
- * Anything else is compared exactly.
+ * A CIDR list is detected by qp_addr_value_is_cidr(), so a relative Unix
+ * socket path in proxy_addr is compared exactly rather than being mistaken
+ * for a malformed prefix list. A NULL or empty value leaves the predicate in
+ * QP_ADDR_MATCH_NONE. A value containing '%' or '_' is a textual wildcard,
+ * for client_addr only. Anything else is compared exactly.
  *
  * @param pred  Predicate to fill. Left in QP_ADDR_MATCH_NONE on failure.
  * @param value The configured client_addr / proxy_addr value.
  * @param field Which field @p value came from, see qp_addr_field_t.
  * @return true when @p value is well formed. On false the caller is expected to
- *         report the rule as rejected rather than load it.
+ *         report the rule as rejected rather than load it, and
+ *         qp_addr_predicate_matches() returns false for a MATCH_NONE
+ *         predicate -- it never falls back to comparing the raw strings.
  */
 bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, qp_addr_field_t field);
+
+/**
+ * @brief Validate a configured client_addr / proxy_addr value before the rule
+ *   is installed to runtime.
+ *
+ * Lives next to qp_addr_predicate_init() so both sides consult one classifier
+ * (qp_addr_value_is_cidr); it used to be file-static in ProxySQL_Admin.cpp,
+ * which made the two decisions impossible to unit test together. Rejects a
+ * malformed prefix list on both fields, and -- for client_addr only -- a
+ * leading '/' or a '%' that is not the last character. A proxy_addr Unix
+ * listener path is unconstrained: it may exceed INET6_ADDRSTRLEN and contain
+ * '%'.
+ *
+ * @param rule_id Rule id, for the error message.
+ * @param field   Which field @p value came from.
+ * @param value   Configured value; NULL and "" both mean "no criterion".
+ * @return true when the value is usable.
+ */
+bool validate_qp_addr_value(const char *rule_id, const qp_addr_field_t field, const char *value);
 
 typedef struct _Query_Processor_rule_t {
 	int rule_id;
@@ -400,7 +439,8 @@ void __reset_rules(std::vector<QP_rule_t*>* qrs);
  * @param digest_text Parsed digest text.
  * @param query_text Original query text.
  * @param rewritten_query Rewritten query text produced by a previous rule, if any.
- * @param query_processor_regex Regex engine selector: PCRE (1) or RE2 (2).
+ * @param query_processor_regex Regex engine selector: PCRE (1), RE2 (2) or
+ *   PCRE2 (3, available only when PROXYSQL31 is defined -- issue #6411).
  * @return true when all rule criteria match, otherwise false.
  */
 bool rule_matches_query(

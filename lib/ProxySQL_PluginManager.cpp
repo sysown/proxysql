@@ -943,7 +943,19 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		std::string registration_error;
 		{
 			ScopedRegistryTarget target_guard(this, plugin.descriptor, true);
-			phase_b_ok = register_schemas_cb(&services_phase_b_);
+			// Contain plugin exceptions: a throwing register_schemas must take
+			// the intended startup-failure path, not std::terminate.
+			try {
+				phase_b_ok = register_schemas_cb(&services_phase_b_);
+			} catch (const std::exception &e) {
+				phase_b_ok = false;
+				proxy_warning("Plugin register_schemas threw for %s: %s\n",
+					plugin_name(plugin.descriptor).c_str(), e.what());
+			} catch (...) {
+				phase_b_ok = false;
+				proxy_warning("Plugin register_schemas threw for %s\n",
+					plugin_name(plugin.descriptor).c_str());
+			}
 			registration_failed = g_registry_registration_failed;
 			registration_error = g_registry_registration_error;
 		}
@@ -1018,7 +1030,21 @@ bool ProxySQL_PluginManager::init_all(std::string &err) {
 		std::string registration_error;
 		{
 			ScopedRegistryTarget target_guard(this, plugin.descriptor, false);
-			init_ok = plugin.descriptor->init(&services_);
+			// A throwing plugin must not terminate the process: the chassis
+			// boundaries (stop_all / runtime_ready_all) already contain throws.
+			// Apply the same containment here so a bad_alloc in init() reaches
+			// the intended proxy_error()+exit(EXIT_FAILURE) startup path.
+			try {
+				init_ok = plugin.descriptor->init(&services_);
+			} catch (const std::exception &e) {
+				init_ok = false;
+				proxy_warning("Plugin init threw for %s: %s\n",
+					plugin_name(plugin.descriptor).c_str(), e.what());
+			} catch (...) {
+				init_ok = false;
+				proxy_warning("Plugin init threw for %s\n",
+					plugin_name(plugin.descriptor).c_str());
+			}
 			registration_failed = g_registry_registration_failed;
 			registration_error = g_registry_registration_error;
 		}
@@ -1065,7 +1091,19 @@ bool ProxySQL_PluginManager::start_all(std::string &err) {
 			plugin.started = true;
 			continue;
 		}
-		if (!plugin.descriptor->start()) {
+		bool started_ok = false;
+		try {
+			started_ok = plugin.descriptor->start();
+		} catch (const std::exception &e) {
+			started_ok = false;
+			proxy_warning("Plugin start threw for %s: %s\n",
+				plugin_name(plugin.descriptor).c_str(), e.what());
+		} catch (...) {
+			started_ok = false;
+			proxy_warning("Plugin start threw for %s\n",
+				plugin_name(plugin.descriptor).c_str());
+		}
+		if (!started_ok) {
 			err = "plugin start failed: " + plugin_name(plugin.descriptor);
 			return false;
 		}
@@ -1300,9 +1338,20 @@ bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommand
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Dispatching plugin command: %s (via %s)\n",
 			    command.sql.c_str(), normalized_sql.c_str());
 		// Pass the CANONICAL form to the callback so plugins can ignore
-		// which alias the user typed — they match on their own canonical
+	// which alias the user typed — they match on their own canonical
 		// strings only.
-		result = command.cb(ctx, command.sql.c_str());
+		// Contain plugin exceptions: this runs on the Admin thread, where an
+		// escaping throw would tear down the proxy over one bad plugin.
+		try {
+			result = command.cb(ctx, command.sql.c_str());
+		} catch (const std::exception &e) {
+			proxy_error("Plugin command '%s' threw: %s\n",
+				command.sql.c_str(), e.what());
+			result = { 1, 0, "plugin command failed" };
+		} catch (...) {
+			proxy_error("Plugin command '%s' threw\n", command.sql.c_str());
+			result = { 1, 0, "plugin command failed" };
+		}
 		return true;
 	}
 
@@ -1417,7 +1466,18 @@ bool ProxySQL_PluginManager::dispatch_query_hook(ProxySQL_PluginProtocol proto,
 	if (cb == nullptr) {
 		return false;
 	}
-	result = cb(payload);
+	// Contain plugin exceptions: this runs inline on a worker thread in the
+	// query path, where an escaping throw would kill the whole proxy. Report
+	// "no hook ran" so the caller falls through to normal query processing.
+	try {
+		result = cb(payload);
+	} catch (const std::exception &e) {
+		proxy_error("Plugin query hook threw: %s\n", e.what());
+		return false;
+	} catch (...) {
+		proxy_error("Plugin query hook threw\n");
+		return false;
+	}
 	return true;
 }
 

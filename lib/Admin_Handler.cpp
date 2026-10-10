@@ -2452,10 +2452,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(LOAD_PGSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->pgsql_servers_wrlock();
-				SPA->load_pgsql_servers_to_runtime();
+				const bool loaded = SPA->load_pgsql_servers_to_runtime_checked({}, {}, {}, true);
 				// A server-module veto blocked only the plugin tables: report it.
 				const std::string veto = SPA->servers_load_veto[1];
 				SPA->pgsql_servers_wrunlock();
+				if (!loaded && veto.empty()) {
+					// Genuine failure (not a module veto): tell the operator the
+					// runtime was not installed instead of returning a bare OK.
+					proxy_error("Error while loading pgsql servers to RUNTIME\n");
+					SPA->send_error_msg_to_client(sess, (char*)"Error while loading pgsql servers to RUNTIME");
+					return false;
+				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers to RUNTIME\n");
 				const std::string veto_msg = "pgsql_servers loaded; the server module rejected its tables and keeps its previous configuration: " + veto;
 				SPA->send_ok_msg_to_client(sess, veto.empty() ? NULL : veto_msg.c_str(), 0, query_no_space);
@@ -2465,10 +2472,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(LOAD_MYSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->mysql_servers_wrlock();
-				SPA->load_mysql_servers_to_runtime();
+				const bool loaded = SPA->load_mysql_servers_to_runtime();
 				// A server-module veto blocked only the plugin tables: report it.
 				const std::string veto = SPA->servers_load_veto[0];
 				SPA->mysql_servers_wrunlock();
+				if (!loaded && veto.empty()) {
+					// Genuine failure (not a module veto): tell the operator the
+					// runtime was not installed instead of returning a bare OK.
+					proxy_error("Error while loading mysql servers to RUNTIME\n");
+					SPA->send_error_msg_to_client(sess, (char*)"Error while loading mysql servers to RUNTIME");
+					return false;
+				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
 				const std::string veto_msg = "mysql_servers loaded; the server module rejected its tables and keeps its previous configuration: " + veto;
 				SPA->send_ok_msg_to_client(sess, veto.empty() ? NULL : veto_msg.c_str(), 0, query_no_space);
@@ -2826,11 +2840,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			char* err = NULL;
+			std::string skipped_rules_warning {};
 
 			if (query_no_space[5] == 'P' || query_no_space[5] == 'p')
-				err = SPA->load_pgsql_query_rules_to_runtime();
+				err = SPA->load_pgsql_query_rules_to_runtime(nullptr, nullptr, "", 0, &skipped_rules_warning);
 			else
-				err = SPA->load_mysql_query_rules_to_runtime();
+				err = SPA->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, true, &skipped_rules_warning);
 
 			if (err==NULL) {
 				if (query_no_space[5] == 'P' || query_no_space[5] == 'p')
@@ -2838,7 +2853,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				else
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to RUNTIME\n");
 
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				// A rule skipped for an invalid client_addr/proxy_addr is still a
+				// successful load, but the client must not get a bare OK: the
+				// warning message names the skipped rule_ids (issue #6426).
+				SPA->send_ok_msg_to_client(sess,
+					skipped_rules_warning.empty() ? NULL : skipped_rules_warning.c_str(),
+					0, query_no_space);
 			} else {
 				SPA->send_error_msg_to_client(sess, err);
 			}

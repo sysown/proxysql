@@ -188,6 +188,11 @@ unsigned char* ok_to_eof_packet(const MySQL_QC_entry_t* entry) {
 bool MySQL_Query_Cache::set(uint64_t user_hash, const unsigned char* kp, uint32_t kl, unsigned char* vp, 
 	uint32_t vl, uint64_t create_ms, uint64_t curtime_ms, uint64_t expire_ms, bool deprecate_eof_active, uint64_t num_rows) {
 	MySQL_QC_entry_t* entry = (MySQL_QC_entry_t*)malloc(sizeof(MySQL_QC_entry_t));
+	if (entry == nullptr) {
+		// set() takes ownership of the value even when admission fails.
+		free(vp);
+		return false;
+	}
 
 	entry->column_eof_pkt_offset = 0;
 	entry->row_eof_pkt_offset = 0;

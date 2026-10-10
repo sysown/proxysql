@@ -274,7 +274,8 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	veto.clear();
 	const int expected_core_columns = protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11;
 	if (core_rows == nullptr || core_rows->columns != expected_core_columns) {
-		proxy_error("Malformed core server snapshot while preparing plugin runtime\n");
+		veto = "Malformed core server snapshot while preparing plugin runtime";
+		proxy_error("%s\n", veto.c_str());
 		return false;
 	}
 #ifdef PROXYSQL40
@@ -284,7 +285,8 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *core_rows);
 	if (!proxysql_collect_active_builtin_server_topology(*db, protocol, topology_inputs,
 		snapshot.runtime.topology_hostgroups, error)) {
-		proxy_error("Unable to collect built-in topology claims: %s\n", error.c_str());
+		veto = "Unable to collect built-in topology claims: " + error;
+		proxy_error("%s\n", veto.c_str());
 		return false;
 	}
 	// The tables being installed. Recorded as the loaded copy once the plugin
@@ -299,7 +301,8 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 		const std::string sql = "SELECT * FROM main." + table.table_name + " ORDER BY " + table.order_by;
 		db->execute_statement(sql.c_str(), &error, &columns, &affected_rows, &rows);
 		if (error != nullptr) {
-			proxy_error("Error preparing plugin server table %s: %s\n", table.table_name.c_str(), error);
+			veto = "Error preparing plugin server table " + table.table_name + ": " + error;
+			proxy_error("%s\n", veto.c_str());
 			free(error);
 			if (rows != nullptr) delete rows;
 			return false;
@@ -3643,7 +3646,21 @@ size_t ProxySQL_Admin::drain_server_discovery_updates() {
 			fcntl(pipefd[0], F_SETFL, flags);
 		}
 	}
-	return proxysql_drain_server_desired_sets();
+	// Reconcile + materialize writes admindb inside a transaction on the SAME
+	// sqlite3 connection that the Cluster servers pull uses. A Cluster pull
+	// holds 'sql_query_global_mutex' but the drain never did, so the two could
+	// interleave: the pull's BEGIN IMMEDIATE would fail ("cannot start a
+	// transaction within a transaction"), or worse, its autocommit
+	// DELETE/INSERTs would be absorbed into the drain's transaction and lost on
+	// its ROLLBACK. Serialize on the same global mutex every other admindb
+	// writer uses, taken BEFORE the discovery-protocol lock inside the drain.
+	// ('admin_db_lock_guard' is declared further down in this file, so lock
+	// directly here; this function has no early return, so the unlock is
+	// unconditional.)
+	pthread_mutex_lock(&sql_query_global_mutex);
+	const size_t drained = proxysql_drain_server_desired_sets();
+	pthread_mutex_unlock(&sql_query_global_mutex);
+	return drained;
 #else
 	return 0;
 #endif
@@ -9233,10 +9250,28 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 			topology_inputs.mysql_galera = incoming_galera_hostgroups;
 			topology_inputs.mysql_aurora = incoming_aurora_hostgroups;
 			topology_inputs.mysql_rds_blue_green = incoming_aws_rds_bgd_hostgroups;
-			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
+			// Every failure below must leave a reason in 'servers_load_veto':
+			// it is the only channel the Admin session and the Cluster puller
+			// use to tell "installed" from "silently not installed".
+			if (!runtime_install) {
+				if (servers_load_veto[0].empty()) {
+					servers_load_veto[0] = install_error.empty()
+						? std::string("Unable to create the MySQL server runtime installation")
+						: install_error;
+				}
+				proxy_error("%s\n", servers_load_veto[0].c_str());
+				return false;
+			}
+			if (!prepare_registered_server_module_runtime(admindb,
 				ProxySQL_ServerProtocol::mysql, resultset_servers, topology_inputs,
 				runtime_install, installed_snapshot, commit_server_module,
-				servers_load_veto[0])) return false;
+				servers_load_veto[0])) {
+				if (servers_load_veto[0].empty()) {
+					servers_load_veto[0] = "Unable to prepare the MySQL server runtime installation";
+				}
+				proxy_error("%s\n", servers_load_veto[0].c_str());
+				return false;
+			}
 		}
 		runtime_install_prepared = emit_runtime_install;
 		MyHGM->servers_add(resultset_servers);
@@ -9455,6 +9490,11 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		resultset_mysql_servers_ssl_params = NULL;
 	}
 	if (!first_error.empty() && servers_load_veto[0].empty()) servers_load_veto[0] = first_error;
+	// A false 'committed' must still carry a reason, otherwise callers that
+	// report on 'servers_load_veto' cannot tell a real failure from a clean load.
+	if (!committed && servers_load_veto[0].empty()) {
+		servers_load_veto[0] = "MySQL server runtime was not committed";
+	}
 	return first_error.empty() && committed;
 }
 
@@ -9507,10 +9547,28 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 			runtime_install = ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerProtocol::pgsql, install_error);
 			ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
 			topology_inputs.pgsql_replication = incoming_replication_hostgroups;
-			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
+			// Every failure below must leave a reason in 'servers_load_veto':
+			// it is the only channel the Admin session and the Cluster puller
+			// use to tell "installed" from "silently not installed".
+			if (!runtime_install) {
+				if (servers_load_veto[1].empty()) {
+					servers_load_veto[1] = install_error.empty()
+						? std::string("Unable to create the PostgreSQL server runtime installation")
+						: install_error;
+				}
+				proxy_error("%s\n", servers_load_veto[1].c_str());
+				return false;
+			}
+			if (!prepare_registered_server_module_runtime(admindb,
 				ProxySQL_ServerProtocol::pgsql, resultset_servers, topology_inputs,
 				runtime_install, installed_snapshot, commit_server_module,
-				servers_load_veto[1])) return false;
+				servers_load_veto[1])) {
+				if (servers_load_veto[1].empty()) {
+					servers_load_veto[1] = "Unable to prepare the PostgreSQL server runtime installation";
+				}
+				proxy_error("%s\n", servers_load_veto[1].c_str());
+				return false;
+			}
 		}
 		runtime_install_prepared = emit_runtime_install;
 		PgHGM->servers_add(resultset_servers);
@@ -9614,7 +9672,13 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;
 	}
- return runtime_hgm_committed && servers_load_veto[1].empty();
+ // A false 'runtime_hgm_committed' must still carry a reason, otherwise
+	// callers that report on 'servers_load_veto' cannot tell a real failure
+	// from a clean load.
+	if (!runtime_hgm_committed && servers_load_veto[1].empty()) {
+		servers_load_veto[1] = "PostgreSQL server runtime was not committed";
+	}
+	return runtime_hgm_committed && servers_load_veto[1].empty();
 }
 
 char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {
@@ -9745,74 +9809,11 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 //   NULL on success, error message string on failure (caller must free)
 //
 
-/**
- * @brief Validate a query rule address value before it is installed to runtime.
- *
- * Three forms are accepted:
- *  - an exact address, compared byte for byte against the rendered text;
- *  - a textual wildcard ('%' or '_'), where '%' may only be the last character;
- *  - a comma-separated list of CIDR prefixes, matched numerically.
- *
- * Which one applies is decided by ip_cidr_spec_looks_like_prefix(), which also
- * keeps a Unix socket path such as "/tmp/proxysql.sock" on the literal path:
- * proxy_addr is how a Unix listener identifies itself, and those rules have
- * always worked.
- *
- * The length cap and the '%'-position rule constrain a *rendered address*, so
- * they are applied to client_addr only. A listener path is neither: a socket
- * path may legitimately exceed INET6_ADDRSTRLEN or contain a '%', and capping
- * it would skip a rule the listener can still satisfy. client_addr cannot be a
- * path, so a leading '/' there is rejected instead of being quietly installed
- * as a criterion that could never match.
- *
- * A malformed prefix is rejected on both fields so a rule is never installed in
- * a state where it can only ever fail to match -- previously such a value loaded
- * cleanly and then silently matched nothing.
- *
- * @param rule_id    Rule id, for the error message.
- * @param field      Which field @p value came from, see qp_addr_field_t.
- * @param value      Configured value; NULL and "" both mean "no criterion".
- * @return true when the value is usable.
- */
-static bool validate_qp_addr_value(const char *rule_id, const qp_addr_field_t field, const char *value) {
-	if (value == NULL || *value == '\0') {
-		return true;
-	}
-	const char *field_name = (field == QP_ADDR_FIELD_PROXY) ? "proxy_addr" : "client_addr";
+// validate_qp_addr_value() moved to Query_Processor.cpp (it is no longer
+// file-static here) so the admin validator and the runtime predicate consult
+// the same qp_addr_value_is_cidr() decision; see issue #6426.
 
-	if (ip_cidr_spec_looks_like_prefix(value) == true) {
-		if (strnlen(value, MAX_CIDR_LIST_VALUE_LEN + 1) > MAX_CIDR_LIST_VALUE_LEN ||
-			ip_cidr_list_is_valid(value) == false) {
-			proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
-			return false;
-		}
-		return true;
-	}
-	if (field == QP_ADDR_FIELD_PROXY) {
-		// A listener path or a plain address: nothing here constrains its
-		// length or its characters.
-		return true;
-	}
-	if (*value == '/') {
-		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
-		return false;
-	}
-	if (strnlen(value, INET6_ADDRSTRLEN) >= INET6_ADDRSTRLEN) {
-		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
-		return false;
-	}
-	// mywildcmp() would honour a '%' anywhere in the pattern, but a '%' in the
-	// middle of an address is far more likely a typo than an intent.
-	const char *pct = strchr(value, '%');
-	if (pct != NULL && pct[1] != '\0') {
-		proxy_error("Query rule with rule_id=%s has a wildcard that is not at the end of %s: %s\n",
-			rule_id, field_name, value);
-		return false;
-	}
-	return true;
-}
-
-char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch, bool acquire_lock) {
+char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch, bool acquire_lock, std::string* skipped_rules_warning) {
 	// About the queries used here, see notes about CLUSTER_QUERY_MYSQL_QUERY_RULES and
 	// CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING in ProxySQL_Cluster.hpp
 	char *error=NULL;
@@ -9913,10 +9914,15 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 		}
 		rules_mem_sts_t prev_rules_data(GloMyQPro->reset_all(false) );
 		QP_rule_t * nqpr;
+		std::string skipped_rule_ids;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			if (validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_CLIENT, r->fields[4]) == false ||
 				validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_PROXY, r->fields[5]) == false) {
+				// The whole rule is skipped (issue #6426): report it, so the
+				// admin client sees a warning instead of a bare OK.
+				if (!skipped_rule_ids.empty()) skipped_rule_ids += ", ";
+				skipped_rule_ids += r->fields[0];
 				continue;
 			}
 			nqpr=GloMyQPro->new_query_rule(
@@ -9957,6 +9963,10 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 				r->fields[33]  // comment
 			);
 			GloMyQPro->insert(nqpr, false);
+		}
+		if (skipped_rules_warning != nullptr && !skipped_rule_ids.empty()) {
+			*skipped_rules_warning = "The load skipped query rules with invalid client_addr/proxy_addr: rule_id " +
+				skipped_rule_ids;
 		}
 		GloMyQPro->sort(false);
 #ifdef BENCHMARK_FASTROUTING_LOAD
@@ -10014,7 +10024,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	return NULL;
 }
 
-char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch) {
+char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch, std::string* skipped_rules_warning) {
 	// About the queries used here, see notes about CLUSTER_QUERY_PGSQL_QUERY_RULES and
 	// CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING in ProxySQL_Cluster.hpp
 	char* error = NULL;
@@ -10121,10 +10131,15 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			}
 			rules_mem_sts_t prev_rules_data(GloPgQPro->reset_all(false));
 			QP_rule_t* nqpr;
+			std::string skipped_rule_ids;
 			for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 				SQLite3_row* r = *it;
 				if (validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_CLIENT, r->fields[4]) == false ||
 					validate_qp_addr_value(r->fields[0], QP_ADDR_FIELD_PROXY, r->fields[5]) == false) {
+					// The whole rule is skipped (issue #6426): report it, so the
+					// admin client sees a warning instead of a bare OK.
+					if (!skipped_rule_ids.empty()) skipped_rule_ids += ", ";
+					skipped_rule_ids += r->fields[0];
 					continue;
 				}
 				nqpr = GloPgQPro->new_query_rule(
@@ -10164,6 +10179,10 @@ char* ProxySQL_Admin::load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_
 					r->fields[32]  // comment
 				);
 				GloPgQPro->insert(nqpr, false);
+			}
+			if (skipped_rules_warning != nullptr && !skipped_rule_ids.empty()) {
+				*skipped_rules_warning = "The load skipped query rules with invalid client_addr/proxy_addr: rule_id " +
+					skipped_rule_ids;
 			}
 			GloPgQPro->sort(false);
 #ifdef BENCHMARK_FASTROUTING_LOAD

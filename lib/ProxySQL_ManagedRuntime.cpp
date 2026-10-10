@@ -807,6 +807,12 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
         return {false, "VariablesApplyFailed",
                 "existing variable commit rejected " + result.rejected_variables.front()};
     }
+    // The vanilla 'LOAD <ENGINE> VARIABLES TO RUNTIME' flow maintains TWO more
+    // pieces of derived state after applying engine variables:
+    // Refresh the engine projection + checksum from live values; see
+    // commit_managed_engine_variables_projection() for why.
+    if (engine_variables)
+      GloAdmin->commit_managed_engine_variables_projection(p.pgsql);
     if (admin_variables && !GloAdmin->commit_managed_admin_variables_locked(error))
       return {false, "VariablesApplyFailed", error};
     return {true, "", ""};
@@ -923,6 +929,45 @@ bool ProxySQL_Admin::set_managed_variable_locked(const std::string &name,
   Unlock unlock{[this]() noexcept { wrunlock(); }};
   return set_variable(const_cast<char *>(name.c_str()), const_cast<char *>(value.c_str()), false);
 }
+void ProxySQL_Admin::commit_managed_engine_variables_projection(bool pgsql) {
+  // The vanilla 'LOAD <ENGINE> VARIABLES TO RUNTIME' flow maintains TWO more
+  // pieces of derived state after applying engine variables:
+  //   * 'runtime_global_variables' -- the live projection read by
+  //     'SELECT * FROM runtime_global_variables' and by a Cluster peer via
+  //     'pull_global_variables_from_peer';
+  //   * the 'mysql_variables' / 'pgsql_variables' checksum served through
+  //     'runtime_checksums_values'.
+  // The managed path applied the values but refreshed neither, so a managed
+  // node looked in-sync to its peers while silently diverging, and no pull was
+  // ever triggered for the drift.
+  //
+  // The engine handler lock must be held across the flush and is taken BEFORE
+  // 'checksum_mutex', the same global order every writer in
+  // Admin_FlushVariables.cpp uses.
+  const std::string modname = pgsql ? "pgsql" : "mysql";
+  pthread_mutex_lock(&GloVars.checksum_mutex);
+  Unlock checksum_unlock{[]() noexcept {
+    pthread_mutex_unlock(&GloVars.checksum_mutex);
+  }};
+  if (pgsql) {
+    GloPTH->wrlock();
+    Unlock engine_unlock{[]() noexcept { GloPTH->wrunlock(); }};
+    admindb->execute("BEGIN");
+    flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true,
+                                                false);
+    admindb->execute("COMMIT");
+  } else {
+    GloMTH->wrlock();
+    Unlock engine_unlock{[]() noexcept { GloMTH->wrunlock(); }};
+    admindb->execute("BEGIN");
+    flush_mysql_variables___runtime_to_database_unlocked(admindb, false, false, false,
+                                                         true);
+    admindb->execute("COMMIT");
+  }
+  // generate checksum for cluster
+  flush_GENERIC_variables__checksum__database_to_runtime(modname, "", 0);
+}
+
 bool ProxySQL_Admin::commit_managed_admin_variables_locked(std::string &error) {
   {
     wrlock();
