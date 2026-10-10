@@ -14,8 +14,8 @@
  *   **Section 1 — Digest adapter**
  *   Uses `Emitter::DIGEST` mode to produce normalised query text from a full AST, then
  *   hashes it with SpookyHash for backward compatibility with ProxySQL's existing digest
- *   infrastructure.  For statements that parse only to the token level (Tier 2 — no full
- *   AST), it falls back to `Digest<D>` which normalises at the token level instead.
+ *   infrastructure. Failed or incomplete parsing falls back to ProxySQL's dialect
+ *   tokenizer, independently of ParserSQL's grammar and AST allocation limits.
  *
  *   **Section 2 — Command type mapping**
  *   Translates ParserSQL's `StmtType` enum to ProxySQL's `MYSQL_COM_QUERY_command` /
@@ -32,7 +32,7 @@
 #include "proxysql.h"
 #include "Query_Processor_ParserSQL.h"
 #include "sql_parser/parser.h"
-#include "sql_parser/digest.h"
+#include "c_tokenizer.h"
 #include "sql_parser/emitter.h"
 #include "sql_parser/ast.h"
 #include "sql_parser/common.h"
@@ -395,99 +395,106 @@ static std::string emit_delimited_ident_raw(
 // Section 1: Digest adapter
 // ---------------------------------------------------------------------------
 
-/**
- * @brief MySQL digest: normalise then SpookyHash.
- *
- * Two-tier strategy:
- *   - If the parser produces a full AST (Tier 1), `Emitter::DIGEST` mode walks
- *     it and emits normalised text with literals replaced by placeholders (?).
- *   - If the parser only reached the token level (Tier 2 — partial parse of
- *     unsupported statement types), `Digest<D>` performs token-level
- *     normalisation as a fallback.
- *
- * The resulting normalised text is hashed with SpookyHash::Hash64 to produce
- * the 64-bit digest that ProxySQL uses for query rule matching and statistics.
- */
-void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_length) {
-    qp->digest_text = NULL;
-    qp->first_comment = NULL;
-    qp->query_prefix = NULL;
-    qp->digest = 0;
-    qp->parsersql_stmt_type = -1;
-
-    auto result = tl_mysql_parser.parse(query, query_length);
-
-    if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        // The arena holds 'normalized' until reset() below, so it can be hashed and copied out directly.
-        const char* normalized = NULL;
-        size_t normalized_len = 0;
-        if (result.ast) {
-            // Tier 1: full AST available — use Emitter in DIGEST mode
-            Emitter<Dialect::MySQL> emitter(tl_mysql_parser.arena(), EmitMode::DIGEST);
-            emitter.emit(result.ast);
-            StringRef ref = emitter.result();
-            normalized = ref.ptr;
-            normalized_len = ref.len;
-        } else {
-            // Tier 2: token-level fallback for statements without full AST support
-            Digest<Dialect::MySQL> digest(tl_mysql_parser.arena());
-            DigestResult dr = digest.compute(query, query_length);
-            normalized = dr.normalized.ptr;
-            normalized_len = dr.normalized.len;
-        }
-        // SpookyHash is preserved for backward compatibility with existing digest stats
-        qp->digest = SpookyHash::Hash64(normalized, normalized_len, 0);
-        qp->parsersql_stmt_type = static_cast<int>(result.stmt_type);
-        // Reuse qp->buf when it fits, as query_parser_free() expects for the legacy tokenizer.
-        if (normalized_len < QUERY_DIGEST_BUF) {
-            memcpy(qp->buf, normalized, normalized_len);
-            qp->buf[normalized_len] = '\0';
-            qp->digest_text = qp->buf;
-        } else {
-            qp->digest_text = strndup(normalized, normalized_len);
-        }
+/** Tokenize independently of ParserSQL's grammar and bounded AST arena. */
+template <Dialect D>
+static void parsersql_digest_fallback(SQP_par_t* qp, const char* query, int query_length) {
+    options opts {};
+    int max_digest_length;
+    if constexpr (D == Dialect::MySQL) {
+        opts.lowercase = mysql_thread___query_digests_lowercase;
+        opts.replace_null = mysql_thread___query_digests_replace_null;
+        opts.replace_number = mysql_thread___query_digests_no_digits;
+        opts.keep_comment = mysql_thread___query_digests_keep_comment;
+        opts.grouping_limit = mysql_thread___query_digests_grouping_limit;
+        opts.groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
+        opts.max_query_length = mysql_thread___query_digests_max_query_length;
+        max_digest_length = mysql_thread___query_digests_max_digest_length;
+    } else {
+        opts.lowercase = pgsql_thread___query_digests_lowercase;
+        opts.replace_null = pgsql_thread___query_digests_replace_null;
+        opts.replace_number = pgsql_thread___query_digests_no_digits;
+        opts.keep_comment = pgsql_thread___query_digests_keep_comment;
+        opts.grouping_limit = pgsql_thread___query_digests_grouping_limit;
+        opts.groups_grouping_limit = pgsql_thread___query_digests_groups_grouping_limit;
+        opts.max_query_length = pgsql_thread___query_digests_max_query_length;
+        max_digest_length = pgsql_thread___query_digests_max_digest_length;
     }
-
-    tl_mysql_parser.reset();
+    // Standalone adapter callers may not have initialized worker variables.
+    // Runtime configuration requires positive limits; use the normal defaults.
+    if (opts.max_query_length <= 0) opts.max_query_length = 65000;
+    if (max_digest_length <= 0) max_digest_length = 2048;
+    char* buffer = query_length < QUERY_DIGEST_BUF ? qp->buf : nullptr;
+    if constexpr (D == Dialect::MySQL) {
+        qp->digest_text = mysql_query_digest_and_first_comment(
+            query, query_length, &qp->first_comment, buffer, &opts);
+    } else {
+        qp->digest_text = pgsql_query_digest_and_first_comment(
+            query, query_length, &qp->first_comment, buffer, &opts);
+    }
+    if (qp->digest_text && *qp->digest_text) {
+        const size_t length = strnlen(qp->digest_text, max_digest_length);
+        qp->digest = SpookyHash::Hash64(qp->digest_text, length, 0);
+    } else {
+        if (qp->digest_text != qp->buf) free(qp->digest_text);
+        qp->digest_text = nullptr;
+    }
 }
 
-/** PostgreSQL variant of the digest adapter. See parsersql_digest_init_mysql for details. */
-void parsersql_digest_init_pgsql(SQP_par_t* qp, const char* query, int query_length) {
+/**
+ * @brief Normalize a complete AST, or tokenize the original SQL independently.
+ *
+ * Grammar coverage must not determine whether a query receives a digest. An
+ * error or an incomplete parse can still contain an AST for only a prefix of
+ * the statement, so it must use the token path rather than that partial AST.
+ */
+template <Dialect D>
+static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_length,
+    Parser<D>& parser) {
     qp->digest_text = NULL;
     qp->first_comment = NULL;
     qp->query_prefix = NULL;
     qp->digest = 0;
     qp->parsersql_stmt_type = -1;
+    if (!query || query_length <= 0) return;
+    if constexpr (D == Dialect::PostgreSQL) {
+        // PgSQL_Query_Info includes the protocol terminator in QueryLength.
+        if (query[query_length - 1] == '\0') --query_length;
+    }
+    if (query_length == 0) return;
 
-    auto result = tl_pgsql_parser.parse(query, query_length);
-
-    if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        const char* normalized = NULL;
-        size_t normalized_len = 0;
-        if (result.ast) {
-            Emitter<Dialect::PostgreSQL> emitter(tl_pgsql_parser.arena(), EmitMode::DIGEST);
-            emitter.emit(result.ast);
-            StringRef ref = emitter.result();
-            normalized = ref.ptr;
-            normalized_len = ref.len;
-        } else {
-            Digest<Dialect::PostgreSQL> digest(tl_pgsql_parser.arena());
-            DigestResult dr = digest.compute(query, query_length);
-            normalized = dr.normalized.ptr;
-            normalized_len = dr.normalized.len;
-        }
-        qp->digest = SpookyHash::Hash64(normalized, normalized_len, 0);
-        qp->parsersql_stmt_type = static_cast<int>(result.stmt_type);
-        if (normalized_len < QUERY_DIGEST_BUF) {
-            memcpy(qp->buf, normalized, normalized_len);
-            qp->buf[normalized_len] = '\0';
+    auto result = parser.parse(query, query_length);
+    StringRef normalized;
+    if (result.status == ParseResult::OK && result.full_input && result.ast) {
+        Emitter<D> emitter(parser.arena(), EmitMode::DIGEST);
+        emitter.emit(result.ast);
+        normalized = emitter.result();
+    }
+    if (normalized.ptr && normalized.len != 0) {
+        // Preserve SpookyHash and the ownership expected by query_parser_free().
+        if (normalized.len < QUERY_DIGEST_BUF) {
+            memcpy(qp->buf, normalized.ptr, normalized.len);
+            qp->buf[normalized.len] = '\0';
             qp->digest_text = qp->buf;
         } else {
-            qp->digest_text = strndup(normalized, normalized_len);
+            qp->digest_text = strndup(normalized.ptr, normalized.len);
         }
+        if (qp->digest_text) {
+            qp->digest = SpookyHash::Hash64(normalized.ptr, normalized.len, 0);
+        }
+    } else {
+        parser.reset();
+        parsersql_digest_fallback<D>(qp, query, query_length);
     }
+    if (qp->digest_text) qp->parsersql_stmt_type = static_cast<int>(result.stmt_type);
+    parser.reset();
+}
 
-    tl_pgsql_parser.reset();
+void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_length) {
+    parsersql_digest_init(qp, query, query_length, tl_mysql_parser);
+}
+
+void parsersql_digest_init_pgsql(SQP_par_t* qp, const char* query, int query_length) {
+    parsersql_digest_init(qp, query, query_length, tl_pgsql_parser);
 }
 
 // ---------------------------------------------------------------------------
