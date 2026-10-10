@@ -7643,6 +7643,23 @@ int PgSQL_Session::handle_post_sync_close_message(PgSQL_Close_Message* close_msg
 				// stays authoritative for its actual state.
 				break;
 			}
+			// TEMPORARY (#6412): previous_hostgroup is "the hostgroup of the last request",
+			// not the portal's owner. A simple-query cache hit under transaction_persistent=0
+			// leaves it at -1 while the portal is still registered, and the backend there may
+			// not be the connection that bound the portal. Rather than abort, drop the entry
+			// and synthesize the CloseComplete locally, like the unregistered case above.
+			// Protocol portals are never holdable, so the backend portal dies with the txn.
+			{
+				const PgSQL_Backend* owner = (previous_hostgroup != -1) ? find_backend(previous_hostgroup) : nullptr;
+				if (owner == nullptr || owner->server_myds == nullptr
+					|| owner->server_myds->myconn == nullptr
+					|| owner->server_myds->myconn != it->second.bound_conn) {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session=%p client_myds=%p. Close of portal '%s' with no attached owner (previous_hostgroup=%d), completing locally\n",
+						this, client_myds, it->first.c_str(), previous_hostgroup);
+					named_portals.erase(it);
+					break;
+				}
+			}
 			// Registered portal: dispatch a REAL backend Close('P', name) round-trip on
 			// the connection that holds it (previous_hostgroup — the portal is pinned
 			// there since the Bind), forward the backend's CloseComplete '3', and evict
@@ -7680,8 +7697,7 @@ int PgSQL_Session::handle_post_sync_close_message(PgSQL_Close_Message* close_msg
 			// pinned previous_hostgroup, never re-route via the query processor. Consume
 			// the per-frame exec-qp flag either way.
 			extended_query_exec_qp = false;
-			assert(previous_hostgroup != -1); // a registered portal implies a prior Bind set this
-			current_hostgroup = previous_hostgroup;
+			current_hostgroup = previous_hostgroup; // != -1: checked above
 			if (pgsql_thread___set_query_lock_on_hostgroup == 1 && locked_on_hostgroup >= 0) {
 				if (current_hostgroup != locked_on_hostgroup) {
 					handle_post_sync_locked_on_hostgroup_error(stmt_info->query, stmt_info->query_length);
