@@ -803,8 +803,8 @@ static void test_match_digest_pcre2() {
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"127.0.0.1",
-		nullptr, 6033, 0, "AAB", "SELECT 1", nullptr, 1),
-		"PCRE-compatible mode accepts PCRE2 variable-length lookbehind");
+		nullptr, 6033, 0, "AAB", "SELECT 1", nullptr, 3),
+		"PCRE2 mode (engine 3) accepts variable-length lookbehind");
 }
 
 static void test_match_digest_pcre2_lookaround_reset_start() {
@@ -813,8 +813,8 @@ static void test_match_digest_pcre2_lookaround_reset_start() {
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"127.0.0.1",
-		nullptr, 6033, 0, "a", "SELECT 1", nullptr, 1),
-		"PCRE-compatible mode accepts legacy \\K inside positive lookahead");
+		nullptr, 6033, 0, "a", "SELECT 1", nullptr, 3),
+		"PCRE2 mode (engine 3) accepts legacy \\K inside positive lookahead");
 }
 
 static void test_invalid_pcre2_pattern() {
@@ -823,8 +823,8 @@ static void test_invalid_pcre2_pattern() {
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"127.0.0.1",
-		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
-		"invalid PCRE2 pattern safely returns no match");
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 3),
+		"invalid PCRE2 pattern safely returns no match on engine 3");
 }
 
 static void test_invalid_negated_pcre2_pattern() {
@@ -834,8 +834,8 @@ static void test_invalid_negated_pcre2_pattern() {
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"127.0.0.1",
-		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
-		"invalid PCRE2 pattern does not match a negated rule");
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 3),
+		"invalid PCRE2 pattern does not match a negated rule on engine 3");
 }
 
 // Issue #6319: an invalid regex makes the rule inert with both engines, so a
@@ -1020,10 +1020,19 @@ static void test_null_rule() {
 // ============================================================================
 
 int main() {
-#ifdef DEBUG
+#ifdef PROXYSQL31
+	// Engine-3 tests run only on the Innovative/Plugin tiers.
+#	ifdef DEBUG
 	plan(242);
-#else
+#	else
 	plan(232);
+#	endif
+#else
+#	ifdef DEBUG
+	plan(238);
+#	else
+	plan(228);
+#	endif
 #endif
 
 	test_init_minimal();
@@ -1051,10 +1060,14 @@ int main() {
 	test_digest();
 	test_match_digest_re2();
 	test_match_digest_pcre();
+// Engine 3 (PCRE2) exists only on the Innovative/Plugin tiers; on the Stable
+// tier these would exercise engine 1 and fail (issue #6411).
+#ifdef PROXYSQL31
 	test_match_digest_pcre2();
 	test_match_digest_pcre2_lookaround_reset_start();
 	test_invalid_pcre2_pattern();
 	test_invalid_negated_pcre2_pattern();
+#endif
 	test_invalid_re2_pattern();
 	test_match_pattern();
 	test_negate_match_pattern();

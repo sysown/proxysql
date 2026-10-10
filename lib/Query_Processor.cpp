@@ -16,6 +16,7 @@ using json = nlohmann::json;
 #include "re2/regexp.h"
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
+#include "pcrecpp.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -249,8 +250,14 @@ __thread bool _thr_SQP_have_cidr_proxy_addr;
 
 // A compiled query rule regex, one per rule in each worker thread's private
 // rule copy, so the PCRE2 match data is never used by two threads at once.
+// Three regex engines share this struct (issue #6411): engine 1 is PCRE
+// (pcrecpp, the semantics every released 3.x tag shipped), engine 2 is RE2,
+// and engine 3 -- opt-in, v3.1/v4.0 only -- is PCRE2.
 struct __RE2_objects_t {
-	// PCRE2 engine (query_processor_regex=1)
+	// PCRE1 engine (query_processor_regex=1)
+	pcrecpp::RE_Options* opt1;
+	pcrecpp::RE* re1;
+	// PCRE2 engine (query_processor_regex=3, PROXYSQL31/PROXYSQL40 only)
 	pcre2_code* pcre2;
 	pcre2_match_data* pcre2_md;
 	// replace_pattern translated to PCRE2 syntax once, at compile time; NULL
@@ -707,6 +714,8 @@ static bool query_digest_text_matches(
 
 static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
+	r->opt1=NULL;
+	r->re1=NULL;
 	r->pcre2=NULL;
 	r->pcre2_md=NULL;
 	r->pcre2_rewrite=NULL;
@@ -724,7 +733,7 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 		} else if (i==2) {
 			r->re2=new RE2(qr->match_pattern, *r->opt2);
 		}
-	} else {
+	} else if (query_processor_regex==3) {
 		uint32_t options = 0;
 		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
 			options |= PCRE2_CASELESS;
@@ -748,6 +757,19 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 					qr->rule_id, qr->replace_pattern);
 			}
 		}
+	} else {
+		// query_processor_regex==1 (the default, and every other accepted
+		// value on a tier where engine 3 does not exist): PCRE 8.45 via
+		// pcrecpp, the semantics every released 3.x tag shipped (issue #6411).
+		r->opt1=new pcrecpp::RE_Options();
+		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
+			r->opt1->set_caseless(true);
+		}
+		if (i==1) {
+			r->re1=new pcrecpp::RE(qr->match_digest, *r->opt1);
+		} else if (i==2) {
+			r->re1=new pcrecpp::RE(qr->match_pattern, *r->opt1);
+		}
 	}
 	// A rule whose regex does not compile never matches, negated or not. Name
 	// the rule and the field so the broken rule can be found: RE2 runs with
@@ -755,19 +777,21 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 	const char *error = NULL;
 	if (r->re2 && r->re2->ok() == false) {
 		error = r->re2->error().c_str();
-	} else if (query_processor_regex!=2 && r->pcre2 == NULL) {
+	} else if (query_processor_regex==3 && r->pcre2 == NULL) {
 		error = pcre2_error.c_str();
 	}
 	if (error) {
 		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, the rule will never match: %s\n",
 			qr->rule_id, (i==1 ? "match_digest" : "match_pattern"), (i==1 ? qr->match_digest : qr->match_pattern),
-			(query_processor_regex==2 ? "RE2" : "PCRE2"), error);
+			(query_processor_regex==2 ? "RE2" : (query_processor_regex==3 ? "PCRE2" : "PCRE1")), error);
 	}
 	return r;
 };
 
 static void free_compiled_query_rule(re2_t *r) {
 	if (r == NULL) return;
+	if (r->opt1) { delete r->opt1; r->opt1=NULL; }
+	if (r->re1) { delete r->re1; r->re1=NULL; }
 	if (r->pcre2_md) { pcre2_match_data_free(r->pcre2_md); r->pcre2_md=NULL; }
 	if (r->pcre2) { pcre2_code_free(r->pcre2); r->pcre2=NULL; }
 	if (r->pcre2_rewrite) { free(r->pcre2_rewrite); r->pcre2_rewrite=NULL; }
@@ -804,6 +828,9 @@ static bool rule_matches_regex(
 		} else if (compiled_regex->pcre2) {
 			regex_is_valid = true;
 			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md, subject);
+		} else if (compiled_regex->re1) {
+			regex_is_valid = true;
+			rc = compiled_regex->re1->PartialMatch(subject);
 		}
 	}
 
@@ -2688,6 +2715,17 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 							RE2::GlobalReplace(ret->new_query, *re2p->re2, qr->replace_pattern);
 						} else {
 							RE2::Replace(ret->new_query, *re2p->re2, qr->replace_pattern);
+						}
+					} else if (re2p->re1) {
+						// PCRE1 semantics: the legacy rewrite string is used
+						// verbatim (\1..\9), exactly as every released 3.x tag
+						// did. Note the argument order: pcrecpp binds caller
+						// arguments right-to-left, so the rewrite comes first
+						// and the query last (issue #6411).
+						if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+							re2p->re1->GlobalReplace(qr->replace_pattern, ret->new_query);
+						} else {
+							re2p->re1->Replace(qr->replace_pattern, ret->new_query);
 						}
 					} else if (re2p->pcre2_rewrite) {
 						pcre2_replace(

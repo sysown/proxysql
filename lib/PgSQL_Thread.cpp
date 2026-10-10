@@ -2377,7 +2377,13 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_rules_fast_routing_algorithm"] = make_tuple(&variables.query_rules_fast_routing_algorithm, 1, 2, false);
 		VariablesPointers_int["query_processor_iterations"] = make_tuple(&variables.query_processor_iterations, 0, 1000 * 1000, false);
 		VariablesPointers_int["query_processor_first_comment_parsing"] = make_tuple(&variables.query_processor_first_comment_parsing, 0, 3, false);
+		// See MySQL_Thread.cpp: engine 3 (PCRE2) is unavailable on the Stable
+		// tier (issue #6411).
+#ifdef PROXYSQL31
+		VariablesPointers_int["query_processor_regex"] = make_tuple(&variables.query_processor_regex, 1, 3, false);
+#else
 		VariablesPointers_int["query_processor_regex"] = make_tuple(&variables.query_processor_regex, 1, 2, false);
+#endif
 		VariablesPointers_int["query_processor_parser"] = make_tuple(&variables.query_processor_parser, 0, 1, false);
 		VariablesPointers_int["query_retries_on_failure"] = make_tuple(&variables.query_retries_on_failure, 0, 1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"] = make_tuple(&variables.set_query_lock_on_hostgroup, 0, 1, false);

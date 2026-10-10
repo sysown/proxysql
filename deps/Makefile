@@ -63,6 +63,7 @@ targets :=	libssl \
 			abseil \
 			re2 \
 			sqlite3 \
+			pcre \
 			pcre2 \
 			lz4 \
 			zstd \
@@ -470,6 +471,15 @@ re2/re2/obj/libre2.a: $(ABSL_STAMP)
 
 re2: re2/re2/obj/libre2.a
 
+
+pcre/pcre/.libs/libpcre.a:
+	cd pcre && rm -rf pcre-*/ || true
+	cd pcre && tar -zxf pcre-*.tar.gz
+	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
+	cd pcre/pcre && ./configure
+	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
+
+pcre: pcre/pcre/.libs/libpcre.a
 
 pcre2/pcre2/.libs/libpcre2-8.a:
 	cd pcre2 && rm -rf pcre2-*/ || true

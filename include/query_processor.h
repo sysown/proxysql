@@ -439,7 +439,8 @@ void __reset_rules(std::vector<QP_rule_t*>* qrs);
  * @param digest_text Parsed digest text.
  * @param query_text Original query text.
  * @param rewritten_query Rewritten query text produced by a previous rule, if any.
- * @param query_processor_regex Regex engine selector: PCRE (1) or RE2 (2).
+ * @param query_processor_regex Regex engine selector: PCRE (1), RE2 (2) or
+ *   PCRE2 (3, available only when PROXYSQL31 is defined -- issue #6411).
  * @return true when all rule criteria match, otherwise false.
  */
 bool rule_matches_query(

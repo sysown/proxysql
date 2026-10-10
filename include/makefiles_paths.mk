@@ -55,6 +55,11 @@ RE2_PLATFORM_LIBS := -framework CoreFoundation
 endif
 RE2_STATIC_LIBS = $(RE2_STATIC_LIB) $(RE2_ABSL_LIBS) $(RE2_PLATFORM_LIBS)
 
+PCRE_PATH := $(DEPS_PATH)/pcre/pcre
+PCRE_IDIR := $(PCRE_PATH)
+PCRE_LDIR := $(PCRE_PATH)/.libs
+PCRE_LIBS := -lpcrecpp -lpcre
+
 PCRE2_PATH := $(DEPS_PATH)/pcre2/pcre2
 PCRE2_IDIR := $(PCRE2_PATH)/src
 PCRE2_LDIR := $(PCRE2_PATH)/.libs
