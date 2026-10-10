@@ -1163,7 +1163,15 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
 std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(
     const std::string& query)
 {
-    auto result = tl_pgsql_parser.parse(query.c_str(), query.size());
+    // Simple-query protocol payloads can include their terminating NUL in
+    // QueryLength. It is framing, not SQL: after a trailing comma ParserSQL
+    // otherwise tries to parse it as another value. Exclude only that final
+    // byte; never truncate at an embedded NUL and silently discard SQL.
+    size_t query_length = query.size();
+    if (query_length && query[query_length - 1] == '\0') --query_length;
+    if (std::memchr(query.data(), '\0', query_length)) return {};
+
+    auto result = tl_pgsql_parser.parse(query.c_str(), query_length);
     // PG walker: only act on a clean OK parse. PARTIAL means the parser hit
     // unexpected syntax mid-statement (e.g. `public,,schema1` -> the empty
     // element after the first comma) and produced an AST that captures only
@@ -1184,9 +1192,9 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(
     // tracked variables don't have analogous shapes.
     if (result.status == ParseResult::OK) {
         if (result.ast && result.ast->type == NodeType::NODE_SET_STMT &&
-            ast_covers_full_input(result.ast, query.c_str(), (int)query.size())) {
+            ast_covers_full_input(result.ast, query.c_str(), (int)query_length)) {
             auto parsed = walk_set_stmt<Dialect::PostgreSQL>(
-                result.ast, tl_pgsql_parser.arena(), query.c_str(), query.size());
+                result.ast, tl_pgsql_parser.arena(), query.c_str(), query_length);
             tl_pgsql_parser.reset();
             return parsed;
         }
