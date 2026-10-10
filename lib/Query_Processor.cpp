@@ -310,6 +310,129 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 	return s;
 }
 
+/**
+ * @brief Is @p value a CIDR prefix list for @p field, rather than a plain value?
+ *
+ * The two fields accept deliberately different forms, so the decision is
+ * field-aware and MUST be the single decision both the admin validator and the
+ * runtime predicate consult -- otherwise the two disagree and a rule behaves
+ * differently depending on which side classified it:
+ *
+ *  - client_addr is always a rendered peer address, so any non-leading '/'
+ *    can only be a prefix list (issue #6426: the previous field-blind helper
+ *    tripped on this assumption for proxy_addr).
+ *  - proxy_addr is the listener's configured string, and for a Unix listener
+ *    that is a socket path, which may be relative: './proxysql.sock' or
+ *    'run/proxysql.sock' contain '/' but are paths, while '10.0.0.0/8' is a
+ *    prefix list. The list form is taken only when the text before the first
+ *    '/' -- cut at the first ',' and trimmed -- is an inet_pton-valid IPv4 or
+ *    IPv6 literal. A malformed list whose head is a valid literal
+ *    ('10.0.0.0/8,garbage', '10.0.0.0/33') still enters the CIDR branch so the
+ *    existing rejection paths keep catching typos.
+ */
+bool qp_addr_value_is_cidr(const char *value, qp_addr_field_t field) {
+	if (value == NULL || *value == '\0') {
+		return false;
+	}
+	const char *slash = strchr(value, '/');
+	if (slash == NULL) {
+		return false;
+	}
+	if (field == QP_ADDR_FIELD_CLIENT) {
+		// client_addr can never be a filesystem path.
+		return (*value != '/');
+	}
+	// proxy_addr: only a valid IP literal before the first '/' makes the value
+	// a prefix list. An empty head (leading '/') is a socket path.
+	std::string head(value, slash - value);
+	size_t comma = head.find(',');
+	if (comma != std::string::npos) {
+		head.resize(comma);
+	}
+	const size_t first = head.find_first_not_of(" \t");
+	if (first == std::string::npos) {
+		return false;
+	}
+	const size_t last = head.find_last_not_of(" \t");
+	head = head.substr(first, last - first + 1);
+	if (head.empty()) {
+		return false;
+	}
+	if (head.find(':') != std::string::npos) {
+		struct in6_addr tmp;
+		return inet_pton(AF_INET6, head.c_str(), &tmp) == 1;
+	}
+	struct in_addr tmp;
+	return inet_pton(AF_INET, head.c_str(), &tmp) == 1;
+}
+
+/**
+ * @brief Validate a query rule address value before it is installed to runtime.
+ *
+ * Three forms are accepted:
+ *  - an exact address, compared byte for byte against the rendered text;
+ *  - a textual wildcard ('%' or '_'), where '%' may only be the last character;
+ *  - a comma-separated list of CIDR prefixes, matched numerically.
+ *
+ * Which one applies is decided by qp_addr_value_is_cidr(), which also keeps a
+ * Unix listener string such as "/tmp/proxysql.sock" -- or a relative one, for
+ * example "run/proxysql.sock" -- on the literal path: proxy_addr is how a Unix
+ * listener identifies itself, and those rules have always worked.
+ *
+ * The length cap and the '%'-position rule constrain a *rendered address*, so
+ * they are applied to client_addr only. A listener path is neither: a socket
+ * path may legitimately exceed INET6_ADDRSTRLEN or contain a '%', and capping
+ * it would skip a rule the listener can still satisfy. client_addr cannot be a
+ * path, so a leading '/' there is rejected instead of being quietly installed
+ * as a criterion that could never match.
+ *
+ * A malformed prefix is rejected on both fields so a rule is never installed in
+ * a state where it can only ever fail to match -- previously such a value
+ * loaded cleanly and then silently matched nothing.
+ *
+ * @param rule_id    Rule id, for the error message.
+ * @param field      Which field @p value came from, see qp_addr_field_t.
+ * @param value      Configured value; NULL and "" both mean "no criterion".
+ * @return true when the value is usable.
+ */
+bool validate_qp_addr_value(const char *rule_id, const qp_addr_field_t field, const char *value) {
+	if (value == NULL || *value == '\0') {
+		return true;
+	}
+	const char *field_name = (field == QP_ADDR_FIELD_PROXY) ? "proxy_addr" : "client_addr";
+
+	if (qp_addr_value_is_cidr(value, field) == true) {
+		if (strnlen(value, MAX_CIDR_LIST_VALUE_LEN + 1) > MAX_CIDR_LIST_VALUE_LEN ||
+			ip_cidr_list_is_valid(value) == false) {
+			proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+			return false;
+		}
+		return true;
+	}
+	if (field == QP_ADDR_FIELD_PROXY) {
+		// A listener path or a plain address: nothing here constrains its
+		// length or its characters.
+		return true;
+	}
+	if (*value == '/') {
+		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+		return false;
+	}
+	if (strnlen(value, INET6_ADDRSTRLEN) >= INET6_ADDRSTRLEN) {
+		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+		return false;
+	}
+	// mywildcmp() would honour a '%' anywhere in the pattern, but a '%' in the
+	// middle of an address is far more likely a typo than an intent.
+	const char *pct = strchr(value, '%');
+	if (pct != NULL && pct[1] != '\0') {
+		proxy_error("Query rule with rule_id=%s has a wildcard that is not at the end of %s: %s\n",
+			rule_id, field_name, value);
+		return false;
+	}
+	return true;
+}
+
 bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, qp_addr_field_t field) {
 	if (pred == NULL) {
 		return false;
@@ -330,10 +453,12 @@ bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, qp_add
 	if (allow_path == false && *value == '/') {
 		return false;
 	}
-	if (ip_cidr_spec_looks_like_prefix(value) == true) {
+	if (qp_addr_value_is_cidr(value, field) == true) {
 		if (ip_cidr_parse_list(value, pred->cidrs, MAX_CIDR_PREFIXES_PER_RULE, &pred->cidr_count) == false) {
 			// Leave the predicate inert so a rule that somehow reaches the
 			// runtime unvalidated can never match on a half-parsed prefix list.
+			// qp_addr_predicate_matches() returns false for MATCH_NONE; it
+			// deliberately does NOT fall through to a strcmp of the raw values.
 			pred->match = QP_ADDR_MATCH_NONE;
 			pred->cidr_count = 0;
 			return false;
@@ -404,6 +529,10 @@ static bool qp_addr_predicate_matches(const qp_addr_predicate_t *pred, const cha
 	case QP_ADDR_MATCH_WILDCARD:
 		return mywildcmp(ruleval, sessval) == true;
 	case QP_ADDR_MATCH_NONE:
+		// An inert predicate (an unparseable prefix list that bypassed the
+		// admin validation) must never match. Falling through to a strcmp of
+		// the raw values would resurrect a rule the admin layer rejected.
+		return false;
 	case QP_ADDR_MATCH_EXACT:
 	default:
 		return strcmp(ruleval, sessval) == 0;

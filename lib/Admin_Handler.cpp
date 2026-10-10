@@ -2840,11 +2840,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			char* err = NULL;
+			std::string skipped_rules_warning {};
 
 			if (query_no_space[5] == 'P' || query_no_space[5] == 'p')
-				err = SPA->load_pgsql_query_rules_to_runtime();
+				err = SPA->load_pgsql_query_rules_to_runtime(nullptr, nullptr, "", 0, &skipped_rules_warning);
 			else
-				err = SPA->load_mysql_query_rules_to_runtime();
+				err = SPA->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, true, &skipped_rules_warning);
 
 			if (err==NULL) {
 				if (query_no_space[5] == 'P' || query_no_space[5] == 'p')
@@ -2852,7 +2853,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				else
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to RUNTIME\n");
 
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				// A rule skipped for an invalid client_addr/proxy_addr is still a
+				// successful load, but the client must not get a bare OK: the
+				// warning message names the skipped rule_ids (issue #6426).
+				SPA->send_ok_msg_to_client(sess,
+					skipped_rules_warning.empty() ? NULL : skipped_rules_warning.c_str(),
+					0, query_no_space);
 			} else {
 				SPA->send_error_msg_to_client(sess, err);
 			}

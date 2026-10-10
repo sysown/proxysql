@@ -405,13 +405,15 @@ static void test_addr_predicate_mode_selection() {
 
 	// A Unix socket path is how a socket listener spells itself in proxy_addr,
 	// so a leading '/' must not be read as the start of a malformed prefix.
-	ok(ip_cidr_spec_looks_like_prefix("/tmp/proxysql.sock") == false,
+	// The classification is field-aware since #6426: qp_addr_value_is_cidr()
+	// is the single decision the admin validator and the predicate consult.
+	ok(qp_addr_value_is_cidr("/tmp/proxysql.sock", QP_ADDR_FIELD_PROXY) == false,
 		"a leading '/' is a path, not a prefix");
-	ok(ip_cidr_spec_looks_like_prefix("10.0.0.0/8") == true, "addr/len is a prefix");
-	ok(ip_cidr_spec_looks_like_prefix("2001:db8::/32") == true, "IPv6 addr/len is a prefix");
-	ok(ip_cidr_spec_looks_like_prefix("10.0.0.1") == false, "a bare address is not a prefix");
-	ok(ip_cidr_spec_looks_like_prefix("") == false, "an empty value is not a prefix");
-	ok(ip_cidr_spec_looks_like_prefix(NULL) == false, "a null value is not a prefix");
+	ok(qp_addr_value_is_cidr("10.0.0.0/8", QP_ADDR_FIELD_PROXY) == true, "addr/len is a prefix");
+	ok(qp_addr_value_is_cidr("2001:db8::/32", QP_ADDR_FIELD_PROXY) == true, "IPv6 addr/len is a prefix");
+	ok(qp_addr_value_is_cidr("10.0.0.1", QP_ADDR_FIELD_PROXY) == false, "a bare address is not a prefix");
+	ok(qp_addr_value_is_cidr("", QP_ADDR_FIELD_PROXY) == false, "an empty value is not a prefix");
+	ok(qp_addr_value_is_cidr(NULL, QP_ADDR_FIELD_PROXY) == false, "a null value is not a prefix");
 
 	// The path exception is reserved for proxy_addr, which is the field a Unix
 	// listener writes its socket path into.
@@ -428,6 +430,78 @@ static void test_addr_predicate_mode_selection() {
 	ok(qp_addr_predicate_init(&pred, "/tmp/a%b.sock", QP_ADDR_FIELD_PROXY),
 		"a socket path containing '%' is accepted on proxy_addr");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "a socket path containing '%' stays exact");
+}
+
+// Issue #6426: a Unix listener may be declared with a RELATIVE path, and
+// MySQL_Thread copies that configured string verbatim into proxy_addr. A
+// relative path ('./proxysql.sock', 'run/proxysql.sock') contains a '/' but is
+// not a prefix list, so the rule must load and match exactly, as in v3.0.11.
+static void test_qp_addr_relative_socket_paths() {
+	qp_addr_predicate_t pred;
+	const char *paths[] = { "./proxysql.sock", "run/proxysql.sock", "../run/p.sock",
+		"/tmp/proxysql.sock", "proxysql.sock" };
+	for (const char *path : paths) {
+		ok(qp_addr_predicate_init(&pred, path, QP_ADDR_FIELD_PROXY) == true,
+			"socket-path proxy_addr '%s' resolves", path);
+		ok(pred.match == QP_ADDR_MATCH_EXACT, "socket-path proxy_addr '%s' is exact", path);
+	}
+	for (const char *path : paths) {
+		ok(validate_qp_addr_value("42", QP_ADDR_FIELD_PROXY, path) == true,
+			"socket-path proxy_addr '%s' passes admin validation", path);
+	}
+
+	// The criterion must match the identical session string, which is exactly
+	// the listener's configured text.
+	QP_rule_t r = make_rule();
+	r.proxy_addr = const_cast<char *>("run/proxysql.sock");
+	ok(qp_addr_predicate_init(&r.proxy_addr_pred, r.proxy_addr, QP_ADDR_FIELD_PROXY), "predicate resolves");
+	ok(rule_matches_query(&r, 0, "u", "d", "10.0.0.1",
+		nullptr,
+		"run/proxysql.sock",
+		nullptr, -1, 0, nullptr, "SELECT 1", nullptr, 1),
+		"a relative socket path matches the identical session string");
+
+	// classifier ground truth for proxy_addr
+	ok(qp_addr_value_is_cidr("./proxysql.sock", QP_ADDR_FIELD_PROXY) == false,
+		"a relative socket path is not classified as CIDR");
+	ok(qp_addr_value_is_cidr("run/proxysql.sock", QP_ADDR_FIELD_PROXY) == false,
+		"'run/x.sock' is not classified as CIDR");
+	ok(qp_addr_value_is_cidr("10.0.0.0/8", QP_ADDR_FIELD_PROXY) == true,
+		"a literal addr/len on proxy_addr is still a prefix list");
+
+	// Malformed lists whose head IS a literal keep entering the CIDR branch so
+	// typo protection is preserved: they fail init and are never loaded.
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/33", QP_ADDR_FIELD_PROXY) == false,
+		"'10.0.0.0/33' on proxy_addr is rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/8,foo", QP_ADDR_FIELD_PROXY) == false,
+		"'10.0.0.0/8,foo' on proxy_addr is rejected");
+	ok(validate_qp_addr_value("42", QP_ADDR_FIELD_PROXY, "10.0.0.0/33") == false,
+		"admin validation rejects '10.0.0.0/33' on proxy_addr");
+	ok(validate_qp_addr_value("42", QP_ADDR_FIELD_PROXY, "10.0.0.0/8,garbage") == false,
+		"admin validation rejects a list with a bad token on proxy_addr");
+
+	//.client_addr semantics are unchanged: a non-CIDR '/' form is refused.
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/255.0.0.0", QP_ADDR_FIELD_CLIENT) == false,
+		"a netmask-form prefix is rejected on client_addr");
+	ok(qp_addr_predicate_init(&pred, "/tmp/x", QP_ADDR_FIELD_CLIENT) == false,
+		"a socket path is still rejected on client_addr");
+	ok(qp_addr_predicate_init(&pred, "10.0.0._", QP_ADDR_FIELD_CLIENT) == true,
+		"'10.0.0._' resolves on client_addr");
+	ok(pred.match == QP_ADDR_MATCH_WILDCARD, "'_' is a single-character wildcard on client_addr");
+
+	// An inert (QP_ADDR_MATCH_NONE) predicate can never match: it must NOT
+	// fall through to a strcmp of the raw strings.
+	QP_rule_t none_rule = make_rule();
+	none_rule.client_addr = const_cast<char *>("10.0.0.0/8,foo");
+	ok(qp_addr_predicate_init(&none_rule.client_addr_pred, none_rule.client_addr,
+		QP_ADDR_FIELD_CLIENT) == false, "the malformed list fails predicate init");
+	ok(none_rule.client_addr_pred.match == QP_ADDR_MATCH_NONE, "the predicate is inert");
+	struct sockaddr_storage sa = make_sa("10.0.0.0");
+	ok(!rule_matches_query(&none_rule, 0, "u", "d", "10.0.0.0/8,foo",
+		(struct sockaddr *)&sa,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"a MATCH_NONE predicate never matches, even against an identical string");
 }
 
 // An IPv6 literal may embed a dotted quad, which makes the longest legal token
@@ -667,6 +741,9 @@ static void test_proxy_addr_port() {
 	QP_rule_t r = make_rule();
 	r.proxy_addr = const_cast<char *>("10.0.0.5");
 	r.proxy_port = 6033;
+	// Production (new_query_rule) always resolves the predicate; a raw
+	// QP_rule_t must too, since a NONE predicate is inert by design (#6426).
+	qp_addr_predicate_init(&r.proxy_addr_pred, r.proxy_addr, QP_ADDR_FIELD_PROXY);
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"10.0.0.5",
@@ -913,6 +990,7 @@ static void test_combined_criteria() {
 	r.proxy_addr = const_cast<char *>("10.0.0.9");
 	r.proxy_port = 6033;
 	r.match_pattern = const_cast<char *>("SELECT");
+	qp_addr_predicate_init(&r.proxy_addr_pred, r.proxy_addr, QP_ADDR_FIELD_PROXY);
 	ok(rule_matches_query(&r, 0, "appuser", "analytics", "1.2.3.4",
 		nullptr,
 		"10.0.0.9",
@@ -943,9 +1021,9 @@ static void test_null_rule() {
 
 int main() {
 #ifdef DEBUG
-	plan(211);
+	plan(242);
 #else
-	plan(201);
+	plan(232);
 #endif
 
 	test_init_minimal();
@@ -963,6 +1041,7 @@ int main() {
 	test_cidr_requires_parsed_address();
 	test_cidr_ipv4_mapped_client();
 	test_addr_predicate_mode_selection();
+	test_qp_addr_relative_socket_paths();
 	test_cidr_ipv6_embedded_dotted_quad();
 	test_bare_underscore_wildcard_matches();
 	test_cidr_rejects_malformed();
