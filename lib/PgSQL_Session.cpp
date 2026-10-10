@@ -3768,10 +3768,13 @@ handler_again:
 				// Switch to fast forward mode if the query matches copy ... stdin command
 				re2::StringPiece matched;
 				const char* digest_text = CurrentQuery.get_digest_text();
-				bool run_match = true;
+				// The handler passes here again each time the backend sends part of the reply. The text was
+				// already checked before the query was sent (a statement only starts from ASYNC_IDLE, as the
+				// timeout below also assumes), so only that first pass looks for COPY.
+				bool run_match = (myconn->async_state_machine == ASYNC_IDLE);
 				const char* query_to_match;
 				if (digest_text) {
-					if (strcasestr(digest_text, "COPY ") == NULL)
+					if (run_match && strcasestr(digest_text, "COPY ") == NULL)
 						run_match = false;
 					query_to_match = digest_text;
 				} else {
