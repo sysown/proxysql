@@ -179,6 +179,9 @@ ifeq ($(UNAME_S),Darwin)
 endif
 LIBPROXYSQLAR += $(ZSTD_LDIR)/libzstd.a
 LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
+ifeq ($(PROXYSQLCLICKHOUSE),1)
+	LIBPROXYSQLAR += $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(LZ4_LDIR)/liblz4.a
+endif
 ifeq ($(PROXYSQL40),1)
 	LIBPROXYSQLAR += $(SQLITE_VEC_OBJ)
 endif
@@ -196,9 +199,7 @@ $(ODIR)/%.o: %.cpp $(HEADERS)
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR) $(CURL_AR) $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
-ifeq ($(PROXYSQLCLICKHOUSE),1)
-	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -Wl,--whole-archive $(PROXYSQL_LDIR)/libproxysql.a -Wl,--no-whole-archive $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
-else ifeq ($(UNAME_S),Darwin)
+ifeq ($(UNAME_S),Darwin)
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -force_load $(PROXYSQL_LDIR)/libproxysql.a $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -Wl,--whole-archive $(PROXYSQL_LDIR)/libproxysql.a -Wl,--no-whole-archive $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)

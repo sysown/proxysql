@@ -70,7 +70,7 @@ PSQLGA := -DPROXYSQL40
 CXXFLAGS := $(STDCPP) -fPIC $(OPTZ) $(WGCOV) $(WASAN) -pthread \
 	-fvisibility=hidden -fvisibility-inlines-hidden \
 	-fstack-protector-strong \
-	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
+	$(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLGA)
 
 PLUGIN_LDFLAGS :=
 ifeq ($(UNAME_S),Darwin)

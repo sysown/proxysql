@@ -9,6 +9,10 @@ endif
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
+# Keep shared core class layouts identical in standalone subdirectory builds.
+PROXYSQLCLICKHOUSE ?= 1
+PSQLCH := $(if $(filter 1,$(PROXYSQLCLICKHOUSE)),-DPROXYSQLCLICKHOUSE)
+
 ifeq ($(UNAME_S),Darwin)
 SHLIB_EXT  := .dylib
 SHARED_FLAGS := -dynamiclib
