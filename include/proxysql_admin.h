@@ -692,6 +692,11 @@ class ProxySQL_Admin {
 	/** Apply a validated operational variable under the caller's configuration lock. */
 	bool set_managed_variable_locked(const std::string& name, const std::string& value);
 	bool commit_managed_admin_variables_locked(std::string& error);
+	/** @brief Refresh the engine half of the managed activation: rebuild the
+	 *  'runtime_global_variables' projection and the '<engine>_variables'
+	 *  checksum from live values. Without this a managed node looks in-sync to
+	 *  its Cluster peers while silently diverging, and no pull is triggered. */
+	void commit_managed_engine_variables_projection(bool pgsql);
 	SQLite3_result* get_mysql_users_snapshot();
 	SQLite3_result* get_mysql_servers_snapshot();
 	SQLite3_result* get_mysql_group_replication_hostgroups_snapshot();
