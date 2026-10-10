@@ -8393,11 +8393,13 @@ static bool extq_special_text(const char* text) {
 		}
 		break;
 	}
+	// Uppercase only: the loop below skips a keyword unless its first letter equals the statement's, uppercased.
 	static const char* const keywords[] = { "SET", "RESET", "DISCARD", "DEALLOCATE", "LISTEN", "UNLISTEN", "COPY" };
+	const char first = (char)toupper((unsigned char)text[0]);
 	for (const char* k : keywords) {
-		if (pgsql_stmt_first_keyword_is(text, k)) return true;
+		if (k[0] == first && pgsql_stmt_first_keyword_is(text, k)) return true;
 	}
-	return strncasecmp(text, "SELECT pg_backend_pid()", 23) == 0;
+	return first == 'S' && strncasecmp(text, "SELECT pg_backend_pid()", 23) == 0;
 }
 
 static bool extq_special_stmt(const PgSQL_STMT_Global_info& s) {
