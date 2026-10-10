@@ -397,11 +397,9 @@ static std::string emit_delimited_ident_raw(
 // Section 1: Digest adapter
 // ---------------------------------------------------------------------------
 
-/** Tokenize independently of ParserSQL's grammar and bounded AST arena. */
+/** Load the legacy tokenizer options for dialect @p D. */
 template <Dialect D>
-static void parsersql_digest_fallback(SQP_par_t* qp, const char* query, int query_length) {
-    options opts {};
-    int max_digest_length;
+static void parsersql_tokenizer_options(options& opts, int& max_digest_length) {
     if constexpr (D == Dialect::MySQL) {
         opts.lowercase = mysql_thread___query_digests_lowercase;
         opts.replace_null = mysql_thread___query_digests_replace_null;
@@ -425,6 +423,14 @@ static void parsersql_digest_fallback(SQP_par_t* qp, const char* query, int quer
     // Runtime configuration requires positive limits; use the normal defaults.
     if (opts.max_query_length <= 0) opts.max_query_length = 65000;
     if (max_digest_length <= 0) max_digest_length = 2048;
+}
+
+/** Tokenize independently of ParserSQL's grammar and bounded AST arena. */
+template <Dialect D>
+static void parsersql_digest_fallback(SQP_par_t* qp, const char* query, int query_length) {
+    options opts {};
+    int max_digest_length;
+    parsersql_tokenizer_options<D>(opts, max_digest_length);
     char* buffer = query_length < QUERY_DIGEST_BUF ? qp->buf : nullptr;
     if constexpr (D == Dialect::MySQL) {
         qp->digest_text = mysql_query_digest_and_first_comment(
@@ -440,6 +446,42 @@ static void parsersql_digest_fallback(SQP_par_t* qp, const char* query, int quer
         if (qp->digest_text != qp->buf) free(qp->digest_text);
         qp->digest_text = nullptr;
     }
+}
+
+/**
+ * @brief Extract the first comment of a query normalized from a complete AST.
+ *
+ * ParserSQL skips plain block comments, so a successful parse would lose
+ * query annotations such as a leading "hostgroup=N" comment. Run the legacy
+ * tokenizer, which defines the first-comment semantics, and keep only its
+ * comment. The tokenizer records only block comments, so queries without a
+ * '/' immediately followed by '*' skip it and pay only a memchr() scan.
+ *
+ * Must run before qp->buf receives the ParserSQL digest: qp->buf is the
+ * scratch buffer for the discarded token digest, exactly as in legacy mode.
+ */
+template <Dialect D>
+static void parsersql_first_comment(SQP_par_t* qp, const char* query, int query_length) {
+    const char* const end = query + query_length;
+    const char* p = query;
+    while ((p = static_cast<const char*>(memchr(p, '/', end - p))) != nullptr) {
+        if (++p == end) return;
+        if (*p == '*') break;
+    }
+    if (!p) return;
+    options opts {};
+    int max_digest_length;
+    parsersql_tokenizer_options<D>(opts, max_digest_length);
+    char* buffer = query_length < QUERY_DIGEST_BUF ? qp->buf : nullptr;
+    char* digest;
+    if constexpr (D == Dialect::MySQL) {
+        digest = mysql_query_digest_and_first_comment(
+            query, query_length, &qp->first_comment, buffer, &opts);
+    } else {
+        digest = pgsql_query_digest_and_first_comment(
+            query, query_length, &qp->first_comment, buffer, &opts);
+    }
+    if (digest != qp->buf) free(digest);
 }
 
 /**
@@ -472,6 +514,7 @@ static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_le
         normalized = emitter.result();
     }
     if (normalized.ptr && normalized.len != 0) {
+        parsersql_first_comment<D>(qp, query, query_length);
         // Preserve SpookyHash and the ownership expected by query_parser_free().
         if (normalized.len < QUERY_DIGEST_BUF) {
             memcpy(qp->buf, normalized.ptr, normalized.len);
