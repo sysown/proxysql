@@ -197,14 +197,28 @@ PgSQL_Query_Info::~PgSQL_Query_Info() {
 	reset_extended_query_info();
 }
 
-void PgSQL_Query_Info::begin(unsigned char *_p, int len, bool header) {
+void PgSQL_Query_Info::begin(unsigned char *_p, int len, bool header, const PgSQL_STMT_Global_info* cached) {
 	PgQueryCmd=PGSQL_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
 	memset(&QueryParserArgs, 0, sizeof(QueryParserArgs));
 	start_time=sess->thread->curtime;
 	init(_p, len, header);
-	if (pgsql_thread___commands_stats || pgsql_thread___query_digests) {
+	// A statement cached while commands_stats was off has no command type: parse in full then.
+	if (cached && pgsql_thread___query_digests && cached->digest_text &&
+		(pgsql_thread___commands_stats == false || cached->PgQueryCmd != PGSQL_QUERY__UNINITIALIZED)) {
+		// Same text as a cached statement: copy what parsing it would produce. A short digest goes in
+		// the inline buffer, as the parser puts it. -1 because the memset above left 0, which is a
+		// real statement type.
+		const size_t len = strlen(cached->digest_text) + 1;
+		QueryParserArgs.digest = cached->digest;
+		QueryParserArgs.digest_text = len <= sizeof(QueryParserArgs.buf) ?
+			(char*)memcpy(QueryParserArgs.buf, cached->digest_text, len) : strdup(cached->digest_text);
+		QueryParserArgs.first_comment = cached->first_comment ? strdup(cached->first_comment) : nullptr;
+		QueryParserArgs.parsersql_stmt_type = -1;
+		if (pgsql_thread___commands_stats)
+			PgQueryCmd = cached->PgQueryCmd;
+	} else if (pgsql_thread___commands_stats || pgsql_thread___query_digests) {
 		query_parser_init();
 		if (pgsql_thread___commands_stats)
 			query_parser_command_type();
@@ -7316,11 +7330,44 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 	const PgSQL_Parse_Data& parse_data = parse_msg->data();
 	PgSQL_Extended_Query_Info& extended_query_info = CurrentQuery.extended_query_info;
 
-	CurrentQuery.begin((unsigned char*)parse_data.query_string, strlen(parse_data.query_string) + 1, false);
+	Parse_Param_Types parse_param_type;
+	if (parse_data.num_param_types > 0) {
+		parse_param_type.resize(parse_data.num_param_types);
+		auto param_type_reader = parse_msg->get_param_types_reader(); // get the reader for the param types
+		for (uint16_t i = 0; i < parse_data.num_param_types; ++i) {
+			if (!param_type_reader.next(&parse_param_type[i])) {
+				proxy_error("Failed to read result format at index %u\n", i);
+				return 2;
+			}
+		}
+	}
+
+	// Look the text up before begin(): when the client already holds it under this name, or any
+	// client has prepared it, begin() copies the cached digest instead of parsing the text again.
+	PgSQL_STMT_Local* local_stmts = client_myds->myconn->local_stmts;
+	std::string client_stmt_name(parse_data.stmt_name);
+	auto local_stmt_info_itr = local_stmts->stmt_name_to_global_info.find(client_stmt_name);
+	uint64_t hash = local_stmts->compute_hash(
+		client_myds->myconn->userinfo->username,
+		client_myds->myconn->userinfo->dbname,
+		parse_data.query_string,
+		strlen(parse_data.query_string) + 1,
+		parse_param_type
+	);
+	const bool local_hit = local_stmt_info_itr != local_stmts->stmt_name_to_global_info.end() &&
+		local_stmt_info_itr->second && local_stmt_info_itr->second->hash == hash;
+	std::shared_ptr<const PgSQL_STMT_Global_info> stmt_info;
+	if (local_hit == false) {
+		stmt_info = GloPgStmt->find_prepared_statement_by_hash(hash);
+	}
+
+	CurrentQuery.begin((unsigned char*)parse_data.query_string, strlen(parse_data.query_string) + 1, false,
+		local_hit ? local_stmt_info_itr->second.get() : stmt_info.get());
 	// parse_msg memory will be freed in pgsql_real_query.end(), if message is sent to backend server
 	// CurrentQuery.stmt_client_name may briefly become a dangling pointer until CurrentQuery.end() is invoked
 
 	extended_query_info.stmt_client_name = parse_data.stmt_name;
+	extended_query_info.parse_param_types = std::move(parse_param_type);
 
 	timespec begint;
 	timespec endt;
@@ -7335,6 +7382,8 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 			(begint.tv_sec * 1000000000 + begint.tv_nsec);
 	}
 	assert(qpo);	// GloPgQPro->process_mysql_query() should always return a qpo
+	// A rewrite replaces the text, so the hash and the cache lookup above no longer apply.
+	const bool rewritten = qpo->new_query != nullptr;
 
 	// Same check and the same reason as the simple-query path: after the query processor,
 	// so the digest is what gets inspected rather than the bytes the client sent.
@@ -7347,19 +7396,6 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 		proxy_warning("LISTEN command is not supported\n");
 		handle_post_sync_error(PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, "LISTEN is not supported", false);
 		return 2;
-	}
-
-	if (parse_data.num_param_types > 0) {
-		Parse_Param_Types parse_param_type;
-		parse_param_type.resize(parse_data.num_param_types);
-		auto param_type_reader = parse_msg->get_param_types_reader(); // get the reader for the param types
-		for (uint16_t i = 0; i < parse_data.num_param_types; ++i) {
-			if (!param_type_reader.next(&parse_param_type[i])) {
-				proxy_error("Failed to read result format at index %u\n", i);
-				return 2;
-			}
-		}
-		CurrentQuery.extended_query_info.parse_param_types = std::move(parse_param_type);
 	}
 
 	auto parse_pkt = parse_msg->detach(); // detach the packet from the parse message
@@ -7410,13 +7446,9 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 		}
 	}
 
-	// If a client provides a statement name that already exists in the local map,
-	// validate whether it can be reused. Only the *unnamed* statement ("") may be redefined.
-	PgSQL_STMT_Local* local_stmts = client_myds->myconn->local_stmts;
-	std::string client_stmt_name(extended_query_info.stmt_client_name);
-
-	// Try to find an existing statement entry for this name in Local map
-	auto local_stmt_info_itr = local_stmts->stmt_name_to_global_info.find(client_stmt_name);
+	// If a client provides a statement name that already exists in the local map
+	// (local_stmt_info_itr, found above), validate whether it can be reused.
+	// Only the *unnamed* statement ("") may be redefined.
 
 	// ----------------------------------------------------------------------
 	// 1) Reject redefinition of a named prepared statement
@@ -7437,15 +7469,17 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 	}
 
 	// ----------------------------------------------------------------------
-	// 2) Compute hash for current query
+	// 2) Hash of the current query: computed above, again only if a rule rewrote the text
 	// ----------------------------------------------------------------------
-	uint64_t hash = local_stmts->compute_hash(
-		client_myds->myconn->userinfo->username,
-		client_myds->myconn->userinfo->dbname,
-		(const char*)CurrentQuery.QueryPointer,
-		CurrentQuery.QueryLength,
-		CurrentQuery.extended_query_info.parse_param_types
-	);
+	if (rewritten) {
+		hash = local_stmts->compute_hash(
+			client_myds->myconn->userinfo->username,
+			client_myds->myconn->userinfo->dbname,
+			(const char*)CurrentQuery.QueryPointer,
+			CurrentQuery.QueryLength,
+			CurrentQuery.extended_query_info.parse_param_types
+		);
+	}
 
 	// ----------------------------------------------------------------------
 	// 3) Local-cache fast path:
@@ -7473,8 +7507,12 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 	// 4) Global-cache lookup:
 	//    If another session already prepared an identical statement (same hash),
 	//    link the local name to that shared global entry. 
+	//    Looked up above already, unless the text was rewritten or the local
+	//    entry matched (a buffered unit gets here even then).
 	// ----------------------------------------------------------------------
-	auto stmt_info = GloPgStmt->find_prepared_statement_by_hash(hash);
+	if (rewritten || local_hit) {
+		stmt_info = GloPgStmt->find_prepared_statement_by_hash(hash);
+	}
 	if (stmt_info) {
 		std::shared_ptr<const PgSQL_STMT_Global_info>* local_stmt_info_ptr = nullptr;
 		if (local_stmt_info_itr != local_stmts->stmt_name_to_global_info.end()) {

@@ -234,7 +234,8 @@ public:
 	enum PGSQL_QUERY_command query_parser_command_type();
 	void query_parser_free();
 	unsigned long long query_parser_update_counters();
-	void begin(unsigned char* _p, int len, bool header = false);
+	// 'cached' is a statement with the same text: its digest is copied instead of parsing the text again.
+	void begin(unsigned char* _p, int len, bool header = false, const PgSQL_STMT_Global_info* cached = nullptr);
 	void end();
 	char* get_digest_text();
 	void set_end_time(unsigned long long time);
