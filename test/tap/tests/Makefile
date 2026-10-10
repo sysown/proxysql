@@ -537,6 +537,7 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-scram_rotate_midhandshake_backend-t \
 	pgsql-native_portals-t \
 	pgsql-native_portal_backend_kill-t \
+	pgsql-native_portal_close_after_cache_hit-t \
 	pgsql-native_extq_orphaned_sync-t \
 	pgsql-discard_all_txn_block-t \
 	pgsql-reg_test_6345_admin_extended_query_sync-t \
