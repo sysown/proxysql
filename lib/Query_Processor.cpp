@@ -1738,7 +1738,15 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 			digest_umap_aux.insert(element);
 		}
 	}
-	digest_text_umap_aux.insert(digest_text_umap_aux_2.begin(), digest_text_umap_aux_2.end());
+	// A digest present both before the first swap and queried during the dump
+	// window exists in both maps. unordered_map::insert() drops the *source*
+	// pair for an already-present key, so the strdup()'ed text would leak on
+	// every such fold-back. Free the skipped duplicates explicitly.
+	for (auto& element : digest_text_umap_aux_2) {
+		if (!digest_text_umap_aux.emplace(element.first, element.second).second) {
+			free(element.second);
+		}
+	}
 	digest_umap_aux_2.clear();
 	digest_text_umap_aux_2.clear();
 
@@ -1767,7 +1775,13 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 			digest_umap.insert(element);
 		}
 	}
-	digest_text_umap.insert(digest_text_umap_aux.begin(), digest_text_umap_aux.end());
+	// Same duplicate-key leak as the fold-back above: the live map may already
+	// hold the text for a digest queried during the dump window.
+	for (auto& element : digest_text_umap_aux) {
+		if (!digest_text_umap.emplace(element.first, element.second).second) {
+			free(element.second);
+		}
+	}
 	pthread_rwlock_unlock(&digest_rwlock);
 	digest_umap_aux.clear();
 	digest_text_umap_aux.clear();
