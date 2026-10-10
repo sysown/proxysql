@@ -330,6 +330,52 @@ static void test_mysql_set_invalid() {
 	ok(m.empty(), "MySQL SET: invalid input produces empty map");
 }
 
+static void test_mysql_session_set_scopes() {
+	using Assignments = std::map<std::string, std::vector<std::string>>;
+	struct Case { const char* sql; Assignments expected; };
+	const Case cases[] = {
+		{"SET LOCAL innodb_lock_wait_timeout=5", {{"innodb_lock_wait_timeout", {"5"}}}},
+		{"SET SESSION sql_safe_updates=1, LOCAL innodb_lock_wait_timeout=5",
+			{{"sql_safe_updates", {"1"}}, {"innodb_lock_wait_timeout", {"5"}}}},
+		{"SET @@local.sql_safe_updates=1, @@session.innodb_lock_wait_timeout=5",
+			{{"sql_safe_updates", {"1"}}, {"innodb_lock_wait_timeout", {"5"}}}},
+		{"SET sql_mode='GLOBAL,PERSIST'", {{"sql_mode", {"GLOBAL,PERSIST"}}}},
+		{"SET LOCAL time_zone=@@global.time_zone", {{"time_zone", {"@@global.time_zone"}}}},
+		{"SET NAMES utf8mb4", {{"names", {"utf8mb4"}}}},
+		{"SET CHARACTER SET utf8mb4", {{"character_set_results", {"utf8mb4"}}}},
+		{"SET GLOBAL time_zone='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, GLOBAL time_zone='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, @@global.time_zone='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, @@GLOBAL.`time_zone`='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, PERSIST time_zone='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, PERSIST_ONLY time_zone='+00:00'", {}},
+		{"SET GLOBAL time_zone='+00:00', LOCAL innodb_lock_wait_timeout=5", {}},
+		{"SET LOCAL time_zone='+01:00', GLOBAL time_zone='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, @user_var=1", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, GLOBAL time_zone=", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, GLOBAL time_zone=, LOCAL sql_safe_updates=1", {}},
+		{"SET GLOBAL time_zone=, LOCAL innodb_lock_wait_timeout=5", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, GLOBAL", {}},
+		{"SET LOCAL @@global.innodb_lock_wait_timeout=5", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, LOCAL @@global.time_zone='+00:00'", {}},
+		{"SET LOCAL time_zone=(SELECT @@global.time_zone)", {{"time_zone", {"(SELECT @@global.time_zone)"}}}},
+		{"SET LOCAL sql_safe_updates=(1); /* trailing comment */", {{"sql_safe_updates", {"(1)"}}}},
+		{"SET LOCAL time_zone=CONCAT('+', '00:00')", {{"time_zone", {"CONCAT('+', '00:00')"}}}},
+		{"SET LOCAL innodb_lock_wait_timeout=5; SET GLOBAL time_zone='+00:00'", {}},
+	};
+	for (const auto& c : cases) {
+		const auto actual = parsersql_parse_set_mysql(c.sql, true);
+		ok(actual == c.expected,
+			"Session SET extraction preserves scope atomically: %s", c.sql);
+		if (actual != c.expected) {
+			for (const auto& assignment : actual) {
+				for (const auto& value : assignment.second)
+					diag("Unexpected assignment: %s=%s", assignment.first.c_str(), value.c_str());
+			}
+		}
+	}
+}
+
 static void test_mysql_digest_empty_query() {
 	SQP_par_t qp;
 	memset(&qp, 0, sizeof(qp));
@@ -828,7 +874,7 @@ static void test_user_variable_replay_context() {
 }
 
 int main() {
-	plan(206);
+	plan(232);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -875,6 +921,7 @@ int main() {
 	test_mysql_set_session_scope();
 	test_mysql_set_global_scope();
 	test_mysql_set_invalid();
+	test_mysql_session_set_scopes();
 
 	test_pgsql_set_simple();
 	test_pgsql_set_multiple_values();
