@@ -274,7 +274,8 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	veto.clear();
 	const int expected_core_columns = protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11;
 	if (core_rows == nullptr || core_rows->columns != expected_core_columns) {
-		proxy_error("Malformed core server snapshot while preparing plugin runtime\n");
+		veto = "Malformed core server snapshot while preparing plugin runtime";
+		proxy_error("%s\n", veto.c_str());
 		return false;
 	}
 #ifdef PROXYSQL40
@@ -284,7 +285,8 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *core_rows);
 	if (!proxysql_collect_active_builtin_server_topology(*db, protocol, topology_inputs,
 		snapshot.runtime.topology_hostgroups, error)) {
-		proxy_error("Unable to collect built-in topology claims: %s\n", error.c_str());
+		veto = "Unable to collect built-in topology claims: " + error;
+		proxy_error("%s\n", veto.c_str());
 		return false;
 	}
 	// The tables being installed. Recorded as the loaded copy once the plugin
@@ -299,7 +301,8 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 		const std::string sql = "SELECT * FROM main." + table.table_name + " ORDER BY " + table.order_by;
 		db->execute_statement(sql.c_str(), &error, &columns, &affected_rows, &rows);
 		if (error != nullptr) {
-			proxy_error("Error preparing plugin server table %s: %s\n", table.table_name.c_str(), error);
+			veto = "Error preparing plugin server table " + table.table_name + ": " + error;
+			proxy_error("%s\n", veto.c_str());
 			free(error);
 			if (rows != nullptr) delete rows;
 			return false;
@@ -9233,10 +9236,28 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 			topology_inputs.mysql_galera = incoming_galera_hostgroups;
 			topology_inputs.mysql_aurora = incoming_aurora_hostgroups;
 			topology_inputs.mysql_rds_blue_green = incoming_aws_rds_bgd_hostgroups;
-			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
+			// Every failure below must leave a reason in 'servers_load_veto':
+			// it is the only channel the Admin session and the Cluster puller
+			// use to tell "installed" from "silently not installed".
+			if (!runtime_install) {
+				if (servers_load_veto[0].empty()) {
+					servers_load_veto[0] = install_error.empty()
+						? std::string("Unable to create the MySQL server runtime installation")
+						: install_error;
+				}
+				proxy_error("%s\n", servers_load_veto[0].c_str());
+				return false;
+			}
+			if (!prepare_registered_server_module_runtime(admindb,
 				ProxySQL_ServerProtocol::mysql, resultset_servers, topology_inputs,
 				runtime_install, installed_snapshot, commit_server_module,
-				servers_load_veto[0])) return false;
+				servers_load_veto[0])) {
+				if (servers_load_veto[0].empty()) {
+					servers_load_veto[0] = "Unable to prepare the MySQL server runtime installation";
+				}
+				proxy_error("%s\n", servers_load_veto[0].c_str());
+				return false;
+			}
 		}
 		runtime_install_prepared = emit_runtime_install;
 		MyHGM->servers_add(resultset_servers);
@@ -9455,6 +9476,11 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		resultset_mysql_servers_ssl_params = NULL;
 	}
 	if (!first_error.empty() && servers_load_veto[0].empty()) servers_load_veto[0] = first_error;
+	// A false 'committed' must still carry a reason, otherwise callers that
+	// report on 'servers_load_veto' cannot tell a real failure from a clean load.
+	if (!committed && servers_load_veto[0].empty()) {
+		servers_load_veto[0] = "MySQL server runtime was not committed";
+	}
 	return first_error.empty() && committed;
 }
 
@@ -9507,10 +9533,28 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 			runtime_install = ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerProtocol::pgsql, install_error);
 			ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
 			topology_inputs.pgsql_replication = incoming_replication_hostgroups;
-			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
+			// Every failure below must leave a reason in 'servers_load_veto':
+			// it is the only channel the Admin session and the Cluster puller
+			// use to tell "installed" from "silently not installed".
+			if (!runtime_install) {
+				if (servers_load_veto[1].empty()) {
+					servers_load_veto[1] = install_error.empty()
+						? std::string("Unable to create the PostgreSQL server runtime installation")
+						: install_error;
+				}
+				proxy_error("%s\n", servers_load_veto[1].c_str());
+				return false;
+			}
+			if (!prepare_registered_server_module_runtime(admindb,
 				ProxySQL_ServerProtocol::pgsql, resultset_servers, topology_inputs,
 				runtime_install, installed_snapshot, commit_server_module,
-				servers_load_veto[1])) return false;
+				servers_load_veto[1])) {
+				if (servers_load_veto[1].empty()) {
+					servers_load_veto[1] = "Unable to prepare the PostgreSQL server runtime installation";
+				}
+				proxy_error("%s\n", servers_load_veto[1].c_str());
+				return false;
+			}
 		}
 		runtime_install_prepared = emit_runtime_install;
 		PgHGM->servers_add(resultset_servers);
@@ -9614,7 +9658,13 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;
 	}
- return runtime_hgm_committed && servers_load_veto[1].empty();
+ // A false 'runtime_hgm_committed' must still carry a reason, otherwise
+	// callers that report on 'servers_load_veto' cannot tell a real failure
+	// from a clean load.
+	if (!runtime_hgm_committed && servers_load_veto[1].empty()) {
+		servers_load_veto[1] = "PostgreSQL server runtime was not committed";
+	}
+	return runtime_hgm_committed && servers_load_veto[1].empty();
 }
 
 char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {

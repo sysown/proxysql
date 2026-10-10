@@ -2833,12 +2833,25 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime MySQL Servers v2 from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: Loading to runtime MySQL Servers v2 from peer %s:%d\n", hostname, port);
-						GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
+						const bool mysql_servers_loaded =
+							GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
 						if (!GloAdmin->servers_load_veto[0].empty()) {
-							// The core tables were installed; only the plugin tables were rejected.
+							// A server-module veto blocked only the plugin tables;
+							// the core tables WERE installed, so keep persisting them.
 							proxy_error("Cluster: the server module rejected the MySQL plugin tables pulled from peer %s:%d and keeps its previous configuration: %s\n",
 								hostname, port, GloAdmin->servers_load_veto[0].c_str());
 							fetch_failed = true;
+						} else if (!mysql_servers_loaded) {
+							// A veto-less failure means the runtime was never
+							// installed. Do NOT fall through to the save-to-disk
+							// below: it would overwrite the freshly-pulled tables
+							// with the stale runtime.
+							proxy_error("Cluster: MySQL servers pulled from peer %s:%d were not installed to runtime (internal error)\n",
+								hostname, port);
+							fetch_failed = true;
+							GloAdmin->mysql_servers_wrunlock();
+							pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+							break;
 						}
 
 						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
@@ -4126,16 +4139,29 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					update_pgsql_replication_hostgroups(incoming_pgsql_servers.incoming_replication_hostgroups);
 					update_pgsql_hostgroup_attributes(incoming_pgsql_servers.incoming_hostgroup_attributes);
 					update_pgsql_servers_ssl_params(incoming_pgsql_servers.incoming_pgsql_servers_ssl_params);
-					GloAdmin->load_pgsql_servers_to_runtime(
+					const bool pgsql_servers_loaded = GloAdmin->load_pgsql_servers_to_runtime_checked(
 						incoming_pgsql_servers,
 						fetch_runtime_pgsql_servers ? expected_runtime_pgsql_server : runtime_pgsql_servers_checksum_t {},
-						expected_pgsql_server_v2
+						expected_pgsql_server_v2,
+						true
 					);
 					if (!GloAdmin->servers_load_veto[1].empty()) {
-						// The core tables were installed; only the plugin tables were rejected.
+						// A server-module veto blocked only the plugin tables; the
+						// core tables WERE installed, so keep persisting them.
 						proxy_error("Cluster: the server module rejected the PostgreSQL plugin tables pulled from peer %s:%d and keeps its previous configuration: %s\n",
 							hostname, port, GloAdmin->servers_load_veto[1].c_str());
 						fetch_failed = true;
+					} else if (!pgsql_servers_loaded) {
+						// A veto-less failure means the runtime was never
+						// installed. Do NOT fall through to the save-to-disk
+						// below: it would overwrite the freshly-pulled tables
+						// with the stale runtime.
+						proxy_error("Cluster: PostgreSQL servers pulled from peer %s:%d were not installed to runtime (internal error)\n",
+							hostname, port);
+						fetch_failed = true;
+						GloAdmin->pgsql_servers_wrunlock();
+						pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+						break;
 					}
 
 					if (GloProxyCluster->cluster_pgsql_servers_save_to_disk == true) {
