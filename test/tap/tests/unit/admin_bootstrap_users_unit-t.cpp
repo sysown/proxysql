@@ -32,12 +32,17 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, std::string& error)
 
 namespace {
 
-constexpr size_t USER_FIELD_COUNT = 5;
+constexpr size_t USER_FIELD_COUNT = 6;
 using user_row_t = std::array<std::string, USER_FIELD_COUNT>;
+
+// rows whose username field (index 0) becomes a real NULL pointer, which
+// insert_bootstrap_user() rejects -- used to trigger genuine row failures.
+constexpr size_t USER_FIELD_IDX = 0;
 
 class MySQL_Result_Fixture {
 public:
-	explicit MySQL_Result_Fixture(const std::vector<user_row_t>& values)
+	explicit MySQL_Result_Fixture(const std::vector<user_row_t>& values,
+		const std::vector<size_t>& null_user_rows = {})
 		: buffers_(values.size()), row_ptrs_(values.size()), rows_(values.size()) {
 		for (size_t row_idx = 0; row_idx < values.size(); ++row_idx) {
 			size_t buffer_size = 0;
@@ -53,6 +58,11 @@ public:
 				memcpy(buffers_[row_idx].data() + offset, value.data(), value.size());
 				offset += value.size();
 				buffers_[row_idx][offset++] = '\0';
+			}
+			for (size_t null_idx : null_user_rows) {
+				if (null_idx == row_idx) {
+					row_ptrs_[row_idx][USER_FIELD_IDX] = nullptr;
+				}
 			}
 			// MariaDB Connector/C derives buffered-result lengths from the next
 			// field pointer, including this sentinel after the final field.
@@ -76,7 +86,10 @@ public:
 private:
 	MYSQL_RES result_ {};
 	MYSQL_DATA data_ {};
-	std::array<unsigned long, USER_FIELD_COUNT> lengths_ {};
+	// mysql_fetch_lengths() derives lengths from pointer offsets and writes one
+	// entry past the last field (the sentinel column is part of the sweep), so
+	// the buffer needs USER_FIELD_COUNT + 1 slots.
+	std::array<unsigned long, USER_FIELD_COUNT + 1> lengths_ {};
 	std::vector<std::vector<char>> buffers_;
 	std::vector<std::array<char*, USER_FIELD_COUNT + 1>> row_ptrs_;
 	std::vector<MYSQL_ROWS> rows_;
@@ -94,8 +107,8 @@ void test_import_preserves_sql_metacharacters() {
 		"$A$005$[:V=2k#\t\"SP+AgqtYBw6HA0wp/3.73nwB/oSh5eAzZxtu2Vc1SJMTrUTn8WLB"
 	};
 	MySQL_Result_Fixture users {{
-		{ username, "ANY", auth_string, "caching_sha2_password", "N" },
-		{ "plain_user", "", "plain_password", "mysql_native_password", "N" }
+		{ username, "ANY", auth_string, "caching_sha2_password", "N", "%" },
+		{ "plain_user", "", "plain_password", "mysql_native_password", "N", "%" }
 	}};
 	// Bootstrap import must not depend on whether another reader inspected the result.
 	mysql_fetch_row(users.get());
@@ -126,6 +139,60 @@ void test_import_preserves_sql_metacharacters() {
 	}
 }
 
+// A duplicate username is a legal mysql.user shape (one account per host, and
+// caching_sha2_password salts make the credential columns differ). It must
+// import exactly one account, preferring the wildcard host, and start up.
+void test_duplicate_username_imports_single_account() {
+	SQLite3DB db;
+	char db_path[] { ":memory:" };
+	db.open(db_path, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	db.execute(ADMIN_SQLITE_TABLE_MYSQL_USERS);
+
+	// The wildcard row comes first, as BOOTSTRAP_SELECT_USERS orders it.
+	MySQL_Result_Fixture users {{
+		{ "duplicate", "", "first", "mysql_native_password", "N", "%" },
+		{ "duplicate", "", "second", "mysql_native_password", "N", "localhost" }
+	}};
+
+	std::string error;
+	const bool imported = import_bootstrap_users(&db, users.get(), error);
+	ok(imported, "bootstrap import accepts a username defined under several hosts: %s", error.c_str());
+	ok(db.return_one_int("SELECT COUNT(*) FROM mysql_users WHERE username='duplicate'") == 1,
+		"bootstrap import stores exactly one row per username");
+
+	std::unique_ptr<SQLite3_result> result { db.execute_statement(
+		"SELECT password FROM mysql_users WHERE username='duplicate'"
+	) };
+	ok(result != nullptr && result->rows_count == 1 &&
+		std::string(result->rows[0]->fields[0], result->rows[0]->sizes[0]) == "first",
+		"bootstrap import keeps the deterministic first row (wildcard host)");
+}
+
+// The wildcard preference is enforced in the importer, not only by the SQL
+// ORDER BY: a '%' row arriving after the others must still win.
+void test_duplicate_username_prefers_wildcard_host() {
+	SQLite3DB db;
+	char db_path[] { ":memory:" };
+	db.open(db_path, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	db.execute(ADMIN_SQLITE_TABLE_MYSQL_USERS);
+
+	MySQL_Result_Fixture users {{
+		{ "late_wildcard", "", "local_pw", "mysql_native_password", "N", "localhost" },
+		{ "late_wildcard", "", "wildcard_pw", "mysql_native_password", "N", "%" }
+	}};
+
+	std::string error;
+	const bool imported = import_bootstrap_users(&db, users.get(), error);
+	ok(imported, "bootstrap import succeeds when the wildcard row arrives last: %s", error.c_str());
+
+	std::unique_ptr<SQLite3_result> result { db.execute_statement(
+		"SELECT password FROM mysql_users WHERE username='late_wildcard'"
+	) };
+	ok(result != nullptr && result->rows_count == 1 &&
+		std::string(result->rows[0]->fields[0], result->rows[0]->sizes[0]) == "wildcard_pw",
+		"bootstrap import prefers the wildcard-host credentials");
+}
+
 void test_failed_import_rolls_back() {
 	SQLite3DB db;
 	char db_path[] { ":memory:" };
@@ -133,10 +200,12 @@ void test_failed_import_rolls_back() {
 	db.execute(ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	db.execute("INSERT INTO mysql_users (username,password) VALUES ('old_user','old_password')");
 
+	// Duplicate usernames are legal input now -- a row whose username is NULL is
+	// the genuine-failure trigger (insert_bootstrap_user rejects it).
 	MySQL_Result_Fixture users {{
-		{ "duplicate", "", "first", "mysql_native_password", "N" },
-		{ "duplicate", "", "second", "mysql_native_password", "N" }
-	}};
+		{ "", "", "good", "mysql_native_password", "N", "%" },
+		{ "valid_user", "", "valid", "mysql_native_password", "N", "%" }
+	}, std::vector<size_t> { 0 }};
 
 	std::string error;
 	const bool imported = import_bootstrap_users(&db, users.get(), error);
@@ -151,10 +220,12 @@ void test_failed_import_rolls_back() {
 } // namespace
 
 int main() {
-	plan(10);
+	plan(18);
 	test_init_minimal();
 
 	test_import_preserves_sql_metacharacters();
+	test_duplicate_username_imports_single_account();
+	test_duplicate_username_prefers_wildcard_host();
 	test_failed_import_rolls_back();
 
 	test_cleanup_minimal();

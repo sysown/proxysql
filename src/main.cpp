@@ -2474,11 +2474,18 @@ string to_string(const conn_uri_t& conn_uri) {
  *   ProxySQL fetching them as regular users.
  */
 const char BOOTSTRAP_SELECT_USERS[] {
-	"SELECT DISTINCT user,ssl_type,authentication_string,plugin,password_expired FROM mysql.user"
+	"SELECT DISTINCT user,ssl_type,authentication_string,plugin,password_expired,host FROM mysql.user"
 		" WHERE user NOT LIKE 'mysql.%' AND user NOT LIKE 'bt_proxysql_%'"
 #ifndef DEBUG
 		" AND user != 'root'"
 #endif
+		// One row per (user, host) account. 'DISTINCT' cannot collapse two rows of
+		// the same username whose credential columns differ (caching_sha2_password
+		// embeds a per-account salt), so the importer deduplicates by username.
+		// Make the winner deterministic and prefer the wildcard account: for each
+		// user, rows with host='%' come first (host<>'%' evaluates to 0), then the
+		// remaining hosts in ascending order.
+		" ORDER BY user, host<>'%', host"
 };
 
 /**
