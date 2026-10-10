@@ -454,8 +454,12 @@ static void test_user_variable_rejections() {
 		{"SET @x=?", UserVariableSetStatus::UNSUPPORTED},
 		{"SET @x=NOW()", UserVariableSetStatus::UNSUPPORTED},
 		{"SET @x=1,@y=NOW()", UserVariableSetStatus::UNSUPPORTED},
-		{"SET @x=_utf8mb4'hello'", UserVariableSetStatus::PARSE_ERROR},
-		{"SET @x='hello' COLLATE utf8mb4_bin", UserVariableSetStatus::PARSE_ERROR},
+		// ParserSQL recognizes these expressions, but replay deliberately
+		// supports only plain literals. Reject the entire assignment list.
+		{"SET @x=_utf8mb4'hello'", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x='hello' COLLATE utf8mb4_bin", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @a=1,@x=_utf8mb4'hello'", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @a=1,@x='hello' COLLATE utf8mb4_bin", UserVariableSetStatus::UNSUPPORTED},
 		{"SET @x=1,", UserVariableSetStatus::PARSE_ERROR},
 		{"SET @x=1; SELECT 1", UserVariableSetStatus::PARSE_ERROR},
 		{"SET @x='unterminated", UserVariableSetStatus::PARSE_ERROR},
@@ -824,7 +828,7 @@ static void test_user_variable_replay_context() {
 }
 
 int main() {
-	plan(204);
+	plan(206);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
