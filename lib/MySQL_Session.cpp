@@ -5790,6 +5790,12 @@ int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
 		RequestEnd(nullptr, 1815, message);
 		l_free(pkt.size, pkt.ptr);
 		pkt = {};
+		// RequestEnd() only queues the error in PSarrayOUT and the caller
+		// returns -1, which makes the caller hand the session back to the
+		// thread to be deleted. Flush now, exactly like the wrong-pass epilogue,
+		// otherwise the client only observes a bare TCP close.
+		client_myds->array2buffer_full();
+		client_myds->write_to_net();
 		return -1;
 	};
 
