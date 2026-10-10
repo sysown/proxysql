@@ -52,7 +52,9 @@ struct UserVariableQueryDecision {
  *
  * Parses the query, normalizes it into digest text (replacing literals with
  * placeholders), and stores both the normalized text and its SpookyHash in
- * `qp->digest_text` / `qp->digest`.
+ * `qp->digest_text` / `qp->digest`. Failed or incomplete grammar parsing falls
+ * back to token normalization of the original SQL. Inputs without SQL tokens
+ * leave the digest empty.
  *
  * Controlled by `mysql-query_processor_parser`.
  *
