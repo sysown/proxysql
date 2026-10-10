@@ -8511,7 +8511,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					set = thread->thr_SetParser->parse1v2(); // use algorithm v2
 				} else if (mysql_thread___set_parser_algorithm == 3
 				|| mysql_thread___query_processor_parser == 1) {
-					set = parsersql_parse_set_mysql(nq);
+					set = parsersql_parse_set_mysql(nq, true);
+					if (set.empty()) {
+						// Forward the whole statement before touching tracked state:
+						// GLOBAL/PERSIST targets must not become session assignments.
+						unable_to_parse_set_statement(lock_hostgroup);
+						return false;
+					}
 				} else {
 					assert(0);
 				}
