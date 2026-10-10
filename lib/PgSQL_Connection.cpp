@@ -1656,6 +1656,9 @@ bool PgSQL_Connection::native_ssl_pump_wbio_to_fd(bool& would_block) {
 
 bool PgSQL_Connection::native_flush_outbuf() {
 	native_ssl_block_dir = 0;
+	// A false return is reported with errno's text (native_send_fatal()). The TLS exits do not
+	// all set errno, so clear it rather than let them report a stale one.
+	errno = 0;
 	// Encrypted path: native_outbuf holds *plaintext* protocol bytes. Feed them to
 	// SSL_write, which produces ciphertext into wbio_ssl, then drain wbio to the fd.
 	if (native_ssl != nullptr) {
@@ -1735,6 +1738,22 @@ void PgSQL_Connection::native_result_fatal(const char* code, const char* message
 	set_error(code, message, false);
 	native_result_aborted = true;
 	native_teardown();
+}
+
+// A failed send() after login means the socket is dead (ECONNRESET / EPIPE), so it gets the
+// same teardown as a failed recv(). Recording the error alone left fd open and native_connected
+// set: the connection kept reporting itself live and reusable, the session skipped its
+// destroy-and-retry path and pooled it, and every later checkout failed the same way (issue
+// #6409). A retry is safe: the backend runs a message only once it has all of it.
+void PgSQL_Connection::native_send_fatal(const char* what) {
+	const int err = errno;
+	char msg[128];
+	if (err) {
+		snprintf(msg, sizeof(msg), "%s failed: %s", what, strerror(err));
+	} else {
+		snprintf(msg, sizeof(msg), "%s failed", what);
+	}
+	native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), msg);
 }
 
 void PgSQL_Connection::native_result_protocol_violation(const char* message) {
@@ -3117,7 +3136,7 @@ void PgSQL_Connection::query_start() {
 			// native_send_or_buffer drives native_st for the connect handshake; in
 			// the query path we only care about the flush result. A false return
 			// means a fatal send error.
-			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Query) failed", false);
+			native_send_fatal("send(Query)");
 			async_exit_status = PG_EVENT_NONE;
 			return;
 		}
@@ -3147,7 +3166,7 @@ void PgSQL_Connection::query_cont(short event) {
 		// Native simple-query path (Task 1.6c): finish flushing the Query message.
 		async_exit_status = PG_EVENT_NONE;
 		if (!native_flush_outbuf()) {
-			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Query) failed", false);
+			native_send_fatal("send(Query)");
 			return;
 		}
 		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -3261,14 +3280,15 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 
 void PgSQL_Connection::native_stmt_send_or_wait() {
 	// Flush the extended-query step just built into native_outbuf. Mirrors the tail
-	// of query_start()'s native branch: on a fatal send set error_info; otherwise
+	// of query_start()'s native branch: on a fatal send record the error and tear the
+	// connection down (native_send_fatal); otherwise
 	// leave async_exit_status = PG_EVENT_WRITE while bytes remain buffered (the
 	// caller's START case then waits for POLLOUT via *_CONT) or PG_EVENT_NONE once
 	// fully sent (the START case proceeds straight to the result fetch).
 	if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
 		// native_send_or_buffer drives native_st only for the connect handshake; here
 		// (post-connect) only the flush result matters. false == fatal send error.
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(extended-query) failed", false);
+		native_send_fatal("send(extended-query)");
 		async_exit_status = PG_EVENT_NONE;
 		return;
 	}
@@ -3288,7 +3308,7 @@ void PgSQL_Connection::native_stmt_flush_cont() {
 	// once fully drained lets the caller's *_CONT case advance to the result fetch.
 	async_exit_status = PG_EVENT_NONE;
 	if (!native_flush_outbuf()) {
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(extended-query) failed", false);
+		native_send_fatal("send(extended-query)");
 		return;
 	}
 	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {

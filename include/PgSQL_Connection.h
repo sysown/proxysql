@@ -965,6 +965,10 @@ public:
 	// down, so the connection is classified non-reusable instead of being pooled.
 	// See the definition in PgSQL_Connection.cpp for why the teardown is required.
 	void native_result_fatal(const char* code, const char* message);
+	// A post-connect send() of `what` (e.g. "send(Query)") failed: 08006 with errno's text,
+	// then native_result_fatal(). Must be called right after native_flush_outbuf() returned
+	// false, before anything else can overwrite errno.
+	void native_send_fatal(const char* what);
 	// End the result cycle on a protocol violation ProxySQL itself detected, telling the CLIENT
 	// why. Unlike native_result_fatal() this leaves the socket open so the session takes the
 	// branch that reports an error rather than the one for a connection that merely died, and it
