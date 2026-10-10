@@ -423,9 +423,28 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 		return false;
 	}
 
+	// mysql.user is keyed by (user, host) while mysql_users is keyed by username
+	// alone. BOOTSTRAP_SELECT_USERS does not select 'host', so a user defined
+	// for several hosts yields several rows whenever their credential columns
+	// differ (different authentication_string/plugin/ssl_type/password_expired).
+	// The second INSERT would then fail with SQLITE_CONSTRAINT and abort the
+	// whole import, turning a startup-time warning into a hard startup failure.
+	// Keep the first definition seen for each username and import the rest
+	// silently dropping the duplicates; any other SQLite error still rolls the
+	// entire import back.
+	std::unordered_set<std::string> imported_usernames;
 	mysql_data_seek(users, 0);
 	while (MYSQL_ROW row = mysql_fetch_row(users)) {
-		if (!insert_bootstrap_user(db, stmt.get(), row, mysql_fetch_lengths(users), error)) {
+		unsigned long* lengths = mysql_fetch_lengths(users);
+		if (row != nullptr && lengths != nullptr && row[BOOT_USER_INFO_T::USER] != nullptr) {
+			const std::string username { row[BOOT_USER_INFO_T::USER], lengths[BOOT_USER_INFO_T::USER] };
+			if (!imported_usernames.insert(username).second) {
+				proxy_warning("Bootstrap: MySQL user '%s' is defined for multiple hosts; importing the first definition only\n",
+					username.c_str());
+				continue;
+			}
+		}
+		if (!insert_bootstrap_user(db, stmt.get(), row, lengths, error)) {
 			rollback_bootstrap_users(db, error);
 			return false;
 		}
