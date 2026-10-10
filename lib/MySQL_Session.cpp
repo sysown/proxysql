@@ -1647,6 +1647,43 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	}
 }
 
+/**
+ * @brief Returns true if 'query' is a 'LOAD DATA [LOW_PRIORITY|CONCURRENT] LOCAL INFILE'
+ *   statement, tolerating leading whitespace/comments and any whitespace between keywords.
+ * @details Only used to return a descriptive error to the client; the policy itself is
+ *   enforced by the connector (see MySQL_Connection::apply_local_infile_policy()).
+ */
+static bool is_load_data_local_infile(const char* query, size_t len) {
+	const char* p = query;
+	const char* end = query + len;
+	auto skip_ws = [&]() {
+		while (p < end) {
+			if (isspace(static_cast<unsigned char>(*p))) {
+				p++;
+			} else if (end - p >= 2 && p[0] == '/' && p[1] == '*' && (end - p < 3 || p[2] != '!')) {
+				const char* c = p + 2;
+				while (end - c >= 2 && !(c[0] == '*' && c[1] == '/')) c++;
+				if (end - c < 2) return;
+				p = c + 2;
+			} else {
+				return;
+			}
+		}
+	};
+	auto match = [&](const char* kw) -> bool {
+		size_t l = strlen(kw);
+		if (static_cast<size_t>(end - p) < l || strncasecmp(p, kw, l) != 0) return false;
+		if (p + l < end && (isalnum(static_cast<unsigned char>(p[l])) || p[l] == '_' || p[l] == '$')) return false;
+		p += l;
+		skip_ws();
+		return true;
+	};
+	skip_ws();
+	if (!match("LOAD") || !match("DATA")) return false;
+	if (!match("LOW_PRIORITY")) match("CONCURRENT");
+	return match("LOCAL") && match("INFILE");
+}
+
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 
@@ -1953,7 +1990,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	}
 
 	// 'LOAD DATA LOCAL INFILE' is unsupported. We report an specific error to inform clients about this fact. For more context see #833.
-	if ( (pkt->size >= 22 + 5) && (strncasecmp((char *)"LOAD DATA LOCAL INFILE",(char *)pkt->ptr+5, 22)==0) ) {
+	if ( (pkt->size > 5) && is_load_data_local_infile((char *)pkt->ptr+5, pkt->size-5) ) {
 		if (mysql_thread___enable_load_data_local_infile == false) {
 			client_myds->DSS=STATE_QUERY_SENT_NET;
 			string errmsg = "Unsupported 'LOAD DATA LOCAL INFILE' command";
@@ -4716,6 +4753,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		status=WAITING_CLIENT_DATA;
 		return;
 	} else {
+		if (mysql_thread___enable_load_data_local_infile == false && pkt.size > 5
+			&& is_load_data_local_infile((char *)pkt.ptr+5, pkt.size-5)) {
+			l_free(pkt.size,pkt.ptr);
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1047,(char *)"08S01",(char *)"Unsupported 'LOAD DATA LOCAL INFILE' command");
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			return;
+		}
 		thread->status_variables.stvar[st_var_frontend_stmt_prepare]++;
 		thread->status_variables.stvar[st_var_queries]++;
 		// if we reach here, we are not on MySQL module
@@ -7230,7 +7276,27 @@ handler_again:
 							if (rc1 == 1)
 								NEXT_IMMEDIATE(CONNECTING_SERVER);
 						}
-						if (myerr >= 2000 && myerr < 3000) {
+						if (myerr == 2000 /* CR_UNKNOWN_ERROR */
+							&& strcmp(mysql_error(myconn->mysql), "Load data local infile forbidden") == 0) {
+							// The connector refused a backend 'LOAD DATA LOCAL INFILE' file request: the
+							// feature is disabled (see MySQL_Connection::apply_local_infile_policy()), or the
+							// statement doesn't start with 'LOAD' (connector's AUTO mode). The connection isn't broken:
+							// report the error to the client, and discard the backend connection since
+							// the server may still have pending results.
+							proxy_warning(
+								"Refused 'LOAD DATA LOCAL INFILE' file request from backend (%d,%s,%d) for user '%s'\n",
+								myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port,
+								client_myds->myconn->userinfo->username
+							);
+							handler_minus1_GenerateErrorMessage(myds, myconn, wrong_pass);
+							myds->destroy_MySQL_Connection_From_Pool(false);
+							myds->fd=0;
+							RequestEnd(myds, myerr);
+							if (errmsg) {
+								free(errmsg);
+								errmsg = NULL;
+							}
+						} else if (myerr >= 2000 && myerr < 3000) {
 							if (handler_minus1_ClientLibraryError(myds, myerr, &errmsg)) {
 								NEXT_IMMEDIATE(CONNECTING_SERVER);
 							} else {
