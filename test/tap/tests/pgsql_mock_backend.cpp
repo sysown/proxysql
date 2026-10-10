@@ -217,6 +217,7 @@ Step step_expect_startup() { Step s; s.kind = Step::EXPECT_STARTUP; return s; }
 Step step_expect_message() { Step s; s.kind = Step::EXPECT_MESSAGE; return s; }
 Step step_expect_query(bool stop_at_housekeeping)
                            { Step s; s.kind = Step::EXPECT_QUERY; s.stop_at_housekeeping = stop_at_housekeeping; return s; }
+Step step_expect_sync()    { Step s; s.kind = Step::EXPECT_SYNC; return s; }
 Step step_close()          { Step s; s.kind = Step::CLOSE; return s; }
 Step step_sleep(int ms)    { Step s; s.kind = Step::SLEEP_MS; s.ms = ms; return s; }
 Step step_tls_accept()     { Step s; s.kind = Step::TLS_ACCEPT; return s; }
@@ -607,6 +608,19 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
                 const std::string ack = pgmb_command_complete("SET") + pgmb_ready_for_query('I');
                 if (!write_all(fd, ack.data(), ack.size())) { fail("pre-query ack failed"); goto done; }
             }
+            break;
+        }
+        case Step::EXPECT_SYNC: {
+            std::string types;
+            for (;;) {
+                char type = 0; std::string payload;
+                if (!read_frontend_msg(fd, &type, payload)) { fail("unit read failed"); goto done; }
+                if (type == 'X') goto done;              // Terminate
+                types += type;
+                if (type == 'S') break;
+            }
+            std::lock_guard<std::mutex> g(mech_mtx_);
+            unit_types_.push_back(types);
             break;
         }
         case Step::CLOSE:

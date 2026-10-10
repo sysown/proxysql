@@ -134,6 +134,10 @@ struct Step {
         // unanswered, which looks like a hang in the code under test rather
         // than a scripting mistake in the fixture.
         EXPECT_QUERY,
+        // Read frontend messages up to and including a Sync, answering none of them, so the
+        // next SEND answers the whole extended-query unit at once. A proxy that waits for a
+        // reply before sending the rest never gets one. Types read are kept for unit_types().
+        EXPECT_SYNC,
         EXPECT_STARTUP,    // read the startup packet (no type byte, length-prefixed)
         CLOSE,             // close the connection immediately (FIN)
         SLEEP_MS,          // pause, e.g. to let ProxySQL park the connection
@@ -178,6 +182,7 @@ Step step_send(const std::string& data, size_t chunk_bytes = 0, int chunk_delay_
 Step step_expect_startup();
 Step step_expect_message();
 Step step_expect_query(bool stop_at_housekeeping = false);
+Step step_expect_sync();
 Step step_close();
 Step step_sleep(int ms);
 Step step_tls_accept();
@@ -236,6 +241,14 @@ public:
         queries_observed_.store(0);
         std::lock_guard<std::mutex> l(mech_mtx_);
         selected_mechanism_.clear();
+        unit_types_.clear();
+    }
+
+    // Message types each EXPECT_SYNC step read since the last reset_stats(), one unit per
+    // entry, e.g. {"PBDES", "ES"}.
+    std::vector<std::string> unit_types() {
+        std::lock_guard<std::mutex> l(mech_mtx_);
+        return unit_types_;
     }
 
     // Diagnostics from the most recent connection handler, for failure output.
@@ -271,6 +284,7 @@ private:
     std::string last_error_;
     std::mutex mech_mtx_;
     std::string selected_mechanism_;
+    std::vector<std::string> unit_types_;   // guarded by mech_mtx_
 };
 
 // Best-effort discovery of this container's IP on the shared Docker network:

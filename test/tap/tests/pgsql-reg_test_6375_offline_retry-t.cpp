@@ -124,9 +124,13 @@ int main() {
 			value(db, "BEGIN");
 			value(db, "LOCK issue6375_lock IN ACCESS EXCLUSIVE MODE");
 			if (scenario == 2) {
+				// Two statements run in one frame: the first may have run before the second waits on
+				// the lock, so the frame must not be replayed.
 				if (!PQenterPipelineMode(c) ||
-					!PQsendPrepare(c, "first", ("SELECT 1 /* " + marker + "_first */").c_str(), 0, nullptr) ||
-					!PQsendPrepare(c, "second", query.c_str(), 0, nullptr) || !PQpipelineSync(c))
+					!PQsendQueryParams(c, ("SELECT 1 /* " + marker + "_first */").c_str(), 0, nullptr, nullptr,
+									   nullptr, nullptr, 0) ||
+					!PQsendQueryParams(c, query.c_str(), 0, nullptr, nullptr, nullptr, nullptr, 0) ||
+					!PQpipelineSync(c))
 					BAIL_OUT("pipeline send failed");
 			} else if (scenario == 3) {
 				// The held operation is first: its remaining frame must survive the retry.
@@ -190,7 +194,7 @@ int main() {
 			PGresult *r = PQgetResult(c);
 			if (scenario == 5 && !r)
 				r = PQgetResult(c);
-			if (scenario == 2 && r && PQresultStatus(r) == PGRES_COMMAND_OK) {
+			if (scenario == 2 && r && PQresultStatus(r) == PGRES_TUPLES_OK) {
 				PQclear(r);
 				r = PQgetResult(c);
 				if (!r)

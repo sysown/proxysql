@@ -878,10 +878,11 @@ static LockedResetProbe runLockedResetScenario(PGconn* admin, PGconn* be_db,
 	return r;
 }
 
-// Refused frames destroy their backend connection. Destroying on a path that runs per query is how
-// pool slots leak, and nothing else here would notice: every other assertion is about one frame, and
-// a leak only shows up as a number that never comes back down. Several frames in a row, so a leak of
-// one per refusal is unmistakable rather than a rounding difference.
+// Refused frames destroy their backend connection (libpq) or keep it (native). Losing one on a
+// path that runs per query is how pool slots leak, and nothing else here would notice: every other
+// assertion is about one frame, and a leak only shows up as a number that never comes back down.
+// Several frames in a row, so a leak of one per refusal is unmistakable rather than a rounding
+// difference.
 static const int DISCARD_LEAK_ROUNDS = 3;
 
 static bool runLeakRounds(const std::string& base, PGconn* be_db, bool* reached_backend) {
@@ -1003,6 +1004,9 @@ struct ResyncFailureProbe {
 	bool client_ok = false;     // the client's own frame still completes cleanly -- Close is
 	                             // answered locally either way, so the client never sees the
 	                             // backend's death
+	bool told_failure = false;  // the client got an error or lost its connection: in native mode
+	                             // the frame's own Sync goes to the backend with the rest of the
+	                             // frame, so the commit's failure reaches the client
 	long gauge_baseline = -1;
 	long gauge_after = -1;      // the connected-backend count returns to baseline: nothing was
 	                             // left counted as connected
@@ -1050,10 +1054,15 @@ static ResyncFailureProbe runResyncFailure(PGconn* admin, PGconn* be_db, const s
 			if (type == PgConnection::READY_FOR_QUERY) break;
 		}
 		r.client_ok = !errored;
+		r.told_failure = errored;
 		// Still connected here on purpose: once this client disconnects, session teardown drops
 		// the backend connection whether or not the resync disowned it.
 		r.pool_live = pooledConnsWithin(admin, r.pool_baseline, 5);
 	} catch (const PgException& e) {
+		// Only a closed connection tells the client; a read timeout means ProxySQL went silent.
+		const std::string what = e.what();
+		r.told_failure = what.find("closed by peer") != std::string::npos || what.find("Socket read failed") != std::string::npos;
+		r.pool_live = pooledConnsWithin(admin, r.pool_baseline, 5);
 		r.detail = std::string("frame threw: ") + e.what();
 	}
 	const std::string seq_after = seqValue(be_db);
@@ -1394,16 +1403,19 @@ int main(int, char**) {
 		const long gauge_baseline = connectedGauge(admin.get());
 		bool reached = false;
 		const bool rejected = runLeakRounds(base + "_" + label, be_db.get(), &reached);
-		const long gauge_end = connectedGaugeWithin(admin.get(), gauge_baseline, 15);
+		// libpq destroys the connection on each refusal. Native makes the backend fail the frame and
+		// keeps the connection, so every round reuses the same one: one more, never one per round.
+		const long gauge_want = gauge_baseline + (native ? 1 : 0);
+		const long gauge_end = connectedGaugeWithin(admin.get(), gauge_want, 15);
 		// gauge_baseline >= 0 is not decoration: both reads return -1 if the admin query fails, and
 		// -1 == -1 would pass this while measuring nothing at all. `reached` is the other half of
 		// that: zero to zero also describes rounds that never opened a backend connection.
-		ok(rejected && reached && gauge_baseline >= 0 && gauge_end == gauge_baseline,
-		   "%s: %d refused frames in a row leave the connected-backend count where it started -- "
-		   "discarding a connection per refusal is exactly how pool slots leak [baseline=%ld, "
+		ok(rejected && reached && gauge_baseline >= 0 && gauge_end == gauge_want,
+		   "%s: %d refused frames in a row leave the connected-backend count at %s -- "
+		   "a connection per refusal is exactly how pool slots leak [baseline=%ld, "
 		   "end=%ld, all rejected=%s, reached a backend=%s]",
-		   label, DISCARD_LEAK_ROUNDS, gauge_baseline, gauge_end, rejected ? "yes" : "no",
-		   reached ? "yes" : "no");
+		   label, DISCARD_LEAK_ROUNDS, native ? "one connection, reused" : "where it started",
+		   gauge_baseline, gauge_end, rejected ? "yes" : "no", reached ? "yes" : "no");
 	}
 
 	// --- a SUCCEEDED frame whose Sync never reached the backend (PJ1) ----------------------------
@@ -1438,8 +1450,15 @@ int main(int, char**) {
 		const std::string m = base + "_resyncfail_" + label;
 		const ResyncFailureProbe r = runResyncFailure(admin.get(), be_db.get(), m);
 		diag("%s resync-failure frame: %s", label, r.detail.c_str());
-		ok(r.client_ok, "%s: the client's own frame still completes cleanly -- the Close is "
-		   "answered locally regardless of the backend's fate [%s]", label, r.detail.c_str());
+		if (native) {
+			// The frame goes to the backend as one batch, its own Sync included: the commit fails
+			// there and the client learns it, as it would from PostgreSQL itself.
+			ok(r.told_failure, "%s: the client is told its frame failed -- its Sync goes out with the "
+			   "batch, so it is never told a write that was lost succeeded [%s]", label, r.detail.c_str());
+		} else {
+			ok(r.client_ok, "%s: the client's own frame still completes cleanly -- the Close is "
+			   "answered locally regardless of the backend's fate [%s]", label, r.detail.c_str());
+		}
 		ok(r.insert_ran, "%s: the Execute really ran on the backend before it was killed -- "
 		   "without this the rest of this probe would prove nothing [%s]", label, r.detail.c_str());
 		ok(r.kill_fired, "%s: the resync's Sync reached the backend and killed it -- the commit "

@@ -340,6 +340,8 @@ enum session_status {
 	// (CloseComplete '3' forwarded, registry entry evicted). Append-only, same
 	// rationale as PROCESSING_STMT_BIND above.
 	PROCESSING_STMT_CLOSE,
+	// A buffered extended-query unit sent in one write. Append-only, as above.
+	PROCESSING_EXTQ_BATCH,
 	session_status___NONE // special marker
 };
 
