@@ -299,6 +299,7 @@
   "pgsql-reg_test_6349_auth_anti_enumeration-t" : [ "legacy-g4" ],
   "pgsql-reg_test_6375_offline_retry-t" : [ "legacy-g4" ],
   "pgsql-reg_test_6389_monitor_lifecycle-t" : [ "legacy-g4" ],
+  "pgsql-reg_test_oversized_length_prefix-t" : [ "legacy-g4" ],
   "pgsql-retry_guard_in_txn_on_broken_backend-t" : [ "legacy-g2" ],
   "pgsql-scram_cache_invalidation-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-scram_reload_midhandshake-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
