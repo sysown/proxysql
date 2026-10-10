@@ -1596,6 +1596,20 @@ static void RegisterConfiguredPluginSchemas() {
 		           GloVars.plugin_modules.size());
 		return;
 	}
+	// A shutdown cycle (PROXYSQL RESTART, or STOP+START) destroys the manager
+	// and dlclose()s every module, but discovery only ever ran once, inside
+	// ProxySQL_Main_process_global_variables() before the restart loop. Without
+	// re-running it here the manager stays null, every lifecycle wrapper below
+	// silently no-ops, and the plugin chassis disappears for the rest of the
+	// process lifetime -- with no error logged. 'GloVars.plugin_modules' still
+	// holds the pre-scanned module list.
+	if (!GloPluginManager && !GloVars.plugin_modules.empty()) {
+		std::string discover_error {};
+		if (!proxysql_discover_configured_plugins(GloPluginManager, GloVars.plugin_modules, discover_error)) {
+			proxy_error("Plugin discovery failed on reload: %s\n", discover_error.c_str());
+			exit(EXIT_FAILURE);
+		}
+	}
 	std::string plugin_error {};
 	if (!proxysql_register_configured_plugin_schemas(GloPluginManager.get(), plugin_error)) {
 		proxy_error("Plugin schema registration failed: %s\n", plugin_error.c_str());
