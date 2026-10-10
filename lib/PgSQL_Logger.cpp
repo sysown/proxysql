@@ -1327,6 +1327,11 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 }
 
 void PgSQL_Logger::flush(bool force) {
+	// Every worker calls this on every loop pass. With no log file open there is nothing to write, so
+	// return before reading the clock and taking the lock that all workers share.
+	if (!force && !is_events_logfile_open() && !is_audit_logfile_open()) {
+		return;
+	}
 	const uint64_t current_time = monotonic_time();
 
 	if (force) {
