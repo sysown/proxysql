@@ -2328,7 +2328,7 @@ static bool mysql_decode_length_ll_checked(unsigned char* ptr, const unsigned ch
 		return false;
 	}
 
-	const int decoded_len = mysql_decode_length_ll(ptr, len);
+	const int decoded_len = mysql_decode_length_ll(ptr, static_cast<size_t>(end - ptr), len);
 	if (decoded_len <= 0) {
 		return false;
 	}
@@ -2427,9 +2427,9 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . missing auth response length in handshake response\n", (*myds), (*myds)->sess, vars1.user);
 			return false;
 		}
-		uint64_t passlen64;
-		int pass_len_enc=mysql_decode_length_ll(pkt,&passlen64);
-		if (pass_len_enc <= 0 || static_cast<size_t>(packet_end - pkt) < static_cast<size_t>(pass_len_enc)) {
+		uint64_t passlen64 = 0;
+		int pass_len_enc = 0;
+		if (!mysql_decode_length_ll_checked(pkt, packet_end, &passlen64, &pass_len_enc)) {
 			ret = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth response length in handshake response\n", (*myds), (*myds)->sess, vars1.user);
 			return false;
@@ -4420,15 +4420,32 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			}
 		}
 
-		for (i=0;i<num_params;i++) {
-			if (p > static_cast<char*>(pkt.ptr) + pkt.size) {
-				// Required to prevent double-free in dtor
-				if (ret->pkt) { ret->pkt = NULL; }
-				// Only free when metadata not obtained from cache (i.e. first execute)
-				if (!*stmt_meta) { delete ret; }
-
-				return NULL;
+		// Every read below must stay within the packet: values are forwarded to the backend,
+		// so an over-read would disclose ProxySQL's heap (GHSA-r23x-jg5r-jmcc).
+		const char * const end = static_cast<char*>(pkt.ptr) + pkt.size;
+		auto avail = [&](size_t n) -> bool { return p <= end && static_cast<size_t>(end - p) >= n; };
+		auto malformed = [&](uint16_t processed) -> stmt_execute_metadata_t* {
+			proxy_warning("Malformed COM_STMT_EXECUTE packet: parameter %u exceeds packet size %lu\n",
+				processed, static_cast<unsigned long>(pkt.size));
+			// Free the temporal buffers allocated so far, not the ones owned by SLDH
+			for (uint16_t j = 0; j < processed; j++) {
+				const enum enum_field_types t = binds[j].buffer_type;
+				if (t == MYSQL_TYPE_TIME || t == MYSQL_TYPE_DATE || t == MYSQL_TYPE_TIMESTAMP || t == MYSQL_TYPE_DATETIME) {
+					unsigned long *_l = NULL;
+					my_bool *_is_null = NULL;
+					if (binds[j].buffer && binds[j].buffer != (*myds)->sess->SLDH->get(ret->stmt_id, j, &_l, &_is_null)) {
+						free(binds[j].buffer);
+					}
+				}
+				binds[j].buffer = NULL;
 			}
+			// Required to prevent double-free in dtor
+			if (ret->pkt) { ret->pkt = NULL; }
+			// Only free when metadata not obtained from cache (i.e. first execute)
+			if (!*stmt_meta) { delete ret; }
+			return NULL;
+		};
+		for (i=0;i<num_params;i++) {
 			unsigned long *_l = 0;
 			my_bool * _is_null;
 			void *_data = (*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null);
@@ -4446,27 +4463,35 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			enum enum_field_types buffer_type=binds[i].buffer_type;
 			switch (buffer_type) {
 				case MYSQL_TYPE_TINY:
+					if (!avail(1)) return malformed(i);
 					binds[i].buffer=p;
 					p+=1;
 					break;
 				case MYSQL_TYPE_SHORT:
 				case MYSQL_TYPE_YEAR:
+					if (!avail(2)) return malformed(i);
 					binds[i].buffer=p;
 					p+=2;
 					break;
 				case MYSQL_TYPE_FLOAT:
 				case MYSQL_TYPE_LONG:
 				case MYSQL_TYPE_INT24:
+					if (!avail(4)) return malformed(i);
 					binds[i].buffer=p;
 					p+=4;
 					break;
 				case MYSQL_TYPE_DOUBLE:
 				case MYSQL_TYPE_LONGLONG:
+					if (!avail(8)) return malformed(i);
 					binds[i].buffer=p;
 					p+=8;
 					break;
 				case MYSQL_TYPE_TIME:
 					{
+						// The decoding below reads fixed offsets: only the lengths defined by the protocol are valid
+						if (!avail(1)) return malformed(i);
+						const uint8_t tlen = static_cast<uint8_t>(p[0]);
+						if ((tlen != 0 && tlen != 8 && tlen != 12) || !avail(1 + tlen)) return malformed(i);
 						binds[i].buffer=malloc(sizeof(MYSQL_TIME)); // NOTE: remember to free() this
 						uint8_t l;
 						memcpy(&l,p,1);
@@ -4491,6 +4516,10 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 				case MYSQL_TYPE_TIMESTAMP:
 				case MYSQL_TYPE_DATETIME:
 					{
+						// The decoding below reads fixed offsets: only the lengths defined by the protocol are valid
+						if (!avail(1)) return malformed(i);
+						const uint8_t dlen = static_cast<uint8_t>(p[0]);
+						if ((dlen != 0 && dlen != 4 && dlen != 7 && dlen != 11) || !avail(1 + dlen)) return malformed(i);
 						binds[i].buffer=malloc(sizeof(MYSQL_TIME)); // NOTE: remember to free() this
 						uint8_t l;
 						memcpy(&l,p,1);
@@ -4531,18 +4560,11 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 					{
 						uint8_t l=0;
 						uint32_t len { 0 };
-						l=mysql_decode_length((unsigned char *)p, &len);
+						if (!avail(1)) return malformed(i);
+						l=mysql_decode_length((unsigned char *)p, end - p, &len);
+						if (l == 0 || !avail(l) || static_cast<size_t>(end - (p + l)) < len) return malformed(i);
 						if (l>1) {
 							PROXY_TRACE();
-						}
-
-						if (p + l > static_cast<char*>(pkt.ptr) + pkt.size || len > pkt.size) {
-							// Required to prevent double-free in dtor
-							if (ret->pkt) { ret->pkt = NULL; }
-							// Only free when metadata not obtained from cache (i.e. first execute)
-							if (!*stmt_meta) { delete ret; }
-
-							return NULL;
 						}
 
 						p+=l;
@@ -4552,13 +4574,10 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 					}
 					break;
 				default:
-					// LCOV_EXCL_START
 					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
 							"of query %s from user %s with default schema %s\n",
 							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
+					return malformed(i);
 			}
 		}
 	}
