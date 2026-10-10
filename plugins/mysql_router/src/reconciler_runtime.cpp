@@ -509,6 +509,11 @@ public:
 		if (!session_ || current_topology_.topology_uuid.empty() || !current_effective_) {
 			throw std::runtime_error("metadata topology is unavailable for user publication");
 		}
+		// 'PROXYSQL FLUSH CONFIGDB' replaces the core's configdb object
+		// (delete + new), so the handle cached in the constructor can dangle.
+		// Re-resolve it here, like every other consumer in this plugin does.
+		db_ = services_.get_configdb();
+		if (db_ == nullptr) throw std::runtime_error("Router config DB is unavailable");
 		const uint64_t published = publish_mysql_router_users(services_, *session_,
 			current_topology_, *current_effective_, listeners_, snapshot, metadata_user_, generation);
 		if (!persist_generation(services_, "user_generation", published)) {
