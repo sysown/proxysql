@@ -3646,7 +3646,21 @@ size_t ProxySQL_Admin::drain_server_discovery_updates() {
 			fcntl(pipefd[0], F_SETFL, flags);
 		}
 	}
-	return proxysql_drain_server_desired_sets();
+	// Reconcile + materialize writes admindb inside a transaction on the SAME
+	// sqlite3 connection that the Cluster servers pull uses. A Cluster pull
+	// holds 'sql_query_global_mutex' but the drain never did, so the two could
+	// interleave: the pull's BEGIN IMMEDIATE would fail ("cannot start a
+	// transaction within a transaction"), or worse, its autocommit
+	// DELETE/INSERTs would be absorbed into the drain's transaction and lost on
+	// its ROLLBACK. Serialize on the same global mutex every other admindb
+	// writer uses, taken BEFORE the discovery-protocol lock inside the drain.
+	// ('admin_db_lock_guard' is declared further down in this file, so lock
+	// directly here; this function has no early return, so the unlock is
+	// unconditional.)
+	pthread_mutex_lock(&sql_query_global_mutex);
+	const size_t drained = proxysql_drain_server_desired_sets();
+	pthread_mutex_unlock(&sql_query_global_mutex);
+	return drained;
 #else
 	return 0;
 #endif
