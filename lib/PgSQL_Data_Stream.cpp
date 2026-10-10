@@ -895,6 +895,9 @@ void PgSQL_Data_Stream::set_pollout() {
 	}
 	else {
 		_pollfd->events = POLLIN;
+		if (myds_type == MYDS_FRONTEND && sess && sess->client_output_held) {
+			return;
+		}
 		//if (PSarrayOUT->len || available_data_out() || queueOUT.partial || (encrypted && !SSL_is_init_finished(ssl))) {
 		if (PSarrayOUT->len || available_data_out() || queueOUT.partial) {
 			_pollfd->events |= POLLOUT;

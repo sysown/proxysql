@@ -675,6 +675,10 @@ public:
 	bool tx_poisoned{ false };
 	// Backend administrative removal: drain the FATAL response before closing.
 	bool offline_fatal_pending = false;
+	// The last handler pass kept the client's replies back until the backend answers. Nothing is
+	// written to the client meanwhile, so polling it for POLLOUT would only wake the thread again
+	// and again until that answer comes.
+	bool client_output_held = false;
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
 	bool last_pool_ff{ false };
