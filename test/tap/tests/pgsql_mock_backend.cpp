@@ -218,6 +218,7 @@ Step step_expect_message() { Step s; s.kind = Step::EXPECT_MESSAGE; return s; }
 Step step_expect_query(bool stop_at_housekeeping)
                            { Step s; s.kind = Step::EXPECT_QUERY; s.stop_at_housekeeping = stop_at_housekeeping; return s; }
 Step step_close()          { Step s; s.kind = Step::CLOSE; return s; }
+Step step_reset()          { Step s; s.kind = Step::RESET; return s; }
 Step step_sleep(int ms)    { Step s; s.kind = Step::SLEEP_MS; s.ms = ms; return s; }
 Step step_tls_accept()     { Step s; s.kind = Step::TLS_ACCEPT; return s; }
 Step step_tls_key_update() { Step s; s.kind = Step::TLS_KEY_UPDATE; return s; }
@@ -611,6 +612,14 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
         }
         case Step::CLOSE:
             goto done;
+        case Step::RESET: {
+            // A zero linger timeout makes close() discard anything unsent and answer
+            // with an RST: what a middlebox expiring an idle flow, or a peer that died
+            // with unread data, looks like to ProxySQL.
+            linger lg{1, 0};
+            setsockopt(fd, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
+            goto done;
+        }
         case Step::SLEEP_MS:
             usleep((useconds_t)s.ms * 1000);
             break;

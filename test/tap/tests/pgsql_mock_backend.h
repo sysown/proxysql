@@ -136,6 +136,7 @@ struct Step {
         EXPECT_QUERY,
         EXPECT_STARTUP,    // read the startup packet (no type byte, length-prefixed)
         CLOSE,             // close the connection immediately (FIN)
+        RESET,             // abort the connection (SO_LINGER {1,0} + close: an RST, not a FIN)
         SLEEP_MS,          // pause, e.g. to let ProxySQL park the connection
         // TLS handshake, server side; everything after it is encrypted. Goes after the
         // 'S' answer, and the real StartupMessage then needs its own EXPECT_STARTUP.
@@ -179,6 +180,7 @@ Step step_expect_startup();
 Step step_expect_message();
 Step step_expect_query(bool stop_at_housekeeping = false);
 Step step_close();
+Step step_reset();
 Step step_sleep(int ms);
 Step step_tls_accept();
 Step step_tls_key_update();
