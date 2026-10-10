@@ -99,6 +99,10 @@ class BaseHGC {	// MySQL Host Group Container
 	std::atomic<uint32_t> num_online_servers;
 #ifdef PROXYSQL31
 	std::atomic<uint64_t> backup_servers_selected;
+	// Per-hostgroup throttle for the backup-weight selection warning. A
+	// function-local static would be shared by every hostgroup and thread, so
+	// one busy hostgroup would silence the warning everywhere else.
+	time_t last_log_time_backup_selection;
 #endif
 	time_t last_log_time_num_online_servers;
 	unsigned long long current_time_now;
