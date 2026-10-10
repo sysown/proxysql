@@ -142,6 +142,66 @@ class AiGroupShardTest(unittest.TestCase):
                         self.assertEqual(environment["PROXYSQL_CONFIG_OVERRIDE"],
                                          str(workspace / relative))
 
+    def test_restored_metadata_selects_config_without_executing_foreign_binary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "src").mkdir()
+            shutil.copytree(AI_GROUP_DIR, workspace / "test/tap/groups/ai")
+            marker = workspace / "host-probe"
+            binary = workspace / "src/proxysql"
+            binary.write_text(
+                '#!/bin/sh\ntouch "$WORKSPACE/host-probe"\n'
+                "echo 'GLIBC_2.38 not found' >&2\nexit 1\n", encoding="utf-8",
+            )
+            binary.chmod(0o755)
+            for version, tier, enabled in (("3.0.9", "v30", "0"),
+                                           ("3.1.12", "v31", "0"),
+                                           ("4.0.0", "v40", "1")):
+                metadata = {"version": f"ProxySQL version {version}_DEBUG", "tier": tier,
+                            "sha": "test-source", "execution_id": "test-execution",
+                            "mode": "asan", "applicable_groups": ["ai-g1"]}
+                (workspace / "src/ci-tier.json").write_text(json.dumps(metadata))
+                for group in ("ai", "ai-g1", "ai-g2"):
+                    with self.subTest(version=version, group=group):
+                        result = subprocess.run(
+                            ["sh", "-c", 'set -e; . "$1"; env -0', "sh",
+                             str(ROOT / "test/tap/groups" / group / "env.sh")],
+                            env={"PATH": os.environ["PATH"], "WORKSPACE": str(workspace),
+                                 "PROXYSQL_LOAD_GENAI_PLUGIN": "1"},
+                            text=True, capture_output=True,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        environment = dict(item.split("=", 1)
+                                           for item in result.stdout.split("\0") if "=" in item)
+                        self.assertEqual(environment["PROXYSQL_LOAD_GENAI_PLUGIN"], enabled)
+                        relative = ("test/tap/groups/ai/proxysql-ci.cnf" if enabled == "1"
+                                    else "test/infra/control/proxysql-ci.cnf")
+                        self.assertEqual(environment["PROXYSQL_CONFIG_OVERRIDE"],
+                                         str(workspace / relative))
+                        self.assertFalse(marker.exists(), "foreign binary executed on the host")
+
+    def test_invalid_handoff_version_fails_without_host_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "src").mkdir()
+            shutil.copytree(AI_GROUP_DIR, workspace / "test/tap/groups/ai")
+            binary = workspace / "src/proxysql"
+            binary.write_text(
+                '#!/bin/sh\ntouch "$WORKSPACE/host-probe"\n'
+                "echo 'ProxySQL version 4.0.0_DEBUG'\n", encoding="utf-8",
+            )
+            binary.chmod(0o755)
+            for contents in ('{', '{}', '{"version": "unknown"}'):
+                with self.subTest(metadata=contents):
+                    (workspace / "src/ci-tier.json").write_text(contents)
+                    result = subprocess.run(
+                        ["sh", "-c", 'set -e; . "$1"', "sh", str(AI_GROUP_DIR / "env.sh")],
+                        env={"PATH": os.environ["PATH"], "WORKSPACE": str(workspace)},
+                        text=True, capture_output=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((workspace / "host-probe").exists())
+
     def test_lower_tier_setup_seeds_backends_without_configuring_mcp(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

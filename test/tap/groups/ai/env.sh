@@ -22,10 +22,15 @@ export MCP_PGSQL_HOSTGROUP_ID="${MCP_PGSQL_HOSTGROUP_ID:-9200}"
 export MYSQL_DATABASE="${MYSQL_DATABASE:-test}"
 export PGSQL_DATABASE="${PGSQL_DATABASE:-postgres}"
 
-# Plugin availability follows the executable restored for this product tier,
-# not the source branch or the caller's build flags. Older products still run
-# their eligible TSDB/config tests with the generic daemon configuration.
-_ai_product_version="$("${WORKSPACE}/src/proxysql" --version)" || return 1
+# CI validates the restored binary and its handoff metadata before setup. Read
+# that version without executing an Ubuntu 24 binary on an Ubuntu 22 host.
+# Local builds without a handoff still probe the executable directly.
+if [ -f "${WORKSPACE}/src/ci-tier.json" ]; then
+    _ai_product_version="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' \
+        "${WORKSPACE}/src/ci-tier.json")" || return 1
+else
+    _ai_product_version="$("${WORKSPACE}/src/proxysql" --version)" || return 1
+fi
 _ai_product_major="$(printf '%s\n' "${_ai_product_version}" | sed -n 's/^ProxySQL version \([0-9][0-9]*\)\..*/\1/p')"
 case "${_ai_product_major}" in
     ''|*[!0-9]*)
