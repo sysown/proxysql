@@ -809,6 +809,11 @@ public:
 	// Set true once a ReadyForQuery ('Z') has been consumed for the in-flight query,
 	// signalling the result stream is complete. Reset at query_start().
 	bool native_result_complete = false;
+	// Set when the result cycle was cut short by a failure that leaves nothing more to read:
+	// native_result_fatal() or native_result_protocol_violation(). An ordinary ErrorResponse
+	// does NOT set it -- the backend still owes the ReadyForQuery after one, and the drain
+	// must reach it before the cycle ends. Reset alongside native_result_complete.
+	bool native_result_aborted = false;
 	// Set true once a CopyInResponse ('G') or CopyBothResponse ('W') has been
 	// answered with a CopyFail by the native_fetch_result_cont() safety net
 	// (see there). Reset at query_start() alongside native_result_complete.
@@ -874,6 +879,8 @@ public:
 	// (native_stmt_resync_logged is intentionally absent: per-connection, not per-step.)
 	inline void native_stmt_reset_step() {
 		native_result_complete = false;
+		native_result_aborted = false;
+		native_fetch_paused = false;
 		native_copy_intercepted = false;
 		native_stmt_step = PG_Native_Stmt_Step::NONE;
 		native_last_execute_suspended = false;
@@ -1028,7 +1035,11 @@ public:
 	// pool return. myds->ssl stays NULL in native mode.
 	// Set when a result fetch stopped early because it had already moved enough
 	// bytes for this event. The next entry drains what is still framed instead
-	// of asking the socket for more, which may never come.
+	// of asking the socket for more, which may never come. Only ever set right
+	// after a DataRow/CopyData and never once an ErrorResponse is recorded, so a
+	// fetch cannot stop between an error and its ReadyForQuery. Cleared at every
+	// query/step start and by async_free_result(); a connection that still has it
+	// set is not reusable (is_connection_in_reusable_state()).
 	bool native_fetch_paused = false;
 	SSL* native_ssl  = nullptr;
 	BIO* native_rbio = nullptr;

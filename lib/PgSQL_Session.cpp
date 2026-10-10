@@ -6140,9 +6140,30 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			}
 		}
 #endif // PROXYSQL31
-		// Not known to be reachable. If this fires it is a bug -- please report it.
-		if (status == PROCESSING_QUERY && _conn->processing_multi_statement == false)
-			assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
+		// The result should always be complete here. Issue #6410 proved it is not
+		// guaranteed: an ErrorResponse that ended the native fetch before its
+		// ReadyForQuery reached this point and an assert aborted the whole proxy, every
+		// client of every protocol with it. If any route still gets here, fail only
+		// this query: finish the client's cycle with an error and a ReadyForQuery, then
+		// close the session. That destroys the backend connection, whose reply was not
+		// fully read, instead of letting it be reused -- the same way
+		// native_result_protocol_violation() disposes of a desynchronised backend.
+		if (status == PROCESSING_QUERY && _conn->processing_multi_statement == false &&
+			resultset_completed == false) {
+			proxy_error("PgSQL result ended without ReadyForQuery on %s:%d (%s); "
+				"failing the query and discarding the backend connection\n",
+				_conn->parent ? _conn->parent->address : "?", _conn->parent ? _conn->parent->port : 0,
+				_conn->native_mode ? "native" : "libpq");
+			_conn->set_error(PGSQL_ERROR_CODES::ERRCODE_INTERNAL_ERROR,
+				"ProxySQL received an incomplete result from the backend", false);
+			query_result->add_error(NULL);
+			query_result->add_ready_status(_conn->IsActiveTransaction() ? PQTRANS_INERROR : PQTRANS_IDLE);
+			query_result->get_resultset(client_myds->PSarrayOUT);
+			_conn->reusable = false;
+			_conn->healthy = false;
+			set_unhealthy();
+			return;
+		}
 		if (status == PROCESSING_QUERY && transfer_started == false && 
 			_conn->processing_multi_statement == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
 			// A result that carried a NotificationResponse must not be stored: the cache

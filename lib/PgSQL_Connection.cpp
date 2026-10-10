@@ -585,16 +585,22 @@ handler_again:
 				next_event(ASYNC_USE_RESULT_CONT);
 				break;
 			}
-			if (native_result_complete || is_error_present()) {
+			if (native_result_complete || native_result_aborted) {
 				// ReadyForQuery consumed (result complete) or a fatal recv/frame
 				// error: hand off to the end state (ASYNC_QUERY_END for queries,
 				// or the configured fetch_result_end_st).
+				// Not is_error_present(): an ordinary ErrorResponse sets that too, and
+				// the backend still owes the ReadyForQuery that ends its cycle. Leaving
+				// on it would strand that 'Z' in the framer and hand the session a
+				// result with no READY, which aborts the proxy (issue #6410).
 				NEXT_IMMEDIATE(fetch_result_end_st);
 			}
 			// Enough bytes moved in this event: pause and let the client drain,
 			// exactly as the libpq loop below does, so pgsql-threshold_resultset_size
-			// behaves the same on both paths.
-			if (suspend_resultset_fetch(processed_bytes)) {
+			// behaves the same on both paths. The drain decided that and kept the
+			// framed rest for the next entry; pausing on anything else would make that
+			// entry recv() first, and wait on a socket that has nothing left to send.
+			if (native_fetch_paused) {
 				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 				break;
 			}
@@ -1727,11 +1733,13 @@ bool PgSQL_Connection::native_flush_outbuf() {
 // never did, on any of its exits.
 void PgSQL_Connection::native_result_fatal(const char* code, const char* message) {
 	set_error(code, message, false);
+	native_result_aborted = true;
 	native_teardown();
 }
 
 void PgSQL_Connection::native_result_protocol_violation(const char* message) {
 	set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, message, false);
+	native_result_aborted = true;
 	reusable = false;
 	healthy = false;
 	if (myds && myds->sess) {
@@ -3072,6 +3080,8 @@ void PgSQL_Connection::query_start() {
 		// defensively from query.length bytes + an explicit NUL so we never
 		// depend on / read past the caller's terminator.
 		native_result_complete = false;
+		native_result_aborted = false;
+		native_fetch_paused = false;
 		native_copy_intercepted = false;
 		// A simple query is not an extended-query step: clear any stmt-step state left
 		// on a pooled connection by a prior Parse/Describe/Execute so the native result
@@ -3291,6 +3301,20 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 	// the caller compares against pgsql-threshold_resultset_size to decide when
 	// to pause the fetch.
 	auto count_bytes = [&](unsigned int n) { if (processed_bytes) *processed_bytes += n; };
+	// Enough bytes for this event: stop and let the client drain, the same rule the
+	// libpq fetch loop applies per row. Asked only right after a DataRow or CopyData,
+	// the messages a result can have without limit. Never once an ErrorResponse is
+	// recorded: the caller would take the error as the end of the cycle while its
+	// ReadyForQuery is still unread, and a single 'E' can cross the threshold on its
+	// own -- PostgreSQL echoes client input into the message text (issue #6410).
+	auto pause_after = [&](char type) -> bool {
+		if ((type == 'D' || type == 'd') && processed_bytes && !is_error_present() &&
+			suspend_resultset_fetch(*processed_bytes)) {
+			native_fetch_paused = true;
+			return true;
+		}
+		return false;
+	};
 	// Native result fetch (Task 1.6c / Phase 2). Pull backend bytes into the
 	// framer, then drain every complete message into query_result as raw
 	// client-wire bytes. Non-blocking throughout.
@@ -3343,12 +3367,6 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 	// buffer) before looping, and we never feed() again inside this loop, so the
 	// dangling-pointer rule is respected.
 	for (;;) {
-		// Enough bytes for this event: stop before taking another message and let
-		// the client drain, the same rule the libpq fetch loop applies per row.
-		if (processed_bytes && suspend_resultset_fetch(*processed_bytes)) {
-			native_fetch_paused = true;
-			return;
-		}
 		PgSQL_Backend_Msg msg;
 		PgSQL_Frame_Result fr = native_framer.next(msg);
 		if (fr == FRAME_OK) {
@@ -3591,6 +3609,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 						return;
 					}
 				}
+				if (pause_after(t)) return;
 				continue;
 			}
 
@@ -3612,6 +3631,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				native_result_complete = true;
 				return;
 			}
+			if (pause_after(msg.type)) return;
 			continue;
 		}
 		if (fr == FRAME_NEED_MORE) {
@@ -3774,6 +3794,8 @@ void PgSQL_Connection::async_free_result() {
 	}
 	compute_unknown_transaction_status();
 	async_state_machine = ASYNC_IDLE;
+	// The query is over; a pause belongs to its fetch and must not carry into the next one.
+	native_fetch_paused = false;
 	if (query_result) {
 		if (query_result_reuse) {
 			delete query_result_reuse;
@@ -4102,6 +4124,17 @@ bool PgSQL_Connection::is_connection_in_reusable_state() const {
 	// The backend still owes this connection a ReadyForQuery, so it is mid-batch and holding an
 	// implicit transaction. Its last status byte predates the batch and would say otherwise.
 	if (native_mode && native_unsynced_work) {
+		return false;
+	}
+	// Backend bytes still waiting to be read belong to a reply that has not been consumed. The
+	// next query on this connection would read them as the start of its own answer. A pinned
+	// LISTEN connection is the exception: between queries it legitimately buffers asynchronous
+	// notifications, which the next query start keeps rather than discards (issue #6410).
+	// Not after native_result_protocol_violation(): it stops reading on purpose, finishes the
+	// result itself and marks the connection for destruction, and answering false here would
+	// send the session down the broken-connection branch, which never tells the client why.
+	if (native_mode && !native_result_aborted && (native_fetch_paused ||
+		(!native_framer.empty() && (status_flags & STATUS_PGSQL_CONNECTION_LISTEN) == 0))) {
 		return false;
 	}
 	const PGTransactionStatusType txn_status = get_pg_transaction_status();
