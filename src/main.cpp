@@ -1666,9 +1666,20 @@ void UnloadPlugins() {
 #endif
 }
 
+/** Initialize TLS, plugins, and core modules before starting worker listeners. */
 void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_info) {
+	// Track the exact context created by SSL-module startup until a reload
+	// replaces it. If the first attempt fails, a phase-2 retry runs after
+	// phase 4 has drained the modules and listeners that could borrow it.
+	// Never recapture a later runtime context: those retain the existing
+	// restart/live-reload lifetime policy.
+	static SSL_CTX* startup_ssl_ctx = GloVars.global.ssl_ctx;
 	std::string msg;
 	ProxySQL_create_or_load_TLS(false, msg);
+	if (startup_ssl_ctx && startup_ssl_ctx != GloVars.global.ssl_ctx) {
+		SSL_CTX_free(startup_ssl_ctx);
+		startup_ssl_ctx = nullptr;
+	}
 
 	LoadPlugins();
 
