@@ -389,6 +389,21 @@ SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
 bool proxysql_start_managed_configuration(ProxySQL_PluginManager* manager,
  Web_Interface* web, proxysql_web_bind_managed_configuration_v1_t binder,
  const std::string* manifest_json, std::string& error);
+
+enum class ProxySQL_ManagedStartupDisposition : uint8_t {
+	continue_startup,
+	exit_failure
+};
+
+/**
+ * @brief Run managed bootstrap or restore and select the process disposition.
+ * @return Continue for every applied success, including local bootstrap;
+ *         failure only when the managed service rejects startup.
+ */
+ProxySQL_ManagedStartupDisposition proxysql_run_managed_configuration_startup(
+ ProxySQL_PluginManager* manager, Web_Interface* web,
+ proxysql_web_bind_managed_configuration_v1_t binder,
+ const std::string* manifest_json, std::string& error);
 /**
  * @brief Drain HTTP, stop controllers, then destroy web and retire plugins.
  * @param web Cleared after synchronous stop and destruction.

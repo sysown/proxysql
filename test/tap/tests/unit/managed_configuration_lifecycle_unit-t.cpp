@@ -69,7 +69,7 @@ std::unique_ptr<ProxySQL_PluginManager> provider(std::string& error) {
 }
 }
 int main() {
- plan(28); test_init_minimal();
+ plan(29); test_init_minimal();
  char path[] = "/tmp/proxysql_managed_lifecycle.XXXXXX";
  int fd = mkstemp(path);
  if (fd < 0) BAIL_OUT("cannot create private managed lifecycle log");
@@ -97,8 +97,9 @@ int main() {
  clear_events();
  const bool cluster_sync_interfaces = GloVars.cluster_sync_interfaces;
  GloVars.cluster_sync_interfaces = true;
- ok(proxysql_start_managed_configuration(manager.get(), &web, bind, nullptr, error),
-    "restore uses required bound service");
+ ok(proxysql_run_managed_configuration_startup(manager.get(), &web, bind, nullptr, error) ==
+    ProxySQL_ManagedStartupDisposition::continue_startup,
+    "successful restore continues normal process startup");
  ok(GloVars.cluster_sync_interfaces, "managed restore does not disable or reconfigure Cluster");
  GloVars.cluster_sync_interfaces = cluster_sync_interfaces;
  const auto restored = events();
@@ -109,9 +110,14 @@ int main() {
     "local bootstrap goes through same required service");
  ok(events().find("bootstrap") != std::string::npos && events().find("restore") == std::string::npos,
     "bootstrap selected explicitly instead of restore");
+ clear_events();
+ ok(proxysql_run_managed_configuration_startup(manager.get(), &web, bind, &manifest, error) ==
+    ProxySQL_ManagedStartupDisposition::continue_startup,
+    "successful bootstrap continues normal process startup");
  setenv("PROXYSQL_MANAGED_FAKE_PENDING", "1", 1);
- ok(!proxysql_start_managed_configuration(manager.get(), &web, bind, nullptr, error),
-    "pending recovery error prevents successful startup");
+ ok(proxysql_run_managed_configuration_startup(manager.get(), &web, bind, nullptr, error) ==
+    ProxySQL_ManagedStartupDisposition::exit_failure,
+    "pending recovery error stops process startup");
  unsetenv("PROXYSQL_MANAGED_FAKE_PENDING");
  clear_events();
  Web_Interface* drain_web = new FakeWeb;
