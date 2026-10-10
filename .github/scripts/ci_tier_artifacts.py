@@ -125,18 +125,22 @@ class GitHubAPI:
     def __init__(self, repository, token=None):
         self.repository=repository
         self.token=token
-    def request(self,path,method='GET',payload=None,raw=False):
+    def request(self,path,method='GET',payload=None,raw=False,*,retry_safe=False,before_retry=None):
+        # Only callers assigning a stable check state may opt into replay.
+        # POST registration and all other unknown-outcome writes stay single-shot.
+        if retry_safe and method!='PATCH':raise ValueError('retry_safe requires PATCH')
         args=['gh','api',path,'--method',method]
         if payload is not None:args+=['--input','-']
         attempts=6
         for attempt in range(attempts):
+            if attempt and before_retry is not None:before_retry()
             try:
                 result=subprocess.run(args,input=json.dumps(payload).encode() if payload is not None else None,
                     capture_output=True,timeout=900 if raw else 60,
                     env=dict(os.environ,GH_TOKEN=self.token) if self.token else None)
             except subprocess.TimeoutExpired:
-                if method!='GET' or attempt==attempts-1:
-                    raise RuntimeError(f'GitHub API {method} {path}: timed out') from None
+                if (method!='GET' and not retry_safe) or attempt==attempts-1:
+                    raise RuntimeError(f'GitHub API {method} {path}: timed out after {attempt+1} attempts') from None
                 time.sleep(min(30,2**attempt))
                 continue
             if not result.returncode:
@@ -149,9 +153,14 @@ class GitHubAPI:
             # A rate-limit rejection did not perform the write; other write
             # failures may have committed and must not be replayed.
             rejected_limit='http 429' in error or ('http 403' in error and 'rate limit' in error)
-            retryable=transient if method=='GET' else rejected_limit
+            retryable=transient if method=='GET' or retry_safe else rejected_limit
             if not retryable or attempt==attempts-1:
-                raise RuntimeError(f'GitHub API {method} {path}: exit {result.returncode}')
+                diagnostic=result.stderr.decode(errors='replace')
+                for token in (self.token,os.environ.get('GH_TOKEN'),os.environ.get('GITHUB_TOKEN')):
+                    if token:diagnostic=diagnostic.replace(token,'[REDACTED]')
+                diagnostic=re.sub(r'(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+','[REDACTED]',diagnostic)
+                diagnostic=re.sub(r'[\r\n]+',' ',diagnostic).strip()[:1000]
+                raise RuntimeError(f'GitHub API {method} {path}: exit {result.returncode} after {attempt+1} attempts: {diagnostic}')
             time.sleep(60 if 'rate limit' in error or '429' in error else min(30,2**attempt))
 
     def download(self,path,destination,size,digest=None):
