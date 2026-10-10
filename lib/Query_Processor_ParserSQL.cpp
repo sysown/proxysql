@@ -32,6 +32,8 @@
 #include "proxysql.h"
 #include "Query_Processor_ParserSQL.h"
 #include "sql_parser/parser.h"
+#include "sql_parser/set_parser.h"
+#include "sql_parser/subquery_parse_callback.h"
 #include "sql_parser/digest.h"
 #include "sql_parser/emitter.h"
 #include "sql_parser/ast.h"
@@ -925,6 +927,9 @@ static ReplayContextTarget replay_context_target(const AstNode* target) {
     bool affects_session = true;
     std::string name = identifiers.back();
     if (identifiers.size() > 1) {
+        // MySQL does not combine a scope keyword with an @/@@ target.
+        // In particular, LOCAL @@global.x must not mask the global scope.
+        if (!name.empty() && name[0] == '@') return {};
         const std::string& scope = identifiers.front();
         affects_session = is_scope(scope, "SESSION") || is_scope(scope, "LOCAL");
     } else if (name.size() > 2 && name[0] == '@' && name[1] == '@') {
@@ -1144,10 +1149,45 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
     return result;
 }
 
+// Keep the tokenizer's error state available to the session tracker. The
+// general ParserSQL 1.0.11 entry point can report OK after dropping a malformed
+// SET assignment, including a GLOBAL assignment with a missing RHS.
+static ParseResult parse_mysql_set_for_session(const std::string& query) {
+    ParseResult result;
+    Tokenizer<Dialect::MySQL> tokenizer;
+    tokenizer.reset(query.data(), query.size());
+    if (tokenizer.next_token().type != TokenType::TK_SET) return result;
+
+    SetParser<Dialect::MySQL> parser(tokenizer, tl_mysql_parser.arena());
+    parser.set_subquery_callback(&parse_subquery_select<Dialect::MySQL>);
+    result.ast = parser.parse();
+    if (tokenizer.peek().type == TokenType::TK_SEMICOLON) tokenizer.skip();
+    result.full_input = tokenizer.peek().type == TokenType::TK_EOF;
+    result.status = tokenizer.has_error() ? ParseResult::ERROR : ParseResult::OK;
+    return result;
+}
+
 std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
-    const std::string& query)
+    const std::string& query, bool session_scope_only)
 {
-    auto result = tl_mysql_parser.parse(query.c_str(), query.size());
+    auto result = session_scope_only ? parse_mysql_set_for_session(query)
+        : tl_mysql_parser.parse(query.c_str(), query.size());
+    if (session_scope_only) {
+        // A partial AST cannot prove that all targets are session-scoped.
+        // Check before the walker strips scopes or coalesces duplicate names.
+        if (result.status != ParseResult::OK || !result.full_input) {
+            tl_mysql_parser.reset();
+            return {};
+        }
+        for (const AstNode* child = result.ast ? result.ast->first_child : nullptr;
+             child; child = child->next_sibling) {
+            if (child->type == NodeType::NODE_VAR_ASSIGNMENT &&
+                !replay_context_target(child->first_child).affects_session) {
+                tl_mysql_parser.reset();
+                return {};
+            }
+        }
+    }
     if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
         if (result.ast && result.ast->type == NodeType::NODE_SET_STMT) {
             auto parsed = walk_set_stmt<Dialect::MySQL>(

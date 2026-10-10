@@ -137,10 +137,15 @@ enum PGSQL_QUERY_command parsersql_stmt_type_to_pgsql_command(int stmt_type);
  * Controlled by `mysql-set_parser_algorithm` (value 3).
  *
  * @param query  The SET statement to parse.
+ * @param session_scope_only Require a complete parse containing only session
+ *               assignments (including LOCAL). Reject the whole map before
+ *               scope normalization if any target is global, persistent, or
+ *               a user variable. Used by session-variable tracking.
  * @return       Map from normalised variable name to its value(s). Empty map
  *               if the query is not a valid SET statement.
  */
-std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(const std::string& query);
+std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
+    const std::string& query, bool session_scope_only = false);
 
 /**
  * @brief Parses a PostgreSQL SET statement into variable-value pairs.
