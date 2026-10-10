@@ -46,16 +46,19 @@ def publish_result(plan,key,status,api,run_id,attempt,run_repository=None):
     check=next(c for c in plan['checks'] if c['key']==key)
     path=f"repos/{reporting_repository(plan)}/check-runs/{check['check_id']}"
     run_repository=run_repository or reporting_repository(plan)
-    current=api.request(f"repos/{run_repository}/actions/runs/{int(run_id)}")
-    if int(current['run_attempt'])!=int(attempt):raise ValueError('refusing stale consumer attempt result')
+    def verify_attempt():
+        current=api.request(f"repos/{run_repository}/actions/runs/{int(run_id)}")
+        if int(current['run_attempt'])!=int(attempt):raise ValueError('refusing stale consumer attempt result')
+    verify_attempt()
     meta=dict(execution_id=plan['execution_id'],key=key,run_id=int(run_id),attempt=int(attempt),run_repository=run_repository)
     payload=dict(status='in_progress' if status=='in_progress' else 'completed',details_url=url(plan,run_id,run_repository),
         output={'title':check['name'],'summary':status,'text':json.dumps(meta)})
     if status!='in_progress':payload['conclusion']=status
-    api.request(path,'PATCH',payload)
+    api.request(path,'PATCH',payload,retry_safe=True,before_retry=verify_attempt)
     if status=='in_progress':
         api.request(f"repos/{reporting_repository(plan)}/check-runs/{plan['summary_check_id']}",'PATCH',
-                    {'status':'in_progress','output':{'title':'Selected product tiers','summary':'Execution in progress'}})
+                    {'status':'in_progress','output':{'title':'Selected product tiers','summary':'Execution in progress'}},
+                    retry_safe=True,before_retry=verify_attempt)
 
 def observations(plan,api,verify_native=True):
     observed=[];runs={};jobs={}

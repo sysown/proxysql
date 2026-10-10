@@ -207,4 +207,47 @@ class ArtifactTests(unittest.TestCase):
    with self.assertRaisesRegex(RuntimeError,'timed out') as failure:GitHubAPI('repo').request('artifacts/1/zip',raw=True)
    self.assertNotIn('secret',str(failure.exception));self.assertEqual(run.call_count,6)
 
+ def test_retry_safe_check_update_recovers_transient_failure(self):
+  import subprocess
+  from unittest.mock import patch,Mock
+  failures=[subprocess.CompletedProcess([],1,b'',b'HTTP 503 upstream unavailable'),subprocess.TimeoutExpired(['gh'],60)]
+  for failure in failures:
+   with self.subTest(failure=type(failure).__name__),patch('ci_tier_artifacts.subprocess.run',side_effect=[failure,subprocess.CompletedProcess([],0,b'{"id":7}',b'')]),patch('ci_tier_artifacts.time.sleep'):
+    before_retry=Mock()
+    self.assertEqual(GitHubAPI('repo').request('check-runs/7','PATCH',{'status':'completed'},retry_safe=True,before_retry=before_retry)['id'],7)
+    before_retry.assert_called_once_with()
+
+ def test_retry_safe_update_rechecks_attempt_before_replay(self):
+  import subprocess
+  from unittest.mock import patch,Mock
+  before_retry=Mock(side_effect=ValueError('stale consumer attempt'))
+  with patch('ci_tier_artifacts.subprocess.run',return_value=subprocess.CompletedProcess([],1,b'',b'HTTP 503')) as run,patch('ci_tier_artifacts.time.sleep'):
+   with self.assertRaisesRegex(ValueError,'stale'):
+    GitHubAPI('repo').request('check-runs/7','PATCH',{'status':'in_progress'},retry_safe=True,before_retry=before_retry)
+   self.assertEqual(run.call_count,1)
+
+ def test_retry_safe_check_updates_are_bounded(self):
+  import subprocess
+  from unittest.mock import patch
+  with patch('ci_tier_artifacts.subprocess.run',return_value=subprocess.CompletedProcess([],1,b'',b'HTTP 503')) as run,patch('ci_tier_artifacts.time.sleep'):
+   with self.assertRaisesRegex(RuntimeError,'after 6 attempts'):GitHubAPI('repo').request('check-runs/7','PATCH',{'status':'completed'},retry_safe=True)
+   self.assertEqual(run.call_count,6)
+
+ def test_unsafe_registration_cannot_opt_into_unknown_outcome_replay(self):
+  from unittest.mock import patch
+  with patch('ci_tier_artifacts.subprocess.run') as run:
+   with self.assertRaisesRegex(ValueError,'PATCH'):GitHubAPI('repo').request('check-runs','POST',{'name':'test'},retry_safe=True)
+   run.assert_not_called()
+
+ def test_failed_api_diagnostic_is_bounded_and_redacts_token(self):
+  import subprocess
+  from unittest.mock import patch
+  token='private-token-sentinel'
+  failure=subprocess.CompletedProcess([],1,b'',('HTTP 422 invalid status '+token+' '+'x'*2000).encode())
+  with patch('ci_tier_artifacts.subprocess.run',return_value=failure):
+   with self.assertRaises(RuntimeError) as error:GitHubAPI('repo',token=token).request('check-runs/7','PATCH')
+   self.assertIn('HTTP 422',str(error.exception))
+   self.assertNotIn(token,str(error.exception))
+   self.assertLess(len(str(error.exception)),1200)
+
 if __name__=='__main__':unittest.main()

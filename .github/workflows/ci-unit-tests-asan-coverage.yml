@@ -185,7 +185,9 @@ jobs:
         flags: unit-tests
         name: unit-tests-asan-coverage-${{ matrix.tier }}
         use_oidc: true
+        root_dir: proxysql
         disable_search: true
+        disable_file_fixes: true
         plugins: noop
         fail_ci_if_error: true
         verbose: true
@@ -204,7 +206,9 @@ jobs:
         flags: unit-tests
         name: unit-tests-asan-coverage-${{ matrix.tier }}
         use_oidc: true
+        root_dir: proxysql
         disable_search: true
+        disable_file_fixes: true
         plugins: noop
         fail_ci_if_error: true
         verbose: true
@@ -223,7 +227,9 @@ jobs:
         flags: unit-tests
         name: unit-tests-asan-coverage-${{ matrix.tier }}
         use_oidc: true
+        root_dir: proxysql
         disable_search: true
+        disable_file_fixes: true
         plugins: noop
         fail_ci_if_error: true
         verbose: true
