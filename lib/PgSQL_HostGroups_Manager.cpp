@@ -56,46 +56,6 @@ std::unique_ptr<SQLite3_result> pgsql_desired_rows(
 	return result;
 }
 
-bool same_server_hostgroup_claims(const std::vector<ProxySQL_ServerHostgroupClaim>& left,
-	const std::vector<ProxySQL_ServerHostgroupClaim>& right) {
-	return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin(),
-		[](const ProxySQL_ServerHostgroupClaim& lhs, const ProxySQL_ServerHostgroupClaim& rhs) {
-			return lhs.writer_hostgroup == rhs.writer_hostgroup &&
-				lhs.reader_hostgroup == rhs.reader_hostgroup;
-		});
-}
-
-std::string pgsql_active_replication_hostgroups_cte(
-	const std::vector<ProxySQL_ServerHostgroupClaim>& claims) {
-	std::string query =
-		"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
-		"SELECT writer_hostgroup,reader_hostgroup,check_type FROM pgsql_replication_hostgroups";
-	if (!claims.empty()) {
-		query += " UNION ALL SELECT column1,column2,'read_only' FROM (VALUES ";
-		for (size_t index = 0; index < claims.size(); ++index) {
-			if (index != 0) query += ",";
-			query += "(" + std::to_string(claims[index].writer_hostgroup) + "," +
-				std::to_string(claims[index].reader_hostgroup) + ")";
-		}
-		query += ")";
-	}
-	query += ") ";
-	return query;
-}
-
-class ScopedPgSQLHostgroupLock {
-public:
-	explicit ScopedPgSQLHostgroupLock(PgSQL_HostGroups_Manager* manager) : manager_(manager) {
-		manager_->wrlock();
-	}
-	~ScopedPgSQLHostgroupLock() { manager_->wrunlock(); }
-	ScopedPgSQLHostgroupLock(const ScopedPgSQLHostgroupLock&) = delete;
-	ScopedPgSQLHostgroupLock& operator=(const ScopedPgSQLHostgroupLock&) = delete;
-
-private:
-	PgSQL_HostGroups_Manager* manager_;
-};
-
 } // namespace
 #endif
 
@@ -1259,20 +1219,12 @@ void PgSQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
  * IMPORTANT: Make sure wrlock() is called before calling this method.
  * 
 */
-bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_context) {
+bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
-#ifdef PROXYSQL40
-	auto active_claims = proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql);
-	const bool server_module_claims_changed =
-		!same_server_hostgroup_claims(active_claims, hgsm_server_module_claims_);
-#else
-	const bool server_module_claims_changed = false;
-#endif
-
-	const bool config_changed = commit_context && (
+	const bool config_changed =
 		hgsm_pgsql_servers_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS] ||
-		hgsm_pgsql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS]);
-	if (config_changed || server_module_claims_changed)
+		hgsm_pgsql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS];
+	if (config_changed)
 	{
 		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - pgsql_servers { old: 0x%lX, new: 0x%lX }, pgsql_replication_hostgroups { old:0x%lX, new:0x%lX }\n",
 			hgsm_pgsql_servers_checksum, table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS],
@@ -1283,24 +1235,16 @@ bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_con
 		int affected_rows = 0;
 		SQLite3_result* resultset = NULL;
 
-		std::string query;
-#ifdef PROXYSQL40
-		query = pgsql_active_replication_hostgroups_cte(active_claims);
-#endif
-		query += "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
-			"active_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 "
+		const char* query =
+			"SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
+			"pgsql_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 "
 			"UNION "
 			"SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
-			"active_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 "
+			"pgsql_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 "
 			"ORDER BY hostname, port";
-#ifndef PROXYSQL40
-		query.replace(0, 0,
-			"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
-			"SELECT writer_hostgroup,reader_hostgroup,check_type FROM pgsql_replication_hostgroups) ");
-#endif
 
 		const bool query_ok = mydb->execute_statement(
-			query.c_str(), &error, &cols, &affected_rows, &resultset);
+			query, &error, &cols, &affected_rows, &resultset);
 		if (!query_ok || error != nullptr || resultset == nullptr) {
 			proxy_error("Unable to rebuild PostgreSQL hostgroup server mapping: %s\n",
 				error != nullptr ? error : "query returned no result");
@@ -1349,48 +1293,10 @@ bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_con
 		}
 		delete resultset;
 
-		if (commit_context) {
-			hgsm_pgsql_servers_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS];
-			hgsm_pgsql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS];
-		}
-#ifdef PROXYSQL40
-		hgsm_server_module_claims_ = std::move(active_claims);
-#endif
+		hgsm_pgsql_servers_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS];
+		hgsm_pgsql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS];
 	}
 	return true;
-}
-
-SQLite3_result* PgSQL_HostGroups_Manager::get_read_only_servers(char** error) {
-	char* local_error = nullptr;
-	char** error_target = error == nullptr ? &local_error : error;
-#ifdef PROXYSQL40
-	ScopedServerDiscoveryProtocolLock protocol_lock(ProxySQL_ServerProtocol::pgsql);
-	ScopedPgSQLHostgroupLock hostgroup_lock(this);
-	std::string query = pgsql_active_replication_hostgroups_cte(
-		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql));
-#else
-	std::string query =
-		"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
-		"SELECT writer_hostgroup,reader_hostgroup,check_type FROM pgsql_replication_hostgroups) ";
-#endif
-	query += "SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup "
-		"FROM pgsql_servers JOIN active_replication_hostgroups "
-		"ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup "
-		"WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
-#ifdef PROXYSQL40
-	int columns = 0;
-	int affected_rows = 0;
-	SQLite3_result* result = nullptr;
-	mydb->execute_statement(query.c_str(), error_target, &columns, &affected_rows, &result);
-#else
-	SQLite3_result* result = execute_query(const_cast<char*>(query.c_str()), error_target);
-#endif
-	if (result == nullptr) result = new SQLite3_result(6);
-	if (error == nullptr && local_error != nullptr) {
-		proxy_error("Error enumerating read-only monitor servers: %s\n", local_error);
-		free(local_error);
-	}
-	return result;
 }
 
 /**
@@ -3759,14 +3665,7 @@ void PgSQL_HostGroups_Manager::read_only_action_v2(
 	bool update_pgsql_servers_table = false;
 
 	unsigned long long curtime1 = monotonic_time();
-#ifdef PROXYSQL40
-	ScopedServerDiscoveryProtocolLock protocol_lock(ProxySQL_ServerProtocol::pgsql);
-#endif
 	wrlock();
-	if (!update_hostgroup_manager_mappings(false)) {
-		wrunlock();
-		return;
-	}
 	for (const auto& server : pgsql_servers) {
 		bool is_writer = false;
 		const std::string& hostname = std::get<PgSQL_READ_ONLY_SERVER_T::PG_ROS_HOSTNAME>(server);

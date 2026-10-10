@@ -1879,7 +1879,6 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 	const bool committed = transaction.commit(std::move(snapshot), false);
 	assert(committed);
 	if (!committed) { error = "managed discovery generation commit failed"; return false; }
-	proxysql_request_server_read_only_monitor(protocol);
 	error.clear();
 	return true;
 }

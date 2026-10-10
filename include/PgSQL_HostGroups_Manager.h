@@ -521,10 +521,6 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 *   and 'hostgroup_server_mapping' should be rebuild.
 	 */
 	uint64_t hgsm_pgsql_replication_hostgroups_checksum = 0;
-#ifdef PROXYSQL40
-	// Exact affiliated-module claims used to invalidate the derived role map.
-	std::vector<ProxySQL_ServerHostgroupClaim> hgsm_server_module_claims_ {};
-#endif
 
 	std::mutex PgSQL_Servers_SSL_Params_map_mutex;
 	std::unordered_map<std::string, PgSQLServers_SslParams> PgSQL_Servers_SSL_Params_map;
@@ -866,7 +862,6 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 
 	void replication_lag_action_inner(PgSQL_HGC *, const char*, unsigned int, int);
 	void replication_lag_action(const std::list<replication_lag_server_t>& pgsql_servers);
-	SQLite3_result* get_read_only_servers(char** error = nullptr);
 //	void read_only_action(char *hostname, int port, int read_only);
 	void read_only_action_v2(const std::list<read_only_server_t>& pgsql_servers, bool writer_is_also_reader);
 	unsigned int get_servers_table_version();
@@ -894,15 +889,9 @@ private:
 		bool only_commit_runtime_pgsql_servers, bool update_version);
 	void finish_commit(unsigned long long started_at);
 	/**
-	 * @brief Rebuilds 'hostgroup_server_mapping' when its inputs changed.
-	 * @param commit_context true when called while installing configuration (commit or an
-	 *   equivalent table regeneration that refreshed 'table_resultset_checksum'). Only then may the
-	 *   'hgsm_*_checksum' members be advanced to the configuration checksums. Monitor actions
-	 *   ('read_only_action_v2') pass false: they rebuild only for server-module claim changes and
-	 *   leave 'hgsm_*_checksum' untouched, because those actions store the runtime checksum there as
-	 *   the signal that runtime diverged from configuration and the next commit must rebuild.
+	 * @brief Rebuilds 'hostgroup_server_mapping' when its explicit replication inputs changed.
 	 */
-	bool update_hostgroup_manager_mappings(bool commit_context = true);
+	bool update_hostgroup_manager_mappings();
 	uint64_t get_pgsql_servers_checksum(SQLite3_result* runtime_pgsql_servers = nullptr);
 	uint64_t get_pgsql_servers_v2_checksum(SQLite3_result* incoming_pgsql_servers_v2 = nullptr);
 };
