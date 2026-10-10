@@ -9,6 +9,37 @@
 #include "setparser_test_common.h"
 #include "Query_Processor_ParserSQL.h"
 
+static void free_parser_result(SQP_par_t& qp) {
+	// Match query_parser_free(): short digests belong to qp, not the heap.
+	if (qp.digest_text != qp.buf) free(qp.digest_text);
+	free(qp.first_comment);
+	free(qp.query_prefix);
+	qp.digest_text = qp.first_comment = qp.query_prefix = NULL;
+}
+
+static void test_digest_storage(const char* dialect,
+	void (*initialize)(SQP_par_t*, const char*, int)) {
+	std::string long_query = "SELECT ";
+	for (int i = 0; i < QUERY_DIGEST_BUF; ++i) {
+		if (i) long_query += ", ";
+		long_query += "col" + std::to_string(i);
+	}
+	long_query += " FROM t";
+
+	for (bool heap : {false, true}) {
+		const std::string query = heap ? long_query : "SELECT col0 FROM t WHERE id = 42";
+		const std::string expected = heap ? long_query : "SELECT col0 FROM t WHERE id = ?";
+		SQP_par_t qp {};
+		initialize(&qp, query.c_str(), static_cast<int>(query.size()));
+		ok(qp.digest_text && (qp.digest_text == qp.buf) == !heap,
+			"%s digest uses %s storage", dialect, heap ? "heap" : "inline");
+		ok(qp.digest_text && expected == qp.digest_text,
+			"%s %s digest preserves normalized SQL", dialect, heap ? "long" : "short");
+		ok(qp.digest != 0, "%s %s digest has a hash", dialect, heap ? "long" : "short");
+		free_parser_result(qp);
+	}
+}
+
 static const char* test_queries[] = {
 	"SELECT * FROM users WHERE id = 1",
 	"SELECT a, b FROM t1 JOIN t2 ON t1.id = t2.id WHERE t1.x > 5",
@@ -33,7 +64,7 @@ static const char* test_queries[] = {
 int main(int argc, char** argv) {
 	int count = 0;
 	for (int i = 0; test_queries[i]; i++) count++;
-	plan(count * 3);
+	plan(count * 3 + 12);
 
 	for (int i = 0; test_queries[i]; i++) {
 		SQP_par_t qp;
@@ -52,10 +83,11 @@ int main(int argc, char** argv) {
 			ok(false, "Query %d: digest generated (FAILED)", i);
 		}
 
-		free(qp.digest_text); // NOSONAR: C-allocated by digest engine
-		free(qp.first_comment); // NOSONAR
-		free(qp.query_prefix); // NOSONAR
+		free_parser_result(qp);
 	}
+
+	test_digest_storage("MySQL", parsersql_digest_init_mysql);
+	test_digest_storage("PostgreSQL", parsersql_digest_init_pgsql);
 
 	return exit_status();
 }

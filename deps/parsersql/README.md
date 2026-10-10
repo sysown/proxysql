@@ -107,6 +107,21 @@ Reasons:
 
 Significant audits / bumps:
 
+- **v1.1.0 (2026-10-10)** — Expands native PostgreSQL and MySQL grammar,
+  including structured transaction starts, table DDL and query sources;
+  adds AST traversal, cloning, replacement and parameterization APIs; and
+  improves large IN-list parsing. Also preserves source spans during
+  canonicalization and rejects expression-valued PostgreSQL generic SET
+  assignments, including malformed `search_path` values.
+  ([Release notes](https://github.com/ProxySQL/ParserSQL/releases/tag/v1.1.0),
+  [SET regression fix](https://github.com/ProxySQL/ParserSQL/pull/70))
+  The archive is generated with the command above from upstream commit
+  `a123f6e94dff79f0823909401cc7a3ef4eff9e56`, with SHA-256
+  `2d14704f15f94ce707e6349e77a1f34dc99349c83831d7038dc4adda3ca29c66`.
+  AST-based digest text/hashes can change as emission and grammar improve;
+  consumers should review persisted digest-based rules when upgrading.
+  Parsing support does not imply query-engine execution support or complete
+  PostgreSQL/MySQL grammar coverage.
 - **v1.0.11 (2026-08-12)** — Adds lossless literal and user-variable AST
   nodes, full-input coverage for MySQL parsing, and user-variable usage
   classification. ProxySQL's typed SET adapter can therefore preserve exact
