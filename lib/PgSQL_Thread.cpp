@@ -3438,13 +3438,16 @@ void PgSQL_Thread::run() {
 			const bool b_rearm = (curtime >= last_b_rearm_us + 50000);
 			if (b_rearm) {
 				last_b_rearm_us = curtime;
-				waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
-					unsigned guard = 0;
-					for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+				waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
+					// Bound the scan by the real list size: a fixed cap would
+					// permanently skip the tail (never re-armed, never noticing a
+					// client disconnect) once a list grew past it.
+					for (auto *n = head; n; n = n->next) {
 						auto *sess = static_cast<PgSQL_Session*>(n->session);
 						if (sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0)
 							mypolls.add(POLLIN, sess->client_myds->fd, sess->client_myds, curtime);
 					}
+					(void)waiter_count;
 				});
 			}
 #endif // PROXYSQL31
@@ -3573,12 +3576,15 @@ void PgSQL_Thread::run() {
 		ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
 #ifdef PROXYSQL31
 		if (last_b_rearm_us == pre_poll_time) {
-			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
-				unsigned guard = 0;
-				for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
+				// Bound the scan by the real list size: a fixed cap would
+				// permanently skip the tail (never dropped from the poll set)
+				// once a list grew past it.
+				for (auto *n = head; n; n = n->next) {
 					auto *sess = static_cast<PgSQL_Session*>(n->session);
 					drop_from_poll(sess->client_myds);
 				}
+				(void)waiter_count;
 			});
 		}
 #endif // PROXYSQL31
@@ -4257,10 +4263,13 @@ void PgSQL_Thread::process_all_sessions() {
 	}
 #ifdef PROXYSQL31
 	if (!waiter_lists.empty()) {
-		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head) {
+		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head, size_t waiter_count) {
 			(void)hid;
-			unsigned walk_guard = 0;
-			for (PgSQL_Waiter_Node *n = head; n && walk_guard < 100000; ++walk_guard) {
+			// No fixed visit cap: this walk only ever removes nodes (leave_waiter /
+			// session deletion), so it terminates naturally, and capping it would
+			// permanently starve the tail of a large list -- those waiters would
+			// never be retried even when the pool has free connections again.
+			for (PgSQL_Waiter_Node *n = head; n;) {
 				PgSQL_Waiter_Node *next = n->next;
 				auto *sess = static_cast<PgSQL_Session*>(n->session);
 				if (sess->pause_until > curtime && !sess->killed) {
@@ -4301,6 +4310,7 @@ void PgSQL_Thread::process_all_sessions() {
 				}
 				n = next;
 			}
+			(void)waiter_count;
 		});
 	}
 

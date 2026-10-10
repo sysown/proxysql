@@ -59,7 +59,7 @@ int main() {
 	int seen = 0;
 	unsigned seen_hid = 0;
 	PgSQL_Waiter_Node *seen_head = nullptr;
-	lists3.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head) {
+	lists3.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head, size_t waiter_count) {
 		seen++;
 		seen_hid = hid;
 		seen_head = head;
@@ -85,8 +85,9 @@ int main() {
 	lists4.push_back(e1);
 	lists4.push_back(e2);
 	lists4.push_back(e3);
-	lists4.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *h) {
+	lists4.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *h, size_t waiter_count) {
 		(void)hid;
+		(void)waiter_count;
 		while (h) {
 			PgSQL_Waiter_Node *nxt = h->next;
 			lists4.unlink(*h);
