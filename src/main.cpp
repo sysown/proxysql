@@ -2011,19 +2011,24 @@ void ProxySQL_Main_init_phase4___shutdown() {
 	cpu_timer t;
 	// Stop accepting admin work and wait for all detached admin clients before
 	// the modules used by admin queries are joined or destroyed.
-	GloAdmin->shutdown_threads();
+GloAdmin->shutdown_threads();
 	// Admin cannot restart HTTP after this point. Drain web handlers while
 	// the AWS service and all core runtime dependencies are still alive.
 	UnloadPlugins();
-#ifdef PROXYSQL40
-	if (managed_startup_exit_code >= 0) {
-		// A one-shot installation or failed recovery exits before
-		// start_listeners(), which normally releases these existing startup
-		// waits. Release them for teardown without opening any listeners.
+	// Every worker spins in run_BootstrapListener() while this flag is true and
+	// that loop never consults 'shutdown'. Reaching teardown before
+	// start_listeners() ran (listener-conflict validation is the only such path;
+	// a managed one-shot/recovery failure sets managed_startup_exit_code first)
+	// would otherwise leave shutdown_threads() pthread_join()-ing threads that
+	// can never exit, wedging the process until SIGKILL. Clearing is safe
+	// unconditionally: once listeners exist the flag is already false, and
+	// clearing it never opens a listener.
+	if (GloMTH) {
 		GloMTH->bootstrapping_listeners = false;
+	}
+	if (GloPTH) {
 		GloPTH->bootstrapping_listeners = false;
 	}
-#endif
 	ProxySQL_Main_join_all_threads();
 #ifdef PROXYSQL40
 	// The locality manager can retain a provider lease between refreshes.
