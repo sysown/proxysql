@@ -4298,6 +4298,29 @@ void * MySQL_Protocol::Query_String_to_packet(uint8_t sid, std::string *s, unsig
 //
 // returns stmt_meta, or a new one
 // See https://dev.mysql.com/doc/internals/en/com-stmt-execute.html for reference
+/**
+ * @brief Tells whether the server accepts a COM_STMT_SEND_LONG_DATA value for a
+ *   parameter of the given declared type.
+ * @details MySQL and MariaDB accept long data only for string and blob
+ *   parameters, and reject the execution for any other type (VARCHAR is
+ *   accepted by MariaDB, rejected by MySQL; it is forwarded by length, so it is
+ *   allowed).
+ */
+static bool is_long_data_param_type(enum enum_field_types buffer_type) {
+	switch (buffer_type) {
+		case MYSQL_TYPE_STRING:
+		case MYSQL_TYPE_VAR_STRING:
+		case MYSQL_TYPE_VARCHAR:
+		case MYSQL_TYPE_TINY_BLOB:
+		case MYSQL_TYPE_MEDIUM_BLOB:
+		case MYSQL_TYPE_LONG_BLOB:
+		case MYSQL_TYPE_BLOB:
+			return true;
+		default:
+			return false;
+	}
+}
+
 stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 	PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta,
 	const unsigned char *effective_types
@@ -4417,6 +4440,26 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 
 				if (new_params_bound_flag) p+=2;
 
+			}
+		}
+
+		// Reject long data sent for a parameter that is not a string or a blob,
+		// as the server does. Forwarding it with the declared type would make the
+		// client library read sizeof(type) bytes from the long data buffer and
+		// send them as a binary value of that type (e.g. a whole MYSQL_TIME read
+		// from a shorter buffer). Checked before any bind buffer is allocated.
+		for (i=0;i<num_params;i++) {
+			if (is_long_data_param_type(binds[i].buffer_type)) {
+				continue;
+			}
+			unsigned long *_l = NULL;
+			my_bool *_is_null = NULL;
+			if ((*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null)) {
+				// Required to prevent double-free in dtor
+				if (ret->pkt) { ret->pkt = NULL; }
+				// Only free when metadata not obtained from cache (i.e. first execute)
+				if (!*stmt_meta) { delete ret; }
+				return NULL;
 			}
 		}
 
