@@ -9254,8 +9254,6 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 			// Every failure below must leave a reason in 'servers_load_veto':
 			// it is the only channel the Admin session and the Cluster puller
 			// use to tell "installed" from "silently not installed".
-			// A failed reservation is a REAL installation failure, not a module veto.
-			servers_load_install_failed[0] = true;
 			if (!runtime_install) {
 				if (servers_load_veto[0].empty()) {
 					servers_load_veto[0] = install_error.empty()
@@ -9560,7 +9558,6 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 			// Every failure below must leave a reason in 'servers_load_veto':
 			// it is the only channel the Admin session and the Cluster puller
 			// use to tell "installed" from "silently not installed".
-			servers_load_install_failed[1] = true;
 			if (!runtime_install) {
 				if (servers_load_veto[1].empty()) {
 					servers_load_veto[1] = install_error.empty()
