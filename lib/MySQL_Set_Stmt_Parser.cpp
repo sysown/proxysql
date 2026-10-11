@@ -5,6 +5,7 @@
 #include <map>
 #include <cassert>
 #include <utility> // for std::pair
+#include <cctype>
 //#ifdef PARSERDEBUG
 #include <iostream>
 //#endif
@@ -455,15 +456,30 @@ std::map<std::string,std::vector<std::string>> MySQL_Set_Stmt_Parser::parse2() {
 
 	std::map<std::string,std::vector<std::string>> result;
 
-	// Regex used:
-	// SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))
-	const std::string pattern="(|SESSION) *TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))";
+	// Same grammar as match_regexes[2] in MySQL_Thread (the digest matched
+	// before calling parse2()), applied to the query without its leading SET.
+	// The digest collapses whitespace, the query does not: accept any whitespace.
+	const std::string pattern="(|SESSION)\\s*TRANSACTION\\s+(?:(?:(ISOLATION\\s+LEVEL)\\s+(REPEATABLE\\s+READ|READ\\s+COMMITTED|READ\\s+UNCOMMITTED|SERIALIZABLE))|(?:(READ)\\s+(WRITE|ONLY)))";
 	re2::RE2 re(pattern, *opt2);
+	// "READ\n COMMITTED" -> "READ COMMITTED"
+	auto collapse_spaces = [](std::string& value) {
+		std::string out;
+		for (char c : value) {
+			if (isspace(static_cast<unsigned char>(c))) {
+				if (!out.empty() && out.back() != ' ') out.push_back(' ');
+			} else {
+				out.push_back(c);
+			}
+		}
+		value.swap(out);
+	};
 	std::string var;
 	std::string value1, value2, value3, value4, value5;
 	re2::StringPiece input(query);
 	while (re2::RE2::Consume(&input, re, &value1, &value2, &value3, &value4, &value5)) {
 		std::vector<std::string> op;
+		collapse_spaces(value2);
+		collapse_spaces(value3);
 #ifdef DEBUG
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: v1='%s' , v2='%s' , v3='%s' , v4='%s' , v5='%s'\n", value1.c_str(), value2.c_str(), value3.c_str(), value4.c_str(), value5.c_str());
 #endif // DEBUG
@@ -482,6 +498,10 @@ std::map<std::string,std::vector<std::string>> MySQL_Set_Stmt_Parser::parse2() {
 		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
 		result[key] = op;
 	}
+	// Anything left (e.g. a second characteristic after a comma) was not parsed:
+	// report nothing rather than a subset of the statement.
+	while (!input.empty() && isspace(static_cast<unsigned char>(input[0]))) input.remove_prefix(1);
+	if (!input.empty()) result.clear();
 
 	delete opt2;
 	return result;
