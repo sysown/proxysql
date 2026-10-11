@@ -19,7 +19,8 @@
  *
  * And the statement scan over a digest used to find LISTEN in every statement of a
  * multi-statement Simple Query (issue #6438):
- *   - pgsql_digest_next_stmt() / pgsql_digest_has_stmt_keyword()
+ *   - pgsql_stmt_skip_lead() / pgsql_digest_next_stmt() / pgsql_digest_has_stmt_keyword()
+ *   - pgsql_text_has_word(), for the part of a digest the scan cannot follow
  */
 
 #include "tap.h"
@@ -679,17 +680,60 @@ static void test_stmt_keyword_not_found() {
 	ok(!has_listen("select ? as \"a\"\"; listen b\""), "stmt scan: nor inside one holding a doubled quote");
 	ok(!has_listen("select ? /* ; listen b */"), "stmt scan: nor inside a kept block comment");
 	ok(!has_listen("select ? /* /* */ ; listen b */"), "stmt scan: nor inside a nested kept block comment");
-	ok(!has_listen("select \"a; listen b"), "stmt scan: an unterminated quoted identifier stops the scan");
+	ok(!has_listen("select ?; /* listen */ select ?"), "stmt scan: LISTEN inside a kept comment starts no statement");
+	ok(!has_listen("select ?; /*c*/ unlisten ch"), "stmt scan: UNLISTEN behind a kept comment is not LISTEN");
 	ok(!has_listen("") && !has_listen(NULL), "stmt scan: empty and NULL digests");
 }
 
+// query_digests_keep_comment leaves a statement's leading comments in the digest; the
+// keyword is the first token past them, not the first bytes.
+static void test_stmt_keyword_behind_kept_comment() {
+	ok(has_listen("/*c*/ listen ch"), "stmt scan: a kept comment before the first statement");
+	ok(has_listen("select ?; /*c*/ listen ch"), "stmt scan: a kept comment before a later statement");
+	ok(has_listen("select ?;/*c*/listen ch"), "stmt scan: a kept comment with no spaces around it");
+	ok(has_listen("select ?; /*a*/ /*b*/ listen ch"), "stmt scan: several kept comments in a row");
+	ok(has_listen("select ?; /* /* n */ */ listen ch"), "stmt scan: a nested kept comment");
+	ok(has_listen("select ?; /*c*/ ; listen ch"), "stmt scan: an empty statement holding only a comment");
+}
+
+// A kept comment longer than FIRST_COMMENT_MAX_LENGTH reaches the digest without its
+// terminator, and nothing after it can be told apart: the keyword counts anywhere in the
+// rest as a whole word.
+static void test_stmt_keyword_after_lost_scan() {
+	ok(has_listen("/*xxx select ?; listen ch"), "stmt scan: LISTEN after an unterminated comment");
+	ok(has_listen("/*xxx listen ch"), "stmt scan: LISTEN right after an unterminated comment");
+	ok(has_listen("select ?; /*x'y listen ch"), "stmt scan: a quote inside the unterminated comment hides nothing");
+	ok(has_listen("select \"a; listen b"), "stmt scan: LISTEN after an unterminated quoted identifier");
+	ok(!has_listen("/*xxx select ?; unlisten ch"), "stmt scan: past the loss UNLISTEN is still not LISTEN");
+	ok(!has_listen("/*xxx select listener, ?"), "stmt scan: past the loss an identifier holding the word is not LISTEN");
+	ok(!has_listen("/*xxx select ?; select ?"), "stmt scan: past the loss no LISTEN, no match");
+	ok(pgsql_text_has_word("Listen", "LISTEN") && pgsql_text_has_word("a,listen*", "LISTEN"),
+		"has_word: whole word, any case, at either end of the text");
+	ok(!pgsql_text_has_word("_listen", "LISTEN") && !pgsql_text_has_word("listen$1", "LISTEN") &&
+		!pgsql_text_has_word(NULL, "LISTEN"), "has_word: not inside an identifier, not in NULL");
+}
+
 static void test_stmt_next() {
+	const char* lost = "unset";
 	const char* d = "select ?;  listen ch";
-	const char* n = pgsql_digest_next_stmt(d);
-	ok(n != NULL && strcmp(n, "listen ch") == 0,
+	const char* n = pgsql_digest_next_stmt(d, &lost);
+	ok(n != NULL && strcmp(n, "listen ch") == 0 && lost == NULL,
 		"next_stmt: returns the next statement with its leading spaces skipped");
-	ok(pgsql_digest_next_stmt(n) == NULL, "next_stmt: NULL after the last statement");
-	ok(pgsql_digest_next_stmt("select ?; ") == NULL, "next_stmt: a trailing ';' starts no statement");
+	ok(pgsql_digest_next_stmt(n, &lost) == NULL && lost == NULL, "next_stmt: NULL after the last statement");
+	ok(pgsql_digest_next_stmt("select ?; ", NULL) == NULL, "next_stmt: a trailing ';' starts no statement");
+	n = pgsql_digest_next_stmt("select ?; /* a */ --b\n listen ch", NULL);
+	ok(n != NULL && strcmp(n, "listen ch") == 0, "next_stmt: block and line comments before the statement are skipped");
+	d = "select ?; /*xx; listen ch";
+	ok(pgsql_digest_next_stmt(d, &lost) == NULL && lost == d + 10,
+		"next_stmt: an unterminated comment before the statement is reported where it starts");
+	d = "select ? /*xx; listen ch";
+	ok(pgsql_digest_next_stmt(d, &lost) == NULL && lost == d + 9,
+		"next_stmt: so is one inside the statement");
+	n = pgsql_stmt_skip_lead("  /*c*/ listen ch", &lost);
+	ok(n != NULL && strcmp(n, "listen ch") == 0 && lost == NULL, "skip_lead: the first statement past a comment");
+	ok(pgsql_stmt_skip_lead(" /*c*/ ", &lost) == NULL && lost == NULL &&
+		pgsql_stmt_skip_lead("-- only a comment", &lost) == NULL && lost == NULL,
+		"skip_lead: only comments is no statement, and nothing is lost");
 }
 
 // End to end from the client text, so a change in the digest that hides the second
@@ -709,6 +753,25 @@ static void test_stmt_keyword_through_digest() {
 	keep.keep_comment = true;
 	ok(!has_listen(digest_query("SELECT 1 /* ; LISTEN b */", keep).c_str()),
 		"stmt scan of digest: ';' inside a block comment kept by keep_comment");
+	ok(has_listen(digest_query("SELECT 1; /*c*/ LISTEN ch", keep).c_str()),
+		"stmt scan of digest: kept comment before a later LISTEN");
+	ok(has_listen(digest_query("/*c*/ LISTEN ch", keep).c_str()),
+		"stmt scan of digest: kept comment before the first statement");
+	ok(has_listen(digest_query("/* /* n */ */ LISTEN ch", keep).c_str()),
+		"stmt scan of digest: nested kept comment before LISTEN");
+	ok(!has_listen(digest_query("SELECT 1; /* LISTEN */ SELECT 2", keep).c_str()),
+		"stmt scan of digest: LISTEN only inside a kept comment");
+
+	// A kept comment over FIRST_COMMENT_MAX_LENGTH is cut, closing "*/" included.
+	const std::string long_cmt = "/*" + std::string(FIRST_COMMENT_MAX_LENGTH + 76, 'x') + "*/";
+	const std::string d_long = digest_query((long_cmt + " SELECT 1; LISTEN ch").c_str(), keep);
+	ok(d_long.find("*/") == std::string::npos,
+		"digest: a kept comment longer than FIRST_COMMENT_MAX_LENGTH loses its terminator");
+	ok(has_listen(d_long.c_str()), "stmt scan of digest: LISTEN after a kept comment cut short");
+	ok(has_listen(digest_query((long_cmt + " LISTEN ch").c_str(), keep).c_str()),
+		"stmt scan of digest: LISTEN right after a kept comment cut short");
+	ok(!has_listen(digest_query((long_cmt + " SELECT 1; SELECT 2").c_str(), keep).c_str()),
+		"stmt scan of digest: a kept comment cut short alone does not read as LISTEN");
 }
 
 // ============================================================================
@@ -716,7 +779,7 @@ static void test_stmt_keyword_through_digest() {
 // ============================================================================
 
 int main() {
-	plan(96);
+	plan(125);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -809,11 +872,13 @@ int main() {
 	test_digest_comment_between_tokens(); // 1
 	test_digest_only_comment();          // 1
 
-	// 14. Statement scan over a digest (26 tests, issue #6438)
+	// 14. Statement scan over a digest (55 tests, issue #6438)
 	test_stmt_keyword_found();           // 7
-	test_stmt_keyword_not_found();       // 10
-	test_stmt_next();                    // 3
-	test_stmt_keyword_through_digest();  // 6
+	test_stmt_keyword_not_found();       // 11
+	test_stmt_keyword_behind_kept_comment(); // 6
+	test_stmt_keyword_after_lost_scan(); // 9
+	test_stmt_next();                    // 8
+	test_stmt_keyword_through_digest();  // 14
 
 	// Total: 1 + 9 + 4 + 6 + 2 + 6 + 2 + 3 + 3 + 2 + 4 + 5 + 7 + 10 = 64
 

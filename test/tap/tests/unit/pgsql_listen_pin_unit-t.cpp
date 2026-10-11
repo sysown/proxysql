@@ -86,6 +86,24 @@ static void test_digest_last_statement_decides() {
 	ok(pin_after(true, "select ?"), "digest: an unrelated statement keeps the pin");
 }
 
+// With query_digests_keep_comment the digest keeps each statement's leading comments.
+static void test_digest_kept_comments() {
+	ok(pin_after(false, "/*c*/ listen ch"), "digest: LISTEN behind a kept comment pins");
+	ok(pin_after(false, "select ?; /*c*/ listen ch"), "digest: a later LISTEN behind a kept comment pins");
+	ok(!pin_after(true, "/*c*/ unlisten *"), "digest: UNLISTEN * behind a kept comment releases the pin");
+	ok(!pin_after(true, "unlisten /*c*/ *"), "digest: so does UNLISTEN /*c*/ *");
+	ok(!pin_after(false, "select ?; /* listen ch */ select ?"), "digest: LISTEN only inside a kept comment does not pin");
+}
+
+// A kept comment longer than FIRST_COMMENT_MAX_LENGTH is cut before its "*/". Past it the
+// statements cannot be told apart: a LISTEN anywhere pins, and nothing unpins.
+static void test_digest_lost_scan() {
+	ok(pin_after(false, "/*xxx select ?; listen ch"), "digest: LISTEN after a comment cut short pins");
+	ok(pin_after(false, "/*xxx listen ch"), "digest: LISTEN right after a comment cut short pins");
+	ok(pin_after(true, "/*xxx select ?; unlisten *"), "digest: UNLISTEN * after a comment cut short keeps the pin");
+	ok(!pin_after(false, "/*xxx select ?; select ?"), "digest: a comment cut short alone does not pin");
+}
+
 // ---------------------------------------------------------------------------
 // From the native result stream.
 // ---------------------------------------------------------------------------
@@ -146,11 +164,13 @@ static void test_command_complete_tag() {
 }
 
 int main() {
-	plan(16);
+	plan(25);
 	test_init_minimal();
 
 	test_digest_pins();                    // 5
 	test_digest_last_statement_decides();  // 7
+	test_digest_kept_comments();           // 5
+	test_digest_lost_scan();               // 4
 	test_command_complete_tag();           // 4
 
 	test_cleanup_minimal();
