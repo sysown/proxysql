@@ -505,6 +505,74 @@ static bool parsersql_is_set_transaction(const AstNode* ast) {
 }
 
 /**
+ * @brief True if @p node is a literal or a placeholder, optionally signed,
+ * parenthesized, or grouped in a row constructor.
+ */
+static bool parsersql_is_literal_expr(const AstNode* node) {
+    switch (node->type) {
+        case NodeType::NODE_LITERAL_INT:
+        case NodeType::NODE_LITERAL_FLOAT:
+        case NodeType::NODE_LITERAL_STRING:
+        case NodeType::NODE_LITERAL_NULL:
+        case NodeType::NODE_LITERAL_HEX:
+        case NodeType::NODE_LITERAL_BIT:
+        case NodeType::NODE_PLACEHOLDER:
+            return true;
+        case NodeType::NODE_UNARY_OP:
+            if (node->value_len != 1 || (node->value_ptr[0] != '-' && node->value_ptr[0] != '+')) {
+                return false;
+            }
+            [[fallthrough]];
+        case NodeType::NODE_EXPRESSION:
+        case NodeType::NODE_TUPLE:
+        case NodeType::NODE_VALUES_ROW:
+            for (const AstNode* child = node->first_child; child; child = child->next_sibling) {
+                if (!parsersql_is_literal_expr(child)) return false;
+            }
+            return true;
+        default:
+            return false;
+    }
+}
+
+/**
+ * @brief True if the DIGEST emitter would hide a non-literal expression in @p node.
+ *
+ * In DIGEST mode ParserSQL renders every IN / NOT IN list that is not a single
+ * subquery as "IN (?)", and keeps only the first row of a VALUES clause,
+ * whatever the omitted elements are. The legacy tokenizer only replaces
+ * literals. ProxySQL string-matches the digest text for routing and
+ * multiplexing decisions (LAST_INSERT_ID / @@IDENTITY routing, GET_LOCK(,
+ * user variables, ...), so hiding e.g. "IN (LAST_INSERT_ID())" or
+ * "VALUES (1),(GET_LOCK('x',1))" changed behaviour versus
+ * query_processor_parser=0 (#6428). Such statements must use the legacy
+ * tokenizer. Lists made only of literals and placeholders lose nothing.
+ */
+static bool parsersql_digest_hides_expression(const AstNode* node) {
+    // The collapsed children, if any, are always a suffix of the child list.
+    const AstNode* hidden = nullptr;
+    if (node->type == NodeType::NODE_IN_LIST) {
+        const AstNode* expr = node->first_child;
+        const AstNode* first_val = expr ? expr->next_sibling : nullptr;
+        // A single subquery is emitted in full, not collapsed.
+        if (!first_val || first_val->type != NodeType::NODE_SUBQUERY || first_val->next_sibling) {
+            hidden = first_val;
+        }
+    } else if (node->type == NodeType::NODE_VALUES_CLAUSE && node->value_len == 0) {
+        // Only the first row is emitted.
+        hidden = node->first_child ? node->first_child->next_sibling : nullptr;
+    }
+    for (const AstNode* child = hidden; child; child = child->next_sibling) {
+        if (!parsersql_is_literal_expr(child)) return true;
+    }
+    // Literal-only children cannot contain another list: search only the emitted ones.
+    for (const AstNode* child = node->first_child; child != hidden; child = child->next_sibling) {
+        if (parsersql_digest_hides_expression(child)) return true;
+    }
+    return false;
+}
+
+/**
  * @brief Normalize a complete AST, or tokenize the original SQL independently.
  *
  * Grammar coverage must not determine whether a query receives a digest. An
@@ -512,7 +580,9 @@ static bool parsersql_is_set_transaction(const AstNode* ast) {
  * the statement, so it must use the token path rather than that partial AST.
  * SET ... TRANSACTION also uses the token path, so its digest text and hash
  * are exactly those of query_processor_parser=0 (see
- * parsersql_is_set_transaction()).
+ * parsersql_is_set_transaction()). So does a statement whose IN list or
+ * additional VALUES rows hold a non-literal expression that the DIGEST
+ * emitter would collapse away (see parsersql_digest_hides_expression()).
  */
 template <Dialect D>
 static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_length,
@@ -532,7 +602,8 @@ static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_le
     auto result = parser.parse(query, query_length);
     StringRef normalized;
     if (result.status == ParseResult::OK && result.full_input && result.ast &&
-        !parsersql_is_set_transaction(result.ast)) {
+        !parsersql_is_set_transaction(result.ast) &&
+        !parsersql_digest_hides_expression(result.ast)) {
         Emitter<D> emitter(parser.arena(), EmitMode::DIGEST);
         emitter.emit(result.ast);
         normalized = emitter.result();
