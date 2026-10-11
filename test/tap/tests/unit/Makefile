@@ -609,6 +609,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	proxy_protocol_unit-t \
 	pgsql_txn_state_unit-t \
 	pgsql_midbatch_reset_refused_unit-t \
+	pgsql_local_error_txn_state_unit-t \
 	pgsql_conn_liveness_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \

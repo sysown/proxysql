@@ -540,6 +540,7 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-native_portal_close_after_cache_hit-t \
 	pgsql-native_extq_orphaned_sync-t \
 	pgsql-discard_all_txn_block-t \
+	pgsql-local_error_txn_state-t \
 	pgsql-reg_test_6345_admin_extended_query_sync-t \
 	pgsql-reg_test_6349_auth_anti_enumeration-t \
 	test_ffto_pgsql_pipeline-t \
@@ -652,4 +653,4 @@ parsersql_digest_test-t: parsersql_digest_test
 	ln -fs parsersql_digest_test parsersql_digest_test-t
 
 # These tests query the target server capability or active backend mode.
-pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t pgsql-reg_test_6375_offline_retry-t pgsql-extended_query_protocol_test-t pgsql-unsupported_feature_test-t: pgsql_native_tier.h
+pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-local_error_txn_state-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t pgsql-reg_test_6375_offline_retry-t pgsql-extended_query_protocol_test-t pgsql-unsupported_feature_test-t: pgsql_native_tier.h
