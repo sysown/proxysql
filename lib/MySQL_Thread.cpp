@@ -7264,7 +7264,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 								MySrvC *mysrvc = c->parent;
 								std::vector<MySrvC *>::iterator it;
 								it = find(parents.begin(), parents.end(), mysrvc);
-								if (it != parents.end()) {
+								if (it == parents.end()) {
 									// we didn't exclude this server (yet?)
 									bool gtid_found = false;
 									gtid_found = MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
