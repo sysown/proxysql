@@ -2559,14 +2559,13 @@ __implicit_sync:
 								// query that later lands on a libpq connection.
 								// Every statement of the digest is checked, as a Simple Query can
 								// carry several and `SELECT 1; LISTEN ch` subscribes too (issue
-								// #6438). Without a digest only the first keyword of the raw text is
-								// trusted: comments and literals there can hold any ';'. Either way
-								// leading comments are skipped first: the digest keeps them with
-								// query_digests_keep_comment, and the raw text always has them.
-								const char* listen_dg = CurrentQuery.get_digest_text();
-								listen_pending = (listen_dg && *listen_dg) ?
-									pgsql_digest_has_stmt_keyword(listen_dg, "LISTEN") :
-									pgsql_stmt_first_keyword_is(pgsql_stmt_skip_lead(query_ptr, NULL), "LISTEN");
+								// #6438). Without a digest, or with one that may have been cut at
+								// query_digests_max_query_length before a trailing statement, a query
+								// holding the word is digested in full for this check. Leading
+								// comments are skipped: the digest keeps them with
+								// query_digests_keep_comment.
+								listen_pending = pgsql_query_has_stmt_keyword(CurrentQuery.get_digest_text(),
+									query_ptr, "LISTEN");
 								if (listen_pending && listen_can_be_supported() == false) {
 									listen_pending = false;
 									handler_refuse_listen(&pkt);
@@ -7497,10 +7496,8 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 	// Recomputed per statement; see the simple-query path. PostgreSQL rejects a Parse holding
 	// more than one statement, but the digest still goes through the same scan: it skips the
 	// comments kept by query_digests_keep_comment, including one cut short of its terminator.
-	const char* listen_dg = CurrentQuery.get_digest_text();
-	listen_pending = (listen_dg && *listen_dg) ?
-		pgsql_digest_has_stmt_keyword(listen_dg, "LISTEN") :
-		pgsql_stmt_first_keyword_is(pgsql_stmt_skip_lead(parse_data.query_string, NULL), "LISTEN");
+	listen_pending = pgsql_query_has_stmt_keyword(CurrentQuery.get_digest_text(),
+		parse_data.query_string, "LISTEN");
 	if (listen_pending && listen_can_be_supported() == false) {
 		listen_pending = false;
 		proxy_warning("LISTEN command is not supported\n");

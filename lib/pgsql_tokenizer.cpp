@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <assert.h>
+#include <limits.h>
 #include "c_tokenizer.h"
 
 extern __thread int  pgsql_thread___query_digests_max_query_length;
@@ -3438,4 +3439,38 @@ bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword) {
 	// well, since `lost` points at its opening "/*". Refusing or pinning a query that only
 	// mentions it is the safe side of being wrong.
 	return pgsql_text_has_word(lost, keyword);
+}
+
+char* pgsql_query_full_digest(const char* query) {
+	if (query == NULL) return NULL;
+	const size_t len = strlen(query);
+	if (len > INT_MAX) return NULL;
+	options opts;
+	get_pgsql_options(&opts);
+	// As long as the query: nothing is cut. Comments are not needed to find statements.
+	opts.max_query_length = (int)len;
+	opts.keep_comment = false;
+	char* fst_cmnt = NULL;
+	char* digest = pgsql_query_digest_and_first_comment(query, (int)len, &fst_cmnt, NULL, &opts);
+	free(fst_cmnt);
+	return digest;
+}
+
+bool pgsql_query_has_stmt_keyword(const char* digest, const char* query, const char* keyword) {
+	if (digest != NULL && *digest != '\0') {
+		// The digest buffer is as long as the query up to query_digests_max_query_length, so
+		// only the digest of a longer query can have been cut short.
+		if (query == NULL || strnlen(query, (size_t)pgsql_thread___query_digests_max_query_length + 1) <=
+			(size_t)pgsql_thread___query_digests_max_query_length) {
+			return pgsql_digest_has_stmt_keyword(digest, keyword);
+		}
+	}
+	// No digest, or one that may miss trailing statements. Only a query holding the word at
+	// all is digested in full, so the common case costs one scan of the text.
+	if (pgsql_text_has_word(query, keyword) == false) return false;
+	char* full = pgsql_query_full_digest(query);
+	if (full == NULL) return true; // cannot be told apart: fail closed
+	const bool found = pgsql_digest_has_stmt_keyword(full, keyword);
+	free(full);
+	return found;
 }

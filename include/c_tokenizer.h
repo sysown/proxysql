@@ -88,6 +88,20 @@ bool pgsql_text_has_word(const char* text, const char* keyword);
 // is taken for LISTEN (fail-closed), not only a LISTEN that follows the cut comment.
 bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword);
 
+// Digest of the whole of `query` (NUL-terminated), with the current query_digests_* options
+// except that nothing is cut at query_digests_max_query_length and comments are dropped.
+// For the rare checks that must see every statement where the session has no digest, or one
+// that may be cut. The caller frees the result; NULL for a NULL or oversized query.
+char* pgsql_query_full_digest(const char* query);
+
+// Whether any statement of a query begins with `keyword`, the way
+// pgsql_digest_has_stmt_keyword() tells it, for the LISTEN gate. `digest` is the session's
+// digest of `query` and is used as is unless it is missing (pgsql-query_digests off) or the
+// query is longer than query_digests_max_query_length -- then the digest can end before a
+// trailing statement, so the raw query is digested in full instead; only when it holds the
+// keyword as a word at all, so other queries pay one scan of their text.
+bool pgsql_query_has_stmt_keyword(const char* digest, const char* query, const char* keyword);
+
 // For TAP Test
 char* mysql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
 char* mysql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
