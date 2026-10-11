@@ -3468,6 +3468,10 @@ bool pgsql_query_has_stmt_keyword(const char* digest, const char* query, const c
 	// No digest, or one that may miss trailing statements. Only a query holding the word at
 	// all is digested in full, so the common case costs one scan of the text.
 	if (pgsql_text_has_word(query, keyword) == false) return false;
+	// The first statement is read from the text itself as well: the digest tokenizer takes
+	// the "*/" + "/" of a nested comment closing right before the keyword ("/*/*n*/*/LISTEN")
+	// for the opening of another comment and digests the query to nothing.
+	if (pgsql_stmt_first_keyword_is(pgsql_stmt_skip_lead(query, NULL), keyword)) return true;
 	char* full = pgsql_query_full_digest(query);
 	if (full == NULL) return true; // cannot be told apart: fail closed
 	const bool found = pgsql_digest_has_stmt_keyword(full, keyword);
