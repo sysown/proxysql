@@ -19,11 +19,14 @@
 // and then the temporal-type loop freed it a second time.
 //
 // libmariadb allows mysql_stmt_send_long_data() on a parameter of any type,
-// so the path is reachable with a standard connector. The test repeatedly
-// executes a statement whose DATETIME parameter is sent as long data, then
-// verifies that ProxySQL still serves new connections, text queries and
-// prepared statements. It also executes a DATETIME parameter sent inside the
-// COM_STMT_EXECUTE packet, whose MYSQL_TIME buffer must still be freed.
+// so the path is reachable with a standard connector. Like the server,
+// ProxySQL now rejects long data for a parameter that is not a string or a
+// blob (see reg_test_stmt_long_data_param_type-t). The test repeatedly
+// executes a statement whose DATETIME parameter is sent as long data, expects
+// every execution to be rejected, then verifies that ProxySQL still serves new
+// connections, text queries and prepared statements. It also executes a
+// DATETIME parameter sent inside the COM_STMT_EXECUTE packet, whose MYSQL_TIME
+// buffer must still be freed.
 
 namespace {
 
@@ -93,9 +96,10 @@ bool consume_result(MYSQL_STMT* stmt) {
  * @brief Executes the statement once with a DATETIME parameter.
  * @param as_long_data Send the value via COM_STMT_SEND_LONG_DATA instead of
  *   inside the COM_STMT_EXECUTE packet.
- * @return true if the execution succeeded and its result was consumed.
+ * @return 0 if the execution succeeded and its result was consumed, the
+ *   statement errno otherwise (1 if it is not set).
  */
-bool execute_datetime(MYSQL_STMT* stmt, bool as_long_data) {
+unsigned int execute_datetime(MYSQL_STMT* stmt, bool as_long_data) {
 	// ProxySQL forwards the long data buffer to the backend as the bind buffer
 	// of the declared type, so send a full MYSQL_TIME.
 	MYSQL_TIME ts {};
@@ -113,17 +117,16 @@ bool execute_datetime(MYSQL_STMT* stmt, bool as_long_data) {
 	bind.buffer_length = sizeof(ts);
 	if (mysql_stmt_bind_param(stmt, &bind)) {
 		diag("mysql_stmt_bind_param failed: %s", mysql_stmt_error(stmt));
-		return false;
+		return mysql_stmt_errno(stmt) ? mysql_stmt_errno(stmt) : 1;
 	}
 	if (as_long_data && mysql_stmt_send_long_data(stmt, 0, reinterpret_cast<const char*>(&ts), sizeof(ts))) {
 		diag("mysql_stmt_send_long_data failed: %s", mysql_stmt_error(stmt));
-		return false;
+		return mysql_stmt_errno(stmt) ? mysql_stmt_errno(stmt) : 1;
 	}
 	if (mysql_stmt_execute(stmt)) {
-		diag("mysql_stmt_execute failed: %s", mysql_stmt_error(stmt));
-		return false;
+		return mysql_stmt_errno(stmt) ? mysql_stmt_errno(stmt) : 1;
 	}
-	return consume_result(stmt);
+	return consume_result(stmt) ? 0 : 1;
 }
 
 /**
@@ -181,27 +184,30 @@ int main(int /*argc*/, char** /*argv*/) {
 		return exit_status();
 	}
 
-	int succeeded = 0;
+	// ER_WRONG_ARGUMENTS, as returned by MySQL 5.7 and MariaDB in this case.
+	int rejected = 0;
 	for (int i = 0; i < kExecutions; i++) {
-		if (execute_datetime(stmt, true)) {
-			succeeded++;
+		const unsigned int err = execute_datetime(stmt, true);
+		if (err == 1210) {
+			rejected++;
 		} else {
-			diag("Execution %d failed", i);
+			diag("Execution %d returned %u (%s), expected 1210", i, err, mysql_stmt_error(stmt));
 			break;
 		}
 	}
-	ok(succeeded == kExecutions,
-		"%d/%d executions with a DATETIME parameter sent as long data succeeded", succeeded, kExecutions);
+	ok(rejected == kExecutions,
+		"%d/%d executions with a DATETIME parameter sent as long data rejected with 1210", rejected, kExecutions);
 
 	// A DATETIME parameter inside the packet: its MYSQL_TIME buffer is owned by
 	// the bind and must still be freed by cleanup_stmt_execute().
 	MYSQL_STMT* inline_stmt = prepare(mysql, "SELECT ? AS reg_test_6233_inline_datetime");
 	int inline_succeeded = 0;
 	for (int i = 0; inline_stmt != nullptr && i < kExecutions; i++) {
-		if (execute_datetime(inline_stmt, false)) {
+		const unsigned int err = execute_datetime(inline_stmt, false);
+		if (err == 0) {
 			inline_succeeded++;
 		} else {
-			diag("Inline execution %d failed", i);
+			diag("Inline execution %d returned %u (%s)", i, err, mysql_stmt_error(inline_stmt));
 			break;
 		}
 	}
