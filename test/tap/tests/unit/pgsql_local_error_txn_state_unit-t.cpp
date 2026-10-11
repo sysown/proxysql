@@ -244,8 +244,62 @@ static void test_error_packet_carries_status() {
 	free(pkt.ptr);
 }
 
+// The tracker misses a transaction end it cannot read from the first word -- 'SELECT 1;
+// ROLLBACK', a COMMIT that fails (PostgreSQL rolls back), a hostgroup-locked session -- and
+// learns of it only from the backend going idle. It used to drop the BEGIN snapshot then,
+// keeping the SET values PostgreSQL had put back: ProxySQL then believed the backend held
+// them, and never re-sent them, to this client or to the next session on that backend.
+static void test_idle_sync_after_missed_end() {
+	const int idx = 0;
+	const char* changed = "changed-inside-txn";
+	const uint32_t changed_hash = SpookyHash::Hash32(changed, strlen(changed), 10);
+	auto begin_and_set = [&](Fixture& f) -> std::string {
+		const std::string at_begin = f.sess->client_myds->myconn->variables[idx].value;
+		f.sess->transaction_state_manager->handle_transaction("BEGIN");
+		pgsql_variables.client_set_hash_and_value(f.sess, idx, changed, changed_hash);
+		pgsql_variables.server_set_hash_and_value(f.sess, idx, changed, changed_hash);
+		return at_begin;
+	};
+	{
+		Fixture f = build('I');
+		const std::string at_begin = begin_and_set(f);
+		f.sess->transaction_state_manager->sync_with_backend(false, 'R');
+		const char* cv = f.sess->client_myds->myconn->variables[idx].value;
+		const char* sv = f.conn->variables[idx].value;
+		ok(f.sess->is_in_transaction() == false && cv && sv && at_begin == cv && at_begin == sv,
+		   "missed ROLLBACK: '%s' back to its BEGIN value '%s' on both sides [client '%s', backend '%s']",
+		   pgsql_tracked_variables[idx].set_variable_name, at_begin.c_str(), cv ? cv : "(null)", sv ? sv : "(null)");
+	}
+	{
+		Fixture f = build('I');
+		begin_and_set(f);
+		f.sess->transaction_state_manager->sync_with_backend(false, 'C');
+		ok(f.sess->is_in_transaction() == false &&
+		   f.sess->client_myds->myconn->var_hash[idx] == changed_hash && f.conn->var_hash[idx] == changed_hash,
+		   "missed COMMIT: the value set in the transaction is kept on both sides");
+	}
+	{
+		Fixture f = build('I');
+		begin_and_set(f);
+		f.sess->transaction_state_manager->sync_with_backend(false, 0);
+		ok(f.sess->is_in_transaction() == false &&
+		   f.sess->client_myds->myconn->var_hash[idx] == changed_hash && f.conn->var_hash[idx] == 0,
+		   "unknown end: the client keeps its value, the backend's is unknown so it is re-sent");
+	}
+	typedef PgSQL_ExplicitTxnStateMgr M;
+	ok(M::txn_end_in_digest("select ?; rollback") == 'R' && M::txn_end_in_digest("select ?;abort") == 'R' &&
+	   M::txn_end_in_digest("select ?; commit") == 'C' && M::txn_end_in_digest("select ?; end") == 'C' &&
+	   M::txn_end_in_digest("commit; begin; rollback") == 'R' && M::txn_end_in_digest("rollback; begin; commit") == 'C',
+	   "txn_end_in_digest: the last ROLLBACK/ABORT or COMMIT/END decides");
+	ok(M::txn_end_in_digest("select ?") == 0 && M::txn_end_in_digest(NULL) == 0 &&
+	   M::txn_end_in_digest("rollback to savepoint a") == 0 && M::txn_end_in_digest("commit prepared ?") == 0 &&
+	   M::txn_end_in_digest("select ? as \"x; rollback\"") == 0 && M::txn_end_in_digest("select ?; /*x rollback") == 0 &&
+	   M::txn_end_in_digest("select rollback_count from t") == 0,
+	   "txn_end_in_digest: savepoints, PREPARED forms, quoted or lost text and longer words end nothing");
+}
+
 int main(int, char**) {
-	plan(16);
+	plan(16 + 5);
 	test_init_minimal();
 	g_thread = new PgSQL_Thread();
 
@@ -254,6 +308,7 @@ int main(int, char**) {
 	test_backend_lost_restores_variables();
 	test_mid_batch_restores_variables();
 	test_error_packet_carries_status();
+	test_idle_sync_after_missed_end();
 
 	return exit_status();
 }
