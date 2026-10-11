@@ -71,8 +71,8 @@ struct Fixture {
 		}) good = execute(admin, sql) && good;
 		saved = !good;
 		if (good) {
-			good = execute(admin, "DROP TABLE pgfc6419_rules") && good;
-			good = execute(admin, "DROP TABLE pgfc6419_vars") && good;
+			good = execute(admin, "DROP TABLE temp.pgfc6419_rules") && good;
+			good = execute(admin, "DROP TABLE temp.pgfc6419_vars") && good;
 		}
 		return good;
 	}
@@ -89,9 +89,10 @@ struct Fixture {
 
 static bool configure(Fixture& fixture) {
 	MYSQL* admin = fixture.admin;
-	// Admin temporary tables outlive client disconnects; drop leftovers of an interrupted run.
-	if (!execute(admin, "DROP TABLE IF EXISTS pgfc6419_rules") ||
-		!execute(admin, "DROP TABLE IF EXISTS pgfc6419_vars")) return false;
+	// Admin temporary tables live in the single shared admin SQLite handle and outlive client
+	// disconnects; drop leftovers of an interrupted run (temp.-qualified: never touches main).
+	if (!execute(admin, "DROP TABLE IF EXISTS temp.pgfc6419_rules") ||
+		!execute(admin, "DROP TABLE IF EXISTS temp.pgfc6419_vars")) return false;
 	if (!execute(admin, "CREATE TEMPORARY TABLE pgfc6419_rules AS SELECT * FROM pgsql_query_rules") ||
 		!execute(admin, "CREATE TEMPORARY TABLE pgfc6419_vars AS SELECT * FROM global_variables WHERE variable_name IN "
 			"('pgsql-query_processor_parser','pgsql-query_processor_first_comment_parsing','pgsql-query_digests')")) return false;

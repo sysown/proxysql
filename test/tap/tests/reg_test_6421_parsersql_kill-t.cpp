@@ -79,7 +79,7 @@ struct Fixture {
 			"WHERE v.variable_name=global_variables.variable_name) WHERE variable_name IN (SELECT variable_name FROM kill6421_vars)");
 		good = execute(admin, "LOAD MYSQL VARIABLES TO RUNTIME") && good;
 		saved = !good;
-		if (good) good = execute(admin, "DROP TABLE kill6421_vars");
+		if (good) good = execute(admin, "DROP TABLE temp.kill6421_vars");
 		return good;
 	}
 	~Fixture() noexcept {
@@ -95,8 +95,9 @@ struct Fixture {
 
 static bool configure(Fixture& fixture) {
 	MYSQL* admin = fixture.admin;
-	// Admin temporary tables outlive client disconnects; drop leftovers of an interrupted run.
-	if (!execute(admin, "DROP TABLE IF EXISTS kill6421_vars") ||
+	// Admin temporary tables live in the single shared admin SQLite handle and outlive client
+	// disconnects; drop leftovers of an interrupted run (temp.-qualified: never touches main).
+	if (!execute(admin, "DROP TABLE IF EXISTS temp.kill6421_vars") ||
 		!execute(admin, "CREATE TEMPORARY TABLE kill6421_vars AS SELECT * FROM global_variables WHERE variable_name IN "
 			"('mysql-query_processor_parser','mysql-query_digests','mysql-commands_stats')")) return false;
 	fixture.saved = true;

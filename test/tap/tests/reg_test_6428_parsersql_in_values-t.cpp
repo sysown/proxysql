@@ -83,8 +83,8 @@ struct Fixture {
 		}) good = execute(admin, sql) && good;
 		saved = !good;
 		if (good) {
-			good = execute(admin, "DROP TABLE iv6428_rules") && good;
-			good = execute(admin, "DROP TABLE iv6428_vars") && good;
+			good = execute(admin, "DROP TABLE temp.iv6428_rules") && good;
+			good = execute(admin, "DROP TABLE temp.iv6428_vars") && good;
 		}
 		return good;
 	}
@@ -101,9 +101,10 @@ struct Fixture {
 
 static bool configure(Fixture& fixture, int writer) {
 	MYSQL* admin = fixture.admin;
-	// Admin temporary tables outlive client disconnects; drop leftovers of an interrupted run.
-	if (!execute(admin, "DROP TABLE IF EXISTS iv6428_rules") ||
-		!execute(admin, "DROP TABLE IF EXISTS iv6428_vars")) return false;
+	// Admin temporary tables live in the single shared admin SQLite handle and outlive client
+	// disconnects; drop leftovers of an interrupted run (temp.-qualified: never touches main).
+	if (!execute(admin, "DROP TABLE IF EXISTS temp.iv6428_rules") ||
+		!execute(admin, "DROP TABLE IF EXISTS temp.iv6428_vars")) return false;
 	if (!execute(admin, "CREATE TEMPORARY TABLE iv6428_rules AS SELECT * FROM mysql_query_rules") ||
 		!execute(admin, "CREATE TEMPORARY TABLE iv6428_vars AS SELECT * FROM global_variables WHERE variable_name IN "
 			"('mysql-query_processor_parser','mysql-query_digests','mysql-auto_increment_delay_multiplex',"
