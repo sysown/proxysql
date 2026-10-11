@@ -155,6 +155,10 @@ enum ExtendedQueryPhase : uint8_t {
 	EXTQ_PHASE_PROCESSING_EXECUTE		= 0x80	// Processing Execute message after Sync
 };
 
+// What a handler did with a message ProxySQL may answer itself: nothing (it goes on to the backend),
+// sent a reply, or sent an error. An error ends an extended-query unit, so the caller has to know.
+enum class PgSQL_Local_Reply : uint8_t { NONE, SENT, SENT_ERROR };
+
 #define EXTQ_PHASE_PROCESSING_MASK \
     (EXTQ_PHASE_PROCESSING_PARSE | EXTQ_PHASE_PROCESSING_DESCRIBE | \
      EXTQ_PHASE_PROCESSING_CLOSE | EXTQ_PHASE_PROCESSING_BIND | \
@@ -426,12 +430,12 @@ private:
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
 	bool is_multi_statement_command(const char* cmd);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command(const char* dig, bool* lock_hostgroup);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_RESET_command(const char* dig, bool* lock_hostgroup);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DISCARD_command(const char* dig);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DEALLOCATE_command(const char* dig);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(const char* dig, bool* lock_hostgroup);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo(PtrSize_t*, bool* lock_hostgroup, 
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command(const char* dig, bool* lock_hostgroup);
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_RESET_command(const char* dig, bool* lock_hostgroup);
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DISCARD_command(const char* dig);
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DEALLOCATE_command(const char* dig);
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(const char* dig, bool* lock_hostgroup);
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo(PtrSize_t*, bool* lock_hostgroup, 
 		PgSQL_Extended_Query_Type stmt_type = PGSQL_EXTENDED_QUERY_TYPE_NOT_SET);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_PARSE(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_DESCRIBE(PtrSize_t& pkt);
@@ -818,7 +822,7 @@ public:
 	//void writeout();
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds) override;
-	bool handle_command_query_kill(PtrSize_t*);
+	PgSQL_Local_Reply handle_command_query_kill(PtrSize_t*);
 
 	//void update_expired_conns(const std::vector<std::function<bool(PgSQL_Connection*)>>&);
 	/**
