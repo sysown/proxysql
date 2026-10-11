@@ -1901,6 +1901,11 @@ int main(int argc, char** argv) {
             return false;
         }
 
+        // The ROLLBACK in the batch came after the error, so it was skipped, as PostgreSQL does: the
+        // transaction is still open and failed. End it the way a client has to.
+        PGresult* rollback = PQexec(conn.get(), "ROLLBACK");
+        PQclear(rollback);
+
         // Verify value unchanged
         const auto final_val = getVariable(conn.get(), "datestyle");
         diag("Final value: '%s', expected original: '%s'", final_val.c_str(), original.c_str());

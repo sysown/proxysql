@@ -541,6 +541,7 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-native_extq_batch-t \
 	pgsql-native_extq_named_portals-t \
 	pgsql-extq_local_error_in_txn-t \
+	pgsql-extq_rule_error_stops_batch-t \
 	pgsql-discard_all_txn_block-t \
 	pgsql-reg_test_6345_admin_extended_query_sync-t \
 	pgsql-reg_test_6349_auth_anti_enumeration-t \
