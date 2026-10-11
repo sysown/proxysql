@@ -8,7 +8,8 @@
  * single-family listener failed on every connect. Here the address list is built by hand
  * (a bound but not listening port, which refuses, followed by a listening one) and the connect
  * is driven the way the session drives it: poll the connection's current fd, hand the events to
- * connect_cont().
+ * connect_cont(). A last case runs the fallback through a fast_forward session and the thread's
+ * per-stream processing, and checks that the backend data stream still writes afterwards.
  */
 
 #include "tap.h"
@@ -19,6 +20,11 @@
 #include "cpp.h"
 #include "PgSQL_Connection.h"
 #include "PgSQL_HostGroups_Manager.h"
+#include "PgSQL_Session.h"
+#include "PgSQL_Data_Stream.h"
+#include "PgSQL_Backend.h"
+#include "PgSQL_Thread.h"
+#include "PgSQL_Variables.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -26,6 +32,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -254,8 +261,174 @@ static void check_hostname() {
 	close(live);
 }
 
+// Reads exactly `n` bytes, or fails after `ms` without progress.
+static bool read_exact(int fd, unsigned char* buf, size_t n, int ms) {
+	size_t got = 0;
+	while (got < n) {
+		struct pollfd p { fd, POLLIN, 0 };
+		if (poll(&p, 1, ms) <= 0) return false;
+		ssize_t r = read(fd, buf + got, n - got);
+		if (r <= 0) return false;
+		got += r;
+	}
+	return true;
+}
+
+// The client's tracked variables, which the StartupMessage is built from.
+static void fill_tracked_variables(PgSQL_Connection* conn) {
+	for (int idx = 0; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
+		const char* def_val = pgsql_tracked_variables[idx].default_value;
+		conn->variables[idx].value = strdup(def_val);
+		conn->var_hash[idx] = SpookyHash::Hash32(def_val, strlen(def_val), 10);
+	}
+}
+
+static PtrSize_t heap_pkt(const std::string& bytes) {
+	PtrSize_t pkt;
+	pkt.size = bytes.size();
+	pkt.ptr = malloc(pkt.size);
+	memcpy(pkt.ptr, bytes.data(), pkt.size);
+	return pkt;
+}
+
+// A fast_forward session relays the client's bytes through the backend data stream:
+// they wait in its PSarrayOUT while the backend connects, and are written once it has.
+// That stream only writes while net_failure is unset, and the thread loop sets it when a
+// poll entry that asked for POLLOUT comes back with POLLERR/POLLHUP -- which is how a
+// refused first address is reported. After the connect falls back to the next address the
+// stream must still be writable, or the session never sends anything to the backend.
+// Driven the way the thread does it: poll the session's entry, process_data_on_data_stream(),
+// then the session's handler().
+static void check_fast_forward_writes_after_fallback() {
+	unsigned short live_port = 0, dead_port = 0;
+	int live = bound(AF_INET, "127.0.0.1", true, &live_port);
+	int dead = bound(AF_INET, "127.0.0.1", false, &dead_port);
+	int client_sp[2] = { -1, -1 };
+	if (live < 0 || dead < 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, client_sp) != 0)
+		BAIL_OUT("could not set up sockets for the fast_forward case");
+
+	PgSQL_Thread* thr = new PgSQL_Thread();
+	thr->curtime = monotonic_time();
+
+	PgSQL_Session* sess = new PgSQL_Session();
+	sess->thread = thr;
+	sess->connections_handler = true; // keeps the session destructor away from PgHGM
+	sess->session_fast_forward = SESSION_FORWARD_TYPE_PERMANENT;
+
+	PgSQL_Data_Stream* client_ds = new PgSQL_Data_Stream();
+	client_ds->init(MYDS_FRONTEND, sess, client_sp[0]);
+	client_ds->myconn = new PgSQL_Connection(true);
+	fill_tracked_variables(client_ds->myconn);
+	sess->client_myds = client_ds;
+
+	// As create_backend() and the first fast_forward packet leave it.
+	sess->mybe = sess->find_or_create_backend(0);
+	PgSQL_Data_Stream* server_ds = sess->mybe->server_myds;
+	server_ds->reinit_queues();
+	const std::string q1("Q\0\0\0\x0dSELECT 1\0", 14);
+	const std::string q2("S\0\0\0\x04", 5);
+	PtrSize_t p1 = heap_pkt(q1);
+	server_ds->PSarrayOUT->add(p1.ptr, p1.size);
+	sess->previous_status.push(FAST_FORWARD);
+	sess->set_status(CONNECTING_SERVER);
+
+	// As get_connection() leaves a new connection: connect started, waiting for writable.
+	Conn* c = make_conn("fallback.test", live_port);
+	server_ds->attach_connection(c);
+	server_ds->wait_until = thr->curtime + 10000000ULL;
+	bool started = start_on(c, { addr(AF_INET, "127.0.0.1", dead_port),
+		addr(AF_INET, "127.0.0.1", live_port) });
+	c->handler_first_call = false;
+	c->async_exit_status = PG_EVENT_WRITE;
+	c->async_state_machine = ASYNC_CONNECT_CONT;
+	server_ds->fd = c->fd;
+	server_ds->DSS = STATE_MARIADB_CONNECTING;
+	if (!started) BAIL_OUT("could not start the connect");
+
+	// A second client packet, arriving while the session connects.
+	PtrSize_t p2 = heap_pkt(q2);
+	client_ds->PSarrayIN->add(p2.ptr, p2.size);
+
+	// The session registers the backend in the thread's poll set.
+	sess->to_process = 1;
+	sess->handler();
+	const int idx = server_ds->poll_fds_idx;
+	ok(idx >= 0 && server_ds->PSarrayOUT->len == 2,
+		"ff fallback: the backend is polled and both client packets wait for it");
+	if (idx < 0) BAIL_OUT("backend not registered in the poll set");
+
+	// One thread-loop iteration: poll, process the data stream, run the session. Returns
+	// what was polled, as the handlers may change the entry's events.
+	auto iterate = [&](int ms) {
+		thr->curtime = monotonic_time();
+		struct pollfd p { thr->mypolls.fds[idx].fd, (short)thr->mypolls.fds[idx].events, 0 };
+		poll(&p, 1, ms);
+		thr->mypolls.fds[idx].revents = p.revents;
+		thr->process_data_on_data_stream(server_ds, idx);
+		if (sess->to_process) sess->handler();
+		return p;
+	};
+
+	const struct pollfd first = iterate(2000);
+	const short ev = first.revents;
+	ok((first.events & POLLOUT) && (ev & (POLLERR | POLLHUP)) &&
+		c->native_addr_idx == 1 && !c->is_error_present(),
+		"ff fallback: the refusal is polled as an error on a POLLOUT entry (revents=0x%x) "
+		"and the connect moves to the next address", ev);
+
+	// The backend: accept, take the StartupMessage, answer AuthenticationOk + ReadyForQuery.
+	int peer = -1;
+	for (int i = 0; i < 200 && sess->status != FAST_FORWARD; i++) {
+		if (peer < 0) {
+			struct pollfd lp { live, POLLIN, 0 };
+			if (poll(&lp, 1, 0) > 0) {
+				peer = accept(live, nullptr, nullptr);
+				unsigned char len[4];
+				if (peer >= 0 && read_exact(peer, len, 4, 2000)) {
+					uint32_t n = (len[0] << 24) | (len[1] << 16) | (len[2] << 8) | len[3];
+					std::string rest(n > 4 ? n - 4 : 0, '\0');
+					read_exact(peer, reinterpret_cast<unsigned char*>(&rest[0]), rest.size(), 2000);
+					const unsigned char reply[] = { 'R', 0, 0, 0, 8, 0, 0, 0, 0, 'Z', 0, 0, 0, 5, 'I' };
+					if (write(peer, reply, sizeof(reply)) != (ssize_t)sizeof(reply)) BAIL_OUT("could not answer the StartupMessage");
+				}
+			}
+		}
+		iterate(10);
+	}
+	ok(peer >= 0 && sess->status == FAST_FORWARD && server_ds->myds_type == MYDS_BACKEND &&
+		server_ds->fd == c->fd,
+		"ff fallback: the connect completes on the next address and the session forwards "
+		"(status=%d)", (int)sess->status);
+	ok(server_ds->net_failure == false,
+		"ff fallback: the backend data stream is not left marked as failed");
+
+	// The bytes queued while connecting must now reach the backend, in order.
+	const std::string want = q1 + q2;
+	std::string got(want.size(), '\0');
+	bool received = false;
+	if (peer >= 0) {
+		for (int i = 0; i < 20 && !received; i++) {
+			struct pollfd p { peer, POLLIN, 0 };
+			if (poll(&p, 1, 0) > 0) {
+				received = read_exact(peer, reinterpret_cast<unsigned char*>(&got[0]), got.size(), 2000);
+			} else {
+				iterate(10);
+			}
+		}
+	}
+	ok(received && got == want,
+		"ff fallback: the client packets queued during the connect are written to the backend");
+
+	if (peer >= 0) close(peer);
+	close(client_sp[1]);
+	close(live);
+	close(dead);
+	// Like the other session-level unit tests, the fabricated session is left to process exit.
+}
+
 int main() {
 	if (test_init_minimal() != 0) BAIL_OUT("test_init_minimal failed");
+	if (test_init_hostgroups() != 0) BAIL_OUT("test_init_hostgroups failed");
 
 	// ::1 is only usable if IPv6 is configured on lo.
 	unsigned short v6port = 0;
@@ -263,7 +436,7 @@ int main() {
 	const bool have_v6 = v6 >= 0;
 	if (v6 >= 0) close(v6);
 
-	plan(7 + 7 + 3 + 2 + 1);
+	plan(7 + 7 + 3 + 2 + 1 + 5);
 
 	check_falls_back(AF_INET, "127.0.0.1", "IPv4 then IPv4");
 	if (have_v6) {
@@ -274,6 +447,7 @@ int main() {
 	check_all_fail();
 	check_stale_events();
 	check_hostname();
+	check_fast_forward_writes_after_fallback();
 
 	return exit_status();
 }
