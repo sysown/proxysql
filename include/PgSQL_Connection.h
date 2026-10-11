@@ -34,6 +34,7 @@ class PgSQL_Backend_Protocol;
 #define STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 // This bit belonged to STATUS_PGSQL_CONNECTION_HAS_WARNINGS, which was never implemented.
 #define STATUS_PGSQL_CONNECTION_LISTEN               0x00001000
+#define STATUS_PGSQL_CONNECTION_HOLD_CURSOR          0x00002000
 
 
 enum PgSQL_Param_Name {

@@ -5412,6 +5412,21 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 		}
 	}
 
+	// A WITH HOLD cursor survives COMMIT on the backend connection; pooled, the next client
+	// could FETCH this client's rows from it. Cursors are not tracked one by one, so only
+	// CLOSE ALL clears the flag (DISCARD ALL clears it through reset()).
+	if (get_status(STATUS_PGSQL_CONNECTION_HOLD_CURSOR) == false) {
+		// ';': a multi-statement query whose DECLARE is not the first statement
+		if ((pgsql_stmt_first_keyword_is(query_digest_text, "DECLARE") || strchr(query_digest_text, ';')) &&
+			strcasestr(query_digest_text, "CURSOR WITH HOLD")) {
+			set_status(true, STATUS_PGSQL_CONNECTION_HOLD_CURSOR);
+		}
+	} else {
+		if (pgsql_stmt_first_keyword_is(query_digest_text, "CLOSE ALL")) {
+			set_status(false, STATUS_PGSQL_CONNECTION_HOLD_CURSOR);
+		}
+	}
+
 	// CREATE SEQUENCE vs CREATE TEMP SEQUENCE:
 	/// - CREATE SEQUENCE: Persistent; survives across sessions until explicitly dropped.
 	// - CREATE TEMP SEQUENCE: Session-scoped; automatically dropped when the session ends.
@@ -5701,7 +5716,7 @@ bool PgSQL_Connection::MultiplexDisabled(bool check_delay_token) {
 		STATUS_PGSQL_CONNECTION_LOCK_TABLES | STATUS_PGSQL_CONNECTION_TEMPORARY_TABLE | STATUS_PGSQL_CONNECTION_ADVISORY_LOCK | 
 		STATUS_PGSQL_CONNECTION_NO_MULTIPLEX | STATUS_PGSQL_CONNECTION_HAS_SEQUENCES | STATUS_PGSQL_CONNECTION_ADVISORY_XACT_LOCK | 
 		STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG | STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT |
-		STATUS_PGSQL_CONNECTION_LISTEN )) {
+		STATUS_PGSQL_CONNECTION_LISTEN | STATUS_PGSQL_CONNECTION_HOLD_CURSOR )) {
 		ret = true;
 	}
 	if (check_delay_token && auto_increment_delay_token) return true;

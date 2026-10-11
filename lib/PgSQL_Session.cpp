@@ -871,6 +871,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 				j["backends"][i]["conn"]["status"]["no_multiplex"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_NO_MULTIPLEX);
 				j["backends"][i]["conn"]["status"]["no_multiplex_HG"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG);
 				j["backends"][i]["conn"]["status"]["listen"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_LISTEN);
+				j["backends"][i]["conn"]["status"]["hold_cursor"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_HOLD_CURSOR);
 				j["backends"][i]["conn"]["status"]["has_sequences"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_HAS_SEQUENCES);
 				//j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_COMPRESSION);
 				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_PGSQL_CONNECTION_PREPARED_STATEMENT);
