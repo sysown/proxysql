@@ -644,6 +644,51 @@ SQLite3_result* PgSQL_Query_Processor::get_stats_commands_counters() {
 	return result;
 }
 
+/**
+ * @brief Classifies the token that follows a leading SELECT.
+ *
+ * ProxySQL intercepts pg_cancel_backend() and pg_terminate_backend() itself, because the
+ * PID a client passes is the ProxySQL session id that SELECT pg_backend_pid() returned.
+ * Only the start of the token is compared, so "pg_cancel_backend(?)" matches.
+ */
+static enum PGSQL_QUERY_command select_target_command_type(const char* token) {
+	if (!strncasecmp("pg_cancel_backend", token, sizeof("pg_cancel_backend") - 1)) return PGSQL_QUERY_CANCEL_BACKEND;
+	if (!strncasecmp("pg_terminate_backend", token, sizeof("pg_terminate_backend") - 1)) return PGSQL_QUERY_TERMINATE_BACKEND;
+	return PGSQL_QUERY_SELECT;
+}
+
+static enum PGSQL_QUERY_command legacy_command_type(const char* text);
+
+/**
+ * @brief Refines a SELECT or UNKNOWN reported by ParserSQL with the legacy classification (#6422).
+ *
+ * ParserSQL reports SELECT for "SELECT pg_cancel_backend(N)" and for data-modifying CTEs
+ * ("WITH d AS (DELETE ... RETURNING *) SELECT ..."). The result must match the legacy
+ * classifier, so that the session still intercepts cancel/terminate and a CTE is not
+ * treated as a read. ParserSQL reports UNKNOWN when it cannot parse the text, as with
+ * "SELECT pg_terminate_backend(1234" from the 32-byte query prefix used without digests;
+ * such a text is only promoted to CANCEL_BACKEND / TERMINATE_BACKEND.
+ *
+ * The common "SELECT <token>" form is scanned in place with the legacy tokenizer rules
+ * (delimiters ' ' and ';', leading '(' skipped), so that the text is not copied. Any other
+ * text reported as SELECT is handed to the legacy classifier.
+ *
+ * @param ret Classification from ParserSQL: PGSQL_QUERY_SELECT or PGSQL_QUERY_UNKNOWN.
+ * @param text Digest text or query prefix. Must not be NULL.
+ */
+static enum PGSQL_QUERY_command parser_refine_command_type(enum PGSQL_QUERY_command ret, const char* text) {
+	const char* p = text + strspn(text, " ;(");
+	const size_t len = strcspn(p, " ;");
+	if (len != sizeof("SELECT") - 1 || strncasecmp("SELECT", p, len)) {
+		return ret == PGSQL_QUERY_SELECT ? legacy_command_type(text) : ret;
+	}
+	p += len;
+	p += strspn(p, " ;");
+	if (*p == '\0') return PGSQL_QUERY_UNKNOWN; // legacy: a bare SELECT has no next token
+	const enum PGSQL_QUERY_command target = select_target_command_type(p);
+	return (ret == PGSQL_QUERY_SELECT || target != PGSQL_QUERY_SELECT) ? target : ret;
+}
+
 enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_par_t* qp) {
 	char* text = NULL;
 	if (qp->digest_text) {
@@ -658,14 +703,32 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	if (pgsql_thread___query_processor_parser == 1) {
 		if (qp->parsersql_stmt_type >= 0) {
 			// already classified during the digest parse
-			return parsersql_stmt_type_to_pgsql_command(qp->parsersql_stmt_type);
+			ret = parsersql_stmt_type_to_pgsql_command(qp->parsersql_stmt_type);
+		} else if (text) {
+			ret = parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
 		}
-		if (text) {
-			return parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
+		if (text && (ret == PGSQL_QUERY_SELECT || ret == PGSQL_QUERY_UNKNOWN)) {
+			ret = parser_refine_command_type(ret, text);
 		}
-		return PGSQL_QUERY_UNKNOWN;
+	} else {
+		ret = legacy_command_type(text);
 	}
 
+	// query_prefix is only set when digests are disabled; it is owned here in both modes
+	if (qp->query_prefix) {
+		free(qp->query_prefix);
+		qp->query_prefix = NULL;
+	}
+	return ret;
+}
+
+/**
+ * @brief Tokenizer-based classification used when pgsql-query_processor_parser=0.
+ *
+ * @param text Digest text, or the query prefix when digests are disabled. May be NULL.
+ */
+static enum PGSQL_QUERY_command legacy_command_type(const char* text) {
+	enum PGSQL_QUERY_command ret = PGSQL_QUERY_UNKNOWN;
 	char c1;
 
 	tokenizer_t tok;
@@ -1100,9 +1163,7 @@ __remove_parenthesis:
 		if (!strcasecmp("SELECT", token)) {
 			token = (char*)tokenize(&tok);
 			if (token == NULL) break;
-			if (!strncasecmp("pg_cancel_backend", token, sizeof("pg_cancel_backend") - 1)) ret = PGSQL_QUERY_CANCEL_BACKEND;
-			else if (!strncasecmp("pg_terminate_backend", token, sizeof("pg_terminate_backend") - 1)) ret = PGSQL_QUERY_TERMINATE_BACKEND;
-			else ret = PGSQL_QUERY_SELECT;
+			ret = select_target_command_type(token);
 			break;
 		}
 		if (!strcasecmp("SET", token)) {
@@ -1154,9 +1215,5 @@ __remove_parenthesis:
 
 __exit__query_parser_command_type:
 	free_tokenizer(&tok);
-	if (qp->query_prefix) {
-		free(qp->query_prefix);
-		qp->query_prefix = NULL;
-	}
 	return ret;
 }
