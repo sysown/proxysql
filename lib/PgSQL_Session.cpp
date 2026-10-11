@@ -7263,12 +7263,27 @@ void PgSQL_Session::classify_poisoned_extq_message() {
 		}
 		const PgSQL_STMT_Global_info* stmt_info =
 			client_myds->myconn->local_stmts->find_stmt_info_from_stmt_name(name);
-		return stmt_info ? classify_poisoned_txn_end(stmt_info->query, stmt_info->query_length) : 0;
+		// Declared parameter types make it a statement that takes parameters.
+		if (stmt_info == NULL || stmt_info->parse_param_types.empty() == false) return 0;
+		return classify_poisoned_txn_end(stmt_info->query, stmt_info->query_length);
 	};
+	// The transaction is ended at the Sync, before the frame runs, so every message of an
+	// accepted frame has to be one that cannot then fail -- the client would be told of an
+	// error, and PostgreSQL would have left the transaction aborted. What PostgreSQL rejects
+	// is refused here instead, with the 25P02 that keeps the session poisoned: a Parse
+	// redefining a named statement that exists, and parameters (declared, supplied, or more
+	// than one parameter format) that a transaction end does not take (#6424).
 	const bool accepted = std::visit([&](auto& msg) -> bool {
 		using T = std::decay_t<decltype(msg)>;
 		if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Parse_Message>>) {
 			const PgSQL_Parse_Data& d = msg->data();
+			if (d.num_param_types != 0) return false;
+			if (d.stmt_name[0] != '\0') {
+				if (client_myds->myconn->local_stmts->find_stmt_info_from_stmt_name(d.stmt_name) != NULL) return false;
+				for (const auto& s : poisoned_extq.stmts) {
+					if (s.first == d.stmt_name) return false;
+				}
+			}
 			const char kind = classify_poisoned_txn_end(d.query_string, strlen(d.query_string));
 			if (kind == 0) return false;
 			poisoned_extq.stmts.emplace_back(d.stmt_name, kind);
@@ -7276,6 +7291,7 @@ void PgSQL_Session::classify_poisoned_extq_message() {
 		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Bind_Message>>) {
 			const PgSQL_Bind_Data& d = msg->data();
 			if (d.portal_name[0] != '\0') return false;
+			if (d.num_param_values != 0 || d.num_param_formats > 1) return false;
 			poisoned_extq.portal = stmt_kind(d.stmt_name);
 			return poisoned_extq.portal != 0;
 		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Describe_Message>>) {
