@@ -6532,6 +6532,22 @@ void PgSQL_Session::RequestEnd(PgSQL_Data_Stream* myds, bool called_on_failure) 
 			}
 
 			myds->myconn->ProcessQueryAndSetStatusFlags(query_digest_text, savepoint_count);
+		} else if (myds->myconn->get_status(STATUS_PGSQL_CONNECTION_LISTEN)) {
+			// pgsql-query_digests off: the LISTEN pin came from the CommandComplete tag, and
+			// only the query text can tell an UNLISTEN * that releases it.
+			const char* raw = NULL;
+			size_t raw_len = 0;
+			if (status == PROCESSING_QUERY && CurrentQuery.QueryPointer) {
+				raw = (const char*)CurrentQuery.QueryPointer;
+				raw_len = CurrentQuery.QueryLength;
+			} else if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.extended_query_info.stmt_info) {
+				raw = CurrentQuery.extended_query_info.stmt_info->query;
+				raw_len = CurrentQuery.extended_query_info.stmt_info->query_length;
+			}
+			if (raw) {
+				const std::string query(raw, strnlen(raw, raw_len));
+				myds->myconn->update_listen_status_from_query(query.c_str());
+			}
 		}
 	}
 

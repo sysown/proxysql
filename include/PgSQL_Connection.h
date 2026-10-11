@@ -514,6 +514,12 @@ public:
 	void update_bytes_recv(uint64_t bytes_recv);
 	void update_bytes_sent(uint64_t bytes_sent);
 	void ProcessQueryAndSetStatusFlags(const char* query_digest_text, int savepoint_count);
+	// STATUS_PGSQL_CONNECTION_LISTEN from the statements of a digest: the last LISTEN or
+	// UNLISTEN * decides (see the definition).
+	void update_listen_status(const char* query_digest_text);
+	// The same for a query with no digest (pgsql-query_digests off): releases the pin on
+	// UNLISTEN *, which nothing else does in that mode.
+	void update_listen_status_from_query(const char* query);
 
 	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
 	inline int get_pg_server_version() {

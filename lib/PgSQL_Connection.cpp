@@ -5424,6 +5424,54 @@ void PgSQL_Connection::unhandled_notice_cb(void* arg, const PGresult* result) {
 #endif
 }
 
+	// LISTEN registers a subscription on the backend connection, so the connection must
+	// stay with this session: notifications can only be delivered to the client that asked
+	// for them, and a pooled connection would hand them to whoever holds it next. This flag
+	// is also what stops such a connection returning to the pool still subscribed.
+	// Individual channels are not tracked, so only UNLISTEN * clears it -- after
+	// UNLISTEN <channel> ProxySQL cannot know whether any subscription remains, and
+	// unpinning while one does sends the next notification to the wrong client.
+	// DISCARD ALL is the other way out, and it clears every flag through reset().
+	// A Simple Query can carry several statements, so each one is looked at and the last
+	// LISTEN or UNLISTEN * decides: `SELECT 1; LISTEN ch` pins, `UNLISTEN *; LISTEN ch`
+	// stays pinned, and `LISTEN ch; UNLISTEN *` leaves nothing subscribed (issue #6438).
+	// Statements are taken past any comment kept by query_digests_keep_comment, and once the
+	// scan loses track of the digest (a kept comment cut short of its terminator) a LISTEN
+	// anywhere from that comment's opening on pins -- the word inside the cut comment's own
+	// text included, which fails closed -- while nothing there unpins.
+void PgSQL_Connection::update_listen_status(const char* query_digest_text) {
+	bool listening = get_status(STATUS_PGSQL_CONNECTION_LISTEN);
+	const char* lost = NULL;
+	for (const char* stmt = pgsql_stmt_skip_lead(query_digest_text, &lost); stmt != NULL;
+		stmt = pgsql_digest_next_stmt(stmt, &lost)) {
+		if (pgsql_stmt_first_keyword_is(stmt, "LISTEN")) {
+			listening = true;
+		} else if (listening && pgsql_stmt_first_keyword_is(stmt, "UNLISTEN")) {
+			// The star may abut the keyword: UNLISTEN* is valid and the digest keeps it
+			// joined, so a compare against "UNLISTEN " would leave the connection pinned.
+			const char* p = pgsql_stmt_skip_lead(stmt + sizeof("UNLISTEN") - 1, NULL);
+			if (p != NULL && *p == '*') listening = false;
+		}
+	}
+	if (pgsql_text_has_word(lost, "LISTEN")) listening = true;
+	set_status(listening, STATUS_PGSQL_CONNECTION_LISTEN);
+}
+
+// With pgsql-query_digests off there is no digest for update_listen_status(). A LISTEN that
+// ran still pins, from its CommandComplete tag (native_fetch_result_cont()), but nothing would
+// release it. The tag of UNLISTEN does not say whether it was UNLISTEN *, so the query is read:
+// only one holding the word UNLISTEN, on a pinned connection, is digested in full for it.
+void PgSQL_Connection::update_listen_status_from_query(const char* query) {
+	if (get_status(STATUS_PGSQL_CONNECTION_LISTEN) == false || pgsql_text_has_word(query, "UNLISTEN") == false) {
+		return;
+	}
+	char* digest = pgsql_query_full_digest(query);
+	if (digest != NULL) {
+		update_listen_status(digest);
+		free(digest);
+	}
+}
+
 void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_text, int savepoint_count) {
 	if (query_digest_text == NULL) return;
 	// unknown what to do with multiplex
@@ -5535,38 +5583,7 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 		}
 	}
 
-	// LISTEN registers a subscription on the backend connection, so the connection must
-	// stay with this session: notifications can only be delivered to the client that asked
-	// for them, and a pooled connection would hand them to whoever holds it next. This flag
-	// is also what stops such a connection returning to the pool still subscribed.
-	// Individual channels are not tracked, so only UNLISTEN * clears it -- after
-	// UNLISTEN <channel> ProxySQL cannot know whether any subscription remains, and
-	// unpinning while one does sends the next notification to the wrong client.
-	// DISCARD ALL is the other way out, and it clears every flag through reset().
-	// A Simple Query can carry several statements, so each one is looked at and the last
-	// LISTEN or UNLISTEN * decides: `SELECT 1; LISTEN ch` pins, `UNLISTEN *; LISTEN ch`
-	// stays pinned, and `LISTEN ch; UNLISTEN *` leaves nothing subscribed (issue #6438).
-	// Statements are taken past any comment kept by query_digests_keep_comment, and once the
-	// scan loses track of the digest (a kept comment cut short of its terminator) a LISTEN
-	// anywhere from that comment's opening on pins -- the word inside the cut comment's own
-	// text included, which fails closed -- while nothing there unpins.
-	{
-		bool listening = get_status(STATUS_PGSQL_CONNECTION_LISTEN);
-		const char* lost = NULL;
-		for (const char* stmt = pgsql_stmt_skip_lead(query_digest_text, &lost); stmt != NULL;
-			stmt = pgsql_digest_next_stmt(stmt, &lost)) {
-			if (pgsql_stmt_first_keyword_is(stmt, "LISTEN")) {
-				listening = true;
-			} else if (listening && pgsql_stmt_first_keyword_is(stmt, "UNLISTEN")) {
-				// The star may abut the keyword: UNLISTEN* is valid and the digest keeps it
-				// joined, so a compare against "UNLISTEN " would leave the connection pinned.
-				const char* p = pgsql_stmt_skip_lead(stmt + sizeof("UNLISTEN") - 1, NULL);
-				if (p != NULL && *p == '*') listening = false;
-			}
-		}
-		if (pgsql_text_has_word(lost, "LISTEN")) listening = true;
-		set_status(listening, STATUS_PGSQL_CONNECTION_LISTEN);
-	}
+	update_listen_status(query_digest_text);
 
 	// CREATE SEQUENCE vs CREATE TEMP SEQUENCE:
 	/// - CREATE SEQUENCE: Persistent; survives across sessions until explicitly dropped.
