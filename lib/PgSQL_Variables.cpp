@@ -72,6 +72,20 @@ std::string PgSQL_Variables::build_set_tracked_vars_regexp(const std::string& va
 	return "^SET(?: +)(|SESSION +)`?(" + vars_regexp + ")`?(?:$|[\\s=])";
 }
 
+const char* PgSQL_Variables::set_transaction_regexp() {
+	// Separator: whitespace, a (non-nested) block comment or a line comment.
+#define PGSQL_SET_TRX_SEP "(?:\\s|/\\*(?:[^*]|\\*+[^*/])*\\*+/|--[^\\n]*\\n)"
+	return "^SET" PGSQL_SET_TRX_SEP "+(?:(?:LOCAL|SESSION)" PGSQL_SET_TRX_SEP "+)?TRANSACTION(?:" PGSQL_SET_TRX_SEP "|;|$)";
+#undef PGSQL_SET_TRX_SEP
+}
+
+bool PgSQL_Variables::is_set_transaction(Session_Regex* re, const char* digest, const char* query) {
+	if (re == nullptr || digest == nullptr || query == nullptr) return false;
+	if (re->match(digest) == false) return false;
+	while (*query && isspace((unsigned char)*query)) query++;
+	return re->match(query);
+}
+
 bool PgSQL_Variables::client_set_hash_and_value(PgSQL_Session* session, int idx, const std::string& value, uint32_t hash) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
 		proxy_warning("Session validation failed\n");

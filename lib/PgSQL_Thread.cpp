@@ -3090,7 +3090,8 @@ bool PgSQL_Thread::init() {
 
 	const std::string set_tracked_vars_regexp = PgSQL_Variables::build_set_tracked_vars_regexp(pgsql_variables.variables_regexp);
 	match_regexes[1] = new Session_Regex((char*)set_tracked_vars_regexp.c_str());
-	match_regexes[2] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
+	// SET [LOCAL|SESSION] TRANSACTION ...: forwarded without locking the hostgroup.
+	match_regexes[2] = new Session_Regex(PgSQL_Variables::set_transaction_regexp());
 	match_regexes[3] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)`?(client_encoding|names)`?( *)(|=|TO)( *)");
 
 	copy_cmd_matcher = new CopyCmdMatcher();
