@@ -3433,8 +3433,9 @@ bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword) {
 	for (const char* s = pgsql_stmt_skip_lead(digest, &lost); s != NULL; s = pgsql_digest_next_stmt(s, &lost)) {
 		if (pgsql_stmt_first_keyword_is(s, keyword)) return true;
 	}
-	// Past an unterminated comment or quote the statements cannot be told apart, so the
-	// keyword counts wherever it stands as a word: refusing or pinning a query that only
+	// From an unterminated comment or quote on, the statements cannot be told apart, so the
+	// keyword counts wherever it stands as a word -- inside that comment's own kept text as
+	// well, since `lost` points at its opening "/*". Refusing or pinning a query that only
 	// mentions it is the safe side of being wrong.
 	return pgsql_text_has_word(lost, keyword);
 }

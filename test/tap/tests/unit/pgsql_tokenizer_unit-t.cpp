@@ -697,8 +697,8 @@ static void test_stmt_keyword_behind_kept_comment() {
 }
 
 // A kept comment longer than FIRST_COMMENT_MAX_LENGTH reaches the digest without its
-// terminator, and nothing after it can be told apart: the keyword counts anywhere in the
-// rest as a whole word.
+// terminator, and from its opening on nothing can be told apart: the keyword counts as a
+// whole word anywhere from there, inside the cut comment's own text too.
 static void test_stmt_keyword_after_lost_scan() {
 	ok(has_listen("/*xxx select ?; listen ch"), "stmt scan: LISTEN after an unterminated comment");
 	ok(has_listen("/*xxx listen ch"), "stmt scan: LISTEN right after an unterminated comment");

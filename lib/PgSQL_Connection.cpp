@@ -5548,7 +5548,8 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 	// stays pinned, and `LISTEN ch; UNLISTEN *` leaves nothing subscribed (issue #6438).
 	// Statements are taken past any comment kept by query_digests_keep_comment, and once the
 	// scan loses track of the digest (a kept comment cut short of its terminator) a LISTEN
-	// anywhere in the rest pins, while nothing there unpins.
+	// anywhere from that comment's opening on pins -- the word inside the cut comment's own
+	// text included, which fails closed -- while nothing there unpins.
 	{
 		bool listening = get_status(STATUS_PGSQL_CONNECTION_LISTEN);
 		const char* lost = NULL;

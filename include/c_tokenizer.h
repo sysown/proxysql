@@ -70,18 +70,22 @@ const char* pgsql_stmt_skip_lead(const char* text, const char** lost);
 // A digest can also stop making sense: a kept comment longer than FIRST_COMMENT_MAX_LENGTH
 // loses its terminator, and a digest cut at query_digests_max_query_length can end inside a
 // quote. On a block comment or quote with no terminator NULL is returned and, if `lost` is not
-// NULL, *lost points at it: what follows may hold statements the scan cannot tell apart.
-// Otherwise *lost is set to NULL.
+// NULL, *lost points at its opening "/*" or quote: from there on, the comment or quoted text
+// itself included, the scan cannot tell statements apart. Otherwise *lost is set to NULL.
 const char* pgsql_digest_next_stmt(const char* stmt, const char** lost);
 
 // True when `keyword` appears anywhere in `text` as a whole word, by the boundary rule of
-// pgsql_stmt_first_keyword_is() on both sides. For the part of a digest left in *lost.
+// pgsql_stmt_first_keyword_is() on both sides. For the part of a digest left in *lost, which
+// starts at the unterminated comment or quote, so a word inside that comment counts too.
 bool pgsql_text_has_word(const char* text, const char* keyword);
 
 // True when any statement of `digest` begins with `keyword`, by the same rule as
 // pgsql_stmt_first_keyword_is(). A Simple Query can carry several statements, and checking
-// only the first lets `SELECT 1; LISTEN ch` through (issue #6438). Past a point the scan is
-// lost at, any whole-word occurrence counts, so a damaged digest errs toward a match.
+// only the first lets `SELECT 1; LISTEN ch` through (issue #6438). From the point the scan is
+// lost at -- the opening of an unterminated comment or quote -- any whole-word occurrence
+// counts, so a damaged digest errs toward a match. That includes the text of a kept comment
+// cut at FIRST_COMMENT_MAX_LENGTH: `/* ... listen ... */ SELECT 1` with a comment that long
+// is taken for LISTEN (fail-closed), not only a LISTEN that follows the cut comment.
 bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword);
 
 // For TAP Test
