@@ -863,6 +863,10 @@ static void test_stmt_keyword_gate() {
 	ok(!gate_listen(NULL, "SELECT 1; /* LISTEN b */ SELECT 2"), "gate, no digest: LISTEN only inside a comment");
 	ok(!gate_listen(NULL, "SELECT listener FROM t; UNLISTEN *"), "gate, no digest: words that only contain LISTEN");
 	ok(!gate_listen(NULL, NULL), "gate: no digest and no query");
+	// The digest tokenizer reads "*/" + "/" as the opening of another comment, so this query
+	// digests to nothing; the first statement is read from the text itself.
+	ok(gate_listen("", "/*/*n*/*/LISTEN ch") && gate_listen(NULL, "/*/*n*/*/LISTEN ch"),
+		"gate: LISTEN right after a nested comment whose digest is empty");
 
 	// A digest cut at query_digests_max_query_length. The SELECT list alone is longer than the
 	// limit, so the digest stops inside it and the trailing LISTEN is not in it.
@@ -894,7 +898,7 @@ static void test_stmt_keyword_gate() {
 // ============================================================================
 
 int main() {
-	plan(131 + 13);
+	plan(131 + 14);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -998,8 +1002,8 @@ int main() {
 	// 15. Kept comment buffer bound under nested "/*" (4 tests)
 	test_kept_comment_nested_open_bounded(); // 4
 
-	// 16. LISTEN gate without a digest or with a cut one (13 tests)
-	test_stmt_keyword_gate();            // 13
+	// 16. LISTEN gate without a digest or with a cut one (14 tests)
+	test_stmt_keyword_gate();            // 14
 
 	// Total: 1 + 9 + 4 + 6 + 2 + 6 + 2 + 3 + 3 + 2 + 4 + 5 + 7 + 10 = 64
 
