@@ -252,6 +252,11 @@ deps/duckdb/duckdb/
 # symlink at runtime under test-scripts/deps/; never commit this one (it was
 # accidentally committed once with an absolute /home path).
 test/scripts/deps/mysqlbinlog
+# TLS private keys: ProxySQL regenerates the listener/managed TLS material
+# inside its datadir at runtime; they must never be committed (SonarCloud
+# secrets:S6706, BLOCKER). 
+proxysql-*.pem
+proxysql-key.pem
 
 # Temporary ASAN CI end-to-end validation trigger; this branch will not merge.
 
