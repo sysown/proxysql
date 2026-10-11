@@ -1,20 +1,25 @@
 /**
  * @file reg_test_6420_parsersql_set_transaction-t.cpp
- * @brief SET GLOBAL|LOCAL TRANSACTION behaves identically with and without ParserSQL (#6420).
+ * @brief SET ... TRANSACTION behaves identically with and without ParserSQL (#6420).
  *
- * With mysql-query_processor_parser=1 the ParserSQL digest of SET GLOBAL|LOCAL
- * TRANSACTION lost its scope. The scope-less digest matched the session-level
- * SET TRANSACTION handler, which replied OK without applying or forwarding the
- * statement: the global isolation level did not change, an unprivileged user
- * received OK instead of ERR 1227, and SET LOCAL TRANSACTION had no effect.
+ * With mysql-query_processor_parser=1 the ParserSQL 1.1.0 digest of SET
+ * GLOBAL|LOCAL TRANSACTION lost its scope. The scope-less digest matched the
+ * session-level SET TRANSACTION handler, which replied OK without applying or
+ * forwarding the statement: the global isolation level did not change, an
+ * unprivileged user received OK instead of ERR 1227, and SET LOCAL TRANSACTION
+ * had no effect. ParserSQL 1.1.1 keeps the scope, and ProxySQL tracks SET LOCAL
+ * TRANSACTION (a MySQL synonym of SESSION) like SET SESSION TRANSACTION.
  *
  * For query_processor_parser=0 and =1 this test checks, through ProxySQL:
  *  - SET GLOBAL TRANSACTION ISOLATION LEVEL changes @@GLOBAL isolation on the
  *    backend (the original value is restored in the same transaction);
  *  - an unprivileged user receives ERR 1227;
- *  - SET LOCAL TRANSACTION, if the backend accepts it, changes the session
- *    isolation level, and both parser modes produce the same outcome;
+ *  - SET LOCAL TRANSACTION ISOLATION LEVEL / READ ONLY is tracked by ProxySQL
+ *    without locking the hostgroup and applied to the session, with the same
+ *    outcome in both parser modes;
  *  - SET SESSION TRANSACTION (tracked by ProxySQL) keeps working;
+ *  - SET SESSION TRANSACTION with two characteristics, which ProxySQL does not
+ *    track, is forwarded and both characteristics are applied;
  *  - the query digest keeps the GLOBAL scope.
  */
 #include <cstdio>
@@ -26,6 +31,8 @@
 #include "mysql.h"
 #include "command_line.h"
 #include "tap.h"
+#include "utils.h"
+#include "json.hpp"
 
 using Connection = std::unique_ptr<MYSQL, decltype(&mysql_close)>;
 
@@ -67,6 +74,13 @@ static std::string scalar(MYSQL* conn, const std::string& sql, bool quiet = fals
 static std::string isolation(MYSQL* conn, const char* scope) {
 	std::string value = scalar(conn, std::string("SELECT @@") + scope + ".transaction_isolation", true);
 	if (value.empty()) value = scalar(conn, std::string("SELECT @@") + scope + ".tx_isolation");
+	return value;
+}
+
+/** Session access mode ('1' read only); MariaDB 10 has only tx_read_only. */
+static std::string session_read_only(MYSQL* conn) {
+	std::string value = scalar(conn, "SELECT @@SESSION.transaction_read_only", true);
+	if (value.empty()) value = scalar(conn, "SELECT @@SESSION.tx_read_only");
 	return value;
 }
 
@@ -179,16 +193,26 @@ static bool run_checks(const CommandLine& cl, MYSQL* admin, int parser, LocalOut
 		ok(rc == 1227, "parser=%d: unprivileged SET GLOBAL TRANSACTION returns ERR 1227 (rc: %u)", parser, rc);
 	}
 
-	// SET LOCAL TRANSACTION (a synonym of SESSION) must not be acknowledged without effect.
+	// SET LOCAL TRANSACTION (a synonym of SESSION) is tracked like SET SESSION TRANSACTION.
 	{
 		Connection client = connect(cl, cl.username, cl.password);
 		if (!client) return false;
 		const unsigned int rc = execute_errno(client.get(), "SET LOCAL TRANSACTION ISOLATION LEVEL SERIALIZABLE");
-		const std::string value = rc == 0 ? isolation(client.get(), "SESSION") : "";
-		ok(rc != 0 || value == "SERIALIZABLE",
-			"parser=%d: SET LOCAL TRANSACTION is applied when acknowledged (rc: %u, session: '%s')",
-			parser, rc, value.c_str());
+		const nlohmann::json state = fetch_internal_session(client.get(), false);
+		const int locked = state.value("locked_on_hostgroup", -2);
+		const std::string tracked = state.contains("conn") && state["conn"].contains("isolation_level") &&
+			state["conn"]["isolation_level"].is_string() ? state["conn"]["isolation_level"].get<std::string>() : "";
+		ok(rc == 0 && locked == -1 && tracked == "SERIALIZABLE",
+			"parser=%d: SET LOCAL TRANSACTION ISOLATION LEVEL is tracked without locking the hostgroup "
+			"(rc: %u, locked_on_hostgroup: %d, tracked: '%s')", parser, rc, locked, tracked.c_str());
+		const std::string value = isolation(client.get(), "SESSION");
+		ok(value == "SERIALIZABLE", "parser=%d: SET LOCAL TRANSACTION ISOLATION LEVEL is applied (session: '%s')",
+			parser, value.c_str());
 		local = {rc, value};
+		const unsigned int ro_rc = execute_errno(client.get(), "SET LOCAL\n TRANSACTION READ  ONLY");
+		const std::string read_only = ro_rc == 0 ? session_read_only(client.get()) : "";
+		ok(ro_rc == 0 && read_only == "1", "parser=%d: SET LOCAL TRANSACTION READ ONLY is applied (rc: %u, read only: '%s')",
+			parser, ro_rc, read_only.c_str());
 	}
 
 	// Guard: SET SESSION TRANSACTION is tracked by ProxySQL as before.
@@ -199,6 +223,20 @@ static bool run_checks(const CommandLine& cl, MYSQL* admin, int parser, LocalOut
 		const std::string value = rc == 0 ? isolation(client.get(), "SESSION") : "";
 		ok(rc == 0 && value == "READ-COMMITTED",
 			"parser=%d: SET SESSION TRANSACTION is applied (rc: %u, session: '%s')", parser, rc, value.c_str());
+	}
+
+	// Two characteristics are not tracked: the statement must reach the backend
+	// instead of being acknowledged with only the first one applied.
+	{
+		Connection client = connect(cl, cl.username, cl.password);
+		if (!client) return false;
+		const unsigned int rc = execute_errno(client.get(),
+			"SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY");
+		const std::string value = rc == 0 ? isolation(client.get(), "SESSION") : "";
+		const std::string read_only = rc == 0 ? session_read_only(client.get()) : "";
+		ok(rc == 0 && value == "READ-COMMITTED" && read_only == "1",
+			"parser=%d: SET SESSION TRANSACTION with two characteristics applies both (rc: %u, session: '%s', read only: '%s')",
+			parser, rc, value.c_str(), read_only.c_str());
 	}
 	return true;
 }
@@ -212,7 +250,7 @@ int main() {
 	Fixture fixture(admin.get());
 	if (!configure(fixture)) return EXIT_FAILURE;
 
-	plan(2 * 6 + 1 + 1);
+	plan(2 * 9 + 1 + 1);
 	LocalOutcome local[2];
 	for (int parser : {0, 1}) {
 		if (!execute(admin.get(), "SET mysql-query_processor_parser=" + std::to_string(parser)) ||
