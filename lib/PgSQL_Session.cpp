@@ -158,6 +158,119 @@ static void write_tx_poisoned_warning_notice(PG_pkt& pgpkt, PGSQL_ERROR_CODES co
 		0);
 }
 
+// Classify a statement sent while the session is poisoned: 'R' for a plain
+// ROLLBACK / ABORT, 'C' for a plain COMMIT / END -- both end the aborted
+// transaction -- and 0 for anything else, which is rejected with 25P02.
+// Shared by the simple-query path (handler_poisoned_simple_query) and the
+// extended-query one (classify_poisoned_extq_message).
+static char classify_poisoned_txn_end(const char* sql, unsigned int sql_len) {
+	// A Simple Query packet body, and a prepared statement's text, is a null-terminated
+	// string. Trim it so the "is any non-whitespace content remaining?" check does not
+	// treat the null byte itself as trailing junk and reject an otherwise-valid
+	// statement (e.g. "ROLLBACK\0" or "ROLLBACK WORK\0").
+	if (sql_len > 0 && sql[sql_len - 1] == '\0') {
+		sql_len--;
+	}
+
+	// skip whitespace and SQL comments (-- to EOL, /* ... */ non-nesting) in-place.
+	auto skip_ws_and_comments = [](const char*& p, unsigned int& n) {
+		for (;;) {
+			while (n > 0 && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) { p++; n--; }
+			if (n >= 2 && p[0] == '-' && p[1] == '-') {
+				p += 2; n -= 2;
+				while (n > 0 && *p != '\n') { p++; n--; }
+				continue;
+			}
+			if (n >= 2 && p[0] == '/' && p[1] == '*') {
+				p += 2; n -= 2;
+				while (n >= 2 && !(p[0] == '*' && p[1] == '/')) { p++; n--; }
+				if (n >= 2) { p += 2; n -= 2; } else { n = 0; }
+				continue;
+			}
+			break;
+		}
+	};
+
+	// Skip leading whitespace and comments. An ORM-prepended `/* query tag */ ROLLBACK`
+	// must recover, not be rejected.
+	skip_ws_and_comments(sql, sql_len);
+
+	char kind = 0;
+
+	// Case-insensitive prefix match, followed by a word boundary so "ROLLBACKET"
+	// doesn't get classified as ROLLBACK.
+	auto matches_kw = [](const char* p, unsigned int n, const char* kw, unsigned int klen) -> bool {
+		if (n < klen) return false;
+		if (strncasecmp(p, kw, klen) != 0) return false;
+		if (n == klen) return true;
+		char ch = p[klen];
+		return !(ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'));
+	};
+
+	// ABORT is a Postgres synonym for ROLLBACK. END is a Postgres synonym for COMMIT.
+	// Both ROLLBACK and COMMIT recover the session to IDLE.
+	unsigned int verb_len = 0;
+	if (matches_kw(sql, sql_len, "ROLLBACK", 8)) { kind = 'R'; verb_len = 8; }
+	else if (matches_kw(sql, sql_len, "ABORT", 5)) { kind = 'R'; verb_len = 5; }
+	else if (matches_kw(sql, sql_len, "COMMIT", 6)) { kind = 'C'; verb_len = 6; }
+	else if (matches_kw(sql, sql_len, "END", 3))    { kind = 'C'; verb_len = 3; }
+
+	// Having identified a recovery verb, verify the rest of the statement is a
+	// *plain* whole-tx end — no modifiers that change the semantics into
+	// something we can't honor on a dead backend, and no second statement
+	// pipelined after it. The only modifiers we accept are:
+	//   WORK | TRANSACTION   (Postgres noise-word aliases; no semantic effect)
+	// Anything else — specifically ROLLBACK TO SAVEPOINT (partial rollback,
+	// keeps tx open) and AND CHAIN (rolls back and opens a new tx) — would
+	// leave the client's transaction-status view inconsistent with what we can
+	// actually deliver once the backend is gone. Reject those with 25P02 and
+	// keep the session poisoned; the client can then issue a plain ROLLBACK.
+	//
+	// Multi-statement Simple Query (e.g. "ROLLBACK; SELECT 1;") is rejected for
+	// the same reason: we would recover, synthesize a ROLLBACK response, and
+	// silently drop the second statement. Safer to make the client split.
+	if (kind != 0) {
+		const char* rest = sql + verb_len;
+		unsigned int rest_len = sql_len - verb_len;
+		skip_ws_and_comments(rest, rest_len);
+		// Optionally consume a single WORK or TRANSACTION noise word.
+		if (matches_kw(rest, rest_len, "WORK", 4)) {
+			rest += 4; rest_len -= 4;
+			skip_ws_and_comments(rest, rest_len);
+		} else if (matches_kw(rest, rest_len, "TRANSACTION", 11)) {
+			rest += 11; rest_len -= 11;
+			skip_ws_and_comments(rest, rest_len);
+		}
+		// Optional trailing semicolon.
+		if (rest_len > 0 && *rest == ';') {
+			rest++; rest_len--;
+			skip_ws_and_comments(rest, rest_len);
+		}
+		// Anything remaining is either a savepoint/chain modifier or a second
+		// pipelined statement. Either way, reject.
+		if (rest_len > 0) {
+			kind = 0;
+		}
+	}
+	// RELEASE SAVEPOINT and anything else: rejected. Matches Postgres: only
+	// plain ROLLBACK / COMMIT / ABORT / END end an aborted tx cleanly.
+	return kind;
+}
+
+// The answer to the plain ROLLBACK ('R') or COMMIT ('C') that ends a poisoned
+// transaction, without the ReadyForQuery. Match Postgres native: COMMIT inside an
+// aborted tx emits a WARNING notice and rolls back. SQLSTATE 25P01 =
+// no_active_sql_transaction is the correct code (not 00000, which would be
+// successful_completion).
+static void write_poisoned_txn_end(PG_pkt& pgpkt, char kind) {
+	if (kind == 'C') {
+		write_tx_poisoned_warning_notice(pgpkt,
+			PGSQL_ERROR_CODES::ERRCODE_NO_ACTIVE_SQL_TRANSACTION,
+			"there is no transaction in progress");
+	}
+	pgpkt.write_CommandComplete("ROLLBACK");
+}
+
 // ---------------------------------------------------------------------------
 
 extern PgSQL_Authentication* GloPgAuth;
@@ -407,6 +520,7 @@ void PgSQL_Session::reset() {
 	// Clear any poisoned-transaction state — if the session is being reset we're
 	// past the scope of the poison.
 	tx_poisoned = false;
+	poisoned_extq.reset();
 #ifdef PROXYSQLFFTO
 	ffto_bypassed = false;
 	if (m_ffto) {
@@ -510,135 +624,20 @@ bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
 		return true;
 	}
 
-	const char* sql = (char*)pkt->ptr + 5;
-	unsigned int sql_len = pkt->size - 5;
-	// The Simple Query packet body is a null-terminated string; the caller at
-	// handler___status_WAITING_CLIENT_DATA has already validated the terminator.
-	// Trim it so the classifier's "is any non-whitespace content remaining?"
-	// check does not treat the null byte itself as trailing junk and reject an
-	// otherwise-valid statement (e.g. "ROLLBACK\0" or "ROLLBACK WORK\0").
-	if (sql_len > 0 && sql[sql_len - 1] == '\0') {
-		sql_len--;
-	}
-
-	// skip whitespace and SQL comments (-- to EOL, /* ... */ non-nesting) in-place.
-	auto skip_ws_and_comments = [](const char*& p, unsigned int& n) {
-		for (;;) {
-			while (n > 0 && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) { p++; n--; }
-			if (n >= 2 && p[0] == '-' && p[1] == '-') {
-				p += 2; n -= 2;
-				while (n > 0 && *p != '\n') { p++; n--; }
-				continue;
-			}
-			if (n >= 2 && p[0] == '/' && p[1] == '*') {
-				p += 2; n -= 2;
-				while (n >= 2 && !(p[0] == '*' && p[1] == '/')) { p++; n--; }
-				if (n >= 2) { p += 2; n -= 2; } else { n = 0; }
-				continue;
-			}
-			break;
-		}
-	};
-
-	// Skip leading whitespace and comments. An ORM-prepended `/* query tag */ ROLLBACK`
-	// must recover, not be rejected.
-	skip_ws_and_comments(sql, sql_len);
-
-	enum RecoveryKind { KIND_REJECT, KIND_ROLLBACK, KIND_COMMIT };
-	RecoveryKind kind = KIND_REJECT;
-
-	// Case-insensitive prefix match, followed by a word boundary so "ROLLBACKET"
-	// doesn't get classified as ROLLBACK.
-	auto matches_kw = [](const char* p, unsigned int n, const char* kw, unsigned int klen) -> bool {
-		if (n < klen) return false;
-		if (strncasecmp(p, kw, klen) != 0) return false;
-		if (n == klen) return true;
-		char ch = p[klen];
-		return !(ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'));
-	};
-
-	// ABORT is a Postgres synonym for ROLLBACK. END is a Postgres synonym for COMMIT.
-	// Both ROLLBACK and COMMIT recover the session to IDLE.
-	unsigned int verb_len = 0;
-	if (matches_kw(sql, sql_len, "ROLLBACK", 8)) { kind = KIND_ROLLBACK; verb_len = 8; }
-	else if (matches_kw(sql, sql_len, "ABORT", 5)) { kind = KIND_ROLLBACK; verb_len = 5; }
-	else if (matches_kw(sql, sql_len, "COMMIT", 6)) { kind = KIND_COMMIT;   verb_len = 6; }
-	else if (matches_kw(sql, sql_len, "END", 3))    { kind = KIND_COMMIT;   verb_len = 3; }
-
-	// Having identified a recovery verb, verify the rest of the statement is a
-	// *plain* whole-tx end — no modifiers that change the semantics into
-	// something we can't honor on a dead backend, and no second statement
-	// pipelined after it. The only modifiers we accept are:
-	//   WORK | TRANSACTION   (Postgres noise-word aliases; no semantic effect)
-	// Anything else — specifically ROLLBACK TO SAVEPOINT (partial rollback,
-	// keeps tx open) and AND CHAIN (rolls back and opens a new tx) — would
-	// leave the client's transaction-status view inconsistent with what we can
-	// actually deliver once the backend is gone. Reject those with 25P02 and
-	// keep the session poisoned; the client can then issue a plain ROLLBACK.
-	//
-	// Multi-statement Simple Query (e.g. "ROLLBACK; SELECT 1;") is rejected for
-	// the same reason: we would recover, synthesize a ROLLBACK response, and
-	// silently drop the second statement. Safer to make the client split.
-	if (kind != KIND_REJECT) {
-		const char* rest = sql + verb_len;
-		unsigned int rest_len = sql_len - verb_len;
-		skip_ws_and_comments(rest, rest_len);
-		// Optionally consume a single WORK or TRANSACTION noise word.
-		if (matches_kw(rest, rest_len, "WORK", 4)) {
-			rest += 4; rest_len -= 4;
-			skip_ws_and_comments(rest, rest_len);
-		} else if (matches_kw(rest, rest_len, "TRANSACTION", 11)) {
-			rest += 11; rest_len -= 11;
-			skip_ws_and_comments(rest, rest_len);
-		}
-		// Optional trailing semicolon.
-		if (rest_len > 0 && *rest == ';') {
-			rest++; rest_len--;
-			skip_ws_and_comments(rest, rest_len);
-		}
-		// Anything remaining is either a savepoint/chain modifier or a second
-		// pipelined statement. Either way, reject.
-		if (rest_len > 0) {
-			kind = KIND_REJECT;
-		}
-	}
-	// RELEASE SAVEPOINT and anything else: KIND_REJECT. Matches Postgres: only
-	// plain ROLLBACK / COMMIT / ABORT / END end an aborted tx cleanly.
+	const char kind = classify_poisoned_txn_end((char*)pkt->ptr + 5, pkt->size - 5);
 
 	PG_pkt pgpkt{};
 	pgpkt.set_multi_pkt_mode(true);
 
-	if (kind == KIND_REJECT) {
+	if (kind == 0) {
 		thread->status_variables.tx_poisoned_rejected_statements_total++;
 		write_tx_poisoned_error(pgpkt);
 		pgpkt.write_ReadyForQuery('E');
 	} else {
 		// Recovery. Clear the poison and issue a ROLLBACK-shaped response.
-		thread->status_variables.tx_poisoned_recovered_total++;
-		// A poison raised by a local error (txn_state_for_local_error()) leaves the
-		// backend holding the transaction attached and still open: it never saw the
-		// error. Dropping it is what rolls that transaction back, so neither COMMIT nor
-		// the next statement can carry its work forward. The tracked SET variables go
-		// back to their BEGIN values first, while that backend is still attached.
-		rollback_tracked_txn_state();
-		for (unsigned int i = 0; mybes && i < mybes->len; i++) {
-			PgSQL_Backend* _mybe = (PgSQL_Backend*)mybes->index(i);
-			if (_mybe && _mybe->server_myds && _mybe->server_myds->myconn &&
-				_mybe->server_myds->myconn->IsActiveTransaction()) {
-				_mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
-			}
-		}
-		if (kind == KIND_COMMIT) {
-			// Match Postgres native: COMMIT inside an aborted tx emits a WARNING
-			// notice and rolls back. SQLSTATE 25P01 = no_active_sql_transaction
-			// is the correct code (not 00000, which would be successful_completion).
-			write_tx_poisoned_warning_notice(pgpkt,
-				PGSQL_ERROR_CODES::ERRCODE_NO_ACTIVE_SQL_TRANSACTION,
-				"there is no transaction in progress");
-		}
-		pgpkt.write_CommandComplete("ROLLBACK");
+		end_poisoned_transaction();
+		write_poisoned_txn_end(pgpkt, kind);
 		pgpkt.write_ReadyForQuery('I');
-		tx_poisoned = false;
 	}
 
 	pgpkt.set_multi_pkt_mode(false);
@@ -2422,39 +2421,57 @@ __implicit_sync:
 						char command = c = *((unsigned char*)pkt.ptr);
 						// Poisoned-session gate for Extended Query messages.
 						// Simple Query ('Q') falls through to handler_special_queries,
-						// which dispatches to handler_poisoned_simple_query. Extended
-						// Query (P/B/D/C/E/S) is rejected here in V1: P/B/D/C/E are
-						// swallowed silently, and S emits ErrorResponse(25P02) +
-						// ReadyForQuery('E'). Client must issue a Simple-Query ROLLBACK
-						// to recover. QUIT ('X') is always honored.
+						// which dispatches to handler_poisoned_simple_query. QUIT ('X')
+						// is always honored. Extended Query (P/B/D/C/E) is queued as
+						// usual and classified as it arrives: a frame that only runs a
+						// plain ROLLBACK / COMMIT / ABORT / END ends the transaction at
+						// Sync, the way the simple-query ROLLBACK does -- pgjdbc and other
+						// extended-only drivers send rollback() that way. Anything else
+						// refuses the frame: it is thrown away, the rest of it is
+						// swallowed, and its Sync gets ErrorResponse(25P02) +
+						// ReadyForQuery('E').
 						if (tx_poisoned && command != 'Q' && command != 'X') {
 							if (command == 'P' || command == 'B' || command == 'D' ||
 							    command == 'C' || command == 'E') {
-								// Silent swallow — Parse/Bind/Describe/Close/Execute
-								// packets carry no client-visible response while
-								// poisoned. The whole logical ext-query gets
-								// accounted for once, at Sync.
-								l_free(pkt.size, pkt.ptr);
-								continue;
+								if (poisoned_extq.refused) {
+									// Rest of a refused frame: no client-visible
+									// response. The whole logical ext-query gets
+									// accounted for once, at Sync.
+									l_free(pkt.size, pkt.ptr);
+									continue;
+								}
+								// Queued by the switch below, then classified.
 							}
 							if (command == 'S') {
-								// One "rejected statement" per logical extended
-								// query (== per Sync), matching the simple-query
-								// path where a single 'Q' packet bumps the counter
-								// exactly once.
-								thread->status_variables.tx_poisoned_rejected_statements_total++;
-								PG_pkt pgpkt{};
-								pgpkt.set_multi_pkt_mode(true);
-								write_tx_poisoned_error(pgpkt,
-									"current transaction is aborted, commands ignored until end of transaction block (extended-query path; issue ROLLBACK via simple query to recover)");
-								pgpkt.write_ReadyForQuery('E');
-								pgpkt.set_multi_pkt_mode(false);
-								auto buff = pgpkt.detach();
-								client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
-								client_myds->DSS = STATE_SLEEP;
-								l_free(pkt.size, pkt.ptr);
-								if (mirror == false) RequestEnd(NULL, false);
-								continue;
+								const bool ends_txn = poisoned_extq.refused == false && poisoned_extq.executes;
+								poisoned_extq.reset();
+								if (ends_txn) {
+									// The transaction is rolled back now; the switch
+									// below runs the frame, whose Executes are answered
+									// locally (handle_post_sync_execute_message()).
+									end_poisoned_transaction();
+								} else {
+									// One "rejected statement" per logical extended
+									// query (== per Sync), matching the simple-query
+									// path where a single 'Q' packet bumps the counter
+									// exactly once.
+									thread->status_variables.tx_poisoned_rejected_statements_total++;
+									// A Sync implied by a simple Query that follows leaves
+									// the ReadyForQuery to that Query.
+									const bool send_ready = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0;
+									reset_extended_query_frame();
+									PG_pkt pgpkt{};
+									pgpkt.set_multi_pkt_mode(true);
+									write_tx_poisoned_error(pgpkt);
+									if (send_ready) pgpkt.write_ReadyForQuery('E');
+									pgpkt.set_multi_pkt_mode(false);
+									auto buff = pgpkt.detach();
+									client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
+									client_myds->DSS = STATE_SLEEP;
+									l_free(pkt.size, pkt.ptr);
+									if (mirror == false) RequestEnd(NULL, false);
+									continue;
+								}
 							}
 						}
 						switch (command) {
@@ -2702,6 +2719,7 @@ __implicit_sync:
 								handler_ret = -1;
 								return handler_ret;
 							}
+							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
 						case 'D':
 							extended_query_phase = EXTQ_PHASE_BUILDING;
@@ -2709,6 +2727,7 @@ __implicit_sync:
 								handler_ret = -1;
 								return handler_ret;
 							}
+							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
 						case 'C':
 							extended_query_phase = EXTQ_PHASE_BUILDING;
@@ -2716,6 +2735,7 @@ __implicit_sync:
 								handler_ret = -1;
 								return handler_ret;
 							}
+							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
 						case 'B':
 							extended_query_phase = EXTQ_PHASE_BUILDING;
@@ -2723,6 +2743,7 @@ __implicit_sync:
 								handler_ret = -1;
 								return handler_ret;
 							}
+							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
 						case 'E':
 							extended_query_phase = EXTQ_PHASE_BUILDING;
@@ -2730,6 +2751,7 @@ __implicit_sync:
 								handler_ret = -1;
 								return handler_ret;
 							}
+							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
 						case 'S':
 						{
@@ -7056,24 +7078,27 @@ bool PgSQL_Session::is_in_transaction() const {
 //
 // The backend never saw this error. One still at 'T' would commit the transaction on
 // a later COMMIT, so the session is poisoned: every statement is answered with 25P02
-// until the client ends the transaction, and handler_poisoned_simple_query() discards
-// that backend then -- the backend is NOT touched here, because callers may still be
-// using it. A backend already at 'E' agrees with the client and handles the ROLLBACK
-// itself, unless it is mid-batch (the frame reset about to follow drops it) or
-// 'backend_lost' says the caller is about to drop it.
+// until the client ends the transaction with a ROLLBACK/COMMIT -- over either protocol
+// -- and end_poisoned_transaction() discards that backend then. The backend is NOT
+// touched here, because callers may still be using it. A backend already at 'E' agrees
+// with the client and handles the ROLLBACK itself, unless it is mid-batch (the frame
+// reset about to follow drops it) or 'backend_lost' says the caller is about to drop it.
 //
 // The SET variables tracked since BEGIN are put back when the transaction ends, as a
 // real ROLLBACK does (rollback_tracked_txn_state()). That needs the backend attached,
-// so a caller about to drop it gets it done now; otherwise recovery does it.
+// so a caller about to drop it -- or whose frame reset will, for a mid-batch one -- gets
+// it done now; otherwise recovery does it.
 char PgSQL_Session::txn_state_for_local_error(bool backend_lost) {
 	if (tx_poisoned) return 'E';
 	bool in_txn = false;
 	bool backend_agrees = true;
+	bool mid_batch = false;
 	for (unsigned int i = 0; mybes && i < mybes->len; i++) {
 		PgSQL_Backend* _mybe = (PgSQL_Backend*)mybes->index(i);
 		PgSQL_Connection* conn = (_mybe && _mybe->server_myds) ? _mybe->server_myds->myconn : NULL;
 		if (conn == NULL || conn->IsKnownActiveTransaction() == false) continue;
 		in_txn = true;
+		if (conn->is_pipeline_active()) mid_batch = true;
 		if (backend_lost || conn->is_pipeline_active() || conn->get_transaction_status_char() != 'E') {
 			backend_agrees = false;
 		}
@@ -7081,8 +7106,9 @@ char PgSQL_Session::txn_state_for_local_error(bool backend_lost) {
 	if (in_txn == false) return 'I';
 	if (backend_agrees == false) {
 		tx_poisoned = true;
+		poisoned_extq.reset();
 		thread->status_variables.tx_poisoned_total++;
-		if (backend_lost) rollback_tracked_txn_state();
+		if (backend_lost || mid_batch) rollback_tracked_txn_state();
 	}
 	return 'E';
 }
@@ -7098,6 +7124,84 @@ void PgSQL_Session::rollback_tracked_txn_state() {
 		transaction_state_manager->handle_transaction("ROLLBACK");
 	} else {
 		transaction_state_manager->reset_state();
+	}
+}
+
+// See the tx_poisoned field. Plain ROLLBACK / ABORT / COMMIT / END end a poisoned
+// transaction, over either protocol. A poison raised by a local error
+// (txn_state_for_local_error()) leaves the backend holding the transaction attached
+// and still open: it never saw the error. Dropping it is what rolls that transaction
+// back, so neither COMMIT nor the next statement can carry its work forward. The
+// tracked SET variables go back to their BEGIN values first, while that backend is
+// still attached.
+void PgSQL_Session::end_poisoned_transaction() {
+	thread->status_variables.tx_poisoned_recovered_total++;
+	rollback_tracked_txn_state();
+	for (unsigned int i = 0; mybes && i < mybes->len; i++) {
+		PgSQL_Backend* _mybe = (PgSQL_Backend*)mybes->index(i);
+		if (_mybe && _mybe->server_myds && _mybe->server_myds->myconn &&
+			_mybe->server_myds->myconn->IsActiveTransaction()) {
+			_mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+		}
+	}
+	tx_poisoned = false;
+	poisoned_extq.reset();
+}
+
+// Classify the extended-query message just queued while the session is poisoned (the
+// back of extended_query_frame). The frame may end the transaction only if every
+// message serves a plain ROLLBACK / ABORT / COMMIT / END: Parse of one, Bind of one to
+// the unnamed portal, Describe of either, Close, and Execute of that portal -- the
+// shape pgjdbc, among others, sends for rollback()/commit(), with the statement named
+// once it is server-prepared. PostgreSQL itself accepts exactly these in an aborted
+// transaction. Anything else marks the frame refused.
+void PgSQL_Session::classify_poisoned_extq_message() {
+	if (extended_query_frame.empty() || poisoned_extq.refused) return;
+	// The kind of a statement the frame binds or describes: one Parsed earlier in this
+	// frame wins, as it will replace (unnamed) or fail to replace (named) the existing one.
+	auto stmt_kind = [this](const char* name) -> char {
+		for (auto it = poisoned_extq.stmts.rbegin(); it != poisoned_extq.stmts.rend(); ++it) {
+			if (it->first == name) return it->second;
+		}
+		const PgSQL_STMT_Global_info* stmt_info =
+			client_myds->myconn->local_stmts->find_stmt_info_from_stmt_name(name);
+		return stmt_info ? classify_poisoned_txn_end(stmt_info->query, stmt_info->query_length) : 0;
+	};
+	const bool accepted = std::visit([&](auto& msg) -> bool {
+		using T = std::decay_t<decltype(msg)>;
+		if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Parse_Message>>) {
+			const PgSQL_Parse_Data& d = msg->data();
+			const char kind = classify_poisoned_txn_end(d.query_string, strlen(d.query_string));
+			if (kind == 0) return false;
+			poisoned_extq.stmts.emplace_back(d.stmt_name, kind);
+			return true;
+		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Bind_Message>>) {
+			const PgSQL_Bind_Data& d = msg->data();
+			if (d.portal_name[0] != '\0') return false;
+			poisoned_extq.portal = stmt_kind(d.stmt_name);
+			return poisoned_extq.portal != 0;
+		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Describe_Message>>) {
+			const PgSQL_Describe_Data& d = msg->data();
+			if (d.stmt_type == 'P') return d.stmt_name[0] == '\0' && poisoned_extq.portal != 0;
+			return stmt_kind(d.stmt_name) != 0;
+		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Close_Message>>) {
+			const PgSQL_Close_Data& d = msg->data();
+			if (d.stmt_type == 'S') return true;
+			if (d.stmt_name[0] != '\0') return false;
+			poisoned_extq.portal = 0;
+			return true;
+		} else {
+			const PgSQL_Execute_Data& d = msg->data();
+			if (d.portal_name[0] != '\0' || poisoned_extq.portal == 0) return false;
+			msg->poisoned_txn_end = poisoned_extq.portal;
+			poisoned_extq.executes = true;
+			return true;
+		}
+	}, extended_query_frame.back());
+	if (accepted == false) {
+		// Nothing of a refused frame is run: drop what is queued, swallow the rest.
+		poisoned_extq.refused = true;
+		reset_extended_query_frame();
 	}
 }
 
@@ -7337,8 +7441,11 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 		// setting 'prepared' to prevent fetching results from the cache if the digest matches
 		bool handled_in_handler = handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo(&parse_pkt, &lock_hostgroup, PGSQL_EXTENDED_QUERY_TYPE_PARSE);
 		if (handled_in_handler == true) {
-			// parse_pkt memory is already freed in the handler
-			return 0;
+			// parse_pkt memory is already freed in the handler. For a Parse the handler
+			// only ever answers with an error (max_allowed_packet, a rule's error_msg, a
+			// hostgroup-lock refusal), so the rest of the frame is discarded, as after
+			// handle_post_sync_error(): nothing behind the error may reach the backend.
+			return 2;
 		}
 		extended_query_exec_qp = false; // reset the flag, we have processed the query and destination_hostgroup is set
 	} else {
@@ -7349,12 +7456,12 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 
 		if (parse_pkt.size > (unsigned int)pgsql_thread___max_allowed_packet) {
 			handler_WCD_SS_MCQ_qpo_LargePacket(&parse_pkt);
-			return 0;
+			return 2; // an error: discard the rest of the frame
 		}
 
 		if (qpo->error_msg) {
 			handler_WCD_SS_MCQ_qpo_error_msg(&parse_pkt);
-			return 0;
+			return 2; // an error: discard the rest of the frame
 		}
 
 		assert(previous_hostgroup != -1); // previous_hostgroup should be set before 
@@ -7635,7 +7742,9 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 			// describe_pkt memory is already freed in the handler
 			// we can detach the describe_msg now
 			describe_msg->detach();
-			return 0;
+			// For a Describe the handler only ever answers with the hostgroup-lock
+			// refusal: discard the rest of the frame.
+			return 2;
 		}
 		extended_query_exec_qp = false;
 	} else {
@@ -7891,7 +8000,9 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 		if (handled_in_handler == true) {
 			// bind_msg now has dangling pointer to bind_pkt, which is already freed in the handler
 			bind_msg->detach(); // detach the packet from the bind message
-			return 0;
+			// For a Bind the handler only ever answers with the hostgroup-lock refusal:
+			// discard the rest of the frame.
+			return 2;
 		}
 		extended_query_exec_qp = false;
 	} else {
@@ -8119,6 +8230,29 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 			PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL : PGSQL_EXTENDED_QUERY_FLAG_NONE;
 	}
 	CurrentQuery.start_time = thread->curtime;
+
+	if (execute_msg->poisoned_txn_end) {
+		// The ROLLBACK/COMMIT that ended a poisoned transaction: end_poisoned_transaction()
+		// already rolled it back when the frame was accepted, so it is answered here the
+		// way handler_poisoned_simple_query() answers it, and never reaches a backend.
+		CurrentQuery.QueryPointer = (unsigned char*)stmt_info->query;
+		CurrentQuery.QueryLength = stmt_info->query_length;
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		PG_pkt pgpkt{};
+		pgpkt.set_multi_pkt_mode(true);
+		if (execute_msg->send_describe_portal_result) {
+			pgpkt.write_generic('n', ""); // NoData: a transaction end returns no rows
+		}
+		write_poisoned_txn_end(pgpkt, execute_msg->poisoned_txn_end);
+		if (is_extended_query_ready_for_query()) {
+			pgpkt.write_ReadyForQuery('I');
+		}
+		pgpkt.set_multi_pkt_mode(false);
+		auto buff = pgpkt.detach();
+		client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
+		RequestEnd(NULL, false);
+		return 0;
+	}
 
 	timespec begint;
 	timespec endt;

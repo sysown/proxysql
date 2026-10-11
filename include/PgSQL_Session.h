@@ -485,6 +485,12 @@ private:
 	// Returns true if the packet was handled here. Increments the
 	// pgsql_tx_poisoned_{recovered,rejected_statements}_total counters.
 	bool handler_poisoned_simple_query(PtrSize_t* pkt);
+	// The extended-query counterpart, called for each Parse/Bind/Describe/Close/Execute
+	// queued while tx_poisoned: may the frame end the transaction? (see poisoned_extq)
+	void classify_poisoned_extq_message();
+	// The client ended a poisoned transaction (ROLLBACK/COMMIT, either protocol): roll it
+	// back -- tracked SET variables, then any backend still holding it -- and clear the poison.
+	void end_poisoned_transaction();
 	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn);
 	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret);
 	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, bool& wrong_pass);
@@ -587,7 +593,24 @@ public:
 	//     "there is no transaction in progress" warning, clear flag.
 	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
 	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
+	// The same holds over the extended protocol (poisoned_extq). An error ProxySQL
+	// raises itself inside a transaction poisons the session too
+	// (txn_state_for_local_error()).
 	bool tx_poisoned{ false };
+	// An extended-query frame received while tx_poisoned, classified message by message
+	// by classify_poisoned_extq_message(). A frame that only prepares, binds to the
+	// unnamed portal and executes plain ROLLBACK / COMMIT / ABORT / END (plus Describe and
+	// Close) ends the transaction at Sync, as the simple-query ROLLBACK does; any other
+	// frame is answered with 25P02 + ReadyForQuery('E') and the session stays poisoned.
+	struct Poisoned_Extq_Frame {
+		// Statements Parsed in this frame (name, kind); kind is 'R' for ROLLBACK/ABORT,
+		// 'C' for COMMIT/END.
+		std::vector<std::pair<std::string, char>> stmts;
+		char portal = 0;          // kind of the statement bound to the unnamed portal
+		bool executes = false;    // an Execute of a transaction end was queued
+		bool refused = false;     // something else was: the frame does not end the txn
+		void reset() { stmts.clear(); portal = 0; executes = false; refused = false; }
+	} poisoned_extq;
 	// Backend administrative removal: drain the FATAL response before closing.
 	bool offline_fatal_pending = false;
 #ifdef PROXYSQL31
