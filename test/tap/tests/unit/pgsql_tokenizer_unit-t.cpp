@@ -774,12 +774,74 @@ static void test_stmt_keyword_through_digest() {
 		"stmt scan of digest: a kept comment cut short alone does not read as LISTEN");
 }
 
+// With query_digests_keep_comment the kept comment is collected in a thread-local buffer of
+// FIRST_COMMENT_MAX_LENGTH bytes and cut at FIRST_COMMENT_MAX_LENGTH-1. Every byte of the
+// comment was bounded except the two of a nested "/*", so a comment that had already filled
+// the buffer followed by nested "/*" wrote past its end, over whatever thread-local data
+// follows it (before the fix this test aborted inside jemalloc, whose per-thread state had
+// been overwritten), and the overrun was then counted into the comment copied into the
+// digest. Found during the #6438 review.
+//
+// Digested into a heap buffer sized for the whole query (buf == NULL), with a max length
+// large enough that only the comment bound can limit what is kept.
+static std::string digest_query_big(const std::string& query, bool keep_comment, std::string* first_comment) {
+	char* fst = nullptr;
+	options opts;
+	opts.lowercase = true;
+	opts.replace_null = true;
+	opts.replace_number = true;
+	opts.grouping_limit = 3;
+	opts.groups_grouping_limit = 0;
+	opts.keep_comment = keep_comment;
+	opts.max_query_length = (int)query.size() + 1024;
+	char* res = pgsql_query_digest_and_first_comment(query.c_str(), (int)query.size(), &fst, NULL, &opts);
+	std::string ret(res ? res : "");
+	free(res);
+	if (first_comment) *first_comment = fst ? fst : "";
+	free(fst);
+	return ret;
+}
+
+static void test_kept_comment_nested_open_bounded() {
+	const int over = 100;      // comment bytes past the buffer before the nested marks
+	const int nests = 4000;    // 8000 bytes of "/*", far beyond the 1024-byte buffer
+	const std::string body(FIRST_COMMENT_MAX_LENGTH + over, 'x');
+	std::string opens, closes;
+	for (int i = 0; i < nests; i++) { opens += " /*"; closes += " */"; }
+
+	// Closed: the comment ends, is copied into the digest, and SELECT 1 follows it. Every
+	// "*/" is preceded by a space: the tokenizer reads the '/' of "*/*/" as opening another
+	// comment, which is a separate matter.
+	const std::string q_closed = "/*" + body + opens + closes + " */ SELECT 1";
+	std::string fst;
+	const std::string d = digest_query_big(q_closed, true, &fst);
+	const std::string kept = "/*" + std::string(FIRST_COMMENT_MAX_LENGTH - 3, 'x');
+	ok(d == kept + " select ?",
+		"kept comment + nested '/*': digest keeps exactly FIRST_COMMENT_MAX_LENGTH-1 comment bytes "
+		"(digest length %zu, expected %zu)", d.size(), kept.size() + 9);
+	ok(fst.size() <= FIRST_COMMENT_MAX_LENGTH - 1 && fst.compare(0, 4, "xxxx") == 0,
+		"kept comment + nested '/*': first comment bounded (%zu bytes)", fst.size());
+
+	// Unterminated: the query ends inside the nested comment.
+	const std::string q_open = "/*" + body + opens;
+	const std::string d_open = digest_query_big(q_open, true, NULL);
+	ok(d_open.size() <= FIRST_COMMENT_MAX_LENGTH - 1,
+		"kept comment + nested '/*', unterminated: digest bounded (%zu bytes)", d_open.size());
+
+	// The thread-local state is reused by the next digest on this thread.
+	DigestOptions keep;
+	keep.keep_comment = true;
+	ok(digest_query("/* c */ SELECT 1", keep) == "/* c */ select ?" &&
+		digest_query("SELECT 1") == "select ?",
+		"kept comment + nested '/*': later digests on the same thread unaffected");
+}
+
 // ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(125);
+	plan(129);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -879,6 +941,9 @@ int main() {
 	test_stmt_keyword_after_lost_scan(); // 9
 	test_stmt_next();                    // 8
 	test_stmt_keyword_through_digest();  // 14
+
+	// 15. Kept comment buffer bound under nested "/*" (4 tests)
+	test_kept_comment_nested_open_bounded(); // 4
 
 	// Total: 1 + 9 + 4 + 6 + 2 + 6 + 2 + 3 + 3 + 2 + 4 + 5 + 7 + 10 = 64
 
