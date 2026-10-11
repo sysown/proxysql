@@ -2456,11 +2456,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				// A server-module veto blocked only the plugin tables: report it.
 				const std::string veto = SPA->servers_load_veto[1];
 				SPA->pgsql_servers_wrunlock();
-				// Return-value contract (loader): FALSE always means a failed
-				// installation -- check it FIRST, whatever 'servers_load_veto'
-				// says; a module veto on a TRUE return is advisory and shown
-				// as the OK packet's warning (issue #6440 review).
-				if (!loaded) {
+				// 'false' can mean an advisory module veto (which installed the
+				// core tables anyway) or a REAL installation failure; the loader
+				// reports the distinction in servers_load_install_failed. Only
+				// a real failure is an error to the operator (issue #6440
+				// review).
+				if (SPA->servers_load_install_failed[1]) {
 					proxy_error("Error while loading pgsql servers to RUNTIME\n");
 					SPA->send_error_msg_to_client(sess,
 						veto.empty() ? (char*)"Error while loading pgsql servers to RUNTIME" : (char*)veto.c_str());
@@ -2479,7 +2480,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				// A server-module veto blocked only the plugin tables: report it.
 				const std::string veto = SPA->servers_load_veto[0];
 				SPA->mysql_servers_wrunlock();
-				if (!loaded) {
+				if (SPA->servers_load_install_failed[0]) {
 					proxy_error("Error while loading mysql servers to RUNTIME\n");
 					SPA->send_error_msg_to_client(sess,
 						veto.empty() ? (char*)"Error while loading mysql servers to RUNTIME" : (char*)veto.c_str());

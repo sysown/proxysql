@@ -2835,14 +2835,15 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_info("Cluster: Loading to runtime MySQL Servers v2 from peer %s:%d\n", hostname, port);
 						const bool mysql_servers_loaded =
 							GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
-						// Return-value contract (see the loader): FALSE always
-						// means the installation failed -- check it FIRST,
-						// whatever 'servers_load_veto' says, and stop BEFORE
-						// persisting anything below: a save-to-disk here would
-						// overwrite the freshly-pulled tables with the stale
-						// runtime (issue #6440 review). A veto, on a TRUE
-						// return, is advisory: it never changes the instance.
-						if (!mysql_servers_loaded) {
+						// FALSE plus a REAL installation failure must stop
+						// this pull BEFORE any persistence below: a
+						// save-to-disk here would overwrite the
+						// freshly-pulled tables with the stale runtime
+						// (issue #6440 review). The loader reports that
+						// distinction in servers_load_install_failed; a
+						// module veto (which installed the core tables)
+						// is advisory only.
+						if (GloAdmin->servers_load_install_failed[0]) {
 							proxy_error("Cluster: MySQL servers pulled from peer %s:%d were not installed to runtime: %s\n",
 								hostname, port,
 								GloAdmin->servers_load_veto[0].empty() ?
@@ -4151,9 +4152,9 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 						expected_pgsql_server_v2,
 						true
 					);
-					// Same contract as the MySQL pull above: FALSE means a failed
-					// installation, checked FIRST, before any persistence.
-					if (!pgsql_servers_loaded) {
+					// Same contract as the MySQL pull above: a REAL
+					// installation failure stops the pull before persistence.
+					if (GloAdmin->servers_load_install_failed[1]) {
 						proxy_error("Cluster: PostgreSQL servers pulled from peer %s:%d were not installed to runtime: %s\n",
 							hostname, port,
 							GloAdmin->servers_load_veto[1].empty() ?

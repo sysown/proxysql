@@ -181,7 +181,14 @@ MySQLBackendAuthPolicy resolve_mysql_backend_auth_policy(
 		free_account_details(account);
 		MySQLBackendAuthPolicy policy;
 		policy.database_user = database_user;
+		// Routing fix (v3.0.11 parity for the split-row user): connect with
+		// the credentials captured at frontend authentication. 'type' stays
+		// PASSWORD so the session cannot fail closed at query time, but
+		// 'failure_code' records WHY the backend row is absent so reset-time
+		// validation (can_reset_for_backend_auth_policy) can still deny a
+		// COM_CHANGE_USER for an UNMARKED rowless connection.
 		policy.type = MySQLBackendAuthType::PASSWORD;
+		policy.failure_code = "backend_user_not_found";
 		return policy;
 	}
 

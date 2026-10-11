@@ -95,7 +95,8 @@ static void test_own_gtid_sets_for_routing() {
 }
 
 int main() {
-	plan(51);
+	// 32 pre-existing ok() calls + 15 in test_own_gtid_sets_for_routing().
+	plan(47);
 	ok(test_init_minimal() == 0, "test_init_minimal() succeeds");
 	ParsedGTID p;
 

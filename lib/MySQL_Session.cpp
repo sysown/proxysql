@@ -251,7 +251,17 @@ static bool session_authorizes_rowless_passthrough(
 	const MySQL_Session *session, const char *backend_username,
 	const MySQLBackendAuthPolicy& policy)
 {
-	return policy.type == MySQLBackendAuthType::INVALID && session != nullptr &&
+	// Two shapes arrive for a rowless session (no backend row):
+	//  - the legacy INVALID policy, whose failure code marks the absence;
+	//  - the routing-fix PASSWORD policy that carries the SAME failure code
+	//    with type==PASSWORD (see resolve_mysql_backend_auth_policy) so a
+	//    backend connect attempt with the frontend credentials succeeds.
+	// Both must be recognized, or an authorized rowless passthrough session
+	// would be treated as an ordinary PASSWORD user after the routing fix.
+	const bool type_recognized =
+		policy.type == MySQLBackendAuthType::INVALID ||
+		policy.type == MySQLBackendAuthType::PASSWORD;
+	return type_recognized && session != nullptr &&
 		session->passthrough_credential && backend_username != nullptr &&
 		backend_username[0] != '\0' &&
 		policy.failure_code == "backend_user_not_found";

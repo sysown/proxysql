@@ -9191,6 +9191,7 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock,
 	bool emit_runtime_install) {
 	// make sure that the caller has called mysql_servers_wrlock()
+	servers_load_install_failed[0] = false;
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::mysql;
 	ProxySQL_ServerRuntimeInstallTransaction runtime_install;
@@ -9253,6 +9254,8 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 			// Every failure below must leave a reason in 'servers_load_veto':
 			// it is the only channel the Admin session and the Cluster puller
 			// use to tell "installed" from "silently not installed".
+			// A failed reservation is a REAL installation failure, not a module veto.
+			servers_load_install_failed[0] = true;
 			if (!runtime_install) {
 				if (servers_load_veto[0].empty()) {
 					servers_load_veto[0] = install_error.empty()
@@ -9269,6 +9272,7 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 				if (servers_load_veto[0].empty()) {
 					servers_load_veto[0] = "Unable to prepare the MySQL server runtime installation";
 				}
+				servers_load_install_failed[0] = true;
 				proxy_error("%s\n", servers_load_veto[0].c_str());
 				return false;
 			}
@@ -9490,6 +9494,11 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		resultset_mysql_servers_ssl_params = NULL;
 	}
 	if (!first_error.empty() && servers_load_veto[0].empty()) servers_load_veto[0] = first_error;
+	if (!first_error.empty() || !committed) {
+		// A real installation failure (HGM commit or install transaction),
+		// never an advisory module veto.
+		servers_load_install_failed[0] = true;
+	}
 	// A false 'committed' must still carry a reason, otherwise callers that
 	// report on 'servers_load_veto' cannot tell a real failure from a clean load.
 	if (!committed && servers_load_veto[0].empty()) {
@@ -9513,6 +9522,7 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	bool runtime_install_prepared = false;
 	bool commit_server_module = true;
 	servers_load_veto[1].clear();
+	servers_load_install_failed[1] = false;
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
@@ -9550,6 +9560,7 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 			// Every failure below must leave a reason in 'servers_load_veto':
 			// it is the only channel the Admin session and the Cluster puller
 			// use to tell "installed" from "silently not installed".
+			servers_load_install_failed[1] = true;
 			if (!runtime_install) {
 				if (servers_load_veto[1].empty()) {
 					servers_load_veto[1] = install_error.empty()
@@ -9566,6 +9577,7 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 				if (servers_load_veto[1].empty()) {
 					servers_load_veto[1] = "Unable to prepare the PostgreSQL server runtime installation";
 				}
+				servers_load_install_failed[1] = true;
 				proxy_error("%s\n", servers_load_veto[1].c_str());
 				return false;
 			}
@@ -9655,6 +9667,7 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	);
  if (runtime_install_prepared && runtime_hgm_committed &&
      !runtime_install.commit(std::move(installed_snapshot), commit_server_module)) {
+  servers_load_install_failed[1] = true;
   servers_load_veto[1] = "Unable to commit PostgreSQL server runtime installation transaction";
   proxy_error("%s\n",servers_load_veto[1].c_str());
  }
@@ -9677,14 +9690,17 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	// from a clean load.
 	if (!runtime_hgm_committed && servers_load_veto[1].empty()) {
 		servers_load_veto[1] = "PostgreSQL server runtime was not committed";
+		servers_load_install_failed[1] = true;
 	}
-	// Return-value contract, aligned with the MySQL loader and pinned by
-	// server_runtime_load_unit-t: FALSE always means a failed installation
-	// (any text left in 'servers_load_veto' describes THAT failure), while a
-	// module veto -- which installs the core tables anyway -- only lands in
-	// 'servers_load_veto' on a TRUE return. Callers check the bool first; a
-	// veto is advisory information, never a failure signal.
-	return runtime_hgm_committed;
+	// Return-value contract, as pinned by server_runtime_load_unit-t (the
+	// loader must report FALSE when the core installation itself failed, e.g.
+	// a rejected runtime-install commit): the bool gates BOTH the HGM commit
+	// and the veto channel, exactly as it did before the
+	// servers_load_install_failed signal existed. Callers distinguish a real
+	// installation failure from an advisory module veto through
+	// 'servers_load_install_failed' instead of re-deriving it from the veto
+	// text.
+	return runtime_hgm_committed && servers_load_veto[1].empty();
 }
 
 char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {

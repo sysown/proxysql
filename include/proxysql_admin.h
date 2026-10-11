@@ -776,6 +776,15 @@ class ProxySQL_Admin {
 	 *   The core tables were installed regardless (caller holds the servers lock).
 	 */
 	std::string servers_load_veto[2];
+	/**
+	 * @brief TRUE when the LAST load's failure was a REAL installation
+	 *   failure: the HGM commit or the server-runtime install transaction
+	 *   could not commit. Distinct from an advisory module veto (install_failed
+	 *   stays FALSE, the veto text describes "the server module kept its
+	 *   previous configuration"). It is never reset per call, so always read
+	 *   it together with the load's bool result; [0] MySQL, [1] PostgreSQL.
+	 */
+	bool servers_load_install_failed[2];
 	bool load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
 		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool hgm_acquire_lock = true,
 		bool emit_runtime_install = true);
