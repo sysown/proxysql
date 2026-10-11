@@ -4321,6 +4321,24 @@ static bool is_long_data_param_type(enum enum_field_types buffer_type) {
 	}
 }
 
+/** @brief Detects unsupported long-data parameters, including empty entries. */
+static bool has_invalid_long_data(StmtLongDataHandler* handler, uint32_t stmt_id,
+	const MYSQL_BIND* binds, uint16_t num_params) {
+#ifdef PROXYSQL31
+	if (!handler->has_data(stmt_id)) return false;
+#endif
+	for (uint16_t i = 0; i < num_params; ++i) {
+		if (is_long_data_param_type(binds[i].buffer_type)) continue;
+		unsigned long* length = nullptr;
+		my_bool* is_null = nullptr;
+		handler->get(stmt_id, i, &length, &is_null);
+		// get() fills length for an existing entry even when realloc(ptr, 0)
+		// has freed its buffer. A null data pointer does not mean no long data.
+		if (length) return true;
+	}
+	return false;
+}
+
 stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 	PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta,
 	const unsigned char *effective_types
@@ -4448,19 +4466,12 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 		// client library read sizeof(type) bytes from the long data buffer and
 		// send them as a binary value of that type (e.g. a whole MYSQL_TIME read
 		// from a shorter buffer). Checked before any bind buffer is allocated.
-		for (i=0;i<num_params;i++) {
-			if (is_long_data_param_type(binds[i].buffer_type)) {
-				continue;
-			}
-			unsigned long *_l = NULL;
-			my_bool *_is_null = NULL;
-			if ((*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null)) {
-				// Required to prevent double-free in dtor
-				if (ret->pkt) { ret->pkt = NULL; }
-				// Only free when metadata not obtained from cache (i.e. first execute)
-				if (!*stmt_meta) { delete ret; }
-				return NULL;
-			}
+		if (has_invalid_long_data((*myds)->sess->SLDH, ret->stmt_id, binds, num_params)) {
+			// Required to prevent double-free in dtor
+			ret->pkt = NULL;
+			// Only free when metadata not obtained from cache (i.e. first execute)
+			if (!*stmt_meta) { delete ret; }
+			return NULL;
 		}
 
 		// Every read below must stay within the packet: values are forwarded to the backend,
@@ -4490,12 +4501,15 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 		};
 		for (i=0;i<num_params;i++) {
 			unsigned long *_l = 0;
-			my_bool * _is_null;
+			my_bool * _is_null = NULL;
 			void *_data = (*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null);
-			if (_data) {
+			if (_l) {
 				// Data was sent via STMT_SEND_LONG_DATA so no data in the packet.
 				binds[i].length = _l;
-				binds[i].buffer = _data;
+				// libmariadb treats a null bind buffer as SQL NULL, even at length
+				// zero. Supply a non-null buffer for an empty string/blob value.
+				static char empty_long_data = 0;
+				binds[i].buffer = _data ? _data : &empty_long_data;
 				binds[i].is_null = _is_null;
 				continue;
 			} else if (is_nulls[i]==true) {
