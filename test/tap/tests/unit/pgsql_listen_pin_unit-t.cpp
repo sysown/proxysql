@@ -130,6 +130,10 @@ static void test_no_digest_unlisten() {
 	   "no digest: UNLISTEN * inside a literal or a comment keeps the pin");
 	ok(!pin_after_query(false, "UNLISTEN *") && !pin_after_query(false, "SELECT 1"),
 	   "no digest: an unpinned connection stays unpinned");
+	// A nested comment whose "*/*/" closes twice right before the keyword: the full digest
+	// used to be empty, so the pin was never released.
+	ok(!pin_after_query(true, "/*/*n*/*/UNLISTEN *"),
+	   "no digest: UNLISTEN * right after a nested comment releases the pin");
 }
 
 // ---------------------------------------------------------------------------
@@ -208,14 +212,14 @@ static void test_command_complete_tag() {
 }
 
 int main() {
-	plan(31);
+	plan(32);
 	test_init_minimal();
 
 	test_digest_pins();                    // 5
 	test_digest_last_statement_decides();  // 7
 	test_digest_kept_comments();           // 5
 	test_digest_lost_scan();               // 4
-	test_no_digest_unlisten();             // 6
+	test_no_digest_unlisten();             // 7
 	test_command_complete_tag();           // 4
 
 	test_cleanup_minimal();
