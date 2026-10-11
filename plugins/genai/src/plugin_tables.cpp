@@ -209,6 +209,13 @@ void refresh_stats_mcp_query_digest_reset(SQLite3DB* db, void*) {
 
 void refresh_stats_mcp_query_rules(SQLite3DB* db, void*) {
 	if (db == nullptr) return;
+	// This refresh dereferences the query handler and its catalog, which the
+	// MCP server destructor deletes under the EXCLUSIVE side of the runtime
+	// lock; readers hold the SHARED side, exactly like
+	// refresh_stats_mcp_query_digest / refresh_stats_mcp_tool_counters. The
+	// projection is also driven from the Admin thread via a SQL query hook, so
+	// no outer runtime lock can be assumed (issue #6440 reviewer follow-up).
+	std::shared_lock<GenAIRWLock> runtime_guard(genai_context().runtime_dependencies_mutex);
 	MCP_Threads_Handler* mcp = genai_context().mcp;
 	if (mcp == nullptr) return;
 	Query_Tool_Handler* qth = mcp->query_tool_handler;

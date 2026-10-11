@@ -577,14 +577,16 @@ bool MySQL_Query_Processor::_is_valid_gtid(const char* gtid, size_t gtid_len) {
 	// a GTID SET ('uuid:582-584', 'uuid:636:638'), not a single GTID. Accepting
 	// only the strict single-GTID grammar rejected exactly those annotations
 	// with 'Invalid min_gtid value' and routed the query unconstrained
-	// (issue #6415). Ranges and gap lists are accepted; a multi-UUID value is
-	// still rejected because pool routing cannot express it.
+	// (issue #6415). Ranges and gap lists are accepted here.
+	//
+	// Multi-UUID values are intentionally ACCEPTED by validation as well:
+	// refusing them here would drop the annotation with 'Invalid min_gtid'
+	// and run the query UNCONSTRAINED, the opposite of #6415's fail-closed
+	// requirement. Validation only judges the GRAMMAR; the routing helper
+	// (parse_gtid_set_for_routing) fails closed on a multi-UUID set and keeps
+	// the query on an unsatisfiable predicate until the operator resolves it.
 	std::map<std::string, std::vector<TrxId_Interval>> parsed_set;
-	// Pool routing can only express one (uuid, trxid) pair, so a multi-UUID
-	// annotation fails validation exactly like the routing helper does; the
-	// caller then logs 'Invalid min_gtid value' and the query runs unconstrained
-	// -- consistent with the routing fail-closed branch in MySQL_Session.
-	if (parse_gtid_set(gtid, gtid_len, &parsed_set) && parsed_set.size() == 1) {
+	if (parse_gtid_set(gtid, gtid_len, &parsed_set)) {
 		return true;
 	}
 

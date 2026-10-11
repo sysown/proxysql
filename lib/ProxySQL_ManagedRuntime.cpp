@@ -941,22 +941,26 @@ void ProxySQL_Admin::commit_managed_engine_variables_projection(bool pgsql) {
   // node looked in-sync to its peers while silently diverging, and no pull was
   // ever triggered for the drift.
   //
-  // The engine handler lock must be held across the flush and is taken BEFORE
-  // 'checksum_mutex', the same global order every writer in
-  // Admin_FlushVariables.cpp uses. Taking 'checksum_mutex' first would invert
-  // that order against a concurrent LOAD whose flush holds the engine lock
-  // and waits for the checksum mutex.
+  // Lock ORDER matters and is engine-specific, mirroring what each writer
+  // family in Admin_FlushVariables.cpp already established on the same pair
+  // of locks (mixed orders across threads on GloPTH and checksum_mutex would
+  // create an ABBA deadlock):
+  //  - MySQL: GloMTH is taken BEFORE checksum_mutex
+  //    (flush_mysql_variables___database_to_runtime callers).
+  //  - PostgreSQL: checksum_mutex is taken BEFORE GloPTH; the flusher itself
+  //    acquires GloPTH under the checksum mutex when use_lock=true
+  //    (the admin pool path at Admin_FlushVariables.cpp:+1068).
   const std::string modname = pgsql ? "pgsql" : "mysql";
   if (pgsql) {
-    GloPTH->wrlock();
-    Unlock engine_unlock{[]() noexcept { GloPTH->wrunlock(); }};
     pthread_mutex_lock(&GloVars.checksum_mutex);
     Unlock checksum_unlock{[]() noexcept {
       pthread_mutex_unlock(&GloVars.checksum_mutex);
     }};
     admindb->execute("BEGIN");
+    // use_lock=true makes the flusher take GloPTH itself, under the checksum
+    // mutex, in the same order the vanilla pool statistics path uses.
     flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true,
-                                                false);
+                                                true);
     admindb->execute("COMMIT");
     // generate checksum for cluster
     flush_GENERIC_variables__checksum__database_to_runtime(modname, "", 0);

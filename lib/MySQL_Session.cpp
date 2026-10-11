@@ -9822,8 +9822,13 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				// deployment stopped using its readers.
 				static std::atomic<time_t> gtid_invalid_warn_ts{0};
 				const time_t gtid_warn_now = thread->curtime / 1000000;
-				if (gtid_warn_now - gtid_invalid_warn_ts.load(std::memory_order_relaxed) >= 10) {
-					gtid_invalid_warn_ts.store(gtid_warn_now, std::memory_order_relaxed);
+				// One CAS (not load-then-store) so concurrent sessions that
+				// all reach this warning in the same 10 s window burst only
+				// once: whoever claims the timestamp logs, the others skip.
+				time_t gtid_warn_prev = gtid_invalid_warn_ts.load(std::memory_order_relaxed);
+				if (gtid_warn_now - gtid_warn_prev >= 10 &&
+					gtid_invalid_warn_ts.compare_exchange_strong(gtid_warn_prev,
+						gtid_warn_now, std::memory_order_relaxed)) {
 					proxy_warning(
 						"GTID causal read: tracked value '%s' is not usable for routing (GTID set, tagged GTID or multi-UUID). %s\n",
 						gtid_uuid,
