@@ -5363,7 +5363,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		// [COMMIT, DISCARD ALL, Sync] after a 'T' is the batch's implicit block, not an
 		// explicit one. Only the tracker followed those statements, and it started the
 		// batch in agreement with the backend (sync_txn_tracker_with_backend()), so mid-
-		// batch it alone decides.
+		// batch it alone decides. Under a hostgroup lock the tracker is not fed and is
+		// not opened from a 'T' either, so there a mid-batch DISCARD ALL always gets the
+		// pipelined refusal with 'I', as it did before #6417.
 		const bool explicit_txn = extq_backend_used ? is_in_transaction() : (NumActiveTransactions() > 0);
 		const bool in_txn_block = explicit_txn || extq_backend_used;
 		// Anything still queued behind this command in the same unsynced batch would be
@@ -7182,6 +7184,14 @@ void PgSQL_Session::rollback_tracked_txn_state() {
 // idle) for libpq while a result is still owed, and PQTRANS_UNKNOWN for a dead backend:
 // neither is an answer, so the tracker is left alone. is_pipeline_active() covers a
 // batch the backend has not concluded yet, whose last ReadyForQuery predates it.
+//
+// Opening a tracked transaction is skipped while the session is locked on a hostgroup:
+// handle_transaction_state() does not feed the tracker there, so nothing would ever
+// close it again before the next cycle boundary. A COMMIT or ROLLBACK run mid-batch
+// would go unseen and the DISCARD ALL after it ([BEGIN, Sync] then [COMMIT, DISCARD ALL,
+// Sync]) would be refused as inside an explicit transaction -- 25001 with 'E', backend
+// destroyed, session poisoned -- instead of with the pipelined refusal and 'I' (#6417).
+// Dropping a stale transaction when the backend reports idle stays safe either way.
 void PgSQL_Session::sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool mid_batch) {
 	if (mid_batch || transaction_state_manager == NULL || myconn == NULL) return;
 	if (myconn->is_pipeline_active()) return;
@@ -7191,7 +7201,9 @@ void PgSQL_Session::sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool
 		break;
 	case PQTRANS_INTRANS:
 	case PQTRANS_INERROR:
-		transaction_state_manager->sync_with_backend(true);
+		if (locked_on_hostgroup == -1) {
+			transaction_state_manager->sync_with_backend(true);
+		}
 		break;
 	default:
 		break;
