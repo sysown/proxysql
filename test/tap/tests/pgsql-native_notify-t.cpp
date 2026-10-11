@@ -833,14 +833,15 @@ static void scenario_multi_statement_listen(PGconn* admin, const std::vector<Ser
 			ok(false, "multi-statement UNLISTEN could not connect");
 			ok(false, "multi-statement UNLISTEN could not connect");
 		} else {
-			execSQL(c.get(), "LISTEN " + chan("mua") + "; UNLISTEN *");
+			// The statement's own result counts too: a refused one would pass on ConnUsed alone.
+			const bool unlistened_last = execSQL(c.get(), "LISTEN " + chan("mua") + "; UNLISTEN *");
 			long v = waitConnUsed(admin, 0, 5000);
-			ok(v == 0, "LISTEN a; UNLISTEN * in one message leaves nothing to pin (ConnUsed=%ld)", v);
+			ok(unlistened_last && v == 0, "LISTEN a; UNLISTEN * in one message leaves nothing to pin (ConnUsed=%ld)", v);
 			execSQL(c.get(), "LISTEN " + chan("mub"));
 			waitConnUsed(admin, 1, 5000);
-			execSQL(c.get(), "UNLISTEN *; LISTEN " + chan("muc"));
+			const bool listened_last = execSQL(c.get(), "UNLISTEN *; LISTEN " + chan("muc"));
 			v = waitConnUsed(admin, 1, 2000);
-			ok(v == 1, "UNLISTEN *; LISTEN c in one message keeps the pin (ConnUsed=%ld)", v);
+			ok(listened_last && v == 1, "UNLISTEN *; LISTEN c in one message keeps the pin (ConnUsed=%ld)", v);
 		}
 	}
 	waitConnUsed(admin, 0, 5000);
@@ -864,6 +865,45 @@ static void scenario_multi_statement_listen(PGconn* admin, const std::vector<Ser
 	ok(dropped && rc != Q_OK,
 	   "a notification for a LISTEN hidden in a DO block, on a connection held by a temp table,"
 	   " ends the session (known limit, %s)", qres_name(rc));
+}
+
+// With pgsql-query_digests=false there is no digest to read. LISTEN still pins, from its
+// CommandComplete tag; the UNLISTEN * that releases it can only be told from the query
+// text, as UNLISTEN <channel> has the same tag. It used to stay pinned for good.
+static void scenario_unlisten_without_digests(PGconn* admin, const std::vector<ServerRow>& saved) {
+	const int N = 4;
+	const std::string prev = scalar(admin,
+		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-query_digests'");
+	if (prev.empty() || !setVar(admin, "pgsql-multiplexing", "true") ||
+	    !setVar(admin, "pgsql-query_digests", "false") || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		for (int i = 0; i < N - 1; i++) ok(false, "no-digest UNLISTEN setup failed");
+	} else {
+		PGConnPtr c = open_client_conn();
+		// The session's thread has the variable once a fresh identifier is not digested.
+		bool off = false;
+		for (int i = 0; c && i < 50 && !off; i++) {
+			const std::string marker = "nn_nd_probe_" + std::to_string(getpid()) + "_" + std::to_string(i);
+			execSQL(c.get(), "SELECT 1 AS " + marker);
+			off = scalar(admin, "SELECT COUNT(*) FROM stats_pgsql_query_digest WHERE digest_text LIKE '%" +
+				marker + "%'") == "0";
+			if (!off) usleep(100000);
+		}
+		if (!c || PQstatus(c.get()) != CONNECTION_OK || !off) {
+			for (int i = 0; i < N - 1; i++) ok(false, "no-digest UNLISTEN: digests could not be turned off");
+		} else {
+			const bool listened = execSQL(c.get(), "LISTEN " + chan("nd"));
+			long v = waitConnUsed(admin, 1, 5000);
+			ok(listened && v == 1, "no digest: LISTEN pins the connection (ConnUsed=%ld)", v);
+			const bool unlistened_ch = execSQL(c.get(), "UNLISTEN " + chan("nd"));
+			v = waitConnUsed(admin, 1, 2000);
+			ok(unlistened_ch && v == 1, "no digest: UNLISTEN <channel> keeps the pin (ConnUsed=%ld)", v);
+			const bool unlistened_all = execSQL(c.get(), "SELECT 1; UNLISTEN *");
+			v = waitConnUsed(admin, 0, 5000);
+			ok(unlistened_all && v == 0, "no digest: UNLISTEN * releases the pin (ConnUsed=%ld)", v);
+		}
+	}
+	waitConnUsed(admin, 0, 5000);
+	ok(prev.empty() || setVar(admin, "pgsql-query_digests", prev), "pgsql-query_digests restored to '%s'", prev.c_str());
 }
 
 // PostgreSQL cannot splice a notification into a result it is already sending, so it
@@ -1274,8 +1314,9 @@ int main(int, char**) {
 	// delivery: scenario A 2 x 2 modes, scenario B 1 x 2 modes plus cached 2 x 2 modes.
 	const int DELIVERY_ASSERTIONS = 4 + 2 + 4;
 	// pin lifecycle, buffered, disconnect, backend killed, TLS, many listeners, COPY,
-	// multi-statement LISTEN, notification during a query, second hostgroup, mock backend
-	const int LIFECYCLE_ASSERTIONS = 6 + 2 + 4 + 2 + 2 + 2 + 1 + 5 + 2 + 2 + 2 + 3 + 3;
+	// multi-statement LISTEN, UNLISTEN without digests, notification during a query, second
+	// hostgroup, mock backend
+	const int LIFECYCLE_ASSERTIONS = 6 + 2 + 4 + 2 + 2 + 2 + 1 + 5 + 4 + 2 + 2 + 2 + 3 + 3;
 	plan(DELIVERY_ASSERTIONS + LIFECYCLE_ASSERTIONS);
 	if (cl.getEnv()) return exit_status();
 	// The proxy closes the client socket when a backend is killed under a pinned
@@ -1326,6 +1367,7 @@ int main(int, char**) {
 		scenario_many_listeners(admin.get(), saved);
 		scenario_copy_on_pinned(admin.get(), saved);
 		scenario_multi_statement_listen(admin.get(), saved);
+		scenario_unlisten_without_digests(admin.get(), saved);
 		scenario_notification_during_query(admin.get(), saved);
 		scenario_extended_protocol_listen(admin.get(), saved);
 		scenario_listen_on_pooled_libpq_conn(admin.get(), saved);

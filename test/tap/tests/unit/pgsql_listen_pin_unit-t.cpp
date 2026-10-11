@@ -28,6 +28,10 @@
 #include <unistd.h>
 #include <string>
 
+// get_resultset() hands the collected bytes over only when a protocol is attached; the native
+// drain itself never calls into it.
+static PgSQL_Protocol g_proto;
+
 static PgSQL_Connection* make_conn() {
 	PgSQL_Connection* c = new PgSQL_Connection(false);
 	c->native_mode = true;
@@ -36,7 +40,7 @@ static PgSQL_Connection* make_conn() {
 	c->native_connected = true;
 	c->set_ready_for_query_status('I');
 	c->query_result = new PgSQL_Query_Result();
-	c->query_result->init(nullptr, nullptr, c);
+	c->query_result->init(&g_proto, nullptr, c);
 	return c;
 }
 
@@ -105,6 +109,30 @@ static void test_digest_lost_scan() {
 }
 
 // ---------------------------------------------------------------------------
+// With pgsql-query_digests off. The LISTEN tag pins; the query text releases.
+// ---------------------------------------------------------------------------
+
+static bool pin_after_query(bool pinned_before, const char* query) {
+	PgSQL_Connection* c = make_conn();
+	c->set_status(pinned_before, STATUS_PGSQL_CONNECTION_LISTEN);
+	c->update_listen_status_from_query(query);
+	const bool r = pinned(c);
+	destroy(c);
+	return r;
+}
+
+static void test_no_digest_unlisten() {
+	ok(!pin_after_query(true, "UNLISTEN *"), "no digest: UNLISTEN * releases the pin");
+	ok(!pin_after_query(true, "SELECT 1;\n unlisten\t*"), "no digest: so does a later UNLISTEN * of the message");
+	ok(pin_after_query(true, "UNLISTEN ch"), "no digest: UNLISTEN <channel> keeps the pin");
+	ok(pin_after_query(true, "UNLISTEN *; LISTEN ch"), "no digest: UNLISTEN *; LISTEN ch keeps the pin");
+	ok(pin_after_query(true, "SELECT 'unlisten *'") && pin_after_query(true, "SELECT 1 /* UNLISTEN * */"),
+	   "no digest: UNLISTEN * inside a literal or a comment keeps the pin");
+	ok(!pin_after_query(false, "UNLISTEN *") && !pin_after_query(false, "SELECT 1"),
+	   "no digest: an unpinned connection stays unpinned");
+}
+
+// ---------------------------------------------------------------------------
 // From the native result stream.
 // ---------------------------------------------------------------------------
 
@@ -135,6 +163,20 @@ static void drain(PgSQL_Connection* c, const std::string& bytes) {
 	c->native_fetch_result_cont(0, nullptr);
 }
 
+// Whether the NotificationResponse of wire_A() is among the bytes the result hands to the
+// client: the flag alone says nothing about what actually reaches the result stream.
+static bool result_carries_notification(PgSQL_Connection* c) {
+	PtrSizeArray out;
+	c->query_result->get_resultset(&out);
+	std::string bytes;
+	for (unsigned int i = 0; i < out.len; i++) {
+		const PtrSize_t* p = out.index(i);
+		bytes.append((const char*)p->ptr, p->size);
+		free(p->ptr);
+	}
+	return bytes.find(wire_A()) != std::string::npos;
+}
+
 static void test_command_complete_tag() {
 	PgSQL_Connection* c = make_conn();
 	drain(c, wire_C("SELECT 1") + wire_C("LISTEN") + wire_Z());
@@ -145,14 +187,16 @@ static void test_command_complete_tag() {
 	// LISTEN ch; NOTIFY ch: the notification comes after the LISTEN tag, in the same reply.
 	c = make_conn();
 	drain(c, wire_C("LISTEN") + wire_C("NOTIFY") + wire_A() + wire_Z());
-	ok(c->native_result_complete && pinned(c) && c->native_result_had_notification,
+	ok(c->native_result_complete && pinned(c) && c->native_result_had_notification &&
+	   result_carries_notification(c),
 	   "native: a notification after the LISTEN tag in the same reply is forwarded");
 	destroy(c);
 
 	// Control: with no LISTEN in the reply the notification belongs to nobody here.
 	c = make_conn();
 	drain(c, wire_C("NOTIFY") + wire_A() + wire_Z());
-	ok(c->native_result_complete && !pinned(c) && !c->native_result_had_notification,
+	ok(c->native_result_complete && !pinned(c) && !c->native_result_had_notification &&
+	   !result_carries_notification(c),
 	   "native control: without a LISTEN tag the notification is discarded and nothing is pinned");
 	destroy(c);
 
@@ -164,13 +208,14 @@ static void test_command_complete_tag() {
 }
 
 int main() {
-	plan(25);
+	plan(31);
 	test_init_minimal();
 
 	test_digest_pins();                    // 5
 	test_digest_last_statement_decides();  // 7
 	test_digest_kept_comments();           // 5
 	test_digest_lost_scan();               // 4
+	test_no_digest_unlisten();             // 6
 	test_command_complete_tag();           // 4
 
 	test_cleanup_minimal();
