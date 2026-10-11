@@ -104,6 +104,10 @@ public:
 	int get_savepoint_count() const { return savepoint.size(); }
     bool is_in_transaction() const { return !transaction_state.empty(); }
     void reset_state();
+    // Make the tracker agree with the backend's own transaction status, read at a
+    // cycle boundary: drop everything when it is idle, open a transaction the keywords
+    // never showed ('SELECT 1; BEGIN', COMMIT AND CHAIN) when it is in one.
+    void sync_with_backend(bool backend_in_txn);
     void fill_internal_session(nlohmann::json& j);
 
 private:

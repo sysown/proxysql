@@ -3260,7 +3260,7 @@ void PgSQL_Session::handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* my
 			// Kept attached. A failed statement never reaches the tracker, so a COMMIT
 			// that fails (deferred constraint, serialization failure) ends the
 			// transaction on the backend and leaves the tracker saying BEGIN (#6417).
-			reset_txn_tracker_if_backend_idle(myconn, false);
+			sync_txn_tracker_with_backend(myconn, false);
 			myconn->async_state_machine = ASYNC_IDLE;
 			myds->DSS = STATE_MARIADB_GENERIC;
 		}
@@ -3965,11 +3965,13 @@ handler_again:
 				// The transaction keyword tracker only reads the first word of each
 				// statement, so 'BEGIN; ...; COMMIT' in one query, a COMMIT skipped
 				// under a hostgroup lock or a ROLLBACK answered locally all leave it
-				// saying BEGIN. A backend that just reported idle has no transaction,
-				// whatever the tracker says: drop the stale state so neither DISCARD ALL
-				// nor the savepoint pin acts on it (#6417). Only at a true cycle
-				// boundary: mid-batch the status predates the batch.
-				reset_txn_tracker_if_backend_idle(myconn, has_pending_messages);
+				// saying BEGIN, and 'SELECT 1; BEGIN' or COMMIT AND CHAIN leave it saying
+				// nothing. The status the backend just reported is the truth: bring the
+				// tracker in line with it, so neither DISCARD ALL nor the savepoint pin
+				// acts on a stale state and the next batch starts from the real one
+				// (#6417). Only at a true cycle boundary: mid-batch the status predates
+				// the batch.
+				sync_txn_tracker_with_backend(myconn, has_pending_messages);
 				// Pin the backend while named portals are open (same intent as the
 				// active-transaction sticky pin) so a later Execute/Describe/Close of a
 				// named portal routes to the connection that holds it. Kept SEPARATE from
@@ -5326,17 +5328,20 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		// instead would tear down the backend mid-batch, rolling back work the client
 		// has already been told succeeded.
 		//
-		// Whether the client is inside one is asked of the backend, not of the keyword
-		// tracker: the tracker reads only first words and can still say BEGIN long after
-		// the backend reported 'I' (or say nothing for a 'T' it never saw), and refusing
-		// then kills a healthy idle backend and poisons the session (#6417). A real
-		// transaction always pins its backend, so no backend means no transaction.
-		const bool backend_txn = NumActiveTransactions() > 0;
-		// Mid-batch the last ReadyForQuery predates the batch, so it cannot see a BEGIN
-		// run earlier in this same batch: only there is the tracker still needed, to
-		// tell an explicit block from the batch's implicit one. Outside a batch it is
-		// reset whenever the backend reports idle, so it starts each batch clean.
-		const bool explicit_txn = backend_txn || (extq_backend_used && is_in_transaction());
+		// Before any statement of this batch has run, whether the client is inside one
+		// is asked of the backend, not of the keyword tracker: the tracker reads only
+		// first words and can still say BEGIN long after the backend reported 'I' (or say
+		// nothing for a 'T' it never saw), and refusing then kills a healthy idle backend
+		// and poisons the session (#6417). A real transaction always pins its backend, so
+		// no backend means no transaction.
+		//
+		// Once a statement of this batch has run, the last ReadyForQuery predates it and
+		// can no longer see a BEGIN, nor a COMMIT or ROLLBACK, run earlier in the batch:
+		// [COMMIT, DISCARD ALL, Sync] after a 'T' is the batch's implicit block, not an
+		// explicit one. Only the tracker followed those statements, and it started the
+		// batch in agreement with the backend (sync_txn_tracker_with_backend()), so mid-
+		// batch it alone decides.
+		const bool explicit_txn = extq_backend_used ? is_in_transaction() : (NumActiveTransactions() > 0);
 		const bool in_txn_block = explicit_txn || extq_backend_used;
 		// Anything still queued behind this command in the same unsynced batch would be
 		// processed against the session state reset()/init() below is about to replace.
@@ -7151,13 +7156,23 @@ void PgSQL_Session::rollback_tracked_txn_state() {
 }
 
 // get_pg_transaction_status() works in both backend modes; it says PQTRANS_ACTIVE (not
-// idle) for libpq while a result is still owed. is_pipeline_active() covers a batch the
-// backend has not concluded yet, whose last ReadyForQuery predates it.
-void PgSQL_Session::reset_txn_tracker_if_backend_idle(PgSQL_Connection* myconn, bool mid_batch) {
+// idle) for libpq while a result is still owed, and PQTRANS_UNKNOWN for a dead backend:
+// neither is an answer, so the tracker is left alone. is_pipeline_active() covers a
+// batch the backend has not concluded yet, whose last ReadyForQuery predates it.
+void PgSQL_Session::sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool mid_batch) {
 	if (mid_batch || transaction_state_manager == NULL || myconn == NULL) return;
 	if (myconn->is_pipeline_active()) return;
-	if (myconn->get_pg_transaction_status() != PQTRANS_IDLE) return;
-	transaction_state_manager->reset_state();
+	switch (myconn->get_pg_transaction_status()) {
+	case PQTRANS_IDLE:
+		transaction_state_manager->sync_with_backend(false);
+		break;
+	case PQTRANS_INTRANS:
+	case PQTRANS_INERROR:
+		transaction_state_manager->sync_with_backend(true);
+		break;
+	default:
+		break;
+	}
 }
 
 // See the tx_poisoned field. Plain ROLLBACK / ABORT / COMMIT / END end a poisoned

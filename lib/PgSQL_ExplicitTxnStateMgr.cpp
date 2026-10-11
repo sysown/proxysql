@@ -340,6 +340,15 @@ void PgSQL_ExplicitTxnStateMgr::reset_state() {
     savepoint.clear();
 }
 
+void PgSQL_ExplicitTxnStateMgr::sync_with_backend(bool backend_in_txn) {
+	if (backend_in_txn == false) {
+		reset_state();
+	} else if (transaction_state.empty()) {
+		// The snapshot is taken now, not at the unseen BEGIN: the closest this gets.
+		start_transaction();
+	}
+}
+
 TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input) noexcept {
     TxnCmd cmd;
 
