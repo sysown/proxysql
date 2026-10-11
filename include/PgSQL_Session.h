@@ -603,8 +603,8 @@ public:
 	// Close) ends the transaction at Sync, as the simple-query ROLLBACK does; any other
 	// frame is answered with 25P02 + ReadyForQuery('E') and the session stays poisoned.
 	struct Poisoned_Extq_Frame {
-		// Statements Parsed in this frame (name, kind); kind is 'R' for ROLLBACK/ABORT,
-		// 'C' for COMMIT/END.
+		// Statements Parsed or Closed in this frame (name, kind), in order; kind is 'R' for
+		// ROLLBACK/ABORT, 'C' for COMMIT/END, 0 for a Close. The latest entry for a name wins.
 		std::vector<std::pair<std::string, char>> stmts;
 		char portal = 0;          // kind of the statement bound to the unnamed portal
 		bool executes = false;    // an Execute of a transaction end was queued

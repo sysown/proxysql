@@ -7299,10 +7299,14 @@ void PgSQL_Session::classify_poisoned_extq_message() {
 			const PgSQL_Parse_Data& d = msg->data();
 			if (d.num_param_types != 0) return false;
 			if (d.stmt_name[0] != '\0') {
-				if (client_myds->myconn->local_stmts->find_stmt_info_from_stmt_name(d.stmt_name) != NULL) return false;
-				for (const auto& s : poisoned_extq.stmts) {
-					if (s.first == d.stmt_name) return false;
-				}
+				// The name is taken if the latest word on it in this frame is a Parse, or, with
+				// none, if the statement exists. A Close earlier in the frame frees it, as in
+				// PostgreSQL: Close(S, name) then Parse(name, 'ROLLBACK') is accepted.
+				auto it = std::find_if(poisoned_extq.stmts.rbegin(), poisoned_extq.stmts.rend(),
+					[&d](const std::pair<std::string, char>& s) { return s.first == d.stmt_name; });
+				const bool taken = (it != poisoned_extq.stmts.rend()) ? it->second != 0 :
+					client_myds->myconn->local_stmts->find_stmt_info_from_stmt_name(d.stmt_name) != NULL;
+				if (taken) return false;
 			}
 			const char kind = classify_poisoned_txn_end(d.query_string, strlen(d.query_string));
 			if (kind == 0) return false;
@@ -7320,7 +7324,12 @@ void PgSQL_Session::classify_poisoned_extq_message() {
 			return stmt_kind(d.stmt_name) != 0;
 		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Close_Message>>) {
 			const PgSQL_Close_Data& d = msg->data();
-			if (d.stmt_type == 'S') return true;
+			if (d.stmt_type == 'S') {
+				// Closed for the rest of the frame: a later Parse may reuse the name, a later
+				// Bind or Describe of it would fail.
+				poisoned_extq.stmts.emplace_back(d.stmt_name, 0);
+				return true;
+			}
 			if (d.stmt_name[0] != '\0') return false;
 			poisoned_extq.portal = 0;
 			return true;
