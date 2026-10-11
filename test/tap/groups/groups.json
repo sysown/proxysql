@@ -343,6 +343,7 @@
   "pgsql_dns_cache_all_ips_unit-t" : [ "unit-tests-g1" ],
   "pgsql_error_classifier_unit-t" : [ "unit-tests-g1" ],
   "pgsql_error_helper_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_listen_pin_unit-t" : [ "unit-tests-g1" ],
   "pgsql_local_error_txn_state_unit-t" : [ "unit-tests-g1" ],
   "pgsql_midbatch_reset_refused_unit-t" : [ "unit-tests-g1" ],
   "pgsql_monitor_unit-t" : [ "unit-tests-g1" ],

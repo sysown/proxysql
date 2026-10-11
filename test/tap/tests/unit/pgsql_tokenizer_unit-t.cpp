@@ -16,6 +16,10 @@
  *   - Nested block comments
  *   - Prefix-typed string literals (E'...', B'...', X'...', U&'...')
  *   - -- line comments (no space required after --)
+ *
+ * And the statement scan over a digest used to find LISTEN in every statement of a
+ * multi-statement Simple Query (issue #6438):
+ *   - pgsql_digest_next_stmt() / pgsql_digest_has_stmt_keyword()
  */
 
 #include "tap.h"
@@ -646,11 +650,73 @@ static void test_digest_only_comment() {
 }
 
 // ============================================================================
+// 14. Statement scan over a digest (issue #6438)
+// ============================================================================
+
+static bool has_listen(const char* digest) {
+	return pgsql_digest_has_stmt_keyword(digest, "LISTEN");
+}
+
+// The digests a client can produce: LISTEN behind another statement has to be found,
+// whatever the spacing around the ';'.
+static void test_stmt_keyword_found() {
+	ok(has_listen("listen ch"), "stmt scan: a lone LISTEN is found");
+	ok(has_listen("select ?; listen ch"), "stmt scan: LISTEN after another statement is found");
+	ok(has_listen("select ?;listen ch"), "stmt scan: LISTEN right after the ';' is found");
+	ok(has_listen("SELECT ?; LISTEN ch"), "stmt scan: the match ignores case");
+	ok(has_listen("select ?; select ?; listen ch"), "stmt scan: LISTEN as the third statement is found");
+	ok(has_listen("select ?; ; listen ch"), "stmt scan: an empty statement in between is skipped");
+	ok(has_listen("select ?; listen\"Ch\""), "stmt scan: a quoted channel abutting LISTEN still matches");
+}
+
+// Anything that only looks like LISTEN to a naive substring search.
+static void test_stmt_keyword_not_found() {
+	ok(!has_listen("select ?"), "stmt scan: a single statement without LISTEN");
+	ok(!has_listen("select listen_col from t"), "stmt scan: an identifier holding the word");
+	ok(!has_listen("select ?; select listener from t"), "stmt scan: an identifier starting with LISTEN");
+	ok(!has_listen("select ?; unlisten ch"), "stmt scan: UNLISTEN is not LISTEN");
+	ok(!has_listen("select ? as \"a; listen b\""), "stmt scan: a ';' inside a quoted identifier is no boundary");
+	ok(!has_listen("select ? as \"a\"\"; listen b\""), "stmt scan: nor inside one holding a doubled quote");
+	ok(!has_listen("select ? /* ; listen b */"), "stmt scan: nor inside a kept block comment");
+	ok(!has_listen("select ? /* /* */ ; listen b */"), "stmt scan: nor inside a nested kept block comment");
+	ok(!has_listen("select \"a; listen b"), "stmt scan: an unterminated quoted identifier stops the scan");
+	ok(!has_listen("") && !has_listen(NULL), "stmt scan: empty and NULL digests");
+}
+
+static void test_stmt_next() {
+	const char* d = "select ?;  listen ch";
+	const char* n = pgsql_digest_next_stmt(d);
+	ok(n != NULL && strcmp(n, "listen ch") == 0,
+		"next_stmt: returns the next statement with its leading spaces skipped");
+	ok(pgsql_digest_next_stmt(n) == NULL, "next_stmt: NULL after the last statement");
+	ok(pgsql_digest_next_stmt("select ?; ") == NULL, "next_stmt: a trailing ';' starts no statement");
+}
+
+// End to end from the client text, so a change in the digest that hides the second
+// statement, or exposes a literal, breaks here rather than in the proxy.
+static void test_stmt_keyword_through_digest() {
+	ok(has_listen(digest_query("SELECT 1;\n\tLISTEN ch").c_str()),
+		"stmt scan of digest: newline and tab before LISTEN");
+	ok(has_listen(digest_query("SELECT 1; /* c */ LISTEN ch").c_str()),
+		"stmt scan of digest: comment before LISTEN");
+	ok(!has_listen(digest_query("SELECT 'a; LISTEN b'").c_str()),
+		"stmt scan of digest: ';' inside a string literal");
+	ok(!has_listen(digest_query("SELECT $$a; LISTEN b$$").c_str()),
+		"stmt scan of digest: ';' inside a dollar-quoted string");
+	ok(!has_listen(digest_query("SELECT E'a\\'; LISTEN b'").c_str()),
+		"stmt scan of digest: ';' inside an escape string holding a quote");
+	DigestOptions keep;
+	keep.keep_comment = true;
+	ok(!has_listen(digest_query("SELECT 1 /* ; LISTEN b */", keep).c_str()),
+		"stmt scan of digest: ';' inside a block comment kept by keep_comment");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(70);
+	plan(96);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -742,6 +808,12 @@ int main() {
 	test_digest_complex_query();         // 2
 	test_digest_comment_between_tokens(); // 1
 	test_digest_only_comment();          // 1
+
+	// 14. Statement scan over a digest (26 tests, issue #6438)
+	test_stmt_keyword_found();           // 7
+	test_stmt_keyword_not_found();       // 10
+	test_stmt_next();                    // 3
+	test_stmt_keyword_through_digest();  // 6
 
 	// Total: 1 + 9 + 4 + 6 + 2 + 6 + 2 + 3 + 3 + 2 + 4 + 5 + 7 + 10 = 64
 

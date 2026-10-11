@@ -20,6 +20,11 @@
  * Both gates now run after the query processor and read the normalized digest,
  * which is what collapses those spellings into one. They are still asserted
  * separately, because they live in different functions and can drift apart.
+ *
+ * A Simple Query can carry several statements, and a LISTEN behind another one
+ * subscribes just the same, so the simple-query gate checks every statement of the
+ * digest (issue #6438). The extended protocol cannot: PostgreSQL rejects a Parse
+ * holding more than one statement.
  */
 
 #include <string>
@@ -97,12 +102,34 @@ static const Case NOT_REFUSED[] = {
 	{ "/*unterminated LISTEN x",     "unterminated comment" },
 };
 
+// A LISTEN that is not the first statement of a Simple Query (issue #6438).
+static const Case MULTI_REFUSED[] = {
+	{ "SELECT 1; LISTEN lnc_multi",          "after another statement" },
+	{ "SELECT 1;LISTEN lnc_multi_nosp",      "right after the ';'" },
+	{ "SELECT 1;\n\tLISTEN lnc_multi_ws",    "after a newline and a tab" },
+	{ "SELECT 1; /*c*/ LISTEN lnc_multi_cmt", "behind a comment" },
+	{ "SELECT 1; SELECT 2; LISTEN lnc_multi3", "as the third statement" },
+	{ "UNLISTEN *; LISTEN lnc_multi_un",     "after UNLISTEN *" },
+};
+
+// A ';' that is not a statement boundary, before something that reads like LISTEN.
+static const Case MULTI_NOT_REFUSED[] = {
+	{ "SELECT 'a; LISTEN b'",                "inside a string literal" },
+	{ "SELECT 1 AS \"a; LISTEN b\"",         "inside a quoted identifier" },
+	{ "SELECT $$a; LISTEN b$$",              "inside a dollar-quoted string" },
+	{ "SELECT 1; SELECT 2 AS listener",      "identifier starting with LISTEN" },
+	{ "SELECT 1; UNLISTEN lnc_multi",        "UNLISTEN after another statement" },
+};
+
 static const size_t N_REFUSED = sizeof(REFUSED) / sizeof(REFUSED[0]);
 static const size_t N_NOT_REFUSED = sizeof(NOT_REFUSED) / sizeof(NOT_REFUSED[0]);
+static const size_t N_MULTI_REFUSED = sizeof(MULTI_REFUSED) / sizeof(MULTI_REFUSED[0]);
+static const size_t N_MULTI_NOT_REFUSED = sizeof(MULTI_NOT_REFUSED) / sizeof(MULTI_NOT_REFUSED[0]);
 
 int main(int, char**) {
 	if (cl.getEnv()) return exit_status();
-	plan(1 + (int)(N_REFUSED * 2) + (int)(N_NOT_REFUSED * 2) + 3 + 1);
+	plan(1 + (int)(N_REFUSED * 2) + (int)(N_NOT_REFUSED * 2) +
+	     (int)N_MULTI_REFUSED + (int)N_MULTI_NOT_REFUSED + 2 + 1);
 
 	// Pin the backend protocol: the refusals below are the libpq contract.
 	{
@@ -144,25 +171,24 @@ int main(int, char**) {
 		ok(st != "0A000", "extended statement not refused as LISTEN -- %s (got '%s')",
 		   NOT_REFUSED[i].label, st.c_str());
 	}
+	for (size_t i = 0; i < N_MULTI_REFUSED; i++) {
+		std::string st = run_simple(c, MULTI_REFUSED[i].sql);
+		ok(st == "0A000", "multi-statement LISTEN refused with 0A000 -- %s (got '%s')",
+		   MULTI_REFUSED[i].label, st.c_str());
+	}
+	for (size_t i = 0; i < N_MULTI_NOT_REFUSED; i++) {
+		std::string st = run_simple(c, MULTI_NOT_REFUSED[i].sql);
+		ok(st != "0A000", "multi-statement query not refused as LISTEN -- %s (got '%s')",
+		   MULTI_NOT_REFUSED[i].label, st.c_str());
+	}
 
-	// Known gaps, asserted as ACCEPTED so that closing either one has to come back here.
-	// Both have the same cause: the gate runs after the query processor and reads the
-	// digest, so it only sees what the digest sees.
-	//   - a multi-statement query digests to "SELECT ?; LISTEN x", and the gate looks at
-	//     the first keyword only;
-	//   - a query opening with a NESTED block comment digests to the empty string, so the
-	//     gate falls back to the raw text, which starts with the comment.
-	// Both are inert: the NotificationResponse such a subscription produces is discarded
+	// Known gap, asserted as ACCEPTED so that closing it has to come back here. The gate
+	// runs after the query processor and reads the digest, so it only sees what the digest
+	// sees: a query opening with a NESTED block comment digests to the empty string, so the
+	// gate falls back to the raw text, which starts with the comment.
+	// It is inert: the NotificationResponse such a subscription produces is discarded
 	// rather than handed to another client. Channel names carry the pid because the
 	// subscription outlives this test on whichever pooled connection ran it.
-	{
-		ensure_usable(c);
-		std::string q = "SELECT 1; LISTEN lnc_multi_" + std::to_string(getpid());
-		PGresult* r = PQexec(c.get(), q.c_str());
-		std::string st = sqlstate_of(r);
-		PQclear(r);
-		ok(st != "0A000", "multi-statement LISTEN is accepted (known gap, got '%s')", st.c_str());
-	}
 	{
 		std::string q = "/*/*n*/*/LISTEN lnc_nested_" + std::to_string(getpid());
 		std::string st = run_simple(c, q.c_str());
