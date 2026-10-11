@@ -616,6 +616,12 @@ int SQLite3DB::return_one_int(const char *str) {
  */
 int SQLite3DB::check_table_structure(const char *table_name, const char *table_def) {
 	if (db == NULL || quarantined) return 0;
+	// SQLite omits this modifier from sqlite_master.sql. Comparing it verbatim
+	// would cause check_and_build_table() to drop a matching populated table.
+	std::string canonical_def(table_def);
+	const char* idempotent_prefix = "CREATE TABLE IF NOT EXISTS ";
+	if (canonical_def.compare(0, strlen(idempotent_prefix), idempotent_prefix) == 0)
+		canonical_def.replace(0, strlen(idempotent_prefix), "CREATE TABLE ");
 	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=?1 AND sql=?2";
 	int count=0;
 	sqlite3_stmt *statement=NULL;
@@ -626,7 +632,7 @@ int SQLite3DB::check_table_structure(const char *table_name, const char *table_d
 	  return 0;
 	}
 	int rc=(*proxy_sqlite3_bind_text)(statement, 1, table_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, this);
-	rc=(*proxy_sqlite3_bind_text)(statement, 2, table_def, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, this);
+	rc=(*proxy_sqlite3_bind_text)(statement, 2, canonical_def.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, this);
 	int result=0;
 	while ((result=(*proxy_sqlite3_step)(statement))==SQLITE_ROW) {
 	  count+=(*proxy_sqlite3_column_int)(statement,0);
