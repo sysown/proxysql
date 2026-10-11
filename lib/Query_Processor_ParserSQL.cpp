@@ -485,26 +485,6 @@ static void parsersql_first_comment(SQP_par_t* qp, const char* query, int query_
 }
 
 /**
- * @brief True if @p ast is a SET statement carrying a SET ... TRANSACTION clause.
- *
- * ParserSQL's DIGEST emitter does not render SET ... TRANSACTION faithfully:
- * it drops the scope keyword (GLOBAL, LOCAL, SESSION, PERSIST, PERSIST_ONLY,
- * PgSQL SESSION CHARACTERISTICS AS), renders PERSIST/PERSIST_ONLY as an
- * isolation level, and copies the raw whitespace inside multi-word levels and
- * access modes. MySQL_Session matches the digest text against its SET
- * TRANSACTION regex and handles a match without forwarding the statement, so
- * a wrong digest acknowledges e.g. SET GLOBAL TRANSACTION with an OK that
- * nothing applied (#6420). These statements must use the legacy tokenizer.
- */
-static bool parsersql_is_set_transaction(const AstNode* ast) {
-    if (ast->type != NodeType::NODE_SET_STMT) return false;
-    for (const AstNode* child = ast->first_child; child; child = child->next_sibling) {
-        if (child->type == NodeType::NODE_SET_TRANSACTION) return true;
-    }
-    return false;
-}
-
-/**
  * @brief True if @p node is a literal or a placeholder, optionally signed,
  * parenthesized, or grouped in a row constructor.
  */
@@ -578,11 +558,9 @@ static bool parsersql_digest_hides_expression(const AstNode* node) {
  * Grammar coverage must not determine whether a query receives a digest. An
  * error or an incomplete parse can still contain an AST for only a prefix of
  * the statement, so it must use the token path rather than that partial AST.
- * SET ... TRANSACTION also uses the token path, so its digest text and hash
- * are exactly those of query_processor_parser=0 (see
- * parsersql_is_set_transaction()). So does a statement whose IN list or
- * additional VALUES rows hold a non-literal expression that the DIGEST
- * emitter would collapse away (see parsersql_digest_hides_expression()).
+ * So does a statement whose IN list or additional VALUES rows hold a
+ * non-literal expression that the DIGEST emitter would collapse away (see
+ * parsersql_digest_hides_expression()).
  */
 template <Dialect D>
 static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_length,
@@ -602,7 +580,6 @@ static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_le
     auto result = parser.parse(query, query_length);
     StringRef normalized;
     if (result.status == ParseResult::OK && result.full_input && result.ast &&
-        !parsersql_is_set_transaction(result.ast) &&
         !parsersql_digest_hides_expression(result.ast)) {
         Emitter<D> emitter(parser.arena(), EmitMode::DIGEST);
         emitter.emit(result.ast);
