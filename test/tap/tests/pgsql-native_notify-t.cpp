@@ -1003,7 +1003,7 @@ static void scenario_extended_protocol_listen(PGconn* admin, const std::vector<S
 // and unwinds the session by hand -- ends the request, empties the status stack, disposes of
 // the connection -- so what matters is that the client gets a real error AND the session is
 // still usable, not merely that the LISTEN was refused.
-static void scenario_listen_on_pooled_libpq_conn(PGconn* admin, const std::vector<ServerRow>& saved) {
+static void listen_on_pooled_libpq_conn(PGconn* admin, const std::vector<ServerRow>& saved) {
 	// One connection only, so the LISTEN below cannot be handed a fresh native one.
 	if (!setVar(admin, "pgsql-multiplexing", "true") ||
 	    !setVar(admin, "pgsql-use_native_backend_protocol", "false") ||
@@ -1046,6 +1046,20 @@ static void scenario_listen_on_pooled_libpq_conn(PGconn* admin, const std::vecto
 	ok(rc == Q_OK && val == "42" && held == 0,
 	   "and the session still works afterwards, holding nothing (%s, ConnUsed=%ld)",
 	   qres_name(rc), held);
+}
+
+// The warm libpq connection has to survive in the pool until the LISTEN takes it. With
+// max_connections=1, free_connections_pct (default 10) allows 10*1/100 = 0 free
+// connections, so every idle-connection maintenance pass (one per worker thread per
+// pgsql-ping_interval_server_msec) drops it, and a pass landing between the warm query and
+// the LISTEN handed the LISTEN a fresh native connection, accepted and pinned. Allowing all
+// free connections for the scenario takes that pass out of the picture.
+static void scenario_listen_on_pooled_libpq_conn(PGconn* admin, const std::vector<ServerRow>& saved) {
+	const std::string pct = scalar(admin, "SELECT variable_value FROM global_variables"
+	                                      " WHERE variable_name='pgsql-free_connections_pct'");
+	setVar(admin, "pgsql-free_connections_pct", "100");
+	listen_on_pooled_libpq_conn(admin, saved);
+	setVar(admin, "pgsql-free_connections_pct", pct.empty() ? "10" : pct);
 }
 
 // A routing rule sends the pinned session's next query to another hostgroup, so it ends
