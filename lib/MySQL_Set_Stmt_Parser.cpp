@@ -456,10 +456,11 @@ std::map<std::string,std::vector<std::string>> MySQL_Set_Stmt_Parser::parse2() {
 
 	std::map<std::string,std::vector<std::string>> result;
 
-	// Same grammar as match_regexes[2] in MySQL_Thread (the digest matched
+	// Same grammar as MYSQL_SET_TRANSACTION_DIGEST_REGEX (the digest matched
 	// before calling parse2()), applied to the query without its leading SET.
+	// LOCAL is a MySQL synonym of SESSION and is reported as "session".
 	// The digest collapses whitespace, the query does not: accept any whitespace.
-	const std::string pattern="(|SESSION)\\s*TRANSACTION\\s+(?:(?:(ISOLATION\\s+LEVEL)\\s+(REPEATABLE\\s+READ|READ\\s+COMMITTED|READ\\s+UNCOMMITTED|SERIALIZABLE))|(?:(READ)\\s+(WRITE|ONLY)))";
+	const std::string pattern="(|SESSION|LOCAL)\\s*TRANSACTION\\s+(?:(?:(ISOLATION\\s+LEVEL)\\s+(REPEATABLE\\s+READ|READ\\s+COMMITTED|READ\\s+UNCOMMITTED|SERIALIZABLE))|(?:(READ)\\s+(WRITE|ONLY)))";
 	re2::RE2 re(pattern, *opt2);
 	// "READ\n COMMITTED" -> "READ COMMITTED"
 	auto collapse_spaces = [](std::string& value) {
@@ -496,6 +497,7 @@ std::map<std::string,std::vector<std::string>> MySQL_Set_Stmt_Parser::parse2() {
 			}
 		//}
 		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+		if (key.compare(0, 6, "local:") == 0) key.replace(0, 5, "session");
 		result[key] = op;
 	}
 	// Anything left (e.g. a second characteristic after a comma) was not parsed:
