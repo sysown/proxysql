@@ -712,6 +712,11 @@ private:
 	PgSQL_Data_Stream* myds;
 	PgSQL_Connection* conn;
 	bool transfer_started;
+	// Native path only: true once the CURRENT statement has produced a RowDescription
+	// or DataRow, cleared when it ends ('C'/'I'/'E'/'Z'). A native simple query keeps
+	// one result for the whole multi-statement batch, so the result-wide TUPLE flag
+	// cannot tell whether the 'C' being parsed belongs to a row-returning statement.
+	bool stmt_had_tuple;
 	uint8_t result_packet_type;
 
 	friend class PgSQL_Protocol;

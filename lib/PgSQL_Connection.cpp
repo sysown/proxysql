@@ -3623,12 +3623,15 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				// An unnamed Execute always describes the portal, as libpq does, so
 				// empty rowsets can be distinguished from command-only results.
 				// Keep that metadata without adding an unrequested Describe response
-				// to the client stream (or the cached wire bytes).
+				// to the client stream (or the cached wire bytes). A swallowed 'T'
+				// still marks the statement row-returning, so a zero-row SELECT's
+				// "SELECT 0" is not taken for an affected-row count (issue #6435).
 				if (native_stmt_step == PG_Native_Stmt_Step::EXECUTE &&
 					(t == 'T' || t == 'n') &&
 					(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) == 0) {
 					query_result->num_fields = (t == 'T' && msg.payload_len >= 2) ?
 						((unsigned int)msg.payload[0] << 8) | msg.payload[1] : 0;
+					if (t == 'T') query_result->stmt_had_tuple = true;
 					continue;
 				}
 

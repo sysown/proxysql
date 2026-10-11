@@ -2774,7 +2774,11 @@ unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool
 
 PgSQL_Query_Result::PgSQL_Query_Result() {
 	buffer = NULL;
+	proto = NULL;
+	myds = NULL;
+	conn = NULL;
 	transfer_started = false;
+	stmt_had_tuple = false;
 	buffer_used = 0;
 	resultset_size = 0;
 	num_fields = 0;
@@ -2965,12 +2969,14 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		break;
 	case 'T': // RowDescription
 		result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+		stmt_had_tuple = true;
 		if (payload_len >= 2) {
 			num_fields = ((unsigned int)payload[0] << 8) | (unsigned int)payload[1];
 		}
 		break;
 	case 'D': // DataRow
 		result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+		stmt_had_tuple = true;
 		num_rows++;
 		break;
 	case 'C': { // CommandComplete: payload is a NUL-terminated command tag.
@@ -2979,8 +2985,14 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		// — i.e. extract_affected_rows=false — for row-returning results (SELECT,
 		// or any query that already emitted RowDescription/DataRow). For those, the
 		// trailing number in "SELECT <rows>" is a returned-row count, not affected
-		// rows, so we leave affected_rows at its sentinel (-1).
-		const bool had_tuple = (result_packet_type & PGSQL_QUERY_RESULT_TUPLE) != 0;
+		// rows, so we leave affected_rows untouched.
+		// The test is per statement (stmt_had_tuple), not per result: a native
+		// simple query feeds every statement of a batch into this one result, so
+		// the result-wide TUPLE flag set by "SELECT 1" would also hide the count of
+		// a later "UPDATE 10" (issue #6435). As on libpq, where each statement gets
+		// its own result, the last DML count of the batch wins; counts are not summed.
+		const bool had_tuple = stmt_had_tuple;
+		stmt_had_tuple = false;
 		result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
 		// Parse the trailing integer of the tag for affected rows. For INSERT the
 		// tag is "INSERT <oid> <rows>" (rows is the 2nd/last number); for UPDATE/
@@ -3007,9 +3019,11 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 	}
 	case 'I': // EmptyQueryResponse
 		result_packet_type |= PGSQL_QUERY_RESULT_EMPTY;
+		stmt_had_tuple = false; // ends the statement, as 'C' does
 		break;
 	case 'E': // ErrorResponse
 		result_packet_type |= PGSQL_QUERY_RESULT_ERROR;
+		stmt_had_tuple = false; // a failed statement ends without a 'C'
 		if (conn) {
 			conn->native_fill_error_from_E(payload, payload_len);
 			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql,
@@ -3049,6 +3063,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 			conn->set_ready_for_query_status((char)payload[0]);
 		}
 		result_packet_type |= PGSQL_QUERY_RESULT_READY;
+		stmt_had_tuple = false;
 		// Mirror add_ready_status(): flush the in-line buffer into PSarrayOUT so the
 		// completed result is wholly in PSarrayOUT (get_resultset asserts buffer_used==0).
 		buffer_to_PSarrayOut();
@@ -3185,6 +3200,7 @@ void PgSQL_Query_Result::reset() {
 	num_rows = 0;
 	pkt_count = 0;
 	affected_rows = -1;
+	stmt_had_tuple = false;
 	result_packet_type = PGSQL_QUERY_RESULT_NO_DATA;
 }
 
