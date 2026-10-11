@@ -470,6 +470,53 @@ static void sc_hidden_txn_ext_rollback(PgConnection& c) {
     c.sendSync();
 }
 
+// ---- #6417: the decision mid-batch -------------------------------------------
+//
+// Once a statement of the batch has run, the backend's last ReadyForQuery predates the
+// batch and only the keyword tracker followed it. These cover the tracker deciding there.
+
+// The stale BEGIN of the temp-table case, but with DISCARD ALL after a statement in the
+// same batch: the batch's implicit block, refused as such ('I'), never as an explicit
+// transaction that poisons the session.
+static void sc_stale_temp_batch(PgConnection& c) {
+    c.execute("CREATE TEMP TABLE da_tt(i int)");
+    c.execute("BEGIN; SELECT 1; COMMIT");
+    extStep(c, "sb_sel", "SELECT 1", false);
+    extStep(c, "sb_da", "DISCARD ALL", true);
+    c.sendSync();
+}
+
+// A BEGIN run earlier in the same batch makes it an explicit transaction.
+static void sc_begin_same_batch(PgConnection& c) {
+    extStep(c, "bs_begin", "BEGIN", false);
+    extStep(c, "bs_da", "DISCARD ALL", true);
+    c.sendSync();
+    c.execute("ROLLBACK");
+}
+
+// A transaction the tracker never saw, carried into a batch: the tracker must start the
+// batch knowing about it, since mid-batch nothing else is asked.
+static void sc_hidden_txn_batch(PgConnection& c) {
+    c.execute("SELECT 1; BEGIN");
+    extStep(c, "hb_sel", "SELECT 1", false);
+    extStep(c, "hb_da", "DISCARD ALL", true);
+    c.sendSync();
+    c.execute("ROLLBACK");
+}
+
+// The same, with the unseen transaction left by an extended-protocol batch: the tracker
+// has to be brought in line at that batch's Sync, not only after a simple query.
+static void sc_hidden_chain_batch(PgConnection& c) {
+    extStep(c, "hc_begin", "BEGIN", false);
+    c.sendSync();
+    extStep(c, "hc_chain", "COMMIT AND CHAIN", false);
+    c.sendSync();
+    extStep(c, "hc_sel", "SELECT 1", false);
+    extStep(c, "hc_da", "DISCARD ALL", true);
+    c.sendSync();
+    c.execute("ROLLBACK");
+}
+
 // `todo` marks a case that fails for a reason outside this fix's scope. The assertion is
 // wrapped in todo_start()/todo_end(), so a `not ok` does not fail the run but the
 // divergence stays in the TAP output every time -- recorded rather than deleted. The
@@ -501,6 +548,10 @@ static const Case PARITY_CASES[] = {
     { "#6417 BEGIN unseen by tracker (SELECT 1; BEGIN)",         sc_hidden_txn,          3, nullptr },
     { "#6417 BEGIN unseen by tracker (COMMIT AND CHAIN)",        sc_hidden_txn_chain,    4, nullptr },
     { "#6417 BEGIN unseen by tracker, extended ROLLBACK",        sc_hidden_txn_ext_rollback, 3, nullptr },
+    { "#6417 stale BEGIN, temp table pin, DISCARD ALL mid-batch", sc_stale_temp_batch,   3, nullptr },
+    { "#6417 BEGIN and DISCARD ALL in the same batch",           sc_begin_same_batch,    2, nullptr },
+    { "#6417 BEGIN unseen by tracker, DISCARD ALL mid-batch",    sc_hidden_txn_batch,    3, nullptr },
+    { "#6417 extended COMMIT AND CHAIN, DISCARD ALL mid-batch",  sc_hidden_chain_batch,  4, nullptr },
 };
 
 // --------------------------------------------------------- run one leg
@@ -678,13 +729,85 @@ static void checkStaleTracker(PGconn* admin, const char* name, const std::vector
 
 static const int STALE_CHECKS = 3;
 
+// ---- #6417: a transaction ended earlier in the same batch ----------------------
+//
+// [BEGIN, Sync] leaves the backend at 'T'. In the next batch, [COMMIT, DISCARD ALL,
+// Sync], the COMMIT runs and ends that transaction, but the 'T' is still the last
+// ReadyForQuery when DISCARD ALL is reached. Taking it for an explicit transaction
+// destroyed the idle backend, poisoned the session and answered 'E'.
+//
+// The streams cannot be compared with PostgreSQL's: it finishes a transaction-control
+// statement at once, so the DISCARD ALL after it is in no block and runs, while ProxySQL
+// refuses a DISCARD ALL that is not the first statement of its batch (the same rule as
+// KNOWN DIVERGENCE in the file header). What must hold is that the refusal is the
+// pipelined one -- client left idle and usable, nothing poisoned -- and that the
+// transaction ended exactly as it does on a direct connection.
+static std::vector<Msg> batchEndThenDiscard(PgConnection& c, const char* end_cmd) {
+    extStep(c, "be_begin", "BEGIN", false);
+    c.sendSync();
+    const auto begin = collect(c, 1);
+    extStep(c, "be_ins", "INSERT INTO " + FIXTURE + " VALUES (6417)", false);
+    c.sendSync();
+    const auto insert = collect(c, 1);
+    if (!errorCodes(begin).empty() || lastReadyState(begin) != 'T' ||
+        !errorCodes(insert).empty() || lastReadyState(insert) != 'T')
+        throw std::runtime_error("cannot open the transaction before the batch");
+    extStep(c, "be_end", end_cmd, false);
+    extStep(c, "be_da", "DISCARD ALL", true);
+    c.sendSync();
+    return collect(c, 1);
+}
+
+static void checkBatchEndThenDiscard(PGconn* admin, const char* end_cmd, const char* mode) {
+    bool ended = false, idle = false, usable = false, not_poisoned = false, same_rows = false;
+    std::string detail;
+    try {
+        PGConnPtr be = backendLibpq();
+        if (!be || PQstatus(be.get()) != CONNECTION_OK || !truncateFixture(be.get()))
+            throw std::runtime_error("cannot initialize durability fixture");
+        std::vector<Msg> oracle;
+        {
+            auto c = connectBackend();
+            oracle = batchEndThenDiscard(*c, end_cmd);
+        }
+        const long long oracle_rows = fixtureRowCount(be.get());
+        if (!truncateFixture(be.get())) throw std::runtime_error("cannot truncate durability fixture");
+
+        const long long poisoned_before = txPoisonedTotal(admin);
+        auto c = connectProxy();
+        const auto proxy = batchEndThenDiscard(*c, end_cmd);
+        ended = hasCommandTag(proxy, end_cmd);
+        idle = lastReadyState(proxy) == 'I';
+        c->execute("SELECT 1");
+        const auto select = collect(*c, 1);
+        usable = errorCodes(select).empty() && lastReadyState(select) == 'I';
+        not_poisoned = poisoned_before >= 0 && txPoisonedTotal(admin) == poisoned_before;
+        const long long proxy_rows = fixtureRowCount(be.get());
+        same_rows = oracle_rows >= 0 && oracle_rows == proxy_rows;
+        detail = "direct PostgreSQL: " + streamSummary(oracle) + " (SQLSTATE '" + errorCodes(oracle) +
+            "', rows " + std::to_string(oracle_rows) + "); via ProxySQL: " + streamSummary(proxy) +
+            " (SQLSTATE '" + errorCodes(proxy) + "', last ReadyForQuery '" + lastReadyState(proxy) +
+            "', rows " + std::to_string(proxy_rows) + "), next SELECT: " + streamSummary(select) +
+            " (SQLSTATE '" + errorCodes(select) + "')";
+    } catch (const std::exception& e) {
+        detail = e.what();
+    }
+    diag("  %s", detail.c_str());
+    ok(ended && idle && usable && not_poisoned && same_rows,
+       "#6417 [BEGIN] then [%s, DISCARD ALL] [%s]: client idle and usable, not poisoned, same rows as PostgreSQL",
+       end_cmd, mode);
+}
+
+static const int BATCH_END_CHECKS = 2;
+
 // ------------------------------------------------------------------ main
 
 static const char* MODE_NAME[2] = { "libpq backend protocol", "native backend protocol" };
 
 int main(int, char**) {
     // Existing parity cases plus 5 assertions for each DISCARD/recovery shape.
-    plan((int)((sizeof(PARITY_CASES) / sizeof(PARITY_CASES[0]) + 2 + 5 * 2 * 2 + STALE_CHECKS) * 2));
+    plan((int)((sizeof(PARITY_CASES) / sizeof(PARITY_CASES[0]) + 2 + 5 * 2 * 2 + STALE_CHECKS +
+                BATCH_END_CHECKS) * 2));
 
     if (cl.getEnv()) return exit_status();
 
@@ -725,7 +848,8 @@ int main(int, char**) {
     for (int mode = 0; mode < 2; mode++) {
         const bool native = (mode == 1);
         if (native && !native_supported) {
-            skip((int)(sizeof(PARITY_CASES) / sizeof(PARITY_CASES[0]) + 2 + 5 * 2 * 2 + STALE_CHECKS),
+            skip((int)(sizeof(PARITY_CASES) / sizeof(PARITY_CASES[0]) + 2 + 5 * 2 * 2 + STALE_CHECKS +
+                       BATCH_END_CHECKS),
                  "native backend protocol is unavailable in v3.0");
             continue;
         }
@@ -810,6 +934,10 @@ int main(int, char**) {
         checkStaleTracker(admin, "#6417 COMMIT unseen under a hostgroup lock, extended DISCARD",
             { "BEGIN", "SET DateStyle='ISO'; SELECT 1", "COMMIT" },
             true, MODE_NAME[mode]);
+
+        // ---- #6417: transaction ended earlier in the same batch ----------------
+        for (const char* end_cmd : {"COMMIT", "ROLLBACK"})
+            checkBatchEndThenDiscard(admin, end_cmd, MODE_NAME[mode]);
 
         // ---- durability: the row must land in the same place on both legs ----
         {
