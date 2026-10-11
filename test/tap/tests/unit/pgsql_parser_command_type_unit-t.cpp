@@ -79,6 +79,9 @@ static const ClassifyCase cases[] = {
 	{"SELECT pg_cancel_backend_extra(1)", PGSQL_QUERY_SELECT},
 	{"SELECT pg_terminate_backend2(1)", PGSQL_QUERY_SELECT},
 	{"SELECT pg_cancel_backend (1)", PGSQL_QUERY_CANCEL_BACKEND},
+	// A comment is whitespace to PostgreSQL, also between the name and '('.
+	{"SELECT pg_cancel_backend/*x*/(123)", PGSQL_QUERY_CANCEL_BACKEND},
+	{"SELECT pg_terminate_backend /* x */ -- y\n (123)", PGSQL_QUERY_TERMINATE_BACKEND},
 };
 
 // Parser mode only. The legacy classifier reads the first token of the text as is, so it
@@ -98,6 +101,9 @@ static const ClassifyCase keep_comment_cases[] = {
 	{"/* hint */ SELECT pg_cancel_backend_extra(7)", PGSQL_QUERY_SELECT},
 	{"/* hint */ WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d", PGSQL_QUERY_UNKNOWN},
 	{"/* hint */ INSERT INTO t VALUES (1)", PGSQL_QUERY_INSERT},
+	// The kept comment sits between the function name and '('.
+	{"SELECT pg_cancel_backend/*x*/(123)", PGSQL_QUERY_CANCEL_BACKEND},
+	{"SELECT pg_terminate_backend /* x */ (123)", PGSQL_QUERY_TERMINATE_BACKEND},
 };
 
 // With digests enabled the parser path classifies from the cached ParserSQL statement
@@ -161,6 +167,9 @@ static void test_parser_without_digests() {
 		{"/* c */ SELECT pg_cancel_backend(1)", PGSQL_QUERY_CANCEL_BACKEND},
 		{"-- c\nSELECT 1", PGSQL_QUERY_SELECT},
 		{"SELECT pg_cancel_backend_x(1)", PGSQL_QUERY_SELECT},
+		// The raw prefix keeps a comment between the function name and '('.
+		{"SELECT pg_cancel_backend/**/(1)", PGSQL_QUERY_CANCEL_BACKEND},
+		{"SELECT pg_terminate_backend/*x*/(1)", PGSQL_QUERY_TERMINATE_BACKEND},
 	};
 	for (const auto& c : prefix_cases) {
 		bool prefix_freed = false;
@@ -187,7 +196,7 @@ int main() {
 	const size_t n_cases = sizeof(cases) / sizeof(cases[0]);
 	const size_t n_parser_only = sizeof(parser_only_cases) / sizeof(parser_only_cases[0]) +
 		sizeof(keep_comment_cases) / sizeof(keep_comment_cases[0]);
-	plan(1 + n_cases + 3 + n_parser_only + 12 * 2 + n_cases);
+	plan(1 + n_cases + 3 + n_parser_only + 14 * 2 + n_cases);
 	ok(test_init_minimal() == 0 && test_init_query_processor() == 0, "test init succeeds");
 	// Worker defaults; the legacy digest yields an empty text with a zero length limit.
 	pgsql_thread___query_digests_max_query_length = 65000;
