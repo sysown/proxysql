@@ -407,7 +407,7 @@ static void test_addr_predicate_mode_selection() {
 	// so a leading '/' must not be read as the start of a malformed prefix.
 	// The classification is field-aware since #6426: qp_addr_value_is_cidr()
 	// is the single decision the admin validator and the predicate consult.
-	ok(qp_addr_value_is_cidr("/tmp/proxysql.sock", QP_ADDR_FIELD_PROXY) == false,
+	ok(qp_addr_value_is_cidr("/run/proxysql.sock", QP_ADDR_FIELD_PROXY) == false,
 		"a leading '/' is a path, not a prefix");
 	ok(qp_addr_value_is_cidr("10.0.0.0/8", QP_ADDR_FIELD_PROXY) == true, "addr/len is a prefix");
 	ok(qp_addr_value_is_cidr("2001:db8::/32", QP_ADDR_FIELD_PROXY) == true, "IPv6 addr/len is a prefix");
@@ -417,17 +417,17 @@ static void test_addr_predicate_mode_selection() {
 
 	// The path exception is reserved for proxy_addr, which is the field a Unix
 	// listener writes its socket path into.
-	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", QP_ADDR_FIELD_PROXY), "Unix socket path resolves on proxy_addr");
+	ok(qp_addr_predicate_init(&pred, "/run/proxysql.sock", QP_ADDR_FIELD_PROXY), "Unix socket path resolves on proxy_addr");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "Unix socket path stays on the exact-match path");
-	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", QP_ADDR_FIELD_CLIENT) == false,
+	ok(qp_addr_predicate_init(&pred, "/run/proxysql.sock", QP_ADDR_FIELD_CLIENT) == false,
 		"a socket path is refused on client_addr");
 
 	// A listener path is not a rendered address, so neither the length cap nor
 	// the '%'-position rule may be applied to it.
-	ok(qp_addr_predicate_init(&pred, "/tmp/a-very-long-socket-path-that-exceeds-inet6-addrstrlen-by-a-way.sock",
+	ok(qp_addr_predicate_init(&pred, "/run/a-very-long-socket-path-that-exceeds-inet6-addrstrlen-by-a-way.sock",
 		QP_ADDR_FIELD_PROXY), "an over-long socket path is accepted on proxy_addr");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "an over-long socket path stays exact");
-	ok(qp_addr_predicate_init(&pred, "/tmp/a%b.sock", QP_ADDR_FIELD_PROXY),
+	ok(qp_addr_predicate_init(&pred, "/run/a%b.sock", QP_ADDR_FIELD_PROXY),
 		"a socket path containing '%' is accepted on proxy_addr");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "a socket path containing '%' stays exact");
 }
@@ -439,7 +439,7 @@ static void test_addr_predicate_mode_selection() {
 static void test_qp_addr_relative_socket_paths() {
 	qp_addr_predicate_t pred;
 	const char *paths[] = { "./proxysql.sock", "run/proxysql.sock", "../run/p.sock",
-		"/tmp/proxysql.sock", "proxysql.sock" };
+		"/run/proxysql.sock", "proxysql.sock" };
 	for (const char *path : paths) {
 		ok(qp_addr_predicate_init(&pred, path, QP_ADDR_FIELD_PROXY) == true,
 			"socket-path proxy_addr '%s' resolves", path);
@@ -483,7 +483,7 @@ static void test_qp_addr_relative_socket_paths() {
 	//.client_addr semantics are unchanged: a non-CIDR '/' form is refused.
 	ok(qp_addr_predicate_init(&pred, "10.0.0.0/255.0.0.0", QP_ADDR_FIELD_CLIENT) == false,
 		"a netmask-form prefix is rejected on client_addr");
-	ok(qp_addr_predicate_init(&pred, "/tmp/x", QP_ADDR_FIELD_CLIENT) == false,
+	ok(qp_addr_predicate_init(&pred, "/run/x", QP_ADDR_FIELD_CLIENT) == false,
 		"a socket path is still rejected on client_addr");
 	ok(qp_addr_predicate_init(&pred, "10.0.0._", QP_ADDR_FIELD_CLIENT) == true,
 		"'10.0.0._' resolves on client_addr");
@@ -615,7 +615,7 @@ static void test_cidr_rejects_malformed() {
 	// rejected rather than becoming a criterion that could never match.
 	ok(qp_addr_predicate_init(&pred, "/8", QP_ADDR_FIELD_CLIENT) == false,
 		"a leading '/' is rejected on client_addr");
-	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", QP_ADDR_FIELD_CLIENT) == false,
+	ok(qp_addr_predicate_init(&pred, "/run/proxysql.sock", QP_ADDR_FIELD_CLIENT) == false,
 		"a socket path is rejected on client_addr");
 	ok(qp_addr_predicate_init(&pred, "/8", QP_ADDR_FIELD_PROXY) == true,
 		"a leading '/' is accepted on proxy_addr");
