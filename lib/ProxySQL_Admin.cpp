@@ -3786,6 +3786,23 @@ bool materialize_plugin_secrets_schema(SQLite3DB* db) {
 		proxysql_plugin_secrets_table_definition(), exists, current) && exists && current;
 }
 
+bool materialize_plugin_generations_schema(SQLite3DB* db) {
+	if (db == nullptr || db->get_db() == nullptr) return false;
+	bool exists = false;
+	bool current = false;
+	if (!admin_table_schema_matches(db, "proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL, exists, current)) return false;
+	if (current) return true;
+	if (exists) {
+		proxy_error("Refusing destructive rebuild of an unknown proxysql_plugin_config_generations schema\n");
+		return false;
+	}
+	if (!db->build_table("proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL, false)) return false;
+	return admin_table_schema_matches(db, "proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL, exists, current) && exists && current;
+}
+
 bool upgrade_plugin_owned_objects_schema(SQLite3DB* db) {
 	if (db == nullptr || db->get_db() == nullptr) return false;
 	bool backup_exists = false;
@@ -3860,15 +3877,19 @@ bool ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<
 #ifdef PROXYSQL40
 	bool has_plugin_ownership_table = false;
 	bool has_plugin_secrets_table = false;
+	bool has_plugin_generations_table = false;
 	for (const table_def_t* definition : *tables_defs) {
 		if (strcmp(definition->table_name, "proxysql_plugin_owned_objects") == 0) {
 			has_plugin_ownership_table = true;
 		}
 		if (strcmp(definition->table_name, "proxysql_plugin_secrets") == 0)
 			has_plugin_secrets_table = true;
+		if (strcmp(definition->table_name, "proxysql_plugin_config_generations") == 0)
+			has_plugin_generations_table = true;
 	}
 	if (has_plugin_ownership_table && !upgrade_plugin_owned_objects_schema(db)) return false;
 	if (has_plugin_secrets_table && !materialize_plugin_secrets_schema(db)) return false;
+	if (has_plugin_generations_table && !materialize_plugin_generations_schema(db)) return false;
 #endif
 	db->execute("PRAGMA foreign_keys = OFF");
 	for (std::vector<table_def_t *>::iterator it=tables_defs->begin(); it!=tables_defs->end(); ++it) {
@@ -3878,6 +3899,8 @@ bool ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<
 			strcmp(td->table_name, "proxysql_plugin_owned_objects") == 0) continue;
 		if (has_plugin_secrets_table &&
 			strcmp(td->table_name, "proxysql_plugin_secrets") == 0) continue;
+		if (has_plugin_generations_table &&
+			strcmp(td->table_name, "proxysql_plugin_config_generations") == 0) continue;
 #endif
 		db->check_and_build_table(td->table_name, td->table_def);
 	}
