@@ -71,7 +71,7 @@ void MySQL_Set_Stmt_Parser::set_query(const std::string& nq) {
 #define NAMES "(NAMES)"
 #define NAME_VALUE "((?:\\w|\\d)+)"
 
-#define SESSION_P1 "(?:|SESSION +|@@|@@session.|@@local.)"
+#define SESSION_P1 "(?:|SESSION +|LOCAL +|@@|@@session.|@@local.)"
 #define VAR_P1 "`?(@\\w+|\\w+)`?"
 
 // added (?:[\\w]+=(?:on|off)|,)+ for optimizer_switch

@@ -40,8 +40,8 @@ typedef union _4bytes_t {
 
 unsigned int CPY3(unsigned char *ptr) {
 	_4bytes_t buf;
-	buf.i=*(uint32_t *)ptr;
-	buf.data[3]=0;
+	buf.i=0;
+	memcpy(buf.data, ptr, 3);
 	return buf.i;
 }
 

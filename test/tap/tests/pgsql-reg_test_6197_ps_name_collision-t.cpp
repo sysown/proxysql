@@ -30,6 +30,8 @@
  * connection is being established, with a sweep of delays. When the race lands, the
  * Parse is retried on X (S2). A second, timing-free scenario keeps the backend connection
  * attached between requests (pgsql-multiplexing=false), see below.
+ * If the delay instead reaches an in-flight libpq pipeline, replay is refused with
+ * ProxySQL's FATAL 57P01. Only that explicit refusal, with no work on S2, is expected.
  *
  * Evidence that a statement moved from S1 to S2 comes from stats_pgsql_connection_pool:
  *   - scenario 1: an iteration counts as a retry only if it both opened a connection to
@@ -133,6 +135,57 @@ static bool grew(long before, long after) {
 	return before >= 0 && after > before;
 }
 
+struct PrepareOutcome {
+	bool command_ok = false;
+	bool offline_refusal = false;
+	bool other_error = false;
+	std::string first_error;
+	std::string first_collision;
+
+	bool succeeded() const {
+		return command_ok && !offline_refusal && !other_error && first_collision.empty();
+	}
+
+	bool expected_refusal(long s2_before, long s2_after) const {
+		return offline_refusal && !command_ok && !other_error && first_collision.empty() &&
+			s2_before >= 0 && s2_after == s2_before;
+	}
+};
+
+static PrepareOutcome read_prepare_result(PGconn* c, const std::string& offline_message) {
+	PrepareOutcome outcome;
+	bool first_error_structured = false;
+	while (PGresult* r = PQgetResult(c)) {
+		if (PQresultStatus(r) == PGRES_COMMAND_OK) {
+			outcome.command_ok = true;
+		} else {
+			const std::string error = PQresultErrorMessage(r);
+			const char* state = PQresultErrorField(r, PG_DIAG_SQLSTATE);
+			const char* severity = PQresultErrorField(r, PG_DIAG_SEVERITY_NONLOCALIZED);
+			const char* message = PQresultErrorField(r, PG_DIAG_MESSAGE_PRIMARY);
+			if (outcome.first_error.empty() || (!first_error_structured && state)) {
+				outcome.first_error = error;
+				first_error_structured = state != nullptr;
+			}
+			if (error.find("proxysql_ps_") != std::string::npos) {
+				if (outcome.first_collision.empty()) outcome.first_collision = error;
+			} else if (state && std::string(state) == "57P01" && severity &&
+				std::string(severity) == "FATAL" && message && offline_message == message) {
+				// The delay sweep can hit an already in-flight libpq pipeline, where
+				// replay is deliberately refused. Accept only our exact administrative error.
+				outcome.offline_refusal = true;
+			} else if (!(outcome.offline_refusal && !state && !severity &&
+				PQstatus(c) == CONNECTION_BAD && error.find("server closed the connection unexpectedly") == 0)) {
+				// After FATAL, libpq returns another result for EOF. A bare EOF or any
+				// other error must still fail, regardless of the other results' order.
+				outcome.other_error = true;
+			}
+		}
+		PQclear(r);
+	}
+	return outcome;
+}
+
 static bool cleanup(PGconn* admin) {
 	return exec_ok(admin, "DELETE FROM pgsql_query_rules WHERE rule_id=" + std::to_string(TEST_RULE_ID)) &&
 		exec_ok(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(TEST_HG)) &&
@@ -204,9 +257,11 @@ int main(int, char**) {
 
 	static const useconds_t delays[] = { 0, 200, 500, 1000, 1500, 2000, 3000, 5000 };
 	const int n_delays = sizeof(delays) / sizeof(delays[0]);
-	int iterations = 0, collisions = 0, other_errors = 0, successes = 0;
+	int iterations = 0, collisions = 0, other_errors = 0, successes = 0, offline_refusals = 0;
 	long retries = 0;
 	std::string first_collision;
+	const std::string offline_message = "Backend server went offline during query (hostgroup " + hg +
+		", " + s1 + ":" + port + "); query cannot be retried";
 
 	for (int i = 0; i < MAX_ITERATIONS && retries < TARGET_RETRIES; i++) {
 		if (!set_s1_status(admin, s1, "ONLINE")) break;
@@ -219,39 +274,38 @@ int main(int, char**) {
 		// A statement never seen before: its Parse is sent to a backend, which must be a
 		// brand-new connection on S1.
 		const std::string q = "SELECT " + std::to_string(i) + " /* " + MARKER + " iter */";
+		PrepareOutcome outcome;
 		if (PQsendPrepare(c, "", q.c_str(), 0, nullptr) == 1) {
 			usleep(delays[i % n_delays]);
 			set_s1_status(admin, s1, "OFFLINE_HARD");
-			bool failed = false;
-			std::string err;
-			while (PGresult* r = PQgetResult(c)) {
-				if (PQresultStatus(r) != PGRES_COMMAND_OK) {
-					failed = true;
-					err = PQresultErrorMessage(r);
-				}
-				PQclear(r);
-			}
-			if (failed && err.find("proxysql_ps_") != std::string::npos) {
-				collisions++;
-				if (first_collision.empty()) first_collision = err;
-			} else if (failed) {
-				other_errors++;
-				diag("iteration %d: non-collision error: %s", i, err.c_str());
-			} else {
-				successes++;
-			}
+			outcome = read_prepare_result(c, offline_message);
 		} else {
-			other_errors++;
+			outcome.other_error = true;
+			outcome.first_error = PQerrorMessage(c);
 		}
 		PQfinish(c);
-		if (grew(s1_conns_before, pool_stat(admin, s1, "ConnOK+ConnERR")) &&
-			grew(s2_queries_before, pool_stat(admin, s2, "Queries"))) {
+		const bool s1_attempted = grew(s1_conns_before, pool_stat(admin, s1, "ConnOK+ConnERR"));
+		const long s2_queries_after = pool_stat(admin, s2, "Queries");
+		const bool s2_ran = grew(s2_queries_before, s2_queries_after);
+		if (!outcome.first_collision.empty()) {
+			collisions++;
+			if (first_collision.empty()) first_collision = outcome.first_collision;
+		} else if (outcome.succeeded()) {
+			successes++;
+		} else if (outcome.expected_refusal(s2_queries_before, s2_queries_after)) {
+			offline_refusals++;
+			diag("iteration %d: expected in-flight offline refusal: %s", i, outcome.first_error.c_str());
+		} else {
+			other_errors++;
+			diag("iteration %d: non-collision error: %s", i, outcome.first_error.c_str());
+		}
+		if (s1_attempted && s2_ran) {
 			retries++;
 		}
 	}
 
-	diag("iterations=%d successes=%d collisions=%d other_errors=%d retries_S1_to_S2=%ld",
-		iterations, successes, collisions, other_errors, retries);
+	diag("iterations=%d successes=%d collisions=%d other_errors=%d offline_refusals=%d retries_S1_to_S2=%ld",
+		iterations, successes, collisions, other_errors, offline_refusals, retries);
 	ok(iterations > 0, "Ran %d iterations", iterations);
 	if (retries > 0) {
 		ok(true, "The offline-during-query retry path was exercised (%ld iterations moved from S1 to S2)", retries);

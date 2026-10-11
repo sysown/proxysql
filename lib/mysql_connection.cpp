@@ -1345,8 +1345,28 @@ void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 	}
 }
 
+/**
+ * @brief Enforce 'mysql-enable_load_data_local_infile' at the connector level.
+ *
+ * A 'LOAD DATA LOCAL INFILE' request (0xFB) from the backend makes the connector
+ * read a file from the ProxySQL host. The textual check in handler_special_queries()
+ * only covers canonically spelled COM_QUERY; COM_STMT_PREPARE/EXECUTE and alternate
+ * spellings bypass it. The connector refuses file requests when CLIENT_LOCAL_FILES is
+ * absent from 'options.client_flag' (checked at request time), so the flag is synced
+ * with the current policy before every statement sent to the backend. The capability
+ * advertised at handshake is unaffected, so pooled connections follow runtime changes.
+ */
+void MySQL_Connection::apply_local_infile_policy() {
+	if (mysql_thread___enable_load_data_local_infile) {
+		mysql->options.client_flag |= CLIENT_LOCAL_FILES;
+	} else {
+		mysql->options.client_flag &= ~CLIENT_LOCAL_FILES;
+	}
+}
+
 void MySQL_Connection::real_query_start() {
 	PROXY_TRACE();
+	apply_local_infile_policy();
 	async_exit_status = mysql_real_query_start(&interr , mysql, query.ptr, query.length);
 }
 
@@ -1358,6 +1378,7 @@ void MySQL_Connection::real_query_cont(short event) {
 
 void MySQL_Connection::stmt_prepare_start() {
 	PROXY_TRACE();
+	apply_local_infile_policy();
 	query.stmt=mysql_stmt_init(mysql);
 	my_bool my_arg=true;
 	mysql_stmt_attr_set(query.stmt, STMT_ATTR_UPDATE_MAX_LENGTH, &my_arg);
@@ -1383,6 +1404,7 @@ void MySQL_Connection::stmt_execute_start() {
 	// it is a nasty hack because we shouldn't change states that should belong to the library
 	// I am not sure if this is a bug in the backend library or not
 	query.stmt->state= MYSQL_STMT_PREPARED;
+	apply_local_infile_policy();
 	async_exit_status = mysql_stmt_execute_start(&interr , query.stmt);
 }
 

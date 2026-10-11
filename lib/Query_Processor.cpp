@@ -733,12 +733,15 @@ bool rule_matches_query(
 		return false;
 	}
 
-	if (qr->digest && digest && qr->digest != digest) {
+	// Digest predicates require their input. Missing metadata must not make
+	// a digest-specific rule act as an unconditional match.
+	if (qr->digest && (!digest || qr->digest != digest)) {
 		return false;
 	}
 
-	if (qr->match_digest && digest_text) {
-		if (rule_matches_regex(qr, qr->regex_engine1, 1, digest_text, query_processor_regex) == false) {
+	if (qr->match_digest) {
+		if (!digest_text || !*digest_text ||
+			rule_matches_regex(qr, qr->regex_engine1, 1, digest_text, query_processor_regex) == false) {
 			return false;
 		}
 	}

@@ -1476,6 +1476,10 @@ void PgSQL_Data_Stream::reset_connection() {
 	}
 }
 
+// Upper bounds for the size of messages received from clients, see buffer2array().
+static constexpr uint32_t PGSQL_MAX_PREAUTH_MESSAGE_SIZE = 65536;
+static constexpr uint32_t PGSQL_MAX_MESSAGE_SIZE = 0x40000000; // PostgreSQL's 1GB message limit
+
 int PgSQL_Data_Stream::buffer2array() {
 	int ret = 0;
 	unsigned char header[5];
@@ -1515,9 +1519,29 @@ int PgSQL_Data_Stream::buffer2array() {
 			return 0;
 		}
 
+		// The length prefix is untrusted: bound it before allocating (GHSA-33xp-q4g3-r79r).
+		// Before authentication only startup, SSL and authentication messages are valid;
+		// PostgreSQL itself limits these to 10000 bytes (startup) and 65535 (auth tokens).
+		// After it, no message may exceed PostgreSQL's 1GB message size limit.
+		uint32_t max_pkgsize = UINT32_MAX;
+		if (myds_type == MYDS_FRONTEND) {
+			max_pkgsize = (sess == nullptr || sess->status == CONNECTING_CLIENT)
+				? PGSQL_MAX_PREAUTH_MESSAGE_SIZE : PGSQL_MAX_MESSAGE_SIZE;
+		}
+		if (pkgsize > max_pkgsize) {
+			proxy_error("Oversized packet (size=%u, max=%u) received from client %s:%d\n", pkgsize, max_pkgsize, addr.addr ? addr.addr : "", addr.port);
+			shut_soft();
+			return 0;
+		}
+
 		// PostgreSQL packets should always be >= 5 bytes.
-		queueIN.pkt.size = pkgsize;
 		queueIN.pkt.ptr = l_alloc(pkgsize);
+		if (queueIN.pkt.ptr == NULL) {
+			proxy_error("Failed to allocate %u bytes for packet received from %s:%d\n", pkgsize, addr.addr ? addr.addr : "", addr.port);
+			shut_soft();
+			return 0;
+		}
+		queueIN.pkt.size = pkgsize;
 
 		memcpy(queueIN.pkt.ptr, header, sizeof(header)); // immediately copy the header into the packet
 		queueIN.partial = sizeof(header);
