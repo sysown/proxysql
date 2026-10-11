@@ -7229,28 +7229,6 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 	if (!use_aws_locality) {
 	for (i=0; i<cached_connections->len;) {
 		c = (MySQL_Connection *) cached_connections->index(i);
-		const char *candidate_username =
-			c->userinfo != nullptr ? c->userinfo->username : nullptr;
-		const char *requested_username = client_conn->userinfo->username;
-		const bool same_username = candidate_username != nullptr &&
-			requested_username != nullptr &&
-			strcmp(candidate_username, requested_username) == 0;
-		if (c->parent->myhgc->hid == _hid &&
-			same_username &&
-			(c->backend_auth_type() != requested_type ||
-			 (requested_type == MySQLBackendAuthType::AWS_IAM &&
-			  c->requires_CHANGE_USER(client_conn, requested_type)))) {
-			cached_connections->remove_index_fast(i);
-			c->send_quit = false;
-			MyHGM->destroy_MyConn_from_pool(c);
-			continue;
-		}
-		if (c->backend_auth_type() != requested_type ||
-			(requested_type == MySQLBackendAuthType::AWS_IAM &&
-			 c->requires_CHANGE_USER(client_conn, requested_type))) {
-			++i;
-			continue;
-		}
 
 		// Skip unhealthy or non-reusable connections
 		if (!c->healthy || !c->reusable) {
@@ -7286,7 +7264,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 								MySrvC *mysrvc = c->parent;
 								std::vector<MySrvC *>::iterator it;
 								it = find(parents.begin(), parents.end(), mysrvc);
-								if (it != parents.end()) {
+								if (it == parents.end()) {
 									// we didn't exclude this server (yet?)
 									bool gtid_found = false;
 									gtid_found = MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
@@ -7320,28 +7298,6 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 	}
 
 #ifdef PROXYSQL40
-	// Remove mode-incompatible connections before the allocation-free scoring
-	// passes below, so their indices remain stable throughout the lottery.
-	for (i = 0; i < cached_connections->len;) {
-		c = static_cast<MySQL_Connection*>(cached_connections->index(i));
-		const char* candidate_username =
-			c->userinfo != nullptr ? c->userinfo->username : nullptr;
-		const char* requested_username = client_conn->userinfo->username;
-		const bool same_username = candidate_username != nullptr &&
-			requested_username != nullptr &&
-			strcmp(candidate_username, requested_username) == 0;
-		if (c->parent->myhgc->hid == _hid && same_username &&
-			(c->backend_auth_type() != requested_type ||
-			 (requested_type == MySQLBackendAuthType::AWS_IAM &&
-			  c->requires_CHANGE_USER(client_conn, requested_type)))) {
-			cached_connections->remove_index_fast(i);
-			c->send_quit = false;
-			MyHGM->destroy_MyConn_from_pool(c);
-			continue;
-		}
-		++i;
-	}
-
 	const bool is_session_track_backoff_enabled = check_session_track_backoff;
 	const int max_lag_ms_local = max_lag_ms;
 	const char* requested_schema = client_conn->userinfo ? client_conn->userinfo->schemaname : nullptr;
@@ -7354,10 +7310,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 		is_session_track_backoff_enabled, max_lag_ms_local, current_time,
 			&thread_status_variables, gtid_uuid, _hid](
 		MySQL_Connection* candidate, bool record_lag_skip) -> bool {
-		if (candidate->backend_auth_type() != requested_auth_type ||
-			(requested_auth_type == MySQLBackendAuthType::AWS_IAM &&
-			 candidate->requires_CHANGE_USER(requested_connection, requested_auth_type)) ||
-			!candidate->healthy || !candidate->reusable) {
+		if (!candidate->healthy || !candidate->reusable) {
 			return false;
 		}
 		if (is_session_track_backoff_enabled &&

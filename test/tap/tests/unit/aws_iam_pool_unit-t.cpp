@@ -10,6 +10,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "Aws_Iam_Provider.h"
+#include "Aws_Locality_Manager.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Logger.hpp"
@@ -39,6 +40,8 @@ constexpr const char *kSchema = "pool_schema";
 
 std::atomic<unsigned int> change_user_calls { 0 };
 std::atomic<bool> change_user_immediate_success { false };
+std::string change_user_username;
+std::string change_user_password;
 MySQL_Connection *kill_source_connection = nullptr;
 unsigned int kill_helper_dispatches = 0;
 bool kill_source_token_present_at_dispatch = false;
@@ -193,12 +196,12 @@ void test_identity_matrix(MySQL_Thread& worker) {
 	ok(password->requires_CHANGE_USER(
 		other_password.frontend, MySQLBackendAuthType::PASSWORD),
 		"different username in password mode still requires ordinary CHANGE_USER");
-	ok(password->requires_CHANGE_USER(
+	ok(!password->requires_CHANGE_USER(
 		same_iam.frontend, MySQLBackendAuthType::AWS_IAM),
-		"password connection cannot satisfy the same username in IAM mode");
-	ok(iam->requires_CHANGE_USER(
+		"established password connection satisfies the same username after switching to IAM");
+	ok(!iam->requires_CHANGE_USER(
 		same_password.frontend, MySQLBackendAuthType::PASSWORD),
-		"IAM connection cannot satisfy the same username in password mode");
+		"established IAM connection satisfies the same username after switching to password");
 	ok(!iam->requires_CHANGE_USER(
 		same_iam.frontend, MySQLBackendAuthType::AWS_IAM),
 		"same username and IAM mode are compatible without token-age checks");
@@ -220,44 +223,196 @@ void test_runtime_mode_changes_global(MySQL_Thread& worker) {
 	SessionFixture iam_request(worker, 802, MySQLBackendAuthType::AWS_IAM);
 	auto old_password = create_established_connection(
 		password_server, kUser, MySQLBackendAuthType::PASSWORD);
+	auto old_password_ptr = old_password.get();
 	password_server->ConnectionsFree->add(old_password.release());
 	MySQL_Connection *selected = MyHGM->get_MyConn_from_pool(
 		802, iam_request.session, false, nullptr, 0, -1,
 		MySQLBackendAuthType::AWS_IAM);
-	ok(selected != nullptr && selected->fd == -1 &&
+	ok(selected == old_password_ptr && selected->fd == 123 &&
+		selected->backend_auth_type() == MySQLBackendAuthType::PASSWORD &&
 		password_server->ConnectionsFree->conns_length() == 0,
-		"PASSWORD to IAM policy change lazily destroys the old global entry and creates fresh");
+		"PASSWORD to IAM policy change reuses the established global connection");
 	destroy_used(selected);
 
 	MySrvC *iam_server = create_server(803, "iam-to-password");
 	SessionFixture password_request(worker, 803, MySQLBackendAuthType::PASSWORD);
 	auto old_iam = create_established_connection(
 		iam_server, kUser, MySQLBackendAuthType::AWS_IAM);
+	auto old_iam_ptr = old_iam.get();
 	iam_server->ConnectionsFree->add(old_iam.release());
 	selected = MyHGM->get_MyConn_from_pool(
 		803, password_request.session, false, nullptr, 0, -1,
 		MySQLBackendAuthType::PASSWORD);
-	ok(selected != nullptr && selected->fd == -1 &&
+	ok(selected == old_iam_ptr && selected->fd == 123 &&
+		selected->backend_auth_type() == MySQLBackendAuthType::AWS_IAM &&
 		iam_server->ConnectionsFree->conns_length() == 0,
-		"IAM to PASSWORD policy change lazily destroys the old global entry and creates fresh");
+		"IAM to PASSWORD policy change reuses the established global connection");
 	destroy_used(selected);
 }
 
-void test_runtime_mode_change_local(MySQL_Thread& worker) {
-	MySrvC *server = create_server(804, "local-password-to-iam");
-	SessionFixture request(worker, 804, MySQLBackendAuthType::AWS_IAM);
-	auto old_password = create_established_connection(
-		server, kUser, MySQLBackendAuthType::PASSWORD);
-	auto old_password_ptr = old_password.get();
-	server->ConnectionsUsed->add(old_password.release());
-	worker.push_MyConn_local(old_password_ptr);
+void test_runtime_mode_change_local(MySQL_Thread& worker, bool locality = false) {
+	for (unsigned int direction = 0; direction < 2; ++direction) {
+		const auto opened_type = direction == 0
+			? MySQLBackendAuthType::PASSWORD : MySQLBackendAuthType::AWS_IAM;
+		const auto requested_type = direction == 0
+			? MySQLBackendAuthType::AWS_IAM : MySQLBackendAuthType::PASSWORD;
+		const unsigned int hid = (locality ? 824 : 822) + direction;
+		MySrvC *server = create_server(hid, (std::string("local-mode-change-") + std::to_string(hid)).c_str());
+#ifdef PROXYSQL40
+		if (locality) {
+			AwsLocalityHostgroupConfig config;
+			config.hostgroup_id = hid;
+			config.policy.valid = true;
+			MyHGM->aws_locality_manager()->configure({config});
+			MyHGM->set_aws_locality_awareness_enabled(true);
+			mysql_thread___aws_locality_awareness = true;
+			if (!MyHGM->aws_locality_manager()->snapshot()->has_hostgroup(hid)) {
+				BAIL_OUT("locality cache fixture did not publish its hostgroup");
+			}
+		}
+#endif
+		SessionFixture request(worker, hid, requested_type);
+		auto established = create_established_connection(server, kUser, opened_type);
+		auto established_ptr = established.get();
+		server->ConnectionsUsed->add(established.release());
+		worker.push_MyConn_local(established_ptr);
+		const auto destroyed_before = MyHGM->status.myconnpoll_destroy;
+		MySQL_Connection *selected = worker.get_MyConn_local(
+			hid, request.session, nullptr, 0, -1, requested_type);
+		ok(selected == established_ptr &&
+			MyHGM->status.myconnpoll_destroy == destroyed_before,
+			"%s cache reuses established %s connection after auth-mode change",
+			locality ? "locality" : "ordinary", direction == 0 ? "PASSWORD" : "IAM");
+		if (selected != nullptr) destroy_used(selected);
+	}
+#ifdef PROXYSQL40
+	if (locality) {
+		mysql_thread___aws_locality_awareness = false;
+		MyHGM->set_aws_locality_awareness_enabled(false);
+	}
+#endif
+}
 
-	MySQL_Connection *selected = worker.get_MyConn_local(
-		804, request.session, nullptr, 0, -1,
-		MySQLBackendAuthType::AWS_IAM);
-	ok(selected == nullptr && server->ConnectionsUsed->conns_length() == 0,
-		"local checkout lazily destroys a connection from the previous auth mode");
-	if (selected != nullptr) destroy_used(selected);
+void set_user_policy(const char *username, MySQLBackendAuthType type) {
+	std::string user(username);
+	std::string password = type == MySQLBackendAuthType::AWS_IAM ? "" : "password";
+	std::string attributes = type == MySQLBackendAuthType::AWS_IAM
+		? "{\"backend_auth\":{\"type\":\"aws_iam\"}}" : "";
+	char empty[] = "";
+	if (!GloMyAuth->add(&user[0], &password[0], USERNAME_BACKEND,
+		false, 0, empty, false, false, false, 100, &attributes[0], empty)) {
+		BAIL_OUT("failed to change backend user policy");
+	}
+}
+
+void test_large_pool_retains_established_connections(MySQL_Thread& worker) {
+	MySrvC *server = create_server(826, "large-established-pool");
+	server->max_connections = 3000;
+	SessionFixture request(worker, 826, MySQLBackendAuthType::PASSWORD);
+	for (unsigned int i = 0; i < 2000; ++i) {
+		auto connection = create_established_connection(server, kUser,
+			i % 2 ? MySQLBackendAuthType::AWS_IAM : MySQLBackendAuthType::PASSWORD);
+		server->ConnectionsFree->add(connection.release());
+	}
+	const auto created_before = MyHGM->status.server_connections_created;
+	const auto destroyed_before = MyHGM->status.myconnpoll_destroy;
+	bool reused = true;
+	for (unsigned int i = 0; i < 32; ++i) {
+		auto selected = MyHGM->get_MyConn_from_pool(826, request.session,
+			false, nullptr, 0, -1, MySQLBackendAuthType::PASSWORD);
+		if (selected == nullptr) { reused = false; break; }
+		reused &= selected->fd == 123 && server->ConnectionsFree->conns_length() == 1999;
+		MyHGM->push_MyConn_to_pool(selected);
+	}
+	ok(reused && server->ConnectionsFree->conns_length() == 2000,
+		"repeated checkout retains all 2000 established mixed-mode connections for one user");
+	ok(MyHGM->status.server_connections_created == created_before &&
+		MyHGM->status.myconnpoll_destroy == destroyed_before,
+		"same-user pool checkout creates and destroys no backend connections");
+}
+
+void test_session_checkout_after_mode_change(MySQL_Thread& worker) {
+	for (unsigned int variant = 0; variant < 4; ++variant) {
+		const bool local = variant >= 2;
+		const auto opened_type = variant % 2 == 0
+			? MySQLBackendAuthType::PASSWORD : MySQLBackendAuthType::AWS_IAM;
+		const auto requested_type = variant % 2 == 0
+			? MySQLBackendAuthType::AWS_IAM : MySQLBackendAuthType::PASSWORD;
+		const unsigned int hid = 827 + variant;
+		MySrvC *server = create_server(hid, (std::string("session-mode-change-") + std::to_string(hid)).c_str());
+		set_user_policy(kUser, requested_type);
+		SessionFixture request(worker, hid, requested_type);
+		auto established = create_established_connection(server, kUser, opened_type);
+		auto established_ptr = established.get();
+		if (local) {
+			server->ConnectionsUsed->add(established.release());
+			worker.push_MyConn_local(established_ptr);
+		} else {
+			server->ConnectionsFree->add(established.release());
+		}
+		request.session->previous_status.push(WAITING_CLIENT_DATA);
+		request.session->set_status(CONNECTING_SERVER);
+		request.session->to_process = 1;
+		request.session->handler();
+		ok(request.selected() == established_ptr && request.selected()->fd == 123,
+			"session retains established %s checkout after switching %s policy",
+			local ? "local" : "global", variant % 2 == 0 ? "to IAM" : "to PASSWORD");
+	}
+	set_user_policy(kUser, MySQLBackendAuthType::PASSWORD);
+}
+
+void test_different_user_global_checkout(MySQL_Thread& worker) {
+	for (unsigned int direction = 0; direction < 2; ++direction) {
+		const auto opened_type = direction == 0
+			? MySQLBackendAuthType::AWS_IAM : MySQLBackendAuthType::PASSWORD;
+		const auto requested_type = direction == 0
+			? MySQLBackendAuthType::PASSWORD : MySQLBackendAuthType::AWS_IAM;
+		const unsigned int hid = 831 + direction;
+		MySrvC *server = create_server(hid, (std::string("cross-user-pool-") + std::to_string(hid)).c_str());
+		SessionFixture request(worker, hid, requested_type, kOtherUser);
+		auto established = create_established_connection(server, kUser, opened_type);
+		auto established_ptr = established.get();
+		server->ConnectionsFree->add(established.release());
+		auto selected = MyHGM->get_MyConn_from_pool(hid, request.session,
+			false, nullptr, 0, -1, requested_type);
+		ok(selected == established_ptr && selected->fd == 123 && selected->requires_CHANGE_USER(
+			request.frontend, requested_type),
+			"global pool permits different-user %s checkout through the reset path",
+			direction == 0 ? "PASSWORD" : "IAM");
+		destroy_used(selected);
+	}
+}
+
+void test_iam_reset_required_entry_is_not_purged(MySQL_Thread& worker) {
+	for (unsigned int local = 0; local < 2; ++local) {
+		const unsigned int hid = 835 + local;
+		MySrvC *server = create_server(hid, (std::string("iam-session-reset-") + std::to_string(hid)).c_str());
+		SessionFixture request(worker, hid, MySQLBackendAuthType::AWS_IAM);
+		request.frontend->var_hash[0] = 0;
+		auto established = create_established_connection(server, kUser, MySQLBackendAuthType::AWS_IAM);
+		established->var_hash[0] = 1;
+		auto established_ptr = established.get();
+		if (local) {
+			server->ConnectionsUsed->add(established.release());
+			worker.push_MyConn_local(established_ptr);
+			auto selected = worker.get_MyConn_local(hid, request.session, nullptr, 0, -1,
+				MySQLBackendAuthType::AWS_IAM);
+			ok(selected == nullptr && server->ConnectionsUsed->conns_length() == 1,
+				"local checkout preserves an IAM entry requiring session-state reset");
+			request.frontend->var_hash[0] = 1;
+			selected = worker.get_MyConn_local(hid, request.session, nullptr, 0, -1,
+				MySQLBackendAuthType::AWS_IAM);
+			if (selected != nullptr) destroy_used(selected);
+		} else {
+			server->ConnectionsFree->add(established.release());
+			auto selected = MyHGM->get_MyConn_from_pool(hid, request.session,
+				false, nullptr, 0, -1, MySQLBackendAuthType::AWS_IAM);
+			ok(selected == established_ptr && selected->fd == 123 && selected->requires_CHANGE_USER(
+				request.frontend, MySQLBackendAuthType::AWS_IAM),
+				"global checkout retains an IAM entry for session-state reset");
+			destroy_used(selected);
+		}
+	}
 }
 
 void test_mixed_user_mode_global(MySQL_Thread& worker) {
@@ -696,6 +851,70 @@ void test_change_user_state_replaces_iam(MySQL_Thread& worker) {
 		"CHANGING_USER_SERVER destroys IAM and returns through fresh acquisition");
 }
 
+class PendingTokenSource final : public AwsIamTokenSource {
+public:
+	AwsIamRequestHandle request(const AwsIamTokenKey& key, uint64_t,
+		std::weak_ptr<AwsIamCompletionSink>) override {
+		keys.push_back(key);
+		return {1};
+	}
+	AwsIamTokenResult request_blocking(const AwsIamTokenKey&,
+		std::chrono::steady_clock::time_point) override { return {}; }
+	void cancel(AwsIamRequestHandle) override {}
+	void invalidate(const AwsIamTokenKey&, uint64_t) override {}
+	void record_backend_connection(bool) override {}
+	void record_waiting_session(bool) override {}
+	AwsIamStatsSnapshot snapshot() const override { return {}; }
+	std::vector<AwsIamTokenKey> keys;
+};
+
+void test_change_user_uses_requesting_policy(MySQL_Thread& worker) {
+	{
+		MySrvC *server = create_server(837, "password-change-user");
+		SessionFixture request(worker, 837, MySQLBackendAuthType::PASSWORD, kOtherUser);
+		auto password = create_established_connection(server, kUser, MySQLBackendAuthType::PASSWORD);
+		auto connection = password.get();
+		server->ConnectionsUsed->add(password.release());
+		request.attach_backend(connection);
+		request.session->previous_status.push(WAITING_CLIENT_DATA);
+		request.session->set_status(CHANGING_USER_SERVER);
+		change_user_calls.store(0);
+		request.session->to_process = 1;
+		request.session->handler();
+		ok(change_user_calls.load() == 1 && change_user_username == kOtherUser &&
+			change_user_password == "password" && request.selected() == connection,
+			"different-user password reset sends the requesting user's credentials");
+	}
+	PendingTokenSource source;
+	publish_global_aws_iam_token_source(&source);
+	char *saved_ca = mysql_thread___ssl_p2s_ca;
+	mysql_thread___ssl_p2s_ca = const_cast<char *>("test-ca.pem");
+	set_user_policy(kOtherUser, MySQLBackendAuthType::AWS_IAM);
+	{
+		MySrvC *server = create_server(833, "change-user.abcdefghijkl.us-east-1.rds.amazonaws.com");
+		server->use_ssl = 1;
+		server->myhgc->attributes.aws_iam_region = make_owned_cstring("us-east-1").release();
+		SessionFixture request(worker, 833, MySQLBackendAuthType::AWS_IAM, kOtherUser);
+		auto password = create_established_connection(server, kUser, MySQLBackendAuthType::PASSWORD);
+		server->ConnectionsUsed->add(password.get());
+		request.attach_backend(password.release());
+		request.session->previous_status.push(WAITING_CLIENT_DATA);
+		request.session->set_status(CHANGING_USER_SERVER);
+		change_user_calls.store(0);
+		request.session->to_process = 1;
+		request.session->handler();
+		ok(request.session->status == WAITING_AWS_IAM_TOKEN &&
+			request.session->aws_iam_connection != nullptr &&
+			request.session->aws_iam_connection->backend_auth_type() == MySQLBackendAuthType::AWS_IAM &&
+			source.keys.size() == 1 && source.keys[0].database_user == kOtherUser &&
+			change_user_calls.load() == 0,
+			"different-user IAM reset acquires a fresh token for the requesting user");
+	}
+	set_user_policy(kOtherUser, MySQLBackendAuthType::PASSWORD);
+	mysql_thread___ssl_p2s_ca = saved_ca;
+	publish_global_aws_iam_token_source(nullptr);
+}
+
 void test_resetting_state_destroys_iam(MySQL_Thread& worker) {
 	MySrvC *server = create_server(807, "resetting-iam");
 	SessionFixture fixture(worker, 807, MySQLBackendAuthType::AWS_IAM);
@@ -728,8 +947,10 @@ int __real_pthread_create(pthread_t *, const pthread_attr_t *,
 	void *(*)(void *), void *);
 
 int __wrap_mysql_change_user_start(
-	my_bool *ret, MYSQL *, const char *, const char *, const char *)
+	my_bool *ret, MYSQL *, const char *username, const char *password, const char *)
 {
+	change_user_username = username != nullptr ? username : "";
+	change_user_password = password != nullptr ? password : "";
 	change_user_calls.fetch_add(1);
 	*ret = 0;
 	return change_user_immediate_success.load()
@@ -779,7 +1000,7 @@ int main() {
 	skip(1, "requires GNU ld --wrap support");
 	return exit_status();
 #else
-	plan(31);
+	plan(46);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 ||
 		test_init_hostgroups() != 0) {
@@ -812,7 +1033,16 @@ int main() {
 		worker.curtime = 10000000;
 		test_identity_matrix(worker);            // 7
 		test_runtime_mode_changes_global(worker); // 2
-		test_runtime_mode_change_local(worker);   // 1
+		test_runtime_mode_change_local(worker);   // 2
+#ifdef PROXYSQL40
+		test_runtime_mode_change_local(worker, true); // 2
+#else
+		skip(2, "locality requires PROXYSQL40");
+#endif
+		test_large_pool_retains_established_connections(worker); // 2
+		test_session_checkout_after_mode_change(worker); // 4
+		test_different_user_global_checkout(worker); // 2
+		test_iam_reset_required_entry_is_not_purged(worker); // 2
 		test_mixed_user_mode_global(worker);       // 4
 		test_mixed_user_mode_local(worker);        // 4
 		test_attached_password_reload_to_invalid_fails_closed(worker); // 1
@@ -826,6 +1056,7 @@ int main() {
 		test_reset_queue_worker_preserves_authorized_rowless_passthrough(); // 1
 		test_reset_queue_worker_discards_unmarked_rowless_password(); // 1
 		test_change_user_state_replaces_iam(worker); // 1
+		test_change_user_uses_requesting_policy(worker); // 2
 		test_resetting_state_destroys_iam(worker);   // 1
 	}
 
