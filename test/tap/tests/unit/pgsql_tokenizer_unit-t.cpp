@@ -843,12 +843,58 @@ static void test_kept_comment_nested_open_bounded() {
 		"kept comment + nested '/*': later digests on the same thread unaffected");
 }
 
+// The LISTEN gate cannot always trust the session's digest: with pgsql-query_digests off
+// there is none, and a digest of a query longer than query_digests_max_query_length can be
+// cut on a token boundary before a trailing statement. Both used to fail open: without a
+// digest only the first statement of the raw text was looked at, and a cut digest simply
+// did not hold the LISTEN. pgsql_query_has_stmt_keyword() falls back to the raw query.
+static bool gate_listen(const char* digest, const char* query) {
+	return pgsql_query_has_stmt_keyword(digest, query, "LISTEN");
+}
+
+static void test_stmt_keyword_gate() {
+	// No digest: every statement of the raw text, with literals and comments understood.
+	ok(gate_listen(NULL, "SELECT 1; LISTEN ch"), "gate, no digest: LISTEN behind another statement");
+	ok(gate_listen("", "SELECT 1;\n\tlisten ch"), "gate, empty digest: LISTEN behind another statement");
+	ok(gate_listen(NULL, "/* c */ LISTEN ch"), "gate, no digest: LISTEN behind a comment");
+	ok(!gate_listen(NULL, "SELECT 'a; LISTEN b'"), "gate, no digest: ';' inside a string literal");
+	ok(!gate_listen(NULL, "SELECT $$a; LISTEN b$$"), "gate, no digest: ';' inside a dollar-quoted string");
+	ok(!gate_listen(NULL, "SELECT 1 -- ; LISTEN b"), "gate, no digest: ';' inside a line comment");
+	ok(!gate_listen(NULL, "SELECT 1; /* LISTEN b */ SELECT 2"), "gate, no digest: LISTEN only inside a comment");
+	ok(!gate_listen(NULL, "SELECT listener FROM t; UNLISTEN *"), "gate, no digest: words that only contain LISTEN");
+	ok(!gate_listen(NULL, NULL), "gate: no digest and no query");
+
+	// A digest cut at query_digests_max_query_length. The SELECT list alone is longer than the
+	// limit, so the digest stops inside it and the trailing LISTEN is not in it.
+	const int saved_max = pgsql_thread___query_digests_max_query_length;
+	pgsql_thread___query_digests_max_query_length = 64;
+	std::string cols;
+	for (int i = 0; i < 40; i++) cols += (i ? ", c" : "c") + std::to_string(i);
+	const std::string q_listen = "SELECT " + cols + " FROM t; LISTEN ch";
+	DigestOptions cut;
+	cut.max_query_length = 64;
+	const std::string d_cut = digest_query(q_listen.c_str(), cut);
+	ok(d_cut.size() <= 64 && !has_listen(d_cut.c_str()),
+		"precondition: the cut digest '%s' does not hold the LISTEN", d_cut.c_str());
+	ok(gate_listen(d_cut.c_str(), q_listen.c_str()),
+		"gate, cut digest: the trailing LISTEN is found in the query itself");
+	const std::string q_word = "SELECT " + cols + " FROM t WHERE x = 'listen; LISTEN ch'";
+	ok(!gate_listen(digest_query(q_word.c_str(), cut).c_str(), q_word.c_str()),
+		"gate, cut digest: LISTEN only inside a literal of the query is not taken");
+	pgsql_thread___query_digests_max_query_length = saved_max;
+
+	// A digest that cannot be cut is trusted as is.
+	ok(gate_listen("select ?; listen ch", "SELECT 1; LISTEN ch") &&
+		!gate_listen("select ?", "SELECT 1"),
+		"gate, whole digest: the digest decides");
+}
+
 // ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(131);
+	plan(131 + 13);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -951,6 +997,9 @@ int main() {
 
 	// 15. Kept comment buffer bound under nested "/*" (4 tests)
 	test_kept_comment_nested_open_bounded(); // 4
+
+	// 16. LISTEN gate without a digest or with a cut one (13 tests)
+	test_stmt_keyword_gate();            // 13
 
 	// Total: 1 + 9 + 4 + 6 + 2 + 6 + 2 + 3 + 3 + 2 + 4 + 5 + 7 + 10 = 64
 

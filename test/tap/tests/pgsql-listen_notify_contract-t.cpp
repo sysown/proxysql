@@ -152,6 +152,19 @@ static const std::vector<std::pair<std::string, std::string>> KEEP_NOT_REFUSED =
 	{ LONG_CMT + " SELECT 1; SELECT 2",            "a kept comment cut short, no LISTEN" },
 };
 
+// With pgsql-query_digests=false there is no digest: the gate reads the query itself.
+// Without one it used to check only the first statement (#6438 review).
+static const std::vector<std::pair<std::string, std::string>> NODIGEST_MULTI_REFUSED = {
+	{ "SELECT 1; LISTEN lnc_nd_multi",         "after another statement" },
+	{ "SELECT 1;\n\tLISTEN lnc_nd_ws",         "after a newline and a tab" },
+	{ "SELECT 1; /*c*/ LISTEN lnc_nd_cmt",     "behind a comment" },
+};
+static const std::vector<std::pair<std::string, std::string>> NODIGEST_NOT_REFUSED = {
+	{ "SELECT 'a; LISTEN b'",                  "inside a string literal" },
+	{ "SELECT $$a; LISTEN b$$",                "inside a dollar-quoted string" },
+	{ "SELECT 1 -- ; LISTEN b",                "inside a line comment" },
+};
+
 static std::string admin_scalar(PGconn* admin, const char* q) {
 	PGresult* r = PQexec(admin, q);
 	std::string v = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : "";
@@ -163,7 +176,8 @@ int main(int, char**) {
 	if (cl.getEnv()) return exit_status();
 	plan(1 + (int)(N_REFUSED * 2) + (int)(N_NOT_REFUSED * 2) +
 	     (int)N_MULTI_REFUSED + (int)N_MULTI_NOT_REFUSED + 1 +
-	     1 + (int)(KEEP_REFUSED.size() * 2) + (int)KEEP_MULTI_REFUSED.size() + (int)KEEP_NOT_REFUSED.size());
+	     1 + (int)(KEEP_REFUSED.size() * 2) + (int)KEEP_MULTI_REFUSED.size() + (int)KEEP_NOT_REFUSED.size() + 1 +
+	     1 + (int)NODIGEST_MULTI_REFUSED.size() + (int)NODIGEST_NOT_REFUSED.size() + 1 + 1);
 
 	// Pin the backend protocol: the refusals below are the libpq contract.
 	std::stringstream as;
@@ -228,7 +242,9 @@ int main(int, char**) {
 		bool kept = false;
 		for (int i = 0; i < 50 && !kept; i++) {
 			run_simple(c, probe.c_str());
-			kept = admin_scalar(admin.get(), seen.c_str()) != "0";
+			// An empty answer is a failed query, not a kept comment.
+			const std::string count = admin_scalar(admin.get(), seen.c_str());
+			kept = !count.empty() && count != "0";
 			if (!kept) usleep(100000);
 		}
 		ok(kept, "digests keep comments after enabling pgsql-query_digests_keep_comment");
@@ -253,8 +269,65 @@ int main(int, char**) {
 		}
 
 		const std::string restore = "SET pgsql-query_digests_keep_comment='" + (prev.empty() ? std::string("false") : prev) + "'";
-		PQclear(PQexec(admin.get(), restore.c_str()));
+		// Left enabled, it would change the digests every later test in the group sees.
+		bool restored = true;
+		for (const char* q : { restore.c_str(), "LOAD PGSQL VARIABLES TO RUNTIME" }) {
+			PGresult* r = PQexec(admin.get(), q);
+			if (PQresultStatus(r) != PGRES_COMMAND_OK) {
+				diag("restore failed: %s -- %s", q, PQerrorMessage(admin.get()));
+				restored = false;
+			}
+			PQclear(r);
+		}
+		ok(restored, "pgsql-query_digests_keep_comment restored to '%s'", prev.c_str());
+	}
+
+	// pgsql-query_digests=false, for this block only. The session's thread has picked it up
+	// once a query with a fresh marker no longer shows up among the digests.
+	{
+		const std::string prev = admin_scalar(admin.get(),
+			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-query_digests'");
+		PQclear(PQexec(admin.get(), "SET pgsql-query_digests='false'"));
 		PQclear(PQexec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"));
+		bool off = false;
+		for (int i = 0; i < 50 && !off; i++) {
+			const std::string marker = "lnc_nd_probe_" + std::to_string(getpid()) + "_" + std::to_string(i);
+			const std::string probe = "SELECT 1 AS " + marker; // an identifier stays in the digest
+			run_simple(c, probe.c_str());
+			const std::string seen = "SELECT COUNT(*) FROM stats_pgsql_query_digest WHERE digest_text LIKE '%" +
+				marker + "%'";
+			const std::string count = admin_scalar(admin.get(), seen.c_str());
+			off = count == "0";
+			if (!off) usleep(100000);
+		}
+		ok(off, "queries are no longer digested after disabling pgsql-query_digests");
+
+		for (const auto& k : NODIGEST_MULTI_REFUSED) {
+			std::string st = run_simple(c, k.first.c_str());
+			ok(st == "0A000", "no digest: multi-statement LISTEN refused with 0A000 -- %s (got '%s')",
+			   k.second.c_str(), st.c_str());
+		}
+		for (const auto& k : NODIGEST_NOT_REFUSED) {
+			std::string st = run_simple(c, k.first.c_str());
+			ok(st != "0A000", "no digest: query not refused as LISTEN -- %s (got '%s')",
+			   k.second.c_str(), st.c_str());
+		}
+		{
+			std::string st = run_extended(c, "/*c*/ LISTEN lnc_nd_ext");
+			ok(st == "0A000", "no digest: extended LISTEN behind a comment refused with 0A000 (got '%s')", st.c_str());
+		}
+
+		const std::string restore = "SET pgsql-query_digests='" + (prev.empty() ? std::string("true") : prev) + "'";
+		bool restored = true;
+		for (const char* q : { restore.c_str(), "LOAD PGSQL VARIABLES TO RUNTIME" }) {
+			PGresult* r = PQexec(admin.get(), q);
+			if (PQresultStatus(r) != PGRES_COMMAND_OK) {
+				diag("restore failed: %s -- %s", q, PQerrorMessage(admin.get()));
+				restored = false;
+			}
+			PQclear(r);
+		}
+		ok(restored, "pgsql-query_digests restored to '%s'", prev.c_str());
 	}
 
 	// NOTIFY is a plain statement and stays supported; only delivery is not.
