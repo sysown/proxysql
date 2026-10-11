@@ -5139,8 +5139,9 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 
 						client_myds->DSS = STATE_QUERY_SENT_NET;
 
-						reset_extended_query_frame();
-						bool send_ready_packet = is_extended_query_ready_for_query();
+						// Returning SENT_ERROR has the caller end the unit. Discarding the frame here would drop
+						// the backend still holding this statement, and a transaction open on it with it.
+						const bool send_ready_packet = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0;
 						client_myds->myprot.generate_error_packet(true, send_ready_packet, errmsg,
 							PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, false, true);
 						free(errmsg);
@@ -5271,10 +5272,11 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 
 		// Check if in pipeline/extended query mode
 		if (extended_query_phase != EXTQ_PHASE_IDLE) {
-			reset_extended_query_frame();
 			proxy_error("RESET ALL is not supported in Extended Query protocol mode. Use Simple Query mode to run this command\n");
 			client_myds->DSS = STATE_QUERY_SENT_NET;
-			bool send_ready_packet = is_extended_query_ready_for_query();
+			// Returning SENT_ERROR has the caller end the unit. Discarding the frame here would drop
+			// the backend still holding this statement, and a transaction open on it with it.
+			const bool send_ready_packet = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0;
 			client_myds->myprot.generate_error_packet(true, send_ready_packet,
 				"RESET ALL is not supported in pipeline mode",
 				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
@@ -5634,9 +5636,6 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 
 				bool is_reset_all = (strncasecmp(nq.c_str(), "ALL", 3) == 0);
 
-				// Read the backend's parameters BEFORE discarding the frame. Discarding it drops a
-				// backend the batch left unfinished, and the names below are read off that very
-				// connection -- gathering them afterwards dereferences one that is already gone.
 				std::string mismatch_details;
 				if (is_reset_all) {
 					for (int idx = 0; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
@@ -5648,11 +5647,10 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 					}
 				}
 
-				// Discard pending pipeline messages 
-				reset_extended_query_frame();
-
 				client_myds->DSS = STATE_QUERY_SENT_NET;
-				bool send_ready_packet = is_extended_query_ready_for_query();
+				// Returning SENT_ERROR has the caller end the unit. Discarding the frame here would drop
+				// the backend still holding this statement, and a transaction open on it with it.
+				const bool send_ready_packet = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0;
 
 				if (is_reset_all) {
 					proxy_error("RESET ALL is not allowed when hostgroup is locked and startup parameter values differ between client and backend. "
