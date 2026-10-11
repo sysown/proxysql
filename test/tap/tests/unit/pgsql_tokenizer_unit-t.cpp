@@ -772,6 +772,13 @@ static void test_stmt_keyword_through_digest() {
 		"stmt scan of digest: LISTEN right after a kept comment cut short");
 	ok(!has_listen(digest_query((long_cmt + " SELECT 1; SELECT 2").c_str(), keep).c_str()),
 		"stmt scan of digest: a kept comment cut short alone does not read as LISTEN");
+	// Fail-closed by design: the scan is lost from the cut comment's opening, so the word
+	// inside the comment's kept text counts as well.
+	const std::string long_cmt_word = "/* listen " + std::string(FIRST_COMMENT_MAX_LENGTH + 76, 'x') + "*/";
+	ok(has_listen(digest_query((long_cmt_word + " SELECT 1").c_str(), keep).c_str()),
+		"stmt scan of digest: LISTEN inside a kept comment cut short reads as LISTEN (fail-closed)");
+	ok(!has_listen(digest_query(("/* listen */ SELECT 1"), keep).c_str()),
+		"stmt scan of digest: but not inside a kept comment that is not cut");
 }
 
 // With query_digests_keep_comment the kept comment is collected in a thread-local buffer of
@@ -841,7 +848,7 @@ static void test_kept_comment_nested_open_bounded() {
 // ============================================================================
 
 int main() {
-	plan(129);
+	plan(131);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -934,13 +941,13 @@ int main() {
 	test_digest_comment_between_tokens(); // 1
 	test_digest_only_comment();          // 1
 
-	// 14. Statement scan over a digest (55 tests, issue #6438)
+	// 14. Statement scan over a digest (57 tests, issue #6438)
 	test_stmt_keyword_found();           // 7
 	test_stmt_keyword_not_found();       // 11
 	test_stmt_keyword_behind_kept_comment(); // 6
 	test_stmt_keyword_after_lost_scan(); // 9
 	test_stmt_next();                    // 8
-	test_stmt_keyword_through_digest();  // 14
+	test_stmt_keyword_through_digest();  // 16
 
 	// 15. Kept comment buffer bound under nested "/*" (4 tests)
 	test_kept_comment_nested_open_bounded(); // 4
