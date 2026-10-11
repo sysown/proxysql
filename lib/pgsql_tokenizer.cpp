@@ -658,12 +658,15 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 		// Increment nesting level /*
 		c_t_1_st->nest_level++;
 
-		// copy the initial mark "/*" if comment preserving is enabled
+		// copy the initial mark "/*" if comment preserving is enabled. A nested "/*" can
+		// arrive after the kept comment already filled 'cur_cmd_cmnt', so each byte is
+		// bounded like every other byte of the comment: at most FIRST_COMMENT_MAX_LENGTH-1
+		// bytes, leaving room for the terminator written when the comment ends.
 		if (opts->keep_comment) {
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q);
-			c_t_1_st->cur_cmd_cmnt_len++;
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q + 1);
-			c_t_1_st->cur_cmd_cmnt_len++;
+			for (int i = 0; i < 2 && c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1; i++) {
+				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q + i);
+				c_t_1_st->cur_cmd_cmnt_len++;
+			}
 		}
 
 		if (c_t_1_st->fst_cmnt_end == 0 && c_t_1_st->nest_level > 1 &&
