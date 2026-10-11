@@ -3349,42 +3349,89 @@ bool pgsql_stmt_first_keyword_is(const char* text, const char* keyword) {
 	return !(isalnum((unsigned char)c) || c == '_' || c == '$');
 }
 
-const char* pgsql_digest_next_stmt(const char* stmt) {
+// `p` points at "/*". Returns what follows the matching "*/", or NULL when there is none.
+// PostgreSQL nests block comments, so the depth is tracked.
+static const char* pgsql_skip_block_comment(const char* p) {
+	int depth = 1;
+	p += 2;
+	while (depth > 0 && *p != '\0') {
+		if (p[0] == '/' && p[1] == '*') { depth++; p += 2; }
+		else if (p[0] == '*' && p[1] == '/') { depth--; p += 2; }
+		else p++;
+	}
+	return (depth > 0) ? NULL : p;
+}
+
+const char* pgsql_stmt_skip_lead(const char* text, const char** lost) {
+	if (lost != NULL) *lost = NULL;
+	if (text == NULL) return NULL;
+	const char* p = text;
+	for (;;) {
+		while (isspace((unsigned char)*p)) p++;
+		if (p[0] == '/' && p[1] == '*') {
+			const char* end = pgsql_skip_block_comment(p);
+			if (end == NULL) {
+				if (lost != NULL) *lost = p;
+				return NULL;
+			}
+			p = end;
+		} else if (p[0] == '-' && p[1] == '-') {
+			p = strchr(p, '\n');
+			if (p == NULL) return NULL;
+		} else {
+			return (*p != '\0') ? p : NULL;
+		}
+	}
+}
+
+const char* pgsql_digest_next_stmt(const char* stmt, const char** lost) {
+	if (lost != NULL) *lost = NULL;
 	if (stmt == NULL) return NULL;
 	const char* p = stmt;
 	while ((p = strpbrk(p, ";\"'/")) != NULL) {
 		const char c = *p;
 		if (c == ';') {
-			p++;
-			while (isspace((unsigned char)*p)) p++;
-			return (*p != '\0') ? p : NULL;
+			return pgsql_stmt_skip_lead(p + 1, lost);
 		}
+		const char* end = NULL;
 		if (c == '/') {
 			// Only a block comment hides a ';', and only with query_digests_keep_comment.
-			// PostgreSQL nests them, so the depth is tracked.
 			if (p[1] != '*') { p++; continue; }
-			int depth = 1;
-			p += 2;
-			while (depth > 0 && *p != '\0') {
-				if (p[0] == '/' && p[1] == '*') { depth++; p += 2; }
-				else if (p[0] == '*' && p[1] == '/') { depth--; p += 2; }
-				else p++;
-			}
-			if (depth > 0) return NULL;
-			continue;
+			end = pgsql_skip_block_comment(p);
+		} else {
+			// A quoted identifier (kept by the digest) or a literal: a doubled quote inside
+			// it simply closes it and opens another, which the next round skips the same way.
+			end = strchr(p + 1, c);
+			if (end != NULL) end++;
 		}
-		// A quoted identifier (kept by the digest) or a literal: a doubled quote inside it
-		// simply closes it and opens another, which the next round skips the same way.
-		const char* end = strchr(p + 1, c);
-		if (end == NULL) return NULL;
-		p = end + 1;
+		if (end == NULL) {
+			if (lost != NULL) *lost = p;
+			return NULL;
+		}
+		p = end;
 	}
 	return NULL;
 }
 
-bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword) {
-	for (const char* s = digest; s != NULL; s = pgsql_digest_next_stmt(s)) {
-		if (pgsql_stmt_first_keyword_is(s, keyword)) return true;
+bool pgsql_text_has_word(const char* text, const char* keyword) {
+	if (text == NULL) return false;
+	for (const char* p = text; *p != '\0'; p++) {
+		if (p != text) {
+			const char b = p[-1];
+			if (isalnum((unsigned char)b) || b == '_' || b == '$') continue;
+		}
+		if (pgsql_stmt_first_keyword_is(p, keyword)) return true;
 	}
 	return false;
+}
+
+bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword) {
+	const char* lost = NULL;
+	for (const char* s = pgsql_stmt_skip_lead(digest, &lost); s != NULL; s = pgsql_digest_next_stmt(s, &lost)) {
+		if (pgsql_stmt_first_keyword_is(s, keyword)) return true;
+	}
+	// Past an unterminated comment or quote the statements cannot be told apart, so the
+	// keyword counts wherever it stands as a word: refusing or pinning a query that only
+	// mentions it is the safe side of being wrong.
+	return pgsql_text_has_word(lost, keyword);
 }

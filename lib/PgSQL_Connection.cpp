@@ -5546,19 +5546,24 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 	// A Simple Query can carry several statements, so each one is looked at and the last
 	// LISTEN or UNLISTEN * decides: `SELECT 1; LISTEN ch` pins, `UNLISTEN *; LISTEN ch`
 	// stays pinned, and `LISTEN ch; UNLISTEN *` leaves nothing subscribed (issue #6438).
+	// Statements are taken past any comment kept by query_digests_keep_comment, and once the
+	// scan loses track of the digest (a kept comment cut short of its terminator) a LISTEN
+	// anywhere in the rest pins, while nothing there unpins.
 	{
 		bool listening = get_status(STATUS_PGSQL_CONNECTION_LISTEN);
-		for (const char* stmt = query_digest_text; stmt != NULL; stmt = pgsql_digest_next_stmt(stmt)) {
+		const char* lost = NULL;
+		for (const char* stmt = pgsql_stmt_skip_lead(query_digest_text, &lost); stmt != NULL;
+			stmt = pgsql_digest_next_stmt(stmt, &lost)) {
 			if (pgsql_stmt_first_keyword_is(stmt, "LISTEN")) {
 				listening = true;
 			} else if (listening && pgsql_stmt_first_keyword_is(stmt, "UNLISTEN")) {
 				// The star may abut the keyword: UNLISTEN* is valid and the digest keeps it
 				// joined, so a compare against "UNLISTEN " would leave the connection pinned.
-				const char* p = stmt + sizeof("UNLISTEN") - 1;
-				while (*p == ' ') p++;
-				if (*p == '*') listening = false;
+				const char* p = pgsql_stmt_skip_lead(stmt + sizeof("UNLISTEN") - 1, NULL);
+				if (p != NULL && *p == '*') listening = false;
 			}
 		}
+		if (pgsql_text_has_word(lost, "LISTEN")) listening = true;
 		set_status(listening, STATUS_PGSQL_CONNECTION_LISTEN);
 	}
 
