@@ -105,6 +105,9 @@ struct PgSQL_Monitor {
 	// SUCCESSFUL branch of PgSQL_Connection's handler so the next
 	// connect avoids getaddrinfo even before the resolver loop has run.
 	static bool update_dns_cache_from_pgsql_conn(PGconn* pgsql_conn);
+	// Same, for a connection whose socket we own (the native backend path): `sock` is
+	// connected to `hostname`. Only fills a name the cache has no entry for.
+	static bool update_dns_cache_from_socket(const std::string& hostname, int sock);
 	// Wake the resolver loop early (e.g. after a pgsql_servers update).
 	static void trigger_dns_cache_update();
 

@@ -802,6 +802,14 @@ public:
 	std::string native_options;                      // the `options` value sent in the StartupMessage
 	std::string native_hostaddr;                     // resolved numeric IP, or "" — mirrors when the libpq path passes hostaddr=
 	std::string native_port;                         // backend port as a decimal string, matching PQport()'s shape
+	// Every address the backend host resolved to, in getaddrinfo() order, and the one the TCP
+	// connect in flight is using. When that connect fails, the next address is tried, as libpq
+	// does (#6425). The addresses are copied out of the addrinfo list so none of them has to
+	// outlive freeaddrinfo(). Refilled by each native_connect_start().
+	std::vector<std::pair<sockaddr_storage, socklen_t>> native_addrs;
+	size_t native_addr_idx = 0;
+	// One entry per address that has already failed, reported once every address has.
+	std::string native_connect_errors;
 	int native_backend_pid = 0;                      // BackendKeyData PID
 	int native_backend_secret = 0;                   // BackendKeyData secret key
 
@@ -944,6 +952,12 @@ public:
 	// setting async_exit_status and returning to the event loop.
 	void native_connect_start();
 	void native_connect_cont(short event);
+	// Start a non-blocking connect() to native_addrs[native_addr_idx], skipping any address whose
+	// connect() fails at once. Returns true, with `fd` set, once a connect is in progress (or
+	// already done); false once the list is used up.
+	bool native_tcp_connect_next();
+	// Record in native_connect_errors that the address at native_addr_idx failed with `err`.
+	void native_note_addr_failure(int err);
 	void native_drive_auth(short event);             // AUTH sub-state: Authentication* exchange
 	void native_drive_startup_tail(short event);     // post-auth: ParamStatus/KeyData/ReadyForQuery
 	bool native_flush_outbuf();                      // returns false on fatal send error

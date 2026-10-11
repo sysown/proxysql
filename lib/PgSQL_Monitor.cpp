@@ -2825,14 +2825,12 @@ bool PgSQL_Monitor::update_dns_cache_from_pgsql_conn(PGconn* pgsql_conn) {
 	if (!host_param || !host_param[0])
 		return false;
 
-	const std::string hostname { host_param };
+	return update_dns_cache_from_socket(std::string(host_param), PQsocket(pgsql_conn));
+}
 
+bool PgSQL_Monitor::update_dns_cache_from_socket(const std::string& hostname, int sock) {
 	// If user configured an IP directly, no cache update needed.
-	if (validate_ip(hostname))
-		return false;
-
-	const int sock = PQsocket(pgsql_conn);
-	if (sock < 0)
+	if (sock < 0 || hostname.empty() || validate_ip(hostname))
 		return false;
 
 	const std::string& ip_addr = get_connected_peer_ip_from_socket(sock);

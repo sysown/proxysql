@@ -452,10 +452,13 @@ handler_again:
 		__sync_fetch_and_add(&parent->connect_OK, 1);
 		// Seed the PgSQL DNS cache from the just-established connection so
 		// the next connect for this hostname can skip getaddrinfo even if
-		// the background resolver loop hasn't visited it yet. libpq-only:
-		// the native path resolves via the DNS cache itself in native_connect_start().
+		// the background resolver loop hasn't visited it yet.
 		if (!native_mode) {
 			PgSQL_Monitor::update_dns_cache_from_pgsql_conn(pgsql_conn);
+		} else if (native_hostaddr.empty()) {
+			// The cache had nothing for this name (or it is an IP literal, which the call
+			// ignores): record the address that just worked, as the libpq branch does.
+			PgSQL_Monitor::update_dns_cache_from_socket(native_host, fd);
 		}
 		break;
 	case ASYNC_CONNECT_FAILED:
@@ -1801,6 +1804,8 @@ void PgSQL_Connection::native_teardown() {
 	native_framer.reset();
 	native_outbuf.clear();
 	native_ssl_outbuf.clear();
+	native_addrs.clear();
+	native_addr_idx = 0;
 	// The TLS session belongs to this connection (see PgSQL_Connection.h), so we
 	// free it here. SSL_set_bio() transferred both BIOs to the SSL, so SSL_free()
 	// releases all three; freeing the BIOs separately would be a double free. It
@@ -1839,6 +1844,64 @@ SSL* PgSQL_Connection::get_pg_ssl_object() {
 	return (SSL*)PQsslStruct(pgsql_conn, "OpenSSL");
 }
 
+// "<ip> port <port>" for a resolved backend address, for the connect error message.
+static std::string native_addr_text(const sockaddr_storage& ss) {
+	char buf[INET6_ADDRSTRLEN] = "";
+	const void* a = nullptr;
+	unsigned port = 0;
+	if (ss.ss_family == AF_INET) {
+		a = &reinterpret_cast<const sockaddr_in*>(&ss)->sin_addr;
+		port = ntohs(reinterpret_cast<const sockaddr_in*>(&ss)->sin_port);
+	} else if (ss.ss_family == AF_INET6) {
+		a = &reinterpret_cast<const sockaddr_in6*>(&ss)->sin6_addr;
+		port = ntohs(reinterpret_cast<const sockaddr_in6*>(&ss)->sin6_port);
+	}
+	if (a == nullptr || inet_ntop(ss.ss_family, a, buf, sizeof(buf)) == nullptr) return "?";
+	return std::string(buf) + " port " + std::to_string(port);
+}
+
+void PgSQL_Connection::native_note_addr_failure(int err) {
+	if (!native_connect_errors.empty()) native_connect_errors += "; ";
+	native_connect_errors += "connection to ";
+	native_connect_errors += (native_addr_idx < native_addrs.size())
+		? native_addr_text(native_addrs[native_addr_idx].first) : std::string("?");
+	native_connect_errors += " failed: ";
+	native_connect_errors += err ? strerror(err) : "connect failed";
+}
+
+bool PgSQL_Connection::native_tcp_connect_next() {
+	for (; native_addr_idx < native_addrs.size(); native_addr_idx++) {
+		const auto& addr = native_addrs[native_addr_idx];
+		int sock = ::socket(addr.first.ss_family, SOCK_STREAM, IPPROTO_TCP);
+		if (sock < 0) {
+			native_note_addr_failure(errno);
+			continue;
+		}
+		// non-blocking
+		int fl = fcntl(sock, F_GETFL, 0);
+		if (fl < 0 || fcntl(sock, F_SETFL, fl | O_NONBLOCK) < 0) {
+			const int err = errno;
+			::close(sock);
+			native_note_addr_failure(err);
+			continue;
+		}
+		{ int one = 1; setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)); }
+		// libpq's default (keepalives=1): the OS eventually notices a peer that vanished
+		// while the connection sat idle in the pool. Best-effort, as for TCP_NODELAY.
+		{ int one = 1; setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)); }
+		int rc = ::connect(sock, reinterpret_cast<const sockaddr*>(&addr.first), addr.second);
+		if (rc == 0 || errno == EINPROGRESS || errno == EWOULDBLOCK || errno == EINTR) {
+			this->fd = sock; // connect in progress (or immediately done)
+			return true;
+		}
+		// Failed at once, e.g. ENETUNREACH for a family the host has no route for.
+		const int err = errno;
+		::close(sock);
+		native_note_addr_failure(err);
+	}
+	return false;
+}
+
 void PgSQL_Connection::native_connect_start() {
 	// Resolve the backend address. Prefer the DNS cache (non-blocking); fall back
 	// to the literal parent->address (which may itself be an IP literal).
@@ -1854,14 +1917,22 @@ void PgSQL_Connection::native_connect_start() {
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
-	if (!ip.empty()) {
-		hints.ai_flags = AI_NUMERICHOST;
-	}
+	// A hostname is filtered the way the DNS cache resolver filters it (dns_resolve()): no
+	// addresses of a family the host has no address in, which a connect could never reach.
+	hints.ai_flags = (!ip.empty()) ? AI_NUMERICHOST : AI_ADDRCONFIG;
 	char portstr[16];
 	snprintf(portstr, sizeof(portstr), "%u", (unsigned)parent->port);
 
 	struct addrinfo* res = nullptr;
 	int gai = getaddrinfo(host, portstr, &hints, &res);
+	if ((gai != 0 || res == nullptr) && hints.ai_flags == AI_ADDRCONFIG) {
+		// AI_ADDRCONFIG does not count loopback addresses, so a name that only resolves to the
+		// loopback of a family the host has nothing else in (e.g. ::1 alone) comes back empty.
+		// libpq does not filter; resolve once more unfiltered rather than fail where it works.
+		if (res) { freeaddrinfo(res); res = nullptr; }
+		hints.ai_flags = 0;
+		gai = getaddrinfo(host, portstr, &hints, &res);
+	}
 	if (gai != 0 || res == nullptr) {
 		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
 			gai_strerror(gai), false);
@@ -1871,36 +1942,29 @@ void PgSQL_Connection::native_connect_start() {
 		return;
 	}
 
-	int sock = -1;
+	// Keep every candidate: an address whose connect fails later, in TCP_CONNECTING, is
+	// followed by the next one (#6425).
+	native_addrs.clear();
+	native_addr_idx = 0;
+	native_connect_errors.clear();
 	for (struct addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
-		sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-		if (sock < 0) continue;
-		// non-blocking
-		int fl = fcntl(sock, F_GETFL, 0);
-		if (fl < 0 || fcntl(sock, F_SETFL, fl | O_NONBLOCK) < 0) {
-			::close(sock); sock = -1; continue;
-		}
-		{ int one = 1; setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)); }
-		// libpq's default (keepalives=1): the OS eventually notices a peer that vanished
-		// while the connection sat idle in the pool. Best-effort, as for TCP_NODELAY.
-		{ int one = 1; setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)); }
-		int rc = ::connect(sock, ai->ai_addr, ai->ai_addrlen);
-		if (rc == 0 || errno == EINPROGRESS || errno == EWOULDBLOCK || errno == EINTR) {
-			break; // connect in progress (or immediately done)
-		}
-		::close(sock); sock = -1;
+		if (ai->ai_addr == nullptr || ai->ai_addrlen > sizeof(sockaddr_storage)) continue;
+		sockaddr_storage ss;
+		memset(&ss, 0, sizeof(ss));
+		memcpy(&ss, ai->ai_addr, ai->ai_addrlen);
+		native_addrs.emplace_back(ss, ai->ai_addrlen);
 	}
 	freeaddrinfo(res);
 
-	if (sock < 0) {
+	if (!native_tcp_connect_next()) {
 		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
-			"native connect() failed", false);
-		proxy_error("Native connect: socket/connect to %s:%s failed: %s\n", host, portstr, strerror(errno));
+			native_connect_errors.empty() ? "native connect() failed" : native_connect_errors.c_str(), false);
+		proxy_error("Native connect: socket/connect to %s:%s failed: %s\n", host, portstr,
+			native_connect_errors.empty() ? "no usable address" : native_connect_errors.c_str());
 		async_exit_status = PG_EVENT_NONE;
 		return;
 	}
 
-	this->fd = sock;
 	native_host = parent->address ? parent->address : "";
 	// Mirror the libpq path's rule for `hostaddr` (connect_start(): passed only when
 	// the DNS cache resolved something DIFFERENT from parent->address) so that both
@@ -1943,12 +2007,40 @@ void PgSQL_Connection::native_connect_cont(short event) {
 		int soerr = 0;
 		socklen_t slen = sizeof(soerr);
 		if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) < 0 || soerr != 0) {
+			native_note_addr_failure(soerr ? soerr : errno);
+			// Move on to the next resolved address, as libpq does (#6425). Not through
+			// native_teardown(): that ends the whole connect. The session notices the new
+			// fd and swaps it into its poll entry, as it does when libpq changes it.
+			if (fd >= 0) {
+				::close(fd);
+				fd = -1;
+			}
+			native_addr_idx++;
+			if (native_tcp_connect_next()) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+					"Native connect to %s:%d: trying next address after: %s\n",
+					parent->address, parent->port, native_connect_errors.c_str());
+				async_exit_status = PG_EVENT_WRITE;
+				return;
+			}
 			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
-				soerr ? strerror(soerr) : "connect failed", false);
+				native_connect_errors.c_str(), false);
 			proxy_error("Native connect: TCP connect to %s:%d failed: %s\n",
-				parent->address, parent->port, strerror(soerr));
+				parent->address, parent->port, native_connect_errors.c_str());
 			native_teardown();
 			return; // error present -> handler -> ASYNC_CONNECT_FAILED
+		}
+		{
+			// SO_ERROR is also 0 while the connect is still in flight. That happens after a
+			// move to the next address: the thread loop and then the session each call the
+			// handler with the events polled on the old fd, so the second call lands here
+			// before the new connect has finished. Wait for it instead of sending on it.
+			sockaddr_storage peer;
+			socklen_t plen = sizeof(peer);
+			if (getpeername(fd, reinterpret_cast<sockaddr*>(&peer), &plen) < 0 && errno == ENOTCONN) {
+				async_exit_status = PG_EVENT_WRITE;
+				return;
+			}
 		}
 		if (native_ssl_requested) {
 			// TLS path: negotiate SSLRequest BEFORE the StartupMessage. Send the
