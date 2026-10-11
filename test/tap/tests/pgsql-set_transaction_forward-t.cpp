@@ -163,6 +163,10 @@ static const std::vector<InTxnCase> in_txn_cases = {
 	{ "SET SESSION TRANSACTION READ ONLY", "SHOW transaction_read_only", "on" },
 	{ "set transaction isolation level repeatable read, read only, deferrable", "SHOW transaction_isolation", "repeatable read" },
 	{ "SET /* c */ SESSION  TRANSACTION\n ISOLATION LEVEL READ UNCOMMITTED", "SHOW transaction_isolation", "read uncommitted" },
+	// PostgreSQL reads a comment as whitespace, and block comments nest.
+	{ "SET/*c*/TRANSACTION READ ONLY", "SHOW transaction_read_only", "on" },
+	{ "SET /*a /*b*/ c*/ LOCAL /* d */ TRANSACTION ISOLATION LEVEL SERIALIZABLE", "SHOW transaction_isolation", "serializable" },
+	{ "-- leading\nSET -- between\nTRANSACTION ISOLATION LEVEL REPEATABLE READ", "SHOW transaction_isolation", "repeatable read" },
 };
 static const int IN_TXN_TESTS = 6;
 
@@ -179,6 +183,8 @@ static const std::vector<const char*> locking_cases = {
 	"SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
 	"SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY",
 	"SET default_transaction_isolation = 'serializable'",
+	// The words after the nested comment are comment text: this is SESSION CHARACTERISTICS.
+	"SET /*x/*y*/ TRANSACTION */ SESSION CHARACTERISTICS AS TRANSACTION READ ONLY",
 };
 static const int LOCKING_TESTS = 2;
 

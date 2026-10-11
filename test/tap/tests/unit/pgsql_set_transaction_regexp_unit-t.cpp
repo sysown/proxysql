@@ -5,15 +5,20 @@
  * PgSQL_Session forwards a SET for which PgSQL_Variables::is_set_transaction() holds
  * without locking the hostgroup: it only changes the transaction already open, which
  * holds its backend since BEGIN. Any other SET it cannot parse still locks. This test
- * checks the pattern against literal digests, then the helper against the digests the two
- * digest engines actually produce, paired with the query text as the session passes it:
+ * checks PgSQL_Variables::is_set_transaction_stmt() against literal texts, then the helper
+ * against the digests the two digest engines actually produce, paired with the query text
+ * as the client sent it (comments included; PostgreSQL nests block comments):
  *   - the legacy tokenizer, with upper/lower case and with comments kept or stripped;
  *   - ParserSQL (pgsql-query_processor_parser=1). Version 1.1.0 drops the SESSION/LOCAL
  *     scope and digests 'SET SESSION CHARACTERISTICS AS TRANSACTION ...' as
  *     'SET TRANSACTION ...', and falls back to the tokenizer on 'SET LOCAL TRANSACTION'.
  *
- * The session-wide 'SET SESSION CHARACTERISTICS AS TRANSACTION' and the
- * default_transaction_* / transaction_* variables must not be forwarded.
+ * The session-wide 'SET SESSION CHARACTERISTICS AS TRANSACTION' (also when a nested
+ * comment makes it look like 'SET TRANSACTION' to a non-nesting reader), the
+ * default_transaction_* / transaction_* variables and multi-statement texts must not be
+ * forwarded.
+ *
+ * (The file keeps its historical name; the check no longer uses a regex.)
  */
 
 #include "tap.h"
@@ -27,20 +32,16 @@
 #include "query_processor.h"
 #include "Query_Processor_ParserSQL.h"
 
-#include "re2/re2.h"
-
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
-static Session_Regex* re = nullptr;
-
-static bool matches(const std::string& digest) {
-	return re->match(digest.c_str());
+static bool matches(const std::string& text) {
+	return PgSQL_Variables::is_set_transaction_stmt(text.c_str());
 }
 
-// Digest text as handed to handle_SET_command.
+// Digest or query text as handed to handle_SET_command.
 static const std::vector<std::string> digest_positive = {
 	"SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
 	"SET TRANSACTION READ ONLY",
@@ -65,6 +66,24 @@ static const std::vector<std::string> digest_positive = {
 	"SET /* c */ TRANSACTION READ ONLY",
 	"SET /* c */ SESSION /* d */ TRANSACTION READ ONLY",
 	"SET SESSION TRANSACTION/* c */READ ONLY",
+	// Leading whitespace and comments are skipped.
+	"/* c */ SET TRANSACTION READ ONLY",
+	" SET TRANSACTION READ ONLY",
+	"-- c\nSET TRANSACTION READ ONLY",
+	// A comment is a separator, even with no whitespace around it.
+	"SET/*c*/TRANSACTION READ ONLY",
+	"SET/*c*/LOCAL/*d*/TRANSACTION/*e*/READ ONLY",
+	"SET--c\nTRANSACTION READ ONLY",
+	// Block comments nest.
+	"SET /*a /*b*/ c*/ TRANSACTION READ ONLY",
+	"SET /*/*n*/*/ SESSION /*a /*b /*c*/ d*/ e*/ TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+	"/*a /*b*/ c*/ SET TRANSACTION READ ONLY",
+	// Only whitespace or comments after a ';'.
+	"SET TRANSACTION READ ONLY; ",
+	"SET TRANSACTION READ ONLY; -- c",
+	"SET TRANSACTION READ ONLY; /* c */",
+	"SET TRANSACTION READ ONLY -- c",
+	"SET TRANSACTION SNAPSHOT '00000003-0000001B-1'",
 };
 
 static const std::vector<std::string> digest_negative = {
@@ -90,9 +109,31 @@ static const std::vector<std::string> digest_negative = {
 	"SET LOCAL datestyle TO ?",
 	"SETTRANSACTION READ ONLY",
 	"SELECT ? FROM t WHERE x = ?",
-	"/* c */ SET TRANSACTION READ ONLY",
-	" SET TRANSACTION READ ONLY",
 	"SET \"transaction\" = ?",
+	"",
+	"SET",
+	"SET TRANSACTION=?",
+	"SET TRANSACTION.foo = ?",
+	"SET LOCAL.foo = ?",
+	"SET TRANSACTION'x'",
+	"SET LOCAL/**/SESSION TRANSACTION READ ONLY",
+	"-- SET TRANSACTION READ ONLY",
+	"/* SET TRANSACTION READ ONLY */",
+	"/* SET TRANSACTION READ ONLY",
+	"SET /* TRANSACTION READ ONLY",
+	"SET /*a /*b*/ TRANSACTION READ ONLY",
+	// The words after "*/" of "/*y*/" are still comment text: this is SESSION CHARACTERISTICS.
+	"SET /*x/*y*/ TRANSACTION */ SESSION CHARACTERISTICS AS TRANSACTION READ ONLY",
+	"SET /*x/*y*/ TRANSACTION */ default_transaction_read_only = on",
+	// Multi-statement: anything but whitespace or comments after a ';'.
+	"SET TRANSACTION READ ONLY;SET default_transaction_read_only=?",
+	"SET TRANSACTION READ ONLY; SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY",
+	"SET TRANSACTION;SELECT ?",
+	"SET TRANSACTION READ ONLY;;",
+	// Quotes do not hide a ';' (E'\'' ends after the second quote in PostgreSQL).
+	"SET TRANSACTION SNAPSHOT E'\\''; SET default_transaction_read_only='on'",
+	"SET TRANSACTION SNAPSHOT $$x$$; SET default_transaction_read_only=on",
+	"SET TRANSACTION READ ONLY -- '\n; SET default_transaction_read_only=on; -- '",
 };
 
 // Raw SQL, digested by both engines.
@@ -130,6 +171,13 @@ static const std::vector<SqlCase> sql_cases = {
 	{ "SET transaction_read_only = on", false },
 	{ "SET SESSION AUTHORIZATION DEFAULT", false },
 	{ "SET /* x */ SESSION CHARACTERISTICS AS TRANSACTION READ ONLY", false },
+	{ "SET/*c*/TRANSACTION READ ONLY", true },
+	{ "SET /*a /*b*/ c*/ TRANSACTION READ ONLY", true },
+	{ "SET /*/*n*/*/ LOCAL /*a /*b*/ c*/ TRANSACTION ISOLATION LEVEL SERIALIZABLE", true },
+	{ "-- leading\nSET -- between\nTRANSACTION READ ONLY", true },
+	{ "SET /*x/*y*/ TRANSACTION */ SESSION CHARACTERISTICS AS TRANSACTION READ ONLY", false },
+	{ "SET /*x/*y*/ LOCAL TRANSACTION */ SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE", false },
+	{ "SET /*x/*y*/ TRANSACTION */ default_transaction_read_only = on", false },
 };
 
 static std::string legacy_digest(const char* sql, bool lowercase, bool keep_comment) {
@@ -164,26 +212,14 @@ static std::string parsersql_digest(const char* sql) {
 	return ret;
 }
 
-// The query text as handle_SET_command builds it: block comments removed, trailing
-// spaces and semicolons dropped. Same patterns as in PgSQL_Session.cpp.
-static std::string session_query_text(const char* sql) {
-	static const RE2 re_versioned_set_comment("^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/");
-	static const RE2 re_inline_comment("(?U)/\\*.*\\*/");
-	std::string nq = sql;
-	RE2::GlobalReplace(&nq, re_versioned_set_comment, "SET\\1");
-	RE2::GlobalReplace(&nq, re_inline_comment, "");
-	nq.erase(nq.find_last_not_of(" ;") + 1);
-	return nq;
-}
-
 // The session only calls handle_SET_command when the digest starts with "SET " (a digest
 // that kept a leading comment never gets there, and is forwarded without a lock anyway).
 // There, a SET it neither tracks nor recognises as SET TRANSACTION locks the hostgroup.
 static void check_engine(const char* engine, const SqlCase& c, const std::string& digest) {
 	const bool reaches_handler = strncasecmp(digest.c_str(), "SET ", 4) == 0;
-	const std::string nq = session_query_text(c.sql);
+	// handle_SET_command passes the query text exactly as the client sent it.
 	const bool locks = reaches_handler &&
-		!PgSQL_Variables::is_set_transaction(re, digest.c_str(), nq.c_str());
+		!PgSQL_Variables::is_set_transaction(digest.c_str(), c.sql);
 	ok(locks == !c.forward, "%s: '%s' -> digest '%s' %s",
 		engine, c.sql, digest.c_str(), c.forward ? "is forwarded without lock" : "still locks");
 }
@@ -197,29 +233,27 @@ int main(int, char**) {
 	pgsql_thread___query_digests_keep_comment = false;
 	pgsql_thread___query_digests_lowercase = false;
 
-	re = new Session_Regex(PgSQL_Variables::set_transaction_regexp());
-
 	// 3 legacy shapes + 2 ParserSQL shapes per raw SQL case, + the helper's own checks.
 	plan(digest_positive.size() + digest_negative.size() + sql_cases.size() * 5 + 4);
-	diag("pattern: %s", PgSQL_Variables::set_transaction_regexp());
 
 	for (const auto& d : digest_positive) {
-		ok(matches(d), "digest '%s' matches", d.c_str());
+		ok(matches(d), "text '%s' is SET TRANSACTION", d.c_str());
 	}
 	for (const auto& d : digest_negative) {
-		ok(!matches(d), "digest '%s' does not match", d.c_str());
+		ok(!matches(d), "text '%s' is not SET TRANSACTION", d.c_str());
 	}
 
 	// The ParserSQL 1.1.0 shape of SESSION CHARACTERISTICS: the digest alone matches.
-	ok(!PgSQL_Variables::is_set_transaction(re, "SET TRANSACTION READ ONLY",
+	ok(!PgSQL_Variables::is_set_transaction("SET TRANSACTION READ ONLY",
 		"SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"),
 		"helper: a matching digest is not enough when the query text is session-wide");
-	ok(!PgSQL_Variables::is_set_transaction(re, "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY",
+	ok(!PgSQL_Variables::is_set_transaction("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY",
 		"SET TRANSACTION READ ONLY"), "helper: a matching query text is not enough either");
-	ok(PgSQL_Variables::is_set_transaction(re, "SET TRANSACTION READ ONLY", " \t\n SET TRANSACTION READ ONLY"),
+	ok(PgSQL_Variables::is_set_transaction("SET TRANSACTION READ ONLY", " \t\n SET TRANSACTION READ ONLY"),
 		"helper: leading whitespace in the query text is skipped");
-	ok(!PgSQL_Variables::is_set_transaction(nullptr, "SET TRANSACTION READ ONLY", "SET TRANSACTION READ ONLY"),
-		"helper: no regex, no match");
+	ok(!PgSQL_Variables::is_set_transaction(nullptr, "SET TRANSACTION READ ONLY") &&
+		!PgSQL_Variables::is_set_transaction("SET TRANSACTION READ ONLY", nullptr),
+		"helper: a missing digest or query text does not match");
 
 	for (const auto& c : sql_cases) {
 		check_engine("legacy", c, legacy_digest(c.sql, false, false));
@@ -233,7 +267,6 @@ int main(int, char**) {
 		pgsql_thread___query_digests_lowercase = false;
 	}
 
-	delete re;
 	test_cleanup_minimal();
 	return exit_status();
 }
