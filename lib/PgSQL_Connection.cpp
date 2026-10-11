@@ -1566,7 +1566,8 @@ void PgSQL_Connection::connect_cont(short event) {
 	}
 	int current_fd = PQsocket(pgsql_conn);
 	if (current_fd != fd) {
-		proxy_warning("PgSQL Connection FD has been changed by PQconnectPoll(). oldFD:%d newFD:%d\n", fd, current_fd);
+		// Expected whenever libpq moves on to the next host/hostaddr of the list it was given
+		// (#6432), so not a warning.
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "PgSQL Connection FD has been changed by PQconnectPoll()"
 			"Session=%p, Conn=%p, myds=%p, oldFD=%d, newFD=%d\n", myds->sess, this, myds, fd, current_fd);
 		fd = current_fd;
