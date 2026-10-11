@@ -22,6 +22,16 @@
  * no help from ProxySQL: the backend handles the ROLLBACK, including one sent over the
  * extended protocol, and that case is in the parity set too.
  *
+ * A backend still at 'T' never saw the error, so ProxySQL poisons the session and ends
+ * the transaction itself when the client sends ROLLBACK/COMMIT. Extended-only drivers
+ * (pgjdbc's rollback(), with the statement unnamed or, once server-prepared, named) send
+ * it as Parse/Bind/Execute/Sync, and that must recover the session just like a simple
+ * ROLLBACK: before, every Sync got 25P02 forever and the connection was lost to the
+ * pool. Those shapes are in the parity set, and in the durability checks.
+ *
+ * An error_msg query rule that refuses a Parse in the middle of a frame must also throw
+ * the rest of that frame away: nothing queued behind the error may run.
+ *
  * Both backend protocols are exercised; the backend pool is flushed between the two
  * phases because pooled connections keep the protocol they were opened with. Named
  * portals exist only with the native backend protocol; with libpq they are refused with
@@ -369,6 +379,54 @@ static void sc_backend_already_aborted(PgConnection& c) {
     c.executePortal("", 0, true);
 }
 
+// The extended-protocol ROLLBACK an extended-only driver sends: Parse/Bind/Execute/Sync
+// of the unnamed statement and portal.
+static void ext_rollback(PgConnection& c, bool describe = false) {
+    c.prepareStatement("", "ROLLBACK", false);
+    c.bindStatement("", "", {}, {}, false);
+    if (describe) c.describePortal("", false);
+    c.executePortal("", 0, true);
+}
+
+// The local error leaves the backend at 'T'; the extended ROLLBACK must end the
+// transaction and leave the session idle and usable.
+static void sc_local_error_ext_rollback(PgConnection& c) {
+    c.execute("BEGIN");
+    c.executePortal("", 0, true);
+    ext_rollback(c);
+    c.execute("SELECT 1");
+}
+
+// Same, with Describe(portal) before the Execute (NoData for a transaction end).
+static void sc_local_error_ext_rollback_describe(PgConnection& c) {
+    c.execute("BEGIN");
+    c.executePortal("", 0, true);
+    ext_rollback(c, true);
+    c.execute("SELECT 1");
+}
+
+// pgjdbc server-prepares its ROLLBACK after a few uses: Bind of the named statement
+// with no Parse in the frame.
+static void sc_local_error_named_ext_rollback(PgConnection& c) {
+    c.prepareStatement("rollback_6424", "ROLLBACK", true);   // consumes its own ReadyForQuery
+    c.execute("BEGIN");
+    c.executePortal("", 0, true);
+    c.bindStatement("rollback_6424", "", {}, {}, false);
+    c.executePortal("", 0, true);
+    c.execute("SELECT 1");
+}
+
+// Anything but a transaction end is still refused with 25P02, and the extended
+// ROLLBACK that follows still recovers.
+static void sc_local_error_ext_refused(PgConnection& c) {
+    c.execute("BEGIN");
+    c.executePortal("", 0, true);
+    c.prepareStatement("", "SELECT 1", false);
+    c.bindStatement("", "", {}, {}, false);
+    c.executePortal("", 0, true);
+    ext_rollback(c);
+}
+
 struct Case { const char* name; void (*fn)(PgConnection&); int n_ready; bool named; };
 
 static const Case PARITY_CASES[] = {
@@ -376,6 +434,10 @@ static const Case PARITY_CASES[] = {
     { "Execute of a missing unnamed portal inside BEGIN",               sc_unnamed_execute_txn,     4, false },
     { "Describe of a missing unnamed portal inside BEGIN",              sc_unnamed_describe_txn,    4, false },
     { "local error after the backend aborted, extended ROLLBACK",       sc_backend_already_aborted, 4, false },
+    { "local error at 'T', extended ROLLBACK",                          sc_local_error_ext_rollback, 4, false },
+    { "local error at 'T', extended ROLLBACK with Describe(portal)",    sc_local_error_ext_rollback_describe, 4, false },
+    { "local error at 'T', extended ROLLBACK of a named statement",     sc_local_error_named_ext_rollback, 4, false },
+    { "local error at 'T', extended SELECT refused, extended ROLLBACK", sc_local_error_ext_refused, 4, false },
     { "Execute of a missing named portal inside BEGIN",                 sc_named_execute_txn,       3, true  },
     { "Describe of a missing named portal inside BEGIN",                sc_named_describe_txn,      3, true  },
 };
@@ -469,10 +531,111 @@ static void checkDurability(const char* what, void (*raise_local_error)(PgConnec
 static void raise_rule_error(PgConnection& c) { c.execute(RULE_QUERY); }
 static void raise_portal_error(PgConnection& c) { c.executePortal("", 0, true); }
 
+// BEGIN; INSERT; <a local error>; then the transaction is ended over the extended
+// protocol, as pgjdbc's rollback()/commit() do. Both must answer ROLLBACK and Z('I'),
+// keep nothing, and leave the session usable. Before, the extended ROLLBACK/COMMIT got
+// 25P02 + Z('E') at every Sync and the session never recovered.
+static const int EXT_END_ASSERTS = 3;
+static void checkExtendedEnd(const char* verb, const char* mode) {
+    bool ended = false, not_kept = false, usable = false;
+    try {
+        PGConnPtr be = backendLibpq();
+        if (!be || PQstatus(be.get()) != CONNECTION_OK || !truncateFixture(be.get()))
+            throw std::runtime_error("cannot initialize durability fixture");
+        auto c = connectProxy();
+        c->execute("BEGIN");
+        const auto begin = collect(*c, 1);
+        c->execute("INSERT INTO " + FIXTURE + " VALUES (1)");
+        const auto insert = collect(*c, 1);
+        if (!errorCodes(insert).empty() || lastReadyState(begin) != 'T' || lastReadyState(insert) != 'T')
+            throw std::runtime_error("cannot insert within the transaction before the local error");
+        raise_portal_error(*c);
+        const auto err = collect(*c, 1);
+        if (lastReadyState(err) != 'E')
+            throw std::runtime_error("the local error did not report 'E'");
+
+        c->prepareStatement("", verb, false);
+        c->bindStatement("", "", {}, {}, false);
+        c->executePortal("", 0, true);
+        const auto end = collect(*c, 1);
+        diag("  [extended %s] answered: %s (SQLSTATE '%s', ReadyForQuery '%c')", verb,
+             streamSummary(end).c_str(), errorCodes(end).c_str(), lastReadyState(end));
+        ended = errorCodes(end).empty() && hasCommandTag(end, "ROLLBACK") && lastReadyState(end) == 'I';
+        not_kept = fixtureRowCount(be.get()) == 0;
+
+        c->execute("INSERT INTO " + FIXTURE + " VALUES (2)");
+        const auto after = collect(*c, 1);
+        usable = errorCodes(after).empty() && lastReadyState(after) == 'I' && fixtureRowCount(be.get()) == 1;
+        truncateFixture(be.get());
+    } catch (const std::exception& e) {
+        diag("[extended %s] probe failed: %s", verb, e.what());
+    }
+    ok(ended, "local error at 'T' [%s]: extended-protocol %s answers ROLLBACK + ReadyForQuery('I')", mode, verb);
+    ok(not_kept, "local error at 'T' [%s]: extended-protocol %s keeps nothing", mode, verb);
+    ok(usable, "local error at 'T' [%s]: session usable in autocommit after the extended %s", mode, verb);
+}
+
+// A query rule refuses the first Parse of a frame; the INSERT queued behind it in the
+// same frame must not run. It used to: the Parse path returned without discarding the
+// frame, so the client got ErrorResponse + ReadyForQuery and then the INSERT ran --
+// committed in autocommit, or sent to the pinned backend of a poisoned transaction.
+static const int RULE_FRAME_ASSERTS = 4;
+static void checkRuleErrorDiscardsFrame(const char* mode) {
+    bool idle_only_error = false, idle_not_run = false, txn_only_error = false, txn_not_run = false;
+    auto send_frame = [](PgConnection& c) {
+        c.prepareStatement("", RULE_QUERY, false);
+        c.prepareStatement("", "INSERT INTO " + FIXTURE + " VALUES (3)", false);
+        c.bindStatement("", "", {}, {}, false);
+        c.executePortal("", 0, true);
+    };
+    try {
+        PGConnPtr be = backendLibpq();
+        if (!be || PQstatus(be.get()) != CONNECTION_OK || !truncateFixture(be.get()))
+            throw std::runtime_error("cannot initialize durability fixture");
+        {
+            auto c = connectProxy();
+            send_frame(*c);
+            const auto r = collect(*c, 1);
+            diag("  [rule error mid-frame, autocommit] %s (SQLSTATE %s, ReadyForQuery %s)",
+                 streamSummary(r).c_str(), errorCodes(r).c_str(), readyStates(r).c_str());
+            // Whatever the INSERT would have produced arrives before this reply.
+            c->execute("SELECT 1");
+            const auto next = collect(*c, 1);
+            idle_only_error = streamSummary(r) == "EZ" && lastReadyState(r) == 'I' &&
+                              errorCodes(next).empty() && streamSummary(next) == "TDCZ";
+            idle_not_run = fixtureRowCount(be.get()) == 0;
+        }
+        {
+            auto c = connectProxy();
+            c->execute("BEGIN");
+            collect(*c, 1);
+            send_frame(*c);
+            const auto r = collect(*c, 1);
+            diag("  [rule error mid-frame, in BEGIN] %s (SQLSTATE %s, ReadyForQuery %s)",
+                 streamSummary(r).c_str(), errorCodes(r).c_str(), readyStates(r).c_str());
+            c->execute("ROLLBACK");
+            const auto rb = collect(*c, 1);
+            txn_only_error = streamSummary(r) == "EZ" && lastReadyState(r) == 'E' &&
+                             streamSummary(rb) == "CZ" && hasCommandTag(rb, "ROLLBACK") &&
+                             lastReadyState(rb) == 'I';
+            txn_not_run = fixtureRowCount(be.get()) == 0;
+        }
+        truncateFixture(be.get());
+    } catch (const std::exception& e) {
+        diag("[rule error mid-frame] probe failed: %s", e.what());
+    }
+    ok(idle_only_error, "error_msg rule on a Parse mid-frame [%s]: only ErrorResponse + ReadyForQuery('I'), "
+       "nothing else answered", mode);
+    ok(idle_not_run, "error_msg rule on a Parse mid-frame [%s]: the INSERT queued behind it never ran", mode);
+    ok(txn_only_error, "error_msg rule on a Parse mid-frame in BEGIN [%s]: only ErrorResponse + "
+       "ReadyForQuery('E'), then ROLLBACK answers ROLLBACK + 'I'", mode);
+    ok(txn_not_run, "error_msg rule on a Parse mid-frame in BEGIN [%s]: the INSERT never reached the backend", mode);
+}
+
 // ------------------------------------------------------------------ main
 
 static const char* MODE_NAME[2] = { "libpq backend protocol", "native backend protocol" };
-static const int PER_MODE = N_PARITY + 2 * DURABILITY_ASSERTS;
+static const int PER_MODE = N_PARITY + 2 * DURABILITY_ASSERTS + 2 * EXT_END_ASSERTS + RULE_FRAME_ASSERTS;
 
 int main(int, char**) {
     plan(PER_MODE * 2);
@@ -559,6 +722,9 @@ int main(int, char**) {
         // ---- durability: COMMIT after a local error must not commit ----------
         checkDurability("query rule error_msg", raise_rule_error, MODE_NAME[mode]);
         checkDurability("Execute of a missing portal", raise_portal_error, MODE_NAME[mode]);
+        checkExtendedEnd("ROLLBACK", MODE_NAME[mode]);
+        checkExtendedEnd("COMMIT", MODE_NAME[mode]);
+        checkRuleErrorDiscardsFrame(MODE_NAME[mode]);
     }
 
     {

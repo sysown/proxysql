@@ -20,7 +20,9 @@
  *    attached, because callers may still be using it;
  *  - a backend already at 'E' agrees with the client and must NOT be poisoned, so its
  *    own ROLLBACK keeps working (including over the extended protocol), unless it is
- *    mid-batch or the caller is about to drop it.
+ *    mid-batch or the caller is about to drop it;
+ *  - when the backend is about to go (mid-batch, or dropped by the caller), the client's
+ *    SET variables are put back to their BEGIN values while it is still attached.
  *
  * The libpq path shares the decision through IsKnownActiveTransaction() and
  * get_transaction_status_char(); a fabricated connection cannot own a PGconn, so the
@@ -196,6 +198,28 @@ static void test_backend_lost_restores_variables() {
 	   pgsql_tracked_variables[idx].set_variable_name, at_begin.c_str(), now ? now : "(null)");
 }
 
+// Same for a backend mid-batch: the frame reset that follows the error drops it, so by
+// recovery time there is nothing attached to roll the snapshot back on and it could only
+// be dropped -- leaving the SET variables changed inside the aborted transaction in place.
+static void test_mid_batch_restores_variables() {
+	Fixture f = build('T', true);
+	const int idx = 0;
+	const std::string at_begin = f.sess->client_myds->myconn->variables[idx].value;
+	f.sess->transaction_state_manager->handle_transaction("BEGIN");
+	const char* changed = "changed-inside-batch";
+	const uint32_t changed_hash = SpookyHash::Hash32(changed, strlen(changed), 10);
+	pgsql_variables.client_set_hash_and_value(f.sess, idx, changed, changed_hash);
+	pgsql_variables.server_set_hash_and_value(f.sess, idx, changed, changed_hash);
+
+	const char st = f.sess->txn_state_for_local_error();
+	const char* now = f.sess->client_myds->myconn->variables[idx].value;
+	ok(st == 'E' && f.sess->tx_poisoned && f.sess->is_in_transaction() == false &&
+	   now && at_begin == now,
+	   "backend mid-batch: poisoned, and '%s' is back to its BEGIN value '%s' before the frame "
+	   "reset drops the backend [now '%s']",
+	   pgsql_tracked_variables[idx].set_variable_name, at_begin.c_str(), now ? now : "(null)");
+}
+
 // generate_error_packet() used to write ReadyForQuery with the default 'I' whatever the
 // caller knew; the status byte is now a parameter.
 static void test_error_packet_carries_status() {
@@ -221,13 +245,14 @@ static void test_error_packet_carries_status() {
 }
 
 int main(int, char**) {
-	plan(15);
+	plan(16);
 	test_init_minimal();
 	g_thread = new PgSQL_Thread();
 
 	test_status_byte_follows_backend();
 	test_stale_tracker_is_not_trusted();
 	test_backend_lost_restores_variables();
+	test_mid_batch_restores_variables();
 	test_error_packet_carries_status();
 
 	return exit_status();
