@@ -976,13 +976,10 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 	memcpy(okpack+14,&stmt_info->warning_count,sizeof(uint16_t));
 	(*myds)->PSarrayOUT->add((void *)okpack,16);
 	sid++;
-	int setStatus = SERVER_STATUS_AUTOCOMMIT;
-	if (myds) {
-		setStatus = 0;
-		unsigned int Trx_id = (*myds)->sess->FindOneActiveTransaction();
-		setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0 );
-		if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-	}
+	int setStatus = 0;
+	unsigned int Trx_id = (*myds)->sess->FindOneActiveTransaction();
+	setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0 );
+	if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 	bool deprecate_eof_active = false;
 	if (*myds && (*myds)->myconn) {
 		if ((*myds)->myconn->options.client_flag & CLIENT_DEPRECATE_EOF) {
