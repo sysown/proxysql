@@ -786,6 +786,10 @@ public:
 	void rollback_tracked_txn_state();
 
 private:
+	// Drop the transaction keyword tracker's state once 'myconn' has reported idle at a
+	// true cycle boundary (nothing left of the batch), so it cannot outlive the
+	// transaction it tracked (#6417).
+	void reset_txn_tracker_if_backend_idle(PgSQL_Connection* myconn, bool mid_batch);
 	int32_t extract_pid_from_param(const PgSQL_Param_Value& param, uint16_t format) const;
 	void send_parameter_error_response(const char* error_message, PGSQL_ERROR_CODES code = PGSQL_ERROR_CODES::ERRCODE_INVALID_TEXT_REPRESENTATION);
 	bool handle_kill_success(int32_t pid, int tki, const char* digest_text, PgSQL_Connection* mc, PtrSize_t* pkt);
