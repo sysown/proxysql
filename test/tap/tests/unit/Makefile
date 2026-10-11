@@ -626,6 +626,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_native_unix_endpoint_unit-t \
 	pgsql_native_cancel_endpoint_unit-t \
 	pgsql_native_connect_fallback_unit-t \
+	pgsql_native_affected_rows_unit-t \
 	pgsql_dns_cache_all_ips_unit-t \
 	pgsql_native_tls_handover_unit-t \
 	charset_find_unit-t \
