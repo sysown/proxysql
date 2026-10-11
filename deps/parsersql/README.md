@@ -107,6 +107,21 @@ Reasons:
 
 Significant audits / bumps:
 
+- **v1.1.1 (2026-10-11)** — Correctness release for `SET ... TRANSACTION`
+  and several PostgreSQL `SET` forms. MySQL `SET [GLOBAL|SESSION|LOCAL|
+  PERSIST|PERSIST_ONLY] TRANSACTION` keeps its scope in the AST and digest,
+  every characteristic is a canonical `NODE_TRANSACTION_OPTION`, and
+  whitespace/comments/keyword case are normalized. PG `SET SESSION
+  CHARACTERISTICS AS TRANSACTION` is marked with
+  `FLAG_SET_TRANSACTION_CHARACTERISTICS`. SET statements that mix
+  `TRANSACTION` with other items are rejected. PG `SET ROLE`, `SET SESSION
+  AUTHORIZATION`, `SET CONSTRAINTS` and multi-value `search_path` digests
+  are now emitted in full (they were `SET ` / first value only).
+  ([Release notes](https://github.com/ProxySQL/ParserSQL/releases/tag/v1.1.1),
+  [PR #71](https://github.com/ProxySQL/ParserSQL/pull/71))
+  The archive is generated with the command above from upstream commit
+  `c7adfcb1d578f3121f876bebf2ee5b4978cbf7af`, with SHA-256
+  `3c4f4916c38d89ad9ea584e6f6ba7caaf38d0daba8b3053cd088f98bb572fe38`.
 - **v1.1.0 (2026-10-10)** — Expands native PostgreSQL and MySQL grammar,
   including structured transaction starts, table DDL and query sources;
   adds AST traversal, cloning, replacement and parameterization APIs; and
