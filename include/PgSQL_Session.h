@@ -753,6 +753,14 @@ public:
 	void set_previous_status_mode3(bool allow_execute = true);
 	char* get_current_query(int max_length = -1);
 	bool is_in_transaction() const;
+	// Transaction status for the ReadyForQuery that follows an ErrorResponse raised by
+	// ProxySQL itself, which the backend never saw: 'E' inside a transaction block, 'I'
+	// otherwise. Poisons the session when the backend still holds the transaction open.
+	// Call it before anything that discards the backend connection.
+	char txn_state_for_local_error(bool backend_lost = false);
+	// Put the tracked SET variables back to their values at BEGIN (as ROLLBACK does)
+	// for a transaction ProxySQL ends itself; drops the snapshot if no backend is attached.
+	void rollback_tracked_txn_state();
 
 private:
 	int32_t extract_pid_from_param(const PgSQL_Param_Value& param, uint16_t format) const;

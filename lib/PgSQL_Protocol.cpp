@@ -1661,7 +1661,8 @@ bool PgSQL_Protocol::welcome_client() {
 	return true;
 }
 
-void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track, PtrSize_t* _ptr) {
+void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track, PtrSize_t* _ptr,
+	char txn_state) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
 
@@ -1682,7 +1683,7 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 		'C', PgSQL_Error_Helper::get_error_code(code), 'M', msg, 0);
 
 	if (ready == true) {
-		pgpkt.write_ReadyForQuery();
+		pgpkt.write_ReadyForQuery(txn_state);
 		pgpkt.set_multi_pkt_mode(false);
 	}
 

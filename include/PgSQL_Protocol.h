@@ -829,12 +829,18 @@ public:
 	 * @param track A boolean flag to control whether to track the error count.
 	 * @param _ptr A pointer to a `PtrSize_t` structure (if `send` is false)
 	 *            where the generated packet data will be stored.
+	 * @param txn_state The transaction status reported by the ReadyForQuery
+	 *            that follows the error ('I' or 'E'). Inside a transaction
+	 *            block an error leaves the transaction aborted, so a session
+	 *            in one must pass 'E'; see
+	 *            PgSQL_Session::txn_state_for_local_error().
 	 *
 	 * @note This function updates the output buffer with the generated error
 	 *       packet. It also updates the data stream state to `STATE_ERR` if
 	 *       necessary.
 	 */
-	void generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track = false, PtrSize_t* _ptr = NULL);
+	void generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track = false, PtrSize_t* _ptr = NULL,
+		char txn_state = 'I');
 
 	/**
 	 * @brief Generates an "OK" packet for the PostgreSQL protocol.
