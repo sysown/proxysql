@@ -3088,10 +3088,8 @@ bool PgSQL_Thread::init() {
 	//	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
 	match_regexes[0] = NULL; // NOTE: historically we used match_regexes[0] for SET SQL_LOG_BIN . Not anymore
 
-	std::stringstream ss;
-	//ss << "^SET (|SESSION |@@|@@session.|@@local.)`?(" << pgsql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION|TX_READ_ONLY|TRANSACTION_ISOLATION|TRANSACTION_READ_ONLY)`?( *)(:|)=( *)";
-	ss << "^SET(?: +)(|SESSION +)`?(" << pgsql_variables.variables_regexp << ")`?( *)(|=|TO)( *)";
-	match_regexes[1] = new Session_Regex((char*)ss.str().c_str());
+	const std::string set_tracked_vars_regexp = PgSQL_Variables::build_set_tracked_vars_regexp(pgsql_variables.variables_regexp);
+	match_regexes[1] = new Session_Regex((char*)set_tracked_vars_regexp.c_str());
 	match_regexes[2] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
 	match_regexes[3] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)`?(client_encoding|names)`?( *)(|=|TO)( *)");
 

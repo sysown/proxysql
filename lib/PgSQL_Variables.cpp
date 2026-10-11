@@ -68,6 +68,10 @@ PgSQL_Variables::PgSQL_Variables() {
 
 PgSQL_Variables::~PgSQL_Variables() {}
 
+std::string PgSQL_Variables::build_set_tracked_vars_regexp(const std::string& vars_regexp) {
+	return "^SET(?: +)(|SESSION +)`?(" + vars_regexp + ")`?(?:$|[\\s=])";
+}
+
 bool PgSQL_Variables::client_set_hash_and_value(PgSQL_Session* session, int idx, const std::string& value, uint32_t hash) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
 		proxy_warning("Session validation failed\n");

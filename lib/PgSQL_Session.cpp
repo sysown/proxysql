@@ -4967,9 +4967,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 			set = thread->thr_SetParser->parse1v2(); // use algorithm v2
 		}
 
-		// Flag to be set if any variable within the 'SET' statement fails to be tracked,
-		// due to being unknown or because it's an user defined variable.
+		// Set when the parser returned nothing usable for a tracked variable.
 		bool failed_to_parse_var = set.empty();
+		// Set when the parser returned a name we neither track nor ignore.
+		bool unknown_var = false;
 		for (auto it = std::begin(set); it != std::end(set); ++it) {
 			std::string var = it->first;
 			// Declared per iteration on purpose. PostgreSQL announces only some of these
@@ -5123,20 +5124,27 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
 #endif // DEBUG
 			} else {
-				// At this point the variable is unknown to us, or it's a user variable
-				// prefixed by '@', in both cases, we should fail to parse. We don't
-				// fail inmediately so we can anyway keep track of the other variables
+				// At this point the variable is unknown to us. We don't fail
+				// immediately so we can anyway keep track of the other variables
 				// supplied within the 'SET' statement being parsed.
-				failed_to_parse_var = true;
+				unknown_var = true;
 			}
 
 			if (send_param_status)
 				param_status.emplace_back(var, value1);
 		}
 
+		if (unknown_var) {
+			// The backend gets a setting we cannot track or restore, so the
+			// connection must not go back to the pool for another client:
+			// lock the hostgroup, as for any SET that match_regexes[1] rejects.
+			unable_to_parse_set_statement(lock_hostgroup);
+			return false;
+		}
+
 		if (failed_to_parse_var) {
-			// Reached here means match_regexes[1] matched (the outer `if` at
-			// line 4492 above) so the SET targets a variable proxysql tracks
+			// Reached here means match_regexes[1] matched (the outer `if`
+			// above) so the SET targets a variable proxysql tracks
 			// (search_path, datestyle, etc.), but the SET parser couldn't
 			// build a usable map (malformed value, unclosed delimiter,
 			// trailing comma, etc.). Forward to the backend without locking
