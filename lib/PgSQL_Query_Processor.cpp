@@ -645,16 +645,32 @@ SQLite3_result* PgSQL_Query_Processor::get_stats_commands_counters() {
 }
 
 /**
- * @brief Classifies the token that follows a leading SELECT.
+ * @brief Classifies what follows a leading SELECT.
  *
  * ProxySQL intercepts pg_cancel_backend() and pg_terminate_backend() itself, because the
  * PID a client passes is the ProxySQL session id that SELECT pg_backend_pid() returned.
- * Only the start of the token is compared, so "pg_cancel_backend(?)" matches.
+ * The function name must be complete and followed by '(' (spaces allowed) or by the end of
+ * the text, which is where a 32-byte query prefix or a legacy token can stop: a longer
+ * identifier such as pg_cancel_backend_count() or a column named pg_cancel_backend stays a
+ * SELECT.
+ *
+ * @param p Text right after SELECT and the spaces that follow it. Must not be NULL.
  */
-static enum PGSQL_QUERY_command select_target_command_type(const char* token) {
-	if (!strncasecmp("pg_cancel_backend", token, sizeof("pg_cancel_backend") - 1)) return PGSQL_QUERY_CANCEL_BACKEND;
-	if (!strncasecmp("pg_terminate_backend", token, sizeof("pg_terminate_backend") - 1)) return PGSQL_QUERY_TERMINATE_BACKEND;
-	return PGSQL_QUERY_SELECT;
+static enum PGSQL_QUERY_command select_target_command_type(const char* p) {
+	enum PGSQL_QUERY_command cmd = PGSQL_QUERY_SELECT;
+	size_t len = 0;
+	if (pgsql_stmt_first_keyword_is(p, "pg_cancel_backend")) {
+		cmd = PGSQL_QUERY_CANCEL_BACKEND;
+		len = sizeof("pg_cancel_backend") - 1;
+	} else if (pgsql_stmt_first_keyword_is(p, "pg_terminate_backend")) {
+		cmd = PGSQL_QUERY_TERMINATE_BACKEND;
+		len = sizeof("pg_terminate_backend") - 1;
+	} else {
+		return PGSQL_QUERY_SELECT;
+	}
+	p += len;
+	while (isspace((unsigned char)*p)) p++;
+	return (*p == '(' || *p == '\0') ? cmd : PGSQL_QUERY_SELECT;
 }
 
 static enum PGSQL_QUERY_command legacy_command_type(const char* text);
@@ -663,30 +679,34 @@ static enum PGSQL_QUERY_command legacy_command_type(const char* text);
  * @brief Refines a SELECT or UNKNOWN reported by ParserSQL with the legacy classification (#6422).
  *
  * ParserSQL reports SELECT for "SELECT pg_cancel_backend(N)" and for data-modifying CTEs
- * ("WITH d AS (DELETE ... RETURNING *) SELECT ..."). The result must match the legacy
- * classifier, so that the session still intercepts cancel/terminate and a CTE is not
- * treated as a read. ParserSQL reports UNKNOWN when it cannot parse the text, as with
- * "SELECT pg_terminate_backend(1234" from the 32-byte query prefix used without digests;
- * such a text is only promoted to CANCEL_BACKEND / TERMINATE_BACKEND.
+ * ("WITH d AS (DELETE ... RETURNING *) SELECT ..."). The session must still intercept
+ * cancel/terminate, and a CTE must not be treated as a read. ParserSQL reports UNKNOWN when
+ * it cannot parse the text, as with "SELECT pg_terminate_backend(1234" from the 32-byte
+ * query prefix used without digests.
  *
- * The common "SELECT <token>" form is scanned in place with the legacy tokenizer rules
- * (delimiters ' ' and ';', leading '(' skipped), so that the text is not copied. Any other
- * text reported as SELECT is handed to the legacy classifier.
+ * Leading whitespace of any kind, comments (kept in the digest by
+ * pgsql-query_digests_keep_comment, always present in a raw query prefix), '(' and ';' are
+ * skipped first, in place, so that the text is not copied. When the first keyword is SELECT
+ * the result is only ever promoted to CANCEL_BACKEND / TERMINATE_BACKEND: ParserSQL's own
+ * SELECT or UNKNOWN is kept otherwise. Any other text reported as SELECT gets the legacy
+ * classification, which is what tells a CTE apart.
  *
  * @param ret Classification from ParserSQL: PGSQL_QUERY_SELECT or PGSQL_QUERY_UNKNOWN.
  * @param text Digest text or query prefix. Must not be NULL.
  */
 static enum PGSQL_QUERY_command parser_refine_command_type(enum PGSQL_QUERY_command ret, const char* text) {
-	const char* p = text + strspn(text, " ;(");
-	const size_t len = strcspn(p, " ;");
-	if (len != sizeof("SELECT") - 1 || strncasecmp("SELECT", p, len)) {
-		return ret == PGSQL_QUERY_SELECT ? legacy_command_type(text) : ret;
+	const char* p = pgsql_stmt_skip_lead(text, NULL);
+	while (p != NULL && (*p == '(' || *p == ';')) {
+		p = pgsql_stmt_skip_lead(p + 1, NULL);
 	}
-	p += len;
-	p += strspn(p, " ;");
-	if (*p == '\0') return PGSQL_QUERY_UNKNOWN; // legacy: a bare SELECT has no next token
+	if (p == NULL) return ret;
+	if (pgsql_stmt_first_keyword_is(p, "SELECT") == false) {
+		return ret == PGSQL_QUERY_SELECT ? legacy_command_type(p) : ret;
+	}
+	p = pgsql_stmt_skip_lead(p + sizeof("SELECT") - 1, NULL);
+	if (p == NULL) return ret;
 	const enum PGSQL_QUERY_command target = select_target_command_type(p);
-	return (ret == PGSQL_QUERY_SELECT || target != PGSQL_QUERY_SELECT) ? target : ret;
+	return target != PGSQL_QUERY_SELECT ? target : ret;
 }
 
 enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_par_t* qp) {
