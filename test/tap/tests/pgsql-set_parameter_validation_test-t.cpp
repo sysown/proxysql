@@ -12,6 +12,9 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "json.hpp"
+
+using nlohmann::json;
 
 CommandLine cl;
 
@@ -395,8 +398,176 @@ static int query_pgsql_set_parser_algorithm() {
     return algo;
 }
 
+// ---------------------------------------------------------------------------
+// SET of a setting ProxySQL does not track, whose name starts with one it does
+// (issue #6431). Such a SET used to take the tracked-variable path, where the
+// unknown name made ProxySQL forward it without locking the hostgroup: the
+// backend connection went back to the pool still carrying the setting, and the
+// next client to get it inherited it. Now the session must be locked on its
+// hostgroup, so the connection is reset before anyone else can use it.
+//
+// To make the leak observable the client's hostgroup is limited to a single
+// backend connection, so client B can only get the one client A used.
+// ---------------------------------------------------------------------------
+
+struct UntrackedSetCase {
+    std::string set;        // run by client A
+    std::string name;       // setting read back by client B
+    std::string leaked;     // what B sees if A's setting reached it
+};
+
+static const std::vector<UntrackedSetCase> untracked_set_cases = {
+    { "SET timezone_abbreviations = 'India'", "timezone_abbreviations", "India" },
+    { "SET timezone.foo = 'x'", "timezone.foo", "x" },
+};
+static const int UNTRACKED_SET_TESTS_PER_CASE = 3;
+
+static bool execAdmin(PGconn* admin, const std::string& q) {
+    PGresult* r = PQexec(admin, q.c_str());
+    const ExecStatusType st = PQresultStatus(r);
+    const bool good = (st == PGRES_COMMAND_OK || st == PGRES_TUPLES_OK);
+    if (!good) diag("admin failed: %s -- %s", q.c_str(), PQerrorMessage(admin));
+    PQclear(r);
+    return good;
+}
+
+static std::string sqlQuote(const std::string& v) {
+    std::string out = "'";
+    for (char c : v) { if (c == '\'') out += "''"; else out += c; }
+    out += "'";
+    return out;
+}
+
+static const char* SERVER_COLS =
+    "hostgroup_id,hostname,port,status,weight,compression,max_connections,"
+    "max_replication_lag,use_ssl,max_latency_ms,comment";
+
+// The hostgroup's servers, as the INSERT statements that recreate them.
+static std::vector<std::string> snapshotServers(PGconn* admin, int hg) {
+    std::vector<std::string> inserts;
+    const std::string sel = "SELECT " + std::string(SERVER_COLS) +
+        " FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg);
+    PGresult* res = PQexec(admin, sel.c_str());
+    if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+        for (int r = 0; r < PQntuples(res); r++) {
+            std::string ins = "INSERT INTO pgsql_servers (" + std::string(SERVER_COLS) + ") VALUES (";
+            for (int c = 0; c < PQnfields(res); c++) {
+                if (c) ins += ",";
+                ins += PQgetisnull(res, r, c) ? "NULL" : sqlQuote(PQgetvalue(res, r, c));
+            }
+            inserts.push_back(ins + ")");
+        }
+    } else {
+        diag("cannot read pgsql_servers for hostgroup %d: %s", hg, PQerrorMessage(admin));
+    }
+    PQclear(res);
+    return inserts;
+}
+
+// Puts the hostgroup's servers back as 'inserts', optionally capped at one connection.
+// Removing them first closes every pooled connection, so the cap holds from here on.
+static bool reloadServers(PGconn* admin, int hg, const std::vector<std::string>& inserts, bool single_conn) {
+    const std::string hg_s = std::to_string(hg);
+    if (!execAdmin(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + hg_s)) return false;
+    if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
+    for (const auto& q : inserts) {
+        if (!execAdmin(admin, q)) return false;
+    }
+    if (single_conn &&
+        !execAdmin(admin, "UPDATE pgsql_servers SET max_connections=1 WHERE hostgroup_id=" + hg_s)) {
+        return false;
+    }
+    if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
+    usleep(200000); // let the servers come back online before anyone connects
+    return true;
+}
+
+static int lockedOnHostgroup(PGconn* conn) {
+    PGresult* res = PQexec(conn, "PROXYSQL INTERNAL SESSION");
+    int hg = -2;
+    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) {
+        try {
+            const json j = json::parse(PQgetvalue(res, 0, 0));
+            hg = j.at("locked_on_hostgroup").get<int>();
+        } catch (const std::exception& e) {
+            diag("cannot parse PROXYSQL INTERNAL SESSION: %s", e.what());
+        }
+    } else {
+        diag("PROXYSQL INTERNAL SESSION failed: %s", PQerrorMessage(conn));
+    }
+    PQclear(res);
+    return hg;
+}
+
+// Schema-qualified on purpose: ProxySQL answers a bare 'SELECT pg_backend_pid()'
+// itself, with an id of its own rather than the backend's.
+static std::string backendPid(PGconn* conn) {
+    PGresult* res = PQexec(conn, "SELECT pg_catalog.pg_backend_pid()");
+    std::string pid = (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) ? PQgetvalue(res, 0, 0) : "";
+    PQclear(res);
+    return pid;
+}
+
+static void test_untracked_set_does_not_leak() {
+    PGConnPtr admin = createNewConnection(ConnType::ADMIN);
+    std::string hg_s;
+    if (admin) {
+        PGresult* res = PQexec(admin.get(), ("SELECT default_hostgroup FROM runtime_pgsql_users WHERE username=" +
+            sqlQuote(cl.pgsql_root_username) + " LIMIT 1").c_str());
+        if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) hg_s = PQgetvalue(res, 0, 0);
+        PQclear(res);
+    }
+    const int hg = hg_s.empty() ? -1 : std::stoi(hg_s);
+    const std::vector<std::string> servers = (hg >= 0) ? snapshotServers(admin.get(), hg) : std::vector<std::string>{};
+    const bool capped = !servers.empty() && reloadServers(admin.get(), hg, servers, true);
+    if (!capped) {
+        skip(untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE,
+            "cannot limit hostgroup %d to one backend connection", hg);
+        if (!servers.empty()) reloadServers(admin.get(), hg, servers, false);
+        return;
+    }
+    diag("hostgroup %d limited to one backend connection", hg);
+
+    for (const auto& c : untracked_set_cases) {
+        std::string a_pid;
+        {
+            PGConnPtr a = createNewConnection(ConnType::BACKEND);
+            PGresult* res = a ? PQexec(a.get(), c.set.c_str()) : nullptr;
+            const bool set_ok = res && PQresultStatus(res) == PGRES_COMMAND_OK;
+            ok(set_ok, "client A: %s (%s)", c.set.c_str(), set_ok ? "" : (a ? PQerrorMessage(a.get()) : "no connection"));
+            PQclear(res);
+
+            a_pid = a ? backendPid(a.get()) : "";
+            const int locked = a ? lockedOnHostgroup(a.get()) : -2;
+            ok(locked == hg, "client A: '%s' locks the session on hostgroup %d (locked_on_hostgroup=%d)",
+                c.set.c_str(), hg, locked);
+        } // A disconnects: a locked connection is reset before it goes back to the pool
+
+        PGConnPtr b = createNewConnection(ConnType::BACKEND);
+        std::string b_pid, value = "<no result>";
+        if (b) {
+            const std::string q = "SELECT pg_catalog.pg_backend_pid(), current_setting(" + sqlQuote(c.name) + ", true)";
+            PGresult* res = PQexec(b.get(), q.c_str());
+            if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) {
+                b_pid = PQgetvalue(res, 0, 0);
+                value = PQgetisnull(res, 0, 1) ? "<null>" : PQgetvalue(res, 0, 1);
+            } else {
+                diag("client B query failed: %s", PQerrorMessage(b.get()));
+            }
+            PQclear(res);
+        }
+        ok(value != c.leaked && value != "<no result>",
+            "client B: %s is '%s', not client A's '%s' (A on backend pid %s, B on %s)",
+            c.name.c_str(), value.c_str(), c.leaked.c_str(), a_pid.c_str(), b_pid.c_str());
+    }
+
+    if (!reloadServers(admin.get(), hg, servers, false)) {
+        diag("failed to restore the servers of hostgroup %d", hg);
+    }
+}
+
 int main(int argc, char** argv) {
-    int total_tests = 2;
+    int total_tests = 2 + untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE;
 
 	for (const auto& test_case : test_cases) {
 		total_tests += test_case.commands.size();
@@ -506,5 +677,12 @@ int main(int argc, char** argv) {
             ok(test_ok, "%s: %s (%s)", test_case.param_name.c_str(), cmd_test.command.c_str(), error_msg.c_str());
         }
     }
+
+    // Close the connection first: an earlier case may have locked it on the hostgroup,
+    // holding a backend connection that would leave none for the single-connection pool.
+    conn.reset();
+    usleep(500000); // let its backend connection finish resetting before the pool is flushed
+    test_untracked_set_does_not_leak();
+
     return exit_status();
 }
