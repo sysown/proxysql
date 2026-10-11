@@ -58,7 +58,11 @@ std::string g_log_path;
 void retirement_observer(ProxySQL_ServerProtocol protocol, bool controller, void *) {
 	(void)controller;
 	if (protocol != ProxySQL_ServerProtocol::pgsql) return;
-	g_registry_detached.store(true, std::memory_order_release);
+	{
+		// Atomic flags still need the waiting mutex to prevent lost notifications.
+		std::lock_guard<std::mutex> lock(g_lease_mutex);
+		g_registry_detached.store(true, std::memory_order_release);
+	}
 	g_lease_cv.notify_all();
 }
 
@@ -613,7 +617,10 @@ void test_callback_lease_barrier() {
 	}
 	ok(g_module_destroyed.load() == destroyed_before && !g_destroyed_before_callback_release.load(),
 		"registry retirement is observable before the held callback lease permits destroy");
-	g_callback_release.store(true, std::memory_order_release);
+	{
+		std::lock_guard<std::mutex> lock(g_lease_mutex);
+		g_callback_release.store(true, std::memory_order_release);
+	}
 	g_lease_cv.notify_all();
 	callback.join();
 	uninstall.join();
@@ -756,7 +763,10 @@ void test_controller_callback_lease_barrier() {
 	}
 	ok(g_controller_destroyed.load() == destroyed_before,
 		"actual controller registry detachment precedes final callback-lease destroy");
-	g_callback_release.store(true, std::memory_order_release);
+	{
+		std::lock_guard<std::mutex> lock(g_lease_mutex);
+		g_callback_release.store(true, std::memory_order_release);
+	}
 	g_lease_cv.notify_all();
 	callback.join();
 	uninstall.join();
