@@ -1294,13 +1294,17 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
 {
     auto result = session_scope_only ? parse_mysql_set_for_session(query)
         : tl_mysql_parser.parse(query.c_str(), query.size());
+    // Only a complete parse may be tracked, as in parsersql_digest_init(): an
+    // OK result with full_input == false covers only a prefix of the input
+    // (`SET a=1 junk`, `SET a=1; SELECT 1`), and a partial AST also cannot
+    // prove that all targets are session-scoped. An empty map makes the
+    // session forward the statement instead.
+    if (result.status != ParseResult::OK || !result.full_input || !result.ast) {
+        tl_mysql_parser.reset();
+        return {};
+    }
     if (session_scope_only) {
-        // A partial AST cannot prove that all targets are session-scoped.
         // Check before the walker strips scopes or coalesces duplicate names.
-        if (result.status != ParseResult::OK || !result.full_input) {
-            tl_mysql_parser.reset();
-            return {};
-        }
         for (const AstNode* child = result.ast ? result.ast->first_child : nullptr;
              child; child = child->next_sibling) {
             if (child->type == NodeType::NODE_VAR_ASSIGNMENT &&
@@ -1310,13 +1314,11 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
             }
         }
     }
-    if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        if (result.ast && result.ast->type == NodeType::NODE_SET_STMT) {
-            auto parsed = walk_set_stmt<Dialect::MySQL>(
-                result.ast, tl_mysql_parser.arena(), query.c_str(), query.size());
-            tl_mysql_parser.reset();
-            return parsed;
-        }
+    if (result.ast->type == NodeType::NODE_SET_STMT) {
+        auto parsed = walk_set_stmt<Dialect::MySQL>(
+            result.ast, tl_mysql_parser.arena(), query.c_str(), query.size());
+        tl_mysql_parser.reset();
+        return parsed;
     }
     tl_mysql_parser.reset();
     return {};
@@ -1347,12 +1349,10 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(
     // for malformed-input rejection (which is what algorithms 0/1/2 do for
     // these cases too).
     //
-    // The MySQL walker keeps accepting PARTIAL: MySQL SET frequently uses
-    // PARTIAL legitimately for un-parseable RHS expressions (e.g.
-    // `SET x = (SELECT ...)`), where the walker falls back to
-    // `extract_paren_expr` on a NODE_SUBQUERY placeholder. PG search_path
-    // tracked variables don't have analogous shapes.
-    if (result.status == ParseResult::OK) {
+    // An OK result with full_input == false also covers only a prefix of
+    // the input (`SET a = 1 junk`, `SET a = 1; SELECT 1`). ast_covers_full_input()
+    // additionally rejects trailing bytes the AST does not reach.
+    if (result.status == ParseResult::OK && result.full_input) {
         if (result.ast && result.ast->type == NodeType::NODE_SET_STMT &&
             ast_covers_full_input(result.ast, query.c_str(), (int)query_length)) {
             auto parsed = walk_set_stmt<Dialect::PostgreSQL>(
