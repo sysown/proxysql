@@ -649,8 +649,8 @@ SQLite3_result* PgSQL_Query_Processor::get_stats_commands_counters() {
  *
  * ProxySQL intercepts pg_cancel_backend() and pg_terminate_backend() itself, because the
  * PID a client passes is the ProxySQL session id that SELECT pg_backend_pid() returned.
- * The function name must be complete and followed by '(' (spaces allowed) or by the end of
- * the text, which is where a 32-byte query prefix or a legacy token can stop: a longer
+ * The function name must be complete and followed by '(' (whitespace and comments allowed
+ * in between) or by the end of the text, which is where a 32-byte query prefix or a legacy token can stop: a longer
  * identifier such as pg_cancel_backend_count() or a column named pg_cancel_backend stays a
  * SELECT.
  *
@@ -668,9 +668,11 @@ static enum PGSQL_QUERY_command select_target_command_type(const char* p) {
 	} else {
 		return PGSQL_QUERY_SELECT;
 	}
-	p += len;
-	while (isspace((unsigned char)*p)) p++;
-	return (*p == '(' || *p == '\0') ? cmd : PGSQL_QUERY_SELECT;
+	// PostgreSQL takes a comment for whitespace, so "pg_cancel_backend/*x*/(1)" is a call too.
+	// Nothing after the name, or a comment the text ends inside (a cut prefix), counts like
+	// the end of the text.
+	p = pgsql_stmt_skip_lead(p + len, NULL);
+	return (p == NULL || *p == '(') ? cmd : PGSQL_QUERY_SELECT;
 }
 
 static enum PGSQL_QUERY_command legacy_command_type(const char* text);
