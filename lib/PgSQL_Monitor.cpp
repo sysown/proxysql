@@ -2781,9 +2781,12 @@ void* PgSQL_monitor_scheduler_thread() {
 // ============================================================================
 
 std::string PgSQL_Monitor::dns_lookup(const std::string& hostname,
-	bool return_hostname_if_lookup_fails, size_t* ip_count) {
+	bool return_hostname_if_lookup_fails, size_t* ip_count, std::vector<std::string>* all_ips) {
 
 	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
+
+	if (all_ips)
+		all_ips->clear();
 
 	// If hostname is already an IP, return as-is (cache miss avoided).
 	if (hostname.empty() || validate_ip(hostname))
@@ -2795,7 +2798,7 @@ std::string PgSQL_Monitor::dns_lookup(const std::string& hostname,
 	std::string ip;
 
 	if (dns_cache_thread) {
-		ip = dns_cache_thread->lookup(trim(hostname), ip_count);
+		ip = dns_cache_thread->lookup(trim(hostname), ip_count, all_ips);
 	}
 
 	// Apply the hostname fallback even when the cache facade is unavailable
@@ -2811,9 +2814,9 @@ std::string PgSQL_Monitor::dns_lookup(const std::string& hostname,
 }
 
 std::string PgSQL_Monitor::dns_lookup(const char* hostname,
-	bool return_hostname_if_lookup_fails, size_t* ip_count) {
+	bool return_hostname_if_lookup_fails, size_t* ip_count, std::vector<std::string>* all_ips) {
 	return PgSQL_Monitor::dns_lookup(std::string(hostname),
-		return_hostname_if_lookup_fails, ip_count);
+		return_hostname_if_lookup_fails, ip_count, all_ips);
 }
 
 bool PgSQL_Monitor::update_dns_cache_from_pgsql_conn(PGconn* pgsql_conn) {

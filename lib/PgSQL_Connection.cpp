@@ -1261,13 +1261,13 @@ bool pgsql_append_conninfo_credentials(std::ostringstream& conninfo, const char*
 	return false;
 }
 
-std::string PgSQL_Connection::connect_start_DNS_lookup() {
+std::string PgSQL_Connection::connect_start_DNS_lookup(std::vector<std::string>* all_ips) {
 	// PgSQL_Monitor::dns_lookup() returns an IP on cache hit, or empty
-	// on miss / when 'parent->address' is itself an IP / when the cache is
-	// disabled.  Empty result means "don't pass hostaddr to libpq" so the
+	// on miss / when the cache is disabled, and 'parent->address' itself when
+	// it is an IP.  Empty result means "don't pass hostaddr to libpq" so the
 	// existing behavior (libpq does getaddrinfo) is preserved.
 	const std::string ip = PgSQL_Monitor::dns_lookup(parent->address,
-		/*return_hostname_if_lookup_fails=*/false);
+		/*return_hostname_if_lookup_fails=*/false, nullptr, all_ips);
 	return ip;
 }
 
@@ -1376,15 +1376,34 @@ void PgSQL_Connection::connect_start() {
 		return;
 	}
 	append_conninfo_param(conninfo, "dbname", userinfo->dbname); // dbname
-	append_conninfo_param(conninfo, "host", parent->address); // backend address
 	// If the DNS cache has resolved this hostname already, also pass
 	// hostaddr=<ip>.  libpq documents this combo specifically to skip name
 	// resolution while keeping the hostname for TLS verification and error
 	// messages.  Empty IP -> cache miss / IP literal / disabled, leave as-is.
 	{
-		const std::string ip = connect_start_DNS_lookup();
+		std::vector<std::string> ips;
+		const std::string ip = connect_start_DNS_lookup(&ips);
 		if (!ip.empty() && ip != std::string(parent->address)) {
-		append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
+			if (ips.size() > 1 && strchr(parent->address, ',') == nullptr) {
+				// The name has several cached IPs, possibly of both families. A single hostaddr
+				// would make libpq try only the round-robin one, and a backend listening on just
+				// one of them would fail every other connect (#6432). Pass them all, starting at
+				// the round-robin one: libpq walks a hostaddr list in order, as it walks the
+				// addresses of a name, and wants the host list to be just as long.
+				std::string hosts, hostaddrs;
+				for (size_t i = 0; i < ips.size(); i++) {
+					if (i) { hosts += ','; hostaddrs += ','; }
+					hosts += parent->address;
+					hostaddrs += ips[i];
+				}
+				append_conninfo_param(conninfo, "host", const_cast<char*>(hosts.c_str()));
+				append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(hostaddrs.c_str()));
+			} else {
+				append_conninfo_param(conninfo, "host", parent->address); // backend address
+				append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
+			}
+		} else {
+			append_conninfo_param(conninfo, "host", parent->address); // backend address
 		}
 	}
 	// port=0 means hostname is a Unix-domain socket path; libpq rejects
@@ -1844,20 +1863,27 @@ SSL* PgSQL_Connection::get_pg_ssl_object() {
 	return (SSL*)PQsslStruct(pgsql_conn, "OpenSSL");
 }
 
-// "<ip> port <port>" for a resolved backend address, for the connect error message.
-static std::string native_addr_text(const sockaddr_storage& ss) {
+// The numeric IP of a resolved backend address, or "" if it is not an IP one.
+static std::string native_addr_ip(const sockaddr_storage& ss) {
 	char buf[INET6_ADDRSTRLEN] = "";
 	const void* a = nullptr;
-	unsigned port = 0;
 	if (ss.ss_family == AF_INET) {
 		a = &reinterpret_cast<const sockaddr_in*>(&ss)->sin_addr;
-		port = ntohs(reinterpret_cast<const sockaddr_in*>(&ss)->sin_port);
 	} else if (ss.ss_family == AF_INET6) {
 		a = &reinterpret_cast<const sockaddr_in6*>(&ss)->sin6_addr;
-		port = ntohs(reinterpret_cast<const sockaddr_in6*>(&ss)->sin6_port);
 	}
-	if (a == nullptr || inet_ntop(ss.ss_family, a, buf, sizeof(buf)) == nullptr) return "?";
-	return std::string(buf) + " port " + std::to_string(port);
+	if (a == nullptr || inet_ntop(ss.ss_family, a, buf, sizeof(buf)) == nullptr) return "";
+	return buf;
+}
+
+// "<ip> port <port>" for a resolved backend address, for the connect error message.
+static std::string native_addr_text(const sockaddr_storage& ss) {
+	const std::string ip = native_addr_ip(ss);
+	if (ip.empty()) return "?";
+	const unsigned port = (ss.ss_family == AF_INET)
+		? ntohs(reinterpret_cast<const sockaddr_in*>(&ss)->sin_port)
+		: ntohs(reinterpret_cast<const sockaddr_in6*>(&ss)->sin6_port);
+	return ip + " port " + std::to_string(port);
 }
 
 void PgSQL_Connection::native_note_addr_failure(int err) {
@@ -1902,59 +1928,87 @@ bool PgSQL_Connection::native_tcp_connect_next() {
 	return false;
 }
 
+// Appends every address getaddrinfo() returns for `host` to `out`. Returns its error code.
+static int native_append_addrs(const char* host, const char* port, int flags,
+	std::vector<std::pair<sockaddr_storage, socklen_t>>& out) {
+	struct addrinfo hints;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+	hints.ai_flags = flags;
+
+	struct addrinfo* res = nullptr;
+	int gai = getaddrinfo(host, port, &hints, &res);
+	if ((gai != 0 || res == nullptr) && flags == AI_ADDRCONFIG) {
+		// AI_ADDRCONFIG does not count loopback addresses, so a name that only resolves to the
+		// loopback of a family the host has nothing else in (e.g. ::1 alone) comes back empty.
+		// libpq does not filter; resolve once more unfiltered rather than fail where it works.
+		if (res) { freeaddrinfo(res); res = nullptr; }
+		hints.ai_flags = 0;
+		gai = getaddrinfo(host, port, &hints, &res);
+	}
+	if (gai == 0 && res == nullptr) gai = EAI_NONAME;
+	if (gai != 0) {
+		if (res) freeaddrinfo(res);
+		return gai;
+	}
+	for (struct addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
+		if (ai->ai_addr == nullptr || ai->ai_addrlen > sizeof(sockaddr_storage)) continue;
+		sockaddr_storage ss;
+		memset(&ss, 0, sizeof(ss));
+		memcpy(&ss, ai->ai_addr, ai->ai_addrlen);
+		out.emplace_back(ss, ai->ai_addrlen);
+	}
+	freeaddrinfo(res);
+	return 0;
+}
+
 void PgSQL_Connection::native_connect_start() {
 	// Resolve the backend address. Prefer the DNS cache (non-blocking); fall back
 	// to the literal parent->address (which may itself be an IP literal).
-	std::string ip = connect_start_DNS_lookup();
+	// `cached_ips` holds every IP the cache has for the name, starting at the
+	// round-robin one `ip`; empty on a miss or for an IP literal.
+	std::vector<std::string> cached_ips;
+	std::string ip = connect_start_DNS_lookup(&cached_ips);
 	const char* host = (!ip.empty()) ? ip.c_str() : parent->address;
 
 	// getaddrinfo on a numeric host with AI_NUMERICHOST does not block. The DNS
 	// cache returns numeric IPs; if it missed and parent->address is a hostname,
 	// fall back to a (potentially blocking) resolve — acceptable as the pool
 	// connect path already tolerates this and 1.8 validates against real backends.
-	struct addrinfo hints;
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
-	// A hostname is filtered the way the DNS cache resolver filters it (dns_resolve()): no
-	// addresses of a family the host has no address in, which a connect could never reach.
-	hints.ai_flags = (!ip.empty()) ? AI_NUMERICHOST : AI_ADDRCONFIG;
 	char portstr[16];
 	snprintf(portstr, sizeof(portstr), "%u", (unsigned)parent->port);
-
-	struct addrinfo* res = nullptr;
-	int gai = getaddrinfo(host, portstr, &hints, &res);
-	if ((gai != 0 || res == nullptr) && hints.ai_flags == AI_ADDRCONFIG) {
-		// AI_ADDRCONFIG does not count loopback addresses, so a name that only resolves to the
-		// loopback of a family the host has nothing else in (e.g. ::1 alone) comes back empty.
-		// libpq does not filter; resolve once more unfiltered rather than fail where it works.
-		if (res) { freeaddrinfo(res); res = nullptr; }
-		hints.ai_flags = 0;
-		gai = getaddrinfo(host, portstr, &hints, &res);
-	}
-	if (gai != 0 || res == nullptr) {
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
-			gai_strerror(gai), false);
-		proxy_error("Native connect: getaddrinfo(%s:%s) failed: %s\n", host, portstr, gai_strerror(gai));
-		if (res) freeaddrinfo(res);
-		async_exit_status = PG_EVENT_NONE; // error present -> handler moves to FAILED
-		return;
-	}
 
 	// Keep every candidate: an address whose connect fails later, in TCP_CONNECTING, is
 	// followed by the next one (#6425).
 	native_addrs.clear();
 	native_addr_idx = 0;
 	native_connect_errors.clear();
-	for (struct addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
-		if (ai->ai_addr == nullptr || ai->ai_addrlen > sizeof(sockaddr_storage)) continue;
-		sockaddr_storage ss;
-		memset(&ss, 0, sizeof(ss));
-		memcpy(&ss, ai->ai_addr, ai->ai_addrlen);
-		native_addrs.emplace_back(ss, ai->ai_addrlen);
+	int gai = 0;
+	if (cached_ips.size() > 1) {
+		// Every cached IP is a candidate, not just the round-robin one: with a name cached as
+		// both an IPv6 and an IPv4 address and a backend listening on one family, trying only
+		// the round-robin IP failed every other connect (#6432). An IP that does not parse is
+		// skipped; the connect fails only if none does.
+		for (const std::string& cip : cached_ips) {
+			const int rc = native_append_addrs(cip.c_str(), portstr, AI_NUMERICHOST, native_addrs);
+			if (rc != 0) gai = rc;
+		}
+	} else {
+		// A hostname is filtered the way the DNS cache resolver filters it (dns_resolve()): no
+		// addresses of a family the host has no address in, which a connect could never reach.
+		gai = native_append_addrs(host, portstr, (!ip.empty()) ? AI_NUMERICHOST : AI_ADDRCONFIG,
+			native_addrs);
 	}
-	freeaddrinfo(res);
+	if (native_addrs.empty()) {
+		if (gai == 0) gai = EAI_NONAME;
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
+			gai_strerror(gai), false);
+		proxy_error("Native connect: getaddrinfo(%s:%s) failed: %s\n", host, portstr, gai_strerror(gai));
+		async_exit_status = PG_EVENT_NONE; // error present -> handler moves to FAILED
+		return;
+	}
 
 	if (!native_tcp_connect_next()) {
 		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
@@ -2041,6 +2095,12 @@ void PgSQL_Connection::native_connect_cont(short event) {
 				async_exit_status = PG_EVENT_WRITE;
 				return;
 			}
+		}
+		if (!native_hostaddr.empty() && native_addr_idx > 0 && native_addr_idx < native_addrs.size()) {
+			// Connected through another cached IP than the round-robin one (#6432): report the
+			// one in use, as PQhostaddr() does on the libpq path.
+			const std::string used = native_addr_ip(native_addrs[native_addr_idx].first);
+			if (!used.empty()) native_hostaddr = used;
 		}
 		if (native_ssl_requested) {
 			// TLS path: negotiate SSLRequest BEFORE the StartupMessage. Send the

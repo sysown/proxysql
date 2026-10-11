@@ -285,8 +285,10 @@ public:
 	// Consults PgSQL_Monitor::dns_lookup; returns the cached IP on a hit,
 	// empty std::string on a miss.  Used by connect_start() to set
 	// `hostaddr=<ip>` in the libpq conninfo so PQconnectStart skips
-	// getaddrinfo and doesn't block the worker thread on DNS.
-	std::string connect_start_DNS_lookup();
+	// getaddrinfo and doesn't block the worker thread on DNS.  `all_ips`, if
+	// given, receives every cached IP starting at the returned one, so that a
+	// connect refused on one of them can move on to the others (#6432).
+	std::string connect_start_DNS_lookup(std::vector<std::string>* all_ips = nullptr);
 	void query_start();
 	void query_cont(short event);
 	void fetch_result_start();

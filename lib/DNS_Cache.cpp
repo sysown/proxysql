@@ -308,16 +308,25 @@ bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::s
 * @brief Next round-robin IP for 'ip_addr' and the size of the served set.
 *
 * @param ip_addr Cache record to select from.
+* @param all_ips If not null, filled with every resolved IP, starting at the selected one.
 *
 * @return Selected resolved IP details plus current pin metadata.
 */
-DNS_Cache::lookup_result_t DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const {
+DNS_Cache::lookup_result_t DNS_Cache::get_next_ip(const IP_ADDR& ip_addr, std::vector<std::string>* all_ips) const {
 	lookup_result_t result;
 
 	if (!ip_addr.ips.empty()) {
 		const auto counter_val = __sync_fetch_and_add(&ip_addr.counter, 1);
 		result.ip_count = ip_addr.ips.size();
-		result.resolved_ip = ip_addr.ips[counter_val % result.ip_count];
+		const size_t first = counter_val % result.ip_count;
+		result.resolved_ip = ip_addr.ips[first];
+		if (all_ips) {
+			// Rotated rather than in cache order, so a caller that walks the list on connect
+			// failures still spreads its first attempts the way the round-robin does.
+			all_ips->reserve(result.ip_count);
+			for (size_t i = 0; i < result.ip_count; i++)
+				all_ips->push_back(ip_addr.ips[(first + i) % result.ip_count]);
+		}
 	}
 
 	result.pinned_ip = ip_addr.pinned_ip;
@@ -326,7 +335,10 @@ DNS_Cache::lookup_result_t DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const 
 	return result;
 }
 
-std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) {
+std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count,
+	std::vector<std::string>* all_ips) {
+	if (all_ips)
+		all_ips->clear();
 	if (!enabled) {
 		if (ip_count)
 			*ip_count = 0;
@@ -344,7 +356,7 @@ std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) {
 	auto itr = records.find(hostname);
 
 	if (itr != records.end()) {
-		lookup_result_t result = get_next_ip(itr->second);
+		lookup_result_t result = get_next_ip(itr->second, all_ips);
 
 		const unsigned long long now = monotonic_time();
 		const bool pin_active = !result.pinned_ip.empty()
@@ -356,6 +368,8 @@ std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) {
 			ip = result.pinned_ip;
 			if (ip_count)
 				*ip_count = 1;
+			if (all_ips)
+				all_ips->assign(1, ip);
 		} else {
 			ip = result.resolved_ip;
 			if (ip_count)
