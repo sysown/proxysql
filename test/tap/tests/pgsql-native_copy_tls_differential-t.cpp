@@ -175,7 +175,7 @@ static const char* COPY_OUT_SQL =
 static const char* COPY_IN_PAYLOAD = "1\tone\n2\ttwo\n3\tthree\n";
 
 int main(int argc, char** argv) {
-	plan(15);
+	plan(16);
 
 	if (cl.getEnv())
 		return exit_status();
@@ -262,6 +262,37 @@ int main(int argc, char** argv) {
 		}
 	}
 	ok(native_second_copy_ok, "native: two COPYs on one session, then a query, all succeed");
+
+	// A failing COPY ends with the backend's error while the client may still be sending its
+	// CopyData and CopyDone. When those reached ProxySQL together with the error, they went out
+	// after the TLS was handed back, unencrypted, and the backend dropped the connection. Inside
+	// a transaction the session keeps that connection, so the ROLLBACK is what fails. It is a
+	// race, hence the rounds.
+	const int copy_error_rounds = 200;
+	int copy_error_done = 0;
+	{
+		auto client = open_client_conn();
+		const std::string copy_freeze = "COPY " + TBL + " FROM STDIN FREEZE";
+		for (int i = 0; i < copy_error_rounds && PQstatus(client.get()) == CONNECTION_OK; i++) {
+			if (!execSQL(client.get(), "BEGIN")) break;
+			PGresult* res = PQexec(client.get(), copy_freeze.c_str());
+			if (PQresultStatus(res) == PGRES_COPY_IN) {
+				PQputCopyData(client.get(), "1\tone\n", 6);
+				PQputCopyEnd(client.get(), nullptr);
+				PQclear(res);
+				res = PQgetResult(client.get());
+			}
+			const bool copy_failed = (PQresultStatus(res) == PGRES_FATAL_ERROR);
+			if (!copy_failed) diag("round %d: COPY FREEZE did not fail: %s", i, PQresStatus(PQresultStatus(res)));
+			PQclear(res);
+			while ((res = PQgetResult(client.get())) != nullptr) PQclear(res);
+			if (!copy_failed || !execSQL(client.get(), "ROLLBACK")) break;
+			copy_error_done++;
+		}
+	}
+	ok(copy_error_done == copy_error_rounds,
+		"native: %d of %d COPYs failing inside a transaction were followed by a working ROLLBACK",
+		copy_error_done, copy_error_rounds);
 
 	// Large enough to need many write cycles, so a partial write leaves buffered
 	// ciphertext rather than completing in one go.

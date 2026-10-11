@@ -7289,6 +7289,18 @@ void PgSQL_Session::switch_fast_forward_to_normal_mode() {
 		session_fast_forward = SESSION_FORWARD_TYPE_NONE;
 		PgSQL_Data_Stream* myds = mybe->server_myds;
 		PgSQL_Connection* myconn = myds->myconn;
+		// The backend has ended the COPY, so it ignores any client COPY message still queued for
+		// it, such as a CopyDone that arrived with its error. Sent after the TLS is given back,
+		// that message goes out unencrypted and the backend drops the connection. Discard them,
+		// as normal mode discards the ones that arrive later.
+		PtrSizeArray* out = myds->PSarrayOUT;
+		unsigned int n = 0;
+		for (; n < out->len; n++) {
+			const char type = *(const char*)out->index(n)->ptr;
+			if (type != 'd' && type != 'c' && type != 'f') break;
+			l_free(out->index(n)->size, out->index(n)->ptr);
+		}
+		out->remove_index_range(0, n);
 		// Give the borrowed TLS back before the session uses the connection again or
 		// it is pooled, or the next query on it never reaches the backend.
 		myds->release_backend_tls();
