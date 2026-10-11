@@ -3348,3 +3348,43 @@ bool pgsql_stmt_first_keyword_is(const char* text, const char* keyword) {
 	const char c = text[klen];
 	return !(isalnum((unsigned char)c) || c == '_' || c == '$');
 }
+
+const char* pgsql_digest_next_stmt(const char* stmt) {
+	if (stmt == NULL) return NULL;
+	const char* p = stmt;
+	while ((p = strpbrk(p, ";\"'/")) != NULL) {
+		const char c = *p;
+		if (c == ';') {
+			p++;
+			while (isspace((unsigned char)*p)) p++;
+			return (*p != '\0') ? p : NULL;
+		}
+		if (c == '/') {
+			// Only a block comment hides a ';', and only with query_digests_keep_comment.
+			// PostgreSQL nests them, so the depth is tracked.
+			if (p[1] != '*') { p++; continue; }
+			int depth = 1;
+			p += 2;
+			while (depth > 0 && *p != '\0') {
+				if (p[0] == '/' && p[1] == '*') { depth++; p += 2; }
+				else if (p[0] == '*' && p[1] == '/') { depth--; p += 2; }
+				else p++;
+			}
+			if (depth > 0) return NULL;
+			continue;
+		}
+		// A quoted identifier (kept by the digest) or a literal: a doubled quote inside it
+		// simply closes it and opens another, which the next round skips the same way.
+		const char* end = strchr(p + 1, c);
+		if (end == NULL) return NULL;
+		p = end + 1;
+	}
+	return NULL;
+}
+
+bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword) {
+	for (const char* s = digest; s != NULL; s = pgsql_digest_next_stmt(s)) {
+		if (pgsql_stmt_first_keyword_is(s, keyword)) return true;
+	}
+	return false;
+}

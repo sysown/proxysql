@@ -2557,9 +2557,14 @@ __implicit_sync:
 								// spelling of LISTEN in the raw bytes. The digest exists now.
 								// Recomputed per statement: left set, it would refuse an unrelated
 								// query that later lands on a libpq connection.
+								// Every statement of the digest is checked, as a Simple Query can
+								// carry several and `SELECT 1; LISTEN ch` subscribes too (issue
+								// #6438). Without a digest only the first keyword of the raw text is
+								// trusted: comments and literals there can hold any ';'.
 								const char* listen_dg = CurrentQuery.get_digest_text();
-								listen_pending = pgsql_stmt_first_keyword_is(
-									(listen_dg && *listen_dg) ? listen_dg : query_ptr, "LISTEN");
+								listen_pending = (listen_dg && *listen_dg) ?
+									pgsql_digest_has_stmt_keyword(listen_dg, "LISTEN") :
+									pgsql_stmt_first_keyword_is(query_ptr, "LISTEN");
 								if (listen_pending && listen_can_be_supported() == false) {
 									listen_pending = false;
 									handler_refuse_listen(&pkt);

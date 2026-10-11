@@ -56,6 +56,17 @@ char* pgsql_query_digest_and_first_comment(const char* const q, int q_len, char*
 // abutting it still matches, while a longer word starting with the keyword does not.
 bool pgsql_stmt_first_keyword_is(const char* text, const char* keyword);
 
+// Start of the statement after the one `stmt` points into, in a query digest holding a
+// multi-statement Simple Query, or NULL when there is none. Leading spaces are skipped.
+// The digest has already turned string literals into '?', but quoted identifiers and (with
+// query_digests_keep_comment) block comments survive, so a ';' inside them is not a boundary.
+const char* pgsql_digest_next_stmt(const char* stmt);
+
+// True when any statement of `digest` begins with `keyword`, by the same rule as
+// pgsql_stmt_first_keyword_is(). A Simple Query can carry several statements, and checking
+// only the first lets `SELECT 1; LISTEN ch` through (issue #6438).
+bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword);
+
 // For TAP Test
 char* mysql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);
 char* mysql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);

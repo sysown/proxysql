@@ -3614,6 +3614,15 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				native_result_had_notification = true;
 			}
 
+			// A LISTEN that ran is pinned from its CommandComplete tag as well as from the
+			// digest: the tag is there whatever the query looked like, including when
+			// pgsql-query_digests is off and there is no digest to inspect (issue #6438).
+			// Set before ReadyForQuery, so a notification later in this same reply is kept.
+			if (msg.type == 'C' && msg.payload_len == sizeof("LISTEN") &&
+				memcmp(msg.payload, "LISTEN", sizeof("LISTEN")) == 0) {
+				set_status(true, STATUS_PGSQL_CONNECTION_LISTEN);
+			}
+
 			// --- Extended-query (prepared-statement) drain (Task C) ---
 			// When driving a Parse/Describe/Execute step, apply the per-step
 			// ack-filtering + terminator rules. native_stmt_step == NONE means a plain
@@ -5534,23 +5543,23 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 	// UNLISTEN <channel> ProxySQL cannot know whether any subscription remains, and
 	// unpinning while one does sends the next notification to the wrong client.
 	// DISCARD ALL is the other way out, and it clears every flag through reset().
-	// A subscription lives on this connection, so the connection has to stay with the
-	// session that made it: pooled, it would hand notifications to whoever holds it next.
-	// Only UNLISTEN * clears the flag, since individual channels are not tracked and
-	// unpinning while one remains sends the next notification to the wrong client.
-	// DISCARD ALL is the other way out, through reset().
-	if (get_status(STATUS_PGSQL_CONNECTION_LISTEN) == false) {
-		if (pgsql_stmt_first_keyword_is(query_digest_text, "LISTEN")) {
-			set_status(true, STATUS_PGSQL_CONNECTION_LISTEN);
+	// A Simple Query can carry several statements, so each one is looked at and the last
+	// LISTEN or UNLISTEN * decides: `SELECT 1; LISTEN ch` pins, `UNLISTEN *; LISTEN ch`
+	// stays pinned, and `LISTEN ch; UNLISTEN *` leaves nothing subscribed (issue #6438).
+	{
+		bool listening = get_status(STATUS_PGSQL_CONNECTION_LISTEN);
+		for (const char* stmt = query_digest_text; stmt != NULL; stmt = pgsql_digest_next_stmt(stmt)) {
+			if (pgsql_stmt_first_keyword_is(stmt, "LISTEN")) {
+				listening = true;
+			} else if (listening && pgsql_stmt_first_keyword_is(stmt, "UNLISTEN")) {
+				// The star may abut the keyword: UNLISTEN* is valid and the digest keeps it
+				// joined, so a compare against "UNLISTEN " would leave the connection pinned.
+				const char* p = stmt + sizeof("UNLISTEN") - 1;
+				while (*p == ' ') p++;
+				if (*p == '*') listening = false;
+			}
 		}
-	} else {
-		// The star may abut the keyword: UNLISTEN* is valid and the digest keeps it joined,
-		// so a compare against "UNLISTEN " would leave the connection pinned for good.
-		if (pgsql_stmt_first_keyword_is(query_digest_text, "UNLISTEN")) {
-			const char* p = query_digest_text + sizeof("UNLISTEN") - 1;
-			while (*p == ' ') p++;
-			if (*p == '*') set_status(false, STATUS_PGSQL_CONNECTION_LISTEN);
-		}
+		set_status(listening, STATUS_PGSQL_CONNECTION_LISTEN);
 	}
 
 	// CREATE SEQUENCE vs CREATE TEMP SEQUENCE:
