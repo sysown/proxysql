@@ -631,6 +631,26 @@ static char is_digit_string_2(shared_st* shared_st, char *f, char *t)
 }
 
 /**
+ * @brief Allocates the first-comment buffer when the first byte of it is about to be stored.
+ * @details On allocation failure the first comment is not collected: 'fst_cmnt_end' is set,
+ *   so no later byte tries again, and the digest itself is unaffected.
+ * @return True when '*fst_cmnt' points to a buffer of FIRST_COMMENT_MAX_LENGTH bytes.
+ */
+static __attribute__((always_inline)) inline
+bool fst_cmnt_buf_ready(cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
+	if (*fst_cmnt == NULL) {
+		*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
+		if (*fst_cmnt == NULL) {
+			c_t_1_st->fst_cmnt_end = 1;
+			return false;
+		}
+		// set a final NULL terminator for safety
+		*(*fst_cmnt + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
+	}
+	return true;
+}
+
+/**
  * @brief Records one character of a "/\* *\/" comment: into 'cur_cmd_cmnt' when comments are kept,
  *   and into the first comment while that one is still being collected. Both are bounded.
  */
@@ -646,12 +666,8 @@ void copy_cmnt_type_1_char(const options* opts, cmnt_type_1_st* c_t_1_st, char**
 
 	// first comment hasn't finished, we are yet copying it
 	if (c_t_1_st->fst_cmnt_end == 0 &&
-		c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
-		if (*fst_cmnt == NULL) {
-			// initialize the 'first_comment' and set a final NULL terminator for safety
-			*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
-			*(*fst_cmnt + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
-		}
+		c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1 &&
+		fst_cmnt_buf_ready(c_t_1_st, fst_cmnt)) {
 		char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
 		*next_fst_cmnt_char = !is_space_char(c) ? c : ' ';
 		c_t_1_st->fst_cmnt_len++;
@@ -699,12 +715,9 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 		}
 
 		if (c_t_1_st->fst_cmnt_end == 0 && c_t_1_st->nest_level > 1 &&
-			c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 2) {
+			c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 2 &&
 			// "/*/*" opens the nested comment before any byte of the outer one was collected
-			if (*fst_cmnt == NULL) {
-				*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
-				*(*fst_cmnt + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
-			}
+			fst_cmnt_buf_ready(c_t_1_st, fst_cmnt)) {
 			char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
 			*next_fst_cmnt_char = *(shared_st->q);
 			next_fst_cmnt_char++;
