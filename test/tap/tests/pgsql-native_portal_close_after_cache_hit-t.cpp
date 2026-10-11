@@ -120,22 +120,25 @@ static long long statVal(PGconn* admin, const char* name) {
 static long long cacheHits(PGconn* admin) { return statVal(admin, "Query_Cache_count_GET_OK"); }
 static long long uptime(PGconn* admin) { return statVal(admin, "ProxySQL_Uptime"); }
 
-struct ServerRow { std::string hostname, port, max_connections, use_ssl, comment; };
-
-static std::vector<ServerRow> readServers(PGconn* admin, int hg) {
-	std::vector<ServerRow> rows;
+// The hostgroup's servers, as INSERT statements recreating every column of each row,
+// so a restore cannot bring an OFFLINE server back or reset weight, use_ssl, etc.
+static std::vector<std::string> readServers(PGconn* admin, int hg) {
+	std::vector<std::string> rows;
 	PGresult* res = PQexec(admin,
-	    ("SELECT hostname, port, max_connections, use_ssl, comment FROM pgsql_servers "
-	     "WHERE hostgroup_id=" + std::to_string(hg)).c_str());
+	    ("SELECT * FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg)).c_str());
 	if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+		std::string cols;
+		for (int c = 0; c < PQnfields(res); c++) cols += std::string(c ? "," : "") + PQfname(res, c);
 		for (int i = 0; i < PQntuples(res); i++) {
-			ServerRow r;
-			r.hostname = PQgetvalue(res, i, 0);
-			r.port = PQgetvalue(res, i, 1);
-			r.max_connections = PQgetvalue(res, i, 2);
-			r.use_ssl = PQgetvalue(res, i, 3);
-			r.comment = PQgetisnull(res, i, 4) ? "" : PQgetvalue(res, i, 4);
-			rows.push_back(std::move(r));
+			std::string ins = "INSERT INTO pgsql_servers (" + cols + ") VALUES (";
+			for (int c = 0; c < PQnfields(res); c++) {
+				if (c) ins += ",";
+				if (PQgetisnull(res, i, c)) { ins += "NULL"; continue; }
+				ins += "'";
+				for (const char* v = PQgetvalue(res, i, c); *v; v++) ins += (*v == '\'') ? "''" : std::string(1, *v);
+				ins += "'";
+			}
+			rows.push_back(ins + ")");
 		}
 	}
 	PQclear(res);
@@ -144,15 +147,11 @@ static std::vector<ServerRow> readServers(PGconn* admin, int hg) {
 
 // Drop + re-add the backend servers so the pool is recreated in the CURRENT
 // (native) mode. Same trick as pgsql-native_portals-t::flushBackendPool.
-static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>& saved) {
+static bool flushBackendPool(PGconn* admin, int hg, const std::vector<std::string>& saved) {
 	if (saved.empty()) return false;
 	if (!execAdmin(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg))) return false;
 	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
-	for (const auto& r : saved) {
-		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment) VALUES ("
-			+ std::to_string(hg) + ",'" + r.hostname + "'," + r.port + ","
-			+ (r.max_connections.empty() ? std::string("1000") : r.max_connections) + ","
-			+ (r.use_ssl.empty() ? std::string("0") : r.use_ssl) + ",'" + r.comment + "')";
+	for (const auto& ins : saved) {
 		if (!execAdmin(admin, ins)) return false;
 	}
 	if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
@@ -174,7 +173,7 @@ struct SavedState {
 	std::string auth_method;      // pgsql-authentication_method
 	std::string native_mode;      // pgsql-use_native_backend_protocol
 	std::string txn_persistent;   // pgsql_users.transaction_persistent (root user)
-	std::vector<ServerRow> servers;
+	std::vector<std::string> servers; // INSERTs recreating the full rows
 	bool changed_auth = false, changed_native = false, changed_users = false, added_rule = false;
 	bool restored = false;
 };
@@ -490,6 +489,13 @@ int main(int /*argc*/, char** /*argv*/) {
 		execAdmin(admin, "SET pgsql-use_native_backend_protocol='true'") &&
 		execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME") &&
 		flushBackendPool(admin, BACKEND_HG, g_saved.servers);
+	if (setup_ok && adminScalar(admin, "SELECT COUNT(*) FROM pgsql_query_rules WHERE rule_id=" +
+		std::to_string(RULE_ID)) != "0") {
+		// The rule id is dedicated to this test; do not delete someone else's rule.
+		restoreAll();
+		BAIL_OUT("pgsql_query_rules already has rule_id=%d; refusing to overwrite it", RULE_ID);
+		return exit_status();
+	}
 	if (setup_ok) {
 		g_saved.added_rule = true;
 		setup_ok =

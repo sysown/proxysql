@@ -32,6 +32,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -213,12 +214,28 @@ static void check_stale_events() {
 	int dead = bound(AF_INET, "127.0.0.1", false, &dead_port);
 	int full = bound(AF_INET, "127.0.0.1", false, &full_port);
 	if (dead < 0 || full < 0 || listen(full, 0) != 0) BAIL_OUT("could not set up listeners");
-	// A backlog of 0 holds one connection. Fill it, and the SYN of the next connect is dropped,
-	// which keeps that connect in progress.
-	int filler = socket(AF_INET, SOCK_STREAM, 0);
+	// A backlog of 0 holds one connection on Linux. Fill it, and the SYN of the next connect is
+	// dropped, which keeps that connect in progress. The filler connects without blocking and is
+	// given a bounded time: where the queue admits nothing, these checks are skipped rather than
+	// left hanging.
+	int filler = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
 	auto fa = addr(AF_INET, "127.0.0.1", full_port);
-	if (filler < 0 || connect(filler, reinterpret_cast<sockaddr*>(&fa.first), fa.second) != 0)
-		BAIL_OUT("could not fill the accept queue");
+	bool filled = false;
+	if (filler >= 0 && (connect(filler, reinterpret_cast<sockaddr*>(&fa.first), fa.second) == 0 ||
+		errno == EINPROGRESS)) {
+		struct pollfd pf { filler, POLLOUT, 0 };
+		int so_err = -1;
+		socklen_t so_len = sizeof(so_err);
+		filled = poll(&pf, 1, 2000) > 0 &&
+			getsockopt(filler, SOL_SOCKET, SO_ERROR, &so_err, &so_len) == 0 && so_err == 0;
+	}
+	if (!filled) {
+		skip(2, "stale events: could not fill the accept queue of a zero-backlog listener");
+		if (filler >= 0) close(filler);
+		close(full);
+		close(dead);
+		return;
+	}
 
 	Conn* c = make_conn("fallback.test", full_port);
 	bool started = start_on(c, { addr(AF_INET, "127.0.0.1", dead_port), fa });

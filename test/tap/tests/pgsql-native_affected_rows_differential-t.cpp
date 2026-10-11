@@ -297,7 +297,7 @@ int main(int argc, char** argv) {
 	const std::string table = "t6435_" + std::to_string(getpid());
 	const std::vector<Batch> batches = makeBatches(table);
 
-	plan(1 + 2 * TESTS_PER_PHASE + (int)batches.size());
+	plan(1 + 2 * TESTS_PER_PHASE + (int)batches.size() + 1); // + restore
 
 	auto admin = createAdminConn();
 	if (PQstatus(admin.get()) != CONNECTION_OK) {
@@ -353,12 +353,16 @@ int main(int argc, char** argv) {
 	}
 
 	// Restore the original runtime state, with a pool built under the original mode.
-	execAdmin(admin.get(), "SET pgsql-use_native_backend_protocol='" + orig_native + "'");
-	execAdmin(admin.get(), "SET pgsql-eventslog_buffer_history_size='" + orig_history + "'");
-	execAdmin(admin.get(), "SET pgsql-eventslog_default_log='" + orig_default_log + "'");
-	execAdmin(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
-	if (!servers.empty() && !flushBackendPool(admin.get(), hg, servers))
+	// A failed restore leaves shared ProxySQL state changed for later tests: fail on it.
+	const bool vars_restored =
+		execAdmin(admin.get(), "SET pgsql-use_native_backend_protocol='" + orig_native + "'") &&
+		execAdmin(admin.get(), "SET pgsql-eventslog_buffer_history_size='" + orig_history + "'") &&
+		execAdmin(admin.get(), "SET pgsql-eventslog_default_log='" + orig_default_log + "'") &&
+		execAdmin(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+	const bool servers_restored = servers.empty() || flushBackendPool(admin.get(), hg, servers) ||
 		restoreServers(admin.get(), hg, servers);
+	ok(vars_restored && servers_restored, "original pgsql variables and hostgroup %d servers restored "
+	   "(variables %s, servers %s)", hg, vars_restored ? "ok" : "FAILED", servers_restored ? "ok" : "FAILED");
 	{
 		auto c = createClientConn();
 		if (PQstatus(c.get()) == CONNECTION_OK) execClient(c.get(), "DROP TABLE IF EXISTS " + table);

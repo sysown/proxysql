@@ -126,10 +126,13 @@ int main() {
 		"SELECT port FROM runtime_pgsql_servers ORDER BY hostgroup_id LIMIT 1");
 	if (host.empty())
 		BAIL_OUT("no pgsql backend configured");
-	query(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id IN (" + std::to_string(WRITER_HG) +
-					 "," + std::to_string(READER_HG) + ")");
-	query(admin, "DELETE FROM pgsql_replication_hostgroups WHERE writer_hostgroup=" +
-					 std::to_string(WRITER_HG));
+	// The test hostgroups are dedicated to it: refuse to run rather than delete
+	// configuration someone else put there (cleanup removes them unconditionally).
+	const std::string hgs = std::to_string(WRITER_HG) + "," + std::to_string(READER_HG);
+	if (query(admin, "SELECT COUNT(*) FROM pgsql_servers WHERE hostgroup_id IN (" + hgs + ")") != "0" ||
+		query(admin, "SELECT COUNT(*) FROM pgsql_replication_hostgroups WHERE writer_hostgroup IN (" + hgs +
+					 ") OR reader_hostgroup IN (" + hgs + ")") != "0")
+		BAIL_OUT("hostgroups %s are already configured; refusing to overwrite them", hgs.c_str());
 	query(admin, "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_replication_lag) VALUES (" +
 					 std::to_string(WRITER_HG) + ",'" + host + "'," + srv_port + ",3600)");
 	query(admin, "INSERT INTO pgsql_replication_hostgroups (writer_hostgroup,reader_hostgroup,comment) "

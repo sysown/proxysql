@@ -17,8 +17,9 @@
  *     destruction, whose client must still be told why;
  *   - native_result_aborted, which ends the handler's fetch early, is set by
  *     native_result_fatal() and native_result_protocol_violation() but NOT by an
- *     ordinary ErrorResponse, and is cleared, with native_fetch_paused, at each step
- *     start and by async_free_result().
+ *     ordinary ErrorResponse -- an 'E' driven through the native result drain still
+ *     reaches its ReadyForQuery. It is cleared at each query and step start, together
+ *     with native_fetch_paused; async_free_result() clears native_fetch_paused only.
  */
 
 #include "tap.h"
@@ -26,6 +27,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Connection.h"
+#include "PgSQL_Protocol.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -115,6 +117,29 @@ static void test_error_response_does_not_abort_the_cycle() {
 	destroy(c);
 }
 
+// The same through the drain itself: the 'E' is recorded and the drain goes on to the
+// 'Z' that ends the cycle.
+static void test_error_response_drains_to_ready_for_query() {
+	PgSQL_Connection* c = make_live_native_conn();
+	// The result is not tied to the connection: that would also count the error against the
+	// connection's server, which a fabricated connection has none of. The error is recorded
+	// on the connection the way the result would record it.
+	c->query_result = new PgSQL_Query_Result();
+	c->query_result->clear(); // the inline buffer, without init()'s ties to a connection
+	static const char e[] = "SERROR\0" "C22P02\0" "Minvalid input syntax for type integer\0";
+	c->native_fill_error_from_E((const unsigned char*)e, (uint32_t)sizeof(e));
+	feed(c, backend_msg('E', std::string(e, sizeof(e))) + backend_msg('Z', "I"));
+	// Only what is already framed is drained, so the (dummy) socket is never read.
+	c->native_fetch_paused = true;
+	c->native_fetch_result_cont(0, nullptr);
+	ok(c->is_error_present() && c->native_result_aborted == false && c->native_result_complete &&
+	   c->native_framer.empty(),
+	   "an ErrorResponse in the native drain is recorded, and the drain reaches its ReadyForQuery "
+	   "[error=%d aborted=%d complete=%d framer_empty=%d]", (int)c->is_error_present(),
+	   (int)c->native_result_aborted, (int)c->native_result_complete, (int)c->native_framer.empty());
+	destroy(c); // also deletes query_result
+}
+
 static void test_fatal_and_violation_abort_the_cycle() {
 	PgSQL_Connection* c = make_live_native_conn();
 	c->native_result_fatal("08006", "backend closed during result fetch");
@@ -153,7 +178,7 @@ static void test_flags_cleared_at_step_start_and_free() {
 }
 
 int main() {
-	plan(11);
+	plan(12);
 	test_init_minimal();
 
 	test_clean_conn_is_reusable();                  // 1
@@ -161,6 +186,7 @@ int main() {
 	test_unread_framer_is_not_reusable();           // 1
 	test_listen_conn_keeps_buffered_notification(); // 2
 	test_error_response_does_not_abort_the_cycle(); // 1
+	test_error_response_drains_to_ready_for_query(); // 1
 	test_fatal_and_violation_abort_the_cycle();     // 3
 	test_flags_cleared_at_step_start_and_free();    // 2
 

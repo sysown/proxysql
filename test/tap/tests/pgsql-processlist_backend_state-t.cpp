@@ -167,8 +167,12 @@ static bool flushBackendPool(PGconn* admin, int hg, const std::vector<std::strin
 	diag("flushBackendPool: hostgroup %d before flush ConnUsed=%d ConnFree=%d", hg,
 	     poolCount(admin, hg, "ConnUsed"), poolCount(admin, hg, "ConnFree"));
 	for (int attempt = 0; attempt < 3; attempt++) {
-		if (!waitUntil([&]() { return poolCount(admin, hg, "ConnUsed") == 0; }, 10000))
+		// Those would survive the flush anyway, so do not remove the servers under the
+		// clients still using them.
+		if (!waitUntil([&]() { return poolCount(admin, hg, "ConnUsed") == 0; }, 10000)) {
 			diag("flushBackendPool: hostgroup %d still has connections in use", hg);
+			return false;
+		}
 		if (!execAdmin(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg))) return false;
 		if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
 		if (!restoreServers(admin, hg, inserts)) return false;

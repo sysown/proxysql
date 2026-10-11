@@ -31,9 +31,9 @@
  * its connection destroyed on the way back to the pool for an unrelated reason.
  *
  * NOTE: phase 1 disables pgsql-monitor_enabled, because monitor probes would
- * connect to the mock and consume script steps. The harness reloads variables from
- * disk before every test, but the monitor thread does not come back until ProxySQL
- * restarts. Phase 1 also raises pgsql-free_connections_pct to 100: with
+ * connect to the mock and consume script steps, and puts the saved value back when
+ * it is done: the monitor scheduler thread stays alive while disabled and resumes
+ * its checks once the variable is loaded as true again. Phase 1 also raises pgsql-free_connections_pct to 100: with
  * max_connections=1 the default 10% allows no free connection at all, and the pool
  * maintenance would drop the parked connection before the query could draw it.
  */
@@ -172,6 +172,9 @@ static int killProxiedBackends(PGconn* backend, int* left) {
 // ------------------------------------------------------------------ phase 1
 
 static void phase1_rst_while_pooled(PGconn* admin) {
+    std::string monitor_enabled = scalar(admin,
+        "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-monitor_enabled'");
+    if (monitor_enabled.empty()) monitor_enabled = "true";
     if (!setVar(admin, "pgsql-monitor_enabled", "false"))
         BAIL_OUT("cannot disable the monitor for the mock phase");
     std::string free_pct = scalar(admin,
@@ -278,6 +281,9 @@ static void phase1_rst_while_pooled(PGconn* admin) {
     execOk(admin, std::string("DELETE FROM pgsql_users WHERE username='") + MOCK_USER + "'");
     execOk(admin, "LOAD PGSQL USERS TO RUNTIME");
     setVar(admin, "pgsql-free_connections_pct", free_pct.c_str());
+    // Later tests sharing this ProxySQL rely on PgSQL monitoring.
+    if (!setVar(admin, "pgsql-monitor_enabled", monitor_enabled.c_str()))
+        diag("phase 1: could not restore pgsql-monitor_enabled='%s'", monitor_enabled.c_str());
     mock.stop();
 }
 

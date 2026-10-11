@@ -464,7 +464,9 @@ static std::vector<std::string> snapshotServers(PGconn* admin, int hg) {
     return inserts;
 }
 
-// Puts the hostgroup's servers back as 'inserts', optionally capped at one connection.
+// Puts the hostgroup's servers back as 'inserts', or with 'single_conn' only the first of
+// them, capped at one connection: max_connections is per server, so with a second endpoint
+// client B could reach another backend and pass without ever reusing A's connection.
 // Removing them first closes every pooled connection, so the cap holds from here on.
 static bool reloadServers(PGconn* admin, int hg, const std::vector<std::string>& inserts, bool single_conn) {
     const std::string hg_s = std::to_string(hg);
@@ -472,6 +474,7 @@ static bool reloadServers(PGconn* admin, int hg, const std::vector<std::string>&
     if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
     for (const auto& q : inserts) {
         if (!execAdmin(admin, q)) return false;
+        if (single_conn) break;
     }
     if (single_conn &&
         !execAdmin(admin, "UPDATE pgsql_servers SET max_connections=1 WHERE hostgroup_id=" + hg_s)) {
@@ -523,10 +526,11 @@ static void test_untracked_set_does_not_leak() {
     if (!capped) {
         skip(untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE,
             "cannot limit hostgroup %d to one backend connection", hg);
-        if (!servers.empty()) reloadServers(admin.get(), hg, servers, false);
+        const bool restored = servers.empty() || reloadServers(admin.get(), hg, servers, false);
+        ok(restored, "servers of hostgroup %d restored", hg);
         return;
     }
-    diag("hostgroup %d limited to one backend connection", hg);
+    diag("hostgroup %d limited to one server and one backend connection", hg);
 
     for (const auto& c : untracked_set_cases) {
         std::string a_pid;
@@ -561,13 +565,11 @@ static void test_untracked_set_does_not_leak() {
             c.name.c_str(), value.c_str(), c.leaked.c_str(), a_pid.c_str(), b_pid.c_str());
     }
 
-    if (!reloadServers(admin.get(), hg, servers, false)) {
-        diag("failed to restore the servers of hostgroup %d", hg);
-    }
+    ok(reloadServers(admin.get(), hg, servers, false), "servers of hostgroup %d restored", hg);
 }
 
 int main(int argc, char** argv) {
-    int total_tests = 2 + untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE;
+    int total_tests = 2 + untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE + 1; // + servers restored
 
 	for (const auto& test_case : test_cases) {
 		total_tests += test_case.commands.size();
