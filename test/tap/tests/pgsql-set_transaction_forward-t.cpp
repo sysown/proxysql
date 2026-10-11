@@ -189,6 +189,7 @@ static const std::vector<const char*> locking_cases = {
 static const int LOCKING_TESTS = 2;
 
 static const int ROUTING_TESTS = 3;
+static const int ROUTE_SETUP_TESTS = 2;
 
 static int tests_per_mode() {
 	return in_txn_cases.size() * IN_TXN_TESTS + out_of_txn_cases.size() * OUT_OF_TXN_TESTS +
@@ -201,29 +202,85 @@ static const int ROUTE_RULE_ID = 6446;
 static const char* ROUTED_QUERY = "SELECT 'settx_route_6446'";
 static int route_hg = -1;
 
-static bool setup_route_rule() {
+// A rule the configuration already had under ROUTE_RULE_ID, kept as an INSERT recreating
+// every column (quotes doubled, NULLs kept) and put back by cleanup_route_rule().
+static std::vector<std::string> saved_rule_rows {};
+// True once saved_rule_rows holds what was there: only then may cleanup touch the rule.
+static bool rule_saved = false;
+
+static std::vector<std::string> read_rule_rows(int rule_id, bool* ok_) {
+	std::vector<std::string> rows;
+	*ok_ = false;
+	if (mysql_query(admin, ("SELECT * FROM pgsql_query_rules WHERE rule_id=" + std::to_string(rule_id)).c_str())) {
+		diag("Admin query failed: reading rule %d: %s", rule_id, mysql_error(admin));
+		return rows;
+	}
+	MYSQL_RES* r = mysql_store_result(admin);
+	if (!r) {
+		diag("Admin query failed: reading rule %d: %s", rule_id, mysql_error(admin));
+		return rows;
+	}
+	const unsigned int n = mysql_num_fields(r);
+	MYSQL_FIELD* fields = mysql_fetch_fields(r);
+	std::string cols;
+	for (unsigned int c = 0; c < n; c++) cols += std::string(c ? "," : "") + fields[c].name;
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(r))) {
+		std::string ins = "INSERT INTO pgsql_query_rules (" + cols + ") VALUES (";
+		for (unsigned int c = 0; c < n; c++) {
+			if (c) ins += ",";
+			if (row[c] == nullptr) { ins += "NULL"; continue; }
+			ins += "'";
+			for (const char* v = row[c]; *v; v++) ins += (*v == '\'') ? "''" : std::string(1, *v);
+			ins += "'";
+		}
+		rows.push_back(ins + ")");
+	}
+	mysql_free_result(r);
+	*ok_ = true;
+	return rows;
+}
+
+enum class RouteSetup { READY, NO_SECOND_HOSTGROUP, FAILED };
+
+static RouteSetup setup_route_rule() {
 	const std::string def_hg = admin_scalar("SELECT default_hostgroup FROM runtime_pgsql_users WHERE username='" +
 		std::string(cl.pgsql_root_username) + "' LIMIT 1");
-	if (def_hg.empty()) return false;
+	if (def_hg.empty()) {
+		diag("route setup: no runtime_pgsql_users row for '%s'", cl.pgsql_root_username);
+		return RouteSetup::FAILED;
+	}
 	const std::string other = admin_scalar("SELECT hostgroup_id FROM runtime_pgsql_servers WHERE status='ONLINE' "
 		"AND hostgroup_id<>" + def_hg + " ORDER BY hostgroup_id LIMIT 1");
-	if (other.empty()) return false;
+	if (other.empty()) return RouteSetup::NO_SECOND_HOSTGROUP;
+	bool read_ok = false;
+	saved_rule_rows = read_rule_rows(ROUTE_RULE_ID, &read_ok);
+	if (!read_ok) return RouteSetup::FAILED;
+	rule_saved = true;
+	if (!saved_rule_rows.empty()) diag("route setup: rule %d already exists; it is restored at the end", ROUTE_RULE_ID);
 	route_hg = std::stoi(other);
 	diag("routing rule %d sends \"%s\" to hostgroup %d (default hostgroup %s)", ROUTE_RULE_ID, ROUTED_QUERY, route_hg, def_hg.c_str());
-	return admin_exec("DELETE FROM pgsql_query_rules WHERE rule_id=" + std::to_string(ROUTE_RULE_ID)) &&
+	const bool ok_ = admin_exec("DELETE FROM pgsql_query_rules WHERE rule_id=" + std::to_string(ROUTE_RULE_ID)) &&
 		admin_exec("INSERT INTO pgsql_query_rules (rule_id,active,match_pattern,destination_hostgroup,apply) VALUES (" +
 			std::to_string(ROUTE_RULE_ID) + ",1,'^SELECT ''settx_route_6446''$'," + other + ",1)") &&
 		admin_exec("LOAD PGSQL QUERY RULES TO RUNTIME");
+	return ok_ ? RouteSetup::READY : RouteSetup::FAILED;
 }
 
-static void cleanup_route_rule() {
-	admin_exec("DELETE FROM pgsql_query_rules WHERE rule_id=" + std::to_string(ROUTE_RULE_ID));
-	admin_exec("LOAD PGSQL QUERY RULES TO RUNTIME");
+// Puts back whatever rule ROUTE_RULE_ID was before the test, or none.
+static bool cleanup_route_rule() {
+	bool ok_ = admin_exec("DELETE FROM pgsql_query_rules WHERE rule_id=" + std::to_string(ROUTE_RULE_ID));
+	for (const auto& ins : saved_rule_rows) ok_ = admin_exec(ins) && ok_;
+	return admin_exec("LOAD PGSQL QUERY RULES TO RUNTIME") && ok_;
 }
 
-static void run_routing() {
-	if (route_hg < 0) {
+static void run_routing(RouteSetup setup) {
+	if (setup == RouteSetup::NO_SECOND_HOSTGROUP) {
 		skip(ROUTING_TESTS, "no second hostgroup to route to");
+		return;
+	}
+	if (setup == RouteSetup::FAILED) {
+		for (int i = 0; i < ROUTING_TESTS; i++) ok(false, "routing check not run: the routing rule could not be set up");
 		return;
 	}
 	{
@@ -323,7 +380,7 @@ int main(int, char**) {
 	if (cl.getEnv()) return exit_status();
 
 	const std::vector<int> modes = { 0, 1 };
-	plan(tests_per_mode() * modes.size());
+	plan(tests_per_mode() * modes.size() + ROUTE_SETUP_TESTS);
 
 	admin = mysql_init(NULL);
 	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
@@ -340,8 +397,12 @@ int main(int, char**) {
 		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-query_processor_parser'");
 	diag("pgsql-query_processor_parser was '%s'", orig_parser.c_str());
 
-	const bool have_route = setup_route_rule();
-	if (!have_route) route_hg = -1;
+	// Only a configuration without a second hostgroup skips the routing checks; a setup
+	// that fails is a failure, so they cannot silently not run.
+	const RouteSetup route_setup = setup_route_rule();
+	ok(route_setup != RouteSetup::FAILED, "routing rule %d set up (%s)", ROUTE_RULE_ID,
+		route_setup == RouteSetup::READY ? "ready" :
+		route_setup == RouteSetup::NO_SECOND_HOSTGROUP ? "no second hostgroup, routing checks skipped" : "failed");
 
 	for (int mode : modes) {
 		diag("=== pgsql-query_processor_parser=%d ===", mode);
@@ -356,12 +417,17 @@ int main(int, char**) {
 		for (const auto* s : out_of_txn_cases) run_out_of_txn(s);
 		run_snapshot();
 		for (const auto* s : locking_cases) run_locking(s);
-		run_routing();
+		run_routing(route_setup);
 
 		dump_digests();
 	}
 
-	if (have_route) cleanup_route_rule();
+	if (!rule_saved) {
+		skip(1, "rule %d was not touched", ROUTE_RULE_ID);
+	} else {
+		ok(cleanup_route_rule(), "rule %d restored to its state before the test (%zu row(s))",
+			ROUTE_RULE_ID, saved_rule_rows.size());
+	}
 	if (!orig_parser.empty()) {
 		admin_exec("SET pgsql-query_processor_parser=" + orig_parser);
 		admin_exec("LOAD PGSQL VARIABLES TO RUNTIME");
