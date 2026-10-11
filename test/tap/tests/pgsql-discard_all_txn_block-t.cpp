@@ -742,7 +742,19 @@ static const int STALE_CHECKS = 3;
 // KNOWN DIVERGENCE in the file header). What must hold is that the refusal is the
 // pipelined one -- client left idle and usable, nothing poisoned -- and that the
 // transaction ended exactly as it does on a direct connection.
-static std::vector<Msg> batchEndThenDiscard(PgConnection& c, const char* end_cmd) {
+//
+// With `lock_first`, a custom GUC first locks the session on its hostgroup. The tracker
+// is not fed while locked, so it never sees the COMMIT or ROLLBACK run mid-batch; it must
+// therefore not be opened from the backend's 'T' at the end of [BEGIN, Sync] either, or
+// the DISCARD ALL is refused as explicit (25001, 'E', poisoned) where v3.0.11 gave the
+// pipelined refusal with 'I'.
+static std::vector<Msg> batchEndThenDiscard(PgConnection& c, const char* end_cmd, bool lock_first) {
+    if (lock_first) {
+        c.execute("SET app.da_lock = '1'");
+        const auto lock = collect(c, 1);
+        if (!errorCodes(lock).empty() || lastReadyState(lock) != 'I')
+            throw std::runtime_error("cannot lock the session on its hostgroup");
+    }
     extStep(c, "be_begin", "BEGIN", false);
     c.sendSync();
     const auto begin = collect(c, 1);
@@ -758,7 +770,7 @@ static std::vector<Msg> batchEndThenDiscard(PgConnection& c, const char* end_cmd
     return collect(c, 1);
 }
 
-static void checkBatchEndThenDiscard(PGconn* admin, const char* end_cmd, const char* mode) {
+static void checkBatchEndThenDiscard(PGconn* admin, const char* end_cmd, bool lock_first, const char* mode) {
     bool ended = false, idle = false, usable = false, not_poisoned = false, same_rows = false;
     std::string detail;
     try {
@@ -768,14 +780,14 @@ static void checkBatchEndThenDiscard(PGconn* admin, const char* end_cmd, const c
         std::vector<Msg> oracle;
         {
             auto c = connectBackend();
-            oracle = batchEndThenDiscard(*c, end_cmd);
+            oracle = batchEndThenDiscard(*c, end_cmd, lock_first);
         }
         const long long oracle_rows = fixtureRowCount(be.get());
         if (!truncateFixture(be.get())) throw std::runtime_error("cannot truncate durability fixture");
 
         const long long poisoned_before = txPoisonedTotal(admin);
         auto c = connectProxy();
-        const auto proxy = batchEndThenDiscard(*c, end_cmd);
+        const auto proxy = batchEndThenDiscard(*c, end_cmd, lock_first);
         ended = hasCommandTag(proxy, end_cmd);
         idle = lastReadyState(proxy) == 'I';
         c->execute("SELECT 1");
@@ -794,11 +806,11 @@ static void checkBatchEndThenDiscard(PGconn* admin, const char* end_cmd, const c
     }
     diag("  %s", detail.c_str());
     ok(ended && idle && usable && not_poisoned && same_rows,
-       "#6417 [BEGIN] then [%s, DISCARD ALL] [%s]: client idle and usable, not poisoned, same rows as PostgreSQL",
-       end_cmd, mode);
+       "#6417 %s[BEGIN] then [%s, DISCARD ALL] [%s]: client idle and usable, not poisoned, same rows as PostgreSQL",
+       lock_first ? "hostgroup-locked " : "", end_cmd, mode);
 }
 
-static const int BATCH_END_CHECKS = 2;
+static const int BATCH_END_CHECKS = 4;
 
 // ------------------------------------------------------------------ main
 
@@ -936,8 +948,9 @@ int main(int, char**) {
             true, MODE_NAME[mode]);
 
         // ---- #6417: transaction ended earlier in the same batch ----------------
-        for (const char* end_cmd : {"COMMIT", "ROLLBACK"})
-            checkBatchEndThenDiscard(admin, end_cmd, MODE_NAME[mode]);
+        for (bool lock_first : {false, true})
+            for (const char* end_cmd : {"COMMIT", "ROLLBACK"})
+                checkBatchEndThenDiscard(admin, end_cmd, lock_first, MODE_NAME[mode]);
 
         // ---- durability: the row must land in the same place on both legs ----
         {
