@@ -130,21 +130,26 @@ struct AuthMethodScope {
 // Re-inserting the server rows drops every pooled backend connection with them.
 // Needed between protocol phases: a pooled connection keeps the protocol it was
 // opened with, so reusing one makes the second phase repeat the first.
-struct ServerRow { std::string hostname, port, max_connections, comment; };
-
-static std::vector<ServerRow> readServers(PGconn* admin, int hg) {
-    std::vector<ServerRow> rows;
+// The rows are kept as INSERTs recreating every column, quotes doubled, so the restore
+// keeps status, weight, use_ssl and the rest instead of resetting them to defaults.
+static std::vector<std::string> readServers(PGconn* admin, int hg) {
+    std::vector<std::string> rows;
     std::stringstream q;
-    q << "SELECT hostname, port, max_connections, comment FROM pgsql_servers WHERE hostgroup_id=" << hg;
+    q << "SELECT * FROM pgsql_servers WHERE hostgroup_id=" << hg;
     PGresult* res = PQexec(admin, q.str().c_str());
     if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+        std::string cols;
+        for (int c = 0; c < PQnfields(res); c++) cols += std::string(c ? "," : "") + PQfname(res, c);
         for (int i = 0; i < PQntuples(res); i++) {
-            ServerRow r;
-            r.hostname = PQgetvalue(res, i, 0);
-            r.port = PQgetvalue(res, i, 1);
-            r.max_connections = PQgetvalue(res, i, 2);
-            r.comment = PQgetisnull(res, i, 3) ? "" : PQgetvalue(res, i, 3);
-            rows.push_back(std::move(r));
+            std::string ins = "INSERT INTO pgsql_servers (" + cols + ") VALUES (";
+            for (int c = 0; c < PQnfields(res); c++) {
+                if (c) ins += ",";
+                if (PQgetisnull(res, i, c)) { ins += "NULL"; continue; }
+                ins += "'";
+                for (const char* v = PQgetvalue(res, i, c); *v; v++) ins += (*v == '\'') ? "''" : std::string(1, *v);
+                ins += "'";
+            }
+            rows.push_back(ins + ")");
         }
     } else {
         diag("readServers failed: %s", PQerrorMessage(admin));
@@ -153,19 +158,14 @@ static std::vector<ServerRow> readServers(PGconn* admin, int hg) {
     return rows;
 }
 
-static bool flushBackendPool(PGconn* admin, int hg, const std::vector<ServerRow>& saved) {
+static bool flushBackendPool(PGconn* admin, int hg, const std::vector<std::string>& saved) {
     if (saved.empty()) return false;
     std::stringstream del;
     del << "DELETE FROM pgsql_servers WHERE hostgroup_id=" << hg;
     if (!execAdmin(admin, del.str())) return false;
     if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
-    for (const auto& r : saved) {
-        std::stringstream ins;
-        ins << "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,comment) VALUES ("
-            << hg << ",'" << r.hostname << "'," << r.port << ","
-            << (r.max_connections.empty() ? std::string("1000") : r.max_connections)
-            << ",'" << r.comment << "')";
-        if (!execAdmin(admin, ins.str())) return false;
+    for (const auto& ins : saved) {
+        if (!execAdmin(admin, ins)) return false;
     }
     if (!execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
     usleep(200000);
@@ -427,6 +427,56 @@ static void sc_local_error_ext_refused(PgConnection& c) {
     ext_rollback(c);
 }
 
+// A frame shaped like a transaction end that PostgreSQL still rejects: the poisoned
+// transaction must stay aborted ('E') until a valid ROLLBACK, as on PostgreSQL. ProxySQL
+// used to accept the frame at its Sync -- ending the transaction -- before the Bind or
+// Parse failed, so the client got the error with 'I'.
+static void sc_local_error_ext_rollback_with_param(PgConnection& c) {
+    c.execute("BEGIN");
+    c.executePortal("", 0, true);
+    c.prepareStatement("", "ROLLBACK", false);
+    PgConnection::Param param = { "1", 0 };
+    c.bindStatement("", "", { param }, {}, false);
+    c.executePortal("", 0, true);
+    ext_rollback(c);
+}
+
+static void sc_local_error_ext_rollback_dup_name(PgConnection& c) {
+    c.prepareStatement("rollback_6424_dup", "ROLLBACK", true);   // consumes its own ReadyForQuery
+    c.execute("BEGIN");
+    c.executePortal("", 0, true);
+    c.prepareStatement("rollback_6424_dup", "ROLLBACK", false);  // the name is taken
+    c.bindStatement("rollback_6424_dup", "", {}, {}, false);
+    c.executePortal("", 0, true);
+    ext_rollback(c);
+}
+
+// Only the transaction states are compared: PostgreSQL reports these with its own
+// SQLSTATE, the poisoned session with 25P02.
+static std::vector<Msg> runLeg(bool via_proxy, void (*fn)(PgConnection&), int n_ready,
+                               std::string& err);
+
+static const int INVALID_END_ASSERTS = 2;
+static void checkInvalidExtendedEnd(const char* mode) {
+    const struct { const char* name; void (*fn)(PgConnection&); } cases[] = {
+        { "extended ROLLBACK bound with a parameter", sc_local_error_ext_rollback_with_param },
+        { "extended ROLLBACK parsed under a taken statement name", sc_local_error_ext_rollback_dup_name },
+    };
+    for (const auto& k : cases) {
+        std::string oerr, perr;
+        const std::vector<Msg> oracle = runLeg(false, k.fn, 4, oerr);
+        const std::vector<Msg> proxy = runLeg(true, k.fn, 4, perr);
+        diag("  local error at 'T', %s: oracle %s (SQLSTATE %s, ReadyForQuery %s); proxy %s (SQLSTATE %s, ReadyForQuery %s)",
+             k.name, streamSummary(oracle).c_str(), errorCodes(oracle).c_str(), readyStates(oracle).c_str(),
+             streamSummary(proxy).c_str(), errorCodes(proxy).c_str(), readyStates(proxy).c_str());
+        const bool same = oerr.empty() && perr.empty() && readyStates(oracle) == "TEEI" &&
+                          readyStates(proxy) == readyStates(oracle);
+        ok(same, "local error at 'T', %s [%s]: the transaction stays aborted until a valid ROLLBACK, "
+           "states %s as direct PostgreSQL's %s%s%s", k.name, mode, readyStates(proxy).c_str(),
+           readyStates(oracle).c_str(), perr.empty() ? "" : " -- proxy: ", perr.c_str());
+    }
+}
+
 struct Case { const char* name; void (*fn)(PgConnection&); int n_ready; bool named; };
 
 static const Case PARITY_CASES[] = {
@@ -635,7 +685,8 @@ static void checkRuleErrorDiscardsFrame(const char* mode) {
 // ------------------------------------------------------------------ main
 
 static const char* MODE_NAME[2] = { "libpq backend protocol", "native backend protocol" };
-static const int PER_MODE = N_PARITY + 2 * DURABILITY_ASSERTS + 2 * EXT_END_ASSERTS + RULE_FRAME_ASSERTS;
+static const int PER_MODE = N_PARITY + 2 * DURABILITY_ASSERTS + 2 * EXT_END_ASSERTS + RULE_FRAME_ASSERTS +
+    INVALID_END_ASSERTS;
 
 int main(int, char**) {
     plan(PER_MODE * 2);
@@ -650,7 +701,7 @@ int main(int, char**) {
 
     const std::string saved_native = adminScalar(admin,
         "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-use_native_backend_protocol'");
-    const std::vector<ServerRow> saved_servers = readServers(admin, BACKEND_HG);
+    const std::vector<std::string> saved_servers = readServers(admin, BACKEND_HG);
 
     AuthMethodScope auth(admin);
     auto cleanup = [&]() {
@@ -725,6 +776,7 @@ int main(int, char**) {
         checkExtendedEnd("ROLLBACK", MODE_NAME[mode]);
         checkExtendedEnd("COMMIT", MODE_NAME[mode]);
         checkRuleErrorDiscardsFrame(MODE_NAME[mode]);
+        checkInvalidExtendedEnd(MODE_NAME[mode]);
     }
 
     {
