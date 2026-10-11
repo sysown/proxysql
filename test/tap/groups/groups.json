@@ -337,6 +337,7 @@
   "pgsql_command_complete_unit-t" : [ "unit-tests-g1" ],
   "pgsql_conn_liveness_unit-t" : [ "unit-tests-g1" ],
   "pgsql_conninfo_credentials_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_dns_cache_all_ips_unit-t" : [ "unit-tests-g1" ],
   "pgsql_error_classifier_unit-t" : [ "unit-tests-g1" ],
   "pgsql_error_helper_unit-t" : [ "unit-tests-g1" ],
   "pgsql_local_error_txn_state_unit-t" : [ "unit-tests-g1" ],
