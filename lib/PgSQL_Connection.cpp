@@ -5302,6 +5302,29 @@ const char* PgSQL_Connection::get_pg_transaction_status_str() {
 }
 
 const char* PgSQL_Connection::get_pg_backend_state() const {
+	if (native_mode) {
+		// pgsql_conn is always NULL here, so asking libpq would report every native
+		// backend as "disconnected".
+		if (!backend_is_live())
+			return "disconnected";
+		// libpq reports ACTIVE while a request is outstanding. The native equivalent is
+		// a request still being driven by the state machine, or a batch the backend has
+		// not yet concluded with ReadyForQuery. Not folded into get_pg_transaction_status():
+		// that one decides reuse, and native_unsynced_work is handled there separately.
+		if (async_state_machine != ASYNC_IDLE || native_unsynced_work)
+			return "active";
+		switch (native_txn_status) {
+		case 'I':
+			return "idle";
+		case 'T':
+			return "idle in transaction";
+		case 'E':
+			return "idle in transaction (aborted)";
+		default:
+			return "unknown";
+		}
+	}
+
 	if (PQstatus(pgsql_conn) != CONNECTION_OK)
 		return "disconnected";
 
