@@ -2456,11 +2456,14 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				// A server-module veto blocked only the plugin tables: report it.
 				const std::string veto = SPA->servers_load_veto[1];
 				SPA->pgsql_servers_wrunlock();
-				if (!loaded && veto.empty()) {
-					// Genuine failure (not a module veto): tell the operator the
-					// runtime was not installed instead of returning a bare OK.
+				// Return-value contract (loader): FALSE always means a failed
+				// installation -- check it FIRST, whatever 'servers_load_veto'
+				// says; a module veto on a TRUE return is advisory and shown
+				// as the OK packet's warning (issue #6440 review).
+				if (!loaded) {
 					proxy_error("Error while loading pgsql servers to RUNTIME\n");
-					SPA->send_error_msg_to_client(sess, (char*)"Error while loading pgsql servers to RUNTIME");
+					SPA->send_error_msg_to_client(sess,
+						veto.empty() ? (char*)"Error while loading pgsql servers to RUNTIME" : (char*)veto.c_str());
 					return false;
 				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers to RUNTIME\n");
@@ -2476,11 +2479,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				// A server-module veto blocked only the plugin tables: report it.
 				const std::string veto = SPA->servers_load_veto[0];
 				SPA->mysql_servers_wrunlock();
-				if (!loaded && veto.empty()) {
-					// Genuine failure (not a module veto): tell the operator the
-					// runtime was not installed instead of returning a bare OK.
+				if (!loaded) {
 					proxy_error("Error while loading mysql servers to RUNTIME\n");
-					SPA->send_error_msg_to_client(sess, (char*)"Error while loading mysql servers to RUNTIME");
+					SPA->send_error_msg_to_client(sess,
+						veto.empty() ? (char*)"Error while loading mysql servers to RUNTIME" : (char*)veto.c_str());
 					return false;
 				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");

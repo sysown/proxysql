@@ -5793,9 +5793,28 @@ int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
 		// RequestEnd() only queues the error in PSarrayOUT and the caller
 		// returns -1, which makes the caller hand the session back to the
 		// thread to be deleted. Flush now, exactly like the wrong-pass epilogue,
-		// otherwise the client only observes a bare TCP close.
+		// otherwise the client only observes a bare TCP close. A nonblocking
+		// socket can still leave bytes queued (EAGAIN after a partial write);
+		// under normal use the ~100-byte error packet fits the send buffer, and
+		// keeping the session alive instead of tearing down is NOT possible
+		// here without further plumbing: RequestEnd() already freed 'qpo', and
+		// returning 0 would make the caller fall through into
+		// find_or_create_backend() and touch freed state. See the reviewer
+		// discussion on the #6440 comment for the follow-up option.
 		client_myds->array2buffer_full();
-		client_myds->write_to_net();
+		for (int flush_attempt = 0; flush_attempt < 2 &&
+			client_myds->queueOUT.head - client_myds->queueOUT.tail > 0; flush_attempt++) {
+			client_myds->write_to_net();
+		}
+		if (client_myds->queueOUT.head - client_myds->queueOUT.tail > 0) {
+			static std::atomic<time_t> gpee_flush_ts{0};
+			const time_t flush_now = time(NULL);
+			if (flush_now - gpee_flush_ts.load(std::memory_order_relaxed) >= 10) {
+				gpee_flush_ts.store(flush_now, std::memory_order_relaxed);
+				proxy_warning("Fast-forward rejection for session_id=%u could not be fully flushed to the client before teardown\n",
+					thread_session_id);
+			}
+		}
 		return -1;
 	};
 

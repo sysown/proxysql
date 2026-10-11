@@ -9672,13 +9672,19 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;
 	}
- // A false 'runtime_hgm_committed' must still carry a reason, otherwise
+	// A false 'runtime_hgm_committed' must still carry a reason, otherwise
 	// callers that report on 'servers_load_veto' cannot tell a real failure
 	// from a clean load.
 	if (!runtime_hgm_committed && servers_load_veto[1].empty()) {
 		servers_load_veto[1] = "PostgreSQL server runtime was not committed";
 	}
-	return runtime_hgm_committed && servers_load_veto[1].empty();
+	// Return-value contract, aligned with the MySQL loader and pinned by
+	// server_runtime_load_unit-t: FALSE always means a failed installation
+	// (any text left in 'servers_load_veto' describes THAT failure), while a
+	// module veto -- which installs the core tables anyway -- only lands in
+	// 'servers_load_veto' on a TRUE return. Callers check the bool first; a
+	// veto is advisory information, never a failure signal.
+	return runtime_hgm_committed;
 }
 
 char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {

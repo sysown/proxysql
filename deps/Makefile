@@ -567,6 +567,8 @@ cleanall:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd re2 && rm -rf re2-*/ || true
 	cd pcre2 && rm -rf pcre2-*/ pcre2 || true
+	# deps/pcre/pcre is a TRACKED symlink (to pcre-8.45/); keep it intact.
+	cd pcre && rm -rf pcre-8.45 || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
 	cd duckdb && rm -rf duckdb-*/ duckdb || true

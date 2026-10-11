@@ -1467,16 +1467,21 @@ bool ProxySQL_PluginManager::dispatch_query_hook(ProxySQL_PluginProtocol proto,
 		return false;
 	}
 	// Contain plugin exceptions: this runs inline on a worker thread in the
-	// query path, where an escaping throw would kill the whole proxy. Report
-	// "no hook ran" so the caller falls through to normal query processing.
+	// query path, where an escaping throw would kill the whole proxy. The
+	// session callers treat FALSE as "no hook ran" and let the query proceed,
+	// so returning false here would turn a throwing hook into a BYPASS of the
+	// configured policy. Report a deny result instead: the hook was most
+	// likely going to block the query anyway (an abort during policy
+	// evaluation cannot be a defensible "allow"), and the client gets a
+	// defined error rather than a crash (issue #6440 review).
 	try {
 		result = cb(payload);
 	} catch (const std::exception &e) {
 		proxy_error("Plugin query hook threw: %s\n", e.what());
-		return false;
+		result = { ProxySQL_PluginQueryHookAction::deny, "query processing failed" };
 	} catch (...) {
 		proxy_error("Plugin query hook threw\n");
-		return false;
+		result = { ProxySQL_PluginQueryHookAction::deny, "query processing failed" };
 	}
 	return true;
 }

@@ -112,17 +112,19 @@ MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 		attributes.data(), attributes.data() + attributes.size(), nullptr, false);
 	if (parsed.is_discarded() || !parsed.is_object()) {
 		// 'mysql_users.attributes' only has to satisfy JSON_VALID(attributes) OR
-		// attributes='', so valid-but-non-object values such as '[]' or '"x"'
-		// are storable and were harmless before this policy existed. Only fail
-		// closed when the value actually mentions 'backend_auth', so that
-		// pre-existing rows keep working after an upgrade.
+		// attributes='', so valid-but-non-object values such as '[]', '"x"' or
+		// even 'null' are storable and were harmless before this policy existed.
+		// Only fail closed when the value actually mentions 'backend_auth', so
+		// that pre-existing rows keep working after an upgrade.
 		//
-		// "null" is NOT such a value: MySQL_Authentication::add() substitutes
-		// exactly "null" as the sentinel for a backend row whose stored JSON
-		// failed to parse (see invalid_attributes_storage()). That sentinel
-		// must stay INVALID so a row that failed policy validation cannot
-		// silently fall back to password authentication once reloaded.
-		if (attributes != "null" && attributes.find("backend_auth") == std::string_view::npos) {
+		// The exact sentinel returned by invalid_attributes_storage() -- a
+		// backend row whose stored JSON failed to parse -- is the ONE
+		// non-object value that must stay INVALID: a row that failed policy
+		// validation cannot silently fall back to password authentication once
+		// reloaded. The sentinel is deliberately JSON-invalid ("invalid") so
+		// no operator-configured value can collide with it.
+		if (attributes != invalid_backend_attributes_sentinel() &&
+			attributes.find("backend_auth") == std::string_view::npos) {
 			policy.type = MySQLBackendAuthType::PASSWORD;
 			return policy;
 		}

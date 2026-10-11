@@ -2835,23 +2835,29 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_info("Cluster: Loading to runtime MySQL Servers v2 from peer %s:%d\n", hostname, port);
 						const bool mysql_servers_loaded =
 							GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
+						// Return-value contract (see the loader): FALSE always
+						// means the installation failed -- check it FIRST,
+						// whatever 'servers_load_veto' says, and stop BEFORE
+						// persisting anything below: a save-to-disk here would
+						// overwrite the freshly-pulled tables with the stale
+						// runtime (issue #6440 review). A veto, on a TRUE
+						// return, is advisory: it never changes the instance.
+						if (!mysql_servers_loaded) {
+							proxy_error("Cluster: MySQL servers pulled from peer %s:%d were not installed to runtime: %s\n",
+								hostname, port,
+								GloAdmin->servers_load_veto[0].empty() ?
+									"(internal error)" : GloAdmin->servers_load_veto[0].c_str());
+							fetch_failed = true;
+							GloAdmin->mysql_servers_wrunlock();
+							pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+							break;
+						}
 						if (!GloAdmin->servers_load_veto[0].empty()) {
 							// A server-module veto blocked only the plugin tables;
 							// the core tables WERE installed, so keep persisting them.
 							proxy_error("Cluster: the server module rejected the MySQL plugin tables pulled from peer %s:%d and keeps its previous configuration: %s\n",
 								hostname, port, GloAdmin->servers_load_veto[0].c_str());
 							fetch_failed = true;
-						} else if (!mysql_servers_loaded) {
-							// A veto-less failure means the runtime was never
-							// installed. Do NOT fall through to the save-to-disk
-							// below: it would overwrite the freshly-pulled tables
-							// with the stale runtime.
-							proxy_error("Cluster: MySQL servers pulled from peer %s:%d were not installed to runtime (internal error)\n",
-								hostname, port);
-							fetch_failed = true;
-							GloAdmin->mysql_servers_wrunlock();
-							pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
-							break;
 						}
 
 						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
@@ -4145,23 +4151,24 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 						expected_pgsql_server_v2,
 						true
 					);
+					// Same contract as the MySQL pull above: FALSE means a failed
+					// installation, checked FIRST, before any persistence.
+					if (!pgsql_servers_loaded) {
+						proxy_error("Cluster: PostgreSQL servers pulled from peer %s:%d were not installed to runtime: %s\n",
+							hostname, port,
+							GloAdmin->servers_load_veto[1].empty() ?
+								"(internal error)" : GloAdmin->servers_load_veto[1].c_str());
+						fetch_failed = true;
+						GloAdmin->pgsql_servers_wrunlock();
+						pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+						break;
+					}
 					if (!GloAdmin->servers_load_veto[1].empty()) {
 						// A server-module veto blocked only the plugin tables; the
 						// core tables WERE installed, so keep persisting them.
 						proxy_error("Cluster: the server module rejected the PostgreSQL plugin tables pulled from peer %s:%d and keeps its previous configuration: %s\n",
 							hostname, port, GloAdmin->servers_load_veto[1].c_str());
 						fetch_failed = true;
-					} else if (!pgsql_servers_loaded) {
-						// A veto-less failure means the runtime was never
-						// installed. Do NOT fall through to the save-to-disk
-						// below: it would overwrite the freshly-pulled tables
-						// with the stale runtime.
-						proxy_error("Cluster: PostgreSQL servers pulled from peer %s:%d were not installed to runtime (internal error)\n",
-							hostname, port);
-						fetch_failed = true;
-						GloAdmin->pgsql_servers_wrunlock();
-						pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
-						break;
 					}
 
 					if (GloProxyCluster->cluster_pgsql_servers_save_to_disk == true) {

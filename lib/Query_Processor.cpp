@@ -206,6 +206,10 @@ bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, p
 // translate_legacy_rewrite()). The output is sized for typical rewrites; only
 // when it is too small does PCRE2 report the exact size needed
 // (PCRE2_SUBSTITUTE_OVERFLOW_LENGTH) and the substitution is repeated once.
+// 'out_rc' receives the final pcre2_substitute() code, so the caller can tell
+// a heap/depth/match limit hit apart from the other failure modes (invalid
+// substitution, unset-group error, allocation failure) when logging (#6423,
+// CodeRabbit follow-up). Ignored when NULL.
 bool pcre2_replace(
 	const pcre2_code* code,
 	pcre2_match_data* match_data,
@@ -213,8 +217,10 @@ bool pcre2_replace(
 	const char* rewrite,
 	size_t rewrite_len,
 	bool global,
-	std::string* subject
+	std::string* subject,
+	int* out_rc = nullptr
 ) {
+	if (out_rc) *out_rc = 0;
 	if (code == nullptr || match_data == nullptr || rewrite == nullptr || subject == nullptr) return false;
 
 	const uint32_t substitute_options = PCRE2_SUBSTITUTE_UNSET_EMPTY |
@@ -243,10 +249,12 @@ bool pcre2_replace(
 		// With OVERFLOW_LENGTH, output_size now holds the required size,
 		// including the terminator.
 		if (rc != PCRE2_ERROR_NOMEMORY || output_size == PCRE2_SIZE_MAX) {
+			if (out_rc) *out_rc = rc;
 			return false;
 		}
 		output.resize(output_size);
 	}
+	if (out_rc) *out_rc = PCRE2_ERROR_NOMEMORY;
 	return false;
 }
 
@@ -2812,6 +2820,7 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 							re2p->re1->Replace(qr->replace_pattern, ret->new_query);
 						}
 					} else if (re2p->pcre2_rewrite) {
+						int substitute_rc = 0;
 						const bool replaced = pcre2_replace(
 							re2p->pcre2,
 							re2p->pcre2_md,
@@ -2819,7 +2828,8 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 							re2p->pcre2_rewrite,
 							re2p->pcre2_rewrite_len,
 							(qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL,
-							ret->new_query
+							ret->new_query,
+							&substitute_rc
 						);
 						// A rewrite that hit a limit must not pin frames either.
 						pcre2_rule_release_pinned_heapframes(&re2p->pcre2_md, re2p->pcre2);
@@ -2828,8 +2838,14 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 							const time_t limit_log_now = time(NULL);
 							if (limit_log_now - pcre2_limit_log_ts.load(std::memory_order_relaxed) >= 10) {
 								pcre2_limit_log_ts.store(limit_log_now, std::memory_order_relaxed);
-								proxy_warning("Query rule %d: replace_pattern stopped because the PCRE2 heap/depth/match limit was reached; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*' (issue #6423)\n",
-									qr->rule_id);
+								if (substitute_rc == PCRE2_ERROR_HEAPLIMIT || substitute_rc == PCRE2_ERROR_DEPTHLIMIT ||
+									substitute_rc == PCRE2_ERROR_MATCHLIMIT) {
+									proxy_warning("Query rule %d: replace_pattern stopped because the PCRE2 heap/depth/match limit was reached; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*' (issue #6423)\n",
+										qr->rule_id);
+								} else {
+									proxy_warning("Query rule %d: replace_pattern failed with PCRE2 error %d\n",
+										qr->rule_id, substitute_rc);
+								}
 							}
 						}
 					}

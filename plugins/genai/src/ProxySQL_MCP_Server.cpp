@@ -226,64 +226,56 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 		std::unique_lock<GenAIRWLock> runtime_guard(genai_context().runtime_dependencies_mutex);
 		// Clean up all tool handlers stored in the handler object
 		if (handler) {
-
-		// Clean up MySQL Tool Handler
-		if (handler->mysql_tool_handler) {
-			proxy_info("Cleaning up MySQL Tool Handler...\n");
-			delete handler->mysql_tool_handler;
-			handler->mysql_tool_handler = NULL;
+			// Clean up MySQL Tool Handler
+			if (handler->mysql_tool_handler) {
+				proxy_info("Cleaning up MySQL Tool Handler...\n");
+				delete handler->mysql_tool_handler;
+				handler->mysql_tool_handler = NULL;
+			}
+			// Clean up Config Tool Handler
+			if (handler->config_tool_handler) {
+				proxy_info("Cleaning up Config Tool Handler...\n");
+				delete handler->config_tool_handler;
+				handler->config_tool_handler = NULL;
+			}
+			// Clean up Query Tool Handler
+			if (handler->query_tool_handler) {
+				proxy_info("Cleaning up Query Tool Handler...\n");
+				delete handler->query_tool_handler;
+				handler->query_tool_handler = NULL;
+			}
+			// Clean up Admin Tool Handler
+			if (handler->admin_tool_handler) {
+				proxy_info("Cleaning up Admin Tool Handler...\n");
+				delete handler->admin_tool_handler;
+				handler->admin_tool_handler = NULL;
+			}
+			// Clean up Cache Tool Handler
+			if (handler->cache_tool_handler) {
+				proxy_info("Cleaning up Cache Tool Handler...\n");
+				delete handler->cache_tool_handler;
+				handler->cache_tool_handler = NULL;
+			}
+			// Clean up Stats Tool Handler
+			if (handler->stats_tool_handler) {
+				proxy_info("Cleaning up Stats Tool Handler...\n");
+				delete handler->stats_tool_handler;
+				handler->stats_tool_handler = NULL;
+			}
+			// Clean up AI Tool Handler (uses shared components, don't delete them)
+			if (handler->ai_tool_handler) {
+				proxy_info("Cleaning up AI Tool Handler...\n");
+				delete handler->ai_tool_handler;
+				handler->ai_tool_handler = NULL;
+			}
+			// Clean up RAG Tool Handler
+			if (handler->rag_tool_handler) {
+				proxy_info("Cleaning up RAG Tool Handler...\n");
+				delete handler->rag_tool_handler;
+				handler->rag_tool_handler = NULL;
+			}
 		}
-
-		// Clean up Config Tool Handler
-		if (handler->config_tool_handler) {
-			proxy_info("Cleaning up Config Tool Handler...\n");
-			delete handler->config_tool_handler;
-			handler->config_tool_handler = NULL;
-		}
-
-		// Clean up Query Tool Handler
-		if (handler->query_tool_handler) {
-			proxy_info("Cleaning up Query Tool Handler...\n");
-			delete handler->query_tool_handler;
-			handler->query_tool_handler = NULL;
-		}
-
-		// Clean up Admin Tool Handler
-		if (handler->admin_tool_handler) {
-			proxy_info("Cleaning up Admin Tool Handler...\n");
-			delete handler->admin_tool_handler;
-			handler->admin_tool_handler = NULL;
-		}
-
-		// Clean up Cache Tool Handler
-		if (handler->cache_tool_handler) {
-			proxy_info("Cleaning up Cache Tool Handler...\n");
-			delete handler->cache_tool_handler;
-			handler->cache_tool_handler = NULL;
-		}
-
-		// Clean up Stats Tool Handler
-		if (handler->stats_tool_handler) {
-			proxy_info("Cleaning up Stats Tool Handler...\n");
-			delete handler->stats_tool_handler;
-			handler->stats_tool_handler = NULL;
-		}
-
-		// Clean up AI Tool Handler (uses shared components, don't delete them)
-		if (handler->ai_tool_handler) {
-			proxy_info("Cleaning up AI Tool Handler...\n");
-			delete handler->ai_tool_handler;
-			handler->ai_tool_handler = NULL;
-		}
-
-		// Clean up RAG Tool Handler
-		if (handler->rag_tool_handler) {
-			proxy_info("Cleaning up RAG Tool Handler...\n");
-			delete handler->rag_tool_handler;
-			handler->rag_tool_handler = NULL;
-		}
-		} // end exclusive runtime_dependencies_mutex scope
-	}
+	} // end explicit runtime_dependencies_mutex scope
 }
 
 bool ProxySQL_MCP_Server::start() {

@@ -943,29 +943,37 @@ void ProxySQL_Admin::commit_managed_engine_variables_projection(bool pgsql) {
   //
   // The engine handler lock must be held across the flush and is taken BEFORE
   // 'checksum_mutex', the same global order every writer in
-  // Admin_FlushVariables.cpp uses.
+  // Admin_FlushVariables.cpp uses. Taking 'checksum_mutex' first would invert
+  // that order against a concurrent LOAD whose flush holds the engine lock
+  // and waits for the checksum mutex.
   const std::string modname = pgsql ? "pgsql" : "mysql";
-  pthread_mutex_lock(&GloVars.checksum_mutex);
-  Unlock checksum_unlock{[]() noexcept {
-    pthread_mutex_unlock(&GloVars.checksum_mutex);
-  }};
   if (pgsql) {
     GloPTH->wrlock();
     Unlock engine_unlock{[]() noexcept { GloPTH->wrunlock(); }};
+    pthread_mutex_lock(&GloVars.checksum_mutex);
+    Unlock checksum_unlock{[]() noexcept {
+      pthread_mutex_unlock(&GloVars.checksum_mutex);
+    }};
     admindb->execute("BEGIN");
     flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true,
                                                 false);
     admindb->execute("COMMIT");
+    // generate checksum for cluster
+    flush_GENERIC_variables__checksum__database_to_runtime(modname, "", 0);
   } else {
     GloMTH->wrlock();
     Unlock engine_unlock{[]() noexcept { GloMTH->wrunlock(); }};
+    pthread_mutex_lock(&GloVars.checksum_mutex);
+    Unlock checksum_unlock{[]() noexcept {
+      pthread_mutex_unlock(&GloVars.checksum_mutex);
+    }};
     admindb->execute("BEGIN");
     flush_mysql_variables___runtime_to_database_unlocked(admindb, false, false, false,
                                                          true);
     admindb->execute("COMMIT");
+    // generate checksum for cluster
+    flush_GENERIC_variables__checksum__database_to_runtime(modname, "", 0);
   }
-  // generate checksum for cluster
-  flush_GENERIC_variables__checksum__database_to_runtime(modname, "", 0);
 }
 
 bool ProxySQL_Admin::commit_managed_admin_variables_locked(std::string &error) {

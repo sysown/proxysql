@@ -134,4 +134,13 @@ class MySQL_Authentication {
 	SQLite3_result* get_current_mysql_users();
 };
 
+/**
+ * @brief Exact 'attributes' value that MySQL_Authentication::add() substitutes
+ *   for a BACKEND row whose stored JSON failed to parse. Kept JSON-invalid so
+ *   no operator-configurable value can collide with it; the backend auth
+ *   policy parser relies on it to distinguish "policy was malformed" from a
+ *   harmless non-object value (issue #6440 review).
+ */
+const char* invalid_backend_attributes_sentinel();
+
 #endif /* __CLASS_MYSQL_AUTHENTICATION_H */

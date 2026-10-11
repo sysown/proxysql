@@ -54,13 +54,25 @@ void cleanse_and_free_password(char*& password) {
 	}
 }
 
-const char* invalid_attributes_storage(enum cred_username_type usertype) {
-	// Backend policies must stay invalid after runtime loading so they cannot
-	// silently fall back to password authentication.
-	return usertype == USERNAME_BACKEND ? "null" : "";
+static const char* invalid_attributes_storage(enum cred_username_type usertype) {
+	return usertype == USERNAME_BACKEND ? invalid_backend_attributes_sentinel() : "";
 }
 
 } // namespace
+
+// External linkage on purpose (declared in MySQL_Authentication.hpp): the
+// backend auth policy parser must consult exactly the sentinel add()
+// substitutes for a failed JSON parse, without duplicating the string.
+const char* invalid_backend_attributes_sentinel() {
+	// Backend policies must stay invalid after runtime loading so they cannot
+	// silently fall back to password authentication. The sentinel must never be
+	// a string that can also occur as a VALID stored value: valid JSON
+	// 'null' used to be the sentinel until an operator-configured
+	// attributes='null' (accepted by JSON_VALID) collided with it, making a
+	// legitimate empty policy fail closed (issue #6440 review). A bare word
+	// cannot be produced by JSON_VALID storage, so it is collision-free.
+	return "invalid";
+}
 
 namespace mysql_authentication_test {
 

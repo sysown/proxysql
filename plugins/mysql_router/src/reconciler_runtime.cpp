@@ -510,14 +510,32 @@ public:
 			throw std::runtime_error("metadata topology is unavailable for user publication");
 		}
 		// 'PROXYSQL FLUSH CONFIGDB' replaces the core's configdb object
-		// (delete + new), so the handle cached in the constructor can dangle.
-		// Re-resolve it here, like every other consumer in this plugin does.
-		db_ = services_.get_configdb();
-		if (db_ == nullptr) throw std::runtime_error("Router config DB is unavailable");
-		const uint64_t published = publish_mysql_router_users(services_, *session_,
-			current_topology_, *current_effective_, listeners_, snapshot, metadata_user_, generation);
-		if (!persist_generation(services_, "user_generation", published)) {
-			throw std::runtime_error("cannot persist the active user generation");
+		// (delete + new) while holding Admin's global SQL mutex. Every handle
+		// resolved here -- and every dereference inside the publication, which
+		// reaches 'PluginBootstrapStore' and persists through the SAME
+		// connection the admin config lives on -- must run inside that mutex;
+		// a refresh alone would still race a concurrent FLUSH between the
+		// re-resolve and the query. The nested lock acquisitions inside the
+		// publication are re-entrant (mysql_router_with_admin_db_lock()),
+		// so one outer critical section covers the whole publication.
+		uint64_t published = 0;
+		std::string lock_error;
+		const bool locked_ok = mysql_router_with_admin_db_lock(services_, [&]() -> bool {
+			db_ = services_.get_configdb();
+			if (db_ == nullptr) {
+				lock_error = "Router config DB is unavailable";
+				return false;
+			}
+			published = publish_mysql_router_users(services_, *session_,
+				current_topology_, *current_effective_, listeners_, snapshot, metadata_user_, generation);
+			if (!persist_generation(services_, "user_generation", published)) {
+				lock_error = "cannot persist the active user generation";
+				return false;
+			}
+			return true;
+		});
+		if (!locked_ok) {
+			throw std::runtime_error(lock_error.empty() ? "Router user publication failed under the Admin DB lock" : lock_error);
 		}
 		uint64_t collisions = 0;
 		uint64_t unresolved = 0;
