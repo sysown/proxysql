@@ -8,7 +8,6 @@
 #include <memory>
 
 class PgSQL_Session;
-class Session_Regex;
 
 extern void print_backtrace(void);
 
@@ -44,33 +43,35 @@ public:
 	static std::string build_set_tracked_vars_regexp(const std::string& vars_regexp);
 
 	/**
-	 * @brief Pattern matching a SET digest that changes only the current transaction.
+	 * @brief True when the statement `text` holds is 'SET [LOCAL|SESSION] TRANSACTION ...'.
 	 *
-	 * Matches 'SET [LOCAL|SESSION] TRANSACTION ...', including 'TRANSACTION SNAPSHOT'.
+	 * That form, including 'TRANSACTION SNAPSHOT', changes only the current transaction.
 	 * PostgreSQL accepts it only inside a transaction block, where the session already
 	 * holds its backend, and outside one it is a no-op that only raises a WARNING. Nothing
 	 * survives the transaction, so there is nothing to track and no reason to lock the
-	 * hostgroup. TRANSACTION must follow SET or its scope directly: the session-wide
-	 * 'SET SESSION CHARACTERISTICS AS TRANSACTION ...' does not match. Block comments the
-	 * digest kept (query_digests_keep_comment) and line comments may separate the words.
+	 * hostgroup. TRANSACTION must follow SET or its one scope word directly: the session-wide
+	 * 'SET SESSION CHARACTERISTICS AS TRANSACTION ...' does not match.
 	 *
-	 * @return The pattern, to be matched case-insensitively with RE2::PartialMatch().
+	 * The words are read as PostgreSQL's lexer reads them: case-insensitive, and separated by
+	 * whitespace, line comments or block comments, which nest. Leading whitespace and comments
+	 * are skipped. After TRANSACTION comes a separator, ';' or the end of the text, and only
+	 * whitespace and comments may follow any ';' (quotes are not read, so none can hide one).
+	 *
+	 * @param text A query text or a digest (query_digests_keep_comment keeps block comments).
 	 */
-	static const char* set_transaction_regexp();
+	static bool is_set_transaction_stmt(const char* text);
 
 	/**
 	 * @brief True when a SET is 'SET [LOCAL|SESSION] TRANSACTION ...'.
 	 *
-	 * Both the digest and the query text must match set_transaction_regexp(). The digest
+	 * Both the digest and the query text must pass is_set_transaction_stmt(). The digest
 	 * alone is not enough: ParserSQL 1.1.0 (pgsql-query_processor_parser=1) digests
 	 * 'SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY' as 'SET TRANSACTION READ ONLY'.
 	 *
-	 * @param re     Session_Regex built from set_transaction_regexp() (match_regexes[2]).
 	 * @param digest Digest text of the query.
-	 * @param query  Query text; leading whitespace is skipped. PgSQL_Session passes it with
-	 *               block comments already removed.
+	 * @param query  Query text exactly as the client sent it, comments included.
 	 */
-	static bool is_set_transaction(Session_Regex* re, const char* digest, const char* query);
+	static bool is_set_transaction(const char* digest, const char* query);
 
 	bool client_set_value(PgSQL_Session* session, int idx, const std::string& value, bool reorder_dynamic_variables_idx);
 	bool client_set_hash_and_value(PgSQL_Session* session, int idx, const std::string& value, uint32_t hash);

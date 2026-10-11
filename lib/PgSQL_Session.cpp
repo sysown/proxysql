@@ -5192,13 +5192,16 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		client_myds->myprot.generate_ok_packet(true, send_ready_packet, NULL, 0, dig, txn_state, NULL, param_status);
 		RequestEnd(NULL, false);
 		return true;
-	} else if (match_regexes && PgSQL_Variables::is_set_transaction(match_regexes[2], dig, nq.c_str())) {
+	} else if (PgSQL_Variables::is_set_transaction(dig,
+			std::string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength).c_str())) {
 		// SET [LOCAL|SESSION] TRANSACTION ... only changes the transaction already open,
 		// and the session took its backend at BEGIN; outside a transaction PostgreSQL
 		// ignores it with a WARNING. Nothing outlives the transaction, so forward it
 		// through normal routing without tracking it or locking the hostgroup. The query
 		// text is checked too: ParserSQL 1.1.0 digests the session-wide
-		// 'SET SESSION CHARACTERISTICS AS TRANSACTION ...' as 'SET TRANSACTION ...'.
+		// 'SET SESSION CHARACTERISTICS AS TRANSACTION ...' as 'SET TRANSACTION ...'. It is
+		// the text as sent, not 'nq': stripping comments with a non-nesting regex can put
+		// a word that PostgreSQL reads as comment text next to SET.
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Forwarding SET TRANSACTION without hostgroup lock: %s\n", nq.c_str());
 		return false;
 	} else {

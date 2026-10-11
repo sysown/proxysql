@@ -8,6 +8,9 @@
 #define SPOOKYV2
 #endif
 
+#include "c_tokenizer.h"
+
+#include <cstring>
 #include <sstream>
 
 pgsql_verify_var PgSQL_Variables::verifiers[PGSQL_NAME_LAST_HIGH_WM];
@@ -72,18 +75,44 @@ std::string PgSQL_Variables::build_set_tracked_vars_regexp(const std::string& va
 	return "^SET(?: +)(|SESSION +)`?(" + vars_regexp + ")`?(?:$|[\\s=])";
 }
 
-const char* PgSQL_Variables::set_transaction_regexp() {
-	// Separator: whitespace, a (non-nested) block comment or a line comment.
-#define PGSQL_SET_TRX_SEP "(?:\\s|/\\*(?:[^*]|\\*+[^*/])*\\*+/|--[^\\n]*\\n)"
-	return "^SET" PGSQL_SET_TRX_SEP "+(?:(?:LOCAL|SESSION)" PGSQL_SET_TRX_SEP "+)?TRANSACTION(?:" PGSQL_SET_TRX_SEP "|;|$)";
-#undef PGSQL_SET_TRX_SEP
+// After a word of 'SET [LOCAL|SESSION] TRANSACTION': PostgreSQL ends a keyword at whitespace
+// or at the start of a comment. Anything else ('_', '.', '=', a quote, ...) makes it part of
+// another token, such as the custom setting 'transaction.foo'.
+static bool pgsql_set_trx_word_ends(const char* p) {
+	return isspace((unsigned char)*p) || (p[0] == '/' && p[1] == '*') || (p[0] == '-' && p[1] == '-');
 }
 
-bool PgSQL_Variables::is_set_transaction(Session_Regex* re, const char* digest, const char* query) {
-	if (re == nullptr || digest == nullptr || query == nullptr) return false;
-	if (re->match(digest) == false) return false;
-	while (*query && isspace((unsigned char)*query)) query++;
-	return re->match(query);
+bool PgSQL_Variables::is_set_transaction_stmt(const char* text) {
+	// pgsql_stmt_skip_lead() skips whitespace, line comments and nested block comments, and
+	// returns NULL at the end of the text or on a block comment with no terminator.
+	const char* p = pgsql_stmt_skip_lead(text, NULL);
+	if (!pgsql_stmt_first_keyword_is(p, "SET")) return false;
+	p += 3;
+	if (!pgsql_set_trx_word_ends(p)) return false;
+	p = pgsql_stmt_skip_lead(p, NULL);
+	for (const char* scope : { "LOCAL", "SESSION" }) {
+		if (pgsql_stmt_first_keyword_is(p, scope)) {
+			p += strlen(scope);
+			if (!pgsql_set_trx_word_ends(p)) return false;
+			p = pgsql_stmt_skip_lead(p, NULL);
+			break;
+		}
+	}
+	if (!pgsql_stmt_first_keyword_is(p, "TRANSACTION")) return false;
+	p += 11;
+	if (*p != '\0' && *p != ';' && !pgsql_set_trx_word_ends(p)) return false;
+	// One statement only: whatever follows a ';' must be whitespace or comments. Quotes are
+	// deliberately not read, so no quoting form (E'', $$, ...) can hide a second statement;
+	// a ';' inside a literal or a comment only costs the lock-free path.
+	for (const char* q = strchr(p, ';'); q != NULL; q = strchr(q + 1, ';')) {
+		const char* lost = NULL;
+		if (pgsql_stmt_skip_lead(q + 1, &lost) != NULL || lost != NULL) return false;
+	}
+	return true;
+}
+
+bool PgSQL_Variables::is_set_transaction(const char* digest, const char* query) {
+	return is_set_transaction_stmt(digest) && is_set_transaction_stmt(query);
 }
 
 bool PgSQL_Variables::client_set_hash_and_value(PgSQL_Session* session, int idx, const std::string& value, uint32_t hash) {
