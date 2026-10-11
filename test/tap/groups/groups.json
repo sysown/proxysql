@@ -344,6 +344,7 @@
   "pgsql_monitor_unit-t" : [ "unit-tests-g1" ],
   "pgsql_named_portal_teardown_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_cancel_endpoint_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_native_connect_fallback_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_params_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_read_burst_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_scram_order_unit-t" : [ "unit-tests-g1" ],
