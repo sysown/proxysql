@@ -1738,6 +1738,14 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 		switch (rc) {
 		case 0:
 			myds->myds_type = MYDS_BACKEND;
+			// The thread loop flags the stream when a poll entry that asked for POLLOUT
+			// comes back with POLLERR/POLLHUP. While connecting, that is a socket the
+			// connect has already left: a refused address before the next one is tried
+			// (native and libpq alike), or a failed attempt before a connect retry on
+			// this same stream. The connection is now up on its own socket. A stale flag
+			// would keep write_to_net_poll() from ever writing, so a fast_forward session
+			// would never forward the client's bytes.
+			myds->net_failure = false;
 			myds->DSS = STATE_MARIADB_GENERIC;
 			status = WAITING_CLIENT_DATA;
 			st = previous_status.top();
