@@ -3274,7 +3274,7 @@ void PgSQL_Session::handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* my
 			// Kept attached. A failed statement never reaches the tracker, so a COMMIT
 			// that fails (deferred constraint, serialization failure) ends the
 			// transaction on the backend and leaves the tracker saying BEGIN (#6417).
-			sync_txn_tracker_with_backend(myconn, false);
+			sync_txn_tracker_with_backend(myconn, false, true);
 			myconn->async_state_machine = ASYNC_IDLE;
 			myds->DSS = STATE_MARIADB_GENERIC;
 		}
@@ -7207,12 +7207,32 @@ void PgSQL_Session::rollback_tracked_txn_state() {
 // Sync]) would be refused as inside an explicit transaction -- 25001 with 'E', backend
 // destroyed, session poisoned -- instead of with the pipelined refusal and 'I' (#6417).
 // Dropping a stale transaction when the backend reports idle stays safe either way.
-void PgSQL_Session::sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool mid_batch) {
+void PgSQL_Session::sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool mid_batch, bool failed) {
 	if (mid_batch || transaction_state_manager == NULL || myconn == NULL) return;
 	if (myconn->is_pipeline_active()) return;
 	switch (myconn->get_pg_transaction_status()) {
 	case PQTRANS_IDLE:
-		transaction_state_manager->sync_with_backend(false);
+		if (transaction_state_manager->is_in_transaction()) {
+			// The tracker missed how the transaction ended, and the SET variables it tracks
+			// depend on it: a rollback puts back their values at BEGIN. What was just run
+			// tells: a statement that failed and left the backend idle ended the transaction
+			// with a rollback (a failed COMMIT does); otherwise the last transaction end among
+			// its statements ('SELECT 1; ROLLBACK'). In any other case it is not known.
+			const char* digest = NULL;
+			if (status == PROCESSING_QUERY) {
+				digest = CurrentQuery.get_digest_text();
+			} else if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.extended_query_info.stmt_info) {
+				digest = CurrentQuery.extended_query_info.stmt_info->digest_text;
+			}
+			char ended_by = 0;
+			if (failed) {
+				const char* first = pgsql_stmt_skip_lead(digest, NULL);
+				if (first != NULL && pgsql_digest_next_stmt(first, NULL) == NULL) ended_by = 'R';
+			} else {
+				ended_by = PgSQL_ExplicitTxnStateMgr::txn_end_in_digest(digest);
+			}
+			transaction_state_manager->sync_with_backend(false, ended_by);
+		}
 		break;
 	case PQTRANS_INTRANS:
 	case PQTRANS_INERROR:
