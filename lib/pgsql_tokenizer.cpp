@@ -631,6 +631,34 @@ static char is_digit_string_2(shared_st* shared_st, char *f, char *t)
 }
 
 /**
+ * @brief Records one character of a "/\* *\/" comment: into 'cur_cmd_cmnt' when comments are kept,
+ *   and into the first comment while that one is still being collected. Both are bounded.
+ */
+static __attribute__((always_inline)) inline
+void copy_cmnt_type_1_char(const options* opts, cmnt_type_1_st* c_t_1_st, char** fst_cmnt, char c) {
+	if (opts->keep_comment) {
+		// copy the char into 'cur_cmd_cmnt'
+		if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
+			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = c;
+			c_t_1_st->cur_cmd_cmnt_len++;
+		}
+	}
+
+	// first comment hasn't finished, we are yet copying it
+	if (c_t_1_st->fst_cmnt_end == 0 &&
+		c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
+		if (*fst_cmnt == NULL) {
+			// initialize the 'first_comment' and set a final NULL terminator for safety
+			*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
+			*(*fst_cmnt + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
+		}
+		char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
+		*next_fst_cmnt_char = !is_space_char(c) ? c : ' ';
+		c_t_1_st->fst_cmnt_len++;
+	}
+}
+
+/**
  * @brief Process a detected comment of type "/\* *\/". Determines when to exit the 'st_cmnt_type_1' state.
  * @details Function assumes that 'shared_st->q' is pointing to the initial mark '/' of the comment start, and
  *   that it's safe to look forward for '*'. State 'st_cmnt_type_1' doesn't copy any data to the result
@@ -649,9 +677,9 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	enum p_st next_st = st_cmnt_type_1;
 	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
 
-	// initial mark "/*" detection
+	// initial mark "/*" detection, and a nested one right after it ("/*/*")
 	// comments are not copied by while processed, boundary checks should rely on 'q_cur_pos' and 'q_len'.
-	if (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
+	while (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
 
 		if (c_t_1_st->nest_level == 0) 
 			c_t_1_st->cur_cmd_cmnt_len = 0;
@@ -672,7 +700,11 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 
 		if (c_t_1_st->fst_cmnt_end == 0 && c_t_1_st->nest_level > 1 &&
 			c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 2) {
-			assert(*fst_cmnt);
+			// "/*/*" opens the nested comment before any byte of the outer one was collected
+			if (*fst_cmnt == NULL) {
+				*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
+				*(*fst_cmnt + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
+			}
 			char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
 			*next_fst_cmnt_char = *(shared_st->q);
 			next_fst_cmnt_char++;
@@ -706,31 +738,22 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 //  into the supplied 'fst_cmnt' memory? Or should they be considered for further processing?
 //  {
 
-	// we are parsing a "/*" comment
-	if (opts->keep_comment) {
-		// copy the char into 'cur_cmd_cmnt'
-		if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *shared_st->q;
-			c_t_1_st->cur_cmd_cmnt_len++;
-		}
-	}
+	// One character of the comment, or both of a "*/". As in PostgreSQL's lexer the comment is
+	// read from left to right in tokens: a "*/" is recognized at its '*' and consumed whole, and
+	// an "/*" is consumed whole above, so the '/' of a "*/" never opens a comment ("*/*/" closes
+	// twice) and the '*' of an "/*" never closes one ("/*/" stays open).
+	const bool closing = *shared_st->q == '*' && shared_st->q_cur_pos + 1 < shared_st->q_len &&
+		*(shared_st->q + 1) == '/';
+	copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *shared_st->q);
 
-	// first comment hasn't finished, we are yet copying it
-	if (c_t_1_st->fst_cmnt_end == 0 && 
-		c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
-		if (*fst_cmnt == NULL) {
-			// initialize the 'first_comment' and set a final NULL terminator for safety
-			*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
-			*(*fst_cmnt + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
-		}
-		char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
-		*next_fst_cmnt_char = !is_space_char(*shared_st->q) ? *shared_st->q : ' ';
-		c_t_1_st->fst_cmnt_len++;
-	}
+	if (closing) {
+		// move onto the '/' of "*/"; it is consumed below, or by the caller while still nested
+		shared_st->q++;
+		shared_st->q_cur_pos++;
+		copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *shared_st->q);
 
-	if (shared_st->prev_char == '*' && *shared_st->q == '/') {
-		// Decrement nesting level when we encounter 
-		if (c_t_1_st->nest_level > 0) 
+		// Decrement nesting level when we encounter "*/"
+		if (c_t_1_st->nest_level > 0)
 			c_t_1_st->nest_level--;
 
 		// Only end the comment when we're back at nest level 0
@@ -3468,9 +3491,9 @@ bool pgsql_query_has_stmt_keyword(const char* digest, const char* query, const c
 	// No digest, or one that may miss trailing statements. Only a query holding the word at
 	// all is digested in full, so the common case costs one scan of the text.
 	if (pgsql_text_has_word(query, keyword) == false) return false;
-	// The first statement is read from the text itself as well: the digest tokenizer takes
-	// the "*/" + "/" of a nested comment closing right before the keyword ("/*/*n*/*/LISTEN")
-	// for the opening of another comment and digests the query to nothing.
+	// The first statement is also read from the text itself, by pgsql_stmt_skip_lead(), so the
+	// gate does not rest on the digest tokenizer alone for it. Before the tokenizer read
+	// nested comments the way PostgreSQL does, "/*/*n*/*/LISTEN ch" digested to nothing.
 	if (pgsql_stmt_first_keyword_is(pgsql_stmt_skip_lead(query, NULL), keyword)) return true;
 	char* full = pgsql_query_full_digest(query);
 	if (full == NULL) return true; // cannot be told apart: fail closed
