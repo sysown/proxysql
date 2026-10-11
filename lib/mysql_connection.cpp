@@ -745,11 +745,12 @@ bool MySQL_Connection::get_status_sql_log_bin0() {
 }
 
 bool MySQL_Connection::backend_auth_compatible(
-	const char *requested_username, MySQLBackendAuthType requested_type) const
+	const char *requested_username, MySQLBackendAuthType) const
 {
+	// Authentication is established when the connection opens. Its original
+	// mode and token lifetime do not change the authenticated username.
 	return requested_username != nullptr && userinfo != nullptr &&
 		userinfo->username != nullptr &&
-		backend_auth_type_ == requested_type &&
 		strcmp(userinfo->username, requested_username) == 0;
 }
 
@@ -760,9 +761,8 @@ bool MySQL_Connection::requires_CHANGE_USER(
 	const char *username = client_conn != nullptr && client_conn->userinfo != nullptr
 		? client_conn->userinfo->username : nullptr;
 	if (!backend_auth_compatible(username, requested_type)) {
-		// the two connections use different usernames
-		// or authentication modes. The caller decides whether CHANGE_USER is
-		// permitted for that mode.
+		// Different usernames require authentication with the requesting user's
+		// policy. The caller chooses CHANGE_USER or a fresh connection.
 		return true;
 	}
 	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
