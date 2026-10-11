@@ -416,6 +416,20 @@ static void sc_local_error_named_ext_rollback(PgConnection& c) {
     c.execute("SELECT 1");
 }
 
+// A driver that re-prepares its ROLLBACK closes the old statement first: Close(S, name)
+// then Parse(name, 'ROLLBACK') in one frame. PostgreSQL accepts both in an aborted
+// transaction; the Close frees the name for the Parse.
+static void sc_local_error_close_then_parse_rollback(PgConnection& c) {
+    c.prepareStatement("rollback_6424_reprep", "ROLLBACK", true);   // consumes its own ReadyForQuery
+    c.execute("BEGIN");
+    c.executePortal("", 0, true);
+    c.closeStatement("rollback_6424_reprep", false);
+    c.prepareStatement("rollback_6424_reprep", "ROLLBACK", false);
+    c.bindStatement("rollback_6424_reprep", "", {}, {}, false);
+    c.executePortal("", 0, true);
+    c.execute("SELECT 1");
+}
+
 // Anything but a transaction end is still refused with 25P02, and the extended
 // ROLLBACK that follows still recovers.
 static void sc_local_error_ext_refused(PgConnection& c) {
@@ -451,16 +465,28 @@ static void sc_local_error_ext_rollback_dup_name(PgConnection& c) {
     ext_rollback(c);
 }
 
+// The Close frees the name, and also leaves nothing to Bind: the Bind fails.
+static void sc_local_error_bind_after_close(PgConnection& c) {
+    c.execute("BEGIN");
+    c.executePortal("", 0, true);
+    c.prepareStatement("rollback_6424_closed", "ROLLBACK", false);
+    c.closeStatement("rollback_6424_closed", false);
+    c.bindStatement("rollback_6424_closed", "", {}, {}, false);
+    c.executePortal("", 0, true);
+    ext_rollback(c);
+}
+
 // Only the transaction states are compared: PostgreSQL reports these with its own
 // SQLSTATE, the poisoned session with 25P02.
 static std::vector<Msg> runLeg(bool via_proxy, void (*fn)(PgConnection&), int n_ready,
                                std::string& err);
 
-static const int INVALID_END_ASSERTS = 2;
+static const int INVALID_END_ASSERTS = 3;
 static void checkInvalidExtendedEnd(const char* mode) {
     const struct { const char* name; void (*fn)(PgConnection&); } cases[] = {
         { "extended ROLLBACK bound with a parameter", sc_local_error_ext_rollback_with_param },
         { "extended ROLLBACK parsed under a taken statement name", sc_local_error_ext_rollback_dup_name },
+        { "extended ROLLBACK bound after its statement was closed", sc_local_error_bind_after_close },
     };
     for (const auto& k : cases) {
         std::string oerr, perr;
@@ -487,6 +513,7 @@ static const Case PARITY_CASES[] = {
     { "local error at 'T', extended ROLLBACK",                          sc_local_error_ext_rollback, 4, false },
     { "local error at 'T', extended ROLLBACK with Describe(portal)",    sc_local_error_ext_rollback_describe, 4, false },
     { "local error at 'T', extended ROLLBACK of a named statement",     sc_local_error_named_ext_rollback, 4, false },
+    { "local error at 'T', Close then Parse of a named ROLLBACK",       sc_local_error_close_then_parse_rollback, 4, false },
     { "local error at 'T', extended SELECT refused, extended ROLLBACK", sc_local_error_ext_refused, 4, false },
     { "Execute of a missing named portal inside BEGIN",                 sc_named_execute_txn,       3, true  },
     { "Describe of a missing named portal inside BEGIN",                sc_named_describe_txn,      3, true  },
