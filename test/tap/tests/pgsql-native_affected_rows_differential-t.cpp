@@ -359,8 +359,14 @@ int main(int argc, char** argv) {
 		execAdmin(admin.get(), "SET pgsql-eventslog_buffer_history_size='" + orig_history + "'") &&
 		execAdmin(admin.get(), "SET pgsql-eventslog_default_log='" + orig_default_log + "'") &&
 		execAdmin(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
-	const bool servers_restored = servers.empty() || flushBackendPool(admin.get(), hg, servers) ||
-		restoreServers(admin.get(), hg, servers);
+	// The pool must also be emptied, so that no connection built in the other mode is left
+	// behind. A failed flush can have stopped before the rows were back: put them back and
+	// flush once more, and only an emptied pool counts as restored.
+	bool servers_restored = servers.empty() || flushBackendPool(admin.get(), hg, servers);
+	if (!servers_restored) {
+		diag("restore: hostgroup %d pool not emptied, restoring its servers and flushing again", hg);
+		servers_restored = restoreServers(admin.get(), hg, servers) && flushBackendPool(admin.get(), hg, servers);
+	}
 	ok(vars_restored && servers_restored, "original pgsql variables and hostgroup %d servers restored "
 	   "(variables %s, servers %s)", hg, vars_restored ? "ok" : "FAILED", servers_restored ? "ok" : "FAILED");
 	{

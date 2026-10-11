@@ -280,10 +280,12 @@ static void phase1_rst_while_pooled(PGconn* admin) {
     execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME");
     execOk(admin, std::string("DELETE FROM pgsql_users WHERE username='") + MOCK_USER + "'");
     execOk(admin, "LOAD PGSQL USERS TO RUNTIME");
-    setVar(admin, "pgsql-free_connections_pct", free_pct.c_str());
-    // Later tests sharing this ProxySQL rely on PgSQL monitoring.
-    if (!setVar(admin, "pgsql-monitor_enabled", monitor_enabled.c_str()))
-        diag("phase 1: could not restore pgsql-monitor_enabled='%s'", monitor_enabled.c_str());
+    // Later tests sharing this ProxySQL rely on PgSQL monitoring: a failed restore fails here.
+    const bool pct_restored = setVar(admin, "pgsql-free_connections_pct", free_pct.c_str());
+    const bool monitor_restored = setVar(admin, "pgsql-monitor_enabled", monitor_enabled.c_str());
+    ok(pct_restored && monitor_restored,
+       "phase 1: pgsql-monitor_enabled='%s' (%s) and pgsql-free_connections_pct='%s' (%s) restored",
+       monitor_enabled.c_str(), monitor_restored ? "ok" : "FAILED", free_pct.c_str(), pct_restored ? "ok" : "FAILED");
     mock.stop();
 }
 
@@ -332,20 +334,20 @@ static bool warmPrepared(PGconn* c) {
 }
 
 int main(int, char**) {
-    plan(13);
+    plan(14);
     if (cl.getEnv()) return exit_status();
 
     auto admin = openAdmin();
     ok(connected(admin), "ADMIN connection created");
     if (!connected(admin)) return exit_status();
     if (!pgsql_native_supported(admin.get())) {
-        skip(12, "native backend protocol is unavailable in this tier");
+        skip(13, "native backend protocol is unavailable in this tier");
         return exit_status();
     }
     if (!setVar(admin.get(), "pgsql-use_native_backend_protocol", "true"))
         BAIL_OUT("cannot enable the native backend protocol");
 
-    phase1_rst_while_pooled(admin.get());   // 5
+    phase1_rst_while_pooled(admin.get());   // 6
 
     auto backend = openBackend();
     ok(connected(backend), "direct backend connection created (kills sessions without going through the proxy)");
