@@ -356,13 +356,14 @@ std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count,
 	auto itr = records.find(hostname);
 
 	if (itr != records.end()) {
-		lookup_result_t result = get_next_ip(itr->second, all_ips);
-
 		const unsigned long long now = monotonic_time();
-		const bool pin_active = !result.pinned_ip.empty()
-								&& (result.pinned_until == 0 || now <= result.pinned_until);
-		clear_expired_pin = !result.pinned_ip.empty()
-							&& result.pinned_until != 0 && now > result.pinned_until;
+		const IP_ADDR& rec = itr->second;
+		const bool pin_active = !rec.pinned_ip.empty()
+								&& (rec.pinned_until == 0 || now <= rec.pinned_until);
+		clear_expired_pin = !rec.pinned_ip.empty()
+							&& rec.pinned_until != 0 && now > rec.pinned_until;
+		// A pin serves its one IP: the rotated list of every resolved IP is not built for it.
+		lookup_result_t result = get_next_ip(rec, pin_active ? nullptr : all_ips);
 
 		if (pin_active) {
 			ip = result.pinned_ip;
