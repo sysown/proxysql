@@ -45,6 +45,7 @@ class AIUnitHandoffTests(unittest.TestCase):
         cls.groups = json.loads(GROUPS_JSON.read_text())
         cls.top_makefile = TOP_MAKEFILE.read_text()
         cls.unit_makefile = UNIT_MAKEFILE.read_text()
+        cls.unit_manifest = (TAP_ROOT / "ai_genai_unit_tests.mk").read_text()
         cls.expected = {
             name
             for name, memberships in cls.groups.items()
@@ -57,8 +58,9 @@ class AIUnitHandoffTests(unittest.TestCase):
         self.assertEqual(len(self.expected), 11)
 
     def test_unit_makefile_build_contract_matches_group_declarations(self):
+        self.assertIn("include $(PROXYSQL_PATH)/test/tap/ai_genai_unit_tests.mk", self.unit_makefile)
         configured = set(
-            parse_make_list(self.unit_makefile, "AI_GENAI_UNIT_TESTS")
+            parse_make_list(self.unit_manifest, "AI_GENAI_UNIT_TESTS")
         )
         self.assertEqual(configured, self.expected)
         self.assertTrue(configured.isdisjoint(UNRELATED_GENAI_UNITS))
@@ -67,8 +69,9 @@ class AIUnitHandoffTests(unittest.TestCase):
         )
 
     def test_top_level_stage_contract_is_runner_discoverable(self):
+        self.assertIn("include $(dir $(lastword $(MAKEFILE_LIST)))ai_genai_unit_tests.mk", self.top_makefile)
         configured = set(
-            parse_make_list(self.top_makefile, "AI_GENAI_UNIT_TESTS")
+            parse_make_list(self.unit_manifest, "AI_GENAI_UNIT_TESTS")
         )
         self.assertEqual(configured, self.expected)
         self.assertTrue(configured.isdisjoint(UNRELATED_GENAI_UNITS))

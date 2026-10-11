@@ -27,6 +27,7 @@
 #include <vector>
 
 extern ProxySQL_Admin* GloAdmin;
+extern ProxySQL_Admin* SPA;
 extern ProxySQL_Statistics* GloProxyStats;
 extern MySQL_Monitor* GloMyMon;
 extern void proxysql_wake_server_discovery_admin();
@@ -34,6 +35,28 @@ extern void proxysql_wake_server_discovery_admin();
 #ifndef PROXYSQL_FAKE_PLUGIN_PATH
 #error "PROXYSQL_FAKE_PLUGIN_PATH must be defined"
 #endif
+
+// The fixture uses the real constructor but never starts the Admin daemon.
+// Initialize the private state normally supplied by init() so scoped owners
+// can run the real destructor without joining a nonexistent Admin thread.
+class TestDiskUpgrade {
+public:
+	/** Return an owned, constructor-only Admin prepared for real destruction. */
+	static std::unique_ptr<ProxySQL_Admin> make_admin() {
+		auto admin = std::make_unique<ProxySQL_Admin>();
+		admin->main_shutdown = 0;
+		admin->admin_threads_shutdown = true;
+		admin->main_poll_nfds = 0;
+		admin->main_poll_fds = nullptr;
+		admin->main_callback_func = nullptr;
+		admin->tables_defs_admin = std::make_unique<std::vector<table_def_t*>>().release();
+		admin->tables_defs_stats = std::make_unique<std::vector<table_def_t*>>().release();
+		admin->tables_defs_config = std::make_unique<std::vector<table_def_t*>>().release();
+		admin->AdminHTTPServer = nullptr;
+		admin->AdminRestApiServer = nullptr;
+		return admin;
+	}
+};
 
 namespace {
 
@@ -303,8 +326,9 @@ ProxySQL_ServerDesiredSet pgsql_desired(uint64_t generation,
 
 } // namespace
 
+/** Check server reconciliation and teardown of constructor-only Admin fixtures. */
 int main() {
-	plan(84);
+	plan(85);
 	proxysql_server_discovery_after_final_revalidation_for_test = &after_final_revalidation_hook;
 	proxysql_server_reconcile_after_hgm_snapshot_for_test = &after_hgm_snapshot_hook;
 	proxysql_server_discovery_retirement_attempt_for_test = &retirement_attempt_hook;
@@ -318,7 +342,8 @@ int main() {
 	MyHGM->gtid_ev_loop = ev_loop_new(0);
 	ev_async_init(MyHGM->gtid_ev_async, [](EV_P_ ev_async*, int) {});
 
-	auto* admin = new ProxySQL_Admin();
+	auto admin_owner = TestDiskUpgrade::make_admin();
+	auto* admin = admin_owner.get();
 	GloAdmin = admin;
 	ok(pipe(admin->pipefd) == 0, "Admin wake pipe is available to worker posts");
 
@@ -460,7 +485,8 @@ int main() {
 		{0, "zero-writer.example", 3306, 0, "ONLINE", 23, 0, 100, 0, 1, 0, "zero"},
 		{1, "zero-reader.example", 3306, 0, "ONLINE", 24, 0, 100, 0, 1, 0, "zero"},
 		{99, "unrelated.example", 3306, 0, "ONLINE", 90, 0, 100, 0, 1, 0, "keep"}});
-	MyHGM->save_incoming_mysql_table(std::make_unique<SQLite3_result>(4).release(),
+	auto empty_replication = std::make_unique<SQLite3_result>(4);
+	MyHGM->save_incoming_mysql_table(empty_replication.get(),
 		"mysql_replication_hostgroups");
 	MyHGM->servers_add(initial.get());
 	ok(MyHGM->commit({}, {}, false),
@@ -877,7 +903,8 @@ int main() {
 		std::unique_lock<std::mutex> lock(acks.mutex);
 		acks.cv.wait(lock, [&] { return acks.callback_entered; });
 	}
-	auto* premature_admin = new ProxySQL_Admin();
+	auto premature_admin_owner = TestDiskUpgrade::make_admin();
+	auto* premature_admin = premature_admin_owner.get();
 	ok(pipe(premature_admin->pipefd) == 0, "concurrent replacement Admin has a wake pipe");
 	GloAdmin = premature_admin;
 	ok(!manager->post_server_desired_set(desired(newer_generation, {shunned})),
@@ -888,7 +915,8 @@ int main() {
 		acks.cv.notify_all();
 	}
 	closing_inbox.join();
-	auto* reopened_admin = new ProxySQL_Admin();
+	auto reopened_admin_owner = TestDiskUpgrade::make_admin();
+	auto* reopened_admin = reopened_admin_owner.get();
 	ok(pipe(reopened_admin->pipefd) == 0, "fresh Admin lifecycle has a wake pipe after shutdown drains");
 	GloAdmin = reopened_admin;
 	ProxySQL_ServerRow reloaded = shunned;
@@ -896,7 +924,8 @@ int main() {
 	reloaded.weight = 301;
 	reloaded.force_topology_role = true;
 	const bool reloaded_post = manager->post_server_desired_set(desired(newer_generation, {reloaded}));
-	auto* duplicate_admin = new ProxySQL_Admin();
+	auto duplicate_admin_owner = TestDiskUpgrade::make_admin();
+	auto* duplicate_admin = duplicate_admin_owner.get();
 	ok(pipe(duplicate_admin->pipefd) == 0, "duplicate in-process Admin lifecycle has a wake pipe");
 	GloAdmin = duplicate_admin;
 	ok(reloaded_post && duplicate_admin->drain_server_discovery_updates() == 1,
@@ -997,12 +1026,14 @@ int main() {
 
 	auto configured_mysql = mysql_rows({
 		{31, "configured-mysql.example", 3306, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "writer"}});
-	MyHGM->save_incoming_mysql_table(replication_rows(31, 32).release(),
+	auto configured_mysql_replication = replication_rows(31, 32);
+	MyHGM->save_incoming_mysql_table(configured_mysql_replication.get(),
 		"mysql_replication_hostgroups");
 	MyHGM->servers_add(configured_mysql.get());
 	auto configured_pgsql = pgsql_rows({
 		{31, "configured-pgsql.example", 5432, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "writer"}});
-	PgHGM->save_incoming_pgsql_table(replication_rows(31, 32).release(),
+	auto configured_pgsql_replication = replication_rows(31, 32);
+	PgHGM->save_incoming_pgsql_table(configured_pgsql_replication.get(),
 		"pgsql_replication_hostgroups");
 	PgHGM->servers_add(configured_pgsql.get());
 	ok(MyHGM->commit({}, {}, false) && PgHGM->commit({}, {}, false),
@@ -1021,12 +1052,10 @@ int main() {
 			32, "configured-pgsql.example", 5432) != nullptr,
 		"configured MySQL and PostgreSQL replication pairs still enumerate and map normally");
 
-	close(admin->pipefd[0]);
-	close(admin->pipefd[1]);
-	close(premature_admin->pipefd[0]);
-	close(premature_admin->pipefd[1]);
-	close(reopened_admin->pipefd[0]);
-	close(reopened_admin->pipefd[1]);
+	const std::vector<int> scoped_admin_descriptors {
+		admin->pipefd[0], admin->pipefd[1],
+		premature_admin->pipefd[0], premature_admin->pipefd[1],
+		reopened_admin->pipefd[0], reopened_admin->pipefd[1]};
 	GloAdmin = duplicate_admin;
 	duplicate_admin->close_server_discovery_wake_pipe();
 	int replacement_pipe[2] {-1, -1};
@@ -1048,5 +1077,20 @@ int main() {
 		close(replacement_pipe[0]);
 		close(replacement_pipe[1]);
 	}
+	// All controllers and queued leases have retired. The destructor now owns
+	// cleanup of the constructor allocations and remaining Admin wake pipes.
+	duplicate_admin_owner.reset();
+	reopened_admin_owner.reset();
+	premature_admin_owner.reset();
+	GloAdmin = admin;
+	admin_owner.reset();
+	SPA = nullptr;
+	const bool scoped_descriptors_closed = std::all_of(
+		scoped_admin_descriptors.begin(), scoped_admin_descriptors.end(), [](int fd) {
+			errno = 0;
+			return fcntl(fd, F_GETFD) == -1 && errno == EBADF;
+		});
+	ok(GloAdmin == nullptr && scoped_descriptors_closed,
+		"scoped Admin destructors close every remaining wake descriptor and clear the active Admin");
 	return exit_status();
 }

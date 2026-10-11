@@ -9820,6 +9820,12 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 // the same qp_addr_value_is_cidr() decision; see issue #6426.
 
 char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch, bool acquire_lock, std::string* skipped_rules_warning) {
+/**
+ * Publish query rules to QPro, transferring input ownership only on success.
+ * SQL failure releases locally queried inputs and preserves supplied snapshots.
+ * Checked callers own the returned SQLite error; legacy calls log errors.
+ */
+
 	// About the queries used here, see notes about CLUSTER_QUERY_MYSQL_QUERY_RULES and
 	// CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING in ProxySQL_Cluster.hpp
 	char *error=NULL;
@@ -10008,6 +10014,14 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			}
 			__reset_rules(&prev_rules_data.query_rules);
 		}
+	}
+	// SQL errors bypass the successful transfer to QPro. Release only results
+	// queried here; supplied snapshots remain owned by the caller on failure.
+	if (error != nullptr || error2 != nullptr) {
+		std::unique_ptr<SQLite3_result> local_rules(
+			SQLite3_query_rules_resultset == nullptr ? resultset : nullptr);
+		std::unique_ptr<SQLite3_result> local_fast_routing(
+			SQLite3_query_rules_fast_routing_resultset == nullptr ? resultset2 : nullptr);
 	}
 	// Legacy callers historically receive only log-based error reporting and
 	// do not own a returned SQLite allocation. The atomic publisher disables

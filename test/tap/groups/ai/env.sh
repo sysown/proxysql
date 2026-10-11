@@ -21,3 +21,28 @@ export MCP_PGSQL_HOSTGROUP_ID="${MCP_PGSQL_HOSTGROUP_ID:-9200}"
 # Test data database name
 export MYSQL_DATABASE="${MYSQL_DATABASE:-test}"
 export PGSQL_DATABASE="${PGSQL_DATABASE:-postgres}"
+
+# CI validates the restored binary and its handoff metadata before setup. Read
+# that version without executing an Ubuntu 24 binary on an Ubuntu 22 host.
+# Local builds without a handoff still probe the executable directly.
+if [ -f "${WORKSPACE}/src/ci-tier.json" ]; then
+    _ai_product_version="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' \
+        "${WORKSPACE}/src/ci-tier.json")" || return 1
+else
+    _ai_product_version="$("${WORKSPACE}/src/proxysql" --version)" || return 1
+fi
+_ai_product_major="$(printf '%s\n' "${_ai_product_version}" | sed -n 's/^ProxySQL version \([0-9][0-9]*\)\..*/\1/p')"
+case "${_ai_product_major}" in
+    ''|*[!0-9]*)
+        echo "ERROR: Cannot determine the compiled ProxySQL version for AI setup" >&2
+        return 1
+        ;;
+esac
+if [ "${_ai_product_major}" -ge 4 ]; then
+    export PROXYSQL_LOAD_GENAI_PLUGIN=1
+    export PROXYSQL_CONFIG_OVERRIDE="${WORKSPACE}/test/tap/groups/ai/proxysql-ci.cnf"
+else
+    export PROXYSQL_LOAD_GENAI_PLUGIN=0
+    export PROXYSQL_CONFIG_OVERRIDE="${WORKSPACE}/test/infra/control/proxysql-ci.cnf"
+fi
+unset _ai_product_version _ai_product_major
