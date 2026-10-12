@@ -7,7 +7,9 @@ run-name: >-
 on:
   # Execute trusted base-branch control code only; never check out PR code.
   pull_request_target:
-    types: [opened, reopened, synchronize]
+    # `closed` cancels all CI of a merged or closed PR; without it that CI
+    # stays queued ahead of the open PRs (GH-Actions #6462).
+    types: [opened, reopened, synchronize, closed]
   push:
     # Mirror CI-trigger exactly. Without the same filters the sweeper would
     # fire on pushes that start no cascade, and would then cancel the
