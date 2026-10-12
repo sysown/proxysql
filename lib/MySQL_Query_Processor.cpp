@@ -568,10 +568,9 @@ enum MYSQL_COM_QUERY_command MySQL_Query_Processor::query_parser_command_type(SQ
 	enum MYSQL_COM_QUERY_command ret = MYSQL_COM_QUERY_UNKNOWN;
 
 	if (mysql_thread___query_processor_parser == 1) {
-		if (qp->parsersql_stmt_type >= 0) {
-			// already classified during the digest parse
-			ret = parsersql_stmt_type_to_mysql_command(qp->parsersql_stmt_type);
-		} else if (text) {
+		// The digest no longer classifies the statement (#6454): ask ParserSQL
+		// lazily, and only when the command type is actually needed.
+		if (text) {
 			ret = parsersql_command_type_mysql(text, strlen(text)); // NOSONAR
 		}
 	}

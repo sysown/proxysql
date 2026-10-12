@@ -69,6 +69,24 @@ Phase 1 limitations (documented in code + spec):
 - Cluster sync of variables works via the standard `mysql_variables`
   path; metric counters are per-node
 
+#### PostgreSQL query digest fixes and ParserSQL digest removal
+
+- Fixed `pgsql-query_digests_keep_comment`: a kept comment is followed by a
+  separator space, and the digest buffer now accounts for it, so the last
+  character of a query is no longer dropped (#6451).
+- Fixed an unterminated `/*` comment leaking its last character into the
+  digest. An unterminated comment now contributes nothing; its partial text is
+  preserved when `pgsql-query_digests_keep_comment` is on (#6451).
+- Parser mode (`*-query_processor_parser=1`) no longer changes the digest: the
+  digest, digest text and first comment always come from the legacy tokenizer,
+  with every `*-query_digests_*` option honoured. ParserSQL is now used only as
+  an add-on, for the command type and for SET / user-variable parsing (#6454).
+  Digests of statements that ParserSQL fully parsed change on upgrade, so rules
+  that match on `digest` and saved digest statistics must be reviewed.
+
+**Note:** the ParserSQL digest change (#6454) must land with or after the
+tokenizer fixes in #6451, because the tokenizer becomes the only digest source.
+
 #### New Features (3.1)
 
 - `hostgroup_settings.backup_weight_threshold` / `backup_availability`: servers with

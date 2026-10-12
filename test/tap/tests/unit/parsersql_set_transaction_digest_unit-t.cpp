@@ -138,16 +138,15 @@ static std::string loose(const std::string& digest) {
 }
 
 /**
- * The ParserSQL digest must be @p c.digest and equal the legacy digest except
- * for keyword case and list spacing. match_regexes[2] must decide the same on
- * both digests.
+ * The parser digest must equal the legacy digest. match_regexes[2] must decide the
+ * same on both digests.
  */
 static void check_case(const Dialect& d, const Case& c) {
 	const Digest legacy = legacy_digest(d, c.sql);
 	const Digest parser = parser_digest(d, c.sql);
-	ok(parser.found && parser.text == c.digest,
-		"%s digest of [%s] is '%s' (got: '%s')", d.name, printable(c.sql).c_str(), c.digest,
-		printable(parser.text).c_str());
+	ok(parser.found && legacy.found && parser.text == legacy.text,
+		"%s digest of [%s] equals the legacy digest (got: '%s', legacy: '%s')", d.name,
+		printable(c.sql).c_str(), printable(parser.text).c_str(), printable(legacy.text).c_str());
 	ok(legacy.found && loose(parser.text) == loose(legacy.text),
 		"%s digest of [%s] equals the legacy digest ignoring case and list spacing (legacy: '%s')", d.name,
 		printable(c.sql).c_str(), printable(legacy.text).c_str());
@@ -226,15 +225,14 @@ static void test_mysql_scope(const Dialect& d) {
 		"%s SESSION TRANSACTION digest keeps the scope (got: '%s')", d.name, session.text.c_str());
 	ok(session.hash != unscoped.hash, "%s SESSION TRANSACTION hash differs from unscoped", d.name);
 
-	// The annotation is still extracted from a fully parsed SET TRANSACTION.
+	// The annotation is still extracted, and the command type is classified lazily.
 	const char* annotated = "/* hostgroup=1 */ SET GLOBAL TRANSACTION READ ONLY";
 	SQP_par_t qp {};
 	d.parser_init(&qp, annotated, std::strlen(annotated));
 	ok(qp.first_comment && std::strstr(qp.first_comment, "hostgroup=1"),
 		"%s first comment kept for SET GLOBAL TRANSACTION (got: %s)", d.name,
 		qp.first_comment ? qp.first_comment : "NULL");
-	ok(qp.parsersql_stmt_type >= 0 &&
-		parsersql_stmt_type_to_mysql_command(qp.parsersql_stmt_type) == MYSQL_COM_QUERY_SET,
+	ok(parsersql_command_type_mysql(annotated, std::strlen(annotated)) == MYSQL_COM_QUERY_SET,
 		"%s SET GLOBAL TRANSACTION is still classified as SET", d.name);
 	release_digest(qp);
 }
@@ -282,11 +280,13 @@ static void test_parse2() {
 	check_parse2("SET PERSIST TRANSACTION READ ONLY", {});
 }
 
-/** SET statements without a TRANSACTION clause must keep the ParserSQL digest. */
+/** SET statements without a TRANSACTION clause must also get the legacy digest. */
 static void test_other_set_unchanged(const Dialect& d, const char* sql, const char* expected) {
 	const Digest parser = parser_digest(d, sql);
-	ok(parser.text == expected, "%s non-transaction SET keeps the ParserSQL digest for [%s] (got: '%s', expected: '%s')",
-		d.name, sql, parser.text.c_str(), expected);
+	const Digest legacy = legacy_digest(d, sql);
+	ok(parser.found && legacy.found && parser.text == legacy.text,
+		"%s parser digest equals legacy for [%s] (got: '%s', legacy: '%s', documented: '%s')",
+		d.name, sql, parser.text.c_str(), legacy.text.c_str(), expected);
 }
 
 int main() {
