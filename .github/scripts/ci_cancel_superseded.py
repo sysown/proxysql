@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import time
 
 from ci_tier_artifacts import GitHubAPI
 
@@ -13,19 +14,29 @@ TRIGGER_PATH = '.github/workflows/CI-trigger.yml'
 # is excluded on purpose: a manual dispatch is an explicit request for that commit
 # and must never be swept away by a later push.
 CASCADE_EVENTS = ('pull_request', 'push')
+CANCEL_ATTEMPTS = 3
+sleep = time.sleep  # replaced by the tests
 
 
 def cancel_run(api, run_id):
     path = f'repos/{api.repository}/actions/runs/{run_id}'
     if api.request(path)['status'] == 'completed':
         return False
-    try:
-        api.request(path + '/cancel', 'POST')
-    except RuntimeError:
-        # A run may finish between the status check and the cancellation.
-        if api.request(path)['status'] != 'completed':
-            raise
-        return False
+    # GitHubAPI never replays a failed POST, because most writes are not safe
+    # to repeat. Cancelling a run is: asking twice has the same effect as
+    # asking once. A transient error must not fail the whole sweep -- GitHub
+    # has answered HTTP 502 to a cancellation that did take effect.
+    for attempt in range(CANCEL_ATTEMPTS):
+        try:
+            api.request(path + '/cancel', 'POST')
+            break
+        except RuntimeError:
+            # A run may finish between the status check and the cancellation.
+            if api.request(path)['status'] == 'completed':
+                return False
+            if attempt == CANCEL_ATTEMPTS - 1:
+                raise
+            sleep(5 * 2 ** attempt)
     print(f'Cancellation requested: {api.repository}/actions/runs/{run_id}')
     return True
 
@@ -52,13 +63,13 @@ def resolve_origin(api, run, origins):
     return origin
 
 
-def sweep(api, head_sha_now, head_sha, belongs, exclude_run_id):
-    """Cancel active runs whose cascade origin predates this branch's head.
+def sweep(api, still_current, superseded, exclude_run_id):
+    """Cancel active runs whose cascade origin is superseded.
 
-    The head is re-read immediately before each cancellation rather than once
-    up front: a queued cascade lists hundreds of workflows and the head may
-    advance while the sweep runs, so a delayed sweeper must never reach a
-    cancellation for a commit that is no longer the branch head.
+    `still_current()` is re-checked immediately before each cancellation
+    rather than once up front: a queued cascade lists hundreds of workflows
+    and the branch head (or the PR state) may change while the sweep runs, so
+    a delayed sweeper must never reach a cancellation the new state forbids.
     """
     origins = {}
     cancelled = []
@@ -72,11 +83,11 @@ def sweep(api, head_sha_now, head_sha, belongs, exclude_run_id):
             origin = resolve_origin(api, run, origins)
             if origin is None:
                 continue
-            if not belongs(origin) or origin.get('head_sha') == head_sha:
+            if not superseded(origin):
                 continue
-            # Re-read the head immediately before each cancellation, not just
+            # Re-read the state immediately before each cancellation, not just
             # before listing potentially hundreds of workflows.
-            if head_sha_now() != head_sha:
+            if not still_current():
                 return cancelled
             if cancel_run(api, run_id):
                 cancelled.append(run_id)
@@ -103,7 +114,42 @@ def cancel_superseded(api, pr_number, event_head_sha, exclude_run_id):
         return run.get('event') == 'pull_request' and any(
             pr.get('number') == pr_number for pr in run.get('pull_requests', []))
 
-    return sweep(api, head_sha_now, event_head_sha, belongs, exclude_run_id)
+    return sweep(api, lambda: head_sha_now() == event_head_sha,
+                 lambda run: belongs(run) and run.get('head_sha') != event_head_sha,
+                 exclude_run_id)
+
+
+def cancel_closed_pr(api, pr_number, exclude_run_id):
+    """Cancel all CI of a PR that was merged or closed, its last head included.
+
+    Nothing else stops it: the superseded sweep only fires on a new head, so
+    every PR merged or closed with CI still queued used to leave its whole
+    ~100-workflow cascade in the shared runner pool, ahead of the open PRs.
+    A merged PR's code is tested again by the push cascade of the branch it
+    was merged into; a closed one needs no results at all.
+
+    GitHub empties a run's `pull_requests` once the PR is no longer open, so
+    the run cannot be matched by PR number. It is matched by the PR's source
+    repository and branch instead, and a run still attached to another open
+    PR from the same branch is left to that PR. Only `pull_request` origins
+    are swept: push CI on the same branch is not this PR's work.
+    """
+    pr_path = f'repos/{api.repository}/pulls/{pr_number}'
+    head = api.request(pr_path)['head']
+
+    def still_closed():
+        # A reopened PR wants its CI again; stop at once.
+        return api.request(pr_path)['state'] == 'closed'
+
+    def belongs(run):
+        return (run.get('event') == 'pull_request'
+                and (run.get('head_repository') or {}).get('full_name') == head['repo']['full_name']
+                and run.get('head_branch') == head['ref']
+                and all(pr.get('number') == pr_number for pr in run.get('pull_requests', [])))
+
+    if not still_closed():
+        return []  # Reopened before this delayed event was handled.
+    return sweep(api, still_closed, belongs, exclude_run_id)
 
 
 def cancel_superseded_push(api, branch, event_after, exclude_run_id):
@@ -133,7 +179,9 @@ def cancel_superseded_push(api, branch, event_after, exclude_run_id):
                 and run.get('head_branch') == branch
                 and run.get('path') == TRIGGER_PATH)
 
-    return sweep(api, head_sha_now, event_after, belongs, exclude_run_id)
+    return sweep(api, lambda: head_sha_now() == event_after,
+                 lambda run: belongs(run) and run.get('head_sha') != event_after,
+                 exclude_run_id)
 
 
 def cancel_if_superseded(context, api, current_run_id):
@@ -156,7 +204,9 @@ def main():
     # Both sweeps must run from a trusted context: `pull_request_target`
     # executes base-branch code, and `push` only ever fires on a branch the
     # actor can already write to. Neither checks out the tested code.
-    if name == 'pull_request_target':
+    if name == 'pull_request_target' and event.get('action') == 'closed':
+        cancelled = cancel_closed_pr(api, event['number'], run_id)
+    elif name == 'pull_request_target':
         cancelled = cancel_superseded(api, event['number'],
                                       event['pull_request']['head']['sha'], run_id)
     elif name == 'push':

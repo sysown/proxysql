@@ -5,14 +5,16 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ci_cancel_superseded import cancel_superseded, cancel_if_superseded, cancel_superseded_push
+import ci_cancel_superseded
+from ci_cancel_superseded import (cancel_closed_pr, cancel_superseded, cancel_if_superseded,
+                                  cancel_superseded_push)
 
 REPO = 'sysown/proxysql'
 OLD, CURRENT, NEWER = 'a'*40, 'b'*40, 'c'*40
 
 
-def pr(sha=CURRENT):
-    return dict(number=42, head=dict(sha=sha, ref='feature/test', repo=dict(full_name=REPO)))
+def pr(sha=CURRENT, state='open'):
+    return dict(number=42, state=state, head=dict(sha=sha, ref='feature/test', repo=dict(full_name=REPO)))
 
 
 def run(identifier, sha=OLD, event='pull_request', **changes):
@@ -42,7 +44,9 @@ class API:
         self.cancelled = []
         self.reads = 0
         self.advance_on_read = None
+        self.reopen_on_read = None
         self.complete_on_cancel = False
+        self.failing_cancels = 0
 
     def pages(self, path, key):
         status = path.split('status=')[1]
@@ -53,6 +57,8 @@ class API:
             self.reads += 1
             if self.reads == self.advance_on_read:
                 self.pr = pr(NEWER)
+            if self.reads == self.reopen_on_read:
+                self.pr['state'] = 'open'
             return copy.deepcopy(self.pr)
         if path == f'repos/{REPO}/commits/{self.branch}':
             self.reads += 1
@@ -65,6 +71,9 @@ class API:
             if self.complete_on_cancel:
                 self.runs[identifier]['status'] = 'completed'
                 raise RuntimeError('already completed')
+            if self.failing_cancels:
+                self.failing_cancels -= 1
+                raise RuntimeError('gh: Server Error (HTTP 502)')
             self.cancelled.append(identifier)
         return copy.deepcopy(self.runs[identifier])
 
@@ -206,6 +215,62 @@ class PushSweepTests(unittest.TestCase):
         api = API([package, cascade])
         self.assertEqual(cancel_superseded_push(api, 'v3.0', CURRENT, 99), [2])
         self.assertEqual(api.cancelled, [2])
+
+
+class CancelRetryTests(unittest.TestCase):
+    """Cancelling is idempotent, so a transient API error is retried."""
+
+    def setUp(self):
+        self.sleeps = []
+        self.addCleanup(setattr, ci_cancel_superseded, 'sleep', ci_cancel_superseded.sleep)
+        ci_cancel_superseded.sleep = self.sleeps.append
+
+    def test_transient_error_is_retried(self):
+        api = API([run(1)])
+        api.failing_cancels = 2
+        self.assertEqual(cancel_superseded(api, 42, CURRENT, 99), [1])
+        self.assertEqual(api.cancelled, [1])
+        self.assertEqual(len(self.sleeps), 2)
+
+    def test_persistent_error_on_an_active_run_is_reported(self):
+        api = API([run(1)])
+        api.failing_cancels = ci_cancel_superseded.CANCEL_ATTEMPTS
+        with self.assertRaisesRegex(RuntimeError, 'HTTP 502'):
+            cancel_superseded(api, 42, CURRENT, 99)
+
+
+class ClosedPRTests(unittest.TestCase):
+    """A merged or closed PR cancels all of its CI, its last head included."""
+
+    def closed_api(self, rows):
+        return API(rows, current=pr(CURRENT, state='closed'))
+
+    def test_all_runs_of_the_closed_pr_are_cancelled(self):
+        # GitHub empties pull_requests once the PR is closed.
+        origin = run(10, sha=CURRENT, pull_requests=[], status='completed')
+        child = run(11, sha='d'*40, event='workflow_run', head_branch='v3.0', pull_requests=[],
+                    display_title='feature/test CI-tests '+CURRENT+' trigger=10/1')
+        api = self.closed_api([origin, child, run(12, pull_requests=[]), run(13, CURRENT)])
+        self.assertEqual(set(cancel_closed_pr(api, 42, 99)), {11, 12, 13})
+
+    def test_other_prs_forks_branches_and_push_runs_are_preserved(self):
+        rows = [run(1, pull_requests=[dict(number=43)]),
+                run(2, head_repository=dict(full_name='someone/proxysql')),
+                run(3, head_branch='other'), run(4, event='workflow_dispatch'),
+                run(5, event='push', pull_requests=[]), run(6, event='pull_request_target'),
+                run(7, path='.github/workflows/unrelated.yml', status='completed'),
+                run(8, event='workflow_run', display_title='CI-tests trigger=7/1')]
+        api = self.closed_api(rows)
+        self.assertEqual(cancel_closed_pr(api, 42, 99), [])
+
+    def test_reopened_pr_keeps_its_ci(self):
+        api = API([run(1), run(2)])
+        self.assertEqual(cancel_closed_pr(api, 42, 99), [])
+
+    def test_reopening_during_the_sweep_stops_it(self):
+        api = self.closed_api([run(1), run(2)])
+        api.reopen_on_read = 4
+        self.assertEqual(cancel_closed_pr(api, 42, 99), [1])
 
 
 if __name__ == '__main__':
