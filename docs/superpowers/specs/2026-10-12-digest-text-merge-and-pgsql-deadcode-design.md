@@ -18,9 +18,9 @@ drops the duplicate `char *`, leaking it.
 #6440 (already merged, `lib/Query_Processor.cpp`) fixed the leak at both
 fold-back sites by replacing `insert(range)` with `emplace()` + `free()` on the
 losing key. The remaining gap versus the issue is regression coverage: the fold
-logic is inline in a template method and cannot be unit-tested. `#6453`'s
-`get_query_digests_reset_v2()` was audited and frees every auxiliary text, so it
-has no equivalent leak.
+logic is inline in a template method and cannot be unit-tested.
+`get_query_digests_reset_v2()` was audited as part of #6437 and frees every
+auxiliary text, so it has no equivalent leak.
 
 ### #6453 — dead MySQL code in the PgSQL classes
 
@@ -47,8 +47,8 @@ For each `src` entry: `dst.try_emplace(key, value)`. If the key already exists,
 `dst` keeps its pointer and the incoming `strdup()`'d duplicate is either
 appended to `duplicates` (so the caller can free it after dropping a lock) or
 freed immediately. `src` is cleared. The header only depends on
-`proxysql_typedefs.h` plus `<vector>`/`<cstdlib>`, which keeps it cheap to
-include from the unit test.
+`proxysql_typedefs.h` plus the standard `<cstdint>`, `<cstdlib>`, `<unordered_map>`
+and `<vector>` headers, which keeps it cheap to include from the unit test.
 
 `get_query_digests_v2()` calls it at the two fold-back sites:
 
