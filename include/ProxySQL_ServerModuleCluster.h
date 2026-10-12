@@ -89,7 +89,8 @@ bool proxysql_verify_server_module_tables(SQLite3DB& db, ProxySQL_ServerProtocol
 	const std::vector<ProxySQL_ServerModuleTable>& tables, std::string& error);
 
 // Builds the server-module snapshot of a Cluster v1 runtime pull. Returns
-// false, with an error, if the core rows or a module table payload are missing.
+// false, with an error, if the core result has an unexpected column count or
+// a module table payload is missing. An empty core result is a valid snapshot.
 bool proxysql_server_module_cluster_runtime_snapshot(
 	ProxySQL_ServerProtocol protocol, const SQLite3_result& core_servers,
 	const std::vector<ProxySQL_ServerModuleClusterTable>& tables,

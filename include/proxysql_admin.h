@@ -774,7 +774,9 @@ class ProxySQL_Admin {
 	 * @brief Installs the MySQL server tables in the Hostgroups Manager. Caller holds mysql_servers_wrlock().
 	 * @details Never fails and is never partially rejected: an SQLite error on a table is logged and
 	 *   that table is skipped. With PROXYSQL40, server modules and discovery controllers are notified
-	 *   after the installation ('emit_runtime_install') and cannot reject it.
+	 *   after the installation ('emit_runtime_install') and cannot reject it. With PROXYSQL40 and
+	 *   'emit_runtime_install', this function also takes ProxySQL_ServerRuntimeInstallLock itself
+	 *   (reentrant per thread); lock order: Admin servers lock -> runtime install -> HGM.
 	 */
 	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
 		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool hgm_acquire_lock = true,

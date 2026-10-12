@@ -192,6 +192,12 @@ struct ProxySQL_ServerModuleHooks {
 	// appended callback protocol.  Core never reads beyond the ABI-14 prefix for
 	// legacy modules, so frozen DSOs remain valid.
 	std::vector<ProxySQL_ServerModuleTable> tables;
+	// This appended tail replaced the ABI-15 prepare_runtime/commit_runtime pair
+	// in place, without a layout-version bump, on purpose (issue #6448): ABI 15
+	// never shipped in a release (v4.0.11 is ABI 5) and no plugin in this tree
+	// used that pair, so there is no compiled module whose slots could be
+	// misread. Do not add a compatibility shim for the removed pair.
+	//
 	// Called after core has installed a LOAD ... SERVERS TO RUNTIME. The module
 	// adopts its tables from the snapshot and reports the writer/reader
 	// hostgroups it owns. It is a notification: the module cannot reject the
@@ -237,6 +243,8 @@ extern void (*proxysql_servers_v2_refresh_exception_for_test)(int protocol, int 
 extern void (*proxysql_server_discovery_after_final_revalidation_for_test)(ProxySQL_ServerProtocol);
 extern void (*proxysql_server_reconcile_after_hgm_snapshot_for_test)(ProxySQL_ServerProtocol);
 extern void (*proxysql_server_discovery_retirement_attempt_for_test)(ProxySQL_ServerProtocol);
+// Called by proxysql_publish_server_runtime() right before it takes the install lock.
+extern void (*proxysql_server_runtime_publication_before_lock_for_test)(ProxySQL_ServerProtocol);
 #endif
 
 #endif /* PROXYSQL_SERVER_DISCOVERY_H */

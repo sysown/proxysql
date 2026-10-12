@@ -1923,12 +1923,21 @@ int main() {
 	const uint64_t hgm_before_error = MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum();
 	ok(v.db.execute("DROP TABLE main.mysql_galera_hostgroups"),
 		"an early real HGM companion-table failure is injected");
+	// Change the servers too: the LOAD must install the change despite the
+	// companion-table failure, so an unchanged checksum would mean no install.
+	v.db.execute("UPDATE main.mysql_servers SET max_latency_ms=max_latency_ms+1");
+	admin->mysql_servers_wrlock();
+	admin->load_mysql_servers_to_runtime();
+	admin->mysql_servers_wrunlock();
+	ok(MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() != hgm_before_error,
+		"an SQL failure on a companion table is logged and the LOAD still installs the changed servers");
+	v.db.execute("UPDATE main.mysql_servers SET max_latency_ms=max_latency_ms-1");
+	ok(v.db.execute(k_galera), "the HGM failure fixture is repaired");
 	admin->mysql_servers_wrlock();
 	admin->load_mysql_servers_to_runtime();
 	admin->mysql_servers_wrunlock();
 	ok(MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() == hgm_before_error,
-		"an SQL failure on a companion table is logged and the LOAD still installs the servers");
-	ok(v.db.execute(k_galera), "the HGM failure fixture is repaired");
+		"the repaired fixture reloads the original servers");
 
 	const auto live_applied = admin->apply_plugin_mysql_config(v.plan);
 	SQLite3_result* applied_users = GloMyAuth->get_current_mysql_users();

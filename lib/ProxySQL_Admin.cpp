@@ -261,10 +261,6 @@ static bool save_registered_server_module_runtime_tables(SQLite3DB* db,
 /** @brief What a LOAD ... SERVERS TO RUNTIME publishes to server modules and controllers. */
 struct server_runtime_publication_t {
 	ProxySQL_ServerModuleSnapshot snapshot {};
-	// The module tables being installed, recorded as the loaded copy: it is part
-	// of the *_servers_v2 Cluster checksum and is what peers are served
-	// (ProxySQL_ServerModuleCluster.h).
-	std::vector<ProxySQL_ServerModuleClusterTable> loaded_tables {};
 	bool notify_module {true};
 };
 
@@ -273,6 +269,10 @@ struct server_runtime_publication_t {
  * @details Never fails. When the built-in topology or a module table cannot be
  *   read, the error is logged and the module is not notified: it keeps its
  *   previous configuration. Discovery controllers are notified regardless.
+ *   When the module will be notified, its tables are recorded here as the
+ *   loaded copy: that copy is hashed into the *_servers_v2 Cluster checksum by
+ *   the HGM commit that follows, and is what peers are served
+ *   (ProxySQL_ServerModuleCluster.h), so it must be recorded before the commit.
  */
 static server_runtime_publication_t collect_server_runtime_publication(SQLite3DB* db,
 	ProxySQL_ServerProtocol protocol, const SQLite3_result& core_rows,
@@ -287,6 +287,7 @@ static server_runtime_publication_t collect_server_runtime_publication(SQLite3DB
 		publication.notify_module = false;
 		return publication;
 	}
+	std::vector<ProxySQL_ServerModuleClusterTable> loaded_tables;
 	for (const auto& table : proxysql_active_server_module_tables(protocol)) {
 		char* sqlite_error = nullptr;
 		int columns = 0;
@@ -301,21 +302,18 @@ static server_runtime_publication_t collect_server_runtime_publication(SQLite3DB
 			if (rows != nullptr) delete rows;
 			publication.notify_module = false;
 			publication.snapshot.module_tables.clear();
-			publication.loaded_tables.clear();
 			return publication;
 		}
-		publication.loaded_tables.push_back({table.table_name, table.runtime_table_name, table.order_by,
+		loaded_tables.push_back({table.table_name, table.runtime_table_name, table.order_by,
 			rows != nullptr ? std::make_unique<SQLite3_result>(rows) : nullptr});
 		publication.snapshot.module_tables.push_back({table.table_name, std::unique_ptr<SQLite3_result>(rows)});
 	}
+	proxysql_server_module_cluster_set_loaded_tables(protocol, std::move(loaded_tables));
 	return publication;
 }
 
 /** @brief Publishes a LOAD already committed to the HGM. Never fails. */
-static void publish_server_runtime(ProxySQL_ServerProtocol protocol,
-	server_runtime_publication_t publication) {
-	if (publication.notify_module)
-		proxysql_server_module_cluster_set_loaded_tables(protocol, std::move(publication.loaded_tables));
+static void publish_server_runtime(server_runtime_publication_t publication) {
 	proxysql_publish_server_runtime(std::move(publication.snapshot), publication.notify_module);
 }
 #endif /* PROXYSQL40 */
@@ -9459,7 +9457,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		false, true, hgm_acquire_lock
 	);
 #ifdef PROXYSQL40
-	if (publication) publish_server_runtime(ProxySQL_ServerProtocol::mysql, std::move(*publication));
+	if (publication) publish_server_runtime(std::move(*publication));
 #endif
 	
 	// quering runtime table will update and return latest records, so this is not needed.
@@ -9517,6 +9515,16 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	std::unique_ptr<SQLite3_result> local_resultset_servers;
 	SQLite3_result* resultset_replication = NULL;
 	SQLite3_result* resultset_hostgroup_attributes = NULL;
+	// An SQLite error is logged and the table is skipped, as in v3.0.11: the
+	// LOAD itself never fails. Freeing and resetting 'error' keeps a failed
+	// read from leaking and from skipping a later table that did not fail.
+	auto consume_error = [&](const char* failed_query) {
+		if (error == nullptr) return false;
+		proxy_error("Error on %s : %s\n", failed_query, error);
+		free(error);
+		error = nullptr;
+		return true;
+	};
 
 	SQLite3_result* runtime_pgsql_servers = incoming_pgsql_servers.runtime_pgsql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_pgsql_servers.incoming_replication_hostgroups;
@@ -9533,8 +9541,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		resultset_servers = runtime_pgsql_servers;
 	}
 	//MyHGH->wrlock();
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	}
 	else {
 #ifdef PROXYSQL40
@@ -9552,8 +9559,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	query = (char*)"SELECT a.* FROM pgsql_replication_hostgroups a JOIN pgsql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	}
 	else {
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
@@ -9573,8 +9579,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		resultset_replication = incoming_replication_hostgroups;
 	}
 
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	}
 	else {
 		// Pass the resultset to PgHGM
@@ -9593,8 +9598,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	else {
 		resultset_hostgroup_attributes = incoming_hostgroup_attributes;
 	}
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	}
 	else {
 		// Pass the resultset to PgHGM
@@ -9610,8 +9614,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	} else {
 		resultset_pgsql_servers_ssl_params = incoming_pgsql_servers.incoming_pgsql_servers_ssl_params;
 	}
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		// Pass the resultset to PgHGM
 		PgHGM->save_incoming_pgsql_table(resultset_pgsql_servers_ssl_params, "pgsql_servers_ssl_params");
@@ -9624,7 +9627,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		false, true
 	);
 #ifdef PROXYSQL40
-	if (publication) publish_server_runtime(ProxySQL_ServerProtocol::pgsql, std::move(*publication));
+	if (publication) publish_server_runtime(std::move(*publication));
 #endif
 
 	// quering runtime table will update and return latest records, so this is not needed.

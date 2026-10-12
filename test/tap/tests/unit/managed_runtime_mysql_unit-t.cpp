@@ -434,8 +434,14 @@ int main() {
   db.execute("DROP TABLE mysql_aws_rds_bgd_hostgroups");
   if (failure_ready)
     result = proxysql_activate_managed_runtime_locked(*prepared, 2);
-  ok(failure_ready && result.applied,
-     "a companion-table SQLite error does not fail the server load");
+  std::unique_ptr<SQLite3_result> runtime_servers(MyHGM->dump_table_mysql("mysql_servers"));
+  bool managed_server_installed = false;
+  if (runtime_servers)
+    for (const auto *row : runtime_servers->rows)
+      managed_server_installed |= row != nullptr && row->fields[1] != nullptr &&
+                                  std::string(row->fields[1]) == "managed.test";
+  ok(failure_ready && result.applied && managed_server_installed,
+     "a companion-table SQLite error does not fail the server load, which installs the servers");
   proxysql_destroy_managed_prepared_runtime(prepared);
   proxysql_unlock_configuration();
   return exit_status();

@@ -129,7 +129,10 @@ public:
 	// Records a configuration core has already installed. With notify_module,
 	// the module's runtime_installed callback observes it and reports its
 	// hostgroup claims; invalid or overlapping claims are dropped and logged.
-	// Never fails. Without notify_module the module keeps its previous claims.
+	// Never fails. Without notify_module the module is not called and keeps
+	// its previous claims, minus any that now overlap the installed topology.
+	// The legacy (ABI-14) callback and the controller are notified either way:
+	// they observe the installed core servers, which this LOAD did install.
 	void install_server_runtime(ProxySQL_ServerModuleSnapshot snapshot, bool notify_module);
 	// Records the snapshot, replaces the module hostgroup claims, and notifies
 	// the legacy callback and the discovery controller under one callback lease.
@@ -274,9 +277,10 @@ private:
 	uint64_t managed_server_revisions_[2] {0, 0};
 	// Requires server_discovery_mutex_. Keeps module and managed ownership separate.
 	void rebuild_server_delegated_hostgroups(int index);
-	// Null hostgroup_claims keeps the current module claims.
+	// Null hostgroup_claims keeps the current module claims. With only_if_newer,
+	// a snapshot older than the stored one is dropped (nested publication).
 	void store_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot,
-		std::vector<ProxySQL_ServerHostgroupClaim>* hostgroup_claims);
+		std::vector<ProxySQL_ServerHostgroupClaim>* hostgroup_claims, bool only_if_newer);
 	server_retirement_observer_for_test_cb server_retirement_observer_for_test_ { nullptr };
 	void *server_retirement_observer_opaque_for_test_ { nullptr };
 #endif /* PROXYSQL40 */
@@ -374,7 +378,9 @@ size_t proxysql_active_manager_pin_acquisitions_for_test();
 std::vector<ProxySQL_ServerModuleTable> proxysql_active_server_module_tables(
 	ProxySQL_ServerProtocol protocol);
 std::vector<ProxySQL_ClusterPluginIdentity> proxysql_active_plugin_identities();
-// See ProxySQL_PluginManager::install_server_runtime(). No-op without an active manager.
+// See ProxySQL_PluginManager::install_server_runtime(). No-op without an active manager,
+// and while plugin init/start holds the manager exclusively (the snapshot is then
+// dropped with a warning; modules observe the next LOAD).
 void proxysql_install_active_server_runtime(ProxySQL_ServerModuleSnapshot snapshot,
 	bool notify_module);
 SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(

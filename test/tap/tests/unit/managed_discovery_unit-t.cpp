@@ -199,8 +199,10 @@ int main() {
             "stale revisions and overlapping claims reject without consuming a generation");
         ProxySQL_ServerModuleSnapshot reload {};
         reload.runtime = {protocol,0,{unrelated},{}};
+        const uint64_t before_reload = proxysql_pending_server_runtime_generation(protocol);
         proxysql_publish_server_runtime(std::move(reload), true);
-        ok(proxysql_active_server_hostgroup_claims(protocol).size()==1,
+        ok(proxysql_pending_server_runtime_generation(protocol)==before_reload+1 &&
+            proxysql_active_server_hostgroup_claims(protocol).size()==1,
             "ordinary server installation retains separately owned managed claims");
         ProxySQL_ServerModuleSnapshot conflict {};
         conflict.runtime = {protocol,0,{unrelated},{703}};

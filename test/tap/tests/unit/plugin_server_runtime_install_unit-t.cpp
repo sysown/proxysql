@@ -76,7 +76,7 @@ size_t occurrences(const std::string& value, const std::string& needle) {
 } // namespace
 
 int main() {
-	plan(32);
+	plan(33);
 	test_init_minimal();
 	char path[] = "/tmp/proxysql_server_runtime_install.XXXXXX";
 	const int fd = mkstemp(path);
@@ -151,21 +151,27 @@ int main() {
 	// Publications of one protocol are serialized by the install lock: one
 	// arriving while another installation holds it waits, and never fails.
 	std::atomic<bool> second_published {false};
-	std::atomic<bool> second_started {false};
+	static std::atomic<bool> second_at_lock {false};
+	second_at_lock.store(false);
+	// Set by the publication itself right before it takes the install lock,
+	// so the check below cannot pass merely because the worker never ran.
+	proxysql_server_runtime_publication_before_lock_for_test = [](ProxySQL_ServerProtocol) {
+		second_at_lock.store(true, std::memory_order_release);
+	};
 	std::thread second;
 	{
 		ProxySQL_ServerRuntimeInstallLock held(ProxySQL_ServerProtocol::mysql);
 		second = std::thread([&] {
-			second_started.store(true, std::memory_order_release);
 			proxysql_publish_server_runtime(module_snapshot(ProxySQL_ServerProtocol::mysql), true);
 			second_published.store(true, std::memory_order_release);
 		});
-		while (!second_started.load(std::memory_order_acquire)) std::this_thread::yield();
+		while (!second_at_lock.load(std::memory_order_acquire)) std::this_thread::yield();
 		std::this_thread::sleep_for(std::chrono::milliseconds(30));
 		ok(!second_published.load(std::memory_order_acquire),
 			"a concurrent MySQL publication waits for the held install lock");
 	}
 	second.join();
+	proxysql_server_runtime_publication_before_lock_for_test = nullptr;
 	ok(second_published.load(std::memory_order_acquire),
 		"the waiting publication completes once the install lock is released");
 
@@ -189,6 +195,16 @@ int main() {
 		"a throwing module cannot block the publication or the controller notification");
 	ok(claims_are(ProxySQL_ServerProtocol::mysql, {}),
 		"a throwing module owns no hostgroup claims");
+
+	// A module callback may publish again on the same thread (the install lock
+	// is reentrant). The outer, older publication must not overwrite the
+	// nested, newer one when it completes.
+	const size_t before_stale = occurrences(read_log(), "server_controller_runtime");
+	ProxySQL_ServerModuleSnapshot stale = module_snapshot(ProxySQL_ServerProtocol::mysql);
+	stale.runtime.generation = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) - 2;
+	manager->install_server_runtime(std::move(stale), true);
+	ok(occurrences(read_log(), "server_controller_runtime") == before_stale,
+		"a publication older than the installed one is dropped, not stored or announced");
 
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_INVALID_CLAIM", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM", "1", 1);

@@ -1796,20 +1796,23 @@ void ProxySQL_PluginManager::install_server_runtime(
 	ProxySQL_ServerModuleSnapshot snapshot, bool notify_module) {
 	const int index = server_protocol_index(snapshot.runtime.protocol);
 	if (index < 0) return;
-	if (!notify_module) {
-		install_server_runtime_snapshot(std::move(snapshot.runtime));
-		return;
-	}
 	void (*runtime_installed)(void *, const ProxySQL_ServerModuleSnapshot&,
 		std::vector<ProxySQL_ServerHostgroupClaim>&) = nullptr;
 	void* opaque = nullptr;
+	std::vector<ProxySQL_ServerHostgroupClaim> claims;
 	{
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-		runtime_installed = server_modules_[index].runtime_installed;
-		opaque = server_modules_[index].opaque;
-		if (runtime_installed != nullptr) ++server_callback_leases_[index];
+		if (notify_module) {
+			runtime_installed = server_modules_[index].runtime_installed;
+			opaque = server_modules_[index].opaque;
+			if (runtime_installed != nullptr) ++server_callback_leases_[index];
+		} else {
+			// The module is not notified and keeps its claims, but they are
+			// filtered again below against the topology installed now, so a
+			// built-in topology added by this LOAD cannot overlap them.
+			claims = server_hostgroup_claims_[index];
+		}
 	}
-	std::vector<ProxySQL_ServerHostgroupClaim> claims;
 	if (runtime_installed != nullptr) {
 		ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
 		try {
@@ -1824,22 +1827,25 @@ void ProxySQL_PluginManager::install_server_runtime(
 	}
 	claims = filter_server_module_claims(snapshot.runtime,
 		managed_server_hostgroup_claims(snapshot.runtime.protocol), claims);
-	install_server_runtime_snapshot(std::move(snapshot.runtime), std::move(claims));
+	// A module callback can publish again on this thread (the install lock is
+	// reentrant): that nested publication carries a higher generation and is
+	// already stored, so this older one must not overwrite it.
+	store_server_runtime_snapshot(std::move(snapshot.runtime), &claims, true);
 }
 
 void ProxySQL_PluginManager::install_server_runtime_snapshot(
     ProxySQL_ServerRuntimeSnapshot snapshot,
     std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims) {
-	store_server_runtime_snapshot(std::move(snapshot), &hostgroup_claims);
+	store_server_runtime_snapshot(std::move(snapshot), &hostgroup_claims, false);
 }
 
 void ProxySQL_PluginManager::install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot) {
-	store_server_runtime_snapshot(std::move(snapshot), nullptr);
+	store_server_runtime_snapshot(std::move(snapshot), nullptr, false);
 }
 
 void ProxySQL_PluginManager::store_server_runtime_snapshot(
     ProxySQL_ServerRuntimeSnapshot snapshot,
-    std::vector<ProxySQL_ServerHostgroupClaim>* hostgroup_claims) {
+    std::vector<ProxySQL_ServerHostgroupClaim>* hostgroup_claims, bool only_if_newer) {
 	const int index = server_protocol_index(snapshot.protocol);
 	if (index < 0) return;
 	void *module_opaque = nullptr;
@@ -1848,6 +1854,8 @@ void ProxySQL_PluginManager::store_server_runtime_snapshot(
 	bool callback_lease = false;
 	{
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		if (only_if_newer && server_snapshots_present_[index] &&
+			server_snapshots_[index].generation > snapshot.generation) return;
 		server_snapshots_[index] = snapshot;
 		server_snapshots_present_[index] = true;
 		if (hostgroup_claims != nullptr) {

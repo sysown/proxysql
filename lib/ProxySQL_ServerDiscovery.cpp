@@ -22,6 +22,7 @@ bool proxysql_materialize_server_desired_set(const ProxySQL_ServerDesiredSet& de
 void (*proxysql_server_discovery_after_final_revalidation_for_test)(ProxySQL_ServerProtocol) = nullptr;
 void (*proxysql_server_reconcile_after_hgm_snapshot_for_test)(ProxySQL_ServerProtocol) = nullptr;
 void (*proxysql_server_discovery_retirement_attempt_for_test)(ProxySQL_ServerProtocol) = nullptr;
+void (*proxysql_server_runtime_publication_before_lock_for_test)(ProxySQL_ServerProtocol) = nullptr;
 #endif
 void (*proxysql_servers_v2_refresh_exception_for_test)(int, int) = nullptr;
 
@@ -152,6 +153,8 @@ uint64_t proxysql_publish_server_runtime(ProxySQL_ServerModuleSnapshot snapshot,
 	bool notify_module) {
 	const ProxySQL_ServerProtocol protocol = snapshot.runtime.protocol;
 	if (protocol_index(protocol) < 0) return 0;
+	if (proxysql_server_runtime_publication_before_lock_for_test != nullptr)
+		proxysql_server_runtime_publication_before_lock_for_test(protocol);
 	ProxySQL_ServerRuntimeInstallLock lock(protocol);
 	snapshot.runtime.generation = proxysql_advance_server_runtime_generation(protocol);
 	const uint64_t generation = snapshot.runtime.generation;
