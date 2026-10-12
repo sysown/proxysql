@@ -12,6 +12,8 @@ Apply to every push:
 4. **Failing tests investigated, not dismissed.** No "flaky" / "baseline" / "pre-existing" labels without a deterministic mechanism attached. (§11)
 5. **Comprehensive claims backed by exhaustive probes.** When the fix is "comprehensive" / "all at once" / "one bump", the catalogue of inputs that were probed must exist *before* the fix list. (§12)
 6. **CI red lights diagnosed before reacting.** Real test failure vs status-reporter / cache-race / auth blip. The PR-status column hides which step actually failed. (§13)
+7. **Invariants checked.** The change does not break, weaken or add a way to violate anything in `doc/agents/invariants.md`. If it touches one, it is a design change: stop and ask. (§19)
+8. **Every new mechanism has an in-tree caller.** A new hook, flag, ABI slot, transaction, protocol or "for future use" parameter must name the shipped code that uses it. (§18)
 
 ---
 
@@ -312,3 +314,57 @@ gh pr diff <PR> | grep "^+++ b/" | grep -v "<expected_files_pattern>"
 **Detection:** `docker inspect proxysql.<INFRA_ID> --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}'` shows whose worktree the binary comes from; `SELECT hostname FROM pgsql_servers` via admin shows a poisoned backend hostname.
 
 **Useful:** `TEST_PY_TAP_INCL=<regex>` runs a subset through `run-tests-isolated.bash` without the full group.
+
+---
+
+## 18. Building a Mechanism With No In-Tree User
+
+**Symptom:** A PR adds generic machinery (a hook, a veto, a transaction or prepare/commit protocol, a generation counter, an ABI slot, a result side channel) "so that plugins/modules can ...". Nothing that ships uses it. Its only callers are test fakes. Later PRs fix bugs in it, add reporting for it, and build more code on it.
+
+**Root cause:** For an agent, writing generality costs nothing, and it looks like good design. Its cost only appears later: every subsequent change must keep the unused paths "correct", and every bug in them is real even though the feature isn't.
+
+#6448 is the reference case:
+- `1ed576b9d` wrapped every `LOAD ... SERVERS TO RUNTIME` in an install transaction with a mutex, a generation counter and a module veto, compiled on every tier. No shipped plugin registers a server module.
+- That caused five follow-up commits in eight weeks, three more defects in review, one commit that made every successful LOAD return ERROR and broke all cluster CI, and finally an issue to delete all of it.
+
+**Prevention:**
+- A new mechanism must name its **shipped** caller in the PR description, by file and function. Test fakes do not count. Neither does "a future plugin" or "an out-of-tree plugin might".
+- If the caller does not exist yet, the mechanism lands **in the same PR as its first real user**, or not at all.
+- If a plugin needs to *observe* core state, give it a notification after the fact. Do not give it a way to *participate in or reject* a core operation (see `invariants.md` I-3).
+
+**Detection:**
+- For every new function pointer, hook struct field, ABI slot or public member in the diff, grep for callers outside `test/` and outside the file that defines it. Zero callers means a red flag.
+- A test file whose only purpose is to drive a fake plugin through a new core hook is a strong hint that the hook has no user.
+
+---
+
+## 19. Changing a Contract Under a `fix(...)` Label
+
+**Symptom:** A commit titled `fix(...)` changes what a user-visible operation does: it can now fail when it could not before, it replies differently, it becomes conditional on plugin state, or it behaves differently on the Stable tier. Reviewers apply fix-level scrutiny, and the change ships.
+
+**Root cause:** The agent is solving a local problem ("make installs transactional") and does not see that the local solution changes a product contract. The contracts were never written down, so nothing told it otherwise.
+
+**Prevention:**
+- Read `doc/agents/invariants.md` before changing any admin command, LOAD/SAVE path, auth path, session-state handling, or hot-path locking.
+- If the change touches an invariant, **stop**. Do not implement it. Write up the trade-off and ask for a maintainer decision. A contract change ships only with that decision cited in the commit message, and is labelled `feat(...)` or `change(...)`, never `fix(...)`.
+- Changing a function from `void` to `bool` (or adding an error return) on an operation that could not fail before is a contract change by definition.
+
+**Detection:**
+- In a `fix(...)` commit, a new `return false` / error path in `load_*_to_runtime`, `save_*`, `flush_*`, `Admin_Handler.cpp` command branches, or auth code.
+- In a `fix(...)` commit, any `void` → `bool` signature change on those paths.
+
+---
+
+## 20. Fix-on-Fix: Patching a Mechanism for the Third Time
+
+**Symptom:** The same mechanism gets fix after fix. Each one addresses the newest symptom: missing reason, wrong flag, flag not reset, flag read after unlock. Each fix adds state, and the blast radius grows.
+
+**Root cause:** Each agent session accepts the existing design as a given and patches the reported symptom. Nobody in the loop owns the question "should this exist?". Review bots add more symptoms to fix.
+
+**Prevention:**
+- **The third fix to the same mechanism within a release cycle is a stop sign.** Do not write it. Report the chain to the maintainer: the commits, what each one patched, and what the mechanism is for. Propose reverting or redesigning it.
+- Before fixing a bug in code added during the current cycle, check `git log` for that code. If it is already a fix of a fix, the right fix is usually deletion.
+
+**Detection:**
+- `git log -p --format='%h %ad %s' --date=short v<last-release>..HEAD -- <file>` lists the candidate commits. Read the diffs: count only fixes that modify the same function, flag or mechanism. Three or more is the stop sign.
+- Commit messages that describe fixing "the previous round" or "the previous fix".
