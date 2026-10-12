@@ -20,6 +20,7 @@
 #include "PgSQL_Authentication.h"
 #include "PgSQL_Query_Processor.h"
 #include "ProxySQL_StartupGate.h"
+#include "proxysql_admin_global_sql_lock.h"
 #include "ProxySQL_ClusterPluginHash.h"
 
 #ifdef DEBUG
@@ -1233,6 +1234,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime MySQL Query Rules from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: Loading to runtime MySQL Query Rules from peer %s:%d\n", hostname, port);
 						pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+						proxysql_admin_global_sql_lock_depth() = 1;
 						//GloAdmin->admindb->execute("PRAGMA quick_check");
 						GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_QUERY_RULES);
 						GloAdmin->admindb->execute(SQLQueries::DELETE_MYSQL_QUERY_RULES_FAST_ROUTING);
@@ -1343,6 +1345,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "NOT saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
 							proxy_info("Cluster: NOT saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
 						}
+						proxysql_admin_global_sql_lock_depth() = 0;
 						pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_success]->Increment();
 
@@ -2207,6 +2210,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						// Same order as an Admin LOAD: the global Admin SQL mutex, then the
 						// servers lock. The pull writes to the shared admin database.
 						pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+						proxysql_admin_global_sql_lock_depth() = 1;
 						GloAdmin->mysql_servers_wrlock();
 						std::unique_ptr<SQLite3_result> runtime_mysql_servers_resultset = get_SQLite3_resulset(result);
 #ifdef PROXYSQL40
@@ -2242,6 +2246,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 							}
 						}
 						GloAdmin->mysql_servers_wrunlock();
+						proxysql_admin_global_sql_lock_depth() = 0;
 						pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 
 						// free result
@@ -2526,6 +2531,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						// Same order as an Admin LOAD: the global Admin SQL mutex, then the
 						// servers lock. The pull writes to the shared admin database.
 						pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+						proxysql_admin_global_sql_lock_depth() = 1;
 						GloAdmin->mysql_servers_wrlock();
 #ifdef PROXYSQL40
 						if (module_status == module_fetch_status::success) {
@@ -2534,6 +2540,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 								proxy_error("Cluster: applying MySQL server-module v2 tables failed: %s\n", apply_error.c_str());
 								fetch_failed = true;
 								GloAdmin->mysql_servers_wrunlock();
+								proxysql_admin_global_sql_lock_depth() = 0;
 								pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 								break;
 							}
@@ -2833,9 +2840,30 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime MySQL Servers v2 from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: Loading to runtime MySQL Servers v2 from peer %s:%d\n", hostname, port);
-						GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
+						const bool mysql_servers_loaded =
+							GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
+						// FALSE plus a REAL installation failure must stop
+						// this pull BEFORE any persistence below: a
+						// save-to-disk here would overwrite the
+						// freshly-pulled tables with the stale runtime
+						// (issue #6440 review). The loader reports that
+						// distinction in servers_load_install_failed; a
+						// module veto (which installed the core tables)
+						// is advisory only.
+						if (GloAdmin->servers_load_install_failed[0]) {
+							proxy_error("Cluster: MySQL servers pulled from peer %s:%d were not installed to runtime: %s\n",
+								hostname, port,
+								GloAdmin->servers_load_veto[0].empty() ?
+									"(internal error)" : GloAdmin->servers_load_veto[0].c_str());
+							fetch_failed = true;
+							GloAdmin->mysql_servers_wrunlock();
+							proxysql_admin_global_sql_lock_depth() = 0;
+							pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+							break;
+						}
 						if (!GloAdmin->servers_load_veto[0].empty()) {
-							// The core tables were installed; only the plugin tables were rejected.
+							// A server-module veto blocked only the plugin tables;
+							// the core tables WERE installed, so keep persisting them.
 							proxy_error("Cluster: the server module rejected the MySQL plugin tables pulled from peer %s:%d and keeps its previous configuration: %s\n",
 								hostname, port, GloAdmin->servers_load_veto[0].c_str());
 							fetch_failed = true;
@@ -2858,6 +2886,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							proxy_info("Cluster: Not saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
 						}
 						GloAdmin->mysql_servers_wrunlock();
+						proxysql_admin_global_sql_lock_depth() = 0;
 						pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 						} while (false);
 					} else {
@@ -3656,6 +3685,8 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 					proxy_info("Cluster: Loading to runtime PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 
 					pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+
+					proxysql_admin_global_sql_lock_depth() = 1;
 					GloAdmin->load_pgsql_query_rules_to_runtime(
 						query_rules_resultset.release(),
 						fast_routing_resultset.release(),
@@ -3672,6 +3703,7 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "NOT saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: NOT saving to disk PostgreSQL Query Rules from peer %s:%d\n", hostname, port);
 					}
+					proxysql_admin_global_sql_lock_depth() = 0;
 					pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 
 					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_query_rules_success]->Increment();
@@ -3829,6 +3861,7 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 				// Same order as an Admin LOAD: the global Admin SQL mutex, then the
 				// servers lock. The pull writes to the shared admin database.
 				pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+				proxysql_admin_global_sql_lock_depth() = 1;
 				GloAdmin->pgsql_servers_wrlock();
 				std::unique_ptr<SQLite3_result> runtime_pgsql_servers_resultset = get_SQLite3_resulset(result);
 #ifdef PROXYSQL40
@@ -3861,6 +3894,7 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 					}
 				}
 				GloAdmin->pgsql_servers_wrunlock();
+				proxysql_admin_global_sql_lock_depth() = 0;
 				pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 				if (!fetch_failed)
 					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_servers_success]->Increment();
@@ -4108,6 +4142,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					// Same order as an Admin LOAD: the global Admin SQL mutex, then the
 					// servers lock. The pull writes to the shared admin database.
 					pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+					proxysql_admin_global_sql_lock_depth() = 1;
 					GloAdmin->pgsql_servers_wrlock();
 #ifdef PROXYSQL40
 					if (pgsql_module_status == module_fetch_status::success) {
@@ -4116,6 +4151,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 							proxy_error("Cluster: applying PostgreSQL server-module v2 tables failed: %s\n", apply_error.c_str());
 							fetch_failed = true;
 							GloAdmin->pgsql_servers_wrunlock();
+							proxysql_admin_global_sql_lock_depth() = 0;
 							pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 							break;
 							}
@@ -4126,13 +4162,28 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					update_pgsql_replication_hostgroups(incoming_pgsql_servers.incoming_replication_hostgroups);
 					update_pgsql_hostgroup_attributes(incoming_pgsql_servers.incoming_hostgroup_attributes);
 					update_pgsql_servers_ssl_params(incoming_pgsql_servers.incoming_pgsql_servers_ssl_params);
-					GloAdmin->load_pgsql_servers_to_runtime(
+					const bool pgsql_servers_loaded = GloAdmin->load_pgsql_servers_to_runtime_checked(
 						incoming_pgsql_servers,
 						fetch_runtime_pgsql_servers ? expected_runtime_pgsql_server : runtime_pgsql_servers_checksum_t {},
-						expected_pgsql_server_v2
+						expected_pgsql_server_v2,
+						true
 					);
+					// Same contract as the MySQL pull above: a REAL
+					// installation failure stops the pull before persistence.
+					if (GloAdmin->servers_load_install_failed[1]) {
+						proxy_error("Cluster: PostgreSQL servers pulled from peer %s:%d were not installed to runtime: %s\n",
+							hostname, port,
+							GloAdmin->servers_load_veto[1].empty() ?
+								"(internal error)" : GloAdmin->servers_load_veto[1].c_str());
+						fetch_failed = true;
+						GloAdmin->pgsql_servers_wrunlock();
+						proxysql_admin_global_sql_lock_depth() = 0;
+						pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+						break;
+					}
 					if (!GloAdmin->servers_load_veto[1].empty()) {
-						// The core tables were installed; only the plugin tables were rejected.
+						// A server-module veto blocked only the plugin tables; the
+						// core tables WERE installed, so keep persisting them.
 						proxy_error("Cluster: the server module rejected the PostgreSQL plugin tables pulled from peer %s:%d and keeps its previous configuration: %s\n",
 							hostname, port, GloAdmin->servers_load_veto[1].c_str());
 						fetch_failed = true;
@@ -4152,6 +4203,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 						}
 					}
 					GloAdmin->pgsql_servers_wrunlock();
+					proxysql_admin_global_sql_lock_depth() = 0;
 					pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 					} while (false);
 					if (!fetch_failed)

@@ -15,6 +15,7 @@
 #include "MySQL_PreparedStatement.h"
 #include "PgSQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
+#include "proxysql_admin_global_sql_lock.h"
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Query_Cache.h"
 #include "PgSQL_Query_Cache.h"
@@ -1616,8 +1617,13 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 	//      + ProxySQL_Cluster::pull_mysql_query_rules_from_peer -> tries to lock on 'sql_query_global_mutex'
 	//  Producing a deadlock scenario between the two threads.
 	pthread_mutex_unlock(&this->sql_query_global_mutex);
+	// Manual release window: the depth drops with the mutex so any re-entrant
+	// door invoked inside the window (none today, but the protocol is
+	// mandatory) still locks; see include/proxysql_admin_global_sql_lock.h.
+	proxysql_admin_global_sql_lock_depth() = 0;
 	SQLite3_result* resultset = GloProxyCluster->get_stats_proxysql_servers_checksums();
 	pthread_mutex_lock(&this->sql_query_global_mutex);
+	proxysql_admin_global_sql_lock_depth() = 1;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_proxysql_servers_checksums");
 	if (resultset) {
@@ -1651,12 +1657,22 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 }
 
 void ProxySQL_Admin::stats___proxysql_servers_metrics() {
-	//SQLite3_result * resultset=GloProxyCluster->get_stats_proxysql_servers_metrics();
-	//if (resultset==NULL) return;
+	// Same ABBA as stats___proxysql_servers_checksums() above: this Admin
+	// session holds 'sql_query_global_mutex' and
+	// get_stats_proxysql_servers_metrics() takes 'ProxySQL_Cluster_Nodes::mutex',
+	// while a Cluster peer thread holds that nodes mutex across
+	// ProxySQL_Node_Entry::set_checksums(), whose tail pulls configuration and
+	// takes 'sql_query_global_mutex'. Release the global mutex around the
+	// snapshot; the returned resultset is a self-contained copy.
+	pthread_mutex_unlock(&this->sql_query_global_mutex);
+	// Manual release window: depth follows the mutex, see the shared protocol
+	// in include/proxysql_admin_global_sql_lock.h.
+	proxysql_admin_global_sql_lock_depth() = 0;
+	SQLite3_result *resultset = GloProxyCluster->get_stats_proxysql_servers_metrics();
+	pthread_mutex_lock(&this->sql_query_global_mutex);
+	proxysql_admin_global_sql_lock_depth() = 1;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_proxysql_servers_metrics");
-	SQLite3_result *resultset=NULL;
-	resultset=GloProxyCluster->get_stats_proxysql_servers_metrics();
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement1=NULL;

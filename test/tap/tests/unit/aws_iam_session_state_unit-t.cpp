@@ -690,7 +690,11 @@ void test_unknown_user_passthrough_uses_password(MySQL_Thread& worker) {
 	SessionFixture fixture(worker, kUnknownPassthroughUser);
 	fixture.session->passthrough_credential = true;
 	fixture.start();
-	ok(missing_policy.type == MySQLBackendAuthType::INVALID &&
+	// After the routing fix the resolver keeps a rowless account connectable:
+	// type PASSWORD with the SAME 'backend_user_not_found' failure code it
+	// used to report as INVALID. Passthrough authorization is decided from
+	// 'failure_code', not from the type (aws_iam_policy_unit pins it).
+	ok(missing_policy.type == MySQLBackendAuthType::PASSWORD &&
 		missing_policy.failure_code == "backend_user_not_found" &&
 		source.keys.empty() && fixture.session->status == CONNECTING_SERVER &&
 		fixture.selected_connection() != nullptr &&

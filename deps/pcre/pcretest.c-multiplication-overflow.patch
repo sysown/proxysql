@@ -1,0 +1,9 @@
+@@ -4094,7 +4094,7 @@
+ #endif
+       new_info(re, NULL, PCRE_INFO_SIZE, &size);
+       fprintf(outfile, "Memory allocation (code space): %d\n",
+-        (int)(size - real_pcre_size - name_count * name_entry_size));
++        (int)(size - real_pcre_size - (long) name_count * name_entry_size));
+       }
+ 
+     /* If -s or /S was present, study the regex to generate additional info to

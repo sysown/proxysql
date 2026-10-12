@@ -63,6 +63,7 @@ targets :=	libssl \
 			abseil \
 			re2 \
 			sqlite3 \
+			pcre \
 			pcre2 \
 			lz4 \
 			zstd \
@@ -471,6 +472,15 @@ re2/re2/obj/libre2.a: $(ABSL_STAMP)
 re2: re2/re2/obj/libre2.a
 
 
+pcre/pcre/.libs/libpcre.a:
+	cd pcre && rm -rf pcre-*/ || true
+	cd pcre && tar -zxf pcre-*.tar.gz
+	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
+	cd pcre/pcre && ./configure
+	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
+
+pcre: pcre/pcre/.libs/libpcre.a
+
 pcre2/pcre2/.libs/libpcre2-8.a:
 	cd pcre2 && rm -rf pcre2-*/ || true
 	cd pcre2 && tar -zxf pcre2-10.47.tar.gz
@@ -557,6 +567,8 @@ cleanall:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd re2 && rm -rf re2-*/ || true
 	cd pcre2 && rm -rf pcre2-*/ pcre2 || true
+	# deps/pcre/pcre is a TRACKED symlink (to pcre-8.45/); keep it intact.
+	cd pcre && rm -rf pcre-8.45 || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
 	cd duckdb && rm -rf duckdb-*/ duckdb || true

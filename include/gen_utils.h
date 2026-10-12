@@ -560,18 +560,10 @@ typedef struct _IP_CIDR_t {
 } IP_CIDR_t;
 
 /**
- * @brief Does @p value use the CIDR form, as opposed to being a plain address?
- *
- * '/' on its own is not enough to decide. A query rule's proxy_addr is also how
- * a Unix listener identifies itself -- MySQL_Thread.cpp copies ifi->address
- * straight into proxy_addr.addr, and for a socket listener that is the socket
- * path, e.g. "/tmp/proxysql.sock". Those values are compared literally and must
- * keep working, so a value that begins with '/' is a path rather than a prefix.
- *
- * Every other value containing '/' can only be a prefix list, since '/' cannot
- * occur in a rendered address.
+ * @brief CIDR-vs-literal classification for query rule address values lives in
+ *   query_processor.h (qp_addr_value_is_cidr) where it is field-aware: a
+ *   proxy_addr Unix listener path may be relative and still not be a prefix.
  */
-bool ip_cidr_spec_looks_like_prefix(const char *value);
 
 /**
  * @brief Parse one "address/prefix_len" token into @p out.

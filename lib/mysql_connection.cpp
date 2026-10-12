@@ -609,7 +609,21 @@ bool MySQL_Connection::can_reset_for_backend_auth_policy(
 	const MySQLBackendAuthPolicy& policy) const
 {
 	if (backend_auth_type_ != MySQLBackendAuthType::PASSWORD) return false;
-	if (policy.type == MySQLBackendAuthType::PASSWORD) return true;
+	if (policy.type == MySQLBackendAuthType::PASSWORD) {
+		// A resolvable backend row: the account is a real backend account, so
+		// a COM_CHANGE_USER towards it is ordinary reset work.
+		if (policy.failure_code.empty()) return true;
+		// A rowless PASSWORD policy ('backend_user_not_found', see
+		// resolve_mysql_backend_auth_policy) may only reset when THIS
+		// connection actually authenticated as an authorized rowless
+		// passthrough session: an unmarked connection cannot bypass the
+		// validator with frontend credentials it never presented
+		// (aws_iam_pool_unit-t pins the unmarked case as destroy-only).
+		return rowless_passthrough_authorized_ &&
+			policy.failure_code == "backend_user_not_found";
+	}
+	// An INVALID policy can never fall back to password authentication; the
+	// only reset path is an authorized rowless passthrough session.
 	return rowless_passthrough_authorized_ &&
 		policy.type == MySQLBackendAuthType::INVALID &&
 		policy.failure_code == "backend_user_not_found";

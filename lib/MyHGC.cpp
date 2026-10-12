@@ -511,10 +511,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #ifdef PROXYSQL31
 				if (used_backup) {
 					backup_servers_selected.fetch_add(1, std::memory_order_relaxed);
-					static time_t last_backup_log = 0;
 					time_t now = time(NULL);
-					if (now - last_backup_log > 1) {
-						last_backup_log = now;
+					if (now - last_log_time_backup_selection > 1) {
+						last_log_time_backup_selection = now;
 						proxy_warning("Hostgroup %u: selecting backup-weight server %s:%d\n",
 							hid, mysrvc->address, mysrvc->port);
 					}

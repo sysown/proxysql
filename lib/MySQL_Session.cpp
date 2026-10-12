@@ -251,7 +251,17 @@ static bool session_authorizes_rowless_passthrough(
 	const MySQL_Session *session, const char *backend_username,
 	const MySQLBackendAuthPolicy& policy)
 {
-	return policy.type == MySQLBackendAuthType::INVALID && session != nullptr &&
+	// Two shapes arrive for a rowless session (no backend row):
+	//  - the legacy INVALID policy, whose failure code marks the absence;
+	//  - the routing-fix PASSWORD policy that carries the SAME failure code
+	//    with type==PASSWORD (see resolve_mysql_backend_auth_policy) so a
+	//    backend connect attempt with the frontend credentials succeeds.
+	// Both must be recognized, or an authorized rowless passthrough session
+	// would be treated as an ordinary PASSWORD user after the routing fix.
+	const bool type_recognized =
+		policy.type == MySQLBackendAuthType::INVALID ||
+		policy.type == MySQLBackendAuthType::PASSWORD;
+	return type_recognized && session != nullptr &&
 		session->passthrough_credential && backend_username != nullptr &&
 		backend_username[0] != '\0' &&
 		policy.failure_code == "backend_user_not_found";
@@ -5790,6 +5800,31 @@ int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
 		RequestEnd(nullptr, 1815, message);
 		l_free(pkt.size, pkt.ptr);
 		pkt = {};
+		// RequestEnd() only queues the error in PSarrayOUT and the caller
+		// returns -1, which makes the caller hand the session back to the
+		// thread to be deleted. Flush now, exactly like the wrong-pass epilogue,
+		// otherwise the client only observes a bare TCP close. A nonblocking
+		// socket can still leave bytes queued (EAGAIN after a partial write);
+		// under normal use the ~100-byte error packet fits the send buffer, and
+		// keeping the session alive instead of tearing down is NOT possible
+		// here without further plumbing: RequestEnd() already freed 'qpo', and
+		// returning 0 would make the caller fall through into
+		// find_or_create_backend() and touch freed state. See the reviewer
+		// discussion on the #6440 comment for the follow-up option.
+		client_myds->array2buffer_full();
+		for (int flush_attempt = 0; flush_attempt < 2 &&
+			client_myds->queueOUT.head - client_myds->queueOUT.tail > 0; flush_attempt++) {
+			client_myds->write_to_net();
+		}
+		if (client_myds->queueOUT.head - client_myds->queueOUT.tail > 0) {
+			static std::atomic<time_t> gpee_flush_ts{0};
+			const time_t flush_now = time(NULL);
+			if (flush_now - gpee_flush_ts.load(std::memory_order_relaxed) >= 10) {
+				gpee_flush_ts.store(flush_now, std::memory_order_relaxed);
+				proxy_warning("Fast-forward rejection for session_id=%u could not be fully flushed to the client before teardown\n",
+					thread_session_id);
+			}
+		}
 		return -1;
 	};
 
@@ -9780,9 +9815,58 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 
-			if (gtid_uuid != NULL) {
-				if (!parse_gtid_for_routing(gtid_uuid, uuid, sizeof(uuid), &trxid)) {
-					gtid_uuid = NULL; // gtid is invalid
+			if (gtid_uuid != NULL && !parse_gtid_set_for_routing(gtid_uuid, uuid, sizeof(uuid), &trxid)) {
+				// A tracked OWN_GTID value is a GTID SET ('uuid:582-584',
+				// 'uuid:636:638'), not a single GTID; tagged GTIDs and
+				// multi-UUID values cannot be honoured at all. Failure must
+				// drop the QUERY from the readers, not the constraint:
+				// silently unconstrained selection serves stale reads while
+				// the query is still counted as GTID-consistent (issue
+				// #6415). Two fail-closed outcomes:
+				//   - with gtid_from_hostgroup, the server the tracked value
+				//     came from has every committed transaction by
+				//     definition: route the query to the writer hostgroup by
+				//     switching the session's backend, exactly as a rule
+				//     with destination_hostgroup=writer would;
+				//   - without one (min_gtid-only rules), no hostgroup has
+				//     the value by construction: keep a predicate no server
+				//     can satisfy, so the query waits in the same
+				//     "Waiting for replication" state a genuinely lagging
+				//     constraint produces instead of serving stale data.
+				// Both clear with_gtid so the causal-read stats are not
+				// inflated, and log rate-limited so admins can see why a
+				// deployment stopped using its readers.
+				static std::atomic<time_t> gtid_invalid_warn_ts{0};
+				const time_t gtid_warn_now = thread->curtime / 1000000;
+				// One CAS (not load-then-store) so concurrent sessions that
+				// all reach this warning in the same 10 s window burst only
+				// once: whoever claims the timestamp logs, the others skip.
+				time_t gtid_warn_prev = gtid_invalid_warn_ts.load(std::memory_order_relaxed);
+				if (gtid_warn_now - gtid_warn_prev >= 10 &&
+					gtid_invalid_warn_ts.compare_exchange_strong(gtid_warn_prev,
+						gtid_warn_now, std::memory_order_relaxed)) {
+					proxy_warning(
+						"GTID causal read: tracked value '%s' is not usable for routing (GTID set, tagged GTID or multi-UUID). %s\n",
+						gtid_uuid,
+						(qpo->gtid_from_hostgroup >= 0 && _gtid_from_backend) ?
+							"Routing the query to the writer hostgroup" :
+							"No writer hostgroup available: the read waits on an unsatisfiable constraint"
+					);
+				}
+				with_gtid = false;
+				trxid = 0;
+				if (qpo->gtid_from_hostgroup >= 0 && _gtid_from_backend) {
+					mybe = _gtid_from_backend;
+					gtid_uuid = NULL;
+				} else {
+					// A value that cannot be a normalized UUID (the tracked
+					// ids are 32 hex digits) and a trxid no replica can hold:
+					// gtid_exists() excludes every server, which yields the
+					// standard causal-read wait instead of stale data.
+					uuid[0] = 'z';
+					uuid[1] = '\0';
+					trxid = UINT64_MAX;
+					gtid_uuid = uuid;
 				}
 			}
 
@@ -9791,8 +9875,14 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1, backend_auth_policy.type);
 #endif // STRESSTEST_POOL
 			} else {
+				// The causal-read constraint could not be honoured: when
+				// reading from the writer its lag filter must not also
+				// suppress the only server that still provides
+				// read-your-writes.
+				const int fallback_max_lag =
+					(mybe == _gtid_from_backend) ? -1 : (int)qpo->max_lag_ms;
 #ifndef STRESSTEST_POOL
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms, backend_auth_policy.type);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, fallback_max_lag, backend_auth_policy.type);
 #endif // STRESSTEST_POOL
 			}
 		}

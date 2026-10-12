@@ -54,6 +54,7 @@ BaseHGC<HGC>::BaseHGC(int _hid) {
 	num_online_servers.store(0, std::memory_order_relaxed);;
 #ifdef PROXYSQL31
 	backup_servers_selected.store(0, std::memory_order_relaxed);
+	last_log_time_backup_selection = 0;
 #endif
 	last_log_time_num_online_servers = 0;
 }

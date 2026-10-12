@@ -8,6 +8,8 @@
 #include <locale>
 #include <string>
 #include <unordered_map>
+#include <map>
+#include <vector>
 
 typedef int64_t trxid_t;
 
@@ -90,6 +92,54 @@ bool parse_gtid(const char* s, ParsedGTID* out);
 bool parse_gtid(const char* s, size_t len, ParsedGTID* out);
 bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
                             uint64_t* trxid);
+/**
+ * @brief Parses a MySQL GTID SET -- the grammar OWN_GTID tracking actually
+ *   delivers -- into one ordered interval vector per UUID.
+ *
+ * MySQL's SESSION_TRACK_GTIDS payload accumulates every GTID the session has
+ * committed until the server finishes answering the current command, so a
+ * single OK packet can carry 'uuid:582-584' (stored procedures committing
+ * more than once), 'uuid:636:638' (concurrent commits producing a gap) or
+ * 'uuid:1-5:7-9', and 'Gtid_set::to_string' separates UUID blocks with
+ * ",\n" (issue #6415). The strict single-GTID parser rejects all of those
+ * trailing-set spellings, which used to silently drop the routing
+ * predicate.
+ *
+ * Grammar per UUID block: normalize_mysql_uuid of the first ':' component,
+ * then one or more TrxId_Interval components separated by ':'. Blocks are
+ * separated by ',' or '\n'. Unexpected input -- tagged GTIDs ('uuid:tag:n'),
+ * bare garbage, empty components -- fails and leaves @p out untouched.
+ *
+ * @param s     Raw tracked value; NUL bytes are rejected.
+ * @param len   Length of the value.
+ * @param out   Receives one interval vector per UUID, all intervals strictly
+ *              validated. Multi-UUID sets are accepted here; CALLERS that can
+ *              only honour a single UUID must fail closed on them (see
+ *              parse_gtid_set_for_routing).
+ * @return true when the whole value parsed.
+ */
+bool parse_gtid_set(const char* s, size_t len,
+                    std::map<std::string, std::vector<TrxId_Interval>>* out);
+/**
+ * @brief Routing helper for a tracked OWN_GTID value: same grammar, single
+ *   UUID block only, reporting the HIGHEST trxid of the block.
+ *
+ * Routing asks "has every transaction this session committed been applied
+ * here": with commit-order-preserving appliers
+ * (replica_preserve_commit_order=ON, the default since MySQL 8.0.27) a
+ * replica holding the highest transaction id of the block holds every
+ * earlier one as well, so one "(uuid, max trxid)" pair is sufficient and no
+ * containment walk is needed. Without order preservation a multi-threaded
+ * applier can hold the top id while missing a gap, which is the documented
+ * limitation of the minimum-change variant chosen for #6415.
+ *
+ * Multi-UUID values (only possible via a manual gtl_next) and tagged GTIDs
+ * fail: the caller must then fail closed instead of dropping the predicate.
+ *
+ * @return false leaves @p id_buf and @p trxid untouched.
+ */
+bool parse_gtid_set_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
+                                uint64_t* trxid);
 // Selects the GTID of the session's own last transaction from an OK packet:
 // the SESSION_TRACK_GTIDS payload (MySQL), or else the tracked 'last_gtid'
 // system variable (MariaDB). Global positions such as 'gtid_binlog_pos' are

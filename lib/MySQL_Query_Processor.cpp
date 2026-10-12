@@ -592,6 +592,24 @@ enum MYSQL_COM_QUERY_command MySQL_Query_Processor::query_parser_command_type(SQ
 }
 
 bool MySQL_Query_Processor::_is_valid_gtid(const char* gtid, size_t gtid_len) {
+	// A min_gtid annotation is produced by clients that echo the tracked
+	// OWN_GTID value back (mysql-client_session_track_gtid), and that value is
+	// a GTID SET ('uuid:582-584', 'uuid:636:638'), not a single GTID. Accepting
+	// only the strict single-GTID grammar rejected exactly those annotations
+	// with 'Invalid min_gtid value' and routed the query unconstrained
+	// (issue #6415). Ranges and gap lists are accepted here.
+	//
+	// Multi-UUID values are intentionally ACCEPTED by validation as well:
+	// refusing them here would drop the annotation with 'Invalid min_gtid'
+	// and run the query UNCONSTRAINED, the opposite of #6415's fail-closed
+	// requirement. Validation only judges the GRAMMAR; the routing helper
+	// (parse_gtid_set_for_routing) fails closed on a multi-UUID set and keeps
+	// the query on an unsatisfiable predicate until the operator resolves it.
+	std::map<std::string, std::vector<TrxId_Interval>> parsed_set;
+	if (parse_gtid_set(gtid, gtid_len, &parsed_set)) {
+		return true;
+	}
+
 	ParsedGTID parsed;
 	return parse_gtid(gtid, gtid_len, &parsed);
 }

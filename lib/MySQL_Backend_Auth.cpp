@@ -111,6 +111,23 @@ MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 	const nlohmann::json parsed = nlohmann::json::parse(
 		attributes.data(), attributes.data() + attributes.size(), nullptr, false);
 	if (parsed.is_discarded() || !parsed.is_object()) {
+		// 'mysql_users.attributes' only has to satisfy JSON_VALID(attributes) OR
+		// attributes='', so valid-but-non-object values such as '[]', '"x"' or
+		// even 'null' are storable and were harmless before this policy existed.
+		// Only fail closed when the value actually mentions 'backend_auth', so
+		// that pre-existing rows keep working after an upgrade.
+		//
+		// The exact sentinel returned by invalid_attributes_storage() -- a
+		// backend row whose stored JSON failed to parse -- is the ONE
+		// non-object value that must stay INVALID: a row that failed policy
+		// validation cannot silently fall back to password authentication once
+		// reloaded. The sentinel is deliberately JSON-invalid ("invalid") so
+		// no operator-configured value can collide with it.
+		if (attributes != invalid_backend_attributes_sentinel() &&
+			attributes.find("backend_auth") == std::string_view::npos) {
+			policy.type = MySQLBackendAuthType::PASSWORD;
+			return policy;
+		}
 		return invalid_backend_auth_policy(database_user, "attributes_not_object");
 	}
 
@@ -152,8 +169,27 @@ MySQLBackendAuthPolicy resolve_mysql_backend_auth_policy(
 	account_details_t account = authentication.lookup(
 		const_cast<char*>(mapped_backend_username), USERNAME_BACKEND, { false, false, true });
 	if (account.password == nullptr) {
+		// No backend row: this is the documented 'frontend=1, backend=0' split-row
+		// user, the ordinary way to express "this user authenticates to ProxySQL".
+		// Before the backend_auth policy existed (v3.0.11) this path never
+		// consulted 'creds_backends' at all and simply connected using the
+		// credentials captured at frontend authentication. Absence of a row is
+		// therefore NOT an invalid policy: report PASSWORD so the caller falls
+		// back to that legacy behaviour. INVALID is reserved for a row whose
+		// 'attributes' actually carry a malformed 'backend_auth' object, which
+		// can never silently degrade into password authentication.
 		free_account_details(account);
-		return invalid_backend_auth_policy(database_user, "backend_user_not_found");
+		MySQLBackendAuthPolicy policy;
+		policy.database_user = database_user;
+		// Routing fix (v3.0.11 parity for the split-row user): connect with
+		// the credentials captured at frontend authentication. 'type' stays
+		// PASSWORD so the session cannot fail closed at query time, but
+		// 'failure_code' records WHY the backend row is absent so reset-time
+		// validation (can_reset_for_backend_auth_policy) can still deny a
+		// COM_CHANGE_USER for an UNMARKED rowless connection.
+		policy.type = MySQLBackendAuthType::PASSWORD;
+		policy.failure_code = "backend_user_not_found";
+		return policy;
 	}
 
 	const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(

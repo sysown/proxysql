@@ -252,6 +252,12 @@ deps/duckdb/duckdb/
 # symlink at runtime under test-scripts/deps/; never commit this one (it was
 # accidentally committed once with an absolute /home path).
 test/scripts/deps/mysqlbinlog
+# TLS material that ProxySQL generates in its datadir at runtime, and the
+# SQLite file a "file:...?mode=memory" URI creates when SQLite URI handling is
+# off. A run from the repository root leaves them there; never commit them
+# (private keys: SonarCloud secrets:S6706, BLOCKER).
+/proxysql-*.pem
+/file:*
 
 # Temporary ASAN CI end-to-end validation trigger; this branch will not merge.
 

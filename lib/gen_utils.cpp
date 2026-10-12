@@ -174,18 +174,6 @@ static void cidr_mask_in_place(unsigned char *raw, int bytes, int bits) {
 	}
 }
 
-bool ip_cidr_spec_looks_like_prefix(const char *value) {
-	if (value == NULL || *value == '\0') {
-		return false;
-	}
-	// A leading '/' can only be a filesystem path: a prefix always starts with
-	// the address, so "/tmp/proxysql.sock" is a Unix listener path and not a
-	// malformed prefix.
-	if (*value == '/') {
-		return false;
-	}
-	return strchr(value, '/') != NULL;
-}
 
 bool ip_cidr_parse(const char *token, IP_CIDR_t *out) {
 	if (out == NULL) {

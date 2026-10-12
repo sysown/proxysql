@@ -9,6 +9,8 @@ using json = nlohmann::json;
 #include <memory>
 #include <vector>       // std::vector
 #include <unordered_set>
+#include <unordered_map>
+#include <map>
 #include "prometheus/exposer.h"
 #include "prometheus/counter.h"
 #include "openssl/ssl.h"
@@ -264,7 +266,8 @@ struct BOOT_USER_INFO_T {
 		SSL_TYPE,
 		AUTH_STRING,
 		AUTH_PLUGIN,
-		PASSWORD_EXPIRED
+		PASSWORD_EXPIRED,
+		HOST
 	};
 };
 
@@ -423,11 +426,68 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 		return false;
 	}
 
-	mysql_data_seek(users, 0);
-	while (MYSQL_ROW row = mysql_fetch_row(users)) {
-		if (!insert_bootstrap_user(db, stmt.get(), row, mysql_fetch_lengths(users), error)) {
-			rollback_bootstrap_users(db, error);
+	// mysql.user is keyed by (user, host) while mysql_users is keyed by username
+	// alone. BOOTSTRAP_SELECT_USERS selects 'host', so a user defined for several
+	// hosts yields several rows whenever their credential columns differ
+	// (caching_sha2_password embeds a per-account salt), and the second INSERT
+	// would fail with SQLITE_CONSTRAINT, aborting the whole import.
+	//
+	// Import exactly one account per username, preferring the wildcard host '%'
+	// regardless of the order the rows arrive in (the preference is enforced
+	// HERE, not only by the SQL ORDER BY, so it holds for any caller): the first
+	// pass imports '%' rows, the second pass imports the first remaining row
+	// seen for usernames that have none. Skipped accounts are collected and
+	// summarised once, after COMMIT; credential material is never logged. Any
+	// SQLite error other than the expected dedup skips still rolls the entire
+	// import back and fails startup.
+	std::unordered_map<std::string, std::string> imported_hosts;
+	std::map<std::string, std::vector<std::string>> skipped_hosts;
+	auto host_of = [](MYSQL_ROW row, unsigned long* lengths) -> std::string {
+		if (row == nullptr || lengths == nullptr ||
+			row[BOOT_USER_INFO_T::HOST] == nullptr) {
+			return "";
+		}
+		return std::string(row[BOOT_USER_INFO_T::HOST], lengths[BOOT_USER_INFO_T::HOST]);
+	};
+	auto import_row = [&](MYSQL_ROW row, unsigned long* lengths) -> bool {
+		if (!insert_bootstrap_user(db, stmt.get(), row, lengths, error)) {
 			return false;
+		}
+		return true;
+	};
+	for (int pass = 0; pass < 2; ++pass) {
+		mysql_data_seek(users, 0);
+		while (MYSQL_ROW row = mysql_fetch_row(users)) {
+			unsigned long* lengths = mysql_fetch_lengths(users);
+			if (row != nullptr && lengths != nullptr &&
+				row[BOOT_USER_INFO_T::USER] != nullptr) {
+				const std::string username {
+					row[BOOT_USER_INFO_T::USER], lengths[BOOT_USER_INFO_T::USER]
+				};
+				const std::string host = host_of(row, lengths);
+				if (pass == 0 && host != "%") {
+					continue;
+				}
+				const bool already_imported = imported_hosts.count(username) != 0;
+				if (already_imported) {
+					if (std::find(skipped_hosts[username].begin(),
+							skipped_hosts[username].end(), host) == skipped_hosts[username].end()) {
+						skipped_hosts[username].push_back(host);
+					}
+					continue;
+				}
+				if (!import_row(row, lengths)) {
+					rollback_bootstrap_users(db, error);
+					return false;
+				}
+				imported_hosts[username] = host;
+			} else {
+				// A row without a username is rejected by insert_bootstrap_user().
+				if (!import_row(row, lengths)) {
+					rollback_bootstrap_users(db, error);
+					return false;
+				}
+			}
 		}
 	}
 
@@ -435,6 +495,21 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 		error = bootstrap_users_sqlite_error(db, "Failed to commit mysql_users import");
 		rollback_bootstrap_users(db, error);
 		return false;
+	}
+
+	for (const auto& entry : skipped_hosts) {
+		const auto imported = imported_hosts.find(entry.first);
+		if (imported == imported_hosts.end()) {
+			continue;
+		}
+		std::string hosts;
+		for (const auto& host : entry.second) {
+			if (!hosts.empty()) hosts += ", ";
+			hosts += "'" + host + "'";
+		}
+		proxy_warning(
+			"Bootstrap: user '%s' exists for multiple hosts (%s); imported credentials of '%s'@'%s' only\n",
+			entry.first.c_str(), hosts.c_str(), entry.first.c_str(), imported->second.c_str());
 	}
 
 	return true;
