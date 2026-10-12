@@ -2453,6 +2453,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(LOAD_PGSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->pgsql_servers_wrlock();
+				// Always a plain OK, as in v3.0.11: the LOAD never fails or is
+				// partially rejected, and a server module that could not be notified
+				// is logged, not reported to the client (maintainer decision, #6448).
 				SPA->load_pgsql_servers_to_runtime();
 				SPA->pgsql_servers_wrunlock();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers to RUNTIME\n");
@@ -2463,6 +2466,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(LOAD_MYSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->mysql_servers_wrlock();
+				// Always a plain OK, as in v3.0.11: the LOAD never fails or is
+				// partially rejected, and a server module that could not be notified
+				// is logged, not reported to the client (maintainer decision, #6448).
 				SPA->load_mysql_servers_to_runtime();
 				SPA->mysql_servers_wrunlock();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");

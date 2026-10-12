@@ -2823,11 +2823,9 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
  * @return A pointer to the start of the supplied buffer, or the allocated memory containing the digest.
  */
 char* pgsql_query_digest_and_first_comment(const char* const q, int q_len, char** const fst_cmnt, char* const buf, const options* opts) {
-#ifdef DEBUG
-	if (buf != NULL) {
-		memset(buf, 0, 127);
-	}
-#endif
+	// No DEBUG-only memset of the caller's buffer here: callers may pass a
+	// buffer of exactly pgsql_query_digest_buffer_size() bytes, which can be
+	// smaller than the 127 bytes a fixed-size clear would write (#6451).
 
 	/* buffer to store first comment. */
 	int d_max_len = get_digest_max_len(q_len, opts->max_query_length);
@@ -3285,11 +3283,9 @@ char* pgsql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 }
 
 char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst_cmnt, char* buf) {
-#ifdef DEBUG
-	if (buf != NULL) {
-		memset(buf, 0, 127);
-	}
-#endif
+	// No DEBUG-only memset of the caller's buffer here: callers may pass a
+	// buffer of exactly pgsql_query_digest_buffer_size() bytes, which can be
+	// smaller than the 127 bytes a fixed-size clear would write (#6451).
 
 	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
 	char* res = get_result_buffer(d_max_len, buf);

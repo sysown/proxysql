@@ -46,6 +46,8 @@ constexpr const char *kRegion = "us-east-1";
 constexpr const char *kIamUser = "iam_backend";
 constexpr const char *kPasswordUser = "password_backend";
 constexpr const char *kUnknownPassthroughUser = "passthrough_unknown_backend";
+// A split-row user: a USERNAME_FRONTEND row and no USERNAME_BACKEND row (#6413).
+constexpr const char *kFrontendOnlyUser = "frontend_only_user";
 constexpr const char *kMalformedPassthroughUser = "passthrough_malformed_backend";
 constexpr const char *kSensitiveToken = "FAKE_AWS_SESSION_TOKEN_MUST_NOT_ESCAPE";
 
@@ -235,6 +237,18 @@ public:
 	std::vector<uint64_t> canceled;
 	uint64_t waiting_sessions { 0 };
 };
+
+bool add_frontend_user(const char *username, const char *password) {
+	std::string username_mut(username);
+	std::string password_mut(password);
+	std::string region_mut("");
+	std::string attributes_mut("");
+	std::string extra_attrs_mut("");
+	return GloMyAuth->add(
+		&username_mut[0], &password_mut[0], USERNAME_FRONTEND,
+		false, 0, &region_mut[0], false, false, false, 100,
+		&attributes_mut[0], &extra_attrs_mut[0]);
+}
 
 bool add_backend_user(const char *username, const char *password, const char *attributes) {
 	std::string username_mut(username);
@@ -706,7 +720,9 @@ void test_frontend_only_user_uses_password(MySQL_Thread& worker) {
 	FakeTokenSource source;
 	publish_global_aws_iam_token_source(&source);
 	const unsigned int calls_before = connector_calls.load(std::memory_order_relaxed);
-	SessionFixture fixture(worker, kUnknownPassthroughUser);
+	if (!add_frontend_user(kFrontendOnlyUser, "fe_pw"))
+		BAIL_OUT("cannot add the frontend-only user fixture");
+	SessionFixture fixture(worker, kFrontendOnlyUser);
 	fixture.session->passthrough_credential = false;
 	fixture.start();
 	ok(source.keys.empty() && fixture.session->status == CONNECTING_SERVER &&

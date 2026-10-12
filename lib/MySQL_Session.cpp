@@ -9741,6 +9741,11 @@ bool MySQL_Session::route_unusable_tracked_gtid_to_writer() {
 	// definition. Routing here, rather than switching the backend in
 	// get_connection(), keeps the query attached to the backend that serves
 	// it and honours a connection already attached to the writer.
+	// The caller selects 'mybe' from current_hostgroup after this returns
+	// (find_or_create_backend), so get_connection() recognizes this case
+	// from mybe->hostgroup_id. Repeating find_backend() and the set parse
+	// there is intentional: it only happens for gtid_from_hostgroup rules,
+	// and get_connection() must also handle the cases not rerouted here.
 	current_hostgroup = qpo->gtid_from_hostgroup;
 	return true;
 }

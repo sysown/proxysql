@@ -107,6 +107,10 @@ private:
 
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_claims(
 	ProxySQL_ServerProtocol protocol);
+// Built-in topology hostgroups of the last published runtime snapshot (empty
+// without an active plugin manager). Used when a new topology cannot be read,
+// so a partial read never replaces the last complete one.
+std::vector<uint32_t> proxysql_active_server_topology_hostgroups(ProxySQL_ServerProtocol protocol);
 uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol);
 // Caller holds the Admin SQL mutex. Publishes policy claims and a fresh runtime
 // generation from the retained configuration snapshot, never from HGM health.
@@ -175,8 +179,11 @@ uint64_t proxysql_advance_server_runtime_generation(ProxySQL_ServerProtocol prot
 // Hostgroups Manager. Takes the install lock, tags the snapshot with a new
 // generation and notifies the server module (when notify_module is true) and
 // the discovery controller. Never fails: a module observes the installation
-// but cannot reject it. With notify_module false the module is not called and
-// keeps its previous hostgroup claims. Returns the published generation.
+// but cannot reject it. With notify_module false only the module's
+// runtime_installed callback is skipped: the legacy (ABI-14) callback and the
+// controller are still notified, and the module's previous hostgroup claims
+// are kept minus any that now overlap the installed topology or managed
+// discovery. Returns the published generation.
 uint64_t proxysql_publish_server_runtime(ProxySQL_ServerModuleSnapshot snapshot,
 	bool notify_module);
 #endif

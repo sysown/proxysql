@@ -121,10 +121,12 @@ void test_backend_untouched(SessionFixture& f) {
 	// The decision only selects the destination: the backend and the data
 	// stream that will carry the query are chosen afterwards from it.
 	f.reset(kUnusable);
+	// With the reader backend active, as when a previous query used it.
+	f.session->mybe = f.session->find_backend(kReader);
 	MySQL_Backend* before = f.session->mybe;
 	f.route();
-	ok(f.session->mybe == before && f.session->find_backend(kWriter) == f.writer,
-		"the fallback does not swap the session's backend");
+	ok(before != nullptr && f.session->mybe == before && f.session->find_backend(kWriter) == f.writer,
+		"the fallback does not swap the session's active backend");
 }
 
 } // namespace

@@ -2064,10 +2064,15 @@ void proxysql_cluster_install_v1_runtime_post_fetch(
 	std::vector<uint32_t> topology;
 	std::string error;
 	bool notify_module = module_runtime_supported;
-	if (notify_module &&
-		(!proxysql_snapshot_installed_builtin_server_topology(protocol, topology, error) ||
-		 !proxysql_server_module_cluster_runtime_snapshot(protocol, *core_rows, module_tables,
-			topology, snapshot, error))) {
+	if (notify_module && !proxysql_snapshot_installed_builtin_server_topology(protocol, topology, error)) {
+		// Keep the last complete topology rather than a partial read.
+		topology = proxysql_active_server_topology_hostgroups(protocol);
+		proxy_error("Cluster: server module not notified of the pulled servers, it keeps its previous configuration: %s\n",
+			error.c_str());
+		notify_module = false;
+	}
+	if (notify_module && !proxysql_server_module_cluster_runtime_snapshot(protocol, *core_rows,
+		module_tables, topology, snapshot, error)) {
 		proxy_error("Cluster: server module not notified of the pulled servers, it keeps its previous configuration: %s\n",
 			error.c_str());
 		notify_module = false;

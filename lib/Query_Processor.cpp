@@ -136,7 +136,9 @@ pcre2_code* pcre2_compile_rule_regex(const char* pattern, uint32_t options, std:
 //   defaults engine 1 runs with. Lower limits made ordinary patterns fail on
 //   large queries: '^SELECT .* FROM t' backtracks once per byte of a large
 //   value after 'FROM t'; with 100000 it no longer matched a query carrying
-//   a 1 MB value (issue #6411).
+//   a 1 MB value (issue #6411). The higher limits are deliberate: they cost
+//   more CPU only for pathological patterns, which engine 1 already allows,
+//   while the heap limit still bounds memory. Do not lower them again.
 static constexpr uint32_t PCRE2_RULE_HEAP_LIMIT_KIB = 64u * 1024u;
 static constexpr uint32_t PCRE2_RULE_DEPTH_LIMIT = 10000000u;
 static constexpr uint32_t PCRE2_RULE_MATCH_LIMIT = 10000000u;

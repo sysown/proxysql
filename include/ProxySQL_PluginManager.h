@@ -140,6 +140,8 @@ public:
 		std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims);
 	std::vector<ProxySQL_ServerHostgroupClaim> server_hostgroup_claims(
 		ProxySQL_ServerProtocol protocol) const;
+	// Built-in topology hostgroups of the last recorded runtime snapshot.
+	std::vector<uint32_t> server_topology_hostgroups(ProxySQL_ServerProtocol protocol) const;
 	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims(
 		ProxySQL_ServerProtocol protocol) const;
 	bool install_managed_discovery(ProxySQL_ServerProtocol protocol, uint64_t desired_revision,

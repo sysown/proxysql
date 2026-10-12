@@ -1769,6 +1769,11 @@ std::vector<ProxySQL_ServerHostgroupClaim> filter_server_module_claims(
 	// Ordinary core server rows are seeds, not topology ownership claims. Only
 	// active built-in topology mappings reserve hostgroups from plugins.
 	std::set<uint32_t> claimed(snapshot.topology_hostgroups.begin(), snapshot.topology_hostgroups.end());
+	// A built-in topology that overlaps a managed discovery claim is only
+	// logged, never rejected, and there is no pre-install check for it on
+	// purpose: LOAD ... SERVERS TO RUNTIME and Cluster pulls must never fail
+	// or be partially rejected (maintainer decision, #6448). The operator
+	// resolves the overlap; module claims that overlap are dropped below.
 	for (const auto& claim : managed_claims) {
 		if (claimed.count(claim.writer_hostgroup) != 0 || claimed.count(claim.reader_hostgroup) != 0)
 			proxy_warning("Built-in server topology overlaps managed discovery hostgroups %u/%u\n",
@@ -1889,6 +1894,15 @@ void ProxySQL_PluginManager::store_server_runtime_snapshot(
 			log_server_callback_unknown_exception("controller runtime");
 		}
 	}
+}
+
+std::vector<uint32_t> ProxySQL_PluginManager::server_topology_hostgroups(
+	ProxySQL_ServerProtocol protocol) const {
+	const int index = server_protocol_index(protocol);
+	if (index < 0) return {};
+	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+	return server_snapshots_present_[index] ? server_snapshots_[index].topology_hostgroups :
+		std::vector<uint32_t>{};
 }
 
 std::vector<ProxySQL_ServerHostgroupClaim> ProxySQL_PluginManager::server_hostgroup_claims(
@@ -2680,6 +2694,12 @@ std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_clai
 	ScopedActiveManagerPin pin;
 	return pin.manager() == nullptr ? std::vector<ProxySQL_ServerHostgroupClaim>{} :
 		pin.manager()->server_hostgroup_claims(protocol);
+}
+
+std::vector<uint32_t> proxysql_active_server_topology_hostgroups(ProxySQL_ServerProtocol protocol) {
+	ScopedActiveManagerPin pin;
+	return pin.manager() == nullptr ? std::vector<uint32_t>{} :
+		pin.manager()->server_topology_hostgroups(protocol);
 }
 
 

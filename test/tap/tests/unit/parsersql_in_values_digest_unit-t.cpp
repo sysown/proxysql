@@ -154,15 +154,15 @@ struct KeptCase {
 };
 
 static const KeptCase mysql_kept_cases[] = {
-	{ "SELECT * FROM t WHERE id IN (1,2,3)", "SELECT * FROM t WHERE id IN (?)" },
+	{ "SELECT * FROM t WHERE id IN (1,2,3)", "SELECT * FROM t WHERE id IN (?,?,?)" },
 	{ "SELECT * FROM t WHERE id NOT IN (1,-2,'a',NULL,0x1F,1.5,b'01',(3),?)",
-		"SELECT * FROM t WHERE id NOT IN (?)" },
-	{ "SELECT * FROM t WHERE (a,b) IN ((1,2),(3,4))", "SELECT * FROM t WHERE (a, b) IN (?)" },
-	{ "INSERT INTO t (a) VALUES (1),(2),(3)", "INSERT INTO t (a) VALUES (?)" },
-	{ "INSERT INTO t (a, b) VALUES (1, -2), (+3, 'x'), (NULL, ?)", "INSERT INTO t (a, b) VALUES (?, -?)" },
-	// Only additional rows are collapsed: the first row is emitted in full.
-	{ "INSERT INTO t (a) VALUES (NOW()),(1)", "INSERT INTO t (a) VALUES (NOW())" },
-	// A single subquery is emitted in full.
+		"SELECT * FROM t WHERE id NOT IN (?,?,?,NULL,?,?,b?,(?),?)" },
+	{ "SELECT * FROM t WHERE (a,b) IN ((1,2),(3,4))", "SELECT * FROM t WHERE (a,b) IN ((?,?),(?,?))" },
+	{ "INSERT INTO t (a) VALUES (1),(2),(3)", "INSERT INTO t (a) VALUES (?),(?),(?)" },
+	{ "INSERT INTO t (a, b) VALUES (1, -2), (+3, 'x'), (NULL, ?)", "INSERT INTO t (a,b) VALUES (?,?),(?,?),(NULL,?)" },
+	// The tokenizer keeps every row; function calls are kept verbatim.
+	{ "INSERT INTO t (a) VALUES (NOW()),(1)", "INSERT INTO t (a) VALUES (NOW()),(?)" },
+	// A subquery is kept verbatim.
 	{ "SELECT * FROM t WHERE id IN (SELECT LAST_INSERT_ID())",
 		"SELECT * FROM t WHERE id IN (SELECT LAST_INSERT_ID())" },
 	{ "SELECT * FROM t WHERE id = LAST_INSERT_ID()", "SELECT * FROM t WHERE id = LAST_INSERT_ID()" },
@@ -176,9 +176,9 @@ static const char* const pgsql_hidden_cases[] = {
 };
 
 static const KeptCase pgsql_kept_cases[] = {
-	{ "SELECT * FROM t WHERE id IN ($1, $2)", "SELECT * FROM t WHERE id IN (?)" },
-	{ "SELECT * FROM t WHERE id IN (1,-2,'x',NULL)", "SELECT * FROM t WHERE id IN (?)" },
-	{ "INSERT INTO t (a) VALUES ($1),($2)", "INSERT INTO t (a) VALUES ($1)" },
+	{ "SELECT * FROM t WHERE id IN ($1, $2)", "SELECT * FROM t WHERE id IN ($1,$2)" },
+	{ "SELECT * FROM t WHERE id IN (1,-2,'x',NULL)", "SELECT * FROM t WHERE id IN (?,?,?,NULL)" },
+	{ "INSERT INTO t (a) VALUES ($1),($2)", "INSERT INTO t (a) VALUES ($1),($2)" },
 };
 
 static void test_hidden_mysql(const Dialect& d, const HiddenCase& c) {
@@ -190,13 +190,15 @@ static void test_hidden_mysql(const Dialect& d, const HiddenCase& c) {
 }
 
 // The parser digest is now the legacy tokenizer digest; a literal-only list keeps
-// exactly what the tokenizer produces.
+// exactly what the tokenizer produces. 'expected' pins that tokenizer output, so a
+// change in both paths at once is still caught.
 static void test_kept(const Dialect& d, const KeptCase& c) {
 	const Digest parser = parser_digest(d, c.sql);
 	const Digest legacy = legacy_digest(d, c.sql);
-	ok(parser.found && legacy.found && parser.text == legacy.text && parser.hash == legacy.hash,
-		"%s parser digest and hash equal legacy for [%s] (got: '%s', legacy: '%s')",
-		d.name, c.sql, parser.text.c_str(), legacy.text.c_str());
+	ok(parser.found && legacy.found && parser.text == legacy.text && parser.hash == legacy.hash &&
+		parser.text == c.expected,
+		"%s parser digest and hash equal legacy for [%s] (got: '%s', legacy: '%s', expected: '%s')",
+		d.name, c.sql, parser.text.c_str(), legacy.text.c_str(), c.expected);
 }
 
 int main() {

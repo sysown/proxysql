@@ -284,6 +284,8 @@ static server_runtime_publication_t collect_server_runtime_publication(SQLite3DB
 		publication.snapshot.runtime.topology_hostgroups, error)) {
 		proxy_error("Unable to collect built-in topology, server modules keep their previous configuration: %s\n",
 			error.c_str());
+		// Keep the last complete topology rather than a partial read.
+		publication.snapshot.runtime.topology_hostgroups = proxysql_active_server_topology_hostgroups(protocol);
 		publication.notify_module = false;
 		return publication;
 	}

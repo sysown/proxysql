@@ -18,8 +18,10 @@ explicitly. To keep the previous behaviour on v4.0, set
 
 ## What engine 3 is
 
-- PCRE2 10.47, built with UTF support available but not enabled by default
-  (only through `(*UTF)` or `(*UCP)`), and without JIT.
+- PCRE2 10.47, built with UTF support available but not enabled by default,
+  and without JIT. A pattern enables UTF mode with `(*UTF)`; `(*UCP)` only makes
+  `\d`, `\w`, `\s` and POSIX classes use Unicode properties, it does not enable
+  UTF mode on its own.
 - Lookaround may contain `\K` (`PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK`).
 - Per-match limits: 64 MiB of backtracking heap, and the PCRE2 default match
   and depth limits (10,000,000, the same values engine 1 runs with).
@@ -92,7 +94,8 @@ negated. On engine 3 it matches according to the pattern.
 | Invalid regex, `negate_match_pattern=1` | **matches every query** (as in v3.0.11) | never matches |
 | Heap/depth/match limit reached on a query | n/a (engine 1 may crash, see above) | the rule is not applied to that query, negated or not |
 
-An invalid regex is logged by each worker thread when the rule is compiled:
+An invalid regex is logged once per rules load, by the first worker thread that
+compiles the new rules (not once per worker):
 `Query rule <id>: match_digest|match_pattern '<pattern>' cannot be compiled by the PCRE|RE2|PCRE2 regex engine, ...`.
 A limit hit is logged at most every 10 seconds:
 `Query rule <id>: match_digest|match_pattern matching stopped with PCRE2 error <code> ...`.

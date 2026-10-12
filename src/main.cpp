@@ -1866,10 +1866,6 @@ bool ProxySQL_Main_init_phase3___start_all() {
 #endif
 	}
 
-	// Both threads handlers now hold the listener configuration. Validate it
-	// before the plugin lifecycle and before any listener is started.
-	ProxySQL_Main_exit_on_listener_conflicts();
-
 	{
 		cpu_timer t;
 		ProxySQL_Main_init_Query_Cache_module();
@@ -1895,6 +1891,13 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	const auto early_action_result = RunConfiguredPluginEarlyActions();
 	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_success) exit(EXIT_SUCCESS);
 	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_failure) exit(EXIT_FAILURE);
+#endif /* PROXYSQL40 */
+	// Validate the listener configuration before the plugin lifecycle and
+	// before any listener starts (#6414), but after the one-shot early
+	// actions above: those exit before any listener exists, so a listener
+	// overlap must not stop e.g. a mysql_router --bootstrap run.
+	ProxySQL_Main_exit_on_listener_conflicts();
+#ifdef PROXYSQL40
 	InitConfiguredPlugins();
 	if (GloVars.aws_managed) {
 		std::string manifest_json, error;
