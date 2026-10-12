@@ -159,18 +159,16 @@ static void test_resolver_falls_back_to_password_for_rowless_backend_account() {
 	// backend row must select PASSWORD, not INVALID. Reporting INVALID here
 	// made every query fail with ERROR 9002 for ordinary split-row users.
 	const MySQLBackendAuthPolicy missing = resolve_mysql_backend_auth_policy(*GloMyAuth, "missing_backend");
-	ok(missing.type == MySQLBackendAuthType::PASSWORD &&
-		missing.failure_code == "backend_user_not_found",
-		"resolver falls back to password authentication for a rowless backend account");
+	ok(missing.type == MySQLBackendAuthType::PASSWORD && missing.failure_code.empty(),
+		"resolver selects plain password authentication for a user without a backend row");
 
 	ok(add_backend_user("inactive_backend", "password", ""),
 		"inactive backend fixture is added");
 	GloMyAuth->set_all_inactive(USERNAME_BACKEND);
 	GloMyAuth->remove_inactives(USERNAME_BACKEND);
 	const MySQLBackendAuthPolicy inactive = resolve_mysql_backend_auth_policy(*GloMyAuth, "inactive_backend");
-	ok(inactive.type == MySQLBackendAuthType::PASSWORD &&
-		inactive.failure_code == "backend_user_not_found",
-		"resolver falls back to password authentication after runtime removal");
+	ok(inactive.type == MySQLBackendAuthType::PASSWORD && inactive.failure_code.empty(),
+		"resolver selects plain password authentication after runtime removal");
 }
 
 static void test_resolver_rejects_malformed_loaded_backend_attributes() {

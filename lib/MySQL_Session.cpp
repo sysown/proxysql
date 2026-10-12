@@ -247,26 +247,6 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 extern SQLite3_Server *GloSQLite3Server;
 
-static bool session_authorizes_rowless_passthrough(
-	const MySQL_Session *session, const char *backend_username,
-	const MySQLBackendAuthPolicy& policy)
-{
-	// Two shapes arrive for a rowless session (no backend row):
-	//  - the legacy INVALID policy, whose failure code marks the absence;
-	//  - the routing-fix PASSWORD policy that carries the SAME failure code
-	//    with type==PASSWORD (see resolve_mysql_backend_auth_policy) so a
-	//    backend connect attempt with the frontend credentials succeeds.
-	// Both must be recognized, or an authorized rowless passthrough session
-	// would be treated as an ordinary PASSWORD user after the routing fix.
-	const bool type_recognized =
-		policy.type == MySQLBackendAuthType::INVALID ||
-		policy.type == MySQLBackendAuthType::PASSWORD;
-	return type_recognized && session != nullptr &&
-		session->passthrough_credential && backend_username != nullptr &&
-		backend_username[0] != '\0' &&
-		policy.failure_code == "backend_user_not_found";
-}
-
 static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
 	MySQL_Session *session)
 {
@@ -275,15 +255,9 @@ static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
 		session->client_myds->myconn != nullptr &&
 		session->client_myds->myconn->userinfo != nullptr
 			? session->client_myds->myconn->userinfo->username : nullptr;
-	MySQLBackendAuthPolicy policy = session != nullptr
+	return session != nullptr
 		? session->backend_auth_policy_for(backend_username)
 		: resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
-	if (session_authorizes_rowless_passthrough(
-			session, backend_username, policy)) {
-		policy.type = MySQLBackendAuthType::PASSWORD;
-		policy.failure_code.clear();
-	}
-	return policy;
 }
 
 #ifdef PROXYSQLCLICKHOUSE
@@ -2475,12 +2449,6 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 				bui->set_schemaname(
 					default_schema, default_schema ? strlen(default_schema) : 0);
 			}
-			const char *backend_username = bui != nullptr ? bui->username : nullptr;
-			const MySQLBackendAuthPolicy policy =
-				resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
-			backend_conn->set_rowless_passthrough_authorized(
-				session_authorizes_rowless_passthrough(
-					this, backend_username, policy));
 			mybe->server_myds->return_MySQL_Connection_To_Pool();
 		}
 
@@ -9764,20 +9732,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		const bool force_fresh_iam_connection =
 			backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM &&
 			aws_iam_fresh_token_retry_attempted;
-		// A pass-through credential has already been authorized by a successful
-		// backend probe (or its cache). Unknown-user pass-through intentionally
-		// has no USERNAME_BACKEND row, so retain its established password mode.
-		// Every other invalid policy, including malformed IAM attributes, remains
-		// fail-closed and an IAM row can never fall back to password mode.
-		const bool rowless_passthrough = session_authorizes_rowless_passthrough(
-			this, backend_username, backend_auth_policy);
-		if (rowless_passthrough) {
-			backend_auth_policy.type = MySQLBackendAuthType::PASSWORD;
-			backend_auth_policy.failure_code.clear();
-		}
+		// Only a backend row whose 'backend_auth' is malformed is INVALID: a
+		// missing row is PASSWORD (issue #6413). It is not an AWS IAM failure.
 		if (backend_auth_policy.type == MySQLBackendAuthType::INVALID) {
-			aws_iam_token_key.database_user = backend_auth_policy.database_user;
-			fail_aws_iam_backend(backend_auth_policy.failure_code.c_str());
+			fail_invalid_backend_auth_policy(mybe != nullptr ? mybe->server_myds : nullptr,
+				backend_auth_policy.database_user.c_str(), backend_auth_policy.failure_code.c_str());
 			return;
 		}
 
@@ -9959,7 +9918,6 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		hostgroup_pool_wait.observe(pool_stats, thread->curtime, mc != nullptr, pool_stats_hid);
 #endif
 		if (mc) {
-			mc->set_rowless_passthrough_authorized(rowless_passthrough);
 			mybe->server_myds->attach_connection(mc);
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
 #ifdef PROXYSQL31
