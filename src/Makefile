@@ -201,9 +201,18 @@ HEADERS := ../include/*.h ../include/*.hpp
 # mixing layouts.
 BUILD_FLAGS_STAMP := $(ODIR)/.build_flags
 
-$(BUILD_FLAGS_STAMP): FORCE
-	@mkdir -p $(ODIR)
-	@printf '%s\n' '$(MYCXXFLAGS) $(CXXFLAGS)' | cmp -s - $@ || printf '%s\n' '$(MYCXXFLAGS) $(CXXFLAGS)' > $@
+# Same exclusions/additions as lib/Makefile: -DGITVERSION=... would otherwise
+# change on every commit and force a full rebuild; the compiler is included so a
+# toolchain switch invalidates the objects. Exported and referenced as
+# "$$STAMP_FLAGS" so the shell expands it from the environment without
+# re-parsing literal quotes or backticks in a flag.
+STAMP_FLAGS := $(CC) $(CXX) $(filter-out -DGITVERSION=%,$(MYCXXFLAGS)) $(CXXFLAGS)
+export STAMP_FLAGS
+
+# Order-only prerequisite on $(ODIR), so this recipe cannot race the directory
+# rule's own `mkdir` under `make -j` (this one is a plain `mkdir`, not `-p`).
+$(BUILD_FLAGS_STAMP): FORCE | $(ODIR)
+	@printf '%s\n' "$$STAMP_FLAGS" | cmp -s - $@ || printf '%s\n' "$$STAMP_FLAGS" > $@
 
 .PHONY: FORCE
 FORCE:

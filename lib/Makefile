@@ -121,9 +121,19 @@ MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(
 # ---------------------------------------------------------------------------
 BUILD_FLAGS_STAMP := $(ODIR)/.build_flags
 
-$(BUILD_FLAGS_STAMP): FORCE
-	@mkdir -p $(ODIR)
-	@printf '%s\n' '$(MYCXXFLAGS) $(CXXFLAGS)' | cmp -s - $@ || printf '%s\n' '$(MYCXXFLAGS) $(CXXFLAGS)' > $@
+# The recorded flag set deliberately excludes -DGITVERSION=... (it changes on
+# every commit, so recording it would force a full rebuild each time) and
+# includes the compiler, so switching toolchains also invalidates the objects.
+# It is exported and referenced as "$$STAMP_FLAGS" below so the shell expands it
+# from the environment without re-parsing it, which keeps literal quotes and
+# backticks in a flag intact rather than letting the shell consume them.
+STAMP_FLAGS := $(CC) $(CXX) $(filter-out -DGITVERSION=%,$(MYCXXFLAGS)) $(CXXFLAGS)
+export STAMP_FLAGS
+
+# Order-only prerequisite on $(ODIR): the recipe must not race the directory
+# rule's own `mkdir` under `make -j`, and so it no longer needs its own mkdir.
+$(BUILD_FLAGS_STAMP): FORCE | $(ODIR)
+	@printf '%s\n' "$$STAMP_FLAGS" | cmp -s - $@ || printf '%s\n' "$$STAMP_FLAGS" > $@
 
 default: libproxysql.a
 .PHONY: default
@@ -201,7 +211,13 @@ $(ODIR)/ProxySQL_PluginManager.oo: ../include/ProxySQL_ServerDiscovery.h
 $(ODIR)/%.oo: %.cpp $(HEADERS) $(BUILD_FLAGS_STAMP)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 
+# Recreate the archive from scratch: `ar rcs` replaces/inserts members but never
+# removes them, so when a flag change shrinks the object list (e.g. dropping the
+# FFTO/TSDB objects) the stale members would survive and be pulled back in by
+# the `--whole-archive` link in src/Makefile, reintroducing the very mismatch
+# the stamp above prevents.
 libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o
+	rm -f $@
 	ar rcs $@ $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o
 
 $(ODIR):

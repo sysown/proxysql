@@ -49,7 +49,7 @@ There is no separate `PROXYSQLGENAI` flag — `PROXYSQL40=1` builds and packages
 
 **CI never builds the bare default.** Every CI package/test build sets a tier flag: `PROXYSQL31=1` (v3.1) or `PROXYSQL40=1` (v4.0/genai) — see `.github/workflows/CI-*.yml`. Build with the tier you are targeting. **Bare `make` compiles the Stable tier with FFTO and TSDB left OUT** (`MySQLFFTO.cpp`/`PgSQLFFTO.cpp` are excluded and the `#ifdef PROXYSQLFFTO` symbols like `*_thread___ffto_max_buffer_size` are not defined). For most work, build `PROXYSQL31=1` (or `PROXYSQL40=1` if touching plugins/genai).
 
-**The Makefile does NOT track the tier flag between invocations.** Object files and `lib/libproxysql.a` produced under one tier are silently reused when you next build under a different tier (or against a tree someone else built under a different tier). The classic symptom is a link failure:
+**The `deps` tree does NOT track the tier flag between invocations.** `lib/` and `src/` now do (see below), but dependency libraries produced under one tier are silently reused when you next build under a different tier (or against a tree someone else built under a different tier). The classic symptom is a link failure:
 
 ```
 undefined reference to `mysql_thread___ffto_max_buffer_size'
@@ -60,11 +60,12 @@ This is **not** a real breakage and **not** a bug in the default build — it is
 
 `lib/Makefile` and `src/Makefile` now record the effective flag set in `obj/.build_flags` and
 make every object depend on it, so a tier change forces a rebuild of `lib/` and `src/` rather
-than reusing mismatched objects. **The deps tree still carries no such guard**: switching tier
-with `PROXYSQL31=1` set also needs `make cleanall`, otherwise the dep libraries keep their old
-configuration.
+than reusing mismatched objects; `lib/Makefile` also recreates `libproxysql.a` from scratch, so
+the objects dropped by a tier change do not linger in the archive. **The deps tree still carries
+no such guard**: switching tier with `PROXYSQL31=1` set also needs `make cleanall`, otherwise the
+dep libraries keep their old configuration.
 
-Fix / avoid it by cleaning when the tier changes, and by passing the SAME tier flag on every make in a session:
+Fix / avoid it by cleaning `deps` when the tier changes (`lib/` and `src/` now self-invalidate), and by passing the SAME tier flag on every make in a session:
 
 ```bash
 # Switching tiers (or unsure what the tree was last built with): clean first.
