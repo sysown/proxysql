@@ -124,10 +124,13 @@ BUILD_FLAGS_STAMP := $(ODIR)/.build_flags
 # The recorded flag set deliberately excludes -DGITVERSION=... (it changes on
 # every commit, so recording it would force a full rebuild each time) and
 # includes the compiler, so switching toolchains also invalidates the objects.
+# The macro is dropped with $(subst), not $(filter-out): the latter is a
+# whitespace word-list function, so it would collapse whitespace inside a quoted
+# flag value (e.g. -DMSG="a  b" vs -DMSG="a b") and could leave stale objects.
 # It is exported and referenced as "$$STAMP_FLAGS" below so the shell expands it
 # from the environment without re-parsing it, which keeps literal quotes and
 # backticks in a flag intact rather than letting the shell consume them.
-STAMP_FLAGS := $(CC) $(CXX) $(filter-out -DGITVERSION=%,$(MYCXXFLAGS)) $(CXXFLAGS)
+STAMP_FLAGS := $(CC) $(CXX) $(subst -DGITVERSION=\"$(GIT_VERSION)\",,$(MYCXXFLAGS)) $(CXXFLAGS)
 export STAMP_FLAGS
 
 # Order-only prerequisite on $(ODIR): the recipe must not race the directory

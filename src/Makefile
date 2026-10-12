@@ -203,10 +203,11 @@ BUILD_FLAGS_STAMP := $(ODIR)/.build_flags
 
 # Same exclusions/additions as lib/Makefile: -DGITVERSION=... would otherwise
 # change on every commit and force a full rebuild; the compiler is included so a
-# toolchain switch invalidates the objects. Exported and referenced as
-# "$$STAMP_FLAGS" so the shell expands it from the environment without
-# re-parsing literal quotes or backticks in a flag.
-STAMP_FLAGS := $(CC) $(CXX) $(filter-out -DGITVERSION=%,$(MYCXXFLAGS)) $(CXXFLAGS)
+# toolchain switch invalidates the objects. The macro is dropped with $(subst),
+# not $(filter-out), so whitespace inside other quoted flags is preserved.
+# Exported and referenced as "$$STAMP_FLAGS" so the shell expands it from the
+# environment without re-parsing literal quotes or backticks in a flag.
+STAMP_FLAGS := $(CC) $(CXX) $(subst -DGITVERSION=\"$(GIT_VERSION)\",,$(MYCXXFLAGS)) $(CXXFLAGS)
 export STAMP_FLAGS
 
 # Order-only prerequisite on $(ODIR), so this recipe cannot race the directory
