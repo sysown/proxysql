@@ -3037,8 +3037,6 @@ PgSQL_Thread::~PgSQL_Thread() {
 		delete sr;
 		sr = match_regexes[2];
 		delete sr;
-		sr = match_regexes[3];
-		delete sr;
 		free(match_regexes);
 		match_regexes = NULL;
 	}
@@ -3090,16 +3088,15 @@ bool PgSQL_Thread::init() {
 	assert(i == 0);
 
 	thr_SetParser = new PgSQL_Set_Stmt_Parser("");
-	match_regexes = (Session_Regex**)malloc(sizeof(Session_Regex*) * 4);
+	match_regexes = (Session_Regex**)malloc(sizeof(Session_Regex*) * 3);
 	//	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
 	match_regexes[0] = NULL; // NOTE: historically we used match_regexes[0] for SET SQL_LOG_BIN . Not anymore
 
 	const std::string set_tracked_vars_regexp = PgSQL_Variables::build_set_tracked_vars_regexp(pgsql_variables.variables_regexp);
 	match_regexes[1] = new Session_Regex((char*)set_tracked_vars_regexp.c_str());
 	// SET [LOCAL|SESSION] TRANSACTION ... is recognised by PgSQL_Variables::is_set_transaction(),
-	// which reads comments the way PostgreSQL does (they nest), so no regex is needed here.
-	match_regexes[2] = NULL;
-	match_regexes[3] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)`?(client_encoding|names)`?( *)(|=|TO)( *)");
+	// which reads comments the way PostgreSQL does (they nest), so no regex slot is needed for it.
+	match_regexes[2] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)`?(client_encoding|names)`?( *)(|=|TO)( *)");
 
 	copy_cmd_matcher = new CopyCmdMatcher();
 
