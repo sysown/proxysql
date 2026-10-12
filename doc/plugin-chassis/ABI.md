@@ -132,8 +132,9 @@ ABI evolution so far:
   An affiliated server module (fields appended after the frozen ABI-14
   `ProxySQL_ServerModuleHooks` prefix) is recognized at registration by a null
   `runtime_configuration_installed` (an ABI-14 callback-only module sets it and
-  core never reads past the prefix); it must then set `tables`,
-  `runtime_installed`, `runtime_table_snapshot` and `shutdown`. It gets a
+  core never reads past the prefix); it must then set a non-empty `tables`
+  and non-null `runtime_installed`, `runtime_table_snapshot` and `shutdown`,
+  otherwise registration returns false. It gets a
   `runtime_installed` notification
   after core has installed `LOAD MYSQL|PGSQL SERVERS TO RUNTIME`. It reports
   the hostgroups it claims; core drops and logs an invalid or overlapping

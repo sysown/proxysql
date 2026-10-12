@@ -1925,13 +1925,15 @@ int main() {
 		"an early real HGM companion-table failure is injected");
 	// Change the servers too: the LOAD must install the change despite the
 	// companion-table failure, so an unchanged checksum would mean no install.
-	v.db.execute("UPDATE main.mysql_servers SET max_latency_ms=max_latency_ms+1");
+	ok(v.db.execute("UPDATE main.mysql_servers SET max_latency_ms=max_latency_ms+1"),
+		"the server fixture is changed before the failing LOAD");
 	admin->mysql_servers_wrlock();
 	admin->load_mysql_servers_to_runtime();
 	admin->mysql_servers_wrunlock();
 	ok(MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() != hgm_before_error,
 		"an SQL failure on a companion table is logged and the LOAD still installs the changed servers");
-	v.db.execute("UPDATE main.mysql_servers SET max_latency_ms=max_latency_ms-1");
+	ok(v.db.execute("UPDATE main.mysql_servers SET max_latency_ms=max_latency_ms-1"),
+		"the server fixture change is reverted");
 	ok(v.db.execute(k_galera), "the HGM failure fixture is repaired");
 	admin->mysql_servers_wrlock();
 	admin->load_mysql_servers_to_runtime();

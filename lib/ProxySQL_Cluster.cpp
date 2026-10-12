@@ -2077,19 +2077,14 @@ void proxysql_cluster_install_v1_runtime_post_fetch(
 		snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, 0, *core_rows);
 		snapshot.runtime.topology_hostgroups = std::move(topology);
 	}
-	// The callers hold sql_query_global_mutex and the servers lock: an
-	// exception must not escape with them held. The HGM commit API owns the
-	// raw resultset.
-	try {
-		stage_core_rows(core_rows);
-		commit_core_rows(core_rows);
-	} catch (const std::exception& e) {
-		proxy_error("Cluster: installing the pulled runtime servers failed: %s\n", e.what());
-		return;
-	} catch (...) {
-		proxy_error("Cluster: installing the pulled runtime servers failed with an unknown exception\n");
-		return;
-	}
+	// The HGM commit API owns the raw resultset. No try/catch here, on
+	// purpose: nothing above the Cluster pull catches exceptions, so an
+	// exception from servers_add()/commit() terminates the process, exactly
+	// as on every other HGM install path (Admin LOAD, the non-PROXYSQL40 pull)
+	// and as in v3.0.11. Catching it here would let the pull continue as if it
+	// succeeded after a partial HGM commit, and persist that state.
+	stage_core_rows(core_rows);
+	commit_core_rows(core_rows);
 	proxysql_publish_server_runtime(std::move(snapshot), notify_module);
 }
 #endif
