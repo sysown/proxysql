@@ -1,4 +1,4 @@
-"""Cancellation runs from trusted control code for every new PR head and push."""
+"""Cancellation runs from trusted control code for every new PR head, PR close and push."""
 from pathlib import Path
 import json
 import os
@@ -37,8 +37,9 @@ class CancelSupersededTests(unittest.TestCase):
     def test_every_pr_update_calls_trusted_cancellation_with_write_permission(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/CI-cancel-superseded.yml').read_text())
         events = workflow.get('on', workflow.get(True, {}))
+        # `closed` cancels all CI of a merged or closed PR.
         self.assertEqual(events['pull_request_target'],
-                         {'types': ['opened', 'reopened', 'synchronize']})
+                         {'types': ['opened', 'reopened', 'synchronize', 'closed']})
         self.assertEqual(workflow['permissions'], {'actions': 'write', 'contents': 'read', 'pull-requests': 'read'})
         self.assertEqual(workflow['jobs'], {'cancel': {
             'uses': 'sysown/proxysql/.github/workflows/ci-cancel-superseded.yml@GH-Actions'}})
