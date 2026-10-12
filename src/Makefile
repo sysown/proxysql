@@ -197,7 +197,33 @@ OBJ := $(patsubst %,$(ODIR)/%,$(_OBJ))
 
 HEADERS := ../include/*.h ../include/*.hpp
 
-$(ODIR)/%.o: %.cpp $(HEADERS)
+# Same guard as lib/Makefile, for the same reason: the top-level Makefile passes
+# these flags as environment variables on the recursive make command line, so a
+# targeted `make -C src obj/Foo.o` inherits none of them and links a
+# differently-configured object into the binary. main.o is the object behind
+# the tier-mismatch link errors documented in CLAUDE.md. Every object depends on
+# the stamp, so any flag change forces a full rebuild instead of silently
+# mixing layouts.
+BUILD_FLAGS_STAMP := $(ODIR)/.build_flags
+
+# Same exclusions/additions as lib/Makefile: -DGITVERSION=... would otherwise
+# change on every commit and force a full rebuild; the compiler is included so a
+# toolchain switch invalidates the objects. The macro is dropped with $(subst),
+# not $(filter-out), so whitespace inside other quoted flags is preserved.
+# Exported and referenced as "$$STAMP_FLAGS" so the shell expands it from the
+# environment without re-parsing literal quotes or backticks in a flag.
+STAMP_FLAGS := $(CC) $(CXX) $(subst -DGITVERSION=\"$(GIT_VERSION)\",,$(MYCXXFLAGS)) $(CXXFLAGS)
+export STAMP_FLAGS
+
+# Order-only prerequisite on $(ODIR), so this recipe cannot race the directory
+# rule's own `mkdir` under `make -j` (this one is a plain `mkdir`, not `-p`).
+$(BUILD_FLAGS_STAMP): FORCE | $(ODIR)
+	@printf '%s\n' "$$STAMP_FLAGS" | cmp -s - $@ || printf '%s\n' "$$STAMP_FLAGS" > $@
+
+.PHONY: FORCE
+FORCE:
+
+$(ODIR)/%.o: %.cpp $(HEADERS) $(BUILD_FLAGS_STAMP)
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR) $(CURL_AR) $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)

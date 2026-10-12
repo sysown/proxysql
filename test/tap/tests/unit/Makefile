@@ -330,11 +330,19 @@ endif
 # Auto-detect feature flags from libproxysql.a symbols.
 # This ensures unit tests compile with the same flags the library was built with,
 # regardless of whether the environment variables are set during `make`.
-# The archive freshness rule below always requests the default ClickHouse
-# build. Define the same mode before compiling test globals, including when a
-# clean tree has no archive available for symbol probing yet.
+#
+# ClickHouse is handled separately: it cannot be probed reliably on a clean tree,
+# so the archive freshness rule below requests an explicit mode. Only the
+# non-legacy top-level build (Linux) enables PROXYSQLCLICKHOUSE and builds the
+# clickhouse-cpp dependency; on Darwin/FreeBSD the default build is
+# LEGACY_BUILD and does not build it. Requesting it there would make the
+# flag stamp force a lib rebuild of ClickHouse_Server.cpp without its headers.
+PROXYSQLCLICKHOUSE :=
+PSQLCH :=
+ifeq ($(UNAME_S),Linux)
 PROXYSQLCLICKHOUSE := 1
 PSQLCH := -DPROXYSQLCLICKHOUSE
+endif
 PSQLGA :=
 PSQLFFTO :=
 ifeq ($(PROXYSQLFFTO),1)
@@ -575,7 +583,7 @@ endif
 
 $(LIBPROXYSQLAR): FORCE
 	$(MAKE) -C $(PROXYSQL_PATH)/lib libproxysql.a \
-		PROXYSQLCLICKHOUSE=1 \
+		PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
 		PROXYSQLED25519=$(PROXYSQLED25519) \
 		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) \
