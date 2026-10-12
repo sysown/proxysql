@@ -372,6 +372,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		cg.cred_array->add(ad);
 	}
 	bool warn_for_iam_password = false;
+	std::string invalid_policy_code {};
 	if (usertype == USERNAME_BACKEND) {
 		const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(
 			username,
@@ -379,6 +380,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 			ad->password != nullptr && ad->password[0] != '\0');
 		warn_for_iam_password =
 			policy.type == MySQLBackendAuthType::AWS_IAM && policy.ignored_password;
+		if (policy.type == MySQLBackendAuthType::INVALID) invalid_policy_code = policy.failure_code;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
@@ -390,6 +392,15 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 			"mysql_users backend entry for '%s' uses aws_iam authentication; "
 			"clear the unused backend password\n",
 			username);
+	}
+	if (!invalid_policy_code.empty()) {
+		// The row is loaded, but its malformed 'backend_auth' fails closed
+		// (see parse_mysql_backend_auth_policy): say so now, not only when
+		// the first query fails with ERR 9002 (issue #6413).
+		proxy_warning(
+			"mysql_users backend entry for '%s' has an invalid 'backend_auth' in its attributes (%s); "
+			"queries of this user fail with ERR 9002 until it is fixed\n",
+			username, invalid_policy_code.c_str());
 	}
 	return true;
 };

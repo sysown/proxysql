@@ -136,6 +136,12 @@ MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 		policy.type = MySQLBackendAuthType::PASSWORD;
 		return policy;
 	}
+	// A row that has 'backend_auth' asked for a non-password mode. If it is
+	// malformed, the policy is INVALID and the connection fails closed. It
+	// must NOT fall back to PASSWORD: that would send the frontend password
+	// to a backend account the operator configured for another mode (e.g.
+	// IAM). Maintainer decision, final (issue #6413); not a bug. The row is
+	// reported when it is loaded (MySQL_Authentication::add()).
 	if (!backend_auth->is_object()) {
 		return invalid_backend_auth_policy(database_user, "backend_auth_not_object");
 	}
