@@ -5813,10 +5813,10 @@ int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
 		// discussion on the #6440 comment for the follow-up option.
 		client_myds->array2buffer_full();
 		for (int flush_attempt = 0; flush_attempt < 2 &&
-			client_myds->queueOUT.head - client_myds->queueOUT.tail > 0; flush_attempt++) {
+			client_myds->queueOUT.head != client_myds->queueOUT.tail; flush_attempt++) {
 			client_myds->write_to_net();
 		}
-		if (client_myds->queueOUT.head - client_myds->queueOUT.tail > 0) {
+		if (client_myds->queueOUT.head != client_myds->queueOUT.tail) {
 			static std::atomic<time_t> gpee_flush_ts{0};
 			const time_t flush_now = time(NULL);
 			if (flush_now - gpee_flush_ts.load(std::memory_order_relaxed) >= 10) {
