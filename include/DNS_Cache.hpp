@@ -84,7 +84,19 @@ public:
 	void clear();
 	bool empty() const;
 	bool is_ip_valid(const std::string& hostname, const std::string& ip) const;
-	std::string lookup(const std::string& hostname, size_t* ip_count);
+	/**
+	* @brief Round-robin lookup of a cached hostname.
+	*
+	* @param hostname Hostname to look up.
+	* @param ip_count If not null, set to the size of the served set (1 while pinned, 0 on a miss).
+	* @param all_ips  If not null, filled with the whole served set in the order a connect should
+	*   try it: the returned IP first, then the others in cache order, wrapping around. Only the
+	*   pinned IP while a pin is active; left empty on a miss.
+	*
+	* @return The next IP, or "" on a miss / when the cache is disabled.
+	*/
+	std::string lookup(const std::string& hostname, size_t* ip_count,
+		std::vector<std::string>* all_ips = nullptr);
 
 	/**
 	* @brief Pin a hostname to a fixed IP until it is explicitly unpinned.
@@ -139,10 +151,11 @@ private:
 	* @brief Next round-robin IP for 'ip_addr' and the size of the served set.
 	*
 	* @param ip_addr Cache record to select from.
+	* @param all_ips If not null, filled with every resolved IP, starting at the selected one.
 	*
 	* @return Selected resolved IP details plus current pin metadata.
 	*/
-	lookup_result_t get_next_ip(const IP_ADDR& ip_addr) const;
+	lookup_result_t get_next_ip(const IP_ADDR& ip_addr, std::vector<std::string>* all_ips = nullptr) const;
 
 	mutable std::unordered_map<std::string, IP_ADDR> records;
 	std::atomic_bool enabled;

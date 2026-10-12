@@ -285,8 +285,10 @@ public:
 	// Consults PgSQL_Monitor::dns_lookup; returns the cached IP on a hit,
 	// empty std::string on a miss.  Used by connect_start() to set
 	// `hostaddr=<ip>` in the libpq conninfo so PQconnectStart skips
-	// getaddrinfo and doesn't block the worker thread on DNS.
-	std::string connect_start_DNS_lookup();
+	// getaddrinfo and doesn't block the worker thread on DNS.  `all_ips`, if
+	// given, receives every cached IP starting at the returned one, so that a
+	// connect refused on one of them can move on to the others (#6432).
+	std::string connect_start_DNS_lookup(std::vector<std::string>* all_ips = nullptr);
 	void query_start();
 	void query_cont(short event);
 	void fetch_result_start();
@@ -512,6 +514,12 @@ public:
 	void update_bytes_recv(uint64_t bytes_recv);
 	void update_bytes_sent(uint64_t bytes_sent);
 	void ProcessQueryAndSetStatusFlags(const char* query_digest_text, int savepoint_count);
+	// STATUS_PGSQL_CONNECTION_LISTEN from the statements of a digest: the last LISTEN or
+	// UNLISTEN * decides (see the definition).
+	void update_listen_status(const char* query_digest_text);
+	// The same for a query with no digest (pgsql-query_digests off): releases the pin on
+	// UNLISTEN *, which nothing else does in that mode.
+	void update_listen_status_from_query(const char* query);
 
 	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
 	inline int get_pg_server_version() {
@@ -802,6 +810,14 @@ public:
 	std::string native_options;                      // the `options` value sent in the StartupMessage
 	std::string native_hostaddr;                     // resolved numeric IP, or "" — mirrors when the libpq path passes hostaddr=
 	std::string native_port;                         // backend port as a decimal string, matching PQport()'s shape
+	// Every address the backend host resolved to, in getaddrinfo() order, and the one the TCP
+	// connect in flight is using. When that connect fails, the next address is tried, as libpq
+	// does (#6425). The addresses are copied out of the addrinfo list so none of them has to
+	// outlive freeaddrinfo(). Refilled by each native_connect_start().
+	std::vector<std::pair<sockaddr_storage, socklen_t>> native_addrs;
+	size_t native_addr_idx = 0;
+	// One entry per address that has already failed, reported once every address has.
+	std::string native_connect_errors;
 	int native_backend_pid = 0;                      // BackendKeyData PID
 	int native_backend_secret = 0;                   // BackendKeyData secret key
 
@@ -809,6 +825,11 @@ public:
 	// Set true once a ReadyForQuery ('Z') has been consumed for the in-flight query,
 	// signalling the result stream is complete. Reset at query_start().
 	bool native_result_complete = false;
+	// Set when the result cycle was cut short by a failure that leaves nothing more to read:
+	// native_result_fatal() or native_result_protocol_violation(). An ordinary ErrorResponse
+	// does NOT set it -- the backend still owes the ReadyForQuery after one, and the drain
+	// must reach it before the cycle ends. Reset alongside native_result_complete.
+	bool native_result_aborted = false;
 	// Set true once a CopyInResponse ('G') or CopyBothResponse ('W') has been
 	// answered with a CopyFail by the native_fetch_result_cont() safety net
 	// (see there). Reset at query_start() alongside native_result_complete.
@@ -874,6 +895,8 @@ public:
 	// (native_stmt_resync_logged is intentionally absent: per-connection, not per-step.)
 	inline void native_stmt_reset_step() {
 		native_result_complete = false;
+		native_result_aborted = false;
+		native_fetch_paused = false;
 		native_copy_intercepted = false;
 		native_stmt_step = PG_Native_Stmt_Step::NONE;
 		native_last_execute_suspended = false;
@@ -937,6 +960,12 @@ public:
 	// setting async_exit_status and returning to the event loop.
 	void native_connect_start();
 	void native_connect_cont(short event);
+	// Start a non-blocking connect() to native_addrs[native_addr_idx], skipping any address whose
+	// connect() fails at once. Returns true, with `fd` set, once a connect is in progress (or
+	// already done); false once the list is used up.
+	bool native_tcp_connect_next();
+	// Record in native_connect_errors that the address at native_addr_idx failed with `err`.
+	void native_note_addr_failure(int err);
 	void native_drive_auth(short event);             // AUTH sub-state: Authentication* exchange
 	void native_drive_startup_tail(short event);     // post-auth: ParamStatus/KeyData/ReadyForQuery
 	bool native_flush_outbuf();                      // returns false on fatal send error
@@ -958,6 +987,10 @@ public:
 	// down, so the connection is classified non-reusable instead of being pooled.
 	// See the definition in PgSQL_Connection.cpp for why the teardown is required.
 	void native_result_fatal(const char* code, const char* message);
+	// A post-connect send() of `what` (e.g. "send(Query)") failed: 08006 with errno's text,
+	// then native_result_fatal(). Must be called right after native_flush_outbuf() returned
+	// false, before anything else can overwrite errno.
+	void native_send_fatal(const char* what);
 	// End the result cycle on a protocol violation ProxySQL itself detected, telling the CLIENT
 	// why. Unlike native_result_fatal() this leaves the socket open so the session takes the
 	// branch that reports an error rather than the one for a connection that merely died, and it
@@ -1028,7 +1061,11 @@ public:
 	// pool return. myds->ssl stays NULL in native mode.
 	// Set when a result fetch stopped early because it had already moved enough
 	// bytes for this event. The next entry drains what is still framed instead
-	// of asking the socket for more, which may never come.
+	// of asking the socket for more, which may never come. Only ever set right
+	// after a DataRow/CopyData and never once an ErrorResponse is recorded, so a
+	// fetch cannot stop between an error and its ReadyForQuery. Cleared at every
+	// query/step start and by async_free_result(); a connection that still has it
+	// set is not reusable (is_connection_in_reusable_state()).
 	bool native_fetch_paused = false;
 	SSL* native_ssl  = nullptr;
 	BIO* native_rbio = nullptr;

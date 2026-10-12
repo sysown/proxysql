@@ -485,6 +485,12 @@ private:
 	// Returns true if the packet was handled here. Increments the
 	// pgsql_tx_poisoned_{recovered,rejected_statements}_total counters.
 	bool handler_poisoned_simple_query(PtrSize_t* pkt);
+	// The extended-query counterpart, called for each Parse/Bind/Describe/Close/Execute
+	// queued while tx_poisoned: may the frame end the transaction? (see poisoned_extq)
+	void classify_poisoned_extq_message();
+	// The client ended a poisoned transaction (ROLLBACK/COMMIT, either protocol): roll it
+	// back -- tracked SET variables, then any backend still holding it -- and clear the poison.
+	void end_poisoned_transaction();
 	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn);
 	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret);
 	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, bool& wrong_pass);
@@ -587,7 +593,24 @@ public:
 	//     "there is no transaction in progress" warning, clear flag.
 	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
 	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
+	// The same holds over the extended protocol (poisoned_extq). An error ProxySQL
+	// raises itself inside a transaction poisons the session too
+	// (txn_state_for_local_error()).
 	bool tx_poisoned{ false };
+	// An extended-query frame received while tx_poisoned, classified message by message
+	// by classify_poisoned_extq_message(). A frame that only prepares, binds to the
+	// unnamed portal and executes plain ROLLBACK / COMMIT / ABORT / END (plus Describe and
+	// Close) ends the transaction at Sync, as the simple-query ROLLBACK does; any other
+	// frame is answered with 25P02 + ReadyForQuery('E') and the session stays poisoned.
+	struct Poisoned_Extq_Frame {
+		// Statements Parsed or Closed in this frame (name, kind), in order; kind is 'R' for
+		// ROLLBACK/ABORT, 'C' for COMMIT/END, 0 for a Close. The latest entry for a name wins.
+		std::vector<std::pair<std::string, char>> stmts;
+		char portal = 0;          // kind of the statement bound to the unnamed portal
+		bool executes = false;    // an Execute of a transaction end was queued
+		bool refused = false;     // something else was: the frame does not end the txn
+		void reset() { stmts.clear(); portal = 0; executes = false; refused = false; }
+	} poisoned_extq;
 	// Backend administrative removal: drain the FATAL response before closing.
 	bool offline_fatal_pending = false;
 #ifdef PROXYSQL31
@@ -753,8 +776,22 @@ public:
 	void set_previous_status_mode3(bool allow_execute = true);
 	char* get_current_query(int max_length = -1);
 	bool is_in_transaction() const;
+	// Transaction status for the ReadyForQuery that follows an ErrorResponse raised by
+	// ProxySQL itself, which the backend never saw: 'E' inside a transaction block, 'I'
+	// otherwise. Poisons the session when the backend still holds the transaction open.
+	// Call it before anything that discards the backend connection.
+	char txn_state_for_local_error(bool backend_lost = false);
+	// Put the tracked SET variables back to their values at BEGIN (as ROLLBACK does)
+	// for a transaction ProxySQL ends itself; drops the snapshot if no backend is attached.
+	void rollback_tracked_txn_state();
 
 private:
+	// Make the transaction keyword tracker agree with the status 'myconn' reported at a
+	// true cycle boundary (nothing left of the batch): no transaction when it is idle,
+	// one when it is in a transaction block. Mid-batch the tracker is then the only
+	// up-to-date answer, the status byte predating the batch (#6417).
+	// 'failed': the statement just run failed (it never reached the tracker).
+	void sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool mid_batch, bool failed = false);
 	int32_t extract_pid_from_param(const PgSQL_Param_Value& param, uint16_t format) const;
 	void send_parameter_error_response(const char* error_message, PGSQL_ERROR_CODES code = PGSQL_ERROR_CODES::ERRCODE_INVALID_TEXT_REPRESENTATION);
 	bool handle_kill_success(int32_t pid, int tki, const char* digest_text, PgSQL_Connection* mc, PtrSize_t* pkt);

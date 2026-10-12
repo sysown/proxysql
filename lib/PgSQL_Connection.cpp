@@ -452,10 +452,13 @@ handler_again:
 		__sync_fetch_and_add(&parent->connect_OK, 1);
 		// Seed the PgSQL DNS cache from the just-established connection so
 		// the next connect for this hostname can skip getaddrinfo even if
-		// the background resolver loop hasn't visited it yet. libpq-only:
-		// the native path resolves via the DNS cache itself in native_connect_start().
+		// the background resolver loop hasn't visited it yet.
 		if (!native_mode) {
 			PgSQL_Monitor::update_dns_cache_from_pgsql_conn(pgsql_conn);
+		} else if (native_hostaddr.empty()) {
+			// The cache had nothing for this name (or it is an IP literal, which the call
+			// ignores): record the address that just worked, as the libpq branch does.
+			PgSQL_Monitor::update_dns_cache_from_socket(native_host, fd);
 		}
 		break;
 	case ASYNC_CONNECT_FAILED:
@@ -585,16 +588,22 @@ handler_again:
 				next_event(ASYNC_USE_RESULT_CONT);
 				break;
 			}
-			if (native_result_complete || is_error_present()) {
+			if (native_result_complete || native_result_aborted) {
 				// ReadyForQuery consumed (result complete) or a fatal recv/frame
 				// error: hand off to the end state (ASYNC_QUERY_END for queries,
 				// or the configured fetch_result_end_st).
+				// Not is_error_present(): an ordinary ErrorResponse sets that too, and
+				// the backend still owes the ReadyForQuery that ends its cycle. Leaving
+				// on it would strand that 'Z' in the framer and hand the session a
+				// result with no READY, which aborts the proxy (issue #6410).
 				NEXT_IMMEDIATE(fetch_result_end_st);
 			}
 			// Enough bytes moved in this event: pause and let the client drain,
 			// exactly as the libpq loop below does, so pgsql-threshold_resultset_size
-			// behaves the same on both paths.
-			if (suspend_resultset_fetch(processed_bytes)) {
+			// behaves the same on both paths. The drain decided that and kept the
+			// framed rest for the next entry; pausing on anything else would make that
+			// entry recv() first, and wait on a socket that has nothing left to send.
+			if (native_fetch_paused) {
 				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 				break;
 			}
@@ -1252,13 +1261,13 @@ bool pgsql_append_conninfo_credentials(std::ostringstream& conninfo, const char*
 	return false;
 }
 
-std::string PgSQL_Connection::connect_start_DNS_lookup() {
+std::string PgSQL_Connection::connect_start_DNS_lookup(std::vector<std::string>* all_ips) {
 	// PgSQL_Monitor::dns_lookup() returns an IP on cache hit, or empty
-	// on miss / when 'parent->address' is itself an IP / when the cache is
-	// disabled.  Empty result means "don't pass hostaddr to libpq" so the
+	// on miss / when the cache is disabled, and 'parent->address' itself when
+	// it is an IP.  Empty result means "don't pass hostaddr to libpq" so the
 	// existing behavior (libpq does getaddrinfo) is preserved.
 	const std::string ip = PgSQL_Monitor::dns_lookup(parent->address,
-		/*return_hostname_if_lookup_fails=*/false);
+		/*return_hostname_if_lookup_fails=*/false, nullptr, all_ips);
 	return ip;
 }
 
@@ -1367,15 +1376,34 @@ void PgSQL_Connection::connect_start() {
 		return;
 	}
 	append_conninfo_param(conninfo, "dbname", userinfo->dbname); // dbname
-	append_conninfo_param(conninfo, "host", parent->address); // backend address
 	// If the DNS cache has resolved this hostname already, also pass
 	// hostaddr=<ip>.  libpq documents this combo specifically to skip name
 	// resolution while keeping the hostname for TLS verification and error
 	// messages.  Empty IP -> cache miss / IP literal / disabled, leave as-is.
 	{
-		const std::string ip = connect_start_DNS_lookup();
+		std::vector<std::string> ips;
+		const std::string ip = connect_start_DNS_lookup(&ips);
 		if (!ip.empty() && ip != std::string(parent->address)) {
-		append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
+			if (ips.size() > 1 && strchr(parent->address, ',') == nullptr) {
+				// The name has several cached IPs, possibly of both families. A single hostaddr
+				// would make libpq try only the round-robin one, and a backend listening on just
+				// one of them would fail every other connect (#6432). Pass them all, starting at
+				// the round-robin one: libpq walks a hostaddr list in order, as it walks the
+				// addresses of a name, and wants the host list to be just as long.
+				std::string hosts, hostaddrs;
+				for (size_t i = 0; i < ips.size(); i++) {
+					if (i) { hosts += ','; hostaddrs += ','; }
+					hosts += parent->address;
+					hostaddrs += ips[i];
+				}
+				append_conninfo_param(conninfo, "host", const_cast<char*>(hosts.c_str()));
+				append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(hostaddrs.c_str()));
+			} else {
+				append_conninfo_param(conninfo, "host", parent->address); // backend address
+				append_conninfo_param(conninfo, "hostaddr", const_cast<char*>(ip.c_str()));
+			}
+		} else {
+			append_conninfo_param(conninfo, "host", parent->address); // backend address
 		}
 	}
 	// port=0 means hostname is a Unix-domain socket path; libpq rejects
@@ -1538,7 +1566,8 @@ void PgSQL_Connection::connect_cont(short event) {
 	}
 	int current_fd = PQsocket(pgsql_conn);
 	if (current_fd != fd) {
-		proxy_warning("PgSQL Connection FD has been changed by PQconnectPoll(). oldFD:%d newFD:%d\n", fd, current_fd);
+		// Expected whenever libpq moves on to the next host/hostaddr of the list it was given
+		// (#6432), so not a warning.
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "PgSQL Connection FD has been changed by PQconnectPoll()"
 			"Session=%p, Conn=%p, myds=%p, oldFD=%d, newFD=%d\n", myds->sess, this, myds, fd, current_fd);
 		fd = current_fd;
@@ -1631,7 +1660,7 @@ bool PgSQL_Connection::native_ssl_pump_wbio_to_fd(bool& would_block) {
 	}
 	// Now flush native_ssl_outbuf to the socket.
 	while (!native_ssl_outbuf.empty()) {
-		ssize_t n = ::send(fd, native_ssl_outbuf.data(), native_ssl_outbuf.size(), 0);
+		ssize_t n = ::send(fd, native_ssl_outbuf.data(), native_ssl_outbuf.size(), MSG_NOSIGNAL);
 		if (n > 0) {
 			native_ssl_outbuf.erase(0, (size_t)n);
 			continue;
@@ -1650,6 +1679,9 @@ bool PgSQL_Connection::native_ssl_pump_wbio_to_fd(bool& would_block) {
 
 bool PgSQL_Connection::native_flush_outbuf() {
 	native_ssl_block_dir = 0;
+	// A false return is reported with errno's text (native_send_fatal()). The TLS exits do not
+	// all set errno, so clear it rather than let them report a stale one.
+	errno = 0;
 	// Encrypted path: native_outbuf holds *plaintext* protocol bytes. Feed them to
 	// SSL_write, which produces ciphertext into wbio_ssl, then drain wbio to the fd.
 	if (native_ssl != nullptr) {
@@ -1693,7 +1725,7 @@ bool PgSQL_Connection::native_flush_outbuf() {
 
 	// Plaintext path (1.6a): native_outbuf holds raw bytes for the socket.
 	while (!native_outbuf.empty()) {
-		ssize_t n = ::send(fd, native_outbuf.data(), native_outbuf.size(), 0);
+		ssize_t n = ::send(fd, native_outbuf.data(), native_outbuf.size(), MSG_NOSIGNAL);
 		if (n > 0) {
 			native_outbuf.erase(0, (size_t)n);
 			continue;
@@ -1727,11 +1759,29 @@ bool PgSQL_Connection::native_flush_outbuf() {
 // never did, on any of its exits.
 void PgSQL_Connection::native_result_fatal(const char* code, const char* message) {
 	set_error(code, message, false);
+	native_result_aborted = true;
 	native_teardown();
+}
+
+// A failed send() after login means the socket is dead (ECONNRESET / EPIPE), so it gets the
+// same teardown as a failed recv(). Recording the error alone left fd open and native_connected
+// set: the connection kept reporting itself live and reusable, the session skipped its
+// destroy-and-retry path and pooled it, and every later checkout failed the same way (issue
+// #6409). A retry is safe: the backend runs a message only once it has all of it.
+void PgSQL_Connection::native_send_fatal(const char* what) {
+	const int err = errno;
+	char msg[128];
+	if (err) {
+		snprintf(msg, sizeof(msg), "%s failed: %s", what, strerror(err));
+	} else {
+		snprintf(msg, sizeof(msg), "%s failed", what);
+	}
+	native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), msg);
 }
 
 void PgSQL_Connection::native_result_protocol_violation(const char* message) {
 	set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, message, false);
+	native_result_aborted = true;
 	reusable = false;
 	healthy = false;
 	if (myds && myds->sess) {
@@ -1774,6 +1824,8 @@ void PgSQL_Connection::native_teardown() {
 	native_framer.reset();
 	native_outbuf.clear();
 	native_ssl_outbuf.clear();
+	native_addrs.clear();
+	native_addr_idx = 0;
 	// The TLS session belongs to this connection (see PgSQL_Connection.h), so we
 	// free it here. SSL_set_bio() transferred both BIOs to the SSL, so SSL_free()
 	// releases all three; freeing the BIOs separately would be a double free. It
@@ -1812,65 +1864,162 @@ SSL* PgSQL_Connection::get_pg_ssl_object() {
 	return (SSL*)PQsslStruct(pgsql_conn, "OpenSSL");
 }
 
+// The numeric IP of a resolved backend address, or "" if it is not an IP one.
+static std::string native_addr_ip(const sockaddr_storage& ss) {
+	char buf[INET6_ADDRSTRLEN] = "";
+	const void* a = nullptr;
+	if (ss.ss_family == AF_INET) {
+		a = &reinterpret_cast<const sockaddr_in*>(&ss)->sin_addr;
+	} else if (ss.ss_family == AF_INET6) {
+		a = &reinterpret_cast<const sockaddr_in6*>(&ss)->sin6_addr;
+	}
+	if (a == nullptr || inet_ntop(ss.ss_family, a, buf, sizeof(buf)) == nullptr) return "";
+	return buf;
+}
+
+// "<ip> port <port>" for a resolved backend address, for the connect error message.
+static std::string native_addr_text(const sockaddr_storage& ss) {
+	const std::string ip = native_addr_ip(ss);
+	if (ip.empty()) return "?";
+	const unsigned port = (ss.ss_family == AF_INET)
+		? ntohs(reinterpret_cast<const sockaddr_in*>(&ss)->sin_port)
+		: ntohs(reinterpret_cast<const sockaddr_in6*>(&ss)->sin6_port);
+	return ip + " port " + std::to_string(port);
+}
+
+void PgSQL_Connection::native_note_addr_failure(int err) {
+	if (!native_connect_errors.empty()) native_connect_errors += "; ";
+	native_connect_errors += "connection to ";
+	native_connect_errors += (native_addr_idx < native_addrs.size())
+		? native_addr_text(native_addrs[native_addr_idx].first) : std::string("?");
+	native_connect_errors += " failed: ";
+	native_connect_errors += err ? strerror(err) : "connect failed";
+}
+
+bool PgSQL_Connection::native_tcp_connect_next() {
+	for (; native_addr_idx < native_addrs.size(); native_addr_idx++) {
+		const auto& addr = native_addrs[native_addr_idx];
+		int sock = ::socket(addr.first.ss_family, SOCK_STREAM, IPPROTO_TCP);
+		if (sock < 0) {
+			native_note_addr_failure(errno);
+			continue;
+		}
+		// non-blocking
+		int fl = fcntl(sock, F_GETFL, 0);
+		if (fl < 0 || fcntl(sock, F_SETFL, fl | O_NONBLOCK) < 0) {
+			const int err = errno;
+			::close(sock);
+			native_note_addr_failure(err);
+			continue;
+		}
+		{ int one = 1; setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)); }
+		// libpq's default (keepalives=1): the OS eventually notices a peer that vanished
+		// while the connection sat idle in the pool. Best-effort, as for TCP_NODELAY.
+		{ int one = 1; setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)); }
+		int rc = ::connect(sock, reinterpret_cast<const sockaddr*>(&addr.first), addr.second);
+		if (rc == 0 || errno == EINPROGRESS || errno == EWOULDBLOCK || errno == EINTR) {
+			this->fd = sock; // connect in progress (or immediately done)
+			return true;
+		}
+		// Failed at once, e.g. ENETUNREACH for a family the host has no route for.
+		const int err = errno;
+		::close(sock);
+		native_note_addr_failure(err);
+	}
+	return false;
+}
+
+// Appends every address getaddrinfo() returns for `host` to `out`. Returns its error code.
+static int native_append_addrs(const char* host, const char* port, int flags,
+	std::vector<std::pair<sockaddr_storage, socklen_t>>& out) {
+	struct addrinfo hints;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+	hints.ai_flags = flags;
+
+	struct addrinfo* res = nullptr;
+	int gai = getaddrinfo(host, port, &hints, &res);
+	if ((gai != 0 || res == nullptr) && flags == AI_ADDRCONFIG) {
+		// AI_ADDRCONFIG does not count loopback addresses, so a name that only resolves to the
+		// loopback of a family the host has nothing else in (e.g. ::1 alone) comes back empty.
+		// libpq does not filter; resolve once more unfiltered rather than fail where it works.
+		if (res) { freeaddrinfo(res); res = nullptr; }
+		hints.ai_flags = 0;
+		gai = getaddrinfo(host, port, &hints, &res);
+	}
+	if (gai == 0 && res == nullptr) gai = EAI_NONAME;
+	if (gai != 0) {
+		if (res) freeaddrinfo(res);
+		return gai;
+	}
+	for (struct addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
+		if (ai->ai_addr == nullptr || ai->ai_addrlen > sizeof(sockaddr_storage)) continue;
+		sockaddr_storage ss;
+		memset(&ss, 0, sizeof(ss));
+		memcpy(&ss, ai->ai_addr, ai->ai_addrlen);
+		out.emplace_back(ss, ai->ai_addrlen);
+	}
+	freeaddrinfo(res);
+	return 0;
+}
+
 void PgSQL_Connection::native_connect_start() {
 	// Resolve the backend address. Prefer the DNS cache (non-blocking); fall back
 	// to the literal parent->address (which may itself be an IP literal).
-	std::string ip = connect_start_DNS_lookup();
+	// `cached_ips` holds every IP the cache has for the name, starting at the
+	// round-robin one `ip`; empty on a miss or for an IP literal.
+	std::vector<std::string> cached_ips;
+	std::string ip = connect_start_DNS_lookup(&cached_ips);
 	const char* host = (!ip.empty()) ? ip.c_str() : parent->address;
 
 	// getaddrinfo on a numeric host with AI_NUMERICHOST does not block. The DNS
 	// cache returns numeric IPs; if it missed and parent->address is a hostname,
 	// fall back to a (potentially blocking) resolve — acceptable as the pool
 	// connect path already tolerates this and 1.8 validates against real backends.
-	struct addrinfo hints;
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
-	if (!ip.empty()) {
-		hints.ai_flags = AI_NUMERICHOST;
-	}
 	char portstr[16];
 	snprintf(portstr, sizeof(portstr), "%u", (unsigned)parent->port);
 
-	struct addrinfo* res = nullptr;
-	int gai = getaddrinfo(host, portstr, &hints, &res);
-	if (gai != 0 || res == nullptr) {
+	// Keep every candidate: an address whose connect fails later, in TCP_CONNECTING, is
+	// followed by the next one (#6425).
+	native_addrs.clear();
+	native_addr_idx = 0;
+	native_connect_errors.clear();
+	int gai = 0;
+	if (cached_ips.size() > 1) {
+		// Every cached IP is a candidate, not just the round-robin one: with a name cached as
+		// both an IPv6 and an IPv4 address and a backend listening on one family, trying only
+		// the round-robin IP failed every other connect (#6432). An IP that does not parse is
+		// skipped; the connect fails only if none does.
+		for (const std::string& cip : cached_ips) {
+			const int rc = native_append_addrs(cip.c_str(), portstr, AI_NUMERICHOST, native_addrs);
+			if (rc != 0) gai = rc;
+		}
+	} else {
+		// A hostname is filtered the way the DNS cache resolver filters it (dns_resolve()): no
+		// addresses of a family the host has no address in, which a connect could never reach.
+		gai = native_append_addrs(host, portstr, (!ip.empty()) ? AI_NUMERICHOST : AI_ADDRCONFIG,
+			native_addrs);
+	}
+	if (native_addrs.empty()) {
+		if (gai == 0) gai = EAI_NONAME;
 		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
 			gai_strerror(gai), false);
 		proxy_error("Native connect: getaddrinfo(%s:%s) failed: %s\n", host, portstr, gai_strerror(gai));
-		if (res) freeaddrinfo(res);
 		async_exit_status = PG_EVENT_NONE; // error present -> handler moves to FAILED
 		return;
 	}
 
-	int sock = -1;
-	for (struct addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
-		sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-		if (sock < 0) continue;
-		// non-blocking
-		int fl = fcntl(sock, F_GETFL, 0);
-		if (fl < 0 || fcntl(sock, F_SETFL, fl | O_NONBLOCK) < 0) {
-			::close(sock); sock = -1; continue;
-		}
-		{ int one = 1; setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)); }
-		int rc = ::connect(sock, ai->ai_addr, ai->ai_addrlen);
-		if (rc == 0 || errno == EINPROGRESS || errno == EWOULDBLOCK || errno == EINTR) {
-			break; // connect in progress (or immediately done)
-		}
-		::close(sock); sock = -1;
-	}
-	freeaddrinfo(res);
-
-	if (sock < 0) {
+	if (!native_tcp_connect_next()) {
 		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
-			"native connect() failed", false);
-		proxy_error("Native connect: socket/connect to %s:%s failed: %s\n", host, portstr, strerror(errno));
+			native_connect_errors.empty() ? "native connect() failed" : native_connect_errors.c_str(), false);
+		proxy_error("Native connect: socket/connect to %s:%s failed: %s\n", host, portstr,
+			native_connect_errors.empty() ? "no usable address" : native_connect_errors.c_str());
 		async_exit_status = PG_EVENT_NONE;
 		return;
 	}
 
-	this->fd = sock;
 	native_host = parent->address ? parent->address : "";
 	// Mirror the libpq path's rule for `hostaddr` (connect_start(): passed only when
 	// the DNS cache resolved something DIFFERENT from parent->address) so that both
@@ -1913,12 +2062,46 @@ void PgSQL_Connection::native_connect_cont(short event) {
 		int soerr = 0;
 		socklen_t slen = sizeof(soerr);
 		if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) < 0 || soerr != 0) {
+			native_note_addr_failure(soerr ? soerr : errno);
+			// Move on to the next resolved address, as libpq does (#6425). Not through
+			// native_teardown(): that ends the whole connect. The session notices the new
+			// fd and swaps it into its poll entry, as it does when libpq changes it.
+			if (fd >= 0) {
+				::close(fd);
+				fd = -1;
+			}
+			native_addr_idx++;
+			if (native_tcp_connect_next()) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+					"Native connect to %s:%d: trying next address after: %s\n",
+					parent->address, parent->port, native_connect_errors.c_str());
+				async_exit_status = PG_EVENT_WRITE;
+				return;
+			}
 			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
-				soerr ? strerror(soerr) : "connect failed", false);
+				native_connect_errors.c_str(), false);
 			proxy_error("Native connect: TCP connect to %s:%d failed: %s\n",
-				parent->address, parent->port, strerror(soerr));
+				parent->address, parent->port, native_connect_errors.c_str());
 			native_teardown();
 			return; // error present -> handler -> ASYNC_CONNECT_FAILED
+		}
+		{
+			// SO_ERROR is also 0 while the connect is still in flight. That happens after a
+			// move to the next address: the thread loop and then the session each call the
+			// handler with the events polled on the old fd, so the second call lands here
+			// before the new connect has finished. Wait for it instead of sending on it.
+			sockaddr_storage peer;
+			socklen_t plen = sizeof(peer);
+			if (getpeername(fd, reinterpret_cast<sockaddr*>(&peer), &plen) < 0 && errno == ENOTCONN) {
+				async_exit_status = PG_EVENT_WRITE;
+				return;
+			}
+		}
+		if (!native_hostaddr.empty() && native_addr_idx > 0 && native_addr_idx < native_addrs.size()) {
+			// Connected through another cached IP than the round-robin one (#6432): report the
+			// one in use, as PQhostaddr() does on the libpq path.
+			const std::string used = native_addr_ip(native_addrs[native_addr_idx].first);
+			if (!used.empty()) native_hostaddr = used;
 		}
 		if (native_ssl_requested) {
 			// TLS path: negotiate SSLRequest BEFORE the StartupMessage. Send the
@@ -3072,6 +3255,8 @@ void PgSQL_Connection::query_start() {
 		// defensively from query.length bytes + an explicit NUL so we never
 		// depend on / read past the caller's terminator.
 		native_result_complete = false;
+		native_result_aborted = false;
+		native_fetch_paused = false;
 		native_copy_intercepted = false;
 		// A simple query is not an extended-query step: clear any stmt-step state left
 		// on a pooled connection by a prior Parse/Describe/Execute so the native result
@@ -3107,7 +3292,7 @@ void PgSQL_Connection::query_start() {
 			// native_send_or_buffer drives native_st for the connect handshake; in
 			// the query path we only care about the flush result. A false return
 			// means a fatal send error.
-			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Query) failed", false);
+			native_send_fatal("send(Query)");
 			async_exit_status = PG_EVENT_NONE;
 			return;
 		}
@@ -3137,7 +3322,7 @@ void PgSQL_Connection::query_cont(short event) {
 		// Native simple-query path (Task 1.6c): finish flushing the Query message.
 		async_exit_status = PG_EVENT_NONE;
 		if (!native_flush_outbuf()) {
-			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Query) failed", false);
+			native_send_fatal("send(Query)");
 			return;
 		}
 		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -3251,14 +3436,15 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 
 void PgSQL_Connection::native_stmt_send_or_wait() {
 	// Flush the extended-query step just built into native_outbuf. Mirrors the tail
-	// of query_start()'s native branch: on a fatal send set error_info; otherwise
+	// of query_start()'s native branch: on a fatal send record the error and tear the
+	// connection down (native_send_fatal); otherwise
 	// leave async_exit_status = PG_EVENT_WRITE while bytes remain buffered (the
 	// caller's START case then waits for POLLOUT via *_CONT) or PG_EVENT_NONE once
 	// fully sent (the START case proceeds straight to the result fetch).
 	if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
 		// native_send_or_buffer drives native_st only for the connect handshake; here
 		// (post-connect) only the flush result matters. false == fatal send error.
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(extended-query) failed", false);
+		native_send_fatal("send(extended-query)");
 		async_exit_status = PG_EVENT_NONE;
 		return;
 	}
@@ -3278,7 +3464,7 @@ void PgSQL_Connection::native_stmt_flush_cont() {
 	// once fully drained lets the caller's *_CONT case advance to the result fetch.
 	async_exit_status = PG_EVENT_NONE;
 	if (!native_flush_outbuf()) {
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(extended-query) failed", false);
+		native_send_fatal("send(extended-query)");
 		return;
 	}
 	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -3291,6 +3477,20 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 	// the caller compares against pgsql-threshold_resultset_size to decide when
 	// to pause the fetch.
 	auto count_bytes = [&](unsigned int n) { if (processed_bytes) *processed_bytes += n; };
+	// Enough bytes for this event: stop and let the client drain, the same rule the
+	// libpq fetch loop applies per row. Asked only right after a DataRow or CopyData,
+	// the messages a result can have without limit. Never once an ErrorResponse is
+	// recorded: the caller would take the error as the end of the cycle while its
+	// ReadyForQuery is still unread, and a single 'E' can cross the threshold on its
+	// own -- PostgreSQL echoes client input into the message text (issue #6410).
+	auto pause_after = [&](char type) -> bool {
+		if ((type == 'D' || type == 'd') && processed_bytes && !is_error_present() &&
+			suspend_resultset_fetch(*processed_bytes)) {
+			native_fetch_paused = true;
+			return true;
+		}
+		return false;
+	};
 	// Native result fetch (Task 1.6c / Phase 2). Pull backend bytes into the
 	// framer, then drain every complete message into query_result as raw
 	// client-wire bytes. Non-blocking throughout.
@@ -3343,12 +3543,6 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 	// buffer) before looping, and we never feed() again inside this loop, so the
 	// dangling-pointer rule is respected.
 	for (;;) {
-		// Enough bytes for this event: stop before taking another message and let
-		// the client drain, the same rule the libpq fetch loop applies per row.
-		if (processed_bytes && suspend_resultset_fetch(*processed_bytes)) {
-			native_fetch_paused = true;
-			return;
-		}
 		PgSQL_Backend_Msg msg;
 		PgSQL_Frame_Result fr = native_framer.next(msg);
 		if (fr == FRAME_OK) {
@@ -3421,6 +3615,15 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				native_result_had_notification = true;
 			}
 
+			// A LISTEN that ran is pinned from its CommandComplete tag as well as from the
+			// digest: the tag is there whatever the query looked like, including when
+			// pgsql-query_digests is off and there is no digest to inspect (issue #6438).
+			// Set before ReadyForQuery, so a notification later in this same reply is kept.
+			if (msg.type == 'C' && msg.payload_len == sizeof("LISTEN") &&
+				memcmp(msg.payload, "LISTEN", sizeof("LISTEN")) == 0) {
+				set_status(true, STATUS_PGSQL_CONNECTION_LISTEN);
+			}
+
 			// --- Extended-query (prepared-statement) drain (Task C) ---
 			// When driving a Parse/Describe/Execute step, apply the per-step
 			// ack-filtering + terminator rules. native_stmt_step == NONE means a plain
@@ -3430,12 +3633,15 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				// An unnamed Execute always describes the portal, as libpq does, so
 				// empty rowsets can be distinguished from command-only results.
 				// Keep that metadata without adding an unrequested Describe response
-				// to the client stream (or the cached wire bytes).
+				// to the client stream (or the cached wire bytes). A swallowed 'T'
+				// still marks the statement row-returning, so a zero-row SELECT's
+				// "SELECT 0" is not taken for an affected-row count (issue #6435).
 				if (native_stmt_step == PG_Native_Stmt_Step::EXECUTE &&
 					(t == 'T' || t == 'n') &&
 					(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) == 0) {
 					query_result->num_fields = (t == 'T' && msg.payload_len >= 2) ?
 						((unsigned int)msg.payload[0] << 8) | msg.payload[1] : 0;
+					if (t == 'T') query_result->stmt_had_tuple = true;
 					continue;
 				}
 
@@ -3591,6 +3797,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 						return;
 					}
 				}
+				if (pause_after(t)) return;
 				continue;
 			}
 
@@ -3612,6 +3819,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				native_result_complete = true;
 				return;
 			}
+			if (pause_after(msg.type)) return;
 			continue;
 		}
 		if (fr == FRAME_NEED_MORE) {
@@ -3774,6 +3982,8 @@ void PgSQL_Connection::async_free_result() {
 	}
 	compute_unknown_transaction_status();
 	async_state_machine = ASYNC_IDLE;
+	// The query is over; a pause belongs to its fetch and must not carry into the next one.
+	native_fetch_paused = false;
 	if (query_result) {
 		if (query_result_reuse) {
 			delete query_result_reuse;
@@ -4102,6 +4312,17 @@ bool PgSQL_Connection::is_connection_in_reusable_state() const {
 	// The backend still owes this connection a ReadyForQuery, so it is mid-batch and holding an
 	// implicit transaction. Its last status byte predates the batch and would say otherwise.
 	if (native_mode && native_unsynced_work) {
+		return false;
+	}
+	// Backend bytes still waiting to be read belong to a reply that has not been consumed. The
+	// next query on this connection would read them as the start of its own answer. A pinned
+	// LISTEN connection is the exception: between queries it legitimately buffers asynchronous
+	// notifications, which the next query start keeps rather than discards (issue #6410).
+	// Not after native_result_protocol_violation(): it stops reading on purpose, finishes the
+	// result itself and marks the connection for destruction, and answering false here would
+	// send the session down the broken-connection branch, which never tells the client why.
+	if (native_mode && !native_result_aborted && (native_fetch_paused ||
+		(!native_framer.empty() && (status_flags & STATUS_PGSQL_CONNECTION_LISTEN) == 0))) {
 		return false;
 	}
 	const PGTransactionStatusType txn_status = get_pg_transaction_status();
@@ -5094,6 +5315,29 @@ const char* PgSQL_Connection::get_pg_transaction_status_str() {
 }
 
 const char* PgSQL_Connection::get_pg_backend_state() const {
+	if (native_mode) {
+		// pgsql_conn is always NULL here, so asking libpq would report every native
+		// backend as "disconnected".
+		if (!backend_is_live())
+			return "disconnected";
+		// libpq reports ACTIVE while a request is outstanding. The native equivalent is
+		// a request still being driven by the state machine, or a batch the backend has
+		// not yet concluded with ReadyForQuery. Not folded into get_pg_transaction_status():
+		// that one decides reuse, and native_unsynced_work is handled there separately.
+		if (async_state_machine != ASYNC_IDLE || native_unsynced_work)
+			return "active";
+		switch (native_txn_status) {
+		case 'I':
+			return "idle";
+		case 'T':
+			return "idle in transaction";
+		case 'E':
+			return "idle in transaction (aborted)";
+		default:
+			return "unknown";
+		}
+	}
+
 	if (PQstatus(pgsql_conn) != CONNECTION_OK)
 		return "disconnected";
 
@@ -5179,6 +5423,54 @@ void PgSQL_Connection::unhandled_notice_cb(void* arg, const PGresult* result) {
 #ifdef DEBUG
 	assert(0);
 #endif
+}
+
+	// LISTEN registers a subscription on the backend connection, so the connection must
+	// stay with this session: notifications can only be delivered to the client that asked
+	// for them, and a pooled connection would hand them to whoever holds it next. This flag
+	// is also what stops such a connection returning to the pool still subscribed.
+	// Individual channels are not tracked, so only UNLISTEN * clears it -- after
+	// UNLISTEN <channel> ProxySQL cannot know whether any subscription remains, and
+	// unpinning while one does sends the next notification to the wrong client.
+	// DISCARD ALL is the other way out, and it clears every flag through reset().
+	// A Simple Query can carry several statements, so each one is looked at and the last
+	// LISTEN or UNLISTEN * decides: `SELECT 1; LISTEN ch` pins, `UNLISTEN *; LISTEN ch`
+	// stays pinned, and `LISTEN ch; UNLISTEN *` leaves nothing subscribed (issue #6438).
+	// Statements are taken past any comment kept by query_digests_keep_comment, and once the
+	// scan loses track of the digest (a kept comment cut short of its terminator) a LISTEN
+	// anywhere from that comment's opening on pins -- the word inside the cut comment's own
+	// text included, which fails closed -- while nothing there unpins.
+void PgSQL_Connection::update_listen_status(const char* query_digest_text) {
+	bool listening = get_status(STATUS_PGSQL_CONNECTION_LISTEN);
+	const char* lost = NULL;
+	for (const char* stmt = pgsql_stmt_skip_lead(query_digest_text, &lost); stmt != NULL;
+		stmt = pgsql_digest_next_stmt(stmt, &lost)) {
+		if (pgsql_stmt_first_keyword_is(stmt, "LISTEN")) {
+			listening = true;
+		} else if (listening && pgsql_stmt_first_keyword_is(stmt, "UNLISTEN")) {
+			// The star may abut the keyword: UNLISTEN* is valid and the digest keeps it
+			// joined, so a compare against "UNLISTEN " would leave the connection pinned.
+			const char* p = pgsql_stmt_skip_lead(stmt + sizeof("UNLISTEN") - 1, NULL);
+			if (p != NULL && *p == '*') listening = false;
+		}
+	}
+	if (pgsql_text_has_word(lost, "LISTEN")) listening = true;
+	set_status(listening, STATUS_PGSQL_CONNECTION_LISTEN);
+}
+
+// With pgsql-query_digests off there is no digest for update_listen_status(). A LISTEN that
+// ran still pins, from its CommandComplete tag (native_fetch_result_cont()), but nothing would
+// release it. The tag of UNLISTEN does not say whether it was UNLISTEN *, so the query is read:
+// only one holding the word UNLISTEN, on a pinned connection, is digested in full for it.
+void PgSQL_Connection::update_listen_status_from_query(const char* query) {
+	if (get_status(STATUS_PGSQL_CONNECTION_LISTEN) == false || pgsql_text_has_word(query, "UNLISTEN") == false) {
+		return;
+	}
+	char* digest = pgsql_query_full_digest(query);
+	if (digest != NULL) {
+		update_listen_status(digest);
+		free(digest);
+	}
 }
 
 void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_text, int savepoint_count) {
@@ -5292,32 +5584,7 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 		}
 	}
 
-	// LISTEN registers a subscription on the backend connection, so the connection must
-	// stay with this session: notifications can only be delivered to the client that asked
-	// for them, and a pooled connection would hand them to whoever holds it next. This flag
-	// is also what stops such a connection returning to the pool still subscribed.
-	// Individual channels are not tracked, so only UNLISTEN * clears it -- after
-	// UNLISTEN <channel> ProxySQL cannot know whether any subscription remains, and
-	// unpinning while one does sends the next notification to the wrong client.
-	// DISCARD ALL is the other way out, and it clears every flag through reset().
-	// A subscription lives on this connection, so the connection has to stay with the
-	// session that made it: pooled, it would hand notifications to whoever holds it next.
-	// Only UNLISTEN * clears the flag, since individual channels are not tracked and
-	// unpinning while one remains sends the next notification to the wrong client.
-	// DISCARD ALL is the other way out, through reset().
-	if (get_status(STATUS_PGSQL_CONNECTION_LISTEN) == false) {
-		if (pgsql_stmt_first_keyword_is(query_digest_text, "LISTEN")) {
-			set_status(true, STATUS_PGSQL_CONNECTION_LISTEN);
-		}
-	} else {
-		// The star may abut the keyword: UNLISTEN* is valid and the digest keeps it joined,
-		// so a compare against "UNLISTEN " would leave the connection pinned for good.
-		if (pgsql_stmt_first_keyword_is(query_digest_text, "UNLISTEN")) {
-			const char* p = query_digest_text + sizeof("UNLISTEN") - 1;
-			while (*p == ' ') p++;
-			if (*p == '*') set_status(false, STATUS_PGSQL_CONNECTION_LISTEN);
-		}
-	}
+	update_listen_status(query_digest_text);
 
 	// CREATE SEQUENCE vs CREATE TEMP SEQUENCE:
 	/// - CREATE SEQUENCE: Persistent; survives across sessions until explicitly dropped.

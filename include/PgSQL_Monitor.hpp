@@ -96,15 +96,22 @@ struct PgSQL_Monitor {
 
 	// DNS cache facade.  Mirrors MySQL_Monitor's surface so PgSQL_Connection
 	// can call PgSQL_Monitor::dns_lookup(hostname) and get a cached IP without
-	// blocking on getaddrinfo.
+	// blocking on getaddrinfo.  `all_ips`, if given, receives every cached IP
+	// starting at the returned one (see DNS_Cache::lookup()); empty unless the
+	// cache served the IP, so it stays empty for an IP literal or a miss.
 	static std::string dns_lookup(const std::string& hostname,
-		bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr);
+		bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr,
+		std::vector<std::string>* all_ips = nullptr);
 	static std::string dns_lookup(const char* hostname,
-		bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr);
+		bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr,
+		std::vector<std::string>* all_ips = nullptr);
 	// Seed the cache from an already-connected PGconn.  Called on the
 	// SUCCESSFUL branch of PgSQL_Connection's handler so the next
 	// connect avoids getaddrinfo even before the resolver loop has run.
 	static bool update_dns_cache_from_pgsql_conn(PGconn* pgsql_conn);
+	// Same, for a connection whose socket we own (the native backend path): `sock` is
+	// connected to `hostname`. Only fills a name the cache has no entry for.
+	static bool update_dns_cache_from_socket(const std::string& hostname, int sock);
 	// Wake the resolver loop early (e.g. after a pgsql_servers update).
 	static void trigger_dns_cache_update();
 

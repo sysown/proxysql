@@ -618,11 +618,14 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_resolution_unit-t \
 	mariadb_tls_server_name_unit-t \
 	pgsql_variables_validator_unit-t \
+	pgsql_set_tracked_vars_regexp_unit-t \
+	pgsql_set_transaction_regexp_unit-t \
 	proxysql_utils_unit-t startup_gate_unit-t cluster_plugin_set_hash_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
 	pgsql_txn_state_unit-t \
 	pgsql_midbatch_reset_refused_unit-t \
+	pgsql_local_error_txn_state_unit-t \
 	pgsql_conn_liveness_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
@@ -630,12 +633,18 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_native_tier_policy_unit-t \
 	pgsql_native_read_burst_unit-t \
 	pgsql_native_scram_order_unit-t \
+	pgsql_native_send_failure_unit-t \
 	pgsql_native_startup_params_reset_unit-t \
 	pgsql_native_teardown_state_unit-t \
+	pgsql_native_unread_reply_unit-t \
 	pgsql_named_portal_teardown_unit-t \
 	pgsql_native_tls_verify_modes_unit-t \
 	pgsql_native_unix_endpoint_unit-t \
 	pgsql_native_cancel_endpoint_unit-t \
+	pgsql_native_connect_fallback_unit-t \
+	pgsql_native_affected_rows_unit-t \
+	pgsql_listen_pin_unit-t \
+	pgsql_dns_cache_all_ips_unit-t \
 	pgsql_native_tls_handover_unit-t \
 	charset_find_unit-t \
 	config_validation_unit-t \
@@ -662,7 +671,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	parsersql_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
 	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
 	parsersql_in_values_digest_unit-t \
-	pgsql_query_processor_unit-t \
+	pgsql_query_processor_unit-t pgsql_parser_command_type_unit-t \
 	http_server_unit-t \
 	mysql_resultset_framer_unit-t \
 	mysql_resultset_framer_traffic_unit-t \

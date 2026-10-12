@@ -16,6 +16,11 @@
  *   - Nested block comments
  *   - Prefix-typed string literals (E'...', B'...', X'...', U&'...')
  *   - -- line comments (no space required after --)
+ *
+ * And the statement scan over a digest used to find LISTEN in every statement of a
+ * multi-statement Simple Query (issue #6438):
+ *   - pgsql_stmt_skip_lead() / pgsql_digest_next_stmt() / pgsql_digest_has_stmt_keyword()
+ *   - pgsql_text_has_word(), for the part of a digest the scan cannot follow
  */
 
 #include "tap.h"
@@ -646,11 +651,316 @@ static void test_digest_only_comment() {
 }
 
 // ============================================================================
+// 14. Statement scan over a digest (issue #6438)
+// ============================================================================
+
+static bool has_listen(const char* digest) {
+	return pgsql_digest_has_stmt_keyword(digest, "LISTEN");
+}
+
+// The digests a client can produce: LISTEN behind another statement has to be found,
+// whatever the spacing around the ';'.
+static void test_stmt_keyword_found() {
+	ok(has_listen("listen ch"), "stmt scan: a lone LISTEN is found");
+	ok(has_listen("select ?; listen ch"), "stmt scan: LISTEN after another statement is found");
+	ok(has_listen("select ?;listen ch"), "stmt scan: LISTEN right after the ';' is found");
+	ok(has_listen("SELECT ?; LISTEN ch"), "stmt scan: the match ignores case");
+	ok(has_listen("select ?; select ?; listen ch"), "stmt scan: LISTEN as the third statement is found");
+	ok(has_listen("select ?; ; listen ch"), "stmt scan: an empty statement in between is skipped");
+	ok(has_listen("select ?; listen\"Ch\""), "stmt scan: a quoted channel abutting LISTEN still matches");
+}
+
+// Anything that only looks like LISTEN to a naive substring search.
+static void test_stmt_keyword_not_found() {
+	ok(!has_listen("select ?"), "stmt scan: a single statement without LISTEN");
+	ok(!has_listen("select listen_col from t"), "stmt scan: an identifier holding the word");
+	ok(!has_listen("select ?; select listener from t"), "stmt scan: an identifier starting with LISTEN");
+	ok(!has_listen("select ?; unlisten ch"), "stmt scan: UNLISTEN is not LISTEN");
+	ok(!has_listen("select ? as \"a; listen b\""), "stmt scan: a ';' inside a quoted identifier is no boundary");
+	ok(!has_listen("select ? as \"a\"\"; listen b\""), "stmt scan: nor inside one holding a doubled quote");
+	ok(!has_listen("select ? /* ; listen b */"), "stmt scan: nor inside a kept block comment");
+	ok(!has_listen("select ? /* /* */ ; listen b */"), "stmt scan: nor inside a nested kept block comment");
+	ok(!has_listen("select ?; /* listen */ select ?"), "stmt scan: LISTEN inside a kept comment starts no statement");
+	ok(!has_listen("select ?; /*c*/ unlisten ch"), "stmt scan: UNLISTEN behind a kept comment is not LISTEN");
+	ok(!has_listen("") && !has_listen(NULL), "stmt scan: empty and NULL digests");
+}
+
+// query_digests_keep_comment leaves a statement's leading comments in the digest; the
+// keyword is the first token past them, not the first bytes.
+static void test_stmt_keyword_behind_kept_comment() {
+	ok(has_listen("/*c*/ listen ch"), "stmt scan: a kept comment before the first statement");
+	ok(has_listen("select ?; /*c*/ listen ch"), "stmt scan: a kept comment before a later statement");
+	ok(has_listen("select ?;/*c*/listen ch"), "stmt scan: a kept comment with no spaces around it");
+	ok(has_listen("select ?; /*a*/ /*b*/ listen ch"), "stmt scan: several kept comments in a row");
+	ok(has_listen("select ?; /* /* n */ */ listen ch"), "stmt scan: a nested kept comment");
+	ok(has_listen("select ?; /*c*/ ; listen ch"), "stmt scan: an empty statement holding only a comment");
+}
+
+// A kept comment longer than FIRST_COMMENT_MAX_LENGTH reaches the digest without its
+// terminator, and from its opening on nothing can be told apart: the keyword counts as a
+// whole word anywhere from there, inside the cut comment's own text too.
+static void test_stmt_keyword_after_lost_scan() {
+	ok(has_listen("/*xxx select ?; listen ch"), "stmt scan: LISTEN after an unterminated comment");
+	ok(has_listen("/*xxx listen ch"), "stmt scan: LISTEN right after an unterminated comment");
+	ok(has_listen("select ?; /*x'y listen ch"), "stmt scan: a quote inside the unterminated comment hides nothing");
+	ok(has_listen("select \"a; listen b"), "stmt scan: LISTEN after an unterminated quoted identifier");
+	ok(!has_listen("/*xxx select ?; unlisten ch"), "stmt scan: past the loss UNLISTEN is still not LISTEN");
+	ok(!has_listen("/*xxx select listener, ?"), "stmt scan: past the loss an identifier holding the word is not LISTEN");
+	ok(!has_listen("/*xxx select ?; select ?"), "stmt scan: past the loss no LISTEN, no match");
+	ok(pgsql_text_has_word("Listen", "LISTEN") && pgsql_text_has_word("a,listen*", "LISTEN"),
+		"has_word: whole word, any case, at either end of the text");
+	ok(!pgsql_text_has_word("_listen", "LISTEN") && !pgsql_text_has_word("listen$1", "LISTEN") &&
+		!pgsql_text_has_word(NULL, "LISTEN"), "has_word: not inside an identifier, not in NULL");
+}
+
+static void test_stmt_next() {
+	const char* lost = "unset";
+	const char* d = "select ?;  listen ch";
+	const char* n = pgsql_digest_next_stmt(d, &lost);
+	ok(n != NULL && strcmp(n, "listen ch") == 0 && lost == NULL,
+		"next_stmt: returns the next statement with its leading spaces skipped");
+	ok(pgsql_digest_next_stmt(n, &lost) == NULL && lost == NULL, "next_stmt: NULL after the last statement");
+	ok(pgsql_digest_next_stmt("select ?; ", NULL) == NULL, "next_stmt: a trailing ';' starts no statement");
+	n = pgsql_digest_next_stmt("select ?; /* a */ --b\n listen ch", NULL);
+	ok(n != NULL && strcmp(n, "listen ch") == 0, "next_stmt: block and line comments before the statement are skipped");
+	d = "select ?; /*xx; listen ch";
+	ok(pgsql_digest_next_stmt(d, &lost) == NULL && lost == d + 10,
+		"next_stmt: an unterminated comment before the statement is reported where it starts");
+	d = "select ? /*xx; listen ch";
+	ok(pgsql_digest_next_stmt(d, &lost) == NULL && lost == d + 9,
+		"next_stmt: so is one inside the statement");
+	n = pgsql_stmt_skip_lead("  /*c*/ listen ch", &lost);
+	ok(n != NULL && strcmp(n, "listen ch") == 0 && lost == NULL, "skip_lead: the first statement past a comment");
+	ok(pgsql_stmt_skip_lead(" /*c*/ ", &lost) == NULL && lost == NULL &&
+		pgsql_stmt_skip_lead("-- only a comment", &lost) == NULL && lost == NULL,
+		"skip_lead: only comments is no statement, and nothing is lost");
+}
+
+// End to end from the client text, so a change in the digest that hides the second
+// statement, or exposes a literal, breaks here rather than in the proxy.
+static void test_stmt_keyword_through_digest() {
+	ok(has_listen(digest_query("SELECT 1;\n\tLISTEN ch").c_str()),
+		"stmt scan of digest: newline and tab before LISTEN");
+	ok(has_listen(digest_query("SELECT 1; /* c */ LISTEN ch").c_str()),
+		"stmt scan of digest: comment before LISTEN");
+	ok(!has_listen(digest_query("SELECT 'a; LISTEN b'").c_str()),
+		"stmt scan of digest: ';' inside a string literal");
+	ok(!has_listen(digest_query("SELECT $$a; LISTEN b$$").c_str()),
+		"stmt scan of digest: ';' inside a dollar-quoted string");
+	ok(!has_listen(digest_query("SELECT E'a\\'; LISTEN b'").c_str()),
+		"stmt scan of digest: ';' inside an escape string holding a quote");
+	DigestOptions keep;
+	keep.keep_comment = true;
+	ok(!has_listen(digest_query("SELECT 1 /* ; LISTEN b */", keep).c_str()),
+		"stmt scan of digest: ';' inside a block comment kept by keep_comment");
+	ok(has_listen(digest_query("SELECT 1; /*c*/ LISTEN ch", keep).c_str()),
+		"stmt scan of digest: kept comment before a later LISTEN");
+	ok(has_listen(digest_query("/*c*/ LISTEN ch", keep).c_str()),
+		"stmt scan of digest: kept comment before the first statement");
+	ok(has_listen(digest_query("/* /* n */ */ LISTEN ch", keep).c_str()),
+		"stmt scan of digest: nested kept comment before LISTEN");
+	ok(!has_listen(digest_query("SELECT 1; /* LISTEN */ SELECT 2", keep).c_str()),
+		"stmt scan of digest: LISTEN only inside a kept comment");
+
+	// A kept comment over FIRST_COMMENT_MAX_LENGTH is cut, closing "*/" included.
+	const std::string long_cmt = "/*" + std::string(FIRST_COMMENT_MAX_LENGTH + 76, 'x') + "*/";
+	const std::string d_long = digest_query((long_cmt + " SELECT 1; LISTEN ch").c_str(), keep);
+	ok(d_long.find("*/") == std::string::npos,
+		"digest: a kept comment longer than FIRST_COMMENT_MAX_LENGTH loses its terminator");
+	ok(has_listen(d_long.c_str()), "stmt scan of digest: LISTEN after a kept comment cut short");
+	ok(has_listen(digest_query((long_cmt + " LISTEN ch").c_str(), keep).c_str()),
+		"stmt scan of digest: LISTEN right after a kept comment cut short");
+	ok(!has_listen(digest_query((long_cmt + " SELECT 1; SELECT 2").c_str(), keep).c_str()),
+		"stmt scan of digest: a kept comment cut short alone does not read as LISTEN");
+	// Fail-closed by design: the scan is lost from the cut comment's opening, so the word
+	// inside the comment's kept text counts as well.
+	const std::string long_cmt_word = "/* listen " + std::string(FIRST_COMMENT_MAX_LENGTH + 76, 'x') + "*/";
+	ok(has_listen(digest_query((long_cmt_word + " SELECT 1").c_str(), keep).c_str()),
+		"stmt scan of digest: LISTEN inside a kept comment cut short reads as LISTEN (fail-closed)");
+	ok(!has_listen(digest_query(("/* listen */ SELECT 1"), keep).c_str()),
+		"stmt scan of digest: but not inside a kept comment that is not cut");
+}
+
+// With query_digests_keep_comment the kept comment is collected in a thread-local buffer of
+// FIRST_COMMENT_MAX_LENGTH bytes and cut at FIRST_COMMENT_MAX_LENGTH-1. Every byte of the
+// comment was bounded except the two of a nested "/*", so a comment that had already filled
+// the buffer followed by nested "/*" wrote past its end, over whatever thread-local data
+// follows it (before the fix this test aborted inside jemalloc, whose per-thread state had
+// been overwritten), and the overrun was then counted into the comment copied into the
+// digest. Found during the #6438 review.
+//
+// Digested into a heap buffer sized for the whole query (buf == NULL), with a max length
+// large enough that only the comment bound can limit what is kept.
+static std::string digest_query_big(const std::string& query, bool keep_comment, std::string* first_comment) {
+	char* fst = nullptr;
+	options opts;
+	opts.lowercase = true;
+	opts.replace_null = true;
+	opts.replace_number = true;
+	opts.grouping_limit = 3;
+	opts.groups_grouping_limit = 0;
+	opts.keep_comment = keep_comment;
+	opts.max_query_length = (int)query.size() + 1024;
+	char* res = pgsql_query_digest_and_first_comment(query.c_str(), (int)query.size(), &fst, NULL, &opts);
+	std::string ret(res ? res : "");
+	free(res);
+	if (first_comment) *first_comment = fst ? fst : "";
+	free(fst);
+	return ret;
+}
+
+static void test_kept_comment_nested_open_bounded() {
+	const int over = 100;      // comment bytes past the buffer before the nested marks
+	const int nests = 4000;    // 8000 bytes of "/*", far beyond the 1024-byte buffer
+	const std::string body(FIRST_COMMENT_MAX_LENGTH + over, 'x');
+	std::string opens, closes;
+	for (int i = 0; i < nests; i++) { opens += " /*"; closes += " */"; }
+
+	// Closed: the comment ends, is copied into the digest, and SELECT 1 follows it.
+	const std::string q_closed = "/*" + body + opens + closes + " */ SELECT 1";
+	std::string fst;
+	const std::string d = digest_query_big(q_closed, true, &fst);
+	const std::string kept = "/*" + std::string(FIRST_COMMENT_MAX_LENGTH - 3, 'x');
+	ok(d == kept + " select ?",
+		"kept comment + nested '/*': digest keeps exactly FIRST_COMMENT_MAX_LENGTH-1 comment bytes "
+		"(digest length %zu, expected %zu)", d.size(), kept.size() + 9);
+	ok(fst.size() <= FIRST_COMMENT_MAX_LENGTH - 1 && fst.compare(0, 4, "xxxx") == 0,
+		"kept comment + nested '/*': first comment bounded (%zu bytes)", fst.size());
+	// The same with the closing marks abutting: "*/*/" closes twice.
+	std::string tight_closes;
+	for (int i = 0; i < nests; i++) tight_closes += "*/";
+	ok(digest_query_big("/*" + body + opens + tight_closes + "*/ SELECT 1", true, NULL) == kept + " select ?",
+		"kept comment + nested '/*' closed by abutting '*/': same digest");
+
+	// Unterminated: the query ends inside the nested comment.
+	const std::string q_open = "/*" + body + opens;
+	const std::string d_open = digest_query_big(q_open, true, NULL);
+	ok(d_open.size() <= FIRST_COMMENT_MAX_LENGTH - 1,
+		"kept comment + nested '/*', unterminated: digest bounded (%zu bytes)", d_open.size());
+
+	// The thread-local state is reused by the next digest on this thread.
+	DigestOptions keep;
+	keep.keep_comment = true;
+	ok(digest_query("/* c */ SELECT 1", keep) == "/* c */ select ?" &&
+		digest_query("SELECT 1") == "select ?",
+		"kept comment + nested '/*': later digests on the same thread unaffected");
+}
+
+// PostgreSQL reads a block comment from left to right in tokens: "/*" opens a level and
+// "*/" closes one, each consumed whole, so the '/' of a "*/" never opens a comment and the
+// '*' of an "/*" never closes one. The tokenizer used to look for "/*" before "*/" at every
+// '/', so "*/*/" closed one level and opened another, and the query never left the comment.
+static std::string first_comment_of(const char* query, bool keep_comment) {
+	std::string fst;
+	digest_query_big(query, keep_comment, &fst);
+	return fst;
+}
+
+static void test_digest_nested_comment_tokens() {
+	ok(digest_query("/*/*n*/*/LISTEN ch") == "listen ch",
+		"nested comment: \"*/*/\" closes both levels (got '%s')", digest_query("/*/*n*/*/LISTEN ch").c_str());
+	ok(digest_query("/* x /* */*/ SELECT 1") == "select ?",
+		"nested comment: \"*/*/\" after a spaced nested comment closes both levels");
+	ok(digest_query("/*/* a */ */ SELECT 1") == "select ?",
+		"nested comment: \"/*/*\" opens two levels");
+	ok(digest_query("/*/*/**/*/*/SELECT 1") == "select ?",
+		"nested comment: three levels opened and closed with no space at all");
+	ok(digest_query("/*/ x */ SELECT 1") == "select ?",
+		"nested comment: the '*' of \"/*\" does not close it (\"/*/\")");
+	ok(digest_query("/* **/ SELECT 1") == "select ?",
+		"nested comment: \"**/\" closes at its last '*'");
+	ok(digest_query("/* a */ SELECT 1 /* b /* c */ */") == "select ?",
+		"nested comment: a trailing nested comment is dropped");
+	ok(digest_query("SELECT 2*/*/c*/3") == "select ?*?",
+		"nested comment: a '*' right before the comment does not close it at its first '/' (got '%s')",
+		digest_query("SELECT 2*/*/c*/3").c_str());
+	ok(digest_query("/* /* */ SELECT 1").find("select") == std::string::npos,
+		"nested comment: one level left open hides the rest of the query (got '%s')",
+		digest_query("/* /* */ SELECT 1").c_str());
+
+	DigestOptions keep;
+	keep.keep_comment = true;
+	ok(digest_query("/* x /* */*/ SELECT 1", keep) == "/* x /* */*/ select ?",
+		"kept nested comment: \"*/*/\" closes it and the comment is kept whole (got '%s')",
+		digest_query("/* x /* */*/ SELECT 1", keep).c_str());
+	ok(digest_query("/*/*n*/*/ LISTEN ch", keep) == "/*/*n*/*/ listen ch",
+		"kept nested comment: \"/*/*n*/*/\" is kept whole (got '%s')",
+		digest_query("/*/*n*/*/ LISTEN ch", keep).c_str());
+
+	ok(first_comment_of("/*/*n*/*/LISTEN ch", false) == "/*n*/",
+		"first comment: \"/*/*n*/*/\" yields its nested comment (got '%s')",
+		first_comment_of("/*/*n*/*/LISTEN ch", false).c_str());
+	ok(first_comment_of("/* x /* */*/ SELECT 1", true) == " x /* */",
+		"first comment: \"/* x /* */*/\" yields ' x /* */' (got '%s')",
+		first_comment_of("/* x /* */*/ SELECT 1", true).c_str());
+	ok(first_comment_of("/* outer /* inner */ still */ SELECT 1", false) == " outer /* inner */ still ",
+		"first comment: a spaced nested comment is unchanged (got '%s')",
+		first_comment_of("/* outer /* inner */ still */ SELECT 1", false).c_str());
+
+	ok(has_listen(digest_query("/*/*n*/*/LISTEN ch").c_str()) &&
+		has_listen(digest_query("/*/*n*/*/LISTEN ch", keep).c_str()),
+		"stmt scan of digest: LISTEN right after \"*/*/\", with and without kept comments");
+	ok(has_listen(digest_query("SELECT 1; /* a /* b */*/ LISTEN ch").c_str()),
+		"stmt scan of digest: LISTEN behind a later \"*/*/\"");
+}
+
+// The LISTEN gate cannot always trust the session's digest: with pgsql-query_digests off
+// there is none, and a digest of a query longer than query_digests_max_query_length can be
+// cut on a token boundary before a trailing statement. Both used to fail open: without a
+// digest only the first statement of the raw text was looked at, and a cut digest simply
+// did not hold the LISTEN. pgsql_query_has_stmt_keyword() falls back to the raw query.
+static bool gate_listen(const char* digest, const char* query) {
+	return pgsql_query_has_stmt_keyword(digest, query, "LISTEN");
+}
+
+static void test_stmt_keyword_gate() {
+	// No digest: every statement of the raw text, with literals and comments understood.
+	ok(gate_listen(NULL, "SELECT 1; LISTEN ch"), "gate, no digest: LISTEN behind another statement");
+	ok(gate_listen("", "SELECT 1;\n\tlisten ch"), "gate, empty digest: LISTEN behind another statement");
+	ok(gate_listen(NULL, "/* c */ LISTEN ch"), "gate, no digest: LISTEN behind a comment");
+	ok(!gate_listen(NULL, "SELECT 'a; LISTEN b'"), "gate, no digest: ';' inside a string literal");
+	ok(!gate_listen(NULL, "SELECT $$a; LISTEN b$$"), "gate, no digest: ';' inside a dollar-quoted string");
+	ok(!gate_listen(NULL, "SELECT 1 -- ; LISTEN b"), "gate, no digest: ';' inside a line comment");
+	ok(!gate_listen(NULL, "SELECT 1; /* LISTEN b */ SELECT 2"), "gate, no digest: LISTEN only inside a comment");
+	ok(!gate_listen(NULL, "SELECT listener FROM t; UNLISTEN *"), "gate, no digest: words that only contain LISTEN");
+	ok(!gate_listen(NULL, NULL), "gate: no digest and no query");
+	// "*/*/" closes both levels of the nested comment; this query used to digest to nothing.
+	ok(gate_listen("", "/*/*n*/*/LISTEN ch") && gate_listen(NULL, "/*/*n*/*/LISTEN ch"),
+		"gate: LISTEN right after a nested comment closed by \"*/*/\"");
+	ok(gate_listen(NULL, "SELECT 1; /*/*n*/*/LISTEN ch") && !gate_listen(NULL, "/*/*n*/*/UNLISTEN ch"),
+		"gate, no digest: a later LISTEN behind \"*/*/\" is found, UNLISTEN is not LISTEN");
+
+	// A digest cut at query_digests_max_query_length. The SELECT list alone is longer than the
+	// limit, so the digest stops inside it and the trailing LISTEN is not in it.
+	const int saved_max = pgsql_thread___query_digests_max_query_length;
+	pgsql_thread___query_digests_max_query_length = 64;
+	std::string cols;
+	for (int i = 0; i < 40; i++) cols += (i ? ", c" : "c") + std::to_string(i);
+	const std::string q_listen = "SELECT " + cols + " FROM t; LISTEN ch";
+	DigestOptions cut;
+	cut.max_query_length = 64;
+	const std::string d_cut = digest_query(q_listen.c_str(), cut);
+	ok(d_cut.size() <= 64 && !has_listen(d_cut.c_str()),
+		"precondition: the cut digest '%s' does not hold the LISTEN", d_cut.c_str());
+	ok(gate_listen(d_cut.c_str(), q_listen.c_str()),
+		"gate, cut digest: the trailing LISTEN is found in the query itself");
+	const std::string q_word = "SELECT " + cols + " FROM t WHERE x = 'listen; LISTEN ch'";
+	ok(!gate_listen(digest_query(q_word.c_str(), cut).c_str(), q_word.c_str()),
+		"gate, cut digest: LISTEN only inside a literal of the query is not taken");
+	pgsql_thread___query_digests_max_query_length = saved_max;
+
+	// A digest that cannot be cut is trusted as is.
+	ok(gate_listen("select ?; listen ch", "SELECT 1; LISTEN ch") &&
+		!gate_listen("select ?", "SELECT 1"),
+		"gate, whole digest: the digest decides");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(70);
+	plan(131 + 14 + 18);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -742,6 +1052,21 @@ int main() {
 	test_digest_complex_query();         // 2
 	test_digest_comment_between_tokens(); // 1
 	test_digest_only_comment();          // 1
+
+	// 14. Statement scan over a digest (57 tests, issue #6438)
+	test_stmt_keyword_found();           // 7
+	test_stmt_keyword_not_found();       // 11
+	test_stmt_keyword_behind_kept_comment(); // 6
+	test_stmt_keyword_after_lost_scan(); // 9
+	test_stmt_next();                    // 8
+	test_stmt_keyword_through_digest();  // 16
+
+	// 15. Kept comment buffer bound under nested "/*" (5 tests), nested comment tokens (16)
+	test_kept_comment_nested_open_bounded(); // 5
+	test_digest_nested_comment_tokens();     // 16
+
+	// 16. LISTEN gate without a digest or with a cut one (15 tests)
+	test_stmt_keyword_gate();            // 15
 
 	// Total: 1 + 9 + 4 + 6 + 2 + 6 + 2 + 3 + 3 + 2 + 4 + 5 + 7 + 10 = 64
 
