@@ -131,19 +131,22 @@ pcre2_code* pcre2_compile_rule_regex(const char* pattern, uint32_t options, std:
 // they are fixed constants, deliberately not runtime variables, so the
 // denial-of-service surface is independent of any configuration mistake.
 //   heap limit: 64 MiB in KiB
-//   depth/match limits: 1% of the defaults, still several orders of
-//   magnitude above what a legitimate query-rule pattern needs.
+//   depth/match limits: the PCRE2 defaults, which are also the PCRE 8.45
+//   defaults engine 1 runs with. Lower limits made ordinary patterns fail on
+//   large queries: '^SELECT .* FROM t' backtracks once per byte of a large
+//   value after 'FROM t'; with 100000 it no longer matched a query carrying
+//   a 1 MB value (issue #6411).
 static constexpr uint32_t PCRE2_RULE_HEAP_LIMIT_KIB = 64u * 1024u;
-static constexpr uint32_t PCRE2_RULE_DEPTH_LIMIT = 100000u;
-static constexpr uint32_t PCRE2_RULE_MATCH_LIMIT = 100000u;
+static constexpr uint32_t PCRE2_RULE_DEPTH_LIMIT = 10000000u;
+static constexpr uint32_t PCRE2_RULE_MATCH_LIMIT = 10000000u;
 // Recreating the match data releases the cached frames; a threshold keeps
 // the hot path free of work for normal-sized queries, per #6423.
 static constexpr size_t PCRE2_RULE_HEAPFRAMES_RELEASE_THRESHOLD = (1u << 20);
 
-// Limit hits mean "an input too big for a query rule", not a match: treat
-// them as a negative code so callers keep their existing negative-rc
-// handling, and log rate-limited so admins can find rules like
-// '(.|\n)*' that should be rewritten to '[\s\S]*'.
+// A limit hit means "an input too big for a query rule": the rule neither
+// matches nor fails to match, so it is not applied, negated or not
+// (rule_matches_regex()). It is logged rate-limited so admins can find rules
+// like '(.|\n)*' that should be rewritten to '[\s\S]*'.
 static void pcre2_rule_match_context_create(pcre2_match_data* match_data,
                                             pcre2_match_context** out_mctx) {
 	if (out_mctx == nullptr) return;
@@ -188,7 +191,10 @@ static void pcre2_rule_release_pinned_heapframes(pcre2_match_data** md,
 	*md = fresh;
 }
 
-bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, pcre2_match_context* match_context, const char* subject) {
+// 'out_rc' receives the pcre2_match() code, so a caller can tell a limit hit
+// or another error apart from PCRE2_ERROR_NOMATCH. Ignored when NULL.
+bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, pcre2_match_context* match_context, const char* subject, int* out_rc = nullptr) {
+	if (out_rc) *out_rc = PCRE2_ERROR_NOMATCH;
 	if (code == nullptr || match_data == nullptr || subject == nullptr) return false;
 	const int rc = pcre2_match(
 		code,
@@ -199,6 +205,7 @@ bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, p
 		match_data,
 		match_context
 	);
+	if (out_rc) *out_rc = rc;
 	return rc >= 0;
 }
 
@@ -859,19 +866,30 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 			r->re1=new pcrecpp::RE(qr->match_pattern, *r->opt1);
 		}
 	}
-	// A rule whose regex does not compile never matches, negated or not. Name
-	// the rule and the field so the broken rule can be found: RE2 runs with
-	// RE2::Quiet and reports nothing on its own (issue #6319).
+	// Name the rule and the field so a broken rule can be found: RE2 runs with
+	// RE2::Quiet and reports nothing on its own (issue #6319). Logging does not
+	// change matching (issue #6411): on PCRE and RE2 the regex never matches,
+	// so a negated rule matches every query, as in v3.0.11; on PCRE2 the rule
+	// never matches.
 	const char *error = NULL;
+	const char *engine = NULL;
 	if (r->re2 && r->re2->ok() == false) {
 		error = r->re2->error().c_str();
+		engine = "RE2";
 	} else if (query_processor_regex==3 && r->pcre2 == NULL) {
 		error = pcre2_error.c_str();
+		engine = "PCRE2";
+	} else if (r->re1 && r->re1->error().empty() == false) {
+		error = r->re1->error().c_str();
+		engine = "PCRE";
 	}
 	if (error) {
-		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, the rule will never match: %s\n",
+		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, %s: %s\n",
 			qr->rule_id, (i==1 ? "match_digest" : "match_pattern"), (i==1 ? qr->match_digest : qr->match_pattern),
-			(query_processor_regex==2 ? "RE2" : (query_processor_regex==3 ? "PCRE2" : "PCRE1")), error);
+			engine,
+			(query_processor_regex==3 ? "the rule will never match" :
+				"the regex never matches and a negated rule matches every query"),
+			error);
 	}
 	return r;
 };
@@ -906,20 +924,36 @@ static bool rule_matches_regex(
 		compiled_regex = temporary_regex;
 	}
 
+	// 'regex_is_valid' false means the rule is not applied, negated or not.
+	// Engines 1 (PCRE) and 2 (RE2) keep the v3.0.11 semantics of an invalid
+	// regex: it never matches, so a negated rule matches every query (#6411).
+	// Engine 3 (PCRE2) fails closed on an invalid regex.
 	bool regex_is_valid = false;
 	bool rc = false;
 	if (compiled_regex) {
 		if (compiled_regex->re2) {
-			if (compiled_regex->re2->ok()) {
-				regex_is_valid = true;
-				rc = RE2::PartialMatch(subject, *compiled_regex->re2);
-			}
-		} else if (compiled_regex->pcre2) {
 			regex_is_valid = true;
-			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md, compiled_regex->pcre2_mctx, subject);
+			rc = compiled_regex->re2->ok() && RE2::PartialMatch(subject, *compiled_regex->re2);
+		} else if (compiled_regex->pcre2) {
+			int match_rc = PCRE2_ERROR_NOMATCH;
+			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md,
+				compiled_regex->pcre2_mctx, subject, &match_rc);
 			// One oversized subject must not pin its backtracking frames in
 			// the worker thread until the rules are recompiled (#6423).
 			pcre2_rule_release_pinned_heapframes(&compiled_regex->pcre2_md, compiled_regex->pcre2);
+			// A heap/depth/match limit hit (or another match error) is not a
+			// "no match": a negated rule must not match because of it (#6411).
+			regex_is_valid = match_rc >= 0 || match_rc == PCRE2_ERROR_NOMATCH;
+			if (!regex_is_valid) {
+				static std::atomic<time_t> pcre2_match_error_log_ts{0};
+				const time_t now = time(NULL);
+				time_t prev = pcre2_match_error_log_ts.load(std::memory_order_relaxed);
+				if (now - prev >= 10 && pcre2_match_error_log_ts.compare_exchange_strong(prev, now,
+					std::memory_order_relaxed)) {
+					proxy_warning("Query rule %d: %s matching stopped with PCRE2 error %d (heap/depth/match limit or other error), the rule is not applied to this query; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
+						qr->rule_id, (regex_index==1 ? "match_digest" : "match_pattern"), match_rc);
+				}
+			}
 		} else if (compiled_regex->re1) {
 			regex_is_valid = true;
 			rc = compiled_regex->re1->PartialMatch(subject);
