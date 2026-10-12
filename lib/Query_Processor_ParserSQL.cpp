@@ -397,11 +397,9 @@ static std::string emit_delimited_ident_raw(
 // Section 1: Digest adapter
 // ---------------------------------------------------------------------------
 
-/** Tokenize independently of ParserSQL's grammar and bounded AST arena. */
+/** Load the legacy tokenizer options for dialect @p D. */
 template <Dialect D>
-static void parsersql_digest_fallback(SQP_par_t* qp, const char* query, int query_length) {
-    options opts {};
-    int max_digest_length;
+static void parsersql_tokenizer_options(options& opts, int& max_digest_length) {
     if constexpr (D == Dialect::MySQL) {
         opts.lowercase = mysql_thread___query_digests_lowercase;
         opts.replace_null = mysql_thread___query_digests_replace_null;
@@ -425,6 +423,14 @@ static void parsersql_digest_fallback(SQP_par_t* qp, const char* query, int quer
     // Runtime configuration requires positive limits; use the normal defaults.
     if (opts.max_query_length <= 0) opts.max_query_length = 65000;
     if (max_digest_length <= 0) max_digest_length = 2048;
+}
+
+/** Tokenize independently of ParserSQL's grammar and bounded AST arena. */
+template <Dialect D>
+static void parsersql_digest_fallback(SQP_par_t* qp, const char* query, int query_length) {
+    options opts {};
+    int max_digest_length;
+    parsersql_tokenizer_options<D>(opts, max_digest_length);
     char* buffer = query_length < QUERY_DIGEST_BUF ? qp->buf : nullptr;
     if constexpr (D == Dialect::MySQL) {
         qp->digest_text = mysql_query_digest_and_first_comment(
@@ -443,11 +449,118 @@ static void parsersql_digest_fallback(SQP_par_t* qp, const char* query, int quer
 }
 
 /**
+ * @brief Extract the first comment of a query normalized from a complete AST.
+ *
+ * ParserSQL skips plain block comments, so a successful parse would lose
+ * query annotations such as a leading "hostgroup=N" comment. Run the legacy
+ * tokenizer, which defines the first-comment semantics, and keep only its
+ * comment. The tokenizer records only block comments, so queries without a
+ * '/' immediately followed by '*' skip it and pay only a memchr() scan.
+ *
+ * Must run before qp->buf receives the ParserSQL digest: qp->buf is the
+ * scratch buffer for the discarded token digest, exactly as in legacy mode.
+ */
+template <Dialect D>
+static void parsersql_first_comment(SQP_par_t* qp, const char* query, int query_length) {
+    const char* const end = query + query_length;
+    const char* p = query;
+    while ((p = static_cast<const char*>(memchr(p, '/', end - p))) != nullptr) {
+        if (++p == end) return;
+        if (*p == '*') break;
+    }
+    if (!p) return;
+    options opts {};
+    int max_digest_length;
+    parsersql_tokenizer_options<D>(opts, max_digest_length);
+    char* buffer = query_length < QUERY_DIGEST_BUF ? qp->buf : nullptr;
+    char* digest;
+    if constexpr (D == Dialect::MySQL) {
+        digest = mysql_query_digest_and_first_comment(
+            query, query_length, &qp->first_comment, buffer, &opts);
+    } else {
+        digest = pgsql_query_digest_and_first_comment(
+            query, query_length, &qp->first_comment, buffer, &opts);
+    }
+    if (digest != qp->buf) free(digest);
+}
+
+/**
+ * @brief True if @p node is a literal or a placeholder, optionally signed,
+ * parenthesized, or grouped in a row constructor.
+ */
+static bool parsersql_is_literal_expr(const AstNode* node) {
+    switch (node->type) {
+        case NodeType::NODE_LITERAL_INT:
+        case NodeType::NODE_LITERAL_FLOAT:
+        case NodeType::NODE_LITERAL_STRING:
+        case NodeType::NODE_LITERAL_NULL:
+        case NodeType::NODE_LITERAL_HEX:
+        case NodeType::NODE_LITERAL_BIT:
+        case NodeType::NODE_PLACEHOLDER:
+            return true;
+        case NodeType::NODE_UNARY_OP:
+            if (node->value_len != 1 || (node->value_ptr[0] != '-' && node->value_ptr[0] != '+')) {
+                return false;
+            }
+            [[fallthrough]];
+        case NodeType::NODE_EXPRESSION:
+        case NodeType::NODE_TUPLE:
+        case NodeType::NODE_VALUES_ROW:
+            for (const AstNode* child = node->first_child; child; child = child->next_sibling) {
+                if (!parsersql_is_literal_expr(child)) return false;
+            }
+            return true;
+        default:
+            return false;
+    }
+}
+
+/**
+ * @brief True if the DIGEST emitter would hide a non-literal expression in @p node.
+ *
+ * In DIGEST mode ParserSQL renders every IN / NOT IN list that is not a single
+ * subquery as "IN (?)", and keeps only the first row of a VALUES clause,
+ * whatever the omitted elements are. The legacy tokenizer only replaces
+ * literals. ProxySQL string-matches the digest text for routing and
+ * multiplexing decisions (LAST_INSERT_ID / @@IDENTITY routing, GET_LOCK(,
+ * user variables, ...), so hiding e.g. "IN (LAST_INSERT_ID())" or
+ * "VALUES (1),(GET_LOCK('x',1))" changed behaviour versus
+ * query_processor_parser=0 (#6428). Such statements must use the legacy
+ * tokenizer. Lists made only of literals and placeholders lose nothing.
+ */
+static bool parsersql_digest_hides_expression(const AstNode* node) {
+    // The collapsed children, if any, are always a suffix of the child list.
+    const AstNode* hidden = nullptr;
+    if (node->type == NodeType::NODE_IN_LIST) {
+        const AstNode* expr = node->first_child;
+        const AstNode* first_val = expr ? expr->next_sibling : nullptr;
+        // A single subquery is emitted in full, not collapsed.
+        if (!first_val || first_val->type != NodeType::NODE_SUBQUERY || first_val->next_sibling) {
+            hidden = first_val;
+        }
+    } else if (node->type == NodeType::NODE_VALUES_CLAUSE && node->value_len == 0) {
+        // Only the first row is emitted.
+        hidden = node->first_child ? node->first_child->next_sibling : nullptr;
+    }
+    for (const AstNode* child = hidden; child; child = child->next_sibling) {
+        if (!parsersql_is_literal_expr(child)) return true;
+    }
+    // Literal-only children cannot contain another list: search only the emitted ones.
+    for (const AstNode* child = node->first_child; child != hidden; child = child->next_sibling) {
+        if (parsersql_digest_hides_expression(child)) return true;
+    }
+    return false;
+}
+
+/**
  * @brief Normalize a complete AST, or tokenize the original SQL independently.
  *
  * Grammar coverage must not determine whether a query receives a digest. An
  * error or an incomplete parse can still contain an AST for only a prefix of
  * the statement, so it must use the token path rather than that partial AST.
+ * So does a statement whose IN list or additional VALUES rows hold a
+ * non-literal expression that the DIGEST emitter would collapse away (see
+ * parsersql_digest_hides_expression()).
  */
 template <Dialect D>
 static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_length,
@@ -466,12 +579,14 @@ static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_le
 
     auto result = parser.parse(query, query_length);
     StringRef normalized;
-    if (result.status == ParseResult::OK && result.full_input && result.ast) {
+    if (result.status == ParseResult::OK && result.full_input && result.ast &&
+        !parsersql_digest_hides_expression(result.ast)) {
         Emitter<D> emitter(parser.arena(), EmitMode::DIGEST);
         emitter.emit(result.ast);
         normalized = emitter.result();
     }
     if (normalized.ptr && normalized.len != 0) {
+        parsersql_first_comment<D>(qp, query, query_length);
         // Preserve SpookyHash and the ownership expected by query_parser_free().
         if (normalized.len < QUERY_DIGEST_BUF) {
             memcpy(qp->buf, normalized.ptr, normalized.len);
@@ -1179,13 +1294,17 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
 {
     auto result = session_scope_only ? parse_mysql_set_for_session(query)
         : tl_mysql_parser.parse(query.c_str(), query.size());
+    // Only a complete parse may be tracked, as in parsersql_digest_init(): an
+    // OK result with full_input == false covers only a prefix of the input
+    // (`SET a=1 junk`, `SET a=1; SELECT 1`), and a partial AST also cannot
+    // prove that all targets are session-scoped. An empty map makes the
+    // session forward the statement instead.
+    if (result.status != ParseResult::OK || !result.full_input || !result.ast) {
+        tl_mysql_parser.reset();
+        return {};
+    }
     if (session_scope_only) {
-        // A partial AST cannot prove that all targets are session-scoped.
         // Check before the walker strips scopes or coalesces duplicate names.
-        if (result.status != ParseResult::OK || !result.full_input) {
-            tl_mysql_parser.reset();
-            return {};
-        }
         for (const AstNode* child = result.ast ? result.ast->first_child : nullptr;
              child; child = child->next_sibling) {
             if (child->type == NodeType::NODE_VAR_ASSIGNMENT &&
@@ -1195,13 +1314,11 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
             }
         }
     }
-    if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        if (result.ast && result.ast->type == NodeType::NODE_SET_STMT) {
-            auto parsed = walk_set_stmt<Dialect::MySQL>(
-                result.ast, tl_mysql_parser.arena(), query.c_str(), query.size());
-            tl_mysql_parser.reset();
-            return parsed;
-        }
+    if (result.ast->type == NodeType::NODE_SET_STMT) {
+        auto parsed = walk_set_stmt<Dialect::MySQL>(
+            result.ast, tl_mysql_parser.arena(), query.c_str(), query.size());
+        tl_mysql_parser.reset();
+        return parsed;
     }
     tl_mysql_parser.reset();
     return {};
@@ -1232,12 +1349,10 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(
     // for malformed-input rejection (which is what algorithms 0/1/2 do for
     // these cases too).
     //
-    // The MySQL walker keeps accepting PARTIAL: MySQL SET frequently uses
-    // PARTIAL legitimately for un-parseable RHS expressions (e.g.
-    // `SET x = (SELECT ...)`), where the walker falls back to
-    // `extract_paren_expr` on a NODE_SUBQUERY placeholder. PG search_path
-    // tracked variables don't have analogous shapes.
-    if (result.status == ParseResult::OK) {
+    // An OK result with full_input == false also covers only a prefix of
+    // the input (`SET a = 1 junk`, `SET a = 1; SELECT 1`). ast_covers_full_input()
+    // additionally rejects trailing bytes the AST does not reach.
+    if (result.status == ParseResult::OK && result.full_input) {
         if (result.ast && result.ast->type == NodeType::NODE_SET_STMT &&
             ast_covers_full_input(result.ast, query.c_str(), (int)query_length)) {
             auto parsed = walk_set_stmt<Dialect::PostgreSQL>(

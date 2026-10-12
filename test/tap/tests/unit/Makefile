@@ -476,6 +476,17 @@ $(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEA
 $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
 
+# The daemon probe skips before inspecting its binary outside Linux.
+# Keep that skip independent of the platform's daemon build requirements.
+STARTUP_TLS_BINARY :=
+ifeq ($(UNAME_S),Linux)
+STARTUP_TLS_BINARY := $(PROXYSQL_BINARY)
+endif
+
+startup_tls_ownership_unit-t: startup_tls_ownership_unit-t.cpp $(STARTUP_TLS_BINARY) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/test/infra/control/test_startup_tls_ownership.py
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -o $@
+
 # Must carry $(PSQLDEBUG) alongside $(PSQL40): the loader now refuses to
 # dlopen a plugin whose -DDEBUG setting disagrees with the core's (see
 # ProxySQL_Plugin.h / PROXYSQL_PLUGIN_ABI_DEBUG_BIT) because DEBUG-only
@@ -567,12 +578,13 @@ $(LIBPROXYSQLAR): FORCE
 		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) \
 		$(LIB_OPTZ_ARG) CC=$(CC) CXX=$(CXX)
 
-$(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
+# Delegate source freshness to src/Makefile even if only daemon sources change.
+$(PROXYSQL_BINARY): $(LIBPROXYSQLAR) FORCE
 	$(MAKE) -C $(PROXYSQL_PATH)/src proxysql \
 		PROXYSQL40=$(PROXYSQL40) PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) \
 		PROXYSQL31=$(PROXYSQL31) \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
-		PROXYSQLED25519=$(PROXYSQLED25519) CC=$(CC) CXX=$(CXX)
+		PROXYSQLED25519=$(PROXYSQLED25519) $(LIB_OPTZ_ARG) CC=$(CC) CXX=$(CXX)
 
 
 # ===========================================================================
@@ -584,8 +596,10 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_tls_write_retry_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
+	gtid_local_cache_unit-t mysql_resultset_add_row2_unit-t \
 	protocol_unit-t auth_unit-t aws_iam_policy_unit-t aws_iam_connection_config_unit-t aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
+	stmt_long_data_param_type_unit-t \
 	rule_matching_unit-t hostgroups_unit-t hgc_attribute_strings_unit-t hgm_mapping_commit_sentinel_unit-t monitor_health_unit-t \
 	pgsql_backend_framing-t pgsql_backend_auth-t pgsql_backend_extq-t \
 	pgsql_command_complete_unit-t \
@@ -654,7 +668,9 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	connection_unhealthy_unit-t \
 	connection_max_age_unit-t \
 	cluster_sync_unit-t \
-	parsersql_unit-t parsersql_digest_fallback_unit-t \
+	parsersql_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
+	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
+	parsersql_in_values_digest_unit-t \
 	pgsql_query_processor_unit-t pgsql_parser_command_type_unit-t \
 	http_server_unit-t \
 	mysql_resultset_framer_unit-t \
@@ -670,7 +686,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_waiter_list_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
-UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t
+UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
@@ -799,6 +815,10 @@ debug: $(UNIT_TESTS)
 ALLOW_MULTI_DEF :=
 ifneq ($(UNAME_S),Darwin)
 	ALLOW_MULTI_DEF := -Wl,--allow-multiple-definition
+endif
+
+ifeq ($(UNAME_S),Linux)
+gtid_local_cache_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN24MySQL_HostGroups_Manager11gtid_existsEP6MySrvCPcm
 endif
 
 # Standalone header-only tests: need tap.o + noise stubs, no libproxysql.a
@@ -1420,6 +1440,7 @@ server_runtime_load_unit-t: IDIRS += -DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN
 endif
 
 STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
+	gtid_local_cache_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \

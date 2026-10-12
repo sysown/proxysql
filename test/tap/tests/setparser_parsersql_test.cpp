@@ -93,8 +93,9 @@ static Test parsersql_syntax_errors[] = {
     { Expected("sql_mode", { "(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))" } ) } },
   { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
     { Expected("sql_mode", { "(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
-  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
-    { Expected("sql_mode", { "(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
+  // "SET sql_mode=(SELCT ...)" must be unparsed: it is in
+  // parsersql_parse_fail_strict, because TestParse accepts any non-empty
+  // result for an empty expectation.
 };
 
 // Byte-exact regression tests for the walker's function-call source preservation
@@ -629,6 +630,10 @@ struct EmptyOnParseFailCase {
 static EmptyOnParseFailCase parsersql_parse_fail_strict[] = {
   { "SET search_path = \"unclosed_quote, public",  EmptyOnParseFailCase::PGSQL },
   { "SET `unclosed_ident = 1",                      EmptyOnParseFailCase::MYSQL },
+  // Not a subquery: ParserSQL parses only `sql_mode=(SELCT` (full_input false),
+  // so the statement is unparsed, as with set_parser_algorithm=1/2.
+  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
+    EmptyOnParseFailCase::MYSQL },
 };
 
 // Direct invocation of the search_path validator with values the walker would

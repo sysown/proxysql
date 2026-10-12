@@ -5949,16 +5949,24 @@ cluster_creds_t ProxySQL_Cluster::get_credentials() {
 }
 
 void ProxySQL_Cluster::set_username(char *_username) {
+	char *username = strdup(_username);
+	if (username == NULL) {
+		return;
+	}
 	pthread_mutex_lock(&mutex);
 	free(cluster_username);
-	cluster_username=strdup(_username);
+	cluster_username = username;
 	pthread_mutex_unlock(&mutex);
 }
 
 void ProxySQL_Cluster::set_password(char *_password) {
+	char *password = strdup(_password);
+	if (password == NULL) {
+		return;
+	}
 	pthread_mutex_lock(&mutex);
 	free(cluster_password);
-	cluster_password=strdup(_password);
+	cluster_password = password;
 	pthread_mutex_unlock(&mutex);
 }
 

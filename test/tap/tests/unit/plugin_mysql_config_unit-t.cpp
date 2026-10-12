@@ -13,6 +13,7 @@
 #include "sqlite3db.h"
 #include "tap.h"
 #include "test_init.h"
+#include "test_globals.h"
 
 #include <algorithm>
 #include <arpa/inet.h>
@@ -57,6 +58,20 @@ public:
 		std::vector<table_def_t*> definitions;
 		admin->insert_into_tables_defs(&definitions, "proxysql_plugin_secrets",
 			proxysql_plugin_secrets_table_definition());
+		const bool materialized = admin->check_and_build_standard_tables(&db, &definitions);
+		admin->drop_tables_defs(&definitions);
+		free(storage);
+		return materialized;
+	}
+
+	static bool materialize_plugin_config_schema(SQLite3DB& db) {
+		void* storage = calloc(1, sizeof(ProxySQL_Admin));
+		auto* admin = reinterpret_cast<ProxySQL_Admin*>(storage);
+		std::vector<table_def_t*> definitions;
+		admin->insert_into_tables_defs(&definitions, "proxysql_plugin_owned_objects",
+			PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL);
+		admin->insert_into_tables_defs(&definitions, "proxysql_plugin_config_generations",
+			PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL);
 		const bool materialized = admin->check_and_build_standard_tables(&db, &definitions);
 		admin->drop_tables_defs(&definitions);
 		free(storage);
@@ -574,6 +589,7 @@ struct AuthMidpointThrowOnce {
 
 } // namespace
 
+/** Exercise plugin publication, rollback, and result ownership through TAP. */
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(NO_PLAN);
@@ -589,6 +605,31 @@ int main() {
 		ownership_schema.execute("INSERT INTO disk.proxysql_plugin_owned_objects VALUES "
 			"('mysql_router','mysql_user_v2','v2:1:0:41',1)"),
 		"the ownership schema accepts discriminated exact user keys in main and disk");
+
+	SQLite3DB generation_schema;
+	generation_schema.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool generation_seeded = TestDiskUpgrade::materialize_plugin_config_schema(generation_schema) &&
+		generation_schema.execute("INSERT INTO proxysql_plugin_config_generations VALUES ('mysql_router',12)");
+	const std::string generation_ddl = text_value(generation_schema,
+		"SELECT sql FROM sqlite_master WHERE name='proxysql_plugin_config_generations'");
+	ok(generation_seeded && TestDiskUpgrade::materialize_plugin_config_schema(generation_schema) &&
+		TestDiskUpgrade::materialize_plugin_config_schema(generation_schema) &&
+		scalar(generation_schema, "SELECT generation FROM proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 12 &&
+		text_value(generation_schema,
+			"SELECT sql FROM sqlite_master WHERE name='proxysql_plugin_config_generations'") == generation_ddl,
+		"repeated production schema setup preserves plugin generations and the stored DDL");
+
+	SQLite3DB unknown_generation_schema;
+	unknown_generation_schema.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool unknown_generation_seeded = unknown_generation_schema.execute(
+		"CREATE TABLE proxysql_plugin_config_generations (owner TEXT, generation INTEGER, extra TEXT)") &&
+		unknown_generation_schema.execute(
+			"INSERT INTO proxysql_plugin_config_generations VALUES ('mysql_router',12,'keep')");
+	ok(unknown_generation_seeded && !TestDiskUpgrade::materialize_plugin_config_schema(unknown_generation_schema) &&
+		text_value(unknown_generation_schema,
+			"SELECT extra FROM proxysql_plugin_config_generations WHERE owner='mysql_router'") == "keep",
+		"unknown generation schemas fail closed without dropping their data");
 
 	SQLite3DB secret_schema;
 	secret_schema.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
@@ -866,6 +907,35 @@ int main() {
 		scalar(upgraded_admin,
 			"SELECT COUNT(*) FROM disk.proxysql_plugin_owned_objects WHERE owner='other_plugin'") == 1,
 		"publication migrates marker-proven ownership and preserves operator rows after schema upgrade");
+
+	Fixture restart_fence;
+	SQLite3DB restart_disk;
+	const char* restart_uri = "file:plugin-generation-restart?mode=memory&cache=shared";
+	restart_disk.open(const_cast<char*>(restart_uri),
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
+	create_schema(restart_disk, "");
+	const bool disk_seeded = restart_disk.execute("DROP TABLE proxysql_plugin_owned_objects") &&
+		restart_disk.execute("DROP TABLE proxysql_plugin_config_generations") &&
+		TestDiskUpgrade::materialize_plugin_config_schema(restart_disk) &&
+		restart_disk.execute("INSERT INTO proxysql_plugin_config_generations VALUES ('mysql_router',12)");
+	const bool restart_schemas = disk_seeded && restart_fence.db.execute("DETACH DATABASE disk") &&
+		restart_fence.db.execute((std::string("ATTACH DATABASE '") + restart_uri + "' AS disk").c_str()) &&
+		restart_fence.db.execute("DROP TABLE main.proxysql_plugin_owned_objects") &&
+		restart_fence.db.execute("DROP TABLE main.proxysql_plugin_config_generations");
+	const bool restart_restored = restart_schemas &&
+		TestDiskUpgrade::materialize_plugin_config_schema(restart_disk) &&
+		TestDiskUpgrade::materialize_plugin_config_schema(restart_fence.db) &&
+		TestDiskUpgrade::restore_plugin_config_runtime_state(restart_fence.db);
+	restart_fence.plan.generation = 5;
+	const auto stale_after_restart = proxysql_apply_plugin_mysql_config(
+		restart_fence.db, restart_fence.plan, restart_fence.runtime.hooks());
+	ok(restart_restored && !stale_after_restart.applied &&
+		stale_after_restart.message.find("generation must be strictly newer") != std::string::npos &&
+		scalar(restart_fence.db, "SELECT generation FROM main.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 12 &&
+		scalar(restart_disk, "SELECT generation FROM proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 12,
+		"schema setup and startup restoration retain the generation fence against replayed plans");
 
 	Fixture v2_validation;
 	ProxySQL_PluginMysqlRuleAttributesRow valid_v2_attribute {
@@ -1930,6 +2000,41 @@ int main() {
 		"a real QPro adapter failure restores exact Auth checksum state and HGM at generation 13 without touching listeners");
 	free(after_qpro_interfaces);
 	ok(v.db.execute(k_fast_rules), "query processor failure fixture is repaired");
+
+	// Exercise both SQL-error branches, including mixed caller-owned and
+	// locally queried inputs. LSan also verifies that successful companion
+	// queries are released when publication never transfers them to QPro.
+	{
+		auto supplied_rules = std::make_unique<SQLite3_result>(GloMyQPro->get_current_query_rules_inner());
+		auto supplied_fast_rules = std::make_unique<SQLite3_result>(5);
+		ok(v.db.execute("ALTER TABLE main.mysql_query_rules RENAME TO mysql_query_rules_error_fixture"),
+			"the first query-rule SELECT can fail without discarding configured rules");
+		std::unique_ptr<char, decltype(&std::free)> rules_error(
+			admin->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, false), &std::free);
+		ok(rules_error && std::string(rules_error.get()).find("mysql_query_rules") != std::string::npos,
+			"first SELECT failure returns its SQL error after querying fast-routing rules");
+		rules_error.reset(admin->load_mysql_query_rules_to_runtime(nullptr, supplied_fast_rules.get(), "", 0, false));
+		ok(rules_error && supplied_fast_rules->columns == 5 && supplied_fast_rules->rows_count == 0,
+			"first SELECT failure preserves the caller-owned fast-routing result");
+		ok(admin->load_mysql_query_rules_to_runtime() == nullptr &&
+			GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum,
+			"legacy first SELECT failure leaves live query rules unchanged");
+		ok(v.db.execute("ALTER TABLE main.mysql_query_rules_error_fixture RENAME TO mysql_query_rules"),
+			"the first query-rule input table is restored");
+		ok(v.db.execute("ALTER TABLE main.mysql_query_rules_fast_routing RENAME TO mysql_fast_rules_error_fixture"),
+			"the second query-rule SELECT can fail independently");
+		rules_error.reset(admin->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, false));
+		ok(rules_error && std::string(rules_error.get()).find("mysql_query_rules_fast_routing") != std::string::npos,
+			"second SELECT failure returns its SQL error after querying ordinary rules");
+		rules_error.reset(admin->load_mysql_query_rules_to_runtime(supplied_rules.get(), nullptr, "", 0, false));
+		ok(rules_error && supplied_rules->raw_checksum() == stable_rule_checksum,
+			"second SELECT failure preserves the caller-owned ordinary-rule result");
+		ok(admin->load_mysql_query_rules_to_runtime() == nullptr &&
+			GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum,
+			"legacy second SELECT failure leaves live query rules unchanged");
+		ok(v.db.execute("ALTER TABLE main.mysql_fast_rules_error_fixture RENAME TO mysql_query_rules_fast_routing"),
+			"the second query-rule input table is restored");
+	}
 
 	const pid_t auth_exception_pid = fork();
 	if (auth_exception_pid == 0) {

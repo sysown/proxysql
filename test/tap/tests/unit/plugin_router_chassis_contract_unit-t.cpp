@@ -167,6 +167,7 @@ extern "C" bool proxysql_router_contract_secret_round_trip() {
 #include "sqlite3db.h"
 #include "tap.h"
 #include "test_init.h"
+#include "test_globals.h"
 
 #include <arpa/inet.h>
 #include <algorithm>
@@ -195,6 +196,48 @@ extern ProxySQL_Admin* GloAdmin;
 extern ProxySQL_Cluster* GloProxyCluster;
 extern ProxySQL_GlobalVariables GloVars;
 extern PgSQL_Threads_Handler* GloPTH;
+
+/** @brief Rebuild every real startup catalogue while detecting destructive DDL. */
+class TestDiskUpgrade {
+public:
+	static void check_catalogues(ProxySQL_Admin* admin) {
+		struct Catalogue {
+			SQLite3DB* db;
+			std::vector<table_def_t*>* definitions;
+			const char* name;
+		};
+		const Catalogue catalogues[] {
+			{admin->admindb, admin->tables_defs_admin, "admin"},
+			{admin->configdb, admin->tables_defs_config, "config"},
+			{admin->statsdb, admin->tables_defs_stats, "stats"}
+		};
+		for (const auto& catalogue : catalogues) {
+			std::vector<table_def_t*> tables;
+			for (auto* definition : *catalogue.definitions) {
+				// Views contain no stored rows; exercise every actual table definition.
+				if (strncasecmp(definition->table_def, "CREATE VIEW ", 12) != 0)
+					tables.push_back(definition);
+			}
+			unsigned int drops = 0;
+			auto authorizer = [](void* context, int operation, const char* table, const char*,
+				const char*, const char*) -> int {
+				if (operation == SQLITE_DROP_TABLE) {
+					diag("Repeated schema materialization attempted to drop %s", table);
+					++*static_cast<unsigned int*>(context);
+					return SQLITE_DENY;
+				}
+				return SQLITE_OK;
+			};
+			const int installed = sqlite3_set_authorizer(catalogue.db->get_db(), authorizer, &drops);
+			const bool rebuilt = installed == SQLITE_OK &&
+				admin->check_and_build_standard_tables(catalogue.db, &tables);
+			sqlite3_set_authorizer(catalogue.db->get_db(), nullptr, nullptr);
+			ok(rebuilt && drops == 0,
+				"repeated %s catalogue materialization preserves every existing table (%u attempted drops)",
+				catalogue.name, drops);
+		}
+	}
+};
 
 namespace {
 
@@ -444,6 +487,7 @@ int main() {
 	// contract test exercises the materialized databases directly afterwards,
 	// so stop that background reader before mutating the runtime globals below.
 	admin->shutdown_threads();
+	if (admin_materialized) TestDiskUpgrade::check_catalogues(admin);
 	SQLite3DB& admindb = *admin->admindb;
 	SQLite3DB& configdb = *admin->configdb;
 	ok(admin_materialized &&

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression contracts for TAP Makefile dependency boundaries."""
 
+import os
 import subprocess
 import tempfile
 import unittest
@@ -220,6 +221,80 @@ class MakefileDependencyTest(unittest.TestCase):
                 f"probe line for {probe}",
                 result.stdout,
             )
+
+    def test_startup_tls_probe_builds_the_daemon_for_each_tier(self):
+        """The standalone TLS test must build its daemon before linking the wrapper."""
+        for tier in ((), ("PROXYSQL31=1",), ("PROXYSQL40=1",)):
+            with self.subTest(tier=tier), tempfile.TemporaryDirectory() as tmp:
+                probe_makefile = Path(tmp) / "probe.mk"
+                probe = "startup_tls_daemon_prerequisite"
+                self.write_dependency_probe(probe_makefile, "$(PROXYSQL_BINARY)", probe)
+                result = subprocess.run(
+                    [
+                        "make", "--no-print-directory", "-B", "-n",
+                        "-C", str(TAP_TESTS_DIR / "unit"),
+                        "-f", "Makefile", "-f", str(probe_makefile),
+                        "MAKE=true", "UNAME_S=Linux", *tier, "startup_tls_ownership_unit-t",
+                    ],
+                    cwd=ROOT, text=True, capture_output=True, check=False, timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                lines = result.stdout.splitlines()
+                probe_line = self.required_output_line(
+                    lines, lambda line: f"TASK4_PROBE={probe}" in line,
+                    "daemon prerequisite for the startup TLS probe", result.stdout,
+                )
+                compile_line = self.required_output_line(
+                    lines, lambda line: "startup_tls_ownership_unit-t.cpp" in line,
+                    "startup TLS wrapper compile line", result.stdout,
+                )
+                self.assertLess(lines.index(probe_line), lines.index(compile_line))
+
+    def test_startup_tls_probe_checks_daemon_sources_on_incremental_build(self):
+        """A source-only daemon change must reach the daemon's own Makefile."""
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "libproxysql.a"
+            binary = Path(tmp) / "proxysql"
+            archive.touch()
+            os.utime(archive, (1, 1))
+            binary.touch()
+            result = subprocess.run(
+                [
+                    "make", "--no-print-directory", "-n",
+                    "-C", str(TAP_TESTS_DIR / "unit"), "MAKE=true",
+                    "UNAME_S=Linux", "PROXYSQL40=1", "PSQLDEBUG=-DDEBUG",
+                    f"LIBPROXYSQLAR={archive}", f"PROXYSQL_BINARY={binary}",
+                    "-W", str(ROOT / "src/main.cpp"), "startup_tls_ownership_unit-t",
+                ],
+                cwd=ROOT, text=True, capture_output=True, check=False, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            daemon_call = f"true -C {ROOT / 'src'} proxysql"
+            self.assertIn(daemon_call, result.stdout)
+            lines = result.stdout.splitlines()
+            daemon_line = next(i for i, line in enumerate(lines) if daemon_call in line)
+            self.assertIn('OPTZ="-O0 -ggdb -DDEBUG"', "\n".join(lines[daemon_line:daemon_line + 6]))
+
+    def test_startup_tls_probe_skips_daemon_build_on_other_platforms(self):
+        """The Linux-only probe must skip without building a daemon elsewhere."""
+        for platform in ("Darwin", "FreeBSD"):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as tmp:
+                probe_makefile = Path(tmp) / "probe.mk"
+                probe = "startup_tls_daemon_prerequisite"
+                self.write_dependency_probe(probe_makefile, "$(PROXYSQL_BINARY)", probe)
+                result = subprocess.run(
+                    [
+                        "make", "--no-print-directory", "-B", "-n",
+                        "-C", str(TAP_TESTS_DIR / "unit"),
+                        "-f", "Makefile", "-f", str(probe_makefile),
+                        "MAKE=true", f"UNAME_S={platform}", "PROXYSQL40=1",
+                        "startup_tls_ownership_unit-t",
+                    ],
+                    cwd=ROOT, text=True, capture_output=True, check=False, timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn(f"TASK4_PROBE={probe}", result.stdout)
+                self.assertIn("startup_tls_ownership_unit-t.cpp", result.stdout)
 
     def test_mysqlx_bridge_targets_share_one_unit_submake(self):
         result = subprocess.run(

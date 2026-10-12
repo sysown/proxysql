@@ -3786,6 +3786,23 @@ bool materialize_plugin_secrets_schema(SQLite3DB* db) {
 		proxysql_plugin_secrets_table_definition(), exists, current) && exists && current;
 }
 
+bool materialize_plugin_generations_schema(SQLite3DB* db) {
+	if (db == nullptr || db->get_db() == nullptr) return false;
+	bool exists = false;
+	bool current = false;
+	if (!admin_table_schema_matches(db, "proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL, exists, current)) return false;
+	if (current) return true;
+	if (exists) {
+		proxy_error("Refusing destructive rebuild of an unknown proxysql_plugin_config_generations schema\n");
+		return false;
+	}
+	if (!db->build_table("proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL, false)) return false;
+	return admin_table_schema_matches(db, "proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL, exists, current) && exists && current;
+}
+
 bool upgrade_plugin_owned_objects_schema(SQLite3DB* db) {
 	if (db == nullptr || db->get_db() == nullptr) return false;
 	bool backup_exists = false;
@@ -3860,15 +3877,19 @@ bool ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<
 #ifdef PROXYSQL40
 	bool has_plugin_ownership_table = false;
 	bool has_plugin_secrets_table = false;
+	bool has_plugin_generations_table = false;
 	for (const table_def_t* definition : *tables_defs) {
 		if (strcmp(definition->table_name, "proxysql_plugin_owned_objects") == 0) {
 			has_plugin_ownership_table = true;
 		}
 		if (strcmp(definition->table_name, "proxysql_plugin_secrets") == 0)
 			has_plugin_secrets_table = true;
+		if (strcmp(definition->table_name, "proxysql_plugin_config_generations") == 0)
+			has_plugin_generations_table = true;
 	}
 	if (has_plugin_ownership_table && !upgrade_plugin_owned_objects_schema(db)) return false;
 	if (has_plugin_secrets_table && !materialize_plugin_secrets_schema(db)) return false;
+	if (has_plugin_generations_table && !materialize_plugin_generations_schema(db)) return false;
 #endif
 	db->execute("PRAGMA foreign_keys = OFF");
 	for (std::vector<table_def_t *>::iterator it=tables_defs->begin(); it!=tables_defs->end(); ++it) {
@@ -3878,6 +3899,8 @@ bool ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<
 			strcmp(td->table_name, "proxysql_plugin_owned_objects") == 0) continue;
 		if (has_plugin_secrets_table &&
 			strcmp(td->table_name, "proxysql_plugin_secrets") == 0) continue;
+		if (has_plugin_generations_table &&
+			strcmp(td->table_name, "proxysql_plugin_config_generations") == 0) continue;
 #endif
 		db->check_and_build_table(td->table_name, td->table_def);
 	}
@@ -4753,9 +4776,13 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	}
 	if (!strcasecmp(name,"cluster_username")) {
 		if (vallen) {
+			char *username=strdup(value);
+			if (username==NULL) {
+				return false;
+			}
 			free(variables.cluster_username);
-			variables.cluster_username=strdup(value);
-			GloProxyCluster->set_username(variables.cluster_username);
+			variables.cluster_username=username;
+			GloProxyCluster->set_username(username);
 			return true;
 		} else {
 			return true;
@@ -4763,9 +4790,13 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	}
 	if (!strcasecmp(name,"cluster_password")) {
 		if (vallen) {
+			char *password=strdup(value);
+			if (password==NULL) {
+				return false;
+			}
 			free(variables.cluster_password);
-			variables.cluster_password=strdup(value);
-			GloProxyCluster->set_password(variables.cluster_password);
+			variables.cluster_password=password;
+			GloProxyCluster->set_password(password);
 			return true;
 		} else {
 			return true;
@@ -9812,6 +9843,11 @@ static bool validate_qp_addr_value(const char *rule_id, const qp_addr_field_t fi
 	return true;
 }
 
+/**
+ * Publish query rules to QPro, transferring input ownership only on success.
+ * SQL failure releases locally queried inputs and preserves supplied snapshots.
+ * Checked callers own the returned SQLite error; legacy calls log errors.
+ */
 char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch, bool acquire_lock) {
 	// About the queries used here, see notes about CLUSTER_QUERY_MYSQL_QUERY_RULES and
 	// CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING in ProxySQL_Cluster.hpp
@@ -9992,6 +10028,14 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			}
 			__reset_rules(&prev_rules_data.query_rules);
 		}
+	}
+	// SQL errors bypass the successful transfer to QPro. Release only results
+	// queried here; supplied snapshots remain owned by the caller on failure.
+	if (error != nullptr || error2 != nullptr) {
+		std::unique_ptr<SQLite3_result> local_rules(
+			SQLite3_query_rules_resultset == nullptr ? resultset : nullptr);
+		std::unique_ptr<SQLite3_result> local_fast_routing(
+			SQLite3_query_rules_fast_routing_resultset == nullptr ? resultset2 : nullptr);
 	}
 	// Legacy callers historically receive only log-based error reporting and
 	// do not own a returned SQLite allocation. The atomic publisher disables

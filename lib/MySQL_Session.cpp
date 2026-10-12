@@ -9119,6 +9119,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			} else if (match_regexes && match_regexes[2]->match(dig)) {
 				MySQL_Set_Stmt_Parser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse2();
+				if (set.empty()) {
+					// The digest matched but the query was not fully parsed: forward it
+					// rather than acknowledge a statement that nothing applied (#6420).
+					unable_to_parse_set_statement(lock_hostgroup);
+					return false;
+				}
 
 				for(auto it = std::begin(set); it != std::end(set); ++it) {
 
@@ -9808,8 +9814,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		if (mc==NULL) {
 			if (trxid) {
 #ifdef PROXYSQL31
-				// IAM checkouts are auth-type filtered (and may force a fresh
-				// connection), so they are never "vanilla" for waiter FIFO purposes.
+				// IAM checkouts may require asynchronous token acquisition or a fresh
+				// connection, so retain their separate waiter FIFO classification.
 				last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
 					backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM);
 				last_pool_gtid = true;
@@ -9852,13 +9858,6 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // STRESSTESTPOOL_MEASURE
 		}
 #endif // STRESSTEST_POOL
-		if (mc != nullptr && mc->fd != -1 &&
-			mc->backend_auth_type() != backend_auth_policy.type) {
-			// Authentication mode is part of pool compatibility. Never let a
-			// password connection satisfy an IAM request (or vice versa).
-			MyHGM->destroy_MyConn_from_pool(mc);
-			mc = nullptr;
-		}
 #ifdef PROXYSQL31
 		const unsigned int pool_stats_hid = mc ? mc->parent->myhgc->hid : mybe->hostgroup_id;
 		HostgroupPoolStats *pool_stats = mc

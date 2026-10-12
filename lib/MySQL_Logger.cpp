@@ -1483,9 +1483,15 @@ void MySQL_Logger::events_set_base_filename() {
 	events_close_log_unlocked();
 	// set file id to 0 , so that find_next_id() will be called
 	events.log_file_id=0;
+	char *base_filename=strdup(mysql_thread___eventslog_filename);
+	if (base_filename==NULL) {
+		events.enabled=false;
+		wrunlock();
+		return;
+	}
 	free(events.base_filename);
-	events.base_filename=strdup(mysql_thread___eventslog_filename);
-	if (strlen(events.base_filename)) {
+	events.base_filename=base_filename;
+	if (strlen(base_filename)) {
 		events.enabled=true;
 		events_open_log_unlocked();
 	} else {
@@ -1513,9 +1519,15 @@ void MySQL_Logger::audit_set_base_filename() {
 	audit_close_log_unlocked();
 	// set file id to 0 , so that find_next_id() will be called
 	audit.log_file_id=0;
+	char *base_filename=strdup(mysql_thread___auditlog_filename);
+	if (base_filename==NULL) {
+		audit.enabled=false;
+		wrunlock();
+		return;
+	}
 	free(audit.base_filename);
-	audit.base_filename=strdup(mysql_thread___auditlog_filename);
-	if (strlen(audit.base_filename)) {
+	audit.base_filename=base_filename;
+	if (strlen(base_filename)) {
 		audit.enabled=true;
 		audit_open_log_unlocked();
 	} else {
