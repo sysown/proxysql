@@ -3074,8 +3074,12 @@ static void qp_digest_legacy(SQP_par_t* qp, const char* query, int query_length)
 		qp->digest_text = mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
 			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
 	} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// With query_digests_keep_comment the digest can be longer than the query, so the
+		// fixed 'qp->buf' can only be used when it is known to be large enough.
+		char* buffer = (pgsql_query_digest_buffer_size(query_length, &opts) <= (int)QUERY_DIGEST_BUF) ?
+			qp->buf : NULL;
 		qp->digest_text = pgsql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
-			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+			buffer, &opts);
 	}
 	const int digest_text_length=strnlen(qp->digest_text, GET_THREAD_VARIABLE(query_digests_max_digest_length));
 	qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
@@ -3093,6 +3097,11 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 	qp->query_prefix=NULL;
 	qp->parsersql_stmt_type=-1;
 	if (GET_THREAD_VARIABLE(query_digests)) {
+		// Parser mode no longer changes the digest (#6454): parsersql_digest_init_*()
+		// now delegates to the legacy tokenizer, so both branches below yield the
+		// same digest, digest text and first comment. The *-query_processor_parser
+		// variable only selects the command-type classifier, consulted lazily by
+		// query_parser_command_type().
 		if (GET_THREAD_VARIABLE(query_processor_parser) == 1) {
 			qp_digest_parsersql<QP_DERIVED>(qp, query, query_length);
 		} else {

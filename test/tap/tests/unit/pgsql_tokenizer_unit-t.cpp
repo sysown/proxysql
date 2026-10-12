@@ -956,11 +956,91 @@ static void test_stmt_keyword_gate() {
 }
 
 // ============================================================================
+// 17. keep_comment separator space and unterminated comments (issue #6451)
+// ============================================================================
+
+// With query_digests_keep_comment, a kept comment is copied verbatim and a separator
+// space is appended after it, so the digest can be longer than the query. The result
+// buffer must account for that space or the last character of the query is cut.
+static void test_digest_keep_comment_no_char_lost() {
+	DigestOptions keep;
+	keep.keep_comment = true;
+	ok(digest_query("/*a*/LISTEN ch", keep) == "/*a*/ listen ch",
+		"#6451 keep_comment: no char lost after a leading kept comment (got '%s')",
+		digest_query("/*a*/LISTEN ch", keep).c_str());
+	ok(digest_query("/*/*n*/*/LISTEN ch", keep) == "/*/*n*/*/ listen ch",
+		"#6451 keep_comment: no char lost after a nested kept comment (got '%s')",
+		digest_query("/*/*n*/*/LISTEN ch", keep).c_str());
+	ok(digest_query("SELECT 1/*x*/FROM t", keep) == "select ?/*x*/ from t",
+		"#6451 keep_comment: no char lost after an inline kept comment (got '%s')",
+		digest_query("SELECT 1/*x*/FROM t", keep).c_str());
+	ok(digest_query("SELECT 1/**/2", keep) == "select ?/**/ ?",
+		"#6451 keep_comment: trailing literal survives an empty kept comment (got '%s')",
+		digest_query("SELECT 1/**/2", keep).c_str());
+	ok(digest_query("/*a*/ LISTEN ch", keep) == "/*a*/ listen ch",
+		"#6451 keep_comment: a kept comment already followed by a space is unchanged");
+}
+
+// An unterminated comment must not leak any of its characters into the digest as
+// ordinary text. The final byte of the query used to be copied as one.
+static void test_digest_unterminated_comment() {
+	ok(digest_query("SELECT 1 /* unterminated") == "select ?",
+		"#6451 unterminated comment: no char from inside leaks (got '%s')",
+		digest_query("SELECT 1 /* unterminated").c_str());
+	ok(digest_query("SELECT abc /* x") == "select abc",
+		"#6451 unterminated comment: trailing text dropped (got '%s')",
+		digest_query("SELECT abc /* x").c_str());
+	ok(digest_query("/* /* */ SELECT 1").empty(),
+		"#6451 unterminated nested comment: the whole query is a comment (got '%s')",
+		digest_query("/* /* */ SELECT 1").c_str());
+	ok(digest_query("/*x").empty(),
+		"#6451 unterminated comment right after the opener (got '%s')",
+		digest_query("/*x").c_str());
+	// A comment closed at the very end must not consume the last character.
+	ok(digest_query("SELECT 1/**/2") == "select ? ?",
+		"#6451 a comment closed at the end still digests the next token (got '%s')",
+		digest_query("SELECT 1/**/2").c_str());
+	DigestOptions keep;
+	keep.keep_comment = true;
+	ok(digest_query("SELECT abc /* x", keep) == "select abc /* x",
+		"#6451 keep_comment: an unterminated comment is still preserved (got '%s')",
+		digest_query("SELECT abc /* x", keep).c_str());
+}
+
+// Callers that pass their own fixed buffer use pgsql_query_digest_buffer_size() to
+// tell whether it is large enough; with keep_comment it must reserve the separators.
+static void test_digest_buffer_size_helper() {
+	options opts;
+	opts.lowercase = true;
+	opts.replace_null = true;
+	opts.replace_number = true;
+	opts.grouping_limit = 3;
+	opts.groups_grouping_limit = 0;
+	opts.keep_comment = true;
+	opts.max_query_length = 2048;
+
+	const char* q_short = "/*a*/LISTEN ch";
+	ok(pgsql_query_digest_buffer_size((int)strlen(q_short), &opts) > (int)strlen(q_short) + 1,
+		"#6451 buffer size: keep_comment reserves room for the separator space");
+
+	const char* q = "SELECT 1/*x*/FROM t";
+	const int need = pgsql_query_digest_buffer_size((int)strlen(q), &opts);
+	char small[64];
+	memset(small, 0, sizeof(small));
+	ok(need <= (int)sizeof(small), "#6451 buffer size: helper size %d fits the test buffer", need);
+	char* fc = nullptr;
+	char* r = pgsql_query_digest_and_first_comment(q, (int)strlen(q), &fc, small, &opts);
+	ok(r == small && strcmp(small, "select ?/*x*/ from t") == 0,
+		"#6451 buffer size: an exact-size caller buffer keeps the whole digest (got '%s')", small);
+	if (fc) free(fc);
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(131 + 14 + 18);
+	plan(131 + 14 + 18 + 14);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -1068,7 +1148,10 @@ int main() {
 	// 16. LISTEN gate without a digest or with a cut one (15 tests)
 	test_stmt_keyword_gate();            // 15
 
-	// Total: 1 + 9 + 4 + 6 + 2 + 6 + 2 + 3 + 3 + 2 + 4 + 5 + 7 + 10 = 64
+	// 17. keep_comment separator and unterminated comments (14 tests, issue #6451)
+	test_digest_keep_comment_no_char_lost(); // 5
+	test_digest_unterminated_comment();      // 6
+	test_digest_buffer_size_helper();        // 3
 
 	test_cleanup_minimal();
 	return exit_status();
