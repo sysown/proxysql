@@ -880,7 +880,10 @@ All `CI-*.yml` files on `v3.0` as of 2026-04-11. Status is as observed on
 On each PR open, reopen, or new head, `CI-cancel-superseded` runs trusted
 `GH-Actions` control code on a GitHub-hosted runner to cancel older CI for that
 PR. It follows downstream runs back to their originating trigger and checks
-the current PR head before cancellation. Producers and consumers also reject
+the current PR head before cancellation. When a PR is merged or closed, it
+cancels all of that PR's CI, last head included, and stops if the PR is
+reopened. A push to a release branch likewise cancels the CI of that branch's
+older pushes. Producers and consumers also reject
 superseded PR work before registering checks or reading artifacts. Label-only
 changes do not trigger the sweep. Deploy the engine reusable before the caller.
 
@@ -888,7 +891,7 @@ changes do not trigger the sweep. Deploy the engine reusable before the caller.
 |---|---|---|---|---|
 | `CI-trigger.yml` | `ci-trigger.yml` | `push`, `pull_request`, `workflow_dispatch` | Anchor PR `head_sha`, block on `CI-builds` | ✅ |
 | `CI-builds.yml` | `ci-builds.yml` | `workflow_run[in_progress]` on `CI-trigger` | Build the handoff, publish the artifact | ✅ |
-| `CI-cancel-superseded.yml` | `ci-cancel-superseded.yml` | `pull_request_target`: opened, reopened, synchronize | Cancel superseded PR runs without waiting for self-hosted runners | ✅ |
+| `CI-cancel-superseded.yml` | `ci-cancel-superseded.yml` | `pull_request_target`: opened, reopened, synchronize, closed; `push` | Cancel superseded or merged/closed PR runs, and older pushes' runs, without waiting for self-hosted runners | ✅ |
 | `CI-maketest.yml` | *(inline, no reusable)* | Nightly 02:17 UTC; `workflow_dispatch` | Compile six simulator targets independently of PR CI | ✅ |
 | `CI-lint-groups-json.yml` | *(inline, no reusable)* | `push`, `pull_request` on `groups.json` only | Lint `test/tap/groups/groups.json` format | ✅ |
 
