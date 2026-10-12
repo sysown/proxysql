@@ -599,7 +599,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_tls_write_retry_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
-	gtid_local_cache_unit-t mysql_resultset_add_row2_unit-t \
+	gtid_local_cache_unit-t gtid_writer_fallback_route_unit-t mysql_resultset_add_row2_unit-t \
 	protocol_unit-t auth_unit-t aws_iam_policy_unit-t aws_iam_connection_config_unit-t aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
 	stmt_long_data_param_type_unit-t \

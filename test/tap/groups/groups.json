@@ -83,6 +83,7 @@
   "glovars_unit-t" : [ "unit-tests-g1" ],
   "gtid_local_cache_unit-t" : [ "unit-tests-g1" ],
   "gtid_parse_unit-t" : [ "unit-tests-g1" ],
+  "gtid_writer_fallback_route_unit-t" : [ "unit-tests-g1" ],
   "gtid_server_data_unit-t" : [ "unit-tests-g1" ],
   "gtid_set_unit-t" : [ "unit-tests-g1" ],
   "gtid_trxid_interval_unit-t" : [ "unit-tests-g1" ],

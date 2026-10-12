@@ -9538,6 +9538,7 @@ __exit_set_destination_hostgroup:
 			current_hostgroup=qpo->destination_hostgroup;
 		}
 	}
+	route_unusable_tracked_gtid_to_writer();
 
 	if (mysql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
 		if (locked_on_hostgroup >= 0) {
@@ -9754,6 +9755,28 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
+bool MySQL_Session::route_unusable_tracked_gtid_to_writer() {
+	// Same gating as the GTID constraint in get_connection(): only a
+	// 'gtid_from_hostgroup' rule whose tracked value would be enforced there.
+	if (qpo == nullptr || qpo->min_gtid != nullptr || qpo->gtid_from_hostgroup < 0) return false;
+	if (session_fast_forward != SESSION_FORWARD_TYPE_NONE || qpo->create_new_conn) return false;
+	// A transaction-persistent or locked hostgroup cannot change; the
+	// constraint is then handled fail-closed in get_connection().
+	if (transaction_persistent_hostgroup != -1 || locked_on_hostgroup >= 0) return false;
+	if (current_hostgroup == qpo->gtid_from_hostgroup) return false;
+	MySQL_Backend* gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
+	if (gtid_from_backend == nullptr || gtid_from_backend->gtid_uuid[0] == '\0') return false;
+	char uuid[64];
+	uint64_t trxid = 0;
+	if (parse_gtid_set_for_routing(gtid_from_backend->gtid_uuid, uuid, sizeof(uuid), &trxid)) return false;
+	// The server the value came from has every committed transaction by
+	// definition. Routing here, rather than switching the backend in
+	// get_connection(), keeps the query attached to the backend that serves
+	// it and honours a connection already attached to the writer.
+	current_hostgroup = qpo->gtid_from_hostgroup;
+	return true;
+}
+
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 		// Get a MySQL Connection
 		const char *backend_username =
@@ -9786,6 +9809,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		char uuid[64];
 		char * gtid_uuid=NULL;
 		uint64_t trxid = 0;
+		// Set when an unusable tracked GTID is read from its source hostgroup.
+		bool gtid_writer_fallback = false;
 		unsigned long long now_us = 0;
 		if (qpo->max_lag_ms >= 0) {
 			if (qpo->max_lag_ms > 360000) { // this is an absolute time, we convert it to relative
@@ -9825,17 +9850,22 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				// #6415). Two fail-closed outcomes:
 				//   - with gtid_from_hostgroup, the server the tracked value
 				//     came from has every committed transaction by
-				//     definition: route the query to the writer hostgroup by
-				//     switching the session's backend, exactly as a rule
-				//     with destination_hostgroup=writer would;
-				//   - without one (min_gtid-only rules), no hostgroup has
-				//     the value by construction: keep a predicate no server
+				//     definition: route_unusable_tracked_gtid_to_writer()
+				//     already routed the query to that hostgroup while the
+				//     destination was chosen, exactly as a rule with
+				//     destination_hostgroup=writer would. Read it there
+				//     without a constraint;
+				//   - otherwise (min_gtid-only rules, or a hostgroup locked
+				//     by a transaction or SET), no reachable hostgroup is
+				//     known to have the value: keep a predicate no server
 				//     can satisfy, so the query waits in the same
 				//     "Waiting for replication" state a genuinely lagging
 				//     constraint produces instead of serving stale data.
 				// Both clear with_gtid so the causal-read stats are not
 				// inflated, and log rate-limited so admins can see why a
 				// deployment stopped using its readers.
+				const bool routed_to_gtid_source = qpo->gtid_from_hostgroup >= 0 &&
+					mybe->hostgroup_id == qpo->gtid_from_hostgroup;
 				static std::atomic<time_t> gtid_invalid_warn_ts{0};
 				const time_t gtid_warn_now = thread->curtime / 1000000;
 				// One CAS (not load-then-store) so concurrent sessions that
@@ -9848,16 +9878,16 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					proxy_warning(
 						"GTID causal read: tracked value '%s' is not usable for routing (GTID set, tagged GTID or multi-UUID). %s\n",
 						gtid_uuid,
-						(qpo->gtid_from_hostgroup >= 0 && _gtid_from_backend) ?
+						routed_to_gtid_source ?
 							"Routing the query to the writer hostgroup" :
 							"No writer hostgroup available: the read waits on an unsatisfiable constraint"
 					);
 				}
 				with_gtid = false;
 				trxid = 0;
-				if (qpo->gtid_from_hostgroup >= 0 && _gtid_from_backend) {
-					mybe = _gtid_from_backend;
+				if (routed_to_gtid_source) {
 					gtid_uuid = NULL;
+					gtid_writer_fallback = true;
 				} else {
 					// A value that cannot be a normalized UUID (the tracked
 					// ids are 32 hex digits) and a trxid no replica can hold:
@@ -9879,8 +9909,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				// reading from the writer its lag filter must not also
 				// suppress the only server that still provides
 				// read-your-writes.
-				const int fallback_max_lag =
-					(mybe == _gtid_from_backend) ? -1 : (int)qpo->max_lag_ms;
+				const int fallback_max_lag = gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms;
 #ifndef STRESSTEST_POOL
 				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, fallback_max_lag, backend_auth_policy.type);
 #endif // STRESSTEST_POOL
@@ -9919,11 +9948,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
 					backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM);
 				last_pool_gtid = false;
-				last_pool_max_lag_ms = (int)qpo->max_lag_ms;
+				last_pool_max_lag_ms = gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms;
 #endif // PROXYSQL31
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
 					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
-					NULL, 0, (int)qpo->max_lag_ms, backend_auth_policy.type);
+					NULL, 0, gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms, backend_auth_policy.type);
 			}
 			thread->note_pool_attempt(mc == NULL);
 #ifdef STRESSTEST_POOL
