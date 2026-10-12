@@ -3368,7 +3368,6 @@ int PgSQL_Session::handler() {
 	bool wrong_pass = false;
 	bool in_pending_state = false;
 	if (to_process == 0) return 0; // this should be redundant if the called does the same check
-	client_output_held = false;
 	if (offline_fatal_pending) {
 		writeout();
 		// Include encrypted bytes retained after a short write. The normal poll
@@ -4262,7 +4261,6 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		}
 	}
 
-	client_output_held = in_pending_state;
 	if (!in_pending_state)
 		writeout();
 
