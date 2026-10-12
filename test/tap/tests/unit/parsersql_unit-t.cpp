@@ -376,6 +376,57 @@ static void test_mysql_session_set_scopes() {
 	}
 }
 
+/**
+ * set_parser_algorithm=3: a SET that ParserSQL parses only in part (status OK,
+ * full_input false) must be reported as unparsed (empty map), like any other
+ * non-OK result, so the session forwards it instead of tracking a prefix.
+ * Trailing ';' and whitespace are part of a complete parse. A second statement
+ * is not: the session locks the hostgroup for multi-statement SETs before
+ * parsing, with every algorithm, and the parser must not track the prefix.
+ */
+static void test_set_partial_parse() {
+	const char* mysql_partial[] = {
+		"SET wait_timeout=100 junk",
+		"SET NAMES utf8 junk",
+		"SET wait_timeout=100, =2",
+		"SET wait_timeout=100; SELECT 1",
+		"SET NAMES utf8; SELECT 1",
+		"SET wait_timeout=100;;",
+	};
+	for (const char* sql : mysql_partial) {
+		ok(parsersql_parse_set_mysql(sql).empty() && parsersql_parse_set_mysql(sql, true).empty(),
+			"MySQL SET parsed in part is unparsed: %s", sql);
+	}
+	using Assignments = std::map<std::string, std::vector<std::string>>;
+	const std::pair<const char*, Assignments> mysql_complete[] = {
+		{"SET wait_timeout=100;", {{"wait_timeout", {"100"}}}},
+		{"SET wait_timeout=100 ;  \n", {{"wait_timeout", {"100"}}}},
+		{"SET NAMES utf8 ;", {{"names", {"utf8"}}}},
+	};
+	for (const auto& c : mysql_complete) {
+		ok(parsersql_parse_set_mysql(c.first) == c.second && parsersql_parse_set_mysql(c.first, true) == c.second,
+			"MySQL SET with trailing ';' / whitespace is parsed: %s", c.first);
+	}
+	const char* pgsql_partial[] = {
+		"SET search_path = a b",
+		"SET search_path = a, TRANSACTION READ ONLY",
+		"SET search_path = a; SELECT 1",
+		"SET client_encoding = 'UTF8' junk",
+		"SET search_path = a;;",
+	};
+	for (const char* sql : pgsql_partial) {
+		ok(parsersql_parse_set_pgsql(sql).empty(), "PgSQL SET parsed in part is unparsed: %s", sql);
+	}
+	const std::pair<const char*, Assignments> pgsql_complete[] = {
+		{"SET search_path = a;", {{"search_path", {"a"}}}},
+		{"SET search_path = a, b ;  \n", {{"search_path", {"a", "b"}}}},
+	};
+	for (const auto& c : pgsql_complete) {
+		ok(parsersql_parse_set_pgsql(c.first) == c.second,
+			"PgSQL SET with trailing ';' / whitespace is parsed: %s", c.first);
+	}
+}
+
 static void test_mysql_digest_empty_query() {
 	SQP_par_t qp;
 	memset(&qp, 0, sizeof(qp));
@@ -874,7 +925,7 @@ static void test_user_variable_replay_context() {
 }
 
 int main() {
-	plan(232);
+	plan(248);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -922,6 +973,7 @@ int main() {
 	test_mysql_set_global_scope();
 	test_mysql_set_invalid();
 	test_mysql_session_set_scopes();
+	test_set_partial_parse();
 
 	test_pgsql_set_simple();
 	test_pgsql_set_multiple_values();

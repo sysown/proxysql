@@ -659,7 +659,9 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	connection_unhealthy_unit-t \
 	connection_max_age_unit-t \
 	cluster_sync_unit-t \
-	parsersql_unit-t parsersql_digest_fallback_unit-t \
+	parsersql_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
+	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
+	parsersql_in_values_digest_unit-t \
 	pgsql_query_processor_unit-t \
 	http_server_unit-t \
 	mysql_resultset_framer_unit-t \

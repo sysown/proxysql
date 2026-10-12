@@ -9119,6 +9119,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			} else if (match_regexes && match_regexes[2]->match(dig)) {
 				MySQL_Set_Stmt_Parser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse2();
+				if (set.empty()) {
+					// The digest matched but the query was not fully parsed: forward it
+					// rather than acknowledge a statement that nothing applied (#6420).
+					unable_to_parse_set_statement(lock_hostgroup);
+					return false;
+				}
 
 				for(auto it = std::begin(set); it != std::end(set); ++it) {
 
