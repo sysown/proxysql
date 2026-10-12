@@ -590,9 +590,6 @@ void MySQL_Connection::set_backend_auth_type(MySQLBackendAuthType type) {
 		clear_aws_iam_handshake_secret();
 		aws_iam_identity_.reset();
 	}
-	if (type != MySQLBackendAuthType::PASSWORD) {
-		rowless_passthrough_authorized_ = false;
-	}
 	backend_auth_type_ = type;
 }
 
@@ -600,33 +597,15 @@ MySQLBackendAuthType MySQL_Connection::backend_auth_type() const {
 	return backend_auth_type_;
 }
 
-void MySQL_Connection::set_rowless_passthrough_authorized(bool authorized) {
-	rowless_passthrough_authorized_ =
-		authorized && backend_auth_type_ == MySQLBackendAuthType::PASSWORD;
-}
-
 bool MySQL_Connection::can_reset_for_backend_auth_policy(
 	const MySQLBackendAuthPolicy& policy) const
 {
-	if (backend_auth_type_ != MySQLBackendAuthType::PASSWORD) return false;
-	if (policy.type == MySQLBackendAuthType::PASSWORD) {
-		// A resolvable backend row: the account is a real backend account, so
-		// a COM_CHANGE_USER towards it is ordinary reset work.
-		if (policy.failure_code.empty()) return true;
-		// A rowless PASSWORD policy ('backend_user_not_found', see
-		// resolve_mysql_backend_auth_policy) may only reset when THIS
-		// connection actually authenticated as an authorized rowless
-		// passthrough session: an unmarked connection cannot bypass the
-		// validator with frontend credentials it never presented
-		// (aws_iam_pool_unit-t pins the unmarked case as destroy-only).
-		return rowless_passthrough_authorized_ &&
-			policy.failure_code == "backend_user_not_found";
-	}
-	// An INVALID policy can never fall back to password authentication; the
-	// only reset path is an authorized rowless passthrough session.
-	return rowless_passthrough_authorized_ &&
-		policy.type == MySQLBackendAuthType::INVALID &&
-		policy.failure_code == "backend_user_not_found";
+	// COM_CHANGE_USER resets a password connection towards a password policy,
+	// whether or not the user has a backend row (issue #6413). An AWS IAM
+	// connection, or a user whose policy is now AWS IAM or invalid, is
+	// destroyed instead.
+	return backend_auth_type_ == MySQLBackendAuthType::PASSWORD &&
+		policy.type == MySQLBackendAuthType::PASSWORD;
 }
 
 void MySQL_Connection::attach_aws_iam_token(

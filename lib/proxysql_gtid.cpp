@@ -640,6 +640,9 @@ bool parse_gtid_set_for_routing(const char* gtid, char* id_buf, size_t id_buf_le
 		return false;
 	}
 
+	// Route on the highest trxid of the set: the gaps and lower intervals are
+	// not checked one by one. Intentional and final (#6415): see the
+	// declaration in proxysql_gtid.h for why full-set containment is not done.
 	const auto& entry = *parsed_set.begin();
 	uint64_t max_end = 0;
 	for (const auto& iv : entry.second) {

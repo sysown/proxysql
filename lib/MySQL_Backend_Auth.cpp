@@ -136,6 +136,12 @@ MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 		policy.type = MySQLBackendAuthType::PASSWORD;
 		return policy;
 	}
+	// A row that has 'backend_auth' asked for a non-password mode. If it is
+	// malformed, the policy is INVALID and the connection fails closed. It
+	// must NOT fall back to PASSWORD: that would send the frontend password
+	// to a backend account the operator configured for another mode (e.g.
+	// IAM). Maintainer decision, final (issue #6413); not a bug. The row is
+	// reported when it is loaded (MySQL_Authentication::add()).
 	if (!backend_auth->is_object()) {
 		return invalid_backend_auth_policy(database_user, "backend_auth_not_object");
 	}
@@ -169,26 +175,15 @@ MySQLBackendAuthPolicy resolve_mysql_backend_auth_policy(
 	account_details_t account = authentication.lookup(
 		const_cast<char*>(mapped_backend_username), USERNAME_BACKEND, { false, false, true });
 	if (account.password == nullptr) {
-		// No backend row: this is the documented 'frontend=1, backend=0' split-row
-		// user, the ordinary way to express "this user authenticates to ProxySQL".
-		// Before the backend_auth policy existed (v3.0.11) this path never
-		// consulted 'creds_backends' at all and simply connected using the
-		// credentials captured at frontend authentication. Absence of a row is
-		// therefore NOT an invalid policy: report PASSWORD so the caller falls
-		// back to that legacy behaviour. INVALID is reserved for a row whose
-		// 'attributes' actually carry a malformed 'backend_auth' object, which
-		// can never silently degrade into password authentication.
+		// No backend row: the 'frontend=1, backend=0' split-row user. As in
+		// v3.0.11, the backend connection uses the credentials captured at
+		// frontend authentication: plain PASSWORD mode, exactly like a row
+		// without 'backend_auth' (issue #6413). AWS IAM is selected only by
+		// 'backend_auth.type' on a backend row, never inferred.
 		free_account_details(account);
 		MySQLBackendAuthPolicy policy;
 		policy.database_user = database_user;
-		// Routing fix (v3.0.11 parity for the split-row user): connect with
-		// the credentials captured at frontend authentication. 'type' stays
-		// PASSWORD so the session cannot fail closed at query time, but
-		// 'failure_code' records WHY the backend row is absent so reset-time
-		// validation (can_reset_for_backend_auth_policy) can still deny a
-		// COM_CHANGE_USER for an UNMARKED rowless connection.
 		policy.type = MySQLBackendAuthType::PASSWORD;
-		policy.failure_code = "backend_user_not_found";
 		return policy;
 	}
 
