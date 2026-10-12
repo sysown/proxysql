@@ -597,6 +597,13 @@ public:
 
 protected:
 	volatile unsigned int version;
+	// Highest rules version whose regex compile errors were already logged.
+	// Each worker compiles its private copy of the rules lazily, on its next
+	// query; only the first worker that installs a given version logs them,
+	// so a broken rule is reported once per load, not once per worker (#6411).
+	// "First to install" rather than "worker 0": an idle worker may never
+	// recompile, and its errors would never be reported.
+	std::atomic<unsigned int> rules_errors_reported_version {0};
 	std::vector<QP_rule_t*> rules;
 
 	Query_Processor_Output* process_query(TypeSession* sess, bool stmt_exec, const char* query, unsigned int len,

@@ -29,6 +29,9 @@
 #include "PgSQL_Query_Processor.h"
 
 #include <cstring>
+#include <unistd.h>
+#include <string>
+#include <thread>
 
 // Extern declarations for Glo* pointers (defined in test_globals.cpp)
 extern MySQL_Query_Processor *GloMyQPro;
@@ -269,6 +272,83 @@ static void test_mysql_switch_to_fast_forward_matcher() {
 		"MySQL QP: both matching rules increment their hit counters");
 
 	GloMyQPro->end_thread();
+	delete session;
+	rules_mem_sts_t fixture_rules = GloMyQPro->reset_all(true);
+	free_mysql_rules_mem_sts(&fixture_rules);
+}
+
+/** @brief Runs @p action with stderr redirected and returns what it wrote. */
+template <typename F>
+static std::string capture_stderr_of(F action) {
+	FILE* captured = tmpfile();
+	fflush(stderr);
+	const int saved = dup(STDERR_FILENO);
+	dup2(fileno(captured), STDERR_FILENO);
+	action();
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+	std::string log;
+	char buffer[512];
+	rewind(captured);
+	while (fgets(buffer, sizeof(buffer), captured) != nullptr) log += buffer;
+	fclose(captured);
+	return log;
+}
+
+static size_t count_occurrences(const std::string& text, const std::string& needle) {
+	size_t count = 0;
+	for (size_t pos = text.find(needle); pos != std::string::npos; pos = text.find(needle, pos + 1)) ++count;
+	return count;
+}
+
+/**
+ * @brief A broken rule regex is reported once per rules load, not once per
+ *   worker: only the first worker that installs a rules version logs (#6411).
+ */
+static void test_regex_compile_error_reported_once_per_load() {
+	rules_mem_sts_t previous_rules = GloMyQPro->reset_all(true);
+	free_mysql_rules_mem_sts(&previous_rules);
+	GloMyQPro->insert(mysql_simple_rule(6411, true, "("));
+	GloMyQPro->sort();
+	GloMyQPro->commit();
+
+	MySQL_Session* session = new MySQL_Session();
+	__sync_fetch_and_add(&MyHGM->status.client_connections, 1);
+	session->client_myds = new MySQL_Data_Stream();
+	session->client_myds->fd = 0;
+	session->client_myds->init(MYDS_FRONTEND, session, 0);
+	MySQL_Connection* connection = new MySQL_Connection();
+	session->client_myds->attach_connection(connection);
+	connection->set_is_client();
+	connection->userinfo->set((char*)"re_qp", (char*)"", (char*)"test", (char*)"");
+	session->client_myds->addr.addr = strdup("127.0.0.1");
+	session->client_myds->addr.port = 3306;
+	session->client_myds->proxy_addr.addr = strdup("127.0.0.1");
+	session->client_myds->proxy_addr.port = 6033;
+
+	unsigned char query[] = { 9, 0, 0, 0, PROXYSQL_COM_QUERY, 'S', 'E', 'L', 'E', 'C', 'T', ' ', '1' };
+	// Each "worker" is a thread with its own private rule copy.
+	auto worker_run = [&]() {
+		return capture_stderr_of([&]() {
+			std::thread worker([&]() {
+				GloMyQPro->init_thread();
+				GloMyQPro->process_query(session, query, sizeof(query), nullptr);
+				GloMyQPro->end_thread();
+			});
+			worker.join();
+		});
+	};
+	const std::string marker = "Query rule 6411: match_pattern '(' cannot be compiled";
+	const std::string first = worker_run();
+	const std::string second = worker_run();
+	ok(count_occurrences(first, marker) == 1 && count_occurrences(second, marker) == 0,
+		"MySQL QP: a broken rule regex is logged by the first worker only");
+	GloMyQPro->commit();
+	const std::string after_reload = worker_run();
+	ok(count_occurrences(after_reload, marker) == 1,
+		"MySQL QP: the broken rule is reported again after the next rules load");
+
 	delete session;
 	rules_mem_sts_t fixture_rules = GloMyQPro->reset_all(true);
 	free_mysql_rules_mem_sts(&fixture_rules);
@@ -1683,7 +1763,7 @@ static void test_pgsql_memory_tracking() {
 // ============================================================================
 
 int main() {
-	plan(283);
+	plan(285);
 
 	test_init_minimal();
 	test_init_query_processor();
@@ -1692,6 +1772,7 @@ int main() {
 	// MySQL tests
 	test_mysql_switch_to_fast_forward_attributes(); // 11 tests
 	test_mysql_switch_to_fast_forward_matcher();    // 6 tests
+	test_regex_compile_error_reported_once_per_load(); // 2 tests
 	test_mysql_rule_creation();              // 18 tests
 	test_mysql_insert_and_retrieve();        // 2 tests
 	test_mysql_rule_sorting();               // 4 tests

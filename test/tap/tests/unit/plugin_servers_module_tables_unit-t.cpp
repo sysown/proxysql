@@ -13,9 +13,8 @@ namespace {
 
 bool g_throw_snapshot = false;
 
-bool module_prepare_runtime(void*, const ProxySQL_ServerModuleSnapshot&,
-	std::vector<ProxySQL_ServerHostgroupClaim>&, std::string&) { return true; }
-void module_commit_runtime(void*, uint64_t) {}
+void module_runtime_installed(void*, const ProxySQL_ServerModuleSnapshot&,
+	std::vector<ProxySQL_ServerHostgroupClaim>&) {}
 SQLite3_result* module_runtime_table_snapshot(void*, const char*) {
 	if (g_throw_snapshot) throw std::runtime_error("snapshot failure");
 	return nullptr;
@@ -27,8 +26,7 @@ public:
 	Module(ProxySQL_ServerProtocol protocol,
 		std::vector<ProxySQL_ServerModuleTable> tables)
 		: ProxySQL_ServerModuleHooks(protocol, std::move(tables)) {
-		prepare_runtime = &module_prepare_runtime;
-		commit_runtime = &module_commit_runtime;
+		runtime_installed = &module_runtime_installed;
 		runtime_table_snapshot = &module_runtime_table_snapshot;
 		shutdown = &module_shutdown;
 	}

@@ -838,8 +838,9 @@ static void test_invalid_negated_pcre2_pattern() {
 		"invalid PCRE2 pattern does not match a negated rule on engine 3");
 }
 
-// Issue #6319: an invalid regex makes the rule inert with both engines, so a
-// negated rule does not turn the compile failure into "matches everything".
+// Issue #6411 (maintainer decision): engines 1 and 2 keep the v3.0.11
+// semantics of an invalid regex. It never matches, so a negated rule matches
+// every query.
 static void test_invalid_re2_pattern() {
 	QP_rule_t r = make_rule();
 	r.match_pattern = const_cast<char *>("(");
@@ -849,12 +850,70 @@ static void test_invalid_re2_pattern() {
 		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"invalid RE2 pattern safely returns no match");
 	r.negate_match_pattern = true;
-	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"127.0.0.1",
 		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
-		"invalid RE2 pattern does not match a negated rule");
+		"invalid RE2 pattern matches a negated rule (v3.0.11 semantics)");
 }
+
+static void test_invalid_pcre1_pattern() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("(");
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"invalid PCRE pattern safely returns no match on engine 1");
+	r.negate_match_pattern = true;
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"invalid PCRE pattern matches a negated rule on engine 1 (v3.0.11 semantics)");
+}
+
+#ifdef PROXYSQL31
+// Issue #6411: a large query must still be matched by an ordinary pattern on
+// engine 3; the PCRE2 match limit must not be lower than PCRE's.
+static void test_pcre2_large_query_matches() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("^SELECT .* FROM big_table");
+	// The greedy '.*' runs to the end and backtracks over the whole 1 MB
+	// value to find ' FROM big_table', as PCRE does on engine 1.
+	const std::string query = "SELECT * FROM big_table WHERE v='" + std::string(1024 * 1024, 'a') + "'";
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, query.c_str(), nullptr, 3),
+		"PCRE2 matches '^SELECT .* FROM' against a query with a 1 MB value on engine 3");
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, query.c_str(), nullptr, 1),
+		"PCRE matches the same query on engine 1");
+}
+
+// Issue #6411: a PCRE2 limit hit is "unknown", not "no match": it must not
+// make a negated rule match.
+static void test_pcre2_limit_does_not_match_negated() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("^(.|\\n)*FOR UPDATE");
+	r.negate_match_pattern = true;
+	const std::string query = "SELECT '" + std::string(1024 * 1024, 'a') + "' FROM t";
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, query.c_str(), nullptr, 3),
+		"a PCRE2 heap/match limit hit does not make a negated rule match");
+	r.negate_match_pattern = false;
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, query.c_str(), nullptr, 3),
+		"a PCRE2 heap/match limit hit does not make a rule match");
+}
+#endif
 
 static void test_match_pattern() {
 	QP_rule_t r = make_rule();
@@ -1023,15 +1082,15 @@ int main() {
 #ifdef PROXYSQL31
 	// Engine-3 tests run only on the Innovative/Plugin tiers.
 #	ifdef DEBUG
-	plan(242);
+	plan(248);
 #	else
-	plan(232);
+	plan(238);
 #	endif
 #else
 #	ifdef DEBUG
-	plan(238);
+	plan(240);
 #	else
-	plan(228);
+	plan(230);
 #	endif
 #endif
 
@@ -1067,8 +1126,11 @@ int main() {
 	test_match_digest_pcre2_lookaround_reset_start();
 	test_invalid_pcre2_pattern();
 	test_invalid_negated_pcre2_pattern();
+	test_pcre2_large_query_matches();
+	test_pcre2_limit_does_not_match_negated();
 #endif
 	test_invalid_re2_pattern();
+	test_invalid_pcre1_pattern();
 	test_match_pattern();
 	test_negate_match_pattern();
 	test_caseless_modifier();

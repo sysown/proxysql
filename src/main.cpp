@@ -1759,15 +1759,56 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 }
 
 /**
+ * @brief Exits the process if two ProxySQL modules are configured on overlapping listeners.
+ * @details A configuration error: ProxySQL logs it and exits with code 0, as v3.0.11 did, so the
+ *   angel process does not restart it (issue #6414). It runs before the plugin lifecycle and before
+ *   start_listeners(), so there is no plugin state to drain and no shutdown sequence to run (the
+ *   worker threads, still waiting for listeners, could not be joined).
+ */
+static void ProxySQL_Main_exit_on_listener_conflicts() {
+	char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
+	char* admin_pgsql_ifaces = GloAdmin->get_variable((char*)"pgsql_ifaces");
+	char* admin_telnet_ifaces = GloAdmin->get_variable((char*)"telnet_admin_ifaces");
+	char* admin_stats_ifaces = GloAdmin->get_variable((char*)"telnet_stats_ifaces");
+	char* mysql_ifaces = GloMTH->get_variable((char*)"interfaces");
+	char* pgsql_ifaces = GloPTH->get_variable((char*)"interfaces");
+
+	std::vector<proxysql_listen_validator::module_listener_config> modules {
+		{ "Admin", admin_mysql_ifaces },
+		{ "Admin PostgreSQL", admin_pgsql_ifaces },
+		{ "Admin Telnet", admin_telnet_ifaces },
+		{ "Admin Stats Telnet", admin_stats_ifaces },
+		{ "MySQL", mysql_ifaces },
+		{ "PostgreSQL", pgsql_ifaces },
+	};
+	std::string error {};
+	const bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);
+
+	free(admin_mysql_ifaces);
+	free(admin_pgsql_ifaces);
+	free(admin_telnet_ifaces);
+	free(admin_stats_ifaces);
+	free(mysql_ifaces);
+	free(pgsql_ifaces);
+
+	if (valid == false) {
+		proxy_error("%s\n", error.c_str());
+		proxy_error("Use different listen interfaces/ports or disable one of the conflicting listeners.\n");
+		proxy_error("ProxySQL startup aborted due to configuration error\n");
+		exit(EXIT_SUCCESS);
+	}
+}
+
+/**
  * @brief Phase 3 of ProxySQL initialization.
  * 
  * This phase starts all the core modules, including MySQL and PostgreSQL
- * threads handlers, monitor modules, and listeners. It also performs
- * validation of listener configurations to detect cross-module conflicts
- * before starting listeners.
+ * threads handlers, monitor modules, and listeners. A cross-module listener
+ * conflict exits the process before the plugin lifecycle and before any
+ * listener starts (see ProxySQL_Main_exit_on_listener_conflicts()).
  * 
  * @return True if all modules and listeners started successfully, false if a
- * configuration conflict or other fatal error occurred.
+ * managed startup (PROXYSQL40) failed or completed a one-shot run.
  */
 bool ProxySQL_Main_init_phase3___start_all() {
 
@@ -1824,6 +1865,10 @@ bool ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : PgSQL Threads Handler initialized in ";
 #endif
 	}
+
+	// Both threads handlers now hold the listener configuration. Validate it
+	// before the plugin lifecycle and before any listener is started.
+	ProxySQL_Main_exit_on_listener_conflicts();
 
 	{
 		cpu_timer t;
@@ -1908,39 +1953,6 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	// threads run.
 	proxysql_startup_gate_open();
 #endif /* PROXYSQL40 */
-	{
-		char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
-		char* admin_pgsql_ifaces = GloAdmin->get_variable((char*)"pgsql_ifaces");
-		char* admin_telnet_ifaces = GloAdmin->get_variable((char*)"telnet_admin_ifaces");
-		char* admin_stats_ifaces = GloAdmin->get_variable((char*)"telnet_stats_ifaces");
-		char* mysql_ifaces = GloMTH->get_variable((char*)"interfaces");
-		char* pgsql_ifaces = GloPTH->get_variable((char*)"interfaces");
-
-		std::vector<proxysql_listen_validator::module_listener_config> modules {
-			{ "Admin", admin_mysql_ifaces },
-			{ "Admin PostgreSQL", admin_pgsql_ifaces },
-			{ "Admin Telnet", admin_telnet_ifaces },
-			{ "Admin Stats Telnet", admin_stats_ifaces },
-			{ "MySQL", mysql_ifaces },
-			{ "PostgreSQL", pgsql_ifaces },
-		};
-		std::string error {};
-		bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);
-
-		free(admin_mysql_ifaces);
-		free(admin_pgsql_ifaces);
-		free(admin_telnet_ifaces);
-		free(admin_stats_ifaces);
-		free(mysql_ifaces);
-		free(pgsql_ifaces);
-
-		if (valid == false) {
-			proxy_error("%s\n", error.c_str());
-			proxy_error("Use different listen interfaces/ports or disable one of the conflicting listeners.\n");
-			proxy_error("ProxySQL startup aborted due to configuration error\n");
-			return false;
-		}
-	}
 	{
 		cpu_timer t;
 		GloMTH->start_listeners();
@@ -2042,8 +2054,8 @@ GloAdmin->shutdown_threads();
 	UnloadPlugins();
 	// Every worker spins in run_BootstrapListener() while this flag is true and
 	// that loop never consults 'shutdown'. Reaching teardown before
-	// start_listeners() ran (listener-conflict validation is the only such path;
-	// a managed one-shot/recovery failure sets managed_startup_exit_code first)
+	// start_listeners() ran (a managed one-shot/recovery failure; a listener
+	// conflict now exits before the plugin lifecycle, issue #6414)
 	// would otherwise leave shutdown_threads() pthread_join()-ing threads that
 	// can never exit, wedging the process until SIGKILL. Clearing is safe
 	// unconditionally: once listeners exist the flag is already false, and

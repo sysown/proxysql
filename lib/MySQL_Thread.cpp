@@ -1439,7 +1439,13 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_timeout=24*3600*1000;
 	variables.query_processor_iterations=0;
 	variables.query_processor_first_comment_parsing=2;
+	// Regex engine for query rules (issue #6411): PCRE (1) everywhere, except
+	// v4.0, which defaults to PCRE2 (3). v3.1 keeps 1 for upgrade compatibility.
+#ifdef PROXYSQL40
+	variables.query_processor_regex=3;
+#else
 	variables.query_processor_regex=1;
+#endif
 	variables.query_processor_parser=0;
 	variables.set_query_lock_on_hostgroup=1;
 	variables.set_parser_algorithm=2; // before 2.6.0 this was 1

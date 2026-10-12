@@ -409,17 +409,17 @@ int main() {
 		"PostgreSQL acknowledgement observer is retained");
 	const uint64_t mysql_module_hash_before = loaded_module_tables_hash(ProxySQL_ServerProtocol::mysql);
 	const uint64_t pgsql_module_hash_before = loaded_module_tables_hash(ProxySQL_ServerProtocol::pgsql);
-	ProxySQL_ServerRuntimeSnapshot mysql_installed {};
-	mysql_installed.protocol = ProxySQL_ServerProtocol::mysql;
-	ProxySQL_ServerRuntimeInstallTransaction mysql_install(mysql_installed.protocol, error);
-	const uint64_t mysql_generation = mysql_install.generation();
-	ok(mysql_install.prepare(mysql_installed, error) && mysql_install.commit(mysql_installed),
+	ProxySQL_ServerModuleSnapshot mysql_installed {};
+	mysql_installed.runtime.protocol = ProxySQL_ServerProtocol::mysql;
+	const uint64_t mysql_generation = proxysql_publish_server_runtime(std::move(mysql_installed), true);
+	ok(mysql_generation != 0 &&
+		!proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql).empty(),
 		"MySQL runtime generation records the delegated scope");
-	ProxySQL_ServerRuntimeSnapshot pgsql_installed {};
-	pgsql_installed.protocol = ProxySQL_ServerProtocol::pgsql;
-	ProxySQL_ServerRuntimeInstallTransaction pgsql_install(pgsql_installed.protocol, error);
-	const uint64_t pgsql_generation = pgsql_install.generation();
-	ok(pgsql_install.prepare(pgsql_installed, error) && pgsql_install.commit(pgsql_installed),
+	ProxySQL_ServerModuleSnapshot pgsql_installed {};
+	pgsql_installed.runtime.protocol = ProxySQL_ServerProtocol::pgsql;
+	const uint64_t pgsql_generation = proxysql_publish_server_runtime(std::move(pgsql_installed), true);
+	ok(pgsql_generation != 0 &&
+		!proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql).empty(),
 		"PostgreSQL runtime generation records the delegated scope");
 
 	const std::string mysql_checksum_before = GloVars.checksums_values.mysql_servers.checksum;

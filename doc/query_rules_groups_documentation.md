@@ -18,11 +18,13 @@ ProxySQL's query rules engine supports regular expression capture groups and bac
 
 ### Regex Engine Support
 
-ProxySQL supports two regex engines (configurable via `mysql-query_processor_regex`):
-- **PCRE** (default, `query_processor_regex=1`): Full regex support including capture groups
+ProxySQL supports these regex engines (configurable via `mysql-query_processor_regex`):
+- **PCRE** (`query_processor_regex=1`, default on v3.0 and v3.1): Full regex support including capture groups
 - **RE2** (`query_processor_regex=2`): Google's RE2 library, supports capture groups in replacement patterns
+- **PCRE2** (`query_processor_regex=3`, v3.1 and v4.0 only, default on v4.0): not syntax-compatible with PCRE;
+  see [query_rules_regex_engines.md](query_rules_regex_engines.md) before switching or upgrading
 
-Both engines support backreferences (`\1`, `\2`, etc.) in `replace_pattern`.
+All engines support backreferences (`\1`, `\2`, etc.) in `replace_pattern`.
 
 ## Basic Syntax
 

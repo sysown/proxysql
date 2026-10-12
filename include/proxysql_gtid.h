@@ -129,11 +129,17 @@ bool parse_gtid_set(const char* s, size_t len,
  * (replica_preserve_commit_order=ON, the default since MySQL 8.0.27) a
  * replica holding the highest transaction id of the block holds every
  * earlier one as well, so one "(uuid, max trxid)" pair is sufficient and no
- * containment walk is needed. Without order preservation a multi-threaded
- * applier can hold the top id while missing a gap, which is the documented
- * limitation of the minimum-change variant chosen for #6415.
+ * containment walk is needed.
  *
- * Multi-UUID values (only possible via a manual gtl_next) and tagged GTIDs
+ * Maintainer decision (#6415), final: route on the highest trxid only. Full
+ * GTID-set containment (checking every interval of the set against each
+ * replica) is deliberately NOT implemented and must not be added: it only
+ * matters for replicas that apply transactions out of commit order (old MySQL
+ * versions, or replica_preserve_commit_order=OFF with a multi-threaded
+ * applier), an edge case not worth its cost. Do not report its absence as a
+ * bug.
+ *
+ * Multi-UUID values (only possible via a manual gtid_next) and tagged GTIDs
  * fail: the caller must then fail closed instead of dropping the predicate.
  *
  * @return false leaves @p id_buf and @p trxid untouched.
