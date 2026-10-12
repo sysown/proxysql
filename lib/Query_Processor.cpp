@@ -804,7 +804,7 @@ static bool query_digest_text_matches(
 	return it != digest_end;
 }
 
-static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex) {
+static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex, bool report_errors = true) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
 	r->opt1=NULL;
 	r->re1=NULL;
@@ -883,7 +883,7 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 		error = r->re1->error().c_str();
 		engine = "PCRE";
 	}
-	if (error) {
+	if (error && report_errors) {
 		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, %s: %s\n",
 			qr->rule_id, (i==1 ? "match_digest" : "match_pattern"), (i==1 ? qr->match_digest : qr->match_pattern),
 			engine,
@@ -2573,6 +2573,13 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Detected a changed in version. Global:%d , local:%d . Refreshing...\n", version, _thr_SQP_version);
 		rdlock();
 		_thr_SQP_version=__sync_add_and_fetch(&version,0);
+		// Only the first worker to install this version reports compile errors.
+		unsigned int reported_version = rules_errors_reported_version.load(std::memory_order_relaxed);
+		bool report_compile_errors = false;
+		while (reported_version < _thr_SQP_version && !report_compile_errors) {
+			report_compile_errors = rules_errors_reported_version.compare_exchange_weak(
+				reported_version, _thr_SQP_version, std::memory_order_relaxed);
+		}
 		__reset_rules(_thr_SQP_rules);
 		_thr_SQP_have_cidr_client_addr = false;
 		_thr_SQP_have_cidr_proxy_addr = false;
@@ -2590,11 +2597,11 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 					(qr2->proxy_addr_pred.match == QP_ADDR_MATCH_CIDR);
 				if (qr2->match_digest) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: %s\n", qr2->rule_id, qr2->match_digest);
-					qr2->regex_engine1=(void *)compile_query_rule(qr2,1, GET_THREAD_VARIABLE(query_processor_regex));
+					qr2->regex_engine1=(void *)compile_query_rule(qr2,1, GET_THREAD_VARIABLE(query_processor_regex), report_compile_errors);
 				}
 				if (qr2->match_pattern) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: %s\n", qr2->rule_id, qr2->match_pattern);
-					qr2->regex_engine2=(void *)compile_query_rule(qr2,2, GET_THREAD_VARIABLE(query_processor_regex));
+					qr2->regex_engine2=(void *)compile_query_rule(qr2,2, GET_THREAD_VARIABLE(query_processor_regex), report_compile_errors);
 				}
 				_thr_SQP_rules->push_back(qr2);
 			}
