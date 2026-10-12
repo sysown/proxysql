@@ -24,6 +24,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "gen_utils.h"
 #include "query_processor.h"
+#include "digest_text_merge.h"
 #include "QP_rule_text.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -2021,14 +2022,11 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 		}
 	}
 	// A digest present both before the first swap and queried during the dump
-	// window exists in both maps. unordered_map::insert() drops the *source*
-	// pair for an already-present key, so the strdup()'ed text would leak on
-	// every such fold-back. Free the skipped duplicates explicitly.
-	for (auto& element : digest_text_umap_aux_2) {
-		if (!digest_text_umap_aux.emplace(element.first, element.second).second) {
-			free(element.second);
-		}
-	}
+	// window exists in both maps. merge_digest_text_maps() keeps the copy
+	// already in digest_text_umap_aux and frees the duplicate from
+	// digest_text_umap_aux_2; with normalisation on, qds holds no second
+	// reference to either text.
+	merge_digest_text_maps(digest_text_umap_aux, digest_text_umap_aux_2);
 	digest_umap_aux_2.clear();
 	digest_text_umap_aux_2.clear();
 
@@ -2057,14 +2055,16 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 			digest_umap.insert(element);
 		}
 	}
-	// Same duplicate-key leak as the fold-back above: the live map may already
-	// hold the text for a digest queried during the dump window.
-	for (auto& element : digest_text_umap_aux) {
-		if (!digest_text_umap.emplace(element.first, element.second).second) {
-			free(element.second);
-		}
-	}
+	// Same duplicate-key situation as the fold-back above: the live map may
+	// already hold the text for a digest queried during the dump window. The
+	// duplicates are collected here and freed once the lock is dropped, so
+	// free() never runs while worker threads are blocked on digest_rwlock.
+	std::vector<char*> texts_to_free;
+	merge_digest_text_maps(digest_text_umap, digest_text_umap_aux, &texts_to_free);
 	pthread_rwlock_unlock(&digest_rwlock);
+	for (char* text : texts_to_free) {
+		free(text);
+	}
 	digest_umap_aux.clear();
 	digest_text_umap_aux.clear();
 
