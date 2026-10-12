@@ -91,6 +91,40 @@ endif
 MYCFLAGS := $(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(ENABLE_EPOLL)
 
+# Declared explicitly so the BUILD_FLAGS_STAMP rule below cannot be picked up
+# as the default goal -- make takes the first rule it sees as the goal.
+.DEFAULT_GOAL := default
+
+# ---------------------------------------------------------------------------
+# Build-flag stamp: keep the whole object set on one flag set.
+#
+# The top-level Makefile does not pass these as make variables -- it passes
+# them as environment variables on the recursive make command line, e.g.
+#   cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 ... ${MAKE}
+# A targeted `make -C lib obj/Foo.oo` therefore inherits NONE of them and
+# compiles that file with the default (release) flags, notably without
+# -DDEBUG.
+#
+# Make decides staleness by timestamp alone, so the mismatched .oo looks up to
+# date to the next `make debug` and is archived into libproxysql.a silently.
+# Classes with conditional members -- MySQL_Protocol and MySQL_Data_Stream both
+# have #ifdef DEBUG and #ifdef PROXYSQL31 members -- then disagree on layout
+# between translation units, and every field past the first conditional member
+# is read at the wrong offset. Observed as SIGSEGV in
+# MySQL_Protocol::generate_pkt_initial_handshake() on every client connect,
+# where myprot.myds resolves to a garbage pointer.
+#
+# Recording the effective flags in a stamp that every object depends on forces
+# a full rebuild whenever the flag set changes, which covers both this and the
+# PROXYSQL31/PROXYSQL40 tier mismatch. `cmp -s` leaves the stamp's mtime alone
+# when nothing changed, so ordinary rebuilds are not triggered.
+# ---------------------------------------------------------------------------
+BUILD_FLAGS_STAMP := $(ODIR)/.build_flags
+
+$(BUILD_FLAGS_STAMP): FORCE
+	@mkdir -p $(ODIR)
+	@printf '%s\n' '$(MYCXXFLAGS) $(CXXFLAGS)' | cmp -s - $@ || printf '%s\n' '$(MYCXXFLAGS) $(CXXFLAGS)' > $@
+
 default: libproxysql.a
 .PHONY: default
 
@@ -156,7 +190,7 @@ HEADERS := ../include/*.h ../include/*.hpp
 %.ko: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 
-$(ODIR)/proxy_sqlite3_symbols.oo: proxy_sqlite3_symbols.cpp $(HEADERS)
+$(ODIR)/proxy_sqlite3_symbols.oo: proxy_sqlite3_symbols.cpp $(HEADERS) $(BUILD_FLAGS_STAMP)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -DSQLITE_CORE -DSQLITE_VEC_STATIC
 
 # Keep the ABI-9 server-discovery registry object fresh when its public
@@ -164,7 +198,7 @@ $(ODIR)/proxy_sqlite3_symbols.oo: proxy_sqlite3_symbols.cpp $(HEADERS)
 # external plugin builds consume this header directly.
 $(ODIR)/ProxySQL_PluginManager.oo: ../include/ProxySQL_ServerDiscovery.h
 
-$(ODIR)/%.oo: %.cpp $(HEADERS)
+$(ODIR)/%.oo: %.cpp $(HEADERS) $(BUILD_FLAGS_STAMP)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 
 libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o
@@ -172,6 +206,11 @@ libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_LDIR)/sqlite3.o
 
 $(ODIR):
 	mkdir -p $(ODIR)
+
+# Always considered out of date, so BUILD_FLAGS_STAMP is re-examined on every
+# run. Declared after `default:` so it cannot become the default goal.
+.PHONY: FORCE
+FORCE:
 
 #all: $(EXECUTABLE)
 

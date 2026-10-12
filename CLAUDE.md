@@ -58,6 +58,12 @@ undefined reference to `pgsql_thread___ffto_max_buffer_size'
 
 This is **not** a real breakage and **not** a bug in the default build — it is a stale-object *tier mismatch* (e.g. an FFTO-enabled `libproxysql.a` linked against a `main.o` compiled without `PROXYSQLFFTO`). Do **not** "fix" it by dropping the tier flag.
 
+`lib/Makefile` and `src/Makefile` now record the effective flag set in `obj/.build_flags` and
+make every object depend on it, so a tier change forces a rebuild of `lib/` and `src/` rather
+than reusing mismatched objects. **The deps tree still carries no such guard**: switching tier
+with `PROXYSQL31=1` set also needs `make cleanall`, otherwise the dep libraries keep their old
+configuration.
+
 Fix / avoid it by cleaning when the tier changes, and by passing the SAME tier flag on every make in a session:
 
 ```bash
@@ -82,9 +88,19 @@ So a targeted invocation such as
 make -C lib obj/MySQL_Protocol.oo     # WRONG — inherits none of the above
 ```
 
-compiles that one file with the **release** flags (`-Wall -DENABLE_EPOLL`, no `-DDEBUG`) and drops the result into `lib/obj/`. A subsequent `make debug` will not rebuild it — the `.oo` is newer than the `.cpp`, so make considers it up to date — and links the mismatched object into `libproxysql.a`.
+compiles that one file with the **release** flags (`-Wall -DENABLE_EPOLL`, no `-DDEBUG`) and drops the result into `lib/obj/`. On its own that is harmless — it is caught here:
 
-This silently produces a broken binary, because several central classes have `#ifdef`-conditional members and therefore **different layouts** depending on the flags: `MySQL_Protocol` (`#ifdef DEBUG bool dump_pkt`, `#ifdef PROXYSQL31 std::shared_ptr<...> caching_sha2_rsa_snapshot_`), `MySQL_Data_Stream`, and others. Every field after the first conditional one is then read at the wrong offset.
+```bash
+make -C lib obj/MySQL_Protocol.oo                       # bad, but harmless
+```
+
+`lib/Makefile` and `src/Makefile` now write the effective flag set to a stamp file
+(`obj/.build_flags`) that every object depends on, so the next real build sees the flag
+change and rebuilds the whole object set instead of linking the poisoned object. The same
+guard covers the `PROXYSQL31`/`PROXYSQL40` tier mismatch described above.
+
+Without that guard, make would decide staleness by timestamp alone, and the mixed binary
+would silently break because several central classes have `#ifdef`-conditional members and therefore **different layouts** depending on the flags: `MySQL_Protocol` (`#ifdef DEBUG bool dump_pkt`, `#ifdef PROXYSQL31 std::shared_ptr<...> caching_sha2_rsa_snapshot_`), `MySQL_Data_Stream`, and others. Every field after the first conditional one is then read at the wrong offset.
 
 Observed symptom: SIGSEGV on **every** client connect, in the initial handshake.
 

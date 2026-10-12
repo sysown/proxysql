@@ -192,7 +192,23 @@ OBJ := $(patsubst %,$(ODIR)/%,$(_OBJ))
 
 HEADERS := ../include/*.h ../include/*.hpp
 
-$(ODIR)/%.o: %.cpp $(HEADERS)
+# Same guard as lib/Makefile, for the same reason: the top-level Makefile passes
+# these flags as environment variables on the recursive make command line, so a
+# targeted `make -C src obj/Foo.o` inherits none of them and links a
+# differently-configured object into the binary. main.o is the object behind
+# the tier-mismatch link errors documented in CLAUDE.md. Every object depends on
+# the stamp, so any flag change forces a full rebuild instead of silently
+# mixing layouts.
+BUILD_FLAGS_STAMP := $(ODIR)/.build_flags
+
+$(BUILD_FLAGS_STAMP): FORCE
+	@mkdir -p $(ODIR)
+	@printf '%s\n' '$(MYCXXFLAGS) $(CXXFLAGS)' | cmp -s - $@ || printf '%s\n' '$(MYCXXFLAGS) $(CXXFLAGS)' > $@
+
+.PHONY: FORCE
+FORCE:
+
+$(ODIR)/%.o: %.cpp $(HEADERS) $(BUILD_FLAGS_STAMP)
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR) $(CURL_AR) $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
