@@ -4776,9 +4776,13 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	}
 	if (!strcasecmp(name,"cluster_username")) {
 		if (vallen) {
+			char *username=strdup(value);
+			if (username==NULL) {
+				return false;
+			}
 			free(variables.cluster_username);
-			variables.cluster_username=strdup(value);
-			GloProxyCluster->set_username(variables.cluster_username);
+			variables.cluster_username=username;
+			GloProxyCluster->set_username(username);
 			return true;
 		} else {
 			return true;
@@ -4786,9 +4790,13 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	}
 	if (!strcasecmp(name,"cluster_password")) {
 		if (vallen) {
+			char *password=strdup(value);
+			if (password==NULL) {
+				return false;
+			}
 			free(variables.cluster_password);
-			variables.cluster_password=strdup(value);
-			GloProxyCluster->set_password(variables.cluster_password);
+			variables.cluster_password=password;
+			GloProxyCluster->set_password(password);
 			return true;
 		} else {
 			return true;

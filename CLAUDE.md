@@ -67,6 +67,46 @@ PROXYSQL31=1 make -j$(nproc)      # then build the tier you want, consistently
 # If deps were built under a different tier, also: make cleanall  (rebuilds deps — slow)
 ```
 
+### Never compile a single translation unit on its own (IMPORTANT)
+
+The top-level `Makefile` does not export build flags to `lib/` as make variables. It passes them as **environment variables on the recursive make command line**:
+
+```make
+build_lib_debug_default:
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=... ${MAKE}
+```
+
+So a targeted invocation such as
+
+```bash
+make -C lib obj/MySQL_Protocol.oo     # WRONG — inherits none of the above
+```
+
+compiles that one file with the **release** flags (`-Wall -DENABLE_EPOLL`, no `-DDEBUG`) and drops the result into `lib/obj/`. A subsequent `make debug` will not rebuild it — the `.oo` is newer than the `.cpp`, so make considers it up to date — and links the mismatched object into `libproxysql.a`.
+
+This silently produces a broken binary, because several central classes have `#ifdef`-conditional members and therefore **different layouts** depending on the flags: `MySQL_Protocol` (`#ifdef DEBUG bool dump_pkt`, `#ifdef PROXYSQL31 std::shared_ptr<...> caching_sha2_rsa_snapshot_`), `MySQL_Data_Stream`, and others. Every field after the first conditional one is then read at the wrong offset.
+
+Observed symptom: SIGSEGV on **every** client connect, in the initial handshake.
+
+```
+Error: signal 11:
+MySQL_Protocol::generate_pkt_initial_handshake(bool, void**, unsigned int*, unsigned int*, bool)
+MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream*, unsigned int)
+```
+
+because `sess->client_myds->myprot.myds` resolves to a garbage pointer and
+`(*myds)->myconn->scramble_buff[i] = c` (MySQL_Protocol.cpp) writes through it. A core dump
+confirms it: faulting address `0x410`, base register `0`.
+
+It is **not** a code bug, and chasing it as one wastes a lot of time. Recover with:
+
+```bash
+rm -rf lib/obj src/obj lib/libproxysql.a && make debug -j$(nproc)
+```
+
+Rule of thumb: to check that a file compiles, run the real target (`make debug`) or at minimum
+pass the same environment the top-level Makefile would (`cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 make obj/Foo.oo`) — never a bare `make -C lib`. If a segfault appears in code you did not touch, check for flag mismatch before reading the code.
+
 ### Build Flags
 
 - `NOJEMALLOC=1` — disable jemalloc
