@@ -366,5 +366,5 @@ gh pr diff <PR> | grep "^+++ b/" | grep -v "<expected_files_pattern>"
 - Before fixing a bug in code added during the current cycle, check `git log` for that code. If it is already a fix of a fix, the right fix is usually deletion.
 
 **Detection:**
-- `git log --format='%h %ad %s' --date=short v<last-release>..HEAD -- <file>` shows three or more `fix` commits touching the same function or flag.
+- `git log -p --format='%h %ad %s' --date=short v<last-release>..HEAD -- <file>` lists the candidate commits. Read the diffs: count only fixes that modify the same function, flag or mechanism. Three or more is the stop sign.
 - Commit messages that describe fixing "the previous round" or "the previous fix".

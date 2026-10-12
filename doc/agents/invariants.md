@@ -18,24 +18,29 @@ Rules for agents:
 
 ---
 
-## I-1. LOAD ... SERVERS TO RUNTIME always applies
+## I-1. LOAD ... SERVERS TO RUNTIME never fails or gets vetoed
 
 *Decision: #6448.*
 
 `LOAD MYSQL SERVERS TO RUNTIME` and `LOAD PGSQL SERVERS TO RUNTIME` install the admin tables into
 runtime, as they did in v3.0.11:
-- They never fail because of ProxySQL's internal state: locks, transactions, generation counters,
-  snapshots, or SQLite read errors on admin tables. Such errors are logged.
-- They never partially apply.
+- They never fail because of internal machinery: install transactions, install locks, generation
+  counters, snapshots, or plugin/module state.
 - No module or plugin can veto them, block them or reject part of them.
 - Admin replies OK.
 - Cluster sync never branches on a LOAD outcome.
+- A SQLite read error on an admin table is logged and does not turn the LOAD into a failure. As in
+  v3.0.11, the affected table is skipped and the tables that were read are applied. This is
+  existing behaviour, not an atomicity guarantee. Do not make it worse, and do not "fix" it by
+  adding a new failure path. Changing it needs a maintainer decision.
 
 If a plugin needs to know what was installed, it gets a notification *after* the install, and
 cannot reject it.
 
-The same principle is expected to apply to every other `LOAD ... TO RUNTIME` command. Do not add
-new failure modes to any of them.
+This invariant covers the SERVERS commands only. Whether it extends to the other core
+`LOAD ... TO RUNTIME` commands is a pending maintainer decision. Until then, do not add new
+internal failure modes to any core LOAD command without one. Plugin-owned LOAD commands report
+their own errors; I-3 applies to them only where they would affect a core command.
 
 ## I-2. The Stable tier is unchanged by innovative-tier work
 
