@@ -26,14 +26,15 @@ void (*proxysql_server_discovery_retirement_attempt_for_test)(ProxySQL_ServerPro
 void (*proxysql_servers_v2_refresh_exception_for_test)(int, int) = nullptr;
 
 namespace {
+#ifdef PROXYSQL40
+// Server runtime publication state. Only PROXYSQL40 has server modules and
+// discovery controllers to notify; other tiers install servers exactly as
+// before, with no install mutex and no generation counter.
 std::atomic<uint64_t> mysql_generation {0};
 std::atomic<uint64_t> pgsql_generation {0};
-#ifdef PROXYSQL40
 std::atomic<uint64_t> read_only_monitor_epochs[2] {{0}, {0}};
-#endif
 std::mutex mysql_install_mutex;
 std::mutex pgsql_install_mutex;
-thread_local bool install_reservation[2] {false, false};
 thread_local bool install_lock_held[2] {false, false};
 
 int protocol_index(ProxySQL_ServerProtocol protocol) {
@@ -48,6 +49,7 @@ std::mutex& install_mutex(ProxySQL_ServerProtocol protocol) {
 std::atomic<uint64_t>& installed_generation(ProxySQL_ServerProtocol protocol) {
 	return protocol == ProxySQL_ServerProtocol::mysql ? mysql_generation : pgsql_generation;
 }
+#endif
 
 struct BuiltinTopologyTable {
 	std::vector<unsigned int> nonnegative_hostgroups;
@@ -122,6 +124,7 @@ bool append_topology_rows(const SQLite3_result& rows, const BuiltinTopologyTable
 }
 }
 
+#ifdef PROXYSQL40
 ProxySQL_ServerRuntimeInstallLock::ProxySQL_ServerRuntimeInstallLock(
 	ProxySQL_ServerProtocol protocol) {
 	const int index = protocol_index(protocol);
@@ -137,137 +140,25 @@ ProxySQL_ServerRuntimeInstallLock::~ProxySQL_ServerRuntimeInstallLock() {
 	install_mutex(index_ == 0 ? ProxySQL_ServerProtocol::mysql : ProxySQL_ServerProtocol::pgsql).unlock();
 }
 
-struct ProxySQL_ServerRuntimeInstallTransaction::Impl {
-	ProxySQL_ServerProtocol protocol;
-	uint64_t candidate;
-	int index;
-	std::unique_lock<std::mutex> lock;
-	bool prepared {false};
-	bool reservation_owned {false};
-	std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims;
-
-	Impl(ProxySQL_ServerProtocol value_protocol, uint64_t value_candidate, int value_index,
-		std::unique_lock<std::mutex>&& value_lock)
-		: protocol(value_protocol), candidate(value_candidate), index(value_index), lock(std::move(value_lock)) {}
-	~Impl() {
-		if (reservation_owned) install_reservation[index] = false;
-	}
-};
-
-ProxySQL_ServerRuntimeInstallTransaction::ProxySQL_ServerRuntimeInstallTransaction() noexcept = default;
-
-ProxySQL_ServerRuntimeInstallTransaction::ProxySQL_ServerRuntimeInstallTransaction(
-	ProxySQL_ServerProtocol protocol, std::string& error) {
-	const int index = protocol_index(protocol);
-	if (index < 0) {
-		error = "invalid server runtime protocol";
-		return;
-	}
-	if (install_reservation[index]) {
-		error = "nested server runtime installation is not supported";
-		return;
-	}
-	// When this thread already holds the install lock ahead of HGM, the
-	// transaction runs under it and must not lock (or later release) it.
-	std::unique_lock<std::mutex> lock = install_lock_held[index]
-		? std::unique_lock<std::mutex>()
-		: std::unique_lock<std::mutex>(install_mutex(protocol));
-	const uint64_t current = installed_generation(protocol).load(std::memory_order_relaxed);
-	if (current == std::numeric_limits<uint64_t>::max()) {
-		error = "server runtime generation exhausted";
-		return;
-	}
-	impl_.reset(new Impl(protocol, current + 1, index, std::move(lock)));
-	install_reservation[index] = true;
-	impl_->reservation_owned = true;
-	error.clear();
-}
-
-ProxySQL_ServerRuntimeInstallTransaction::~ProxySQL_ServerRuntimeInstallTransaction() = default;
-ProxySQL_ServerRuntimeInstallTransaction::ProxySQL_ServerRuntimeInstallTransaction(
-	ProxySQL_ServerRuntimeInstallTransaction&&) noexcept = default;
-ProxySQL_ServerRuntimeInstallTransaction& ProxySQL_ServerRuntimeInstallTransaction::operator=(
-	ProxySQL_ServerRuntimeInstallTransaction&&) noexcept = default;
-
-ProxySQL_ServerRuntimeInstallTransaction::operator bool() const noexcept { return impl_ != nullptr; }
-uint64_t ProxySQL_ServerRuntimeInstallTransaction::generation() const noexcept {
-	return impl_ == nullptr ? 0 : impl_->candidate;
-}
-
-bool ProxySQL_ServerRuntimeInstallTransaction::prepare(
-	ProxySQL_ServerRuntimeSnapshot& snapshot, std::string& error) {
-	ProxySQL_ServerModuleSnapshot module_snapshot {};
-	module_snapshot.runtime = snapshot;
-	std::vector<ProxySQL_ServerHostgroupClaim> claims;
-	const bool ok = prepare(module_snapshot, claims, error);
-	if (ok) snapshot = std::move(module_snapshot.runtime);
-	return ok;
-}
-
-bool ProxySQL_ServerRuntimeInstallTransaction::prepare(ProxySQL_ServerModuleSnapshot& snapshot,
-	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error) {
-#ifdef PROXYSQL40
-	if (impl_ == nullptr) { error = "inactive server runtime transaction"; return false; }
-	if (impl_->prepared) { error = "server runtime transaction already prepared"; return false; }
-	if (snapshot.runtime.protocol != impl_->protocol) {
-		error = "server runtime transaction protocol mismatch";
-		abort();
-		return false;
-	}
-	snapshot.runtime.generation = impl_->candidate;
-	// Ordinary core server rows are seeds, not topology ownership claims. Only
-	// active built-in topology mappings reserve hostgroups from plugins.
-	std::set<uint32_t> claimed_hostgroups;
-	for (uint32_t hostgroup_id : snapshot.runtime.topology_hostgroups) {
-		claimed_hostgroups.insert(hostgroup_id);
-	}
-	// A generic server LOAD must preserve explicit managed discovery ownership.
-	// Validate it against this candidate's built-in topology before staging HGM.
-	for (const auto& claim : proxysql_active_managed_server_hostgroup_claims(impl_->protocol)) {
-		if (!claimed_hostgroups.insert(claim.writer_hostgroup).second ||
-			!claimed_hostgroups.insert(claim.reader_hostgroup).second) {
-			error = "built-in topology overlaps managed discovery hostgroup claim";
-			abort();
-			return false;
-		}
-	}
-	if (!proxysql_prepare_active_server_module_runtime(snapshot, claims, error)) {
-		abort();
-		return false;
-	}
-	for (const auto& claim : claims) {
-		if (claim.writer_hostgroup == claim.reader_hostgroup) {
-			error = "invalid server-module writer/reader hostgroup claim";
-			abort();
-			return false;
-		}
-		if (!claimed_hostgroups.insert(claim.writer_hostgroup).second ||
-			!claimed_hostgroups.insert(claim.reader_hostgroup).second) {
-			error = "overlapping server-module hostgroup claim";
-			abort();
-			return false;
-		}
-	}
-	impl_->hostgroup_claims = claims;
-	impl_->prepared = true;
-	return true;
-#else
-	(void)snapshot;
-	(void)claims;
-	if (impl_ == nullptr) { error = "inactive server runtime transaction"; return false; }
-	snapshot.runtime.generation = impl_->candidate;
-	impl_->prepared = true;
-	return true;
-#endif
-}
-
 uint64_t proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol protocol) {
-	std::atomic<uint64_t>& generation = protocol == ProxySQL_ServerProtocol::mysql
-		? mysql_generation : pgsql_generation;
-	return generation.load(std::memory_order_relaxed) + 1;
+	return installed_generation(protocol).load(std::memory_order_relaxed) + 1;
 }
 
-#ifdef PROXYSQL40
+uint64_t proxysql_advance_server_runtime_generation(ProxySQL_ServerProtocol protocol) {
+	return installed_generation(protocol).fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
+uint64_t proxysql_publish_server_runtime(ProxySQL_ServerModuleSnapshot snapshot,
+	bool notify_module) {
+	const ProxySQL_ServerProtocol protocol = snapshot.runtime.protocol;
+	if (protocol_index(protocol) < 0) return 0;
+	ProxySQL_ServerRuntimeInstallLock lock(protocol);
+	snapshot.runtime.generation = proxysql_advance_server_runtime_generation(protocol);
+	const uint64_t generation = snapshot.runtime.generation;
+	proxysql_install_active_server_runtime(std::move(snapshot), notify_module);
+	return generation;
+}
+
 uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol) {
 	const int index = protocol_index(protocol);
 	return index < 0 ? 0 : read_only_monitor_epochs[index].load(std::memory_order_acquire);
@@ -278,33 +169,6 @@ void proxysql_request_server_read_only_monitor(ProxySQL_ServerProtocol protocol)
 	if (index >= 0) read_only_monitor_epochs[index].fetch_add(1, std::memory_order_release);
 }
 #endif
-
-bool ProxySQL_ServerRuntimeInstallTransaction::commit(
-	ProxySQL_ServerRuntimeSnapshot snapshot, bool commit_affiliated_module) {
-	if (impl_ == nullptr || snapshot.protocol != impl_->protocol ||
-		snapshot.generation != impl_->candidate || (commit_affiliated_module && !impl_->prepared))
-		return false;
-	uint64_t expected = impl_->candidate - 1;
-	if (!installed_generation(impl_->protocol).compare_exchange_strong(expected, impl_->candidate,
-		std::memory_order_relaxed, std::memory_order_relaxed)) {
-		abort();
-		return false;
-	}
-	std::unique_ptr<Impl> completed = std::move(impl_);
-#ifdef PROXYSQL40
-	if (commit_affiliated_module)
-		proxysql_commit_and_install_active_server_runtime_snapshot(std::move(snapshot),
-			std::move(completed->hostgroup_claims));
-	else
-		proxysql_install_active_server_runtime_snapshot(std::move(snapshot));
-#else
-	(void)snapshot;
-	(void)commit_affiliated_module;
-#endif
-	return true;
-}
-
-void ProxySQL_ServerRuntimeInstallTransaction::abort() noexcept { impl_.reset(); }
 
 static bool collect_active_builtin_server_topology(SQLite3DB* db,
 	ProxySQL_ServerProtocol protocol, const ProxySQL_ServerBuiltinTopologyInputs& inputs,

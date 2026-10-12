@@ -19,25 +19,6 @@ extern ProxySQL_Admin* GloAdmin;
 extern ProxySQL_Statistics* GloProxyStats;
 extern MySQL_Monitor* GloMyMon;
 
-#ifdef __linux__
-// Corrupt the candidate generation at the installation boundary so the real
-// transaction rejects it. The loaders must report that failure even though
-// the preceding HGM commit has already succeeded.
-static bool reject_next_install = false;
-extern "C" bool __real__ZN40ProxySQL_ServerRuntimeInstallTransaction6commitE30ProxySQL_ServerRuntimeSnapshotb(
-	ProxySQL_ServerRuntimeInstallTransaction*, ProxySQL_ServerRuntimeSnapshot, bool);
-/** @brief Reject one real installation without replacing transaction validation. */
-extern "C" bool __wrap__ZN40ProxySQL_ServerRuntimeInstallTransaction6commitE30ProxySQL_ServerRuntimeSnapshotb(
-	ProxySQL_ServerRuntimeInstallTransaction* transaction, ProxySQL_ServerRuntimeSnapshot snapshot,
-	bool commit_module) {
-	if (reject_next_install) {
-		reject_next_install = false;
-		snapshot.generation = 0;
-	}
-	return __real__ZN40ProxySQL_ServerRuntimeInstallTransaction6commitE30ProxySQL_ServerRuntimeSnapshotb(
-		transaction, std::move(snapshot), commit_module);
-}
-#endif
 
 namespace {
 
@@ -84,7 +65,7 @@ public:
 	}
 };
 
-/** @brief Create the server projections consumed by the real checked Admin loaders. */
+/** @brief Create the server projections consumed by the real Admin loaders. */
 void create_schema(SQLite3DB& db) {
 	db.execute("CREATE TABLE mysql_servers (hostgroup_id INTEGER, hostname TEXT, port INTEGER, gtid_port INTEGER, status TEXT, weight INTEGER, compression INTEGER, max_connections INTEGER, max_replication_lag INTEGER, use_ssl INTEGER, max_latency_ms INTEGER, comment TEXT)");
 	db.execute("CREATE TABLE pgsql_servers (hostgroup_id INTEGER, hostname TEXT, port INTEGER, status TEXT, weight INTEGER, compression INTEGER, max_connections INTEGER, max_replication_lag INTEGER, use_ssl INTEGER, max_latency_ms INTEGER, comment TEXT)");
@@ -100,18 +81,17 @@ void create_schema(SQLite3DB& db) {
 	db.execute("CREATE TABLE pgsql_servers_ssl_params (hostgroup_id INTEGER, hostname TEXT, port INTEGER, username TEXT)");
 }
 
-/** @brief Invoke the public checked loader under its required protocol lock. */
-bool load(ProxySQL_ServerProtocol protocol, bool emit = true) {
+/** @brief Invoke the public loader under its required protocol lock. */
+void load(ProxySQL_ServerProtocol protocol, bool emit = true) {
 	if (protocol == ProxySQL_ServerProtocol::mysql) {
 		GloAdmin->mysql_servers_wrlock();
-		const bool loaded = GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, emit);
+		GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, emit);
 		GloAdmin->mysql_servers_wrunlock();
-		return loaded;
+		return;
 	}
 	GloAdmin->pgsql_servers_wrlock();
-	const bool loaded = GloAdmin->load_pgsql_servers_to_runtime_checked({}, {}, {}, emit);
+	GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, emit);
 	GloAdmin->pgsql_servers_wrunlock();
-	return loaded;
 }
 
 /** @brief Take ownership of the HGM runtime projection returned to the caller. */
@@ -129,73 +109,97 @@ bool runtime_matches(ProxySQL_ServerProtocol protocol, const char* hostname, con
 		strcmp(rows->rows[0]->fields[weight_column], weight) == 0;
 }
 
-/** @brief Exercise runtime changes, rejected installs, and recovery for one protocol. */
+/** @brief Recreate the hostgroup attributes table dropped to inject an SQLite error. */
+void create_hostgroup_attributes(SQLite3DB& db, bool mysql) {
+	db.execute(mysql
+		? "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INTEGER, max_num_online_servers INTEGER, autocommit INTEGER, free_connections_pct INTEGER, init_connect TEXT, multiplex INTEGER, connection_warming INTEGER, throttle_connections_per_sec INTEGER, ignore_session_variables TEXT, hostgroup_settings TEXT, comment TEXT)"
+		: "CREATE TABLE pgsql_hostgroup_attributes (hostgroup_id INTEGER, max_num_online_servers INTEGER, free_connections_pct INTEGER, init_connect TEXT, multiplex INTEGER, connection_warming INTEGER, throttle_connections_per_sec INTEGER, ignore_session_variables TEXT, hostgroup_settings TEXT, comment TEXT)");
+}
+
+/**
+ * @brief LOAD ... SERVERS TO RUNTIME always installs the admin tables (#6448).
+ * @details As in v3.0.11, an SQLite error on a table is only logged. On
+ *   PROXYSQL40 every emitting LOAD publishes exactly one runtime generation.
+ */
 void test_protocol_loads(SQLite3DB& db, ProxySQL_ServerProtocol protocol) {
 	const bool mysql = protocol == ProxySQL_ServerProtocol::mysql;
 	const char* name = mysql ? "MySQL" : "PostgreSQL";
-	const int index = mysql ? 0 : 1;
+	const char* host = mysql ? "mysql-load.example" : "pgsql-load.example";
+#ifdef PROXYSQL40
 	uint64_t generation = proxysql_pending_server_runtime_generation(protocol);
-	ok(load(protocol), "%s ordinary checked Admin LOAD succeeds", name);
-	ok(GloAdmin->servers_load_veto[index].empty(), "%s successful LOAD has no module veto", name);
+#endif
+	load(protocol);
+	ok(runtime_matches(protocol, host, "1"), "%s LOAD installs the configured server in HGM", name);
+#ifdef PROXYSQL40
 	ok(proxysql_pending_server_runtime_generation(protocol) == generation + 1,
-		"%s LOAD commits exactly one runtime installation generation", name);
-	ok(runtime_matches(protocol, mysql ? "mysql-load.example" : "pgsql-load.example", "1"),
-		"%s LOAD installs the configured server in HGM", name);
-
-	db.execute(mysql ? "UPDATE mysql_servers SET weight=7" : "UPDATE pgsql_servers SET weight=7");
-	generation = proxysql_pending_server_runtime_generation(protocol);
-	ok(load(protocol) && proxysql_pending_server_runtime_generation(protocol) == generation + 1,
-		"%s repeated LOAD releases its reservation and advances the generation", name);
-	ok(runtime_matches(protocol, mysql ? "mysql-load.example" : "pgsql-load.example", "7"),
-		"%s repeated LOAD installs the updated server weight", name);
-
-	db.execute(mysql ? "UPDATE mysql_servers SET weight=8" : "UPDATE pgsql_servers SET weight=8");
-	generation = proxysql_pending_server_runtime_generation(protocol);
-	ok(load(protocol, false) && GloAdmin->servers_load_veto[index].empty() &&
-		runtime_matches(protocol, mysql ? "mysql-load.example" : "pgsql-load.example", "8"),
-		"%s LOAD without installation notification applies the updated configuration", name);
-	ok(proxysql_pending_server_runtime_generation(protocol) == generation,
-		"%s non-emitting LOAD does not consume a runtime generation", name);
-
-#ifdef __linux__
-	db.execute(mysql ? "UPDATE mysql_servers SET weight=9" : "UPDATE pgsql_servers SET weight=9");
-	reject_next_install = true;
-	ok(!load(protocol), "%s checked LOAD reports a failed runtime installation commit", name);
-	ok(!GloAdmin->servers_load_veto[index].empty(), "%s failed installation has an error reason", name);
-	ok(proxysql_pending_server_runtime_generation(protocol) == generation,
-		"%s failed installation does not advance the generation", name);
-	ok(runtime_matches(protocol, mysql ? "mysql-load.example" : "pgsql-load.example", "9"),
-		"%s installation failure follows an already committed HGM configuration", name);
-	ok(load(protocol) && GloAdmin->servers_load_veto[index].empty() &&
-		proxysql_pending_server_runtime_generation(protocol) == generation + 1,
-		"%s checked LOAD recovers after an installation commit failure", name);
-	generation = proxysql_pending_server_runtime_generation(protocol);
-#else
-	skip(5, "runtime commit fault injection requires GNU ld --wrap");
+		"%s LOAD publishes exactly one runtime generation", name);
 #endif
 
-	std::string error;
+	db.execute(mysql ? "UPDATE mysql_servers SET weight=7" : "UPDATE pgsql_servers SET weight=7");
+	load(protocol);
+	ok(runtime_matches(protocol, host, "7"), "%s repeated LOAD installs the updated server weight", name);
+
+	db.execute(mysql ? "DROP TABLE mysql_hostgroup_attributes" : "DROP TABLE pgsql_hostgroup_attributes");
+	db.execute(mysql ? "UPDATE mysql_servers SET weight=8" : "UPDATE pgsql_servers SET weight=8");
+#ifdef PROXYSQL40
+	generation = proxysql_pending_server_runtime_generation(protocol);
+#endif
+	load(protocol);
+	ok(runtime_matches(protocol, host, "8"),
+		"%s LOAD with an SQLite error on another admin table still installs the servers", name);
+#ifdef PROXYSQL40
+	ok(proxysql_pending_server_runtime_generation(protocol) == generation + 1,
+		"%s LOAD with an SQLite error is still published", name);
+#endif
+	create_hostgroup_attributes(db, mysql);
+
+	db.execute(mysql ? "UPDATE mysql_servers SET weight=9" : "UPDATE pgsql_servers SET weight=9");
+#ifdef PROXYSQL40
+	generation = proxysql_pending_server_runtime_generation(protocol);
+#endif
+	load(protocol, false);
+	ok(runtime_matches(protocol, host, "9"),
+		"%s LOAD without installation notification applies the updated configuration", name);
+#ifdef PROXYSQL40
+	ok(proxysql_pending_server_runtime_generation(protocol) == generation,
+		"%s non-emitting LOAD does not publish a runtime generation", name);
+
+	// A LOAD on a thread that already holds the install lock (plugin MySQL
+	// configuration publication) used to fail as a nested installation.
+	db.execute(mysql ? "UPDATE mysql_servers SET weight=10" : "UPDATE pgsql_servers SET weight=10");
 	{
-		ProxySQL_ServerRuntimeInstallTransaction reserved(protocol, error);
-		ok(reserved && !load(protocol), "%s checked LOAD reports an unavailable installation transaction", name);
-		ok(proxysql_pending_server_runtime_generation(protocol) == generation,
-			"%s failed preparation does not consume a runtime generation", name);
+		ProxySQL_ServerRuntimeInstallLock held(protocol);
+		load(protocol);
 	}
+	ok(runtime_matches(protocol, host, "10") &&
+		proxysql_pending_server_runtime_generation(protocol) == generation + 1,
+		"%s LOAD under a held install lock installs and publishes", name);
+#endif
 
 	db.execute(mysql ? "DELETE FROM mysql_servers" : "DELETE FROM pgsql_servers");
-	ok(load(protocol) && GloAdmin->servers_load_veto[index].empty() &&
-		proxysql_pending_server_runtime_generation(protocol) == generation + 1,
-		"%s empty LOAD succeeds after an aborted reservation", name);
+	load(protocol);
 	const auto rows = runtime_rows(protocol);
 	ok(rows != nullptr && rows->rows_count == 0, "%s empty LOAD removes the runtime server", name);
 }
 
 #if defined(PROXYSQL40) && defined(__linux__)
+/** @brief True if the active module claims are exactly the given pairs. */
+bool module_claims_are(const std::vector<ProxySQL_ServerHostgroupClaim>& expected) {
+	const auto claims = proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql);
+	if (claims.size() != expected.size()) return false;
+	for (size_t i = 0; i < claims.size(); ++i) {
+		if (claims[i].writer_hostgroup != expected[i].writer_hostgroup ||
+			claims[i].reader_hostgroup != expected[i].reader_hostgroup) return false;
+	}
+	return true;
+}
+
 /**
- * @brief Verify that an advisory module veto cannot hide a later commit failure.
- * Successful core-only installations still preserve the module rejection.
+ * @brief A server module observes a LOAD but can never reject it (#6448).
+ * @details A throwing module, invalid or overlapping claims and an unreadable
+ *   module table leave the core installation and its publication intact.
  */
-void test_vetoed_install(SQLite3DB& db) {
+void test_module_cannot_reject(SQLite3DB& db) {
 	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED", "1", 1);
@@ -204,31 +208,42 @@ void test_vetoed_install(SQLite3DB& db) {
 	if (!proxysql_load_configured_plugins(manager, {PROXYSQL_FAKE_PLUGIN_PATH}, error) ||
 		!proxysql_init_configured_plugins(manager.get(), error))
 		BAIL_OUT("cannot activate the server module fixture: %s", error.c_str());
+	const auto protocol = ProxySQL_ServerProtocol::mysql;
 	db.execute("CREATE TABLE mysql_fake_server_module_claims (writer INTEGER)");
 	db.execute("INSERT INTO mysql_servers VALUES (31,'mysql-load.example',3306,0,'ONLINE',10,0,100,0,0,0,'mysql')");
-	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_PREPARE_THROW", "1", 1);
-	const auto protocol = ProxySQL_ServerProtocol::mysql;
-	const uint64_t generation = proxysql_pending_server_runtime_generation(protocol);
-	ok(load(protocol), "MySQL core-only LOAD succeeds despite a module veto");
-	ok(!GloAdmin->servers_load_veto[0].empty(), "MySQL successful core-only LOAD preserves the module veto");
-	ok(proxysql_pending_server_runtime_generation(protocol) == generation + 1,
-		"MySQL successful core-only LOAD advances the generation");
-	ok(runtime_matches(protocol, "mysql-load.example", "10"), "MySQL vetoed module does not block core server changes");
 
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_RUNTIME_THROW", "1", 1);
+	uint64_t generation = proxysql_pending_server_runtime_generation(protocol);
+	load(protocol);
+	ok(runtime_matches(protocol, "mysql-load.example", "10") &&
+		proxysql_pending_server_runtime_generation(protocol) == generation + 1,
+		"MySQL LOAD installs and publishes although the server module throws");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_RUNTIME_THROW");
+
+	db.execute("INSERT INTO mysql_replication_hostgroups VALUES (31,32,'read_only','')");
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_INVALID_CLAIM", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM", "1", 1);
 	db.execute("UPDATE mysql_servers SET weight=11");
-	reject_next_install = true;
-	ok(!load(protocol), "MySQL checked LOAD reports a failed core-only commit after a module veto");
-	ok(GloAdmin->servers_load_veto[0].find("commit MySQL server runtime installation") != std::string::npos,
-		"MySQL core-only commit failure replaces the earlier module veto for the caller");
-	ok(proxysql_pending_server_runtime_generation(protocol) == generation + 1,
-		"MySQL failed core-only commit does not advance the generation");
-	ok(runtime_matches(protocol, "mysql-load.example", "11"), "MySQL failed core-only commit follows the HGM update");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_PREPARE_THROW");
+	load(protocol);
+	ok(runtime_matches(protocol, "mysql-load.example", "11"),
+		"MySQL LOAD installs although the server module reports bad claims");
+	ok(module_claims_are({{27, 28}}),
+		"invalid and built-in-overlapping module claims are dropped, the valid one is kept");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_INVALID_CLAIM");
+
+	db.execute("DROP TABLE mysql_fake_server_module_claims");
 	db.execute("UPDATE mysql_servers SET weight=12");
-	ok(load(protocol) && GloAdmin->servers_load_veto[0].empty() &&
-		proxysql_pending_server_runtime_generation(protocol) == generation + 2,
-		"MySQL checked LOAD recovers after a veto and failed core-only commit");
-	ok(runtime_matches(protocol, "mysql-load.example", "12"), "MySQL recovered LOAD installs the next server configuration");
+	generation = proxysql_pending_server_runtime_generation(protocol);
+	load(protocol);
+	ok(runtime_matches(protocol, "mysql-load.example", "12") &&
+		proxysql_pending_server_runtime_generation(protocol) == generation + 1,
+		"MySQL LOAD installs and publishes although a module table cannot be read");
+	ok(module_claims_are({{27, 28}}),
+		"a module that is not notified keeps its previous claims");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM");
+
 	(void)proxysql_stop_configured_plugins(manager, error);
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY");
@@ -238,12 +253,14 @@ void test_vetoed_install(SQLite3DB& db) {
 
 } // namespace
 
-/** @brief Run checked LOAD regressions on every supported product tier. */
+/** @brief Run LOAD ... SERVERS TO RUNTIME regressions on every supported product tier. */
 int main() {
 #if defined(PROXYSQL40) && defined(__linux__)
-	plan(44);
+	plan(2 * 9 + 5);
+#elif defined(PROXYSQL40)
+	plan(2 * 9);
 #else
-	plan(34);
+	plan(2 * 5);
 #endif
 	test_init_minimal();
 	{
@@ -257,7 +274,7 @@ int main() {
 		test_protocol_loads(db, ProxySQL_ServerProtocol::pgsql);
 
 #if defined(PROXYSQL40) && defined(__linux__)
-		test_vetoed_install(db);
+		test_module_cannot_reject(db);
 #endif
 	}
 	test_cleanup_minimal();

@@ -427,14 +427,15 @@ int main() {
      "supplied deletion scope removes old managed rows while preserving unrelated "
      "entries");
   proxysql_destroy_managed_prepared_runtime(prepared);
-  // Removing an existing companion table exercises a real loader/database failure.
+  // An SQLite error on a companion table is logged by the server loader, which
+  // still installs the servers: LOAD ... SERVERS TO RUNTIME never fails (#6448).
   prepared = nullptr;
   const bool failure_ready = prepare(d, &prepared, error);
   db.execute("DROP TABLE mysql_aws_rds_bgd_hostgroups");
   if (failure_ready)
     result = proxysql_activate_managed_runtime_locked(*prepared, 2);
-  ok(failure_ready && !result.applied && !result.message.empty(),
-     "existing loader errors propagate without reporting success");
+  ok(failure_ready && result.applied,
+     "a companion-table SQLite error does not fail the server load");
   proxysql_destroy_managed_prepared_runtime(prepared);
   proxysql_unlock_configuration();
   return exit_status();

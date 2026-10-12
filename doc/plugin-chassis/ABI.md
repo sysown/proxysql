@@ -129,6 +129,12 @@ ABI evolution so far:
   AWS-locality statistics projection callback.
 - **ABI 13 → ABI 14:** appends the provider-neutral server-module/controller
   registration, runtime snapshot, and desired-set submission services.
+  An affiliated server module (fields appended after the frozen ABI-14
+  `ProxySQL_ServerModuleHooks` prefix) gets a `runtime_installed` notification
+  after core has installed `LOAD MYSQL|PGSQL SERVERS TO RUNTIME`. It reports
+  the hostgroups it claims; core drops and logs an invalid or overlapping
+  claim. A module can never reject or fail a LOAD (issue #6448). The
+  unreleased `prepare_runtime`/`commit_runtime` veto pair was removed.
 - **ABI 14 → ABI 15:** appends the managed-configuration descriptor accessor
   and caller-held configuration lock, database and runtime-adapter callbacks.
   Descriptor accessor reads require layout 15 or newer. The separate managed

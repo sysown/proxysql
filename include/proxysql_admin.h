@@ -771,21 +771,12 @@ class ProxySQL_Admin {
 	void flush_ldap_variables__from_memory_to_disk();
 	void flush_pgsql_variables__from_memory_to_disk();
 	/**
-	 * @brief Reason a server module rejected its tables in the last LOAD
-	 *   ... SERVERS TO RUNTIME ([0] MySQL, [1] PostgreSQL); empty if none.
-	 *   The core tables were installed regardless (caller holds the servers lock).
+	 * @brief Installs the MySQL server tables in the Hostgroups Manager. Caller holds mysql_servers_wrlock().
+	 * @details Never fails and is never partially rejected: an SQLite error on a table is logged and
+	 *   that table is skipped. With PROXYSQL40, server modules and discovery controllers are notified
+	 *   after the installation ('emit_runtime_install') and cannot reject it.
 	 */
-	std::string servers_load_veto[2];
-	/**
-	 * @brief TRUE when the LAST load's failure was a REAL installation
-	 *   failure: the HGM commit or the server-runtime install transaction
-	 *   could not commit. Distinct from an advisory module veto (install_failed
-	 *   stays FALSE, the veto text describes "the server module kept its
-	 *   previous configuration"). It is never reset per call, so always read
-	 *   it together with the load's bool result; [0] MySQL, [1] PostgreSQL.
-	 */
-	bool servers_load_install_failed[2];
-	bool load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
+	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
 		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool hgm_acquire_lock = true,
 		bool emit_runtime_install = true);
 	void save_mysql_servers_from_runtime();
@@ -981,10 +972,9 @@ class ProxySQL_Admin {
 
 	void save_pgsql_users_runtime_to_database(bool _runtime);
 
+	/** @brief PostgreSQL counterpart of load_mysql_servers_to_runtime(); never fails. */
 	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
 		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {}, bool emit_runtime_install = true);
-	bool load_pgsql_servers_to_runtime_checked(const incoming_pgsql_servers_t&, const runtime_pgsql_servers_checksum_t&,
-		const pgsql_servers_v2_checksum_t&, bool emit_runtime_install);
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0, std::string* skipped_rules_warning = nullptr);

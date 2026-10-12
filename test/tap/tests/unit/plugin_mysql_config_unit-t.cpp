@@ -1845,10 +1845,10 @@ int main() {
 		"hostgroup_settings,servers_defaults,comment FROM main.mysql_hostgroup_attributes "
 		"ORDER BY hostgroup_id").release();
 	admin->mysql_servers_wrlock();
-	const bool initial_hgm_loaded = admin->load_mysql_servers_to_runtime(initial_hgm);
+	admin->load_mysql_servers_to_runtime(initial_hgm);
 	admin->mysql_servers_wrunlock();
 	char* initial_rules_error = admin->load_mysql_query_rules_to_runtime();
-	ok(initial_hgm_loaded && initial_rules_error == nullptr,
+	ok(initial_rules_error == nullptr,
 		"real HGM and query processor are seeded from generation 12");
 	free(initial_rules_error);
 
@@ -1924,11 +1924,10 @@ int main() {
 	ok(v.db.execute("DROP TABLE main.mysql_galera_hostgroups"),
 		"an early real HGM companion-table failure is injected");
 	admin->mysql_servers_wrlock();
-	const bool hgm_error_reported = admin->load_mysql_servers_to_runtime();
+	admin->load_mysql_servers_to_runtime();
 	admin->mysql_servers_wrunlock();
-	ok(!hgm_error_reported &&
-		MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() == hgm_before_error,
-		"the live HGM adapter propagates an early SQL failure after later reads succeed");
+	ok(MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() == hgm_before_error,
+		"an SQL failure on a companion table is logged and the LOAD still installs the servers");
 	ok(v.db.execute(k_galera), "the HGM failure fixture is repaired");
 
 	const auto live_applied = admin->apply_plugin_mysql_config(v.plan);

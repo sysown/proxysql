@@ -374,16 +374,14 @@ void test_frozen_server_module_abi14_prefix() {
 	ProxySQL_ServerModuleHooks *module = create == nullptr ? nullptr : create();
 	ok(module != nullptr && destroy != nullptr && mgr.register_server_module(module, destroy, handle),
 		"register a DSO object allocated as the frozen ABI-14 server-module prefix");
-	std::vector<ProxySQL_ServerHostgroupClaim> claims;
-	std::string error;
 	ProxySQL_ServerModuleSnapshot snapshot {};
 	snapshot.runtime.protocol = ProxySQL_ServerProtocol::mysql;
 	snapshot.runtime.generation = 42;
-	ok(mgr.prepare_server_module_runtime(snapshot, claims, error),
-		"prepare does not dereference appended callbacks of frozen ABI-14 module");
-	mgr.commit_server_module_runtime(ProxySQL_ServerProtocol::mysql, 42);
+	mgr.install_server_runtime(std::move(snapshot), true);
+	ok(mgr.server_hostgroup_claims(ProxySQL_ServerProtocol::mysql).empty(),
+		"installation does not dereference appended callbacks of frozen ABI-14 module");
 	ok(mgr.unregister_server_module(ProxySQL_ServerProtocol::mysql),
-		"commit and retirement complete without touching frozen ABI-14 tail");
+		"installation and retirement complete without touching frozen ABI-14 tail");
 }
 
 void test_service_phase_availability() {

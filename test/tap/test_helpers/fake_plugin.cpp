@@ -99,14 +99,10 @@ void fake_log_generation(const char* event, uint64_t generation) {
 	fake_log_event(value);
 }
 
-bool fake_server_module_prepare(void *, const ProxySQL_ServerModuleSnapshot& snapshot,
-	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string&) {
-	fake_log_event("server_module_prepare");
-	fake_log_generation("runtime_prepare_generation", snapshot.runtime.generation);
-	if (env("SERVER_MODULE_PREPARE_THROW") != nullptr)
-		throw std::runtime_error("injected server-module prepare failure");
-	if (env("SERVER_MODULE_PREPARE_FAIL") != nullptr)
-		return false;
+void fake_server_module_runtime_installed(void *, const ProxySQL_ServerModuleSnapshot& snapshot,
+	std::vector<ProxySQL_ServerHostgroupClaim>& claims) {
+	fake_log_event("server_module_runtime_installed");
+	fake_log_generation("runtime_installed_generation", snapshot.runtime.generation);
 	if (env("SERVER_MODULE_CONFLICT_CLAIM") != nullptr)
 		claims.push_back({17, 18});
 	if (env("SERVER_MODULE_SECOND_CLAIM") != nullptr)
@@ -119,11 +115,10 @@ bool fake_server_module_prepare(void *, const ProxySQL_ServerModuleSnapshot& sna
 	}
 	if (env("SERVER_MODULE_CONFLICT_BUILTIN_CLAIM") != nullptr)
 		claims.push_back({31, 32});
-	return true;
-}
-void fake_server_module_commit(void *, uint64_t generation) {
-	fake_log_event("server_module_commit");
-	fake_log_generation("runtime_commit_generation", generation);
+	if (env("SERVER_MODULE_INVALID_CLAIM") != nullptr)
+		claims.push_back({41, 41});
+	if (env("SERVER_MODULE_RUNTIME_THROW") != nullptr)
+		throw std::runtime_error("injected server-module runtime-installed failure");
 }
 SQLite3_result* fake_server_module_table_snapshot(void *, const char *) {
 	if (env("SERVER_MODULE_SNAPSHOT") == nullptr) return nullptr;
@@ -173,8 +168,7 @@ bool fake_register_server_module(ProxySQL_PluginServices *services,
 	if (env("AFFILIATED") != nullptr) {
 		ProxySQL_ServerModuleHooks *affiliated = protocol == ProxySQL_ServerProtocol::mysql
 			? &fake_affiliated_server_module_hooks : &fake_affiliated_server_module_hooks_pgsql;
-		affiliated->prepare_runtime = &fake_server_module_prepare;
-		affiliated->commit_runtime = &fake_server_module_commit;
+		affiliated->runtime_installed = &fake_server_module_runtime_installed;
 		affiliated->runtime_table_snapshot = &fake_server_module_table_snapshot;
 		affiliated->shutdown = &fake_server_module_shutdown;
 		hooks = affiliated;

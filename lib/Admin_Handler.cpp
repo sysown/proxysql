@@ -2453,43 +2453,20 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(LOAD_PGSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->pgsql_servers_wrlock();
-				const bool loaded = SPA->load_pgsql_servers_to_runtime_checked({}, {}, {}, true);
-				// A server-module veto blocked only the plugin tables: report it.
-				const std::string veto = SPA->servers_load_veto[1];
+				SPA->load_pgsql_servers_to_runtime();
 				SPA->pgsql_servers_wrunlock();
-				// 'false' can mean an advisory module veto (which installed the
-				// core tables anyway) or a REAL installation failure; the loader
-				// reports the distinction in servers_load_install_failed. Only
-				// a real failure is an error to the operator (issue #6440
-				// review).
-				if (SPA->servers_load_install_failed[1]) {
-					proxy_error("Error while loading pgsql servers to RUNTIME\n");
-					SPA->send_error_msg_to_client(sess,
-						veto.empty() ? (char*)"Error while loading pgsql servers to RUNTIME" : (char*)veto.c_str());
-					return false;
-				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers to RUNTIME\n");
-				const std::string veto_msg = "pgsql_servers loaded; the server module rejected its tables and keeps its previous configuration: " + veto;
-				SPA->send_ok_msg_to_client(sess, veto.empty() ? NULL : veto_msg.c_str(), 0, query_no_space);
+				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
 			}
 		} else {
 			if (is_admin_command_or_alias(LOAD_MYSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->mysql_servers_wrlock();
-				const bool loaded = SPA->load_mysql_servers_to_runtime();
-				// A server-module veto blocked only the plugin tables: report it.
-				const std::string veto = SPA->servers_load_veto[0];
+				SPA->load_mysql_servers_to_runtime();
 				SPA->mysql_servers_wrunlock();
-				if (SPA->servers_load_install_failed[0]) {
-					proxy_error("Error while loading mysql servers to RUNTIME\n");
-					SPA->send_error_msg_to_client(sess,
-						veto.empty() ? (char*)"Error while loading mysql servers to RUNTIME" : (char*)veto.c_str());
-					return false;
-				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
-				const std::string veto_msg = "mysql_servers loaded; the server module rejected its tables and keeps its previous configuration: " + veto;
-				SPA->send_ok_msg_to_client(sess, veto.empty() ? NULL : veto_msg.c_str(), 0, query_no_space);
+				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
 			}
 		}

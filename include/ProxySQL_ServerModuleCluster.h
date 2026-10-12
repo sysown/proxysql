@@ -88,12 +88,13 @@ bool proxysql_save_active_server_module_runtime_tables(SQLite3DB& db,
 bool proxysql_verify_server_module_tables(SQLite3DB& db, ProxySQL_ServerProtocol protocol,
 	const std::vector<ProxySQL_ServerModuleTable>& tables, std::string& error);
 
-bool proxysql_prepare_server_module_cluster_runtime(
-	ProxySQL_ServerProtocol protocol, ProxySQL_ServerRuntimeInstallTransaction& transaction,
-	const SQLite3_result& core_servers,
+// Builds the server-module snapshot of a Cluster v1 runtime pull. Returns
+// false, with an error, if the core rows or a module table payload are missing.
+bool proxysql_server_module_cluster_runtime_snapshot(
+	ProxySQL_ServerProtocol protocol, const SQLite3_result& core_servers,
 	const std::vector<ProxySQL_ServerModuleClusterTable>& tables,
 	const std::vector<uint32_t>& installed_topology_hostgroups,
-	std::string& error);
+	ProxySQL_ServerModuleSnapshot& snapshot, std::string& error);
 
 #endif /* PROXYSQL40 */
 #endif /* PROXYSQL_SERVER_MODULE_CLUSTER_H */
