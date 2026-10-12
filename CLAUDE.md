@@ -246,6 +246,7 @@ MySQL and PostgreSQL share parallel class hierarchies with the same architecture
 ## Agent Guidelines
 
 See `doc/agents/` for detailed guidance on working with AI coding agents:
+- `doc/agents/invariants.md` — **Read first.** Product contracts (e.g. LOAD ... SERVERS TO RUNTIME never fails; Stable unchanged by v3.1/v4.0 work). Touching one is a design change that needs a maintainer decision — never a `fix(...)`.
 - `doc/agents/project-conventions.md` — ProxySQL-specific rules (directories, build, test harness, git workflow)
 - `doc/agents/task-assignment-template.md` — Template for writing issues assignable to AI agents
 - `doc/agents/common-mistakes.md` — Known agent failure patterns with prevention and detection
