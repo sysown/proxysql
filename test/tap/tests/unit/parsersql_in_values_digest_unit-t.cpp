@@ -185,14 +185,18 @@ static void test_hidden_mysql(const Dialect& d, const HiddenCase& c) {
 	const Digest parser = check_matches_legacy(d, c.sql);
 	ok(strcasestr(parser.text.c_str(), c.needle) != nullptr,
 		"%s digest keeps '%s' for [%s] (got: '%s')", d.name, c.needle, c.sql, parser.text.c_str());
-	ok(parser.stmt_type >= 0 && parsersql_stmt_type_to_mysql_command(parser.stmt_type) == c.command,
-		"%s statement type still comes from ParserSQL for [%s]", d.name, c.sql);
+	ok(parsersql_command_type_mysql(c.sql, std::strlen(c.sql)) == c.command,
+		"%s statement type comes from ParserSQL lazily for [%s]", d.name, c.sql);
 }
 
+// The parser digest is now the legacy tokenizer digest; a literal-only list keeps
+// exactly what the tokenizer produces.
 static void test_kept(const Dialect& d, const KeptCase& c) {
 	const Digest parser = parser_digest(d, c.sql);
-	ok(parser.text == c.expected, "%s keeps the ParserSQL digest for [%s] (got: '%s', expected: '%s')",
-		d.name, c.sql, parser.text.c_str(), c.expected);
+	const Digest legacy = legacy_digest(d, c.sql);
+	ok(parser.found && legacy.found && parser.text == legacy.text && parser.hash == legacy.hash,
+		"%s parser digest and hash equal legacy for [%s] (got: '%s', legacy: '%s')",
+		d.name, c.sql, parser.text.c_str(), legacy.text.c_str());
 }
 
 int main() {
@@ -223,12 +227,14 @@ int main() {
 		qp.first_comment ? qp.first_comment : "NULL");
 	release_digest(qp);
 
-	// A large literal-only multi-row INSERT keeps the ParserSQL digest.
+	// A large literal-only multi-row INSERT also gets the legacy tokenizer digest.
 	std::string big = "INSERT INTO t (a, b) VALUES (1, 'x')";
 	for (int i = 0; i < 5000; i++) big += ", (" + std::to_string(i) + ", 'y')";
 	const Digest parser = parser_digest(mysql, big);
-	ok(parser.text == "INSERT INTO t (a, b) VALUES (?, ?)",
-		"MySQL keeps the ParserSQL digest for a 5001-row literal INSERT (got: '%s')", parser.text.c_str());
+	const Digest legacy = legacy_digest(mysql, big);
+	ok(parser.found && legacy.found && parser.text == legacy.text,
+		"MySQL parser digest equals legacy for a 5001-row literal INSERT (got: '%s', legacy: '%s')",
+		parser.text.c_str(), legacy.text.c_str());
 
 	test_cleanup_minimal();
 	return exit_status();

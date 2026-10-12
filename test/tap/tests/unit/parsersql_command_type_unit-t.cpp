@@ -57,7 +57,7 @@ static MYSQL_COM_QUERY_command legacy_command(const std::string& sql) {
 	return cmd;
 }
 
-/** Command type as computed with query_processor_parser=1 (ParserSQL digest + classifier). */
+/** Command type as computed with query_processor_parser=1 (tokenizer digest + ParserSQL classifier). */
 static MYSQL_COM_QUERY_command parser_command(const std::string& sql, int* stmt_type = nullptr) {
 	SQP_par_t qp {};
 	parsersql_digest_init_mysql(&qp, sql.data(), sql.size());
@@ -135,10 +135,9 @@ int main() {
 	mysql_thread___query_digests_no_digits = 0;
 
 	for (const char* sql : kill_cases) {
-		int stmt_type = -1;
-		const MYSQL_COM_QUERY_command parser = parser_command(sql, &stmt_type);
-		ok(stmt_type >= 0 && parsersql_stmt_type_to_mysql_command(stmt_type) == MYSQL_COM_QUERY_UNKNOWN,
-			"ParserSQL has no statement type for [%s] (stmt_type: %d)", sql, stmt_type);
+		const MYSQL_COM_QUERY_command parser = parser_command(sql);
+		ok(parsersql_command_type_mysql(sql, std::strlen(sql)) == MYSQL_COM_QUERY_UNKNOWN,
+			"ParserSQL has no command type for [%s]", sql);
 		ok(parser == MYSQL_COM_QUERY_KILL, "parser=1 classifies [%s] as KILL (got: %d)", sql, parser);
 		ok(parser == legacy_command(sql), "parser=1 and parser=0 classify [%s] identically", sql);
 	}
@@ -152,11 +151,10 @@ int main() {
 	}
 
 	for (const auto& c : parser_cases) {
-		int stmt_type = -1;
-		const MYSQL_COM_QUERY_command parser = parser_command(c.sql, &stmt_type);
+		const MYSQL_COM_QUERY_command parser = parser_command(c.sql);
 		ok(parser == c.expected, "parser=1 classifies [%s] as %d (got: %d)", c.sql, c.expected, parser);
-		ok(stmt_type >= 0 && parser == parsersql_stmt_type_to_mysql_command(stmt_type),
-			"parser=1 keeps the ParserSQL mapping for [%s]", c.sql);
+		ok(parsersql_command_type_mysql(c.sql, std::strlen(c.sql)) == c.expected,
+			"parser=1 classifies [%s] through ParserSQL lazily", c.sql);
 	}
 
 	// query_digests=0: classification from the query prefix, prefix released in both modes.

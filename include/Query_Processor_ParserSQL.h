@@ -48,13 +48,14 @@ struct UserVariableQueryDecision {
 };
 
 /**
- * @brief Computes a query digest using the MySQL-flavour ParserSQL parser.
+ * @brief Computes a query digest using the legacy MySQL tokenizer.
  *
- * Parses the query, normalizes it into digest text (replacing literals with
- * placeholders), and stores both the normalized text and its SpookyHash in
- * `qp->digest_text` / `qp->digest`. Failed or incomplete grammar parsing falls
- * back to token normalization of the original SQL. Inputs without SQL tokens
- * leave the digest empty.
+ * In parser mode the digest must be identical to the one produced with
+ * `mysql-query_processor_parser=0`, so ParserSQL is not asked to emit it from
+ * its AST. The query is tokenized, normalised (literals replaced, comments
+ * handled per `query_digests_*`) and hashed with SpookyHash, exactly as the
+ * legacy path does. `parsersql_stmt_type` is left at -1; the command type is
+ * computed lazily by query_parser_command_type().
  *
  * Controlled by `mysql-query_processor_parser`.
  *
@@ -66,7 +67,7 @@ struct UserVariableQueryDecision {
 void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_length);
 
 /**
- * @brief Computes a query digest using the PostgreSQL-flavour ParserSQL parser.
+ * @brief Computes a query digest using the legacy PostgreSQL tokenizer.
  *
  * Identical to parsersql_digest_init_mysql() but targets PostgreSQL syntax.
  *
@@ -107,25 +108,6 @@ enum MYSQL_COM_QUERY_command parsersql_command_type_mysql(const char* query, int
  * @return              The detected command type.
  */
 enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int query_length);
-
-/**
- * @brief Maps a ParserSQL StmtType to a `MYSQL_COM_QUERY_command`.
- *
- * @param stmt_type  A `StmtType` value (see sql_parser/common.h), as an int.
- * @return           The corresponding command type.
- */
-enum MYSQL_COM_QUERY_command parsersql_stmt_type_to_mysql_command(int stmt_type);
-
-/**
- * @brief Maps a ParserSQL StmtType to a `PGSQL_QUERY_command`.
- *
- * Identical to parsersql_stmt_type_to_mysql_command() but targets the
- * PostgreSQL command enum.
- *
- * @param stmt_type  A `StmtType` value (see sql_parser/common.h), as an int.
- * @return           The corresponding command type.
- */
-enum PGSQL_QUERY_command parsersql_stmt_type_to_pgsql_command(int stmt_type);
 
 /**
  * @brief Parses a MySQL SET statement into variable-value pairs.
