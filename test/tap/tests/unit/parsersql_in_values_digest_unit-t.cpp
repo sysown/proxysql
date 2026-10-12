@@ -194,8 +194,8 @@ static void test_hidden_mysql(const Dialect& d, const HiddenCase& c) {
 static void test_kept(const Dialect& d, const KeptCase& c) {
 	const Digest parser = parser_digest(d, c.sql);
 	const Digest legacy = legacy_digest(d, c.sql);
-	ok(parser.found && legacy.found && parser.text == legacy.text,
-		"%s parser digest equals legacy for [%s] (got: '%s', legacy: '%s')",
+	ok(parser.found && legacy.found && parser.text == legacy.text && parser.hash == legacy.hash,
+		"%s parser digest and hash equal legacy for [%s] (got: '%s', legacy: '%s')",
 		d.name, c.sql, parser.text.c_str(), legacy.text.c_str());
 }
 

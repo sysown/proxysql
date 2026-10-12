@@ -33,6 +33,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 // Thread-local variables used by pgsql_query_digest_first_stage and
 // pgsql_query_digest_and_first_comment_2 (which call get_pgsql_options internally).
@@ -1025,13 +1026,13 @@ static void test_digest_buffer_size_helper() {
 
 	const char* q = "SELECT 1/*x*/FROM t";
 	const int need = pgsql_query_digest_buffer_size((int)strlen(q), &opts);
-	char small[64];
-	memset(small, 0, sizeof(small));
-	ok(need <= (int)sizeof(small), "#6451 buffer size: helper size %d fits the test buffer", need);
+	// Digest into a buffer of exactly the size the helper reports: a too-small report
+	// would truncate the digest or write past the end of the buffer.
+	std::vector<char> exact(need, '\0');
 	char* fc = nullptr;
-	char* r = pgsql_query_digest_and_first_comment(q, (int)strlen(q), &fc, small, &opts);
-	ok(r == small && strcmp(small, "select ?/*x*/ from t") == 0,
-		"#6451 buffer size: an exact-size caller buffer keeps the whole digest (got '%s')", small);
+	char* r = pgsql_query_digest_and_first_comment(q, (int)strlen(q), &fc, exact.data(), &opts);
+	ok(r == exact.data() && std::string(exact.data()) == "select ?/*x*/ from t",
+		"#6451 buffer size: an exact-size caller buffer keeps the whole digest (got '%s')", exact.data());
 	if (fc) free(fc);
 }
 
@@ -1040,7 +1041,7 @@ static void test_digest_buffer_size_helper() {
 // ============================================================================
 
 int main() {
-	plan(131 + 14 + 18 + 14);
+	plan(131 + 14 + 18 + 13);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -1148,10 +1149,10 @@ int main() {
 	// 16. LISTEN gate without a digest or with a cut one (15 tests)
 	test_stmt_keyword_gate();            // 15
 
-	// 17. keep_comment separator and unterminated comments (14 tests, issue #6451)
+	// 17. keep_comment separator and unterminated comments (13 tests, issue #6451)
 	test_digest_keep_comment_no_char_lost(); // 5
 	test_digest_unterminated_comment();      // 6
-	test_digest_buffer_size_helper();        // 3
+	test_digest_buffer_size_helper();        // 2
 
 	test_cleanup_minimal();
 	return exit_status();

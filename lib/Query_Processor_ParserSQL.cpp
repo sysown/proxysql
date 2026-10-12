@@ -600,14 +600,6 @@ enum MYSQL_COM_QUERY_command parsersql_command_type_mysql(const char* query, int
     return MYSQL_COM_QUERY_UNKNOWN;
 }
 
-enum MYSQL_COM_QUERY_command parsersql_stmt_type_to_mysql_command(int stmt_type) {
-    return stmt_type_to_mysql_command(static_cast<StmtType>(stmt_type));
-}
-
-enum PGSQL_QUERY_command parsersql_stmt_type_to_pgsql_command(int stmt_type) {
-    return stmt_type_to_pgsql_command(static_cast<StmtType>(stmt_type));
-}
-
 enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int query_length) {
     auto result = tl_pgsql_parser.parse(query, query_length);
     tl_pgsql_parser.reset();
