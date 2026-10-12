@@ -21,6 +21,7 @@ using json = nlohmann::json;
 #include "PgSQL_HostGroups_Manager.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
+#include "proxysql_admin_global_sql_lock.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -2603,9 +2604,14 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			// load_proxysql_servers_to_runtime() calls ProxySQL_Cluster::load_servers_list()
 			// that then calls ProxySQL_Cluster_Nodes::load_servers_list(), holding a mutex
 			pthread_mutex_unlock(&SPA->sql_query_global_mutex);
+			// The manually released window shows the depth that the session no
+			// longer holds: see the shared depth protocol in
+			// include/proxysql_admin_global_sql_lock.h.
+			proxysql_admin_global_sql_lock_depth() = 0;
 			SPA->load_proxysql_servers_to_runtime(true);
 			// we re-acquired the mutex because it will be released by the calling function
 			pthread_mutex_lock(&SPA->sql_query_global_mutex);
+			proxysql_admin_global_sql_lock_depth() = 1;
 			//SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ProxySQL servers to RUNTIME\n");
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
@@ -2629,9 +2635,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			// save_proxysql_servers_runtime_to_database() calls ProxySQL_Cluster::dump_table_proxysql_servers()
 			// that then holds a mutex
 			pthread_mutex_unlock(&SPA->sql_query_global_mutex);
+			// Manual release window: depth follows the session, see
+			// include/proxysql_admin_global_sql_lock.h.
+			proxysql_admin_global_sql_lock_depth() = 0;
 			SPA->save_proxysql_servers_runtime_to_database(false);
 			// we re-acquired the mutex because it will be released by the calling function
 			pthread_mutex_lock(&SPA->sql_query_global_mutex);
+			proxysql_admin_global_sql_lock_depth() = 1;
 			//SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved ProxySQL servers from RUNTIME\n");
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
@@ -3227,8 +3237,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// callback that needs it cannot be blocked by a waiting session.
 	proxysql_startup_gate_wait_for_admin([] { return glovars.shutdown != 0; });
 
-	// add global mutex, see bug #1188
+	// add global mutex, see bug #1188. The depth counter records the
+	// per-thread ownership so every re-entrant door of the same mutex
+	// (plugin services reached from this statement) re-enters instead of
+	// double-locking the non-recursive mutex; see
+	// include/proxysql_admin_global_sql_lock.h.
 	pthread_mutex_lock(&pa->sql_query_global_mutex);
+	proxysql_admin_global_sql_lock_depth() = 1;
 
 		if (strcasestr(query_no_space, "INFORMATION_SCHEMA.TABLES") != nullptr) {
 			const char* info_table_name = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
@@ -5670,15 +5685,18 @@ __run_query:
 		delete resultset;
 	}
 	if (run_query == true) {
+		proxysql_admin_global_sql_lock_depth() = 0;
 		pthread_mutex_unlock(&pa->sql_query_global_mutex);
 	} else {
 		// The admin module may have already been freed in case of "PROXYSQL STOP"
 		if (query_no_space && strcasecmp(query_no_space, "PROXYSQL STOP") == 0) {
 			// Command is "PROXYSQL STOP"
 			if (admin_nostart_ && __sync_fetch_and_add((uint8_t*)&GloVars.global.nostart, 0)) {
+				proxysql_admin_global_sql_lock_depth() = 0;
 				pthread_mutex_unlock(&pa->sql_query_global_mutex);
 			}
 		} else {
+			proxysql_admin_global_sql_lock_depth() = 0;
 			pthread_mutex_unlock(&pa->sql_query_global_mutex);
 		}
 	}

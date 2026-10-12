@@ -26,6 +26,7 @@ using json = nlohmann::json;
 #include "ProxySQL_ServerDiscovery.h"
 #include "ProxySQL_PluginConfig.h"
 #include "ProxySQL_PluginSecrets.h"
+#include "proxysql_admin_global_sql_lock.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
 // Discovery_Schema.h moved to plugins/genai/include/ in Step 6.
@@ -525,12 +526,12 @@ SQLite3DB* proxysql_plugin_get_configdb() {
 
 void proxysql_lock_configuration() {
 	assert(GloAdmin != nullptr);
-	pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+	proxysql_admin_global_sql_lock(GloAdmin->sql_query_global_mutex);
 }
 
 void proxysql_unlock_configuration() noexcept {
 	assert(GloAdmin != nullptr);
-	pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+	proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
 }
 
 SQLite3DB* proxysql_configdb_locked() {
@@ -544,16 +545,32 @@ SQLite3DB* proxysql_plugin_get_statsdb() {
 
 // ABI-10 service: serializes a plugin's admindb/statsdb transaction with Admin
 // sessions, which hold sql_query_global_mutex for every statement they run.
+// Re-entrant on purpose: a plugin already inside its outer with_admin_db_lock
+// critical section (e.g. RuntimeBackend::publish_users) reaches further doors
+// of the same lock (apply_mysql_config_v2) and must re-enter instead of
+// double-locking the non-recursive mutex.
 bool proxysql_plugin_with_admin_db_lock(bool (*body)(void*), void* opaque) {
 	if (body == nullptr || GloAdmin == nullptr) return false;
 	pthread_mutex_t* const mutex = &GloAdmin->sql_query_global_mutex;
+	if (proxysql_admin_global_sql_lock_depth() > 0) {
+		// This thread already owns the mutex: run the body directly.
+		bool result = false;
+		try {
+			result = body(opaque);
+		} catch (...) {
+			result = false;
+		}
+		return result;
+	}
 	pthread_mutex_lock(mutex);
+	proxysql_admin_global_sql_lock_depth() = 1;
 	bool result = false;
 	try {
 		result = body(opaque);
 	} catch (...) {
 		result = false;
 	}
+	proxysql_admin_global_sql_lock_depth() = 0;
 	pthread_mutex_unlock(mutex);
 	return result;
 }
@@ -2083,8 +2100,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				// a race condition
 				// save_proxysql_servers_runtime_to_database() calls ProxySQL_Cluster::dump_table_proxysql_servers()
 				pthread_mutex_unlock(&SPA->sql_query_global_mutex);
+				proxysql_admin_global_sql_lock_depth() = 0;
 				save_proxysql_servers_runtime_to_database(true);
 				pthread_mutex_lock(&SPA->sql_query_global_mutex);
+				proxysql_admin_global_sql_lock_depth() = 1;
 				//mysql_servers_wrunlock();
 			}
 			if (runtime_mysql_users) {
@@ -3654,11 +3673,15 @@ size_t ProxySQL_Admin::drain_server_discovery_updates() {
 	// DELETE/INSERTs would be absorbed into the drain's transaction and lost on
 	// its ROLLBACK. Serialize on the same global mutex every other admindb
 	// writer uses, taken BEFORE the discovery-protocol lock inside the drain.
-	// ('admin_db_lock_guard' is declared further down in this file, so lock
-	// directly here; this function has no early return, so the unlock is
-	// unconditional.)
+	// Re-entrant-aware through the depth protocol shared with
+	// admin_db_lock_guard: a caller already holding the mutex (an Admin
+	// session statement that reaches the drain through a plugin hook,
+	// or a plugin publication inside with_admin_db_lock) re-enters instead
+	// of deadlocking; the unconditional unlock pairs with it via depth.
 	pthread_mutex_lock(&sql_query_global_mutex);
+	proxysql_admin_global_sql_lock_depth() = 1;
 	const size_t drained = proxysql_drain_server_desired_sets();
+	proxysql_admin_global_sql_lock_depth() = 0;
 	pthread_mutex_unlock(&sql_query_global_mutex);
 	return drained;
 #else
@@ -6701,15 +6724,19 @@ std::set<std::string> interface_set(const char* value) {
 	return result;
 }
 
-/** RAII holder for ProxySQL_Admin::sql_query_global_mutex. */
+/** RAII holder for ProxySQL_Admin::sql_query_global_mutex (re-entrant-aware
+ * through proxysql_admin_global_sql_guard: a thread that already owns the
+ * mutex -- e.g. a plugin publication running under with_admin_db_lock that
+ * reaches apply_plugin_mysql_config_v2 -- re-enters instead of double-locking
+ * the non-recursive mutex). */
 class admin_db_lock_guard {
 public:
-	explicit admin_db_lock_guard(pthread_mutex_t& mutex) : mutex_(mutex) { pthread_mutex_lock(&mutex_); }
-	~admin_db_lock_guard() { pthread_mutex_unlock(&mutex_); }
+	explicit admin_db_lock_guard(pthread_mutex_t& mutex) : guard_(mutex) { }
+	~admin_db_lock_guard() { }
 	admin_db_lock_guard(const admin_db_lock_guard&) = delete;
 	admin_db_lock_guard& operator=(const admin_db_lock_guard&) = delete;
 private:
-	pthread_mutex_t& mutex_;
+	proxysql_admin_global_sql_guard guard_;
 };
 
 SQLite3_result* hgm_query(const char* sql, std::string& error) {
@@ -7377,10 +7404,15 @@ bool ProxySQL_Admin::dispatch_plugin_admin_command(S* sess, const char* sql) {
 		[](void* opaque) {
 			auto* admin = static_cast<ProxySQL_Admin*>(opaque);
 			pthread_mutex_unlock(&admin->sql_query_global_mutex);
+			// The plugin released the mutex this Admin session was holding as
+			// part of the statement scope; a service invoked inside the plugin
+			// command must not skip its acquisition on a stale depth.
+			proxysql_admin_global_sql_lock_depth() = 0;
 		},
 		[](void* opaque) {
 			auto* admin = static_cast<ProxySQL_Admin*>(opaque);
 			pthread_mutex_lock(&admin->sql_query_global_mutex);
+			proxysql_admin_global_sql_lock_depth() = 1;
 		}
 	};
 	ProxySQL_PluginCommandResult result { 0, 0, "" };
