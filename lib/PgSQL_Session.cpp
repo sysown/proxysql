@@ -3360,6 +3360,19 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA() {
 	// is left below as an example of how to perform a more passive maintenance over session connections.
 }
 
+static bool is_extended_query_status(enum session_status st) {
+	return st == PROCESSING_STMT_PREPARE || st == PROCESSING_STMT_EXECUTE || st == PROCESSING_STMT_DESCRIBE ||
+		st == PROCESSING_STMT_BIND || st == PROCESSING_STMT_CLOSE || st == PROCESSING_EXTQ_BATCH;
+}
+
+// While an extended-query message is in progress, the replies queued for the client can wait and go out
+// together with the backend's answer in one write. Not once they pass 4x threshold_resultset_size: then
+// they must be flushed before reading more from the backend, or a large reply deadlocks.
+static bool can_hold_client_output(bool extended_query, PgSQL_Data_Stream* client_myds, bool mirror) {
+	return extended_query && client_myds && mirror == false &&
+		client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN <= overflow_safe_multiply<4, unsigned int>(pgsql_thread___threshold_resultset_size);
+}
+
 int PgSQL_Session::handler() {
 #if ENABLE_TIMER
 	Timer timer(thread->Timers.Sessions_Handlers);
@@ -3608,12 +3621,7 @@ handler_again:
 		} else {
 			PgSQL_Data_Stream* myds = mybe->server_myds;
 			PgSQL_Connection* myconn = myds->myconn;
-			bool processing_extended_query = (status == PROCESSING_STMT_PREPARE ||
-											  status == PROCESSING_STMT_EXECUTE ||
-											  status == PROCESSING_STMT_DESCRIBE ||
-											  status == PROCESSING_STMT_BIND ||
-											  status == PROCESSING_STMT_CLOSE ||
-											  status == PROCESSING_EXTQ_BATCH);
+			bool processing_extended_query = is_extended_query_status(status);
 			mybe->server_myds->max_connect_time = 0;
 			// we insert it in mypolls only if not already there
 			if (myds->mypolls == NULL) {
@@ -4141,15 +4149,8 @@ handler_again:
 							myconn->query_result->get_resultset(client_myds->PSarrayOUT);
 						} else {
 
-							if (processing_extended_query && client_myds && mirror == false) {
-								const unsigned int buffered_data = client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
-								if (buffered_data > overflow_safe_multiply<4, unsigned int>(pgsql_thread___threshold_resultset_size)) {
-									// Don't enter pending state when PSarrayOUT exceeds threshold. This allows ProxySQL
-									// to flush accumulated data to the client before attempting to read backend responses.
-									// Prevents deadlock. Issue#5300
-								} else {
-									in_pending_state = true;
-								}
+							if (can_hold_client_output(processing_extended_query, client_myds, mirror)) {
+								in_pending_state = true;
 							}
 						}
 						break;
@@ -4229,8 +4230,16 @@ handler_again:
 		int rc = 0;
 		if (handler_again___status_CONNECTING_SERVER(&rc))
 			goto handler_again;	// we changed status
-		if (rc == 1) //handler_again___status_CONNECTING_SERVER returns 1
+		if (rc == 1) { //handler_again___status_CONNECTING_SERVER returns 1
+			// Still waiting for a backend connection. Keep the replies answered locally (ParseComplete,
+			// BindComplete) until the backend answers, as while the query runs. Sending them now splits
+			// every reply in two whenever the pool is exhausted, costing a write and a client wakeup.
+			if (!previous_status.empty() &&
+				can_hold_client_output(is_extended_query_status(previous_status.top()), client_myds, mirror)) {
+				in_pending_state = true;
+			}
 			goto __exit_DSS__STATE_NOT_INITIALIZED;
+		}
 	}
 	break;
 	case session_status___NONE:
