@@ -78,6 +78,11 @@ class API:
         return copy.deepcopy(self.runs[identifier])
 
 
+def closed_api(rows):
+    """A PR that was merged or closed at CURRENT."""
+    return API(rows, current=pr(CURRENT, state='closed'))
+
+
 class CancellationTests(unittest.TestCase):
     def test_old_direct_and_cascade_runs_cancel_but_new_head_is_preserved(self):
         origin = run(10, status='completed')
@@ -232,6 +237,13 @@ class CancelRetryTests(unittest.TestCase):
         self.assertEqual(api.cancelled, [1])
         self.assertEqual(len(self.sleeps), 2)
 
+    def test_state_change_during_retry_stops_the_sweep(self):
+        api = closed_api([run(1), run(2)])
+        api.failing_cancels = 1
+        api.reopen_on_read = 4  # head, pre-check, first POST, then the retry
+        self.assertEqual(cancel_closed_pr(api, 42, 99), [])
+        self.assertEqual(api.cancelled, [])
+
     def test_persistent_error_on_an_active_run_is_reported(self):
         api = API([run(1)])
         api.failing_cancels = ci_cancel_superseded.CANCEL_ATTEMPTS
@@ -242,15 +254,20 @@ class CancelRetryTests(unittest.TestCase):
 class ClosedPRTests(unittest.TestCase):
     """A merged or closed PR cancels all of its CI, its last head included."""
 
-    def closed_api(self, rows):
-        return API(rows, current=pr(CURRENT, state='closed'))
+    def test_deleted_source_repository_is_left_alone(self):
+        # GitHub returns head.repo as null once the PR's source is deleted.
+        for sweeper in (lambda api: cancel_closed_pr(api, 42, 99),
+                        lambda api: cancel_superseded(api, 42, CURRENT, 99)):
+            api = API([run(1, head_repository=None)],
+                      current=dict(pr(CURRENT, state='closed'), head=dict(sha=CURRENT, ref='feature/test', repo=None)))
+            self.assertEqual(sweeper(api), [])
 
     def test_all_runs_of_the_closed_pr_are_cancelled(self):
         # GitHub empties pull_requests once the PR is closed.
         origin = run(10, sha=CURRENT, pull_requests=[], status='completed')
         child = run(11, sha='d'*40, event='workflow_run', head_branch='v3.0', pull_requests=[],
                     display_title='feature/test CI-tests '+CURRENT+' trigger=10/1')
-        api = self.closed_api([origin, child, run(12, pull_requests=[]), run(13, CURRENT)])
+        api = closed_api([origin, child, run(12, pull_requests=[]), run(13, CURRENT)])
         self.assertEqual(set(cancel_closed_pr(api, 42, 99)), {11, 12, 13})
 
     def test_other_prs_forks_branches_and_push_runs_are_preserved(self):
@@ -260,7 +277,7 @@ class ClosedPRTests(unittest.TestCase):
                 run(5, event='push', pull_requests=[]), run(6, event='pull_request_target'),
                 run(7, path='.github/workflows/unrelated.yml', status='completed'),
                 run(8, event='workflow_run', display_title='CI-tests trigger=7/1')]
-        api = self.closed_api(rows)
+        api = closed_api(rows)
         self.assertEqual(cancel_closed_pr(api, 42, 99), [])
 
     def test_reopened_pr_keeps_its_ci(self):
@@ -268,7 +285,7 @@ class ClosedPRTests(unittest.TestCase):
         self.assertEqual(cancel_closed_pr(api, 42, 99), [])
 
     def test_reopening_during_the_sweep_stops_it(self):
-        api = self.closed_api([run(1), run(2)])
+        api = closed_api([run(1), run(2)])
         api.reopen_on_read = 4
         self.assertEqual(cancel_closed_pr(api, 42, 99), [1])
 

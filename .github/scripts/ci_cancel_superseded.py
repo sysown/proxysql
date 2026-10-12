@@ -18,7 +18,11 @@ CANCEL_ATTEMPTS = 3
 sleep = time.sleep  # replaced by the tests
 
 
-def cancel_run(api, run_id):
+class StateChanged(Exception):
+    """The branch head or PR state changed; the sweep must stop."""
+
+
+def cancel_run(api, run_id, still_current=lambda: True):
     path = f'repos/{api.repository}/actions/runs/{run_id}'
     if api.request(path)['status'] == 'completed':
         return False
@@ -27,6 +31,10 @@ def cancel_run(api, run_id):
     # asking once. A transient error must not fail the whole sweep -- GitHub
     # has answered HTTP 502 to a cancellation that did take effect.
     for attempt in range(CANCEL_ATTEMPTS):
+        # Checked before every POST, retries included: the head or the PR
+        # state may change during the status read or the backoff.
+        if not still_current():
+            raise StateChanged
         try:
             api.request(path + '/cancel', 'POST')
             break
@@ -67,7 +75,7 @@ def sweep(api, still_current, superseded, exclude_run_id):
     """Cancel active runs whose cascade origin is superseded.
 
     `still_current()` is re-checked immediately before each cancellation
-    rather than once up front: a queued cascade lists hundreds of workflows
+    request (see cancel_run) rather than once up front: a queued cascade lists hundreds of workflows
     and the branch head (or the PR state) may change while the sweep runs, so
     a delayed sweeper must never reach a cancellation the new state forbids.
     """
@@ -85,12 +93,11 @@ def sweep(api, still_current, superseded, exclude_run_id):
                 continue
             if not superseded(origin):
                 continue
-            # Re-read the state immediately before each cancellation, not just
-            # before listing potentially hundreds of workflows.
-            if not still_current():
+            try:
+                if cancel_run(api, run_id, still_current):
+                    cancelled.append(run_id)
+            except StateChanged:
                 return cancelled
-            if cancel_run(api, run_id):
-                cancelled.append(run_id)
     return cancelled
 
 
@@ -100,6 +107,10 @@ def cancel_superseded(api, pr_number, event_head_sha, exclude_run_id):
     if current['head']['sha'] != event_head_sha:
         return []  # A delayed synchronize event must not cancel newer work.
     head = current['head']
+    if not head.get('repo'):
+        # The PR's source repository was deleted: GitHub returns head.repo
+        # as null and no run can be matched to the PR's source.
+        return []
 
     def head_sha_now():
         return api.request(pr_path)['head']['sha']
@@ -136,6 +147,11 @@ def cancel_closed_pr(api, pr_number, exclude_run_id):
     """
     pr_path = f'repos/{api.repository}/pulls/{pr_number}'
     head = api.request(pr_path)['head']
+    if not head.get('repo'):
+        # The PR's source repository was deleted (head.repo is null). Its runs
+        # cannot be told apart from another source's runs on a branch of the
+        # same name, so leave them alone.
+        return []
 
     def still_closed():
         # A reopened PR wants its CI again; stop at once.
