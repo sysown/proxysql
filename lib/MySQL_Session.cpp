@@ -9469,6 +9469,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			return true;
 		}
 	//}
+	// A query-cache hit is served even when the rule also sets
+	// gtid_from_hostgroup, min_gtid or max_lag_ms: by design, a rule with
+	// cache_ttl opts into cached (possibly stale) results, and the causal-read
+	// constraint only applies to queries that reach a backend. Not a bug.
 	if (qpo->cache_ttl>0 && ((prepare_stmt_type & ps_type_prepare_stmt) == 0)) {
 		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		uint32_t resbuf=0;
