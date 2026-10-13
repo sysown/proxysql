@@ -24,6 +24,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "gen_utils.h"
 #include "query_processor.h"
+#include "digest_text_merge.h"
 #include "QP_rule_text.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -131,19 +132,24 @@ pcre2_code* pcre2_compile_rule_regex(const char* pattern, uint32_t options, std:
 // they are fixed constants, deliberately not runtime variables, so the
 // denial-of-service surface is independent of any configuration mistake.
 //   heap limit: 64 MiB in KiB
-//   depth/match limits: 1% of the defaults, still several orders of
-//   magnitude above what a legitimate query-rule pattern needs.
+//   depth/match limits: the PCRE2 defaults, which are also the PCRE 8.45
+//   defaults engine 1 runs with. Lower limits made ordinary patterns fail on
+//   large queries: '^SELECT .* FROM t' backtracks once per byte of a large
+//   value after 'FROM t'; with 100000 it no longer matched a query carrying
+//   a 1 MB value (issue #6411). The higher limits are deliberate: they cost
+//   more CPU only for pathological patterns, which engine 1 already allows,
+//   while the heap limit still bounds memory. Do not lower them again.
 static constexpr uint32_t PCRE2_RULE_HEAP_LIMIT_KIB = 64u * 1024u;
-static constexpr uint32_t PCRE2_RULE_DEPTH_LIMIT = 100000u;
-static constexpr uint32_t PCRE2_RULE_MATCH_LIMIT = 100000u;
+static constexpr uint32_t PCRE2_RULE_DEPTH_LIMIT = 10000000u;
+static constexpr uint32_t PCRE2_RULE_MATCH_LIMIT = 10000000u;
 // Recreating the match data releases the cached frames; a threshold keeps
 // the hot path free of work for normal-sized queries, per #6423.
 static constexpr size_t PCRE2_RULE_HEAPFRAMES_RELEASE_THRESHOLD = (1u << 20);
 
-// Limit hits mean "an input too big for a query rule", not a match: treat
-// them as a negative code so callers keep their existing negative-rc
-// handling, and log rate-limited so admins can find rules like
-// '(.|\n)*' that should be rewritten to '[\s\S]*'.
+// A limit hit means "an input too big for a query rule": the rule neither
+// matches nor fails to match, so it is not applied, negated or not
+// (rule_matches_regex()). It is logged rate-limited so admins can find rules
+// like '(.|\n)*' that should be rewritten to '[\s\S]*'.
 static void pcre2_rule_match_context_create(pcre2_match_data* match_data,
                                             pcre2_match_context** out_mctx) {
 	if (out_mctx == nullptr) return;
@@ -188,7 +194,10 @@ static void pcre2_rule_release_pinned_heapframes(pcre2_match_data** md,
 	*md = fresh;
 }
 
-bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, pcre2_match_context* match_context, const char* subject) {
+// 'out_rc' receives the pcre2_match() code, so a caller can tell a limit hit
+// or another error apart from PCRE2_ERROR_NOMATCH. Ignored when NULL.
+bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, pcre2_match_context* match_context, const char* subject, int* out_rc = nullptr) {
+	if (out_rc) *out_rc = PCRE2_ERROR_NOMATCH;
 	if (code == nullptr || match_data == nullptr || subject == nullptr) return false;
 	const int rc = pcre2_match(
 		code,
@@ -199,6 +208,7 @@ bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, p
 		match_data,
 		match_context
 	);
+	if (out_rc) *out_rc = rc;
 	return rc >= 0;
 }
 
@@ -797,7 +807,7 @@ static bool query_digest_text_matches(
 	return it != digest_end;
 }
 
-static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex) {
+static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex, bool report_errors = true) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
 	r->opt1=NULL;
 	r->re1=NULL;
@@ -859,19 +869,30 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 			r->re1=new pcrecpp::RE(qr->match_pattern, *r->opt1);
 		}
 	}
-	// A rule whose regex does not compile never matches, negated or not. Name
-	// the rule and the field so the broken rule can be found: RE2 runs with
-	// RE2::Quiet and reports nothing on its own (issue #6319).
+	// Name the rule and the field so a broken rule can be found: RE2 runs with
+	// RE2::Quiet and reports nothing on its own (issue #6319). Logging does not
+	// change matching (issue #6411): on PCRE and RE2 the regex never matches,
+	// so a negated rule matches every query, as in v3.0.11; on PCRE2 the rule
+	// never matches.
 	const char *error = NULL;
+	const char *engine = NULL;
 	if (r->re2 && r->re2->ok() == false) {
 		error = r->re2->error().c_str();
+		engine = "RE2";
 	} else if (query_processor_regex==3 && r->pcre2 == NULL) {
 		error = pcre2_error.c_str();
+		engine = "PCRE2";
+	} else if (r->re1 && r->re1->error().empty() == false) {
+		error = r->re1->error().c_str();
+		engine = "PCRE";
 	}
-	if (error) {
-		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, the rule will never match: %s\n",
+	if (error && report_errors) {
+		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, %s: %s\n",
 			qr->rule_id, (i==1 ? "match_digest" : "match_pattern"), (i==1 ? qr->match_digest : qr->match_pattern),
-			(query_processor_regex==2 ? "RE2" : (query_processor_regex==3 ? "PCRE2" : "PCRE1")), error);
+			engine,
+			(query_processor_regex==3 ? "the rule will never match" :
+				"the regex never matches and a negated rule matches every query"),
+			error);
 	}
 	return r;
 };
@@ -906,20 +927,36 @@ static bool rule_matches_regex(
 		compiled_regex = temporary_regex;
 	}
 
+	// 'regex_is_valid' false means the rule is not applied, negated or not.
+	// Engines 1 (PCRE) and 2 (RE2) keep the v3.0.11 semantics of an invalid
+	// regex: it never matches, so a negated rule matches every query (#6411).
+	// Engine 3 (PCRE2) fails closed on an invalid regex.
 	bool regex_is_valid = false;
 	bool rc = false;
 	if (compiled_regex) {
 		if (compiled_regex->re2) {
-			if (compiled_regex->re2->ok()) {
-				regex_is_valid = true;
-				rc = RE2::PartialMatch(subject, *compiled_regex->re2);
-			}
-		} else if (compiled_regex->pcre2) {
 			regex_is_valid = true;
-			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md, compiled_regex->pcre2_mctx, subject);
+			rc = compiled_regex->re2->ok() && RE2::PartialMatch(subject, *compiled_regex->re2);
+		} else if (compiled_regex->pcre2) {
+			int match_rc = PCRE2_ERROR_NOMATCH;
+			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md,
+				compiled_regex->pcre2_mctx, subject, &match_rc);
 			// One oversized subject must not pin its backtracking frames in
 			// the worker thread until the rules are recompiled (#6423).
 			pcre2_rule_release_pinned_heapframes(&compiled_regex->pcre2_md, compiled_regex->pcre2);
+			// A heap/depth/match limit hit (or another match error) is not a
+			// "no match": a negated rule must not match because of it (#6411).
+			regex_is_valid = match_rc >= 0 || match_rc == PCRE2_ERROR_NOMATCH;
+			if (!regex_is_valid) {
+				static std::atomic<time_t> pcre2_match_error_log_ts{0};
+				const time_t now = time(NULL);
+				time_t prev = pcre2_match_error_log_ts.load(std::memory_order_relaxed);
+				if (now - prev >= 10 && pcre2_match_error_log_ts.compare_exchange_strong(prev, now,
+					std::memory_order_relaxed)) {
+					proxy_warning("Query rule %d: %s matching stopped with PCRE2 error %d (heap/depth/match limit or other error), the rule is not applied to this query; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
+						qr->rule_id, (regex_index==1 ? "match_digest" : "match_pattern"), match_rc);
+				}
+			}
 		} else if (compiled_regex->re1) {
 			regex_is_valid = true;
 			rc = compiled_regex->re1->PartialMatch(subject);
@@ -1987,14 +2024,11 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 		}
 	}
 	// A digest present both before the first swap and queried during the dump
-	// window exists in both maps. unordered_map::insert() drops the *source*
-	// pair for an already-present key, so the strdup()'ed text would leak on
-	// every such fold-back. Free the skipped duplicates explicitly.
-	for (auto& element : digest_text_umap_aux_2) {
-		if (!digest_text_umap_aux.emplace(element.first, element.second).second) {
-			free(element.second);
-		}
-	}
+	// window exists in both maps. merge_digest_text_maps() keeps the copy
+	// already in digest_text_umap_aux and frees the duplicate from
+	// digest_text_umap_aux_2; with normalisation on, qds holds no second
+	// reference to either text.
+	merge_digest_text_maps(digest_text_umap_aux, digest_text_umap_aux_2);
 	digest_umap_aux_2.clear();
 	digest_text_umap_aux_2.clear();
 
@@ -2023,14 +2057,16 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 			digest_umap.insert(element);
 		}
 	}
-	// Same duplicate-key leak as the fold-back above: the live map may already
-	// hold the text for a digest queried during the dump window.
-	for (auto& element : digest_text_umap_aux) {
-		if (!digest_text_umap.emplace(element.first, element.second).second) {
-			free(element.second);
-		}
-	}
+	// Same duplicate-key situation as the fold-back above: the live map may
+	// already hold the text for a digest queried during the dump window. The
+	// duplicates are collected here and freed once the lock is dropped, so
+	// free() never runs while worker threads are blocked on digest_rwlock.
+	std::vector<char*> texts_to_free;
+	merge_digest_text_maps(digest_text_umap, digest_text_umap_aux, &texts_to_free);
 	pthread_rwlock_unlock(&digest_rwlock);
+	for (char* text : texts_to_free) {
+		free(text);
+	}
 	digest_umap_aux.clear();
 	digest_text_umap_aux.clear();
 
@@ -2539,6 +2575,13 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Detected a changed in version. Global:%d , local:%d . Refreshing...\n", version, _thr_SQP_version);
 		rdlock();
 		_thr_SQP_version=__sync_add_and_fetch(&version,0);
+		// Only the first worker to install this version reports compile errors.
+		unsigned int reported_version = rules_errors_reported_version.load(std::memory_order_relaxed);
+		bool report_compile_errors = false;
+		while (reported_version < _thr_SQP_version && !report_compile_errors) {
+			report_compile_errors = rules_errors_reported_version.compare_exchange_weak(
+				reported_version, _thr_SQP_version, std::memory_order_relaxed);
+		}
 		__reset_rules(_thr_SQP_rules);
 		_thr_SQP_have_cidr_client_addr = false;
 		_thr_SQP_have_cidr_proxy_addr = false;
@@ -2556,11 +2599,11 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 					(qr2->proxy_addr_pred.match == QP_ADDR_MATCH_CIDR);
 				if (qr2->match_digest) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: %s\n", qr2->rule_id, qr2->match_digest);
-					qr2->regex_engine1=(void *)compile_query_rule(qr2,1, GET_THREAD_VARIABLE(query_processor_regex));
+					qr2->regex_engine1=(void *)compile_query_rule(qr2,1, GET_THREAD_VARIABLE(query_processor_regex), report_compile_errors);
 				}
 				if (qr2->match_pattern) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: %s\n", qr2->rule_id, qr2->match_pattern);
-					qr2->regex_engine2=(void *)compile_query_rule(qr2,2, GET_THREAD_VARIABLE(query_processor_regex));
+					qr2->regex_engine2=(void *)compile_query_rule(qr2,2, GET_THREAD_VARIABLE(query_processor_regex), report_compile_errors);
 				}
 				_thr_SQP_rules->push_back(qr2);
 			}
@@ -3074,8 +3117,12 @@ static void qp_digest_legacy(SQP_par_t* qp, const char* query, int query_length)
 		qp->digest_text = mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
 			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
 	} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// With query_digests_keep_comment the digest can be longer than the query, so the
+		// fixed 'qp->buf' can only be used when it is known to be large enough.
+		char* buffer = (pgsql_query_digest_buffer_size(query_length, &opts) <= (int)QUERY_DIGEST_BUF) ?
+			qp->buf : NULL;
 		qp->digest_text = pgsql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
-			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+			buffer, &opts);
 	}
 	const int digest_text_length=strnlen(qp->digest_text, GET_THREAD_VARIABLE(query_digests_max_digest_length));
 	qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
@@ -3093,6 +3140,11 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 	qp->query_prefix=NULL;
 	qp->parsersql_stmt_type=-1;
 	if (GET_THREAD_VARIABLE(query_digests)) {
+		// Parser mode no longer changes the digest (#6454): parsersql_digest_init_*()
+		// now delegates to the legacy tokenizer, so both branches below yield the
+		// same digest, digest text and first comment. The *-query_processor_parser
+		// variable only selects the command-type classifier, consulted lazily by
+		// query_parser_command_type().
 		if (GET_THREAD_VARIABLE(query_processor_parser) == 1) {
 			qp_digest_parsersql<QP_DERIVED>(qp, query, query_length);
 		} else {

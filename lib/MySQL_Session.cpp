@@ -247,26 +247,6 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 extern SQLite3_Server *GloSQLite3Server;
 
-static bool session_authorizes_rowless_passthrough(
-	const MySQL_Session *session, const char *backend_username,
-	const MySQLBackendAuthPolicy& policy)
-{
-	// Two shapes arrive for a rowless session (no backend row):
-	//  - the legacy INVALID policy, whose failure code marks the absence;
-	//  - the routing-fix PASSWORD policy that carries the SAME failure code
-	//    with type==PASSWORD (see resolve_mysql_backend_auth_policy) so a
-	//    backend connect attempt with the frontend credentials succeeds.
-	// Both must be recognized, or an authorized rowless passthrough session
-	// would be treated as an ordinary PASSWORD user after the routing fix.
-	const bool type_recognized =
-		policy.type == MySQLBackendAuthType::INVALID ||
-		policy.type == MySQLBackendAuthType::PASSWORD;
-	return type_recognized && session != nullptr &&
-		session->passthrough_credential && backend_username != nullptr &&
-		backend_username[0] != '\0' &&
-		policy.failure_code == "backend_user_not_found";
-}
-
 static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
 	MySQL_Session *session)
 {
@@ -275,15 +255,9 @@ static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
 		session->client_myds->myconn != nullptr &&
 		session->client_myds->myconn->userinfo != nullptr
 			? session->client_myds->myconn->userinfo->username : nullptr;
-	MySQLBackendAuthPolicy policy = session != nullptr
+	return session != nullptr
 		? session->backend_auth_policy_for(backend_username)
 		: resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
-	if (session_authorizes_rowless_passthrough(
-			session, backend_username, policy)) {
-		policy.type = MySQLBackendAuthType::PASSWORD;
-		policy.failure_code.clear();
-	}
-	return policy;
 }
 
 #ifdef PROXYSQLCLICKHOUSE
@@ -2475,12 +2449,6 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 				bui->set_schemaname(
 					default_schema, default_schema ? strlen(default_schema) : 0);
 			}
-			const char *backend_username = bui != nullptr ? bui->username : nullptr;
-			const MySQLBackendAuthPolicy policy =
-				resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
-			backend_conn->set_rowless_passthrough_authorized(
-				session_authorizes_rowless_passthrough(
-					this, backend_username, policy));
 			mybe->server_myds->return_MySQL_Connection_To_Pool();
 		}
 
@@ -9501,6 +9469,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			return true;
 		}
 	//}
+	// A query-cache hit is served even when the rule also sets
+	// gtid_from_hostgroup, min_gtid or max_lag_ms: by design, a rule with
+	// cache_ttl opts into cached (possibly stale) results, and the causal-read
+	// constraint only applies to queries that reach a backend. Not a bug.
 	if (qpo->cache_ttl>0 && ((prepare_stmt_type & ps_type_prepare_stmt) == 0)) {
 		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		uint32_t resbuf=0;
@@ -9538,6 +9510,7 @@ __exit_set_destination_hostgroup:
 			current_hostgroup=qpo->destination_hostgroup;
 		}
 	}
+	route_unusable_tracked_gtid_to_writer();
 
 	if (mysql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
 		if (locked_on_hostgroup >= 0) {
@@ -9754,6 +9727,33 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
+bool MySQL_Session::route_unusable_tracked_gtid_to_writer() {
+	// Same gating as the GTID constraint in get_connection(): only a
+	// 'gtid_from_hostgroup' rule whose tracked value would be enforced there.
+	if (qpo == nullptr || qpo->min_gtid != nullptr || qpo->gtid_from_hostgroup < 0) return false;
+	if (session_fast_forward != SESSION_FORWARD_TYPE_NONE || qpo->create_new_conn) return false;
+	// A transaction-persistent or locked hostgroup cannot change; the
+	// constraint is then handled fail-closed in get_connection().
+	if (transaction_persistent_hostgroup != -1 || locked_on_hostgroup >= 0) return false;
+	if (current_hostgroup == qpo->gtid_from_hostgroup) return false;
+	MySQL_Backend* gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
+	if (gtid_from_backend == nullptr || gtid_from_backend->gtid_uuid[0] == '\0') return false;
+	char uuid[64];
+	uint64_t trxid = 0;
+	if (parse_gtid_set_for_routing(gtid_from_backend->gtid_uuid, uuid, sizeof(uuid), &trxid)) return false;
+	// The server the value came from has every committed transaction by
+	// definition. Routing here, rather than switching the backend in
+	// get_connection(), keeps the query attached to the backend that serves
+	// it and honours a connection already attached to the writer.
+	// The caller selects 'mybe' from current_hostgroup after this returns
+	// (find_or_create_backend), so get_connection() recognizes this case
+	// from mybe->hostgroup_id. Repeating find_backend() and the set parse
+	// there is intentional: it only happens for gtid_from_hostgroup rules,
+	// and get_connection() must also handle the cases not rerouted here.
+	current_hostgroup = qpo->gtid_from_hostgroup;
+	return true;
+}
+
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 		// Get a MySQL Connection
 		const char *backend_username =
@@ -9764,20 +9764,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		const bool force_fresh_iam_connection =
 			backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM &&
 			aws_iam_fresh_token_retry_attempted;
-		// A pass-through credential has already been authorized by a successful
-		// backend probe (or its cache). Unknown-user pass-through intentionally
-		// has no USERNAME_BACKEND row, so retain its established password mode.
-		// Every other invalid policy, including malformed IAM attributes, remains
-		// fail-closed and an IAM row can never fall back to password mode.
-		const bool rowless_passthrough = session_authorizes_rowless_passthrough(
-			this, backend_username, backend_auth_policy);
-		if (rowless_passthrough) {
-			backend_auth_policy.type = MySQLBackendAuthType::PASSWORD;
-			backend_auth_policy.failure_code.clear();
-		}
+		// Only a backend row whose 'backend_auth' is malformed is INVALID: a
+		// missing row is PASSWORD (issue #6413). It is not an AWS IAM failure.
 		if (backend_auth_policy.type == MySQLBackendAuthType::INVALID) {
-			aws_iam_token_key.database_user = backend_auth_policy.database_user;
-			fail_aws_iam_backend(backend_auth_policy.failure_code.c_str());
+			fail_invalid_backend_auth_policy(mybe != nullptr ? mybe->server_myds : nullptr,
+				backend_auth_policy.database_user.c_str(), backend_auth_policy.failure_code.c_str());
 			return;
 		}
 
@@ -9786,6 +9777,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		char uuid[64];
 		char * gtid_uuid=NULL;
 		uint64_t trxid = 0;
+		// Set when an unusable tracked GTID is read from its source hostgroup.
+		bool gtid_writer_fallback = false;
 		unsigned long long now_us = 0;
 		if (qpo->max_lag_ms >= 0) {
 			if (qpo->max_lag_ms > 360000) { // this is an absolute time, we convert it to relative
@@ -9825,17 +9818,22 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				// #6415). Two fail-closed outcomes:
 				//   - with gtid_from_hostgroup, the server the tracked value
 				//     came from has every committed transaction by
-				//     definition: route the query to the writer hostgroup by
-				//     switching the session's backend, exactly as a rule
-				//     with destination_hostgroup=writer would;
-				//   - without one (min_gtid-only rules), no hostgroup has
-				//     the value by construction: keep a predicate no server
+				//     definition: route_unusable_tracked_gtid_to_writer()
+				//     already routed the query to that hostgroup while the
+				//     destination was chosen, exactly as a rule with
+				//     destination_hostgroup=writer would. Read it there
+				//     without a constraint;
+				//   - otherwise (min_gtid-only rules, or a hostgroup locked
+				//     by a transaction or SET), no reachable hostgroup is
+				//     known to have the value: keep a predicate no server
 				//     can satisfy, so the query waits in the same
 				//     "Waiting for replication" state a genuinely lagging
 				//     constraint produces instead of serving stale data.
 				// Both clear with_gtid so the causal-read stats are not
 				// inflated, and log rate-limited so admins can see why a
 				// deployment stopped using its readers.
+				const bool routed_to_gtid_source = qpo->gtid_from_hostgroup >= 0 &&
+					mybe->hostgroup_id == qpo->gtid_from_hostgroup;
 				static std::atomic<time_t> gtid_invalid_warn_ts{0};
 				const time_t gtid_warn_now = thread->curtime / 1000000;
 				// One CAS (not load-then-store) so concurrent sessions that
@@ -9848,16 +9846,16 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					proxy_warning(
 						"GTID causal read: tracked value '%s' is not usable for routing (GTID set, tagged GTID or multi-UUID). %s\n",
 						gtid_uuid,
-						(qpo->gtid_from_hostgroup >= 0 && _gtid_from_backend) ?
+						routed_to_gtid_source ?
 							"Routing the query to the writer hostgroup" :
 							"No writer hostgroup available: the read waits on an unsatisfiable constraint"
 					);
 				}
 				with_gtid = false;
 				trxid = 0;
-				if (qpo->gtid_from_hostgroup >= 0 && _gtid_from_backend) {
-					mybe = _gtid_from_backend;
+				if (routed_to_gtid_source) {
 					gtid_uuid = NULL;
+					gtid_writer_fallback = true;
 				} else {
 					// A value that cannot be a normalized UUID (the tracked
 					// ids are 32 hex digits) and a trxid no replica can hold:
@@ -9879,8 +9877,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				// reading from the writer its lag filter must not also
 				// suppress the only server that still provides
 				// read-your-writes.
-				const int fallback_max_lag =
-					(mybe == _gtid_from_backend) ? -1 : (int)qpo->max_lag_ms;
+				const int fallback_max_lag = gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms;
 #ifndef STRESSTEST_POOL
 				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, fallback_max_lag, backend_auth_policy.type);
 #endif // STRESSTEST_POOL
@@ -9919,11 +9916,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
 					backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM);
 				last_pool_gtid = false;
-				last_pool_max_lag_ms = (int)qpo->max_lag_ms;
+				last_pool_max_lag_ms = gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms;
 #endif // PROXYSQL31
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
 					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
-					NULL, 0, (int)qpo->max_lag_ms, backend_auth_policy.type);
+					NULL, 0, gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms, backend_auth_policy.type);
 			}
 			thread->note_pool_attempt(mc == NULL);
 #ifdef STRESSTEST_POOL
@@ -9959,7 +9956,6 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		hostgroup_pool_wait.observe(pool_stats, thread->curtime, mc != nullptr, pool_stats_hid);
 #endif
 		if (mc) {
-			mc->set_rowless_passthrough_authorized(rowless_passthrough);
 			mybe->server_myds->attach_connection(mc);
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
 #ifdef PROXYSQL31

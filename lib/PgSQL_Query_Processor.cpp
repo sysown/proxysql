@@ -689,9 +689,11 @@ static enum PGSQL_QUERY_command legacy_command_type(const char* text);
  * Leading whitespace of any kind, comments (kept in the digest by
  * pgsql-query_digests_keep_comment, always present in a raw query prefix), '(' and ';' are
  * skipped first, in place, so that the text is not copied. When the first keyword is SELECT
- * the result is only ever promoted to CANCEL_BACKEND / TERMINATE_BACKEND: ParserSQL's own
- * SELECT or UNKNOWN is kept otherwise. Any other text reported as SELECT gets the legacy
- * classification, which is what tells a CTE apart.
+ * the result is promoted to CANCEL_BACKEND / TERMINATE_BACKEND if it is one of the
+ * intercepted calls, and is a SELECT otherwise: the digest tokenizer turns PostgreSQL
+ * arguments into '?' placeholders, which ParserSQL cannot parse, so its UNKNOWN must not
+ * demote a plain SELECT. Any other text reported as SELECT gets the legacy classification,
+ * which is what tells a CTE apart.
  *
  * @param ret Classification from ParserSQL: PGSQL_QUERY_SELECT or PGSQL_QUERY_UNKNOWN.
  * @param text Digest text or query prefix. Must not be NULL.
@@ -706,9 +708,12 @@ static enum PGSQL_QUERY_command parser_refine_command_type(enum PGSQL_QUERY_comm
 		return ret == PGSQL_QUERY_SELECT ? legacy_command_type(p) : ret;
 	}
 	p = pgsql_stmt_skip_lead(p + sizeof("SELECT") - 1, NULL);
-	if (p == NULL) return ret;
+	if (p == NULL) return PGSQL_QUERY_SELECT;
 	const enum PGSQL_QUERY_command target = select_target_command_type(p);
-	return target != PGSQL_QUERY_SELECT ? target : ret;
+	// A SELECT the digest parser could not classify (e.g. the tokenizer turned its
+	// arguments into '?', which is not PostgreSQL syntax) is still a SELECT once the
+	// first keyword says so. Only the two intercepted calls are promoted.
+	return target != PGSQL_QUERY_SELECT ? target : PGSQL_QUERY_SELECT;
 }
 
 enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_par_t* qp) {
@@ -723,14 +728,19 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	enum PGSQL_QUERY_command ret = PGSQL_QUERY_UNKNOWN;
 
 	if (pgsql_thread___query_processor_parser == 1) {
-		if (qp->parsersql_stmt_type >= 0) {
-			// already classified during the digest parse
-			ret = parsersql_stmt_type_to_pgsql_command(qp->parsersql_stmt_type);
-		} else if (text) {
+		// The digest no longer classifies the statement (#6454): ask ParserSQL
+		// lazily, and only when the command type is actually needed.
+		if (text) {
 			ret = parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
 		}
 		if (text && (ret == PGSQL_QUERY_SELECT || ret == PGSQL_QUERY_UNKNOWN)) {
 			ret = parser_refine_command_type(ret, text);
+		}
+		// ParserSQL cannot parse the tokenizer digest when it holds '?' placeholders or
+		// statements outside its grammar. Fall back to the legacy classifier, as MySQL
+		// does, so the command counters keep a meaningful value (#6454).
+		if (ret == PGSQL_QUERY_UNKNOWN) {
+			ret = legacy_command_type(text);
 		}
 	} else {
 		ret = legacy_command_type(text);

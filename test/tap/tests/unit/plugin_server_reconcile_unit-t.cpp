@@ -375,45 +375,47 @@ int main() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM");
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_ZERO_CLAIM", "1", 1);
-	ProxySQL_ServerRuntimeSnapshot mysql_zero_prepared {};
-	mysql_zero_prepared.protocol = ProxySQL_ServerProtocol::mysql;
-	ProxySQL_ServerRuntimeInstallTransaction mysql_zero_install(
-		mysql_zero_prepared.protocol, error);
-	const bool mysql_zero_installed = mysql_zero_install.prepare(mysql_zero_prepared, error) &&
-		mysql_zero_install.commit(mysql_zero_prepared);
+	ProxySQL_ServerModuleSnapshot mysql_zero_prepared {};
+	mysql_zero_prepared.runtime.protocol = ProxySQL_ServerProtocol::mysql;
+	const bool mysql_zero_installed =
+		proxysql_publish_server_runtime(std::move(mysql_zero_prepared), true) != 0;
 	const auto mysql_zero_prepared_claims = proxysql_active_server_hostgroup_claims(
 		ProxySQL_ServerProtocol::mysql);
 	ok(mysql_zero_installed && mysql_zero_prepared_claims.size() == 1 &&
 		mysql_zero_prepared_claims[0].writer_hostgroup == 0 &&
 		mysql_zero_prepared_claims[0].reader_hostgroup == 1,
-		"real MySQL reconciliation prepare installs the active claim pair (0,1)");
-	ProxySQL_ServerRuntimeSnapshot pgsql_zero_prepared {};
-	pgsql_zero_prepared.protocol = ProxySQL_ServerProtocol::pgsql;
-	ProxySQL_ServerRuntimeInstallTransaction pgsql_zero_install(
-		pgsql_zero_prepared.protocol, error);
-	const bool pgsql_zero_installed = pgsql_zero_install.prepare(pgsql_zero_prepared, error) &&
-		pgsql_zero_install.commit(pgsql_zero_prepared);
+		"real MySQL reconciliation publication installs the active claim pair (0,1)");
+	ProxySQL_ServerModuleSnapshot pgsql_zero_prepared {};
+	pgsql_zero_prepared.runtime.protocol = ProxySQL_ServerProtocol::pgsql;
+	const bool pgsql_zero_installed =
+		proxysql_publish_server_runtime(std::move(pgsql_zero_prepared), true) != 0;
 	const auto pgsql_zero_prepared_claims = proxysql_active_server_hostgroup_claims(
 		ProxySQL_ServerProtocol::pgsql);
 	ok(pgsql_zero_installed && pgsql_zero_prepared_claims.size() == 1 &&
 		pgsql_zero_prepared_claims[0].writer_hostgroup == 1 &&
 		pgsql_zero_prepared_claims[0].reader_hostgroup == 0,
-		"real PostgreSQL reconciliation prepare installs the active claim pair (1,0)");
+		"real PostgreSQL reconciliation publication installs the active claim pair (1,0)");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_ZERO_CLAIM");
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM", "1", 1);
 
 	ProxySQL_ServerRuntimeSnapshot installed {};
 	installed.protocol = ProxySQL_ServerProtocol::mysql;
-	ProxySQL_ServerRuntimeInstallTransaction install(installed.protocol, error);
-	const uint64_t generation = install.generation();
-	ok(install.prepare(installed, error) && install.commit(installed),
+	ProxySQL_ServerModuleSnapshot installed_publication {};
+	installed_publication.runtime = installed;
+	const uint64_t generation = proxysql_publish_server_runtime(std::move(installed_publication), true);
+	installed.generation = generation;
+	ok(generation != 0 &&
+		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql).size() == 2,
 		"runtime generation installs the module's delegated writer/reader claims");
 	ProxySQL_ServerRuntimeSnapshot pgsql_installed {};
 	pgsql_installed.protocol = ProxySQL_ServerProtocol::pgsql;
-	ProxySQL_ServerRuntimeInstallTransaction pgsql_install(pgsql_installed.protocol, error);
-	const uint64_t pgsql_generation = pgsql_install.generation();
-	ok(pgsql_install.prepare(pgsql_installed, error) && pgsql_install.commit(pgsql_installed),
+	ProxySQL_ServerModuleSnapshot pgsql_installed_publication {};
+	pgsql_installed_publication.runtime = pgsql_installed;
+	const uint64_t pgsql_generation = proxysql_publish_server_runtime(std::move(pgsql_installed_publication), true);
+	pgsql_installed.generation = pgsql_generation;
+	ok(pgsql_generation != 0 &&
+		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql).size() == 2,
 		"PostgreSQL runtime generation installs independent delegated claims");
 	const auto mysql_claims = proxysql_active_server_hostgroup_claims(
 		ProxySQL_ServerProtocol::mysql);
@@ -501,7 +503,7 @@ int main() {
 		has_readonly_endpoint(*mysql_readonly, 0, "second-reader.example", 3306) &&
 		!has_readonly_endpoint(*mysql_readonly, 0, "unrelated.example", 3306),
 		"MySQL readonly enumeration unions both plugin claim pairs without table rows");
-	manager->commit_and_install_server_runtime_snapshot(installed, large_hostgroup_claim_set());
+	manager->install_server_runtime_snapshot(installed, large_hostgroup_claim_set());
 	mysql_readonly.reset(MyHGM->get_read_only_servers());
 	MyHGM->read_only_action_v2({{"second-writer.example", 3306, 1}});
 	ok(proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql).size() == 500 &&
@@ -509,11 +511,11 @@ int main() {
 			"second-writer.example", 3306) &&
 		find_row(*runtime_rows(), 28, "second-writer.example", 3306) != nullptr,
 		"MySQL enumerates and maps endpoints with 500 active claims and no replication rows");
-	manager->commit_and_install_server_runtime_snapshot(installed, mysql_claims);
+	manager->install_server_runtime_snapshot(installed, mysql_claims);
 	MyHGM->read_only_action_v2({{"second-writer.example", 3306, 0}});
 	const bool mysql_table_hidden = execute_hgm_statement(MyHGM,
 		"ALTER TABLE mysql_replication_hostgroups RENAME TO mysql_replication_hostgroups_hidden");
-	manager->commit_and_install_server_runtime_snapshot(installed, large_hostgroup_claim_set());
+	manager->install_server_runtime_snapshot(installed, large_hostgroup_claim_set());
 	char* mysql_enumeration_error = nullptr;
 	mysql_readonly.reset(MyHGM->get_read_only_servers(&mysql_enumeration_error));
 	MyHGM->read_only_action_v2({{"second-writer.example", 3306, 1}});
@@ -528,7 +530,7 @@ int main() {
 		find_row(*runtime_rows(), 28, "second-writer.example", 3306) != nullptr,
 		"MySQL query failures return an empty set, do not act, and preserve retryable mappings");
 	if (mysql_enumeration_error != nullptr) free(mysql_enumeration_error);
-	manager->commit_and_install_server_runtime_snapshot(installed, {{0, 1}});
+	manager->install_server_runtime_snapshot(installed, {{0, 1}});
 	const ProxySQL_ServerDesiredSet mysql_zero_scope {ProxySQL_ServerProtocol::mysql,
 		generation, {0, 1}, {}, ProxySQL_ServerPersistence::runtime_only};
 	const bool mysql_zero_revalidated = manager->revalidate_server_desired_set(
@@ -546,7 +548,7 @@ int main() {
 		mysql_zero_mapped,
 		"MySQL desired-set subset and monitor mapping treat hostgroup 0 as an ordinary claim");
 	clear_acks(acks);
-	manager->commit_and_install_server_runtime_snapshot(installed, mysql_claims);
+	manager->install_server_runtime_snapshot(installed, mysql_claims);
 	std::atomic<unsigned int> concurrent_posts {0};
 	std::vector<std::thread> producers;
 	for (unsigned int index = 0; index < 4; ++index) {
@@ -729,11 +731,10 @@ int main() {
 
 	ProxySQL_ServerDesiredSet stale = desired(generation, {shunned});
 	ok(manager->post_server_desired_set(stale), "currently valid generation queues successfully");
-	ProxySQL_ServerRuntimeSnapshot newer {};
-	newer.protocol = ProxySQL_ServerProtocol::mysql;
-	ProxySQL_ServerRuntimeInstallTransaction newer_install(newer.protocol, error);
-	const uint64_t newer_generation = newer_install.generation();
-	ok(newer_install.prepare(newer, error) && newer_install.commit(newer),
+	ProxySQL_ServerModuleSnapshot newer {};
+	newer.runtime.protocol = ProxySQL_ServerProtocol::mysql;
+	const uint64_t newer_generation = proxysql_publish_server_runtime(std::move(newer), true);
+	ok(newer_generation > generation,
 		"a newer runtime installation advances the controller generation before drain");
 	shunned.weight = 99;
 	ok(manager->post_server_desired_set(desired(newer_generation, {shunned})) &&
@@ -748,7 +749,7 @@ int main() {
 		{99, "pgsql-unrelated.example", 5432, 0, "ONLINE", 62, 0, 132, 0, 1, 0, "keep"}});
 	PgHGM->servers_add(pgsql_initial.get());
 	ok(PgHGM->commit(), "real PostgreSQL HGM fixture starts with unrelated runtime state");
-	manager->commit_and_install_server_runtime_snapshot(pgsql_installed,
+	manager->install_server_runtime_snapshot(pgsql_installed,
 		large_hostgroup_claim_set());
 	std::unique_ptr<SQLite3_result> large_pgsql_readonly(PgHGM->get_read_only_servers());
 	PgHGM->read_only_action_v2({{"pgsql-old.example", 5432, 1}}, false);
@@ -759,11 +760,11 @@ int main() {
 			"pgsql-old.example", 5432) && large_pgsql_runtime &&
 		find_row(*large_pgsql_runtime, 18, "pgsql-old.example", 5432) != nullptr,
 		"PostgreSQL enumerates and maps endpoints with 500 active claims and no replication rows");
-	manager->commit_and_install_server_runtime_snapshot(pgsql_installed, pgsql_claims);
+	manager->install_server_runtime_snapshot(pgsql_installed, pgsql_claims);
 	PgHGM->read_only_action_v2({{"pgsql-old.example", 5432, 0}}, false);
 	const bool pgsql_table_hidden = execute_hgm_statement(PgHGM,
 		"ALTER TABLE pgsql_replication_hostgroups RENAME TO pgsql_replication_hostgroups_hidden");
-	manager->commit_and_install_server_runtime_snapshot(pgsql_installed, large_hostgroup_claim_set());
+	manager->install_server_runtime_snapshot(pgsql_installed, large_hostgroup_claim_set());
 	char* pgsql_enumeration_error = nullptr;
 	large_pgsql_readonly.reset(PgHGM->get_read_only_servers(&pgsql_enumeration_error));
 	PgHGM->read_only_action_v2({{"pgsql-old.example", 5432, 1}}, false);
@@ -780,7 +781,7 @@ int main() {
 		find_row(*large_pgsql_runtime, 18, "pgsql-old.example", 5432) != nullptr,
 		"PostgreSQL query failures return an empty set, do not act, and preserve retryable mappings");
 	if (pgsql_enumeration_error != nullptr) free(pgsql_enumeration_error);
-	manager->commit_and_install_server_runtime_snapshot(pgsql_installed, {{1, 0}});
+	manager->install_server_runtime_snapshot(pgsql_installed, {{1, 0}});
 	const ProxySQL_ServerDesiredSet pgsql_zero_scope {ProxySQL_ServerProtocol::pgsql,
 		pgsql_generation, {0, 1}, {}, ProxySQL_ServerPersistence::runtime_only};
 	const bool pgsql_zero_revalidated = manager->revalidate_server_desired_set(
@@ -799,7 +800,7 @@ int main() {
 		pgsql_zero_mapped,
 		"PostgreSQL desired-set subset and monitor mapping treat hostgroup 0 as an ordinary claim");
 	clear_acks(pgsql_acks);
-	manager->commit_and_install_server_runtime_snapshot(pgsql_installed, pgsql_claims);
+	manager->install_server_runtime_snapshot(pgsql_installed, pgsql_claims);
 	ProxySQL_ServerRow pgsql_new {18, "pgsql-new.example", 5432, 0, "ONLINE", 71, 0, 141, 0, 1, 0, "new"};
 	pgsql_new.topology_role_epoch = 3;
 	pgsql_new.force_topology_role = true;
@@ -949,36 +950,32 @@ int main() {
 
 	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM");
-	ProxySQL_ServerRuntimeSnapshot inactive_mysql {};
-	inactive_mysql.protocol = ProxySQL_ServerProtocol::mysql;
-	ProxySQL_ServerRuntimeInstallTransaction inactive_mysql_install(
-		ProxySQL_ServerProtocol::mysql, error);
-	ProxySQL_ServerRuntimeSnapshot inactive_pgsql {};
-	inactive_pgsql.protocol = ProxySQL_ServerProtocol::pgsql;
-	ProxySQL_ServerRuntimeInstallTransaction inactive_pgsql_install(
-		ProxySQL_ServerProtocol::pgsql, error);
+	ProxySQL_ServerModuleSnapshot inactive_mysql {};
+	inactive_mysql.runtime.protocol = ProxySQL_ServerProtocol::mysql;
+	ProxySQL_ServerModuleSnapshot inactive_pgsql {};
+	inactive_pgsql.runtime.protocol = ProxySQL_ServerProtocol::pgsql;
 	auto inactive_mysql_rows = mysql_rows({
 		{17, "inactive-mysql.example", 3306, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "race"}});
-	const bool inactive_mysql_race = inactive_mysql_install.prepare(inactive_mysql, error) &&
+	const bool inactive_mysql_race =
 		run_claim_publication_race(ProxySQL_ServerProtocol::mysql,
 			[&] {
 				MyHGM->servers_add(inactive_mysql_rows.get());
 				return MyHGM->commit();
 			},
-			[&] { return inactive_mysql_install.commit(inactive_mysql); },
+			[&] { return proxysql_publish_server_runtime(std::move(inactive_mysql), true) != 0; },
 			[&] { MyHGM->read_only_action_v2({{"inactive-mysql.example", 3306, 1}}); });
 	ok(inactive_mysql_race &&
 		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql).empty(),
 		"MySQL monitor waits across HGM mutation until inactive claims are published");
 	auto inactive_pgsql_rows = pgsql_rows({
 		{18, "inactive-pgsql.example", 5432, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "race"}});
-	const bool inactive_pgsql_race = inactive_pgsql_install.prepare(inactive_pgsql, error) &&
+	const bool inactive_pgsql_race =
 		run_claim_publication_race(ProxySQL_ServerProtocol::pgsql,
 			[&] {
 				PgHGM->servers_add(inactive_pgsql_rows.get());
 				return PgHGM->commit();
 			},
-			[&] { return inactive_pgsql_install.commit(inactive_pgsql); },
+			[&] { return proxysql_publish_server_runtime(std::move(inactive_pgsql), true) != 0; },
 			[&] { PgHGM->read_only_action_v2({{"inactive-pgsql.example", 5432, 0}}, false); });
 	ok(inactive_pgsql_race &&
 		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql).empty(),
@@ -993,18 +990,13 @@ int main() {
 		"inactive claims remove stale MySQL and PostgreSQL role mappings before monitor action");
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM", "1", 1);
-	ProxySQL_ServerRuntimeSnapshot restored_mysql {};
-	restored_mysql.protocol = ProxySQL_ServerProtocol::mysql;
-	ProxySQL_ServerRuntimeInstallTransaction restored_mysql_install(
-		ProxySQL_ServerProtocol::mysql, error);
-	ProxySQL_ServerRuntimeSnapshot restored_pgsql {};
-	restored_pgsql.protocol = ProxySQL_ServerProtocol::pgsql;
-	ProxySQL_ServerRuntimeInstallTransaction restored_pgsql_install(
-		ProxySQL_ServerProtocol::pgsql, error);
-	const bool restored_claims = restored_mysql_install.prepare(restored_mysql, error) &&
-		restored_mysql_install.commit(restored_mysql) &&
-		restored_pgsql_install.prepare(restored_pgsql, error) &&
-		restored_pgsql_install.commit(restored_pgsql);
+	ProxySQL_ServerModuleSnapshot restored_mysql {};
+	restored_mysql.runtime.protocol = ProxySQL_ServerProtocol::mysql;
+	ProxySQL_ServerModuleSnapshot restored_pgsql {};
+	restored_pgsql.runtime.protocol = ProxySQL_ServerProtocol::pgsql;
+	const bool restored_claims =
+		proxysql_publish_server_runtime(std::move(restored_mysql), true) != 0 &&
+		proxysql_publish_server_runtime(std::move(restored_pgsql), true) != 0;
 	MyHGM->read_only_action_v2({{"inactive-mysql.example", 3306, 0}});
 	PgHGM->read_only_action_v2({{"inactive-pgsql.example", 5432, 1}}, false);
 	const bool modules_unregistered =

@@ -98,8 +98,8 @@ static void test_digests(const char* dialect, DigestInit initialize) {
 			dialect, c.sql, qp.digest_text ? qp.digest_text : "NULL");
 		ok(qp.digest == SpookyHash::Hash64(c.expected, std::strlen(c.expected), 0),
 			"%s hashes the expected token digest: %s", dialect, c.sql);
-		ok(qp.parsersql_stmt_type == static_cast<int>(c.type),
-			"%s preserves command classification: %s", dialect, c.sql);
+		ok(qp.parsersql_stmt_type == -1,
+			"%s digest no longer caches a command classification: %s", dialect, c.sql);
 		release_digest(qp);
 	}
 

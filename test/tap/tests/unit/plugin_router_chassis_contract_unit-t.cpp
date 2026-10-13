@@ -587,11 +587,14 @@ int main() {
 		"hostgroup_settings,servers_defaults,comment FROM main.mysql_hostgroup_attributes "
 		"ORDER BY hostgroup_id").release();
 	admin->mysql_servers_wrlock();
-	const bool initial_hgm_loaded = admin->load_mysql_servers_to_runtime(initial_hgm);
+	admin->load_mysql_servers_to_runtime(initial_hgm);
 	admin->mysql_servers_wrunlock();
 	char* initial_rules_error = admin->load_mysql_query_rules_to_runtime();
-	ok(initial_hgm_loaded && initial_rules_error == nullptr &&
-		GloMyAuth->get_current_mysql_users() != nullptr,
+	std::unique_ptr<SQLite3_result> seeded_servers(MyHGM->dump_table_mysql("mysql_servers"));
+	ok(initial_rules_error == nullptr &&
+		GloMyAuth->get_current_mysql_users() != nullptr &&
+		seeded_servers != nullptr &&
+		seeded_servers->rows_count == scalar(admindb, "SELECT COUNT(*) FROM main.mysql_servers"),
 		"real Admin adapters seed the initial Auth, HGM, and QPro snapshots");
 	free(initial_rules_error);
 	ok(proxysql_init_configured_plugins(manager.get(), error) &&

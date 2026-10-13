@@ -125,8 +125,8 @@ static void test_common(const Dialect& d) {
 	ok(plain.digest == annotated.digest && plain.digest != 0,
 		"%s annotation does not change the digest hash", d.name);
 	ok(plain.first_comment == nullptr, "%s query without a comment has a NULL first comment", d.name);
-	ok(annotated.parsersql_stmt_type == plain.parsersql_stmt_type && plain.parsersql_stmt_type >= 0,
-		"%s annotation does not change the ParserSQL statement type", d.name);
+	ok(annotated.parsersql_stmt_type == plain.parsersql_stmt_type && plain.parsersql_stmt_type == -1,
+		"%s digest parsing no longer caches a ParserSQL statement type", d.name);
 	release_digest(plain);
 	release_digest(annotated);
 }

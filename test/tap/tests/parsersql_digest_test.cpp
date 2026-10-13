@@ -19,22 +19,34 @@ static void free_parser_result(SQP_par_t& qp) {
 
 static void test_digest_storage(const char* dialect,
 	void (*initialize)(SQP_par_t*, const char*, int)) {
+	// The digest comes from the legacy tokenizer (#6454), which drops the
+	// space after a comma: "col0, col1" is normalized to "col0,col1".
 	std::string long_query = "SELECT ";
+	std::string long_digest = "SELECT ";
 	for (int i = 0; i < QUERY_DIGEST_BUF; ++i) {
-		if (i) long_query += ", ";
+		if (i) {
+			long_query += ", ";
+			long_digest += ",";
+		}
 		long_query += "col" + std::to_string(i);
+		long_digest += "col" + std::to_string(i);
 	}
 	long_query += " FROM t";
+	long_digest += " FROM t";
 
 	for (bool heap : {false, true}) {
 		const std::string query = heap ? long_query : "SELECT col0 FROM t WHERE id = 42";
-		const std::string expected = heap ? long_query : "SELECT col0 FROM t WHERE id = ?";
+		const std::string expected = heap ? long_digest : "SELECT col0 FROM t WHERE id = ?";
 		SQP_par_t qp {};
 		initialize(&qp, query.c_str(), static_cast<int>(query.size()));
 		ok(qp.digest_text && (qp.digest_text == qp.buf) == !heap,
 			"%s digest uses %s storage", dialect, heap ? "heap" : "inline");
 		ok(qp.digest_text && expected == qp.digest_text,
 			"%s %s digest preserves normalized SQL", dialect, heap ? "long" : "short");
+		if (!qp.digest_text || expected != qp.digest_text) {
+			diag("expected: %s", expected.c_str());
+			diag("actual:   %s", qp.digest_text ? qp.digest_text : "(null)");
+		}
 		ok(qp.digest != 0, "%s %s digest has a hash", dialect, heap ? "long" : "short");
 		free_parser_result(qp);
 	}

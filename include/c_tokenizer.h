@@ -50,6 +50,12 @@ char* mysql_query_digest_and_first_comment(const char* const q, int q_len, char*
 char* pgsql_query_strip_comments(char* s, int len, bool lowercase);
 char* pgsql_query_digest_and_first_comment(const char* const q, int q_len, char** const fst_cmnt, char* const buf, const options* opts);
 
+// Total size, in bytes including the final null terminator, that
+// pgsql_query_digest_and_first_comment() writes for a query of 'q_len' bytes with 'opts'. With
+// query_digests_keep_comment the digest can be longer than the query, because each kept comment
+// is copied verbatim plus a separator space; a caller-supplied 'buf' must be at least this big.
+int pgsql_query_digest_buffer_size(int q_len, const options* opts);
+
 // True when `text` begins with `keyword` as a complete SQL keyword. Nothing is skipped:
 // give it a statement start from pgsql_stmt_skip_lead() or pgsql_digest_next_stmt().
 // The character after the keyword only has to be a non-identifier one, so a quoted name

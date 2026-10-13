@@ -212,6 +212,13 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
+	/**
+	 * @brief Routes a causal read to 'gtid_from_hostgroup' when the GTID tracked there cannot be
+	 *   used for routing (multi-UUID set, tagged GTID). Called while the destination hostgroup is
+	 *   chosen, before a backend is selected and the query attached to it (issue #6415).
+	 * @return True if 'current_hostgroup' was redirected.
+	 */
+	bool route_unusable_tracked_gtid_to_writer();
 
 	//void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);

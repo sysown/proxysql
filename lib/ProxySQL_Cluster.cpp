@@ -2050,38 +2050,47 @@ bool proxysql_snapshot_installed_builtin_server_topology(
 	return proxysql_collect_active_builtin_server_topology(protocol, inputs, hostgroups, error);
 }
 
-bool proxysql_cluster_install_v1_runtime_post_fetch(
+void proxysql_cluster_install_v1_runtime_post_fetch(
 		ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
 		bool module_runtime_supported,
 		const std::vector<ProxySQL_ServerModuleClusterTable>& module_tables,
 		const std::function<void(SQLite3_result*)>& stage_core_rows,
-		const std::function<bool(SQLite3_result*)>& commit_core_rows) {
-	std::unique_ptr<SQLite3_result> rows(core_rows);
-	if (!rows || !stage_core_rows || !commit_core_rows) return false;
+		const std::function<void(SQLite3_result*)>& commit_core_rows) {
+	if (core_rows == nullptr) return;
+	// Lock order: Admin servers lock -> runtime install -> HGM.
+	ProxySQL_ServerRuntimeInstallLock install_lock(protocol);
+	// Built before the HGM takes ownership of the rows.
+	ProxySQL_ServerModuleSnapshot snapshot {};
+	std::vector<uint32_t> topology;
 	std::string error;
-	ProxySQL_ServerRuntimeInstallTransaction transaction(protocol, error);
-	if (!transaction) return false;
-	std::vector<uint32_t> installed_topology_hostgroups;
-	if (module_runtime_supported &&
-		(!proxysql_snapshot_installed_builtin_server_topology(protocol,
-			installed_topology_hostgroups, error) ||
-		 !proxysql_prepare_server_module_cluster_runtime(protocol, transaction,
-			*rows, module_tables, installed_topology_hostgroups, error))) return false;
-	ProxySQL_ServerRuntimeSnapshot installed_snapshot =
-		proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *rows);
-	installed_snapshot.topology_hostgroups = installed_topology_hostgroups;
-	try {
-		stage_core_rows(rows.get());
-	} catch (...) {
-		return false;
+	bool notify_module = module_runtime_supported;
+	if (notify_module && !proxysql_snapshot_installed_builtin_server_topology(protocol, topology, error)) {
+		// Keep the last complete topology rather than a partial read.
+		topology = proxysql_active_server_topology_hostgroups(protocol);
+		proxy_error("Cluster: server module not notified of the pulled servers, it keeps its previous configuration: %s\n",
+			error.c_str());
+		notify_module = false;
 	}
-	// The HGM commit API owns the raw resultset, including its failure paths.
-	try {
-		if (!commit_core_rows(rows.release())) return false;
-	} catch (...) {
-		return false;
+	if (notify_module && !proxysql_server_module_cluster_runtime_snapshot(protocol, *core_rows,
+		module_tables, topology, snapshot, error)) {
+		proxy_error("Cluster: server module not notified of the pulled servers, it keeps its previous configuration: %s\n",
+			error.c_str());
+		notify_module = false;
 	}
-	return transaction.commit(std::move(installed_snapshot), module_runtime_supported);
+	if (!notify_module) {
+		snapshot = {};
+		snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, 0, *core_rows);
+		snapshot.runtime.topology_hostgroups = std::move(topology);
+	}
+	// The HGM commit API owns the raw resultset. No try/catch here, on
+	// purpose: nothing above the Cluster pull catches exceptions, so an
+	// exception from servers_add()/commit() terminates the process, exactly
+	// as on every other HGM install path (Admin LOAD, the non-PROXYSQL40 pull)
+	// and as in v3.0.11. Catching it here would let the pull continue as if it
+	// succeeded after a partial HGM commit, and persist that state.
+	stage_core_rows(core_rows);
+	commit_core_rows(core_rows);
+	proxysql_publish_server_runtime(std::move(snapshot), notify_module);
 }
 #endif
 
@@ -2221,15 +2230,14 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						#endif
 #ifdef PROXYSQL40
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_mysql_servers from peer %s:%d into mysql_servers_incoming", hostname, port);
-						const bool installed = proxysql_cluster_install_v1_runtime_post_fetch(
+						proxysql_cluster_install_v1_runtime_post_fetch(
 							ProxySQL_ServerProtocol::mysql, runtime_mysql_servers_resultset.release(),
 							module_runtime_supported, module_tables_v1,
 							[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
 							[&](SQLite3_result* rows) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
-								return MyHGM->commit({ rows, peer_runtime_mysql_server }, { nullptr, {} }, true, true);
+								MyHGM->commit({ rows, peer_runtime_mysql_server }, { nullptr, {} }, true, true);
 							});
-						if (!installed) fetch_failed = true;
 						#else
 						MyHGM->servers_add(runtime_mysql_servers_resultset.get());
 						MyHGM->commit({ runtime_mysql_servers_resultset.release(), peer_runtime_mysql_server }, { nullptr, {} }, true, true);
@@ -2840,34 +2848,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading to runtime MySQL Servers v2 from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: Loading to runtime MySQL Servers v2 from peer %s:%d\n", hostname, port);
-						const bool mysql_servers_loaded =
-							GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
-						// FALSE plus a REAL installation failure must stop
-						// this pull BEFORE any persistence below: a
-						// save-to-disk here would overwrite the
-						// freshly-pulled tables with the stale runtime
-						// (issue #6440 review). The loader reports that
-						// distinction in servers_load_install_failed; a
-						// module veto (which installed the core tables)
-						// is advisory only.
-						if (GloAdmin->servers_load_install_failed[0]) {
-							proxy_error("Cluster: MySQL servers pulled from peer %s:%d were not installed to runtime: %s\n",
-								hostname, port,
-								GloAdmin->servers_load_veto[0].empty() ?
-									"(internal error)" : GloAdmin->servers_load_veto[0].c_str());
-							fetch_failed = true;
-							GloAdmin->mysql_servers_wrunlock();
-							proxysql_admin_global_sql_lock_depth() = 0;
-							pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
-							break;
-						}
-						if (!GloAdmin->servers_load_veto[0].empty()) {
-							// A server-module veto blocked only the plugin tables;
-							// the core tables WERE installed, so keep persisting them.
-							proxy_error("Cluster: the server module rejected the MySQL plugin tables pulled from peer %s:%d and keeps its previous configuration: %s\n",
-								hostname, port, GloAdmin->servers_load_veto[0].c_str());
-							fetch_failed = true;
-						}
+						GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
 
 						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
 							bool saved = true;
@@ -3869,15 +3850,14 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 				#endif
 #ifdef PROXYSQL40
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_pgsql_servers from peer %s:%d into pgsql_servers_incoming\n", hostname, port);
-				const bool installed = proxysql_cluster_install_v1_runtime_post_fetch(
+				proxysql_cluster_install_v1_runtime_post_fetch(
 					ProxySQL_ServerProtocol::pgsql, runtime_pgsql_servers_resultset.release(),
 					module_runtime_supported, module_tables_v1,
 					[](SQLite3_result* rows) { PgHGM->servers_add(rows); },
 					[&](SQLite3_result* rows) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_pgsql_servers from peer %s:%d\n", hostname, port);
-						return PgHGM->commit({ rows, { expected_runtime_checksum, peer_runtime_pgsql_server.epoch } }, { nullptr, {} }, true, true);
+						PgHGM->commit({ rows, { expected_runtime_checksum, peer_runtime_pgsql_server.epoch } }, { nullptr, {} }, true, true);
 					});
-				if (!installed) fetch_failed = true;
 				#else
 				PgHGM->servers_add(runtime_pgsql_servers_resultset.get());
 				PgHGM->commit({ runtime_pgsql_servers_resultset.release(), { expected_runtime_checksum, peer_runtime_pgsql_server.epoch } }, { nullptr, {} }, true, true);
@@ -4162,32 +4142,11 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					update_pgsql_replication_hostgroups(incoming_pgsql_servers.incoming_replication_hostgroups);
 					update_pgsql_hostgroup_attributes(incoming_pgsql_servers.incoming_hostgroup_attributes);
 					update_pgsql_servers_ssl_params(incoming_pgsql_servers.incoming_pgsql_servers_ssl_params);
-					const bool pgsql_servers_loaded = GloAdmin->load_pgsql_servers_to_runtime_checked(
+					GloAdmin->load_pgsql_servers_to_runtime(
 						incoming_pgsql_servers,
 						fetch_runtime_pgsql_servers ? expected_runtime_pgsql_server : runtime_pgsql_servers_checksum_t {},
-						expected_pgsql_server_v2,
-						true
+						expected_pgsql_server_v2
 					);
-					// Same contract as the MySQL pull above: a REAL
-					// installation failure stops the pull before persistence.
-					if (GloAdmin->servers_load_install_failed[1]) {
-						proxy_error("Cluster: PostgreSQL servers pulled from peer %s:%d were not installed to runtime: %s\n",
-							hostname, port,
-							GloAdmin->servers_load_veto[1].empty() ?
-								"(internal error)" : GloAdmin->servers_load_veto[1].c_str());
-						fetch_failed = true;
-						GloAdmin->pgsql_servers_wrunlock();
-						proxysql_admin_global_sql_lock_depth() = 0;
-						pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
-						break;
-					}
-					if (!GloAdmin->servers_load_veto[1].empty()) {
-						// A server-module veto blocked only the plugin tables; the
-						// core tables WERE installed, so keep persisting them.
-						proxy_error("Cluster: the server module rejected the PostgreSQL plugin tables pulled from peer %s:%d and keeps its previous configuration: %s\n",
-							hostname, port, GloAdmin->servers_load_veto[1].c_str());
-						fetch_failed = true;
-					}
 
 					if (GloProxyCluster->cluster_pgsql_servers_save_to_disk == true) {
 						bool saved = true;

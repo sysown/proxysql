@@ -711,20 +711,15 @@ ManagedRuntimeResult proxysql_activate_managed_runtime_locked(ManagedPreparedRun
           return {false, "MemoryApplyFailed", error};
       }
     }
-    bool servers = false;
+    // LOAD ... SERVERS TO RUNTIME never fails.
     if (p.pgsql) {
       GloAdmin->pgsql_servers_wrlock();
       Unlock unlock{[]() noexcept { GloAdmin->pgsql_servers_wrunlock(); }};
-      servers = GloAdmin->load_pgsql_servers_to_runtime_checked({}, {}, {}, true);
+      GloAdmin->load_pgsql_servers_to_runtime();
     } else {
       GloAdmin->mysql_servers_wrlock();
       Unlock unlock{[]() noexcept { GloAdmin->mysql_servers_wrunlock(); }};
-      servers = GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, true);
-    }
-    if (!servers) {
-      const auto &veto = GloAdmin->servers_load_veto[p.pgsql ? 1 : 0];
-      return {false, "ServersApplyFailed",
-              veto.empty() ? "existing engine server loader rejected configuration" : veto};
+      GloAdmin->load_mysql_servers_to_runtime();
     }
     auto users = std::unique_ptr<SQLite3_result>();
     char *sqlite_error = nullptr;

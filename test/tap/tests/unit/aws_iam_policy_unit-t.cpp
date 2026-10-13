@@ -159,18 +159,31 @@ static void test_resolver_falls_back_to_password_for_rowless_backend_account() {
 	// backend row must select PASSWORD, not INVALID. Reporting INVALID here
 	// made every query fail with ERROR 9002 for ordinary split-row users.
 	const MySQLBackendAuthPolicy missing = resolve_mysql_backend_auth_policy(*GloMyAuth, "missing_backend");
-	ok(missing.type == MySQLBackendAuthType::PASSWORD &&
-		missing.failure_code == "backend_user_not_found",
-		"resolver falls back to password authentication for a rowless backend account");
+	ok(missing.type == MySQLBackendAuthType::PASSWORD && missing.failure_code.empty(),
+		"resolver selects plain password authentication for a user without a backend row");
 
 	ok(add_backend_user("inactive_backend", "password", ""),
 		"inactive backend fixture is added");
 	GloMyAuth->set_all_inactive(USERNAME_BACKEND);
 	GloMyAuth->remove_inactives(USERNAME_BACKEND);
 	const MySQLBackendAuthPolicy inactive = resolve_mysql_backend_auth_policy(*GloMyAuth, "inactive_backend");
-	ok(inactive.type == MySQLBackendAuthType::PASSWORD &&
-		inactive.failure_code == "backend_user_not_found",
-		"resolver falls back to password authentication after runtime removal");
+	ok(inactive.type == MySQLBackendAuthType::PASSWORD && inactive.failure_code.empty(),
+		"resolver selects plain password authentication after runtime removal");
+}
+
+// Issue #6413: a malformed backend_auth stays fail-closed, but is reported
+// when the row is loaded rather than only at the first failing query.
+static void test_malformed_backend_auth_is_reported_at_load() {
+	std::string log;
+	ok(add_backend_user_capturing_stderr("unsupported_backend_auth", "pw",
+		"{\"backend_auth\":{\"type\":\"kerberos\"}}", log) &&
+		log.find("mysql_users backend entry for 'unsupported_backend_auth' has an invalid 'backend_auth'") != std::string::npos &&
+		log.find("type_unsupported") != std::string::npos,
+		"loading a backend row with an unsupported backend_auth type logs a warning naming the user");
+	log.clear();
+	ok(add_backend_user_capturing_stderr("plain_backend", "pw", "{\"foo\":1}", log) &&
+		log.find("invalid 'backend_auth'") == std::string::npos,
+		"loading a backend row without backend_auth logs no such warning");
 }
 
 static void test_resolver_rejects_malformed_loaded_backend_attributes() {
@@ -198,7 +211,7 @@ static void test_rejected_backend_policy_does_not_emit_iam_password_warning() {
 }
 
 int main() {
-	plan(32);
+	plan(34);
 	test_init_minimal();
 	test_init_auth();
 
@@ -210,6 +223,7 @@ int main() {
 	test_diagnostics_do_not_leak_attributes();
 	test_resolver_uses_backend_account_only();
 	test_resolver_falls_back_to_password_for_rowless_backend_account();
+	test_malformed_backend_auth_is_reported_at_load();
 	test_resolver_rejects_malformed_loaded_backend_attributes();
 	test_rejected_backend_policy_does_not_emit_iam_password_warning();
 

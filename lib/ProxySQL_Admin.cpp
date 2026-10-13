@@ -12,6 +12,7 @@ using json = nlohmann::json;
 #include <cctype>
 #include <vector>       // std::vector
 #include <unordered_set>
+#include <optional>
 #include "prometheus/exposer.h"
 #include "prometheus/counter.h"
 #include "openssl/ssl.h"
@@ -256,97 +257,68 @@ static bool save_registered_server_module_runtime_tables(SQLite3DB* db,
 #endif
 }
 
-/**
- * @brief Prepares the runtime installation of a LOAD ... SERVERS TO RUNTIME.
- *
- * A server module may veto its own (plugin) tables. A veto never blocks the
- * core tables: the module keeps its previous configuration, the core
- * configuration is installed through a fresh transaction, and @p veto holds
- * the module's reason for the caller to report. Only internal errors return
- * false.
- */
-static bool prepare_registered_server_module_runtime(SQLite3DB* db,
-	ProxySQL_ServerProtocol protocol, const SQLite3_result* core_rows,
-	const ProxySQL_ServerBuiltinTopologyInputs& topology_inputs,
-	ProxySQL_ServerRuntimeInstallTransaction& transaction,
-	ProxySQL_ServerRuntimeSnapshot& installed_snapshot,
-	bool& commit_module, std::string& veto) {
-	commit_module = true;
-	veto.clear();
-	const int expected_core_columns = protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11;
-	if (core_rows == nullptr || core_rows->columns != expected_core_columns) {
-		veto = "Malformed core server snapshot while preparing plugin runtime";
-		proxy_error("%s\n", veto.c_str());
-		return false;
-	}
 #ifdef PROXYSQL40
+/** @brief What a LOAD ... SERVERS TO RUNTIME publishes to server modules and controllers. */
+struct server_runtime_publication_t {
 	ProxySQL_ServerModuleSnapshot snapshot {};
+	bool notify_module {true};
+};
+
+/**
+ * @brief Collects the publication of a LOAD before the HGM takes the incoming resultsets.
+ * @details Never fails. When the built-in topology or a module table cannot be
+ *   read, the error is logged and the module is not notified: it keeps its
+ *   previous configuration. Discovery controllers are notified regardless.
+ *   When the module will be notified, its tables are recorded here as the
+ *   loaded copy: that copy is hashed into the *_servers_v2 Cluster checksum by
+ *   the HGM commit that follows, and is what peers are served
+ *   (ProxySQL_ServerModuleCluster.h), so it must be recorded before the commit.
+ */
+static server_runtime_publication_t collect_server_runtime_publication(SQLite3DB* db,
+	ProxySQL_ServerProtocol protocol, const SQLite3_result& core_rows,
+	const ProxySQL_ServerBuiltinTopologyInputs& topology_inputs) {
+	server_runtime_publication_t publication {};
+	publication.snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, 0, core_rows);
 	std::string error;
-	snapshot.runtime.protocol = protocol;
-	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *core_rows);
 	if (!proxysql_collect_active_builtin_server_topology(*db, protocol, topology_inputs,
-		snapshot.runtime.topology_hostgroups, error)) {
-		veto = "Unable to collect built-in topology claims: " + error;
-		proxy_error("%s\n", veto.c_str());
-		return false;
+		publication.snapshot.runtime.topology_hostgroups, error)) {
+		proxy_error("Unable to collect built-in topology, server modules keep their previous configuration: %s\n",
+			error.c_str());
+		// Keep the last complete topology rather than a partial read.
+		publication.snapshot.runtime.topology_hostgroups = proxysql_active_server_topology_hostgroups(protocol);
+		publication.notify_module = false;
+		return publication;
 	}
-	// The tables being installed. Recorded as the loaded copy once the plugin
-	// accepts them: it is part of the *_servers_v2 Cluster checksum and is what
-	// peers are served (ProxySQL_ServerModuleCluster.h).
 	std::vector<ProxySQL_ServerModuleClusterTable> loaded_tables;
 	for (const auto& table : proxysql_active_server_module_tables(protocol)) {
-		char* error = nullptr;
+		char* sqlite_error = nullptr;
 		int columns = 0;
 		int affected_rows = 0;
 		SQLite3_result* rows = nullptr;
 		const std::string sql = "SELECT * FROM main." + table.table_name + " ORDER BY " + table.order_by;
-		db->execute_statement(sql.c_str(), &error, &columns, &affected_rows, &rows);
-		if (error != nullptr) {
-			veto = "Error preparing plugin server table " + table.table_name + ": " + error;
-			proxy_error("%s\n", veto.c_str());
-			free(error);
+		db->execute_statement(sql.c_str(), &sqlite_error, &columns, &affected_rows, &rows);
+		if (sqlite_error != nullptr) {
+			proxy_error("Error reading plugin server table %s, the server module keeps its previous configuration: %s\n",
+				table.table_name.c_str(), sqlite_error);
+			free(sqlite_error);
 			if (rows != nullptr) delete rows;
-			return false;
+			publication.notify_module = false;
+			publication.snapshot.module_tables.clear();
+			return publication;
 		}
 		loaded_tables.push_back({table.table_name, table.runtime_table_name, table.order_by,
 			rows != nullptr ? std::make_unique<SQLite3_result>(rows) : nullptr});
-		snapshot.module_tables.push_back({table.table_name, std::unique_ptr<SQLite3_result>(rows)});
-	}
-	std::vector<ProxySQL_ServerHostgroupClaim> claims;
-	if (!transaction.prepare(snapshot, claims, error)) {
-		// Veto of the plugin tables only. The failed prepare aborted the
-		// transaction: install the core tables through a new one, without the
-		// module, which keeps its previous configuration (and the loaded copy
-		// stays the last accepted one).
-		proxy_warning("Server module rejected its tables, keeping its previous configuration: %s\n",
-			error.c_str());
-		veto = error;
-		std::string transaction_error;
-		transaction = ProxySQL_ServerRuntimeInstallTransaction(protocol, transaction_error);
-		if (!transaction) {
-			proxy_error("Unable to start server runtime installation: %s\n", transaction_error.c_str());
-			return false;
-		}
-		installed_snapshot = std::move(snapshot.runtime);
-		installed_snapshot.generation = transaction.generation();
-		commit_module = false;
-		return true;
+		publication.snapshot.module_tables.push_back({table.table_name, std::unique_ptr<SQLite3_result>(rows)});
 	}
 	proxysql_server_module_cluster_set_loaded_tables(protocol, std::move(loaded_tables));
-	installed_snapshot = std::move(snapshot.runtime);
-	return true;
-#else
-	(void)db;
-	(void)topology_inputs;
-	installed_snapshot = proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *core_rows);
-	std::string error;
-	if (!transaction.prepare(installed_snapshot, error)) {
-		proxy_error("Unable to prepare server runtime installation: %s\n", error.c_str());
-		return false;
-	}
-	return true;
-#endif
+	return publication;
 }
+
+/** @brief Publishes a LOAD already committed to the HGM. Never fails. */
+static void publish_server_runtime(server_runtime_publication_t publication) {
+	proxysql_publish_server_runtime(std::move(publication.snapshot), publication.notify_module);
+}
+#endif /* PROXYSQL40 */
 
 
 static int round_intv_to_time_interval(const char* name, int _intv) {
@@ -6917,10 +6889,7 @@ bool plugin_config_publish(void* opaque, ProxySQL_PluginConfigStage stage, SQLit
 	if (stage == ProxySQL_PluginConfigStage::servers) {
 		incoming_servers_t incoming = plugin_server_state(db, error);
 		if (!error.empty()) return false;
-		if (!admin->load_mysql_servers_to_runtime(incoming, {}, {}, false)) {
-			error = "MySQL hostgroup manager rejected staged servers";
-			return false;
-		}
+		admin->load_mysql_servers_to_runtime(incoming, {}, {}, false);
 		return true;
 	}
 	if (stage == ProxySQL_PluginConfigStage::users) {
@@ -6971,10 +6940,7 @@ bool plugin_config_restore(void* opaque, ProxySQL_PluginConfigStage stage,
 	const ProxySQL_PluginMysqlRuntimeSnapshot& snapshot, std::string& error) {
 	auto* admin = static_cast<ProxySQL_Admin*>(opaque);
 	if (stage == ProxySQL_PluginConfigStage::servers) {
-		if (!admin->load_mysql_servers_to_runtime(snapshot_server_state(snapshot), {}, {}, false)) {
-			error = "MySQL hostgroup manager rejected the server snapshot";
-			return false;
-		}
+		admin->load_mysql_servers_to_runtime(snapshot_server_state(snapshot), {}, {}, false);
 	} else if (stage == ProxySQL_PluginConfigStage::users) {
 		if (!admin->init_users_under_lock(unique_ptr<SQLite3_result>(clone_result(snapshot.users)), error,
 			&snapshot.users_checksum)) return false;
@@ -9249,18 +9215,20 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 	resultset=NULL;
 }
 
-bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
+void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
 	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
 	const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock,
 	bool emit_runtime_install) {
 	// make sure that the caller has called mysql_servers_wrlock()
-	servers_load_install_failed[0] = false;
-	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
-	installed_snapshot.protocol = ProxySQL_ServerProtocol::mysql;
-	ProxySQL_ServerRuntimeInstallTransaction runtime_install;
-	bool runtime_install_prepared = false;
-	bool commit_server_module = true;
-	servers_load_veto[0].clear();
+#ifdef PROXYSQL40
+	// Lock order: Admin servers lock -> runtime install -> HGM. Taken before the
+	// HGM is staged so the publication below follows this installation.
+	std::optional<ProxySQL_ServerRuntimeInstallLock> install_lock;
+	if (emit_runtime_install) install_lock.emplace(ProxySQL_ServerProtocol::mysql);
+	std::optional<server_runtime_publication_t> publication;
+#else
+	(void)emit_runtime_install;
+#endif
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
@@ -9274,10 +9242,10 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result *resultset_aws_rds_bgd=NULL;
 	SQLite3_result *resultset_hostgroup_attributes=NULL;
 	SQLite3_result *resultset_mysql_servers_ssl_params=NULL;
-	std::string first_error;
+	// An SQLite error is logged and the table is skipped, as in v3.0.11: the
+	// LOAD itself never fails.
 	auto consume_error = [&](const char* failed_query) {
 		if (error == nullptr) return false;
-		if (first_error.empty()) first_error = error;
 		proxy_error("Error on %s : %s\n", failed_query, error);
 		free(error);
 		error = nullptr;
@@ -9305,40 +9273,18 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	//MyHGH->wrlock();
 	if (consume_error(query)) {
 	} else {
-		if (emit_runtime_install) {
-			std::string install_error;
-			runtime_install = ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerProtocol::mysql, install_error);
+#ifdef PROXYSQL40
+		if (install_lock && resultset_servers != nullptr) {
 			ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
 			topology_inputs.mysql_replication = incoming_replication_hostgroups;
 			topology_inputs.mysql_group_replication = incoming_group_replication_hostgroups;
 			topology_inputs.mysql_galera = incoming_galera_hostgroups;
 			topology_inputs.mysql_aurora = incoming_aurora_hostgroups;
 			topology_inputs.mysql_rds_blue_green = incoming_aws_rds_bgd_hostgroups;
-			// Every failure below must leave a reason in 'servers_load_veto':
-			// it is the only channel the Admin session and the Cluster puller
-			// use to tell "installed" from "silently not installed".
-			if (!runtime_install) {
-				if (servers_load_veto[0].empty()) {
-					servers_load_veto[0] = install_error.empty()
-						? std::string("Unable to create the MySQL server runtime installation")
-						: install_error;
-				}
-				proxy_error("%s\n", servers_load_veto[0].c_str());
-				return false;
-			}
-			if (!prepare_registered_server_module_runtime(admindb,
-				ProxySQL_ServerProtocol::mysql, resultset_servers, topology_inputs,
-				runtime_install, installed_snapshot, commit_server_module,
-				servers_load_veto[0])) {
-				if (servers_load_veto[0].empty()) {
-					servers_load_veto[0] = "Unable to prepare the MySQL server runtime installation";
-				}
-				servers_load_install_failed[0] = true;
-				proxy_error("%s\n", servers_load_veto[0].c_str());
-				return false;
-			}
+			publication = collect_server_runtime_publication(admindb, ProxySQL_ServerProtocol::mysql,
+				*resultset_servers, topology_inputs);
 		}
-		runtime_install_prepared = emit_runtime_install;
+#endif
 		MyHGM->servers_add(resultset_servers);
 	}
 	resultset=NULL;
@@ -9507,20 +9453,14 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	}
 
 	// commit all the changes
-	const bool committed = MyHGM->commit(
+	MyHGM->commit(
 		{ runtime_mysql_servers, peer_runtime_mysql_server },
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
 		false, true, hgm_acquire_lock
 	);
-	if (runtime_install_prepared && committed &&
-		!runtime_install.commit(std::move(installed_snapshot), commit_server_module)) {
-		const char* install_error = "Unable to commit MySQL server runtime installation transaction";
-		proxy_error("%s\n", install_error);
-		if (first_error.empty()) first_error = install_error;
-		// A module veto is advisory when the core-only installation succeeds.
-		// On commit failure, callers need the installation error instead.
-		servers_load_veto[0] = install_error;
-	}
+#ifdef PROXYSQL40
+	if (publication) publish_server_runtime(std::move(*publication));
+#endif
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);
@@ -9554,36 +9494,21 @@ bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (resultset_mysql_servers_ssl_params) {
 		resultset_mysql_servers_ssl_params = NULL;
 	}
-	if (!first_error.empty() && servers_load_veto[0].empty()) servers_load_veto[0] = first_error;
-	if (!first_error.empty() || !committed) {
-		// A real installation failure (HGM commit or install transaction),
-		// never an advisory module veto.
-		servers_load_install_failed[0] = true;
-	}
-	// A false 'committed' must still carry a reason, otherwise callers that
-	// report on 'servers_load_veto' cannot tell a real failure from a clean load.
-	if (!committed && servers_load_veto[0].empty()) {
-		servers_load_veto[0] = "MySQL server runtime was not committed";
-	}
-	return first_error.empty() && committed;
 }
 
-void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& servers,
- const runtime_pgsql_servers_checksum_t& runtime_checksum, const pgsql_servers_v2_checksum_t& config_checksum,
- bool emit_runtime_install) {
- (void)load_pgsql_servers_to_runtime_checked(servers,runtime_checksum,config_checksum,emit_runtime_install);
-}
-bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_servers_t& incoming_pgsql_servers,
- const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
- bool emit_runtime_install) {
+void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
+	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
+	bool emit_runtime_install) {
 	// make sure that the caller has called pgsql_servers_wrlock()
-	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
-	installed_snapshot.protocol = ProxySQL_ServerProtocol::pgsql;
-	ProxySQL_ServerRuntimeInstallTransaction runtime_install;
-	bool runtime_install_prepared = false;
-	bool commit_server_module = true;
-	servers_load_veto[1].clear();
-	servers_load_install_failed[1] = false;
+#ifdef PROXYSQL40
+	// Lock order: Admin servers lock -> runtime install -> HGM. Taken before the
+	// HGM is staged so the publication below follows this installation.
+	std::optional<ProxySQL_ServerRuntimeInstallLock> install_lock;
+	if (emit_runtime_install) install_lock.emplace(ProxySQL_ServerProtocol::pgsql);
+	std::optional<server_runtime_publication_t> publication;
+#else
+	(void)emit_runtime_install;
+#endif
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
@@ -9592,6 +9517,16 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	std::unique_ptr<SQLite3_result> local_resultset_servers;
 	SQLite3_result* resultset_replication = NULL;
 	SQLite3_result* resultset_hostgroup_attributes = NULL;
+	// An SQLite error is logged and the table is skipped, as in v3.0.11: the
+	// LOAD itself never fails. Freeing and resetting 'error' keeps a failed
+	// read from leaking and from skipping a later table that did not fail.
+	auto consume_error = [&](const char* failed_query) {
+		if (error == nullptr) return false;
+		proxy_error("Error on %s : %s\n", failed_query, error);
+		free(error);
+		error = nullptr;
+		return true;
+	};
 
 	SQLite3_result* runtime_pgsql_servers = incoming_pgsql_servers.runtime_pgsql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_pgsql_servers.incoming_replication_hostgroups;
@@ -9608,41 +9543,17 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 		resultset_servers = runtime_pgsql_servers;
 	}
 	//MyHGH->wrlock();
-	if (error) {
-        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	}
 	else {
-		if (emit_runtime_install) {
-			std::string install_error;
-			runtime_install = ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerProtocol::pgsql, install_error);
+#ifdef PROXYSQL40
+		if (install_lock && resultset_servers != nullptr) {
 			ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
 			topology_inputs.pgsql_replication = incoming_replication_hostgroups;
-			// Every failure below must leave a reason in 'servers_load_veto':
-			// it is the only channel the Admin session and the Cluster puller
-			// use to tell "installed" from "silently not installed".
-			if (!runtime_install) {
-				if (servers_load_veto[1].empty()) {
-					servers_load_veto[1] = install_error.empty()
-						? std::string("Unable to create the PostgreSQL server runtime installation")
-						: install_error;
-				}
-				proxy_error("%s\n", servers_load_veto[1].c_str());
-				return false;
-			}
-			if (!prepare_registered_server_module_runtime(admindb,
-				ProxySQL_ServerProtocol::pgsql, resultset_servers, topology_inputs,
-				runtime_install, installed_snapshot, commit_server_module,
-				servers_load_veto[1])) {
-				if (servers_load_veto[1].empty()) {
-					servers_load_veto[1] = "Unable to prepare the PostgreSQL server runtime installation";
-				}
-				servers_load_install_failed[1] = true;
-				proxy_error("%s\n", servers_load_veto[1].c_str());
-				return false;
-			}
+			publication = collect_server_runtime_publication(admindb, ProxySQL_ServerProtocol::pgsql,
+				*resultset_servers, topology_inputs);
 		}
-		runtime_install_prepared = emit_runtime_install;
+#endif
 		PgHGM->servers_add(resultset_servers);
 	}
 	resultset = NULL;
@@ -9650,9 +9561,7 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	query = (char*)"SELECT a.* FROM pgsql_replication_hostgroups a JOIN pgsql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
-	if (error) {
-        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	}
 	else {
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
@@ -9672,9 +9581,7 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 		resultset_replication = incoming_replication_hostgroups;
 	}
 
-	if (error) {
-        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	}
 	else {
 		// Pass the resultset to PgHGM
@@ -9693,9 +9600,7 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	else {
 		resultset_hostgroup_attributes = incoming_hostgroup_attributes;
 	}
-	if (error) {
-        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	}
 	else {
 		// Pass the resultset to PgHGM
@@ -9711,26 +9616,21 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	} else {
 		resultset_pgsql_servers_ssl_params = incoming_pgsql_servers.incoming_pgsql_servers_ssl_params;
 	}
-	if (error) {
-        if (servers_load_veto[1].empty()) servers_load_veto[1] = error;
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		// Pass the resultset to PgHGM
 		PgHGM->save_incoming_pgsql_table(resultset_pgsql_servers_ssl_params, "pgsql_servers_ssl_params");
 	}
 
 	// commit all the changes
-	const bool runtime_hgm_committed = PgHGM->commit(
+	PgHGM->commit(
 		{ runtime_pgsql_servers, peer_runtime_pgsql_server },
 		{ incoming_pgsql_servers_v2, peer_pgsql_server_v2 },
 		false, true
 	);
- if (runtime_install_prepared && runtime_hgm_committed &&
-     !runtime_install.commit(std::move(installed_snapshot), commit_server_module)) {
-  servers_load_install_failed[1] = true;
-  servers_load_veto[1] = "Unable to commit PostgreSQL server runtime installation transaction";
-  proxy_error("%s\n",servers_load_veto[1].c_str());
- }
+#ifdef PROXYSQL40
+	if (publication) publish_server_runtime(std::move(*publication));
+#endif
 
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_pgsql_servers_runtime_to_database(true);
@@ -9745,22 +9645,6 @@ bool ProxySQL_Admin::load_pgsql_servers_to_runtime_checked(const incoming_pgsql_
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;
 	}
-	// A false 'runtime_hgm_committed' must still carry a reason, otherwise
-	// callers that report on 'servers_load_veto' cannot tell a real failure
-	// from a clean load.
-	if (!runtime_hgm_committed && servers_load_veto[1].empty()) {
-		servers_load_veto[1] = "PostgreSQL server runtime was not committed";
-		servers_load_install_failed[1] = true;
-	}
-	// Return-value contract, as pinned by server_runtime_load_unit-t (the
-	// loader must report FALSE when the core installation itself failed, e.g.
-	// a rejected runtime-install commit): the bool gates BOTH the HGM commit
-	// and the veto channel, exactly as it did before the
-	// servers_load_install_failed signal existed. Callers distinguish a real
-	// installation failure from an advisory module veto through
-	// 'servers_load_install_failed' instead of re-deriving it from the veto
-	// text.
-	return runtime_hgm_committed && servers_load_veto[1].empty();
 }
 
 char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {

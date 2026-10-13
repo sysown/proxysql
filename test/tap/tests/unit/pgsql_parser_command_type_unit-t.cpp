@@ -19,6 +19,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Query_Processor.h"
+#include "Query_Processor_ParserSQL.h"
 #include "sql_parser/common.h"
 
 #include <cstring>
@@ -117,14 +118,15 @@ static void test_parser_with_digests() {
 		ok(got == c.expected, "parser=1 digests=1: '%s' -> %s (got %s, stmt_type %d)",
 			c.sql, cmd_name(c.expected), cmd_name(got), stmt_type);
 	}
-	// The fix must be exercised through the ParserSQL AST path, not the fallback:
-	// the adapter itself still reports SELECT for these statements.
+	// The classification is exercised through the digest text: the tokenizer turns
+	// PostgreSQL arguments into '?' placeholders that ParserSQL cannot parse, so the
+	// refinement must promote a plain SELECT rather than trust its UNKNOWN. The
+	// adapter still reports SELECT for these statements on the raw query.
 	for (const char* sql : {"SELECT pg_cancel_backend(1234)", "SELECT pg_terminate_backend($1)",
 		"WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d"}) {
-		int stmt_type = -1;
-		classify(sql, &stmt_type);
-		ok(stmt_type == static_cast<int>(sql_parser::StmtType::SELECT),
-			"ParserSQL reports StmtType::SELECT for '%s' (got %d)", sql, stmt_type);
+		const enum PGSQL_QUERY_command direct = parsersql_command_type_pgsql(sql, std::strlen(sql));
+		ok(direct == PGSQL_QUERY_SELECT,
+			"ParserSQL reports SELECT for '%s' (got %s)", sql, cmd_name(direct));
 	}
 }
 

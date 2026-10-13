@@ -54,10 +54,6 @@ struct ProxySQL_ServerDesiredSet {
 	ProxySQL_ServerPersistence persistence { ProxySQL_ServerPersistence::runtime_only };
 };
 
-// Returns the next generation that a successful transaction would install.
-// This is an observation seam; callers must acquire a transaction rather than
-// using the value to tag a candidate themselves.
-uint64_t proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol protocol);
 ProxySQL_ServerRuntimeSnapshot proxysql_server_runtime_snapshot_from_rows(
 	ProxySQL_ServerProtocol protocol, uint64_t generation, const SQLite3_result& rows);
 
@@ -111,6 +107,10 @@ private:
 
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_claims(
 	ProxySQL_ServerProtocol protocol);
+// Built-in topology hostgroups of the last published runtime snapshot (empty
+// without an active plugin manager). Used when a new topology cannot be read,
+// so a partial read never replaces the last complete one.
+std::vector<uint32_t> proxysql_active_server_topology_hostgroups(ProxySQL_ServerProtocol protocol);
 uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol);
 // Caller holds the Admin SQL mutex. Publishes policy claims and a fresh runtime
 // generation from the retained configuration snapshot, never from HGM health.
@@ -150,11 +150,16 @@ bool proxysql_collect_active_builtin_server_topology(ProxySQL_ServerProtocol pro
 	const ProxySQL_ServerBuiltinTopologyInputs& inputs,
 	std::vector<uint32_t>& hostgroups, std::string& error);
 
+#ifdef PROXYSQL40
+// Returns the generation the next server runtime publication will carry.
+// This is an observation seam for tests.
+uint64_t proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol protocol);
+
 // Holds a protocol's runtime-install mutex for the current thread ahead of
 // other locks. Lock order is: Admin servers lock -> runtime install -> HGM.
 // Paths that must lock the Hostgroups Manager before loading servers (plugin
-// MySQL configuration publication) take this first; a transaction created on
-// the same thread while it is held reuses it instead of locking again.
+// MySQL configuration publication) take this first. The lock is reentrant per
+// thread: a nested holder on the same thread does not lock again.
 class ProxySQL_ServerRuntimeInstallLock {
 public:
 	explicit ProxySQL_ServerRuntimeInstallLock(ProxySQL_ServerProtocol protocol);
@@ -166,28 +171,22 @@ private:
 	int index_ {-1};
 };
 
-class ProxySQL_ServerRuntimeInstallTransaction {
-public:
-	ProxySQL_ServerRuntimeInstallTransaction() noexcept;
-	ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerProtocol protocol, std::string& error);
-	~ProxySQL_ServerRuntimeInstallTransaction();
-	ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerRuntimeInstallTransaction&&) noexcept;
-	ProxySQL_ServerRuntimeInstallTransaction& operator=(ProxySQL_ServerRuntimeInstallTransaction&&) noexcept;
-	ProxySQL_ServerRuntimeInstallTransaction(const ProxySQL_ServerRuntimeInstallTransaction&) = delete;
-	ProxySQL_ServerRuntimeInstallTransaction& operator=(const ProxySQL_ServerRuntimeInstallTransaction&) = delete;
+// Advances and returns the protocol's runtime generation. The caller holds the
+// protocol's ProxySQL_ServerRuntimeInstallLock.
+uint64_t proxysql_advance_server_runtime_generation(ProxySQL_ServerProtocol protocol);
 
-	explicit operator bool() const noexcept;
-	uint64_t generation() const noexcept;
-	bool prepare(ProxySQL_ServerRuntimeSnapshot& snapshot, std::string& error);
-	bool prepare(ProxySQL_ServerModuleSnapshot& snapshot,
-		std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
-	bool commit(ProxySQL_ServerRuntimeSnapshot snapshot, bool commit_affiliated_module = true);
-	void abort() noexcept;
-
-private:
-	struct Impl;
-	std::unique_ptr<Impl> impl_;
-};
+// Publishes a server configuration that core has already installed in the
+// Hostgroups Manager. Takes the install lock, tags the snapshot with a new
+// generation and notifies the server module (when notify_module is true) and
+// the discovery controller. Never fails: a module observes the installation
+// but cannot reject it. With notify_module false only the module's
+// runtime_installed callback is skipped: the legacy (ABI-14) callback and the
+// controller are still notified, and the module's previous hostgroup claims
+// are kept minus any that now overlap the installed topology or managed
+// discovery. Returns the published generation.
+uint64_t proxysql_publish_server_runtime(ProxySQL_ServerModuleSnapshot snapshot,
+	bool notify_module);
+#endif
 
 struct ProxySQL_ServerModuleHooks {
 	// Keep this ABI-14 prefix immutable: retained modules compiled against the
@@ -200,9 +199,19 @@ struct ProxySQL_ServerModuleHooks {
 	// appended callback protocol.  Core never reads beyond the ABI-14 prefix for
 	// legacy modules, so frozen DSOs remain valid.
 	std::vector<ProxySQL_ServerModuleTable> tables;
-	bool (*prepare_runtime)(void *, const ProxySQL_ServerModuleSnapshot&,
-		std::vector<ProxySQL_ServerHostgroupClaim>&, std::string&) { nullptr };
-	void (*commit_runtime)(void *, uint64_t) { nullptr };
+	// This appended tail replaced the ABI-15 prepare_runtime/commit_runtime pair
+	// in place, without a layout-version bump, on purpose (issue #6448): ABI 15
+	// never shipped in a release (v4.0.11 is ABI 5) and no plugin in this tree
+	// used that pair, so there is no compiled module whose slots could be
+	// misread. Do not add a compatibility shim for the removed pair.
+	//
+	// Called after core has installed a LOAD ... SERVERS TO RUNTIME. The module
+	// adopts its tables from the snapshot and reports the writer/reader
+	// hostgroups it owns. It is a notification: the module cannot reject the
+	// configuration. Core drops (and logs) a claim that is invalid or overlaps
+	// built-in topology, managed discovery or another claim.
+	void (*runtime_installed)(void *, const ProxySQL_ServerModuleSnapshot&,
+		std::vector<ProxySQL_ServerHostgroupClaim>&) { nullptr };
 	SQLite3_result* (*runtime_table_snapshot)(void *, const char*) { nullptr };
 	void (*shutdown)(void *) { nullptr };
 
@@ -241,6 +250,8 @@ extern void (*proxysql_servers_v2_refresh_exception_for_test)(int protocol, int 
 extern void (*proxysql_server_discovery_after_final_revalidation_for_test)(ProxySQL_ServerProtocol);
 extern void (*proxysql_server_reconcile_after_hgm_snapshot_for_test)(ProxySQL_ServerProtocol);
 extern void (*proxysql_server_discovery_retirement_attempt_for_test)(ProxySQL_ServerProtocol);
+// Called by proxysql_publish_server_runtime() right before it takes the install lock.
+extern void (*proxysql_server_runtime_publication_before_lock_for_test)(ProxySQL_ServerProtocol);
 #endif
 
 #endif /* PROXYSQL_SERVER_DISCOVERY_H */
