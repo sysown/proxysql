@@ -473,6 +473,14 @@ public:
 		return error_info.code;
 	}
 
+	// PostgreSQL refused a kept statement because its result columns changed since it was prepared
+	// ("cached plan must not change result type"). Only the routine tells it from any other 0A000.
+	inline
+	bool is_stale_stmt_error() const {
+		return error_info.code == PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED && error_info.ext_info &&
+			error_info.ext_info->source_function == "RevalidateCachedQuery";
+	}
+
 	inline
 	std::string get_error_code_with_message() const {
 		return ("[" + std::string(error_info.sqlstate) + "] " + error_info.message);

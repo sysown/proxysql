@@ -2613,6 +2613,9 @@ void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, ui
 	std::string severity = "ERROR";
 	std::string sqlstate = "08000"; // connection_exception default
 	std::string message  = "native handshake error";
+	if (error_info.ext_info) {
+		error_info.ext_info->source_function.clear();
+	}
 	uint32_t i = 0;
 	while (i < len && payload[i] != 0) {
 		char ftype = (char)payload[i++];
@@ -2627,6 +2630,12 @@ void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, ui
 				break;
 			case 'C': sqlstate = val; break;
 			case 'M': message = val; break;
+			case 'R': // Routine: what is_stale_stmt_error() checks
+				if (error_info.ext_info == nullptr) {
+					error_info.ext_info = new PgSQL_ErrorInfo_Ext();
+				}
+				error_info.ext_info->source_function = val;
+				break;
 			default: break;
 		}
 	}

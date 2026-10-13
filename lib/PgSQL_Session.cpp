@@ -42,6 +42,25 @@ const char* PROXYSQL_PS_PREFIX = "proxysql_ps_";
 using std::function;
 using std::vector;
 
+// The backend refused statement s that ProxySQL keeps prepared on it: it no longer has it (26000), or
+// its result columns changed since it was prepared (a schema change). Either way the connection has
+// to prepare it again.
+// A client running s under another search_path than s was prepared under gets the second error from
+// PostgreSQL too, every time. s is still right for the clients on its own path, so it stays: the
+// client's current path must give s's key. Hashed only here, on the error.
+// ponytail: the refused one is never closed, it stays on the backend unused. It still counts toward
+// max_stmts_per_connection, so the reset on return to the pool frees it once too many pile up.
+// Send it a Close instead if those resets ever show up.
+static bool backend_stmt_is_stale(const PgSQL_Connection* conn, const PgSQL_Connection* client,
+	const PgSQL_STMT_Global_info* s) {
+	if (conn->get_error_code() == PGSQL_ERROR_CODES::ERRCODE_INVALID_SQL_STATEMENT_NAME) {
+		return true;
+	}
+	return s && conn->is_stale_stmt_error() && PgSQL_STMT_Local::compute_hash(client->userinfo->username,
+		client->userinfo->dbname, s->query, s->query_length, s->parse_param_types,
+		client->var_hash[PGSQL_SEARCH_PATH]) == s->hash;
+}
+
 /*
 static inline char is_digit(char c) {
 	if (c >= '0' && c <= '9')
@@ -4120,6 +4139,13 @@ handler_again:
 							return handler_ret;
 						}
 					} else {
+						if ((status == PROCESSING_STMT_DESCRIBE || status == PROCESSING_STMT_EXECUTE ||
+							status == PROCESSING_STMT_BIND) &&
+							backend_stmt_is_stale(myconn, client_myds->myconn, CurrentQuery.extended_query_info.stmt_info)) {
+							// The client gets the error; the next use prepares the statement again.
+							myconn->local_stmts->backend_erase(CurrentQuery.extended_query_info.stmt_global_id,
+								myconn->is_stale_stmt_error());
+						}
 						handler_minus1_LogErrorDuringQuery(myconn);
 						if (handler_minus1_HandleErrorCodes(myds, handler_ret)) {
 							if (handler_ret == 0)
@@ -7377,7 +7403,8 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 		client_myds->myconn->userinfo->dbname,
 		parse_data.query_string,
 		strlen(parse_data.query_string) + 1,
-		parse_param_type
+		parse_param_type,
+		client_myds->myconn->var_hash[PGSQL_SEARCH_PATH]
 	);
 	const bool local_hit = local_stmt_info_itr != local_stmts->stmt_name_to_global_info.end() &&
 		local_stmt_info_itr->second && local_stmt_info_itr->second->hash == hash;
@@ -7502,7 +7529,8 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 			client_myds->myconn->userinfo->dbname,
 			(const char*)CurrentQuery.QueryPointer,
 			CurrentQuery.QueryLength,
-			CurrentQuery.extended_query_info.parse_param_types
+			CurrentQuery.extended_query_info.parse_param_types,
+			client_myds->myconn->var_hash[PGSQL_SEARCH_PATH]
 		);
 	}
 
@@ -8589,7 +8617,7 @@ void PgSQL_Session::extq_buffer_message() {
 		const char* user = client_myds->myconn->userinfo->username;
 		const char* db = client_myds->myconn->userinfo->dbname;
 		const uint64_t hash = PgSQL_STMT_Local::compute_hash(user, db, (const char*)CurrentQuery.QueryPointer,
-			CurrentQuery.QueryLength, eqi.parse_param_types);
+			CurrentQuery.QueryLength, eqi.parse_param_types, client_myds->myconn->var_hash[PGSQL_SEARCH_PATH]);
 		std::shared_ptr<const PgSQL_STMT_Global_info>& s = extq_new_stmts[hash];
 		if (!s) {
 			// No backend has prepared this text. It enters the global cache when its ParseComplete
@@ -9052,7 +9080,7 @@ void PgSQL_Session::extq_settle(PgSQL_Data_Stream* myds) {
 			// The connection now holds the statement as proxysql_ps_<parse_id>. A text no backend had
 			// enters the global cache now, and the batch uses the cached statement from here on.
 			const PgSQL_STMT_Global_info* s = e.stmt.get();
-			std::shared_ptr<const PgSQL_STMT_Global_info> reg = GloPgStmt->add_prepared_statement(
+			std::shared_ptr<const PgSQL_STMT_Global_info> reg = GloPgStmt->add_prepared_statement(s->hash,
 				client_myds->myconn->userinfo->username, client_myds->myconn->userinfo->dbname, s->query, s->query_length,
 				Parse_Param_Types(s->parse_param_types), s->first_comment, s->digest_text, s->digest, s->PgQueryCmd);
 			if (s->statement_id == 0) {
@@ -9102,12 +9130,11 @@ void PgSQL_Session::extq_settle(PgSQL_Data_Stream* myds) {
 					}
 				}
 			}
-		} else if (ev.kind != Extq_Kind::PARSE &&
-			myconn->get_error_code() == PGSQL_ERROR_CODES::ERRCODE_INVALID_SQL_STATEMENT_NAME) {
-			// The backend no longer holds a statement ProxySQL prepared there. Forget it, so the next
-			// batch prepares it again instead of failing the same way.
-			proxy_warning("native extq: backend fd=%d lost a prepared statement; it will be prepared again\n", myconn->fd);
-			myconn->local_stmts->backend_erase(e.stmt->statement_id);
+		} else if (ev.kind != Extq_Kind::PARSE && e.stmt && backend_stmt_is_stale(myconn, client_myds->myconn, e.stmt.get())) {
+			// Forget it, so the next batch prepares it again instead of failing the same way.
+			proxy_warning("native extq: backend fd=%d refused a prepared statement (%s); it will be prepared again\n",
+				myconn->fd, myconn->get_error_code_str());
+			myconn->local_stmts->backend_erase(e.stmt->statement_id, myconn->is_stale_stmt_error());
 		}
 		extq_log(e, ev, myds);
 	}
@@ -9462,7 +9489,14 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_E
 bool PgSQL_Session::handler___rc0_PROCESSING_STMT_PREPARE(enum session_status& st, PgSQL_Data_Stream* myds) {
 	thread->status_variables.stvar[st_var_backend_stmt_prepare]++;
 
-	auto stmt_info = GloPgStmt->add_prepared_statement(
+	// An implicit prepare keeps the key the client prepared under: the client may have changed its
+	// search_path since, and a new key would leave its statement missing on this connection for good.
+	const uint64_t hash = (CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_IMPLICIT_PREPARE) ?
+		CurrentQuery.extended_query_info.stmt_info->hash :
+		PgSQL_STMT_Local::compute_hash(client_myds->myconn->userinfo->username, client_myds->myconn->userinfo->dbname,
+			(const char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength, CurrentQuery.extended_query_info.parse_param_types,
+			client_myds->myconn->var_hash[PGSQL_SEARCH_PATH]);
+	auto stmt_info = GloPgStmt->add_prepared_statement(hash,
 		client_myds->myconn->userinfo->username,
 		client_myds->myconn->userinfo->dbname,
 		(const char*)CurrentQuery.QueryPointer,
