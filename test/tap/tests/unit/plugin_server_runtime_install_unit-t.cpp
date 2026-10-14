@@ -148,9 +148,10 @@ int main() {
 	ok(second_published.load(std::memory_order_acquire),
 		"the waiting publication completes once the install lock is released");
 
-	// A controller callback may publish again on the same thread (the install
-	// lock is reentrant). The outer, older publication must not overwrite the
-	// nested, newer one when it completes.
+	// Stale-snapshot rejection: a snapshot whose generation is older than the
+	// installed one (as an outer publication completing after a nested,
+	// newer one would be) is dropped. This injects the stale snapshot
+	// directly; it does not exercise a reentrant publication from a callback.
 	const size_t before_stale = occurrences(read_log(), "server_controller_runtime");
 	ProxySQL_ServerRuntimeSnapshot stale = runtime_snapshot(ProxySQL_ServerProtocol::mysql);
 	stale.generation = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) - 2;
