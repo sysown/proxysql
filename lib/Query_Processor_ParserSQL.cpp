@@ -461,12 +461,12 @@ static void parsersql_tokenizer_digest(SQP_par_t* qp, const char* query, int que
         qp->digest_text = pgsql_query_digest_and_first_comment(
             query, query_length, &qp->first_comment, buffer, &opts);
     }
-    if (qp->digest_text && *qp->digest_text) {
+    // A query without SQL tokens (only comments or whitespace) keeps its empty
+    // digest text and the hash of "", exactly as in legacy mode, so it is
+    // counted in the digest stats in both modes (#6454).
+    if (qp->digest_text) {
         const size_t length = strnlen(qp->digest_text, max_digest_length);
         qp->digest = SpookyHash::Hash64(qp->digest_text, length, 0);
-    } else {
-        if (qp->digest_text != qp->buf) free(qp->digest_text);
-        qp->digest_text = nullptr;
     }
 }
 
@@ -484,12 +484,13 @@ static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_le
     qp->query_prefix = NULL;
     qp->digest = 0;
     qp->parsersql_stmt_type = -1;
-    if (!query || query_length <= 0) return;
+    if (!query || query_length < 0) return;
     if constexpr (D == Dialect::PostgreSQL) {
         // PgSQL_Query_Info includes the protocol terminator in QueryLength.
-        if (query[query_length - 1] == '\0') --query_length;
+        if (query_length > 0 && query[query_length - 1] == '\0') --query_length;
     }
-    if (query_length == 0) return;
+    // An empty query is digested too, as in legacy mode: it gets digest text ""
+    // and the hash of "" (#6454).
     parsersql_tokenizer_digest<D>(qp, query, query_length);
 }
 
