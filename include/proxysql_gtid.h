@@ -107,8 +107,12 @@ bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
  *
  * Grammar per UUID block: normalize_mysql_uuid of the first ':' component,
  * then one or more TrxId_Interval components separated by ':'. Blocks are
- * separated by ',' or '\n'. Unexpected input -- tagged GTIDs ('uuid:tag:n'),
- * bare garbage, empty components -- fails and leaves @p out untouched.
+ * separated by ',' with optional whitespace around it (",\n" from the
+ * server, ", " once a min_gtid annotation went through the comment parser),
+ * or by a bare '\n'; whitespace around the whole value is ignored.
+ * Unexpected input -- tagged GTIDs ('uuid:tag:n'), bare garbage, empty
+ * components or blocks (',,', a leading or trailing ','), whitespace inside a
+ * block or as the only separator -- fails and leaves @p out untouched.
  *
  * @param s     Raw tracked value; NUL bytes are rejected.
  * @param len   Length of the value.
@@ -146,11 +150,43 @@ bool parse_gtid_set(const char* s, size_t len,
  */
 bool parse_gtid_set_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
                                 uint64_t* trxid);
+/**
+ * @brief Stored by select_session_gtid() in place of a tracked GTID value that
+ *   does not fit the tracking buffer and cannot be reduced (#6465).
+ *
+ * Every GTID parser rejects it, so a causal read that depends on it takes the
+ * same fail-closed path as any other unusable tracked value (writer fallback
+ * or unsatisfiable predicate, #6415) instead of reading on an older GTID. It
+ * must never be forwarded to clients or recorded as an executed GTID.
+ */
+#define SESSION_GTID_UNTRACKABLE "untrackable"
+/** Room for "<36-char uuid>:<20-digit trxid>" plus the terminator. */
+#define SESSION_GTID_REDUCED_MAX_LEN 64
+/**
+ * @brief Reduces a single-UUID MySQL GTID set to "uuid:<highest trxid>", the
+ *   only part of it causal routing uses (#6415).
+ *
+ * @param set      Tracked value, not necessarily NUL-terminated.
+ * @param set_len  Length of @p set.
+ * @param buf      Receives the canonical dashed lowercase uuid, ':' and the
+ *                 highest interval end. SESSION_GTID_REDUCED_MAX_LEN always
+ *                 fits.
+ * @param buf_len  Size of @p buf.
+ * @return false for anything parse_gtid_set() rejects, multi-UUID sets, and
+ *   MariaDB GTIDs; @p buf content is then unspecified.
+ */
+bool reduce_gtid_set_to_highest(const char* set, size_t set_len,
+                                char* buf, size_t buf_len);
 // Selects the GTID of the session's own last transaction from an OK packet:
 // the SESSION_TRACK_GTIDS payload (MySQL), or else the tracked 'last_gtid'
 // system variable (MariaDB). Global positions such as 'gtid_binlog_pos' are
 // never used: they describe the whole server and can be multi-domain lists.
-// `buf` is left untouched on failure, and also when the value is unchanged.
+// A value that does not fit `buf` never leaves the previous GTID in place
+// (#6465): a single-UUID set is stored reduced to "uuid:<highest trxid>"
+// (reduce_gtid_set_to_highest), anything else as SESSION_GTID_UNTRACKABLE.
+// Returns true when `buf` changed. `buf` is left untouched when there is no
+// value, when a MariaDB 'last_gtid' is a list, and when the value is
+// unchanged.
 bool select_session_gtid(
 	const char* session_track_gtids, size_t gtids_len,
 	const char* last_gtid, size_t last_gtid_len,
