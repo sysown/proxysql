@@ -49,7 +49,6 @@ static options legacy_options() {
 static MYSQL_COM_QUERY_command legacy_command(const std::string& sql) {
 	const options opts = legacy_options();
 	SQP_par_t qp {};
-	qp.parsersql_stmt_type = -1;
 	qp.digest_text = mysql_query_digest_and_first_comment(sql.data(), sql.size(), &qp.first_comment, qp.buf, &opts);
 	mysql_thread___query_processor_parser = 0;
 	const MYSQL_COM_QUERY_command cmd = MySQL_Query_Processor::query_parser_command_type(&qp);
@@ -58,10 +57,9 @@ static MYSQL_COM_QUERY_command legacy_command(const std::string& sql) {
 }
 
 /** Command type as computed with query_processor_parser=1 (tokenizer digest + ParserSQL classifier). */
-static MYSQL_COM_QUERY_command parser_command(const std::string& sql, int* stmt_type = nullptr) {
+static MYSQL_COM_QUERY_command parser_command(const std::string& sql) {
 	SQP_par_t qp {};
 	parsersql_digest_init_mysql(&qp, sql.data(), sql.size());
-	if (stmt_type) *stmt_type = qp.parsersql_stmt_type;
 	mysql_thread___query_processor_parser = 1;
 	const MYSQL_COM_QUERY_command cmd = MySQL_Query_Processor::query_parser_command_type(&qp);
 	mysql_thread___query_processor_parser = 0;
@@ -75,7 +73,6 @@ static MYSQL_COM_QUERY_command parser_command(const std::string& sql, int* stmt_
  */
 static MYSQL_COM_QUERY_command prefix_command(const std::string& sql, int parser, bool* prefix_freed) {
 	SQP_par_t qp {};
-	qp.parsersql_stmt_type = -1;
 	qp.query_prefix = strndup(sql.data(), sql.size() < 32 ? sql.size() : 32);
 	mysql_thread___query_processor_parser = parser;
 	const MYSQL_COM_QUERY_command cmd = MySQL_Query_Processor::query_parser_command_type(&qp);

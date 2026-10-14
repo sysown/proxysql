@@ -4,7 +4,7 @@
  *
  * Tests the pure parsing functions:
  *   - pgsql_query_digest_and_first_comment() / pgsql_query_digest_and_first_comment_2()
- *   - pgsql_query_digest_first_stage()
+ *   - pgsql_query_digest_first_stage() / _second_stage() / _and_first_comment_one_it()
  *   - pgsql_query_strip_comments()
  *
  * These tests mirror c_tokenizer_unit-t.cpp but cover PgSQL-specific features:
@@ -1037,11 +1037,63 @@ static void test_digest_buffer_size_helper() {
 }
 
 // ============================================================================
+// 18. keep_comment in the stage and single-iteration digest helpers (issue #6454)
+// ============================================================================
+
+using StageDigestFn = char* (*)(const char*, int, char**, char*);
+
+static char* one_it_digest(const char* q, int q_len, char** fst_cmnt, char* buf) {
+	return pgsql_query_digest_and_first_comment_one_it(const_cast<char*>(q), q_len, fst_cmnt, buf);
+}
+
+/**
+ * @brief Digest 'query' with one of the thread-local-option helpers and keep_comment on.
+ *
+ * The result is written to a heap buffer of exactly pgsql_query_digest_buffer_size()
+ * bytes when 'caller_buffer' is set, or to memory the helper allocates otherwise.
+ */
+static std::string stage_digest_keep_comment(StageDigestFn fn, const char* query, bool caller_buffer) {
+	const bool saved = pgsql_thread___query_digests_keep_comment;
+	pgsql_thread___query_digests_keep_comment = true;
+	options opts {};
+	opts.keep_comment = true;
+	opts.max_query_length = pgsql_thread___query_digests_max_query_length;
+	const int q_len = (int)strlen(query);
+	std::vector<char> buf(pgsql_query_digest_buffer_size(q_len, &opts), '\0');
+	char* first_comment = nullptr;
+	char* r = fn(query, q_len, &first_comment, caller_buffer ? buf.data() : nullptr);
+	std::string ret(r ? r : "(null)");
+	if (r && r != buf.data()) free(r);
+	if (first_comment) free(first_comment);
+	pgsql_thread___query_digests_keep_comment = saved;
+	return ret;
+}
+
+// pgsql_query_digest_first_stage(), _second_stage() and _one_it() sized their result
+// for the query alone; with keep_comment the separator space after a kept comment
+// pushed the last character of the query out of the digest.
+static void test_stage_helpers_keep_comment_no_char_lost() {
+	const struct { const char* name; StageDigestFn fn; } helpers[] = {
+		{"first_stage", pgsql_query_digest_first_stage},
+		{"second_stage", pgsql_query_digest_second_stage},
+		{"one_it", one_it_digest},
+	};
+	for (const auto& h : helpers) {
+		for (bool caller_buffer : {false, true}) {
+			const std::string d = stage_digest_keep_comment(h.fn, "/*a*/LISTEN ch", caller_buffer);
+			ok(d == "/*a*/ listen ch",
+				"#6454 %s keep_comment (%s buffer): no char lost after a kept comment (got '%s')",
+				h.name, caller_buffer ? "caller" : "allocated", d.c_str());
+		}
+	}
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(131 + 14 + 18 + 13);
+	plan(131 + 14 + 18 + 13 + 6);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -1153,6 +1205,9 @@ int main() {
 	test_digest_keep_comment_no_char_lost(); // 5
 	test_digest_unterminated_comment();      // 6
 	test_digest_buffer_size_helper();        // 2
+
+	// 18. keep_comment in the stage / single-iteration helpers (6 tests, issue #6454)
+	test_stage_helpers_keep_comment_no_char_lost(); // 6
 
 	test_cleanup_minimal();
 	return exit_status();

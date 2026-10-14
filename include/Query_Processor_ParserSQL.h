@@ -54,8 +54,8 @@ struct UserVariableQueryDecision {
  * `mysql-query_processor_parser=0`, so ParserSQL is not asked to emit it from
  * its AST. The query is tokenized, normalised (literals replaced, comments
  * handled per `query_digests_*`) and hashed with SpookyHash, exactly as the
- * legacy path does. `parsersql_stmt_type` is left at -1; the command type is
- * computed lazily by query_parser_command_type().
+ * legacy path does. The command type is computed lazily by
+ * query_parser_command_type().
  *
  * Controlled by `mysql-query_processor_parser`.
  *

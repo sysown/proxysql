@@ -436,8 +436,11 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 	// regardless of the order the rows arrive in (the preference is enforced
 	// HERE, not only by the SQL ORDER BY, so it holds for any caller): the first
 	// pass imports '%' rows, the second pass imports the first remaining row
-	// seen for usernames that have none. Skipped accounts are collected and
-	// summarised once, after COMMIT; credential material is never logged. Any
+	// seen for usernames that have none. The hosts of the accounts NOT imported
+	// are collected and summarised once per user, after COMMIT; credential
+	// material is never logged. The second pass ignores '%' rows, which the
+	// first pass already handled: re-reading them used to list '%' itself as a
+	// skipped host and warn for every user with a '%' account (#6427). Any
 	// SQLite error other than the expected dedup skips still rolls the entire
 	// import back and fails startup.
 	std::unordered_map<std::string, std::string> imported_hosts;
@@ -465,11 +468,17 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 					row[BOOT_USER_INFO_T::USER], lengths[BOOT_USER_INFO_T::USER]
 				};
 				const std::string host = host_of(row, lengths);
-				if (pass == 0 && host != "%") {
+				// pass 0 reads only the '%' rows, pass 1 only the others
+				const bool wildcard_host = host == "%";
+				if (pass == 0 ? !wildcard_host : wildcard_host) {
 					continue;
 				}
-				const bool already_imported = imported_hosts.count(username) != 0;
-				if (already_imported) {
+				const auto imported = imported_hosts.find(username);
+				if (imported != imported_hosts.end()) {
+					// A repeated row for the imported account is not another host.
+					if (imported->second == host) {
+						continue;
+					}
 					if (std::find(skipped_hosts[username].begin(),
 							skipped_hosts[username].end(), host) == skipped_hosts[username].end()) {
 						skipped_hosts[username].push_back(host);
@@ -508,8 +517,8 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 			hosts += "'" + host + "'";
 		}
 		proxy_warning(
-			"Bootstrap: user '%s' exists for multiple hosts (%s); imported credentials of '%s'@'%s' only\n",
-			entry.first.c_str(), hosts.c_str(), entry.first.c_str(), imported->second.c_str());
+			"Bootstrap: user '%s' exists for multiple hosts; imported credentials of '%s'@'%s' only, skipped host(s): %s\n",
+			entry.first.c_str(), entry.first.c_str(), imported->second.c_str(), hosts.c_str());
 	}
 
 	return true;
@@ -1148,10 +1157,6 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		proxy_error("Failed to materialize Admin database schemas\n");
 		return false;
 	}
-#ifdef PROXYSQL40
-	if (!verify_registered_server_module_tables_after_upgrade()) return false;
-#endif
-
 	__attach_db(admindb, configdb, (char *)"disk");
 #ifdef PROXYSQL40
 	if (!restore_plugin_config_runtime_state()) {

@@ -5876,6 +5876,25 @@ __get_pkts_from_client:
 	// if client_myds == NULL , it is a mirror
 	//     process mirror only status==WAITING_CLIENT_DATA
 	for (unsigned int j=0; j< ( client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0)  || (mirror==true && status==WAITING_CLIENT_DATA) ;) {
+		// Client pipelining (#5930): a client may send several commands without
+		// waiting for the responses (e.g. MariaDB Connector/J batches). MySQL
+		// processes them sequentially from the socket; ProxySQL used to treat any
+		// packet received while a command was in flight as unexpected and to close
+		// the connection. The packet is now left in PSarrayIN (FIFO) and processed
+		// once the command in flight completes and the session is back to
+		// WAITING_CLIENT_DATA (see handler()). A COM_QUIT received while busy keeps
+		// the previous behaviour: the connection is closed immediately.
+		if (mirror==false && client_pkts_must_be_deferred()) {
+			const PtrSize_t* nxt_pkt = client_myds->PSarrayIN->index(0);
+			const bool is_com_quit = nxt_pkt->size == sizeof(mysql_hdr) + 1
+				&& *(static_cast<unsigned char*>(nxt_pkt->ptr) + sizeof(mysql_hdr)) == _MYSQL_COM_QUIT;
+			if (is_com_quit == false) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+					"Session=%p , client_myds=%p . Deferring %u packet(s) from client while session is in status %d\n",
+					this, client_myds, client_myds->PSarrayIN->len, status);
+				return 0;
+			}
+		}
 		if (mirror==false) {
 			client_myds->PSarrayIN->remove_index(0,&pkt);
 		}
@@ -6749,12 +6768,22 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
  */
 void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
-		if (mysql_thread___update_gtid_from_ok) {
+		// An untrackable value (#6465) stays in mybe->gtid_uuid so causal
+		// routing fails closed on it, but it is not a GTID: it is neither
+		// recorded as executed nor forwarded to the client. The client gets
+		// no GTID rather than the previous one.
+		const bool trackable = strcmp(mybe->gtid_uuid, SESSION_GTID_UNTRACKABLE) != 0;
+		if (trackable && mysql_thread___update_gtid_from_ok) {
 			MyHGM->update_gtid_from_ok(myconn->parent, mybe->gtid_uuid);
 		}
 		if (mysql_thread___client_session_track_gtid) {
-			gtid_hid = current_hostgroup;
-			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
+			if (trackable) {
+				gtid_hid = current_hostgroup;
+				memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
+			} else {
+				gtid_hid = -1;
+				gtid_buf[0] = '\0';
+			}
 		}
 	}
 }
@@ -6854,7 +6883,49 @@ void MySQL_Session::handler_rc0_RefreshActiveTransactions(MySQL_Connection* myco
 	}
 }
 
+bool MySQL_Session::client_pkts_must_be_deferred() const {
+	if (mirror || session_fast_forward != SESSION_FORWARD_TYPE_NONE || client_authenticated == false) {
+		return false;
+	}
+	switch (status) {
+		case WAITING_CLIENT_DATA:
+		case CONNECTING_CLIENT:
+		case FAST_FORWARD:
+		case session_status___NONE:
+			return false;
+		case CONNECTING_SERVER:
+			// see GPFC_Statuses2(): packets of a split first packet in fast forward
+			return previous_status.empty() || previous_status.top() != FAST_FORWARD;
+		default:
+			return true;
+	}
+}
+
+bool MySQL_Session::client_may_pipeline() const {
+	if (mirror || session_fast_forward != SESSION_FORWARD_TYPE_NONE || client_authenticated == false) {
+		return false;
+	}
+	return status == WAITING_CLIENT_DATA || client_pkts_must_be_deferred();
+}
+
 int MySQL_Session::handler() {
+	int rc = handler_pass();
+	// Execute the client packets deferred while a command was in flight (#5930).
+	// Every pass consumes at least one packet: in WAITING_CLIENT_DATA
+	// get_pkts_from_client() never defers.
+	while (
+		rc == 0 && status == WAITING_CLIENT_DATA && mirror == false && killed == false && healthy
+		&& client_myds && client_myds->PSarrayIN && client_myds->PSarrayIN->len
+	) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+			"Session=%p , client_myds=%p . Processing %u deferred packet(s) from client\n",
+			this, client_myds, client_myds->PSarrayIN->len);
+		rc = handler_pass();
+	}
+	return rc;
+}
+
+int MySQL_Session::handler_pass() {
 	int handler_ret = 0;
 	bool prepared_stmt_with_no_params = false;
 	bool wrong_pass=false;
@@ -9844,7 +9915,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					gtid_invalid_warn_ts.compare_exchange_strong(gtid_warn_prev,
 						gtid_warn_now, std::memory_order_relaxed)) {
 					proxy_warning(
-						"GTID causal read: tracked value '%s' is not usable for routing (GTID set, tagged GTID or multi-UUID). %s\n",
+						"GTID causal read: tracked value '%s' is not usable for routing (multi-UUID set, tagged GTID, or a value too long to track). %s\n",
 						gtid_uuid,
 						routed_to_gtid_source ?
 							"Routing the query to the writer hostgroup" :

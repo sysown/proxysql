@@ -6,9 +6,6 @@
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Monitor.hpp"
 #include "proxysql_admin.h"
-#ifdef PROXYSQL40
-#include "ProxySQL_PluginManager.h"
-#endif
 
 #include <cstdlib>
 #include <cstring>
@@ -182,111 +179,11 @@ void test_protocol_loads(SQLite3DB& db, ProxySQL_ServerProtocol protocol) {
 	ok(rows != nullptr && rows->rows_count == 0, "%s empty LOAD removes the runtime server", name);
 }
 
-#if defined(PROXYSQL40) && defined(__linux__)
-/** @brief True if the active module claims are exactly the given pairs. */
-bool module_claims_are(const std::vector<ProxySQL_ServerHostgroupClaim>& expected) {
-	const auto claims = proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql);
-	if (claims.size() != expected.size()) return false;
-	for (size_t i = 0; i < claims.size(); ++i) {
-		if (claims[i].writer_hostgroup != expected[i].writer_hostgroup ||
-			claims[i].reader_hostgroup != expected[i].reader_hostgroup) return false;
-	}
-	return true;
-}
-
-/** @brief The advertised mysql_servers_v2 checksum. */
-std::string servers_v2_checksum() {
-	pthread_mutex_lock(&GloVars.checksum_mutex);
-	const std::string checksum = GloVars.checksums_values.mysql_servers_v2.checksum;
-	pthread_mutex_unlock(&GloVars.checksum_mutex);
-	return checksum;
-}
-
-/**
- * @brief A server module observes a LOAD but can never reject it (#6448).
- * @details A throwing module, invalid or overlapping claims and an unreadable
- *   module table leave the core installation and its publication intact.
- */
-void test_module_cannot_reject(SQLite3DB& db) {
-	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
-	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY", "1", 1);
-	setenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED", "1", 1);
-	std::unique_ptr<ProxySQL_PluginManager> manager;
-	std::string error;
-	if (!proxysql_load_configured_plugins(manager, {PROXYSQL_FAKE_PLUGIN_PATH}, error) ||
-		!proxysql_init_configured_plugins(manager.get(), error))
-		BAIL_OUT("cannot activate the server module fixture: %s", error.c_str());
-	const auto protocol = ProxySQL_ServerProtocol::mysql;
-	db.execute("CREATE TABLE mysql_fake_server_module_claims (writer INTEGER)");
-	db.execute("INSERT INTO mysql_servers VALUES (31,'mysql-load.example',3306,0,'ONLINE',10,0,100,0,0,0,'mysql')");
-
-	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_RUNTIME_THROW", "1", 1);
-	uint64_t generation = proxysql_pending_server_runtime_generation(protocol);
-	load(protocol);
-	ok(runtime_matches(protocol, "mysql-load.example", "10") &&
-		proxysql_pending_server_runtime_generation(protocol) == generation + 1,
-		"MySQL LOAD installs and publishes although the server module throws");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_RUNTIME_THROW");
-
-	// The module tables are part of the mysql_servers_v2 checksum computed by
-	// the HGM commit, so they must be recorded before it: a second LOAD with
-	// nothing changed must report the same checksum as the first.
-	const std::string checksum_before = servers_v2_checksum();
-	db.execute("INSERT INTO mysql_fake_server_module_claims VALUES (77)");
-	load(protocol);
-	const std::string checksum_changed = servers_v2_checksum();
-	load(protocol);
-	ok(checksum_changed != checksum_before && servers_v2_checksum() == checksum_changed,
-		"a module table change is in the mysql_servers_v2 checksum of the LOAD that installs it");
-	db.execute("DELETE FROM mysql_fake_server_module_claims");
-
-	db.execute("INSERT INTO mysql_replication_hostgroups VALUES (31,32,'read_only','')");
-	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM", "1", 1);
-	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_INVALID_CLAIM", "1", 1);
-	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM", "1", 1);
-	db.execute("UPDATE mysql_servers SET weight=11");
-	load(protocol);
-	ok(runtime_matches(protocol, "mysql-load.example", "11"),
-		"MySQL LOAD installs although the server module reports bad claims");
-	ok(module_claims_are({{27, 28}}),
-		"invalid and built-in-overlapping module claims are dropped, the valid one is kept");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_INVALID_CLAIM");
-
-	// Without the claim knob a notified module would report no claims, so the
-	// claims check below can only pass if the module was NOT notified.
-	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM");
-	db.execute("DROP TABLE mysql_fake_server_module_claims");
-	db.execute("UPDATE mysql_servers SET weight=12");
-	generation = proxysql_pending_server_runtime_generation(protocol);
-	load(protocol);
-	ok(runtime_matches(protocol, "mysql-load.example", "12") &&
-		proxysql_pending_server_runtime_generation(protocol) == generation + 1,
-		"MySQL LOAD installs and publishes although a module table cannot be read");
-	ok(module_claims_are({{27, 28}}),
-		"a module that is not notified keeps its previous claims");
-
-	// Retained claims are still checked against the topology this LOAD installs.
-	db.execute("INSERT INTO mysql_replication_hostgroups VALUES (27,28,'read_only','')");
-	load(protocol);
-	ok(module_claims_are({}),
-		"a retained module claim that overlaps a newly installed built-in topology is dropped");
-	db.execute("DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup=27");
-
-	(void)proxysql_stop_configured_plugins(manager, error);
-	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED");
-}
-#endif
-
 } // namespace
 
 /** @brief Run LOAD ... SERVERS TO RUNTIME regressions on every supported product tier. */
 int main() {
-#if defined(PROXYSQL40) && defined(__linux__)
-	plan(2 * 9 + 7);
-#elif defined(PROXYSQL40)
+#if defined(PROXYSQL40)
 	plan(2 * 9);
 #else
 	plan(2 * 5);
@@ -301,10 +198,6 @@ int main() {
 
 		test_protocol_loads(db, ProxySQL_ServerProtocol::mysql);
 		test_protocol_loads(db, ProxySQL_ServerProtocol::pgsql);
-
-#if defined(PROXYSQL40) && defined(__linux__)
-		test_module_cannot_reject(db);
-#endif
 	}
 	test_cleanup_minimal();
 	return exit_status();

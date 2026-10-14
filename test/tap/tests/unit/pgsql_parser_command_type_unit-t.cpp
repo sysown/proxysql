@@ -10,7 +10,7 @@
  * PostgreSQL server. A CTE classified as SELECT passes the read-only gates.
  *
  * The queries go through PgSQL_Query_Processor::query_parser_init(), so the
- * digest and the cached ParserSQL statement type are the ones a session sees.
+ * digest is the one a session sees.
  * Every case is also run with the parser off, and both modes must agree.
  */
 #include "tap.h"
@@ -46,14 +46,11 @@ static const char* cmd_name(enum PGSQL_QUERY_command c) {
 /**
  * @brief Runs one statement through query_parser_init() + query_parser_command_type().
  *
- * @param stmt_type Receives the ParserSQL statement type cached in the digest parse (-1 if none).
  * @param prefix_freed Receives whether query_parser_command_type() released query_prefix.
  */
-static enum PGSQL_QUERY_command classify(const char* sql, int* stmt_type = nullptr,
-	bool* prefix_freed = nullptr) {
+static enum PGSQL_QUERY_command classify(const char* sql, bool* prefix_freed = nullptr) {
 	SQP_par_t qp {};
 	GloPgQPro->query_parser_init(&qp, sql, std::strlen(sql), 0);
-	if (stmt_type) *stmt_type = qp.parsersql_stmt_type;
 	const enum PGSQL_QUERY_command ret = PgSQL_Query_Processor::query_parser_command_type(&qp);
 	if (prefix_freed) *prefix_freed = (qp.query_prefix == nullptr);
 	GloPgQPro->query_parser_free(&qp);
@@ -107,16 +104,15 @@ static const ClassifyCase keep_comment_cases[] = {
 	{"SELECT pg_terminate_backend /* x */ (123)", PGSQL_QUERY_TERMINATE_BACKEND},
 };
 
-// With digests enabled the parser path classifies from the cached ParserSQL statement
-// type and refines SELECT from the digest text.
+// With digests enabled the parser path classifies the digest text with ParserSQL
+// and refines SELECT from it.
 static void test_parser_with_digests() {
 	pgsql_thread___query_processor_parser = 1;
 	pgsql_thread___query_digests = true;
 	for (const auto& c : cases) {
-		int stmt_type = -1;
-		const enum PGSQL_QUERY_command got = classify(c.sql, &stmt_type);
-		ok(got == c.expected, "parser=1 digests=1: '%s' -> %s (got %s, stmt_type %d)",
-			c.sql, cmd_name(c.expected), cmd_name(got), stmt_type);
+		const enum PGSQL_QUERY_command got = classify(c.sql);
+		ok(got == c.expected, "parser=1 digests=1: '%s' -> %s (got %s)",
+			c.sql, cmd_name(c.expected), cmd_name(got));
 	}
 	// The classification is exercised through the digest text: the tokenizer turns
 	// PostgreSQL arguments into '?' placeholders that ParserSQL cannot parse, so the
@@ -175,7 +171,7 @@ static void test_parser_without_digests() {
 	};
 	for (const auto& c : prefix_cases) {
 		bool prefix_freed = false;
-		const enum PGSQL_QUERY_command got = classify(c.sql, nullptr, &prefix_freed);
+		const enum PGSQL_QUERY_command got = classify(c.sql, &prefix_freed);
 		ok(got == c.expected, "parser=1 digests=0: '%s' -> %s (got %s)",
 			c.sql, cmd_name(c.expected), cmd_name(got));
 		ok(prefix_freed, "parser=1 digests=0: query_prefix released for '%s'", c.sql);

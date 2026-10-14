@@ -18,8 +18,8 @@
  *    without locking the hostgroup and applied to the session, with the same
  *    outcome in both parser modes;
  *  - SET SESSION TRANSACTION (tracked by ProxySQL) keeps working;
- *  - SET SESSION TRANSACTION with two characteristics, which ProxySQL does not
- *    track, is forwarded and both characteristics are applied;
+ *  - SET SESSION TRANSACTION with two characteristics applies both (tracked since
+ *    #6469, see reg_test_6469_set_transaction_characteristics-t);
  *  - the query digest keeps the GLOBAL scope.
  */
 #include <cstdio>
@@ -225,8 +225,7 @@ static bool run_checks(const CommandLine& cl, MYSQL* admin, int parser, LocalOut
 			"parser=%d: SET SESSION TRANSACTION is applied (rc: %u, session: '%s')", parser, rc, value.c_str());
 	}
 
-	// Two characteristics are not tracked: the statement must reach the backend
-	// instead of being acknowledged with only the first one applied.
+	// Two characteristics: both must be applied, never only the first one.
 	{
 		Connection client = connect(cl, cl.username, cl.password);
 		if (!client) return false;

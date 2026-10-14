@@ -27,6 +27,23 @@ MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 	std::string_view attributes,
 	bool backend_password_is_nonempty);
 
+/**
+ * @brief Backend auth policy of a loaded 'mysql_users' backend row.
+ * @param database_user The backend username.
+ * @param attributes The effective attributes of the row ('' or nullptr if none).
+ * @param rejected_attributes The configured attributes text if
+ *   MySQL_Authentication::add() rejected it, nullptr otherwise. A rejected text
+ *   selects PASSWORD unless it mentions 'backend_auth', in which case the
+ *   policy is INVALID (fail closed, issue #6413).
+ * @param backend_password_is_nonempty Whether the row has a backend password.
+ * @return The resolved policy.
+ */
+MySQLBackendAuthPolicy mysql_backend_auth_policy_for_account(
+	std::string_view database_user,
+	const char* attributes,
+	const char* rejected_attributes,
+	bool backend_password_is_nonempty);
+
 MySQLBackendAuthPolicy resolve_mysql_backend_auth_policy(
 	MySQL_Authentication& authentication,
 	const char* mapped_backend_username);

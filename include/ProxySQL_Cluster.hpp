@@ -5,7 +5,6 @@
 #include "thread.h"
 #include "wqueue.h"
 #include "ProxySQL_ServerDiscovery.h"
-#include "ProxySQL_ServerModuleCluster.h"
 #include <vector>
 #include <atomic>
 #include <functional>
@@ -20,13 +19,9 @@ class SQLite3_result;
 #ifdef PROXYSQL40
 // Shared final step of the v1 runtime-server pulls. `commit_core_rows` takes
 // ownership of `core_rows`. Never fails: the core rows are always installed,
-// then published. The server module is notified only when the peer served its
-// tables (module_runtime_supported) and they could be read; otherwise it keeps
-// its previous configuration. The local controller is always notified.
+// then published to the local discovery controller.
 void proxysql_cluster_install_v1_runtime_post_fetch(
 	ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
-	bool module_runtime_supported,
-	const std::vector<ProxySQL_ServerModuleClusterTable>& module_tables,
 	const std::function<void(SQLite3_result*)>& stage_core_rows,
 	const std::function<void(SQLite3_result*)>& commit_core_rows);
 bool proxysql_snapshot_installed_builtin_server_topology(

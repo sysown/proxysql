@@ -571,7 +571,6 @@ class ProxySQL_Admin {
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
-	bool verify_registered_server_module_tables_after_upgrade();
 	void disk_upgrade_mysql_users();
 	void disk_upgrade_scheduler();
 	void disk_upgrade_rest_api_routes();
@@ -730,7 +729,7 @@ class ProxySQL_Admin {
 	 *   admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
 	 *   ```
 	 */
-	bool save_mysql_servers_runtime_to_database(bool _runtime);
+	void save_mysql_servers_runtime_to_database(bool _runtime);
 	bool save_mysql_servers_runtime_to_database_scoped(
 		const std::vector<uint32_t>& hostgroups);
 	bool save_mysql_servers_memory_to_disk_scoped(
@@ -759,7 +758,7 @@ class ProxySQL_Admin {
 	void save_debug_from_runtime();
 #endif // DEBUG
 
-	bool flush_GENERIC__from_to(const std::string&, const std::string&);
+	void flush_GENERIC__from_to(const std::string&, const std::string&);
 
 	void flush_mysql_users__from_memory_to_disk();
 	void flush_mysql_users__from_disk_to_memory();
@@ -773,7 +772,7 @@ class ProxySQL_Admin {
 	/**
 	 * @brief Installs the MySQL server tables in the Hostgroups Manager. Caller holds mysql_servers_wrlock().
 	 * @details Never fails and is never partially rejected: an SQLite error on a table is logged and
-	 *   that table is skipped. With PROXYSQL40, server modules and discovery controllers are notified
+	 *   that table is skipped. With PROXYSQL40, discovery controllers are notified
 	 *   after the installation ('emit_runtime_install') and cannot reject it. With PROXYSQL40 and
 	 *   'emit_runtime_install', this function also takes ProxySQL_ServerRuntimeInstallLock itself
 	 *   (reentrant per thread); lock order: Admin servers lock -> runtime install -> HGM.
@@ -981,7 +980,7 @@ class ProxySQL_Admin {
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0, std::string* skipped_rules_warning = nullptr);
 
-	bool save_pgsql_servers_runtime_to_database(bool _runtime);
+	void save_pgsql_servers_runtime_to_database(bool _runtime);
 	bool save_pgsql_servers_runtime_to_database_scoped(
 		const std::vector<uint32_t>& hostgroups);
 	bool save_pgsql_servers_memory_to_disk_scoped(

@@ -81,6 +81,92 @@ bool split_rds_endpoint(const std::string& endpoint, std::string& endpoint_regio
 	return false;
 }
 
+/**
+ * @brief Whether attributes text that nlohmann cannot parse mentions
+ *   'backend_auth', also when spelled with JSON escapes.
+ * @details The text cannot be parsed, so the check is lenient: besides the raw
+ *   bytes, every string literal is decoded ('\uXXXX' and the short escapes)
+ *   and searched. A key such as "backend\u005fauth" is therefore found too.
+ *   Escapes outside ASCII cannot form 'backend_auth' and decode to a
+ *   placeholder byte.
+ */
+bool attributes_text_mentions_backend_auth(std::string_view text) {
+	static constexpr std::string_view key { "backend_auth" };
+	if (text.find(key) != std::string_view::npos) {
+		return true;
+	}
+	const auto hex_value = [](char c) -> int {
+		if (c >= '0' && c <= '9') return c - '0';
+		if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+		if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+		return -1;
+	};
+	size_t i = 0;
+	while (i < text.size()) {
+		if (text[i] != '"') {
+			++i;
+			continue;
+		}
+		++i;
+		std::string decoded {};
+		while (i < text.size() && text[i] != '"') {
+			if (text[i] != '\\' || i + 1 >= text.size()) {
+				decoded.push_back(text[i]);
+				++i;
+				continue;
+			}
+			const char escape = text[i + 1];
+			i += 2;
+			if (escape != 'u') {
+				// '\"', '\\', '\/' decode to themselves; the control-character
+				// escapes cannot be part of 'backend_auth'.
+				decoded.push_back(escape);
+				continue;
+			}
+			int code_point = 0;
+			size_t digits = 0;
+			for (; digits < 4 && i + digits < text.size(); ++digits) {
+				const int v = hex_value(text[i + digits]);
+				if (v < 0) {
+					break;
+				}
+				code_point = code_point * 16 + v;
+			}
+			i += digits;
+			decoded.push_back(digits == 4 && code_point < 0x80 ? static_cast<char>(code_point) : '\x80');
+		}
+		++i; // closing quote
+		if (decoded.find(key) != std::string::npos) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * @brief Policy for attributes text that is not a JSON object the policy can
+ *   read: valid-but-non-object JSON, or text add() rejected.
+ * @details 'mysql_users.attributes' only has to satisfy JSON_VALID(attributes)
+ *   OR attributes='', so values such as '[]', '"x"', 'null', or text nlohmann
+ *   rejects ('{"a":1e400}', a lone surrogate escape) are storable and were
+ *   harmless before this policy existed: they select PASSWORD, as in v3.0.11.
+ *   Only text that mentions 'backend_auth' (raw or JSON-escaped, see
+ *   attributes_text_mentions_backend_auth()) fails closed, so that a policy the
+ *   operator configured but that cannot be read never falls back to sending
+ *   the password (issue #6413).
+ */
+MySQLBackendAuthPolicy unreadable_attributes_policy(
+	std::string_view database_user, std::string_view attributes)
+{
+	if (!attributes_text_mentions_backend_auth(attributes)) {
+		MySQLBackendAuthPolicy policy;
+		policy.database_user = database_user;
+		policy.type = MySQLBackendAuthType::PASSWORD;
+		return policy;
+	}
+	return invalid_backend_auth_policy(database_user, "attributes_not_object");
+}
+
 } // namespace
 
 const char* mysql_backend_auth_type_name(MySQLBackendAuthType type) {
@@ -111,24 +197,7 @@ MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 	const nlohmann::json parsed = nlohmann::json::parse(
 		attributes.data(), attributes.data() + attributes.size(), nullptr, false);
 	if (parsed.is_discarded() || !parsed.is_object()) {
-		// 'mysql_users.attributes' only has to satisfy JSON_VALID(attributes) OR
-		// attributes='', so valid-but-non-object values such as '[]', '"x"' or
-		// even 'null' are storable and were harmless before this policy existed.
-		// Only fail closed when the value actually mentions 'backend_auth', so
-		// that pre-existing rows keep working after an upgrade.
-		//
-		// The exact sentinel returned by invalid_attributes_storage() -- a
-		// backend row whose stored JSON failed to parse -- is the ONE
-		// non-object value that must stay INVALID: a row that failed policy
-		// validation cannot silently fall back to password authentication once
-		// reloaded. The sentinel is deliberately JSON-invalid ("invalid") so
-		// no operator-configured value can collide with it.
-		if (attributes != invalid_backend_attributes_sentinel() &&
-			attributes.find("backend_auth") == std::string_view::npos) {
-			policy.type = MySQLBackendAuthType::PASSWORD;
-			return policy;
-		}
-		return invalid_backend_auth_policy(database_user, "attributes_not_object");
+		return unreadable_attributes_policy(database_user, attributes);
 	}
 
 	const auto backend_auth = parsed.find("backend_auth");
@@ -162,6 +231,25 @@ MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 	return policy;
 }
 
+MySQLBackendAuthPolicy mysql_backend_auth_policy_for_account(
+	std::string_view database_user,
+	const char* attributes,
+	const char* rejected_attributes,
+	bool backend_password_is_nonempty)
+{
+	if (rejected_attributes != nullptr) {
+		// add() rejected the configured text (parse or validation error), so the
+		// row has no readable attributes. Decide on the configured text exactly
+		// like any other unreadable value. This also covers text that parses but
+		// failed validation, e.g. a well-formed 'backend_auth' next to a bad
+		// 'default-transaction_isolation': the row was rejected as a whole, so
+		// IAM is not selected from it, and it does not fall back to PASSWORD.
+		return unreadable_attributes_policy(database_user, rejected_attributes);
+	}
+	return parse_mysql_backend_auth_policy(
+		database_user, attributes != nullptr ? attributes : "", backend_password_is_nonempty);
+}
+
 MySQLBackendAuthPolicy resolve_mysql_backend_auth_policy(
 	MySQL_Authentication& authentication,
 	const char* mapped_backend_username)
@@ -187,9 +275,10 @@ MySQLBackendAuthPolicy resolve_mysql_backend_auth_policy(
 		return policy;
 	}
 
-	const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(
+	const MySQLBackendAuthPolicy policy = mysql_backend_auth_policy_for_account(
 		database_user,
-		account.attributes != nullptr ? account.attributes : "",
+		account.attributes,
+		account.rejected_attributes,
 		account.password[0] != '\0');
 	free_account_details(account);
 	return policy;

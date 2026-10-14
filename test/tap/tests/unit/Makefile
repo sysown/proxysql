@@ -457,7 +457,6 @@ TEST_HELPERS_DIR := $(PROXYSQL_PATH)/test/tap/test_helpers
 FAKE_PLUGIN_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin.so
 FAKE_PLUGIN2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin2.so
 FAKE_PLUGIN_ABI13_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin_abi13.so
-FAKE_SERVER_MODULE_ABI14_PREFIX_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_server_module_abi14_prefix.so
 ROUTER_CONTRACT_FAKE_SO := $(TEST_HELPERS_DIR)/proxysql_router_contract_fake.so
 PROXYSQL_BINARY := $(PROXYSQL_PATH)/src/proxysql
 FAKE_PLUGIN_DEBUG_MISMATCH_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin_debug_mismatch.so
@@ -553,9 +552,6 @@ $(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include
 $(FAKE_PLUGIN_ABI13_SO): $(TEST_HELPERS_DIR)/fake_plugin_abi13.cpp | $(TEST_HELPERS_DIR)
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) -ldl
 
-$(FAKE_SERVER_MODULE_ABI14_PREFIX_SO): $(TEST_HELPERS_DIR)/fake_server_module_abi14_prefix.cpp $(PROXYSQL_PATH)/include/ProxySQL_ServerDiscovery.h | $(TEST_HELPERS_DIR)
-	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS)
-
 $(ROUTER_CONTRACT_FAKE_SO): plugin_router_chassis_contract_unit-t.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) \
 		-DPROXYSQL_ROUTER_CONTRACT_FAKE
@@ -611,7 +607,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	protocol_unit-t auth_unit-t aws_iam_policy_unit-t aws_iam_connection_config_unit-t aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
 	stmt_long_data_param_type_unit-t \
-	rule_matching_unit-t query_processor_regex_default_unit-t hostgroups_unit-t hgc_attribute_strings_unit-t hgm_mapping_commit_sentinel_unit-t monitor_health_unit-t \
+	rule_matching_unit-t query_processor_regex_default_unit-t pcre1_query_rule_limits_unit-t hostgroups_unit-t hgc_attribute_strings_unit-t hgm_mapping_commit_sentinel_unit-t monitor_health_unit-t \
 	pgsql_backend_framing-t pgsql_backend_auth-t pgsql_backend_extq-t \
 	pgsql_command_complete_unit-t \
 	ffto_protocol_unit-t \
@@ -624,6 +620,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	backend_sync_unit-t \
 	mysql_encode_unit-t \
 	mysql_variables_unit-t \
+	mysql_users_rejected_attributes_unit-t \
 	mysql_user_variables_unit-t \
 	mysql_decompress_payload_unit-t \
 	mysql_resolution_unit-t \
@@ -669,10 +666,13 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	ezoption_parser_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
+	gtid_set_separator_unit-t \
+	gtid_session_track_overflow_unit-t \
 	gtid_parse_unit-t \
 	gtid_server_data_unit-t \
 	gtid_wire_contract_unit-t \
 	admin_bootstrap_users_unit-t \
+	admin_global_sql_lock_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
@@ -682,6 +682,8 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	parsersql_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
 	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
 	parsersql_in_values_digest_unit-t \
+	query_digest_parser_parity_unit-t \
+	mysql_set_transaction_characteristics_unit-t \
 	pgsql_query_processor_unit-t pgsql_parser_command_type_unit-t \
 	http_server_unit-t \
 	mysql_resultset_framer_unit-t \
@@ -725,6 +727,7 @@ UNIT_TESTS += \
 	managed_discovery_unit-t \
 	managed_runtime_mysql_unit-t \
 	managed_runtime_pgsql_unit-t \
+	managed_engine_projection_txn_unit-t \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \
@@ -736,11 +739,9 @@ UNIT_TESTS += \
 	plugin_cli_unit-t \
 	plugin_runtime_views_unit-t \
 	plugin_server_discovery_abi_unit-t \
-	plugin_servers_module_tables_unit-t \
 	plugin_server_runtime_install_unit-t \
 	plugin_server_reconcile_unit-t \
 	plugin_server_materialization_unit-t \
-	plugin_servers_cluster_transport_unit-t \
 	aws_locality_config_unit-t \
 	aws_locality_selection_unit-t \
 	aws_locality_stats_unit-t \
@@ -897,12 +898,11 @@ plugin_runtime_views_unit-t: plugin_runtime_views_unit-t.cpp $(ODIR)/tap.o $(ODI
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
-plugin_server_discovery_abi_unit-t: plugin_server_discovery_abi_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(FAKE_PLUGIN_ABI13_SO) $(FAKE_SERVER_MODULE_ABI14_PREFIX_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+plugin_server_discovery_abi_unit-t: plugin_server_discovery_abi_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(FAKE_PLUGIN_ABI13_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		-DPROXYSQL_FAKE_PLUGIN2_PATH=\"$(FAKE_PLUGIN2_SO)\" \
 		-DPROXYSQL_FAKE_PLUGIN_ABI13_PATH=\"$(FAKE_PLUGIN_ABI13_SO)\" \
-		-DPROXYSQL_FAKE_SERVER_MODULE_ABI14_PREFIX_PATH=\"$(FAKE_SERVER_MODULE_ABI14_PREFIX_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
@@ -1444,10 +1444,6 @@ aws_iam_kill_helper_unit-t: ALLOW_MULTI_DEF += \
 # AWS IAM wrap tests also need the static archive for their --wrap link flags
 # to reach core-library calls (same requirement as caching_sha2_rsa_unit-t).
 worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
-ifeq ($(PROXYSQL40),1)
-server_runtime_load_unit-t: $(FAKE_PLUGIN_SO)
-server_runtime_load_unit-t: IDIRS += -DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\"
-endif
 
 STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
 	gtid_local_cache_unit-t \
@@ -1488,7 +1484,7 @@ pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
 clean:
 	rm -rf $(ODIR)
 	rm -f $(MANAGED_FAKE_PROVIDER_SO) $(MANAGED_FAKE_PROVIDER2_SO) *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ROUTER_CONTRACT_FAKE_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO) \
-		$(FAKE_PLUGIN_ABI13_SO) $(FAKE_SERVER_MODULE_ABI14_PREFIX_SO)
+		$(FAKE_PLUGIN_ABI13_SO)
 	rm -f $(STAGED_LIBPROXYSQLSO) $(addsuffix .tmp,$(STAGED_LIBPROXYSQLSO))
 	rm -f $(PROXYSQL_LDIR)/libproxysql.so
 

@@ -10,7 +10,12 @@ columns of `mysql_query_rules` and `pgsql_query_rules`.
 | 2 | RE2 | available | available | available |
 | 3 | PCRE2 10.47 | not available | available (opt-in) | **default** |
 
-Engine 1 behaves exactly as in v3.0.11 and earlier. Engine 3 is not
+Engine 1 behaves as in v3.0.11 and earlier, except that a match can no
+longer overflow the worker stack (see [Stack vs heap](#stack-vs-heap)): it
+runs with a recursion/match limit, and a query on which a rule reaches the
+limit is not matched by that rule, negated or not, and is not rewritten by
+it. Up to v3.0.11 a limit hit counted as "no match", so a negated rule
+matched such a query (see [Invalid regex and limit hits](#invalid-regex-and-limit-hits)). Engine 3 is not
 syntax-compatible with engine 1: review your rules with the checklist below
 before switching, and before upgrading to v4.0 if you do not set the variable
 explicitly. To keep the previous behaviour on v4.0, set
@@ -24,7 +29,8 @@ explicitly. To keep the previous behaviour on v4.0, set
   UTF mode on its own.
 - Lookaround may contain `\K` (`PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK`).
 - Per-match limits: 64 MiB of backtracking heap, and the PCRE2 default match
-  and depth limits (10,000,000, the same values engine 1 runs with).
+  and depth limits (10,000,000; engine 1 runs with the same match limit, see
+  [Stack vs heap](#stack-vs-heap) for its recursion limit).
 
 ## Unchanged between engines 1 and 3
 
@@ -81,24 +87,49 @@ negated. On engine 3 it matches according to the pattern.
 
 ### Stack vs heap
 
-- Engine 1 recurses on the worker thread stack (1 MB). Patterns such as
-  `^(.|\n)*FOR UPDATE` can crash on subjects of a few KB.
+- Engine 1 recurses on the stack of the worker thread (`mysql-stacksize` /
+  `pgsql-stacksize`, 1 MiB by default, 256 KiB to 4 MiB). Each repetition
+  of a group such as `(.|\n)*` or `(\d+,?)+` that may have to be resumed adds
+  2-4 nested calls of about 450 bytes each. Up to v3.0.11 there was no limit,
+  so `^(.|\n)*FOR UPDATE` crashed ProxySQL on a query of about 2 KB.
+- Engine 1 now runs with a recursion limit derived from the worker's stack:
+  (free stack when the rules are compiled - 64 KiB) / 1 KiB, about 900 on the
+  default 1 MiB stack and about 160 on a 256 KiB stack. A larger stacksize
+  allows deeper matches. Its match limit is 10,000,000 (the PCRE default).
+- `.*`, `.*?`, `\s+` and `[\s\S]*` do not nest: `^SELECT\s.*\sFROM\s+t\b`
+  needs 2 levels on a 1 MB query. Only a repeated group on a long query
+  reaches the limit, e.g. `IN \((\d+,)*\d+\)` on an IN list of a few hundred
+  values with the default stack.
 - Engine 3 keeps backtracking frames on the heap, limited per match.
-- For both engines, use `[\s\S]*` or `(?s).*` instead of `(.|\n)*`.
+- For both engines, use `[\s\S]*` or `(?s).*` instead of `(.|\n)*`, and
+  possessive quantifiers instead of a repeated group that backtracks:
+  `IN \(\d++(?:,\d++)*+\)` matches the same lists as `IN \((\d+,)*\d+\)`
+  (without the capture group) in 2 recursion levels, whatever the list
+  length. A character class such as `IN \([\d,]+\)` also avoids the
+  recursion but is broader: it also accepts `IN (,)` or `IN (1,,2,)`.
 
 ## Invalid regex and limit hits
 
-| | Engines 1 and 2 | Engine 3 |
+| | Engine 1 | Engine 2 | Engine 3 |
+|---|---|---|---|
+| Invalid regex | never matches | never matches | never matches |
+| Invalid regex, `negate_match_pattern=1` | **matches every query** (as in v3.0.11) | **matches every query** (as in v3.0.11) | never matches |
+| Limit reached on a query | recursion/match limit: the rule is not applied to that query, negated or not | n/a (RE2 does not backtrack) | heap/depth/match limit: the rule is not applied to that query, negated or not |
+| Limit reached by `replace_pattern` | the query is not rewritten (also with GLOBAL: no partial rewrite) | n/a | the query is not rewritten |
+
+| Limit | Engine 1 (PCRE) | Engine 3 (PCRE2) |
 |---|---|---|
-| Invalid regex | never matches | never matches |
-| Invalid regex, `negate_match_pattern=1` | **matches every query** (as in v3.0.11) | never matches |
-| Heap/depth/match limit reached on a query | n/a (engine 1 may crash, see above) | the rule is not applied to that query, negated or not |
+| Recursion / depth | (free worker stack - 64 KiB) / 1 KiB: ~900 with the default 1 MiB `stacksize` | 10,000,000 |
+| Match | 10,000,000 | 10,000,000 |
+| Heap | n/a (frames on the stack) | 64 MiB |
 
 An invalid regex is logged once per rules load, by the first worker thread that
 compiles the new rules (not once per worker):
 `Query rule <id>: match_digest|match_pattern '<pattern>' cannot be compiled by the PCRE|RE2|PCRE2 regex engine, ...`.
 A limit hit is logged at most every 10 seconds:
-`Query rule <id>: match_digest|match_pattern matching stopped with PCRE2 error <code> ...`.
+`Query rule <id>: match_digest|match_pattern matching stopped with PCRE2 error <code> ...` (engine 3),
+`Query rule <id>: match_digest|match_pattern matching stopped with PCRE error <code> (recursion|match limit <n> reached) ...` or
+`Query rule <id>: replace_pattern stopped with PCRE error <code> ...` (engine 1).
 
 ## Migrating to engine 3: checklist
 

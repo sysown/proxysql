@@ -4,7 +4,6 @@ using json = nlohmann::json;
 
 #include "MySQL_HostGroups_Manager.h"
 #include "ProxySQL_ServerDiscovery.h"
-#include "ProxySQL_ServerModuleCluster.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -1327,11 +1326,6 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 	CUCFT1(myhash,init,"mysql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::MYSQL_HOSTGROUP_ATTRIBUTES]);
 	CUCFT1(myhash,init,"mysql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS_SSL_PARAMS]);
 	CUCFT1(myhash,init,"mysql_aws_rds_bgd_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_AWS_RDS_BGD_HOSTGROUPS]);
-#ifdef PROXYSQL40
-	// Server-module (plugin) tables belong to the same module: same checksum,
-	// version and epoch as the core servers tables.
-	proxysql_server_module_cluster_hash_loaded_tables(ProxySQL_ServerProtocol::mysql, myhash, init);
-#endif /* PROXYSQL40 */
 }
 
 /**
@@ -1345,16 +1339,16 @@ bool MySQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_con
 
 #ifdef PROXYSQL40
 	auto active_claims = proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql);
-	const bool server_module_claims_changed =
-		!same_server_hostgroup_claims(active_claims, hgsm_server_module_claims_);
+	const bool server_hostgroup_claims_changed =
+		!same_server_hostgroup_claims(active_claims, hgsm_server_hostgroup_claims_);
 #else
-	const bool server_module_claims_changed = false;
+	const bool server_hostgroup_claims_changed = false;
 #endif
 
 	const bool config_changed = commit_context && (
 		hgsm_mysql_servers_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] ||
 		hgsm_mysql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS]);
-	if (config_changed || server_module_claims_changed)
+	if (config_changed || server_hostgroup_claims_changed)
 	{
 		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - mysql_servers { old: 0x%lX, new: 0x%lX }, mysql_replication_hostgroups { old:0x%lX, new:0x%lX }\n",
 			hgsm_mysql_servers_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS],
@@ -1436,7 +1430,7 @@ bool MySQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_con
 			hgsm_mysql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS];
 		}
 #ifdef PROXYSQL40
-		hgsm_server_module_claims_ = std::move(active_claims);
+		hgsm_server_hostgroup_claims_ = std::move(active_claims);
 #endif
 	}
 	return true;

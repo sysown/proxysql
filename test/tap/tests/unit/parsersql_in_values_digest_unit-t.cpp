@@ -41,7 +41,6 @@ struct Digest {
 	bool found = false;
 	std::string text;
 	uint64_t hash = 0;
-	int stmt_type = -1;
 };
 
 static void release_digest(SQP_par_t& qp) {
@@ -96,7 +95,6 @@ static Digest parser_digest(const Dialect& d, const std::string& sql) {
 		result.found = true;
 		result.text = qp.digest_text;
 		result.hash = qp.digest;
-		result.stmt_type = qp.parsersql_stmt_type;
 	}
 	release_digest(qp);
 	return result;

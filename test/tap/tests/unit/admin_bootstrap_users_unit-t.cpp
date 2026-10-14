@@ -23,9 +23,11 @@ int main() {
 #include "sqlite3db.h"
 
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, std::string& error);
@@ -193,6 +195,113 @@ void test_duplicate_username_prefers_wildcard_host() {
 		"bootstrap import prefers the wildcard-host credentials");
 }
 
+/**
+ * @brief Run import_bootstrap_users() with stderr captured into @p log, where
+ *   proxy_warning() writes in the unit harness.
+ */
+bool import_capturing_stderr(SQLite3DB* db, MYSQL_RES* users, std::string& error, std::string& log) {
+	FILE* captured = tmpfile();
+	if (captured == nullptr) {
+		error = "tmpfile() failed";
+		return false;
+	}
+	fflush(stderr);
+	const int saved_stderr = dup(STDERR_FILENO);
+	if (saved_stderr < 0 || dup2(fileno(captured), STDERR_FILENO) < 0) {
+		if (saved_stderr >= 0) close(saved_stderr);
+		fclose(captured);
+		error = "stderr redirection failed";
+		return false;
+	}
+	const bool imported = import_bootstrap_users(db, users, error);
+	fflush(stderr);
+	dup2(saved_stderr, STDERR_FILENO);
+	close(saved_stderr);
+
+	char buffer[512];
+	rewind(captured);
+	while (fgets(buffer, sizeof(buffer), captured) != nullptr) {
+		log += buffer;
+	}
+	fclose(captured);
+	return imported;
+}
+
+void open_users_db(SQLite3DB& db) {
+	char db_path[] { ":memory:" };
+	db.open(db_path, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	db.execute(ADMIN_SQLITE_TABLE_MYSQL_USERS);
+}
+
+// Issue #6427: the skipped-host warning must be logged only when accounts of
+// other hosts were really skipped, and list only those hosts. The '%' row
+// imported by the first pass used to be re-read by the second pass and listed
+// as "skipped", so every user with a '%' account warned, even with one host.
+void test_single_wildcard_host_does_not_warn() {
+	SQLite3DB db;
+	open_users_db(db);
+	MySQL_Result_Fixture users {{
+		{ "only_wildcard", "", "secret_pw_1", "mysql_native_password", "N", "%" },
+		{ "other_user", "", "secret_pw_2", "mysql_native_password", "N", "%" }
+	}};
+
+	std::string error;
+	std::string log;
+	ok(import_capturing_stderr(&db, users.get(), error, log),
+		"bootstrap import of single-host '%%' users succeeds: %s", error.c_str());
+	ok(log.find("exists for multiple hosts") == std::string::npos,
+		"a user with only a '%%' account does not log the multiple-hosts warning");
+}
+
+void test_wildcard_plus_other_hosts_lists_only_skipped_hosts() {
+	SQLite3DB db;
+	open_users_db(db);
+	// BOOTSTRAP_SELECT_USERS order: ORDER BY user, host<>'%', host
+	MySQL_Result_Fixture users {{
+		{ "multi", "", "wildcard_secret", "mysql_native_password", "N", "%" },
+		{ "multi", "", "net_secret", "mysql_native_password", "N", "10.0.0.%" },
+		{ "multi", "", "local_secret", "mysql_native_password", "N", "localhost" }
+	}};
+
+	std::string error;
+	std::string log;
+	ok(import_capturing_stderr(&db, users.get(), error, log),
+		"bootstrap import of a '%%' user with other hosts succeeds: %s", error.c_str());
+	ok(log.find("Bootstrap: user 'multi' exists for multiple hosts; imported credentials of "
+		"'multi'@'%' only, skipped host(s): '10.0.0.%', 'localhost'\n") != std::string::npos,
+		"the warning names the imported '%%' account and lists only the skipped hosts");
+	ok(log.find("'%', ") == std::string::npos && log.find(", '%'") == std::string::npos,
+		"the imported '%%' host is not listed among the skipped hosts");
+	ok(log.find("_secret") == std::string::npos,
+		"the warning does not contain credential material");
+}
+
+void test_no_wildcard_host_imports_first_host() {
+	SQLite3DB db;
+	open_users_db(db);
+	// Without '%', ORDER BY user, host<>'%', host makes the lowest host first.
+	MySQL_Result_Fixture users {{
+		{ "nowild", "", "first_secret", "mysql_native_password", "N", "10.0.0.1" },
+		{ "nowild", "", "second_secret", "mysql_native_password", "N", "localhost" }
+	}};
+
+	std::string error;
+	std::string log;
+	ok(import_capturing_stderr(&db, users.get(), error, log),
+		"bootstrap import of a user without a '%%' account succeeds: %s", error.c_str());
+	std::unique_ptr<SQLite3_result> result { db.execute_statement(
+		"SELECT password FROM mysql_users WHERE username='nowild'"
+	) };
+	ok(result != nullptr && result->rows_count == 1 &&
+		std::string(result->rows[0]->fields[0], result->rows[0]->sizes[0]) == "first_secret",
+		"without a '%%' account the first host in ORDER BY order is imported");
+	ok(log.find("Bootstrap: user 'nowild' exists for multiple hosts; imported credentials of "
+		"'nowild'@'10.0.0.1' only, skipped host(s): 'localhost'\n") != std::string::npos,
+		"the warning names the imported host and lists only the skipped host");
+	ok(log.find("_secret") == std::string::npos,
+		"the warning does not contain credential material");
+}
+
 void test_failed_import_rolls_back() {
 	SQLite3DB db;
 	char db_path[] { ":memory:" };
@@ -220,13 +329,16 @@ void test_failed_import_rolls_back() {
 } // namespace
 
 int main() {
-	plan(18);
+	plan(25);
 	test_init_minimal();
 
 	test_import_preserves_sql_metacharacters();
 	test_duplicate_username_imports_single_account();
 	test_duplicate_username_prefers_wildcard_host();
 	test_failed_import_rolls_back();
+	test_single_wildcard_host_does_not_warn();
+	test_wildcard_plus_other_hosts_lists_only_skipped_hosts();
+	test_no_wildcard_host_imports_first_host();
 
 	test_cleanup_minimal();
 	return exit_status();

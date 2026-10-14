@@ -3,6 +3,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "Query_Processor_ParserSQL.h"
+#include "SpookyV2.h"
 #include "MySQL_User_Variables.h"
 
 #include <cstring>
@@ -432,8 +433,10 @@ static void test_mysql_digest_empty_query() {
 	memset(&qp, 0, sizeof(qp));
 	const char* q = "";
 	parsersql_digest_init_mysql(&qp, q, 0);
-	ok(qp.digest_text == NULL, "MySQL digest: empty query produces NULL digest_text");
-	ok(qp.digest == 0, "MySQL digest: empty query produces zero hash");
+	// As in legacy mode: digest text "" and the hash of "" (#6454).
+	ok(qp.digest_text != NULL && *qp.digest_text == '\0', "MySQL digest: empty query produces empty digest_text");
+	ok(qp.digest == SpookyHash::Hash64("", 0, 0), "MySQL digest: empty query produces the hash of \"\"");
+	if (qp.digest_text && qp.digest_text != qp.buf) free(qp.digest_text);
 }
 
 static void test_mysql_command_type_unknown() {

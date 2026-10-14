@@ -23,7 +23,6 @@ using json = nlohmann::json;
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_PluginManager.h"
-#include "ProxySQL_ServerModuleCluster.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "ProxySQL_PluginConfig.h"
 #include "ProxySQL_PluginSecrets.h"
@@ -213,110 +212,30 @@ static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, con
 	}
 }
 
-// Server-module tables are ordinary configuration tables.  The registry is
-// intentionally queried at the operation boundary so an unloaded plugin has
-// no schema affiliation and a MySQL operation cannot see PostgreSQL tables.
-static bool copy_registered_server_module_tables(SQLite3DB* db,
-	ProxySQL_ServerProtocol protocol, const char* destination, const char* source) {
 #ifdef PROXYSQL40
-	const auto tables = proxysql_active_server_module_tables(protocol);
-	if (tables.empty()) return true;
-	if (!db->execute("BEGIN")) return false;
-	for (const auto& table : tables) {
-		const std::string delete_sql = std::string("DELETE FROM ") + destination + "." + table.table_name;
-		auto [delete_rc, delete_statement] = db->prepare_v2(delete_sql.c_str());
-		if (delete_rc != SQLITE_OK || (*proxy_sqlite3_step)(delete_statement.get()) != SQLITE_DONE) {
-			db->execute("ROLLBACK"); return false;
-		}
-		const std::string insert_sql = std::string("INSERT INTO ") + destination + "." + table.table_name +
-			" SELECT * FROM " + source + "." + table.table_name;
-		auto [insert_rc, insert_statement] = db->prepare_v2(insert_sql.c_str());
-		if (insert_rc != SQLITE_OK || (*proxy_sqlite3_step)(insert_statement.get()) != SQLITE_DONE) {
-			db->execute("ROLLBACK"); return false;
-		}
-	}
-	if (!db->execute("COMMIT")) { db->execute("ROLLBACK"); return false; }
-	return true;
-#else
-	(void)db; (void)protocol; (void)destination; (void)source; return true;
-#endif
-}
-
-// Runtime tables are plugin-owned projections.  SAVE ... FROM RUNTIME asks
-// the module for a snapshot and writes that snapshot to its normal MEMORY
-// configuration table; core never persists a runtime projection directly.
-static bool save_registered_server_module_runtime_tables(SQLite3DB* db,
-	ProxySQL_ServerProtocol protocol) {
-#ifdef PROXYSQL40
-	std::string error;
-	const bool ok = proxysql_save_active_server_module_runtime_tables(*db, protocol, error);
-	if (!ok) proxy_error("Saving server-module runtime tables failed: %s\n", error.c_str());
-	return ok;
-#else
-	(void)db; (void)protocol; return true;
-#endif
-}
-
-#ifdef PROXYSQL40
-/** @brief What a LOAD ... SERVERS TO RUNTIME publishes to server modules and controllers. */
-struct server_runtime_publication_t {
-	ProxySQL_ServerModuleSnapshot snapshot {};
-	bool notify_module {true};
-};
-
 /**
- * @brief Collects the publication of a LOAD before the HGM takes the incoming resultsets.
- * @details Never fails. When the built-in topology or a module table cannot be
- *   read, the error is logged and the module is not notified: it keeps its
- *   previous configuration. Discovery controllers are notified regardless.
- *   When the module will be notified, its tables are recorded here as the
- *   loaded copy: that copy is hashed into the *_servers_v2 Cluster checksum by
- *   the HGM commit that follows, and is what peers are served
- *   (ProxySQL_ServerModuleCluster.h), so it must be recorded before the commit.
+ * @brief Collects what a LOAD publishes, before the HGM takes the incoming resultsets.
+ * @details Never fails. When the built-in topology cannot be read, the error is
+ *   logged and the last complete topology is kept rather than a partial read.
  */
-static server_runtime_publication_t collect_server_runtime_publication(SQLite3DB* db,
+static ProxySQL_ServerRuntimeSnapshot collect_server_runtime_publication(SQLite3DB* db,
 	ProxySQL_ServerProtocol protocol, const SQLite3_result& core_rows,
 	const ProxySQL_ServerBuiltinTopologyInputs& topology_inputs) {
-	server_runtime_publication_t publication {};
-	publication.snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, 0, core_rows);
+	ProxySQL_ServerRuntimeSnapshot snapshot =
+		proxysql_server_runtime_snapshot_from_rows(protocol, 0, core_rows);
 	std::string error;
 	if (!proxysql_collect_active_builtin_server_topology(*db, protocol, topology_inputs,
-		publication.snapshot.runtime.topology_hostgroups, error)) {
-		proxy_error("Unable to collect built-in topology, server modules keep their previous configuration: %s\n",
+		snapshot.topology_hostgroups, error)) {
+		proxy_error("Unable to collect built-in topology, keeping the previous one: %s\n",
 			error.c_str());
-		// Keep the last complete topology rather than a partial read.
-		publication.snapshot.runtime.topology_hostgroups = proxysql_active_server_topology_hostgroups(protocol);
-		publication.notify_module = false;
-		return publication;
+		snapshot.topology_hostgroups = proxysql_active_server_topology_hostgroups(protocol);
 	}
-	std::vector<ProxySQL_ServerModuleClusterTable> loaded_tables;
-	for (const auto& table : proxysql_active_server_module_tables(protocol)) {
-		char* sqlite_error = nullptr;
-		int columns = 0;
-		int affected_rows = 0;
-		SQLite3_result* rows = nullptr;
-		const std::string sql = "SELECT * FROM main." + table.table_name + " ORDER BY " + table.order_by;
-		db->execute_statement(sql.c_str(), &sqlite_error, &columns, &affected_rows, &rows);
-		if (sqlite_error != nullptr) {
-			proxy_error("Error reading plugin server table %s, the server module keeps its previous configuration: %s\n",
-				table.table_name.c_str(), sqlite_error);
-			free(sqlite_error);
-			if (rows != nullptr) delete rows;
-			publication.notify_module = false;
-			publication.snapshot.module_tables.clear();
-			return publication;
-		}
-		loaded_tables.push_back({table.table_name, table.runtime_table_name, table.order_by,
-			rows != nullptr ? std::make_unique<SQLite3_result>(rows) : nullptr});
-		publication.snapshot.module_tables.push_back({table.table_name, std::unique_ptr<SQLite3_result>(rows)});
-	}
-	proxysql_server_module_cluster_set_loaded_tables(protocol, std::move(loaded_tables));
-	return publication;
+	return snapshot;
 }
 
 /** @brief Publishes a LOAD already committed to the HGM. Never fails. */
-static void publish_server_runtime(server_runtime_publication_t publication) {
-	proxysql_publish_server_runtime(std::move(publication.snapshot), publication.notify_module);
+static void publish_server_runtime(ProxySQL_ServerRuntimeSnapshot snapshot) {
+	proxysql_publish_server_runtime(std::move(snapshot));
 }
 #endif /* PROXYSQL40 */
 
@@ -482,6 +401,13 @@ extern PgSQL_Threads_Handler* GloPTH;
 
 extern void (*flush_logs_function)();
 
+// Single per-thread acquisition counter shared by the core and every plugin;
+// see include/proxysql_admin_global_sql_lock.h for why it is out of line.
+int& proxysql_admin_global_sql_lock_depth() {
+	static thread_local int depth = 0;
+	return depth;
+}
+
 #ifdef PROXYSQL40
 // Plugin DB-handle getters consumed by ProxySQL_PluginManager when it
 // builds the Phase-B services struct. Gated under PROXYSQL40 so v3.x
@@ -523,27 +449,14 @@ SQLite3DB* proxysql_plugin_get_statsdb() {
 // double-locking the non-recursive mutex.
 bool proxysql_plugin_with_admin_db_lock(bool (*body)(void*), void* opaque) {
 	if (body == nullptr || GloAdmin == nullptr) return false;
-	pthread_mutex_t* const mutex = &GloAdmin->sql_query_global_mutex;
-	if (proxysql_admin_global_sql_lock_depth() > 0) {
-		// This thread already owns the mutex: run the body directly.
-		bool result = false;
-		try {
-			result = body(opaque);
-		} catch (...) {
-			result = false;
-		}
-		return result;
-	}
-	pthread_mutex_lock(mutex);
-	proxysql_admin_global_sql_lock_depth() = 1;
+	// A thread that already owns the mutex only adds a nesting level.
+	proxysql_admin_global_sql_guard guard(GloAdmin->sql_query_global_mutex);
 	bool result = false;
 	try {
 		result = body(opaque);
 	} catch (...) {
 		result = false;
 	}
-	proxysql_admin_global_sql_lock_depth() = 0;
-	pthread_mutex_unlock(mutex);
 	return result;
 }
 
@@ -1464,11 +1377,7 @@ template query_digest_topk_result_t ProxySQL_Admin::QueryDigestTopK<(SERVER_TYPE
 );
 
 void ProxySQL_Admin::flush_configdb() { // see #923
-	pthread_mutex_lock(&sql_query_global_mutex);
-	struct Unlock {
-		pthread_mutex_t* mutex;
-		~Unlock() { pthread_mutex_unlock(mutex); }
-	} unlock { &sql_query_global_mutex };
+	proxysql_admin_global_sql_guard guard(sql_query_global_mutex);
 	flush_configdb_locked();
 }
 
@@ -2071,11 +1980,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				// sql_query_global_mutex to prevent a possible deadlock due to
 				// a race condition
 				// save_proxysql_servers_runtime_to_database() calls ProxySQL_Cluster::dump_table_proxysql_servers()
-				pthread_mutex_unlock(&SPA->sql_query_global_mutex);
-				proxysql_admin_global_sql_lock_depth() = 0;
-				save_proxysql_servers_runtime_to_database(true);
-				pthread_mutex_lock(&SPA->sql_query_global_mutex);
-				proxysql_admin_global_sql_lock_depth() = 1;
+				{
+					proxysql_admin_global_sql_release_scope released(SPA->sql_query_global_mutex);
+					save_proxysql_servers_runtime_to_database(true);
+				}
 				//mysql_servers_wrunlock();
 			}
 			if (runtime_mysql_users) {
@@ -3645,17 +3553,12 @@ size_t ProxySQL_Admin::drain_server_discovery_updates() {
 	// DELETE/INSERTs would be absorbed into the drain's transaction and lost on
 	// its ROLLBACK. Serialize on the same global mutex every other admindb
 	// writer uses, taken BEFORE the discovery-protocol lock inside the drain.
-	// Re-entrant-aware through the depth protocol shared with
-	// admin_db_lock_guard: a caller already holding the mutex (an Admin
-	// session statement that reaches the drain through a plugin hook,
-	// or a plugin publication inside with_admin_db_lock) re-enters instead
-	// of deadlocking; the unconditional unlock pairs with it via depth.
-	pthread_mutex_lock(&sql_query_global_mutex);
-	proxysql_admin_global_sql_lock_depth() = 1;
-	const size_t drained = proxysql_drain_server_desired_sets();
-	proxysql_admin_global_sql_lock_depth() = 0;
-	pthread_mutex_unlock(&sql_query_global_mutex);
-	return drained;
+	// Re-entrant through the shared depth counter: a caller already holding
+	// the mutex (an Admin session statement that reaches the drain through a
+	// plugin hook, or a plugin publication inside with_admin_db_lock) only
+	// adds a nesting level, and its own ownership survives the drain.
+	proxysql_admin_global_sql_guard guard(sql_query_global_mutex);
+	return proxysql_drain_server_desired_sets();
 #else
 	return 0;
 #endif
@@ -6381,13 +6284,11 @@ int ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *db) {
 void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
-	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "main", "disk");
 	BQE1(admindb, mysql_query_rules_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 
 	BQE1(admindb, pgsql_servers_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
-	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "main", "disk");
 	BQE1(admindb, pgsql_query_rules_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 	admindb->execute("INSERT OR REPLACE INTO main.pgsql_users SELECT * FROM disk.pgsql_users");
 	BQE1(admindb, pgsql_firewall_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
@@ -6489,7 +6390,6 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
-	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "disk", "main");
 	BQE1(admindb, mysql_query_rules_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
@@ -6499,7 +6399,6 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	BQE1(admindb, proxysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 
 	BQE1(admindb, pgsql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
-	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "disk", "main");
 	BQE1(admindb, pgsql_query_rules_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.pgsql_users SELECT * FROM main.pgsql_users");
 	BQE1(admindb, pgsql_firewall_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
@@ -6591,27 +6490,21 @@ void ProxySQL_Admin::flush_clickhouse_users__from_memory_to_disk() {
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
-bool ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& direction) {
+void ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& direction) {
 	assert(direction == "disk_to_memory" || direction == "memory_to_disk");
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	auto it = module_tablenames.find(name);
 	assert(it != module_tablenames.end());
-	bool module_copy_ok = true;
 	if (direction == "disk_to_memory") {
 		BQE1(admindb, it->second, "DELETE FROM main.", "INSERT INTO main.", " SELECT * FROM disk.");
-		if (name == "mysql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "main", "disk");
-		if (name == "pgsql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "main", "disk");
 	} else if (direction == "memory_to_disk") {
 		BQE1(admindb, it->second, "DELETE FROM disk.", "INSERT INTO disk.", " SELECT * FROM main.");
-		if (name == "mysql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "disk", "main");
-		if (name == "pgsql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "disk", "main");
 	} else {
 		assert(0);
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
-	return module_copy_ok;
 }
 
 void ProxySQL_Admin::flush_mysql_variables__from_memory_to_disk() {
@@ -7393,23 +7286,29 @@ void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t
 #ifdef PROXYSQL40
 template <typename S>
 bool ProxySQL_Admin::dispatch_plugin_admin_command(S* sess, const char* sql) {
+	// The plugin may hand the mutex this Admin session holds for the statement
+	// off while it waits on work that itself enters Admin. Release fully,
+	// whatever the nesting depth, and restore exactly the released levels, so
+	// a service invoked inside the window locks the free mutex normally and the
+	// session's ownership is intact afterwards.
+	struct AdminMutexHandoff {
+		ProxySQL_Admin* admin;
+		int released_levels;
+	} handoff { this, 0 };
 	ProxySQL_PluginCommandContext ctx {
 		admindb,
 		configdb,
 		statsdb,
-		this,
+		&handoff,
 		[](void* opaque) {
-			auto* admin = static_cast<ProxySQL_Admin*>(opaque);
-			pthread_mutex_unlock(&admin->sql_query_global_mutex);
-			// The plugin released the mutex this Admin session was holding as
-			// part of the statement scope; a service invoked inside the plugin
-			// command must not skip its acquisition on a stale depth.
-			proxysql_admin_global_sql_lock_depth() = 0;
+			auto* h = static_cast<AdminMutexHandoff*>(opaque);
+			h->released_levels += proxysql_admin_global_sql_release_all(h->admin->sql_query_global_mutex);
 		},
 		[](void* opaque) {
-			auto* admin = static_cast<ProxySQL_Admin*>(opaque);
-			pthread_mutex_lock(&admin->sql_query_global_mutex);
-			proxysql_admin_global_sql_lock_depth() = 1;
+			auto* h = static_cast<AdminMutexHandoff*>(opaque);
+			const int levels = h->released_levels;
+			h->released_levels = 0;
+			proxysql_admin_global_sql_restore(h->admin->sql_query_global_mutex, levels);
 		}
 	};
 	ProxySQL_PluginCommandResult result { 0, 0, "" };
@@ -7978,8 +7877,22 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_bind_text)(statement1, 10, ad->attributes, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_bind_text)(statement1, 11, ad->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			SAFE_SQLITE3_STEP2(statement1);
+			const int step_rc = rc;
+			if (step_rc != SQLITE_DONE) {
+				// Do not fail silently: when saving FROM RUNTIME the row was already
+				// set active=0 above, and a failed REPLACE leaves it that way (issue
+				// #6413). The attribute values are not logged: they may hold secrets.
+				sqlite3* db = admindb->get_db();
+				proxy_error(
+					"Failed to save %s mysql_users entry for user '%s' into %s: %s\n",
+					ad->frontend_ ? "frontend" : "backend", ad->username,
+					_runtime ? "runtime_mysql_users" : "mysql_users",
+					db ? (*proxy_sqlite3_errmsg)(db) : "unknown error");
+			}
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_reset)(statement1);
+			// After a failed step reset() returns that same error, reported above.
+			if (step_rc == SQLITE_DONE) { ASSERT_SQLITE_OK(rc, admindb); }
 		}
 		free(ad->username);
 		free(ad->password); // this is not initialized with dump_all_users( , false)
@@ -8593,7 +8506,7 @@ bool proxysql_materialize_server_desired_set(const ProxySQL_ServerDesiredSet& de
 }
 #endif
 
-bool ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
+void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *query=NULL;
 	string StrQuery;
@@ -8992,13 +8905,9 @@ bool ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
-	if (_runtime == false) {
-		return save_registered_server_module_runtime_tables(admindb, ProxySQL_ServerProtocol::mysql);
-	}
-	return true;
 }
 
-bool ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
+void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	// make sure that the caller has called pgsql_servers_wrlock()
 	char* query = NULL;
 	string StrQuery;
@@ -9192,10 +9101,6 @@ bool ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
-	if (_runtime == false) {
-		return save_registered_server_module_runtime_tables(admindb, ProxySQL_ServerProtocol::pgsql);
-	}
-	return true;
 }
 
 
@@ -9225,7 +9130,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	// HGM is staged so the publication below follows this installation.
 	std::optional<ProxySQL_ServerRuntimeInstallLock> install_lock;
 	if (emit_runtime_install) install_lock.emplace(ProxySQL_ServerProtocol::mysql);
-	std::optional<server_runtime_publication_t> publication;
+	std::optional<ProxySQL_ServerRuntimeSnapshot> publication;
 #else
 	(void)emit_runtime_install;
 #endif
@@ -9505,7 +9410,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	// HGM is staged so the publication below follows this installation.
 	std::optional<ProxySQL_ServerRuntimeInstallLock> install_lock;
 	if (emit_runtime_install) install_lock.emplace(ProxySQL_ServerProtocol::pgsql);
-	std::optional<server_runtime_publication_t> publication;
+	std::optional<ProxySQL_ServerRuntimeSnapshot> publication;
 #else
 	(void)emit_runtime_install;
 #endif

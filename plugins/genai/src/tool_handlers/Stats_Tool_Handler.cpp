@@ -26,6 +26,7 @@ using json = nlohmann::json;
 
 #include "MCP_Thread.h"
 #include "Stats_Tool_Handler.h"
+#include "proxysql_admin_global_sql_lock.h"
 
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
@@ -347,37 +348,20 @@ std::string Stats_Tool_Handler::execute_admin_query(const char* sql, SQLite3_res
 	*resultset = NULL;
 	*cols = 0;
 
-	int lock_rc = pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
-	if (lock_rc != 0) {
-		return std::string("Failed to lock sql_query_global_mutex: ") + std::strerror(lock_rc);
-	}
-
-	if (refresh_before_query) {
-		GloAdmin->GenericRefreshStatistics(sql, static_cast<unsigned int>(strlen(sql)), false);
-	}
-
 	char* error = NULL;
-	int affected_rows = 0;
-	GloAdmin->admindb->execute_statement(sql, &error, cols, &affected_rows, resultset);
+	{
+		// Enter through the shared re-entrancy protocol: the stats refresh below
+		// opens release windows (stats___proxysql_servers_*) that must see and
+		// restore this thread's ownership, and a raw lock would leave this MCP
+		// thread with a stale depth afterwards.
+		proxysql_admin_global_sql_guard admin_lock(GloAdmin->sql_query_global_mutex);
 
-	int unlock_rc = pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
-	if (unlock_rc != 0) {
-		if (error) {
-			std::string err_msg(error);
-			free(error);
-			if (*resultset) {
-				delete *resultset;
-				*resultset = NULL;
-			}
-			return "Admin query error: " + err_msg +
-				"; also failed to unlock sql_query_global_mutex: " + std::string(std::strerror(unlock_rc));
+		if (refresh_before_query) {
+			GloAdmin->GenericRefreshStatistics(sql, static_cast<unsigned int>(strlen(sql)), false);
 		}
-		if (*resultset) {
-			delete *resultset;
-			*resultset = NULL;
-		}
-		*cols = 0;
-		return std::string("Failed to unlock sql_query_global_mutex: ") + std::strerror(unlock_rc);
+
+		int affected_rows = 0;
+		GloAdmin->admindb->execute_statement(sql, &error, cols, &affected_rows, resultset);
 	}
 
 	if (error) {

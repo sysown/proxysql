@@ -27,6 +27,19 @@ typedef struct _account_details_t {
 	bool active_;
 	char *attributes = nullptr;
 	char *comment = nullptr;
+	/**
+	 * @brief The configured 'attributes' text when 'add()' rejected it (nlohmann
+	 *   cannot parse it, or a value in it fails validation); 'nullptr' otherwise.
+	 * @details 'mysql_users.attributes' only has to satisfy SQLite's
+	 *   'JSON_VALID(attributes) OR attributes=''', which accepts text nlohmann
+	 *   rejects (e.g. '{"a":1e400}'). For such a row 'attributes' is '' -- the user
+	 *   works as if it had no attributes, as in v3.0.11 -- while this field keeps
+	 *   the original text so that 'runtime_mysql_users', 'SAVE MYSQL USERS FROM
+	 *   RUNTIME' and the runtime checksum round-trip it unchanged, and so that the
+	 *   backend auth policy can still fail closed when the rejected text configures
+	 *   'backend_auth' (issue #6413).
+	 */
+	char *rejected_attributes = nullptr;
 } account_details_t;
 
 /**
@@ -133,14 +146,5 @@ class MySQL_Authentication {
 	 */
 	SQLite3_result* get_current_mysql_users();
 };
-
-/**
- * @brief Exact 'attributes' value that MySQL_Authentication::add() substitutes
- *   for a BACKEND row whose stored JSON failed to parse. Kept JSON-invalid so
- *   no operator-configurable value can collide with it; the backend auth
- *   policy parser relies on it to distinguish "policy was malformed" from a
- *   harmless non-object value (issue #6440 review).
- */
-const char* invalid_backend_attributes_sentinel();
 
 #endif /* __CLASS_MYSQL_AUTHENTICATION_H */

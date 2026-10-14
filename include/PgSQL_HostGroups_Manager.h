@@ -522,8 +522,8 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 */
 	uint64_t hgsm_pgsql_replication_hostgroups_checksum = 0;
 #ifdef PROXYSQL40
-	// Exact affiliated-module claims used to invalidate the derived role map.
-	std::vector<ProxySQL_ServerHostgroupClaim> hgsm_server_module_claims_ {};
+	// Exact managed-discovery claims used to invalidate the derived role map.
+	std::vector<ProxySQL_ServerHostgroupClaim> hgsm_server_hostgroup_claims_ {};
 #endif
 
 	std::mutex PgSQL_Servers_SSL_Params_map_mutex;
@@ -898,7 +898,7 @@ private:
 	 * @param commit_context true when called while installing configuration (commit or an
 	 *   equivalent table regeneration that refreshed 'table_resultset_checksum'). Only then may the
 	 *   'hgsm_*_checksum' members be advanced to the configuration checksums. Monitor actions
-	 *   ('read_only_action_v2') pass false: they rebuild only for server-module claim changes and
+	 *   ('read_only_action_v2') pass false: they rebuild only for discovery claim changes and
 	 *   leave 'hgsm_*_checksum' untouched, because those actions store the runtime checksum there as
 	 *   the signal that runtime diverged from configuration and the next commit must rebuild.
 	 */

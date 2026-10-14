@@ -5,11 +5,15 @@
  *        attributed to a service behind a shared pool, not just a client IP.
  *
  * Reproduces the overlap without a driver: a held 'DO SLEEP' keeps the session
- * in PROCESSING_QUERY while a trailing packet (a second COM_QUERY, then a
- * COM_QUIT) is read as unexpected. The overlap case also asserts the logged
- * connection id of the attached backend. Covers 2 of the 3
- * enriched sites; the third (WAITING_CLIENT_DATA default) is an unreachable
- * defensive branch. Mutates no admin state -- default_hostgroup is only read.
+ * in PROCESSING_QUERY while a trailing COM_QUIT is read as unexpected, and the
+ * COM_QUIT line must carry the user and the hostgroup.
+ *
+ * A trailing COM_QUERY used to be logged as an unexpected packet (PMC-10001)
+ * too. Since #5930 a command received while another one is in flight is client
+ * pipelining: it is queued and executed after the first one. The test now
+ * asserts that the overlapping COM_QUERY gets its response, after the held one,
+ * and that no PMC-10001 line is logged for it. Mutates no admin state --
+ * default_hostgroup is only read.
  */
 
 #include <cstddef>
@@ -18,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -31,6 +36,9 @@ using std::string;
 
 static constexpr int MAX_LOG_CHECK_ATTEMPTS = 20;
 static constexpr useconds_t LOG_CHECK_RETRY_DELAY_US = 100000;
+// Upper bound for each wait on the frontend socket: a missing response fails
+// the check instead of hanging the test.
+static constexpr int RECV_TIMEOUT_MS = 10000;
 
 // Held server-side so the session stays in PROCESSING_QUERY while the trailing
 // packet is read. 'DO' (not 'SELECT') avoids '^SELECT' reader rules, so routing
@@ -85,15 +93,8 @@ static bool send_all(int fd, const unsigned char* data, size_t len) {
 	return true;
 }
 
-// The unsigned value immediately after `key` in `line`, or -1 if `key` absent.
-static long value_after(const string& line, const string& key) {
-	const size_t p = line.find(key);
-	if (p == string::npos) return -1;
-	return atol(line.c_str() + p + key.size());
-}
-
-// The connection id from the first log line matching all three needles, or -1.
-static long attributed_connection(
+// Whether a log line matches all three needles.
+static bool attributed_line_found(
 	const std::vector<string>& lines,
 	const string& event,
 	const string& user_needle,
@@ -103,39 +104,27 @@ static long attributed_connection(
 		if (l.find(event) != string::npos
 			&& l.find(user_needle) != string::npos
 			&& l.find(hg_needle) != string::npos) {
-			return value_after(l, ", connection ");
+			return true;
 		}
 	}
-	return -1;
+	return false;
 }
 
 // Send the held query + `trailing` in one write so the trailing packet is read
 // mid-query, then poll the log for a line carrying `event`, the user, and the
-// hostgroup. At the overlap site the line must also carry a non-zero backend
-// `connection` id (a real attached backend). Lines accumulate across attempts.
+// hostgroup. Lines accumulate across attempts.
 static bool trigger_and_find(
 	CommandLine& cl,
 	int hg,
 	std::fstream& log,
 	const std::vector<unsigned char>& trailing,
-	const string& event,
-	bool overlap_site
+	const string& event
 ) {
 	MYSQL* attack = mysql_init(NULL);
 	if (!attack || !mysql_real_connect(attack, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		diag("frontend connect failed: %s", attack ? mysql_error(attack) : "mysql_init");
 		if (attack) mysql_close(attack);
 		return false;
-	}
-
-	// Pin an established backend so the overlap logs a real connection id. A cold
-	// connection was observed to log connection 0 (no backend attached at overlap
-	// time); a transaction attaches and pins one. 'DO' (not 'SELECT') keeps it on
-	// default_hostgroup, no '^SELECT' reader reroute.
-	if (overlap_site) {
-		if (mysql_query(attack, "BEGIN") || mysql_query(attack, "DO 1")) {
-			diag("backend warmup failed: %s", mysql_error(attack));
-		}
 	}
 
 	std::vector<unsigned char> buf = com_query_packet(OVERLAP_SLEEP_QUERY);
@@ -152,28 +141,76 @@ static bool trigger_and_find(
 		log.clear(log.rdstate() & ~std::ios_base::eofbit & ~std::ios_base::failbit);
 		while (getline(log, line)) lines.push_back(line);
 
-		const long backend = attributed_connection(lines, event, user_needle, hg_needle);
-		if (backend < 0) {
-			usleep(LOG_CHECK_RETRY_DELAY_US);   // attributed line not logged yet
-			continue;
-		}
-		// Site 2 (COM_QUIT): the attributed line is the whole assertion. Overlap
-		// site: also require a non-zero backend connection id (a real attached
-		// backend). The matching KILL isn't asserted -- warming the backend for a
-		// non-zero id pins it in a transaction, which suppresses the kill; the
-		// kill only fires on a non-pinned in-flight overlap, which raw sockets
-		// can't arrange deterministically.
-		if (!overlap_site) {
-			found = true;
-		} else if (backend > 0) {
+		if (attributed_line_found(lines, event, user_needle, hg_needle)) {
 			found = true;
 		} else {
-			usleep(LOG_CHECK_RETRY_DELAY_US);   // connection still 0, retry
+			usleep(LOG_CHECK_RETRY_DELAY_US);   // attributed line not logged yet
 		}
 	}
 
 	mysql_close(attack);
 	return found;
+}
+
+static bool recv_all(int fd, unsigned char* buf, size_t len) {
+	size_t got = 0;
+	while (got < len) {
+		struct pollfd pfd { fd, POLLIN, 0 };
+		if (poll(&pfd, 1, RECV_TIMEOUT_MS) != 1) return false;
+		const ssize_t n = recv(fd, buf + got, len - got, 0);
+		if (n <= 0) return false;
+		got += n;
+	}
+	return true;
+}
+
+// First payload byte of the next packet received on `fd`, or -1.
+static int read_packet_first_byte(int fd) {
+	unsigned char hdr[4];
+	if (!recv_all(fd, hdr, sizeof(hdr))) return -1;
+	const size_t len = hdr[0] | (hdr[1] << 8) | (hdr[2] << 16);
+	if (len == 0) return -1;
+	std::vector<unsigned char> payload(len);
+	if (!recv_all(fd, payload.data(), len)) return -1;
+	return payload[0];
+}
+
+// Send the held query + a second COM_QUERY in one write: since #5930 the second
+// one is queued and executed after the held one. Both must get an OK packet, and
+// no PMC-10001 line may be logged.
+static bool overlapping_query_is_pipelined(CommandLine& cl, std::fstream& log) {
+	MYSQL* conn = mysql_init(NULL);
+	if (!conn || !mysql_real_connect(conn, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		diag("frontend connect failed: %s", conn ? mysql_error(conn) : "mysql_init");
+		if (conn) mysql_close(conn);
+		return false;
+	}
+	std::vector<unsigned char> buf = com_query_packet(OVERLAP_SLEEP_QUERY);
+	const std::vector<unsigned char> trailing = com_query_packet("DO 1");
+	buf.insert(buf.end(), trailing.begin(), trailing.end());
+
+	const int fd = mysql_get_socket(conn);
+	bool res = send_all(fd, buf.data(), buf.size());
+	if (!res) diag("send_all failed on frontend connection");
+	for (int i = 0; res && i < 2; i++) {
+		const int first = read_packet_first_byte(fd);
+		if (first != 0x00) {
+			diag("Response %d to the overlapping commands is not an OK packet (first byte %d)", i + 1, first);
+			res = false;
+		}
+	}
+	mysql_close(conn);
+
+	const string user_needle { "user '" + string(cl.username) + "'" };
+	string line {};
+	log.clear(log.rdstate() & ~std::ios_base::eofbit & ~std::ios_base::failbit);
+	while (getline(log, line)) {
+		if (line.find("Unexpected packet from client") != string::npos && line.find(user_needle) != string::npos) {
+			diag("Unexpected PMC-10001 line: %s", line.c_str());
+			res = false;
+		}
+	}
+	return res;
 }
 
 int main() {
@@ -208,14 +245,13 @@ int main() {
 
 	const bool ready = (log_res == EXIT_SUCCESS && hg >= 0);
 
-	// Site 1: overlapping COM_QUERY -> PMC-10001 packet line with a backend connection id.
-	ok(ready && trigger_and_find(cl, hg, proxysql_log, com_query_packet("DO 1"),
-			"Unexpected packet from client", true),
-		"PMC-10001 line carries 'user %s'/'hostgroup %d' and a backend connection id", cl.username, hg);
+	// Overlapping COM_QUERY -> pipelined (#5930): both commands answered, no PMC-10001 line.
+	ok(ready && overlapping_query_is_pipelined(cl, proxysql_log),
+		"Overlapping COM_QUERY is executed after the held one, without a PMC-10001 line");
 
 	// Site 2: overlapping COM_QUIT -> COM_QUIT line.
 	ok(ready && trigger_and_find(cl, hg, proxysql_log, com_quit_packet(),
-			"Unexpected COM_QUIT from client", false),
+			"Unexpected COM_QUIT from client"),
 		"COM_QUIT line carries 'user %s' and 'hostgroup %d'", cl.username, hg);
 
 	if (proxysql_log.is_open()) proxysql_log.close();

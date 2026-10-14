@@ -125,8 +125,6 @@ static void test_common(const Dialect& d) {
 	ok(plain.digest == annotated.digest && plain.digest != 0,
 		"%s annotation does not change the digest hash", d.name);
 	ok(plain.first_comment == nullptr, "%s query without a comment has a NULL first comment", d.name);
-	ok(annotated.parsersql_stmt_type == plain.parsersql_stmt_type && plain.parsersql_stmt_type == -1,
-		"%s digest parsing no longer caches a ParserSQL statement type", d.name);
 	release_digest(plain);
 	release_digest(annotated);
 }
@@ -152,7 +150,7 @@ static void test_pgsql(const Dialect& d) {
 }
 
 int main() {
-	plan(2 * 46 + 8 + 3);
+	plan(2 * 45 + 8 + 3);
 	test_init_minimal();
 	mysql_thread___query_digests_max_query_length = pgsql_thread___query_digests_max_query_length = 65000;
 	mysql_thread___query_digests_max_digest_length = pgsql_thread___query_digests_max_digest_length = 2048;

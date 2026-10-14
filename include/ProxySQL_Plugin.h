@@ -75,7 +75,9 @@ namespace prometheus { class Registry; }
 //          AWS metadata-provider install used by locality discovery, and the
 //          MySQL-owned AWS-locality stats projection callback.
 //   ABI 14: ProxySQL_PluginServices appends provider-neutral server discovery
-//          module/controller registration and desired-set submission.
+//          module/controller registration and desired-set submission. Server
+//          modules were later removed: register_server_module is a reserved
+//          slot whose stub always fails.
 //
 //   ABI 15: appends the managed configuration service descriptor accessor
 //          and configuration-lock/runtime adapter service callbacks.
@@ -541,14 +543,19 @@ struct ProxySQL_PluginServices {
 	proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
 	proxysql_plugin_refresh_mysql_aws_locality_stats_cb refresh_mysql_aws_locality_stats;
 	proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
-	// ABI-14 extension. Server modules can register during Phase B or normal
-	// init; discovery controllers install only during normal init. Uninstall is
-	// live during normal init and the owning plugin's stop() callback so its
-	// installed controller can synchronously drain and be destroyed before
-	// stop returns. A plugin cannot uninstall another plugin's controller.
-	// A plugin may retain post_server_desired_set and call it from start or
-	// steady-state workers. The callback pins the active manager through the
-	// synchronous acknowledgement and fails closed after manager unpublication.
+	// ABI-14 extension. Discovery controllers install only during normal init.
+	// Uninstall is live during normal init and the owning plugin's stop()
+	// callback so its installed controller can synchronously drain and be
+	// destroyed before stop returns. A plugin cannot uninstall another
+	// plugin's controller. A plugin may retain post_server_desired_set and call
+	// it from start or steady-state workers. The callback pins the active
+	// manager through the synchronous acknowledgement and fails closed after
+	// manager unpublication.
+	//
+	// register_server_module is RESERVED: server modules (plugin-owned server
+	// tables) are no longer supported. The slot is kept so the offsets of every
+	// later field stay unchanged. It always points to a stub that logs a
+	// warning once and returns false without touching its arguments.
 	proxysql_plugin_register_server_module_cb register_server_module;
 	proxysql_plugin_install_server_discovery_controller_cb install_server_discovery_controller;
 	proxysql_plugin_uninstall_server_discovery_controller_cb uninstall_server_discovery_controller;
