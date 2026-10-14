@@ -1211,11 +1211,39 @@ int MySQL_Data_Stream::buffer2array() {
 				destLen=payload_length;
 				//dest=(Bytef *)l_alloc(destLen);
 				dest=(Bytef *)malloc(destLen);
+				const uLongf claimed_len=destLen;
+				const unsigned long long body_len=(unsigned long long)(queueIN.pkt.size-7);
 				int rc=uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
-				if (rc!=Z_OK) {
+				if (rc==Z_OK) {
+					// GHSA-fvch-fpgq-pwfx: uncompress() rewrites destLen with
+					// the number of bytes it actually produced. If that is
+					// smaller than the length declared in the packet header,
+					// the tail of 'dest' is uninitialized heap memory, and the
+					// packet walk below would parse it as MySQL packet headers.
+					if (destLen != claimed_len) {
+						proxy_error("Decompressed length %lu does not match the declared length %lu . Dropping compressed packet\n",
+							(unsigned long)destLen, (unsigned long)claimed_len);
+						free(dest);
+						shut_soft();
+						return ret;
+					}
+					datalength=payload_length;
+				} else {
 					// for some reason, uncompress failed
 					// accoding to debugging on #1410 , it seems some library may send uncompress data claiming it is compressed
 					// we try to assume it is not compressed, and we do some sanity check
+					//
+					// 'dest' is only 'claimed_len' bytes, while the body below is
+					// 'body_len' bytes, and the two are independent fields taken
+					// straight off the wire. Falling back to the uncompressed
+					// interpretation when the body is the larger of the two
+					// therefore overflows 'dest', so refuse instead.
+					if (body_len > (unsigned long long)claimed_len) {
+						proxy_error("Unable to uncompress a compressed packet\n");
+						free(dest);
+						shut_soft();
+						return ret;
+					}
 					memcpy(dest, _ptr, queueIN.pkt.size-7);
 					datalength=queueIN.pkt.size-7;
 					// some sanity check now
@@ -1236,11 +1264,11 @@ int MySQL_Data_Stream::buffer2array() {
 					}
 					if (sanity_check == false) {
 						proxy_error("Unable to uncompress a compressed packet\n");
+						free(dest);
 						shut_soft();
 						return ret;
 					}
 				}
-				datalength=payload_length;
 				// change _ptr to the new buffer
 				_ptr=dest;
 			} else {
