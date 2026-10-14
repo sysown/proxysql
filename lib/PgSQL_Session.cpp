@@ -1017,105 +1017,6 @@ bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt, bool* lock_hostgroup
 	return false;
 }
 
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session() {
-	if (pkt.size < 15 * 1024 * 1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
-		// check if there are too many mirror sessions in queue
-		if (thread->mirror_queue_mysql_sessions->len >= (unsigned int)pgsql_thread___mirror_max_queue_length) {
-			return;
-		}
-		// at this point, we will create the new session
-		// we will later decide if queue it or sent it immediately
-
-//		int i=0;
-//		for (i=0;i<100;i++) {
-		PgSQL_Session* newsess = NULL;
-		if (thread->mirror_queue_mysql_sessions_cache->len == 0) {
-			newsess = new PgSQL_Session();
-			newsess->client_myds = new PgSQL_Data_Stream();
-			newsess->client_myds->DSS = STATE_SLEEP;
-			newsess->client_myds->sess = newsess;
-			newsess->client_myds->fd = 0;
-			newsess->client_myds->myds_type = MYDS_FRONTEND;
-			newsess->client_myds->PSarrayOUT = new PtrSizeArray();
-			newsess->thread_session_id = __sync_fetch_and_add(&glovars.thread_id, 1);
-			if (newsess->thread_session_id == 0) {
-				newsess->thread_session_id = __sync_fetch_and_add(&glovars.thread_id, 1);
-			}
-			newsess->status = WAITING_CLIENT_DATA;
-			PgSQL_Connection* myconn = new PgSQL_Connection(true);
-			newsess->client_myds->attach_connection(myconn);
-			newsess->client_myds->myprot.init(&newsess->client_myds, newsess->client_myds->myconn->userinfo, newsess);
-			newsess->mirror = true;
-			newsess->client_myds->destroy_queues();
-		}
-		else {
-			newsess = (PgSQL_Session*)thread->mirror_queue_mysql_sessions_cache->remove_index_fast(0);
-		}
-		newsess->client_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
-		newsess->to_process = 1;
-		newsess->default_hostgroup = default_hostgroup;
-		if (qpo->mirror_hostgroup >= 0) {
-			newsess->mirror_hostgroup = qpo->mirror_hostgroup; // in the new session we copy the mirror hostgroup
-		}
-		else {
-			newsess->mirror_hostgroup = default_hostgroup; // copy the default
-		}
-		newsess->mirror_flagOUT = qpo->mirror_flagOUT; // in the new session we copy the mirror flagOUT
-		if (newsess->default_schema == NULL) {
-			newsess->default_schema = strdup(default_schema);
-		}
-		else {
-			if (strcmp(newsess->default_schema, default_schema)) {
-				free(newsess->default_schema);
-				newsess->default_schema = strdup(default_schema);
-			}
-		}
-
-		if (thread->mirror_queue_mysql_sessions->len == 0) {
-			// there are no sessions in the queue, we try to execute immediately
-			// Only pgsql_thread___mirror_max_concurrency mirror session can run in parallel
-			if (__sync_add_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1) > (unsigned int)pgsql_thread___mirror_max_concurrency) {
-				// if the limit is reached, we queue it instead
-				__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
-				thread->mirror_queue_mysql_sessions->add(newsess);
-			}
-			else {
-				//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
-				thread->register_session(thread,newsess);
-				newsess->handler(); // execute immediately
-				//newsess->to_process=0;
-				if (newsess->status == WAITING_CLIENT_DATA) { // the mirror session has completed
-					thread->unregister_session(thread->mysql_sessions->len - 1);
-					unsigned int l = (unsigned int)pgsql_thread___mirror_max_concurrency;
-					if (thread->mirror_queue_mysql_sessions->len * 0.3 > l) l = thread->mirror_queue_mysql_sessions->len * 0.3;
-					if (thread->mirror_queue_mysql_sessions_cache->len <= l) {
-						bool to_cache = true;
-						if (newsess->mybe) {
-							if (newsess->mybe->server_myds) {
-								to_cache = false;
-							}
-						}
-						if (to_cache) {
-							__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
-							//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
-							thread->mirror_queue_mysql_sessions_cache->add(newsess);
-						}
-						else {
-							delete newsess;
-						}
-					}
-					else {
-						delete newsess;
-					}
-				}
-			}
-		}
-		else {
-			thread->mirror_queue_mysql_sessions->add(newsess);
-		}
-	}
-}
-
 int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 	assert(mybe->server_myds->myconn);
 	PgSQL_Data_Stream* myds = mybe->server_myds;
@@ -1930,25 +1831,6 @@ bool PgSQL_Session::handler_again___status_RESETTING_CONNECTION(int* _rc) {
 }
 
 // this function was inline inside PgSQL_Session::get_pkts_from_client
-// ClickHouse doesn't support COM_INIT_DB , so we replace it
-// with a COM_QUERY running USE
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt) {
-	PtrSize_t _new_pkt;
-	_new_pkt.ptr = malloc(pkt.size + 4); // USE + space
-	memcpy(_new_pkt.ptr, pkt.ptr, 4);
-	unsigned char* _c = (unsigned char*)_new_pkt.ptr;
-	_c += 4; *_c = 0x03;
-	_c += 1; *_c = 'U';
-	_c += 1; *_c = 'S';
-	_c += 1; *_c = 'E';
-	_c += 1; *_c = ' ';
-	memcpy((char*)_new_pkt.ptr + 9, (char*)pkt.ptr + 5, pkt.size - 5);
-	l_free(pkt.size, pkt.ptr);
-	pkt.size += 4;
-	pkt.ptr = _new_pkt.ptr;
-}
-
-// this function was inline inside PgSQL_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
 // client_myds->DSS = STATE_SLEEP
@@ -2562,7 +2444,6 @@ __implicit_sync:
 											"(mirror_hostgroup=%d, mirror_flagOUT=%d, query='%s')\n",
 											qpo->mirror_hostgroup, qpo->mirror_flagOUT, query_text ? query_text : "");
 									}
-									//handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 								}
 
 								if (pgsql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6

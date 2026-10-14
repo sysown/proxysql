@@ -3220,17 +3220,21 @@ char* pgsql_query_strip_comments(char *s, int _len, bool lowercase) {
 
 char* pgsql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
 	/* buffer to store first comment. */
-	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
-	char* res = get_result_buffer(d_max_len, buf);
-
 	// global options
 	options opts;
 	get_pgsql_options(&opts);
+
+	int d_max_len = get_digest_max_len(q_len, opts.max_query_length);
+	// Sized as in pgsql_query_digest_and_first_comment(): with 'keep_comment' the digest
+	// can be longer than the query, so the separator spaces need room too.
+	const int res_max_len = get_result_buffer_len(d_max_len, &opts);
+	char* res = get_result_buffer(res_max_len, buf);
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
 	memset(&shared_st, 0, sizeof(struct shared_st));
 	init_shared_st(&shared_st, q, q_len, d_max_len, res);
+	shared_st.res_max_len = res_max_len;
 
 	struct stage_1_st stage_1_st;
 	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
@@ -3246,17 +3250,21 @@ char* pgsql_query_digest_first_stage(const char* const q, int q_len, char** cons
 
 char* pgsql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
 	/* buffer to store first comment. */
-	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
-	char* res = get_result_buffer(d_max_len, buf);
-
 	// global options
 	options opts;
 	get_pgsql_options(&opts);
+
+	int d_max_len = get_digest_max_len(q_len, opts.max_query_length);
+	// Sized as in pgsql_query_digest_and_first_comment(): with 'keep_comment' the digest
+	// can be longer than the query, so the separator spaces need room too.
+	const int res_max_len = get_result_buffer_len(d_max_len, &opts);
+	char* res = get_result_buffer(res_max_len, buf);
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
 	memset(&shared_st, 0, sizeof(struct shared_st));
 	init_shared_st(&shared_st, q, q_len, d_max_len, res);
+	shared_st.res_max_len = res_max_len;
 
 	struct stage_1_st stage_1_st;
 	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
@@ -3287,12 +3295,15 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	// buffer of exactly pgsql_query_digest_buffer_size() bytes, which can be
 	// smaller than the 127 bytes a fixed-size clear would write (#6451).
 
-	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
-	char* res = get_result_buffer(d_max_len, buf);
-
 	// global options
 	options opts;
 	get_pgsql_options(&opts);
+
+	int d_max_len = get_digest_max_len(q_len, opts.max_query_length);
+	// Sized as in pgsql_query_digest_and_first_comment(): with 'keep_comment' the digest
+	// can be longer than the query, so the separator spaces need room too.
+	const int res_max_len = get_result_buffer_len(d_max_len, &opts);
+	char* res = get_result_buffer(res_max_len, buf);
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
@@ -3300,7 +3311,7 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	shared_st.q = q;
 	shared_st.q_len = q_len;
 	shared_st.d_max_len = d_max_len;
-	shared_st.res_max_len = d_max_len;
+	shared_st.res_max_len = res_max_len;
 	shared_st.res_init_pos = res;
 	shared_st.res_it_init_pos = res;
 	shared_st.res_cur_pos = res;

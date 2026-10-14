@@ -3404,7 +3404,16 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
-	qp->parsersql_stmt_type=-1;
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// PgSQL_Query_Info passes a length that includes the protocol's NUL
+		// terminator. The terminator is not part of the query: digested as a
+		// character it hid the end of the query from the tokenizer, so a trailing
+		// ';' or whitespace was not trimmed and 'SELECT 1' and 'SELECT 1;' got
+		// different digests (#6454). Drop it once, here, for both digest paths.
+		if (query && query_length > 0 && query[query_length - 1] == '\0') {
+			--query_length;
+		}
+	}
 	if (GET_THREAD_VARIABLE(query_digests)) {
 		// Parser mode no longer changes the digest (#6454): parsersql_digest_init_*()
 		// now delegates to the legacy tokenizer, so both branches below yield the
