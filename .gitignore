@@ -258,6 +258,9 @@ test/scripts/deps/mysqlbinlog
 # (private keys: SonarCloud secrets:S6706, BLOCKER).
 /proxysql-*.pem
 /file:*
+# Same runtime output, left by unit tests that start Admin in their directory.
+/test/tap/tests/unit/proxysql-*.pem
+/test/tap/tests/unit/file:*
 
 # Temporary ASAN CI end-to-end validation trigger; this branch will not merge.
 
