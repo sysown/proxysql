@@ -38,7 +38,7 @@ struct ProxySQL_ClusterPluginIdentity {
 /**
  * @brief Computes the canonical plugin-set hash.
  * @return A non-empty checksum string (same format as Cluster checksums).
- *   The result does not depend on the order of either input.
+ *   The result does not depend on the order of `plugins`.
  */
 std::string proxysql_cluster_plugin_set_hash(
 	std::vector<ProxySQL_ClusterPluginIdentity> plugins);

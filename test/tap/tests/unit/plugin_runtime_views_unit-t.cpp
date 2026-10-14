@@ -39,13 +39,16 @@ void probe_refresh_cb(SQLite3DB* /*admindb*/, void* opaque) {
 
 void noop_cb(SQLite3DB*, void*) {}
 
-SQLite3DB* const any_db = reinterpret_cast<SQLite3DB*>(0xFF);
+// Never-opened handles: the chassis inspects a handle's transaction state
+// around each refresh, so even a placeholder must be a real SQLite3DB.
+SQLite3DB any_db_storage;
+SQLite3DB* const any_db = &any_db_storage;
 
 } // namespace
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(47);
+	plan(48);
 	diag("=== plugin_runtime_views_unit-t starting ===");
 
 	// ---- Registration validation ----
@@ -174,9 +177,10 @@ any_db, nullptr, nullptr);
 	{
 		diag(">>> refresh_runtime_views_for_query dispatches correct DB by db_kind");
 
-		SQLite3DB* admin_ptr = reinterpret_cast<SQLite3DB*>(0x1);
-		SQLite3DB* config_ptr = reinterpret_cast<SQLite3DB*>(0x2);
-		SQLite3DB* stats_ptr = reinterpret_cast<SQLite3DB*>(0x3);
+		SQLite3DB admin_db, config_db, stats_db;
+		SQLite3DB* admin_ptr = &admin_db;
+		SQLite3DB* config_ptr = &config_db;
+		SQLite3DB* stats_ptr = &stats_db;
 
 		SQLite3DB* received_db = nullptr;
 
@@ -247,7 +251,15 @@ any_db, nullptr, nullptr);
 		db.execute("CREATE TABLE runtime_throwing_std (v INTEGER)");
 		db.execute("INSERT INTO runtime_throwing_std VALUES (42)");
 
-		auto throw_std_cb = [](SQLite3DB*, void*) { throw std::runtime_error("projection failed"); };
+		// Follows the documented projection pattern (BEGIN; DELETE; INSERT)
+		// and throws before COMMIT, so the chassis must roll the partial
+		// projection back for the previous contents to survive.
+		auto throw_std_cb = [](SQLite3DB* cb_db, void*) {
+			cb_db->execute("BEGIN");
+			cb_db->execute("DELETE FROM runtime_throwing_std");
+			cb_db->execute("INSERT INTO runtime_throwing_std VALUES (99)");
+			throw std::runtime_error("projection failed");
+		};
 		auto throw_other_cb = [](SQLite3DB*, void*) { throw 7; };
 
 		std::atomic<int> after_fires{0};
@@ -270,8 +282,11 @@ any_db, nullptr, nullptr);
 		ok(!escaped, "no exception escapes refresh_runtime_views_for_query");
 		ok(after_fires.load() == 1,
 		   "a view registered after the throwing ones still refreshes (fires=%d)", after_fires.load());
-		ok(db.return_one_int("SELECT v FROM runtime_throwing_std") == 42,
-		   "the throwing view keeps its previous contents");
+		ok(db.return_one_int("SELECT COUNT(*) FROM runtime_throwing_std") == 1 &&
+		   db.return_one_int("SELECT v FROM runtime_throwing_std") == 42,
+		   "the partially projected throwing view is rolled back to its previous contents");
+		ok(proxy_sqlite3_get_autocommit(db.get_db()) != 0,
+		   "no transaction is left open on the view's DB after a contained throw");
 
 		escaped = false;
 		try {
