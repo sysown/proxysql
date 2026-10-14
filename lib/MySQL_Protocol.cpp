@@ -1482,10 +1482,22 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 		return 1;
 	}
 	auth_plugin_id = (*myds)->switching_auth_type;
+	// GHSA-24vm-gh4h-hfr3: the NUL-terminated form was read with an
+	// unbounded strlen() over client bytes, and the raw length below
+	// underflowed for a packet shorter than a header. Bound both by the
+	// number of payload bytes actually present.
+	const size_t payload_length = len >= sizeof(mysql_hdr) ? len - sizeof(mysql_hdr) : 0;
 	if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
-		vars1.pass_len = len - sizeof(mysql_hdr);
+		vars1.pass_len = payload_length;
 	} else {
-		vars1.pass_len=strlen((char *)pkt);
+		const unsigned char* terminator = (const unsigned char*)memchr(pkt, '\0', payload_length);
+		if (terminator == NULL) {
+			ret = false;
+			vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p . Rejected malformed NUL-terminated authentication response\n", (*myds)->sess, (*myds));
+			return 1;
+		}
+		vars1.pass_len = (uint32_t)(terminator - pkt);
 	}
 	vars1.pass = (unsigned char *)malloc(vars1.pass_len+1);
 	memcpy(vars1.pass, pkt, vars1.pass_len);
@@ -1501,6 +1513,21 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 
 // this function was inline in process_pkt_handshake_response() , split for readibility
 bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 2
+	// GHSA-24vm-gh4h-hfr3: HandshakeResponse41 carries a 32-byte fixed
+	// header (4 capabilities + 4 max packet + 1 charset + 23 reserved)
+	// before any variable-length field. This function read that header
+	// unconditionally, so a shorter packet was parsed from out-of-bounds
+	// memory before authentication.
+	const unsigned int handshake_response_header_len = sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t) + 23;
+	if (len < sizeof(mysql_hdr) + handshake_response_header_len) {
+		ret = false;
+		return false;
+	}
+	// GHSA-24vm-gh4h-hfr3: every variable-length field below is bounded
+	// against this rather than trusting a NUL terminator to exist inside
+	// the packet.
+	unsigned char* packet_end = vars1._ptr + len;
+
 	vars1.capabilities = CPY4(pkt);
 	// see bug #2916. If CLIENT_MULTI_STATEMENTS is set by the client
 	// we enforce setting CLIENT_MULTI_RESULTS, this is the proper and expected
@@ -1555,8 +1582,16 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 //		(*myds)->encrypted=true;
 //		use_ssl=true;
 //	} else {
+	// GHSA-24vm-gh4h-hfr3: do not strlen() an unterminated username -- it
+	// scans past the end of the packet when the field is truncated.
+	unsigned char* user_end = (unsigned char*)memchr(pkt, 0, packet_end - pkt);
+	if (user_end == NULL) {
+		ret = false;
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p . malformed username in handshake response\n", (*myds), (*myds)->sess);
+		return false;
+	}
 	vars1.user = pkt;
-	pkt += strlen((char *)vars1.user) + 1;
+	pkt = user_end + 1;
 
 	if (vars1.capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
 		uint64_t passlen64=0;
@@ -1565,7 +1600,7 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 		// truncated prefix at the end of the handshake response read
 		// past the packet, before authentication. Bound the decode by
 		// the bytes actually remaining.
-		int pass_len_enc=mysql_decode_length_checked(pkt, (vars1._ptr + len) - pkt, &passlen64);
+		int pass_len_enc=mysql_decode_length_checked(pkt, packet_end - pkt, &passlen64);
 		if (pass_len_enc == 0) {
 			ret = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth response length in handshake response\n", (*myds), (*myds)->sess, vars1.user);
@@ -1579,7 +1614,27 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 			return false;
 		}
 	} else {
-		vars1.pass_len = (vars1.capabilities & CLIENT_SECURE_CONNECTION ? *pkt++ : strlen((char *)pkt));
+		// GHSA-24vm-gh4h-hfr3: bound the auth-response length. The
+		// fixed-width byte was dereferenced without checking it exists,
+		// and the NUL-terminated form was strlen()'d without a bound.
+		if (vars1.capabilities & CLIENT_SECURE_CONNECTION) {
+			if (packet_end <= pkt) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . missing auth response in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			vars1.pass_len = *pkt++;
+		} else {
+			unsigned char* pass_end = (unsigned char*)memchr(pkt, 0, packet_end - pkt);
+			if (pass_end == NULL) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . unterminated auth response in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			vars1.pass_len = (uint32_t)(pass_end - pkt);
+			// note: 'pkt' is deliberately not advanced here; the caller
+			// advances it by 'vars1.pass_len' after the memcpy below
+		}
 		if (vars1.pass_len > (len - (pkt - vars1._ptr))) {
 			ret = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response\n", (*myds), (*myds)->sess, vars1.user);
@@ -1609,8 +1664,17 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 			vars1.pass_len--; // remove the extra 0 if present
 		}
 	}
-	if (vars1._ptr+len > pkt) {
+	if (packet_end > pkt) {
 		if (vars1.capabilities & CLIENT_PLUGIN_AUTH) {
+			// GHSA-24vm-gh4h-hfr3: reject an unterminated plugin name
+			// rather than letting PPHR_3 compare past the end of the
+			// packet.
+			unsigned char* plugin_end = (unsigned char*)memchr(pkt, 0, packet_end - pkt);
+			if (plugin_end == NULL) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth plugin name in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
 			vars1.auth_plugin = pkt;
 		}
 	}
