@@ -116,7 +116,9 @@ static void test_digests(const char* dialect, DigestInit initialize) {
 
 	for (const char* empty : {"", " \t\n", "/* comment only */"}) {
 		initialize(&qp, empty, std::strlen(empty));
-		ok(!qp.digest_text && qp.digest == 0, "%s input without SQL tokens has no digest", dialect);
+		// As in legacy mode: digest text "" and the hash of "" (#6454).
+		ok(qp.digest_text && *qp.digest_text == '\0' && qp.digest == SpookyHash::Hash64("", 0, 0),
+			"%s input without SQL tokens has the empty digest, as in legacy mode", dialect);
 		release_digest(qp);
 	}
 }

@@ -412,6 +412,7 @@
   "proxy_protocol_unit-t" : [ "unit-tests-g1" ],
   "proxysql_utils_unit-t" : [ "unit-tests-g1" ],
   "query_cache_unit-t" : [ "unit-tests-g1" ],
+  "query_digest_parser_parity_unit-t" : [ "unit-tests-g1" ],
   "query_processor_firewall_unit-t" : [ "unit-tests-g1" ],
   "query_processor_regex_default_unit-t" : [ "unit-tests-g1" ],
   "query_processor_unit-t" : [ "unit-tests-g1" ],
