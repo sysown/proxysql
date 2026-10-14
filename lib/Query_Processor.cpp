@@ -423,9 +423,10 @@ static constexpr unsigned long PCRE1_RULE_MATCH_LIMIT = 10000000;
 // vector keeps the PCRE behaviour identical to RE::PartialMatch().
 static constexpr int PCRE1_OVECTOR_SIZE = (1 + 16) * 3;
 
-// Lowest address of the calling thread's stack, read once per thread.
+// Bounds of the calling thread's stack, read once per thread.
 static __thread bool pcre1_stack_low_probed = false;
 static __thread char* pcre1_stack_low = nullptr;
+static __thread char* pcre1_stack_high = nullptr;
 
 /**
  * @brief The PCRE1 recursion limit for a rule compiled by the calling thread.
@@ -442,6 +443,7 @@ static unsigned long pcre1_recursion_limit_for_current_thread() {
 			size_t size = 0;
 			if (pthread_attr_getstack(&attr, &addr, &size) == 0 && addr != nullptr && size > 0) {
 				pcre1_stack_low = static_cast<char*>(addr);
+				pcre1_stack_high = pcre1_stack_low + size;
 			}
 			pthread_attr_destroy(&attr);
 		}
@@ -450,9 +452,14 @@ static unsigned long pcre1_recursion_limit_for_current_thread() {
 	if (pcre1_stack_low == nullptr) {
 		return PCRE1_RECURSION_LIMIT_FALLBACK;
 	}
-	// Stacks grow down on every platform ProxySQL supports.
-	char here = 0;
-	char* sp = &here;
+	// Stacks grow down on every platform ProxySQL supports. The frame address
+	// is used rather than the address of a local: with ASAN's fake stack a
+	// local can live on the heap, outside the thread's stack.
+	char* sp = static_cast<char*>(__builtin_frame_address(0));
+	if (sp > pcre1_stack_high) {
+		// Not on the stack the thread was created with (e.g. sigaltstack).
+		return PCRE1_RECURSION_LIMIT_FALLBACK;
+	}
 	if (sp <= pcre1_stack_low) {
 		return PCRE1_RECURSION_LIMIT_MIN;
 	}
