@@ -1560,16 +1560,33 @@ void ProxySQL_PluginManager::refresh_runtime_views_for_query(const std::string& 
 		if (db == nullptr) continue;
 		// Contain plugin exceptions like every other plugin hook: a throwing
 		// projection must not escape into the Admin session (which holds
-		// sql_query_global_mutex and the plugin-manager read lock). The view
-		// keeps whatever contents it had, and the remaining views still refresh.
+		// sql_query_global_mutex and the plugin-manager read lock). The
+		// remaining views still refresh.
+		//
+		// The ABI contract has the callback run its own BEGIN ... COMMIT, so
+		// the chassis cannot wrap it in a SAVEPOINT (the callback's BEGIN would
+		// then fail). Instead, a transaction the throwing callback left open is
+		// rolled back, which restores the view's previous contents. Writes a
+		// callback made outside its own transaction are already committed.
+		// Admin serializes refreshes under sql_query_global_mutex, so an open
+		// transaction appearing here belongs to this callback.
+		sqlite3 *raw_db = db->get_db();
+		const bool was_autocommit = raw_db != nullptr &&
+			(*proxy_sqlite3_get_autocommit)(raw_db) != 0;
+		bool threw = false;
 		try {
 			view.refresh(db, view.opaque);
 		} catch (const std::exception &e) {
+			threw = true;
 			proxy_error("Plugin runtime view refresh threw for plugin %s, view '%s': %s\n",
 				view.plugin_name.c_str(), view.table_name.c_str(), e.what());
 		} catch (...) {
+			threw = true;
 			proxy_error("Plugin runtime view refresh threw for plugin %s, view '%s'\n",
 				view.plugin_name.c_str(), view.table_name.c_str());
+		}
+		if (threw && was_autocommit && (*proxy_sqlite3_get_autocommit)(raw_db) == 0) {
+			db->execute("ROLLBACK");
 		}
 	}
 }
