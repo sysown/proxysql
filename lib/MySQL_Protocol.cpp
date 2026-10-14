@@ -1272,32 +1272,73 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	char *db=NULL;
 	char* user_attributes=NULL;
 	mysql_hdr hdr;
+	const unsigned char *packet_end = pkt + len;
+	// GHSA-8mqj-34cf-rj43: this parser had no bounds checks at all. Validate
+	// each field before consuming it. The user, database and auth-plugin
+	// fields were each read with an unbounded strlen(), and the one-byte
+	// auth-response length was memcpy'd into a fixed 128-byte *stack* buffer,
+	// so a single post-authentication packet could write up to 255
+	// attacker-controlled bytes past the frame.
+	if (len <= sizeof(mysql_hdr)) {
+		return false;
+	}
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	int default_hostgroup=-1;
 	bool transaction_persistent = true;
 	bool _ret_use_ssl=false;
 	cur++;
-	user=pkt+cur;
-	cur+=strlen((const char *)user);
-	cur++;
+	const unsigned char *user_ptr = pkt + cur;
+	const unsigned char *user_end = (const unsigned char*)memchr(user_ptr, 0, packet_end - user_ptr);
+	if (user_end == NULL) {
+		return false; // unterminated user
+	}
+	user=(unsigned char *)user_ptr;
+	cur+= (user_end - user_ptr) + 1;
+	if (pkt + cur >= packet_end) {
+		return false;
+	}
 	unsigned char pass_len=pkt[cur];
 	cur++;
-	unsigned char pass[128];
-	memset(pass,0,128);
+	const unsigned char *pass_ptr = pkt + cur;
+	if ((size_t)(packet_end - pass_ptr) < pass_len) {
+		return false;
+	}
+	// allocate instead of using a fixed stack buffer: 'pass_len' is a full byte
+	unsigned char *pass = (unsigned char *)malloc(pass_len+1);
+	if (pass == NULL) {
+		return false;
+	}
+	memset(pass,0,pass_len+1);
 	//pkt+=sizeof(mysql_hdr);
-	memcpy(pass, pkt+cur, pass_len);
+	memcpy(pass, pass_ptr, pass_len);
 	cur+=pass_len;
-	db=(char *)pkt+cur;
+	const char *db_ptr = (const char *)(pkt + cur);
+	const char *db_end = (const char*)memchr(db_ptr, 0, packet_end - (pkt + cur));
+	if (db_end == NULL) {
+		free(pass);
+		return false; // unterminated database name
+	}
+	db=(char *)db_ptr;
 	// Move to field after 'database'
-	cur += strlen(db) + 1;
+	cur += (db_end - db_ptr) + 1;
 	// Skipt field 'character-set' (size 2)
+	if ((size_t)(packet_end - (pkt + cur)) < sizeof(uint16_t)) {
+		free(pass);
+		return false;
+	}
 	cur += 2;
 	// Check and get 'Client Auth Plugin' if capability is supported
 	char* client_auth_plugin = nullptr;
-	if (pkt + len > pkt + cur) {
+	if (pkt + cur < packet_end) {
 		int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
 		if (capabilities & CLIENT_PLUGIN_AUTH) {
-			client_auth_plugin = reinterpret_cast<char*>(pkt + cur);
+			const char *auth_plugin_ptr = (const char *)(pkt + cur);
+			const char *auth_plugin_end = (const char*)memchr(auth_plugin_ptr, 0, packet_end - (pkt + cur));
+			if (auth_plugin_end == NULL) {
+				free(pass);
+				return false; // unterminated auth plugin name
+			}
+			client_auth_plugin = const_cast<char*>(auth_plugin_ptr);
 		}
 	}
 	// Default to 'mysql_native_password' in case 'auth_plugin' is not found.
@@ -1360,6 +1401,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		//	ret=false;
 		//}
 	}
+	// 'pass' is no longer needed once the authentication decision is made;
+	// release it here so the early 'return ret' paths below do not leak it.
+	free(pass);
+	pass = NULL;
 	if (userinfo->username) free(userinfo->username);
 	if (userinfo->password) free(userinfo->password);
 	if (ret==true) {
