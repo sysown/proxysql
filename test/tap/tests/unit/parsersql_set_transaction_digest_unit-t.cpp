@@ -187,7 +187,7 @@ static const Case mysql_cases[] = {
 	{"SET PERSIST_ONLY TRANSACTION ISOLATION LEVEL SERIALIZABLE", "SET PERSIST_ONLY TRANSACTION ISOLATION LEVEL SERIALIZABLE", FORWARDED},
 	{"SET PERSIST_ONLY TRANSACTION READ WRITE", "SET PERSIST_ONLY TRANSACTION READ WRITE", FORWARDED},
 	{"/* hostgroup=1 */ SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE", "SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE", FORWARDED},
-	// The regex matches a prefix; parse2() rejects the unparsed second characteristic.
+	// The regex matches the first characteristic; parse2() parses the whole list (#6469).
 	{"SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY", "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY", TRACKED},
 };
 
@@ -273,8 +273,10 @@ static void test_parse2() {
 	// Whitespace is collapsed in the digest but not in the query.
 	check_parse2("SET LOCAL\nTRANSACTION ISOLATION  LEVEL REPEATABLE\n READ", {{"session:isolation level", {"REPEATABLE READ"}}});
 	check_parse2("SET\tSESSION\tTRANSACTION\tREAD\tONLY", {{"session:read", {"ONLY"}}});
+	// Every characteristic of a list is returned (#6469).
+	check_parse2("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY",
+		{{"session:isolation level", {"READ COMMITTED"}}, {"session:read", {"ONLY"}}});
 	// Not parsed in full: forwarded instead of acknowledged with a partial (or empty) change.
-	check_parse2("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY", {});
 	check_parse2("SET LOCAL TRANSACTION READ ONLY junk", {});
 	check_parse2("SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE", {});
 	check_parse2("SET PERSIST TRANSACTION READ ONLY", {});
