@@ -379,7 +379,6 @@ private:
 	void RequestEnd(PgSQL_Data_Stream*, bool called_on_failure);
 	void LogQuery(PgSQL_Data_Stream*);
 
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
 	int handler_again___status_RESETTING_CONNECTION();
 	int handler_again___status_RESYNCHRONIZING_CONNECTION();
@@ -394,26 +393,11 @@ private:
 	void handler_again___new_thread_to_cancel_query();
 
 	bool handler_again___verify_init_connect();
-#if 0
-	bool handler_again___verify_ldap_user_variable();
-	bool handler_again___verify_backend_autocommit();
-	bool handler_again___verify_backend_session_track_gtids();
-	bool handler_again___verify_backend_multi_statement();
-#endif // 0
 	bool handler_again___verify_backend_user_db();
 	bool handler_again___status_SETTING_INIT_CONNECT(int*);
-#if 0
-	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int*);
-	bool handler_again___status_SETTING_SQL_MODE(int*);
-	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int*);
-	bool handler_again___status_CHANGING_SCHEMA(int*);
-#endif // 0
 	bool handler_again___status_CONNECTING_SERVER(int*);
 	bool handler_again___status_RESETTING_CONNECTION(int*);
 	//bool handler_again___status_CHANGING_AUTOCOMMIT(int*);
-#if 0
-	bool handler_again___status_SETTING_MULTI_STMT(int* _rc);
-#endif // 0
 	bool handler_again___multiple_statuses(int* rc);
 	//void init();
 	void reset();
@@ -458,7 +442,6 @@ private:
 	void handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* myds);
 	int RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA();
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
 	void handler___status_WAITING_CLIENT_DATA___default();
@@ -523,9 +506,6 @@ public:
 	}
 
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);
-#if 0
-	bool handler_again___status_SETTING_SQL_LOG_BIN(int*);
-#endif // 0
 	std::stack<enum session_status> previous_status;
 
 	PgSQL_Query_Info CurrentQuery;
