@@ -349,6 +349,12 @@ struct __RE2_objects_t {
 	// PCRE1 engine (query_processor_regex=1)
 	pcrecpp::RE_Options* opt1;
 	pcrecpp::RE* re1;
+	// The same pattern compiled with the same options as re1's unanchored
+	// regex, matched with pcre_exec() directly: pcrecpp reports a limit hit
+	// as "no match", which would make a negated rule match (issue #6466).
+	pcre* pcre1;
+	// The recursion/match limits re1 and pcre1 run with.
+	pcre_extra pcre1_extra;
 	// PCRE2 engine (query_processor_regex=3, PROXYSQL31/PROXYSQL40 only)
 	pcre2_code* pcre2;
 	pcre2_match_data* pcre2_md;
@@ -365,6 +371,198 @@ struct __RE2_objects_t {
 };
 
 typedef struct __RE2_objects_t re2_t;
+
+// Engine 1 (PCRE 8.45) limits (issue #6466).
+//
+// PCRE 8.45 is built with its default "recursive" match(): every nested
+// group iteration, alternative or backtracking point that has to be resumed
+// costs one more C stack frame of match() on the calling thread. Without a
+// limit the depth only depends on the query, so '^(.|\n)*FOR UPDATE' on a
+// query of about 2 KB overflowed a worker thread's stack and crashed the
+// process. pcre_exec() fails with PCRE_ERROR_RECURSIONLIMIT once
+// match_limit_recursion nested calls are active, before the stack runs out.
+//
+// The recursion limit is derived from the stack the thread actually has:
+// - Worker threads run on mysql-stacksize / pgsql-stacksize, 1 MiB by
+//   default, 256 KiB to 4 MiB allowed (MySQL_Thread.cpp/PgSQL_Thread.cpp,
+//   pthread_attr_setstacksize()). A fixed limit is either unsafe on a small
+//   stack or needlessly strict on a large one.
+// - One recursion level of match() measured 448-463 bytes of stack on
+//   x86_64 with the deps build of PCRE (gcc -O2; the same with
+//   -fstack-protector-strong), 613 bytes with -O0 and 859 bytes with ASAN.
+//   PCRE1_STACK_BYTES_PER_LEVEL budgets 1 KiB per level: twice the shipped
+//   build, and still above an instrumented build.
+// - PCRE1_STACK_RESERVE is left for the frames between compiling a rule
+//   (process_query(), which also does the matching) and pcre_exec().
+// So the limit is (stack still free when the rule is compiled - 64 KiB) /
+// 1 KiB: about 900 levels on the default 1 MiB worker stack, which uses
+// about 400 KiB of stack in the shipped build. It is computed once per rule
+// compilation, in the thread that later runs the match.
+//
+// Normal rules are not affected: 'a.*b', '\s+', '.*?' and '[\s\S]*' cost a
+// constant depth (2-4 levels on a 1 MB query); only a repeated group whose
+// iterations must be resumed, e.g. '(.|\n)*' or '(\d+,?)+', costs 2-4 levels
+// per iteration. Such a rule on a query longer than a few hundred
+// iterations is not applied to that query (logged, rate-limited) instead of
+// crashing; a larger stacksize allows deeper matches.
+//
+// match_limit is the PCRE default (10,000,000), set explicitly so that it
+// cannot be raised by a different build configuration; it bounds CPU time,
+// not stack, and matches engine 3's match limit.
+static constexpr size_t PCRE1_STACK_BYTES_PER_LEVEL = 1024;
+static constexpr size_t PCRE1_STACK_RESERVE = 64 * 1024;
+// Used when the thread's stack bounds cannot be read: the smallest worker
+// stack allowed (256 KiB) minus the reserve.
+static constexpr unsigned long PCRE1_RECURSION_LIMIT_FALLBACK =
+	(256 * 1024 - PCRE1_STACK_RESERVE) / PCRE1_STACK_BYTES_PER_LEVEL;
+// Never 0: pcrecpp treats 0 as "no limit".
+static constexpr unsigned long PCRE1_RECURSION_LIMIT_MIN = 16;
+static constexpr unsigned long PCRE1_RECURSION_LIMIT_MAX = 10000000;
+static constexpr unsigned long PCRE1_RULE_MATCH_LIMIT = 10000000;
+// pcrecpp's ovector size, (1 + 16 arguments) * 3: matching with the same
+// vector keeps the PCRE behaviour identical to RE::PartialMatch().
+static constexpr int PCRE1_OVECTOR_SIZE = (1 + 16) * 3;
+
+// Lowest address of the calling thread's stack, read once per thread.
+static __thread bool pcre1_stack_low_probed = false;
+static __thread char* pcre1_stack_low = nullptr;
+
+/**
+ * @brief The PCRE1 recursion limit for a rule compiled by the calling thread.
+ * @return The number of match() recursion levels that fit in the free stack
+ *   of the calling thread, see the comment above.
+ */
+static unsigned long pcre1_recursion_limit_for_current_thread() {
+	if (pcre1_stack_low_probed == false) {
+		pcre1_stack_low_probed = true;
+#if defined(__linux__)
+		pthread_attr_t attr;
+		if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+			void* addr = nullptr;
+			size_t size = 0;
+			if (pthread_attr_getstack(&attr, &addr, &size) == 0 && addr != nullptr && size > 0) {
+				pcre1_stack_low = static_cast<char*>(addr);
+			}
+			pthread_attr_destroy(&attr);
+		}
+#endif
+	}
+	if (pcre1_stack_low == nullptr) {
+		return PCRE1_RECURSION_LIMIT_FALLBACK;
+	}
+	// Stacks grow down on every platform ProxySQL supports.
+	char here = 0;
+	char* sp = &here;
+	if (sp <= pcre1_stack_low) {
+		return PCRE1_RECURSION_LIMIT_MIN;
+	}
+	const size_t free_stack = static_cast<size_t>(sp - pcre1_stack_low);
+	if (free_stack <= PCRE1_STACK_RESERVE) {
+		return PCRE1_RECURSION_LIMIT_MIN;
+	}
+	unsigned long limit = (free_stack - PCRE1_STACK_RESERVE) / PCRE1_STACK_BYTES_PER_LEVEL;
+	if (limit < PCRE1_RECURSION_LIMIT_MIN) limit = PCRE1_RECURSION_LIMIT_MIN;
+	if (limit > PCRE1_RECURSION_LIMIT_MAX) limit = PCRE1_RECURSION_LIMIT_MAX;
+	return limit;
+}
+
+static inline bool pcre1_is_limit_error(int rc) {
+	return rc == PCRE_ERROR_RECURSIONLIMIT || rc == PCRE_ERROR_MATCHLIMIT;
+}
+
+/**
+ * @brief Matches @p subject the way pcrecpp's RE::PartialMatch() does.
+ * @param out_rc Receives the pcre_exec() code, so a limit hit can be told
+ *   apart from "no match".
+ * @return true on a match. An uncompilable regex never matches, as in
+ *   pcrecpp; any pcre_exec() error is "no match", as in pcrecpp.
+ */
+static bool pcre1_partial_match(const re2_t* r, const char* subject, size_t len, int* out_rc) {
+	*out_rc = PCRE_ERROR_NOMATCH;
+	if (r->pcre1 == nullptr) return false;
+	int ovector[PCRE1_OVECTOR_SIZE];
+	const int rc = pcre_exec(r->pcre1, &r->pcre1_extra, subject, static_cast<int>(len), 0, 0,
+		ovector, PCRE1_OVECTOR_SIZE);
+	*out_rc = rc;
+	// rc == 0 is a match whose captures did not all fit in the vector.
+	return rc >= 0;
+}
+
+/**
+ * @brief Runs the matches pcrecpp's RE::GlobalReplace() runs on @p subject,
+ *   without rewriting, and reports the first limit hit.
+ *
+ * GlobalReplace() stops at a failed match and keeps the rewrites done so far,
+ * so a limit hit in the middle of a query would apply part of a rule. Running
+ * the same sequence first lets the caller leave the query unchanged instead.
+ * The loop mirrors RE::GlobalReplace(): after an empty match it retries
+ * anchored with PCRE_NOTEMPTY at the same offset, then advances one byte.
+ * (The CRLF/UTF-8 advance in GlobalReplace() does not apply: rules are
+ * compiled without newline or UTF-8 options.)
+ *
+ * @return 0, or the PCRE limit error that stopped a match.
+ */
+static int pcre1_global_replace_limit_check(const re2_t* r, const std::string& subject) {
+	if (r->pcre1 == nullptr) return 0;
+	const int len = static_cast<int>(subject.size());
+	int ovector[PCRE1_OVECTOR_SIZE];
+	int start = 0;
+	bool last_match_was_empty = false;
+	while (start <= len) {
+		int rc;
+		if (last_match_was_empty) {
+			rc = pcre_exec(r->pcre1, &r->pcre1_extra, subject.data(), len, start,
+				PCRE_ANCHORED | PCRE_NOTEMPTY, ovector, PCRE1_OVECTOR_SIZE);
+			if (rc < 0) {
+				if (pcre1_is_limit_error(rc)) return rc;
+				start++;
+				last_match_was_empty = false;
+				continue;
+			}
+		} else {
+			rc = pcre_exec(r->pcre1, &r->pcre1_extra, subject.data(), len, start,
+				0, ovector, PCRE1_OVECTOR_SIZE);
+			if (rc < 0) {
+				return pcre1_is_limit_error(rc) ? rc : 0;
+			}
+		}
+		start = ovector[1];
+		last_match_was_empty = (ovector[0] == ovector[1]);
+	}
+	return 0;
+}
+
+/**
+ * @brief Applies an engine 1 replace_pattern to @p query, as v3.0.11 did,
+ *   unless a match of the rewrite hits a PCRE limit.
+ * @param out_limit_rc Receives the PCRE limit error, or 0.
+ * @return false when a limit was hit; @p query is then unchanged.
+ */
+static bool pcre1_rule_replace(const re2_t* r, const char* rewrite, bool global, std::string* query,
+	int* out_limit_rc) {
+	*out_limit_rc = 0;
+	if (global) {
+		const int limit_rc = pcre1_global_replace_limit_check(r, *query);
+		if (limit_rc != 0) {
+			*out_limit_rc = limit_rc;
+			return false;
+		}
+		r->re1->GlobalReplace(rewrite, query);
+	} else {
+		// Replace() leaves the query unchanged when its one match fails,
+		// for a limit hit too; the extra match only runs on that rare path,
+		// to tell a limit hit from "no match" for the log.
+		if (r->re1->Replace(rewrite, query) == false && r->pcre1 != nullptr) {
+			int rc = PCRE_ERROR_NOMATCH;
+			pcre1_partial_match(r, query->data(), query->size(), &rc);
+			if (pcre1_is_limit_error(rc)) {
+				*out_limit_rc = rc;
+				return false;
+			}
+		}
+	}
+	return true;
+}
 
 static int int_cmp(const void *a, const void *b) {
 	const unsigned long long *ia = (const unsigned long long *)a;
@@ -811,6 +1009,8 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
 	r->opt1=NULL;
 	r->re1=NULL;
+	r->pcre1=NULL;
+	memset(&r->pcre1_extra, 0, sizeof(r->pcre1_extra));
 	r->pcre2=NULL;
 	r->pcre2_md=NULL;
 	r->pcre2_mctx=NULL;
@@ -863,10 +1063,20 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
 			r->opt1->set_caseless(true);
 		}
-		if (i==1) {
-			r->re1=new pcrecpp::RE(qr->match_digest, *r->opt1);
-		} else if (i==2) {
-			r->re1=new pcrecpp::RE(qr->match_pattern, *r->opt1);
+		// Stack and CPU limits for both the match and the rewrite (#6466).
+		const unsigned long recursion_limit = pcre1_recursion_limit_for_current_thread();
+		r->opt1->set_match_limit(static_cast<int>(PCRE1_RULE_MATCH_LIMIT));
+		r->opt1->set_match_limit_recursion(static_cast<int>(recursion_limit));
+		r->pcre1_extra.flags = PCRE_EXTRA_MATCH_LIMIT | PCRE_EXTRA_MATCH_LIMIT_RECURSION;
+		r->pcre1_extra.match_limit = PCRE1_RULE_MATCH_LIMIT;
+		r->pcre1_extra.match_limit_recursion = recursion_limit;
+		const char* pattern = (i==1 ? qr->match_digest : qr->match_pattern);
+		if (i==1 || i==2) {
+			r->re1=new pcrecpp::RE(pattern, *r->opt1);
+			// Compiled exactly as pcrecpp compiles re1's unanchored regex.
+			const char* compile_error = nullptr;
+			int error_offset = 0;
+			r->pcre1 = pcre_compile(pattern, r->opt1->all_options(), &compile_error, &error_offset, nullptr);
 		}
 	}
 	// Name the rule and the field so a broken rule can be found: RE2 runs with
@@ -901,6 +1111,7 @@ static void free_compiled_query_rule(re2_t *r) {
 	if (r == NULL) return;
 	if (r->opt1) { delete r->opt1; r->opt1=NULL; }
 	if (r->re1) { delete r->re1; r->re1=NULL; }
+	if (r->pcre1) { pcre_free(r->pcre1); r->pcre1=NULL; }
 	if (r->pcre2_mctx) { pcre2_match_context_free(r->pcre2_mctx); r->pcre2_mctx=NULL; }
 	if (r->pcre2_md) { pcre2_match_data_free(r->pcre2_md); r->pcre2_md=NULL; }
 	if (r->pcre2) { pcre2_code_free(r->pcre2); r->pcre2=NULL; }
@@ -909,6 +1120,31 @@ static void free_compiled_query_rule(re2_t *r) {
 	if (r->re2) { delete r->re2; r->re2=NULL; }
 	free(r);
 }
+
+#ifdef DEBUG
+// Debug-only seam: compiles @p pattern as an engine 1 match_pattern rule, in
+// the calling thread, and applies @p rewrite to @p query through the same
+// code as process_query(). Returns false when a PCRE limit was hit
+// (*limit_rc receives the error), true otherwise (issue #6466).
+bool pcre1_query_rule_replace_for_test(
+	const char* pattern,
+	const char* rewrite,
+	bool global,
+	std::string* query,
+	int* limit_rc
+) {
+	if (pattern == nullptr || rewrite == nullptr || query == nullptr || limit_rc == nullptr) return false;
+	QP_rule_t qr {};
+	qr.match_pattern = const_cast<char*>(pattern);
+	re2_t* r = compile_query_rule(&qr, 2, 1, false);
+	bool rc = false;
+	if (r != nullptr && r->re1 != nullptr) {
+		rc = pcre1_rule_replace(r, rewrite, global, query, limit_rc);
+	}
+	free_compiled_query_rule(r);
+	return rc;
+}
+#endif
 
 static bool rule_matches_regex(
 	const QP_rule_t* qr,
@@ -958,8 +1194,25 @@ static bool rule_matches_regex(
 				}
 			}
 		} else if (compiled_regex->re1) {
-			regex_is_valid = true;
-			rc = compiled_regex->re1->PartialMatch(subject);
+			// Same result as re1->PartialMatch(subject), which v3.0.11 used,
+			// except that a recursion/match limit hit is not a "no match":
+			// the rule is not applied, negated or not, as on engine 3 (#6466).
+			int match_rc = PCRE_ERROR_NOMATCH;
+			rc = pcre1_partial_match(compiled_regex, subject, strlen(subject), &match_rc);
+			regex_is_valid = !pcre1_is_limit_error(match_rc);
+			if (!regex_is_valid) {
+				static std::atomic<time_t> pcre1_match_limit_log_ts{0};
+				const time_t now = time(NULL);
+				time_t prev = pcre1_match_limit_log_ts.load(std::memory_order_relaxed);
+				if (now - prev >= 10 && pcre1_match_limit_log_ts.compare_exchange_strong(prev, now,
+					std::memory_order_relaxed)) {
+					proxy_warning("Query rule %d: %s matching stopped with PCRE error %d (%s limit %lu reached), the rule is not applied to this query; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
+						qr->rule_id, (regex_index==1 ? "match_digest" : "match_pattern"), match_rc,
+						(match_rc == PCRE_ERROR_RECURSIONLIMIT ? "recursion" : "match"),
+						(match_rc == PCRE_ERROR_RECURSIONLIMIT ? compiled_regex->pcre1_extra.match_limit_recursion :
+							compiled_regex->pcre1_extra.match_limit));
+				}
+			}
 		}
 	}
 
@@ -2856,11 +3109,24 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 						// verbatim (\1..\9), exactly as every released 3.x tag
 						// did. Note the argument order: pcrecpp binds caller
 						// arguments right-to-left, so the rewrite comes first
-						// and the query last (issue #6411).
-						if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
-							re2p->re1->GlobalReplace(qr->replace_pattern, ret->new_query);
-						} else {
-							re2p->re1->Replace(qr->replace_pattern, ret->new_query);
+						// and the query last (issue #6411). A recursion/match
+						// limit hit leaves the query unchanged, rather than
+						// partially rewritten by a GLOBAL rule (issue #6466).
+						int limit_rc = 0;
+						if (pcre1_rule_replace(re2p, qr->replace_pattern,
+								(qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL,
+								ret->new_query, &limit_rc) == false) {
+							static std::atomic<time_t> pcre1_replace_limit_log_ts{0};
+							const time_t now = time(NULL);
+							time_t prev = pcre1_replace_limit_log_ts.load(std::memory_order_relaxed);
+							if (now - prev >= 10 && pcre1_replace_limit_log_ts.compare_exchange_strong(prev, now,
+								std::memory_order_relaxed)) {
+								proxy_warning("Query rule %d: replace_pattern stopped with PCRE error %d (%s limit %lu reached), the query is not rewritten; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
+									qr->rule_id, limit_rc,
+									(limit_rc == PCRE_ERROR_RECURSIONLIMIT ? "recursion" : "match"),
+									(limit_rc == PCRE_ERROR_RECURSIONLIMIT ? re2p->pcre1_extra.match_limit_recursion :
+										re2p->pcre1_extra.match_limit));
+							}
 						}
 					} else if (re2p->pcre2_rewrite) {
 						int substitute_rc = 0;
