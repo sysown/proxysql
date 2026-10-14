@@ -3546,6 +3546,20 @@ bool MySQL_Connection::get_gtid_from_session_tracking(char *buff) {
 	if (!select_session_gtid(gtids, gtids_len, last_gtid, last_gtid_len, gtid_uuid, sizeof(gtid_uuid))) {
 		return false;
 	}
+	if (strcmp(gtid_uuid, SESSION_GTID_UNTRACKABLE) == 0) {
+		// The value did not fit and was not a reducible single-UUID set: the
+		// previous GTID is dropped instead of kept (#6465). One CAS per 10 s
+		// window so a burst of such OK packets logs once.
+		static std::atomic<time_t> untrackable_warn_ts{0};
+		const time_t now = time(nullptr);
+		time_t prev = untrackable_warn_ts.load(std::memory_order_relaxed);
+		if (now - prev >= 10 && untrackable_warn_ts.compare_exchange_strong(prev, now,
+				std::memory_order_relaxed)) {
+			proxy_warning(
+				"GTID tracking: the session GTID reported by the backend (%zu bytes) does not fit the %zu-byte tracking buffer and is not a single-UUID GTID set; it is not tracked, and causal reads that depend on it are not served from replicas\n",
+				gtids_len > 0 ? gtids_len : last_gtid_len, sizeof(gtid_uuid));
+		}
+	}
 	return collect_gtid_to_buff(buff);
 }
 

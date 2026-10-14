@@ -6749,12 +6749,22 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
  */
 void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
-		if (mysql_thread___update_gtid_from_ok) {
+		// An untrackable value (#6465) stays in mybe->gtid_uuid so causal
+		// routing fails closed on it, but it is not a GTID: it is neither
+		// recorded as executed nor forwarded to the client. The client gets
+		// no GTID rather than the previous one.
+		const bool trackable = strcmp(mybe->gtid_uuid, SESSION_GTID_UNTRACKABLE) != 0;
+		if (trackable && mysql_thread___update_gtid_from_ok) {
 			MyHGM->update_gtid_from_ok(myconn->parent, mybe->gtid_uuid);
 		}
 		if (mysql_thread___client_session_track_gtid) {
-			gtid_hid = current_hostgroup;
-			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
+			if (trackable) {
+				gtid_hid = current_hostgroup;
+				memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
+			} else {
+				gtid_hid = -1;
+				gtid_buf[0] = '\0';
+			}
 		}
 	}
 }
@@ -9844,7 +9854,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					gtid_invalid_warn_ts.compare_exchange_strong(gtid_warn_prev,
 						gtid_warn_now, std::memory_order_relaxed)) {
 					proxy_warning(
-						"GTID causal read: tracked value '%s' is not usable for routing (GTID set, tagged GTID or multi-UUID). %s\n",
+						"GTID causal read: tracked value '%s' is not usable for routing (multi-UUID set, tagged GTID, or a value too long to track). %s\n",
 						gtid_uuid,
 						routed_to_gtid_source ?
 							"Routing the query to the writer hostgroup" :

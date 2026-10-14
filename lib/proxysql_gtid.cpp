@@ -708,6 +708,34 @@ bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
 	return true;
 }
 
+bool reduce_gtid_set_to_highest(const char* set, size_t set_len,
+                                char* buf, size_t buf_len) {
+	if (set == nullptr || buf == nullptr || buf_len == 0) {
+		return false;
+	}
+	std::map<std::string, std::vector<TrxId_Interval>> parsed;
+	if (!parse_gtid_set(set, set_len, &parsed) || parsed.size() != 1) {
+		return false;
+	}
+	const auto& entry = *parsed.begin();
+	uint64_t max_end = 0;
+	for (const auto& iv : entry.second) {
+		max_end = std::max(max_end, static_cast<uint64_t>(iv.end));
+	}
+	const std::string& u = entry.first; // 32 lowercase hex digits
+	if (max_end == 0 || u.size() != 32) {
+		return false;
+	}
+	const int n = snprintf(buf, buf_len, "%.8s-%.4s-%.4s-%.4s-%.12s:%llu",
+		u.c_str(), u.c_str() + 8, u.c_str() + 12, u.c_str() + 16, u.c_str() + 20,
+		static_cast<unsigned long long>(max_end));
+	if (n < 0 || static_cast<size_t>(n) >= buf_len) {
+		buf[0] = '\0';
+		return false;
+	}
+	return true;
+}
+
 bool select_session_gtid(
 	const char* session_track_gtids, size_t gtids_len,
 	const char* last_gtid, size_t last_gtid_len,
@@ -733,8 +761,28 @@ bool select_session_gtid(
 		}
 	}
 
-	if (selected == nullptr || selected_len == 0 || selected_len >= buf_len) {
+	if (selected == nullptr || selected_len == 0) {
 		return false;
+	}
+	// A value that does not fit the tracking buffer must not leave the
+	// previous GTID in place: the session would keep routing causal reads on
+	// a GTID older than its last write (#6465). Routing only uses the highest
+	// transaction of a single-UUID set (#6415), so store exactly that; a value
+	// that cannot be reduced is replaced by SESSION_GTID_UNTRACKABLE, which
+	// every GTID parser rejects, so routing fails closed on it.
+	char reduced[SESSION_GTID_REDUCED_MAX_LEN];
+	if (selected_len >= buf_len) {
+		if (reduce_gtid_set_to_highest(selected, selected_len, reduced, sizeof(reduced))
+				&& strlen(reduced) < buf_len) {
+			selected = reduced;
+		} else {
+			selected = SESSION_GTID_UNTRACKABLE;
+		}
+		selected_len = strlen(selected);
+		if (selected_len >= buf_len) {
+			// Only reachable with a buffer shorter than the marker.
+			return false;
+		}
 	}
 	if (strncmp(selected, buf, selected_len) == 0 && buf[selected_len] == '\0') {
 		return false;
