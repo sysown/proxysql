@@ -18,6 +18,8 @@
  * scope or SESSION/LOCAL (synonyms in MySQL) sets the session characteristics.
  * No scope applies to the next transaction only. GLOBAL, PERSIST and
  * PERSIST_ONLY must not match: they are forwarded to the backend.
+ * The pattern is not anchored at the end: it matches the first characteristic
+ * of a comma-separated list, and parse2() parses (or rejects) the whole list.
  */
 #define MYSQL_SET_TRANSACTION_DIGEST_REGEX \
 	"^SET(?: +)(|SESSION +|LOCAL +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)" \
@@ -55,7 +57,10 @@ class MySQL_Set_Stmt_Parser {
 	void generateRE_parse1v2();
 	// First implemenation of the parser for TRANSACTION ISOLATION LEVEL and TRANSACTION READ/WRITE.
 	// Keys are "<scope>:isolation level" or "<scope>:read", where scope is "session"
-	// (SESSION or LOCAL) or "" (next transaction only).
+	// (SESSION or LOCAL) or "" (next transaction only). A comma-separated list of
+	// characteristics returns one key per characteristic, all with the same scope.
+	// Returns an empty map if the statement is not parsed in full, or if a
+	// characteristic is repeated (e.g. READ ONLY, READ WRITE), as MySQL rejects it.
 	std::map<std::string, std::vector<std::string>> parse2();
 	std::string parse_character_set();
 	std::string parse_USE_query(std::string& errmsg);
