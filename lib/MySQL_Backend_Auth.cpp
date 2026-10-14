@@ -82,20 +82,83 @@ bool split_rds_endpoint(const std::string& endpoint, std::string& endpoint_regio
 }
 
 /**
+ * @brief Whether attributes text that nlohmann cannot parse mentions
+ *   'backend_auth', also when spelled with JSON escapes.
+ * @details The text cannot be parsed, so the check is lenient: besides the raw
+ *   bytes, every string literal is decoded ('\uXXXX' and the short escapes)
+ *   and searched. A key such as "backend\u005fauth" is therefore found too.
+ *   Escapes outside ASCII cannot form 'backend_auth' and decode to a
+ *   placeholder byte.
+ */
+bool attributes_text_mentions_backend_auth(std::string_view text) {
+	static constexpr std::string_view key { "backend_auth" };
+	if (text.find(key) != std::string_view::npos) {
+		return true;
+	}
+	const auto hex_value = [](char c) -> int {
+		if (c >= '0' && c <= '9') return c - '0';
+		if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+		if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+		return -1;
+	};
+	size_t i = 0;
+	while (i < text.size()) {
+		if (text[i] != '"') {
+			++i;
+			continue;
+		}
+		++i;
+		std::string decoded {};
+		while (i < text.size() && text[i] != '"') {
+			if (text[i] != '\\' || i + 1 >= text.size()) {
+				decoded.push_back(text[i]);
+				++i;
+				continue;
+			}
+			const char escape = text[i + 1];
+			i += 2;
+			if (escape != 'u') {
+				// '\"', '\\', '\/' decode to themselves; the control-character
+				// escapes cannot be part of 'backend_auth'.
+				decoded.push_back(escape);
+				continue;
+			}
+			int code_point = 0;
+			size_t digits = 0;
+			for (; digits < 4 && i + digits < text.size(); ++digits) {
+				const int v = hex_value(text[i + digits]);
+				if (v < 0) {
+					break;
+				}
+				code_point = code_point * 16 + v;
+			}
+			i += digits;
+			decoded.push_back(digits == 4 && code_point < 0x80 ? static_cast<char>(code_point) : '\x80');
+		}
+		++i; // closing quote
+		if (decoded.find(key) != std::string::npos) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
  * @brief Policy for attributes text that is not a JSON object the policy can
  *   read: valid-but-non-object JSON, or text add() rejected.
  * @details 'mysql_users.attributes' only has to satisfy JSON_VALID(attributes)
  *   OR attributes='', so values such as '[]', '"x"', 'null', or text nlohmann
  *   rejects ('{"a":1e400}', a lone surrogate escape) are storable and were
  *   harmless before this policy existed: they select PASSWORD, as in v3.0.11.
- *   Only text that mentions 'backend_auth' fails closed, so that a policy the
+ *   Only text that mentions 'backend_auth' (raw or JSON-escaped, see
+ *   attributes_text_mentions_backend_auth()) fails closed, so that a policy the
  *   operator configured but that cannot be read never falls back to sending
  *   the password (issue #6413).
  */
 MySQLBackendAuthPolicy unreadable_attributes_policy(
 	std::string_view database_user, std::string_view attributes)
 {
-	if (attributes.find("backend_auth") == std::string_view::npos) {
+	if (!attributes_text_mentions_backend_auth(attributes)) {
 		MySQLBackendAuthPolicy policy;
 		policy.database_user = database_user;
 		policy.type = MySQLBackendAuthType::PASSWORD;

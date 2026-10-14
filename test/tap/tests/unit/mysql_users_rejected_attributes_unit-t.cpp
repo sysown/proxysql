@@ -52,6 +52,16 @@ const std::vector<rejected_case_t>& rejected_cases() {
 // Rejected as above, but the text configures 'backend_auth'.
 const std::string k_rejected_backend_auth { R"({"backend_auth":{"type":"aws_iam"},"a":1e400})" };
 
+// As above, with the key spelled with JSON escapes ("backend\u005fauth" is
+// the same key as "backend_auth").
+const std::vector<std::string>& rejected_escaped_backend_auth() {
+	static const std::vector<std::string> cases {
+		R"({"backend\u005fauth":{"type":"aws_iam"},"a":1e400})",
+		R"({"\u0062ackend_auth":{"type":"aws_iam"},"a":"\ud800"})",
+	};
+	return cases;
+}
+
 bool add_user(const char* username, enum cred_username_type type, const std::string& attributes) {
 	std::string owned_username(username);
 	std::string password("pw");
@@ -144,6 +154,14 @@ void test_rejected_backend_auth_fails_closed() {
 		"rejected attributes configuring backend_auth fail closed (not PASSWORD, not IAM)");
 	ok(dumped_attributes("u_rejected_iam", false) == k_rejected_backend_auth,
 		"rejected attributes configuring backend_auth dump the configured text");
+
+	for (const auto& attributes : rejected_escaped_backend_auth()) {
+		add_user("u_rejected_iam_escaped", USERNAME_BACKEND, attributes);
+		const MySQLBackendAuthPolicy escaped =
+			resolve_mysql_backend_auth_policy(*GloMyAuth, "u_rejected_iam_escaped");
+		ok(escaped.type == MySQLBackendAuthType::INVALID && escaped.failure_code == "attributes_not_object",
+			"rejected attributes with an escaped backend_auth key fail closed: %s", attributes.c_str());
+	}
 }
 
 void test_reload_refreshes_rejected_rows() {
@@ -218,7 +236,7 @@ void test_save_from_runtime_round_trip() {
 
 int main() {
 	const int saved_users = 5;
-	plan(3 + 12 + 9 + 3 + 3 + 4 + 2 * saved_users);
+	plan(3 + 12 + 9 + 3 + 2 + 3 + 4 + 2 * saved_users);
 	test_init_minimal();
 	test_init_auth();
 
