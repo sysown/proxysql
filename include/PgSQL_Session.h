@@ -341,6 +341,7 @@ private:
 	};
 	bool extq_allowed = false;            // this unit may be buffered; decided at its Sync
 	bool extq_buffering = false;
+	bool extq_in_handler = false;         // a message's handler is running; its errors end the unit
 	bool extq_sync = false;               // the batch ends in a Sync; false when cut short (ends in Flush)
 	bool extq_resume = false;             // cut short by its size: the rest of the unit is buffered again
 	std::deque<PgSQL_Extq_Entry> extq_entries;
@@ -387,45 +388,6 @@ private:
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t*, bool*);
 
 	//	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
-#if 0
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(PtrSize_t*);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t*);
-	/**
-	 * @brief Handles 'COM_QUERIES' holding 'USE DB' statements.
-	 *
-	 * @param pkt The packet being processed.
-	 * @param query_digest The query digest returned by the 'QueryProcessor'
-	 *   holding the 'USE' statement without the initial comment.
-	 *
-	 * @details NOTE: This function used to be called from 'handler_special_queries'.
-	 *   But since it was change for handling 'USE' statements which are preceded by
-	 *   comments, it's called after 'QueryProcessor' has processed the query.
-	 */
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t* pkt);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t*);
-
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t*, bool*);
-	/**
-	 * @brief Handles the command 'COM_RESET_CONNECTION'.
-	 * @param pkt Pointer to packet received holding the 'COM_RESET_CONNECTION'.
-	 * @details 'COM_RESET_CONNECTION' command is currently supported only for 'sesssion_types':
-	 *   - 'PROXYSQL_SESSION_MYSQL'.
-	 *   - 'PROXYSQL_SESSION_SQLITE'.
-	 *  If the command is received for other sessions, the an error packet with error '1047' is sent to the
-	 *  client. If the session is supported, it performs the following operations over the current session:
-	 *   1. Store the current relevent session variables to be recovered after the 'RESET'.
-	 *   2. Perform a reset and initialization of current session.
-	 *   3. Recover the relevant session variables and other initial state associated with the current session
-	 *      user.
-	 *   4. Respond to client with 'OK' packet.
-	 */
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(PtrSize_t* pkt);
-
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t*);
-
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t*);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t*);
-#endif
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
@@ -454,6 +416,7 @@ private:
 	void extq_buffer_message();
 	std::string extq_take_replies(unsigned int out_before, bool& error);
 	int extq_after_message(int rc, unsigned int out_before, enum session_status st_before);
+	PgSQL_Backend* extq_error_holder();
 	int extq_fail_on_backend(unsigned int out_before);
 	int extq_finish(bool synced);
 	bool extq_render(PgSQL_Connection* myconn);
@@ -508,7 +471,6 @@ private:
 	void RequestEnd(PgSQL_Data_Stream*, bool called_on_failure);
 	void LogQuery(PgSQL_Data_Stream*);
 
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
 	int handler_again___status_RESETTING_CONNECTION();
 	int handler_again___status_RESYNCHRONIZING_CONNECTION();
@@ -523,26 +485,11 @@ private:
 	void handler_again___new_thread_to_cancel_query();
 
 	bool handler_again___verify_init_connect();
-#if 0
-	bool handler_again___verify_ldap_user_variable();
-	bool handler_again___verify_backend_autocommit();
-	bool handler_again___verify_backend_session_track_gtids();
-	bool handler_again___verify_backend_multi_statement();
-#endif // 0
 	bool handler_again___verify_backend_user_db();
 	bool handler_again___status_SETTING_INIT_CONNECT(int*);
-#if 0
-	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int*);
-	bool handler_again___status_SETTING_SQL_MODE(int*);
-	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int*);
-	bool handler_again___status_CHANGING_SCHEMA(int*);
-#endif // 0
 	bool handler_again___status_CONNECTING_SERVER(int*);
 	bool handler_again___status_RESETTING_CONNECTION(int*);
 	//bool handler_again___status_CHANGING_AUTOCOMMIT(int*);
-#if 0
-	bool handler_again___status_SETTING_MULTI_STMT(int* _rc);
-#endif // 0
 	bool handler_again___multiple_statuses(int* rc);
 	//void init();
 	void reset();
@@ -575,19 +522,20 @@ private:
 	// Returns true if the packet was handled here. Increments the
 	// pgsql_tx_poisoned_{recovered,rejected_statements}_total counters.
 	bool handler_poisoned_simple_query(PtrSize_t* pkt);
+	// The extended-query counterpart, called for each Parse/Bind/Describe/Close/Execute
+	// queued while tx_poisoned: may the frame end the transaction? (see poisoned_extq)
+	void classify_poisoned_extq_message();
+	// The client ended a poisoned transaction (ROLLBACK/COMMIT, either protocol): roll it
+	// back -- tracked SET variables, then any backend still holding it -- and clear the poison.
+	void end_poisoned_transaction();
 	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn);
 	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret);
 	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, bool& wrong_pass);
 	void handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* myds);
 	int RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA();
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
-#if 0
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
-#endif
 	void handler___status_WAITING_CLIENT_DATA___default();
 	void handler___status_NONE_or_default(PtrSize_t& pkt);
 
@@ -650,9 +598,6 @@ public:
 	}
 
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);
-#if 0
-	bool handler_again___status_SETTING_SQL_LOG_BIN(int*);
-#endif // 0
 	std::stack<enum session_status> previous_status;
 
 	PgSQL_Query_Info CurrentQuery;
@@ -677,7 +622,24 @@ public:
 	//     "there is no transaction in progress" warning, clear flag.
 	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
 	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
+	// The same holds over the extended protocol (poisoned_extq). An error ProxySQL
+	// raises itself inside a transaction poisons the session too
+	// (txn_state_for_local_error()).
 	bool tx_poisoned{ false };
+	// An extended-query frame received while tx_poisoned, classified message by message
+	// by classify_poisoned_extq_message(). A frame that only prepares, binds to the
+	// unnamed portal and executes plain ROLLBACK / COMMIT / ABORT / END (plus Describe and
+	// Close) ends the transaction at Sync, as the simple-query ROLLBACK does; any other
+	// frame is answered with 25P02 + ReadyForQuery('E') and the session stays poisoned.
+	struct Poisoned_Extq_Frame {
+		// Statements Parsed or Closed in this frame (name, kind), in order; kind is 'R' for
+		// ROLLBACK/ABORT, 'C' for COMMIT/END, 0 for a Close. The latest entry for a name wins.
+		std::vector<std::pair<std::string, char>> stmts;
+		char portal = 0;          // kind of the statement bound to the unnamed portal
+		bool executes = false;    // an Execute of a transaction end was queued
+		bool refused = false;     // something else was: the frame does not end the txn
+		void reset() { stmts.clear(); portal = 0; executes = false; refused = false; }
+	} poisoned_extq;
 	// Backend administrative removal: drain the FATAL response before closing.
 	bool offline_fatal_pending = false;
 #ifdef PROXYSQL31
@@ -843,8 +805,22 @@ public:
 	void set_previous_status_mode3(bool allow_execute = true);
 	char* get_current_query(int max_length = -1);
 	bool is_in_transaction() const;
+	// Transaction status for the ReadyForQuery that follows an ErrorResponse raised by
+	// ProxySQL itself, which the backend never saw: 'E' inside a transaction block, 'I'
+	// otherwise. Poisons the session when the backend still holds the transaction open.
+	// Call it before anything that discards the backend connection.
+	char txn_state_for_local_error(bool backend_lost = false);
+	// Put the tracked SET variables back to their values at BEGIN (as ROLLBACK does)
+	// for a transaction ProxySQL ends itself; drops the snapshot if no backend is attached.
+	void rollback_tracked_txn_state();
 
 private:
+	// Make the transaction keyword tracker agree with the status 'myconn' reported at a
+	// true cycle boundary (nothing left of the batch): no transaction when it is idle,
+	// one when it is in a transaction block. Mid-batch the tracker is then the only
+	// up-to-date answer, the status byte predating the batch (#6417).
+	// 'failed': the statement just run failed (it never reached the tracker).
+	void sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool mid_batch, bool failed = false);
 	int32_t extract_pid_from_param(const PgSQL_Param_Value& param, uint16_t format) const;
 	void send_parameter_error_response(const char* error_message, PGSQL_ERROR_CODES code = PGSQL_ERROR_CODES::ERRCODE_INVALID_TEXT_REPRESENTATION);
 	bool handle_kill_success(int32_t pid, int tki, const char* digest_text, PgSQL_Connection* mc, PtrSize_t* pkt);

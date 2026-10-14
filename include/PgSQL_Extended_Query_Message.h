@@ -336,6 +336,11 @@ public:
 	// Set by the Describe (P) handler. If the client sent Describe(portal),
 	// its row description is appended; otherwise it's omitted to avoid redundancy.
 	bool send_describe_portal_result = false; 
+
+	// Set while the session is poisoned (PgSQL_Session::classify_poisoned_extq_message())
+	// when this Execute runs a plain ROLLBACK/ABORT ('R') or COMMIT/END ('C'). If the frame
+	// ends the transaction, it is answered locally: the transaction was already rolled back.
+	char poisoned_txn_end = 0;
 };
 
 #endif /* CLASS_PGSQL_EXTENDED_QUERY_MESSAGE_H */

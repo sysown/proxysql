@@ -117,7 +117,8 @@ unsigned char* ok_to_eof_packet(const MySQL_QC_entry_t* entry) {
 	// Find the spot in which the first EOF needs to be placed
 	it += sizeof(mysql_hdr);
 	uint64_t c_count = 0;
-	int c_count_len = mysql_decode_length_ll(reinterpret_cast<unsigned char*>(it), &c_count);
+	const size_t c_count_avail = entry->length > sizeof(mysql_hdr) ? entry->length - sizeof(mysql_hdr) : 0;
+	int c_count_len = mysql_decode_length_ll(reinterpret_cast<unsigned char*>(it), c_count_avail, &c_count);
 	it += c_count_len;
 
 	mysql_hdr column_hdr;
@@ -187,6 +188,11 @@ unsigned char* ok_to_eof_packet(const MySQL_QC_entry_t* entry) {
 bool MySQL_Query_Cache::set(uint64_t user_hash, const unsigned char* kp, uint32_t kl, unsigned char* vp, 
 	uint32_t vl, uint64_t create_ms, uint64_t curtime_ms, uint64_t expire_ms, bool deprecate_eof_active, uint64_t num_rows) {
 	MySQL_QC_entry_t* entry = (MySQL_QC_entry_t*)malloc(sizeof(MySQL_QC_entry_t));
+	if (entry == nullptr) {
+		// set() takes ownership of the value even when admission fails.
+		free(vp);
+		return false;
+	}
 
 	entry->column_eof_pkt_offset = 0;
 	entry->row_eof_pkt_offset = 0;
@@ -197,7 +203,8 @@ bool MySQL_Query_Cache::set(uint64_t user_hash, const unsigned char* kp, uint32_
 	unsigned char* it = vp;
 	it += sizeof(mysql_hdr);
 	uint64_t c_count = 0;
-	int c_count_len = mysql_decode_length_ll(const_cast<unsigned char*>(it), &c_count);
+	const size_t c_count_avail = vl > sizeof(mysql_hdr) ? vl - sizeof(mysql_hdr) : 0;
+	int c_count_len = mysql_decode_length_ll(const_cast<unsigned char*>(it), c_count_avail, &c_count);
 	it += c_count_len;
 
 	for (uint64_t i = 0; i < c_count; i++) {
@@ -229,12 +236,16 @@ bool MySQL_Query_Cache::set(uint64_t user_hash, const unsigned char* kp, uint32_
 				// However, when retrieving data from the cache, it's possible that there are no warnings present
 				// that might be associated with previous interactions.
 				unsigned char* payload_temp = payload + 1;
+				unsigned char* payload_end = payload + hdr.pkt_length;
+				size_t remain = payload_end > payload_temp ? static_cast<size_t>(payload_end - payload_temp) : 0;
 
 				// skip affected_rows
-				payload_temp += mysql_decode_length_ll(payload_temp, nullptr);
+				uint8_t skip_len = mysql_decode_length_ll(payload_temp, remain, nullptr);
+				payload_temp += skip_len;
+				remain = payload_end > payload_temp ? static_cast<size_t>(payload_end - payload_temp) : 0;
 
 				// skip last_insert_id
-				payload_temp += mysql_decode_length_ll(payload_temp, nullptr);
+				payload_temp += mysql_decode_length_ll(payload_temp, remain, nullptr);
 
 				// skip stats_flags
 				payload_temp += sizeof(uint16_t);

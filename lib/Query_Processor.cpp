@@ -16,6 +16,7 @@ using json = nlohmann::json;
 #include "re2/regexp.h"
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
+#include "pcrecpp.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -23,6 +24,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "gen_utils.h"
 #include "query_processor.h"
+#include "digest_text_merge.h"
 #include "QP_rule_text.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -121,7 +123,81 @@ pcre2_code* pcre2_compile_rule_regex(const char* pattern, uint32_t options, std:
 	return code;
 }
 
-bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, const char* subject) {
+// PCRE2 keeps its backtracking frames on the heap and caches them in the
+// match data; because a rule's match data lives for as long as the rule,
+// a single oversized query would otherwise pin hundreds of MiB per worker
+// thread, and PCRE2's out-of-the-box limits (heap ~19 GB, match/depth 10M)
+// let one query spend seconds of CPU (issue #6423). The values below cap
+// what one DONE query can allocate and how far one match may backtrack;
+// they are fixed constants, deliberately not runtime variables, so the
+// denial-of-service surface is independent of any configuration mistake.
+//   heap limit: 64 MiB in KiB
+//   depth/match limits: the PCRE2 defaults, which are also the PCRE 8.45
+//   defaults engine 1 runs with. Lower limits made ordinary patterns fail on
+//   large queries: '^SELECT .* FROM t' backtracks once per byte of a large
+//   value after 'FROM t'; with 100000 it no longer matched a query carrying
+//   a 1 MB value (issue #6411). The higher limits are deliberate: they cost
+//   more CPU only for pathological patterns, which engine 1 already allows,
+//   while the heap limit still bounds memory. Do not lower them again.
+static constexpr uint32_t PCRE2_RULE_HEAP_LIMIT_KIB = 64u * 1024u;
+static constexpr uint32_t PCRE2_RULE_DEPTH_LIMIT = 10000000u;
+static constexpr uint32_t PCRE2_RULE_MATCH_LIMIT = 10000000u;
+// Recreating the match data releases the cached frames; a threshold keeps
+// the hot path free of work for normal-sized queries, per #6423.
+static constexpr size_t PCRE2_RULE_HEAPFRAMES_RELEASE_THRESHOLD = (1u << 20);
+
+// A limit hit means "an input too big for a query rule": the rule neither
+// matches nor fails to match, so it is not applied, negated or not
+// (rule_matches_regex()). It is logged rate-limited so admins can find rules
+// like '(.|\n)*' that should be rewritten to '[\s\S]*'.
+static void pcre2_rule_match_context_create(pcre2_match_data* match_data,
+                                            pcre2_match_context** out_mctx) {
+	if (out_mctx == nullptr) return;
+	*out_mctx = nullptr;
+	if (match_data == nullptr) return;
+	pcre2_match_context* mctx = pcre2_match_context_create(nullptr);
+	if (mctx == nullptr) return;
+	// Allocation failures of the context itself leave the limits at PCRE2
+	// defaults rather than disabling the parent feature.
+	if (pcre2_set_heap_limit(mctx, PCRE2_RULE_HEAP_LIMIT_KIB) != 0) {
+		pcre2_match_context_free(mctx);
+		return;
+	}
+	if (pcre2_set_depth_limit(mctx, PCRE2_RULE_DEPTH_LIMIT) != 0) {
+		pcre2_match_context_free(mctx);
+		return;
+	}
+	pcre2_set_match_limit(mctx, PCRE2_RULE_MATCH_LIMIT);
+	*out_mctx = mctx;
+}
+
+// Releases PCRE2 heapframes that a big subject pinned in @p md, so one
+// oversized match does not keep its memory allocated in the worker thread
+// for the lifetime of the rule. Recreating the match data keeps future
+// matches reusing one block, as the hot-path optimisation intended.
+static void pcre2_rule_release_pinned_heapframes(pcre2_match_data** md,
+                                                 const pcre2_code* code) {
+	if (md == nullptr || code == nullptr || *md == nullptr) {
+		return;
+	}
+	if (pcre2_get_match_data_heapframes_size(*md) <=
+			PCRE2_RULE_HEAPFRAMES_RELEASE_THRESHOLD) {
+		return;
+	}
+	pcre2_match_data* fresh = pcre2_match_data_create_from_pattern(code, nullptr);
+	if (fresh == nullptr) {
+		// Keep the oversized block rather than losing the rule's ability to
+		// match; the memory is released when the rules are recompiled.
+		return;
+	}
+	pcre2_match_data_free(*md);
+	*md = fresh;
+}
+
+// 'out_rc' receives the pcre2_match() code, so a caller can tell a limit hit
+// or another error apart from PCRE2_ERROR_NOMATCH. Ignored when NULL.
+bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, pcre2_match_context* match_context, const char* subject, int* out_rc = nullptr) {
+	if (out_rc) *out_rc = PCRE2_ERROR_NOMATCH;
 	if (code == nullptr || match_data == nullptr || subject == nullptr) return false;
 	const int rc = pcre2_match(
 		code,
@@ -130,8 +206,9 @@ bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, c
 		0,
 		0,
 		match_data,
-		nullptr
+		match_context
 	);
+	if (out_rc) *out_rc = rc;
 	return rc >= 0;
 }
 
@@ -139,14 +216,21 @@ bool pcre2_partial_match(const pcre2_code* code, pcre2_match_data* match_data, c
 // translate_legacy_rewrite()). The output is sized for typical rewrites; only
 // when it is too small does PCRE2 report the exact size needed
 // (PCRE2_SUBSTITUTE_OVERFLOW_LENGTH) and the substitution is repeated once.
+// 'out_rc' receives the final pcre2_substitute() code, so the caller can tell
+// a heap/depth/match limit hit apart from the other failure modes (invalid
+// substitution, unset-group error, allocation failure) when logging (#6423,
+// CodeRabbit follow-up). Ignored when NULL.
 bool pcre2_replace(
 	const pcre2_code* code,
 	pcre2_match_data* match_data,
+	pcre2_match_context* match_context,
 	const char* rewrite,
 	size_t rewrite_len,
 	bool global,
-	std::string* subject
+	std::string* subject,
+	int* out_rc = nullptr
 ) {
+	if (out_rc) *out_rc = 0;
 	if (code == nullptr || match_data == nullptr || rewrite == nullptr || subject == nullptr) return false;
 
 	const uint32_t substitute_options = PCRE2_SUBSTITUTE_UNSET_EMPTY |
@@ -161,7 +245,7 @@ bool pcre2_replace(
 			0,
 			substitute_options,
 			match_data,
-			nullptr,
+			match_context,
 			reinterpret_cast<PCRE2_SPTR>(rewrite),
 			rewrite_len,
 			reinterpret_cast<PCRE2_UCHAR*>(&output[0]),
@@ -175,10 +259,12 @@ bool pcre2_replace(
 		// With OVERFLOW_LENGTH, output_size now holds the required size,
 		// including the terminator.
 		if (rc != PCRE2_ERROR_NOMEMORY || output_size == PCRE2_SIZE_MAX) {
+			if (out_rc) *out_rc = rc;
 			return false;
 		}
 		output.resize(output_size);
 	}
+	if (out_rc) *out_rc = PCRE2_ERROR_NOMEMORY;
 	return false;
 }
 
@@ -198,11 +284,14 @@ bool pcre2_query_rule_replace_for_test(
 	pcre2_code* code = pcre2_compile_rule_regex(pattern, 0, &error);
 	if (code == nullptr) return false;
 	pcre2_match_data* match_data = pcre2_match_data_create_from_pattern(code, nullptr);
+	pcre2_match_context* match_context = nullptr;
+	if (match_data != nullptr) pcre2_rule_match_context_create(match_data, &match_context);
 	std::string translated {};
 	const bool translated_ok = legacy_rewrite != nullptr && translate_legacy_rewrite(legacy_rewrite, &translated);
 	*rewritten = subject;
 	const bool rc = translated_ok &&
-		pcre2_replace(code, match_data, translated.data(), translated.size(), global, rewritten);
+		pcre2_replace(code, match_data, match_context, translated.data(), translated.size(), global, rewritten);
+	if (match_context != nullptr) pcre2_match_context_free(match_context);
 	pcre2_match_data_free(match_data);
 	pcre2_code_free(code);
 	return rc;
@@ -222,13 +311,17 @@ bool pcre2_query_rule_replace_sequence_for_test(
 	pcre2_code* code = pcre2_compile_rule_regex(pattern, 0, &error);
 	if (code == nullptr) return false;
 	pcre2_match_data* match_data = pcre2_match_data_create_from_pattern(code, nullptr);
+	pcre2_match_context* match_context = nullptr;
+	if (match_data != nullptr) pcre2_rule_match_context_create(match_data, &match_context);
 	std::string translated {};
 	bool rc = translate_legacy_rewrite(legacy_rewrite, &translated);
 	for (std::string& subject : *subjects) {
 		if (!rc) break;
-		rc = pcre2_partial_match(code, match_data, subject.c_str()) &&
-			pcre2_replace(code, match_data, translated.data(), translated.size(), global, &subject);
+		rc = pcre2_partial_match(code, match_data, match_context, subject.c_str()) &&
+			pcre2_replace(code, match_data, match_context, translated.data(), translated.size(), global, &subject);
+		pcre2_rule_release_pinned_heapframes(&match_data, code);
 	}
+	if (match_context != nullptr) pcre2_match_context_free(match_context);
 	pcre2_match_data_free(match_data);
 	pcre2_code_free(code);
 	return rc;
@@ -249,10 +342,25 @@ __thread bool _thr_SQP_have_cidr_proxy_addr;
 
 // A compiled query rule regex, one per rule in each worker thread's private
 // rule copy, so the PCRE2 match data is never used by two threads at once.
+// Three regex engines share this struct (issue #6411): engine 1 is PCRE
+// (pcrecpp, the semantics every released 3.x tag shipped), engine 2 is RE2,
+// and engine 3 -- opt-in, v3.1/v4.0 only -- is PCRE2.
 struct __RE2_objects_t {
-	// PCRE2 engine (query_processor_regex=1)
+	// PCRE1 engine (query_processor_regex=1)
+	pcrecpp::RE_Options* opt1;
+	pcrecpp::RE* re1;
+	// The same pattern compiled with the same options as re1's unanchored
+	// regex, matched with pcre_exec() directly: pcrecpp reports a limit hit
+	// as "no match", which would make a negated rule match (issue #6466).
+	pcre* pcre1;
+	// The recursion/match limits re1 and pcre1 run with.
+	pcre_extra pcre1_extra;
+	// PCRE2 engine (query_processor_regex=3, PROXYSQL31/PROXYSQL40 only)
 	pcre2_code* pcre2;
 	pcre2_match_data* pcre2_md;
+	// Match context with the heap/depth/match limits, shared by the
+	// rule's matches and rewrites (issue #6423).
+	pcre2_match_context* pcre2_mctx;
 	// replace_pattern translated to PCRE2 syntax once, at compile time; NULL
 	// when the rule has no replace_pattern or it cannot be translated.
 	char* pcre2_rewrite;
@@ -263,6 +371,207 @@ struct __RE2_objects_t {
 };
 
 typedef struct __RE2_objects_t re2_t;
+
+// Engine 1 (PCRE 8.45) limits (issue #6466).
+//
+// PCRE 8.45 is built with its default "recursive" match(): every nested
+// group iteration, alternative or backtracking point that has to be resumed
+// costs one more C stack frame of match() on the calling thread. Without a
+// limit the depth only depends on the query, so '^(.|\n)*FOR UPDATE' on a
+// query of about 2 KB overflowed a worker thread's stack and crashed the
+// process. pcre_exec() fails with PCRE_ERROR_RECURSIONLIMIT once
+// match_limit_recursion nested calls are active, before the stack runs out.
+//
+// The recursion limit is derived from the stack the thread actually has:
+// - Worker threads run on mysql-stacksize / pgsql-stacksize, 1 MiB by
+//   default, 256 KiB to 4 MiB allowed (MySQL_Thread.cpp/PgSQL_Thread.cpp,
+//   pthread_attr_setstacksize()). A fixed limit is either unsafe on a small
+//   stack or needlessly strict on a large one.
+// - One recursion level of match() measured 448-463 bytes of stack on
+//   x86_64 with the deps build of PCRE (gcc -O2; the same with
+//   -fstack-protector-strong), 613 bytes with -O0 and 859 bytes with ASAN.
+//   PCRE1_STACK_BYTES_PER_LEVEL budgets 1 KiB per level: twice the shipped
+//   build, and still above an instrumented build.
+// - PCRE1_STACK_RESERVE is left for the frames between compiling a rule
+//   (process_query(), which also does the matching) and pcre_exec().
+// So the limit is (stack still free when the rule is compiled - 64 KiB) /
+// 1 KiB: about 900 levels on the default 1 MiB worker stack, which uses
+// about 400 KiB of stack in the shipped build. It is computed once per rule
+// compilation, in the thread that later runs the match.
+//
+// Normal rules are not affected: 'a.*b', '\s+', '.*?' and '[\s\S]*' cost a
+// constant depth (2-4 levels on a 1 MB query); only a repeated group whose
+// iterations must be resumed, e.g. '(.|\n)*' or '(\d+,?)+', costs 2-4 levels
+// per iteration. Such a rule on a query longer than a few hundred
+// iterations is not applied to that query (logged, rate-limited) instead of
+// crashing; a larger stacksize allows deeper matches.
+//
+// match_limit is the PCRE default (10,000,000), set explicitly so that it
+// cannot be raised by a different build configuration; it bounds CPU time,
+// not stack, and matches engine 3's match limit.
+static constexpr size_t PCRE1_STACK_BYTES_PER_LEVEL = 1024;
+static constexpr size_t PCRE1_STACK_RESERVE = 64 * 1024;
+// Used when the thread's stack bounds cannot be read: the smallest worker
+// stack allowed (256 KiB) minus the reserve.
+static constexpr unsigned long PCRE1_RECURSION_LIMIT_FALLBACK =
+	(256 * 1024 - PCRE1_STACK_RESERVE) / PCRE1_STACK_BYTES_PER_LEVEL;
+// Never 0: pcrecpp treats 0 as "no limit".
+static constexpr unsigned long PCRE1_RECURSION_LIMIT_MIN = 16;
+static constexpr unsigned long PCRE1_RECURSION_LIMIT_MAX = 10000000;
+static constexpr unsigned long PCRE1_RULE_MATCH_LIMIT = 10000000;
+// pcrecpp's ovector size, (1 + 16 arguments) * 3: matching with the same
+// vector keeps the PCRE behaviour identical to RE::PartialMatch().
+static constexpr int PCRE1_OVECTOR_SIZE = (1 + 16) * 3;
+
+// Bounds of the calling thread's stack, read once per thread.
+static __thread bool pcre1_stack_low_probed = false;
+// Kept as integers: comparing or subtracting pointers into different
+// objects (the stack bounds and a frame address) is undefined behaviour.
+static __thread uintptr_t pcre1_stack_low = 0;
+static __thread uintptr_t pcre1_stack_high = 0;
+
+/**
+ * @brief The PCRE1 recursion limit for a rule compiled by the calling thread.
+ * @return The number of match() recursion levels that fit in the free stack
+ *   of the calling thread, see the comment above.
+ */
+static unsigned long pcre1_recursion_limit_for_current_thread() {
+	if (pcre1_stack_low_probed == false) {
+		pcre1_stack_low_probed = true;
+#if defined(__linux__)
+		pthread_attr_t attr;
+		if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+			void* addr = nullptr;
+			size_t size = 0;
+			if (pthread_attr_getstack(&attr, &addr, &size) == 0 && addr != nullptr && size > 0) {
+				pcre1_stack_low = reinterpret_cast<uintptr_t>(addr);
+				pcre1_stack_high = pcre1_stack_low + size;
+			}
+			pthread_attr_destroy(&attr);
+		}
+#endif
+	}
+	if (pcre1_stack_low == 0) {
+		return PCRE1_RECURSION_LIMIT_FALLBACK;
+	}
+	// Stacks grow down on every platform ProxySQL supports. The frame address
+	// is used rather than the address of a local: with ASAN's fake stack a
+	// local can live on the heap, outside the thread's stack.
+	const uintptr_t sp = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+	if (sp > pcre1_stack_high) {
+		// Not on the stack the thread was created with (e.g. sigaltstack).
+		return PCRE1_RECURSION_LIMIT_FALLBACK;
+	}
+	if (sp <= pcre1_stack_low) {
+		return PCRE1_RECURSION_LIMIT_MIN;
+	}
+	const size_t free_stack = static_cast<size_t>(sp - pcre1_stack_low);
+	if (free_stack <= PCRE1_STACK_RESERVE) {
+		return PCRE1_RECURSION_LIMIT_MIN;
+	}
+	unsigned long limit = (free_stack - PCRE1_STACK_RESERVE) / PCRE1_STACK_BYTES_PER_LEVEL;
+	if (limit < PCRE1_RECURSION_LIMIT_MIN) limit = PCRE1_RECURSION_LIMIT_MIN;
+	if (limit > PCRE1_RECURSION_LIMIT_MAX) limit = PCRE1_RECURSION_LIMIT_MAX;
+	return limit;
+}
+
+static inline bool pcre1_is_limit_error(int rc) {
+	return rc == PCRE_ERROR_RECURSIONLIMIT || rc == PCRE_ERROR_MATCHLIMIT;
+}
+
+/**
+ * @brief Matches @p subject the way pcrecpp's RE::PartialMatch() does.
+ * @param out_rc Receives the pcre_exec() code, so a limit hit can be told
+ *   apart from "no match".
+ * @return true on a match. An uncompilable regex never matches, as in
+ *   pcrecpp; any pcre_exec() error is "no match", as in pcrecpp.
+ */
+static bool pcre1_partial_match(const re2_t* r, const char* subject, size_t len, int* out_rc) {
+	*out_rc = PCRE_ERROR_NOMATCH;
+	if (r->pcre1 == nullptr) return false;
+	int ovector[PCRE1_OVECTOR_SIZE];
+	const int rc = pcre_exec(r->pcre1, &r->pcre1_extra, subject, static_cast<int>(len), 0, 0,
+		ovector, PCRE1_OVECTOR_SIZE);
+	*out_rc = rc;
+	// rc == 0 is a match whose captures did not all fit in the vector.
+	return rc >= 0;
+}
+
+/**
+ * @brief Runs the matches pcrecpp's RE::GlobalReplace() runs on @p subject,
+ *   without rewriting, and reports the first limit hit.
+ *
+ * GlobalReplace() stops at a failed match and keeps the rewrites done so far,
+ * so a limit hit in the middle of a query would apply part of a rule. Running
+ * the same sequence first lets the caller leave the query unchanged instead.
+ * The loop mirrors RE::GlobalReplace(): after an empty match it retries
+ * anchored with PCRE_NOTEMPTY at the same offset, then advances one byte.
+ * (The CRLF/UTF-8 advance in GlobalReplace() does not apply: rules are
+ * compiled without newline or UTF-8 options.)
+ *
+ * @return 0, or the PCRE limit error that stopped a match.
+ */
+static int pcre1_global_replace_limit_check(const re2_t* r, const std::string& subject) {
+	if (r->pcre1 == nullptr) return 0;
+	const int len = static_cast<int>(subject.size());
+	int ovector[PCRE1_OVECTOR_SIZE];
+	int start = 0;
+	bool last_match_was_empty = false;
+	while (start <= len) {
+		int rc;
+		if (last_match_was_empty) {
+			rc = pcre_exec(r->pcre1, &r->pcre1_extra, subject.data(), len, start,
+				PCRE_ANCHORED | PCRE_NOTEMPTY, ovector, PCRE1_OVECTOR_SIZE);
+			if (rc < 0) {
+				if (pcre1_is_limit_error(rc)) return rc;
+				start++;
+				last_match_was_empty = false;
+				continue;
+			}
+		} else {
+			rc = pcre_exec(r->pcre1, &r->pcre1_extra, subject.data(), len, start,
+				0, ovector, PCRE1_OVECTOR_SIZE);
+			if (rc < 0) {
+				return pcre1_is_limit_error(rc) ? rc : 0;
+			}
+		}
+		start = ovector[1];
+		last_match_was_empty = (ovector[0] == ovector[1]);
+	}
+	return 0;
+}
+
+/**
+ * @brief Applies an engine 1 replace_pattern to @p query, as v3.0.11 did,
+ *   unless a match of the rewrite hits a PCRE limit.
+ * @param out_limit_rc Receives the PCRE limit error, or 0.
+ * @return false when a limit was hit; @p query is then unchanged.
+ */
+static bool pcre1_rule_replace(const re2_t* r, const char* rewrite, bool global, std::string* query,
+	int* out_limit_rc) {
+	*out_limit_rc = 0;
+	if (global) {
+		const int limit_rc = pcre1_global_replace_limit_check(r, *query);
+		if (limit_rc != 0) {
+			*out_limit_rc = limit_rc;
+			return false;
+		}
+		r->re1->GlobalReplace(rewrite, query);
+	} else {
+		// Replace() leaves the query unchanged when its one match fails,
+		// for a limit hit too; the extra match only runs on that rare path,
+		// to tell a limit hit from "no match" for the log.
+		if (r->re1->Replace(rewrite, query) == false && r->pcre1 != nullptr) {
+			int rc = PCRE_ERROR_NOMATCH;
+			pcre1_partial_match(r, query->data(), query->size(), &rc);
+			if (pcre1_is_limit_error(rc)) {
+				*out_limit_rc = rc;
+				return false;
+			}
+		}
+	}
+	return true;
+}
 
 static int int_cmp(const void *a, const void *b) {
 	const unsigned long long *ia = (const unsigned long long *)a;
@@ -310,6 +619,129 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 	return s;
 }
 
+/**
+ * @brief Is @p value a CIDR prefix list for @p field, rather than a plain value?
+ *
+ * The two fields accept deliberately different forms, so the decision is
+ * field-aware and MUST be the single decision both the admin validator and the
+ * runtime predicate consult -- otherwise the two disagree and a rule behaves
+ * differently depending on which side classified it:
+ *
+ *  - client_addr is always a rendered peer address, so any non-leading '/'
+ *    can only be a prefix list (issue #6426: the previous field-blind helper
+ *    tripped on this assumption for proxy_addr).
+ *  - proxy_addr is the listener's configured string, and for a Unix listener
+ *    that is a socket path, which may be relative: './proxysql.sock' or
+ *    'run/proxysql.sock' contain '/' but are paths, while '10.0.0.0/8' is a
+ *    prefix list. The list form is taken only when the text before the first
+ *    '/' -- cut at the first ',' and trimmed -- is an inet_pton-valid IPv4 or
+ *    IPv6 literal. A malformed list whose head is a valid literal
+ *    ('10.0.0.0/8,garbage', '10.0.0.0/33') still enters the CIDR branch so the
+ *    existing rejection paths keep catching typos.
+ */
+bool qp_addr_value_is_cidr(const char *value, qp_addr_field_t field) {
+	if (value == NULL || *value == '\0') {
+		return false;
+	}
+	const char *slash = strchr(value, '/');
+	if (slash == NULL) {
+		return false;
+	}
+	if (field == QP_ADDR_FIELD_CLIENT) {
+		// client_addr can never be a filesystem path.
+		return (*value != '/');
+	}
+	// proxy_addr: only a valid IP literal before the first '/' makes the value
+	// a prefix list. An empty head (leading '/') is a socket path.
+	std::string head(value, slash - value);
+	size_t comma = head.find(',');
+	if (comma != std::string::npos) {
+		head.resize(comma);
+	}
+	const size_t first = head.find_first_not_of(" \t");
+	if (first == std::string::npos) {
+		return false;
+	}
+	const size_t last = head.find_last_not_of(" \t");
+	head = head.substr(first, last - first + 1);
+	if (head.empty()) {
+		return false;
+	}
+	if (head.find(':') != std::string::npos) {
+		struct in6_addr tmp;
+		return inet_pton(AF_INET6, head.c_str(), &tmp) == 1;
+	}
+	struct in_addr tmp;
+	return inet_pton(AF_INET, head.c_str(), &tmp) == 1;
+}
+
+/**
+ * @brief Validate a query rule address value before it is installed to runtime.
+ *
+ * Three forms are accepted:
+ *  - an exact address, compared byte for byte against the rendered text;
+ *  - a textual wildcard ('%' or '_'), where '%' may only be the last character;
+ *  - a comma-separated list of CIDR prefixes, matched numerically.
+ *
+ * Which one applies is decided by qp_addr_value_is_cidr(), which also keeps a
+ * Unix listener string such as "/tmp/proxysql.sock" -- or a relative one, for
+ * example "run/proxysql.sock" -- on the literal path: proxy_addr is how a Unix
+ * listener identifies itself, and those rules have always worked.
+ *
+ * The length cap and the '%'-position rule constrain a *rendered address*, so
+ * they are applied to client_addr only. A listener path is neither: a socket
+ * path may legitimately exceed INET6_ADDRSTRLEN or contain a '%', and capping
+ * it would skip a rule the listener can still satisfy. client_addr cannot be a
+ * path, so a leading '/' there is rejected instead of being quietly installed
+ * as a criterion that could never match.
+ *
+ * A malformed prefix is rejected on both fields so a rule is never installed in
+ * a state where it can only ever fail to match -- previously such a value
+ * loaded cleanly and then silently matched nothing.
+ *
+ * @param rule_id    Rule id, for the error message.
+ * @param field      Which field @p value came from, see qp_addr_field_t.
+ * @param value      Configured value; NULL and "" both mean "no criterion".
+ * @return true when the value is usable.
+ */
+bool validate_qp_addr_value(const char *rule_id, const qp_addr_field_t field, const char *value) {
+	if (value == NULL || *value == '\0') {
+		return true;
+	}
+	const char *field_name = (field == QP_ADDR_FIELD_PROXY) ? "proxy_addr" : "client_addr";
+
+	if (qp_addr_value_is_cidr(value, field) == true) {
+		if (strnlen(value, MAX_CIDR_LIST_VALUE_LEN + 1) > MAX_CIDR_LIST_VALUE_LEN ||
+			ip_cidr_list_is_valid(value) == false) {
+			proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+			return false;
+		}
+		return true;
+	}
+	if (field == QP_ADDR_FIELD_PROXY) {
+		// A listener path or a plain address: nothing here constrains its
+		// length or its characters.
+		return true;
+	}
+	if (*value == '/') {
+		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+		return false;
+	}
+	if (strnlen(value, INET6_ADDRSTRLEN) >= INET6_ADDRSTRLEN) {
+		proxy_error("Query rule with rule_id=%s has an invalid %s: %s\n", rule_id, field_name, value);
+		return false;
+	}
+	// mywildcmp() would honour a '%' anywhere in the pattern, but a '%' in the
+	// middle of an address is far more likely a typo than an intent.
+	const char *pct = strchr(value, '%');
+	if (pct != NULL && pct[1] != '\0') {
+		proxy_error("Query rule with rule_id=%s has a wildcard that is not at the end of %s: %s\n",
+			rule_id, field_name, value);
+		return false;
+	}
+	return true;
+}
+
 bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, qp_addr_field_t field) {
 	if (pred == NULL) {
 		return false;
@@ -330,10 +762,12 @@ bool qp_addr_predicate_init(qp_addr_predicate_t *pred, const char *value, qp_add
 	if (allow_path == false && *value == '/') {
 		return false;
 	}
-	if (ip_cidr_spec_looks_like_prefix(value) == true) {
+	if (qp_addr_value_is_cidr(value, field) == true) {
 		if (ip_cidr_parse_list(value, pred->cidrs, MAX_CIDR_PREFIXES_PER_RULE, &pred->cidr_count) == false) {
 			// Leave the predicate inert so a rule that somehow reaches the
 			// runtime unvalidated can never match on a half-parsed prefix list.
+			// qp_addr_predicate_matches() returns false for MATCH_NONE; it
+			// deliberately does NOT fall through to a strcmp of the raw values.
 			pred->match = QP_ADDR_MATCH_NONE;
 			pred->cidr_count = 0;
 			return false;
@@ -404,6 +838,10 @@ static bool qp_addr_predicate_matches(const qp_addr_predicate_t *pred, const cha
 	case QP_ADDR_MATCH_WILDCARD:
 		return mywildcmp(ruleval, sessval) == true;
 	case QP_ADDR_MATCH_NONE:
+		// An inert predicate (an unparseable prefix list that bypassed the
+		// admin validation) must never match. Falling through to a strcmp of
+		// the raw values would resurrect a rule the admin layer rejected.
+		return false;
 	case QP_ADDR_MATCH_EXACT:
 	default:
 		return strcmp(ruleval, sessval) == 0;
@@ -576,15 +1014,21 @@ static bool query_digest_text_matches(
 	return it != digest_end;
 }
 
-static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex) {
+static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex, bool report_errors = true) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
+	r->opt1=NULL;
+	r->re1=NULL;
+	r->pcre1=NULL;
+	memset(&r->pcre1_extra, 0, sizeof(r->pcre1_extra));
 	r->pcre2=NULL;
 	r->pcre2_md=NULL;
+	r->pcre2_mctx=NULL;
 	r->pcre2_rewrite=NULL;
 	r->pcre2_rewrite_len=0;
 	r->opt2=NULL;
 	r->re2=NULL;
 	std::string pcre2_error {};
+	std::string pcre1_error {};
 	if (query_processor_regex==2) {
 		r->opt2=new re2::RE2::Options(RE2::Quiet);
 		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
@@ -595,7 +1039,7 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 		} else if (i==2) {
 			r->re2=new RE2(qr->match_pattern, *r->opt2);
 		}
-	} else {
+	} else if (query_processor_regex==3) {
 		uint32_t options = 0;
 		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
 			options |= PCRE2_CASELESS;
@@ -607,6 +1051,8 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 				pcre2_code_free(r->pcre2);
 				r->pcre2 = NULL;
 				pcre2_error = "PCRE2 match data allocation failed";
+			} else {
+				pcre2_rule_match_context_create(r->pcre2_md, &r->pcre2_mctx);
 			}
 		}
 		if (r->pcre2 && i==2 && qr->replace_pattern) {
@@ -619,26 +1065,83 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 					qr->rule_id, qr->replace_pattern);
 			}
 		}
+	} else {
+		// query_processor_regex==1 (the default, and every other accepted
+		// value on a tier where engine 3 does not exist): PCRE 8.45 via
+		// pcrecpp, the semantics every released 3.x tag shipped (issue #6411).
+		r->opt1=new pcrecpp::RE_Options();
+		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
+			r->opt1->set_caseless(true);
+		}
+		// Stack and CPU limits for both the match and the rewrite (#6466).
+		const unsigned long recursion_limit = pcre1_recursion_limit_for_current_thread();
+		r->opt1->set_match_limit(static_cast<int>(PCRE1_RULE_MATCH_LIMIT));
+		r->opt1->set_match_limit_recursion(static_cast<int>(recursion_limit));
+		r->pcre1_extra.flags = PCRE_EXTRA_MATCH_LIMIT | PCRE_EXTRA_MATCH_LIMIT_RECURSION;
+		r->pcre1_extra.match_limit = PCRE1_RULE_MATCH_LIMIT;
+		r->pcre1_extra.match_limit_recursion = recursion_limit;
+		const char* pattern = (i==1 ? qr->match_digest : qr->match_pattern);
+		if (i==1 || i==2) {
+			r->re1=new pcrecpp::RE(pattern, *r->opt1);
+			// Compiled exactly as pcrecpp compiles re1's unanchored regex.
+			const char* compile_error = nullptr;
+			int error_offset = 0;
+			r->pcre1 = pcre_compile(pattern, r->opt1->all_options(), &compile_error, &error_offset, nullptr);
+			// re1 and pcre1 must agree on whether the pattern compiled: the
+			// match uses pcre1 and the rewrite re1. An invalid pattern keeps
+			// the v3.0.11 semantics (never matches) through both. If only
+			// pcre1 failed (e.g. out of memory), its matches could not tell a
+			// limit hit from "no match", so the rule is not applied at all:
+			// re1 is dropped and neither the match nor the rewrite runs.
+			if (r->re1->error().empty() == false) {
+				if (r->pcre1) { pcre_free(r->pcre1); r->pcre1 = nullptr; }
+			} else if (r->pcre1 == nullptr) {
+				delete r->re1;
+				r->re1 = nullptr;
+				pcre1_error = (compile_error ? compile_error : "pcre_compile() failed");
+			}
+		}
 	}
-	// A rule whose regex does not compile never matches, negated or not. Name
-	// the rule and the field so the broken rule can be found: RE2 runs with
-	// RE2::Quiet and reports nothing on its own (issue #6319).
+	// Name the rule and the field so a broken rule can be found: RE2 runs with
+	// RE2::Quiet and reports nothing on its own (issue #6319). Logging does not
+	// change matching (issue #6411): on PCRE and RE2 the regex never matches,
+	// so a negated rule matches every query, as in v3.0.11; on PCRE2 the rule
+	// never matches.
 	const char *error = NULL;
+	const char *engine = NULL;
 	if (r->re2 && r->re2->ok() == false) {
 		error = r->re2->error().c_str();
-	} else if (query_processor_regex!=2 && r->pcre2 == NULL) {
+		engine = "RE2";
+	} else if (query_processor_regex==3 && r->pcre2 == NULL) {
 		error = pcre2_error.c_str();
+		engine = "PCRE2";
+	} else if (r->re1 && r->re1->error().empty() == false) {
+		error = r->re1->error().c_str();
+		engine = "PCRE";
+	} else if (pcre1_error.empty() == false) {
+		if (report_errors) {
+			proxy_error("Query rule %d: %s '%s' cannot be compiled for matching by the PCRE regex engine, the rule is not applied: %s\n",
+				qr->rule_id, (i==1 ? "match_digest" : "match_pattern"), (i==1 ? qr->match_digest : qr->match_pattern),
+				pcre1_error.c_str());
+		}
 	}
-	if (error) {
-		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, the rule will never match: %s\n",
+	if (error && report_errors) {
+		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, %s: %s\n",
 			qr->rule_id, (i==1 ? "match_digest" : "match_pattern"), (i==1 ? qr->match_digest : qr->match_pattern),
-			(query_processor_regex==2 ? "RE2" : "PCRE2"), error);
+			engine,
+			(query_processor_regex==3 ? "the rule will never match" :
+				"the regex never matches and a negated rule matches every query"),
+			error);
 	}
 	return r;
 };
 
 static void free_compiled_query_rule(re2_t *r) {
 	if (r == NULL) return;
+	if (r->opt1) { delete r->opt1; r->opt1=NULL; }
+	if (r->re1) { delete r->re1; r->re1=NULL; }
+	if (r->pcre1) { pcre_free(r->pcre1); r->pcre1=NULL; }
+	if (r->pcre2_mctx) { pcre2_match_context_free(r->pcre2_mctx); r->pcre2_mctx=NULL; }
 	if (r->pcre2_md) { pcre2_match_data_free(r->pcre2_md); r->pcre2_md=NULL; }
 	if (r->pcre2) { pcre2_code_free(r->pcre2); r->pcre2=NULL; }
 	if (r->pcre2_rewrite) { free(r->pcre2_rewrite); r->pcre2_rewrite=NULL; }
@@ -646,6 +1149,31 @@ static void free_compiled_query_rule(re2_t *r) {
 	if (r->re2) { delete r->re2; r->re2=NULL; }
 	free(r);
 }
+
+#ifdef DEBUG
+// Debug-only seam: compiles @p pattern as an engine 1 match_pattern rule, in
+// the calling thread, and applies @p rewrite to @p query through the same
+// code as process_query(). Returns false when a PCRE limit was hit
+// (*limit_rc receives the error), true otherwise (issue #6466).
+bool pcre1_query_rule_replace_for_test(
+	const char* pattern,
+	const char* rewrite,
+	bool global,
+	std::string* query,
+	int* limit_rc
+) {
+	if (pattern == nullptr || rewrite == nullptr || query == nullptr || limit_rc == nullptr) return false;
+	QP_rule_t qr {};
+	qr.match_pattern = const_cast<char*>(pattern);
+	re2_t* r = compile_query_rule(&qr, 2, 1, false);
+	bool rc = false;
+	if (r != nullptr && r->re1 != nullptr) {
+		rc = pcre1_rule_replace(r, rewrite, global, query, limit_rc);
+	}
+	free_compiled_query_rule(r);
+	return rc;
+}
+#endif
 
 static bool rule_matches_regex(
 	const QP_rule_t* qr,
@@ -664,17 +1192,56 @@ static bool rule_matches_regex(
 		compiled_regex = temporary_regex;
 	}
 
+	// 'regex_is_valid' false means the rule is not applied, negated or not.
+	// Engines 1 (PCRE) and 2 (RE2) keep the v3.0.11 semantics of an invalid
+	// regex: it never matches, so a negated rule matches every query (#6411).
+	// Engine 3 (PCRE2) fails closed on an invalid regex.
 	bool regex_is_valid = false;
 	bool rc = false;
 	if (compiled_regex) {
 		if (compiled_regex->re2) {
-			if (compiled_regex->re2->ok()) {
-				regex_is_valid = true;
-				rc = RE2::PartialMatch(subject, *compiled_regex->re2);
-			}
-		} else if (compiled_regex->pcre2) {
 			regex_is_valid = true;
-			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md, subject);
+			rc = compiled_regex->re2->ok() && RE2::PartialMatch(subject, *compiled_regex->re2);
+		} else if (compiled_regex->pcre2) {
+			int match_rc = PCRE2_ERROR_NOMATCH;
+			rc = pcre2_partial_match(compiled_regex->pcre2, compiled_regex->pcre2_md,
+				compiled_regex->pcre2_mctx, subject, &match_rc);
+			// One oversized subject must not pin its backtracking frames in
+			// the worker thread until the rules are recompiled (#6423).
+			pcre2_rule_release_pinned_heapframes(&compiled_regex->pcre2_md, compiled_regex->pcre2);
+			// A heap/depth/match limit hit (or another match error) is not a
+			// "no match": a negated rule must not match because of it (#6411).
+			regex_is_valid = match_rc >= 0 || match_rc == PCRE2_ERROR_NOMATCH;
+			if (!regex_is_valid) {
+				static std::atomic<time_t> pcre2_match_error_log_ts{0};
+				const time_t now = time(NULL);
+				time_t prev = pcre2_match_error_log_ts.load(std::memory_order_relaxed);
+				if (now - prev >= 10 && pcre2_match_error_log_ts.compare_exchange_strong(prev, now,
+					std::memory_order_relaxed)) {
+					proxy_warning("Query rule %d: %s matching stopped with PCRE2 error %d (heap/depth/match limit or other error), the rule is not applied to this query; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
+						qr->rule_id, (regex_index==1 ? "match_digest" : "match_pattern"), match_rc);
+				}
+			}
+		} else if (compiled_regex->re1) {
+			// Same result as re1->PartialMatch(subject), which v3.0.11 used,
+			// except that a recursion/match limit hit is not a "no match":
+			// the rule is not applied, negated or not, as on engine 3 (#6466).
+			int match_rc = PCRE_ERROR_NOMATCH;
+			rc = pcre1_partial_match(compiled_regex, subject, strlen(subject), &match_rc);
+			regex_is_valid = !pcre1_is_limit_error(match_rc);
+			if (!regex_is_valid) {
+				static std::atomic<time_t> pcre1_match_limit_log_ts{0};
+				const time_t now = time(NULL);
+				time_t prev = pcre1_match_limit_log_ts.load(std::memory_order_relaxed);
+				if (now - prev >= 10 && pcre1_match_limit_log_ts.compare_exchange_strong(prev, now,
+					std::memory_order_relaxed)) {
+					proxy_warning("Query rule %d: %s matching stopped with PCRE error %d (%s limit %lu reached), the rule is not applied to this query; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
+						qr->rule_id, (regex_index==1 ? "match_digest" : "match_pattern"), match_rc,
+						(match_rc == PCRE_ERROR_RECURSIONLIMIT ? "recursion" : "match"),
+						(match_rc == PCRE_ERROR_RECURSIONLIMIT ? compiled_regex->pcre1_extra.match_limit_recursion :
+							compiled_regex->pcre1_extra.match_limit));
+				}
+			}
 		}
 	}
 
@@ -733,12 +1300,15 @@ bool rule_matches_query(
 		return false;
 	}
 
-	if (qr->digest && digest && qr->digest != digest) {
+	// Digest predicates require their input. Missing metadata must not make
+	// a digest-specific rule act as an unconditional match.
+	if (qr->digest && (!digest || qr->digest != digest)) {
 		return false;
 	}
 
-	if (qr->match_digest && digest_text) {
-		if (rule_matches_regex(qr, qr->regex_engine1, 1, digest_text, query_processor_regex) == false) {
+	if (qr->match_digest) {
+		if (!digest_text || !*digest_text ||
+			rule_matches_regex(qr, qr->regex_engine1, 1, digest_text, query_processor_regex) == false) {
 			return false;
 		}
 	}
@@ -1735,7 +2305,12 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 			digest_umap_aux.insert(element);
 		}
 	}
-	digest_text_umap_aux.insert(digest_text_umap_aux_2.begin(), digest_text_umap_aux_2.end());
+	// A digest present both before the first swap and queried during the dump
+	// window exists in both maps. merge_digest_text_maps() keeps the copy
+	// already in digest_text_umap_aux and frees the duplicate from
+	// digest_text_umap_aux_2; with normalisation on, qds holds no second
+	// reference to either text.
+	merge_digest_text_maps(digest_text_umap_aux, digest_text_umap_aux_2);
 	digest_umap_aux_2.clear();
 	digest_text_umap_aux_2.clear();
 
@@ -1764,8 +2339,16 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 			digest_umap.insert(element);
 		}
 	}
-	digest_text_umap.insert(digest_text_umap_aux.begin(), digest_text_umap_aux.end());
+	// Same duplicate-key situation as the fold-back above: the live map may
+	// already hold the text for a digest queried during the dump window. The
+	// duplicates are collected here and freed once the lock is dropped, so
+	// free() never runs while worker threads are blocked on digest_rwlock.
+	std::vector<char*> texts_to_free;
+	merge_digest_text_maps(digest_text_umap, digest_text_umap_aux, &texts_to_free);
 	pthread_rwlock_unlock(&digest_rwlock);
+	for (char* text : texts_to_free) {
+		free(text);
+	}
 	digest_umap_aux.clear();
 	digest_text_umap_aux.clear();
 
@@ -2274,6 +2857,13 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Detected a changed in version. Global:%d , local:%d . Refreshing...\n", version, _thr_SQP_version);
 		rdlock();
 		_thr_SQP_version=__sync_add_and_fetch(&version,0);
+		// Only the first worker to install this version reports compile errors.
+		unsigned int reported_version = rules_errors_reported_version.load(std::memory_order_relaxed);
+		bool report_compile_errors = false;
+		while (reported_version < _thr_SQP_version && !report_compile_errors) {
+			report_compile_errors = rules_errors_reported_version.compare_exchange_weak(
+				reported_version, _thr_SQP_version, std::memory_order_relaxed);
+		}
 		__reset_rules(_thr_SQP_rules);
 		_thr_SQP_have_cidr_client_addr = false;
 		_thr_SQP_have_cidr_proxy_addr = false;
@@ -2291,11 +2881,11 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 					(qr2->proxy_addr_pred.match == QP_ADDR_MATCH_CIDR);
 				if (qr2->match_digest) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: %s\n", qr2->rule_id, qr2->match_digest);
-					qr2->regex_engine1=(void *)compile_query_rule(qr2,1, GET_THREAD_VARIABLE(query_processor_regex));
+					qr2->regex_engine1=(void *)compile_query_rule(qr2,1, GET_THREAD_VARIABLE(query_processor_regex), report_compile_errors);
 				}
 				if (qr2->match_pattern) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: %s\n", qr2->rule_id, qr2->match_pattern);
-					qr2->regex_engine2=(void *)compile_query_rule(qr2,2, GET_THREAD_VARIABLE(query_processor_regex));
+					qr2->regex_engine2=(void *)compile_query_rule(qr2,2, GET_THREAD_VARIABLE(query_processor_regex), report_compile_errors);
 				}
 				_thr_SQP_rules->push_back(qr2);
 			}
@@ -2543,15 +3133,59 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 						} else {
 							RE2::Replace(ret->new_query, *re2p->re2, qr->replace_pattern);
 						}
+					} else if (re2p->re1) {
+						// PCRE1 semantics: the legacy rewrite string is used
+						// verbatim (\1..\9), exactly as every released 3.x tag
+						// did. Note the argument order: pcrecpp binds caller
+						// arguments right-to-left, so the rewrite comes first
+						// and the query last (issue #6411). A recursion/match
+						// limit hit leaves the query unchanged, rather than
+						// partially rewritten by a GLOBAL rule (issue #6466).
+						int limit_rc = 0;
+						if (pcre1_rule_replace(re2p, qr->replace_pattern,
+								(qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL,
+								ret->new_query, &limit_rc) == false) {
+							static std::atomic<time_t> pcre1_replace_limit_log_ts{0};
+							const time_t now = time(NULL);
+							time_t prev = pcre1_replace_limit_log_ts.load(std::memory_order_relaxed);
+							if (now - prev >= 10 && pcre1_replace_limit_log_ts.compare_exchange_strong(prev, now,
+								std::memory_order_relaxed)) {
+								proxy_warning("Query rule %d: replace_pattern stopped with PCRE error %d (%s limit %lu reached), the query is not rewritten; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
+									qr->rule_id, limit_rc,
+									(limit_rc == PCRE_ERROR_RECURSIONLIMIT ? "recursion" : "match"),
+									(limit_rc == PCRE_ERROR_RECURSIONLIMIT ? re2p->pcre1_extra.match_limit_recursion :
+										re2p->pcre1_extra.match_limit));
+							}
+						}
 					} else if (re2p->pcre2_rewrite) {
-						pcre2_replace(
+						int substitute_rc = 0;
+						const bool replaced = pcre2_replace(
 							re2p->pcre2,
 							re2p->pcre2_md,
+							re2p->pcre2_mctx,
 							re2p->pcre2_rewrite,
 							re2p->pcre2_rewrite_len,
 							(qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL,
-							ret->new_query
+							ret->new_query,
+							&substitute_rc
 						);
+						// A rewrite that hit a limit must not pin frames either.
+						pcre2_rule_release_pinned_heapframes(&re2p->pcre2_md, re2p->pcre2);
+						if (replaced == false) {
+							static std::atomic<time_t> pcre2_limit_log_ts{0};
+							const time_t limit_log_now = time(NULL);
+							if (limit_log_now - pcre2_limit_log_ts.load(std::memory_order_relaxed) >= 10) {
+								pcre2_limit_log_ts.store(limit_log_now, std::memory_order_relaxed);
+								if (substitute_rc == PCRE2_ERROR_HEAPLIMIT || substitute_rc == PCRE2_ERROR_DEPTHLIMIT ||
+									substitute_rc == PCRE2_ERROR_MATCHLIMIT) {
+									proxy_warning("Query rule %d: replace_pattern stopped because the PCRE2 heap/depth/match limit was reached; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*' (issue #6423)\n",
+										qr->rule_id);
+								} else {
+									proxy_warning("Query rule %d: replace_pattern failed with PCRE2 error %d\n",
+										qr->rule_id, substitute_rc);
+								}
+							}
+						}
 					}
 				}
 			}
@@ -2778,8 +3412,12 @@ static void qp_digest_legacy(SQP_par_t* qp, const char* query, int query_length)
 		qp->digest_text = mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
 			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
 	} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// With query_digests_keep_comment the digest can be longer than the query, so the
+		// fixed 'qp->buf' can only be used when it is known to be large enough.
+		char* buffer = (pgsql_query_digest_buffer_size(query_length, &opts) <= (int)QUERY_DIGEST_BUF) ?
+			qp->buf : NULL;
 		qp->digest_text = pgsql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
-			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+			buffer, &opts);
 	}
 	const int digest_text_length=strnlen(qp->digest_text, GET_THREAD_VARIABLE(query_digests_max_digest_length));
 	qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
@@ -2795,8 +3433,22 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
-	qp->parsersql_stmt_type=-1;
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// PgSQL_Query_Info passes a length that includes the protocol's NUL
+		// terminator. The terminator is not part of the query: digested as a
+		// character it hid the end of the query from the tokenizer, so a trailing
+		// ';' or whitespace was not trimmed and 'SELECT 1' and 'SELECT 1;' got
+		// different digests (#6454). Drop it once, here, for both digest paths.
+		if (query && query_length > 0 && query[query_length - 1] == '\0') {
+			--query_length;
+		}
+	}
 	if (GET_THREAD_VARIABLE(query_digests)) {
+		// Parser mode no longer changes the digest (#6454): parsersql_digest_init_*()
+		// now delegates to the legacy tokenizer, so both branches below yield the
+		// same digest, digest text and first comment. The *-query_processor_parser
+		// variable only selects the command-type classifier, consulted lazily by
+		// query_parser_command_type().
 		if (GET_THREAD_VARIABLE(query_processor_parser) == 1) {
 			qp_digest_parsersql<QP_DERIVED>(qp, query, query_length);
 		} else {

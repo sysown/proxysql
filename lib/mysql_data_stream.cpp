@@ -370,6 +370,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	CompPktIN.pkt.ptr=NULL;
 	CompPktIN.pkt.size=0;
 	CompPktIN.partial=0;
+	CompPktIN.hdr_len=0;
 	CompPktOUT.pkt.ptr=NULL;
 	CompPktOUT.pkt.size=0;
 	CompPktOUT.partial=0;
@@ -644,6 +645,13 @@ void MySQL_Data_Stream::check_data_flow() {
 			}
 		}
 		///////////////////////////////////////////////////////////////////////////////////////////////
+
+		// Client pipelining (#5930): a client may send the next commands while the
+		// responses to the previous ones are still being sent to it. This is not a
+		// broken data flow: the commands are processed in order by the session.
+		if (myds_type == MYDS_FRONTEND && sess && sess->client_myds == this && sess->client_may_pipeline()) {
+			return;
+		}
 
 		if (sess && sess->status == FAST_FORWARD && sess->session_fast_forward == SESSION_FORWARD_TYPE_PERMANENT) {
 			// Permanent fast-forward sessions: log warning but continue
@@ -1094,6 +1102,17 @@ void MySQL_Data_Stream::set_pollout() {
 				_pollfd->events = 0;
 			}
 		}
+		if (myds_type == MYDS_FRONTEND && PSarrayIN->len && sess && sess->client_myds == this && sess->client_pkts_must_be_deferred()) {
+			// Client pipelining (#5930): packets received while a command is in
+			// flight are queued in PSarrayIN until the session is back to
+			// WAITING_CLIENT_DATA. Stop reading from the client while some are
+			// queued, so a client that keeps sending cannot make the queue grow
+			// unboundedly: the data stays in the kernel buffers and TCP flow control
+			// applies, as with a MySQL server that reads the next command only after
+			// it has answered the previous one. Reading resumes once the queued
+			// packets have been processed.
+			_pollfd->events = 0;
+		}
 		//if (PSarrayOUT->len || available_data_out() || queueOUT.partial || (encrypted && !SSL_is_init_finished(ssl))) {
 		if (PSarrayOUT->len || available_data_out() || queueOUT.partial) {
 			_pollfd->events |= POLLOUT;
@@ -1480,22 +1499,35 @@ int MySQL_Data_Stream::buffer2array() {
 			}
 			while (progress<datalength) {
 				if (CompPktIN.partial==0) {
+					// The compressed protocol is a byte stream: an inner packet header can be split
+					// across compressed frames. Keep the bytes available and complete the header
+					// with the next frame, instead of reading past the payload (GHSA-qg2m-q3ch-cg9v).
+					const unsigned int hdr_missing = sizeof(mysql_hdr) - CompPktIN.hdr_len;
+					if ((datalength-progress) < hdr_missing) {
+						memcpy(CompPktIN.hdr + CompPktIN.hdr_len, _ptr+progress, (datalength-progress));
+						CompPktIN.hdr_len+=(datalength-progress);
+						progress=datalength; // we reached the end
+						continue;
+					}
+					memcpy(CompPktIN.hdr + CompPktIN.hdr_len, _ptr+progress, hdr_missing);
+					progress+=hdr_missing;
+					CompPktIN.hdr_len=0;
 					mysql_hdr _a;
-					assert(datalength >= progress + sizeof(mysql_hdr)); // FIXME: this is a too optimistic assumption
-					memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
+					memcpy(&_a,CompPktIN.hdr,sizeof(mysql_hdr));
 					CompPktIN.pkt.size=_a.pkt_length+sizeof(mysql_hdr);
 					CompPktIN.pkt.ptr=(unsigned char *)l_alloc(CompPktIN.pkt.size);
-					if ((datalength-progress) >= CompPktIN.pkt.size) {
+					memcpy(CompPktIN.pkt.ptr, CompPktIN.hdr, sizeof(mysql_hdr));
+					if ((datalength-progress) >= _a.pkt_length) {
 						// we can copy the whole packet
-						memcpy(CompPktIN.pkt.ptr, _ptr+progress, CompPktIN.pkt.size);
+						memcpy((char *)CompPktIN.pkt.ptr + sizeof(mysql_hdr), _ptr+progress, _a.pkt_length);
 						CompPktIN.partial=0; // stays 0
-						progress+=CompPktIN.pkt.size;
+						progress+=_a.pkt_length;
 						PSarrayIN->add(CompPktIN.pkt.ptr, CompPktIN.pkt.size);
 						CompPktIN.pkt.ptr=NULL; // sanity
 					} else {
 						// not enough data for the whole packet
-						memcpy(CompPktIN.pkt.ptr, _ptr+progress, (datalength-progress));
-						CompPktIN.partial+=(datalength-progress);
+						memcpy((char *)CompPktIN.pkt.ptr + sizeof(mysql_hdr), _ptr+progress, (datalength-progress));
+						CompPktIN.partial=sizeof(mysql_hdr)+(datalength-progress);
 						progress=datalength; // we reached the end
 					}
 				} else {

@@ -310,9 +310,29 @@ bool GTID_Server_Data::add_gtid_from_ok(const char* gtid) {
 		return false;
 	}
 
+	// A single GTID covers the common case: MariaDB's 'last_gtid' (d-s-n) and
+	// MySQL's tracked OWN_GTID value when exactly one transaction was committed.
 	ParsedGTID parsed;
 	if (!parse_gtid(gtid, &parsed)) {
-		return false;
+		// A session that committed several transactions delivers a GTID SET
+		// ('uuid:582-584', 'uuid:636:638'): record every interval instead of
+		// rejecting it, otherwise the server advertises less than the session
+		// actually wrote and causal reads wait forever (issue #6415,
+		// pre-existing at v3.0.11 but closed here while the grammar is being
+		// taught to the routing paths).
+		std::map<std::string, std::vector<TrxId_Interval>> intervals;
+		if (!parse_gtid_set(gtid, strlen(gtid), &intervals)) {
+			return false;
+		}
+		bool updated = false;
+		pthread_rwlock_wrlock(&executed_rwlock);
+		for (const auto& entry : intervals) {
+			for (const auto& iv : entry.second) {
+				updated |= gtid_executed.add(entry.first, iv);
+			}
+		}
+		pthread_rwlock_unlock(&executed_rwlock);
+		return updated;
 	}
 
 	pthread_rwlock_wrlock(&executed_rwlock);

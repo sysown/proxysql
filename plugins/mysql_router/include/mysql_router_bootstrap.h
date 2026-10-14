@@ -7,6 +7,7 @@
 #include <json.hpp>
 
 #include <cstddef>
+#include <utility>
 #include <cstdint>
 #include <exception>
 #include <stdexcept>
@@ -63,8 +64,39 @@ struct TlsOptions {
  *   across the C-style service callback and rethrown here.
  * @return body's result.
  */
+// Re-entrancy bookkeeping for mysql_router_with_admin_db_lock(): the service
+// it wraps takes Admin's non-recursive global SQL mutex, but this plugin calls
+// it NESTED (RuntimeBackend::publish_users holds it while
+// publish_mysql_router_users() and persist_generation() take it again). A
+// plain non-recursive plain mutex would self-deadlock on the second
+// acquisition. A re-entrant call must be the SAME thread that already holds
+// the mutex, in which case the body just runs while that outermost critical
+// section is still active (issue #6440 review).
+inline int& admin_db_lock_depth() {
+	static thread_local int depth = 0;
+	return depth;
+}
+
+template <typename Body>
+bool admin_db_lock_body(Body&& body) {
+	admin_db_lock_depth()++;
+	try {
+		const bool result = body();
+		admin_db_lock_depth()--;
+		return result;
+	} catch (...) {
+		admin_db_lock_depth()--;
+		throw;
+	}
+}
+
 template <typename Body>
 bool mysql_router_with_admin_db_lock(ProxySQL_PluginServices& services, Body&& body) {
+	// A re-entrant call: the caller's critical section already holds the
+	// mutex, so run the body directly instead of re-acquiring.
+	if (admin_db_lock_depth() > 0) {
+		return admin_db_lock_body(std::forward<Body>(body));
+	}
 	if (services.with_admin_db_lock == nullptr) {
 		throw std::runtime_error("the Admin DB lock service is unavailable");
 	}
@@ -76,7 +108,7 @@ bool mysql_router_with_admin_db_lock(ProxySQL_PluginServices& services, Body&& b
 	const bool ran = services.with_admin_db_lock([](void* opaque) {
 		auto& current = *static_cast<Call*>(opaque);
 		try {
-			current.result = (*current.body)();
+			current.result = admin_db_lock_body(*(current.body));
 		} catch (...) {
 			current.error = std::current_exception();
 		}

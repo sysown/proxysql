@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <climits>
+#include <string_view>
 
 #ifdef DEBUG
 //#define VALGRIND_ENABLE_ERROR_REPORTING
@@ -616,6 +617,27 @@ int SQLite3DB::return_one_int(const char *str) {
  */
 int SQLite3DB::check_table_structure(const char *table_name, const char *table_def) {
 	if (db == NULL || quarantined) return 0;
+	// SQLite stores an uppercase CREATE TABLE prefix without IF NOT EXISTS.
+	// Normalize only these leading keywords; preserve names and the table body.
+	std::string canonical_def(table_def);
+	const char* cursor = table_def;
+	constexpr char whitespace[] = " \t\n\r\f";
+	auto consume_keyword = [&](std::string_view keyword) {
+		const char* start = cursor + strspn(cursor, whitespace);
+		if (strncasecmp(start, keyword.data(), keyword.size()) != 0 ||
+			(start[keyword.size()] != '\0' &&
+			 strchr(whitespace, start[keyword.size()]) == nullptr)) return false;
+		cursor = start + keyword.size();
+		cursor += strspn(cursor, whitespace);
+		return true;
+	};
+	if (consume_keyword("CREATE") && consume_keyword("TABLE")) {
+		const char* table_start = cursor;
+		if (consume_keyword("IF")) {
+			table_start = consume_keyword("NOT") && consume_keyword("EXISTS") ? cursor : nullptr;
+		}
+		if (table_start != nullptr) canonical_def = std::string("CREATE TABLE ") + table_start;
+	}
 	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=?1 AND sql=?2";
 	int count=0;
 	sqlite3_stmt *statement=NULL;
@@ -626,7 +648,7 @@ int SQLite3DB::check_table_structure(const char *table_name, const char *table_d
 	  return 0;
 	}
 	int rc=(*proxy_sqlite3_bind_text)(statement, 1, table_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, this);
-	rc=(*proxy_sqlite3_bind_text)(statement, 2, table_def, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, this);
+	rc=(*proxy_sqlite3_bind_text)(statement, 2, canonical_def.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, this);
 	int result=0;
 	while ((result=(*proxy_sqlite3_step)(statement))==SQLITE_ROW) {
 	  count+=(*proxy_sqlite3_column_int)(statement,0);

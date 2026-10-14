@@ -212,6 +212,13 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
+	/**
+	 * @brief Routes a causal read to 'gtid_from_hostgroup' when the GTID tracked there cannot be
+	 *   used for routing (multi-UUID set, tagged GTID). Called while the destination hostgroup is
+	 *   chosen, before a backend is selected and the query attached to it (issue #6415).
+	 * @return True if 'current_hostgroup' was redirected.
+	 */
+	bool route_unusable_tracked_gtid_to_writer();
 
 	//void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
@@ -355,6 +362,10 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void housekeeping_before_pkts();
 #endif // 0
 	int get_pkts_from_client(bool&, PtrSize_t&);
+	/**
+	 * @brief One pass of the session state machine (the former body of handler()).
+	 */
+	int handler_pass();
 
 	// GPFC_ functions are subfunctions of get_pkts_from_client()
 	int GPFC_Statuses2(bool&, PtrSize_t&);
@@ -687,7 +698,35 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	//void set_unhealthy();
 
 	void set_status(enum session_status e);
+	/**
+	 * @brief Process the session: one pass of the state machine, repeated while
+	 *   client packets deferred by get_pkts_from_client() are pending and the
+	 *   session is back to WAITING_CLIENT_DATA.
+	 * @details Clients that pipeline commands (e.g. MariaDB Connector/J batches,
+	 *   #5930) send several commands without waiting for the responses. The
+	 *   packets received while a command is still in flight are kept, in order,
+	 *   in 'client_myds->PSarrayIN' and are executed one by one once the session
+	 *   returns to WAITING_CLIENT_DATA. No further socket event is guaranteed for
+	 *   them (the client already sent everything), so they are drained here
+	 *   regardless of which path made the pass end.
+	 */
 	int handler();
+	/**
+	 * @brief Whether a client packet received now must be deferred until the
+	 *   command in flight completes (pipelining, #5930).
+	 * @details True only for an authenticated, non fast-forward, non mirror
+	 *   session that is busy serving a command. False in every status where
+	 *   client packets are consumed directly (WAITING_CLIENT_DATA,
+	 *   CONNECTING_CLIENT, FAST_FORWARD, CONNECTING_SERVER towards FAST_FORWARD)
+	 *   and before the client is authenticated.
+	 */
+	bool client_pkts_must_be_deferred() const;
+	/**
+	 * @brief Whether the client may legitimately have sent commands that are not
+	 *   processed yet: the session is either ready for them (WAITING_CLIENT_DATA)
+	 *   or deferring them (see client_pkts_must_be_deferred()).
+	 */
+	bool client_may_pipeline() const;
 	int handler_again___status_WAITING_AWS_IAM_TOKEN();
 	void accept_aws_iam_completion(uint64_t opaque_id, AwsIamTokenResult&& result);
 	void cancel_aws_iam_wait();

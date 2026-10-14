@@ -7,10 +7,17 @@
  * Each case runs through ProxySQL and straight against PostgreSQL, and the replies are compared. The
  * error is one ProxySQL answers without the backend: a Bind of a statement the client never
  * prepared, an Execute of a portal never bound. Inside a transaction this is checked with the
- * native backend protocol only; the libpq one still leaves the transaction open.
+ * native backend protocol only: there the error is failed on the backend itself. With the libpq one
+ * ProxySQL poisons the session instead (pgsql-local_error_txn_state-t).
+ *
+ * L13-L18 check what failing on the backend keeps that poisoning would lose: the backend connection,
+ * a LISTEN and a WITH HOLD cursor pinned to it, PostgreSQL's own answer to COMMIT, the savepoint
+ * patterns of real drivers, and PostgreSQL's answer to every kind of statement in the failed
+ * transaction.
  */
 
 #include <chrono>
+#include <cstring>
 #include <ctime>
 #include <functional>
 #include <memory>
@@ -88,19 +95,22 @@ static std::string errorSqlstate(const std::vector<uint8_t>& payload) {
 }
 
 // What the client receives up to the ReadyForQuery, one token per message: "1 2 D=1 C Z(T)".
-static std::string replies(PgConnection& c) {
+// 'full' also shows notices and command tags: "N(25P01) C(ROLLBACK) Z(I)".
+static std::string replies(PgConnection& c, bool full = false) {
 	std::string out;
 	for (;;) {
 		char type = 0;
 		std::vector<uint8_t> buf;
 		c.readMessage(type, buf);
-		if (type == 'N' || type == 'S') continue;
+		if (type == 'S' || (type == 'N' && !full)) continue;
 		if (!out.empty()) out += ' ';
 		out += type;
 		if (type == 'D' && buf.size() >= 6) {
 			const int32_t len = (int32_t)((buf[2] << 24) | (buf[3] << 16) | (buf[4] << 8) | buf[5]);
 			out += "=" + (len < 0 ? std::string("NULL") : std::string((const char*)buf.data() + 6, len));
-		} else if (type == 'E') {
+		} else if (type == 'C' && full) {
+			out += "(" + std::string((const char*)buf.data(), strnlen((const char*)buf.data(), buf.size())) + ")";
+		} else if (type == 'E' || type == 'N') {
 			out += "(" + errorSqlstate(buf) + ")";
 		} else if (type == 'Z' && buf.size() >= 1) {
 			out += std::string("(") + (char)buf[0] + ")";
@@ -166,13 +176,88 @@ static std::string inTxn(PgConnection& c, const std::string& table, const std::f
 
 static const std::string FAILED_TAIL = "E(25P02) Z(E) | C Z(I) | E(42P01) Z(I)";
 
+// The message ProxySQL refuses itself, followed by its Sync.
+static void refuseAndSync(PgConnection& c) {
+	c.bindStatement("none_" + tag, "", {}, {}, false);
+	c.executePortal("", 0, false);
+	c.sendSync();
+}
+
+// One statement over the extended protocol, unnamed, without a Sync.
+static void extq(PgConnection& c, const std::string& sql) {
+	c.prepareStatement("", sql, false);
+	c.bindStatement("", "", {}, {}, false);
+	c.executePortal("", 0, false);
+}
+
+// Whether backend 'pid' is still connected a second later. A destroyed backend leaves
+// pg_stat_activity within milliseconds, so one look that misses it is enough.
+static bool backendAlive(const std::string& pid) {
+	if (pid.empty() || pid.find_first_not_of("0123456789") != std::string::npos) return false;
+	PGConnPtr pg = openConn(cl.pgsql_server_host, cl.pgsql_server_port, cl.pgsql_server_username,
+		cl.pgsql_server_password, cl.pgsql_username);
+	for (int i = 0; i < 10; i++) {
+		if (execLong(pg.get(), "SELECT count(*) FROM pg_stat_activity WHERE pid=" + pid) != 1) return false;
+		usleep(100000);
+	}
+	return true;
+}
+
+// NOTIFY sent straight to PostgreSQL, so it reaches a listener whichever way it connected.
+static void notifyDirect(const std::string& channel) {
+	PGConnPtr pg = openConn(cl.pgsql_server_host, cl.pgsql_server_port, cl.pgsql_server_username,
+		cl.pgsql_server_password, cl.pgsql_username);
+	exec(pg.get(), "NOTIFY " + channel + ", 'x'");
+}
+
+// PostgreSQL's reply is the expected one: for statements whose answer varies between versions.
+// 'start' is what the run must begin with, so two runs that broke the same way do not pass.
+static void checkSame(const char* mode, const std::string& label, const std::string& start, Frame f) {
+	const std::string proxy = run(f, true);
+	const std::string direct = run(f, false);
+	ok(proxy == direct && direct.compare(0, start.size(), start) == 0, "%s: %s [proxy: %s] [PostgreSQL: %s]",
+	   mode, label.c_str(), proxy.c_str(), direct.c_str());
+}
+
 int main(int, char**) {
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(14);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
+
+	// L18: what each kind of statement gets in the failed transaction. PostgreSQL refuses all but
+	// the ones that end it; ProxySQL must neither refuse more nor answer any itself.
+	using Send = std::function<void(PgConnection&)>;
+	const auto simpleQ = [](const std::string& sql) -> Send { return [sql](PgConnection& c) { c.sendQuery(sql); }; };
+	const auto extQ = [](const std::string& sql) -> Send { return [sql](PgConnection& c) { extq(c, sql); c.sendSync(); }; };
+	const std::vector<std::pair<std::string, Send>> probes = {
+		{ "SELECT 1", simpleQ("SELECT 1") },
+		{ "SHOW DateStyle", simpleQ("SHOW DateStyle") },
+		{ "SAVEPOINT", simpleQ("SAVEPOINT sp_new") },
+		{ "RELEASE SAVEPOINT", simpleQ("RELEASE SAVEPOINT sp_none") },
+		{ "ROLLBACK TO an unknown savepoint", simpleQ("ROLLBACK TO SAVEPOINT sp_none") },
+		{ "ROLLBACK AND CHAIN", simpleQ("ROLLBACK AND CHAIN") },
+		{ "COMMIT AND CHAIN", simpleQ("COMMIT AND CHAIN") },
+		{ "ABORT", simpleQ("ABORT") },
+		{ "END", simpleQ("END") },
+		{ "extended SELECT", extQ("SELECT 1") },
+		{ "extended SET of a tracked variable", extQ("SET DateStyle TO 'ISO, MDY'") },
+		{ "extended named ROLLBACK", [](PgConnection& c) {
+			c.prepareStatement("rb_" + tag, "ROLLBACK", false);
+			c.bindStatement("rb_" + tag, "", {}, {}, false);
+			c.executePortal("", 0, false);
+			c.sendSync();
+		} },
+		{ "extended Close then Parse of ROLLBACK under that name", [](PgConnection& c) {
+			c.closeStatement("cl_" + tag, false);
+			c.prepareStatement("cl_" + tag, "ROLLBACK", false);
+			c.bindStatement("cl_" + tag, "", {}, {}, false);
+			c.executePortal("", 0, false);
+			c.sendSync();
+		} },
+	};
+	plan(14 + 7 + probes.size());
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
 	if (PQstatus(admin.get()) != CONNECTION_OK) BAIL_OUT("cannot reach the admin interface");
@@ -380,6 +465,134 @@ int main(int, char**) {
 			ok(got.find("E(26000) Z(E)") != std::string::npos && before == after,
 			   "%s: the failing statement is not counted as a backend error [42601 count %ld -> %ld] [%s]",
 			   mode, before, after, got.c_str());
+		}
+
+		// L13: the backend connection that held the transaction is still there after ROLLBACK, as the
+		// client's own connection is with PostgreSQL. Looked up in pg_stat_activity: ProxySQL answers a
+		// bare pg_backend_pid() itself.
+		check(mode, "L13 the backend connection is kept after ROLLBACK",
+			"C Z(T) | E(26000) Z(E) | C Z(I) | T D=1 C Z(I) | backend kept", [&](PgConnection& c) {
+			std::string out = simple(c, "BEGIN");
+			const std::string pid = firstValue(simple(c, "SELECT pid FROM pg_stat_activity WHERE pid = pg_backend_pid()"));
+			refuseAndSync(c);
+			out += " | " + replies(c);
+			out += " | " + simple(c, "ROLLBACK");
+			out += " | " + simple(c, "SELECT 1");
+			return out + (backendAlive(pid) ? " | backend kept" : " | backend replaced");
+		});
+
+		// L14: a LISTEN pins the session to its backend. After ROLLBACK the subscription is still there
+		// and a NOTIFY reaches the client.
+		check(mode, "L14 a LISTEN still delivers after ROLLBACK",
+			"C Z(I) | C Z(T) | E(26000) Z(E) | C Z(I) | notified", [&](PgConnection& c) {
+			const std::string ch = "l14_" + tag;
+			std::string out = simple(c, "LISTEN " + ch);
+			out += " | " + simple(c, "BEGIN");
+			refuseAndSync(c);
+			out += " | " + replies(c);
+			out += " | " + simple(c, "ROLLBACK");
+			notifyDirect(ch);
+			usleep(300000);
+			const std::string r = simple(c, "SELECT 1");
+			out += (r.compare(0, 1, "A") == 0 || r.find(" A") != std::string::npos) ? " | notified" : " | not notified";
+			simple(c, "UNLISTEN *");
+			return out;
+		});
+
+		// L15: a WITH HOLD cursor from an earlier transaction pins the session too. After ROLLBACK it
+		// can still be fetched from.
+		check(mode, "L15 a WITH HOLD cursor is still there after ROLLBACK",
+			"C Z(T) | C Z(T) | C Z(I) | C Z(T) | E(26000) Z(E) | C Z(I) | T D=1 C Z(I) | C Z(I)", [&](PgConnection& c) {
+			const std::string cur = "l15_" + tag;
+			std::string out = simple(c, "BEGIN");
+			out += " | " + simple(c, "DECLARE " + cur + " CURSOR WITH HOLD FOR SELECT generate_series(1, 3)");
+			out += " | " + simple(c, "COMMIT");
+			out += " | " + simple(c, "BEGIN");
+			refuseAndSync(c);
+			out += " | " + replies(c);
+			out += " | " + simple(c, "ROLLBACK");
+			out += " | " + simple(c, "FETCH 1 FROM " + cur);
+			return out + " | " + simple(c, "CLOSE " + cur);
+		});
+
+		// L16: COMMIT of the failed transaction gets exactly PostgreSQL's answer, notices and command
+		// tag included: CommandComplete ROLLBACK, nothing else.
+		check(mode, "L16 COMMIT after the refused message, notices included",
+			"C Z(T) | E(26000) Z(E) | C(ROLLBACK) Z(I)", [&](PgConnection& c) {
+			std::string out = simple(c, "BEGIN");
+			refuseAndSync(c);
+			out += " | " + replies(c);
+			c.sendQuery("COMMIT");
+			return out + " | " + replies(c, true);
+		});
+		check(mode, "L16 extended-protocol COMMIT after the refused message, notices included",
+			"C Z(T) | E(26000) Z(E) | 1 2 C(ROLLBACK) Z(I)", [&](PgConnection& c) {
+			std::string out = simple(c, "BEGIN");
+			refuseAndSync(c);
+			out += " | " + replies(c);
+			extq(c, "COMMIT");
+			c.sendSync();
+			return out + " | " + replies(c, true);
+		});
+
+		// L17: pgjdbc with autosave sends a SAVEPOINT ahead of each statement in the same unit, and on
+		// an error rolls back to it and goes on. Both inserts outside the failed one are committed.
+		check(mode, "L17 pgjdbc autosave pattern recovers",
+			"C Z(T) | C Z(T) | 1 2 C 1 2 C Z(T) | 1 2 C E(26000) Z(E) | 1 2 C Z(T) | 1 2 C 1 2 C Z(T) | C Z(I) | T D=2 C Z(I)",
+			[&](PgConnection& c) {
+			const std::string t = "l17_" + tag;
+			std::string out = simple(c, "BEGIN");
+			out += " | " + simple(c, "CREATE TEMP TABLE " + t + " (a int)");
+			extq(c, "SAVEPOINT PGJDBC_AUTOSAVE");
+			extq(c, "INSERT INTO " + t + " VALUES (1)");
+			c.sendSync();
+			out += " | " + replies(c);
+			extq(c, "SAVEPOINT PGJDBC_AUTOSAVE");
+			refuseAndSync(c);
+			out += " | " + replies(c);
+			extq(c, "ROLLBACK TO SAVEPOINT PGJDBC_AUTOSAVE");
+			c.sendSync();
+			out += " | " + replies(c);
+			extq(c, "SAVEPOINT PGJDBC_AUTOSAVE");
+			extq(c, "INSERT INTO " + t + " VALUES (2)");
+			c.sendSync();
+			out += " | " + replies(c);
+			out += " | " + simple(c, "COMMIT");
+			return out + " | " + simple(c, "SELECT count(*) FROM " + t);
+		});
+
+		// L17: an ORM's nested transactions: one savepoint per level, the inner one rolled back on the
+		// error, both released, the outer work committed.
+		check(mode, "L17 nested savepoints recover and commit the outer work",
+			"C Z(T) | C Z(T) | C Z(T) | C Z(T) | C Z(T) | C Z(T) | E(26000) Z(E) | C Z(T) | C Z(T) | C Z(T) | C Z(I) | T D=2 C Z(I)",
+			[&](PgConnection& c) {
+			const std::string t = "l17n_" + tag;
+			std::string out = simple(c, "BEGIN");
+			out += " | " + simple(c, "CREATE TEMP TABLE " + t + " (a int)");
+			out += " | " + simple(c, "INSERT INTO " + t + " VALUES (1)");
+			out += " | " + simple(c, "SAVEPOINT s1");
+			out += " | " + simple(c, "INSERT INTO " + t + " VALUES (2)");
+			out += " | " + simple(c, "SAVEPOINT s2");
+			refuseAndSync(c);
+			out += " | " + replies(c);
+			out += " | " + simple(c, "ROLLBACK TO SAVEPOINT s2");
+			out += " | " + simple(c, "RELEASE SAVEPOINT s2");
+			out += " | " + simple(c, "RELEASE SAVEPOINT s1");
+			out += " | " + simple(c, "COMMIT");
+			return out + " | " + simple(c, "SELECT count(*) FROM " + t);
+		});
+
+		// L18: each kind of statement in the failed transaction, then a ROLLBACK to end whatever is left.
+		for (const auto& p : probes) {
+			checkSame(mode, "L18 in the failed transaction: " + p.first, "C Z(T) | E(26000) Z(E) | ",
+				[&](PgConnection& c) {
+				std::string out = simple(c, "BEGIN");
+				refuseAndSync(c);
+				out += " | " + replies(c);
+				p.second(c);
+				out += " | " + replies(c);
+				return out + " | " + simple(c, "ROLLBACK");
+			});
 		}
 	}
 

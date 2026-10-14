@@ -54,10 +54,19 @@ void cleanse_and_free_password(char*& password) {
 	}
 }
 
-const char* invalid_attributes_storage(enum cred_username_type usertype) {
-	// Backend policies must stay invalid after runtime loading so they cannot
-	// silently fall back to password authentication.
-	return usertype == USERNAME_BACKEND ? "null" : "";
+/**
+ * @brief Record that add() rejected the configured 'attributes' text.
+ * @details As in v3.0.11 the effective attributes become '' and the user keeps
+ *   working. The original text is kept in 'rejected_attributes' only, so that
+ *   runtime_mysql_users / SAVE ... FROM RUNTIME round-trip it (it already passed
+ *   the admin table CHECK) and the backend auth policy can fail closed when it
+ *   configures 'backend_auth' (issue #6413). Never store a placeholder in
+ *   'attributes': it would fail that CHECK and drop the row on SAVE.
+ */
+void reject_attributes(account_details_t* ad, const char* attributes, const char* username) {
+	ad->attributes = strdup("");
+	ad->rejected_attributes = strdup(attributes);
+	proxy_error("Invalid attributes for user %s; ignoring invalid JSON\n", username);
 }
 
 } // namespace
@@ -95,6 +104,10 @@ void free_account_details(account_details_t& ad) {
 	if (ad.comment) {
 		free(ad.comment);
 		ad.comment = nullptr;
+	}
+	if (ad.rejected_attributes) {
+		free(ad.rejected_attributes);
+		ad.rejected_attributes = nullptr;
 	}
 }
 
@@ -246,8 +259,19 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 			free(ad->comment);
 			ad->comment=strdup(comment);
 		}
-		if (strcasecmp(ad->attributes, attributes)) {
+		// Compare against the configured text, not the effective value: a
+		// rejected row has attributes='' but must be refreshed when reloaded.
+		// Rejected text is compared case-sensitively: JSON keys are, so
+		// '{"BACKEND_AUTH":...}' reloaded as '{"backend_auth":...}' must refresh
+		// the row. Accepted text keeps the historical case-insensitive compare.
+		const bool attributes_changed = ad->rejected_attributes != nullptr
+			? strcmp(ad->rejected_attributes, attributes) != 0
+			: strcasecmp(ad->attributes, attributes) != 0;
+		if (attributes_changed) {
 			free(ad->attributes);
+			ad->attributes = nullptr;
+			free(ad->rejected_attributes);
+			ad->rejected_attributes = nullptr;
 			if (strlen(attributes)) {
 				// NOTE: add() is only place where we do input validation
 				try {
@@ -297,8 +321,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 					}
 				}
 				catch(nlohmann::json::exception& e) {
-					ad->attributes=strdup(invalid_attributes_storage(usertype));
-					proxy_error("Invalid attributes for user %s; ignoring invalid JSON\n", username);
+					reject_attributes(ad, attributes, username);
 				}
 			} else {
 				ad->attributes=strdup(attributes); // default, empty string
@@ -310,6 +333,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		ad->default_schema=strdup(default_schema);
 		ad->comment=strdup(comment);
 		ad->password=strdup(password);
+		ad->rejected_attributes=NULL;
 		if (strlen(attributes)) {
 			// NOTE: add() is only place where we do input validation
 			try {
@@ -321,8 +345,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 				ad->attributes=strdup(attributes);
 			}
 			catch(nlohmann::json::exception& e) {
-				ad->attributes=strdup(invalid_attributes_storage(usertype));
-				proxy_error("Invalid attributes for user %s; ignoring invalid JSON\n", username);
+				reject_attributes(ad, attributes, username);
 			}
 		} else {
 			ad->attributes=strdup(attributes); // default, empty string
@@ -360,13 +383,16 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		cg.cred_array->add(ad);
 	}
 	bool warn_for_iam_password = false;
+	std::string invalid_policy_code {};
 	if (usertype == USERNAME_BACKEND) {
-		const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(
+		const MySQLBackendAuthPolicy policy = mysql_backend_auth_policy_for_account(
 			username,
-			ad->attributes != nullptr ? ad->attributes : "",
+			ad->attributes,
+			ad->rejected_attributes,
 			ad->password != nullptr && ad->password[0] != '\0');
 		warn_for_iam_password =
 			policy.type == MySQLBackendAuthType::AWS_IAM && policy.ignored_password;
+		if (policy.type == MySQLBackendAuthType::INVALID) invalid_policy_code = policy.failure_code;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
@@ -378,6 +404,15 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 			"mysql_users backend entry for '%s' uses aws_iam authentication; "
 			"clear the unused backend password\n",
 			username);
+	}
+	if (!invalid_policy_code.empty()) {
+		// The row is loaded, but its malformed 'backend_auth' fails closed
+		// (see parse_mysql_backend_auth_policy): say so now, not only when
+		// the first query fails with ERR 9002 (issue #6413).
+		proxy_warning(
+			"mysql_users backend entry for '%s' has an invalid 'backend_auth' in its attributes (%s); "
+			"queries of this user fail with ERR 9002 until it is fixed\n",
+			username, invalid_policy_code.c_str());
 	}
 	return true;
 };
@@ -404,6 +439,7 @@ unsigned int MySQL_Authentication::memory_usage() {
 		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
 		if (ado->comment) ret += strlen(ado->comment) + 1;
 		if (ado->attributes) ret += strlen(ado->attributes) + 1;
+		if (ado->rejected_attributes) ret += strlen(ado->rejected_attributes) + 1;
 	}
 	ret += sizeof(creds_group_t);
 	ret += sizeof(PtrArray);
@@ -419,6 +455,7 @@ unsigned int MySQL_Authentication::memory_usage() {
 		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
 		if (ado->comment) ret += strlen(ado->comment) + 1;
 		if (ado->attributes) ret += strlen(ado->attributes) + 1;
+		if (ado->rejected_attributes) ret += strlen(ado->rejected_attributes) + 1;
 	}
 	ret += sizeof(creds_group_t);
 	ret += sizeof(PtrArray);
@@ -461,6 +498,7 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 			ad->password=NULL;
 			ad->default_schema=NULL;
 			ad->attributes=NULL;
+			ad->rejected_attributes=NULL;
 			ad->comment=NULL;
 			ad->num_connections_used=ado->num_connections_used;
 		} else {
@@ -471,7 +509,9 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 			ad->clear_text_password[1] = NULL;
 			ad->use_ssl=ado->use_ssl;
 			ad->default_schema=strdup(ado->default_schema);
-			ad->attributes=strdup(ado->attributes);
+			// the configured text, so that runtime_mysql_users round-trips it
+			ad->attributes=strdup(ado->rejected_attributes ? ado->rejected_attributes : ado->attributes);
+			ad->rejected_attributes=NULL;
 			ad->comment=strdup(ado->comment);
 			ad->schema_locked=ado->schema_locked;
 			ad->transaction_persistent=ado->transaction_persistent;
@@ -495,7 +535,9 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 		ad->use_ssl=ado->use_ssl;
 		ad->default_hostgroup=ado->default_hostgroup;
 		ad->default_schema=strdup(ado->default_schema);
-		ad->attributes=strdup(ado->attributes);
+		// the configured text, so that runtime_mysql_users round-trips it
+		ad->attributes=strdup(ado->rejected_attributes ? ado->rejected_attributes : ado->attributes);
+		ad->rejected_attributes=NULL;
 		ad->comment=strdup(ado->comment);
 		ad->schema_locked=ado->schema_locked;
 		ad->transaction_persistent=ado->transaction_persistent;
@@ -622,6 +664,7 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 		cleanse_and_free_password(ad->clear_text_password[1]);
 		free(ad->default_schema);
 		free(ad->attributes);
+		free(ad->rejected_attributes);
 		free(ad->comment);
 		free(ad);
 		ret=true;
@@ -787,6 +830,9 @@ account_details_t MySQL_Authentication::lookup(
 
 		if (dup_details.attributes) {
 			ret.attributes = l_strdup(ad->attributes);
+			if (ad->rejected_attributes) {
+				ret.rejected_attributes = strdup(ad->rejected_attributes);
+			}
 		}
 	}
 
@@ -822,6 +868,7 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 			free(ad->default_schema);
 			free(ad->comment);
 			free(ad->attributes);
+			free(ad->rejected_attributes);
 			free(ad);
 		}
 	}
@@ -874,8 +921,12 @@ static uint64_t compute_accounts_hash(const umap_auth& accs_map) {
 				acc_map_hash.Update(ad->default_schema,strlen(ad->default_schema));
 			if (ad->comment)
 				acc_map_hash.Update(ad->comment,strlen(ad->comment));
-			if (ad->attributes) {
-				acc_map_hash.Update(ad->attributes,strlen(ad->attributes));
+			// Hash the configured text, as shown in runtime_mysql_users: the
+			// cluster computes a peer's checksum from those rows.
+			const char* attributes =
+				ad->rejected_attributes != nullptr ? ad->rejected_attributes : ad->attributes;
+			if (attributes) {
+				acc_map_hash.Update(attributes,strlen(attributes));
 			}
 		}
 	}

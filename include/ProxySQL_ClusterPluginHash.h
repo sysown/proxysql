@@ -6,16 +6,12 @@
  * @brief Plugin-set identity used by the ProxySQL Cluster peer guard.
  *
  * Cluster peers already refuse to sync unless they run the same ProxySQL
- * version. Nodes running the same build can still load different plugins, and
- * plugins register server-module tables that are synchronized through Cluster.
+ * version. Nodes running the same build can still load different plugins.
  * The plugin-set hash extends the guard: peers sync only when both version and
  * plugin-set hash match.
  *
- * The hash covers, in a canonical (sorted) order:
- * - each loaded plugin's descriptor name and ABI version;
- * - each registered server-module table (protocol, table, runtime table,
- *   order-by), which is what decides whether module-table sync is compatible.
- * It deliberately excludes host-specific data such as .so paths or file bytes,
+ * The hash covers each loaded plugin's descriptor name and ABI version, in a
+ * canonical (sorted) order. It deliberately excludes host-specific data such as .so paths or file bytes,
  * so nodes running the same plugins agree regardless of install location.
  * A node without plugins hashes the empty set, so plugin-less nodes keep
  * clustering with each other.
@@ -24,8 +20,6 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-
-#include "ProxySQL_ServerDiscovery.h"
 
 /**
  * @brief Peer identity query: version and plugin-set hash in one round trip.
@@ -44,11 +38,10 @@ struct ProxySQL_ClusterPluginIdentity {
 /**
  * @brief Computes the canonical plugin-set hash.
  * @return A non-empty checksum string (same format as Cluster checksums).
- *   The result does not depend on the order of either input.
+ *   The result does not depend on the order of `plugins`.
  */
 std::string proxysql_cluster_plugin_set_hash(
-	std::vector<ProxySQL_ClusterPluginIdentity> plugins,
-	std::vector<ProxySQL_ServerModuleTable> module_tables);
+	std::vector<ProxySQL_ClusterPluginIdentity> plugins);
 
 /** @brief Publishes this node's plugin-set hash; called once, after the plugin lifecycle. */
 void proxysql_cluster_set_local_plugin_set_hash(const std::string& hash);

@@ -38,6 +38,12 @@ extern "C" char * sha256_crypt_r (const char *key, const char *salt, char *buffe
 
 uint8_t mysql_encode_length(uint64_t len, char *hd);
 
+// A maximum-length payload packet always requires a continuation, including
+// an empty terminal packet when the row is an exact multiple of 0xFFFFFF.
+static inline unsigned long long mysql_framed_len(unsigned long long length) {
+	return length + (length / 0xFFFFFF + 1) * sizeof(mysql_hdr);
+}
+
 
 MySQL_ResultSet::MySQL_ResultSet() {
 	buffer = NULL;
@@ -170,18 +176,10 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 		unsigned long long total_size=0;
 		MYSQL_ROWS *r=_stmt->result.data;
 		if (r) {
-			total_size+=r->length;
-			if (r->length > 0xFFFFFF) {
-				total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-			}
-			total_size+=sizeof(mysql_hdr);
+			total_size+=mysql_framed_len(r->length);
 			while(r->next) {
 				r=r->next;
-				total_size+=r->length;
-				if (r->length > 0xFFFFFF) {
-					total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-				}
-				total_size+=sizeof(mysql_hdr);
+				total_size+=mysql_framed_len(r->length);
 			}
 #define MAXBUFFSTMT 12*1024*1024  // hardcoded to LESS *very important* than 16MB
 			if (total_size < MAXBUFFSTMT) {
@@ -191,19 +189,11 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 				total_size=0;
 				r=_stmt->result.data;
 				add_row2(r,(unsigned char *)pkt.ptr);
-				total_size+=r->length;
-				if (r->length > 0xFFFFFF) {
-					total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-				}
-				total_size+=sizeof(mysql_hdr);
+				total_size+=mysql_framed_len(r->length);
 				while(r->next) {
 					r=r->next;
 					add_row2(r,(unsigned char *)pkt.ptr+total_size);
-					total_size+=r->length;
-					if (r->length > 0xFFFFFF) {
-						total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-					}
-					total_size+=sizeof(mysql_hdr);
+					total_size+=mysql_framed_len(r->length);
 				}
 				PSarrayOUT.add(pkt.ptr,pkt.size);
 				if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
@@ -220,11 +210,7 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 					if (r->length >= MAXBUFFSTMT) {
 						// we have a large row
 						// we will send just that
-						tmp_pkt_size = r->length;
-						if (r->length > 0xFFFFFF) {
-							tmp_pkt_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-						}
-						tmp_pkt_size += sizeof(mysql_hdr);
+						tmp_pkt_size = mysql_framed_len(r->length);
 						PtrSize_t pkt;
 						pkt.size=tmp_pkt_size;
 						pkt.ptr=malloc(pkt.size);
@@ -243,8 +229,7 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 						unsigned int a = 0;
 						while (r && (tmp_pkt_size + r->length) < MAXBUFFSTMT) {
 							a++;
-							tmp_pkt_size += r->length;
-							tmp_pkt_size += sizeof(mysql_hdr);
+							tmp_pkt_size += mysql_framed_len(r->length);
 							//if (r->next) {
 								r = r->next;
 							//}
@@ -257,8 +242,7 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 							pkt.ptr=malloc(pkt.size);
 							while (tmp2 < tmp_pkt_size) {
 								add_row2(r,(unsigned char *)pkt.ptr+tmp2);
-								tmp2 += r->length;
-								tmp2 += sizeof(mysql_hdr);
+								tmp2 += mysql_framed_len(r->length);
 								r = r->next;
 							}
 							PSarrayOUT.add(pkt.ptr,pkt.size);
@@ -368,7 +352,7 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 	unsigned long length=row->length;
 	num_rows++;
 	uint8_t pkt_sid=sid;
-	if (length < (0xFFFFFF+sizeof(mysql_hdr))) {
+	if (length < 0xFFFFFF) {
 		mysql_hdr myhdr;
 		myhdr.pkt_length=length;
 		myhdr.pkt_id=pkt_sid;
@@ -376,8 +360,8 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 		memcpy(offset+sizeof(mysql_hdr), row->data, row->length);
 		pkt_sid++;
 	} else {
-		unsigned int left=length;
-		unsigned int copied=0;
+		unsigned long left=length;
+		unsigned long copied=0;
 		while (left>=0xFFFFFF) {
 			mysql_hdr myhdr;
 			myhdr.pkt_length=0xFFFFFF;

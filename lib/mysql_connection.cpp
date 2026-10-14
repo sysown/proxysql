@@ -590,9 +590,6 @@ void MySQL_Connection::set_backend_auth_type(MySQLBackendAuthType type) {
 		clear_aws_iam_handshake_secret();
 		aws_iam_identity_.reset();
 	}
-	if (type != MySQLBackendAuthType::PASSWORD) {
-		rowless_passthrough_authorized_ = false;
-	}
 	backend_auth_type_ = type;
 }
 
@@ -600,19 +597,15 @@ MySQLBackendAuthType MySQL_Connection::backend_auth_type() const {
 	return backend_auth_type_;
 }
 
-void MySQL_Connection::set_rowless_passthrough_authorized(bool authorized) {
-	rowless_passthrough_authorized_ =
-		authorized && backend_auth_type_ == MySQLBackendAuthType::PASSWORD;
-}
-
 bool MySQL_Connection::can_reset_for_backend_auth_policy(
 	const MySQLBackendAuthPolicy& policy) const
 {
-	if (backend_auth_type_ != MySQLBackendAuthType::PASSWORD) return false;
-	if (policy.type == MySQLBackendAuthType::PASSWORD) return true;
-	return rowless_passthrough_authorized_ &&
-		policy.type == MySQLBackendAuthType::INVALID &&
-		policy.failure_code == "backend_user_not_found";
+	// COM_CHANGE_USER resets a password connection towards a password policy,
+	// whether or not the user has a backend row (issue #6413). An AWS IAM
+	// connection, or a user whose policy is now AWS IAM or invalid, is
+	// destroyed instead.
+	return backend_auth_type_ == MySQLBackendAuthType::PASSWORD &&
+		policy.type == MySQLBackendAuthType::PASSWORD;
 }
 
 void MySQL_Connection::attach_aws_iam_token(
@@ -745,11 +738,12 @@ bool MySQL_Connection::get_status_sql_log_bin0() {
 }
 
 bool MySQL_Connection::backend_auth_compatible(
-	const char *requested_username, MySQLBackendAuthType requested_type) const
+	const char *requested_username, MySQLBackendAuthType) const
 {
+	// Authentication is established when the connection opens. Its original
+	// mode and token lifetime do not change the authenticated username.
 	return requested_username != nullptr && userinfo != nullptr &&
 		userinfo->username != nullptr &&
-		backend_auth_type_ == requested_type &&
 		strcmp(userinfo->username, requested_username) == 0;
 }
 
@@ -760,9 +754,8 @@ bool MySQL_Connection::requires_CHANGE_USER(
 	const char *username = client_conn != nullptr && client_conn->userinfo != nullptr
 		? client_conn->userinfo->username : nullptr;
 	if (!backend_auth_compatible(username, requested_type)) {
-		// the two connections use different usernames
-		// or authentication modes. The caller decides whether CHANGE_USER is
-		// permitted for that mode.
+		// Different usernames require authentication with the requesting user's
+		// policy. The caller chooses CHANGE_USER or a fresh connection.
 		return true;
 	}
 	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
@@ -1345,8 +1338,28 @@ void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 	}
 }
 
+/**
+ * @brief Enforce 'mysql-enable_load_data_local_infile' at the connector level.
+ *
+ * A 'LOAD DATA LOCAL INFILE' request (0xFB) from the backend makes the connector
+ * read a file from the ProxySQL host. The textual check in handler_special_queries()
+ * only covers canonically spelled COM_QUERY; COM_STMT_PREPARE/EXECUTE and alternate
+ * spellings bypass it. The connector refuses file requests when CLIENT_LOCAL_FILES is
+ * absent from 'options.client_flag' (checked at request time), so the flag is synced
+ * with the current policy before every statement sent to the backend. The capability
+ * advertised at handshake is unaffected, so pooled connections follow runtime changes.
+ */
+void MySQL_Connection::apply_local_infile_policy() {
+	if (mysql_thread___enable_load_data_local_infile) {
+		mysql->options.client_flag |= CLIENT_LOCAL_FILES;
+	} else {
+		mysql->options.client_flag &= ~CLIENT_LOCAL_FILES;
+	}
+}
+
 void MySQL_Connection::real_query_start() {
 	PROXY_TRACE();
+	apply_local_infile_policy();
 	async_exit_status = mysql_real_query_start(&interr , mysql, query.ptr, query.length);
 }
 
@@ -1358,6 +1371,7 @@ void MySQL_Connection::real_query_cont(short event) {
 
 void MySQL_Connection::stmt_prepare_start() {
 	PROXY_TRACE();
+	apply_local_infile_policy();
 	query.stmt=mysql_stmt_init(mysql);
 	my_bool my_arg=true;
 	mysql_stmt_attr_set(query.stmt, STMT_ATTR_UPDATE_MAX_LENGTH, &my_arg);
@@ -1383,6 +1397,7 @@ void MySQL_Connection::stmt_execute_start() {
 	// it is a nasty hack because we shouldn't change states that should belong to the library
 	// I am not sure if this is a bug in the backend library or not
 	query.stmt->state= MYSQL_STMT_PREPARED;
+	apply_local_infile_policy();
 	async_exit_status = mysql_stmt_execute_start(&interr , query.stmt);
 }
 
@@ -3530,6 +3545,20 @@ bool MySQL_Connection::get_gtid_from_session_tracking(char *buff) {
 	}
 	if (!select_session_gtid(gtids, gtids_len, last_gtid, last_gtid_len, gtid_uuid, sizeof(gtid_uuid))) {
 		return false;
+	}
+	if (strcmp(gtid_uuid, SESSION_GTID_UNTRACKABLE) == 0) {
+		// The value did not fit and was not a reducible single-UUID set: the
+		// previous GTID is dropped instead of kept (#6465). One CAS per 10 s
+		// window so a burst of such OK packets logs once.
+		static std::atomic<time_t> untrackable_warn_ts{0};
+		const time_t now = time(nullptr);
+		time_t prev = untrackable_warn_ts.load(std::memory_order_relaxed);
+		if (now - prev >= 10 && untrackable_warn_ts.compare_exchange_strong(prev, now,
+				std::memory_order_relaxed)) {
+			proxy_warning(
+				"GTID tracking: the session GTID reported by the backend (%zu bytes) does not fit the %zu-byte tracking buffer and is not a single-UUID GTID set; it is not tracked, and causal reads that depend on it are not served from replicas\n",
+				gtids_len > 0 ? gtids_len : last_gtid_len, sizeof(gtid_uuid));
+		}
 	}
 	return collect_gtid_to_buff(buff);
 }

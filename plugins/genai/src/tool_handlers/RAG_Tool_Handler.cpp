@@ -1900,8 +1900,6 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 				if (result.data && result.count > 0) {
 					// Convert to std::vector<float>
 					query_embedding.assign(result.data, result.data + result.embedding_size);
-					// Free the result data (GenAI allocates with malloc)
-					free(result.data);
 				}
 			}
 
@@ -2203,8 +2201,6 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 					if (result.data && result.count > 0) {
 						// Convert to std::vector<float>
 						query_embedding.assign(result.data, result.data + result.embedding_size);
-						// Free the result data (GenAI allocates with malloc)
-						free(result.data);
 					}
 				}
 
@@ -2525,8 +2521,6 @@ json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& ar
 						if (result.data && result.count > 0) {
 							// Convert to std::vector<float>
 							query_embedding.assign(result.data, result.data + result.embedding_size);
-							// Free the result data (GenAI allocates with malloc)
-							free(result.data);
 						}
 					}
 

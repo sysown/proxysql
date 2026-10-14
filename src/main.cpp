@@ -1596,6 +1596,20 @@ static void RegisterConfiguredPluginSchemas() {
 		           GloVars.plugin_modules.size());
 		return;
 	}
+	// A shutdown cycle (PROXYSQL RESTART, or STOP+START) destroys the manager
+	// and dlclose()s every module, but discovery only ever ran once, inside
+	// ProxySQL_Main_process_global_variables() before the restart loop. Without
+	// re-running it here the manager stays null, every lifecycle wrapper below
+	// silently no-ops, and the plugin chassis disappears for the rest of the
+	// process lifetime -- with no error logged. 'GloVars.plugin_modules' still
+	// holds the pre-scanned module list.
+	if (!GloPluginManager && !GloVars.plugin_modules.empty()) {
+		std::string discover_error {};
+		if (!proxysql_discover_configured_plugins(GloPluginManager, GloVars.plugin_modules, discover_error)) {
+			proxy_error("Plugin discovery failed on reload: %s\n", discover_error.c_str());
+			exit(EXIT_FAILURE);
+		}
+	}
 	std::string plugin_error {};
 	if (!proxysql_register_configured_plugin_schemas(GloPluginManager.get(), plugin_error)) {
 		proxy_error("Plugin schema registration failed: %s\n", plugin_error.c_str());
@@ -1666,9 +1680,20 @@ void UnloadPlugins() {
 #endif
 }
 
+/** Initialize TLS, plugins, and core modules before starting worker listeners. */
 void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_info) {
+	// Track the exact context created by SSL-module startup until a reload
+	// replaces it. If the first attempt fails, a phase-2 retry runs after
+	// phase 4 has drained the modules and listeners that could borrow it.
+	// Never recapture a later runtime context: those retain the existing
+	// restart/live-reload lifetime policy.
+	static SSL_CTX* startup_ssl_ctx = GloVars.global.ssl_ctx;
 	std::string msg;
 	ProxySQL_create_or_load_TLS(false, msg);
+	if (startup_ssl_ctx && startup_ssl_ctx != GloVars.global.ssl_ctx) {
+		SSL_CTX_free(startup_ssl_ctx);
+		startup_ssl_ctx = nullptr;
+	}
 
 	LoadPlugins();
 
@@ -1734,15 +1759,56 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 }
 
 /**
+ * @brief Exits the process if two ProxySQL modules are configured on overlapping listeners.
+ * @details A configuration error: ProxySQL logs it and exits with code 0, as v3.0.11 did, so the
+ *   angel process does not restart it (issue #6414). It runs before the plugin lifecycle and before
+ *   start_listeners(), so there is no plugin state to drain and no shutdown sequence to run (the
+ *   worker threads, still waiting for listeners, could not be joined).
+ */
+static void ProxySQL_Main_exit_on_listener_conflicts() {
+	char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
+	char* admin_pgsql_ifaces = GloAdmin->get_variable((char*)"pgsql_ifaces");
+	char* admin_telnet_ifaces = GloAdmin->get_variable((char*)"telnet_admin_ifaces");
+	char* admin_stats_ifaces = GloAdmin->get_variable((char*)"telnet_stats_ifaces");
+	char* mysql_ifaces = GloMTH->get_variable((char*)"interfaces");
+	char* pgsql_ifaces = GloPTH->get_variable((char*)"interfaces");
+
+	std::vector<proxysql_listen_validator::module_listener_config> modules {
+		{ "Admin", admin_mysql_ifaces },
+		{ "Admin PostgreSQL", admin_pgsql_ifaces },
+		{ "Admin Telnet", admin_telnet_ifaces },
+		{ "Admin Stats Telnet", admin_stats_ifaces },
+		{ "MySQL", mysql_ifaces },
+		{ "PostgreSQL", pgsql_ifaces },
+	};
+	std::string error {};
+	const bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);
+
+	free(admin_mysql_ifaces);
+	free(admin_pgsql_ifaces);
+	free(admin_telnet_ifaces);
+	free(admin_stats_ifaces);
+	free(mysql_ifaces);
+	free(pgsql_ifaces);
+
+	if (valid == false) {
+		proxy_error("%s\n", error.c_str());
+		proxy_error("Use different listen interfaces/ports or disable one of the conflicting listeners.\n");
+		proxy_error("ProxySQL startup aborted due to configuration error\n");
+		exit(EXIT_SUCCESS);
+	}
+}
+
+/**
  * @brief Phase 3 of ProxySQL initialization.
  * 
  * This phase starts all the core modules, including MySQL and PostgreSQL
- * threads handlers, monitor modules, and listeners. It also performs
- * validation of listener configurations to detect cross-module conflicts
- * before starting listeners.
+ * threads handlers, monitor modules, and listeners. A cross-module listener
+ * conflict exits the process before the plugin lifecycle and before any
+ * listener starts (see ProxySQL_Main_exit_on_listener_conflicts()).
  * 
  * @return True if all modules and listeners started successfully, false if a
- * configuration conflict or other fatal error occurred.
+ * managed startup (PROXYSQL40) failed or completed a one-shot run.
  */
 bool ProxySQL_Main_init_phase3___start_all() {
 
@@ -1825,6 +1891,13 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	const auto early_action_result = RunConfiguredPluginEarlyActions();
 	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_success) exit(EXIT_SUCCESS);
 	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_failure) exit(EXIT_FAILURE);
+#endif /* PROXYSQL40 */
+	// Validate the listener configuration before the plugin lifecycle and
+	// before any listener starts (#6414), but after the one-shot early
+	// actions above: those exit before any listener exists, so a listener
+	// overlap must not stop e.g. a mysql_router --bootstrap run.
+	ProxySQL_Main_exit_on_listener_conflicts();
+#ifdef PROXYSQL40
 	InitConfiguredPlugins();
 	if (GloVars.aws_managed) {
 		std::string manifest_json, error;
@@ -1864,17 +1937,12 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	// exist, but no listener has yet been validated or started.
 	RunConfiguredPluginsRuntimeReady();
 
-	// The plugin set and its server-module tables are now final. Publish the
-	// plugin-set hash before Cluster peer threads (gated until the open below)
-	// can compare it: peers sync only when version and plugin set both match.
+	// The plugin set is now final. Publish the plugin-set hash before Cluster
+	// peer threads (gated until the open below) can compare it: peers sync only
+	// when version and plugin set both match.
 	{
-		std::vector<ProxySQL_ServerModuleTable> module_tables =
-			proxysql_active_server_module_tables(ProxySQL_ServerProtocol::mysql);
-		std::vector<ProxySQL_ServerModuleTable> pgsql_module_tables =
-			proxysql_active_server_module_tables(ProxySQL_ServerProtocol::pgsql);
-		module_tables.insert(module_tables.end(), pgsql_module_tables.begin(), pgsql_module_tables.end());
 		const std::string plugin_set_hash = proxysql_cluster_plugin_set_hash(
-			proxysql_active_plugin_identities(), std::move(module_tables));
+			proxysql_active_plugin_identities());
 		proxysql_cluster_set_local_plugin_set_hash(plugin_set_hash);
 		proxy_info("Cluster: local plugin-set hash %s\n", plugin_set_hash.c_str());
 	}
@@ -1883,39 +1951,6 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	// threads run.
 	proxysql_startup_gate_open();
 #endif /* PROXYSQL40 */
-	{
-		char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
-		char* admin_pgsql_ifaces = GloAdmin->get_variable((char*)"pgsql_ifaces");
-		char* admin_telnet_ifaces = GloAdmin->get_variable((char*)"telnet_admin_ifaces");
-		char* admin_stats_ifaces = GloAdmin->get_variable((char*)"telnet_stats_ifaces");
-		char* mysql_ifaces = GloMTH->get_variable((char*)"interfaces");
-		char* pgsql_ifaces = GloPTH->get_variable((char*)"interfaces");
-
-		std::vector<proxysql_listen_validator::module_listener_config> modules {
-			{ "Admin", admin_mysql_ifaces },
-			{ "Admin PostgreSQL", admin_pgsql_ifaces },
-			{ "Admin Telnet", admin_telnet_ifaces },
-			{ "Admin Stats Telnet", admin_stats_ifaces },
-			{ "MySQL", mysql_ifaces },
-			{ "PostgreSQL", pgsql_ifaces },
-		};
-		std::string error {};
-		bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);
-
-		free(admin_mysql_ifaces);
-		free(admin_pgsql_ifaces);
-		free(admin_telnet_ifaces);
-		free(admin_stats_ifaces);
-		free(mysql_ifaces);
-		free(pgsql_ifaces);
-
-		if (valid == false) {
-			proxy_error("%s\n", error.c_str());
-			proxy_error("Use different listen interfaces/ports or disable one of the conflicting listeners.\n");
-			proxy_error("ProxySQL startup aborted due to configuration error\n");
-			return false;
-		}
-	}
 	{
 		cpu_timer t;
 		GloMTH->start_listeners();
@@ -2011,19 +2046,24 @@ void ProxySQL_Main_init_phase4___shutdown() {
 	cpu_timer t;
 	// Stop accepting admin work and wait for all detached admin clients before
 	// the modules used by admin queries are joined or destroyed.
-	GloAdmin->shutdown_threads();
+GloAdmin->shutdown_threads();
 	// Admin cannot restart HTTP after this point. Drain web handlers while
 	// the AWS service and all core runtime dependencies are still alive.
 	UnloadPlugins();
-#ifdef PROXYSQL40
-	if (managed_startup_exit_code >= 0) {
-		// A one-shot installation or failed recovery exits before
-		// start_listeners(), which normally releases these existing startup
-		// waits. Release them for teardown without opening any listeners.
+	// Every worker spins in run_BootstrapListener() while this flag is true and
+	// that loop never consults 'shutdown'. Reaching teardown before
+	// start_listeners() ran (a managed one-shot/recovery failure; a listener
+	// conflict now exits before the plugin lifecycle, issue #6414)
+	// would otherwise leave shutdown_threads() pthread_join()-ing threads that
+	// can never exit, wedging the process until SIGKILL. Clearing is safe
+	// unconditionally: once listeners exist the flag is already false, and
+	// clearing it never opens a listener.
+	if (GloMTH) {
 		GloMTH->bootstrapping_listeners = false;
+	}
+	if (GloPTH) {
 		GloPTH->bootstrapping_listeners = false;
 	}
-#endif
 	ProxySQL_Main_join_all_threads();
 #ifdef PROXYSQL40
 	// The locality manager can retain a provider lease between refreshes.
@@ -2455,11 +2495,18 @@ string to_string(const conn_uri_t& conn_uri) {
  *   ProxySQL fetching them as regular users.
  */
 const char BOOTSTRAP_SELECT_USERS[] {
-	"SELECT DISTINCT user,ssl_type,authentication_string,plugin,password_expired FROM mysql.user"
+	"SELECT DISTINCT user,ssl_type,authentication_string,plugin,password_expired,host FROM mysql.user"
 		" WHERE user NOT LIKE 'mysql.%' AND user NOT LIKE 'bt_proxysql_%'"
 #ifndef DEBUG
 		" AND user != 'root'"
 #endif
+		// One row per (user, host) account. 'DISTINCT' cannot collapse two rows of
+		// the same username whose credential columns differ (caching_sha2_password
+		// embeds a per-account salt), so the importer deduplicates by username.
+		// Make the winner deterministic and prefer the wildcard account: for each
+		// user, rows with host='%' come first (host<>'%' evaluates to 0), then the
+		// remaining hosts in ascending order.
+		" ORDER BY user, host<>'%', host"
 };
 
 /**

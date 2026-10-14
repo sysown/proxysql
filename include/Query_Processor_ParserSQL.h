@@ -48,11 +48,14 @@ struct UserVariableQueryDecision {
 };
 
 /**
- * @brief Computes a query digest using the MySQL-flavour ParserSQL parser.
+ * @brief Computes a query digest using the legacy MySQL tokenizer.
  *
- * Parses the query, normalizes it into digest text (replacing literals with
- * placeholders), and stores both the normalized text and its SpookyHash in
- * `qp->digest_text` / `qp->digest`.
+ * In parser mode the digest must be identical to the one produced with
+ * `mysql-query_processor_parser=0`, so ParserSQL is not asked to emit it from
+ * its AST. The query is tokenized, normalised (literals replaced, comments
+ * handled per `query_digests_*`) and hashed with SpookyHash, exactly as the
+ * legacy path does. The command type is computed lazily by
+ * query_parser_command_type().
  *
  * Controlled by `mysql-query_processor_parser`.
  *
@@ -64,7 +67,7 @@ struct UserVariableQueryDecision {
 void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_length);
 
 /**
- * @brief Computes a query digest using the PostgreSQL-flavour ParserSQL parser.
+ * @brief Computes a query digest using the legacy PostgreSQL tokenizer.
  *
  * Identical to parsersql_digest_init_mysql() but targets PostgreSQL syntax.
  *
@@ -107,25 +110,6 @@ enum MYSQL_COM_QUERY_command parsersql_command_type_mysql(const char* query, int
 enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int query_length);
 
 /**
- * @brief Maps a ParserSQL StmtType to a `MYSQL_COM_QUERY_command`.
- *
- * @param stmt_type  A `StmtType` value (see sql_parser/common.h), as an int.
- * @return           The corresponding command type.
- */
-enum MYSQL_COM_QUERY_command parsersql_stmt_type_to_mysql_command(int stmt_type);
-
-/**
- * @brief Maps a ParserSQL StmtType to a `PGSQL_QUERY_command`.
- *
- * Identical to parsersql_stmt_type_to_mysql_command() but targets the
- * PostgreSQL command enum.
- *
- * @param stmt_type  A `StmtType` value (see sql_parser/common.h), as an int.
- * @return           The corresponding command type.
- */
-enum PGSQL_QUERY_command parsersql_stmt_type_to_pgsql_command(int stmt_type);
-
-/**
  * @brief Parses a MySQL SET statement into variable-value pairs.
  *
  * Walks the AST produced by the MySQL ParserSQL parser and extracts each
@@ -137,10 +121,17 @@ enum PGSQL_QUERY_command parsersql_stmt_type_to_pgsql_command(int stmt_type);
  * Controlled by `mysql-set_parser_algorithm` (value 3).
  *
  * @param query  The SET statement to parse.
+ * @param session_scope_only Require only session assignments (including
+ *               LOCAL). Reject the whole map before scope normalization if any
+ *               target is global, persistent, or a user variable. Used by
+ *               session-variable tracking.
  * @return       Map from normalised variable name to its value(s). Empty map
- *               if the query is not a valid SET statement.
+ *               if the query is not a valid SET statement or is not parsed in
+ *               full (trailing `;` and whitespace are allowed; trailing tokens,
+ *               including a second statement, are not).
  */
-std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(const std::string& query);
+std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
+    const std::string& query, bool session_scope_only = false);
 
 /**
  * @brief Parses a PostgreSQL SET statement into variable-value pairs.

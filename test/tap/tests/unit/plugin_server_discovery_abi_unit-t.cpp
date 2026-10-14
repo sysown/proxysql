@@ -27,9 +27,6 @@
 #ifndef PROXYSQL_FAKE_PLUGIN_ABI13_PATH
 #error "PROXYSQL_FAKE_PLUGIN_ABI13_PATH must be defined"
 #endif
-#ifndef PROXYSQL_FAKE_SERVER_MODULE_ABI14_PREFIX_PATH
-#error "PROXYSQL_FAKE_SERVER_MODULE_ABI14_PREFIX_PATH must be defined"
-#endif
 
 char g_fake_admin_db = '\0';
 char g_fake_config_db = '\0';
@@ -40,12 +37,8 @@ SQLite3DB* proxysql_plugin_get_statsdb() { return reinterpret_cast<SQLite3DB*>(&
 
 namespace {
 
-std::atomic<unsigned int> g_module_calls {0};
-std::atomic<unsigned int> g_module_destroyed {0};
 std::atomic<unsigned int> g_controller_calls {0};
 std::atomic<unsigned int> g_controller_destroyed {0};
-std::atomic<bool> g_throw_module_callback {false};
-std::atomic<bool> g_throw_module_destroy {false};
 std::atomic<bool> g_throw_controller_destroy {false};
 std::mutex g_lease_mutex;
 std::condition_variable g_lease_cv;
@@ -58,7 +51,11 @@ std::string g_log_path;
 void retirement_observer(ProxySQL_ServerProtocol protocol, bool controller, void *) {
 	(void)controller;
 	if (protocol != ProxySQL_ServerProtocol::pgsql) return;
-	g_registry_detached.store(true, std::memory_order_release);
+	{
+		// Atomic flags still need the waiting mutex to prevent lost notifications.
+		std::lock_guard<std::mutex> lock(g_lease_mutex);
+		g_registry_detached.store(true, std::memory_order_release);
+	}
 	g_lease_cv.notify_all();
 }
 
@@ -97,30 +94,6 @@ bool is_module_loaded(const char *path) {
 	if (probe == nullptr) return false;
 	dlclose(probe);
 	return true;
-}
-
-void module_installed(void *, ProxySQL_ServerRuntimeSnapshot snapshot) {
-	if (g_throw_module_callback.load()) throw std::runtime_error("module callback failure");
-	if (snapshot.protocol == ProxySQL_ServerProtocol::mysql && snapshot.generation == 7) {
-		++g_module_calls;
-	}
-	if (snapshot.protocol == ProxySQL_ServerProtocol::pgsql && snapshot.generation == 8) {
-		std::unique_lock<std::mutex> lock(g_lease_mutex);
-		g_callback_entered.store(true, std::memory_order_release);
-		g_lease_cv.notify_all();
-		g_lease_cv.wait(lock, [] {
-			return g_callback_release.load(std::memory_order_acquire) &&
-				g_registry_detached.load(std::memory_order_acquire);
-		});
-	}
-}
-
-void destroy_module(ProxySQL_ServerModuleHooks *) {
-	g_module_destroyed.fetch_add(1, std::memory_order_acq_rel);
-	if (!g_callback_release.load(std::memory_order_acquire)) {
-		g_destroyed_before_callback_release.store(true, std::memory_order_release);
-	}
-	if (g_throw_module_destroy.load()) throw std::runtime_error("module destroy failure");
 }
 
 class Controller final : public ProxySQL_ServerDiscoveryController {
@@ -329,19 +302,6 @@ void test_abi13_fixture_and_invalid_registration() {
 	}
 	unsetenv("PROXYSQL_FAKE_PLUGIN_RESERVED_ABI");
 
-	ProxySQL_ServerModuleHooks no_hook {ProxySQL_ServerProtocol::mysql, {nullptr}, nullptr};
-	ProxySQL_ServerModuleHooks invalid_protocol {
-		static_cast<ProxySQL_ServerProtocol>(9), {&module_installed}, nullptr
-	};
-	void *handle = open_retained_module(PROXYSQL_FAKE_PLUGIN_PATH);
-	ok(handle != nullptr, "open a separately retained module DSO reference");
-	ok(!mgr.register_server_module(nullptr, &destroy_module, handle), "reject null module hooks");
-	ok(!mgr.register_server_module(&no_hook, &destroy_module, handle), "reject null module hook callback");
-	ok(!mgr.register_server_module(&invalid_protocol, &destroy_module, handle), "reject invalid module protocol");
-	ok(!mgr.register_server_module(&no_hook, nullptr, handle), "reject null module destroy callback");
-	ok(!mgr.register_server_module(&no_hook, &destroy_module, nullptr), "reject null retained module handle");
-	dlclose(handle);
-
 	void *null_controller_handle = open_retained_module(PROXYSQL_FAKE_PLUGIN2_PATH);
 	ok(!mgr.install_server_discovery_controller(ProxySQL_ServerProtocol::mysql, nullptr,
 		&destroy_controller, null_controller_handle), "reject null controller");
@@ -358,53 +318,48 @@ void test_abi13_fixture_and_invalid_registration() {
 	dlclose(controller_handle);
 }
 
-void test_frozen_server_module_abi14_prefix() {
-	ProxySQL_PluginManager mgr;
-	void *handle = open_retained_module(PROXYSQL_FAKE_SERVER_MODULE_ABI14_PREFIX_PATH);
-	using create_cb = ProxySQL_ServerModuleHooks *(*)();
-	using destroy_cb = void (*)(ProxySQL_ServerModuleHooks *);
-	auto create = handle == nullptr ? nullptr : reinterpret_cast<create_cb>(dlsym(handle,
-		"proxysql_fake_server_module_abi14_prefix_create"));
-	auto destroy = handle == nullptr ? nullptr : reinterpret_cast<destroy_cb>(dlsym(handle,
-		"proxysql_fake_server_module_abi14_prefix_destroy"));
-	ProxySQL_ServerModuleHooks *module = create == nullptr ? nullptr : create();
-	ok(module != nullptr && destroy != nullptr && mgr.register_server_module(module, destroy, handle),
-		"register a DSO object allocated as the frozen ABI-14 server-module prefix");
-	std::vector<ProxySQL_ServerHostgroupClaim> claims;
-	std::string error;
-	ProxySQL_ServerModuleSnapshot snapshot {};
-	snapshot.runtime.protocol = ProxySQL_ServerProtocol::mysql;
-	snapshot.runtime.generation = 42;
-	ok(mgr.prepare_server_module_runtime(snapshot, claims, error),
-		"prepare does not dereference appended callbacks of frozen ABI-14 module");
-	mgr.commit_server_module_runtime(ProxySQL_ServerProtocol::mysql, 42);
-	ok(mgr.unregister_server_module(ProxySQL_ServerProtocol::mysql),
-		"commit and retirement complete without touching frozen ABI-14 tail");
-}
-
 void test_service_phase_availability() {
 	make_log_path();
 	clear_log();
 	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
-	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_CHECK_SERVER_DISCOVERY_INIT", "1", 1);
 	std::unique_ptr<ProxySQL_PluginManager> manager;
 	std::string err;
 	const std::vector<std::string> plugins {PROXYSQL_FAKE_PLUGIN_PATH};
 	ok(proxysql_load_configured_plugins(manager, plugins, err) &&
 		proxysql_init_configured_plugins(manager.get(), err),
-		"Phase B module registration and normal-init services succeed");
-	const std::string phase_log = read_log();
-	ok(phase_log.find("phase_b_server_discovery_availability") != std::string::npos &&
-		phase_log.find("phase_b_server_module_registered") != std::string::npos,
-		"only module registration is live in Phase B");
-	ok(phase_log.find("init_server_discovery_live") != std::string::npos,
+		"normal-init server discovery services succeed");
+	ok(read_log().find("init_server_discovery_live") != std::string::npos,
 		"all server discovery services are live in normal init");
 	(void)proxysql_stop_configured_plugins(manager, err);
-	ok(read_log().find("server_module_destroyed") != std::string::npos,
-		"Phase-B registered module is retired through its destroy callback");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_CHECK_SERVER_DISCOVERY_INIT");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+	cleanup_log();
+}
+
+// register_server_module is a reserved ABI-14 slot: server modules are no
+// longer supported. The slot is still populated in every phase, always
+// rejects, never dereferences its arguments nor calls the destroy callback,
+// and fails the registration phase it is called from.
+void test_reserved_register_server_module() {
+	make_log_path();
+	clear_log();
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY", "1", 1);
+	std::unique_ptr<ProxySQL_PluginManager> manager;
+	std::string err;
+	const std::vector<std::string> plugins {PROXYSQL_FAKE_PLUGIN_PATH};
+	const bool loaded = proxysql_load_configured_plugins(manager, plugins, err);
+	const std::string phase_log = read_log();
+	ok(phase_log.find("phase_b_server_discovery_availability") != std::string::npos,
+		"Phase B exposes the reserved register_server_module slot and no controller service");
+	ok(!loaded && phase_log.find("phase_b_server_module_rejected") != std::string::npos &&
+		err.find("no longer supported") != std::string::npos,
+		"a Phase B server-module registration is rejected and fails the plugin load: %s", err.c_str());
+	ok(phase_log.find("server_module_destroyed") == std::string::npos,
+		"the rejected module's destroy callback is never called");
+	if (manager) (void)proxysql_stop_configured_plugins(manager, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
 
 	clear_log();
@@ -417,6 +372,8 @@ void test_service_phase_availability() {
 	ok(read_log().find("start_server_module_rejected") != std::string::npos,
 		"registration outside Phase B/init is rejected through the service callback");
 	(void)proxysql_stop_configured_plugins(late_manager, err);
+	ok(read_log().find("server_module_destroyed") == std::string::npos,
+		"no destroy callback runs at shutdown for a rejected module");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_START_REGISTER_SERVER_MODULE");
 	cleanup_log();
 }
@@ -493,20 +450,15 @@ void test_nested_steady_state_post_during_unpublish() {
 }
 
 struct RetainedFixtureSymbols {
-	using create_module_cb = ProxySQL_ServerModuleHooks *(*)(ProxySQL_ServerProtocol);
-	using destroy_module_cb = void (*)(ProxySQL_ServerModuleHooks *);
 	using create_controller_cb = ProxySQL_ServerDiscoveryController *(*)();
 	using destroy_controller_cb = void (*)(ProxySQL_ServerDiscoveryController *);
 	using reset_cb = void (*)();
 	using calls_cb = unsigned int (*)();
 
 	void *handle {nullptr};
-	create_module_cb create_module {nullptr};
-	destroy_module_cb destroy_module {nullptr};
 	create_controller_cb create_controller {nullptr};
 	destroy_controller_cb destroy_controller {nullptr};
 	reset_cb reset {nullptr};
-	calls_cb module_calls {nullptr};
 	calls_cb controller_calls {nullptr};
 };
 
@@ -514,49 +466,28 @@ RetainedFixtureSymbols open_retained_fixture(const char *path) {
 	RetainedFixtureSymbols fixture;
 	fixture.handle = open_retained_module(path);
 	if (fixture.handle == nullptr) return fixture;
-	fixture.create_module = reinterpret_cast<RetainedFixtureSymbols::create_module_cb>(dlsym(
-		fixture.handle, "proxysql_fake_retained_module_create"));
-	fixture.destroy_module = reinterpret_cast<RetainedFixtureSymbols::destroy_module_cb>(dlsym(
-		fixture.handle, "proxysql_fake_retained_module_destroy"));
 	fixture.create_controller = reinterpret_cast<RetainedFixtureSymbols::create_controller_cb>(dlsym(
 		fixture.handle, "proxysql_fake_retained_controller_create"));
 	fixture.destroy_controller = reinterpret_cast<RetainedFixtureSymbols::destroy_controller_cb>(dlsym(
 		fixture.handle, "proxysql_fake_retained_controller_destroy"));
 	fixture.reset = reinterpret_cast<RetainedFixtureSymbols::reset_cb>(dlsym(
 		fixture.handle, "proxysql_fake_retained_fixture_reset"));
-	fixture.module_calls = reinterpret_cast<RetainedFixtureSymbols::calls_cb>(dlsym(
-		fixture.handle, "proxysql_fake_retained_fixture_module_calls"));
 	fixture.controller_calls = reinterpret_cast<RetainedFixtureSymbols::calls_cb>(dlsym(
 		fixture.handle, "proxysql_fake_retained_fixture_controller_calls"));
 	return fixture;
 }
 
 bool valid_retained_fixture(const RetainedFixtureSymbols &fixture) {
-	return fixture.handle != nullptr && fixture.create_module != nullptr &&
-		fixture.destroy_module != nullptr && fixture.create_controller != nullptr &&
+	return fixture.handle != nullptr && fixture.create_controller != nullptr &&
 		fixture.destroy_controller != nullptr && fixture.reset != nullptr &&
-		fixture.module_calls != nullptr && fixture.controller_calls != nullptr;
+		fixture.controller_calls != nullptr;
 }
 
 void test_lifecycle_delivery_and_retained_handles() {
 	ProxySQL_PluginManager mgr;
 	make_log_path();
 	clear_log();
-	RetainedFixtureSymbols module_fixture = open_retained_fixture(PROXYSQL_FAKE_PLUGIN_PATH);
-	ok(valid_retained_fixture(module_fixture), "load module fixture factories from retained DSO");
-	module_fixture.reset();
-	ProxySQL_ServerModuleHooks *module = module_fixture.create_module(ProxySQL_ServerProtocol::mysql);
-	ok(module != nullptr && mgr.register_server_module(module, module_fixture.destroy_module,
-		module_fixture.handle), "register DSO-created MySQL module hook with its DSO destroy callback");
-	void *duplicate_handle = open_retained_module(PROXYSQL_FAKE_PLUGIN_PATH);
-	ProxySQL_ServerModuleHooks *duplicate_module = module_fixture.create_module(ProxySQL_ServerProtocol::mysql);
-	ok(!mgr.register_server_module(duplicate_module, module_fixture.destroy_module, duplicate_handle),
-		"reject duplicate protocol module hook");
-	module_fixture.destroy_module(duplicate_module);
-	dlclose(duplicate_handle);
-
 	mgr.install_server_runtime_snapshot({ProxySQL_ServerProtocol::mysql, 7, {}});
-	ok(module_fixture.module_calls() == 1, "retained DSO module callback receives runtime configuration");
 
 	RetainedFixtureSymbols controller_fixture = open_retained_fixture(PROXYSQL_FAKE_PLUGIN2_PATH);
 	ok(valid_retained_fixture(controller_fixture), "load controller fixture factories from retained DSO");
@@ -576,68 +507,10 @@ void test_lifecycle_delivery_and_retained_handles() {
 	ok(read_log().find("retained_fixture_controller_destroyed") != std::string::npos &&
 		!is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
 		"DSO controller destroy code runs before final retained handle release");
-	ok(mgr.unregister_server_module(ProxySQL_ServerProtocol::mysql), "uninstall module hook");
-	ok(read_log().find("retained_fixture_module_destroyed") != std::string::npos &&
-		!is_module_loaded(PROXYSQL_FAKE_PLUGIN_PATH),
-		"DSO module destroy code runs before final retained handle release");
 	cleanup_log();
 }
 
-void test_callback_lease_barrier() {
-	g_callback_entered.store(false);
-	g_callback_release.store(false);
-	g_registry_detached.store(false);
-	g_destroyed_before_callback_release.store(false);
-	const unsigned int destroyed_before = g_module_destroyed.load();
-	ProxySQL_PluginManager mgr;
-	ProxySQL_ServerModuleHooks module {
-		ProxySQL_ServerProtocol::pgsql, {&module_installed}, nullptr
-	};
-	void *handle = open_retained_module(PROXYSQL_FAKE_PLUGIN_PATH);
-	ok(handle != nullptr && mgr.register_server_module(&module, &destroy_module, handle),
-		"register module hook for lease-barrier test");
-	mgr.set_server_retirement_observer_for_test(&retirement_observer, nullptr);
-	std::thread callback([&] {
-		mgr.install_server_runtime_snapshot({ProxySQL_ServerProtocol::pgsql, 8, {}});
-	});
-	{
-		std::unique_lock<std::mutex> lock(g_lease_mutex);
-		g_lease_cv.wait(lock, [] { return g_callback_entered.load(std::memory_order_acquire); });
-	}
-	std::thread uninstall([&] {
-		mgr.unregister_server_module(ProxySQL_ServerProtocol::pgsql);
-	});
-	{
-		std::unique_lock<std::mutex> lock(g_lease_mutex);
-		g_lease_cv.wait(lock, [] { return g_registry_detached.load(std::memory_order_acquire); });
-	}
-	ok(g_module_destroyed.load() == destroyed_before && !g_destroyed_before_callback_release.load(),
-		"registry retirement is observable before the held callback lease permits destroy");
-	g_callback_release.store(true, std::memory_order_release);
-	g_lease_cv.notify_all();
-	callback.join();
-	uninstall.join();
-	ok(g_module_destroyed.load() == destroyed_before + 1 && !g_destroyed_before_callback_release.load() &&
-		!is_module_loaded(PROXYSQL_FAKE_PLUGIN_PATH),
-		"lease barrier releases then destroys and unloads deterministically");
-}
-
 void test_throwing_callbacks_do_not_leak_leases() {
-	{
-		ProxySQL_PluginManager mgr;
-		ProxySQL_ServerModuleHooks module {ProxySQL_ServerProtocol::mysql, {&module_installed}, nullptr};
-		g_throw_module_callback = true;
-		void *handle = open_retained_module(PROXYSQL_FAKE_PLUGIN_PATH);
-		bool threw = false;
-		try { mgr.register_server_module(&module, &destroy_module, handle); mgr.install_server_runtime_snapshot({ProxySQL_ServerProtocol::mysql, 9, {}}); }
-		catch (...) { threw = true; }
-		g_throw_module_callback = false;
-		g_throw_module_destroy = true;
-		const bool retired = mgr.unregister_server_module(ProxySQL_ServerProtocol::mysql);
-		g_throw_module_destroy = false;
-		ok(!threw && retired && !is_module_loaded(PROXYSQL_FAKE_PLUGIN_PATH),
-			"throwing module callback/destroy cannot leak its retirement lease or DSO");
-	}
 	{
 		ProxySQL_PluginManager mgr;
 		mgr.install_server_runtime_snapshot({ProxySQL_ServerProtocol::mysql, 7, {}});
@@ -756,7 +629,10 @@ void test_controller_callback_lease_barrier() {
 	}
 	ok(g_controller_destroyed.load() == destroyed_before,
 		"actual controller registry detachment precedes final callback-lease destroy");
-	g_callback_release.store(true, std::memory_order_release);
+	{
+		std::lock_guard<std::mutex> lock(g_lease_mutex);
+		g_callback_release.store(true, std::memory_order_release);
+	}
 	g_lease_cv.notify_all();
 	callback.join();
 	uninstall.join();
@@ -767,14 +643,13 @@ void test_controller_callback_lease_barrier() {
 } // namespace
 
 int main() {
-	plan(73);
+	plan(56);
 	test_abi13_fixture_and_invalid_registration();
-	test_frozen_server_module_abi14_prefix();
 	test_service_phase_availability();
+	test_reserved_register_server_module();
 	test_steady_state_desired_set_service_lifetime();
 	test_nested_steady_state_post_during_unpublish();
 	test_lifecycle_delivery_and_retained_handles();
-	test_callback_lease_barrier();
 	test_throwing_callbacks_do_not_leak_leases();
 	test_controller_self_uninstall_reentrancy();
 	test_controller_self_uninstall_concurrent_external_retirement();

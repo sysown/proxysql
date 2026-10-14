@@ -247,16 +247,6 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 extern SQLite3_Server *GloSQLite3Server;
 
-static bool session_authorizes_rowless_passthrough(
-	const MySQL_Session *session, const char *backend_username,
-	const MySQLBackendAuthPolicy& policy)
-{
-	return policy.type == MySQLBackendAuthType::INVALID && session != nullptr &&
-		session->passthrough_credential && backend_username != nullptr &&
-		backend_username[0] != '\0' &&
-		policy.failure_code == "backend_user_not_found";
-}
-
 static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
 	MySQL_Session *session)
 {
@@ -265,15 +255,9 @@ static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
 		session->client_myds->myconn != nullptr &&
 		session->client_myds->myconn->userinfo != nullptr
 			? session->client_myds->myconn->userinfo->username : nullptr;
-	MySQLBackendAuthPolicy policy = session != nullptr
+	return session != nullptr
 		? session->backend_auth_policy_for(backend_username)
 		: resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
-	if (session_authorizes_rowless_passthrough(
-			session, backend_username, policy)) {
-		policy.type = MySQLBackendAuthType::PASSWORD;
-		policy.failure_code.clear();
-	}
-	return policy;
 }
 
 #ifdef PROXYSQLCLICKHOUSE
@@ -1647,6 +1631,43 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	}
 }
 
+/**
+ * @brief Returns true if 'query' is a 'LOAD DATA [LOW_PRIORITY|CONCURRENT] LOCAL INFILE'
+ *   statement, tolerating leading whitespace/comments and any whitespace between keywords.
+ * @details Only used to return a descriptive error to the client; the policy itself is
+ *   enforced by the connector (see MySQL_Connection::apply_local_infile_policy()).
+ */
+static bool is_load_data_local_infile(const char* query, size_t len) {
+	const char* p = query;
+	const char* end = query + len;
+	auto skip_ws = [&]() {
+		while (p < end) {
+			if (isspace(static_cast<unsigned char>(*p))) {
+				p++;
+			} else if (end - p >= 2 && p[0] == '/' && p[1] == '*' && (end - p < 3 || p[2] != '!')) {
+				const char* c = p + 2;
+				while (end - c >= 2 && !(c[0] == '*' && c[1] == '/')) c++;
+				if (end - c < 2) return;
+				p = c + 2;
+			} else {
+				return;
+			}
+		}
+	};
+	auto match = [&](const char* kw) -> bool {
+		size_t l = strlen(kw);
+		if (static_cast<size_t>(end - p) < l || strncasecmp(p, kw, l) != 0) return false;
+		if (p + l < end && (isalnum(static_cast<unsigned char>(p[l])) || p[l] == '_' || p[l] == '$')) return false;
+		p += l;
+		skip_ws();
+		return true;
+	};
+	skip_ws();
+	if (!match("LOAD") || !match("DATA")) return false;
+	if (!match("LOW_PRIORITY")) match("CONCURRENT");
+	return match("LOCAL") && match("INFILE");
+}
+
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 
@@ -1953,7 +1974,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	}
 
 	// 'LOAD DATA LOCAL INFILE' is unsupported. We report an specific error to inform clients about this fact. For more context see #833.
-	if ( (pkt->size >= 22 + 5) && (strncasecmp((char *)"LOAD DATA LOCAL INFILE",(char *)pkt->ptr+5, 22)==0) ) {
+	if ( (pkt->size > 5) && is_load_data_local_infile((char *)pkt->ptr+5, pkt->size-5) ) {
 		if (mysql_thread___enable_load_data_local_infile == false) {
 			client_myds->DSS=STATE_QUERY_SENT_NET;
 			string errmsg = "Unsupported 'LOAD DATA LOCAL INFILE' command";
@@ -2428,12 +2449,6 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 				bui->set_schemaname(
 					default_schema, default_schema ? strlen(default_schema) : 0);
 			}
-			const char *backend_username = bui != nullptr ? bui->username : nullptr;
-			const MySQLBackendAuthPolicy policy =
-				resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
-			backend_conn->set_rowless_passthrough_authorized(
-				session_authorizes_rowless_passthrough(
-					this, backend_username, policy));
 			mybe->server_myds->return_MySQL_Connection_To_Pool();
 		}
 
@@ -4716,6 +4731,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		status=WAITING_CLIENT_DATA;
 		return;
 	} else {
+		if (mysql_thread___enable_load_data_local_infile == false && pkt.size > 5
+			&& is_load_data_local_infile((char *)pkt.ptr+5, pkt.size-5)) {
+			l_free(pkt.size,pkt.ptr);
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1047,(char *)"08S01",(char *)"Unsupported 'LOAD DATA LOCAL INFILE' command");
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			return;
+		}
 		thread->status_variables.stvar[st_var_frontend_stmt_prepare]++;
 		thread->status_variables.stvar[st_var_queries]++;
 		// if we reach here, we are not on MySQL module
@@ -5744,6 +5768,31 @@ int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
 		RequestEnd(nullptr, 1815, message);
 		l_free(pkt.size, pkt.ptr);
 		pkt = {};
+		// RequestEnd() only queues the error in PSarrayOUT and the caller
+		// returns -1, which makes the caller hand the session back to the
+		// thread to be deleted. Flush now, exactly like the wrong-pass epilogue,
+		// otherwise the client only observes a bare TCP close. A nonblocking
+		// socket can still leave bytes queued (EAGAIN after a partial write);
+		// under normal use the ~100-byte error packet fits the send buffer, and
+		// keeping the session alive instead of tearing down is NOT possible
+		// here without further plumbing: RequestEnd() already freed 'qpo', and
+		// returning 0 would make the caller fall through into
+		// find_or_create_backend() and touch freed state. See the reviewer
+		// discussion on the #6440 comment for the follow-up option.
+		client_myds->array2buffer_full();
+		for (int flush_attempt = 0; flush_attempt < 2 &&
+			client_myds->queueOUT.head != client_myds->queueOUT.tail; flush_attempt++) {
+			client_myds->write_to_net();
+		}
+		if (client_myds->queueOUT.head != client_myds->queueOUT.tail) {
+			static std::atomic<time_t> gpee_flush_ts{0};
+			const time_t flush_now = time(NULL);
+			if (flush_now - gpee_flush_ts.load(std::memory_order_relaxed) >= 10) {
+				gpee_flush_ts.store(flush_now, std::memory_order_relaxed);
+				proxy_warning("Fast-forward rejection for session_id=%u could not be fully flushed to the client before teardown\n",
+					thread_session_id);
+			}
+		}
 		return -1;
 	};
 
@@ -5827,6 +5876,25 @@ __get_pkts_from_client:
 	// if client_myds == NULL , it is a mirror
 	//     process mirror only status==WAITING_CLIENT_DATA
 	for (unsigned int j=0; j< ( client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0)  || (mirror==true && status==WAITING_CLIENT_DATA) ;) {
+		// Client pipelining (#5930): a client may send several commands without
+		// waiting for the responses (e.g. MariaDB Connector/J batches). MySQL
+		// processes them sequentially from the socket; ProxySQL used to treat any
+		// packet received while a command was in flight as unexpected and to close
+		// the connection. The packet is now left in PSarrayIN (FIFO) and processed
+		// once the command in flight completes and the session is back to
+		// WAITING_CLIENT_DATA (see handler()). A COM_QUIT received while busy keeps
+		// the previous behaviour: the connection is closed immediately.
+		if (mirror==false && client_pkts_must_be_deferred()) {
+			const PtrSize_t* nxt_pkt = client_myds->PSarrayIN->index(0);
+			const bool is_com_quit = nxt_pkt->size == sizeof(mysql_hdr) + 1
+				&& *(static_cast<unsigned char*>(nxt_pkt->ptr) + sizeof(mysql_hdr)) == _MYSQL_COM_QUIT;
+			if (is_com_quit == false) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+					"Session=%p , client_myds=%p . Deferring %u packet(s) from client while session is in status %d\n",
+					this, client_myds, client_myds->PSarrayIN->len, status);
+				return 0;
+			}
+		}
 		if (mirror==false) {
 			client_myds->PSarrayIN->remove_index(0,&pkt);
 		}
@@ -6700,12 +6768,22 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
  */
 void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
-		if (mysql_thread___update_gtid_from_ok) {
+		// An untrackable value (#6465) stays in mybe->gtid_uuid so causal
+		// routing fails closed on it, but it is not a GTID: it is neither
+		// recorded as executed nor forwarded to the client. The client gets
+		// no GTID rather than the previous one.
+		const bool trackable = strcmp(mybe->gtid_uuid, SESSION_GTID_UNTRACKABLE) != 0;
+		if (trackable && mysql_thread___update_gtid_from_ok) {
 			MyHGM->update_gtid_from_ok(myconn->parent, mybe->gtid_uuid);
 		}
 		if (mysql_thread___client_session_track_gtid) {
-			gtid_hid = current_hostgroup;
-			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
+			if (trackable) {
+				gtid_hid = current_hostgroup;
+				memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
+			} else {
+				gtid_hid = -1;
+				gtid_buf[0] = '\0';
+			}
 		}
 	}
 }
@@ -6805,7 +6883,49 @@ void MySQL_Session::handler_rc0_RefreshActiveTransactions(MySQL_Connection* myco
 	}
 }
 
+bool MySQL_Session::client_pkts_must_be_deferred() const {
+	if (mirror || session_fast_forward != SESSION_FORWARD_TYPE_NONE || client_authenticated == false) {
+		return false;
+	}
+	switch (status) {
+		case WAITING_CLIENT_DATA:
+		case CONNECTING_CLIENT:
+		case FAST_FORWARD:
+		case session_status___NONE:
+			return false;
+		case CONNECTING_SERVER:
+			// see GPFC_Statuses2(): packets of a split first packet in fast forward
+			return previous_status.empty() || previous_status.top() != FAST_FORWARD;
+		default:
+			return true;
+	}
+}
+
+bool MySQL_Session::client_may_pipeline() const {
+	if (mirror || session_fast_forward != SESSION_FORWARD_TYPE_NONE || client_authenticated == false) {
+		return false;
+	}
+	return status == WAITING_CLIENT_DATA || client_pkts_must_be_deferred();
+}
+
 int MySQL_Session::handler() {
+	int rc = handler_pass();
+	// Execute the client packets deferred while a command was in flight (#5930).
+	// Every pass consumes at least one packet: in WAITING_CLIENT_DATA
+	// get_pkts_from_client() never defers.
+	while (
+		rc == 0 && status == WAITING_CLIENT_DATA && mirror == false && killed == false && healthy
+		&& client_myds && client_myds->PSarrayIN && client_myds->PSarrayIN->len
+	) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+			"Session=%p , client_myds=%p . Processing %u deferred packet(s) from client\n",
+			this, client_myds, client_myds->PSarrayIN->len);
+		rc = handler_pass();
+	}
+	return rc;
+}
+
+int MySQL_Session::handler_pass() {
 	int handler_ret = 0;
 	bool prepared_stmt_with_no_params = false;
 	bool wrong_pass=false;
@@ -7230,7 +7350,27 @@ handler_again:
 							if (rc1 == 1)
 								NEXT_IMMEDIATE(CONNECTING_SERVER);
 						}
-						if (myerr >= 2000 && myerr < 3000) {
+						if (myerr == 2000 /* CR_UNKNOWN_ERROR */
+							&& strcmp(mysql_error(myconn->mysql), "Load data local infile forbidden") == 0) {
+							// The connector refused a backend 'LOAD DATA LOCAL INFILE' file request: the
+							// feature is disabled (see MySQL_Connection::apply_local_infile_policy()), or the
+							// statement doesn't start with 'LOAD' (connector's AUTO mode). The connection isn't broken:
+							// report the error to the client, and discard the backend connection since
+							// the server may still have pending results.
+							proxy_warning(
+								"Refused 'LOAD DATA LOCAL INFILE' file request from backend (%d,%s,%d) for user '%s'\n",
+								myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port,
+								client_myds->myconn->userinfo->username
+							);
+							handler_minus1_GenerateErrorMessage(myds, myconn, wrong_pass);
+							myds->destroy_MySQL_Connection_From_Pool(false);
+							myds->fd=0;
+							RequestEnd(myds, myerr);
+							if (errmsg) {
+								free(errmsg);
+								errmsg = NULL;
+							}
+						} else if (myerr >= 2000 && myerr < 3000) {
 							if (handler_minus1_ClientLibraryError(myds, myerr, &errmsg)) {
 								NEXT_IMMEDIATE(CONNECTING_SERVER);
 							} else {
@@ -8445,7 +8585,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					set = thread->thr_SetParser->parse1v2(); // use algorithm v2
 				} else if (mysql_thread___set_parser_algorithm == 3
 				|| mysql_thread___query_processor_parser == 1) {
-					set = parsersql_parse_set_mysql(nq);
+					set = parsersql_parse_set_mysql(nq, true);
+					if (set.empty()) {
+						// Forward the whole statement before touching tracked state:
+						// GLOBAL/PERSIST targets must not become session assignments.
+						unable_to_parse_set_statement(lock_hostgroup);
+						return false;
+					}
 				} else {
 					assert(0);
 				}
@@ -9047,6 +9193,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			} else if (match_regexes && match_regexes[2]->match(dig)) {
 				MySQL_Set_Stmt_Parser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse2();
+				if (set.empty()) {
+					// The digest matched but the query was not fully parsed: forward it
+					// rather than acknowledge a statement that nothing applied (#6420).
+					unable_to_parse_set_statement(lock_hostgroup);
+					return false;
+				}
 
 				for(auto it = std::begin(set); it != std::end(set); ++it) {
 
@@ -9388,6 +9540,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			return true;
 		}
 	//}
+	// A query-cache hit is served even when the rule also sets
+	// gtid_from_hostgroup, min_gtid or max_lag_ms: by design, a rule with
+	// cache_ttl opts into cached (possibly stale) results, and the causal-read
+	// constraint only applies to queries that reach a backend. Not a bug.
 	if (qpo->cache_ttl>0 && ((prepare_stmt_type & ps_type_prepare_stmt) == 0)) {
 		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		uint32_t resbuf=0;
@@ -9425,6 +9581,7 @@ __exit_set_destination_hostgroup:
 			current_hostgroup=qpo->destination_hostgroup;
 		}
 	}
+	route_unusable_tracked_gtid_to_writer();
 
 	if (mysql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
 		if (locked_on_hostgroup >= 0) {
@@ -9641,6 +9798,33 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
+bool MySQL_Session::route_unusable_tracked_gtid_to_writer() {
+	// Same gating as the GTID constraint in get_connection(): only a
+	// 'gtid_from_hostgroup' rule whose tracked value would be enforced there.
+	if (qpo == nullptr || qpo->min_gtid != nullptr || qpo->gtid_from_hostgroup < 0) return false;
+	if (session_fast_forward != SESSION_FORWARD_TYPE_NONE || qpo->create_new_conn) return false;
+	// A transaction-persistent or locked hostgroup cannot change; the
+	// constraint is then handled fail-closed in get_connection().
+	if (transaction_persistent_hostgroup != -1 || locked_on_hostgroup >= 0) return false;
+	if (current_hostgroup == qpo->gtid_from_hostgroup) return false;
+	MySQL_Backend* gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
+	if (gtid_from_backend == nullptr || gtid_from_backend->gtid_uuid[0] == '\0') return false;
+	char uuid[64];
+	uint64_t trxid = 0;
+	if (parse_gtid_set_for_routing(gtid_from_backend->gtid_uuid, uuid, sizeof(uuid), &trxid)) return false;
+	// The server the value came from has every committed transaction by
+	// definition. Routing here, rather than switching the backend in
+	// get_connection(), keeps the query attached to the backend that serves
+	// it and honours a connection already attached to the writer.
+	// The caller selects 'mybe' from current_hostgroup after this returns
+	// (find_or_create_backend), so get_connection() recognizes this case
+	// from mybe->hostgroup_id. Repeating find_backend() and the set parse
+	// there is intentional: it only happens for gtid_from_hostgroup rules,
+	// and get_connection() must also handle the cases not rerouted here.
+	current_hostgroup = qpo->gtid_from_hostgroup;
+	return true;
+}
+
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 		// Get a MySQL Connection
 		const char *backend_username =
@@ -9651,20 +9835,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		const bool force_fresh_iam_connection =
 			backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM &&
 			aws_iam_fresh_token_retry_attempted;
-		// A pass-through credential has already been authorized by a successful
-		// backend probe (or its cache). Unknown-user pass-through intentionally
-		// has no USERNAME_BACKEND row, so retain its established password mode.
-		// Every other invalid policy, including malformed IAM attributes, remains
-		// fail-closed and an IAM row can never fall back to password mode.
-		const bool rowless_passthrough = session_authorizes_rowless_passthrough(
-			this, backend_username, backend_auth_policy);
-		if (rowless_passthrough) {
-			backend_auth_policy.type = MySQLBackendAuthType::PASSWORD;
-			backend_auth_policy.failure_code.clear();
-		}
+		// Only a backend row whose 'backend_auth' is malformed is INVALID: a
+		// missing row is PASSWORD (issue #6413). It is not an AWS IAM failure.
 		if (backend_auth_policy.type == MySQLBackendAuthType::INVALID) {
-			aws_iam_token_key.database_user = backend_auth_policy.database_user;
-			fail_aws_iam_backend(backend_auth_policy.failure_code.c_str());
+			fail_invalid_backend_auth_policy(mybe != nullptr ? mybe->server_myds : nullptr,
+				backend_auth_policy.database_user.c_str(), backend_auth_policy.failure_code.c_str());
 			return;
 		}
 
@@ -9673,6 +9848,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		char uuid[64];
 		char * gtid_uuid=NULL;
 		uint64_t trxid = 0;
+		// Set when an unusable tracked GTID is read from its source hostgroup.
+		bool gtid_writer_fallback = false;
 		unsigned long long now_us = 0;
 		if (qpo->max_lag_ms >= 0) {
 			if (qpo->max_lag_ms > 360000) { // this is an absolute time, we convert it to relative
@@ -9702,9 +9879,63 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 
-			if (gtid_uuid != NULL) {
-				if (!parse_gtid_for_routing(gtid_uuid, uuid, sizeof(uuid), &trxid)) {
-					gtid_uuid = NULL; // gtid is invalid
+			if (gtid_uuid != NULL && !parse_gtid_set_for_routing(gtid_uuid, uuid, sizeof(uuid), &trxid)) {
+				// A tracked OWN_GTID value is a GTID SET ('uuid:582-584',
+				// 'uuid:636:638'), not a single GTID; tagged GTIDs and
+				// multi-UUID values cannot be honoured at all. Failure must
+				// drop the QUERY from the readers, not the constraint:
+				// silently unconstrained selection serves stale reads while
+				// the query is still counted as GTID-consistent (issue
+				// #6415). Two fail-closed outcomes:
+				//   - with gtid_from_hostgroup, the server the tracked value
+				//     came from has every committed transaction by
+				//     definition: route_unusable_tracked_gtid_to_writer()
+				//     already routed the query to that hostgroup while the
+				//     destination was chosen, exactly as a rule with
+				//     destination_hostgroup=writer would. Read it there
+				//     without a constraint;
+				//   - otherwise (min_gtid-only rules, or a hostgroup locked
+				//     by a transaction or SET), no reachable hostgroup is
+				//     known to have the value: keep a predicate no server
+				//     can satisfy, so the query waits in the same
+				//     "Waiting for replication" state a genuinely lagging
+				//     constraint produces instead of serving stale data.
+				// Both clear with_gtid so the causal-read stats are not
+				// inflated, and log rate-limited so admins can see why a
+				// deployment stopped using its readers.
+				const bool routed_to_gtid_source = qpo->gtid_from_hostgroup >= 0 &&
+					mybe->hostgroup_id == qpo->gtid_from_hostgroup;
+				static std::atomic<time_t> gtid_invalid_warn_ts{0};
+				const time_t gtid_warn_now = thread->curtime / 1000000;
+				// One CAS (not load-then-store) so concurrent sessions that
+				// all reach this warning in the same 10 s window burst only
+				// once: whoever claims the timestamp logs, the others skip.
+				time_t gtid_warn_prev = gtid_invalid_warn_ts.load(std::memory_order_relaxed);
+				if (gtid_warn_now - gtid_warn_prev >= 10 &&
+					gtid_invalid_warn_ts.compare_exchange_strong(gtid_warn_prev,
+						gtid_warn_now, std::memory_order_relaxed)) {
+					proxy_warning(
+						"GTID causal read: tracked value '%s' is not usable for routing (multi-UUID set, tagged GTID, or a value too long to track). %s\n",
+						gtid_uuid,
+						routed_to_gtid_source ?
+							"Routing the query to the writer hostgroup" :
+							"No writer hostgroup available: the read waits on an unsatisfiable constraint"
+					);
+				}
+				with_gtid = false;
+				trxid = 0;
+				if (routed_to_gtid_source) {
+					gtid_uuid = NULL;
+					gtid_writer_fallback = true;
+				} else {
+					// A value that cannot be a normalized UUID (the tracked
+					// ids are 32 hex digits) and a trxid no replica can hold:
+					// gtid_exists() excludes every server, which yields the
+					// standard causal-read wait instead of stale data.
+					uuid[0] = 'z';
+					uuid[1] = '\0';
+					trxid = UINT64_MAX;
+					gtid_uuid = uuid;
 				}
 			}
 
@@ -9713,8 +9944,13 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1, backend_auth_policy.type);
 #endif // STRESSTEST_POOL
 			} else {
+				// The causal-read constraint could not be honoured: when
+				// reading from the writer its lag filter must not also
+				// suppress the only server that still provides
+				// read-your-writes.
+				const int fallback_max_lag = gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms;
 #ifndef STRESSTEST_POOL
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms, backend_auth_policy.type);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, fallback_max_lag, backend_auth_policy.type);
 #endif // STRESSTEST_POOL
 			}
 		}
@@ -9736,8 +9972,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		if (mc==NULL) {
 			if (trxid) {
 #ifdef PROXYSQL31
-				// IAM checkouts are auth-type filtered (and may force a fresh
-				// connection), so they are never "vanilla" for waiter FIFO purposes.
+				// IAM checkouts may require asynchronous token acquisition or a fresh
+				// connection, so retain their separate waiter FIFO classification.
 				last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
 					backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM);
 				last_pool_gtid = true;
@@ -9751,11 +9987,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
 					backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM);
 				last_pool_gtid = false;
-				last_pool_max_lag_ms = (int)qpo->max_lag_ms;
+				last_pool_max_lag_ms = gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms;
 #endif // PROXYSQL31
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
 					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
-					NULL, 0, (int)qpo->max_lag_ms, backend_auth_policy.type);
+					NULL, 0, gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms, backend_auth_policy.type);
 			}
 			thread->note_pool_attempt(mc == NULL);
 #ifdef STRESSTEST_POOL
@@ -9780,13 +10016,6 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // STRESSTESTPOOL_MEASURE
 		}
 #endif // STRESSTEST_POOL
-		if (mc != nullptr && mc->fd != -1 &&
-			mc->backend_auth_type() != backend_auth_policy.type) {
-			// Authentication mode is part of pool compatibility. Never let a
-			// password connection satisfy an IAM request (or vice versa).
-			MyHGM->destroy_MyConn_from_pool(mc);
-			mc = nullptr;
-		}
 #ifdef PROXYSQL31
 		const unsigned int pool_stats_hid = mc ? mc->parent->myhgc->hid : mybe->hostgroup_id;
 		HostgroupPoolStats *pool_stats = mc
@@ -9798,7 +10027,6 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		hostgroup_pool_wait.observe(pool_stats, thread->curtime, mc != nullptr, pool_stats_hid);
 #endif
 		if (mc) {
-			mc->set_rowless_passthrough_authorized(rowless_passthrough);
 			mybe->server_myds->attach_connection(mc);
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
 #ifdef PROXYSQL31
@@ -10705,6 +10933,19 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
  * @param pkt Reference to the packet containing the command and associated data.
  */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
+	// Header (4) + command (1) + statement id (4). See GHSA-85h9-mr8r-6j4j.
+	if (pkt.size < 9) {
+		proxy_warning(
+			"Received malformed COM_STMT_RESET packet of %lu bytes\n",
+			static_cast<unsigned long>(pkt.size)
+		);
+		l_free(pkt.size, pkt.ptr);
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1210, (char *)"HY000", (char *)"Malformed COM_STMT_RESET");
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		return;
+	}
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	SLDH->reset(stmt_global_id);

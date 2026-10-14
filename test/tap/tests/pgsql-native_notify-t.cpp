@@ -12,10 +12,11 @@
  *   native: LISTEN is supported. The subscription pins the connection, and the
  *           notification reaches the subscriber while it sits idle on the socket,
  *           which is the entire point of the feature.
- *   libpq:  LISTEN is refused, so the only way to subscribe is the multi-statement
- *           gap, which leaves no status flag. An unflagged connection is still read
- *           as a dead backend and the client session is destroyed. Asserted as
- *           broken, so the fix cannot land unnoticed.
+ *   libpq:  LISTEN is refused, in every statement of a message (issue #6438), so
+ *           the only way left to subscribe is a LISTEN run inside a DO block, which
+ *           leaves no status flag. An unflagged connection is still read as a dead
+ *           backend and the client session is destroyed. Asserted as broken, so the
+ *           fix cannot land unnoticed.
  *
  * Scenario B -- the connection goes back to the pool:
  *   no client that did not subscribe may see the notification, on either path, and
@@ -272,9 +273,12 @@ static std::string uniqueChannel(const char* tag, bool native) {
 	return std::string("nn_") + tag + (native ? "_nat_" : "_pq_") + std::to_string(getpid());
 }
 
-// Registers a listener on whatever backend connection this session is using.
+// Registers a listener on whatever backend connection this session is using, in the one
+// form ProxySQL cannot see: run inside a DO block, the LISTEN leaves no keyword in the
+// digest and no LISTEN CommandComplete tag, so no status flag is taken on either protocol.
+// "SELECT 1; LISTEN" used to serve here, until issue #6438 made it refused or pinned.
 static bool subscribe(PGconn* c, const std::string& channel) {
-	std::string q = "SELECT 1; LISTEN " + channel;
+	std::string q = "DO $$BEGIN EXECUTE 'LISTEN " + channel + "'; END$$";
 	PGresult* r = PQexec(c, q.c_str());
 	bool ok_ = (PQresultStatus(r) == PGRES_TUPLES_OK || PQresultStatus(r) == PGRES_COMMAND_OK);
 	if (!ok_) diag("subscribe failed: %s", PQerrorMessage(c));
@@ -294,7 +298,7 @@ static bool notifyChannel(PGconn* c, const std::string& channel, const std::stri
 // Scenario A: the notification lands on a connection pinned to an idle session.
 // native: LISTEN is supported, the connection is pinned by it, and the notification
 //         reaches the client that subscribed, with no query in flight.
-// libpq:  LISTEN is refused, so the only way to subscribe is the multi-statement gap,
+// libpq:  LISTEN is refused, so the only way to subscribe is a LISTEN inside a DO block,
 //         which leaves no status flag -- and an unflagged connection still gets read
 //         as a dead backend. Pinned as a known open issue.
 // ---------------------------------------------------------------------------
@@ -326,7 +330,7 @@ static void scenario_pinned_session(PGconn* admin, bool native,
 		subscribed = (PQresultStatus(r) == PGRES_COMMAND_OK);
 		PQclear(r);
 	} else {
-		subscribed = subscribe(listener.get(), channel);   // multi-statement gap, no flag
+		subscribed = subscribe(listener.get(), channel);   // DO block, no flag
 	}
 	if (!subscribed) {
 		ok(false, "[%s] scenario A could not register a listener", mode.c_str());
@@ -791,33 +795,60 @@ static void scenario_copy_on_pinned(PGconn* admin, const std::vector<ServerRow>&
 	   copy_ok ? "ok" : "failed", got.size());
 }
 
-// "SELECT 1; LISTEN chan" registers a real subscription, but status flags are read from
-// the first keyword of the digest, so it is not tracked and the connection is not pinned.
-// Deliberate, and shared with CREATE TEMP TABLE, PREPARE, SET and LOCK TABLE written the
-// same way. Asserted so the behaviour cannot drift unnoticed.
-static void scenario_multi_statement_listen_not_tracked(PGconn* admin, const std::vector<ServerRow>& saved) {
+// "SELECT 1; LISTEN chan" registers a subscription just as a LISTEN of its own does, so it
+// has to pin the connection and deliver like one (issue #6438): every statement of the
+// digest is looked at, and the native protocol also pins on the LISTEN CommandComplete tag.
+// Within one message the last LISTEN or UNLISTEN * decides. A LISTEN run inside a DO block
+// is still invisible -- no keyword in the digest, no LISTEN tag -- and that remaining limit
+// is asserted as well, so closing it has to come back here.
+static void scenario_multi_statement_listen(PGconn* admin, const std::vector<ServerRow>& saved) {
+	const int N = 5;
 	if (!setVar(admin, "pgsql-multiplexing", "true") || !flushBackendPool(admin, BACKEND_HG, saved)) {
-		ok(false, "multi-statement LISTEN setup failed");
-		ok(false, "multi-statement LISTEN setup failed");
+		for (int i = 0; i < N; i++) ok(false, "multi-statement LISTEN setup failed");
 		return;
 	}
-	const std::string ch = chan("multi");
-	PGConnPtr listener = open_client_conn();
-	if (!listener || PQstatus(listener.get()) != CONNECTION_OK ||
-	    !subscribe(listener.get(), ch)) {          // sends "SELECT 1; LISTEN <chan>"
-		ok(false, "multi-statement LISTEN could not subscribe");
-		ok(false, "multi-statement LISTEN could not subscribe");
-		return;
+	{
+		const std::string ch = chan("multi");
+		PGConnPtr listener = open_client_conn();
+		PGConnPtr notifier = open_client_conn();
+		if (!listener || PQstatus(listener.get()) != CONNECTION_OK ||
+		    !notifier || PQstatus(notifier.get()) != CONNECTION_OK) {
+			for (int i = 0; i < N; i++) ok(false, "multi-statement LISTEN could not connect");
+			return;
+		}
+		const bool subscribed = execSQL(listener.get(), "SELECT 1; LISTEN " + ch);
+		const long v = waitConnUsed(admin, 1, 5000);
+		ok(subscribed && v == 1,
+		   "a LISTEN written behind another statement pins the connection (ConnUsed=%ld)", v);
+		notifyChannel(notifier.get(), ch, "multi");
+		std::vector<Notification> got = drain_notifications(listener.get(), 3000);
+		ok(got.size() == 1 && got[0].channel == ch && got[0].payload == "multi",
+		   "and its notification reaches the subscriber while idle (got %zu)", got.size());
 	}
-	// Nothing else in this session pins anything, so the connection going back to the pool
-	// is what "the subscription was not recorded" looks like from outside.
-	const long v = waitConnUsed(admin, 0, 5000);
-	ok(v == 0, "a LISTEN written behind another statement is deliberately not tracked,"
-	           " so the connection is not pinned (ConnUsed=%ld)", v);
+	waitConnUsed(admin, 0, 5000);   // the subscriber left; its connection is reset
 
-	// Held by a temp table instead, the untracked subscription still receives notifications,
-	// and ProxySQL treats bytes on a held connection it does not know is subscribed as a dead
-	// backend: the first notification ends the session.
+	{
+		PGConnPtr c = open_client_conn();
+		if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+			ok(false, "multi-statement UNLISTEN could not connect");
+			ok(false, "multi-statement UNLISTEN could not connect");
+		} else {
+			// The statement's own result counts too: a refused one would pass on ConnUsed alone.
+			const bool unlistened_last = execSQL(c.get(), "LISTEN " + chan("mua") + "; UNLISTEN *");
+			long v = waitConnUsed(admin, 0, 5000);
+			ok(unlistened_last && v == 0, "LISTEN a; UNLISTEN * in one message leaves nothing to pin (ConnUsed=%ld)", v);
+			execSQL(c.get(), "LISTEN " + chan("mub"));
+			waitConnUsed(admin, 1, 5000);
+			const bool listened_last = execSQL(c.get(), "UNLISTEN *; LISTEN " + chan("muc"));
+			v = waitConnUsed(admin, 1, 2000);
+			ok(listened_last && v == 1, "UNLISTEN *; LISTEN c in one message keeps the pin (ConnUsed=%ld)", v);
+		}
+	}
+	waitConnUsed(admin, 0, 5000);
+
+	// Held by a temp table instead, the untracked DO-block subscription still receives
+	// notifications, and ProxySQL treats bytes on a held connection it does not know is
+	// subscribed as a dead backend: the first notification ends the session.
 	PGConnPtr held = open_client_conn();
 	PGConnPtr notifier = open_client_conn();
 	const std::string sch = chan("stray");
@@ -832,8 +863,47 @@ static void scenario_multi_statement_listen_not_tracked(PGconn* admin, const std
 	std::string r;
 	const QRes rc = ready ? query_with_deadline(held.get(), "SELECT 42", 5000, &r) : Q_OK;
 	ok(dropped && rc != Q_OK,
-	   "a notification for that untracked LISTEN, on a connection held by a temp table, ends the session (%s)",
-	   qres_name(rc));
+	   "a notification for a LISTEN hidden in a DO block, on a connection held by a temp table,"
+	   " ends the session (known limit, %s)", qres_name(rc));
+}
+
+// With pgsql-query_digests=false there is no digest to read. LISTEN still pins, from its
+// CommandComplete tag; the UNLISTEN * that releases it can only be told from the query
+// text, as UNLISTEN <channel> has the same tag. It used to stay pinned for good.
+static void scenario_unlisten_without_digests(PGconn* admin, const std::vector<ServerRow>& saved) {
+	const int N = 4;
+	const std::string prev = scalar(admin,
+		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-query_digests'");
+	if (prev.empty() || !setVar(admin, "pgsql-multiplexing", "true") ||
+	    !setVar(admin, "pgsql-query_digests", "false") || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		for (int i = 0; i < N - 1; i++) ok(false, "no-digest UNLISTEN setup failed");
+	} else {
+		PGConnPtr c = open_client_conn();
+		// The session's thread has the variable once a fresh identifier is not digested.
+		bool off = false;
+		for (int i = 0; c && i < 50 && !off; i++) {
+			const std::string marker = "nn_nd_probe_" + std::to_string(getpid()) + "_" + std::to_string(i);
+			execSQL(c.get(), "SELECT 1 AS " + marker);
+			off = scalar(admin, "SELECT COUNT(*) FROM stats_pgsql_query_digest WHERE digest_text LIKE '%" +
+				marker + "%'") == "0";
+			if (!off) usleep(100000);
+		}
+		if (!c || PQstatus(c.get()) != CONNECTION_OK || !off) {
+			for (int i = 0; i < N - 1; i++) ok(false, "no-digest UNLISTEN: digests could not be turned off");
+		} else {
+			const bool listened = execSQL(c.get(), "LISTEN " + chan("nd"));
+			long v = waitConnUsed(admin, 1, 5000);
+			ok(listened && v == 1, "no digest: LISTEN pins the connection (ConnUsed=%ld)", v);
+			const bool unlistened_ch = execSQL(c.get(), "UNLISTEN " + chan("nd"));
+			v = waitConnUsed(admin, 1, 2000);
+			ok(unlistened_ch && v == 1, "no digest: UNLISTEN <channel> keeps the pin (ConnUsed=%ld)", v);
+			const bool unlistened_all = execSQL(c.get(), "SELECT 1; UNLISTEN *");
+			v = waitConnUsed(admin, 0, 5000);
+			ok(unlistened_all && v == 0, "no digest: UNLISTEN * releases the pin (ConnUsed=%ld)", v);
+		}
+	}
+	waitConnUsed(admin, 0, 5000);
+	ok(prev.empty() || setVar(admin, "pgsql-query_digests", prev), "pgsql-query_digests restored to '%s'", prev.c_str());
 }
 
 // PostgreSQL cannot splice a notification into a result it is already sending, so it
@@ -973,7 +1043,7 @@ static void scenario_extended_protocol_listen(PGconn* admin, const std::vector<S
 // and unwinds the session by hand -- ends the request, empties the status stack, disposes of
 // the connection -- so what matters is that the client gets a real error AND the session is
 // still usable, not merely that the LISTEN was refused.
-static void scenario_listen_on_pooled_libpq_conn(PGconn* admin, const std::vector<ServerRow>& saved) {
+static void listen_on_pooled_libpq_conn(PGconn* admin, const std::vector<ServerRow>& saved) {
 	// One connection only, so the LISTEN below cannot be handed a fresh native one.
 	if (!setVar(admin, "pgsql-multiplexing", "true") ||
 	    !setVar(admin, "pgsql-use_native_backend_protocol", "false") ||
@@ -1016,6 +1086,20 @@ static void scenario_listen_on_pooled_libpq_conn(PGconn* admin, const std::vecto
 	ok(rc == Q_OK && val == "42" && held == 0,
 	   "and the session still works afterwards, holding nothing (%s, ConnUsed=%ld)",
 	   qres_name(rc), held);
+}
+
+// The warm libpq connection has to survive in the pool until the LISTEN takes it. With
+// max_connections=1, free_connections_pct (default 10) allows 10*1/100 = 0 free
+// connections, so every idle-connection maintenance pass (one per worker thread per
+// pgsql-ping_interval_server_msec) drops it, and a pass landing between the warm query and
+// the LISTEN handed the LISTEN a fresh native connection, accepted and pinned. Allowing all
+// free connections for the scenario takes that pass out of the picture.
+static void scenario_listen_on_pooled_libpq_conn(PGconn* admin, const std::vector<ServerRow>& saved) {
+	const std::string pct = scalar(admin, "SELECT variable_value FROM global_variables"
+	                                      " WHERE variable_name='pgsql-free_connections_pct'");
+	setVar(admin, "pgsql-free_connections_pct", "100");
+	listen_on_pooled_libpq_conn(admin, saved);
+	setVar(admin, "pgsql-free_connections_pct", pct.empty() ? "10" : pct);
 }
 
 // A routing rule sends the pinned session's next query to another hostgroup, so it ends
@@ -1230,8 +1314,9 @@ int main(int, char**) {
 	// delivery: scenario A 2 x 2 modes, scenario B 1 x 2 modes plus cached 2 x 2 modes.
 	const int DELIVERY_ASSERTIONS = 4 + 2 + 4;
 	// pin lifecycle, buffered, disconnect, backend killed, TLS, many listeners, COPY,
-	// multi-statement LISTEN, notification during a query, second hostgroup, mock backend
-	const int LIFECYCLE_ASSERTIONS = 6 + 2 + 4 + 2 + 2 + 2 + 1 + 2 + 2 + 2 + 2 + 3 + 3;
+	// multi-statement LISTEN, UNLISTEN without digests, notification during a query, second
+	// hostgroup, mock backend
+	const int LIFECYCLE_ASSERTIONS = 6 + 2 + 4 + 2 + 2 + 2 + 1 + 5 + 4 + 2 + 2 + 2 + 3 + 3;
 	plan(DELIVERY_ASSERTIONS + LIFECYCLE_ASSERTIONS);
 	if (cl.getEnv()) return exit_status();
 	// The proxy closes the client socket when a backend is killed under a pinned
@@ -1281,7 +1366,8 @@ int main(int, char**) {
 		scenario_tls_backend(admin.get(), be.get(), saved);
 		scenario_many_listeners(admin.get(), saved);
 		scenario_copy_on_pinned(admin.get(), saved);
-		scenario_multi_statement_listen_not_tracked(admin.get(), saved);
+		scenario_multi_statement_listen(admin.get(), saved);
+		scenario_unlisten_without_digests(admin.get(), saved);
 		scenario_notification_during_query(admin.get(), saved);
 		scenario_extended_protocol_listen(admin.get(), saved);
 		scenario_listen_on_pooled_libpq_conn(admin.get(), saved);

@@ -4,7 +4,6 @@ using json = nlohmann::json;
 
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_ServerDiscovery.h"
-#include "ProxySQL_ServerModuleCluster.h"
 #include "ConnectionPoolDecision.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -1245,11 +1244,6 @@ void PgSQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 	CUCFT1(myhash,init,"pgsql_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS]);
 	CUCFT1(myhash,init,"pgsql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::PgSQL_HOSTGROUP_ATTRIBUTES]);
 	CUCFT1(myhash,init,"pgsql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS_SSL_PARAMS]);
-#ifdef PROXYSQL40
-	// Server-module (plugin) tables belong to the same module: same checksum,
-	// version and epoch as the core servers tables.
-	proxysql_server_module_cluster_hash_loaded_tables(ProxySQL_ServerProtocol::pgsql, myhash, init);
-#endif /* PROXYSQL40 */
 }
 
 /**
@@ -1263,16 +1257,16 @@ bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_con
 
 #ifdef PROXYSQL40
 	auto active_claims = proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql);
-	const bool server_module_claims_changed =
-		!same_server_hostgroup_claims(active_claims, hgsm_server_module_claims_);
+	const bool server_hostgroup_claims_changed =
+		!same_server_hostgroup_claims(active_claims, hgsm_server_hostgroup_claims_);
 #else
-	const bool server_module_claims_changed = false;
+	const bool server_hostgroup_claims_changed = false;
 #endif
 
 	const bool config_changed = commit_context && (
 		hgsm_pgsql_servers_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS] ||
 		hgsm_pgsql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS]);
-	if (config_changed || server_module_claims_changed)
+	if (config_changed || server_hostgroup_claims_changed)
 	{
 		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - pgsql_servers { old: 0x%lX, new: 0x%lX }, pgsql_replication_hostgroups { old:0x%lX, new:0x%lX }\n",
 			hgsm_pgsql_servers_checksum, table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS],
@@ -1354,7 +1348,7 @@ bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_con
 			hgsm_pgsql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS];
 		}
 #ifdef PROXYSQL40
-		hgsm_server_module_claims_ = std::move(active_claims);
+		hgsm_server_hostgroup_claims_ = std::move(active_claims);
 #endif
 	}
 	return true;
@@ -2596,10 +2590,9 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 #ifdef PROXYSQL31
 				if (used_backup) {
 					backup_servers_selected.fetch_add(1, std::memory_order_relaxed);
-					static time_t last_backup_log = 0;
 					time_t now = time(NULL);
-					if (now - last_backup_log > 1) {
-						last_backup_log = now;
+					if (now - last_log_time_backup_selection > 1) {
+						last_log_time_backup_selection = now;
 						proxy_warning("Hostgroup %u: selecting backup-weight server %s:%d\n",
 							hid, mysrvc->address, mysrvc->port);
 					}

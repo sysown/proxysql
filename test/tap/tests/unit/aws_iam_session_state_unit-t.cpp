@@ -46,6 +46,8 @@ constexpr const char *kRegion = "us-east-1";
 constexpr const char *kIamUser = "iam_backend";
 constexpr const char *kPasswordUser = "password_backend";
 constexpr const char *kUnknownPassthroughUser = "passthrough_unknown_backend";
+// A split-row user: a USERNAME_FRONTEND row and no USERNAME_BACKEND row (#6413).
+constexpr const char *kFrontendOnlyUser = "frontend_only_user";
 constexpr const char *kMalformedPassthroughUser = "passthrough_malformed_backend";
 constexpr const char *kSensitiveToken = "FAKE_AWS_SESSION_TOKEN_MUST_NOT_ESCAPE";
 
@@ -235,6 +237,18 @@ public:
 	std::vector<uint64_t> canceled;
 	uint64_t waiting_sessions { 0 };
 };
+
+bool add_frontend_user(const char *username, const char *password) {
+	std::string username_mut(username);
+	std::string password_mut(password);
+	std::string region_mut("");
+	std::string attributes_mut("");
+	std::string extra_attrs_mut("");
+	return GloMyAuth->add(
+		&username_mut[0], &password_mut[0], USERNAME_FRONTEND,
+		false, 0, &region_mut[0], false, false, false, 100,
+		&attributes_mut[0], &extra_attrs_mut[0]);
+}
 
 bool add_backend_user(const char *username, const char *password, const char *attributes) {
 	std::string username_mut(username);
@@ -690,13 +704,32 @@ void test_unknown_user_passthrough_uses_password(MySQL_Thread& worker) {
 	SessionFixture fixture(worker, kUnknownPassthroughUser);
 	fixture.session->passthrough_credential = true;
 	fixture.start();
-	ok(missing_policy.type == MySQLBackendAuthType::INVALID &&
-		missing_policy.failure_code == "backend_user_not_found" &&
+	// A user without a backend row is plain PASSWORD (#6413).
+	ok(missing_policy.type == MySQLBackendAuthType::PASSWORD &&
+		missing_policy.failure_code.empty() &&
 		source.keys.empty() && fixture.session->status == CONNECTING_SERVER &&
 		fixture.selected_connection() != nullptr &&
 		fixture.selected_connection()->backend_auth_type() == MySQLBackendAuthType::PASSWORD &&
 		connector_calls.load(std::memory_order_relaxed) == calls_before + 1,
 		"authorized unknown-user pass-through keeps password backend semantics without a backend row");
+}
+
+void test_frontend_only_user_uses_password(MySQL_Thread& worker) {
+	// A 'frontend=1, backend=0' user is not a pass-through session: it must
+	// still connect with its frontend credentials, as in v3.0.11 (#6413).
+	FakeTokenSource source;
+	publish_global_aws_iam_token_source(&source);
+	const unsigned int calls_before = connector_calls.load(std::memory_order_relaxed);
+	if (!add_frontend_user(kFrontendOnlyUser, "fe_pw"))
+		BAIL_OUT("cannot add the frontend-only user fixture");
+	SessionFixture fixture(worker, kFrontendOnlyUser);
+	fixture.session->passthrough_credential = false;
+	fixture.start();
+	ok(source.keys.empty() && fixture.session->status == CONNECTING_SERVER &&
+		fixture.selected_connection() != nullptr &&
+		fixture.selected_connection()->backend_auth_type() == MySQLBackendAuthType::PASSWORD &&
+		connector_calls.load(std::memory_order_relaxed) == calls_before + 1,
+		"a user without a backend row connects in password mode without pass-through");
 }
 
 void test_malformed_policy_stays_fail_closed_for_passthrough(MySQL_Thread& worker) {
@@ -705,11 +738,14 @@ void test_malformed_policy_stays_fail_closed_for_passthrough(MySQL_Thread& worke
 	const unsigned int calls_before = connector_calls.load(std::memory_order_relaxed);
 	SessionFixture fixture(worker, kMalformedPassthroughUser);
 	fixture.session->passthrough_credential = true;
-	fixture.start();
+	const std::string log = capture_stderr([&] { fixture.start(); });
 	ok(source.keys.empty() && fixture.session->status == WAITING_CLIENT_DATA &&
 		fixture.selected_connection() == nullptr &&
 		connector_calls.load(std::memory_order_relaxed) == calls_before,
 		"pass-through authorization never overrides a malformed backend IAM policy");
+	ok(log.find("Invalid backend authentication policy") != std::string::npos &&
+		log.find("AWS IAM backend token failure") == std::string::npos,
+		"an invalid policy is logged as such, not as an AWS IAM token failure");
 }
 
 void test_sdk_off_source_reports_support_not_compiled(MySQL_Thread& worker) {
@@ -754,7 +790,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-	plan(33);
+	plan(35);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -800,6 +836,7 @@ int main() {
 		test_selected_server_retention(worker);
 		test_password_mode_unchanged(worker);
 		test_unknown_user_passthrough_uses_password(worker);
+		test_frontend_only_user_uses_password(worker);
 		test_malformed_policy_stays_fail_closed_for_passthrough(worker);
 		test_sdk_off_source_reports_support_not_compiled(worker);
 		publish_global_aws_iam_token_source(nullptr);

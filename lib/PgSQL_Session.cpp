@@ -177,6 +177,119 @@ static void write_tx_poisoned_warning_notice(PG_pkt& pgpkt, PGSQL_ERROR_CODES co
 		0);
 }
 
+// Classify a statement sent while the session is poisoned: 'R' for a plain
+// ROLLBACK / ABORT, 'C' for a plain COMMIT / END -- both end the aborted
+// transaction -- and 0 for anything else, which is rejected with 25P02.
+// Shared by the simple-query path (handler_poisoned_simple_query) and the
+// extended-query one (classify_poisoned_extq_message).
+static char classify_poisoned_txn_end(const char* sql, unsigned int sql_len) {
+	// A Simple Query packet body, and a prepared statement's text, is a null-terminated
+	// string. Trim it so the "is any non-whitespace content remaining?" check does not
+	// treat the null byte itself as trailing junk and reject an otherwise-valid
+	// statement (e.g. "ROLLBACK\0" or "ROLLBACK WORK\0").
+	if (sql_len > 0 && sql[sql_len - 1] == '\0') {
+		sql_len--;
+	}
+
+	// skip whitespace and SQL comments (-- to EOL, /* ... */ non-nesting) in-place.
+	auto skip_ws_and_comments = [](const char*& p, unsigned int& n) {
+		for (;;) {
+			while (n > 0 && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) { p++; n--; }
+			if (n >= 2 && p[0] == '-' && p[1] == '-') {
+				p += 2; n -= 2;
+				while (n > 0 && *p != '\n') { p++; n--; }
+				continue;
+			}
+			if (n >= 2 && p[0] == '/' && p[1] == '*') {
+				p += 2; n -= 2;
+				while (n >= 2 && !(p[0] == '*' && p[1] == '/')) { p++; n--; }
+				if (n >= 2) { p += 2; n -= 2; } else { n = 0; }
+				continue;
+			}
+			break;
+		}
+	};
+
+	// Skip leading whitespace and comments. An ORM-prepended `/* query tag */ ROLLBACK`
+	// must recover, not be rejected.
+	skip_ws_and_comments(sql, sql_len);
+
+	char kind = 0;
+
+	// Case-insensitive prefix match, followed by a word boundary so "ROLLBACKET"
+	// doesn't get classified as ROLLBACK.
+	auto matches_kw = [](const char* p, unsigned int n, const char* kw, unsigned int klen) -> bool {
+		if (n < klen) return false;
+		if (strncasecmp(p, kw, klen) != 0) return false;
+		if (n == klen) return true;
+		char ch = p[klen];
+		return !(ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'));
+	};
+
+	// ABORT is a Postgres synonym for ROLLBACK. END is a Postgres synonym for COMMIT.
+	// Both ROLLBACK and COMMIT recover the session to IDLE.
+	unsigned int verb_len = 0;
+	if (matches_kw(sql, sql_len, "ROLLBACK", 8)) { kind = 'R'; verb_len = 8; }
+	else if (matches_kw(sql, sql_len, "ABORT", 5)) { kind = 'R'; verb_len = 5; }
+	else if (matches_kw(sql, sql_len, "COMMIT", 6)) { kind = 'C'; verb_len = 6; }
+	else if (matches_kw(sql, sql_len, "END", 3))    { kind = 'C'; verb_len = 3; }
+
+	// Having identified a recovery verb, verify the rest of the statement is a
+	// *plain* whole-tx end — no modifiers that change the semantics into
+	// something we can't honor on a dead backend, and no second statement
+	// pipelined after it. The only modifiers we accept are:
+	//   WORK | TRANSACTION   (Postgres noise-word aliases; no semantic effect)
+	// Anything else — specifically ROLLBACK TO SAVEPOINT (partial rollback,
+	// keeps tx open) and AND CHAIN (rolls back and opens a new tx) — would
+	// leave the client's transaction-status view inconsistent with what we can
+	// actually deliver once the backend is gone. Reject those with 25P02 and
+	// keep the session poisoned; the client can then issue a plain ROLLBACK.
+	//
+	// Multi-statement Simple Query (e.g. "ROLLBACK; SELECT 1;") is rejected for
+	// the same reason: we would recover, synthesize a ROLLBACK response, and
+	// silently drop the second statement. Safer to make the client split.
+	if (kind != 0) {
+		const char* rest = sql + verb_len;
+		unsigned int rest_len = sql_len - verb_len;
+		skip_ws_and_comments(rest, rest_len);
+		// Optionally consume a single WORK or TRANSACTION noise word.
+		if (matches_kw(rest, rest_len, "WORK", 4)) {
+			rest += 4; rest_len -= 4;
+			skip_ws_and_comments(rest, rest_len);
+		} else if (matches_kw(rest, rest_len, "TRANSACTION", 11)) {
+			rest += 11; rest_len -= 11;
+			skip_ws_and_comments(rest, rest_len);
+		}
+		// Optional trailing semicolon.
+		if (rest_len > 0 && *rest == ';') {
+			rest++; rest_len--;
+			skip_ws_and_comments(rest, rest_len);
+		}
+		// Anything remaining is either a savepoint/chain modifier or a second
+		// pipelined statement. Either way, reject.
+		if (rest_len > 0) {
+			kind = 0;
+		}
+	}
+	// RELEASE SAVEPOINT and anything else: rejected. Matches Postgres: only
+	// plain ROLLBACK / COMMIT / ABORT / END end an aborted tx cleanly.
+	return kind;
+}
+
+// The answer to the plain ROLLBACK ('R') or COMMIT ('C') that ends a poisoned
+// transaction, without the ReadyForQuery. Match Postgres native: COMMIT inside an
+// aborted tx emits a WARNING notice and rolls back. SQLSTATE 25P01 =
+// no_active_sql_transaction is the correct code (not 00000, which would be
+// successful_completion).
+static void write_poisoned_txn_end(PG_pkt& pgpkt, char kind) {
+	if (kind == 'C') {
+		write_tx_poisoned_warning_notice(pgpkt,
+			PGSQL_ERROR_CODES::ERRCODE_NO_ACTIVE_SQL_TRANSACTION,
+			"there is no transaction in progress");
+	}
+	pgpkt.write_CommandComplete("ROLLBACK");
+}
+
 // ---------------------------------------------------------------------------
 
 extern PgSQL_Authentication* GloPgAuth;
@@ -227,14 +340,12 @@ void PgSQL_Query_Info::begin(unsigned char *_p, int len, bool header, const PgSQ
 	if (cached && pgsql_thread___query_digests && cached->digest_text &&
 		(pgsql_thread___commands_stats == false || cached->PgQueryCmd != PGSQL_QUERY__UNINITIALIZED)) {
 		// Same text as a cached statement: copy what parsing it would produce. A short digest goes in
-		// the inline buffer, as the parser puts it. -1 because the memset above left 0, which is a
-		// real statement type.
+		// the inline buffer, as the parser puts it.
 		const size_t len = strlen(cached->digest_text) + 1;
 		QueryParserArgs.digest = cached->digest;
 		QueryParserArgs.digest_text = len <= sizeof(QueryParserArgs.buf) ?
 			(char*)memcpy(QueryParserArgs.buf, cached->digest_text, len) : strdup(cached->digest_text);
 		QueryParserArgs.first_comment = cached->first_comment ? strdup(cached->first_comment) : nullptr;
-		QueryParserArgs.parsersql_stmt_type = -1;
 		if (pgsql_thread___commands_stats)
 			PgQueryCmd = cached->PgQueryCmd;
 	} else if (pgsql_thread___commands_stats || pgsql_thread___query_digests) {
@@ -465,6 +576,7 @@ void PgSQL_Session::reset() {
 	// Clear any poisoned-transaction state — if the session is being reset we're
 	// past the scope of the poison.
 	tx_poisoned = false;
+	poisoned_extq.reset();
 #ifdef PROXYSQLFFTO
 	ffto_bypassed = false;
 	if (m_ffto) {
@@ -568,122 +680,20 @@ bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
 		return true;
 	}
 
-	const char* sql = (char*)pkt->ptr + 5;
-	unsigned int sql_len = pkt->size - 5;
-	// The Simple Query packet body is a null-terminated string; the caller at
-	// handler___status_WAITING_CLIENT_DATA has already validated the terminator.
-	// Trim it so the classifier's "is any non-whitespace content remaining?"
-	// check does not treat the null byte itself as trailing junk and reject an
-	// otherwise-valid statement (e.g. "ROLLBACK\0" or "ROLLBACK WORK\0").
-	if (sql_len > 0 && sql[sql_len - 1] == '\0') {
-		sql_len--;
-	}
-
-	// skip whitespace and SQL comments (-- to EOL, /* ... */ non-nesting) in-place.
-	auto skip_ws_and_comments = [](const char*& p, unsigned int& n) {
-		for (;;) {
-			while (n > 0 && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) { p++; n--; }
-			if (n >= 2 && p[0] == '-' && p[1] == '-') {
-				p += 2; n -= 2;
-				while (n > 0 && *p != '\n') { p++; n--; }
-				continue;
-			}
-			if (n >= 2 && p[0] == '/' && p[1] == '*') {
-				p += 2; n -= 2;
-				while (n >= 2 && !(p[0] == '*' && p[1] == '/')) { p++; n--; }
-				if (n >= 2) { p += 2; n -= 2; } else { n = 0; }
-				continue;
-			}
-			break;
-		}
-	};
-
-	// Skip leading whitespace and comments. An ORM-prepended `/* query tag */ ROLLBACK`
-	// must recover, not be rejected.
-	skip_ws_and_comments(sql, sql_len);
-
-	enum RecoveryKind { KIND_REJECT, KIND_ROLLBACK, KIND_COMMIT };
-	RecoveryKind kind = KIND_REJECT;
-
-	// Case-insensitive prefix match, followed by a word boundary so "ROLLBACKET"
-	// doesn't get classified as ROLLBACK.
-	auto matches_kw = [](const char* p, unsigned int n, const char* kw, unsigned int klen) -> bool {
-		if (n < klen) return false;
-		if (strncasecmp(p, kw, klen) != 0) return false;
-		if (n == klen) return true;
-		char ch = p[klen];
-		return !(ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'));
-	};
-
-	// ABORT is a Postgres synonym for ROLLBACK. END is a Postgres synonym for COMMIT.
-	// Both ROLLBACK and COMMIT recover the session to IDLE.
-	unsigned int verb_len = 0;
-	if (matches_kw(sql, sql_len, "ROLLBACK", 8)) { kind = KIND_ROLLBACK; verb_len = 8; }
-	else if (matches_kw(sql, sql_len, "ABORT", 5)) { kind = KIND_ROLLBACK; verb_len = 5; }
-	else if (matches_kw(sql, sql_len, "COMMIT", 6)) { kind = KIND_COMMIT;   verb_len = 6; }
-	else if (matches_kw(sql, sql_len, "END", 3))    { kind = KIND_COMMIT;   verb_len = 3; }
-
-	// Having identified a recovery verb, verify the rest of the statement is a
-	// *plain* whole-tx end — no modifiers that change the semantics into
-	// something we can't honor on a dead backend, and no second statement
-	// pipelined after it. The only modifiers we accept are:
-	//   WORK | TRANSACTION   (Postgres noise-word aliases; no semantic effect)
-	// Anything else — specifically ROLLBACK TO SAVEPOINT (partial rollback,
-	// keeps tx open) and AND CHAIN (rolls back and opens a new tx) — would
-	// leave the client's transaction-status view inconsistent with what we can
-	// actually deliver once the backend is gone. Reject those with 25P02 and
-	// keep the session poisoned; the client can then issue a plain ROLLBACK.
-	//
-	// Multi-statement Simple Query (e.g. "ROLLBACK; SELECT 1;") is rejected for
-	// the same reason: we would recover, synthesize a ROLLBACK response, and
-	// silently drop the second statement. Safer to make the client split.
-	if (kind != KIND_REJECT) {
-		const char* rest = sql + verb_len;
-		unsigned int rest_len = sql_len - verb_len;
-		skip_ws_and_comments(rest, rest_len);
-		// Optionally consume a single WORK or TRANSACTION noise word.
-		if (matches_kw(rest, rest_len, "WORK", 4)) {
-			rest += 4; rest_len -= 4;
-			skip_ws_and_comments(rest, rest_len);
-		} else if (matches_kw(rest, rest_len, "TRANSACTION", 11)) {
-			rest += 11; rest_len -= 11;
-			skip_ws_and_comments(rest, rest_len);
-		}
-		// Optional trailing semicolon.
-		if (rest_len > 0 && *rest == ';') {
-			rest++; rest_len--;
-			skip_ws_and_comments(rest, rest_len);
-		}
-		// Anything remaining is either a savepoint/chain modifier or a second
-		// pipelined statement. Either way, reject.
-		if (rest_len > 0) {
-			kind = KIND_REJECT;
-		}
-	}
-	// RELEASE SAVEPOINT and anything else: KIND_REJECT. Matches Postgres: only
-	// plain ROLLBACK / COMMIT / ABORT / END end an aborted tx cleanly.
+	const char kind = classify_poisoned_txn_end((char*)pkt->ptr + 5, pkt->size - 5);
 
 	PG_pkt pgpkt{};
 	pgpkt.set_multi_pkt_mode(true);
 
-	if (kind == KIND_REJECT) {
+	if (kind == 0) {
 		thread->status_variables.tx_poisoned_rejected_statements_total++;
 		write_tx_poisoned_error(pgpkt);
 		pgpkt.write_ReadyForQuery('E');
 	} else {
 		// Recovery. Clear the poison and issue a ROLLBACK-shaped response.
-		thread->status_variables.tx_poisoned_recovered_total++;
-		if (kind == KIND_COMMIT) {
-			// Match Postgres native: COMMIT inside an aborted tx emits a WARNING
-			// notice and rolls back. SQLSTATE 25P01 = no_active_sql_transaction
-			// is the correct code (not 00000, which would be successful_completion).
-			write_tx_poisoned_warning_notice(pgpkt,
-				PGSQL_ERROR_CODES::ERRCODE_NO_ACTIVE_SQL_TRANSACTION,
-				"there is no transaction in progress");
-		}
-		pgpkt.write_CommandComplete("ROLLBACK");
+		end_poisoned_transaction();
+		write_poisoned_txn_end(pgpkt, kind);
 		pgpkt.write_ReadyForQuery('I');
-		tx_poisoned = false;
 	}
 
 	pgpkt.set_multi_pkt_mode(false);
@@ -1034,7 +1044,7 @@ bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt, bool* lock_hostgroup
 		if (pgsql_thread___enable_load_data_local_infile == false) {
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 			client_myds->myprot.generate_error_packet(true, true, "Unsupported 'LOAD DATA LOCAL INFILE' command", 
-				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, NULL, txn_state_for_local_error());
 			if (mirror == false) {
 				RequestEnd(NULL, true);
 			}
@@ -1062,105 +1072,6 @@ bool PgSQL_Session::handler_special_queries(PtrSize_t* pkt, bool* lock_hostgroup
 	}*/
 
 	return false;
-}
-
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session() {
-	if (pkt.size < 15 * 1024 * 1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
-		// check if there are too many mirror sessions in queue
-		if (thread->mirror_queue_mysql_sessions->len >= (unsigned int)pgsql_thread___mirror_max_queue_length) {
-			return;
-		}
-		// at this point, we will create the new session
-		// we will later decide if queue it or sent it immediately
-
-//		int i=0;
-//		for (i=0;i<100;i++) {
-		PgSQL_Session* newsess = NULL;
-		if (thread->mirror_queue_mysql_sessions_cache->len == 0) {
-			newsess = new PgSQL_Session();
-			newsess->client_myds = new PgSQL_Data_Stream();
-			newsess->client_myds->DSS = STATE_SLEEP;
-			newsess->client_myds->sess = newsess;
-			newsess->client_myds->fd = 0;
-			newsess->client_myds->myds_type = MYDS_FRONTEND;
-			newsess->client_myds->PSarrayOUT = new PtrSizeArray();
-			newsess->thread_session_id = __sync_fetch_and_add(&glovars.thread_id, 1);
-			if (newsess->thread_session_id == 0) {
-				newsess->thread_session_id = __sync_fetch_and_add(&glovars.thread_id, 1);
-			}
-			newsess->status = WAITING_CLIENT_DATA;
-			PgSQL_Connection* myconn = new PgSQL_Connection(true);
-			newsess->client_myds->attach_connection(myconn);
-			newsess->client_myds->myprot.init(&newsess->client_myds, newsess->client_myds->myconn->userinfo, newsess);
-			newsess->mirror = true;
-			newsess->client_myds->destroy_queues();
-		}
-		else {
-			newsess = (PgSQL_Session*)thread->mirror_queue_mysql_sessions_cache->remove_index_fast(0);
-		}
-		newsess->client_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
-		newsess->to_process = 1;
-		newsess->default_hostgroup = default_hostgroup;
-		if (qpo->mirror_hostgroup >= 0) {
-			newsess->mirror_hostgroup = qpo->mirror_hostgroup; // in the new session we copy the mirror hostgroup
-		}
-		else {
-			newsess->mirror_hostgroup = default_hostgroup; // copy the default
-		}
-		newsess->mirror_flagOUT = qpo->mirror_flagOUT; // in the new session we copy the mirror flagOUT
-		if (newsess->default_schema == NULL) {
-			newsess->default_schema = strdup(default_schema);
-		}
-		else {
-			if (strcmp(newsess->default_schema, default_schema)) {
-				free(newsess->default_schema);
-				newsess->default_schema = strdup(default_schema);
-			}
-		}
-
-		if (thread->mirror_queue_mysql_sessions->len == 0) {
-			// there are no sessions in the queue, we try to execute immediately
-			// Only pgsql_thread___mirror_max_concurrency mirror session can run in parallel
-			if (__sync_add_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1) > (unsigned int)pgsql_thread___mirror_max_concurrency) {
-				// if the limit is reached, we queue it instead
-				__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
-				thread->mirror_queue_mysql_sessions->add(newsess);
-			}
-			else {
-				//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
-				thread->register_session(thread,newsess);
-				newsess->handler(); // execute immediately
-				//newsess->to_process=0;
-				if (newsess->status == WAITING_CLIENT_DATA) { // the mirror session has completed
-					thread->unregister_session(thread->mysql_sessions->len - 1);
-					unsigned int l = (unsigned int)pgsql_thread___mirror_max_concurrency;
-					if (thread->mirror_queue_mysql_sessions->len * 0.3 > l) l = thread->mirror_queue_mysql_sessions->len * 0.3;
-					if (thread->mirror_queue_mysql_sessions_cache->len <= l) {
-						bool to_cache = true;
-						if (newsess->mybe) {
-							if (newsess->mybe->server_myds) {
-								to_cache = false;
-							}
-						}
-						if (to_cache) {
-							__sync_sub_and_fetch(&GloPTH->status_variables.mirror_sessions_current, 1);
-							//GloPTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
-							thread->mirror_queue_mysql_sessions_cache->add(newsess);
-						}
-						else {
-							delete newsess;
-						}
-					}
-					else {
-						delete newsess;
-					}
-				}
-			}
-		}
-		else {
-			thread->mirror_queue_mysql_sessions->add(newsess);
-		}
-	}
 }
 
 int PgSQL_Session::handler_again___status_PINGING_SERVER() {
@@ -1630,7 +1541,9 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 				// we won't go back to PROCESSING_QUERY
 				st = previous_status.top();
 				previous_status.pop();
-				client_myds->myprot.generate_error_packet(true, true, myconn->get_error_message().c_str(), myconn->get_error_code(), false);
+				// The connection is dropped below, and any transaction with it.
+				client_myds->myprot.generate_error_packet(true, true, myconn->get_error_message().c_str(), myconn->get_error_code(), false,
+					false, NULL, txn_state_for_local_error(true));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd = 0;
 				RequestEnd(myds, true); //fix bug #682
@@ -1783,6 +1696,14 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 		switch (rc) {
 		case 0:
 			myds->myds_type = MYDS_BACKEND;
+			// The thread loop flags the stream when a poll entry that asked for POLLOUT
+			// comes back with POLLERR/POLLHUP. While connecting, that is a socket the
+			// connect has already left: a refused address before the next one is tried
+			// (native and libpq alike), or a failed attempt before a connect retry on
+			// this same stream. The connection is now up on its own socket. A stale flag
+			// would keep write_to_net_poll() from ever writing, so a fast_forward session
+			// would never forward the client's bytes.
+			myds->net_failure = false;
 			myds->DSS = STATE_MARIADB_GENERIC;
 			status = WAITING_CLIENT_DATA;
 			st = previous_status.top();
@@ -1934,7 +1855,9 @@ bool PgSQL_Session::handler_again___status_RESETTING_CONNECTION(int* _rc) {
 				// we won't go back to PROCESSING_QUERY
 				st = previous_status.top();
 				previous_status.pop();
-				client_myds->myprot.generate_error_packet(true, true, myconn->get_error_message().c_str(), myconn->get_error_code(), false);
+				// The connection is dropped below, and any transaction with it.
+				client_myds->myprot.generate_error_packet(true, true, myconn->get_error_message().c_str(), myconn->get_error_code(), false,
+					false, NULL, txn_state_for_local_error(true));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd = 0;
 				RequestEnd(myds, true); //fix bug #682
@@ -1962,25 +1885,6 @@ bool PgSQL_Session::handler_again___status_RESETTING_CONNECTION(int* _rc) {
 		}
 	}
 	return false;
-}
-
-// this function was inline inside PgSQL_Session::get_pkts_from_client
-// ClickHouse doesn't support COM_INIT_DB , so we replace it
-// with a COM_QUERY running USE
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt) {
-	PtrSize_t _new_pkt;
-	_new_pkt.ptr = malloc(pkt.size + 4); // USE + space
-	memcpy(_new_pkt.ptr, pkt.ptr, 4);
-	unsigned char* _c = (unsigned char*)_new_pkt.ptr;
-	_c += 4; *_c = 0x03;
-	_c += 1; *_c = 'U';
-	_c += 1; *_c = 'S';
-	_c += 1; *_c = 'E';
-	_c += 1; *_c = ' ';
-	memcpy((char*)_new_pkt.ptr + 9, (char*)pkt.ptr + 5, pkt.size - 5);
-	l_free(pkt.size, pkt.ptr);
-	pkt.size += 4;
-	pkt.ptr = _new_pkt.ptr;
 }
 
 // this function was inline inside PgSQL_Session::get_pkts_from_client
@@ -2053,89 +1957,6 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 	return false;
 }
-#if 0
-// this function was inline inside PgSQL_Session::get_pkts_from_client
-// where:
-// status = WAITING_CLIENT_DATA
-// client_myds->DSS = STATE_SLEEP_MULTI_PACKET
-//
-// replacing the single goto with return true
-bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt) {
-	if (client_myds->multi_pkt.ptr == NULL) {
-		// not initialized yet
-		client_myds->multi_pkt.ptr = pkt.ptr;
-		client_myds->multi_pkt.size = pkt.size;
-	}
-	else {
-		PtrSize_t tmp_pkt;
-		tmp_pkt.ptr = client_myds->multi_pkt.ptr;
-		tmp_pkt.size = client_myds->multi_pkt.size;
-		client_myds->multi_pkt.size = pkt.size + tmp_pkt.size - sizeof(mysql_hdr);
-		client_myds->multi_pkt.ptr = l_alloc(client_myds->multi_pkt.size);
-		memcpy(client_myds->multi_pkt.ptr, tmp_pkt.ptr, tmp_pkt.size);
-		memcpy((char*)client_myds->multi_pkt.ptr + tmp_pkt.size, (char*)pkt.ptr + sizeof(mysql_hdr), pkt.size - sizeof(mysql_hdr)); // the header is not copied
-		l_free(tmp_pkt.size, tmp_pkt.ptr);
-		l_free(pkt.size, pkt.ptr);
-	}
-	if (pkt.size == (0xFFFFFF + sizeof(mysql_hdr))) { // there are more packets
-		//goto __get_pkts_from_client;
-		return true;
-	}
-	else {
-		// no more packets, move everything back to pkt and proceed
-		pkt.ptr = client_myds->multi_pkt.ptr;
-		pkt.size = client_myds->multi_pkt.size;
-		client_myds->multi_pkt.size = 0;
-		client_myds->multi_pkt.ptr = NULL;
-		client_myds->DSS = STATE_SLEEP;
-	}
-	return false;
-}
-
-
-// this function was inline inside PgSQL_Session::get_pkts_from_client
-// where:
-// status = WAITING_CLIENT_DATA
-// client_myds->DSS = STATE_SLEEP
-// enum_mysql_command in a large list of possible values
-// the most common values for enum_mysql_command are handled from the calling function
-// here we only process the not so common ones
-// we return false if the enum_mysql_command is not found
-bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass) {
-	unsigned char c;
-	c = *((unsigned char*)pkt->ptr + sizeof(mysql_hdr));
-	switch ((enum_mysql_command)c) {
-	case _MYSQL_COM_CHANGE_USER:
-		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(pkt, wrong_pass);
-		break;
-	case _MYSQL_COM_PING:
-		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(pkt);
-		break;
-	case _MYSQL_COM_SET_OPTION:
-		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(pkt);
-		break;
-	case _MYSQL_COM_STATISTICS:
-		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(pkt);
-		break;
-	case _MYSQL_COM_INIT_DB:
-		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(pkt);
-		break;
-	case _MYSQL_COM_FIELD_LIST:
-		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(pkt);
-		break;
-	case _MYSQL_COM_PROCESS_KILL:
-		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(pkt);
-		break;
-	case _MYSQL_COM_RESET_CONNECTION:
-		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(pkt);
-		break;
-	default:
-		return false;
-		break;
-	}
-	return true;
-}
-#endif
 
 // this function was inline inside PgSQL_Session::get_pkts_from_client
 // where:
@@ -2464,39 +2285,57 @@ __implicit_sync:
 						char command = c = *((unsigned char*)pkt.ptr);
 						// Poisoned-session gate for Extended Query messages.
 						// Simple Query ('Q') falls through to handler_special_queries,
-						// which dispatches to handler_poisoned_simple_query. Extended
-						// Query (P/B/D/C/E/S) is rejected here in V1: P/B/D/C/E are
-						// swallowed silently, and S emits ErrorResponse(25P02) +
-						// ReadyForQuery('E'). Client must issue a Simple-Query ROLLBACK
-						// to recover. QUIT ('X') is always honored.
+						// which dispatches to handler_poisoned_simple_query. QUIT ('X')
+						// is always honored. Extended Query (P/B/D/C/E) is queued as
+						// usual and classified as it arrives: a frame that only runs a
+						// plain ROLLBACK / COMMIT / ABORT / END ends the transaction at
+						// Sync, the way the simple-query ROLLBACK does -- pgjdbc and other
+						// extended-only drivers send rollback() that way. Anything else
+						// refuses the frame: it is thrown away, the rest of it is
+						// swallowed, and its Sync gets ErrorResponse(25P02) +
+						// ReadyForQuery('E').
 						if (tx_poisoned && command != 'Q' && command != 'X') {
 							if (command == 'P' || command == 'B' || command == 'D' ||
 							    command == 'C' || command == 'E') {
-								// Silent swallow — Parse/Bind/Describe/Close/Execute
-								// packets carry no client-visible response while
-								// poisoned. The whole logical ext-query gets
-								// accounted for once, at Sync.
-								l_free(pkt.size, pkt.ptr);
-								continue;
+								if (poisoned_extq.refused) {
+									// Rest of a refused frame: no client-visible
+									// response. The whole logical ext-query gets
+									// accounted for once, at Sync.
+									l_free(pkt.size, pkt.ptr);
+									continue;
+								}
+								// Queued by the switch below, then classified.
 							}
 							if (command == 'S') {
-								// One "rejected statement" per logical extended
-								// query (== per Sync), matching the simple-query
-								// path where a single 'Q' packet bumps the counter
-								// exactly once.
-								thread->status_variables.tx_poisoned_rejected_statements_total++;
-								PG_pkt pgpkt{};
-								pgpkt.set_multi_pkt_mode(true);
-								write_tx_poisoned_error(pgpkt,
-									"current transaction is aborted, commands ignored until end of transaction block (extended-query path; issue ROLLBACK via simple query to recover)");
-								pgpkt.write_ReadyForQuery('E');
-								pgpkt.set_multi_pkt_mode(false);
-								auto buff = pgpkt.detach();
-								client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
-								client_myds->DSS = STATE_SLEEP;
-								l_free(pkt.size, pkt.ptr);
-								if (mirror == false) RequestEnd(NULL, false);
-								continue;
+								const bool ends_txn = poisoned_extq.refused == false && poisoned_extq.executes;
+								poisoned_extq.reset();
+								if (ends_txn) {
+									// The transaction is rolled back now; the switch
+									// below runs the frame, whose Executes are answered
+									// locally (handle_post_sync_execute_message()).
+									end_poisoned_transaction();
+								} else {
+									// One "rejected statement" per logical extended
+									// query (== per Sync), matching the simple-query
+									// path where a single 'Q' packet bumps the counter
+									// exactly once.
+									thread->status_variables.tx_poisoned_rejected_statements_total++;
+									// A Sync implied by a simple Query that follows leaves
+									// the ReadyForQuery to that Query.
+									const bool send_ready = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0;
+									reset_extended_query_frame();
+									PG_pkt pgpkt{};
+									pgpkt.set_multi_pkt_mode(true);
+									write_tx_poisoned_error(pgpkt);
+									if (send_ready) pgpkt.write_ReadyForQuery('E');
+									pgpkt.set_multi_pkt_mode(false);
+									auto buff = pgpkt.detach();
+									client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
+									client_myds->DSS = STATE_SLEEP;
+									l_free(pkt.size, pkt.ptr);
+									if (mirror == false) RequestEnd(NULL, false);
+									continue;
+								}
 							}
 						}
 						switch (command) {
@@ -2574,9 +2413,15 @@ __implicit_sync:
 								// spelling of LISTEN in the raw bytes. The digest exists now.
 								// Recomputed per statement: left set, it would refuse an unrelated
 								// query that later lands on a libpq connection.
-								const char* listen_dg = CurrentQuery.get_digest_text();
-								listen_pending = pgsql_stmt_first_keyword_is(
-									(listen_dg && *listen_dg) ? listen_dg : query_ptr, "LISTEN");
+								// Every statement of the digest is checked, as a Simple Query can
+								// carry several and `SELECT 1; LISTEN ch` subscribes too (issue
+								// #6438). Without a digest, or with one that may have been cut at
+								// query_digests_max_query_length before a trailing statement, a query
+								// holding the word is digested in full for this check. Leading
+								// comments are skipped: the digest keeps them with
+								// query_digests_keep_comment.
+								listen_pending = pgsql_query_has_stmt_keyword(CurrentQuery.get_digest_text(),
+									query_ptr, "LISTEN");
 								if (listen_pending && listen_can_be_supported() == false) {
 									listen_pending = false;
 									handler_refuse_listen(&pkt);
@@ -2656,7 +2501,6 @@ __implicit_sync:
 											"(mirror_hostgroup=%d, mirror_flagOUT=%d, query='%s')\n",
 											qpo->mirror_hostgroup, qpo->mirror_flagOUT, query_text ? query_text : "");
 									}
-									//handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 								}
 
 								if (pgsql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
@@ -2687,7 +2531,7 @@ __implicit_sync:
 											char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
 											snprintf(buf, strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 											client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
-												false, true);
+												false, true, NULL, txn_state_for_local_error());
 											thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 											RequestEnd(NULL, true);
 											free(buf);
@@ -2744,6 +2588,7 @@ __implicit_sync:
 								handler_ret = -1;
 								return handler_ret;
 							}
+							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
 						case 'D':
 							extended_query_phase = EXTQ_PHASE_BUILDING;
@@ -2751,6 +2596,7 @@ __implicit_sync:
 								handler_ret = -1;
 								return handler_ret;
 							}
+							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
 						case 'C':
 							extended_query_phase = EXTQ_PHASE_BUILDING;
@@ -2758,6 +2604,7 @@ __implicit_sync:
 								handler_ret = -1;
 								return handler_ret;
 							}
+							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
 						case 'B':
 							extended_query_phase = EXTQ_PHASE_BUILDING;
@@ -2765,6 +2612,7 @@ __implicit_sync:
 								handler_ret = -1;
 								return handler_ret;
 							}
+							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
 						case 'E':
 							extended_query_phase = EXTQ_PHASE_BUILDING;
@@ -2772,6 +2620,7 @@ __implicit_sync:
 								handler_ret = -1;
 								return handler_ret;
 							}
+							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
 						case 'S':
 						{
@@ -2825,15 +2674,15 @@ __implicit_sync:
 							pkt = { 0, nullptr };
 							break;
 						default:
+							// Before the frame reset, which can drop a mid-batch backend.
+							const char txn_state = txn_state_for_local_error();
 							reset_extended_query_frame();
 							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
 
 							bool send_ready_packet = is_extended_query_ready_for_query() && c != 'H';
-							//unsigned int nTrx = NumActiveTransactions();
-							//const char txn_state = (nTrx ? 'T' : 'I');
 							client_myds->myprot.generate_error_packet(true, send_ready_packet, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
-								false, true);
+								false, true, NULL, txn_state);
 							l_free(pkt.size, pkt.ptr);
 							client_myds->DSS = STATE_SLEEP;
 							return handler_ret;
@@ -3278,6 +3127,10 @@ void PgSQL_Session::handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* my
 				myds->return_MySQL_Connection_To_Pool();
 			}
 		} else {
+			// Kept attached. A failed statement never reaches the tracker, so a COMMIT
+			// that fails (deferred constraint, serialization failure) ends the
+			// transaction on the backend and leaves the tracker saying BEGIN (#6417).
+			sync_txn_tracker_with_backend(myconn, false, true);
 			myconn->async_state_machine = ASYNC_IDLE;
 			myds->DSS = STATE_MARIADB_GENERIC;
 		}
@@ -3824,13 +3677,15 @@ handler_again:
 				if (run_match && copy_cmd_matcher->match(query_to_match, &matched)) {
 
 					if (status == PROCESSING_STMT_PREPARE) {
+						// Before the frame reset, which can drop a mid-batch backend.
+						const char txn_state = txn_state_for_local_error();
 						reset_extended_query_frame();
 						proxy_error("'%s' command is not supported in Extended Query protocol mode. Use Simple Query mode to run this command\n",
 							query_to_match ? query_to_match : "");
 						client_myds->setDSS_STATE_QUERY_SENT_NET();
 						bool send_ready_packet = is_extended_query_ready_for_query();
 						client_myds->myprot.generate_error_packet(true, send_ready_packet, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
-							false, true);
+							false, true, NULL, txn_state);
 						RequestEnd(myds, true);
 						finishQuery(myds, myconn, false);
 						goto __exit_DSS__STATE_NOT_INITIALIZED;
@@ -3840,7 +3695,7 @@ handler_again:
 						// Failed to switch to fast forward mode due to pending packets
 						client_myds->setDSS_STATE_QUERY_SENT_NET();
 						client_myds->myprot.generate_error_packet(true, true, "Unexpected packet sequence during COPY command",
-							PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, false, true);
+							PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, false, true, NULL, txn_state_for_local_error());
 						RequestEnd(myds, true);
 						finishQuery(myds, myconn, false);
 						goto __exit_DSS__STATE_NOT_INITIALIZED;
@@ -4075,6 +3930,16 @@ handler_again:
 				// is computed exactly as before (as if the clear had already happened);
 				// only the destructive free is moved past the logging read.
 				bool clear_portals_at_boundary = (!has_pending_messages && myconn->last_ready_for_query_status() == 'I');
+				// The transaction keyword tracker only reads the first word of each
+				// statement, so 'BEGIN; ...; COMMIT' in one query, a COMMIT skipped
+				// under a hostgroup lock or a ROLLBACK answered locally all leave it
+				// saying BEGIN, and 'SELECT 1; BEGIN' or COMMIT AND CHAIN leave it saying
+				// nothing. The status the backend just reported is the truth: bring the
+				// tracker in line with it, so neither DISCARD ALL nor the savepoint pin
+				// acts on a stale state and the next batch starts from the real one
+				// (#6417). Only at a true cycle boundary: mid-batch the status predates
+				// the batch.
+				sync_txn_tracker_with_backend(myconn, has_pending_messages);
 				// Pin the backend while named portals are open (same intent as the
 				// active-transaction sticky pin) so a later Execute/Describe/Close of a
 				// named portal routes to the connection that holds it. Kept SEPARATE from
@@ -4235,11 +4100,7 @@ handler_again:
 	}
 		break;
 
-	case SETTING_ISOLATION_LEVEL:
-	case SETTING_TRANSACTION_READ:
 	case SETTING_VARIABLE:
-	case SETTING_NEXT_ISOLATION_LEVEL:
-	case SETTING_NEXT_TRANSACTION_READ:
 	{
 		int rc = 0;
 		if (pgsql_variables.update_variable(this, status, rc)) {
@@ -4697,146 +4558,6 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 	}
 }
 
-#if 0
-// Note: as commented in issue #546 and #547 , some clients ignore the status of CLIENT_MULTI_STATEMENTS
-// therefore tracking it is not needed, unless in future this should become a security enhancement,
-// returning errors to all clients trying to send multi-statements .
-// see also #1140
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t* pkt) {
-	
-	char v;
-	v = *((char*)pkt->ptr + 3);
-	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_SET_OPTION packet , value %d\n", v);
-	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	unsigned int nTrx = NumActiveTransactions();
-	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);
-	if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-
-	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-	if (deprecate_eof_active)
-		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL, true);
-	else
-		client_myds->myprot.generate_pkt_EOF(true, NULL, NULL, 1, 0, setStatus);
-
-	if (v == 1) { // disabled. MYSQL_OPTION_MULTI_STATEMENTS_OFF == 1
-		client_myds->myconn->options.client_flag &= ~CLIENT_MULTI_STATEMENTS;
-	}
-	else { // enabled, MYSQL_OPTION_MULTI_STATEMENTS_ON == 0
-		client_myds->myconn->options.client_flag |= CLIENT_MULTI_STATEMENTS;
-	}
-	client_myds->DSS = STATE_SLEEP;
-	l_free(pkt->size, pkt->ptr);
-}
-
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t* pkt) {
-
-	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_PING packet\n");
-	l_free(pkt->size, pkt->ptr);
-	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	unsigned int nTrx = NumActiveTransactions();
-	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);
-	if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-	client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
-	client_myds->DSS = STATE_SLEEP;
-}
-
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(PtrSize_t* pkt) {
-	if (session_type == PROXYSQL_SESSION_PGSQL) {
-		/* FIXME: temporary */
-		l_free(pkt->size, pkt->ptr);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_error_packet(true, true, "Command not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
-			false, true);
-		client_myds->DSS = STATE_SLEEP;
-	}
-	else {
-		l_free(pkt->size, pkt->ptr);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_error_packet(true, true, "Command not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
-			false, true);
-		client_myds->DSS = STATE_SLEEP;
-	}
-}
-
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t* pkt) {
-	l_free(pkt->size, pkt->ptr);
-	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	client_myds->myprot.generate_error_packet(true, true, "Command not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false);
-	client_myds->DSS = STATE_SLEEP;
-}
-
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t* pkt) {
-	
-	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
-	if (session_type == PROXYSQL_SESSION_PGSQL) {
-		//__sync_fetch_and_add(&PgHGM->status.frontend_init_db, 1);
-		//client_myds->myconn->userinfo->set_dbname((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
-		l_free(pkt->size, pkt->ptr);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		unsigned int nTrx = NumActiveTransactions();
-		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);
-		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
-		GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::INITDB, this, NULL);
-		client_myds->DSS = STATE_SLEEP;
-	}
-	else {
-		l_free(pkt->size, pkt->ptr);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		unsigned int nTrx = NumActiveTransactions();
-		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);
-		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
-		client_myds->DSS = STATE_SLEEP;
-	}
-}
-
-// this function was introduced due to isseu #718
-// some application (like the one written in Perl) do not use COM_INIT_DB , but COM_QUERY with USE dbname
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t* pkt) {
-	
-	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
-	if (session_type == PROXYSQL_SESSION_PGSQL) {
-		//__sync_fetch_and_add(&PgHGM->status.frontend_use_db, 1);
-		string nq = string((char*)pkt->ptr + sizeof(mysql_hdr) + 1, pkt->size - sizeof(mysql_hdr) - 1);
-		RE2::GlobalReplace(&nq, re_inline_comment, " ");
-		char* sn_tmp = (char*)nq.c_str();
-		while (sn_tmp < (nq.c_str() + nq.length() - 4) && *sn_tmp == ' ')
-			sn_tmp++;
-		//char *schemaname=strdup(nq.c_str()+4);
-		char* schemaname = strdup(sn_tmp + 3);
-		char* schemanameptr = trim_spaces_and_quotes_in_place(schemaname);
-		// handle cases like "USE `schemaname`
-		if (schemanameptr[0] == '`' && schemanameptr[strlen(schemanameptr) - 1] == '`') {
-			schemanameptr[strlen(schemanameptr) - 1] = '\0';
-			schemanameptr++;
-		}
-		//client_myds->myconn->userinfo->set_dbname(schemanameptr);
-		free(schemaname);
-		if (mirror == false) {
-			RequestEnd(NULL);
-		}
-		l_free(pkt->size, pkt->ptr);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		unsigned int nTrx = NumActiveTransactions();
-		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);
-		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
-		GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::INITDB, this, NULL);
-		client_myds->DSS = STATE_SLEEP;
-	}
-	else {
-		l_free(pkt->size, pkt->ptr);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		unsigned int nTrx = NumActiveTransactions();
-		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0);
-		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, setStatus, 0, NULL);
-		client_myds->DSS = STATE_SLEEP;
-	}
-}
-#endif
-
 // this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo
 void PgSQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt) {
 	if (pkt->size == 0)
@@ -4982,7 +4703,7 @@ void PgSQL_Session::handler_refuse_listen(PtrSize_t* pkt) {
 	client_myds->DSS = STATE_QUERY_SENT_NET;
 	proxy_warning("LISTEN command is not supported\n");
 	client_myds->myprot.generate_error_packet(true, true, "LISTEN is not supported",
-		PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+		PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, NULL, txn_state_for_local_error());
 	if (mirror == false) {
 		RequestEnd(NULL, true);
 	} else {
@@ -4996,7 +4717,7 @@ void PgSQL_Session::handler_refuse_listen(PtrSize_t* pkt) {
 void PgSQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t* pkt) {
 	client_myds->DSS = STATE_QUERY_SENT_NET;
 	client_myds->myprot.generate_error_packet(true, true, qpo->error_msg, 
-		PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE, false);
+		PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE, false, false, NULL, txn_state_for_local_error());
 	RequestEnd(NULL, true);
 	l_free(pkt->size, pkt->ptr);
 }
@@ -5006,7 +4727,7 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t* pkt) {
 	// ER_NET_PACKET_TOO_LARGE
 	client_myds->DSS = STATE_QUERY_SENT_NET;
 	client_myds->myprot.generate_error_packet(true, true, "Got a packet bigger than 'max_allowed_packet' bytes",
-		PGSQL_ERROR_CODES::ERRCODE_PROGRAM_LIMIT_EXCEEDED, false);
+		PGSQL_ERROR_CODES::ERRCODE_PROGRAM_LIMIT_EXCEEDED, false, false, NULL, txn_state_for_local_error());
 	RequestEnd(NULL, true);
 	l_free(pkt->size, pkt->ptr);
 }
@@ -5073,9 +4794,10 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 			set = thread->thr_SetParser->parse1v2(); // use algorithm v2
 		}
 
-		// Flag to be set if any variable within the 'SET' statement fails to be tracked,
-		// due to being unknown or because it's an user defined variable.
+		// Set when the parser returned nothing usable for a tracked variable.
 		bool failed_to_parse_var = set.empty();
+		// Set when the parser returned a name we neither track nor ignore.
+		bool unknown_var = false;
 		for (auto it = std::begin(set); it != std::end(set); ++it) {
 			std::string var = it->first;
 			// Declared per iteration on purpose. PostgreSQL announces only some of these
@@ -5175,9 +4897,10 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 
 						// Returning SENT_ERROR has the caller end the unit. Discarding the frame here would drop
 						// the backend still holding this statement, and a transaction open on it with it.
+						const char txn_state = txn_state_for_local_error();
 						const bool send_ready_packet = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0;
 						client_myds->myprot.generate_error_packet(true, send_ready_packet, errmsg,
-							PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, false, true);
+							PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, false, true, NULL, txn_state);
 						free(errmsg);
 						RequestEnd(NULL, true);
 						return PgSQL_Local_Reply::SENT_ERROR;
@@ -5228,20 +4951,27 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
 #endif // DEBUG
 			} else {
-				// At this point the variable is unknown to us, or it's a user variable
-				// prefixed by '@', in both cases, we should fail to parse. We don't
-				// fail inmediately so we can anyway keep track of the other variables
+				// At this point the variable is unknown to us. We don't fail
+				// immediately so we can anyway keep track of the other variables
 				// supplied within the 'SET' statement being parsed.
-				failed_to_parse_var = true;
+				unknown_var = true;
 			}
 
 			if (send_param_status)
 				param_status.emplace_back(var, value1);
 		}
 
+		if (unknown_var) {
+			// The backend gets a setting we cannot track or restore, so the
+			// connection must not go back to the pool for another client:
+			// lock the hostgroup, as for any SET that match_regexes[1] rejects.
+			unable_to_parse_set_statement(lock_hostgroup);
+			return PgSQL_Local_Reply::NONE;
+		}
+
 		if (failed_to_parse_var) {
-			// Reached here means match_regexes[1] matched (the outer `if` at
-			// line 4492 above) so the SET targets a variable proxysql tracks
+			// Reached here means match_regexes[1] matched (the outer `if`
+			// above) so the SET targets a variable proxysql tracks
 			// (search_path, datestyle, etc.), but the SET parser couldn't
 			// build a usable map (malformed value, unclosed delimiter,
 			// trailing comma, etc.). Forward to the backend without locking
@@ -5283,6 +5013,18 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		client_myds->myprot.generate_ok_packet(true, send_ready_packet, NULL, 0, dig, txn_state, NULL, param_status);
 		RequestEnd(NULL, false);
 		return PgSQL_Local_Reply::SENT;
+	} else if (PgSQL_Variables::is_set_transaction(dig,
+			std::string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength).c_str())) {
+		// SET [LOCAL|SESSION] TRANSACTION ... only changes the transaction already open,
+		// and the session took its backend at BEGIN; outside a transaction PostgreSQL
+		// ignores it with a WARNING. Nothing outlives the transaction, so forward it
+		// through normal routing without tracking it or locking the hostgroup. The query
+		// text is checked too: ParserSQL 1.1.0 digests the session-wide
+		// 'SET SESSION CHARACTERISTICS AS TRANSACTION ...' as 'SET TRANSACTION ...'. It is
+		// the text as sent, not 'nq': stripping comments with a non-nesting regex can put
+		// a word that PostgreSQL reads as comment text next to SET.
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Forwarding SET TRANSACTION without hostgroup lock: %s\n", nq.c_str());
+		return PgSQL_Local_Reply::NONE;
 	} else {
 		unable_to_parse_set_statement(lock_hostgroup);
 		return PgSQL_Local_Reply::NONE;
@@ -5306,6 +5048,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 
 		// Check if in pipeline/extended query mode
 		if (extended_query_phase != EXTQ_PHASE_IDLE) {
+			const char txn_state = txn_state_for_local_error();
 			proxy_error("RESET ALL is not supported in Extended Query protocol mode. Use Simple Query mode to run this command\n");
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 			// Returning SENT_ERROR has the caller end the unit. Discarding the frame here would drop
@@ -5313,7 +5056,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 			const bool send_ready_packet = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0;
 			client_myds->myprot.generate_error_packet(true, send_ready_packet,
 				"RESET ALL is not supported in pipeline mode",
-				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, NULL, txn_state);
 			RequestEnd(NULL, true);
 			return PgSQL_Local_Reply::SENT_ERROR; // Handled (with error)
 		}
@@ -5439,13 +5182,32 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		// pipelined statements is one even without an explicit BEGIN. Handling it here
 		// instead would tear down the backend mid-batch, rolling back work the client
 		// has already been told succeeded.
-		const bool explicit_txn = is_in_transaction();
+		//
+		// Before any statement of this batch has run, whether the client is inside one
+		// is asked of the backend, not of the keyword tracker: the tracker reads only
+		// first words and can still say BEGIN long after the backend reported 'I' (or say
+		// nothing for a 'T' it never saw), and refusing then kills a healthy idle backend
+		// and poisons the session (#6417). A real transaction always pins its backend, so
+		// no backend means no transaction.
+		//
+		// Once a statement of this batch has run, the last ReadyForQuery predates it and
+		// can no longer see a BEGIN, nor a COMMIT or ROLLBACK, run earlier in the batch:
+		// [COMMIT, DISCARD ALL, Sync] after a 'T' is the batch's implicit block, not an
+		// explicit one. Only the tracker followed those statements, and it started the
+		// batch in agreement with the backend (sync_txn_tracker_with_backend()), so mid-
+		// batch it alone decides. Under a hostgroup lock the tracker is not fed and is
+		// not opened from a 'T' either, so there a mid-batch DISCARD ALL always gets the
+		// pipelined refusal with 'I', as it did before #6417.
+		const bool explicit_txn = extq_backend_used ? is_in_transaction() : (NumActiveTransactions() > 0);
 		const bool in_txn_block = explicit_txn || extq_backend_used;
 		// Anything still queued behind this command in the same unsynced batch would be
 		// processed against the session state reset()/init() below is about to replace.
 		const bool more_queued = (extended_query_phase != EXTQ_PHASE_IDLE) &&
 			!is_extended_query_ready_for_query();
 		if (in_txn_block || more_queued) {
+			// Asked before the frame reset below can drop a mid-batch backend. Only the
+			// pipelined refusal uses it: the in-transaction one settles the state itself.
+			const char queued_txn_state = in_txn_block ? 'I' : txn_state_for_local_error();
 			// Throws the frame away, and with it the backend connection when the backend
 			// is mid-batch: it never saw this error and concluding the batch would commit
 			// the work the client is about to be told failed.
@@ -5481,24 +5243,15 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 				proxy_error("%s\n", errmsg);
 				// An explicit transaction is left aborted, so the client knows it still
 				// owes a ROLLBACK; the block a pipelined batch opens ends with the batch,
-				// leaving the client idle. generate_error_packet() always reports idle.
-				PG_pkt pgpkt{};
-				pgpkt.set_multi_pkt_mode(true);
-				pgpkt.write_generic('E', "cscscscsc",
-					'S', "ERROR", 'V', "ERROR",
-					'C', PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_ACTIVE_SQL_TRANSACTION),
-					'M', errmsg,
-					0);
-				pgpkt.write_ReadyForQuery(explicit_txn ? 'E' : 'I');
-				pgpkt.set_multi_pkt_mode(false);
-				auto buff = pgpkt.detach();
-				client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
-				thread->status_variables.stvar[st_var_generated_pkt_err]++;
+				// leaving the client idle.
+				client_myds->myprot.generate_error_packet(true, true, errmsg,
+					PGSQL_ERROR_CODES::ERRCODE_ACTIVE_SQL_TRANSACTION, false, true, NULL,
+					explicit_txn ? 'E' : 'I');
 			} else {
 				proxy_error("DISCARD ALL is not supported when pipelined with further statements before Sync. Send it as the only statement before Sync, or use Simple Query mode\n");
 				client_myds->myprot.generate_error_packet(true, is_extended_query_ready_for_query(),
 					"DISCARD ALL is not supported in pipeline mode",
-					PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+					PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, NULL, queued_txn_state);
 			}
 			RequestEnd(NULL, true);
 			return PgSQL_Local_Reply::SENT_ERROR; // Handled (with error)
@@ -5617,7 +5370,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 			const std::string& errmsg = "prepared statement \"" + std::string(dealloc_value) + "\" does not exist";
 			client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(),
-				PGSQL_ERROR_CODES::ERRCODE_INVALID_SQL_STATEMENT_NAME, false, true);
+				PGSQL_ERROR_CODES::ERRCODE_INVALID_SQL_STATEMENT_NAME, false, true, NULL, txn_state_for_local_error());
 			RequestEnd(NULL, true);
 			return PgSQL_Local_Reply::SENT_ERROR;
 		}
@@ -5681,6 +5434,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 					}
 				}
 
+				const char txn_state = txn_state_for_local_error();
 				client_myds->DSS = STATE_QUERY_SENT_NET;
 				// Returning SENT_ERROR has the caller end the unit. Discarding the frame here would drop
 				// the backend still holding this statement, and a transaction open on it with it.
@@ -5691,7 +5445,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 						"Mismatched variables: %s. Use SET to explicitly set the desired values.\n", mismatch_details.c_str());
 					client_myds->myprot.generate_error_packet(true, send_ready_packet,
 						"RESET ALL is not supported when hostgroup is locked and connection startup values differ. Use SET to explicitly set the desired values.",
-						PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+						PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, NULL, txn_state);
 				} else {
 					// For single variable RESET, find which variable was requested
 					std::string reset_var_name;
@@ -5712,7 +5466,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 					}
 					client_myds->myprot.generate_error_packet(true, send_ready_packet,
 						"RESET is not supported when hostgroup is locked and connection startup values differ. Use SET to explicitly set the desired value.",
-						PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+						PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, NULL, txn_state);
 				}
 				RequestEnd(NULL, true);
 				return PgSQL_Local_Reply::SENT_ERROR;
@@ -5925,7 +5679,7 @@ __exit_set_destination_hostgroup:
 			snprintf(buf, sizeof(buf), "ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d",
 				locked_on_hostgroup, current_hostgroup);
 			client_myds->myprot.generate_error_packet(true, true, buf,
-				PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false);
+				PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false, false, NULL, txn_state_for_local_error());
 			thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 			RequestEnd(NULL, true);
 			l_free(pkt->size, pkt->ptr);
@@ -5936,144 +5690,6 @@ __exit_set_destination_hostgroup:
 	return PgSQL_Local_Reply::NONE;
 }
 
-#if 0
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t* pkt) {
-	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_STATISTICS packet\n");
-	l_free(pkt->size, pkt->ptr);
-	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	client_myds->myprot.generate_statistics_response(true, NULL, NULL);
-	client_myds->DSS = STATE_SLEEP;
-}
-
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t* pkt, bool* wrong_pass) {
-	
-	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_CHANGE_USER packet\n");
-	//if (session_type == PROXYSQL_SESSION_PGSQL) {
-	if (session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_SQLITE) {
-		reset();
-		init();
-		if (client_authenticated) {
-			if (use_ldap_auth == false) {
-				GloPgAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
-			}
-			else {
-				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
-			}
-		}
-		client_authenticated = false;
-		if (client_myds->myprot.process_pkt_COM_CHANGE_USER((unsigned char*)pkt->ptr, pkt->size) == true) {
-			l_free(pkt->size, pkt->ptr);
-			client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, 2, 0, NULL);
-			client_myds->DSS = STATE_SLEEP;
-			status = WAITING_CLIENT_DATA;
-			*wrong_pass = false;
-			client_authenticated = true;
-			//int free_users=0;
-			int used_users = 0;
-			/*free_users */GloPgAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
-			// FIXME: max_connections is not handled for CHANGE_USER
-		}
-		else {
-			l_free(pkt->size, pkt->ptr);
-			// 'COM_CHANGE_USER' didn't supply a password, and an 'Auth Switch Response' is
-			// required, going back to 'STATE_SERVER_HANDSHAKE' to perform the regular
-			// 'Auth Switch Response' for a connection is required. See #3504 for more context.
-			if (change_user_auth_switch) {
-				client_myds->DSS = STATE_SERVER_HANDSHAKE;
-				status = CONNECTING_CLIENT;
-				return;
-			}
-
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for frontend: disconnecting\n");
-			*wrong_pass = true;
-			// FIXME: this should become close connection
-			client_myds->setDSS_STATE_QUERY_SENT_NET();
-			char* client_addr = NULL;
-			if (client_myds->client_addr) {
-				char buf[512];
-				switch (client_myds->client_addr->sa_family) {
-				case AF_INET: {
-					struct sockaddr_in* ipv4 = (struct sockaddr_in*)client_myds->client_addr;
-					inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-					client_addr = strdup(buf);
-					break;
-				}
-				case AF_INET6: {
-					struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)client_myds->client_addr;
-					inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-					client_addr = strdup(buf);
-					break;
-				}
-				default:
-					client_addr = strdup((char*)"localhost");
-					break;
-				}
-			}
-			else {
-				client_addr = strdup((char*)"");
-			}
-			char* _s = (char*)malloc(strlen(client_myds->myconn->userinfo->username) + 100 + strlen(client_addr));
-			sprintf(_s, "ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-			proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)\n", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-			client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 2, 1045, (char*)"28000", _s, true);
-			free(_s);
-			__sync_fetch_and_add(&PgHGM->status.access_denied_wrong_password, 1);
-		}
-	}
-	else {
-		//FIXME: send an error message saying "not supported" or disconnect
-		l_free(pkt->size, pkt->ptr);
-	}
-}
-
-void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(PtrSize_t* pkt) {
-	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got MYSQL_COM_RESET_CONNECTION packet\n");
-
-	if (session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_SQLITE) {
-		// Backup the current relevant session values
-		int default_hostgroup = this->default_hostgroup;
-		bool transaction_persistent = this->transaction_persistent;
-
-		// Re-initialize the session
-		reset();
-		init();
-
-		// Recover the relevant session values
-		this->default_hostgroup = default_hostgroup;
-		this->transaction_persistent = transaction_persistent;
-		//-- client_myds->myconn->set_charset(default_charset, NAMES);
-
-		if (user_attributes != NULL && strlen(user_attributes)) {
-			nlohmann::json j_user_attributes = nlohmann::json::parse(user_attributes);
-			auto default_transaction_isolation = j_user_attributes.find("default-transaction_isolation");
-
-			if (default_transaction_isolation != j_user_attributes.end()) {
-				std::string def_trx_isolation_val =
-					j_user_attributes["default-transaction_isolation"].get<std::string>();
-				pgsql_variables.client_set_value(this, SQL_ISOLATION_LEVEL, def_trx_isolation_val.c_str());
-			}
-		}
-
-		l_free(pkt->size, pkt->ptr);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, 2, 0, NULL);
-		client_myds->DSS = STATE_SLEEP;
-		status = WAITING_CLIENT_DATA;
-	}
-	else {
-		l_free(pkt->size, pkt->ptr);
-
-		std::string t_sql_error_msg{ "Received unsupported 'COM_RESET_CONNECTION' for session type '%s'" };
-		std::string sql_error_msg{};
-		string_format(t_sql_error_msg, sql_error_msg, proxysql_session_type_str(session_type).c_str());
-
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 2, 1047, (char*)"28000", sql_error_msg.c_str(), true);
-		client_myds->DSS = STATE_SLEEP;
-		status = WAITING_CLIENT_DATA;
-	}
-}
-#endif
 void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 	// Get a MySQL Connection
 
@@ -6316,9 +5932,30 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			}
 		}
 #endif // PROXYSQL31
-		// Not known to be reachable. If this fires it is a bug -- please report it.
-		if (status == PROCESSING_QUERY && _conn->processing_multi_statement == false)
-			assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
+		// The result should always be complete here. Issue #6410 proved it is not
+		// guaranteed: an ErrorResponse that ended the native fetch before its
+		// ReadyForQuery reached this point and an assert aborted the whole proxy, every
+		// client of every protocol with it. If any route still gets here, fail only
+		// this query: finish the client's cycle with an error and a ReadyForQuery, then
+		// close the session. That destroys the backend connection, whose reply was not
+		// fully read, instead of letting it be reused -- the same way
+		// native_result_protocol_violation() disposes of a desynchronised backend.
+		if (status == PROCESSING_QUERY && _conn->processing_multi_statement == false &&
+			resultset_completed == false) {
+			proxy_error("PgSQL result ended without ReadyForQuery on %s:%d (%s); "
+				"failing the query and discarding the backend connection\n",
+				_conn->parent ? _conn->parent->address : "?", _conn->parent ? _conn->parent->port : 0,
+				_conn->native_mode ? "native" : "libpq");
+			_conn->set_error(PGSQL_ERROR_CODES::ERRCODE_INTERNAL_ERROR,
+				"ProxySQL received an incomplete result from the backend", false);
+			query_result->add_error(NULL);
+			query_result->add_ready_status(_conn->IsActiveTransaction() ? PQTRANS_INERROR : PQTRANS_IDLE);
+			query_result->get_resultset(client_myds->PSarrayOUT);
+			_conn->reusable = false;
+			_conn->healthy = false;
+			set_unhealthy();
+			return;
+		}
 		if (status == PROCESSING_QUERY && transfer_started == false && 
 			_conn->processing_multi_statement == false) { // we have all the resultset when PgSQL_Result_to_PgSQL_wire was called
 			// A result that carried a NotificationResponse must not be stored: the cache
@@ -6596,6 +6233,22 @@ void PgSQL_Session::RequestEnd(PgSQL_Data_Stream* myds, bool called_on_failure) 
 			}
 
 			myds->myconn->ProcessQueryAndSetStatusFlags(query_digest_text, savepoint_count);
+		} else if (myds->myconn->get_status(STATUS_PGSQL_CONNECTION_LISTEN)) {
+			// pgsql-query_digests off: the LISTEN pin came from the CommandComplete tag, and
+			// only the query text can tell an UNLISTEN * that releases it.
+			const char* raw = NULL;
+			size_t raw_len = 0;
+			if (status == PROCESSING_QUERY && CurrentQuery.QueryPointer) {
+				raw = (const char*)CurrentQuery.QueryPointer;
+				raw_len = CurrentQuery.QueryLength;
+			} else if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.extended_query_info.stmt_info) {
+				raw = CurrentQuery.extended_query_info.stmt_info->query;
+				raw_len = CurrentQuery.extended_query_info.stmt_info->query_length;
+			}
+			if (raw) {
+				const std::string query(raw, strnlen(raw, raw_len));
+				myds->myconn->update_listen_status_from_query(query.c_str());
+			}
 		}
 	}
 
@@ -6950,7 +6603,7 @@ void PgSQL_Session::send_parameter_error_response(const char* error_message, PGS
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	// Generate and send error packet using PostgreSQL protocol
 	client_myds->myprot.generate_error_packet(true, is_extended_query_ready_for_query(), 
-		full_error.c_str(), error_code, false, true);
+		full_error.c_str(), error_code, false, true, NULL, txn_state_for_local_error());
 	
 	RequestEnd(NULL, true);
 }
@@ -7185,6 +6838,224 @@ bool PgSQL_Session::is_in_transaction() const {
 	return transaction_state_manager && transaction_state_manager->is_in_transaction();
 }
 
+// PostgreSQL aborts the transaction block on any error, so after an error of ProxySQL's
+// own making a client inside one must be told 'E', not the 'I' an idle session gets.
+//
+// Whether the client is inside one is asked of the backend that holds the transaction,
+// not of the keyword tracker: a real transaction always pins its backend, and the
+// tracker can still say BEGIN long after the backend went idle.
+//
+// The backend never saw this error. One still at 'T' would commit the transaction on
+// a later COMMIT, so the session is poisoned: every statement is answered with 25P02
+// until the client ends the transaction with a ROLLBACK/COMMIT -- over either protocol
+// -- and end_poisoned_transaction() discards that backend then. The backend is NOT
+// touched here, because callers may still be using it. A backend already at 'E' agrees
+// with the client and handles the ROLLBACK itself, unless it is mid-batch (the frame
+// reset about to follow drops it) or 'backend_lost' says the caller is about to drop it.
+//
+// The SET variables tracked since BEGIN are put back when the transaction ends, as a
+// real ROLLBACK does (rollback_tracked_txn_state()). That needs the backend attached,
+// so a caller about to drop it -- or whose frame reset will, for a mid-batch one -- gets
+// it done now; otherwise recovery does it.
+char PgSQL_Session::txn_state_for_local_error(bool backend_lost) {
+	if (tx_poisoned) return 'E';
+	bool in_txn = false;
+	bool backend_agrees = true;
+	bool mid_batch = false;
+	for (unsigned int i = 0; mybes && i < mybes->len; i++) {
+		PgSQL_Backend* _mybe = (PgSQL_Backend*)mybes->index(i);
+		PgSQL_Connection* conn = (_mybe && _mybe->server_myds) ? _mybe->server_myds->myconn : NULL;
+		if (conn == NULL || conn->IsKnownActiveTransaction() == false) continue;
+		in_txn = true;
+		if (conn->is_pipeline_active()) mid_batch = true;
+		if (backend_lost || conn->is_pipeline_active() || conn->get_transaction_status_char() != 'E') {
+			backend_agrees = false;
+		}
+	}
+	if (in_txn == false) return 'I';
+	// In an extended-query message's handler on a native connection, the error is failed on the
+	// backend itself (extq_after_message(), extq_fail_on_backend()), which then reports 'E' and keeps
+	// the transaction. Poisoning would refuse ROLLBACK TO SAVEPOINT and drop the connection at ROLLBACK.
+	if (backend_agrees == false && !backend_lost && extq_in_handler &&
+		(extq_buffering || extq_error_holder() != nullptr)) {
+		return 'E';
+	}
+	if (backend_agrees == false) {
+		tx_poisoned = true;
+		poisoned_extq.reset();
+		thread->status_variables.tx_poisoned_total++;
+		if (backend_lost || mid_batch) rollback_tracked_txn_state();
+	}
+	return 'E';
+}
+
+// Give the client back the SET variables it had at BEGIN, the way a ROLLBACK forwarded
+// to the backend would, for a transaction that ends without one reaching it. The
+// tracker's rollback rewrites the attached backend's bookkeeping too, so it needs one;
+// without it the snapshot can only be dropped.
+void PgSQL_Session::rollback_tracked_txn_state() {
+	if (transaction_state_manager == NULL) return;
+	if (transaction_state_manager->is_in_transaction() &&
+		mybe && mybe->server_myds && mybe->server_myds->myconn) {
+		transaction_state_manager->handle_transaction("ROLLBACK");
+	} else {
+		transaction_state_manager->reset_state();
+	}
+}
+
+// get_pg_transaction_status() works in both backend modes; it says PQTRANS_ACTIVE (not
+// idle) for libpq while a result is still owed, and PQTRANS_UNKNOWN for a dead backend:
+// neither is an answer, so the tracker is left alone. is_pipeline_active() covers a
+// batch the backend has not concluded yet, whose last ReadyForQuery predates it.
+//
+// Opening a tracked transaction is skipped while the session is locked on a hostgroup:
+// handle_transaction_state() does not feed the tracker there, so nothing would ever
+// close it again before the next cycle boundary. A COMMIT or ROLLBACK run mid-batch
+// would go unseen and the DISCARD ALL after it ([BEGIN, Sync] then [COMMIT, DISCARD ALL,
+// Sync]) would be refused as inside an explicit transaction -- 25001 with 'E', backend
+// destroyed, session poisoned -- instead of with the pipelined refusal and 'I' (#6417).
+// Dropping a stale transaction when the backend reports idle stays safe either way.
+void PgSQL_Session::sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool mid_batch, bool failed) {
+	if (mid_batch || transaction_state_manager == NULL || myconn == NULL) return;
+	if (myconn->is_pipeline_active()) return;
+	switch (myconn->get_pg_transaction_status()) {
+	case PQTRANS_IDLE:
+		if (transaction_state_manager->is_in_transaction()) {
+			// The tracker missed how the transaction ended, and the SET variables it tracks
+			// depend on it: a rollback puts back their values at BEGIN. What was just run
+			// tells: a statement that failed and left the backend idle ended the transaction
+			// with a rollback (a failed COMMIT does); otherwise the last transaction end among
+			// its statements ('SELECT 1; ROLLBACK'). In any other case it is not known.
+			const char* digest = NULL;
+			if (status == PROCESSING_QUERY) {
+				digest = CurrentQuery.get_digest_text();
+			} else if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.extended_query_info.stmt_info) {
+				digest = CurrentQuery.extended_query_info.stmt_info->digest_text;
+			}
+			char ended_by = 0;
+			if (failed) {
+				const char* first = pgsql_stmt_skip_lead(digest, NULL);
+				if (first != NULL && pgsql_digest_next_stmt(first, NULL) == NULL) ended_by = 'R';
+			} else {
+				ended_by = PgSQL_ExplicitTxnStateMgr::txn_end_in_digest(digest);
+			}
+			transaction_state_manager->sync_with_backend(false, ended_by);
+		}
+		break;
+	case PQTRANS_INTRANS:
+	case PQTRANS_INERROR:
+		if (locked_on_hostgroup == -1) {
+			transaction_state_manager->sync_with_backend(true);
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+// See the tx_poisoned field. Plain ROLLBACK / ABORT / COMMIT / END end a poisoned
+// transaction, over either protocol. A poison raised by a local error
+// (txn_state_for_local_error()) leaves the backend holding the transaction attached
+// and still open: it never saw the error. Dropping it is what rolls that transaction
+// back, so neither COMMIT nor the next statement can carry its work forward. The
+// tracked SET variables go back to their BEGIN values first, while that backend is
+// still attached.
+void PgSQL_Session::end_poisoned_transaction() {
+	thread->status_variables.tx_poisoned_recovered_total++;
+	rollback_tracked_txn_state();
+	for (unsigned int i = 0; mybes && i < mybes->len; i++) {
+		PgSQL_Backend* _mybe = (PgSQL_Backend*)mybes->index(i);
+		if (_mybe && _mybe->server_myds && _mybe->server_myds->myconn &&
+			_mybe->server_myds->myconn->IsActiveTransaction()) {
+			_mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+		}
+	}
+	tx_poisoned = false;
+	poisoned_extq.reset();
+}
+
+// Classify the extended-query message just queued while the session is poisoned (the
+// back of extended_query_frame). The frame may end the transaction only if every
+// message serves a plain ROLLBACK / ABORT / COMMIT / END: Parse of one, Bind of one to
+// the unnamed portal, Describe of either, Close, and Execute of that portal -- the
+// shape pgjdbc, among others, sends for rollback()/commit(), with the statement named
+// once it is server-prepared. PostgreSQL itself accepts exactly these in an aborted
+// transaction. Anything else marks the frame refused.
+void PgSQL_Session::classify_poisoned_extq_message() {
+	if (extended_query_frame.empty() || poisoned_extq.refused) return;
+	// The kind of a statement the frame binds or describes: one Parsed earlier in this
+	// frame wins, as it will replace (unnamed) or fail to replace (named) the existing one.
+	auto stmt_kind = [this](const char* name) -> char {
+		for (auto it = poisoned_extq.stmts.rbegin(); it != poisoned_extq.stmts.rend(); ++it) {
+			if (it->first == name) return it->second;
+		}
+		const PgSQL_STMT_Global_info* stmt_info =
+			client_myds->myconn->local_stmts->find_stmt_info_from_stmt_name(name);
+		// Declared parameter types make it a statement that takes parameters.
+		if (stmt_info == NULL || stmt_info->parse_param_types.empty() == false) return 0;
+		return classify_poisoned_txn_end(stmt_info->query, stmt_info->query_length);
+	};
+	// The transaction is ended at the Sync, before the frame runs, so every message of an
+	// accepted frame has to be one that cannot then fail -- the client would be told of an
+	// error, and PostgreSQL would have left the transaction aborted. What PostgreSQL rejects
+	// is refused here instead, with the 25P02 that keeps the session poisoned: a Parse
+	// redefining a named statement that exists, and parameters (declared, supplied, or more
+	// than one parameter format) that a transaction end does not take (#6424).
+	const bool accepted = std::visit([&](auto& msg) -> bool {
+		using T = std::decay_t<decltype(msg)>;
+		if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Parse_Message>>) {
+			const PgSQL_Parse_Data& d = msg->data();
+			if (d.num_param_types != 0) return false;
+			if (d.stmt_name[0] != '\0') {
+				// The name is taken if the latest word on it in this frame is a Parse, or, with
+				// none, if the statement exists. A Close earlier in the frame frees it, as in
+				// PostgreSQL: Close(S, name) then Parse(name, 'ROLLBACK') is accepted.
+				auto it = std::find_if(poisoned_extq.stmts.rbegin(), poisoned_extq.stmts.rend(),
+					[&d](const std::pair<std::string, char>& s) { return s.first == d.stmt_name; });
+				const bool taken = (it != poisoned_extq.stmts.rend()) ? it->second != 0 :
+					client_myds->myconn->local_stmts->find_stmt_info_from_stmt_name(d.stmt_name) != NULL;
+				if (taken) return false;
+			}
+			const char kind = classify_poisoned_txn_end(d.query_string, strlen(d.query_string));
+			if (kind == 0) return false;
+			poisoned_extq.stmts.emplace_back(d.stmt_name, kind);
+			return true;
+		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Bind_Message>>) {
+			const PgSQL_Bind_Data& d = msg->data();
+			if (d.portal_name[0] != '\0') return false;
+			if (d.num_param_values != 0 || d.num_param_formats > 1) return false;
+			poisoned_extq.portal = stmt_kind(d.stmt_name);
+			return poisoned_extq.portal != 0;
+		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Describe_Message>>) {
+			const PgSQL_Describe_Data& d = msg->data();
+			if (d.stmt_type == 'P') return d.stmt_name[0] == '\0' && poisoned_extq.portal != 0;
+			return stmt_kind(d.stmt_name) != 0;
+		} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Close_Message>>) {
+			const PgSQL_Close_Data& d = msg->data();
+			if (d.stmt_type == 'S') {
+				// Closed for the rest of the frame: a later Parse may reuse the name, a later
+				// Bind or Describe of it would fail.
+				poisoned_extq.stmts.emplace_back(d.stmt_name, 0);
+				return true;
+			}
+			if (d.stmt_name[0] != '\0') return false;
+			poisoned_extq.portal = 0;
+			return true;
+		} else {
+			const PgSQL_Execute_Data& d = msg->data();
+			if (d.portal_name[0] != '\0' || poisoned_extq.portal == 0) return false;
+			msg->poisoned_txn_end = poisoned_extq.portal;
+			poisoned_extq.executes = true;
+			return true;
+		}
+	}, extended_query_frame.back());
+	if (accepted == false) {
+		// Nothing of a refused frame is run: drop what is queued, swallow the rest.
+		poisoned_extq.refused = true;
+		reset_extended_query_frame();
+	}
+}
+
 /**
  * @brief Sets the previous status of the PgSQL session according to the current status, with an option to allow EXECUTE statements.
  *
@@ -7348,7 +7219,8 @@ void PgSQL_Session::switch_fast_forward_to_normal_mode() {
 
 void PgSQL_Session::handle_post_sync_error(PGSQL_ERROR_CODES errcode, const char* errmsg, bool fatal) {
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	client_myds->myprot.generate_error_packet(true, true, errmsg, errcode, fatal, true);
+	client_myds->myprot.generate_error_packet(true, true, errmsg, errcode, fatal, true, NULL,
+		txn_state_for_local_error());
 	client_myds->DSS = STATE_SLEEP;
 	status = WAITING_CLIENT_DATA;
 }
@@ -7366,7 +7238,7 @@ void PgSQL_Session::handle_post_sync_locked_on_hostgroup_error(const char* query
 	char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
 	snprintf(buf, strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 	client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
-		false, true);
+		false, true, NULL, txn_state_for_local_error());
 	free(buf);
 	thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 	RequestEnd(NULL, true);
@@ -7439,10 +7311,11 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 
 	// Same check and the same reason as the simple-query path: after the query processor,
 	// so the digest is what gets inspected rather than the bytes the client sent.
-	// Recomputed per statement; see the simple-query path.
-	const char* listen_dg = CurrentQuery.get_digest_text();
-	listen_pending = pgsql_stmt_first_keyword_is(
-		(listen_dg && *listen_dg) ? listen_dg : parse_data.query_string, "LISTEN");
+	// Recomputed per statement; see the simple-query path. PostgreSQL rejects a Parse holding
+	// more than one statement, but the digest still goes through the same scan: it skips the
+	// comments kept by query_digests_keep_comment, including one cut short of its terminator.
+	listen_pending = pgsql_query_has_stmt_keyword(CurrentQuery.get_digest_text(),
+		parse_data.query_string, "LISTEN");
 	if (listen_pending && listen_can_be_supported() == false) {
 		listen_pending = false;
 		proxy_warning("LISTEN command is not supported\n");
@@ -7468,12 +7341,12 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 
 		if (parse_pkt.size > (unsigned int)pgsql_thread___max_allowed_packet) {
 			handler_WCD_SS_MCQ_qpo_LargePacket(&parse_pkt);
-			return 2;
+			return 2; // an error: discard the rest of the frame
 		}
 
 		if (qpo->error_msg) {
 			handler_WCD_SS_MCQ_qpo_error_msg(&parse_pkt);
-			return 2;
+			return 2; // an error: discard the rest of the frame
 		}
 
 		assert(previous_hostgroup != -1); // previous_hostgroup should be set before 
@@ -7852,6 +7725,27 @@ int PgSQL_Session::handle_post_sync_close_message(PgSQL_Close_Message* close_msg
 				// stays authoritative for its actual state.
 				break;
 			}
+			// TEMPORARY (#6412): previous_hostgroup is "the hostgroup of the last request",
+			// not the portal's owner. A simple-query cache hit under transaction_persistent=0
+			// leaves it at -1 while the portal is still registered, and the backend there may
+			// not be the connection that bound the portal. Rather than abort, drop the entry
+			// and synthesize the CloseComplete locally, like the unregistered case above.
+			// Protocol portals are never holdable, so the backend portal dies with the txn.
+			// A portal opened earlier in this unit is not bound anywhere yet: its Bind set
+			// previous_hostgroup, and the unit binds it on that backend.
+			{
+				const bool opened_in_unit = extq_buffering && extq_portals.count(portal.name) != 0;
+				const auto held = opened_in_unit ? named_portals.end() : named_portals.find(portal.name);
+				const PgSQL_Backend* owner = (previous_hostgroup != -1) ? find_backend(previous_hostgroup) : nullptr;
+				if (held != named_portals.end() && (owner == nullptr || owner->server_myds == nullptr
+					|| owner->server_myds->myconn == nullptr
+					|| owner->server_myds->myconn != held->second.bound_conn)) {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session=%p client_myds=%p. Close of portal '%s' with no attached owner (previous_hostgroup=%d), completing locally\n",
+						this, client_myds, portal.name, previous_hostgroup);
+					named_portals.erase(held);
+					break;
+				}
+			}
 			// Registered portal: dispatch a REAL backend Close('P', name) round-trip on
 			// the connection that holds it (previous_hostgroup — the portal is pinned
 			// there since the Bind), forward the backend's CloseComplete '3', and evict
@@ -7889,8 +7783,7 @@ int PgSQL_Session::handle_post_sync_close_message(PgSQL_Close_Message* close_msg
 			// pinned previous_hostgroup, never re-route via the query processor. Consume
 			// the per-frame exec-qp flag either way.
 			extended_query_exec_qp = false;
-			assert(previous_hostgroup != -1); // a registered portal implies a prior Bind set this
-			current_hostgroup = previous_hostgroup;
+			current_hostgroup = previous_hostgroup; // != -1: checked above
 			if (pgsql_thread___set_query_lock_on_hostgroup == 1 && locked_on_hostgroup >= 0) {
 				if (current_hostgroup != locked_on_hostgroup) {
 					handle_post_sync_locked_on_hostgroup_error(stmt_info->query, stmt_info->query_length);
@@ -8246,6 +8139,29 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 			PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL : PGSQL_EXTENDED_QUERY_FLAG_NONE;
 	}
 	CurrentQuery.start_time = thread->curtime;
+
+	if (execute_msg->poisoned_txn_end) {
+		// The ROLLBACK/COMMIT that ended a poisoned transaction: end_poisoned_transaction()
+		// already rolled it back when the frame was accepted, so it is answered here the
+		// way handler_poisoned_simple_query() answers it, and never reaches a backend.
+		CurrentQuery.QueryPointer = (unsigned char*)stmt_info->query;
+		CurrentQuery.QueryLength = stmt_info->query_length;
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		PG_pkt pgpkt{};
+		pgpkt.set_multi_pkt_mode(true);
+		if (execute_msg->send_describe_portal_result) {
+			pgpkt.write_generic('n', ""); // NoData: a transaction end returns no rows
+		}
+		write_poisoned_txn_end(pgpkt, execute_msg->poisoned_txn_end);
+		if (is_extended_query_ready_for_query()) {
+			pgpkt.write_ReadyForQuery('I');
+		}
+		pgpkt.set_multi_pkt_mode(false);
+		auto buff = pgpkt.detach();
+		client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
+		RequestEnd(NULL, false);
+		return 0;
+	}
 
 	timespec begint;
 	timespec endt;
@@ -8790,20 +8706,25 @@ int PgSQL_Session::extq_after_message(int rc, unsigned int out_before, enum sess
 	return 0;
 }
 
-// ProxySQL's own error in a unit that is not being buffered. The backend never saw it, so it goes as a
-// one-entry batch that fails on the connection holding a transaction or this unit's unsynced work,
-// whose status still says idle until its ReadyForQuery. Returns 2, the error staying local, when
-// no native connection holds either.
-int PgSQL_Session::extq_fail_on_backend(unsigned int out_before) {
-	PgSQL_Backend* holder = nullptr;
-	for (unsigned int i = 0; i < mybes->len && holder == nullptr; i++) {
+// The native connection holding a transaction or this unit's unsynced work, whose status still says
+// idle until its ReadyForQuery: where ProxySQL's own error is failed. nullptr when there is none.
+PgSQL_Backend* PgSQL_Session::extq_error_holder() {
+	for (unsigned int i = 0; i < mybes->len; i++) {
 		PgSQL_Backend* be = (PgSQL_Backend*)mybes->index(i);
 		PgSQL_Connection* c = (be && be->server_myds) ? be->server_myds->myconn : nullptr;
 		if (c && c->native_mode && (c->is_pipeline_active() ||
 			c->get_transaction_status_char() == 'T' || c->get_transaction_status_char() == 'E')) {
-			holder = be;
+			return be;
 		}
 	}
+	return nullptr;
+}
+
+// ProxySQL's own error in a unit that is not being buffered. The backend never saw it, so it goes as a
+// one-entry batch that fails on extq_error_holder(). Returns 2, the error staying local, when there
+// is no such connection.
+int PgSQL_Session::extq_fail_on_backend(unsigned int out_before) {
+	PgSQL_Backend* holder = extq_error_holder();
 	if (holder == nullptr) {
 		return 2;
 	}
@@ -9292,6 +9213,7 @@ int PgSQL_Session::handler___status_PROCESSING_EXTENDED_QUERY_SYNC() {
 	const unsigned int out_before = client_myds->PSarrayOUT->len;
 	const enum session_status st_before = status;
 
+	extq_in_handler = true;
 	rc = std::visit([&](auto&& msg_ptr) -> int {
 		using T = std::decay_t<decltype(msg_ptr)>;
 		if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Parse_Message>>) {
@@ -9331,6 +9253,7 @@ int PgSQL_Session::handler___status_PROCESSING_EXTENDED_QUERY_SYNC() {
 			return -1;
 		}
 		}, packet);
+	extq_in_handler = false;
 
 	if (extq_buffering) {
 		rc = extq_after_message(rc, out_before, st_before);

@@ -427,14 +427,21 @@ int main() {
      "supplied deletion scope removes old managed rows while preserving unrelated "
      "entries");
   proxysql_destroy_managed_prepared_runtime(prepared);
-  // Removing an existing companion table exercises a real loader/database failure.
+  // An SQLite error on a companion table is logged by the server loader, which
+  // still installs the servers: LOAD ... SERVERS TO RUNTIME never fails (#6448).
   prepared = nullptr;
   const bool failure_ready = prepare(d, &prepared, error);
   db.execute("DROP TABLE mysql_aws_rds_bgd_hostgroups");
   if (failure_ready)
     result = proxysql_activate_managed_runtime_locked(*prepared, 2);
-  ok(failure_ready && !result.applied && !result.message.empty(),
-     "existing loader errors propagate without reporting success");
+  std::unique_ptr<SQLite3_result> runtime_servers(MyHGM->dump_table_mysql("mysql_servers"));
+  bool managed_server_installed = false;
+  if (runtime_servers)
+    for (const auto *row : runtime_servers->rows)
+      managed_server_installed |= row != nullptr && row->fields[1] != nullptr &&
+                                  std::string(row->fields[1]) == "managed.test";
+  ok(failure_ready && result.applied && managed_server_installed,
+     "a companion-table SQLite error does not fail the server load, which installs the servers");
   proxysql_destroy_managed_prepared_runtime(prepared);
   proxysql_unlock_configuration();
   return exit_status();

@@ -219,6 +219,7 @@ struct ProxySQL_PluginServices {
     // live only while init() is running:
     proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
     // ABI 14 tail extensions (provider-neutral server discovery):
+    // reserved: server modules are no longer supported; always returns false
     proxysql_plugin_register_server_module_cb register_server_module;
     proxysql_plugin_install_server_discovery_controller_cb install_server_discovery_controller;
     proxysql_plugin_uninstall_server_discovery_controller_cb uninstall_server_discovery_controller;

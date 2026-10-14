@@ -5,6 +5,7 @@
  */
 
 #include <unistd.h>
+#include <cstring>
 #include <string>
 #include <sstream>
 #include <chrono>
@@ -2199,9 +2200,17 @@ int main(int argc, char** argv) {
         PQclear(invalid_res);
         diag("Step 3 - Invalid SET failed as expected: %s", invalid_failed ? "yes" : "no");
 
-        // Check value after error (should still be new_value)
-        const auto after_error = getVariable(conn.get(), "datestyle");
-        diag("Step 4 - After error: datestyle = '%s'", after_error.c_str());
+        // The error aborted the transaction, exactly as on PostgreSQL: until ROLLBACK
+        // every statement, SHOW included, is refused with 25P02 (#6424). ProxySQL
+        // rejects the invalid value itself, so this is what checks that it reports the
+        // transaction aborted instead of carrying on inside it.
+        PGresult* show_res = PQexec(conn.get(), "SHOW datestyle");
+        const char* show_state = PQresultErrorField(show_res, PG_DIAG_SQLSTATE);
+        const bool aborted = (PQresultStatus(show_res) == PGRES_FATAL_ERROR) &&
+                             show_state && strcmp(show_state, "25P02") == 0;
+        PQclear(show_res);
+        diag("Step 4 - After error: transaction aborted (SHOW refused with 25P02): %s",
+             aborted ? "yes" : "no");
 
         // ROLLBACK
         executeQuery(conn.get(), "ROLLBACK");
@@ -2213,8 +2222,8 @@ int main(int argc, char** argv) {
             executeQuery(conn.get(), "SET datestyle = '" + original + "'");
         }
 
-        // Verify: invalid should have failed, value after error should be new_value, after rollback should be original
-        return invalid_failed && (after_error.find(new_value) != std::string::npos) && (after_rollback == original);
+        // Verify: invalid should have failed and aborted the transaction, after rollback should be original
+        return invalid_failed && aborted && (after_rollback == original);
     });
 
     // Test: Pipeline mode detailed value verification

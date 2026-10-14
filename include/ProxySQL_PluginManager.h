@@ -119,30 +119,19 @@ public:
 	// does not have to reach into the global admin module.
 	void refresh_runtime_views_for_query(const std::string& sql,
 		SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb) const;
-	bool register_server_module(ProxySQL_ServerModuleHooks *module,
-		void (*destroy)(ProxySQL_ServerModuleHooks *), void *module_handle);
-	std::vector<ProxySQL_ServerModuleTable> server_module_tables(
-		ProxySQL_ServerProtocol protocol) const;
-	// These calls retain a callback lease for the duration of the invocation.
-	// The caller owns the result returned by server_module_runtime_table_snapshot.
-	bool prepare_server_module_runtime(const ProxySQL_ServerModuleSnapshot& snapshot,
-		std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
-	void commit_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation);
-	// Runs the module commit and legacy/controller notification under one
-	// callback lease.  Runtime installation uses this instead of two separate
-	// calls so a retired DSO cannot disappear between them.
-	void commit_and_install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot,
-		std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims);
+	// Records a configuration core has already installed and notifies the
+	// discovery controller under a callback lease. Never fails. A built-in
+	// topology that overlaps a managed discovery claim is only logged.
+	void install_server_runtime(ProxySQL_ServerRuntimeSnapshot snapshot);
 	std::vector<ProxySQL_ServerHostgroupClaim> server_hostgroup_claims(
 		ProxySQL_ServerProtocol protocol) const;
+	// Built-in topology hostgroups of the last recorded runtime snapshot.
+	std::vector<uint32_t> server_topology_hostgroups(ProxySQL_ServerProtocol protocol) const;
 	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims(
 		ProxySQL_ServerProtocol protocol) const;
 	bool install_managed_discovery(ProxySQL_ServerProtocol protocol, uint64_t desired_revision,
 		const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
 		uint64_t& runtime_generation_out, std::string& error);
-	SQLite3_result* server_module_runtime_table_snapshot(
-		ProxySQL_ServerProtocol protocol, const char* table_name);
-	bool unregister_server_module(ProxySQL_ServerProtocol protocol);
 	bool install_server_discovery_controller(ProxySQL_ServerProtocol protocol,
 		ProxySQL_ServerDiscoveryController *controller,
 		void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle,
@@ -150,6 +139,7 @@ public:
 	bool uninstall_server_discovery_controller(ProxySQL_ServerProtocol protocol,
 		const ProxySQL_PluginDescriptor *owner = nullptr);
 	bool post_server_desired_set(ProxySQL_ServerDesiredSet desired_set);
+	// Records the snapshot and notifies the discovery controller.
 	void install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
 	bool revalidate_server_desired_set(ProxySQL_ServerProtocol protocol,
 		const ProxySQL_ServerDiscoveryController* controller,
@@ -160,6 +150,10 @@ public:
 	void complete_server_desired_set(ProxySQL_ServerProtocol protocol,
 		ProxySQL_ServerDiscoveryController* controller, uint64_t generation, bool applied,
 		bool applying);
+	// Unit-test-only seam: replaces the managed hostgroup claims without the
+	// revision, overlap checks and runtime generation of install_managed_discovery().
+	void replace_managed_server_hostgroup_claims_for_test(ProxySQL_ServerProtocol protocol,
+		std::vector<ProxySQL_ServerHostgroupClaim> claims);
 	// Unit-test-only retirement observation seam.  The callback runs after a
 	// registry entry is detached and with server_discovery_mutex_ unlocked.
 	using server_retirement_observer_for_test_cb =
@@ -227,25 +221,11 @@ private:
 		std::string table_name {};
 		void (*refresh)(SQLite3DB*, void*) { nullptr };
 		void* opaque { nullptr };
+		// Registering plugin, for diagnostics ("unknown" outside a plugin
+		// registration phase, e.g. direct registration in unit tests).
+		std::string plugin_name {};
 	};
 	std::vector<registered_runtime_view_t> runtime_views_ {};
-	struct registered_server_module_t {
-		ProxySQL_ServerModuleHooks *module { nullptr };
-		void (*destroy)(ProxySQL_ServerModuleHooks *) { nullptr };
-		void *module_handle { nullptr };
-		// Frozen ABI-9 callback modules expose only the three-field prefix.
-		// Cache every callable while registration can safely classify that prefix;
-		// steady-state code must never inspect an appended member through module.
-		bool legacy_callback_only { false };
-		void (*legacy_runtime_configuration_installed)(void *, ProxySQL_ServerRuntimeSnapshot) { nullptr };
-		bool (*prepare_runtime)(void *, const ProxySQL_ServerModuleSnapshot&,
-			std::vector<ProxySQL_ServerHostgroupClaim>&, std::string&) { nullptr };
-		void (*commit_runtime)(void *, uint64_t) { nullptr };
-		SQLite3_result* (*runtime_table_snapshot)(void *, const char*) { nullptr };
-		void (*shutdown)(void *) { nullptr };
-		void *opaque { nullptr };
-		std::vector<ProxySQL_ServerModuleTable> tables {};
-	};
 	struct registered_server_controller_t {
 		ProxySQL_ServerDiscoveryController *controller { nullptr };
 		void (*destroy)(ProxySQL_ServerDiscoveryController *) { nullptr };
@@ -257,7 +237,6 @@ private:
 	void finalize_server_controller_retirement(registered_server_controller_t retired);
 	mutable std::mutex server_discovery_mutex_ {};
 	std::condition_variable server_discovery_cv_ {};
-	registered_server_module_t server_modules_[2] {};
 	registered_server_controller_t server_controllers_[2] {};
 	bool server_snapshots_present_[2] { false, false };
 	size_t server_callback_leases_[2] { 0, 0 };
@@ -266,11 +245,14 @@ private:
 	bool server_controller_retiring_[2] { false, false };
 	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
 	std::vector<uint32_t> server_delegated_hostgroups_[2] {};
-	std::vector<ProxySQL_ServerHostgroupClaim> server_hostgroup_claims_[2] {};
 	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims_[2] {};
 	uint64_t managed_server_revisions_[2] {0, 0};
-	// Requires server_discovery_mutex_. Keeps module and managed ownership separate.
+	// Requires server_discovery_mutex_.
 	void rebuild_server_delegated_hostgroups(int index);
+	// With only_if_newer, a snapshot older than the stored one is dropped
+	// (nested publication).
+	void store_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot,
+		bool only_if_newer);
 	server_retirement_observer_for_test_cb server_retirement_observer_for_test_ { nullptr };
 	void *server_retirement_observer_opaque_for_test_ { nullptr };
 #endif /* PROXYSQL40 */
@@ -365,17 +347,11 @@ bool proxysql_stop_configured_plugins(
 );
 void proxysql_reset_active_manager_pin_acquisitions_for_test();
 size_t proxysql_active_manager_pin_acquisitions_for_test();
-std::vector<ProxySQL_ServerModuleTable> proxysql_active_server_module_tables(
-	ProxySQL_ServerProtocol protocol);
 std::vector<ProxySQL_ClusterPluginIdentity> proxysql_active_plugin_identities();
-bool proxysql_prepare_active_server_module_runtime(const ProxySQL_ServerModuleSnapshot& snapshot,
-	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
-void proxysql_commit_active_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation);
-void proxysql_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
-void proxysql_commit_and_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot,
-	std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims);
-SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
-	ProxySQL_ServerProtocol protocol, const char* table_name);
+// See ProxySQL_PluginManager::install_server_runtime(). No-op without an active manager,
+// and while plugin init/start holds the manager exclusively (the snapshot is then
+// dropped with a warning; controllers observe the next LOAD).
+void proxysql_install_active_server_runtime(ProxySQL_ServerRuntimeSnapshot snapshot);
 
 /**
  * @brief Bind the required web/provider pair and run local bootstrap or recovery.

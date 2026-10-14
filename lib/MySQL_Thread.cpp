@@ -1439,7 +1439,13 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_timeout=24*3600*1000;
 	variables.query_processor_iterations=0;
 	variables.query_processor_first_comment_parsing=2;
+	// Regex engine for query rules (issue #6411): PCRE (1) everywhere, except
+	// v4.0, which defaults to PCRE2 (3). v3.1 keeps 1 for upgrade compatibility.
+#ifdef PROXYSQL40
+	variables.query_processor_regex=3;
+#else
 	variables.query_processor_regex=1;
+#endif
 	variables.query_processor_parser=0;
 	variables.set_query_lock_on_hostgroup=1;
 	variables.set_parser_algorithm=2; // before 2.6.0 this was 1
@@ -3089,7 +3095,15 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_rules_fast_routing_algorithm"]  = make_tuple(&variables.query_rules_fast_routing_algorithm,  1, 2, false);
 		VariablesPointers_int["query_processor_iterations"]      = make_tuple(&variables.query_processor_iterations,       0,   1000*1000, false);
 		VariablesPointers_int["query_processor_first_comment_parsing"] = make_tuple(&variables.query_processor_first_comment_parsing, 0, 3, false);
+		// Engine 1 is PCRE (the semantics every released 3.x tag shipped),
+		// engine 2 is RE2; engine 3, PCRE2, is opt-in and unavailable on the
+		// Stable tier because the regex behaviour differences would change
+		// matches silently (issue #6411).
+#ifdef PROXYSQL31
+		VariablesPointers_int["query_processor_regex"]           = make_tuple(&variables.query_processor_regex,            1,           3, false);
+#else
 		VariablesPointers_int["query_processor_regex"]           = make_tuple(&variables.query_processor_regex,            1,           2, false);
+#endif
 		VariablesPointers_int["query_processor_parser"]           = make_tuple(&variables.query_processor_parser,            0,           1, false);
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"]     = make_tuple(&variables.set_query_lock_on_hostgroup,      0,           1, false);
@@ -3884,10 +3898,10 @@ bool MySQL_Thread::init() {
 	match_regexes[0] = NULL; // NOTE: historically we used match_regexes[0] for SET SQL_LOG_BIN . Not anymore
 	
 	std::stringstream ss;
-	ss << "^SET (|SESSION |@@|@@session.|@@local.)`?(" << mysql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION|TX_READ_ONLY|TRANSACTION_ISOLATION|TRANSACTION_READ_ONLY)`?( *)(:|)=( *)";
+	ss << "^SET (|SESSION |LOCAL |@@|@@session.|@@local.)`?(" << mysql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION|TX_READ_ONLY|TRANSACTION_ISOLATION|TRANSACTION_READ_ONLY)`?( *)(:|)=( *)";
 	match_regexes[1]=new Session_Regex((char *)ss.str().c_str());
 
-	match_regexes[2]=new Session_Regex((char *)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
+	match_regexes[2]=new Session_Regex((char *)MYSQL_SET_TRANSACTION_DIGEST_REGEX);
 	match_regexes[3]=new Session_Regex((char *)"^(set)(?: +)((charset)|(character +set))(?: )");
 
 	return true;
@@ -4325,13 +4339,16 @@ __run_skip_1:
 		const bool b_rearm = (curtime >= last_b_rearm_us + 50000);
 		if (b_rearm) {
 			last_b_rearm_us = curtime;
-			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
-				unsigned guard = 0;
-				for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
+				// Bound the scan by the real list size: a fixed cap would
+				// permanently skip the tail (never re-armed, never noticing a
+				// client disconnect) once a list grew past it.
+				for (auto *n = head; n; n = n->next) {
 					auto *sess = static_cast<MySQL_Session*>(n->session);
 					if (sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0)
 						mypolls.add(POLLIN, sess->client_myds->fd, sess->client_myds, curtime);
 				}
+				(void)waiter_count;
 			});
 		}
 #endif // PROXYSQL31
@@ -4449,12 +4466,15 @@ __run_skip_1:
 			ProcessAllMyDS_AfterPoll<MySQL_Thread>();
 #ifdef PROXYSQL31
 			if (last_b_rearm_us == pre_poll_time) {
-				waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
-					unsigned guard = 0;
-					for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+				waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
+					// Bound the scan by the real list size: a fixed cap would
+					// permanently skip the tail (never dropped from the poll
+					// set) once a list grew past it.
+					for (auto *n = head; n; n = n->next) {
 						auto *sess = static_cast<MySQL_Session*>(n->session);
 						drop_from_poll(sess->client_myds);
 					}
+					(void)waiter_count;
 				});
 			}
 #endif // PROXYSQL31
@@ -5246,10 +5266,13 @@ void MySQL_Thread::process_all_sessions() {
 	}
 #ifdef PROXYSQL31
 	if (!waiter_lists.empty()) {
-		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head) {
+		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head, size_t waiter_count) {
 			(void)hid;
-			unsigned walk_guard = 0;
-			for (PgSQL_Waiter_Node *n = head; n && walk_guard < 100000; ++walk_guard) {
+			// No fixed visit cap: this walk only ever removes nodes (leave_waiter /
+			// session deletion), so it terminates naturally, and capping it would
+			// permanently starve the tail of a large list -- those waiters would
+			// never be retried even when the pool has free connections again.
+			for (PgSQL_Waiter_Node *n = head; n;) {
 				PgSQL_Waiter_Node *next = n->next;
 				auto *sess = static_cast<MySQL_Session*>(n->session);
 				if (sess->pause_until > curtime && !sess->killed) {
@@ -5290,6 +5313,7 @@ void MySQL_Thread::process_all_sessions() {
 				}
 				n = next;
 			}
+			(void)waiter_count;
 		});
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
@@ -7229,28 +7253,6 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 	if (!use_aws_locality) {
 	for (i=0; i<cached_connections->len;) {
 		c = (MySQL_Connection *) cached_connections->index(i);
-		const char *candidate_username =
-			c->userinfo != nullptr ? c->userinfo->username : nullptr;
-		const char *requested_username = client_conn->userinfo->username;
-		const bool same_username = candidate_username != nullptr &&
-			requested_username != nullptr &&
-			strcmp(candidate_username, requested_username) == 0;
-		if (c->parent->myhgc->hid == _hid &&
-			same_username &&
-			(c->backend_auth_type() != requested_type ||
-			 (requested_type == MySQLBackendAuthType::AWS_IAM &&
-			  c->requires_CHANGE_USER(client_conn, requested_type)))) {
-			cached_connections->remove_index_fast(i);
-			c->send_quit = false;
-			MyHGM->destroy_MyConn_from_pool(c);
-			continue;
-		}
-		if (c->backend_auth_type() != requested_type ||
-			(requested_type == MySQLBackendAuthType::AWS_IAM &&
-			 c->requires_CHANGE_USER(client_conn, requested_type))) {
-			++i;
-			continue;
-		}
 
 		// Skip unhealthy or non-reusable connections
 		if (!c->healthy || !c->reusable) {
@@ -7286,7 +7288,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 								MySrvC *mysrvc = c->parent;
 								std::vector<MySrvC *>::iterator it;
 								it = find(parents.begin(), parents.end(), mysrvc);
-								if (it != parents.end()) {
+								if (it == parents.end()) {
 									// we didn't exclude this server (yet?)
 									bool gtid_found = false;
 									gtid_found = MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
@@ -7320,28 +7322,6 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 	}
 
 #ifdef PROXYSQL40
-	// Remove mode-incompatible connections before the allocation-free scoring
-	// passes below, so their indices remain stable throughout the lottery.
-	for (i = 0; i < cached_connections->len;) {
-		c = static_cast<MySQL_Connection*>(cached_connections->index(i));
-		const char* candidate_username =
-			c->userinfo != nullptr ? c->userinfo->username : nullptr;
-		const char* requested_username = client_conn->userinfo->username;
-		const bool same_username = candidate_username != nullptr &&
-			requested_username != nullptr &&
-			strcmp(candidate_username, requested_username) == 0;
-		if (c->parent->myhgc->hid == _hid && same_username &&
-			(c->backend_auth_type() != requested_type ||
-			 (requested_type == MySQLBackendAuthType::AWS_IAM &&
-			  c->requires_CHANGE_USER(client_conn, requested_type)))) {
-			cached_connections->remove_index_fast(i);
-			c->send_quit = false;
-			MyHGM->destroy_MyConn_from_pool(c);
-			continue;
-		}
-		++i;
-	}
-
 	const bool is_session_track_backoff_enabled = check_session_track_backoff;
 	const int max_lag_ms_local = max_lag_ms;
 	const char* requested_schema = client_conn->userinfo ? client_conn->userinfo->schemaname : nullptr;
@@ -7354,10 +7334,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 		is_session_track_backoff_enabled, max_lag_ms_local, current_time,
 			&thread_status_variables, gtid_uuid, _hid](
 		MySQL_Connection* candidate, bool record_lag_skip) -> bool {
-		if (candidate->backend_auth_type() != requested_auth_type ||
-			(requested_auth_type == MySQLBackendAuthType::AWS_IAM &&
-			 candidate->requires_CHANGE_USER(requested_connection, requested_auth_type)) ||
-			!candidate->healthy || !candidate->reusable) {
+		if (!candidate->healthy || !candidate->reusable) {
 			return false;
 		}
 		if (is_session_track_backoff_enabled &&

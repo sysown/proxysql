@@ -127,8 +127,18 @@ ABI evolution so far:
   table: IAM token-source install/uninstall and waiter sizing, the AWS
   metadata-provider install used by locality discovery, and the MySQL-owned
   AWS-locality statistics projection callback.
-- **ABI 13 → ABI 14:** appends the provider-neutral server-module/controller
-  registration, runtime snapshot, and desired-set submission services.
+- **ABI 13 → ABI 14:** appends the provider-neutral server discovery
+  services: `register_server_module`, discovery-controller install/uninstall,
+  and desired-set submission. A controller is notified with a runtime
+  snapshot after core has installed `LOAD MYSQL|PGSQL SERVERS TO RUNTIME`
+  (or a Cluster pull); it observes the installation and can never reject or
+  fail it (issue #6448).
+  Server modules (plugin-owned server tables) were later removed because no
+  plugin used them. `register_server_module` is now a **reserved slot**: it
+  keeps its place so every later field keeps its offset, and it always points
+  to a stub that logs a warning once and returns false without touching its
+  arguments or calling the destroy callback. Called from `register_schemas` or
+  `init`, the rejection also fails that phase, like any rejected registration.
 - **ABI 14 → ABI 15:** appends the managed-configuration descriptor accessor
   and caller-held configuration lock, database and runtime-adapter callbacks.
   Descriptor accessor reads require layout 15 or newer. The separate managed

@@ -2,7 +2,6 @@
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_ServerDiscovery.h"
-#include "ProxySQL_ServerModuleCluster.h"
 #include "MySQL_Thread.h"
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Monitor.hpp"
@@ -34,15 +33,6 @@ extern ProxySQL_Cluster* GloProxyCluster;
 
 namespace {
 
-// The server-module part of the *_servers_v2 checksum.
-uint64_t loaded_module_tables_hash(ProxySQL_ServerProtocol protocol) {
-	SpookyHash hash;
-	bool init = false;
-	proxysql_server_module_cluster_hash_loaded_tables(protocol, hash, init);
-	uint64_t first = 0, second = 0;
-	if (init) hash.Final(&first, &second);
-	return first;
-}
 enum class RefreshExceptionStage : int {
 	none = 0,
 	after_hgm_lock = 1,
@@ -118,10 +108,6 @@ void create_schema(SQLite3DB& db) {
 	db.execute("CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER, check_type TEXT, comment TEXT)");
 	db.execute("CREATE TABLE pgsql_hostgroup_attributes (hostgroup_id INTEGER, max_num_online_servers INTEGER, autocommit INTEGER, free_connections_pct INTEGER, init_connect TEXT, multiplex INTEGER, connection_warming INTEGER, throttle_connections_per_sec INTEGER, ignore_session_variables TEXT, hostgroup_settings TEXT, servers_defaults TEXT, comment TEXT)");
 	db.execute("CREATE TABLE pgsql_servers_ssl_params (hostname TEXT, port INTEGER, username TEXT, ssl_ca TEXT, ssl_cert TEXT, ssl_key TEXT, ssl_crl TEXT, ssl_crlpath TEXT, ssl_protocol_version_range TEXT, comment TEXT)");
-	db.execute("CREATE TABLE mysql_fake_server_module_claims (writer INTEGER, label TEXT)");
-	db.execute("CREATE TABLE pgsql_fake_server_module_claims (writer INTEGER, label TEXT)");
-	db.execute("CREATE TABLE disk.mysql_fake_server_module_claims (writer INTEGER, label TEXT)");
-	db.execute("CREATE TABLE disk.pgsql_fake_server_module_claims (writer INTEGER, label TEXT)");
 	db.execute("CREATE TABLE runtime_checksums_values (name VARCHAR NOT NULL, version INT NOT NULL, epoch INT NOT NULL, checksum VARCHAR NOT NULL, PRIMARY KEY(name))");
 }
 
@@ -254,8 +240,6 @@ struct AckObservation {
 	bool applied {false};
 	std::string memory;
 	std::string disk;
-	std::string memory_policy;
-	std::string disk_policy;
 	ChecksumSnapshot v2;
 };
 
@@ -273,13 +257,10 @@ public:
 	void desired_set_applied(uint64_t generation, bool applied) override {
 		const bool mysql = state_->protocol == ProxySQL_ServerProtocol::mysql;
 		const std::string core = mysql ? "mysql_servers" : "pgsql_servers";
-		const std::string policy = mysql ? "mysql_fake_server_module_claims" :
-			"pgsql_fake_server_module_claims";
 		const auto& v2 = mysql ? GloVars.checksums_values.mysql_servers_v2 :
 			GloVars.checksums_values.pgsql_servers_v2;
 		state_->observations.push_back({generation, applied,
 			snapshot(*state_->db, "main." + core), snapshot(*state_->db, "disk." + core),
-			snapshot(*state_->db, "main." + policy), snapshot(*state_->db, "disk." + policy),
 			checksum_snapshot(v2)});
 	}
 	void shutdown() override {}
@@ -308,7 +289,7 @@ bool post_and_drain(ProxySQL_PluginManager& manager, ProxySQL_Admin& admin,
 } // namespace
 
 int main() {
-	plan(59);
+	plan(55);
 	proxysql_servers_v2_refresh_exception_for_test = &servers_v2_refresh_exception_hook;
 	test_init_minimal();
 	test_init_query_processor();
@@ -341,10 +322,6 @@ int main() {
 	admin_db.execute("INSERT INTO pgsql_servers VALUES (17,'memory-old.pgsql',5432,'ONLINE',1,0,100,0,1,0,'memory-old'),(18,'memory-reader.pgsql',5432,'ONLINE',2,0,100,0,1,0,'memory-reader'),(99,'pending-memory.pgsql',5432,'ONLINE',99,0,100,0,1,0,'pending')");
 	admin_db.execute("INSERT INTO disk.pgsql_servers SELECT * FROM main.pgsql_servers");
 	admin_db.execute("UPDATE disk.pgsql_servers SET hostname='disk-unrelated.pgsql',comment='disk' WHERE hostgroup_id=99");
-	admin_db.execute("INSERT INTO mysql_fake_server_module_claims VALUES (17,'mysql-memory-policy')");
-	admin_db.execute("INSERT INTO disk.mysql_fake_server_module_claims VALUES (18,'mysql-disk-policy')");
-	admin_db.execute("INSERT INTO pgsql_fake_server_module_claims VALUES (17,'pgsql-memory-policy')");
-	admin_db.execute("INSERT INTO disk.pgsql_fake_server_module_claims VALUES (18,'pgsql-disk-policy')");
 
 	auto mysql_initial = mysql_rows({
 		{17, "runtime-old.mysql", 3306, 0, "ONLINE", 10, 0, 100, 0, 1, 0, "runtime"},
@@ -363,10 +340,6 @@ int main() {
 	const std::string mysql_disk_initial = snapshot(admin_db, "disk.mysql_servers");
 	const std::string pgsql_memory_initial = snapshot(admin_db, "main.pgsql_servers");
 	const std::string pgsql_disk_initial = snapshot(admin_db, "disk.pgsql_servers");
-	const std::string mysql_memory_policy = snapshot(admin_db, "main.mysql_fake_server_module_claims");
-	const std::string mysql_disk_policy = snapshot(admin_db, "disk.mysql_fake_server_module_claims");
-	const std::string pgsql_memory_policy = snapshot(admin_db, "main.pgsql_fake_server_module_claims");
-	const std::string pgsql_disk_policy = snapshot(admin_db, "disk.pgsql_fake_server_module_claims");
 	const std::string mysql_pending_memory = snapshot(admin_db,
 		"main.mysql_servers WHERE hostgroup_id=99");
 	const std::string mysql_unrelated_disk = snapshot(admin_db,
@@ -386,17 +359,13 @@ int main() {
 		snapshot(admin_db, "disk.pgsql_servers") == pgsql_disk_initial,
 		"empty PostgreSQL delegated scope is a transactional no-op");
 
-	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
-	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY", "1", 1);
-	setenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED", "1", 1);
-	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_BOTH_PROTOCOLS", "1", 1);
-	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM", "1", 1);
-	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SNAPSHOT", "1", 1);
 	std::unique_ptr<ProxySQL_PluginManager> manager;
 	std::string error;
 	ok(proxysql_load_configured_plugins(manager, {PROXYSQL_FAKE_PLUGIN_PATH}, error) &&
 		proxysql_init_configured_plugins(manager.get(), error),
-		"materialization fixture installs delegated MySQL and PostgreSQL module claims");
+		"materialization fixture starts the plugin manager");
+	manager->replace_managed_server_hostgroup_claims_for_test(ProxySQL_ServerProtocol::mysql, {{17, 18}});
+	manager->replace_managed_server_hostgroup_claims_for_test(ProxySQL_ServerProtocol::pgsql, {{17, 18}});
 	AckState mysql_acks {&admin_db, ProxySQL_ServerProtocol::mysql};
 	AckState pgsql_acks {&admin_db, ProxySQL_ServerProtocol::pgsql};
 	void* mysql_handle = dlopen(PROXYSQL_FAKE_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL);
@@ -407,19 +376,17 @@ int main() {
 	ok(pgsql_handle && manager->install_server_discovery_controller(ProxySQL_ServerProtocol::pgsql,
 		new Controller(&pgsql_acks), &destroy_controller, pgsql_handle),
 		"PostgreSQL acknowledgement observer is retained");
-	const uint64_t mysql_module_hash_before = loaded_module_tables_hash(ProxySQL_ServerProtocol::mysql);
-	const uint64_t pgsql_module_hash_before = loaded_module_tables_hash(ProxySQL_ServerProtocol::pgsql);
 	ProxySQL_ServerRuntimeSnapshot mysql_installed {};
 	mysql_installed.protocol = ProxySQL_ServerProtocol::mysql;
-	ProxySQL_ServerRuntimeInstallTransaction mysql_install(mysql_installed.protocol, error);
-	const uint64_t mysql_generation = mysql_install.generation();
-	ok(mysql_install.prepare(mysql_installed, error) && mysql_install.commit(mysql_installed),
+	const uint64_t mysql_generation = proxysql_publish_server_runtime(std::move(mysql_installed));
+	ok(mysql_generation != 0 &&
+		!proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql).empty(),
 		"MySQL runtime generation records the delegated scope");
 	ProxySQL_ServerRuntimeSnapshot pgsql_installed {};
 	pgsql_installed.protocol = ProxySQL_ServerProtocol::pgsql;
-	ProxySQL_ServerRuntimeInstallTransaction pgsql_install(pgsql_installed.protocol, error);
-	const uint64_t pgsql_generation = pgsql_install.generation();
-	ok(pgsql_install.prepare(pgsql_installed, error) && pgsql_install.commit(pgsql_installed),
+	const uint64_t pgsql_generation = proxysql_publish_server_runtime(std::move(pgsql_installed));
+	ok(pgsql_generation != 0 &&
+		!proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql).empty(),
 		"PostgreSQL runtime generation records the delegated scope");
 
 	const std::string mysql_checksum_before = GloVars.checksums_values.mysql_servers.checksum;
@@ -433,9 +400,6 @@ int main() {
 		mysql_acks.observations.back().memory == mysql_memory_initial &&
 		mysql_acks.observations.back().disk == mysql_disk_initial,
 		"MySQL runtime-only changes HGM without materializing MEMORY or DISK");
-	ok(mysql_acks.observations.back().memory_policy == mysql_memory_policy &&
-		mysql_acks.observations.back().disk_policy == mysql_disk_policy,
-		"MySQL runtime-only does not copy affiliated policy tables");
 	ok(mysql_checksum_before != GloVars.checksums_values.mysql_servers.checksum,
 		"MySQL reconciliation recomputes the existing Servers checksum");
 	admin->dump_checksums_values_table();
@@ -495,9 +459,6 @@ int main() {
 		snapshot(admin_db, "main.mysql_servers WHERE hostgroup_id=99") == mysql_pending_memory &&
 		snapshot(admin_db, "disk.mysql_servers WHERE hostgroup_id=99") == mysql_unrelated_disk,
 		"MySQL MEMORY+DISK changes only delegated rows at each persistence layer");
-	ok(mysql_acks.observations.back().memory_policy == mysql_memory_policy &&
-		mysql_acks.observations.back().disk_policy == mysql_disk_policy,
-		"automatic MySQL materialization never copies plugin policy tables");
 	const ChecksumSnapshot mysql_v2_disk = checksum_snapshot(GloVars.checksums_values.mysql_servers_v2);
 	admin->dump_checksums_values_table();
 	ok(mysql_v2_disk.checksum != mysql_v2_memory_repeat.checksum &&
@@ -636,9 +597,6 @@ int main() {
 		snapshot(admin_db, "main.pgsql_servers WHERE hostgroup_id=99") == pgsql_pending_memory &&
 		snapshot(admin_db, "disk.pgsql_servers WHERE hostgroup_id=99") == pgsql_unrelated_disk,
 		"PostgreSQL MEMORY+DISK changes only delegated rows at each persistence layer");
-	ok(pgsql_acks.observations.back().memory_policy == pgsql_memory_policy &&
-		pgsql_acks.observations.back().disk_policy == pgsql_disk_policy,
-		"automatic PostgreSQL materialization never copies plugin policy tables");
 	const ChecksumSnapshot pgsql_v2_disk = checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2);
 	admin->dump_checksums_values_table();
 	ok(pgsql_v2_disk.checksum != pgsql_v2_memory_repeat.checksum &&
@@ -654,9 +612,6 @@ int main() {
 	ok(set_checksums_schedules_v2("pgsql_servers_v2", pgsql_memory_peer,
 		cluster->update_mysql_servers_v2_mutex),
 		"PostgreSQL MEMORY+DISK publishes a changed v2 checksum consumed by cluster scheduling");
-	ok(loaded_module_tables_hash(ProxySQL_ServerProtocol::mysql) == mysql_module_hash_before &&
-		loaded_module_tables_hash(ProxySQL_ServerProtocol::pgsql) == pgsql_module_hash_before,
-		"scoped saves leave the loaded server-module tables (part of *_servers_v2) unchanged");
 
 	admin_db.execute("DROP TABLE disk.pgsql_servers");
 	const ChecksumSnapshot pgsql_v2_before_disk_failure =
@@ -732,28 +687,22 @@ int main() {
 	ok(manager->uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql) &&
 		manager->uninstall_server_discovery_controller(ProxySQL_ServerProtocol::pgsql) &&
 		proxysql_stop_configured_plugins(manager, error),
-		"materialization controllers and module retire before ordinary full SAVE fixture");
+		"materialization controllers retire before ordinary full SAVE fixture");
 	admin->mysql_servers_wrlock();
-	const bool mysql_full_save = admin->save_mysql_servers_runtime_to_database(false);
+	admin->save_mysql_servers_runtime_to_database(false);
 	admin->mysql_servers_wrunlock();
 	admin->pgsql_servers_wrlock();
-	const bool pgsql_full_save = admin->save_pgsql_servers_runtime_to_database(false);
+	admin->save_pgsql_servers_runtime_to_database(false);
 	admin->pgsql_servers_wrunlock();
-	ok(mysql_full_save && snapshot(admin_db, "main.mysql_servers").find("operator-save.mysql") != std::string::npos &&
+	ok(snapshot(admin_db, "main.mysql_servers").find("operator-save.mysql") != std::string::npos &&
 		snapshot(admin_db, "main.mysql_servers").find("runtime-unrelated.mysql") != std::string::npos,
 		"ordinary full SAVE MYSQL SERVERS copies discovered and unrelated runtime hostgroups");
-	ok(pgsql_full_save && snapshot(admin_db, "main.pgsql_servers").find("operator-save.pgsql") != std::string::npos &&
+	ok(snapshot(admin_db, "main.pgsql_servers").find("operator-save.pgsql") != std::string::npos &&
 		snapshot(admin_db, "main.pgsql_servers").find("runtime-unrelated.pgsql") != std::string::npos,
 		"ordinary full SAVE PGSQL SERVERS copies discovered and unrelated runtime hostgroups");
 	ok(mysql_acks.destroyed.load() == 1 && pgsql_acks.destroyed.load() == 1,
 		"no hidden persistence mode changes controller or runtime lifetime semantics");
 
 	GloAdmin = nullptr;
-	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_BOTH_PROTOCOLS");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SNAPSHOT");
 	return exit_status();
 }
