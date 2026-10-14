@@ -225,6 +225,7 @@
   "parsersql_in_values_digest_unit-t" : [ "unit-tests-g1" ],
   "parsersql_set_transaction_digest_unit-t" : [ "unit-tests-g1" ],
   "parsersql_unit-t" : [ "unit-tests-g1" ],
+  "pcre1_query_rule_limits_unit-t" : [ "unit-tests-g1" ],
   "pcre2_query_rules-t" : [ "legacy-g10","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
   "pgsql-admin_metacmds-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-admin_metacmds_describe_all_tables-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
