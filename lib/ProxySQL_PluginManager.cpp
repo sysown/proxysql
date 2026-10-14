@@ -415,14 +415,16 @@ void refresh_mysql_aws_locality_stats_service(SQLite3DB* statsdb) {
 // callback and its module handle. Inside register_schemas/init the rejection
 // also fails that lifecycle phase, exactly like any other rejected
 // registration, so a plugin that depends on a server module is not started
-// half-working.
+// half-working. A plugin may retain this callback and call it from its own
+// thread, so the phase is identified through the thread-local callback target
+// (set only on the lifecycle thread), never the plain g_registry_target.
 bool register_server_module_unsupported(
 	ProxySQL_ServerModuleHooks *, void (*)(ProxySQL_ServerModuleHooks *), void *) {
 	static std::once_flag logged;
 	std::call_once(logged, [] {
 		proxy_warning("A plugin called register_server_module: server modules are no longer supported, registration rejected\n");
 	});
-	if (g_registry_target != nullptr) {
+	if (g_registry_callback_target.manager != nullptr) {
 		note_registration_failure("server module", "server modules are no longer supported");
 	}
 	return false;
