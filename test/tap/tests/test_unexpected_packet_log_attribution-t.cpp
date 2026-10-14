@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -35,6 +36,9 @@ using std::string;
 
 static constexpr int MAX_LOG_CHECK_ATTEMPTS = 20;
 static constexpr useconds_t LOG_CHECK_RETRY_DELAY_US = 100000;
+// Upper bound for each wait on the frontend socket: a missing response fails
+// the check instead of hanging the test.
+static constexpr int RECV_TIMEOUT_MS = 10000;
 
 // Held server-side so the session stays in PROCESSING_QUERY while the trailing
 // packet is read. 'DO' (not 'SELECT') avoids '^SELECT' reader rules, so routing
@@ -151,6 +155,8 @@ static bool trigger_and_find(
 static bool recv_all(int fd, unsigned char* buf, size_t len) {
 	size_t got = 0;
 	while (got < len) {
+		struct pollfd pfd { fd, POLLIN, 0 };
+		if (poll(&pfd, 1, RECV_TIMEOUT_MS) != 1) return false;
 		const ssize_t n = recv(fd, buf + got, len - got, 0);
 		if (n <= 0) return false;
 		got += n;

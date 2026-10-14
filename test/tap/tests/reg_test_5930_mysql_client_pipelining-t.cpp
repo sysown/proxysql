@@ -18,11 +18,16 @@
  *   - A large batch, written concurrently with the reads, that exceeds the proxy input buffers.
  *   - Pipelined COM_STMT_EXECUTE of a server side prepared statement (Connector/J with
  *     'useServerPrepStmts=true' prepares, then pipelines the executions).
+ *   - A command that a query rule delays, reached while draining pipelined commands: the proxy
+ *     stops reading from the client during the delay (TCP backpressure), and every response still
+ *     arrives in order.
  *   - A COM_QUIT pipelined after a query closes the connection.
  *   The connections remain usable afterwards, and 'mysql_unexpected_frontend_packets' does not grow.
  *   Run with 'mysql-multiplexing=true', so every command can use a different backend connection.
  */
 
+#include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -263,7 +268,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(16);
+	plan(19);
 
 	MYSQL* admin = mysql_init(nullptr);
 	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, nullptr, cl.admin_port, nullptr, 0)) {
@@ -444,12 +449,91 @@ int main(int argc, char** argv) {
 		if (mysql) mysql_close(mysql);
 	}
 
-	// 9. No packet was treated as unexpected.
+	// 9. A pipelined command delayed by a query rule. The delayed command is reached while
+	//    draining the commands deferred behind 'SELECT 'a'', so the session pauses with more
+	//    commands queued. During the pause the proxy must not read from the client: a large batch
+	//    written meanwhile stays (mostly) in the kernel buffers instead of being queued in memory.
+	{
+		const int delay_ms = 2000;
+		const int write_window_ms = 1000;
+		MYSQL_QUERY(admin, ("INSERT OR REPLACE INTO mysql_query_rules (rule_id,active,match_pattern,delay,apply) "
+			"VALUES (5930,1,'delayed_5930'," + std::to_string(delay_ms) + ",0)").c_str());
+		MYSQL_QUERY(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+
+		MYSQL* mysql = open_conn(cl);
+		vector<uint8_t> head;
+		append_query(head, "SELECT 'a'");
+		// Parenthesized: infra rules matching '^SELECT' with apply=1 must not shadow the delay rule.
+		append_query(head, "(SELECT 'delayed_5930')");
+		append_query(head, "SELECT 'b'");
+		// More than the kernel buffers on both ends can hold (tcp_rmem max is often 32MB).
+		const int n_big = 1024;
+		const string pad(64 * 1024, 'x');
+		vector<uint8_t> big;
+		for (int i = 0; i < n_big; i++) {
+			append_query(big, "SELECT 'p' /* " + pad + " */");
+		}
+
+		size_t accepted = 0;
+		long delayed_resp_ms = 0;
+		bool in_order = false;
+		string first_bad;
+		if (mysql && send_all(mysql->net.fd, head)) {
+			const auto t0 = std::chrono::steady_clock::now();
+			auto elapsed_ms = [&t0]() {
+				return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+			};
+			// Write without blocking for 'write_window_ms', well within the delay.
+			while (elapsed_ms() < write_window_ms && accepted < big.size()) {
+				ssize_t n = send(mysql->net.fd, big.data() + accepted, big.size() - accepted, MSG_NOSIGNAL | MSG_DONTWAIT);
+				if (n > 0) {
+					accepted += n;
+				} else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+					struct pollfd pfd { mysql->net.fd, POLLOUT, 0 };
+					poll(&pfd, 1, 50);
+				} else {
+					break;
+				}
+			}
+			diag("Bytes of the batch accepted while the session is delayed: %zu of %zu", accepted, big.size());
+
+			bool sent = false;
+			const vector<uint8_t> rest(big.begin() + accepted, big.end());
+			std::thread writer([&]() { sent = rest.empty() || send_all(mysql->net.fd, rest); });
+			const bool deof = deprecate_eof(mysql);
+			const vector<string> head_vals { "a", "delayed_5930", "b" };
+			in_order = true;
+			for (size_t i = 0; in_order && i < head_vals.size() + n_big; i++) {
+				Resp r = read_response(mysql->net.fd, deof);
+				const string exp = i < head_vals.size() ? head_vals[i] : "p";
+				if (!is_rs_value(r, exp)) {
+					first_bad = "response #" + std::to_string(i) + ": " + describe(r);
+					in_order = false;
+				}
+				if (i == 1) delayed_resp_ms = elapsed_ms();
+			}
+			writer.join();
+			if (!sent) diag("The writer failed to send the rest of the batch");
+		}
+		ok(accepted < big.size(),
+			"The proxy stops reading from the client while a deferred command is delayed. Accepted %zu of %zu bytes",
+			accepted, big.size());
+		ok(delayed_resp_ms >= delay_ms - 200, "The query rule delay was applied to the deferred command (%ld ms)",
+			delayed_resp_ms);
+		ok(in_order, "%d commands pipelined around a delayed command get their responses in order. %s",
+			3 + n_big, first_bad.c_str());
+		if (mysql) mysql_close(mysql);
+
+		MYSQL_QUERY(admin, "DELETE FROM mysql_query_rules WHERE rule_id=5930");
+		MYSQL_QUERY(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	}
+
+	// 10. No packet was treated as unexpected.
 	const string unexp_after = unexpected_packets(admin);
 	ok(unexp_before != "" && unexp_before == unexp_after,
 		"mysql_unexpected_frontend_packets unchanged. Before: %s After: %s", unexp_before.c_str(), unexp_after.c_str());
 
-	// 10. A COM_QUIT pipelined behind a query closes the connection, as before.
+	// 11. A COM_QUIT pipelined behind a query closes the connection, as before.
 	{
 		MYSQL* mysql = open_conn(cl);
 		vector<uint8_t> buf;
