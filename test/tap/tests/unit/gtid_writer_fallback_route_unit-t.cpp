@@ -7,7 +7,10 @@
  * get_connection(), after the query had been attached to the reader backend's
  * data stream, so the writer received an empty query. The fallback is now a
  * routing decision taken before any backend is selected. These tests drive the
- * real MySQL_Session decision with real backends and tracked GTID values.
+ * real MySQL_Session decision with real backends and tracked GTID values, then
+ * run the real get_connection() step on the backend the caller selects from
+ * that decision, and check that it neither swaps the backend nor applies the
+ * wrong pool predicate.
  */
 
 #include "tap.h"
@@ -21,6 +24,7 @@
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Logger.hpp"
+#include "proxysql_gtid.h"
 
 #include <cstring>
 #include <memory>
@@ -48,6 +52,9 @@ public:
 		stream->init(MYDS_FRONTEND, session.get(), -1);
 		auto* frontend = new MySQL_Connection();
 		stream->attach_connection(frontend);
+		// get_connection() resolves the backend auth policy from the client
+		// user; a user without a backend row is plain PASSWORD auth.
+		frontend->userinfo->set((char*)"gtid_user", (char*)"", (char*)"test", nullptr);
 		stream->myprot.init(&stream, frontend->userinfo, session.get());
 		session->client_myds = stream;
 		writer = session->find_or_create_backend(kWriter);
@@ -64,6 +71,7 @@ public:
 		s.transaction_persistent_hostgroup = -1;
 		s.locked_on_hostgroup = -1;
 		s.current_hostgroup = kReader;
+		s.qpo->max_lag_ms = -1;
 		std::strncpy(writer->gtid_uuid, tracked, sizeof(writer->gtid_uuid) - 1);
 		writer->gtid_uuid[sizeof(writer->gtid_uuid) - 1] = '\0';
 	}
@@ -86,6 +94,12 @@ void test_routing(SessionFixture& f) {
 
 	f.reset("");
 	ok(!f.route() && f.hostgroup() == kReader, "no tracked GTID: no constraint and no rerouting");
+
+	// A value too long to track is stored as SESSION_GTID_UNTRACKABLE (#6465):
+	// it must take the same fail-closed route as any unusable value.
+	f.reset(SESSION_GTID_UNTRACKABLE);
+	ok(f.route() && f.hostgroup() == kWriter,
+		"an untrackable tracked GTID routes the read to the GTID source hostgroup");
 
 	f.reset(kUnusable);
 	f.session->qpo->gtid_from_hostgroup = -1;
@@ -117,24 +131,88 @@ void test_fixed_hostgroups(SessionFixture& f) {
 	ok(!f.route() && f.hostgroup() == kReader, "create_new_conn applies no GTID constraint, so no rerouting");
 }
 
-void test_backend_untouched(SessionFixture& f) {
-	// The decision only selects the destination: the backend and the data
-	// stream that will carry the query are chosen afterwards from it.
+/**
+ * @brief Runs the steps that follow the routing decision for a COM_QUERY:
+ *   the caller selects 'mybe' from current_hostgroup and attaches the query
+ *   to that backend's data stream (represented here by the backend pointer
+ *   itself), then get_connection() checks a connection out of the pool (none
+ *   exists here, so the session is left waiting).
+ *
+ * @param poison_gtid Value preloaded into last_pool_gtid (PROXYSQL31).
+ * @return The backend the query was attached to.
+ */
+MySQL_Backend* select_and_get_connection(SessionFixture& f, bool poison_gtid) {
+	MySQL_Session& s = *f.session;
+	s.mybe = s.find_or_create_backend(s.current_hostgroup);
+	MySQL_Backend* attached = s.mybe;
+#ifdef PROXYSQL31
+	// Poison the recorded pool request with the opposite of the expected
+	// value, so each check can only pass on what this call records.
+	s.last_pool_gtid = poison_gtid;
+	s.last_pool_max_lag_ms = 12345;
+#endif // PROXYSQL31
+	s.handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
+#ifdef PROXYSQL31
+	s.thread->leave_waiter(&s, false);
+#endif // PROXYSQL31
+	return attached;
+}
+
+void test_get_connection(SessionFixture& f) {
+	// A regression that switches backends inside get_connection() (the
+	// original fallback did 'mybe = _gtid_from_backend') leaves the query on
+	// the data stream of the backend it was attached to while the connection
+	// is requested for another one.
+
+	// Rerouted: the query is attached to the writer backend and stays there.
 	f.reset(kUnusable);
-	// With the reader backend active, as when a previous query used it.
-	f.session->mybe = f.session->find_backend(kReader);
-	MySQL_Backend* before = f.session->mybe;
+	f.session->qpo->max_lag_ms = 500;
 	f.route();
-	ok(before != nullptr && f.session->mybe == before && f.session->find_backend(kWriter) == f.writer,
-		"the fallback does not swap the session's active backend");
+	MySQL_Backend* attached = select_and_get_connection(f, true);
+	ok(attached == f.writer && f.session->mybe == attached &&
+		f.session->mybe->hostgroup_id == kWriter && f.session->current_hostgroup == kWriter,
+		"rerouted: get_connection() keeps the writer backend the query is attached to");
+#ifdef PROXYSQL31
+	ok(!f.session->last_pool_gtid && f.session->last_pool_max_lag_ms == -1,
+		"rerouted: the writer is read without a GTID predicate and without the lag filter");
+#else
+	ok(true, "rerouted: pool predicate not observable without PROXYSQL31 (skipped)");
+#endif // PROXYSQL31
+
+	// Not rerouted (hostgroup locked on the reader): the query stays on the
+	// reader backend and waits on an unsatisfiable predicate.
+	f.reset(kUnusable);
+	f.session->locked_on_hostgroup = kReader;
+	f.route();
+	MySQL_Backend* reader = f.session->find_backend(kReader);
+	attached = select_and_get_connection(f, false);
+	ok(attached == reader && f.session->mybe == reader && f.session->mybe->hostgroup_id == kReader,
+		"locked: get_connection() does not swap the reader backend for the GTID source");
+#ifdef PROXYSQL31
+	ok(f.session->last_pool_gtid, "locked: the reader is asked for an unsatisfiable GTID predicate");
+#else
+	ok(true, "locked: pool predicate not observable without PROXYSQL31 (skipped)");
+#endif // PROXYSQL31
+
+	// Usable value: the reader backend, constrained on the highest trxid.
+	f.reset(kUsable);
+	f.route();
+	attached = select_and_get_connection(f, false);
+	ok(attached == reader && f.session->mybe == reader,
+		"usable value: get_connection() keeps the reader backend");
+#ifdef PROXYSQL31
+	ok(f.session->last_pool_gtid, "usable value: the reader is asked for the GTID predicate");
+#else
+	ok(true, "usable value: pool predicate not observable without PROXYSQL31 (skipped)");
+#endif // PROXYSQL31
 }
 
 } // namespace
 
 int main() {
-	plan(10);
-	if (test_init_minimal() != 0 || test_init_query_processor() != 0 ||
-		test_init_hostgroups() != 0) {
+	plan(16);
+	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
+		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
 	}
 	GloMyLogger = new MySQL_Logger();
@@ -148,12 +226,13 @@ int main() {
 		SessionFixture fixture(worker);
 		test_routing(fixture);
 		test_fixed_hostgroups(fixture);
-		test_backend_untouched(fixture);
+		test_get_connection(fixture);
 	}
 	test_cleanup_hostgroups();
 	delete GloMyLogger;
 	GloMyLogger = nullptr;
 	test_cleanup_query_processor();
+	test_cleanup_auth();
 	test_cleanup_minimal();
 	return exit_status();
 }
