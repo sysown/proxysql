@@ -236,6 +236,9 @@ private:
 		std::string table_name {};
 		void (*refresh)(SQLite3DB*, void*) { nullptr };
 		void* opaque { nullptr };
+		// Registering plugin, for diagnostics ("unknown" outside a plugin
+		// registration phase, e.g. direct registration in unit tests).
+		std::string plugin_name {};
 	};
 	std::vector<registered_runtime_view_t> runtime_views_ {};
 	struct registered_server_module_t {

@@ -1500,6 +1500,7 @@ bool ProxySQL_PluginManager::register_runtime_view(const ProxySQL_PluginRuntimeV
 	entry.table_name = view.table_name;
 	entry.refresh = view.refresh;
 	entry.opaque = view.opaque;
+	entry.plugin_name = plugin_name(g_registry_callback_target.plugin);
 	runtime_views_.push_back(std::move(entry));
 	return true;
 }
@@ -1555,7 +1556,19 @@ void ProxySQL_PluginManager::refresh_runtime_views_for_query(const std::string& 
 			break;
 		}
 		if (db == nullptr) continue;
-		view.refresh(db, view.opaque);
+		// Contain plugin exceptions like every other plugin hook: a throwing
+		// projection must not escape into the Admin session (which holds
+		// sql_query_global_mutex and the plugin-manager read lock). The view
+		// keeps whatever contents it had, and the remaining views still refresh.
+		try {
+			view.refresh(db, view.opaque);
+		} catch (const std::exception &e) {
+			proxy_error("Plugin runtime view refresh threw for plugin %s, view '%s': %s\n",
+				view.plugin_name.c_str(), view.table_name.c_str(), e.what());
+		} catch (...) {
+			proxy_error("Plugin runtime view refresh threw for plugin %s, view '%s'\n",
+				view.plugin_name.c_str(), view.table_name.c_str());
+		}
 	}
 }
 
