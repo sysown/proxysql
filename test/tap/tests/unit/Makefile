@@ -725,6 +725,7 @@ UNIT_TESTS += \
 	managed_discovery_unit-t \
 	managed_runtime_mysql_unit-t \
 	managed_runtime_pgsql_unit-t \
+	managed_engine_projection_txn_unit-t \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \

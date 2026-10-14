@@ -942,21 +942,32 @@ void ProxySQL_Admin::commit_managed_engine_variables_projection(bool pgsql) {
   // create an ABBA deadlock):
   //  - MySQL: GloMTH is taken BEFORE checksum_mutex
   //    (flush_mysql_variables___database_to_runtime callers).
-  //  - PostgreSQL: checksum_mutex is taken BEFORE GloPTH; the flusher itself
-  //    acquires GloPTH under the checksum mutex when use_lock=true
-  //    (the admin pool path at Admin_FlushVariables.cpp:+1068).
+  //  - PostgreSQL: checksum_mutex is taken BEFORE GloPTH, the order the
+  //    vanilla 'LOAD PGSQL VARIABLES TO RUNTIME' path uses when it calls the
+  //    flusher with use_lock=true under the checksum mutex
+  //    (Admin_FlushVariables.cpp, flush_pgsql_variables___database_to_runtime).
+  //
+  // The PostgreSQL flusher with use_lock=true opens and commits its OWN
+  // transaction. Wrapping that call in another BEGIN/COMMIT nested two
+  // transactions on the same connection: the inner BEGIN failed, the inner
+  // COMMIT ended the outer transaction early and the outer COMMIT failed with
+  // "no transaction is active" (#6464). Like the MySQL branch, own the single
+  // transaction here and call the flusher without its internal locking, taking
+  // GloPTH ourselves in the same checksum_mutex -> GloPTH order.
   const std::string modname = pgsql ? "pgsql" : "mysql";
   if (pgsql) {
     pthread_mutex_lock(&GloVars.checksum_mutex);
     Unlock checksum_unlock{[]() noexcept {
       pthread_mutex_unlock(&GloVars.checksum_mutex);
     }};
-    admindb->execute("BEGIN");
-    // use_lock=true makes the flusher take GloPTH itself, under the checksum
-    // mutex, in the same order the vanilla pool statistics path uses.
-    flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true,
-                                                true);
-    admindb->execute("COMMIT");
+    {
+      GloPTH->wrlock();
+      Unlock engine_unlock{[]() noexcept { GloPTH->wrunlock(); }};
+      admindb->execute("BEGIN");
+      flush_pgsql_variables___runtime_to_database(admindb, false, false, false, true,
+                                                  false);
+      admindb->execute("COMMIT");
+    }
     // generate checksum for cluster
     flush_GENERIC_variables__checksum__database_to_runtime(modname, "", 0);
   } else {
