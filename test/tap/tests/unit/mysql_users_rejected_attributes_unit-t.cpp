@@ -19,6 +19,7 @@
 
 #include "MySQL_Authentication.hpp"
 #include "MySQL_Backend_Auth.h"
+#include "ProxySQL_Statistics.hpp"
 #include "ProxySQL_Admin_Tables_Definitions.h"
 #include "proxysql_admin.h"
 #include "sqlite3db.h"
@@ -30,6 +31,7 @@
 #include <vector>
 
 extern MySQL_Authentication *GloMyAuth;
+extern ProxySQL_Statistics *GloProxyStats;
 
 namespace {
 
@@ -190,7 +192,8 @@ void test_reload_refreshes_rejected_rows() {
 /**
  * @brief SAVE MYSQL USERS FROM RUNTIME and the runtime_mysql_users refresh.
  * @details save_mysql_users_runtime_to_database() only uses 'admindb' and
- *   GloMyAuth, so a zeroed ProxySQL_Admin with an in-memory admin DB is enough.
+ *   GloMyAuth, so a constructed ProxySQL_Admin with an in-memory admin DB is
+ *   enough.
  */
 void test_save_from_runtime_round_trip() {
 	GloMyAuth->reset();
@@ -215,8 +218,17 @@ void test_save_from_runtime_round_trip() {
 	ok(db.return_one_int("SELECT COUNT(*) FROM mysql_users WHERE active=1") == (int)users.size(),
 		"admin table holds the configured rows");
 
-	void* storage = calloc(1, sizeof(ProxySQL_Admin));
-	ProxySQL_Admin* admin = reinterpret_cast<ProxySQL_Admin*>(storage);
+	// The ProxySQL_Admin constructor sets GloProxyStats variables, so it needs
+	// a ProxySQL_Statistics backed by an in-memory stats DB.
+	char* previous_statsdb_path = GloVars.statsdb_disk;
+	std::unique_ptr<char, decltype(&free)> in_memory_statsdb { strdup(":memory:"), &free };
+	GloVars.statsdb_disk = in_memory_statsdb.get();
+	auto proxy_stats = std::make_unique<ProxySQL_Statistics>();
+	GloProxyStats = proxy_stats.get();
+	GloProxyStats->init();
+	// Process-scoped partial fixture: the destructor runs the production
+	// admin_shutdown(), which this fixture never started, so it is not deleted.
+	ProxySQL_Admin* admin = new ProxySQL_Admin(); // NOSONAR
 	admin->admindb = &db;
 
 	admin->save_mysql_users_runtime_to_database(true);
@@ -239,7 +251,10 @@ void test_save_from_runtime_round_trip() {
 		}
 	}
 
-	free(storage);
+	admin->admindb = nullptr;
+	GloProxyStats = nullptr;
+	proxy_stats.reset();
+	GloVars.statsdb_disk = previous_statsdb_path;
 }
 
 } // namespace
