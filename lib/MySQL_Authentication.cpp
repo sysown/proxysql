@@ -261,9 +261,13 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		}
 		// Compare against the configured text, not the effective value: a
 		// rejected row has attributes='' but must be refreshed when reloaded.
-		const char* configured_attributes =
-			ad->rejected_attributes != nullptr ? ad->rejected_attributes : ad->attributes;
-		if (strcasecmp(configured_attributes, attributes)) {
+		// Rejected text is compared case-sensitively: JSON keys are, so
+		// '{"BACKEND_AUTH":...}' reloaded as '{"backend_auth":...}' must refresh
+		// the row. Accepted text keeps the historical case-insensitive compare.
+		const bool attributes_changed = ad->rejected_attributes != nullptr
+			? strcmp(ad->rejected_attributes, attributes) != 0
+			: strcasecmp(ad->attributes, attributes) != 0;
+		if (attributes_changed) {
 			free(ad->attributes);
 			ad->attributes = nullptr;
 			free(ad->rejected_attributes);

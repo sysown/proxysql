@@ -175,6 +175,16 @@ void test_reload_refreshes_rejected_rows() {
 	ok(add_user("u_reload", USERNAME_BACKEND, rejected_cases()[0].attributes) &&
 		dumped_attributes("u_reload", false) == rejected_cases()[0].attributes,
 		"reloading the row with other rejected attributes keeps the new text");
+
+	// JSON keys are case-sensitive: a case-only change is a new configuration.
+	const std::string upper_rejected { R"({"BACKEND_AUTH":{"type":"aws_iam"},"a":1e400})" };
+	ok(add_user("u_reload_case", USERNAME_BACKEND, upper_rejected) &&
+		resolve_mysql_backend_auth_policy(*GloMyAuth, "u_reload_case").type == MySQLBackendAuthType::PASSWORD,
+		"rejected attributes with a differently-cased key do not configure backend_auth");
+	ok(add_user("u_reload_case", USERNAME_BACKEND, k_rejected_backend_auth) &&
+		resolve_mysql_backend_auth_policy(*GloMyAuth, "u_reload_case").type == MySQLBackendAuthType::INVALID &&
+		dumped_attributes("u_reload_case", false) == k_rejected_backend_auth,
+		"reloading rejected attributes with a case-only key change refreshes the row");
 }
 
 /**
@@ -236,7 +246,7 @@ void test_save_from_runtime_round_trip() {
 
 int main() {
 	const int saved_users = 5;
-	plan(3 + 12 + 9 + 3 + 2 + 3 + 4 + 2 * saved_users);
+	plan(3 + 12 + 9 + 3 + 2 + 3 + 2 + 4 + 2 * saved_users);
 	test_init_minimal();
 	test_init_auth();
 
