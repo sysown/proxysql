@@ -676,6 +676,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	gtid_server_data_unit-t \
 	gtid_wire_contract_unit-t \
 	admin_bootstrap_users_unit-t \
+	admin_global_sql_lock_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
@@ -728,6 +729,7 @@ UNIT_TESTS += \
 	managed_discovery_unit-t \
 	managed_runtime_mysql_unit-t \
 	managed_runtime_pgsql_unit-t \
+	managed_engine_projection_txn_unit-t \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \

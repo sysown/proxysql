@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -44,7 +45,7 @@ SQLite3DB* const any_db = reinterpret_cast<SQLite3DB*>(0xFF);
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(42);
+	plan(47);
 	diag("=== plugin_runtime_views_unit-t starting ===");
 
 	// ---- Registration validation ----
@@ -228,6 +229,58 @@ any_db, nullptr, nullptr);
 		mgr.refresh_runtime_views_for_query("SELECT * FROM stats_notnull_test", admin_ptr, nullptr, stats_ptr);
 		ok(stats_fires.load() == 1,
 		   "stats_db view still fires when configdb is null (fires=%d)", stats_fires.load());
+	}
+
+	// ---- A throwing refresh callback is contained (issue #6467) ----
+	//
+	// refresh_runtime_views_for_query() runs inside an Admin statement that
+	// holds sql_query_global_mutex and the plugin-manager read lock. An
+	// exception escaping a plugin projection used to unwind through the Admin
+	// session; it must be contained like every other plugin hook, the view
+	// must keep its previous contents and the remaining views must refresh.
+	{
+		diag(">>> a throwing refresh callback is contained and other views still refresh");
+
+		SQLite3DB db;
+		char in_memory_db[] = ":memory:";
+		db.open(in_memory_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+		db.execute("CREATE TABLE runtime_throwing_std (v INTEGER)");
+		db.execute("INSERT INTO runtime_throwing_std VALUES (42)");
+
+		auto throw_std_cb = [](SQLite3DB*, void*) { throw std::runtime_error("projection failed"); };
+		auto throw_other_cb = [](SQLite3DB*, void*) { throw 7; };
+
+		std::atomic<int> after_fires{0};
+		CallbackProbe after_probe{"after", &after_fires};
+
+		ProxySQL_PluginManager mgr;
+		ok(mgr.register_runtime_view({"runtime_throwing_std", throw_std_cb, nullptr, ProxySQL_PluginDBKind::admin_db}) &&
+		   mgr.register_runtime_view({"runtime_throwing_other", throw_other_cb, nullptr, ProxySQL_PluginDBKind::admin_db}) &&
+		   mgr.register_runtime_view({"runtime_after_throw", &probe_refresh_cb, &after_probe, ProxySQL_PluginDBKind::admin_db}),
+		   "registered two throwing views and one well-behaved view");
+
+		bool escaped = false;
+		try {
+			mgr.refresh_runtime_views_for_query(
+				"SELECT * FROM runtime_throwing_std, runtime_throwing_other, runtime_after_throw",
+				&db, nullptr, nullptr);
+		} catch (...) {
+			escaped = true;
+		}
+		ok(!escaped, "no exception escapes refresh_runtime_views_for_query");
+		ok(after_fires.load() == 1,
+		   "a view registered after the throwing ones still refreshes (fires=%d)", after_fires.load());
+		ok(db.return_one_int("SELECT v FROM runtime_throwing_std") == 42,
+		   "the throwing view keeps its previous contents");
+
+		escaped = false;
+		try {
+			mgr.refresh_runtime_views_for_query("SELECT * FROM runtime_after_throw", &db, nullptr, nullptr);
+		} catch (...) {
+			escaped = true;
+		}
+		ok(!escaped && after_fires.load() == 2,
+		   "the manager keeps dispatching after a contained throw (fires=%d)", after_fires.load());
 	}
 
 	// ---- Restore of plugin config_db tables from disk (issue #6167) ----
