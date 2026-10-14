@@ -19,6 +19,7 @@
 
 #include "MySQL_Authentication.hpp"
 #include "MySQL_Backend_Auth.h"
+#include "ProxySQL_Statistics.hpp"
 #include "ProxySQL_Admin_Tables_Definitions.h"
 #include "proxysql_admin.h"
 #include "sqlite3db.h"
@@ -30,6 +31,7 @@
 #include <vector>
 
 extern MySQL_Authentication *GloMyAuth;
+extern ProxySQL_Statistics *GloProxyStats;
 
 namespace {
 
@@ -51,6 +53,16 @@ const std::vector<rejected_case_t>& rejected_cases() {
 
 // Rejected as above, but the text configures 'backend_auth'.
 const std::string k_rejected_backend_auth { R"({"backend_auth":{"type":"aws_iam"},"a":1e400})" };
+
+// As above, with the key spelled with JSON escapes ("backend\u005fauth" is
+// the same key as "backend_auth").
+const std::vector<std::string>& rejected_escaped_backend_auth() {
+	static const std::vector<std::string> cases {
+		R"({"backend\u005fauth":{"type":"aws_iam"},"a":1e400})",
+		R"({"\u0062ackend_auth":{"type":"aws_iam"},"a":"\ud800"})",
+	};
+	return cases;
+}
 
 bool add_user(const char* username, enum cred_username_type type, const std::string& attributes) {
 	std::string owned_username(username);
@@ -144,6 +156,14 @@ void test_rejected_backend_auth_fails_closed() {
 		"rejected attributes configuring backend_auth fail closed (not PASSWORD, not IAM)");
 	ok(dumped_attributes("u_rejected_iam", false) == k_rejected_backend_auth,
 		"rejected attributes configuring backend_auth dump the configured text");
+
+	for (const auto& attributes : rejected_escaped_backend_auth()) {
+		add_user("u_rejected_iam_escaped", USERNAME_BACKEND, attributes);
+		const MySQLBackendAuthPolicy escaped =
+			resolve_mysql_backend_auth_policy(*GloMyAuth, "u_rejected_iam_escaped");
+		ok(escaped.type == MySQLBackendAuthType::INVALID && escaped.failure_code == "attributes_not_object",
+			"rejected attributes with an escaped backend_auth key fail closed: %s", attributes.c_str());
+	}
 }
 
 void test_reload_refreshes_rejected_rows() {
@@ -157,12 +177,23 @@ void test_reload_refreshes_rejected_rows() {
 	ok(add_user("u_reload", USERNAME_BACKEND, rejected_cases()[0].attributes) &&
 		dumped_attributes("u_reload", false) == rejected_cases()[0].attributes,
 		"reloading the row with other rejected attributes keeps the new text");
+
+	// JSON keys are case-sensitive: a case-only change is a new configuration.
+	const std::string upper_rejected { R"({"BACKEND_AUTH":{"type":"aws_iam"},"a":1e400})" };
+	ok(add_user("u_reload_case", USERNAME_BACKEND, upper_rejected) &&
+		resolve_mysql_backend_auth_policy(*GloMyAuth, "u_reload_case").type == MySQLBackendAuthType::PASSWORD,
+		"rejected attributes with a differently-cased key do not configure backend_auth");
+	ok(add_user("u_reload_case", USERNAME_BACKEND, k_rejected_backend_auth) &&
+		resolve_mysql_backend_auth_policy(*GloMyAuth, "u_reload_case").type == MySQLBackendAuthType::INVALID &&
+		dumped_attributes("u_reload_case", false) == k_rejected_backend_auth,
+		"reloading rejected attributes with a case-only key change refreshes the row");
 }
 
 /**
  * @brief SAVE MYSQL USERS FROM RUNTIME and the runtime_mysql_users refresh.
  * @details save_mysql_users_runtime_to_database() only uses 'admindb' and
- *   GloMyAuth, so a zeroed ProxySQL_Admin with an in-memory admin DB is enough.
+ *   GloMyAuth, so a constructed ProxySQL_Admin with an in-memory admin DB is
+ *   enough.
  */
 void test_save_from_runtime_round_trip() {
 	GloMyAuth->reset();
@@ -187,8 +218,17 @@ void test_save_from_runtime_round_trip() {
 	ok(db.return_one_int("SELECT COUNT(*) FROM mysql_users WHERE active=1") == (int)users.size(),
 		"admin table holds the configured rows");
 
-	void* storage = calloc(1, sizeof(ProxySQL_Admin));
-	ProxySQL_Admin* admin = reinterpret_cast<ProxySQL_Admin*>(storage);
+	// The ProxySQL_Admin constructor sets GloProxyStats variables, so it needs
+	// a ProxySQL_Statistics backed by an in-memory stats DB.
+	char* previous_statsdb_path = GloVars.statsdb_disk;
+	std::unique_ptr<char, decltype(&free)> in_memory_statsdb { strdup(":memory:"), &free };
+	GloVars.statsdb_disk = in_memory_statsdb.get();
+	auto proxy_stats = std::make_unique<ProxySQL_Statistics>();
+	GloProxyStats = proxy_stats.get();
+	GloProxyStats->init();
+	// Process-scoped partial fixture: the destructor runs the production
+	// admin_shutdown(), which this fixture never started, so it is not deleted.
+	ProxySQL_Admin* admin = new ProxySQL_Admin(); // NOSONAR
 	admin->admindb = &db;
 
 	admin->save_mysql_users_runtime_to_database(true);
@@ -211,14 +251,17 @@ void test_save_from_runtime_round_trip() {
 		}
 	}
 
-	free(storage);
+	admin->admindb = nullptr;
+	GloProxyStats = nullptr;
+	proxy_stats.reset();
+	GloVars.statsdb_disk = previous_statsdb_path;
 }
 
 } // namespace
 
 int main() {
 	const int saved_users = 5;
-	plan(3 + 12 + 9 + 3 + 3 + 4 + 2 * saved_users);
+	plan(3 + 12 + 9 + 3 + 2 + 3 + 2 + 4 + 2 * saved_users);
 	test_init_minimal();
 	test_init_auth();
 
