@@ -98,8 +98,6 @@ static void test_digests(const char* dialect, DigestInit initialize) {
 			dialect, c.sql, qp.digest_text ? qp.digest_text : "NULL");
 		ok(qp.digest == SpookyHash::Hash64(c.expected, std::strlen(c.expected), 0),
 			"%s hashes the expected token digest: %s", dialect, c.sql);
-		ok(qp.parsersql_stmt_type == -1,
-			"%s digest no longer caches a command classification: %s", dialect, c.sql);
 		release_digest(qp);
 	}
 
@@ -183,7 +181,7 @@ static void test_fallback_options(const char* dialect, DigestInit initialize,
 }
 
 int main() {
-	plan(110);
+	plan(92);
 	test_init_minimal();
 	mysql_thread___query_digests_max_query_length = pgsql_thread___query_digests_max_query_length = 1048576;
 	mysql_thread___query_digests_max_digest_length = pgsql_thread___query_digests_max_digest_length = 1048576;

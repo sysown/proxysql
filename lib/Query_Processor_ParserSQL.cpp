@@ -440,7 +440,7 @@ static void parsersql_tokenizer_options(options& opts, int& max_digest_length) {
  * This is the only digest path, taken in parser mode as well as in legacy mode,
  * so that *-query_processor_parser never changes a digest. The command type is
  * not computed here; query_parser_command_type() asks ParserSQL lazily when the
- * command type is actually needed, and 'parsersql_stmt_type' stays -1.
+ * command type is actually needed.
  */
 template <Dialect D>
 static void parsersql_tokenizer_digest(SQP_par_t* qp, const char* query, int query_length) {
@@ -483,7 +483,6 @@ static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_le
     qp->first_comment = NULL;
     qp->query_prefix = NULL;
     qp->digest = 0;
-    qp->parsersql_stmt_type = -1;
     if (!query || query_length < 0) return;
     if constexpr (D == Dialect::PostgreSQL) {
         // PgSQL_Query_Info includes the protocol terminator in QueryLength.

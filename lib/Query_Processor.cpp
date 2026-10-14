@@ -3138,7 +3138,6 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
-	qp->parsersql_stmt_type=-1;
 	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
 		// PgSQL_Query_Info passes a length that includes the protocol's NUL
 		// terminator. The terminator is not part of the query: digested as a
