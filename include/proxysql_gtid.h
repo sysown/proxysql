@@ -107,8 +107,12 @@ bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
  *
  * Grammar per UUID block: normalize_mysql_uuid of the first ':' component,
  * then one or more TrxId_Interval components separated by ':'. Blocks are
- * separated by ',' or '\n'. Unexpected input -- tagged GTIDs ('uuid:tag:n'),
- * bare garbage, empty components -- fails and leaves @p out untouched.
+ * separated by ',' with optional whitespace around it (",\n" from the
+ * server, ", " once a min_gtid annotation went through the comment parser),
+ * or by a bare '\n'; whitespace around the whole value is ignored.
+ * Unexpected input -- tagged GTIDs ('uuid:tag:n'), bare garbage, empty
+ * components or blocks (',,', a leading or trailing ','), whitespace inside a
+ * block or as the only separator -- fails and leaves @p out untouched.
  *
  * @param s     Raw tracked value; NUL bytes are rejected.
  * @param len   Length of the value.

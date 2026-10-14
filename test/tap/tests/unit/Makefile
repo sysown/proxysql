@@ -669,6 +669,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	ezoption_parser_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
+	gtid_set_separator_unit-t \
 	gtid_parse_unit-t \
 	gtid_server_data_unit-t \
 	gtid_wire_contract_unit-t \

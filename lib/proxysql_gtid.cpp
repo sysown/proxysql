@@ -564,6 +564,10 @@ static bool parse_mysql_gtid_set_block(const char* block, size_t block_len,
 	return !intervals->empty();
 }
 
+static inline bool gtid_set_is_space(char c) {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
 bool parse_gtid_set(const char* s, size_t len,
                     std::map<std::string, std::vector<TrxId_Interval>>* out) {
 	if (s == nullptr || out == nullptr || len == 0 ||
@@ -578,15 +582,24 @@ bool parse_gtid_set(const char* s, size_t len,
 
 	std::map<std::string, std::vector<TrxId_Interval>> parsed;
 	std::set<std::string> seen_uuids;
-	size_t block_start = 0;
-	for (size_t i = 0; i <= len; ++i) {
-		if (i != len && s[i] != ',' && s[i] != '\n') {
-			continue;
+	// MySQL's Gtid_set::to_string separates UUID blocks with ",\n", and a
+	// min_gtid annotation echoing that value arrives as ", " because the
+	// query comment parser folds the newline into a space (remove_spaces()).
+	// A separator is therefore ',' with optional whitespace around it, or a
+	// bare newline; whitespace around the whole value is ignored (#6415).
+	// Whitespace anywhere else, and an empty block ('', ',,', a leading or
+	// trailing ','), is rejected: the server never emits those.
+	size_t i = 0;
+	while (i < len && gtid_set_is_space(s[i])) {
+		++i;
+	}
+	while (i < len) {
+		const size_t block_start = i;
+		while (i < len && s[i] != ',' && !gtid_set_is_space(s[i])) {
+			++i;
 		}
 		const size_t block_len = i - block_start;
 		if (block_len == 0) {
-			// An empty block ('', leading/trailing separators, ',,') is not
-			// something the server can emit: reject rather than skip.
 			return false;
 		}
 		std::string uuid;
@@ -601,7 +614,27 @@ bool parse_gtid_set(const char* s, size_t len,
 		}
 		seen_uuids.insert(uuid);
 		parsed.emplace(std::move(uuid), std::move(intervals));
-		block_start = i + 1;
+
+		bool newline = false;
+		while (i < len && gtid_set_is_space(s[i])) {
+			newline |= (s[i] == '\n');
+			++i;
+		}
+		if (i == len) {
+			break;
+		}
+		if (s[i] == ',') {
+			++i;
+			while (i < len && gtid_set_is_space(s[i])) {
+				++i;
+			}
+			if (i == len) {
+				return false;
+			}
+		} else if (!newline) {
+			// Two blocks separated only by blanks, or a blank inside a block.
+			return false;
+		}
 	}
 
 	if (parsed.empty()) {
