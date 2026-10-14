@@ -2792,11 +2792,16 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 	// - Semicolons (';') marking the end of the query are also removed.
 	{
 		// v1_crashing_payload_06
-		char* f_char = shared_st->res_cur_pos - 1;
-		while (f_char > shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
+		char* f_char = shared_st->res_cur_pos;
+		// An empty result has nothing to trim, and 'res_cur_pos - 1' would point
+		// before the buffer. The first char is never trimmed (unchanged behaviour).
+		if (f_char > shared_st->res_init_pos) {
 			f_char--;
+			while (f_char > shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
+				f_char--;
+			}
+			f_char++;
 		}
-		f_char++;
 		*f_char = '\0';
 		// NOTE: Since this is the last operation this isn't really required. But it's left in case this block
 		// is moved in the future.
