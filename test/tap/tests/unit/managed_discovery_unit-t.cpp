@@ -102,7 +102,7 @@ const SQLite3_row* find_row(const SQLite3_result& rows, uint32_t hg,
 
 } // namespace
 int main() {
-    plan(43);
+    plan(37);
     test_init_minimal();
     test_init_query_processor();
     test_init_hostgroups();
@@ -115,9 +115,9 @@ int main() {
     pipe(GloAdmin->pipefd);
     std::unique_ptr<ProxySQL_PluginManager> manager;
     std::string error;
-    // No server-module registration or AWS policy tables in this fixture.
+    // No AWS policy tables in this fixture.
     ok(proxysql_load_configured_plugins(manager, {PROXYSQL_FAKE_PLUGIN_PATH}, error) &&
-        proxysql_init_configured_plugins(manager.get(), error), "plugin manager starts without a policy module");
+        proxysql_init_configured_plugins(manager.get(), error), "plugin manager starts without a policy plugin");
     Observed observations[2];
     for (int index=0; index<2; ++index) {
         const auto protocol = index == 0 ? ProxySQL_ServerProtocol::mysql : ProxySQL_ServerProtocol::pgsql;
@@ -133,9 +133,8 @@ int main() {
         bool hgm_commit;
         if (mysql) { MyHGM->servers_add(rows.get()); hgm_commit = MyHGM->commit({}, {}, false); }
         else { PgHGM->servers_add(rows.get()); hgm_commit = PgHGM->commit({}, {}, false); }
-        ProxySQL_ServerModuleSnapshot configured {};
-        configured.runtime = {protocol, 0, {seed,unrelated}, {}};
-        const uint64_t configured_generation = proxysql_publish_server_runtime(std::move(configured), true);
+        ProxySQL_ServerRuntimeSnapshot configured {protocol, 0, {seed,unrelated}, {}};
+        const uint64_t configured_generation = proxysql_publish_server_runtime(std::move(configured));
         ok(hgm_commit && configured_generation != 0, "seed configuration installed");
         const bool shunned = mysql ? MyHGM->shun_and_killall(const_cast<char*>("managed.example"),port) :
             PgHGM->shun_and_killall(const_cast<char*>("managed.example"),port);
@@ -146,7 +145,7 @@ int main() {
         bool installed = proxysql_install_managed_discovery_locked(protocol, 1, {{701,702}}, generation,error);
         proxysql_unlock_configuration();
         ok(installed && generation == configured_generation+1 && observed.snapshot.generation == generation,
-            "new policy installs without LOAD, a server module, or SQL policy tables: %s",error.c_str());
+            "new policy installs without LOAD or SQL policy tables: %s",error.c_str());
         const auto claims = proxysql_active_server_hostgroup_claims(protocol);
         ok(claims.size()==1 && claims[0].writer_hostgroup==701 && claims[0].reader_hostgroup==702,
             "explicit managed claim pair is active");
@@ -163,18 +162,6 @@ int main() {
         const auto* health_row=find_row(*health,701,"managed.example",port);
         ok(health_row && std::string(health_row->fields[mysql?4:3])=="SHUNNED" &&
             find_row(*health,799,"unrelated.example",port), "policy installation preserves health and unrelated runtime servers");
-        manager->install_server_runtime_snapshot(observed.snapshot, {{801,802}});
-        ok(proxysql_active_server_hostgroup_claims(protocol).size()==2,
-            "generic module publication retains distinct managed claims");
-        uint64_t rejected_generation=0;
-        proxysql_lock_configuration();
-        const bool collision=proxysql_install_managed_discovery_locked(protocol,2,{{801,803}},rejected_generation,error);
-        proxysql_unlock_configuration();
-        ok(!collision && proxysql_pending_server_runtime_generation(protocol)==generation+1,
-            "managed policy cannot overlap generic module claims or consume a generation on rejection");
-        manager->install_server_runtime_snapshot(observed.snapshot, {});
-        ok(proxysql_active_server_hostgroup_claims(protocol).size()==1,
-            "clearing generic claims leaves managed policy installed");
         ProxySQL_ServerDesiredSet old {protocol,generation,{701,702},{seed},ProxySQL_ServerPersistence::runtime_only};
         ok(manager->post_server_desired_set(old), "old generation work queues before revision change");
         uint64_t next=0;
@@ -197,17 +184,15 @@ int main() {
         proxysql_unlock_configuration();
         ok(!stale && !overlap && proxysql_pending_server_runtime_generation(protocol)==next+1,
             "stale revisions and overlapping claims reject without consuming a generation");
-        ProxySQL_ServerModuleSnapshot reload {};
-        reload.runtime = {protocol,0,{unrelated},{}};
+        ProxySQL_ServerRuntimeSnapshot reload {protocol,0,{unrelated},{}};
         const uint64_t before_reload = proxysql_pending_server_runtime_generation(protocol);
-        proxysql_publish_server_runtime(std::move(reload), true);
+        proxysql_publish_server_runtime(std::move(reload));
         ok(proxysql_pending_server_runtime_generation(protocol)==before_reload+1 &&
             proxysql_active_server_hostgroup_claims(protocol).size()==1,
             "ordinary server installation retains separately owned managed claims");
-        ProxySQL_ServerModuleSnapshot conflict {};
-        conflict.runtime = {protocol,0,{unrelated},{703}};
+        ProxySQL_ServerRuntimeSnapshot conflict {protocol,0,{unrelated},{703}};
         const uint64_t before_conflict = proxysql_pending_server_runtime_generation(protocol);
-        proxysql_publish_server_runtime(std::move(conflict), true);
+        proxysql_publish_server_runtime(std::move(conflict));
         ok(proxysql_pending_server_runtime_generation(protocol)==before_conflict+1 &&
             proxysql_active_server_hostgroup_claims(protocol).size()==1,
             "builtin topology overlapping a managed claim is logged and never rejects the installation");

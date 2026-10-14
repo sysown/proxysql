@@ -13,7 +13,6 @@
 #include "prometheus_helpers.h"
 
 #include "ProxySQL_Cluster.hpp"
-#include "ProxySQL_ServerModuleCluster.h"
 #include "ProxySQL_PluginManager.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_LDAP_Authentication.hpp"
@@ -1891,117 +1890,6 @@ uint64_t compute_servers_tables_raw_checksum(const vector<MYSQL_RES*>& results, 
 }
 
 #ifdef PROXYSQL40
-/**
- * @brief Checksum of a fetched *_servers_v2 module: the core resultsets followed
- *   by the server-module (plugin) tables, folded exactly as the peer computed it
- *   (see proxysql_server_module_cluster_hash_loaded_tables): a table contributes
- *   its raw checksum only when it has rows, in table-name order.
- */
-uint64_t compute_servers_v2_raw_checksum(const vector<MYSQL_RES*>& results, size_t size,
-	const std::vector<ProxySQL_ServerModuleClusterTable>& module_tables) {
-	bool init = false;
-	SpookyHash myhash {};
-	auto fold = [&](uint64_t raw_hash) {
-		if (!init) {
-			init = true;
-			myhash.Init(19, 3);
-		}
-		myhash.Update(&raw_hash, sizeof(raw_hash));
-	};
-	for (size_t i = 0; i < size; i++) {
-		const uint64_t raw_hash = mysql_raw_checksum(results[i]);
-		if (raw_hash != 0) fold(raw_hash);
-	}
-	for (const auto& table : module_tables) {
-		if (table.rows && table.rows->rows_count != 0) fold(table.rows->raw_checksum());
-	}
-	uint64_t servers_hash = 0, _hash2 = 0;
-	if (init) myhash.Final(&servers_hash, &_hash2);
-	return servers_hash;
-}
-#endif /* PROXYSQL40 */
-
-#ifdef PROXYSQL40
-enum class module_fetch_status { unsupported, success, error };
-
-module_fetch_status fetch_server_module_tables(MYSQL* conn, ProxySQL_ServerProtocol protocol,
-	ProxySQL_ServerModuleClusterVersion version,
-	std::vector<ProxySQL_ServerModuleClusterTable>& tables, std::string& error) {
-	tables.clear();
-	const std::string metadata_query = proxysql_server_module_cluster_metadata_query(protocol, version);
-	if (mysql_query(conn, metadata_query.c_str()) != 0) {
-		const unsigned int error_code = mysql_errno(conn);
-		const std::string mysql_error_text = mysql_error(conn);
-		if (proxysql_server_module_cluster_legacy_fallback_allowed(error_code, mysql_error_text))
-			return module_fetch_status::unsupported;
-		error = mysql_error_text.empty() ? "server-module metadata query failed" : mysql_error_text;
-		return module_fetch_status::error;
-	}
-	std::unique_ptr<MYSQL_RES, decltype(&mysql_free_result)> metadata(mysql_store_result(conn), mysql_free_result);
-	if (!metadata || mysql_num_fields(metadata.get()) != 6) {
-		error = "malformed server-module metadata endpoint";
-		return module_fetch_status::error;
-	}
-	std::string expected_module_checksum;
-	std::vector<ProxySQL_ServerModuleTable> peer_registry;
-	bool capability_only = false;
-	MYSQL_ROW row;
-	while ((row = mysql_fetch_row(metadata.get())) != nullptr) {
-		if (!row[0] || !row[1] || !row[2]) {
-			error = "null server-module metadata field";
-			return module_fetch_status::error;
-		}
-		const char* expected_protocol = protocol == ProxySQL_ServerProtocol::mysql ? "mysql" : "pgsql";
-		if (strcmp(row[0], expected_protocol) != 0 || atoi(row[1]) != static_cast<int>(version)) {
-			error = "server-module metadata protocol/version mismatch";
-			return module_fetch_status::error;
-		}
-		if (expected_module_checksum.empty()) expected_module_checksum = row[2];
-		else if (expected_module_checksum != row[2]) {
-			error = "inconsistent server-module checksum metadata";
-			return module_fetch_status::error;
-		}
-		const bool all_table_fields_null = !row[3] && !row[4] && !row[5];
-		if (all_table_fields_null) {
-			if (capability_only || !peer_registry.empty()) {
-				error = "duplicate server-module empty capability metadata";
-				return module_fetch_status::error;
-			}
-			capability_only = true;
-			continue;
-		}
-		if (capability_only || !row[3] || !row[4] || !row[5]) {
-			error = "null server-module table metadata field";
-			return module_fetch_status::error;
-		}
-		peer_registry.push_back({protocol, row[3], row[4], row[5]});
-		tables.push_back({row[3], row[4], row[5], nullptr});
-	}
-	const auto local_registry = proxysql_active_server_module_tables(protocol);
-	if (expected_module_checksum.empty() ||
-		!proxysql_server_module_cluster_registry_matches(protocol, local_registry, peer_registry, error) ||
-		!proxysql_validate_server_module_cluster_tables(protocol, tables, error))
-		return module_fetch_status::error;
-	for (auto& table : tables) {
-		const std::string table_query = proxysql_server_module_cluster_table_query(protocol, version, table.table_name);
-		if (mysql_query(conn, table_query.c_str()) != 0) {
-			error = mysql_error(conn);
-			return module_fetch_status::error;
-		}
-		std::unique_ptr<MYSQL_RES, decltype(&mysql_free_result)> rows(mysql_store_result(conn), mysql_free_result);
-		if (!rows) {
-			error = "missing server-module table result";
-			return module_fetch_status::error;
-		}
-		table.rows = get_SQLite3_resulset(rows.get());
-	}
-	if (!proxysql_server_module_cluster_checksum_matches(tables, expected_module_checksum, error))
-		return module_fetch_status::error;
-	return module_fetch_status::success;
-}
-#endif
-
-#ifdef PROXYSQL40
 bool proxysql_snapshot_installed_builtin_server_topology(
 		ProxySQL_ServerProtocol protocol, std::vector<uint32_t>& hostgroups,
 		std::string& error) {
@@ -2050,35 +1938,20 @@ bool proxysql_snapshot_installed_builtin_server_topology(
 
 void proxysql_cluster_install_v1_runtime_post_fetch(
 		ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
-		bool module_runtime_supported,
-		const std::vector<ProxySQL_ServerModuleClusterTable>& module_tables,
 		const std::function<void(SQLite3_result*)>& stage_core_rows,
 		const std::function<void(SQLite3_result*)>& commit_core_rows) {
 	if (core_rows == nullptr) return;
 	// Lock order: Admin servers lock -> runtime install -> HGM.
 	ProxySQL_ServerRuntimeInstallLock install_lock(protocol);
 	// Built before the HGM takes ownership of the rows.
-	ProxySQL_ServerModuleSnapshot snapshot {};
-	std::vector<uint32_t> topology;
+	ProxySQL_ServerRuntimeSnapshot snapshot =
+		proxysql_server_runtime_snapshot_from_rows(protocol, 0, *core_rows);
 	std::string error;
-	bool notify_module = module_runtime_supported;
-	if (notify_module && !proxysql_snapshot_installed_builtin_server_topology(protocol, topology, error)) {
+	if (!proxysql_snapshot_installed_builtin_server_topology(protocol, snapshot.topology_hostgroups, error)) {
 		// Keep the last complete topology rather than a partial read.
-		topology = proxysql_active_server_topology_hostgroups(protocol);
-		proxy_error("Cluster: server module not notified of the pulled servers, it keeps its previous configuration: %s\n",
+		snapshot.topology_hostgroups = proxysql_active_server_topology_hostgroups(protocol);
+		proxy_error("Cluster: unable to snapshot the installed built-in topology, keeping the previous one: %s\n",
 			error.c_str());
-		notify_module = false;
-	}
-	if (notify_module && !proxysql_server_module_cluster_runtime_snapshot(protocol, *core_rows,
-		module_tables, topology, snapshot, error)) {
-		proxy_error("Cluster: server module not notified of the pulled servers, it keeps its previous configuration: %s\n",
-			error.c_str());
-		notify_module = false;
-	}
-	if (!notify_module) {
-		snapshot = {};
-		snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, 0, *core_rows);
-		snapshot.runtime.topology_hostgroups = std::move(topology);
 	}
 	// The HGM commit API owns the raw resultset. No try/catch here, on
 	// purpose: nothing above the Cluster pull catches exceptions, so an
@@ -2088,7 +1961,7 @@ void proxysql_cluster_install_v1_runtime_post_fetch(
 	// succeeded after a partial HGM commit, and persist that state.
 	stage_core_rows(core_rows);
 	commit_core_rows(core_rows);
-	proxysql_publish_server_runtime(std::move(snapshot), notify_module);
+	proxysql_publish_server_runtime(std::move(snapshot));
 }
 #endif
 
@@ -2195,19 +2068,6 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 				}
 
 				if (result != nullptr) {
-#ifdef PROXYSQL40
-					std::vector<ProxySQL_ServerModuleClusterTable> module_tables_v1;
-					std::string module_error;
-					const module_fetch_status module_status = fetch_server_module_tables(conn,
-						ProxySQL_ServerProtocol::mysql, ProxySQL_ServerModuleClusterVersion::runtime_v1,
-						module_tables_v1, module_error);
-					if (module_status == module_fetch_status::error) {
-						proxy_error("Cluster: fetching MySQL server-module v1 tables failed: %s\n", module_error.c_str());
-						mysql_free_result(result);
-						fetch_failed = true;
-						goto __exit_pull_mysql_servers_from_peer;
-					}
-#endif
 					const uint64_t servers_hash = mysql_raw_checksum(result);
 					const string computed_checksum{ get_checksum_from_hash(servers_hash) };
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
@@ -2220,16 +2080,9 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						GloAdmin->mysql_servers_wrlock();
 						std::unique_ptr<SQLite3_result> runtime_mysql_servers_resultset = get_SQLite3_resulset(result);
 #ifdef PROXYSQL40
-						const bool module_runtime_supported = module_status == module_fetch_status::success;
-						// An old v1 peer has no dynamic-table endpoint.  Install its core
-						// controller snapshot, but retain this node's affiliated policy
-						// rather than preparing/committing it against absent payload.
-						#endif
-#ifdef PROXYSQL40
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_mysql_servers from peer %s:%d into mysql_servers_incoming", hostname, port);
 						proxysql_cluster_install_v1_runtime_post_fetch(
 							ProxySQL_ServerProtocol::mysql, runtime_mysql_servers_resultset.release(),
-							module_runtime_supported, module_tables_v1,
 							[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
 							[&](SQLite3_result* rows) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
@@ -2242,13 +2095,10 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 
 						if (!fetch_failed && GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving Runtime MySQL Servers to Database\n");
-							const bool saved = GloAdmin->save_mysql_servers_runtime_to_database(false);
+							GloAdmin->save_mysql_servers_runtime_to_database(false);
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk Runtime MySQL Servers from peer %s:%d\n", hostname, port);
 							proxy_info("Cluster: Saving to disk Runtime MySQL Servers from peer %s:%d\n", hostname, port);
-							if (!saved || !GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk")) {
-								proxy_error("Cluster: persisting mysql_servers failed\n");
-								fetch_failed = true;
-							}
+							GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
 						}
 						GloAdmin->mysql_servers_wrunlock();
 						proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
@@ -2492,27 +2342,8 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 					}
 				}
 
-#ifdef PROXYSQL40
-				std::vector<ProxySQL_ServerModuleClusterTable> module_tables_v2;
-				std::string module_fetch_error;
-				module_fetch_status module_status = module_fetch_status::unsupported;
 				if (fetching_error == false) {
-					module_status = fetch_server_module_tables(conn, ProxySQL_ServerProtocol::mysql,
-						ProxySQL_ServerModuleClusterVersion::memory_v2, module_tables_v2, module_fetch_error);
-					if (module_status == module_fetch_status::error) {
-						proxy_error("Cluster: fetching MySQL server-module v2 tables failed: %s\n", module_fetch_error.c_str());
-						fetching_error = fetch_failed = true;
-					}
-				}
-#endif
-
-				if (fetching_error == false) {
-#ifdef PROXYSQL40
-					// Server-module tables are part of the mysql_servers_v2 module checksum.
-					const uint64_t servers_hash = compute_servers_v2_raw_checksum(results, 8, module_tables_v2); // ignore runtime_mysql_servers in checksum calculation
-#else
 					const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 8); // ignore runtime_mysql_servers in checksum calculation
-#endif /* PROXYSQL40 */
 					const string computed_checksum{ get_checksum_from_hash(servers_hash) };
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for MySQL Servers v2 from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 					proxy_info("Cluster: Computed checksum for MySQL Servers v2 from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
@@ -2528,7 +2359,6 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 					}
 
 					if (computed_checksum == peer_mysql_servers_v2_checksum && runtime_checksum_matches == true) {
-						do {
 						// we are OK to sync!
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching checksum for 'MySQL Servers' from peer %s:%d successful. Checksum: %s\n", hostname, port, computed_checksum.c_str());
 						proxy_info("Cluster: Fetching checksum for 'MySQL Servers' from peer %s:%d successful. Checksum: %s\n", hostname, port, computed_checksum.c_str());
@@ -2536,18 +2366,6 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						// servers lock. The pull writes to the shared admin database.
 						proxysql_admin_global_sql_lock(GloAdmin->sql_query_global_mutex);
 						GloAdmin->mysql_servers_wrlock();
-#ifdef PROXYSQL40
-						if (module_status == module_fetch_status::success) {
-							std::string apply_error;
-							if (!proxysql_apply_server_module_cluster_memory(*GloAdmin->admindb, module_tables_v2, apply_error)) {
-								proxy_error("Cluster: applying MySQL server-module v2 tables failed: %s\n", apply_error.c_str());
-								fetch_failed = true;
-								GloAdmin->mysql_servers_wrunlock();
-								proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
-								break;
-							}
-						}
-#endif
 						// Convert only after every operation that can reject the fetched
 						// module state. The runtime load path takes ownership of these
 						// SQLite resultsets.
@@ -2845,24 +2663,19 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
 
 						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
-							bool saved = true;
 							if (fetch_runtime_mysql_servers == true) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving Runtime MySQL Servers to Database\n");
-								saved = GloAdmin->save_mysql_servers_runtime_to_database(false);
+								GloAdmin->save_mysql_servers_runtime_to_database(false);
                             }
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
 							proxy_info("Cluster: Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
-							if (!saved || !GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk")) {
-								proxy_error("Cluster: persisting mysql_servers failed\n");
-								fetch_failed = true;
-							}
+							GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
 						} else {
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Not saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
 							proxy_info("Cluster: Not saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
 						}
 						GloAdmin->mysql_servers_wrunlock();
 						proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
-						} while (false);
 					} else {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Servers v2 from peer %s:%d failed: Checksum changed from %s to %s\n",
 							hostname, port, peer_mysql_servers_v2_checksum, computed_checksum.c_str());
@@ -3810,19 +3623,6 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 				goto __exit_pull_runtime_pgsql_servers_from_peer;
 			}
 
-#ifdef PROXYSQL40
-			std::vector<ProxySQL_ServerModuleClusterTable> module_tables_v1;
-			std::string module_error;
-			const module_fetch_status module_status = fetch_server_module_tables(conn,
-				ProxySQL_ServerProtocol::pgsql, ProxySQL_ServerModuleClusterVersion::runtime_v1,
-				module_tables_v1, module_error);
-			if (module_status == module_fetch_status::error) {
-				proxy_error("Cluster: fetching PostgreSQL server-module v1 tables failed: %s\n", module_error.c_str());
-				mysql_free_result(result);
-				fetch_failed = true;
-				goto __exit_pull_runtime_pgsql_servers_from_peer;
-			}
-#endif
 			const uint64_t hash_val = mysql_raw_checksum(result);
 			const string computed_checksum = get_checksum_from_hash(hash_val);
 			const string expected_runtime_checksum = peer_runtime_pgsql_servers_checksum
@@ -3835,13 +3635,9 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 				GloAdmin->pgsql_servers_wrlock();
 				std::unique_ptr<SQLite3_result> runtime_pgsql_servers_resultset = get_SQLite3_resulset(result);
 #ifdef PROXYSQL40
-				const bool module_runtime_supported = module_status == module_fetch_status::success;
-				#endif
-#ifdef PROXYSQL40
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_pgsql_servers from peer %s:%d into pgsql_servers_incoming\n", hostname, port);
 				proxysql_cluster_install_v1_runtime_post_fetch(
 					ProxySQL_ServerProtocol::pgsql, runtime_pgsql_servers_resultset.release(),
-					module_runtime_supported, module_tables_v1,
 					[](SQLite3_result* rows) { PgHGM->servers_add(rows); },
 					[&](SQLite3_result* rows) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_pgsql_servers from peer %s:%d\n", hostname, port);
@@ -3854,13 +3650,10 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 
 				if (!fetch_failed && GloProxyCluster->cluster_pgsql_servers_save_to_disk == true) {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving Runtime PostgreSQL Servers to Database\n");
-					const bool saved = GloAdmin->save_pgsql_servers_runtime_to_database(false);
+					GloAdmin->save_pgsql_servers_runtime_to_database(false);
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Servers from peer %s:%d\n", hostname, port);
 					proxy_info("Cluster: Saving to disk PostgreSQL Servers from peer %s:%d\n", hostname, port);
-					if (!saved || !GloAdmin->flush_GENERIC__from_to(ClusterModules::PGSQL_SERVERS, "memory_to_disk")) {
-						proxy_error("Cluster: persisting pgsql_servers failed\n");
-						fetch_failed = true;
-					}
+					GloAdmin->flush_GENERIC__from_to(ClusterModules::PGSQL_SERVERS, "memory_to_disk");
 				}
 				GloAdmin->pgsql_servers_wrunlock();
 				proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
@@ -4055,29 +3848,10 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 				}
 			}
 
-#ifdef PROXYSQL40
-			std::vector<ProxySQL_ServerModuleClusterTable> pgsql_module_tables_v2;
-			std::string pgsql_module_fetch_error;
-			module_fetch_status pgsql_module_status = module_fetch_status::unsupported;
-			if (fetching_error == false) {
-				pgsql_module_status = fetch_server_module_tables(conn, ProxySQL_ServerProtocol::pgsql,
-					ProxySQL_ServerModuleClusterVersion::memory_v2, pgsql_module_tables_v2, pgsql_module_fetch_error);
-				if (pgsql_module_status == module_fetch_status::error) {
-					proxy_error("Cluster: fetching PostgreSQL server-module v2 tables failed: %s\n", pgsql_module_fetch_error.c_str());
-					fetching_error = fetch_failed = true;
-				}
-			}
-#endif
-
 			if (fetching_error == false) {
 				const string expected_pgsql_v2_checksum = peer_pgsql_servers_v2_checksum
 					? string(peer_pgsql_servers_v2_checksum) : peer_pgsql_server_v2.value;
-#ifdef PROXYSQL40
-				// Server-module tables are part of the pgsql_servers_v2 module checksum.
-				const uint64_t servers_hash = compute_servers_v2_raw_checksum(results, 4, pgsql_module_tables_v2);
-#else
 				const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 4);
-#endif /* PROXYSQL40 */
 				const string computed_pgsql_v2_checksum = get_checksum_from_hash(servers_hash);
 
 				bool runtime_checksum_matches = true;
@@ -4098,7 +3872,6 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 				if (!expected_pgsql_v2_checksum.empty() &&
 					computed_pgsql_v2_checksum == expected_pgsql_v2_checksum &&
 					runtime_checksum_matches == true) {
-					do {
 					const runtime_pgsql_servers_checksum_t expected_runtime_pgsql_server {
 						expected_runtime_pgsql_checksum, peer_runtime_pgsql_server.epoch
 					};
@@ -4111,18 +3884,6 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					// servers lock. The pull writes to the shared admin database.
 					proxysql_admin_global_sql_lock(GloAdmin->sql_query_global_mutex);
 					GloAdmin->pgsql_servers_wrlock();
-#ifdef PROXYSQL40
-					if (pgsql_module_status == module_fetch_status::success) {
-						std::string apply_error;
-						if (!proxysql_apply_server_module_cluster_memory(*GloAdmin->admindb, pgsql_module_tables_v2, apply_error)) {
-							proxy_error("Cluster: applying PostgreSQL server-module v2 tables failed: %s\n", apply_error.c_str());
-							fetch_failed = true;
-							GloAdmin->pgsql_servers_wrunlock();
-							proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
-							break;
-							}
-					}
-#endif
 					const incoming_pgsql_servers_t incoming_pgsql_servers { convert_pgsql_servers_resultsets(results) };
 					update_pgsql_servers(incoming_pgsql_servers.incoming_pgsql_servers_v2);
 					update_pgsql_replication_hostgroups(incoming_pgsql_servers.incoming_replication_hostgroups);
@@ -4135,21 +3896,16 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					);
 
 					if (GloProxyCluster->cluster_pgsql_servers_save_to_disk == true) {
-						bool saved = true;
 						if (fetch_runtime_pgsql_servers == true) {
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving Runtime PostgreSQL Servers to Database\n");
-							saved = GloAdmin->save_pgsql_servers_runtime_to_database(false);
+							GloAdmin->save_pgsql_servers_runtime_to_database(false);
 						}
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Servers from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: Saving to disk PostgreSQL Servers from peer %s:%d\n", hostname, port);
-						if (!saved || !GloAdmin->flush_GENERIC__from_to(ClusterModules::PGSQL_SERVERS, "memory_to_disk")) {
-							proxy_error("Cluster: persisting pgsql_servers failed\n");
-							fetch_failed = true;
-						}
+						GloAdmin->flush_GENERIC__from_to(ClusterModules::PGSQL_SERVERS, "memory_to_disk");
 					}
 					GloAdmin->pgsql_servers_wrunlock();
 					proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
-					} while (false);
 					if (!fetch_failed)
 						metrics.p_counter_array[p_cluster_counter::pulled_pgsql_servers_success]->Increment();
 				} else {

@@ -93,5 +93,28 @@ static_assert(offsetof(ProxySQL_PluginServices, uninstall_aws_iam_token_source) 
 	offsetof(AwsAbi13, uninstall_aws_iam_token_source), "AWS ABI-13 uninstall_aws_iam_token_source slot moved");
 static_assert(offsetof(ProxySQL_PluginServices, register_server_module) == sizeof(AwsAbi13),
 	"discovery ABI-14 must follow the complete AWS ABI-13 prefix");
+
+// register_server_module is a reserved slot (server modules are no longer
+// supported) but must keep its place so later slots keep their offsets.
+struct DiscoveryAbi14 {
+	AwsAbi13 aws;
+	decltype(ProxySQL_PluginServices::register_server_module) register_server_module;
+	decltype(ProxySQL_PluginServices::install_server_discovery_controller) install_server_discovery_controller;
+	decltype(ProxySQL_PluginServices::uninstall_server_discovery_controller) uninstall_server_discovery_controller;
+	decltype(ProxySQL_PluginServices::post_server_desired_set) post_server_desired_set;
+};
+
+static_assert(sizeof(ProxySQL_PluginServices::register_server_module) == sizeof(void (*)()),
+	"reserved ABI-14 register_server_module slot must stay one function pointer");
+static_assert(offsetof(ProxySQL_PluginServices, register_server_module) ==
+	offsetof(DiscoveryAbi14, register_server_module), "reserved ABI-14 register_server_module slot moved");
+static_assert(offsetof(ProxySQL_PluginServices, install_server_discovery_controller) ==
+	offsetof(DiscoveryAbi14, install_server_discovery_controller), "ABI-14 install_server_discovery_controller slot moved");
+static_assert(offsetof(ProxySQL_PluginServices, uninstall_server_discovery_controller) ==
+	offsetof(DiscoveryAbi14, uninstall_server_discovery_controller), "ABI-14 uninstall_server_discovery_controller slot moved");
+static_assert(offsetof(ProxySQL_PluginServices, post_server_desired_set) ==
+	offsetof(DiscoveryAbi14, post_server_desired_set), "ABI-14 post_server_desired_set slot moved");
+static_assert(offsetof(ProxySQL_PluginServices, lock_configuration) == sizeof(DiscoveryAbi14),
+	"managed-configuration ABI-15 must follow the complete ABI-14 prefix");
 } // namespace plugin_services_abi_layout_test
 #endif

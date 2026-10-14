@@ -71,15 +71,6 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 	std::vector<ProxySQL_ServerRow>& merged, std::string& error);
 #endif
 
-// Synchronous callbacks used by core while it commits configuration. The
-// opaque value is plugin-owned and is returned unchanged on every call.
-struct ProxySQL_ServerModuleTable {
-	ProxySQL_ServerProtocol protocol;
-	std::string table_name;
-	std::string runtime_table_name;
-	std::string order_by;
-};
-
 struct ProxySQL_ServerHostgroupClaim {
 	uint32_t writer_hostgroup {0};
 	uint32_t reader_hostgroup {0};
@@ -121,16 +112,6 @@ std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgr
  ProxySQL_ServerProtocol protocol);
 void proxysql_request_server_read_only_monitor(ProxySQL_ServerProtocol protocol);
 #endif
-
-struct ProxySQL_ServerModuleTableSnapshot {
-	std::string table_name;
-	std::unique_ptr<SQLite3_result> rows;
-};
-
-struct ProxySQL_ServerModuleSnapshot {
-	ProxySQL_ServerRuntimeSnapshot runtime;
-	std::vector<ProxySQL_ServerModuleTableSnapshot> module_tables;
-};
 
 struct ProxySQL_ServerBuiltinTopologyInputs {
 	const SQLite3_result* mysql_replication {nullptr};
@@ -177,52 +158,16 @@ uint64_t proxysql_advance_server_runtime_generation(ProxySQL_ServerProtocol prot
 
 // Publishes a server configuration that core has already installed in the
 // Hostgroups Manager. Takes the install lock, tags the snapshot with a new
-// generation and notifies the server module (when notify_module is true) and
-// the discovery controller. Never fails: a module observes the installation
-// but cannot reject it. With notify_module false only the module's
-// runtime_installed callback is skipped: the legacy (ABI-14) callback and the
-// controller are still notified, and the module's previous hostgroup claims
-// are kept minus any that now overlap the installed topology or managed
-// discovery. Returns the published generation.
-uint64_t proxysql_publish_server_runtime(ProxySQL_ServerModuleSnapshot snapshot,
-	bool notify_module);
+// generation and notifies the discovery controller. Never fails: a controller
+// observes the installation but cannot reject it. Returns the published
+// generation.
+uint64_t proxysql_publish_server_runtime(ProxySQL_ServerRuntimeSnapshot snapshot);
 #endif
 
-struct ProxySQL_ServerModuleHooks {
-	// Keep this ABI-14 prefix immutable: retained modules compiled against the
-	// original callback protocol own exactly these three fields.
-	ProxySQL_ServerProtocol protocol;
-	void (*runtime_configuration_installed)(void *, ProxySQL_ServerRuntimeSnapshot) { nullptr };
-	void *opaque { nullptr };
-
-	// New affiliated modules leave the legacy callback null and populate this
-	// appended callback protocol.  Core never reads beyond the ABI-14 prefix for
-	// legacy modules, so frozen DSOs remain valid.
-	std::vector<ProxySQL_ServerModuleTable> tables;
-	// This appended tail replaced the ABI-15 prepare_runtime/commit_runtime pair
-	// in place, without a layout-version bump, on purpose (issue #6448): ABI 15
-	// never shipped in a release (v4.0.11 is ABI 5) and no plugin in this tree
-	// used that pair, so there is no compiled module whose slots could be
-	// misread. Do not add a compatibility shim for the removed pair.
-	//
-	// Called after core has installed a LOAD ... SERVERS TO RUNTIME. The module
-	// adopts its tables from the snapshot and reports the writer/reader
-	// hostgroups it owns. It is a notification: the module cannot reject the
-	// configuration. Core drops (and logs) a claim that is invalid or overlaps
-	// built-in topology, managed discovery or another claim.
-	void (*runtime_installed)(void *, const ProxySQL_ServerModuleSnapshot&,
-		std::vector<ProxySQL_ServerHostgroupClaim>&) { nullptr };
-	SQLite3_result* (*runtime_table_snapshot)(void *, const char*) { nullptr };
-	void (*shutdown)(void *) { nullptr };
-
-	ProxySQL_ServerModuleHooks() = default;
-	ProxySQL_ServerModuleHooks(ProxySQL_ServerProtocol value,
-		void (*callback)(void *, ProxySQL_ServerRuntimeSnapshot), void *value_opaque)
-		: protocol(value), runtime_configuration_installed(callback), opaque(value_opaque) {}
-	ProxySQL_ServerModuleHooks(ProxySQL_ServerProtocol value,
-		std::vector<ProxySQL_ServerModuleTable> value_tables)
-		: protocol(value), tables(std::move(value_tables)) {}
-};
+// ABI-14 server modules are no longer supported. The type stays declared,
+// incomplete, only so the reserved register_server_module service slot keeps
+// its function-pointer type; core never dereferences it.
+struct ProxySQL_ServerModuleHooks;
 
 class ProxySQL_ServerDiscoveryController {
 public:

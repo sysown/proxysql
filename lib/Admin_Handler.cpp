@@ -41,7 +41,6 @@ using json = nlohmann::json;
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
-#include "ProxySQL_ServerModuleCluster.h"
 #include "ProxySQL_Statistics.hpp"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
@@ -550,10 +549,7 @@ template <typename S>
 bool FlushCommandWrapper(S* sess, const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length, const string& name, const string& direction) {
 	if ( is_admin_command_or_alias(cmds, query_no_space, query_no_space_length) ) {
 		ProxySQL_Admin *SPA = GloAdmin;
-		if (!SPA->flush_GENERIC__from_to(name, direction)) {
-			SPA->send_error_msg_to_client(sess, (char*)"Server-module table copy failed");
-			return true;
-		}
+		SPA->flush_GENERIC__from_to(name, direction);
 #ifdef DEBUG
 		string msg = "Loaded " + name + " ";
 		if (direction == "memory_to_disk")
@@ -2454,8 +2450,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->pgsql_servers_wrlock();
 				// Always a plain OK, as in v3.0.11: the LOAD never fails or is
-				// partially rejected, and a server module that could not be notified
-				// is logged, not reported to the client (maintainer decision, #6448).
+				// partially rejected (maintainer decision, #6448).
 				SPA->load_pgsql_servers_to_runtime();
 				SPA->pgsql_servers_wrunlock();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers to RUNTIME\n");
@@ -2467,8 +2462,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->mysql_servers_wrlock();
 				// Always a plain OK, as in v3.0.11: the LOAD never fails or is
-				// partially rejected, and a server module that could not be notified
-				// is logged, not reported to the client (maintainer decision, #6448).
+				// partially rejected (maintainer decision, #6448).
 				SPA->load_mysql_servers_to_runtime();
 				SPA->mysql_servers_wrunlock();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
@@ -2529,12 +2523,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(SAVE_PGSQL_SERVERS_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->pgsql_servers_wrlock();
-				const bool saved = SPA->save_pgsql_servers_runtime_to_database(false);
+				SPA->save_pgsql_servers_runtime_to_database(false);
 				SPA->pgsql_servers_wrunlock();
-				if (!saved) {
-					SPA->send_error_msg_to_client(sess, (char*)"Server-module runtime snapshot save failed");
-					return false;
-				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved pgsql servers from RUNTIME\n");
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
@@ -2543,12 +2533,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(SAVE_MYSQL_SERVERS_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->mysql_servers_wrlock();
-				const bool saved = SPA->save_mysql_servers_runtime_to_database(false);
+				SPA->save_mysql_servers_runtime_to_database(false);
 				SPA->mysql_servers_wrunlock();
-				if (!saved) {
-					SPA->send_error_msg_to_client(sess, (char*)"Server-module runtime snapshot save failed");
-					return false;
-				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers from RUNTIME\n");
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
@@ -3381,31 +3367,6 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query
-
-#ifdef PROXYSQL40
-	if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
-		std::unique_ptr<SQLite3_result> module_result;
-		std::string module_error;
-		const auto endpoint = proxysql_server_module_cluster_endpoint(
-			query_no_space, *GloAdmin->admindb, module_result, module_error);
-		if (endpoint == ProxySQL_ServerModuleClusterEndpointResult::handled) {
-			if constexpr (std::is_same_v<S, MySQL_Session>) {
-				sess->SQLite3_to_MySQL(module_result.get(), nullptr, 0,
-					&sess->client_myds->myprot);
-			} else {
-				SQLite3_to_Postgres(sess->client_myds->PSarrayOUT,
-					module_result.get(), nullptr, 0, query);
-			}
-			run_query = false;
-			goto __run_query;
-		}
-		if (endpoint == ProxySQL_ServerModuleClusterEndpointResult::error) {
-			SPA->send_error_msg_to_client(sess, const_cast<char*>(module_error.c_str()));
-			run_query = false;
-			goto __run_query;
-		}
-	}
-#endif
 
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			string tn = "";

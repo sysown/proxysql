@@ -10,46 +10,30 @@
 #include <string>
 #include <vector>
 
-namespace {
-
-ProxySQL_ServerModuleTable table(ProxySQL_ServerProtocol protocol, const char* name,
-	const char* runtime_name, const char* order_by) {
-	return {protocol, name, runtime_name, order_by};
-}
-
-} // namespace
-
 int main() {
-	plan(12);
+	plan(10);
 	test_init_minimal();
 
 	const std::vector<ProxySQL_ClusterPluginIdentity> plugins {
 		{"aws", 0x4000000Bu}, {"mysqlx", 0x4000000Bu}};
-	const std::vector<ProxySQL_ServerModuleTable> tables {
-		table(ProxySQL_ServerProtocol::mysql, "mysql_aws_topology_policy",
-			"runtime_mysql_aws_topology_policy", "writer_hostgroup"),
-		table(ProxySQL_ServerProtocol::pgsql, "pgsql_aws_topology_policy",
-			"runtime_pgsql_aws_topology_policy", "writer_hostgroup")};
 
-	const std::string base = proxysql_cluster_plugin_set_hash(plugins, tables);
+	const std::string base = proxysql_cluster_plugin_set_hash(plugins);
 	ok(!base.empty(), "hash is a non-empty checksum string");
-	ok(proxysql_cluster_plugin_set_hash(plugins, tables) == base, "hash is deterministic");
-	ok(proxysql_cluster_plugin_set_hash({plugins[1], plugins[0]}, {tables[1], tables[0]}) == base,
-		"hash does not depend on load or registration order");
+	ok(proxysql_cluster_plugin_set_hash(plugins) == base, "hash is deterministic");
+	ok(proxysql_cluster_plugin_set_hash({plugins[1], plugins[0]}) == base,
+		"hash does not depend on load order");
 
-	ok(proxysql_cluster_plugin_set_hash({plugins[0]}, tables) != base,
+	ok(proxysql_cluster_plugin_set_hash({plugins[0]}) != base,
 		"a missing plugin changes the hash");
-	ok(proxysql_cluster_plugin_set_hash({plugins[0], {"mysqlx", 0x4000000Au}}, tables) != base,
+	ok(proxysql_cluster_plugin_set_hash({plugins[0], {"mysqlx", 0x4000000Au}}) != base,
 		"a different plugin ABI version changes the hash");
-	ok(proxysql_cluster_plugin_set_hash(plugins, {tables[0]}) != base,
-		"a missing server-module table changes the hash");
-	ok(proxysql_cluster_plugin_set_hash(plugins, {tables[0], table(ProxySQL_ServerProtocol::pgsql,
-		"pgsql_aws_topology_policy", "runtime_pgsql_aws_topology_policy", "reader_hostgroup")}) != base,
-		"a different server-module table definition changes the hash");
 
-	const std::string empty = proxysql_cluster_plugin_set_hash({}, {});
-	ok(!empty.empty() && empty == proxysql_cluster_plugin_set_hash({}, {}) && empty != base,
-		"nodes without plugins share one well-defined hash, distinct from any plugin set");
+	// The hash formerly also covered server-module tables (removed). Their
+	// count is still hashed as zero so the value is the one published by
+	// builds that had server modules but no module registered; pin it.
+	const std::string empty = proxysql_cluster_plugin_set_hash({});
+	ok(empty == "0xB7903C7C705E9675" && empty != base,
+		"nodes without plugins share the same well-defined hash as before: %s", empty.c_str());
 
 	ok(proxysql_cluster_plugin_set_compatible(base, true, base),
 		"peers with the same plugin set are compatible");

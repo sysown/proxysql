@@ -326,6 +326,7 @@ gh pr diff <PR> | grep "^+++ b/" | grep -v "<expected_files_pattern>"
 #6448 is the reference case:
 - `1ed576b9d` wrapped every `LOAD ... SERVERS TO RUNTIME` in an install transaction with a mutex, a generation counter and a module veto, compiled on every tier. No shipped plugin registers a server module.
 - That caused five follow-up commits in eight weeks, three more defects in review, one commit that made every successful LOAD return ERROR and broke all cluster CI, and finally an issue to delete all of it.
+- The server-module machinery was then removed entirely (module tables, their Cluster sync and `*_servers_v2` checksum folding, module hostgroup claims); only the ABI-14 `register_server_module` slot remains, as a reserved stub that always rejects.
 
 **Prevention:**
 - A new mechanism must name its **shipped** caller in the PR description, by file and function. Test fakes do not count. Neither does "a future plugin" or "an out-of-tree plugin might".
