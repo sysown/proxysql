@@ -1559,8 +1559,18 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 	pkt += strlen((char *)vars1.user) + 1;
 
 	if (vars1.capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
-		uint64_t passlen64;
-		int pass_len_enc=mysql_decode_length(pkt,&passlen64);
+		uint64_t passlen64=0;
+		// GHSA-x23w-3v26-vgvj: this length-encoded prefix is attacker
+		// controlled and the 0xfe form reads 8 bytes past it, so a
+		// truncated prefix at the end of the handshake response read
+		// past the packet, before authentication. Bound the decode by
+		// the bytes actually remaining.
+		int pass_len_enc=mysql_decode_length_checked(pkt, (vars1._ptr + len) - pkt, &passlen64);
+		if (pass_len_enc == 0) {
+			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth response length in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+			return false;
+		}
 		vars1.pass_len = passlen64;
 		pkt	+= pass_len_enc;
 		if (vars1.pass_len > (len - (pkt - vars1._ptr))) {

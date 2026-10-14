@@ -204,8 +204,12 @@ typedef union _4bytes_t {
 
 unsigned int CPY3(unsigned char *ptr) {
 	_4bytes_t buf;
-	buf.i=*(uint32_t *)ptr;
-	buf.data[3]=0;
+	// GHSA-x23w-3v26-vgvj: copy 3 bytes rather than reading 4 and masking
+	// the last one. The old form touched one byte past the field it was
+	// asked to read, which is an out-of-bounds read when the field ends
+	// exactly at the end of the packet.
+	buf.i = 0;
+	memcpy(buf.data, ptr, 3);
 	return buf.i;
 }
 
@@ -225,8 +229,33 @@ uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len) {
 	if (*ptr <= 0xfb) { if (len) { *len = CPY1(ptr); };  return 1; }
 	if (*ptr == 0xfc) { if (len) { *len = CPY2(ptr+1); }; return 3; }
 	if (*ptr == 0xfd) { if (len) { *len = CPY3(ptr+1); };  return 4; }
-	if (*ptr == 0xfe) { if (len) { *len = CPY8(ptr+1); };  return 9; }
+if (*ptr == 0xfe) { if (len) { *len = CPY8(ptr+1); }; return 9; }
 	return 0; // never reaches here
+}
+
+/**
+ * @brief Bounded variant of 'mysql_decode_length()'.
+ *
+ * The unbounded variant reads up to 9 bytes (the 0xfe form carries a 64-bit
+ * length) with no idea how many bytes are actually available, so a truncated
+ * length-encoded integer at the end of an attacker-controlled packet reads
+ * past its end.
+ *
+ * @param ptr Pointer to the length-encoded integer.
+ * @param avail Number of bytes readable from 'ptr'.
+ * @param len Where to store the decoded value (may be NULL to skip decoding).
+ * @return The size of the encoded integer, or 0 if the encoding is invalid
+ *         or the encoded integer does not fit within 'avail'.
+ */
+uint8_t mysql_decode_length_checked(unsigned char *ptr, size_t avail, uint64_t *len) {
+	if (avail == 0 || *ptr == 0xff) {
+		return 0;
+	}
+	const uint8_t enc_len = *ptr <= 0xfb ? 1 : (*ptr == 0xfc ? 3 : (*ptr == 0xfd ? 4 : 9));
+	if (avail < enc_len) {
+		return 0;
+	}
+	return mysql_decode_length(ptr, len);
 }
 
 uint8_t mysql_encode_length(uint64_t len, char *hd) {
