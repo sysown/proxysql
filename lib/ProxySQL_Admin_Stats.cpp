@@ -1616,14 +1616,14 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 	//        | ProxySQL_Node_Entry::set_checksums
 	//      + ProxySQL_Cluster::pull_mysql_query_rules_from_peer -> tries to lock on 'sql_query_global_mutex'
 	//  Producing a deadlock scenario between the two threads.
-	pthread_mutex_unlock(&this->sql_query_global_mutex);
-	// Manual release window: the depth drops with the mutex so any re-entrant
-	// door invoked inside the window (none today, but the protocol is
-	// mandatory) still locks; see include/proxysql_admin_global_sql_lock.h.
-	proxysql_admin_global_sql_lock_depth() = 0;
-	SQLite3_result* resultset = GloProxyCluster->get_stats_proxysql_servers_checksums();
-	pthread_mutex_lock(&this->sql_query_global_mutex);
-	proxysql_admin_global_sql_lock_depth() = 1;
+	// The release window gives up every level this thread holds and restores
+	// exactly those levels (an Admin session, or a plugin that entered through
+	// the shared protocol); see include/proxysql_admin_global_sql_lock.h.
+	SQLite3_result* resultset = nullptr;
+	{
+		proxysql_admin_global_sql_release_scope released(this->sql_query_global_mutex);
+		resultset = GloProxyCluster->get_stats_proxysql_servers_checksums();
+	}
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_proxysql_servers_checksums");
 	if (resultset) {
@@ -1664,13 +1664,13 @@ void ProxySQL_Admin::stats___proxysql_servers_metrics() {
 	// ProxySQL_Node_Entry::set_checksums(), whose tail pulls configuration and
 	// takes 'sql_query_global_mutex'. Release the global mutex around the
 	// snapshot; the returned resultset is a self-contained copy.
-	pthread_mutex_unlock(&this->sql_query_global_mutex);
-	// Manual release window: depth follows the mutex, see the shared protocol
-	// in include/proxysql_admin_global_sql_lock.h.
-	proxysql_admin_global_sql_lock_depth() = 0;
-	SQLite3_result *resultset = GloProxyCluster->get_stats_proxysql_servers_metrics();
-	pthread_mutex_lock(&this->sql_query_global_mutex);
-	proxysql_admin_global_sql_lock_depth() = 1;
+	// Release window: see stats___proxysql_servers_checksums() above and the
+	// shared protocol in include/proxysql_admin_global_sql_lock.h.
+	SQLite3_result *resultset = nullptr;
+	{
+		proxysql_admin_global_sql_release_scope released(this->sql_query_global_mutex);
+		resultset = GloProxyCluster->get_stats_proxysql_servers_metrics();
+	}
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_proxysql_servers_metrics");
 	if (resultset) {
