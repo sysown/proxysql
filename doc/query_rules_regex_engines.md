@@ -10,8 +10,12 @@ columns of `mysql_query_rules` and `pgsql_query_rules`.
 | 2 | RE2 | available | available | available |
 | 3 | PCRE2 10.47 | not available | available (opt-in) | **default** |
 
-Engine 1 behaves exactly as in v3.0.11 and earlier, except that a match can
-no longer overflow the worker stack (see [Stack vs heap](#stack-vs-heap)). Engine 3 is not
+Engine 1 behaves as in v3.0.11 and earlier, except that a match can no
+longer overflow the worker stack (see [Stack vs heap](#stack-vs-heap)): it
+runs with a recursion/match limit, and a query on which a rule reaches the
+limit is not matched by that rule, negated or not, and is not rewritten by
+it. Up to v3.0.11 a limit hit counted as "no match", so a negated rule
+matched such a query (see [Invalid regex and limit hits](#invalid-regex-and-limit-hits)). Engine 3 is not
 syntax-compatible with engine 1: review your rules with the checklist below
 before switching, and before upgrading to v4.0 if you do not set the variable
 explicitly. To keep the previous behaviour on v4.0, set
@@ -97,8 +101,12 @@ negated. On engine 3 it matches according to the pattern.
   reaches the limit, e.g. `IN \((\d+,)*\d+\)` on an IN list of a few hundred
   values with the default stack.
 - Engine 3 keeps backtracking frames on the heap, limited per match.
-- For both engines, use `[\s\S]*` or `(?s).*` instead of `(.|\n)*`, and a
-  character class (`IN \([\d,]+\)`) instead of a repeated group.
+- For both engines, use `[\s\S]*` or `(?s).*` instead of `(.|\n)*`, and
+  possessive quantifiers instead of a repeated group that backtracks:
+  `IN \(\d++(?:,\d++)*+\)` matches the same lists as `IN \((\d+,)*\d+\)`
+  (without the capture group) in 2 recursion levels, whatever the list
+  length. A character class such as `IN \([\d,]+\)` also avoids the
+  recursion but is broader: it also accepts `IN (,)` or `IN (1,,2,)`.
 
 ## Invalid regex and limit hits
 

@@ -208,7 +208,14 @@ void test_limit_scales_with_stack() {
 	};
 	int result = -1;
 	bool alive = run_isolated(kMaxStack, fn, &result);
+#if defined(__linux__)
 	ok(alive && result == 1, "4 MiB stack: a repeated group matches a 500-item IN list");
+#else
+	// The stack bounds are only read on Linux (pthread_getattr_np()); other
+	// platforms use the fixed limit sized for the smallest worker stack,
+	// which does not grow with the stack.
+	ok(alive && result == 0, "4 MiB stack, stack bounds unknown: the fixed fallback limit still applies");
+#endif
 	result = -1;
 	alive = run_isolated(kMinStack, fn, &result);
 	ok(alive && result == 0, "256 KiB stack: the same rule hits the recursion limit and is not applied, negated or not");

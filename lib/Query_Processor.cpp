@@ -425,8 +425,10 @@ static constexpr int PCRE1_OVECTOR_SIZE = (1 + 16) * 3;
 
 // Bounds of the calling thread's stack, read once per thread.
 static __thread bool pcre1_stack_low_probed = false;
-static __thread char* pcre1_stack_low = nullptr;
-static __thread char* pcre1_stack_high = nullptr;
+// Kept as integers: comparing or subtracting pointers into different
+// objects (the stack bounds and a frame address) is undefined behaviour.
+static __thread uintptr_t pcre1_stack_low = 0;
+static __thread uintptr_t pcre1_stack_high = 0;
 
 /**
  * @brief The PCRE1 recursion limit for a rule compiled by the calling thread.
@@ -442,20 +444,20 @@ static unsigned long pcre1_recursion_limit_for_current_thread() {
 			void* addr = nullptr;
 			size_t size = 0;
 			if (pthread_attr_getstack(&attr, &addr, &size) == 0 && addr != nullptr && size > 0) {
-				pcre1_stack_low = static_cast<char*>(addr);
+				pcre1_stack_low = reinterpret_cast<uintptr_t>(addr);
 				pcre1_stack_high = pcre1_stack_low + size;
 			}
 			pthread_attr_destroy(&attr);
 		}
 #endif
 	}
-	if (pcre1_stack_low == nullptr) {
+	if (pcre1_stack_low == 0) {
 		return PCRE1_RECURSION_LIMIT_FALLBACK;
 	}
 	// Stacks grow down on every platform ProxySQL supports. The frame address
 	// is used rather than the address of a local: with ASAN's fake stack a
 	// local can live on the heap, outside the thread's stack.
-	char* sp = static_cast<char*>(__builtin_frame_address(0));
+	const uintptr_t sp = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
 	if (sp > pcre1_stack_high) {
 		// Not on the stack the thread was created with (e.g. sigaltstack).
 		return PCRE1_RECURSION_LIMIT_FALLBACK;
@@ -1026,6 +1028,7 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 	r->opt2=NULL;
 	r->re2=NULL;
 	std::string pcre2_error {};
+	std::string pcre1_error {};
 	if (query_processor_regex==2) {
 		r->opt2=new re2::RE2::Options(RE2::Quiet);
 		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
@@ -1084,6 +1087,19 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 			const char* compile_error = nullptr;
 			int error_offset = 0;
 			r->pcre1 = pcre_compile(pattern, r->opt1->all_options(), &compile_error, &error_offset, nullptr);
+			// re1 and pcre1 must agree on whether the pattern compiled: the
+			// match uses pcre1 and the rewrite re1. An invalid pattern keeps
+			// the v3.0.11 semantics (never matches) through both. If only
+			// pcre1 failed (e.g. out of memory), its matches could not tell a
+			// limit hit from "no match", so the rule is not applied at all:
+			// re1 is dropped and neither the match nor the rewrite runs.
+			if (r->re1->error().empty() == false) {
+				if (r->pcre1) { pcre_free(r->pcre1); r->pcre1 = nullptr; }
+			} else if (r->pcre1 == nullptr) {
+				delete r->re1;
+				r->re1 = nullptr;
+				pcre1_error = (compile_error ? compile_error : "pcre_compile() failed");
+			}
 		}
 	}
 	// Name the rule and the field so a broken rule can be found: RE2 runs with
@@ -1102,6 +1118,12 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 	} else if (r->re1 && r->re1->error().empty() == false) {
 		error = r->re1->error().c_str();
 		engine = "PCRE";
+	} else if (pcre1_error.empty() == false) {
+		if (report_errors) {
+			proxy_error("Query rule %d: %s '%s' cannot be compiled for matching by the PCRE regex engine, the rule is not applied: %s\n",
+				qr->rule_id, (i==1 ? "match_digest" : "match_pattern"), (i==1 ? qr->match_digest : qr->match_pattern),
+				pcre1_error.c_str());
+		}
 	}
 	if (error && report_errors) {
 		proxy_error("Query rule %d: %s '%s' cannot be compiled by the %s regex engine, %s: %s\n",
