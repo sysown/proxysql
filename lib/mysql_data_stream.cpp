@@ -646,6 +646,13 @@ void MySQL_Data_Stream::check_data_flow() {
 		}
 		///////////////////////////////////////////////////////////////////////////////////////////////
 
+		// Client pipelining (#5930): a client may send the next commands while the
+		// responses to the previous ones are still being sent to it. This is not a
+		// broken data flow: the commands are processed in order by the session.
+		if (myds_type == MYDS_FRONTEND && sess && sess->client_myds == this && sess->client_may_pipeline()) {
+			return;
+		}
+
 		if (sess && sess->status == FAST_FORWARD && sess->session_fast_forward == SESSION_FORWARD_TYPE_PERMANENT) {
 			// Permanent fast-forward sessions: log warning but continue
 			proxy_warning("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, queue_data(queueIN), PSarrayIN->len, queue_data(queueOUT), PSarrayOUT->len);
@@ -1094,6 +1101,17 @@ void MySQL_Data_Stream::set_pollout() {
 				// for the reason listed above, we remove POLLIN unless the timeout has reached
 				_pollfd->events = 0;
 			}
+		}
+		if (myds_type == MYDS_FRONTEND && PSarrayIN->len && sess && sess->client_myds == this && sess->client_pkts_must_be_deferred()) {
+			// Client pipelining (#5930): packets received while a command is in
+			// flight are queued in PSarrayIN until the session is back to
+			// WAITING_CLIENT_DATA. Stop reading from the client while some are
+			// queued, so a client that keeps sending cannot make the queue grow
+			// unboundedly: the data stays in the kernel buffers and TCP flow control
+			// applies, as with a MySQL server that reads the next command only after
+			// it has answered the previous one. Reading resumes once the queued
+			// packets have been processed.
+			_pollfd->events = 0;
 		}
 		//if (PSarrayOUT->len || available_data_out() || queueOUT.partial || (encrypted && !SSL_is_init_finished(ssl))) {
 		if (PSarrayOUT->len || available_data_out() || queueOUT.partial) {
