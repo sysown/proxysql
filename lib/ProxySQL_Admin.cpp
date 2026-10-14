@@ -7978,8 +7978,22 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_bind_text)(statement1, 10, ad->attributes, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_bind_text)(statement1, 11, ad->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			SAFE_SQLITE3_STEP2(statement1);
+			const int step_rc = rc;
+			if (step_rc != SQLITE_DONE) {
+				// Do not fail silently: when saving FROM RUNTIME the row was already
+				// set active=0 above, and a failed REPLACE leaves it that way (issue
+				// #6413). The attribute values are not logged: they may hold secrets.
+				sqlite3* db = admindb->get_db();
+				proxy_error(
+					"Failed to save %s mysql_users entry for user '%s' into %s: %s\n",
+					ad->frontend_ ? "frontend" : "backend", ad->username,
+					_runtime ? "runtime_mysql_users" : "mysql_users",
+					db ? (*proxy_sqlite3_errmsg)(db) : "unknown error");
+			}
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_reset)(statement1);
+			// After a failed step reset() returns that same error, reported above.
+			if (step_rc == SQLITE_DONE) { ASSERT_SQLITE_OK(rc, admindb); }
 		}
 		free(ad->username);
 		free(ad->password); // this is not initialized with dump_all_users( , false)

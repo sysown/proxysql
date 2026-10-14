@@ -81,6 +81,29 @@ bool split_rds_endpoint(const std::string& endpoint, std::string& endpoint_regio
 	return false;
 }
 
+/**
+ * @brief Policy for attributes text that is not a JSON object the policy can
+ *   read: valid-but-non-object JSON, or text add() rejected.
+ * @details 'mysql_users.attributes' only has to satisfy JSON_VALID(attributes)
+ *   OR attributes='', so values such as '[]', '"x"', 'null', or text nlohmann
+ *   rejects ('{"a":1e400}', a lone surrogate escape) are storable and were
+ *   harmless before this policy existed: they select PASSWORD, as in v3.0.11.
+ *   Only text that mentions 'backend_auth' fails closed, so that a policy the
+ *   operator configured but that cannot be read never falls back to sending
+ *   the password (issue #6413).
+ */
+MySQLBackendAuthPolicy unreadable_attributes_policy(
+	std::string_view database_user, std::string_view attributes)
+{
+	if (attributes.find("backend_auth") == std::string_view::npos) {
+		MySQLBackendAuthPolicy policy;
+		policy.database_user = database_user;
+		policy.type = MySQLBackendAuthType::PASSWORD;
+		return policy;
+	}
+	return invalid_backend_auth_policy(database_user, "attributes_not_object");
+}
+
 } // namespace
 
 const char* mysql_backend_auth_type_name(MySQLBackendAuthType type) {
@@ -111,24 +134,7 @@ MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 	const nlohmann::json parsed = nlohmann::json::parse(
 		attributes.data(), attributes.data() + attributes.size(), nullptr, false);
 	if (parsed.is_discarded() || !parsed.is_object()) {
-		// 'mysql_users.attributes' only has to satisfy JSON_VALID(attributes) OR
-		// attributes='', so valid-but-non-object values such as '[]', '"x"' or
-		// even 'null' are storable and were harmless before this policy existed.
-		// Only fail closed when the value actually mentions 'backend_auth', so
-		// that pre-existing rows keep working after an upgrade.
-		//
-		// The exact sentinel returned by invalid_attributes_storage() -- a
-		// backend row whose stored JSON failed to parse -- is the ONE
-		// non-object value that must stay INVALID: a row that failed policy
-		// validation cannot silently fall back to password authentication once
-		// reloaded. The sentinel is deliberately JSON-invalid ("invalid") so
-		// no operator-configured value can collide with it.
-		if (attributes != invalid_backend_attributes_sentinel() &&
-			attributes.find("backend_auth") == std::string_view::npos) {
-			policy.type = MySQLBackendAuthType::PASSWORD;
-			return policy;
-		}
-		return invalid_backend_auth_policy(database_user, "attributes_not_object");
+		return unreadable_attributes_policy(database_user, attributes);
 	}
 
 	const auto backend_auth = parsed.find("backend_auth");
@@ -162,6 +168,25 @@ MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 	return policy;
 }
 
+MySQLBackendAuthPolicy mysql_backend_auth_policy_for_account(
+	std::string_view database_user,
+	const char* attributes,
+	const char* rejected_attributes,
+	bool backend_password_is_nonempty)
+{
+	if (rejected_attributes != nullptr) {
+		// add() rejected the configured text (parse or validation error), so the
+		// row has no readable attributes. Decide on the configured text exactly
+		// like any other unreadable value. This also covers text that parses but
+		// failed validation, e.g. a well-formed 'backend_auth' next to a bad
+		// 'default-transaction_isolation': the row was rejected as a whole, so
+		// IAM is not selected from it, and it does not fall back to PASSWORD.
+		return unreadable_attributes_policy(database_user, rejected_attributes);
+	}
+	return parse_mysql_backend_auth_policy(
+		database_user, attributes != nullptr ? attributes : "", backend_password_is_nonempty);
+}
+
 MySQLBackendAuthPolicy resolve_mysql_backend_auth_policy(
 	MySQL_Authentication& authentication,
 	const char* mapped_backend_username)
@@ -187,9 +212,10 @@ MySQLBackendAuthPolicy resolve_mysql_backend_auth_policy(
 		return policy;
 	}
 
-	const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(
+	const MySQLBackendAuthPolicy policy = mysql_backend_auth_policy_for_account(
 		database_user,
-		account.attributes != nullptr ? account.attributes : "",
+		account.attributes,
+		account.rejected_attributes,
 		account.password[0] != '\0');
 	free_account_details(account);
 	return policy;
