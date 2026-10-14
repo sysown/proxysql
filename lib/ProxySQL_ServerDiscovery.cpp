@@ -28,8 +28,8 @@ void (*proxysql_servers_v2_refresh_exception_for_test)(int, int) = nullptr;
 
 namespace {
 #ifdef PROXYSQL40
-// Server runtime publication state. Only PROXYSQL40 has server modules and
-// discovery controllers to notify; other tiers install servers exactly as
+// Server runtime publication state. Only PROXYSQL40 has discovery
+// controllers to notify; other tiers install servers exactly as
 // before, with no install mutex and no generation counter.
 std::atomic<uint64_t> mysql_generation {0};
 std::atomic<uint64_t> pgsql_generation {0};
@@ -149,16 +149,15 @@ uint64_t proxysql_advance_server_runtime_generation(ProxySQL_ServerProtocol prot
 	return installed_generation(protocol).fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-uint64_t proxysql_publish_server_runtime(ProxySQL_ServerModuleSnapshot snapshot,
-	bool notify_module) {
-	const ProxySQL_ServerProtocol protocol = snapshot.runtime.protocol;
+uint64_t proxysql_publish_server_runtime(ProxySQL_ServerRuntimeSnapshot snapshot) {
+	const ProxySQL_ServerProtocol protocol = snapshot.protocol;
 	if (protocol_index(protocol) < 0) return 0;
 	if (proxysql_server_runtime_publication_before_lock_for_test != nullptr)
 		proxysql_server_runtime_publication_before_lock_for_test(protocol);
 	ProxySQL_ServerRuntimeInstallLock lock(protocol);
-	snapshot.runtime.generation = proxysql_advance_server_runtime_generation(protocol);
-	const uint64_t generation = snapshot.runtime.generation;
-	proxysql_install_active_server_runtime(std::move(snapshot), notify_module);
+	snapshot.generation = proxysql_advance_server_runtime_generation(protocol);
+	const uint64_t generation = snapshot.generation;
+	proxysql_install_active_server_runtime(std::move(snapshot));
 	return generation;
 }
 

@@ -5,7 +5,6 @@
 #ifdef PROXYSQL40
 
 #include "ProxySQL_PluginManager.h"
-#include "ProxySQL_ServerModuleCluster.h"
 #include "ProxySQL_PluginSecrets.h"
 #include "ProxySQL_ConfigurationAccess.h"
 #include "ProxySQL_PluginListenerGate.h"
@@ -411,18 +410,22 @@ void refresh_mysql_aws_locality_stats_service(SQLite3DB* statsdb) {
 	MySQL_HostGroups_Manager::project_aws_locality_stats(statsdb, {});
 }
 
-bool register_server_module_service(
-	ProxySQL_ServerModuleHooks *module,
-	void (*destroy)(ProxySQL_ServerModuleHooks *), void *module_handle) {
-	if (g_registry_target == nullptr) {
-		proxy_warning("Server module registration attempted outside plugin init/register_schemas phase\n");
-		return false;
+// Reserved ABI-14 slot: server modules are no longer supported. The arguments
+// are never dereferenced; the caller keeps ownership of the module, its destroy
+// callback and its module handle. Inside register_schemas/init the rejection
+// also fails that lifecycle phase, exactly like any other rejected
+// registration, so a plugin that depends on a server module is not started
+// half-working.
+bool register_server_module_unsupported(
+	ProxySQL_ServerModuleHooks *, void (*)(ProxySQL_ServerModuleHooks *), void *) {
+	static std::once_flag logged;
+	std::call_once(logged, [] {
+		proxy_warning("A plugin called register_server_module: server modules are no longer supported, registration rejected\n");
+	});
+	if (g_registry_target != nullptr) {
+		note_registration_failure("server module", "server modules are no longer supported");
 	}
-	if (!g_registry_target->register_server_module(module, destroy, module_handle)) {
-		note_registration_failure("server module", "server discovery");
-		return false;
-	}
-	return true;
+	return false;
 }
 
 bool install_server_discovery_controller_service(
@@ -674,7 +677,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.install_aws_metadata_provider = &install_aws_metadata_provider_service;
 	services_.refresh_mysql_aws_locality_stats = &refresh_mysql_aws_locality_stats_service;
 	services_.uninstall_aws_iam_token_source = &uninstall_aws_iam_token_source_service;
-	services_.register_server_module = &register_server_module_service;
+	services_.register_server_module = &register_server_module_unsupported;
 	services_.install_server_discovery_controller = &install_server_discovery_controller_service;
 	services_.uninstall_server_discovery_controller = &uninstall_server_discovery_controller_service;
 	services_.post_server_desired_set = &post_server_desired_set_service;
@@ -718,7 +721,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_phase_b_.with_admin_db_lock = &with_admin_db_lock_not_available;
 	services_phase_b_.refresh_mysql_aws_locality_stats =
 		&refresh_mysql_aws_locality_stats_service;
-	services_phase_b_.register_server_module = &register_server_module_service;
+	services_phase_b_.register_server_module = &register_server_module_unsupported;
 #endif /* PROXYSQL40 */
 }
 
@@ -728,7 +731,6 @@ ProxySQL_PluginManager::~ProxySQL_PluginManager() {
 	for (ProxySQL_ServerProtocol protocol : {ProxySQL_ServerProtocol::mysql,
 	                                         ProxySQL_ServerProtocol::pgsql}) {
 		uninstall_server_discovery_controller(protocol);
-		unregister_server_module(protocol);
 	}
 	#endif /* PROXYSQL40 */
 	// Note: g_active_plugin_manager is cleared by callers under the mutex
@@ -1711,180 +1713,46 @@ void ProxySQL_PluginManager::finish_server_desired_set(int index, bool applying)
 	server_discovery_cv_.notify_all();
 }
 
-bool ProxySQL_PluginManager::register_server_module(
-	ProxySQL_ServerModuleHooks *module,
-	void (*destroy)(ProxySQL_ServerModuleHooks *), void *module_handle) {
-	if (module == nullptr || destroy == nullptr || module_handle == nullptr) {
-		return false;
-	}
-	// ABI-14 callback-only modules remain supported.  Do not read appended
-	// fields from their frozen allocation.
-	const bool affiliated_module = module->runtime_configuration_installed == nullptr;
-	if (affiliated_module && (module->tables.empty() || module->runtime_installed == nullptr ||
-		module->runtime_table_snapshot == nullptr || module->shutdown == nullptr)) return false;
-	const int index = server_protocol_index(module->protocol);
-	if (index < 0) return false;
-	std::vector<ProxySQL_ServerModuleTable> tables = affiliated_module ? module->tables :
-		std::vector<ProxySQL_ServerModuleTable>{};
-	std::string validation_error;
-	if (affiliated_module && !proxysql_validate_server_module_table_registry(
-		module->protocol, tables, validation_error)) return false;
-	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-	if (server_modules_[index].module != nullptr) return false;
-	registered_server_module_t registered {};
-	registered.module = module;
-	registered.destroy = destroy;
-	registered.module_handle = module_handle;
-	registered.legacy_callback_only = !affiliated_module;
-	registered.legacy_runtime_configuration_installed = module->runtime_configuration_installed;
-	registered.opaque = module->opaque;
-	if (affiliated_module) {
-		registered.runtime_installed = module->runtime_installed;
-		registered.runtime_table_snapshot = module->runtime_table_snapshot;
-		registered.shutdown = module->shutdown;
-	}
-	registered.tables = std::move(tables);
-	server_modules_[index] = std::move(registered);
-	return true;
-}
-
-std::vector<ProxySQL_ServerModuleTable> ProxySQL_PluginManager::server_module_tables(
-	ProxySQL_ServerProtocol protocol) const {
-	const int index = server_protocol_index(protocol);
-	if (index < 0) return {};
-	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-	return server_modules_[index].tables;
-}
-
-namespace {
-/**
- * @brief Keeps the module hostgroup claims that are valid and disjoint.
- * @details A dropped claim is logged. Nothing here can reject the installed
- *   configuration: the module simply does not own a dropped claim.
- */
-std::vector<ProxySQL_ServerHostgroupClaim> filter_server_module_claims(
-	const ProxySQL_ServerRuntimeSnapshot& snapshot,
-	const std::vector<ProxySQL_ServerHostgroupClaim>& managed_claims,
-	const std::vector<ProxySQL_ServerHostgroupClaim>& module_claims) {
-	// Ordinary core server rows are seeds, not topology ownership claims. Only
-	// active built-in topology mappings reserve hostgroups from plugins.
-	std::set<uint32_t> claimed(snapshot.topology_hostgroups.begin(), snapshot.topology_hostgroups.end());
+void ProxySQL_PluginManager::install_server_runtime(ProxySQL_ServerRuntimeSnapshot snapshot) {
 	// A built-in topology that overlaps a managed discovery claim is only
 	// logged, never rejected, and there is no pre-install check for it on
 	// purpose: LOAD ... SERVERS TO RUNTIME and Cluster pulls must never fail
 	// or be partially rejected (maintainer decision, #6448). The operator
-	// resolves the overlap; module claims that overlap are dropped below.
-	for (const auto& claim : managed_claims) {
-		if (claimed.count(claim.writer_hostgroup) != 0 || claimed.count(claim.reader_hostgroup) != 0)
+	// resolves the overlap.
+	const std::set<uint32_t> topology(snapshot.topology_hostgroups.begin(),
+		snapshot.topology_hostgroups.end());
+	for (const auto& claim : managed_server_hostgroup_claims(snapshot.protocol)) {
+		if (topology.count(claim.writer_hostgroup) != 0 || topology.count(claim.reader_hostgroup) != 0)
 			proxy_warning("Built-in server topology overlaps managed discovery hostgroups %u/%u\n",
 				claim.writer_hostgroup, claim.reader_hostgroup);
-		claimed.insert(claim.writer_hostgroup);
-		claimed.insert(claim.reader_hostgroup);
 	}
-	std::vector<ProxySQL_ServerHostgroupClaim> accepted;
-	for (const auto& claim : module_claims) {
-		if (claim.writer_hostgroup == claim.reader_hostgroup ||
-			claimed.count(claim.writer_hostgroup) != 0 || claimed.count(claim.reader_hostgroup) != 0) {
-			proxy_error("Server module hostgroup claim %u/%u is invalid or overlaps another owner; ignored\n",
-				claim.writer_hostgroup, claim.reader_hostgroup);
-			continue;
-		}
-		claimed.insert(claim.writer_hostgroup);
-		claimed.insert(claim.reader_hostgroup);
-		accepted.push_back(claim);
-	}
-	return accepted;
-}
-} // namespace
-
-void ProxySQL_PluginManager::install_server_runtime(
-	ProxySQL_ServerModuleSnapshot snapshot, bool notify_module) {
-	const int index = server_protocol_index(snapshot.runtime.protocol);
-	if (index < 0) return;
-	void (*runtime_installed)(void *, const ProxySQL_ServerModuleSnapshot&,
-		std::vector<ProxySQL_ServerHostgroupClaim>&) = nullptr;
-	void* opaque = nullptr;
-	std::vector<ProxySQL_ServerHostgroupClaim> claims;
-	{
-		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-		if (notify_module) {
-			runtime_installed = server_modules_[index].runtime_installed;
-			opaque = server_modules_[index].opaque;
-			if (runtime_installed != nullptr) ++server_callback_leases_[index];
-		} else {
-			// The module is not notified and keeps its claims, but they are
-			// filtered again below against the topology installed now, so a
-			// built-in topology added by this LOAD cannot overlap them.
-			claims = server_hostgroup_claims_[index];
-		}
-	}
-	if (runtime_installed != nullptr) {
-		ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
-		try {
-			runtime_installed(opaque, snapshot, claims);
-		} catch (const std::exception& e) {
-			log_server_callback_exception("module runtime-installed", e);
-			claims.clear();
-		} catch (...) {
-			log_server_callback_unknown_exception("module runtime-installed");
-			claims.clear();
-		}
-	}
-	claims = filter_server_module_claims(snapshot.runtime,
-		managed_server_hostgroup_claims(snapshot.runtime.protocol), claims);
-	// A module callback can publish again on this thread (the install lock is
-	// reentrant): that nested publication carries a higher generation and is
+	// A controller callback can publish again on this thread (the install lock
+	// is reentrant): that nested publication carries a higher generation and is
 	// already stored, so this older one must not overwrite it.
-	store_server_runtime_snapshot(std::move(snapshot.runtime), &claims, true);
-}
-
-void ProxySQL_PluginManager::install_server_runtime_snapshot(
-    ProxySQL_ServerRuntimeSnapshot snapshot,
-    std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims) {
-	store_server_runtime_snapshot(std::move(snapshot), &hostgroup_claims, false);
+	store_server_runtime_snapshot(std::move(snapshot), true);
 }
 
 void ProxySQL_PluginManager::install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot) {
-	store_server_runtime_snapshot(std::move(snapshot), nullptr, false);
+	store_server_runtime_snapshot(std::move(snapshot), false);
 }
 
 void ProxySQL_PluginManager::store_server_runtime_snapshot(
-    ProxySQL_ServerRuntimeSnapshot snapshot,
-    std::vector<ProxySQL_ServerHostgroupClaim>* hostgroup_claims, bool only_if_newer) {
+    ProxySQL_ServerRuntimeSnapshot snapshot, bool only_if_newer) {
 	const int index = server_protocol_index(snapshot.protocol);
 	if (index < 0) return;
-	void *module_opaque = nullptr;
-	void (*legacy_runtime_configuration_installed)(void *, ProxySQL_ServerRuntimeSnapshot) = nullptr;
 	ProxySQL_ServerDiscoveryController *controller = nullptr;
-	bool callback_lease = false;
 	{
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 		if (only_if_newer && server_snapshots_present_[index] &&
 			server_snapshots_[index].generation > snapshot.generation) return;
 		server_snapshots_[index] = snapshot;
 		server_snapshots_present_[index] = true;
-		if (hostgroup_claims != nullptr) {
-			server_hostgroup_claims_[index] = std::move(*hostgroup_claims);
-			rebuild_server_delegated_hostgroups(index);
-		}
-		legacy_runtime_configuration_installed = server_modules_[index].legacy_runtime_configuration_installed;
-		module_opaque = server_modules_[index].opaque;
 		controller = server_controllers_[index].controller;
-		callback_lease = server_modules_[index].module != nullptr || controller != nullptr;
-		if (callback_lease) ++server_callback_leases_[index];
+		if (controller != nullptr) ++server_callback_leases_[index];
 	}
-	if (!callback_lease) return;
+	if (controller == nullptr) return;
 	ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
-	if (legacy_runtime_configuration_installed != nullptr) {
-		try {
-			legacy_runtime_configuration_installed(module_opaque, snapshot);
-		} catch (const std::exception& e) {
-			log_server_callback_exception("module runtime", e);
-		} catch (...) {
-			log_server_callback_unknown_exception("module runtime");
-		}
-	}
-	if (controller != nullptr) {
+	{
 		ScopedServerControllerCallbackContext callback_context(this, index);
 		try {
 			controller->runtime_configuration_installed(std::move(snapshot));
@@ -1910,21 +1778,16 @@ std::vector<ProxySQL_ServerHostgroupClaim> ProxySQL_PluginManager::server_hostgr
 	const int index = server_protocol_index(protocol);
 	if (index < 0) return {};
 	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-	auto claims = server_hostgroup_claims_[index];
-	claims.insert(claims.end(), managed_server_hostgroup_claims_[index].begin(),
-		managed_server_hostgroup_claims_[index].end());
-	return claims;
+	return managed_server_hostgroup_claims_[index];
 }
 
 
 void ProxySQL_PluginManager::rebuild_server_delegated_hostgroups(int index) {
 	auto& delegated = server_delegated_hostgroups_[index];
 	delegated.clear();
-	for (const auto* claims : {&server_hostgroup_claims_[index], &managed_server_hostgroup_claims_[index]}) {
-		for (const auto& claim : *claims) {
-			delegated.push_back(claim.writer_hostgroup);
-			delegated.push_back(claim.reader_hostgroup);
-		}
+	for (const auto& claim : managed_server_hostgroup_claims_[index]) {
+		delegated.push_back(claim.writer_hostgroup);
+		delegated.push_back(claim.reader_hostgroup);
 	}
 	std::sort(delegated.begin(), delegated.end());
 	delegated.erase(std::unique(delegated.begin(), delegated.end()), delegated.end());
@@ -1962,10 +1825,6 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 		snapshot = server_snapshots_present_[index] ? server_snapshots_[index] :
 			ProxySQL_ServerRuntimeSnapshot {protocol, 0, {}, {}};
 		std::set<uint32_t> occupied(snapshot.topology_hostgroups.begin(), snapshot.topology_hostgroups.end());
-		for (const auto& claim : server_hostgroup_claims_[index]) {
-			occupied.insert(claim.writer_hostgroup);
-			occupied.insert(claim.reader_hostgroup);
-		}
 		for (const auto& claim : claims) {
 			if (claim.writer_hostgroup == claim.reader_hostgroup ||
 				!occupied.insert(claim.writer_hostgroup).second ||
@@ -1979,8 +1838,7 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 		managed_server_revisions_[index] = desired_revision;
 		rebuild_server_delegated_hostgroups(index);
 	}
-	// The install lock serializes the generation. The core-only installation
-	// keeps the module claims and does not call the module.
+	// The install lock serializes the generation.
 	runtime_generation_out = snapshot.generation;
 	install_server_runtime_snapshot(std::move(snapshot));
 	proxysql_request_server_read_only_monitor(protocol);
@@ -1988,28 +1846,13 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 	return true;
 }
 
-SQLite3_result* ProxySQL_PluginManager::server_module_runtime_table_snapshot(
-	ProxySQL_ServerProtocol protocol, const char* table_name) {
+void ProxySQL_PluginManager::replace_managed_server_hostgroup_claims_for_test(
+	ProxySQL_ServerProtocol protocol, std::vector<ProxySQL_ServerHostgroupClaim> claims) {
 	const int index = server_protocol_index(protocol);
-	if (index < 0 || table_name == nullptr) return nullptr;
-	SQLite3_result* (*runtime_table_snapshot)(void *, const char*) = nullptr;
-	void* opaque = nullptr;
-	{
-		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-		runtime_table_snapshot = server_modules_[index].runtime_table_snapshot;
-		opaque = server_modules_[index].opaque;
-		if (runtime_table_snapshot != nullptr) ++server_callback_leases_[index];
-	}
-	if (runtime_table_snapshot == nullptr) return nullptr;
-	ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
-	try {
-		return runtime_table_snapshot(opaque, table_name);
-	} catch (const std::exception& e) {
-		log_server_callback_exception("module runtime-table", e);
-	} catch (...) {
-		log_server_callback_unknown_exception("module runtime-table");
-	}
-	return nullptr;
+	if (index < 0) return;
+	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+	managed_server_hostgroup_claims_[index] = std::move(claims);
+	rebuild_server_delegated_hostgroups(index);
 }
 
 void ProxySQL_PluginManager::set_server_retirement_observer_for_test(
@@ -2017,54 +1860,6 @@ void ProxySQL_PluginManager::set_server_retirement_observer_for_test(
 	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 	server_retirement_observer_for_test_ = observer;
 	server_retirement_observer_opaque_for_test_ = opaque;
-}
-
-bool ProxySQL_PluginManager::unregister_server_module(ProxySQL_ServerProtocol protocol) {
-	const int index = server_protocol_index(protocol);
-	if (index < 0) return false;
-	ScopedServerDiscoveryProtocolLock protocol_lock(protocol);
-	registered_server_module_t retired {};
-	server_retirement_observer_for_test_cb observer = nullptr;
-	void *observer_opaque = nullptr;
-	std::unique_lock<std::mutex> lock(server_discovery_mutex_);
-	if (server_modules_[index].module == nullptr) return false;
-	retired = server_modules_[index];
-	server_modules_[index] = {};
-	server_hostgroup_claims_[index].clear();
-	rebuild_server_delegated_hostgroups(index);
-	observer = server_retirement_observer_for_test_;
-	observer_opaque = server_retirement_observer_opaque_for_test_;
-	if (observer != nullptr) {
-		// The test seam intentionally observes retirement only after detaching
-		// the registry entry and never while holding the mutex destroy needs.
-		lock.unlock();
-		try {
-			observer(protocol, false, observer_opaque);
-		} catch (...) {
-			proxy_warning("Server discovery test retirement observer threw\n");
-		}
-		lock.lock();
-	}
-	server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
-	lock.unlock();
-	try {
-		if (!retired.legacy_callback_only && retired.shutdown != nullptr) {
-			retired.shutdown(retired.opaque);
-		}
-	} catch (const std::exception &e) {
-		log_server_callback_exception("module shutdown", e);
-	} catch (...) {
-		log_server_callback_unknown_exception("module shutdown");
-	}
-	try {
-		retired.destroy(retired.module);
-	} catch (const std::exception &e) {
-		log_server_callback_exception("module destroy", e);
-	} catch (...) {
-		log_server_callback_unknown_exception("module destroy");
-	}
-	if (retired.module_handle != nullptr) dlclose(retired.module_handle);
-	return true;
 }
 
 bool ProxySQL_PluginManager::install_server_discovery_controller(
@@ -2666,27 +2461,18 @@ std::vector<ProxySQL_ClusterPluginIdentity> proxysql_active_plugin_identities() 
 		pin.manager()->plugin_identities();
 }
 
-std::vector<ProxySQL_ServerModuleTable> proxysql_active_server_module_tables(
-	ProxySQL_ServerProtocol protocol) {
-	ScopedActiveManagerPin pin;
-	return pin.manager() == nullptr ? std::vector<ProxySQL_ServerModuleTable>{} :
-		pin.manager()->server_module_tables(protocol);
-}
-
-void proxysql_install_active_server_runtime(ProxySQL_ServerModuleSnapshot snapshot,
-	bool notify_module) {
-	// One active-manager pin spans the module notification and the controller
-	// notification: a concurrent plugin-manager retirement cannot unload either
-	// DSO between them.
+void proxysql_install_active_server_runtime(ProxySQL_ServerRuntimeSnapshot snapshot) {
+	// The active-manager pin spans the controller notification: a concurrent
+	// plugin-manager retirement cannot unload its DSO meanwhile.
 	ScopedActiveManagerPin pin;
 	if (pin.exclusive_owner_bypass()) {
 		// Plugin init/start holds the manager exclusively and it is not yet
-		// visible: the servers are installed, and modules see the next LOAD.
-		proxy_warning("Server runtime installed during plugin init/start; server modules are not notified\n");
+		// visible: the servers are installed, and controllers see the next LOAD.
+		proxy_warning("Server runtime installed during plugin init/start; discovery controllers are not notified\n");
 		return;
 	}
 	if (pin.manager() == nullptr) return;
-	pin.manager()->install_server_runtime(std::move(snapshot), notify_module);
+	pin.manager()->install_server_runtime(std::move(snapshot));
 }
 
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_claims(
@@ -2721,13 +2507,6 @@ std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgr
 	ScopedActiveManagerPin pin;
 	return pin.manager() == nullptr ? std::vector<ProxySQL_ServerHostgroupClaim>{} :
 		pin.manager()->managed_server_hostgroup_claims(protocol);
-}
-
-SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
-	ProxySQL_ServerProtocol protocol, const char* table_name) {
-	ScopedActiveManagerPin pin;
-	return pin.manager() == nullptr ? nullptr :
-		pin.manager()->server_module_runtime_table_snapshot(protocol, table_name);
 }
 
 #endif /* PROXYSQL40 */
