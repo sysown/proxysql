@@ -201,7 +201,7 @@ int main(int, char**) {
 	}
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
-	plan(17 + 20);
+	plan(17 + 24);
 
 	PGConnPtr admin_conn = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
 	if (PQstatus(admin_conn.get()) != CONNECTION_OK) BAIL_OUT("cannot reach the admin interface");
@@ -470,19 +470,62 @@ int main(int, char**) {
 			   mode, proxy.c_str(), direct.c_str(), expected.c_str());
 		}
 
-		// The pooled connection the Execute gets was killed: ProxySQL's Parse fails on it and the Execute
-		// is run again on a new connection, which first gets the client's DateStyle. The date shows it.
-		// Native only: libpq mode never retries here, because ProxySQL has already put the connection in
-		// pipeline mode for this Parse and query_retry_allowed() refuses any retry then.
+		// The pooled connection the next statement gets was killed, as an idle timeout or a server
+		// restart does. The first step sent on it fails, and the statement runs again on a new
+		// connection, which first gets the client's DateStyle: the date shows it. Each case first
+		// leaves one connection in the pool with the client's DateStyle on it, then kills it.
+		// Native only: libpq mode does not retry an extended-protocol step, because ProxySQL has put
+		// the connection in pipeline mode for it (kept on purpose, see pgsql-reg_test_6375_offline_retry-t).
 		if (native) {
-			check(mode, "Execute on a pooled connection whose backend was killed",
+			const std::string date = "SELECT DATE '2026-10-15'::text AS ";
+			check(mode, "Execute that needs a prepare, on a pooled connection whose backend was killed",
 				"C Z(I) | 1 Z(I) | T D=1 C Z(I) | 2 D=15/10/2026 C Z(I) | T D=1 C Z(I)", [&](PgConnection& c) {
 				std::string out = simple(c, "SET DateStyle TO 'SQL, DMY'");
-				out += " | " + prepareThenForget(c, "s1", "SELECT DATE '2026-10-15'::text AS p53k_" + sfx);
+				out += " | " + prepareThenForget(c, "s1", date + "p53k_" + sfx);
 				out += " | " + simple(c, "SELECT 1");
 				if (through_proxy) killBackends();
 				out += " | " + execStmt(c, "s1");
 				return out + " | " + simple(c, "SELECT 1");
+			});
+			check(mode, "Execute of a statement the killed connection holds",
+				"C Z(I) | 1 Z(I) | 2 D=15/10/2026 C Z(I) | T D=1 C Z(I)", [&](PgConnection& c) {
+				std::string out = simple(c, "SET DateStyle TO 'SQL, DMY'");
+				c.prepareStatement("s1", date + "p53h_" + sfx, false);
+				c.sendSync();
+				out += " | " + replies(c);
+				if (through_proxy) killBackends();
+				out += " | " + execStmt(c, "s1");
+				return out + " | " + simple(c, "SELECT 1");
+			});
+			// A frame with its own Parse goes out as one batch. The killed backend's FATAL is the
+			// first thing read back: it is not an answer to the batch, which runs again elsewhere.
+			check(mode, "Parse, Bind and Execute of a new statement on a killed connection",
+				"C Z(I) | T D=1 C Z(I) | 1 2 D=15/10/2026 C Z(I) | T D=1 C Z(I)", [&](PgConnection& c) {
+				std::string out = simple(c, "SET DateStyle TO 'SQL, DMY'");
+				out += " | " + simple(c, "SELECT 1");
+				if (through_proxy) killBackends();
+				c.prepareStatement("", date + "p53q_" + sfx, false);
+				out += " | " + execStmt(c, "");
+				return out + " | " + simple(c, "SELECT 1");
+			});
+			// The same with a Parse ProxySQL answers itself, the text being prepared already.
+			check(mode, "Parse of a known statement, Bind and Execute on a killed connection",
+				"C Z(I) | 1 Z(I) | 1 2 D=15/10/2026 C Z(I) | T D=1 C Z(I)", [&](PgConnection& c) {
+				std::string out = simple(c, "SET DateStyle TO 'SQL, DMY'");
+				c.prepareStatement("s1", date + "p53c_" + sfx, false);
+				c.sendSync();
+				out += " | " + replies(c);
+				if (through_proxy) killBackends();
+				c.prepareStatement("s2", date + "p53c_" + sfx, false);
+				out += " | " + execStmt(c, "s2");
+				return out + " | " + simple(c, "SELECT 1");
+			});
+			check(mode, "simple query on a killed connection",
+				"C Z(I) | T D=1 C Z(I) | T D=15/10/2026 C Z(I)", [&](PgConnection& c) {
+				std::string out = simple(c, "SET DateStyle TO 'SQL, DMY'");
+				out += " | " + simple(c, "SELECT 1");
+				if (through_proxy) killBackends();
+				return out + " | " + simple(c, date + "p53s_" + sfx);
 			});
 		}
 
