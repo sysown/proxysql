@@ -16,6 +16,7 @@
 
 #include "openssl/x509v3.h" // X509_VERIFY_PARAM_set1_host / set_hostflags (native backend TLS)
 #include "openssl/evp.h"     // EVP_MAX_MD_SIZE for cbind digest buffer (SCRAM-PLUS)
+#include "PgSQLErrorFields.h"
 #include "PgSQL_Backend_Protocol.h"  // pg_tls_server_end_point / pg_scram_build_cbind_input_* / pg_scram_set_cbind (SCRAM-PLUS)
 #include "openssl/crypto.h"   // OPENSSL_cleanse — non-elidable wipe of harvested SCRAM key material
 
@@ -3666,6 +3667,17 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 			// what was sent, so nothing more from this connection can be trusted.
 			if (native_stmt_step == PG_Native_Stmt_Step::BATCH) {
 				PgSQL_Extq_Registry& reg = *query.extended_query_info->batch_registry;
+				// A FATAL error before any reply is the backend closing the connection, not a reply to
+				// the unit: one killed while idle in the pool sends it before reading anything. Taken as
+				// a reply it made the unit look answered, and an answered unit is never sent again
+				// elsewhere. After a reply it is not sent again anyway, so the registry still takes it.
+				if (msg.type == 'E' && reg.answered() == false) {
+					const PgSQLErrorResult e = pgsql_parse_error_response(msg.payload, msg.payload_len);
+					if (e.severity_len == 5 && (memcmp(e.severity, "FATAL", 5) == 0 || memcmp(e.severity, "PANIC", 5) == 0)) {
+						native_result_fatal(e.sqlstate, std::string(e.message ? e.message : "", e.message_len).c_str());
+						return;
+					}
+				}
 				std::string local;
 				const Extq_Verdict v = reg.on_message(msg.type, msg.payload, msg.payload_len, local);
 				if (v == Extq_Verdict::BAD) {
