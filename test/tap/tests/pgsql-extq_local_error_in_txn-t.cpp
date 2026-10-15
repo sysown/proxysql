@@ -183,6 +183,18 @@ static void refuseAndSync(PgConnection& c) {
 	c.sendSync();
 }
 
+// As check(), for a Bind and Execute of a statement prepared earlier. ProxySQL holds the Bind of the
+// unnamed portal until the Execute and answers it with BindComplete at once, so when PostgreSQL
+// refuses the Bind, ProxySQL's stream has a "2" before the error that PostgreSQL's has not.
+static void checkBindAhead(const char* mode, const char* label, const std::string& expected, Frame f) {
+	std::string proxy = run(f, true);
+	const std::string direct = run(f, false);
+	const size_t at = proxy.find("| 2 E(");
+	if (at != std::string::npos) proxy.erase(at + 2, 2);
+	ok(proxy == expected && proxy == direct, "%s: %s [proxy: %s] [PostgreSQL: %s] [expected: %s]",
+	   mode, label, proxy.c_str(), direct.c_str(), expected.c_str());
+}
+
 // One statement over the extended protocol, unnamed, without a Sync.
 static void extq(PgConnection& c, const std::string& sql) {
 	c.prepareStatement("", sql, false);
@@ -237,6 +249,10 @@ int main(int, char**) {
 		{ "SAVEPOINT", simpleQ("SAVEPOINT sp_new") },
 		{ "RELEASE SAVEPOINT", simpleQ("RELEASE SAVEPOINT sp_none") },
 		{ "ROLLBACK TO an unknown savepoint", simpleQ("ROLLBACK TO SAVEPOINT sp_none") },
+		{ "SET of a tracked variable", simpleQ("SET DateStyle TO 'ISO, MDY'") },
+		{ "RESET of a tracked variable", simpleQ("RESET DateStyle") },
+		{ "DISCARD ALL", simpleQ("DISCARD ALL") },
+		{ "DEALLOCATE ALL", simpleQ("DEALLOCATE ALL") },
 		{ "ROLLBACK AND CHAIN", simpleQ("ROLLBACK AND CHAIN") },
 		{ "COMMIT AND CHAIN", simpleQ("COMMIT AND CHAIN") },
 		{ "ABORT", simpleQ("ABORT") },
@@ -257,7 +273,11 @@ int main(int, char**) {
 			c.sendSync();
 		} },
 	};
-	plan(14 + 7 + probes.size());
+	// L19: statements ProxySQL can answer itself, sent in a transaction a backend error has failed.
+	const std::vector<std::string> local_answers = {
+		"SET DateStyle TO 'ISO, MDY'", "RESET DateStyle", "DISCARD ALL", "DEALLOCATE ALL", "SELECT pg_backend_pid()",
+	};
+	plan(14 + 7 + probes.size() + 2 * local_answers.size() + 2 * 2 + 2 * 6);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
 	if (PQstatus(admin.get()) != CONNECTION_OK) BAIL_OUT("cannot reach the admin interface");
@@ -276,6 +296,104 @@ int main(int, char**) {
 			const std::string out = replies(c);
 			return out + " | " + simple(c, "SELECT 1");
 		});
+
+		// L19: in a transaction the backend failed, PostgreSQL refuses these too. ProxySQL must not
+		// answer them itself with a success and ReadyForQuery 'T'. Both backend protocols.
+		for (const std::string& q : local_answers) {
+			check(mode, ("L19 after a backend error: " + q).c_str(), "C Z(T) | E(22012) Z(E) | E(25P02) Z(E) | C Z(I)",
+				[&](PgConnection& c) {
+				std::string out = simple(c, "BEGIN");
+				out += " | " + simple(c, "SELECT 1/0");
+				out += " | " + simple(c, q);
+				return out + " | " + simple(c, "ROLLBACK");
+			});
+		}
+
+		// L20: a Parse of a text ProxySQL already knows is answered by ProxySQL itself. In the failed
+		// transaction it must reach the backend and be refused. Known from another session, then from
+		// this one.
+		{
+			const std::string q = "SELECT 20 AS l20_" + tag + "_" + mode;
+			run([&](PgConnection& c) { extq(c, q); c.sendSync(); return replies(c); }, true);
+			check(mode, "L20 Parse of a statement another session prepared, after a backend error",
+				"C Z(T) | E(22012) Z(E) | E(25P02) Z(E) | C Z(I)", [&](PgConnection& c) {
+				std::string out = simple(c, "BEGIN");
+				out += " | " + simple(c, "SELECT 1/0");
+				extq(c, q);
+				c.sendSync();
+				out += " | " + replies(c);
+				return out + " | " + simple(c, "ROLLBACK");
+			});
+			check(mode, "L20 Parse of a statement this session prepared, after a backend error",
+				"1 2 D=20 C Z(I) | C Z(T) | E(22012) Z(E) | E(25P02) Z(E) | C Z(I)", [&](PgConnection& c) {
+				extq(c, q);
+				c.sendSync();
+				std::string out = replies(c);
+				out += " | " + simple(c, "BEGIN");
+				out += " | " + simple(c, "SELECT 1/0");
+				extq(c, q);
+				c.sendSync();
+				out += " | " + replies(c);
+				return out + " | " + simple(c, "ROLLBACK");
+			});
+		}
+
+		// L21: a query rule's OK_msg, the query cache and the pg_cancel_backend/pg_terminate_backend
+		// interception answer without the backend. In the failed transaction PostgreSQL refuses the
+		// statement, and so must ProxySQL: as a simple Query, and as the Execute of a statement
+		// prepared before the error.
+		{
+			const std::string ok_q = std::string("SELECT 21 AS okmsg_l21_") + tag + "_" + mode;
+			const std::string qc_q = std::string("SELECT 21 AS qc_l21_") + tag + "_" + mode;
+			exec(admin.get(), "INSERT INTO pgsql_query_rules (rule_id, active, match_digest, OK_msg, apply) VALUES "
+				"(7902, 1, 'okmsg_l21_" + tag + "', 'ok', 1)");
+			exec(admin.get(), "INSERT INTO pgsql_query_rules (rule_id, active, match_digest, cache_ttl, apply) VALUES "
+				"(7903, 1, 'qc_l21_" + tag + "', 60000, 1)");
+			exec(admin.get(), "LOAD PGSQL QUERY RULES TO RUNTIME");
+			run([&](PgConnection& c) { return simple(c, qc_q); }, true);   // fills the cache
+
+			const std::string failed = "C Z(T) | E(22012) Z(E) | E(25P02) Z(E) | C Z(I)";
+			const std::vector<std::pair<std::string, std::string>> simple_cases = {
+				{ "a query rule's OK_msg", ok_q },
+				{ "a query cache hit", qc_q },
+				{ "pg_cancel_backend()", "SELECT pg_cancel_backend(2147483647)" },
+				{ "pg_terminate_backend()", "SELECT pg_terminate_backend(2147483647)" },
+			};
+			for (const auto& sc : simple_cases) {
+				check(mode, ("L21 after a backend error: " + sc.first).c_str(), failed, [&](PgConnection& c) {
+					std::string out = simple(c, "BEGIN");
+					out += " | " + simple(c, "SELECT 1/0");
+					out += " | " + simple(c, sc.second);
+					return out + " | " + simple(c, "ROLLBACK");
+				});
+			}
+			// Texts unique to the mode: one the libpq pass prepared would be answered from the statement
+			// cache here, and the Execute would first have to prepare it on a backend that never had it.
+			// The pid differs rather than the text around it, which would stop it being taken for a cancel.
+			// Prepared after BEGIN, so on the backend the transaction holds: prepared before it, BEGIN
+			// could take another pooled connection and the Execute would prepare it there.
+			const std::vector<std::pair<std::string, std::string>> execute_cases = {
+				{ "Execute under a query rule's OK_msg", ok_q },
+				{ "Execute of pg_cancel_backend()", "SELECT pg_cancel_backend(" + std::to_string(2147483647 - m) + ")" },
+			};
+			for (const auto& ec : execute_cases) {
+				checkBindAhead(mode, ("L21 after a backend error: " + ec.first).c_str(),
+					"C Z(T) | 1 Z(T) | E(22012) Z(E) | E(25P02) Z(E) | C Z(I)", [&](PgConnection& c) {
+					std::string out = simple(c, "BEGIN");
+					c.prepareStatement("s_l21", ec.second, false);
+					c.sendSync();
+					out += " | " + replies(c);
+					out += " | " + simple(c, "SELECT 1/0");
+					c.bindStatement("s_l21", "", {}, {}, false);
+					c.executePortal("", 0, false);
+					c.sendSync();
+					out += " | " + replies(c);
+					return out + " | " + simple(c, "ROLLBACK");
+				});
+			}
+			exec(admin.get(), "DELETE FROM pgsql_query_rules WHERE rule_id IN (7902, 7903)");
+			exec(admin.get(), "LOAD PGSQL QUERY RULES TO RUNTIME");
+		}
 		if (native == false) {
 			continue;
 		}
