@@ -4864,15 +4864,11 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 	MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 	LogQuery(myds);
 	if (CurrentQuery.stmt_meta) {
-		if (CurrentQuery.stmt_meta->pkt) {
-			uint32_t stmt_global_id=0;
-			memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
-			SLDH->reset(stmt_global_id);
-			free(CurrentQuery.stmt_meta->pkt);
-			CurrentQuery.stmt_meta->pkt=NULL;
-		}
-
-		// free for all the buffer types in which we allocate
+		// free for all the buffer types in which we allocate.
+		// This must happen before SLDH->reset(): a parameter sent via
+		// COM_STMT_SEND_LONG_DATA points to the SLDH buffer instead of a buffer
+		// allocated by get_binds_from_pkt(), even for temporal types. That buffer
+		// is owned (and freed) by SLDH, so freeing it here too is a double-free.
 		for (int i = 0; i < CurrentQuery.stmt_meta->num_params; i++) {
 			enum enum_field_types buffer_type =
 				CurrentQuery.stmt_meta->binds[i].buffer_type;
@@ -4883,11 +4879,24 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 				(buffer_type == MYSQL_TYPE_TIMESTAMP) ||
 				(buffer_type == MYSQL_TYPE_DATETIME)
 			) {
-				free(CurrentQuery.stmt_meta->binds[i].buffer);
+				void *buffer = CurrentQuery.stmt_meta->binds[i].buffer;
+				unsigned long *long_data_size = NULL;
+				my_bool *long_data_is_null = NULL;
+				if (buffer && buffer != SLDH->get(CurrentQuery.stmt_meta->stmt_id, i, &long_data_size, &long_data_is_null)) {
+					free(buffer);
+				}
 				// NOTE: This memory should be zeroed during initialization,
 				// but we also nullify it here for extra safety. See #3546.
 				CurrentQuery.stmt_meta->binds[i].buffer = NULL;
 			}
+		}
+
+		if (CurrentQuery.stmt_meta->pkt) {
+			uint32_t stmt_global_id=0;
+			memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
+			SLDH->reset(stmt_global_id);
+			free(CurrentQuery.stmt_meta->pkt);
+			CurrentQuery.stmt_meta->pkt=NULL;
 		}
 	}
 	CurrentQuery.mysql_stmt=NULL;
