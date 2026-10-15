@@ -2567,9 +2567,9 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	} else { // this is the first time that this PS is executed
 		ret= new stmt_execute_metadata_t();
 	}
-	if (*stmt_meta==NULL) {
-		memcpy(&ret->stmt_id,p,4); // stmt-id
-	}
+	// The metadata is cached per global statement, and several client handles can
+	// share it: always take the handle of this packet, it keys the long data (SLDH).
+	memcpy(&ret->stmt_id,p,4); // stmt-id
 	p+=4; // stmt-id
 	memcpy(&ret->flags,p,1); p+=1; // flags
 	p+=4; // iteration-count
