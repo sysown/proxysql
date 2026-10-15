@@ -684,6 +684,10 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	AwsIamTokenKey aws_iam_connect_token_key {};
 	uint64_t aws_iam_connect_token_generation { 0 };
 	bool aws_iam_fresh_token_retry_attempted { false };
+	// True once this session entered the AWS IAM backend-connect path, until
+	// cancel_aws_iam_wait() clears the IAM state again. Lets the reset and
+	// destroy paths of non-IAM sessions skip that cleanup entirely.
+	bool aws_iam_state_used { false };
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
 	bool backend_closed_in_fast_forward;

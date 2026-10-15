@@ -890,6 +890,11 @@ const MySQLBackendAuthPolicy& MySQL_Session::backend_auth_policy_for(const char 
 }
 
 void MySQL_Session::cancel_aws_iam_wait() {
+	if (!aws_iam_state_used) {
+		// Nothing to release or clear; keep the one side effect callers rely on.
+		pause_until = 0;
+		return;
+	}
 	if (!aws_iam_completion_ready && aws_iam_token_source_lease &&
 		aws_iam_request_handle.value != 0) {
 		aws_iam_token_source_lease->cancel(aws_iam_request_handle);
@@ -928,6 +933,7 @@ void MySQL_Session::cancel_aws_iam_wait() {
 	aws_iam_fresh_token_retry_attempted = false;
 	pause_until = 0;
 	aws_iam_token_source_lease = AwsIamTokenSourceLease {};
+	aws_iam_state_used = false;
 }
 
 void MySQL_Session::fail_aws_iam_backend(
@@ -10090,6 +10096,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 		if (backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM) {
 			MySrvC *server = myconn->parent;
+			aws_iam_state_used = true;
 			aws_iam_connection = myconn;
 			std::unique_ptr<MySQLServers_SslParams> ssl_params(
 				MyHGM->get_Server_SSL_Params(
