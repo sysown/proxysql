@@ -576,7 +576,22 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 	// Find the spot in which the first EOF needs to be placed
 	it += sizeof(mysql_hdr);
 	uint64_t c_count = 0;
-	int c_count_len = mysql_decode_length(reinterpret_cast<unsigned char*>(it), &c_count);
+	// GHSA-x23w-3v26-vgvj: bound the length-encoded integer by the bytes
+	// remaining in the entry, so a malformed entry cannot make the decoder
+	// read up to 8 bytes past the buffer. The explicit '>' check matters: a
+	// negative difference cast to size_t would wrap to a huge value and
+	// defeat the bound.
+	char * const entry_end = entry->value + entry->length;
+	if (it > entry_end) {
+		free(result);
+		return NULL;
+	}
+	int c_count_len = mysql_decode_length_checked(reinterpret_cast<unsigned char*>(it),
+		(size_t)(entry_end - it), &c_count);
+	if (c_count_len == 0) {
+		free(result);
+		return NULL;
+	}
 	it += c_count_len;
 
 	mysql_hdr column_hdr;
@@ -702,7 +717,21 @@ bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, 
 	unsigned char* it = vp;
 	it += sizeof(mysql_hdr);
 	uint64_t c_count = 0;
-	int c_count_len = mysql_decode_length(const_cast<unsigned char*>(it), &c_count);
+	// GHSA-x23w-3v26-vgvj: bound the length-encoded integer by the bytes
+	// remaining in the value being cached.
+	const unsigned char * const value_end = vp + vl;
+	if (it > value_end) {
+		free(entry);
+		return false;
+	}
+	int c_count_len = mysql_decode_length_checked(const_cast<unsigned char*>(it),
+		(size_t)(value_end - it), &c_count);
+	if (c_count_len == 0) {
+		// 'entry->value' is not allocated until later in this function, so
+		// only 'entry' can be released here.
+		free(entry);
+		return false;
+	}
 	it += c_count_len;
 
 	for (uint64_t i = 0; i < c_count; i++) {
@@ -736,10 +765,22 @@ bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, 
 				unsigned char* payload_temp = payload+1;
 
 				// skip affected_rows
-				payload_temp += mysql_decode_length(payload_temp, nullptr);
-				
+				// GHSA-x23w-3v26-vgvj: bound each decode by the bytes
+				// remaining in the value, and stop if either is malformed.
+				// The explicit '>' checks matter: a negative difference cast
+				// to size_t would wrap to a huge value and defeat the bound.
+				if (payload_temp > value_end) break;
+				int affected_rows_len = mysql_decode_length_checked(payload_temp,
+					(size_t)(value_end - payload_temp), nullptr);
+				if (affected_rows_len == 0) break;
+				payload_temp += affected_rows_len;
+
 				// skip last_insert_id
-				payload_temp += mysql_decode_length(payload_temp, nullptr);
+				if (payload_temp > value_end) break;
+				int last_insert_id_len = mysql_decode_length_checked(payload_temp,
+					(size_t)(value_end - payload_temp), nullptr);
+				if (last_insert_id_len == 0) break;
+				payload_temp += last_insert_id_len;
 
 				// skip stats_flags
 				payload_temp += sizeof(uint16_t);
