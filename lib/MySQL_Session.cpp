@@ -9843,7 +9843,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			client_myds != nullptr && client_myds->myconn != nullptr &&
 			client_myds->myconn->userinfo != nullptr
 				? client_myds->myconn->userinfo->username : nullptr;
-		MySQLBackendAuthPolicy backend_auth_policy = backend_auth_policy_for(backend_username);
+		const MySQLBackendAuthPolicy& backend_auth_policy = backend_auth_policy_for(backend_username);
 		const bool force_fresh_iam_connection =
 			backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM &&
 			aws_iam_fresh_token_retry_attempted;
