@@ -1638,6 +1638,12 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
  *   enforced by the connector (see MySQL_Connection::apply_local_infile_policy()).
  */
 static bool is_load_data_local_infile(const char* query, size_t len) {
+	// Called for every COM_QUERY: reject on the first byte, without the keyword
+	// matcher, unless the statement can still start with LOAD (an 'L', or leading
+	// whitespace or a comment that the full parser below has to skip).
+	if (len < 4) return false;
+	const unsigned char first = static_cast<unsigned char>(query[0]);
+	if (first != 'L' && first != 'l' && first != '/' && !isspace(first)) return false;
 	const char* p = query;
 	const char* end = query + len;
 	auto skip_ws = [&]() {
