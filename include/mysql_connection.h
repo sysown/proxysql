@@ -240,6 +240,10 @@ class MySQL_Connection {
 	void attach_aws_iam_token(const AwsIamTokenKey&, AwsIamTokenResult&&);
 	void clear_aws_iam_handshake_secret();
 	bool has_aws_iam_handshake_secret() const;
+	/** @brief Region of the IAM token this connection authenticated with, '' if none. */
+	std::string aws_iam_region() const {
+		return aws_iam_identity_ ? aws_iam_identity_->key.region : std::string();
+	}
 #else
 	// AWS IAM backend authentication is a v4.0 feature: on v3.0/v3.1 every
 	// backend connection authenticates with a password, and checks of the

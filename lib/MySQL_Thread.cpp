@@ -4401,6 +4401,9 @@ __run_skip_1:
 		} else {
 			maintenance_loop=false;
 		}
+		// Sessions read init_connect (and aws_iam_region) from this thread's
+		// copy; refresh it if LOAD MYSQL SERVERS TO RUNTIME changed them.
+		refresh_hostgroup_strings(MyHGM);
 
 		handle_kill_queues();
 

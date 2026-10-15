@@ -3510,6 +3510,9 @@ void PgSQL_Thread::run() {
 		else {
 			maintenance_loop = false;
 		}
+		// Sessions read init_connect from this thread's copy; refresh it if
+		// LOAD PGSQL SERVERS TO RUNTIME changed it.
+		refresh_hostgroup_strings(PgHGM);
 
 		handle_kill_queues();
 

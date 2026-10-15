@@ -1184,6 +1184,33 @@ unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
 	return __sync_fetch_and_add(&status.servers_table_version,0);
 }
 
+unsigned int MySQL_HostGroups_Manager::copy_hostgroup_strings(HostgroupStringsMap& out) {
+	out.clear();
+	wrlock();
+	for (unsigned int i = 0; i < MyHostGroups->len; i++) {
+		const MyHGC *myhgc = (const MyHGC *)MyHostGroups->index(i);
+		HostgroupStrings strings;
+		if (myhgc->attributes.init_connect != NULL) {
+			strings.init_connect = myhgc->attributes.init_connect;
+		}
+		bool any = !strings.init_connect.empty();
+#ifdef PROXYSQL40
+		if (myhgc->attributes.aws_iam_region != NULL) {
+			strings.aws_iam_region = myhgc->attributes.aws_iam_region;
+			any = any || !strings.aws_iam_region.empty();
+		}
+#endif // PROXYSQL40
+		if (any) {
+			out.emplace(myhgc->hid, std::move(strings));
+		}
+	}
+	// commit() bumps the version under this same lock, after it applied the
+	// attributes: the copy and the version are consistent.
+	const unsigned int version = status.servers_table_version;
+	wrunlock();
+	return version;
+}
+
 // we always assume that the calling thread has acquired a rdlock()
 int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	if (resultset==NULL) {
@@ -3081,8 +3108,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 						KillArgs *ka = nullptr;
 #ifdef PROXYSQL40
 						if (c->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
-							const std::string region_copy = mysrvc->myhgc != nullptr
-								? mysrvc->myhgc->attribute_aws_iam_region() : "";
+							const std::string region_copy = c->aws_iam_region();
 							const char *region = region_copy.c_str();
 							ka = new KillArgs(
 								ui->username, nullptr, mysrvc->address, mysrvc->port,

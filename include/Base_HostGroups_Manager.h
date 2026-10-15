@@ -21,6 +21,7 @@ class MetricsCollector;
 #include "GTID_Server_Data.h"
 #ifdef PROXYSQL31
 #include "HostgroupPoolStats.h"
+#include "Hostgroup_Strings.h"
 #endif
 #ifdef PROXYSQL40
 #include "Aws_Locality_Types.h"
@@ -139,16 +140,12 @@ class BaseHGC {	// MySQL Host Group Container
 		nlohmann::json * ignore_session_variables_json = nullptr; // the JSON format of ignore_session_variables
 	} attributes;
 	/**
-	 * @brief Guards the attribute strings a configuration reload replaces and
-	 *   threads outside the Hostgroup Manager lock read: worker threads read
-	 *   init_connect and aws_iam_region when they open backend connections.
-	 *   Read them through the getters (a copy); replace them through the setters.
+	 * @brief Replace an attribute string. Only called by the reload paths and
+	 *   reset_attributes(), under the Hostgroup Manager lock. Worker threads do
+	 *   not read these strings here: they use their own copy (HostgroupStrings).
 	 */
-	mutable std::shared_mutex attributes_strings_lock;
-	std::string attribute_init_connect() const;
 	void set_attribute_init_connect(const char* value);
 #ifdef PROXYSQL40
-	std::string attribute_aws_iam_region() const;
 	void set_attribute_aws_iam_region(const char* value);
 #endif // PROXYSQL40
 	struct {

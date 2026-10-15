@@ -2820,8 +2820,7 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 				const char *database_user = connection->userinfo != nullptr &&
 					connection->userinfo->username != nullptr
 						? connection->userinfo->username : "";
-				const std::string region_copy = connection->parent->myhgc != nullptr
-					? connection->parent->myhgc->attribute_aws_iam_region() : "";
+				const std::string region_copy = connection->aws_iam_region();
 				const char *region = region_copy.c_str();
 				ka = new KillArgs(
 					const_cast<char *>(database_user), nullptr,
@@ -2965,11 +2964,12 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent=true;
 		char * tmp_init_connect = mysql_thread___init_connect;
-		// A copy: a concurrent reload may replace the hostgroup attribute.
-		const std::string init_connect_hg = mybe->server_myds->myconn->parent->myhgc->attribute_init_connect();
-		if (!init_connect_hg.empty()) {
+		// This thread's copy: a concurrent reload replaces the hostgroup's own.
+		const HostgroupStrings* hg_strings =
+			thread->hostgroup_strings_for(mybe->server_myds->myconn->parent->myhgc->hid);
+		if (hg_strings != nullptr && !hg_strings->init_connect.empty()) {
 			// mysql_hostgroup_attributes takes priority
-			tmp_init_connect = const_cast<char*>(init_connect_hg.c_str());
+			tmp_init_connect = const_cast<char*>(hg_strings->init_connect.c_str());
 		}
 		if (tmp_init_connect) {
 			// we send init connect queries only if set
@@ -4122,8 +4122,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				const char *database_user = timed_out_connection->userinfo != nullptr &&
 					timed_out_connection->userinfo->username != nullptr
 						? timed_out_connection->userinfo->username : "";
-				const std::string region_copy = timed_out_connection->parent->myhgc != nullptr
-					? timed_out_connection->parent->myhgc->attribute_aws_iam_region() : "";
+				const std::string region_copy = timed_out_connection->aws_iam_region();
 				const char *region = region_copy.c_str();
 				proxy_error(
 					"AWS IAM backend connection failure user='%s' hostgroup=%u endpoint='%s'"
@@ -10179,8 +10178,10 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			input.database_user = backend_auth_policy.database_user;
 			input.configured_endpoint = server->address != nullptr ? server->address : "";
 			input.port = server->port;
-			input.region = server->myhgc != nullptr
-				? server->myhgc->attribute_aws_iam_region() : "";
+			// This thread's copy: a concurrent reload replaces the hostgroup's own.
+			const HostgroupStrings* hg_strings = server->myhgc != nullptr
+				? thread->hostgroup_strings_for(server->myhgc->hid) : nullptr;
+			input.region = hg_strings != nullptr ? hg_strings->aws_iam_region : "";
 			input.use_ssl = server->use_ssl != 0;
 			input.ssl_ca = ssl_params != nullptr
 				? ssl_params->ssl_ca

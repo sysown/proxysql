@@ -1132,6 +1132,27 @@ unsigned int PgSQL_HostGroups_Manager::get_servers_table_version() {
 	return __sync_fetch_and_add(&status.servers_table_version,0);
 }
 
+unsigned int PgSQL_HostGroups_Manager::copy_hostgroup_strings(HostgroupStringsMap& out) {
+	out.clear();
+	wrlock();
+	for (unsigned int i = 0; i < MyHostGroups->len; i++) {
+		const PgSQL_HGC *myhgc = (const PgSQL_HGC *)MyHostGroups->index(i);
+		HostgroupStrings strings;
+		if (myhgc->attributes.init_connect != NULL) {
+			strings.init_connect = myhgc->attributes.init_connect;
+		}
+		bool any = !strings.init_connect.empty();
+		if (any) {
+			out.emplace(myhgc->hid, std::move(strings));
+		}
+	}
+	// commit() bumps the version under this same lock, after it applied the
+	// attributes: the copy and the version are consistent.
+	const unsigned int version = status.servers_table_version;
+	wrunlock();
+	return version;
+}
+
 // we always assume that the calling thread has acquired a rdlock()
 int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	if (resultset==NULL) {
