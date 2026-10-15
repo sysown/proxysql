@@ -3074,7 +3074,7 @@ bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int
 }
 
 // this function used to be inline.
-void PgSQL_Session::handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, bool& wrong_pass) {
+void PgSQL_Session::handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds) {
 	PgSQL_Connection* myconn = myds->myconn;
 
 	if (myconn == NULL) {
@@ -3084,15 +3084,9 @@ void PgSQL_Session::handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds,
 	}
 
 	switch (status) {
+	// A failed implicit prepare is the failure of the Execute, Describe or Bind it ran for: the client
+	// gets the error like any other and keeps its session. RequestEnd() drops the status it saved.
 	case PROCESSING_STMT_PREPARE:
-		if (previous_status.size()) {
-			// an STMT_PREPARE failed
-			// we have a previous status, probably STMT_DESCRIBE or STMT_EXECUTE,
-			//    but returning to that status is not safe after STMT_PREPARE failed
-			// for this reason we exit immediately
-			wrong_pass = true;
-		}
-		// fall through
 	case PROCESSING_STMT_DESCRIBE:
 	case PROCESSING_STMT_EXECUTE:
 	case PROCESSING_STMT_BIND:
@@ -4026,7 +4020,7 @@ handler_again:
 							// HandleBackendConnection (backend already destroyed).
 							RequestEnd(myds, true);
 						} else {
-							handler_minus1_GenerateErrorMessage(myds, wrong_pass);
+							handler_minus1_GenerateErrorMessage(myds);
 							RequestEnd(myds, true);
 							handler_minus1_HandleBackendConnection(myds);
 						}
@@ -6287,6 +6281,12 @@ __cleanup:
 		myds->free_pgsql_real_query();
 	}
 	if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
+		// An implicit prepare still pending here failed: on its own Parse, or on the variable sync of
+		// a connection it was retried on. The statuses it saved are over with the request. Left on
+		// the stack, the next prepare that succeeds resumes into one of them.
+		if (CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_IMPLICIT_PREPARE) {
+			while (previous_status.empty() == false) previous_status.pop();
+		}
 		// reset status of the session
 		status = WAITING_CLIENT_DATA;
 		if (client_myds) {

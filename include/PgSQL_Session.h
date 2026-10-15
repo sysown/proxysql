@@ -530,7 +530,7 @@ private:
 	void end_poisoned_transaction();
 	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn);
 	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret);
-	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, bool& wrong_pass);
+	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds);
 	void handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* myds);
 	int RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA();
