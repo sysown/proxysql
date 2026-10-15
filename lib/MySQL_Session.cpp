@@ -247,17 +247,17 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 extern SQLite3_Server *GloSQLite3Server;
 
-static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
-	MySQL_Session *session)
+// Returns the session's cached policy by reference: the caller in
+// handler_again___verify_backend_user_schema() runs for every query.
+static const MySQLBackendAuthPolicy& resolved_backend_auth_policy_for_session(
+	MySQL_Session& session)
 {
 	const char *backend_username =
-		session != nullptr && session->client_myds != nullptr &&
-		session->client_myds->myconn != nullptr &&
-		session->client_myds->myconn->userinfo != nullptr
-			? session->client_myds->myconn->userinfo->username : nullptr;
-	return session != nullptr
-		? session->backend_auth_policy_for(backend_username)
-		: resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
+		session.client_myds != nullptr &&
+		session.client_myds->myconn != nullptr &&
+		session.client_myds->myconn->userinfo != nullptr
+			? session.client_myds->myconn->userinfo->username : nullptr;
+	return session.backend_auth_policy_for(backend_username);
 }
 
 #ifdef PROXYSQLCLICKHOUSE
@@ -3318,8 +3318,8 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 
 bool MySQL_Session::handler_again___verify_backend_user_schema() {
 	MySQL_Data_Stream *myds=mybe->server_myds;
-	const MySQLBackendAuthPolicy requested_policy =
-		resolved_backend_auth_policy_for_session(this);
+	const MySQLBackendAuthPolicy& requested_policy =
+		resolved_backend_auth_policy_for_session(*this);
 	if (requested_policy.type == MySQLBackendAuthType::INVALID) {
 		fail_invalid_backend_auth_policy(
 			myds, requested_policy.database_user.c_str(),
@@ -4547,8 +4547,8 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 	}
-	const MySQLBackendAuthPolicy requested_policy =
-		resolved_backend_auth_policy_for_session(this);
+	const MySQLBackendAuthPolicy& requested_policy =
+		resolved_backend_auth_policy_for_session(*this);
 	const MySQLBackendAuthType requested_type = requested_policy.type;
 	if (requested_type == MySQLBackendAuthType::INVALID) {
 		fail_invalid_backend_auth_policy(
