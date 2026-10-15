@@ -5395,6 +5395,19 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 	return PgSQL_Local_Reply::SENT;
 }
 
+// The transaction failed on the backend: its last ReadyForQuery said 'E'. PostgreSQL then refuses every
+// statement but the ones that end the transaction, so ProxySQL must not answer any itself.
+bool PgSQL_Session::txn_failed_on_backend() {
+	for (unsigned int i = 0; i < mybes->len; i++) {
+		const PgSQL_Backend* be = (PgSQL_Backend*)mybes->index(i);
+		PgSQL_Connection* c = (be && be->server_myds) ? be->server_myds->myconn : nullptr;
+		if (c && c->get_transaction_status_char() == 'E') {
+			return true;
+		}
+	}
+	return false;
+}
+
 PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(const char* dig, bool* lock_hostgroup) {
 	if (!dig) return PgSQL_Local_Reply::NONE;
 
@@ -5570,7 +5583,8 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 
 	if (stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET ||
 		stmt_type == PGSQL_EXTENDED_QUERY_TYPE_EXECUTE) {
-		if (qpo->OK_msg) {
+		// Not in a failed transaction: the backend refuses the statement there, as PostgreSQL does.
+		if (qpo->OK_msg && txn_failed_on_backend() == false) {
 			handler_WCD_SS_MCQ_qpo_OK_msg(pkt);
 			return PgSQL_Local_Reply::SENT;
 		}
@@ -5610,6 +5624,13 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		goto __exit_set_destination_hostgroup;
 	}
 
+	// In a transaction that failed on the backend, PostgreSQL refuses every statement but the ones
+	// that end it. Nothing below may answer one with a success and ReadyForQuery 'T': it goes to the
+	// backend, which refuses it.
+	if (txn_failed_on_backend()) {
+		goto __exit_set_destination_hostgroup;
+	}
+
 	// Handle special commands
 	if (CurrentQuery.QueryParserArgs.digest_text) {
 		const char* dig = CurrentQuery.QueryParserArgs.digest_text;
@@ -5645,7 +5666,6 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		);
 
 		if (pgsql_qc_entry) {
-			// FIXME: Add Error Transaction state detection
 			unsigned int nTrx = NumActiveTransactions();
 			PgSQL_Data_Stream::copy_buffer_to_resultset(client_myds->PSarrayOUT,
 				pgsql_qc_entry->value, pgsql_qc_entry->length, (nTrx ? 'T' : 'I'));
@@ -7412,8 +7432,11 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 	//    If the client already prepared this same SQL under the same name,
 	//    and the hash matches, reuse the existing global statement.
 	//    (A buffered unit takes step 4, which records the name for later.)
+	//    Neither this nor step 4 answers in a transaction that failed on the backend: the Parse
+	//    goes there and is refused, as PostgreSQL refuses it, instead of getting a ParseComplete.
 	// ----------------------------------------------------------------------
-	if (extq_buffering == false && local_stmt_info_itr != local_stmts->stmt_name_to_global_info.end()) {
+	const bool txn_failed = txn_failed_on_backend();
+	if (txn_failed == false && extq_buffering == false && local_stmt_info_itr != local_stmts->stmt_name_to_global_info.end()) {
 		auto& local_stmt_info = local_stmt_info_itr->second;
 
 		// Exact match found; treat as a parse success and continue normally.
@@ -7439,7 +7462,7 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 	if (rewritten || local_hit) {
 		stmt_info = GloPgStmt->find_prepared_statement_by_hash(hash);
 	}
-	if (stmt_info) {
+	if (stmt_info && txn_failed == false) {
 		std::shared_ptr<const PgSQL_STMT_Global_info>* local_stmt_info_ptr = nullptr;
 		if (local_stmt_info_itr != local_stmts->stmt_name_to_global_info.end()) {
 			local_stmt_info_ptr = &local_stmt_info_itr->second;  // reference to shared_ptr inside map
@@ -8202,8 +8225,9 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 		}
 		extended_query_exec_qp = false;
 	} else {
-		
-		if (qpo->OK_msg) {
+		// In a transaction that failed on the backend nothing is answered here, as in the handler above.
+		const bool txn_failed = txn_failed_on_backend();
+		if (qpo->OK_msg && txn_failed == false) {
 			auto execute_pkt = execute_msg->detach(); // detach the packet from the describe message
 			handler_WCD_SS_MCQ_qpo_OK_msg(&execute_pkt);
 			return 0;
@@ -8217,7 +8241,7 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 		}
 
 		assert(previous_hostgroup != -1); // previous_hostgroup should be set before 
-		if (CurrentQuery.QueryParserArgs.digest_text) {
+		if (CurrentQuery.QueryParserArgs.digest_text && txn_failed == false) {
 			const char* dig = CurrentQuery.QueryParserArgs.digest_text;
 			const PgSQL_Local_Reply reply = handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(dig, &lock_hostgroup);
 			if (reply != PgSQL_Local_Reply::NONE) {

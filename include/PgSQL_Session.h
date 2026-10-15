@@ -810,6 +810,7 @@ public:
 	// otherwise. Poisons the session when the backend still holds the transaction open.
 	// Call it before anything that discards the backend connection.
 	char txn_state_for_local_error(bool backend_lost = false);
+	bool txn_failed_on_backend();
 	// Put the tracked SET variables back to their values at BEGIN (as ROLLBACK does)
 	// for a transaction ProxySQL ends itself; drops the snapshot if no backend is attached.
 	void rollback_tracked_txn_state();
