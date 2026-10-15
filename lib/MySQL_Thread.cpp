@@ -3695,6 +3695,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 }
 
 MySQL_Thread::~MySQL_Thread() {
+#ifdef PROXYSQL40
 	// First sever every session-to-request association while the sessions and
 	// token source are still alive. Only then close the independently-held
 	// inbox duplicate so late provider publications are harmless drops.
@@ -3711,6 +3712,7 @@ MySQL_Thread::~MySQL_Thread() {
 		aws_iam_inbox->close();
 		aws_iam_inbox.reset();
 	}
+#endif // PROXYSQL40
 
 	if (mysql_sessions) {
 		while(mysql_sessions->len) {
@@ -3890,7 +3892,9 @@ bool MySQL_Thread::init() {
 	ioctl_FIONBIO(pipefd[0],1);
 	ioctl_FIONBIO(pipefd[1],1);
 	mypolls.add(POLLIN, pipefd[0], NULL, 0);
+#ifdef PROXYSQL40
 	aws_iam_inbox = std::make_shared<AwsIamWorkerInbox>(pipefd[1]);
+#endif // PROXYSQL40
 
 	thr_SetParser = new MySQL_Set_Stmt_Parser("");
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
@@ -3907,6 +3911,7 @@ bool MySQL_Thread::init() {
 	return true;
 }
 
+#ifdef PROXYSQL40
 uint64_t MySQL_Thread::register_aws_iam_waiter(MySQL_Session *session) {
 	if (session == nullptr || !aws_iam_inbox || !aws_iam_inbox->available()) return 0;
 	for (;;) {
@@ -3934,6 +3939,7 @@ void MySQL_Thread::drain_aws_iam_completions() {
 		}
 	}
 }
+#endif // PROXYSQL40
 
 struct pollfd * MySQL_Thread::get_pollfd(unsigned int i) {
 	return &mypolls.fds[i];
@@ -4478,9 +4484,11 @@ __run_skip_1:
 				});
 			}
 #endif // PROXYSQL31
+#ifdef PROXYSQL40
 			// IAM providers only enqueue opaque completions. Resolve them to
 			// live sessions here, on the owning worker, before session dispatch.
 			drain_aws_iam_completions();
+#endif // PROXYSQL40
 			// iterate through all sessions and process the session logic
 			process_all_sessions();
 			return_local_connections();
@@ -6684,9 +6692,11 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 					case CONNECTING_SERVER:
 						pta[11]=strdup("Connect");
 						break;
+#ifdef PROXYSQL40
 					case WAITING_AWS_IAM_TOKEN:
 						pta[11]=strdup("Waiting AWS IAM token");
 						break;
+#endif // PROXYSQL40
 					case PROCESSING_QUERY:
 						if (sess->pause_until > sess->thread->curtime) {
 							pta[11]=strdup("Delay");

@@ -99,6 +99,7 @@ class MySQL_Authentication {
 	 *   cluster checksum are unaffected.
 	 */
 	creds_group_t creds_admins;
+#ifdef PROXYSQL40
 	/**
 	 * @brief True while some backend row may have a backend auth policy other
 	 *   than PASSWORD (AWS IAM, or an invalid 'backend_auth' that fails closed).
@@ -111,6 +112,7 @@ class MySQL_Authentication {
 	std::atomic<bool> non_password_backend_auth_ { false };
 	/** @brief Recompute 'non_password_backend_auth_'. Caller holds creds_backends' write lock. */
 	void refresh_non_password_backend_auth_locked();
+#endif // PROXYSQL40
 	creds_group_t& creds_for(enum cred_username_type usertype);
 	bool _reset(enum cred_username_type usertype);
 	uint64_t _get_runtime_checksum(enum cred_username_type usertype);
@@ -135,10 +137,17 @@ class MySQL_Authentication {
 	/**
 	 * @brief Whether any backend row may use a non-PASSWORD backend auth policy.
 	 * @details false guarantees that resolve_mysql_backend_auth_policy() returns
-	 *   PASSWORD for every non-null backend username. Lock-free.
+	 *   PASSWORD for every non-null backend username. Lock-free. Always false on
+	 *   v3.0/v3.1 (no PROXYSQL40), where 'backend_auth' is ignored.
 	 */
 	bool has_non_password_backend_auth() const {
+#ifdef PROXYSQL40
 		return non_password_backend_auth_.load(std::memory_order_acquire);
+#else
+		// AWS IAM backend authentication is a v4.0 feature: v3.0/v3.1 ignore
+		// 'backend_auth' and every backend user authenticates with a password.
+		return false;
+#endif // PROXYSQL40
 	}
 #ifdef PROXYSQL40
 	/** Build replacement credential groups off-lock, then swap both groups atomically. */

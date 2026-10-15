@@ -265,10 +265,12 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// caches the credential and completes the client handshake, on
 	// failure sends a generic ERR and tears down the session.
 	int handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT();
+#ifdef PROXYSQL40
 	void fail_aws_iam_backend(const char *failure_code,
 		const AwsIamRedactedFailure *provider_failure = nullptr);
 	void fail_invalid_backend_auth_policy(MySQL_Data_Stream *backend,
 		const char *database_user, const char *failure_code);
+#endif // PROXYSQL40
 	bool handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream *, bool);
 	void handler_again___new_thread_to_kill_connection();
 	void handler_KillConnectionIfNeeded();
@@ -661,6 +663,8 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool passthrough_connect_failed;
 	const char *passthrough_connect_fail_reason;
 
+#ifdef PROXYSQL40
+	// AWS IAM backend authentication state (v4.0 only).
 	// Owner-thread state for a fresh backend connection parked while an IAM
 	// token is acquired. Provider threads never receive any of these pointers.
 	AwsIamTokenSourceLease aws_iam_token_source_lease {};
@@ -691,6 +695,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// cancel_aws_iam_wait() clears the IAM state again. Lets the reset and
 	// destroy paths of non-IAM sessions skip that cleanup entirely.
 	bool aws_iam_state_used { false };
+#endif // PROXYSQL40
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
 	bool backend_closed_in_fast_forward;
@@ -734,9 +739,11 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 *   or deferring them (see client_pkts_must_be_deferred()).
 	 */
 	bool client_may_pipeline() const;
+#ifdef PROXYSQL40
 	int handler_again___status_WAITING_AWS_IAM_TOKEN();
 	void accept_aws_iam_completion(uint64_t opaque_id, AwsIamTokenResult&& result);
 	void cancel_aws_iam_wait();
+#endif // PROXYSQL40
 
 	void (*handler_function) (MySQL_Session* sess, void *, PtrSize_t *pkt);
 	//MySQL_Backend * find_backend(int);

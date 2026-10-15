@@ -182,9 +182,11 @@ void MySQL_Authentication::remove_inactives(enum cred_username_type usertype) {
 		}
 		++i;
 	}
+#ifdef PROXYSQL40
 	if (usertype == USERNAME_BACKEND) {
 		refresh_non_password_backend_auth_locked();
 	}
+#endif // PROXYSQL40
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
 #else
@@ -192,6 +194,7 @@ void MySQL_Authentication::remove_inactives(enum cred_username_type usertype) {
 #endif
 }
 
+#ifdef PROXYSQL40
 void MySQL_Authentication::refresh_non_password_backend_auth_locked() {
 	bool found = false;
 	for (unsigned int i = 0; !found && i < creds_backends.cred_array->len; i++) {
@@ -207,6 +210,7 @@ void MySQL_Authentication::refresh_non_password_backend_auth_locked() {
 	}
 	non_password_backend_auth_.store(found, std::memory_order_release);
 }
+#endif // PROXYSQL40
 
 /**
  * @brief Select the credential scope for a username type.
@@ -401,6 +405,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array->add(ad);
 	}
+#ifdef PROXYSQL40
 	bool warn_for_iam_password = false;
 	std::string invalid_policy_code {};
 	if (usertype == USERNAME_BACKEND) {
@@ -416,11 +421,13 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 			non_password_backend_auth_.store(true, std::memory_order_release);
 		}
 	}
+#endif // PROXYSQL40
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
 #else
 	spin_wrunlock(&cg.lock);
 #endif
+#ifdef PROXYSQL40
 	if (warn_for_iam_password) {
 		proxy_warning(
 			"mysql_users backend entry for '%s' uses aws_iam authentication; "
@@ -436,6 +443,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 			"queries of this user fail with ERR 9002 until it is fixed\n",
 			username, invalid_policy_code.c_str());
 	}
+#endif // PROXYSQL40
 	return true;
 };
 
@@ -897,9 +905,11 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 	while (cg.cred_array->len) {
 		cg.cred_array->remove_index_fast(0);
 	}
+#ifdef PROXYSQL40
 	if (usertype == USERNAME_BACKEND) {
 		non_password_backend_auth_.store(false, std::memory_order_release);
 	}
+#endif // PROXYSQL40
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
 #else

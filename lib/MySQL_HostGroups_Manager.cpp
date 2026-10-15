@@ -244,6 +244,7 @@ void * HGCU_thread_run() {
 			}
 			conn_array->add(myconn);
 		}
+#ifdef PROXYSQL40
 		for (unsigned int i = 0; i < conn_array->len;) {
 			myconn = (MySQL_Connection *)conn_array->index(i);
 			const char *backend_username = myconn->userinfo != nullptr
@@ -263,6 +264,7 @@ void * HGCU_thread_run() {
 			}
 			++i;
 		}
+#endif // PROXYSQL40
 		unsigned int l=conn_array->len;
 		int *errs=(int *)malloc(sizeof(int)*l);
 		int *statuses=(int *)malloc(sizeof(int)*l);
@@ -3077,6 +3079,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 					if (c->mysql->thread_id) {
 						MySQL_Connection_userinfo *ui=c->userinfo;
 						KillArgs *ka = nullptr;
+#ifdef PROXYSQL40
 						if (c->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
 							const std::string region_copy = mysrvc->myhgc != nullptr
 								? mysrvc->myhgc->attribute_aws_iam_region() : "";
@@ -3089,7 +3092,9 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 								MySQLBackendAuthType::AWS_IAM, mysrvc->address,
 								region, ui->username,
 								std::chrono::steady_clock::now() + std::chrono::seconds(5));
-						} else {
+						} else
+#endif // PROXYSQL40
+						{
 							char *auth_password=NULL;
 							if (ui->password) {
 								if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
@@ -6986,7 +6991,9 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
  */
 void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc) {
 	const uint32_t hid = myhgc->hid;
+#ifdef PROXYSQL40
 	myhgc->set_attribute_aws_iam_region(NULL);
+#endif // PROXYSQL40
 #ifdef PROXYSQL40
 	myhgc->attributes.aws_locality_policy = {};
 #endif
@@ -7038,6 +7045,7 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check, "hostgroup_settings");
 			myhgc->attributes.default_query_timeout = default_query_timeout;
 
+#ifdef PROXYSQL40
 			const auto aws_iam_region = j.find("aws_iam_region");
 			if (aws_iam_region != j.end()) {
 				if (!aws_iam_region->is_string()) {
@@ -7056,6 +7064,7 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 					}
 				}
 			}
+#endif // PROXYSQL40
 
 #ifdef PROXYSQL31
 			const auto backup_weight_threshold_check = [](int64_t v) -> bool {

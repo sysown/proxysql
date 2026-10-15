@@ -517,7 +517,9 @@ MySQL_Connection::MySQL_Connection() {
 
 MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
+#ifdef PROXYSQL40
 	clear_aws_iam_handshake_secret();
+#endif // PROXYSQL40
 	if (options.server_version) free(options.server_version);
 	if (options.init_connect) free(options.init_connect);
 	if (options.ldap_user_variable) free(options.ldap_user_variable);
@@ -585,6 +587,7 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 };
 
+#ifdef PROXYSQL40
 void MySQL_Connection::set_backend_auth_type(MySQLBackendAuthType type) {
 	if (type != MySQLBackendAuthType::AWS_IAM) {
 		clear_aws_iam_handshake_secret();
@@ -650,6 +653,7 @@ void MySQL_Connection::clear_aws_iam_handshake_secret() {
 bool MySQL_Connection::has_aws_iam_handshake_secret() const {
 	return aws_iam_identity_ && !aws_iam_identity_->handshake_token.empty();
 }
+#endif // PROXYSQL40
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting autocommit %d\n", _ac);
@@ -737,6 +741,7 @@ bool MySQL_Connection::get_status_sql_log_bin0() {
 	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
 
+#ifdef PROXYSQL40
 bool MySQL_Connection::backend_auth_compatible(
 	const char *requested_username, MySQLBackendAuthType) const
 {
@@ -746,11 +751,13 @@ bool MySQL_Connection::backend_auth_compatible(
 		userinfo->username != nullptr &&
 		strcmp(userinfo->username, requested_username) == 0;
 }
+#endif // PROXYSQL40
 
 bool MySQL_Connection::requires_CHANGE_USER(
 	const MySQL_Connection *client_conn,
 	MySQLBackendAuthType requested_type) const
 {
+#ifdef PROXYSQL40
 	const char *username = client_conn != nullptr && client_conn->userinfo != nullptr
 		? client_conn->userinfo->username : nullptr;
 	if (!backend_auth_compatible(username, requested_type)) {
@@ -758,6 +765,14 @@ bool MySQL_Connection::requires_CHANGE_USER(
 		// policy. The caller chooses CHANGE_USER or a fresh connection.
 		return true;
 	}
+#else
+	(void)requested_type;
+	if (strcmp(userinfo->username, client_conn->userinfo->username)) {
+		// the two connections use different usernames
+		// The connection need to be reset with CHANGE_USER
+		return true;
+	}
+#endif // PROXYSQL40
 	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		if (client_conn->var_hash[i] == 0) {
 			if (var_hash[i]) {
@@ -1165,6 +1180,7 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 #endif
+#ifdef PROXYSQL40
 	if (backend_auth_type_ == MySQLBackendAuthType::AWS_IAM) {
 		const bool valid_iam_handshake = parent->port != 0 && aws_iam_identity_ &&
 			!aws_iam_identity_->handshake_token.empty();
@@ -1191,6 +1207,7 @@ void MySQL_Connection::connect_start() {
 			aws_iam_identity_->key.endpoint.c_str());
 		aws_iam_connector_secret_active_ = true;
 	}
+#endif // PROXYSQL40
 	if (parent->port) {
 		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
@@ -1201,9 +1218,11 @@ void MySQL_Connection::connect_start() {
 		}
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
+#ifdef PROXYSQL40
 	if (aws_iam_connector_secret_active_) {
 		aws_iam_async_connect_pending_ = async_exit_status != 0;
 	}
+#endif // PROXYSQL40
 	fd=mysql_get_socket(mysql);
 //	{
 //		// FIXME: THIS IS FOR TESTING PURPOSE ONLY
@@ -1222,9 +1241,11 @@ void MySQL_Connection::connect_start() {
 void MySQL_Connection::connect_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, mysql_status(event, true));
+#ifdef PROXYSQL40
 	if (aws_iam_connector_secret_active_) {
 		aws_iam_async_connect_pending_ = async_exit_status != 0;
 	}
+#endif // PROXYSQL40
 }
 
 void MySQL_Connection::change_user_start() {
@@ -1232,8 +1253,10 @@ void MySQL_Connection::change_user_start() {
 	// IAM credentials exist only for the initial TLS handshake. Reaching this
 	// path with an IAM identity would turn an ephemeral token into a reusable
 	// password; all session/reset callers must replace the connection instead.
+#ifdef PROXYSQL40
 	assert(backend_auth_type_ != MySQLBackendAuthType::AWS_IAM);
 	assert(!has_aws_iam_handshake_secret());
+#endif // PROXYSQL40
 	//fprintf(stderr,"change_user_start FD %d\n", fd);
 	MySQL_Connection_userinfo *_ui = NULL;
 	if (myds->sess->client_myds == NULL) {
@@ -1472,8 +1495,10 @@ handler_again:
     break;
 			break;
 		case ASYNC_CONNECT_END:
+#ifdef PROXYSQL40
 			aws_iam_async_connect_pending_ = false;
 			clear_aws_iam_handshake_secret();
+#endif // PROXYSQL40
 			if (myds) {
 				if (myds->sess) {
 					if (myds->sess->thread) {
@@ -1484,7 +1509,7 @@ handler_again:
 			}
 			if (!ret_mysql) {
 				int myerr = mysql_errno(mysql);
-				if (backend_auth_type_ == MySQLBackendAuthType::AWS_IAM) {
+				if (backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
 					proxy_error("Failed to connect IAM backend on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: authentication details redacted.\n",
 						parent->myhgc->hid, parent->address, parent->port,
 						mysql->net.fd, myds->fd, myerr);
@@ -1580,7 +1605,9 @@ handler_again:
 		case ASYNC_CONNECT_TIMEOUT:
 			{
 			const int myerr = mysql != nullptr ? mysql_errno(mysql) : CR_CONNECTION_ERROR;
+#ifdef PROXYSQL40
 			clear_aws_iam_handshake_secret();
+#endif // PROXYSQL40
 			//proxy_error("Connect timeout on %s:%d : %llu - %llu = %llu\n",  parent->address, parent->port, myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
 			proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, myerr);

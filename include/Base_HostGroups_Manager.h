@@ -115,7 +115,9 @@ class BaseHGC {	// MySQL Host Group Container
 		char * init_connect;
 		char * comment;
 		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
+#ifdef PROXYSQL40
 		char * aws_iam_region;
+#endif // PROXYSQL40
 #ifdef PROXYSQL40
 		AwsLocalityPolicy aws_locality_policy;
 #endif
@@ -144,9 +146,11 @@ class BaseHGC {	// MySQL Host Group Container
 	 */
 	mutable std::shared_mutex attributes_strings_lock;
 	std::string attribute_init_connect() const;
-	std::string attribute_aws_iam_region() const;
 	void set_attribute_init_connect(const char* value);
+#ifdef PROXYSQL40
+	std::string attribute_aws_iam_region() const;
 	void set_attribute_aws_iam_region(const char* value);
+#endif // PROXYSQL40
 	struct {
 		int64_t weight;
 		int64_t max_connections;

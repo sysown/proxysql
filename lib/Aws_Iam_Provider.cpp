@@ -13,6 +13,11 @@
 #include <mutex>
 #include <utility>
 
+// AWS IAM backend authentication is a v4.0 feature: the token source is
+// installed by the plugin chassis, which only exists with PROXYSQL40. Under
+// v3.0/v3.1 this translation unit compiles to nothing.
+#ifdef PROXYSQL40
+
 namespace {
 
 constexpr std::array<const char *, 8> kAwsIamCounterNames {{
@@ -381,3 +386,5 @@ std::unique_ptr<AwsIamTokenSource> create_aws_iam_token_source(
 	(void)config;
 	return std::make_unique<AwsIamNotCompiledTokenSource>();
 }
+
+#endif // PROXYSQL40
