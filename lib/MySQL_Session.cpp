@@ -1533,13 +1533,17 @@ bool MySQL_Session::handler_special_queries_STATUS(PtrSize_t *pkt) {
 }
 
 /**
- * @brief Returns true if 'query' is a 'LOAD DATA [LOW_PRIORITY|CONCURRENT] LOCAL INFILE'
+ * @brief Returns true if 'query' is a 'LOAD {DATA|XML} [LOW_PRIORITY|CONCURRENT] LOCAL INFILE'
  *   statement, tolerating leading whitespace/comments and any whitespace between keywords.
  * @details The previous check was a bare strncasecmp() against the literal
  *   "LOAD DATA LOCAL INFILE", which missed the statement entirely whenever the
  *   canonical spelling was not reproduced byte for byte at offset 0 -- and it
  *   was only applied on the COM_QUERY path, so a prepared statement carrying
  *   the very same statement was never refused (GHSA-crwq-rcqp-v8jr).
+ *   Comments skipped: '/' '*'...'*' '/', '#' and '-- ' up to the end of the line.
+ *   Executable comments ('/' '*' '!' and '/' '*' 'M!', optional version number)
+ *   are run by the server, so their content is matched as part of the statement,
+ *   and a closing '*' '/' is skipped like a comment.
  */
 static bool is_load_data_local_infile(const char* query, size_t len) {
 	const char* p = query;
@@ -1548,11 +1552,25 @@ static bool is_load_data_local_infile(const char* query, size_t len) {
 		while (p < end) {
 			if (isspace((unsigned char)*p)) {
 				p++;
-			} else if (end - p >= 2 && p[0] == '/' && p[1] == '*' && (end - p < 3 || p[2] != '!')) {
+			} else if (end - p >= 2 && p[0] == '/' && p[1] == '*') {
 				const char* c = p + 2;
+				if (c < end && *c == 'M' && end - c >= 2 && c[1] == '!') c++;
+				if (c < end && *c == '!') {
+					// executable comment: match what is inside it
+					c++;
+					while (c < end && isdigit((unsigned char)*c)) c++;
+					p = c;
+					continue;
+				}
 				while (end - c >= 2 && !(c[0] == '*' && c[1] == '/')) c++;
 				if (end - c < 2) return;
 				p = c + 2;
+			} else if (end - p >= 2 && p[0] == '*' && p[1] == '/') {
+				// end of an executable comment
+				p += 2;
+			} else if (*p == '#' ||
+				(end - p >= 2 && p[0] == '-' && p[1] == '-' && (end - p == 2 || isspace((unsigned char)p[2]) || iscntrl((unsigned char)p[2])))) {
+				while (p < end && *p != '\n') p++;
 			} else {
 				return;
 			}
@@ -1567,7 +1585,8 @@ static bool is_load_data_local_infile(const char* query, size_t len) {
 		return true;
 	};
 	skip_ws();
-	if (!match("LOAD") || !match("DATA")) return false;
+	if (!match("LOAD")) return false;
+	if (!match("DATA") && !match("XML")) return false;
 	if (!match("LOW_PRIORITY")) match("CONCURRENT");
 	return match("LOCAL") && match("INFILE");
 }
