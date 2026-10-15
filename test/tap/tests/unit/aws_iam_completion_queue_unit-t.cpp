@@ -114,6 +114,21 @@ void test_fifo_drain() {
 		"multiple posts before a drain write only one pipe wake");
 }
 
+void test_pending_flag() {
+	PipePair pipe_pair;
+	AwsIamWorkerInbox inbox(pipe_pair.fds[1], 4);
+	ok(!inbox.has_pending(), "a new inbox reports nothing pending");
+	inbox.post(completion(21));
+	ok(inbox.has_pending(), "a post marks the inbox pending");
+	ok(inbox.drain().size() == 1 && !inbox.has_pending(),
+		"drain clears the pending mark");
+	inbox.post(completion(22));
+	inbox.close();
+	inbox.post(completion(23));
+	ok(!inbox.has_pending() && inbox.drain().empty(),
+		"close clears the pending mark and a late post does not set it again");
+}
+
 void test_bounded_overflow_cleanses() {
 	cleanse_calls.store(0);
 	PipePair pipe_pair;
@@ -166,9 +181,10 @@ void test_expired_weak_producers() {
 } // namespace
 
 int main() {
-	plan(9);
+	plan(13);
 	test_multi_producer_and_wake_coalescing();
 	test_fifo_drain();
+	test_pending_flag();
 	test_bounded_overflow_cleanses();
 	test_close_and_late_post();
 	test_expired_weak_producers();

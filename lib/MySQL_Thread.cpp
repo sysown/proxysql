@@ -3921,7 +3921,7 @@ void MySQL_Thread::cancel_aws_iam_waiter(uint64_t opaque_id) {
 }
 
 void MySQL_Thread::drain_aws_iam_completions() {
-	if (!aws_iam_inbox) return;
+	if (!aws_iam_inbox || !aws_iam_inbox->has_pending()) return;
 	auto completions = aws_iam_inbox->drain();
 	for (auto& completion : completions) {
 		auto waiter = aws_iam_waiters.find(completion.opaque_id);

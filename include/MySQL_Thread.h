@@ -73,6 +73,10 @@ private:
 
 	std::mutex mutex_;
 	BoundedCompletions completions_;
+	// Set (under mutex_) when completions_ becomes non-empty, cleared by drain().
+	// Lets the worker skip the lock and the deque construction on every loop
+	// iteration when no IAM completion is pending, which is the common case.
+	std::atomic<bool> pending_ { false };
 	bool closed_ { false };
 	int wake_fd_ { -1 };
 
@@ -91,6 +95,7 @@ public:
 		if (closed_ || completions_.values.size() >= completions_.maximum) return;
 		const bool wake_worker = completions_.values.empty();
 		completions_.values.emplace_back(std::move(completion));
+		pending_.store(true, std::memory_order_release);
 		if (wake_worker) {
 			const unsigned char byte = 0;
 			ssize_t ignored = ::write(wake_fd_, &byte, sizeof(byte));
@@ -98,10 +103,16 @@ public:
 		}
 	}
 
+	/** @brief Lock-free check used by the worker loop before calling drain(). */
+	bool has_pending() const {
+		return pending_.load(std::memory_order_acquire);
+	}
+
 	std::deque<AwsIamCompletion> drain() {
 		std::lock_guard<std::mutex> guard(mutex_);
 		std::deque<AwsIamCompletion> drained;
 		drained.swap(completions_.values);
+		pending_.store(false, std::memory_order_relaxed);
 		return drained;
 	}
 
@@ -115,6 +126,7 @@ public:
 		if (closed_) return;
 		closed_ = true;
 		completions_.values.clear();
+		pending_.store(false, std::memory_order_relaxed);
 		if (wake_fd_ >= 0) {
 			::close(wake_fd_);
 			wake_fd_ = -1;
