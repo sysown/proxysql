@@ -1083,6 +1083,13 @@ int MySQL_Data_Stream::buffer2array() {
 	} else {
 
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
+			// The start of a PROXY header, shorter than the 8 bytes the check below
+			// needs: wait for the rest instead of reading "PROX" as a MySQL header
+			// (a ~5MB packet length).
+			if (pkts_recv==0 && queueIN.tail==0 && queueIN.head < 8 &&
+				strncmp((char *)queueIN.buffer,"PROXY ",(queueIN.head < 6 ? queueIN.head : 6)) == 0) {
+				return 0;
+			}
 			// check if this is a PROXY protocol packet
 			if (
 				pkts_recv==0 && // checks if no packets have been received yet
@@ -1173,12 +1180,14 @@ int MySQL_Data_Stream::buffer2array() {
 					queueIN.pkt.size=0;
 					queueIN.pkt.ptr=NULL;
 					return b;
-				} else {
-					// set the connection unhealthy , this will cause the session to be destroyed
+				} else if (queueIN.head >= 107) {
+					// a PROXY v1 header is at most 107 bytes: without a delimiter by now it is invalid.
+					// Set the connection unhealthy , this will cause the session to be destroyed
 					if (sess) {
 						sess->set_unhealthy();
 					}
 				}
+				// otherwise the header is incomplete: wait for the rest
 				return 0; // we always return
 			}
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Reading the header of a new packet\n", sess);
