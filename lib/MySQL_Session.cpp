@@ -3759,6 +3759,20 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		status=WAITING_CLIENT_DATA;
 		return;
 	} else {
+		// Header (4) + command (1) + statement id (4). See GHSA-5cf5-7gfq-rrj6,
+		// sibling of GHSA-hhq3-jjcq-j897.
+		if (pkt.size < 9) {
+			proxy_warning(
+				"Received malformed COM_STMT_EXECUTE packet of %lu bytes\n",
+				(unsigned long)pkt.size
+			);
+			l_free(pkt.size,pkt.ptr);
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1210,(char *)"HY000",(char *)"Malformed COM_STMT_EXECUTE");
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			return;
+		}
 		// if we reach here, we are on MySQL module
 		bool rc_break=false;
 		bool lock_hostgroup = false;
