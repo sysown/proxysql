@@ -1247,7 +1247,9 @@ int MySQL_Data_Stream::buffer2array() {
 					// straight off the wire. Falling back to the uncompressed
 					// interpretation when the body is the larger of the two
 					// therefore overflows 'dest', so refuse instead.
-					if (body_len > (unsigned long long)claimed_len) {
+					// The sanity check below also reads the 3 bytes at u+7..u+9,
+					// so a body shorter than that would be read past its end.
+					if (body_len < 3 || body_len > (unsigned long long)claimed_len) {
 						proxy_error("Unable to uncompress a compressed packet\n");
 						free(dest);
 						shut_soft();
