@@ -5159,6 +5159,14 @@ void MySQL_Thread::process_all_sessions() {
 	if (sess_sort && mysql_sessions->len > 3 && partition_wanted) {
 		ProcessAllSessions_Partition<MySQL_Session>();
 	}
+#ifdef PROXYSQL31
+	// Sessions holding a backend run first, then the backend waiters, then the
+	// sessions without a backend. A session handled in the first loop that has
+	// since returned its connection to the pool must not run a second time in
+	// the last loop: it has nothing new to do until the next poll.
+	const unsigned long long pass = ++sessions_pass;
+	bool no_backend_loop_needed = false;
+#endif // PROXYSQL31
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
 #ifdef DEBUG
@@ -5232,8 +5240,10 @@ void MySQL_Thread::process_all_sessions() {
 				if (sess->pause_until <= curtime) {
 #ifdef PROXYSQL31
 					if (!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
+						no_backend_loop_needed = true;
 						continue;
 					}
+					sess->handled_in_pass = pass;
 #endif // PROXYSQL31
 					rc=sess->handler();
 
@@ -5308,6 +5318,7 @@ void MySQL_Thread::process_all_sessions() {
 					// A checkout timeout can finish the request without a connection.
 					// Restore the client so its error response and next query can flow.
 					leave_waiter(sess);
+					no_backend_loop_needed = true;
 				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
 					break;
 				}
@@ -5316,9 +5327,10 @@ void MySQL_Thread::process_all_sessions() {
 			(void)waiter_count;
 		});
 	}
-	for (n=0; n<mysql_sessions->len; n++) {
+	for (n=0; no_backend_loop_needed && n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
 		if (sess->waiter_node.session) continue;
+		if (sess->handled_in_pass == pass) continue;
 		if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
 		if (sess->to_process==1 && sess->pause_until <= curtime) {
 			rc=sess->handler();

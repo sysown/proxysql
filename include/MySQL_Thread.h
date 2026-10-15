@@ -293,6 +293,8 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	ProxySQL_Poll<MySQL_Data_Stream> mypolls;
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Lists waiter_lists;
+	// Incremented by every process_all_sessions() call; see handled_in_pass.
+	unsigned long long sessions_pass { 0 };
 	unsigned long long last_b_rearm_us = 0;
 #endif // PROXYSQL31
 	pthread_t thread_id;

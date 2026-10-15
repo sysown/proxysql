@@ -468,6 +468,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
+	// process_all_sessions() pass in which handler() last ran from the first
+	// (sessions holding a backend) loop; the no-backend loop skips it.
+	unsigned long long handled_in_pass { 0 };
 	bool last_pool_ff{ false };
 	bool last_pool_gtid{ false };
 	int last_pool_max_lag_ms{ -1 };

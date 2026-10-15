@@ -79,6 +79,14 @@ void Base_Thread::register_session(T thr, S _sess, bool up_start) {
 	if constexpr (std::is_same_v<T, PgSQL_Thread*>) {
 		_sess->copy_cmd_matcher = (static_cast<PgSQL_Thread*>(this))->copy_cmd_matcher;
 	}
+#ifdef PROXYSQL31
+	if constexpr (std::is_same_v<T, MySQL_Thread*>) {
+		// handled_in_pass is compared with this thread's own pass counter: a
+		// value left by the thread the session comes from (idle threads) could
+		// match it and make process_all_sessions() skip the session.
+		_sess->handled_in_pass = 0;
+	}
+#endif // PROXYSQL31
 
 	if (up_start)
 		_sess->start_time=curtime;
