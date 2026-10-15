@@ -587,20 +587,28 @@ int MySQL_Data_Stream::read_from_net() {
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 4, 0);
 				if (r == 4) {
-					// let's try to read a whole packet
-					mysql_hdr Hdr;
-					memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
-					// GHSA-58ww-865x-grpr: bound the declared packet length by the
-					// remaining capacity of queueIN. Without this check an unauthenticated
-					// client can drive a heap out-of-bounds write into the fixed-size
-					// 32KB input queue by sending an oversized first MySQL packet.
-					if (Hdr.pkt_length > (unsigned int)(s - 4)) {
-						proxy_error("Oversized first packet from client: pkt_length=%u exceeds queue capacity (%d). Closing fd=%d\n",
-							Hdr.pkt_length, s - 4, fd);
-						shut_soft();
-						return -1;
+					// Check for PROXY protocol before treating as MySQL header
+					// PROXY protocol starts with "PROXY " (6 bytes), but we only have 4 bytes here
+					// If first 4 bytes are "PROX", don't interpret as MySQL header
+					if (strncmp((char *)queueIN.buffer, "PROX", 4) == 0) {
+						// PROXY protocol detected - read more data without MySQL header parsing
+						r += recv(fd, queue_w_ptr(queueIN)+4, s-4, 0);
+					} else {
+						// let's try to read a whole packet
+						mysql_hdr Hdr;
+						memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
+						// GHSA-58ww-865x-grpr: bound the declared packet length by the
+						// remaining capacity of queueIN. Without this check an unauthenticated
+						// client can drive a heap out-of-bounds write into the fixed-size
+						// 32KB input queue by sending an oversized first MySQL packet.
+						if (Hdr.pkt_length > (unsigned int)(s - 4)) {
+							proxy_error("Oversized first packet from client: pkt_length=%u exceeds queue capacity (%d). Closing fd=%d\n",
+								Hdr.pkt_length, s - 4, fd);
+							shut_soft();
+							return -1;
+						}
+						r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
 					}
-					r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
 				}
 			} else {
 				r = recv(fd, queue_w_ptr(queueIN), s, 0);
