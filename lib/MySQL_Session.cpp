@@ -8477,6 +8477,19 @@ bool MySQL_Session::has_any_backend() {
  * @param pkt Reference to the packet containing the command and associated data.
  */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
+	// Header (4) + command (1) + statement id (4). See GHSA-85h9-mr8r-6j4j.
+	if (pkt.size < 9) {
+		proxy_warning(
+			"Received malformed COM_STMT_RESET packet of %lu bytes\n",
+			(unsigned long)pkt.size
+		);
+		l_free(pkt.size,pkt.ptr);
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1210, (char *)"HY000", (char *)"Malformed COM_STMT_RESET");
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		return;
+	}
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	SLDH->reset(stmt_global_id);
@@ -8500,9 +8513,19 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
  * @param pkt Reference to the packet containing the command and associated data.
  */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
+	// Header (4) + command (1) + statement id (4). See GHSA-hhq3-jjcq-j897.
+	if (pkt.size < 9) {
+		proxy_warning(
+			"Received malformed COM_STMT_CLOSE packet of %lu bytes\n",
+			(unsigned long)pkt.size
+		);
+		l_free(pkt.size,pkt.ptr);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		return;
+	}
 	uint32_t client_global_id=0;
 	memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-	// FIXME: no input validation
 	uint64_t stmt_global_id=0;
 	stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_global_id);
 	SLDH->reset(client_global_id);
@@ -8520,7 +8543,20 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t& pkt) {
-	// FIXME: no input validation
+	// Header (4) + command (1) + stmt id (4) + param id (2) = 11. Without
+	// this check 'pkt.size-11' below underflows, and SLDH->add() is handed a
+	// near-SIZE_MAX length: an arbitrary heap over-read that is then stored
+	// as a bind buffer. See GHSA-g732-36xh-4442.
+	if (pkt.size < 11) {
+		proxy_warning(
+			"Received malformed COM_STMT_SEND_LONG_DATA packet of %lu bytes\n",
+			(unsigned long)pkt.size
+		);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt.size,pkt.ptr);
+		return;
+	}
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	uint32_t stmt_param_id=0;
