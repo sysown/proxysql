@@ -879,7 +879,22 @@ void MySQL_Session::accept_aws_iam_completion(
 	to_process = 1;
 }
 
+// Policy returned by backend_auth_policy_for() when no backend row can resolve
+// to anything but PASSWORD. Its database_user is empty: callers read it only for
+// AWS_IAM and INVALID.
+static const MySQLBackendAuthPolicy k_password_backend_auth_policy = [] {
+	MySQLBackendAuthPolicy policy;
+	policy.type = MySQLBackendAuthType::PASSWORD;
+	return policy;
+}();
+
 const MySQLBackendAuthPolicy& MySQL_Session::backend_auth_policy_for(const char *backend_username) {
+	// No backend row uses a non-PASSWORD policy (no AWS IAM user configured):
+	// skip the cache lookup and its username compare, which run for every query.
+	// A null username still takes the full path (it resolves to INVALID).
+	if (backend_username != nullptr && !GloMyAuth->has_non_password_backend_auth()) {
+		return k_password_backend_auth_policy;
+	}
 	const char *user = backend_username != nullptr ? backend_username : "";
 	if (!cached_backend_auth_policy_valid || cached_backend_auth_policy_user != user) {
 		cached_backend_auth_policy = resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);

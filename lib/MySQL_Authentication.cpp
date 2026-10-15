@@ -182,11 +182,30 @@ void MySQL_Authentication::remove_inactives(enum cred_username_type usertype) {
 		}
 		++i;
 	}
+	if (usertype == USERNAME_BACKEND) {
+		refresh_non_password_backend_auth_locked();
+	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
 #else
 	spin_wrunlock(&cg.lock);
 #endif
+}
+
+void MySQL_Authentication::refresh_non_password_backend_auth_locked() {
+	bool found = false;
+	for (unsigned int i = 0; !found && i < creds_backends.cred_array->len; i++) {
+		const account_details_t *ad = (account_details_t *)creds_backends.cred_array->index(i);
+		// Rows without attributes are PASSWORD: skip the policy parse for them.
+		if (ad->rejected_attributes == nullptr && (ad->attributes == nullptr || ad->attributes[0] == '\0')) {
+			continue;
+		}
+		const MySQLBackendAuthPolicy policy = mysql_backend_auth_policy_for_account(
+			ad->username, ad->attributes, ad->rejected_attributes,
+			ad->password != nullptr && ad->password[0] != '\0');
+		found = policy.type != MySQLBackendAuthType::PASSWORD;
+	}
+	non_password_backend_auth_.store(found, std::memory_order_release);
 }
 
 /**
@@ -393,6 +412,9 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		warn_for_iam_password =
 			policy.type == MySQLBackendAuthType::AWS_IAM && policy.ignored_password;
 		if (policy.type == MySQLBackendAuthType::INVALID) invalid_policy_code = policy.failure_code;
+		if (policy.type != MySQLBackendAuthType::PASSWORD) {
+			non_password_backend_auth_.store(true, std::memory_order_release);
+		}
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
@@ -875,6 +897,9 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 	while (cg.cred_array->len) {
 		cg.cred_array->remove_index_fast(0);
 	}
+	if (usertype == USERNAME_BACKEND) {
+		non_password_backend_auth_.store(false, std::memory_order_release);
+	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
 #else
@@ -1027,6 +1052,10 @@ bool MySQL_Authentication::replace_mysql_users_atomically(
 	creds_backends.bt_map.swap(replacement.creds_backends.bt_map);
 	std::swap(creds_frontends.cred_array, replacement.creds_frontends.cred_array);
 	std::swap(creds_backends.cred_array, replacement.creds_backends.cred_array);
+	// 'replacement' only ever had rows added, so its flag is exact.
+	non_password_backend_auth_.store(
+		replacement.non_password_backend_auth_.load(std::memory_order_relaxed),
+		std::memory_order_release);
 	return true;
 }
 #endif

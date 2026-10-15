@@ -621,6 +621,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_encode_unit-t \
 	mysql_variables_unit-t \
 	mysql_users_rejected_attributes_unit-t \
+	mysql_backend_auth_in_use_unit-t \
 	mysql_user_variables_unit-t \
 	mysql_decompress_payload_unit-t \
 	mysql_resolution_unit-t \
