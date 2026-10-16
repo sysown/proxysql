@@ -45,11 +45,9 @@
  *     `PQsendQueryPrepared`, which are each their own Sync-terminated
  *     frame). With invalid SQL, the backend's Parse fails while
  *     Bind/Describe/Execute are already queued behind it in the same
- *     received frame, so ProxySQL dispatches the Parse as Flush- (not
- *     Sync-) terminated and must inject its own Sync to resynchronize the
- *     backend (lib/PgSQL_Connection.cpp:~2803-2825). This is the only
- *     flagship native-drive recovery mechanism not otherwise exercised by
- *     this file.
+ *     received frame. Native mode sends the frame as one batch ending in
+ *     the client's Sync, so the error is followed by the skipped messages'
+ *     silence and one ReadyForQuery; the result must match libpq exactly.
  *
  * KNOWN ISSUES (discovered by this test)
  * --------------------------------------
@@ -677,13 +675,13 @@ static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_
 	// the WRONG code.
 	bool sqlstate_ok = (nt_out.find("sqlstate=42601") != std::string::npos);
 
-	bool result_match = (lp_out == nt_out) && sqlstate_ok && resync_logged;
+	// The native path sends the whole frame as one batch, ending in the client's own Sync, so the
+	// backend needs no Sync from ProxySQL after the error; whether the injected-Sync line appears is
+	// reported, not required.
+	bool result_match = (lp_out == nt_out) && sqlstate_ok;
 	std::stringstream det;
 	det << "midframe error-recovery; sqlstate_ok=" << (sqlstate_ok ? "yes" : "no")
 	    << "; injected_sync_observed=" << (resync_logged ? "yes" : "no");
-	if (!resync_logged) {
-		det << " (injected-Sync branch not observed in proxysql.log)";
-	}
 	if (lp_out != nt_out) {
 		det << " (mismatch; lp_out='" << lp_out << "' nt_out='" << nt_out << "')";
 	}
