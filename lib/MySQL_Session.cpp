@@ -2975,13 +2975,13 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent==false) {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent=true;
-		char * tmp_init_connect = mysql_thread___init_connect;
+		const char * tmp_init_connect = mysql_thread___init_connect;
 		// This thread's copy: a concurrent reload replaces the hostgroup's own.
 		const HostgroupStrings* hg_strings =
 			thread->hostgroup_strings_for(mybe->server_myds->myconn->parent->myhgc->hid);
 		if (hg_strings != nullptr && !hg_strings->init_connect.empty()) {
 			// mysql_hostgroup_attributes takes priority
-			tmp_init_connect = const_cast<char*>(hg_strings->init_connect.c_str());
+			tmp_init_connect = hg_strings->init_connect.c_str();
 		}
 		if (tmp_init_connect) {
 			// we send init connect queries only if set
