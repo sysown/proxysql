@@ -20,6 +20,7 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "str_ends_with.h"
 
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 CommandLine cl;
@@ -717,7 +718,7 @@ int main(int, char**) {
 		});
 		ok(r[1].find(" | 1 2 C E(26000) Z(E) | ") != std::string::npos,
 			"local error in a transaction: the error, then ReadyForQuery 'E' [%s]", r[1].c_str());
-		ok(r[1].find(" | E(25P02) Z(E) | ") != std::string::npos && r[1].size() > 7 && r[1].substr(r[1].size() - 7) == " C Z(I)",
+		ok(r[1].find(" | E(25P02) Z(E) | ") != std::string::npos && ends_with(r[1], " C Z(I)"),
 			"local error in a transaction: the next statement is refused until ROLLBACK, which ends it [%s]", r[1].c_str());
 		ok(execLong(be.get(), "SELECT count(*) FROM " + tbl) == 0, "local error in a transaction: the buffered INSERT was rolled back");
 		exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
@@ -822,7 +823,7 @@ int main(int, char**) {
 			return out + " | " + replies(*c);
 		});
 	}
-	ok(r[1].size() >= 12 && r[1].find("threw") == std::string::npos && r[1].substr(r[1].size() - 12) == "T D=1 C Z(I)",
+	ok(r[1].find("threw") == std::string::npos && ends_with(r[1], "T D=1 C Z(I)"),
 		"special statement after a sent Parse: the session survives [%s]", r[1].c_str());
 	ok(r[0] == r[1], "special statement after a sent Parse: same replies as libpq [native: %s] [libpq: %s]", r[1].c_str(), r[0].c_str());
 
@@ -892,7 +893,7 @@ int main(int, char**) {
 			size_t rows = 0;
 			for (size_t p = out.find("D="); p != std::string::npos; p = out.find("D=", p + 1)) rows++;
 			const std::string tail = " C 1 2 D=11 C Z(I)";
-			const bool tail_ok = out.size() > tail.size() && out.compare(out.size() - tail.size(), tail.size(), tail) == 0;
+			const bool tail_ok = ends_with(out, tail);
 			return std::to_string(rows) + (tail_ok ? " tail ok" : " tail: " + out.substr(out.size() > 40 ? out.size() - 40 : 0));
 		});
 		ok(r[1] == "20001 tail ok", "large result: all rows, then the next statement's [%s]", r[1].c_str());

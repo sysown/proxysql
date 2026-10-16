@@ -559,6 +559,7 @@
   "stmt_execute_short_packet_unit-t" : [ "unit-tests-g1" ],
   "stmt_explain-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],
   "stmt_long_data_param_type_unit-t" : [ "unit-tests-g1" ],
+  "str_ends_with_unit-t" : [ "unit-tests-g1" ],
   "test_PROXY_Protocol-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
   "test_admin_builtin_coverage-t" : [ "mysql84-g5" ],
   "test_admin_hostgroup_balancing-t" : [ "mysql84-g1" ],
