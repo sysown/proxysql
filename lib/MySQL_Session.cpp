@@ -1532,6 +1532,73 @@ bool MySQL_Session::handler_special_queries_STATUS(PtrSize_t *pkt) {
 	return false;
 }
 
+/**
+ * @brief Returns the position after the whitespace character or the comment at 'p',
+ *   or 'p' itself when there is neither (or the comment is unterminated).
+ * @details Executable comments ('/' '*' '!' and '/' '*' 'M!', optional version number)
+ *   are run by the server: only their opening is skipped, so their content is matched
+ *   as part of the statement, and their closing '*' '/' is skipped on its own.
+ */
+static const char* skip_one_ws_or_comment(const char* p, const char* end) {
+	// ASCII only, like the server's tokenizer: no locale-dependent <ctype.h> calls
+	auto is_space = [](char ch) { return ch == ' ' || (ch >= '\t' && ch <= '\r'); };
+	auto is_cntrl = [](char ch) { return (unsigned char)ch < 0x20 || ch == 0x7f; };
+	if (is_space(*p)) return p + 1;
+	if (end - p >= 2 && p[0] == '*' && p[1] == '/') return p + 2;
+	if (*p == '#' || (end - p >= 2 && p[0] == '-' && p[1] == '-' &&
+		(end - p == 2 || is_space(p[2]) || is_cntrl(p[2])))) {
+		const char* nl = (const char*)memchr(p, '\n', end - p);
+		return nl ? nl : end;
+	}
+	if (end - p < 2 || p[0] != '/' || p[1] != '*') return p;
+	const char* c = p + 2;
+	if (end - c >= 2 && c[0] == 'M' && c[1] == '!') c++;
+	if (c < end && *c == '!') {
+		c++;
+		while (c < end && *c >= '0' && *c <= '9') c++;
+		return c;
+	}
+	for (; end - c >= 2; c++) {
+		if (c[0] == '*' && c[1] == '/') return c + 2;
+	}
+	return p;
+}
+
+/**
+ * @brief Returns true if 'query' is a 'LOAD {DATA|XML} [LOW_PRIORITY|CONCURRENT] LOCAL INFILE'
+ *   statement, tolerating leading whitespace/comments and any whitespace between keywords.
+ * @details The previous check was a bare strncasecmp() against the literal
+ *   "LOAD DATA LOCAL INFILE", which missed the statement entirely whenever the
+ *   canonical spelling was not reproduced byte for byte at offset 0 -- and it
+ *   was only applied on the COM_QUERY path, so a prepared statement carrying
+ *   the very same statement was never refused (GHSA-crwq-rcqp-v8jr).
+ *   Leading and inter-keyword comments are skipped by skip_one_ws_or_comment().
+ */
+static bool is_load_data_local_infile(const char* query, size_t len) {
+	const char* p = query;
+	const char* end = query + len;
+	auto skip_ws = [&]() {
+		while (p < end) {
+			const char* next = skip_one_ws_or_comment(p, end);
+			if (next == p) return;
+			p = next;
+		}
+	};
+	auto match = [&](const char* kw) -> bool {
+		size_t l = strlen(kw);
+		if ((size_t)(end - p) < l || strncasecmp(p, kw, l) != 0) return false;
+		if (p + l < end && (isalnum((unsigned char)p[l]) || p[l] == '_' || p[l] == '$')) return false;
+		p += l;
+		skip_ws();
+		return true;
+	};
+	skip_ws();
+	if (!match("LOAD")) return false;
+	if (!match("DATA") && !match("XML")) return false;
+	if (!match("LOW_PRIORITY")) match("CONCURRENT");
+	return match("LOCAL") && match("INFILE");
+}
+
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 
@@ -1804,7 +1871,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		return true;
 	}
 	// 'LOAD DATA LOCAL INFILE' is unsupported. We report an specific error to inform clients about this fact. For more context see #833.
-	if ( (pkt->size >= 22 + 5) && (strncasecmp((char *)"LOAD DATA LOCAL INFILE",(char *)pkt->ptr+5, 22)==0) ) {
+	if ( (pkt->size > 5) && is_load_data_local_infile((char *)pkt->ptr+5, pkt->size-5) ) {
 		if (mysql_thread___enable_load_data_local_infile == false) {
 			client_myds->DSS=STATE_QUERY_SENT_NET;
 			string errmsg = "Unsupported 'LOAD DATA LOCAL INFILE' command";
@@ -3586,6 +3653,19 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		status=WAITING_CLIENT_DATA;
 		return;
 	} else {
+		// GHSA-crwq-rcqp-v8jr: the default-off refusal for
+		// 'LOAD DATA LOCAL INFILE' was only applied on the COM_QUERY path,
+		// so preparing the very same statement got it executed and made
+		// ProxySQL read a file from its own filesystem.
+		if (mysql_thread___enable_load_data_local_infile == false && pkt.size > 5
+			&& is_load_data_local_infile((char *)pkt.ptr+5, pkt.size-5)) {
+			l_free(pkt.size,pkt.ptr);
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1047,(char *)"08S01",(char *)"Unsupported 'LOAD DATA LOCAL INFILE' command");
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			return;
+		}
 		thread->status_variables.stvar[st_var_frontend_stmt_prepare]++;
 		thread->status_variables.stvar[st_var_queries]++;
 		// if we reach here, we are not on MySQL module
@@ -3706,6 +3786,20 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		status=WAITING_CLIENT_DATA;
 		return;
 	} else {
+		// Header (4) + command (1) + statement id (4). See GHSA-5cf5-7gfq-rrj6,
+		// sibling of GHSA-hhq3-jjcq-j897.
+		if (pkt.size < 9) {
+			proxy_warning(
+				"Received malformed COM_STMT_EXECUTE packet of %lu bytes\n",
+				(unsigned long)pkt.size
+			);
+			l_free(pkt.size,pkt.ptr);
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1210,(char *)"HY000",(char *)"Malformed COM_STMT_EXECUTE");
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			return;
+		}
 		// if we reach here, we are on MySQL module
 		bool rc_break=false;
 		bool lock_hostgroup = false;
@@ -4797,15 +4891,11 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 	MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 	LogQuery(myds);
 	if (CurrentQuery.stmt_meta) {
-		if (CurrentQuery.stmt_meta->pkt) {
-			uint32_t stmt_global_id=0;
-			memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
-			SLDH->reset(stmt_global_id);
-			free(CurrentQuery.stmt_meta->pkt);
-			CurrentQuery.stmt_meta->pkt=NULL;
-		}
-
-		// free for all the buffer types in which we allocate
+		// free for all the buffer types in which we allocate.
+		// This must happen before SLDH->reset(): a parameter sent via
+		// COM_STMT_SEND_LONG_DATA points to the SLDH buffer instead of a buffer
+		// allocated by get_binds_from_pkt(), even for temporal types. That buffer
+		// is owned (and freed) by SLDH, so freeing it here too is a double-free.
 		for (int i = 0; i < CurrentQuery.stmt_meta->num_params; i++) {
 			enum enum_field_types buffer_type =
 				CurrentQuery.stmt_meta->binds[i].buffer_type;
@@ -4816,11 +4906,24 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 				(buffer_type == MYSQL_TYPE_TIMESTAMP) ||
 				(buffer_type == MYSQL_TYPE_DATETIME)
 			) {
-				free(CurrentQuery.stmt_meta->binds[i].buffer);
+				void *buffer = CurrentQuery.stmt_meta->binds[i].buffer;
+				unsigned long *long_data_size = NULL;
+				my_bool *long_data_is_null = NULL;
+				if (buffer && buffer != SLDH->get(CurrentQuery.stmt_meta->stmt_id, i, &long_data_size, &long_data_is_null)) {
+					free(buffer);
+				}
 				// NOTE: This memory should be zeroed during initialization,
 				// but we also nullify it here for extra safety. See #3546.
 				CurrentQuery.stmt_meta->binds[i].buffer = NULL;
 			}
+		}
+
+		if (CurrentQuery.stmt_meta->pkt) {
+			uint32_t stmt_global_id=0;
+			memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
+			SLDH->reset(stmt_global_id);
+			free(CurrentQuery.stmt_meta->pkt);
+			CurrentQuery.stmt_meta->pkt=NULL;
 		}
 	}
 	CurrentQuery.mysql_stmt=NULL;
@@ -8477,6 +8580,19 @@ bool MySQL_Session::has_any_backend() {
  * @param pkt Reference to the packet containing the command and associated data.
  */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
+	// Header (4) + command (1) + statement id (4). See GHSA-85h9-mr8r-6j4j.
+	if (pkt.size < 9) {
+		proxy_warning(
+			"Received malformed COM_STMT_RESET packet of %lu bytes\n",
+			(unsigned long)pkt.size
+		);
+		l_free(pkt.size,pkt.ptr);
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 1210, (char *)"HY000", (char *)"Malformed COM_STMT_RESET");
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		return;
+	}
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	SLDH->reset(stmt_global_id);
@@ -8500,9 +8616,19 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
  * @param pkt Reference to the packet containing the command and associated data.
  */
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
+	// Header (4) + command (1) + statement id (4). See GHSA-hhq3-jjcq-j897.
+	if (pkt.size < 9) {
+		proxy_warning(
+			"Received malformed COM_STMT_CLOSE packet of %lu bytes\n",
+			(unsigned long)pkt.size
+		);
+		l_free(pkt.size,pkt.ptr);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		return;
+	}
 	uint32_t client_global_id=0;
 	memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-	// FIXME: no input validation
 	uint64_t stmt_global_id=0;
 	stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_global_id);
 	SLDH->reset(client_global_id);
@@ -8520,7 +8646,20 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t& pkt) {
-	// FIXME: no input validation
+	// Header (4) + command (1) + stmt id (4) + param id (2) = 11. Without
+	// this check 'pkt.size-11' below underflows, and SLDH->add() is handed a
+	// near-SIZE_MAX length: an arbitrary heap over-read that is then stored
+	// as a bind buffer. See GHSA-g732-36xh-4442.
+	if (pkt.size < 11) {
+		proxy_warning(
+			"Received malformed COM_STMT_SEND_LONG_DATA packet of %lu bytes\n",
+			(unsigned long)pkt.size
+		);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt.size,pkt.ptr);
+		return;
+	}
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	uint32_t stmt_param_id=0;
