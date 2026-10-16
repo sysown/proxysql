@@ -635,6 +635,85 @@ int main() {
 	if (!fixture_configured) {
 		return exit_status();
 	}
+	for (bool with_timeout : {false, true}) {
+		MysqlPtr mixed = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const std::string query =
+			"/* uv_hg_a */ SET @mixed_tag='web', SESSION max_execution_time=1000" +
+			std::string(with_timeout ? ", SESSION wait_timeout=600" : "");
+		const bool assigned = mixed && execute(mixed.get(), query);
+		const auto count = mixed ? tracked_user_variable_count(mixed.get()) : std::nullopt;
+		const auto locked = mixed ? locked_hostgroup(mixed.get()) : std::nullopt;
+		const auto mixed_state = mixed ? internal_session(mixed.get()) : std::nullopt;
+		ok(assigned && count && *count == 1 && locked && *locked == -1 &&
+			mixed_state && (!with_timeout || mixed_state->value("wait_timeout", 0ULL) == 600000),
+			"mixed SET%s tracks the user variable without locking the hostgroup",
+			with_timeout ? " with wait_timeout" : "");
+
+		std::array<std::optional<ResultCell>, 2> ids;
+		bool replayed = mixed != nullptr;
+		for (size_t i = 0; i < ids.size() && mixed; ++i) {
+			const std::string route = i == 0 ? "/* uv_hg_a */ " : "/* uv_hg_b */ ";
+			replayed = execute(mixed.get(), route + "START TRANSACTION") && replayed;
+			ids[i] = query_scalar(mixed.get(), route + "SELECT CONNECTION_ID()");
+			const auto values = query_result(mixed.get(),
+				route + "SELECT @mixed_tag,@@session.max_execution_time");
+			replayed = values && values->rows.size() == 1 && values->rows[0].size() == 2 &&
+				values->rows[0][0].bytes == "web" && values->rows[0][1].bytes == "1000" && replayed;
+			replayed = execute(mixed.get(), "ROLLBACK") && replayed;
+		}
+		ok(replayed && ids[0] && ids[1] && ids[0]->bytes != ids[1]->bytes,
+			"mixed SET%s replays both tracked values on different backend IDs",
+			with_timeout ? " with wait_timeout" : "");
+		mixed.reset();
+		MysqlPtr other = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const auto clean = other ? query_result(other.get(),
+			"/* uv_hg_a */ SELECT @mixed_tag IS NULL,@@session.wait_timeout=@@global.wait_timeout")
+			: std::nullopt;
+		ok(clean && clean->rows.size() == 1 && clean->rows[0].size() == 2 &&
+			clean->rows[0][0].bytes == "1" && clean->rows[0][1].bytes == "1",
+			"another client inherits neither the mixed user variable nor backend timeout");
+	}
+	{
+		MysqlPtr mixed = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const bool initial = mixed && execute(mixed.get(),
+			"SET @mixed_tag='old',max_execution_time=900");
+		const auto before = mixed ? user_variable_aggregate(mixed.get()) : std::nullopt;
+		const auto session_before = mixed ? internal_session(mixed.get()) : std::nullopt;
+		const bool rejected = mixed && execute_expect_error(mixed.get(),
+			"SET @mixed_tag=1e999999999,max_execution_time=1000,wait_timeout=600");
+		const auto after = mixed ? user_variable_aggregate(mixed.get()) : std::nullopt;
+		const auto session_after = mixed ? internal_session(mixed.get()) : std::nullopt;
+		const auto values = mixed ? query_result(mixed.get(),
+			"SELECT @mixed_tag,@@session.max_execution_time") : std::nullopt;
+		ok(initial && rejected && before && after && aggregates_equal(*before, *after) &&
+			session_before && session_after &&
+			session_before->value("wait_timeout", 0ULL) == session_after->value("wait_timeout", 1ULL) &&
+			values && values->rows.size() == 1 && values->rows[0].size() == 2 &&
+			values->rows[0][0].bytes == "old" && values->rows[0][1].bytes == "900",
+			"backend rejection commits neither part of a mixed SET");
+		const bool transaction = mixed && execute(mixed.get(), "START TRANSACTION") &&
+			execute(mixed.get(), "SET @mixed_tag='transaction',max_execution_time=1000,wait_timeout=600");
+		const bool still_active = mixed && execute(mixed.get(), "SELECT 1") &&
+			(mixed->server_status & SERVER_STATUS_IN_TRANS);
+		ok(transaction && still_active && execute(mixed.get(), "ROLLBACK"),
+			"mixed timeout cleanup leaves an attached transaction active");
+		const auto timeout_commands_before = query_scalar(admin.get(),
+			"SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='mysql_set_wait_timeout_commands'");
+		const bool repeated = mixed && execute(mixed.get(),
+			"SET @mixed_tag='first',wait_timeout=600,max_execution_time=001000,"
+			"wait_timeout=500,max_execution_time=2000,@mixed_tag='last'");
+		const auto repeated_state = mixed ? internal_session(mixed.get()) : std::nullopt;
+		const auto repeated_values = mixed ? query_result(mixed.get(),
+			"SELECT @mixed_tag,@@session.max_execution_time") : std::nullopt;
+		const auto timeout_commands_after = query_scalar(admin.get(),
+			"SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='mysql_set_wait_timeout_commands'");
+		ok(repeated && repeated_state && repeated_state->value("wait_timeout", 0ULL) == 500000 &&
+			repeated_values && repeated_values->rows.size() == 1 && repeated_values->rows[0].size() == 2 &&
+			repeated_values->rows[0][0].bytes == "last" && repeated_values->rows[0][1].bytes == "2000" &&
+			timeout_commands_before && timeout_commands_after &&
+			std::stoull(timeout_commands_after->bytes) == std::stoull(timeout_commands_before->bytes) + 1,
+			"repeated mixed targets keep the last values and count one timeout command");
+	}
 	MysqlPtr proxy = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	if (!proxy) {
 		ok(false, "frontend test connection is available");

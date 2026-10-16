@@ -49,8 +49,8 @@ hostgroup.
 ## Statements that are tracked
 
 Only a text-protocol, single-statement `SET` with complete ParserSQL input
-coverage is eligible. Every target must be a MySQL user variable and every
-right-hand side must be one of these exact forms:
+coverage is eligible. User-variable right-hand sides must be one of these
+exact forms:
 
 - single- or double-quoted string literals;
 - unsigned integers, or a direct unary `+` or `-` on an integer;
@@ -68,8 +68,7 @@ multi-statements, malformed input, and every other expression form are outside
 mode `1`.
 
 Analysis is all-or-nothing: one ineligible target or value makes the whole
-`SET` fall back. Mixed system and user-variable assignments are therefore not
-partially tracked. Targets are normalized case-insensitively, preserve a
+`SET` fall back. Targets are normalized case-insensitively, preserve a
 ParserSQL-validated replay spelling, and have MySQL's 64-byte decoded-name
 limit. Tracked names must be ASCII so case-insensitive canonicalization remains
 unambiguous; quoted target names containing a backslash are not eligible because
@@ -88,6 +87,41 @@ atomically commits the complete assignment group to both the frontend map and
 the selected backend map. A backend error, retry, or other query-error path
 discards pending assignments, so the original backend result remains
 authoritative.
+
+### Mixed user/session-variable assignments
+
+Mode `1` also tracks statements containing literal user-variable assignments
+and either of these session variables:
+
+- `max_execution_time`: an unsigned decimal integer from 0 to 4294967295;
+- `wait_timeout`: an unsigned decimal integer from 1 to 1728000 seconds.
+
+Implicit session scope, `SESSION`, `LOCAL`, `@@`, `@@session.`, and `@@local.`
+are accepted. System-variable values must be plain decimal integer literals;
+quoted values, signs, expressions, and `DEFAULT` retain fallback. Repeated
+assignments retain source order and the last value wins.
+
+```sql
+SET @client_tag = 'web-6d8f9c7b5-x2k4p', SESSION max_execution_time = 1000;
+SET @client_tag = 'web-6d8f9c7b5-x2k4p', SESSION max_execution_time = 1000, SESSION wait_timeout = 600;
+```
+
+ProxySQL forwards the original SQL and commits both kinds of tracked state
+only after a backend `OK` without warnings. A backend error discards the
+entire pending change set. A successful mixed statement with warnings takes
+the connection-bound fallback because the backend may have adjusted a value.
+Other system variables, global/persistent assignments, and context changes
+(including `sql_mode`, charset/collation, `NAMES`, and `CHARACTER SET`) retain
+whole-statement fallback. ParserSQL 1.1.1 already provides the required AST.
+
+As with standalone `wait_timeout`, the frontend timeout is enforced together
+with the global `mysql-wait_timeout` limit. The backend timeout is not replayed.
+Because forwarding the original mixed statement also changes that backend's
+timeout, ProxySQL resets the connection before returning it to the pool (or
+retires it when reset is unavailable). An attached transaction is not reset.
+This prevents the backend timeout from leaking to another client. A subsequent
+query may therefore see the backend's default `@@wait_timeout`, while the
+frontend retains its requested timeout.
 
 ## Pooling and replay
 

@@ -7214,6 +7214,23 @@ handler_again:
 				}
 				gtid_hid = -1;
 				if (rc==0) {
+					if (status == PROCESSING_QUERY && pending_user_variable_set &&
+						!pending_user_variable_set->session_assignments.empty() &&
+						mysql_warning_count(myconn->mysql) != 0) {
+						// OK with warnings may have clamped a requested system value.
+						// Keep the actual backend authoritative instead of replaying
+						// unverified values or publishing only half of the change set.
+						pending_user_variable_set.reset();
+						current_query_user_variable_safe = false;
+						current_query_user_variable_unsafe_fallback = true;
+						thread->status_variables.stvar[st_var_user_variable_fallback_unsupported]++;
+						if (mysql_thread___set_query_lock_on_hostgroup == 1 &&
+							locked_on_hostgroup < 0 && current_hostgroup >= 0) {
+							locked_on_hostgroup = current_hostgroup;
+							thread->status_variables.stvar[st_var_hostgroup_locked]++;
+							thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+						}
+					}
 					if (status == PROCESSING_QUERY && pending_user_variable_set) {
 						const std::vector<UserVariableAssignment>& assignments =
 							pending_user_variable_set->assignments;
@@ -7224,6 +7241,24 @@ handler_again:
 							user_variable_tracking_latched = true;
 							thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
 								assignments.size();
+							bool sets_wait_timeout = false;
+							for (const auto& assignment : pending_user_variable_set->session_assignments) {
+								if (assignment.variable == MixedSetSessionVariable::MAX_EXECUTION_TIME) {
+									const std::string value = std::to_string(assignment.value);
+									mysql_variables.client_set_value(this, SQL_MAX_EXECUTION_TIME, value);
+									mysql_variables.server_set_value(this, SQL_MAX_EXECUTION_TIME, value.c_str());
+								} else {
+									wait_timeout = static_cast<unsigned long long>(assignment.value) * 1000;
+									sets_wait_timeout = true;
+									// Unlike standalone wait_timeout, the original mixed SET
+									// changed a backend value we do not replay. Reset it
+									// before another frontend can borrow this connection.
+									myconn->reset_before_pool = true;
+								}
+							}
+							if (sets_wait_timeout) {
+								thread->status_variables.stvar[st_var_set_wait_timeout_commands]++;
+							}
 						} else {
 							current_query_user_variable_safe = false;
 							user_variable_backend_authoritative = true;

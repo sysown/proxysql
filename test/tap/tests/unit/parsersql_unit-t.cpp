@@ -580,6 +580,57 @@ static void test_user_variable_rejections() {
 		"typed user SET rejects names over 64 bytes atomically");
 }
 
+static void test_user_variable_mixed_sets() {
+	const char* supported[] = {
+		"SET @client_tag='web', SESSION max_execution_time=1000",
+		"SET @client_tag='web', SESSION max_execution_time=1000, SESSION wait_timeout=600",
+		"SET LOCAL max_execution_time=0, @x=NULL",
+		"SET @@session.max_execution_time=4294967295, @x=1",
+		"SET @x=1, @@local.wait_timeout=1728000",
+		"SET max_execution_time=0001000, @x=1, max_execution_time=2000, @x=2"
+	};
+	for (const char* query : supported) {
+		auto r = analyze_user_set(query);
+		ok(r.status == UserVariableSetStatus::SUPPORTED && !r.assignments.empty(),
+			"mixed literal SET is eligible: %s", query);
+	}
+	auto ordered = analyze_user_set(supported[5]);
+	ok(ordered.session_assignments.size() == 2 &&
+		ordered.session_assignments[0].variable == MixedSetSessionVariable::MAX_EXECUTION_TIME &&
+		ordered.session_assignments[0].value == 1000 &&
+		ordered.session_assignments[1].value == 2000 && ordered.assignments.size() == 2 &&
+		ordered.assignments[0].raw_literal == "1" && ordered.assignments[1].raw_literal == "2",
+		"mixed SET keeps ordered repetitions and normalizes decimal session values");
+	auto timeout = analyze_user_set(supported[1]);
+	ok(timeout.session_assignments.size() == 2 &&
+		timeout.session_assignments[1].variable == MixedSetSessionVariable::WAIT_TIMEOUT &&
+		timeout.session_assignments[1].value == 600,
+		"mixed SET carries the frontend timeout separately from replayed session variables");
+	const char* unsupported[] = {
+		"SET @x=1, GLOBAL max_execution_time=1000",
+		"SET GLOBAL max_execution_time=1000, @x=1, max_execution_time=2000",
+		"SET @x=1, @@global.max_execution_time=1000",
+		"SET @x=1, PERSIST max_execution_time=1000",
+		"SET @x=1, PERSIST_ONLY max_execution_time=1000",
+		"SET @x=1, SESSION @@global.max_execution_time=1000",
+		"SET @x=1, max_execution_time=1000+1",
+		"SET @x=NOW(), max_execution_time=1000",
+		"SET @x=1, max_execution_time=4294967296",
+		"SET @x=1, wait_timeout=0",
+		"SET @x=1, wait_timeout=1728001",
+		"SET @x=1, max_execution_time=1000, sql_mode=''",
+		"SET @x=1, max_execution_time=1000, NAMES utf8mb4",
+		"SET @x=1, max_execution_time=1000, character_set_client='utf8mb4'",
+		"SET @x=1, max_execution_time=1000, unknown_variable=1"
+	};
+	for (const char* query : unsupported) {
+		auto r = analyze_user_set(query);
+		ok(r.status != UserVariableSetStatus::SUPPORTED && r.assignments.empty() &&
+			r.session_assignments.empty(),
+			"ineligible mixed SET falls back atomically: %s", query);
+	}
+}
+
 static void test_user_variable_hash_contract() {
 	auto base = analyze_user_set("SET @x=1");
 	auto same = analyze_user_set("SET @x=1");
@@ -928,7 +979,7 @@ static void test_user_variable_replay_context() {
 }
 
 int main() {
-	plan(248);
+	plan(271);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -988,6 +1039,7 @@ int main() {
 	test_user_variable_backslashes();
 	test_user_variable_non_user_statuses();
 	test_user_variable_rejections();
+	test_user_variable_mixed_sets();
 	test_user_variable_hash_contract();
 	test_user_variable_usage();
 	test_user_variable_tracking_policy();

@@ -3458,6 +3458,7 @@ void MySQL_Connection::reset() {
 	}
 	dynamic_variables_idx.clear();
 	user_variables.clear();
+	reset_before_pool = false;
 
 	if (options.init_connect) {
 		free(options.init_connect);

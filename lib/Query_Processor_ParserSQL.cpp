@@ -44,6 +44,7 @@
 #include "SpookyV2.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cstring>
 
@@ -713,6 +714,57 @@ static bool assignment_has_user_target(const AstNode* assignment) {
         target->first_child && target->first_child->type == NodeType::NODE_USER_VARIABLE;
 }
 
+// A deliberately small allowlist: accepting a system variable here also
+// requires a post-OK commit policy in MySQL_Session. Do not strip a scope
+// until it has been checked, or GLOBAL/PERSIST assignments could be replayed
+// as session assignments on another backend.
+static bool mixed_set_session_assignment(
+    const AstNode* assignment, MixedSetSessionAssignment& parsed)
+{
+    if (!assignment || assignment->type != NodeType::NODE_VAR_ASSIGNMENT) return false;
+    const AstNode* target = assignment->first_child;
+    if (!target || target->type != NodeType::NODE_VAR_TARGET) return false;
+    const AstNode* name_node = target->first_child;
+    if (!name_node || name_node->type != NodeType::NODE_IDENTIFIER) return false;
+    std::string name = lowercase_ascii(name_node->value());
+    if (name_node->next_sibling) {
+        if (name != "session" && name != "local") return false;
+        name_node = name_node->next_sibling;
+        if (name_node->type != NodeType::NODE_IDENTIFIER || name_node->next_sibling) return false;
+        name = lowercase_ascii(name_node->value());
+        if (name.empty() || name[0] == '@') return false;
+    } else if (name.compare(0, 2, "@@") == 0) {
+        name.erase(0, 2);
+        const size_t dot = name.find('.');
+        if (dot != std::string::npos) {
+            const std::string scope = name.substr(0, dot);
+            if (scope != "session" && scope != "local") return false;
+            name.erase(0, dot + 1);
+        }
+    }
+    if (name == "max_execution_time") {
+        parsed.variable = MixedSetSessionVariable::MAX_EXECUTION_TIME;
+    } else if (name == "wait_timeout") {
+        parsed.variable = MixedSetSessionVariable::WAIT_TIMEOUT;
+    } else {
+        return false;
+    }
+    const AstNode* rhs = target->next_sibling;
+    if (!rhs || rhs->next_sibling || rhs->type != NodeType::NODE_LITERAL_INT ||
+        !rhs->source_ptr || rhs->source_len == 0) return false;
+    const char* begin = rhs->source_ptr;
+    const char* end = begin + rhs->source_len;
+    for (const char* p = begin; p != end; ++p) {
+        if (*p < '0' || *p > '9') return false;
+    }
+    const auto value = std::from_chars(begin, end, parsed.value);
+    if (value.ec != std::errc {} || value.ptr != end) return false;
+    // Keep the frontend timeout's existing 1-second..20-day policy, without
+    // introducing different frontend/backend clamps within a mixed SET.
+    return parsed.variable != MixedSetSessionVariable::WAIT_TIMEOUT ||
+        (parsed.value >= 1 && parsed.value <= 20U * 24U * 3600U);
+}
+
 UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
     const char* query, size_t query_length)
 {
@@ -747,11 +799,17 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
     }
 
     std::vector<UserVariableAssignment> assignments;
+    std::vector<MixedSetSessionAssignment> session_assignments;
     for (const AstNode* child = result.ast->first_child; child; child = child->next_sibling) {
         if (!assignment_has_user_target(child)) {
-            analysis.status = UserVariableSetStatus::UNSUPPORTED;
-            tl_mysql_parser.reset();
-            return analysis;
+            MixedSetSessionAssignment session_assignment;
+            if (!mixed_set_session_assignment(child, session_assignment)) {
+                analysis.status = UserVariableSetStatus::UNSUPPORTED;
+                tl_mysql_parser.reset();
+                return analysis;
+            }
+            session_assignments.push_back(session_assignment);
+            continue;
         }
 
         const AstNode* target = child->first_child;
@@ -799,6 +857,7 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
 
     analysis.status = UserVariableSetStatus::SUPPORTED;
     analysis.assignments = std::move(assignments);
+    analysis.session_assignments = std::move(session_assignments);
     tl_mysql_parser.reset();
     return analysis;
 }

@@ -1888,8 +1888,11 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	if (expired) {
 		destroy_MySQL_Connection_From_Pool(true);
 	} else if (
-		sess->status != PINGING_SERVER && too_many_stmts
+		sess->status != PINGING_SERVER && (too_many_stmts || mc->reset_before_pool)
 	) {
+		// A mixed SET can change a locally-intercepted backend wait_timeout.
+		// Clean it only now, when normal release policy allows detaching the
+		// connection; resetting it while attached could roll back a transaction.
 		if (mysql_thread___reset_connection_algorithm == 2 && mc->healthy) {
 			sess->create_new_session_and_reset_connection(this);
 		} else {
