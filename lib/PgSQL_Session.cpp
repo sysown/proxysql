@@ -3579,12 +3579,6 @@ handler_again:
 							}
 						}
 					}
-					// A query rule's timeout bounds each statement. A batch's replies come back together at
-					// its end, so one deadline could only bound the whole unit: such a unit runs one
-					// message at a time instead. The rules ran on the unit's first message already.
-					if (extq_allowed && extq_buffering == false && qpo->timeout > 0) {
-						extq_allowed = false;
-					}
 					// The first message of a unit that may be buffered, now that it has a connection: from
 					// here on the unit goes out in one batch. A libpq connection cannot carry one (a
 					// Unix-socket server, or a connection pooled before the native protocol was turned on):
@@ -3753,7 +3747,11 @@ handler_again:
 					goto __exit_DSS__STATE_NOT_INITIALIZED;
 				}
 				if (rc == 1) {
-					extq_settle(myds);   // statements are logged as their replies arrive
+					// Statements are logged as their replies arrive. An Execute's reply means the next
+					// statement has started: its deadline starts now.
+					if (extq_settle(myds)) {
+						extq_arm_timeout();
+					}
 				} else {
 					extq_unit_failed(myds);   // then the generic error path, as for one statement
 				}
@@ -8831,6 +8829,13 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 	for (uint32_t i = 0; i < extq_entries.size(); i++) {
 		PgSQL_Extq_Entry& e = extq_entries[i];
 		e.parse_id = 0;
+		// A query rule's timeout bounds its statement alone. A Flush before it brings back the replies
+		// before it as it starts, and one after it brings back its own as it ends, so
+		// extq_arm_timeout() can give it its own deadline.
+		const bool timed = (e.type == 'E' && e.qpo_timeout > 0);
+		if (timed) {
+			pg_build_flush(extq_out);
+		}
 		switch (e.type) {
 		case 0:
 			if (e.error) {
@@ -8908,6 +8913,9 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 			extq_registry.push({ Extq_Kind::CLOSE, Extq_Reply::RELAY, i, std::string() });
 			break;
 		}
+		if (timed) {
+			pg_build_flush(extq_out);
+		}
 	}
 	if (extq_sync) {
 		// The Sync added before a simple Query: its ReadyForQuery is not the client's.
@@ -8924,9 +8932,11 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 	return true;
 }
 
-// PostgreSQL sends a batch's replies when its send buffer fills or at the Sync, not as each statement
-// ends, so one deadline covers the batch: the sum of its statements' timeouts (query rule, hostgroup
-// or global default), none when one of them has none.
+// PostgreSQL sends a batch's replies at a Sync or a Flush, or when its send buffer fills, not as each
+// statement ends. So one deadline covers the Executes whose replies have not come yet: the sum of
+// their timeouts (query rule, hostgroup or global default), none when one of them has none. The sum
+// stops at an Execute whose query rule sets a timeout: Flushes surround it, and when the replies before
+// it arrive the deadline is armed again with its timeout alone.
 void PgSQL_Session::extq_arm_timeout() {
 	unsigned long long total = 0;
 	bool unbounded = false;
@@ -8935,7 +8945,7 @@ void PgSQL_Session::extq_arm_timeout() {
 	SetQueryTimeout();   // the default, for a batch with no Execute
 	const unsigned long long fallback = mybe->server_myds->wait_until;
 	for (const PgSQL_Extq_Entry& e : extq_entries) {
-		if (e.type != 'E') {
+		if (e.type != 'E' || e.logged) {
 			continue;
 		}
 		qpo->timeout = e.qpo_timeout;
@@ -8944,6 +8954,9 @@ void PgSQL_Session::extq_arm_timeout() {
 			unbounded = true;
 		} else {
 			total += mybe->server_myds->wait_until - thread->curtime;
+		}
+		if (e.qpo_timeout > 0) {
+			break;
 		}
 	}
 	qpo->timeout = saved;
@@ -9009,10 +9022,11 @@ void PgSQL_Session::extq_log(PgSQL_Extq_Entry& e, const Extq_Event& ev, PgSQL_Da
 }
 
 // Applies what each settled reply changed, in order: the statements the connection holds, the
-// client's statement names, and the statement's log record.
-void PgSQL_Session::extq_settle(PgSQL_Data_Stream* myds) {
+// client's statement names, and the statement's log record. Returns whether an Execute settled.
+bool PgSQL_Session::extq_settle(PgSQL_Data_Stream* myds) {
 	PgSQL_Connection* myconn = myds->myconn;
 	Extq_Event ev;
+	bool executed = false;
 	while (extq_registry.next_event(ev)) {
 		PgSQL_Extq_Entry& e = extq_entries[ev.entry];
 		if (ev.reply == Extq_Reply::LOCAL || ev.reply == Extq_Reply::SUBSTITUTE) {
@@ -9082,7 +9096,9 @@ void PgSQL_Session::extq_settle(PgSQL_Data_Stream* myds) {
 			myconn->local_stmts->backend_erase(e.stmt->statement_id, myconn->is_stale_stmt_error());
 		}
 		extq_log(e, ev, myds);
+		executed |= (e.type == 'E');
 	}
+	return executed;
 }
 
 // The batch is over: its ReadyForQuery came, or, cut short, its last reply did. Everything goes to

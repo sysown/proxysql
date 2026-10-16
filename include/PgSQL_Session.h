@@ -420,7 +420,7 @@ private:
 	int extq_fail_on_backend(unsigned int out_before);
 	int extq_finish(bool synced);
 	bool extq_render(PgSQL_Connection* myconn);
-	void extq_settle(PgSQL_Data_Stream* myds);
+	bool extq_settle(PgSQL_Data_Stream* myds);
 	void extq_commit(PgSQL_Extq_Entry& e);
 	void extq_log(PgSQL_Extq_Entry& e, const Extq_Event& ev, PgSQL_Data_Stream* myds);
 	void extq_arm_timeout();
