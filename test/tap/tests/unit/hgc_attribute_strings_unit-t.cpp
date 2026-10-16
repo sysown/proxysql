@@ -42,7 +42,7 @@ MyHGC* mysql_hostgroup(unsigned int hid) {
 }
 
 /** @brief What LOAD MYSQL SERVERS TO RUNTIME does: replace under the lock, then bump the version. */
-void mysql_reload(MyHGC* hgc, const char* init_connect, const char* region) {
+void reload_mysql_hostgroup(MyHGC* hgc, const char* init_connect, const char* region) {
 	MyHGM->wrlock();
 	hgc->set_attribute_init_connect(init_connect);
 #ifdef PROXYSQL40
@@ -71,7 +71,7 @@ void test_mysql_copy() {
 	ok(worker.hostgroup_strings_for(kHid) == nullptr,
 		"no copy while servers_table_version is unchanged");
 
-	mysql_reload(hgc, "SET sql_mode=''", "us-east-1");
+	reload_mysql_hostgroup(hgc, "SET sql_mode=''", "us-east-1");
 	worker.refresh_hostgroup_strings(MyHGM);
 	const HostgroupStrings* copied = worker.hostgroup_strings_for(kHid);
 	bool region_ok = true;
@@ -85,14 +85,14 @@ void test_mysql_copy() {
 		"hostgroups without strings are not copied");
 
 	// The reload frees the string the copy was taken from; the copy is unaffected.
-	mysql_reload(hgc, "SET autocommit=1", nullptr);
+	reload_mysql_hostgroup(hgc, "SET autocommit=1", nullptr);
 	ok(copied->init_connect == "SET sql_mode=''",
 		"the copy stays valid after the hostgroup's string is replaced");
 	worker.refresh_hostgroup_strings(MyHGM);
 	ok(init_connect_of(worker, kHid) == "SET autocommit=1",
 		"the next refresh picks up the replaced string");
 
-	mysql_reload(hgc, nullptr, nullptr);
+	reload_mysql_hostgroup(hgc, nullptr, nullptr);
 	worker.refresh_hostgroup_strings(MyHGM);
 	ok(worker.hostgroup_strings_for(kHid) == nullptr && worker.hostgroup_strings.empty(),
 		"a cleared string is not in the next copy");
