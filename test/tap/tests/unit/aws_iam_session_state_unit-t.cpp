@@ -652,6 +652,8 @@ void test_worker_shutdown_closes_delivery_boundary() {
 	{
 		auto worker = std::make_unique<MySQL_Thread>();
 		if (!worker->init()) BAIL_OUT("shutdown worker init failed");
+		// A new worker has no copy of the hostgroup strings (aws_iam_region) yet.
+		worker->refresh_hostgroup_strings(MyHGM);
 		free(mysql_thread___ssl_p2s_ca);
 		mysql_thread___ssl_p2s_ca = strdup("/unit/fake-ca.pem");
 		worker->curtime = 10000000;
