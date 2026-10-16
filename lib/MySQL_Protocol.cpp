@@ -4381,9 +4381,9 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			return NULL;
 		}
 		memcpy(&new_params_bound_flag,p+null_bitmap_length,1);
-		uint8_t *null_bitmap=NULL;
-		null_bitmap=(uint8_t *)malloc(null_bitmap_length);
-		memcpy(null_bitmap,p,null_bitmap_length);
+		// Read in place: the size check above covers the whole bitmap, and the
+		// packet outlives this function (see ret->pkt).
+		const uint8_t *null_bitmap=(const uint8_t *)p;
 		p+=null_bitmap_length;
 		p+=1; // new_params_bound_flag
 
@@ -4432,7 +4432,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			// initalized. See #3546.
 			binds[i].buffer = NULL;
 		}
-		free(null_bitmap); // we are done with it
 
 		if (new_params_bound_flag || effective_types) {
 			// the client is rebinding the parameters
