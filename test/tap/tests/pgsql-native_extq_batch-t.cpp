@@ -156,6 +156,15 @@ static void pbe(PgConnection& c, const std::string& name, const std::string& sql
 	c.executePortal("", 0, false);
 }
 
+// Sends the Sync and reads the replies; secs gets how long they took.
+static std::string syncReplies(PgConnection& c, double& secs) {
+	const auto t0 = std::chrono::steady_clock::now();
+	c.sendSync();
+	const std::string out = replies(c);
+	secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+	return out;
+}
+
 static std::unique_ptr<PgConnection> client() {
 	std::unique_ptr<PgConnection> c(new PgConnection(5000));
 	c->connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
@@ -206,7 +215,7 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(50);
+	plan(61);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
@@ -292,8 +301,8 @@ int main(int, char**) {
 	ok(r[0] == r[1], "error: same replies as libpq [libpq: %s]", r[0].c_str());
 
 	// --- A query rule's timeout bounds each statement of a unit: the slow first statement is cancelled
-	// at the rule's 1 s, as one statement at a time does. A batch could only give the whole unit one
-	// deadline, the sum of its statements' (3 s here), and the 2.5 s statement would finish.
+	// at the rule's 1 s, as one statement at a time does. With one deadline for the whole batch, the sum
+	// of its statements' (3 s here), the 2.5 s statement would finish.
 	double tmo_secs[2] = { 0, 0 };
 	for (int m = 0; m < 2; m++) {
 		setNativeMode(admin.get(), m == 1);
@@ -315,14 +324,146 @@ int main(int, char**) {
 		"timeout rule on a unit: its slow statement is cancelled at the rule's timeout [%s, %.1f s]", r[1].c_str(), tmo_secs[1]);
 	ok(r[0] == r[1], "timeout rule on a unit: same replies as libpq [libpq: %s, %.1f s]", r[0].c_str(), tmo_secs[0]);
 
-	// --- Only a rule timeout keeps a unit from being batched. With no rule, or a rule whose actions do
-	// not include a timeout, the unit runs as one batch: the processlist says "Execute batch" while its
-	// slow first statement runs. With a timeout rule (long enough not to fire) it runs one message at a
-	// time: "Execute". The client gets the same replies every time.
+	// --- The same with the rule on a later statement, reached after the unit started to be batched: it
+	// is cancelled at its own 1 s, not at the first statement's deadline plus 1 s.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		addRule(admin.get(), 7707, "tmolate_" + tag, "timeout", "1000");
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "", "SELECT 1 AS tmofirst_" + tag + "_" + mode_name[m]);
+			pbe(*c, "", "SELECT pg_sleep(2.5) AS tmolate_" + tag + "_" + mode_name[m]);
+			pbe(*c, "", "SELECT 2 AS tmolast_" + tag);
+			return syncReplies(*c, tmo_secs[m]);
+		});
+		dropRules(admin.get());
+	}
+	ok(r[1] == "1 2 D=1 C 1 2 E(57014) Z(I)" && tmo_secs[1] < 2.0,
+		"timeout rule on a later statement: it is cancelled at the rule's timeout [%s, %.1f s]", r[1].c_str(), tmo_secs[1]);
+	ok(r[0] == r[1], "timeout rule on a later statement: same replies as libpq [libpq: %s, %.1f s]", r[0].c_str(), tmo_secs[0]);
+
+	// --- A statement after the timed one gets its usual limit back: the 1 s rule must not cancel the
+	// 1.5 s statement that follows the fast timed one.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		addRule(admin.get(), 7708, "tmoafter_" + tag, "timeout", "1000");
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "", "SELECT 1 AS tmoafter_" + tag + "_" + mode_name[m]);
+			pbe(*c, "", "SELECT pg_sleep(1.5) AS tmorest_" + tag + "_" + mode_name[m]);
+			return syncReplies(*c, tmo_secs[m]);
+		});
+		dropRules(admin.get());
+	}
+	ok(r[1] == "1 2 D=1 C 1 2 D= C Z(I)" && tmo_secs[1] >= 1.4,
+		"timeout rule, then a slow statement without one: the slow one completes [%s, %.1f s]", r[1].c_str(), tmo_secs[1]);
+	ok(r[0] == r[1], "timeout rule, then a slow statement without one: same replies as libpq [libpq: %s, %.1f s]",
+		r[0].c_str(), tmo_secs[0]);
+
+	// --- Two statements under the same 1 s rule, 0.7 s each: each gets its own 1 s, so both complete
+	// although together they take longer than 1 s.
+	for (int m = 0; m < 2; m++) {
+		setNativeMode(admin.get(), m == 1);
+		addRule(admin.get(), 7709, "tmoeach_" + tag, "timeout", "1000");
+		r[m] = run([&]() {
+			auto c = client();
+			pbe(*c, "", "SELECT pg_sleep(0.7) AS tmoeach_" + tag + "_" + mode_name[m] + "_1");
+			pbe(*c, "", "SELECT pg_sleep(0.7) AS tmoeach_" + tag + "_" + mode_name[m] + "_2");
+			return syncReplies(*c, tmo_secs[m]);
+		});
+		dropRules(admin.get());
+	}
+	ok(r[1] == "1 2 D= C 1 2 D= C Z(I)" && tmo_secs[1] >= 1.3,
+		"two statements under a timeout rule: each gets its own limit, both complete [%s, %.1f s]", r[1].c_str(), tmo_secs[1]);
+	ok(r[0] == r[1], "two statements under a timeout rule: same replies as libpq [libpq: %s, %.1f s]", r[0].c_str(), tmo_secs[0]);
+
+	// --- A timeout rule on the Execute of a named portal, after an unnamed statement. libpq refuses
+	// named portals, so the expected replies are written out: what PostgreSQL sends for a cancel.
+	{
+		setNativeMode(admin.get(), true);
+		addRule(admin.get(), 7710, "tmoportal_" + tag, "timeout", "1000");
+		r[1] = run([&]() {
+			auto c = client();
+			pbe(*c, "", "SELECT 1 AS tmoportfirst_" + tag);
+			c->prepareStatement("s_tmop", "SELECT pg_sleep(2.5) AS tmoportal_" + tag, false);
+			c->bindStatement("s_tmop", "p_tmo", {}, {}, false);
+			c->executePortal("p_tmo", 0, false);
+			return syncReplies(*c, tmo_secs[1]);
+		});
+		dropRules(admin.get());
+		ok(r[1] == "1 2 D=1 C 1 2 E(57014) Z(I)" && tmo_secs[1] < 2.0,
+			"timeout rule on a named portal's Execute: it is cancelled at the rule's timeout [%s, %.1f s]", r[1].c_str(), tmo_secs[1]);
+	}
+
+	// --- A timed statement in a unit longer than one batch holds (600 INSERTs, then the slow
+	// statement): it is in a later batch and is still cancelled at 1 s. The unit is one transaction, so
+	// none of the INSERTs stays.
+	{
+		long rows[2] = { -1, -1 };
+		for (int m = 0; m < 2; m++) {
+			setNativeMode(admin.get(), m == 1);
+			const std::string tbl = "extq_tchunk_" + tag + "_" + mode_name[m];
+			createTable(be.get(), tbl);
+			addRule(admin.get(), 7711, "tmochunk_" + tag, "timeout", "1000");
+			r[m] = run([&]() {
+				auto c = client();
+				c->prepareStatement("s_tchunk", "INSERT INTO " + tbl + " VALUES ($1::int)", false);
+				for (int i = 0; i < 600; i++) {
+					c->bindStatement("s_tchunk", "", { text(std::to_string(i)) }, {}, false);
+					c->executePortal("", 0, false);
+				}
+				pbe(*c, "", "SELECT pg_sleep(2.5) AS tmochunk_" + tag + "_" + mode_name[m]);
+				const std::string out = syncReplies(*c, tmo_secs[m]);
+				size_t completes = 0;
+				for (size_t p = out.find(" C"); p != std::string::npos; p = out.find(" C", p + 1)) completes++;
+				const size_t err = out.find("E(");
+				return std::to_string(completes) + " " + (err == std::string::npos ? "no error" : out.substr(err));
+			});
+			dropRules(admin.get());
+			rows[m] = execLong(be.get(), "SELECT count(*) FROM " + tbl);
+			exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
+		}
+		ok(r[1] == "600 E(57014) Z(I)" && rows[1] == 0,
+			"timeout rule in a unit over several batches: cancelled, none of the unit kept [%s, %.1f s, rows %ld]",
+			r[1].c_str(), tmo_secs[1], rows[1]);
+		ok(r[0] == r[1] && rows[0] == 0, "timeout rule in a unit over several batches: same as libpq [libpq: %s, %.1f s, rows %ld]",
+			r[0].c_str(), tmo_secs[0], rows[0]);
+	}
+
+	// --- A timed statement inside an explicit transaction, BEGIN and INSERT in the same unit: the
+	// cancel fails the transaction, and COMMIT rolls the INSERT back.
+	{
+		long rows[2] = { -1, -1 };
+		for (int m = 0; m < 2; m++) {
+			setNativeMode(admin.get(), m == 1);
+			const std::string tbl = "extq_ttxn_" + tag + "_" + mode_name[m];
+			createTable(be.get(), tbl);
+			addRule(admin.get(), 7712, "tmotxn_" + tag, "timeout", "1000");
+			r[m] = run([&]() {
+				auto c = client();
+				pbe(*c, "", "BEGIN");
+				pbe(*c, "", "INSERT INTO " + tbl + " VALUES (1)");
+				pbe(*c, "", "SELECT pg_sleep(2.5) AS tmotxn_" + tag + "_" + mode_name[m]);
+				std::string out = syncReplies(*c, tmo_secs[m]);
+				c->sendQuery("COMMIT");
+				return out + " | " + replies(*c);
+			});
+			dropRules(admin.get());
+			rows[m] = execLong(be.get(), "SELECT count(*) FROM " + tbl);
+			exec(be.get(), "DROP TABLE IF EXISTS " + tbl);
+		}
+		ok(r[1] == "1 2 C 1 2 C 1 2 E(57014) Z(E) | C Z(I)" && tmo_secs[1] < 2.0 && rows[1] == 0,
+			"timeout rule inside a transaction: cancelled, the transaction fails, COMMIT keeps nothing [%s, %.1f s, rows %ld]",
+			r[1].c_str(), tmo_secs[1], rows[1]);
+		ok(r[0] == r[1] && rows[0] == 0, "timeout rule inside a transaction: same as libpq [libpq: %s, %.1f s, rows %ld]",
+			r[0].c_str(), tmo_secs[0], rows[0]);
+	}
+
+	// --- A query rule, with or without a timeout, leaves the unit batched: the processlist says
+	// "Execute batch" while its slow first statement runs. The client gets the same replies every time.
 	{
 		setNativeMode(admin.get(), true);
 		const char* label[3] = { "no rule", "rule without a timeout", "rule with a timeout" };
-		const char* want_command[3] = { "Execute batch", "Execute batch", "Execute" };
 		for (int k = 0; k < 3; k++) {
 			const std::string mark = "batchmode_" + tag + "_" + std::to_string(k);
 			if (k == 1) addRule(admin.get(), 7706, mark, "retries", "3");
@@ -341,8 +482,8 @@ int main(int, char**) {
 				return replies(*c);
 			});
 			dropRules(admin.get());
-			ok(command == want_command[k] && out == "1 2 D= C 1 2 D=1 C Z(I)",
-				"%s: the unit runs as \"%s\" [%s, %s]", label[k], want_command[k], command.c_str(), out.c_str());
+			ok(command == "Execute batch" && out == "1 2 D= C 1 2 D=1 C Z(I)",
+				"%s: the unit runs as one batch [%s, %s]", label[k], command.c_str(), out.c_str());
 		}
 	}
 
@@ -681,7 +822,7 @@ int main(int, char**) {
 			return out + " | " + replies(*c);
 		});
 	}
-	ok(r[1].size() > 0 && r[1].find("threw") == std::string::npos && r[1].substr(r[1].size() - 12) == "T D=1 C Z(I)",
+	ok(r[1].size() >= 12 && r[1].find("threw") == std::string::npos && r[1].substr(r[1].size() - 12) == "T D=1 C Z(I)",
 		"special statement after a sent Parse: the session survives [%s]", r[1].c_str());
 	ok(r[0] == r[1], "special statement after a sent Parse: same replies as libpq [native: %s] [libpq: %s]", r[1].c_str(), r[0].c_str());
 
