@@ -1540,10 +1540,13 @@ bool MySQL_Session::handler_special_queries_STATUS(PtrSize_t *pkt) {
  *   as part of the statement, and their closing '*' '/' is skipped on its own.
  */
 static const char* skip_one_ws_or_comment(const char* p, const char* end) {
-	if (isspace((unsigned char)*p)) return p + 1;
+	// ASCII only, like the server's tokenizer: no locale-dependent <ctype.h> calls
+	auto is_space = [](char ch) { return ch == ' ' || (ch >= '\t' && ch <= '\r'); };
+	auto is_cntrl = [](char ch) { return (unsigned char)ch < 0x20 || ch == 0x7f; };
+	if (is_space(*p)) return p + 1;
 	if (end - p >= 2 && p[0] == '*' && p[1] == '/') return p + 2;
 	if (*p == '#' || (end - p >= 2 && p[0] == '-' && p[1] == '-' &&
-		(end - p == 2 || isspace((unsigned char)p[2]) || iscntrl((unsigned char)p[2])))) {
+		(end - p == 2 || is_space(p[2]) || is_cntrl(p[2])))) {
 		const char* nl = (const char*)memchr(p, '\n', end - p);
 		return nl ? nl : end;
 	}
@@ -1552,7 +1555,7 @@ static const char* skip_one_ws_or_comment(const char* p, const char* end) {
 	if (end - c >= 2 && c[0] == 'M' && c[1] == '!') c++;
 	if (c < end && *c == '!') {
 		c++;
-		while (c < end && isdigit((unsigned char)*c)) c++;
+		while (c < end && *c >= '0' && *c <= '9') c++;
 		return c;
 	}
 	for (; end - c >= 2; c++) {
