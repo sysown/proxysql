@@ -9,12 +9,37 @@
 #include "ProxySQL_ConfigurationAccess.h"
 #include "Web_Interface.hpp"
 #include <cstddef>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace {
 ManagedAuthResult verify(void*, const ManagedSignatureInput&) { return {}; }
 ManagedResult invoke(void*, const ManagedRequest&) { return {}; }
 ManagedResult bootstrap(void*, const std::string&) { return {}; }
 ManagedResult restore(void*) { return {}; }
+bool rejects_retired_command(std::initializer_list<const char*> arguments) {
+ int output[2];
+ if (pipe(output) != 0) return false;
+ fflush(nullptr);
+ const auto pid = fork();
+ if (pid < 0) { close(output[0]); close(output[1]); return false; }
+ if (pid == 0) {
+  close(output[0]);
+  if (dup2(output[1], STDERR_FILENO) < 0) _exit(127);
+  close(output[1]);
+  std::vector<const char*> args(arguments);
+  GloVars.parse(args.size(), args.data());
+  _exit(0); // Returning instead of rejecting is the regression.
+ }
+ close(output[1]);
+ std::string message; char buffer[256]; ssize_t n;
+ while ((n = read(output[0], buffer, sizeof(buffer))) > 0) message.append(buffer, n);
+ close(output[0]);
+ int status = 0;
+ return waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+  WEXITSTATUS(status) == EXIT_FAILURE && message.find("removed") != std::string::npos &&
+  message.find("aws-deployment.json") != std::string::npos;
+}
 struct ABI14Descriptor {
  const char* name; uint32_t abi_version;
  proxysql_plugin_init_cb init; proxysql_plugin_start_cb start;
@@ -26,7 +51,7 @@ struct ABI14Descriptor {
 };
 }
 int main() {
- plan(13); test_init_minimal();
+ plan(17); test_init_minimal();
  ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 15u, "abi15_debug_prefix_compatible: layout is ABI15");
  ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 15u,
     "ABI15 retains independent DEBUG tagging");
@@ -46,16 +71,22 @@ int main() {
  service.struct_size = sizeof(service); service.restore = nullptr;
  ok(!proxysql_validate_managed_configuration_service(&service, error), "managed restore callback required");
  ok(!proxysql_validate_managed_configuration_service(nullptr, error), "missing service rejected");
- const char* args[] = {"unit", "--aws-managed-bootstrap=/tmp/local-manifest.json"};
- GloVars.parse(2, args);
- ok(GloVars.opt->isSet("--aws-managed-bootstrap"), "documented bootstrap equals syntax is parsed");
- std::string manifest;
- GloVars.opt->get("--aws-managed-bootstrap")->getString(manifest);
- ok(manifest == "/tmp/local-manifest.json", "bootstrap manifest path is preserved");
+ const char* args[] = {"unit", "--foreground", "--exit-on-error"};
+ GloVars.parse(3, args);
+ ok(GloVars.opt->get("--aws-managed-bootstrap") == nullptr, "retired bootstrap option is not registered");
+ ok(!GloVars.opt->isSet("--aws-managed-bootstrap"), "retired bootstrap has no parser state");
  GloVars.global.foreground = false;
  glovars.proxy_restart_on_error = true;
  GloVars.process_opts_pre();
- ok(GloVars.global.foreground, "bootstrap defaults to synchronous foreground execution");
- ok(!glovars.proxy_restart_on_error, "bootstrap defaults to one invocation without supervisor retries");
+ ok(GloVars.opt->isSet("-f"), "ordinary foreground option remains parsed");
+ ok(!glovars.proxy_restart_on_error, "ordinary exit-on-error option remains effective");
+ ok(rejects_retired_command({"unit", "--aws-managed-bootstrap", "/tmp/manifest.json"}),
+    "retired separate-argument command exits with a migration message");
+ ok(rejects_retired_command({"unit", "--aws-managed-bootstrap=/tmp/manifest.json"}),
+    "retired equals command exits with a migration message");
+ ok(rejects_retired_command({"unit", "--aws-managed-bootstrap"}),
+    "retired command without a manifest exits with a migration message");
+ ok(rejects_retired_command({"unit", "--aws-managed-bootstrap="}),
+    "retired command with an empty manifest exits with a migration message");
  test_cleanup_minimal(); return exit_status();
 }

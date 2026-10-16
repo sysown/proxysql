@@ -382,7 +382,22 @@ void ProxySQL_GlobalVariables::install_signal_handler() {
 	signal(SIGPIPE, SIG_IGN);
 }
 
+void ProxySQL_GlobalVariables::reject_retired_cli_options(int argc, const char * argv[]) {
+	// ezOptionParser records unknown options but does not reject them. Refuse
+	// the retired installation command before help, configuration or daemon
+	// startup; otherwise old automation could silently launch a normal proxy.
+	for (int i = 1; i < argc; ++i) {
+		const std::string argument = argv[i] == nullptr ? "" : argv[i];
+		if (argument == "--aws-managed-bootstrap" ||
+		    argument.rfind("--aws-managed-bootstrap=", 0) == 0) {
+			fprintf(stderr, "--aws-managed-bootstrap was removed. Supply non-secret aws-deployment.json in the datadir and start ProxySQL normally with the updated AWS plugin.\n");
+			exit(EXIT_FAILURE);
+		}
+	}
+}
+
 void ProxySQL_GlobalVariables::parse(int argc, const char * argv[]) {
+	reject_retired_cli_options(argc, argv);
 	opt->parse(argc, argv);
 };
 
