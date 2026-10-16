@@ -403,6 +403,32 @@ void test_policy_cached_for_session(MySQL_Thread& worker) {
 	add_backend_user(kPasswordUser, "ordinary-password", "");
 }
 
+// While no backend row uses IAM, backend_auth_policy_for() skips the policy
+// lookup. The PASSWORD decision must still stick to the session: a later
+// LOAD MYSQL USERS that gives its user IAM applies to new client connections.
+void test_password_decision_kept_when_iam_is_loaded(MySQL_Thread& worker) {
+	GloMyAuth->set_all_inactive(USERNAME_BACKEND);
+	add_backend_user(kPasswordUser, "ordinary-password", "");
+	GloMyAuth->remove_inactives(USERNAME_BACKEND);
+	const bool no_iam = !GloMyAuth->has_non_password_backend_auth();
+	SessionFixture established(worker, kPasswordUser);
+	const MySQLBackendAuthType first =
+		established.session->backend_auth_policy_for(kPasswordUser).type;
+	const bool loaded = add_backend_user(kPasswordUser, "",
+		"{\"backend_auth\":{\"type\":\"aws_iam\"}}");
+	ok(no_iam && loaded && GloMyAuth->has_non_password_backend_auth() &&
+		first == MySQLBackendAuthType::PASSWORD &&
+		established.session->backend_auth_policy_for(kPasswordUser).type == MySQLBackendAuthType::PASSWORD,
+		"a session that resolved PASSWORD while no IAM row existed keeps it after IAM is loaded for its user");
+	SessionFixture fresh(worker, kPasswordUser);
+	ok(fresh.session->backend_auth_policy_for(kPasswordUser).type == MySQLBackendAuthType::AWS_IAM,
+		"a new client connection gets the loaded IAM policy");
+	// Restore the fixture accounts.
+	add_backend_user(kIamUser, "", "{\"backend_auth\":{\"type\":\"aws_iam\"}}");
+	add_backend_user(kPasswordUser, "ordinary-password", "");
+	add_backend_user(kMalformedPassthroughUser, "ordinary-password", "{\"backend_auth\":{\"type\":17}}");
+}
+
 void make_fast_forward(SessionFixture& fixture) {
 	fixture.session->session_fast_forward = SESSION_FORWARD_TYPE_PERMANENT;
 	while (!fixture.session->previous_status.empty()) {
@@ -792,7 +818,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-	plan(35);
+	plan(37);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -835,6 +861,7 @@ int main() {
 		test_frontend_disconnect(worker);
 		test_late_completion_is_dropped(worker);
 		test_policy_cached_for_session(worker);
+		test_password_decision_kept_when_iam_is_loaded(worker);
 		test_shutdown_completion(worker);
 		test_fast_forward_provider_failure_is_terminal(worker);
 		test_fast_forward_timeout_is_terminal(worker);
