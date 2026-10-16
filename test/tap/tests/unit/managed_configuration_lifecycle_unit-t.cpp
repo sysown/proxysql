@@ -70,8 +70,12 @@ std::unique_ptr<ProxySQL_PluginManager> provider(std::string& error) {
 }
 int main() {
  plan(29); test_init_minimal();
- ok(GloVars.opt->get("--aws-managed-bootstrap") == nullptr,
-    "manual managed bootstrap is no longer a registered CLI option");
+ const char* removed_option[] = {"proxysql", "--foreground", "--aws-managed-bootstrap", "manifest.json", "--exit-on-error"};
+ GloVars.parse(5, removed_option);
+ bool rejected_bootstrap = false;
+ for (const auto* argument : GloVars.opt->unknownArgs)
+  rejected_bootstrap |= *argument == "--aws-managed-bootstrap";
+ ok(rejected_bootstrap, "manual managed bootstrap is no longer a registered CLI option");
  char path[] = "/tmp/proxysql_managed_lifecycle.XXXXXX";
  int fd = mkstemp(path);
  if (fd < 0) BAIL_OUT("cannot create private managed lifecycle log");

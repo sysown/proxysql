@@ -754,9 +754,6 @@ void* unified_query_cache_purge_thread(void *arg) {
 }*/
 
 void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
-	// Reject retired installation commands before plugin pre-scan can read
-	// configuration, load a module, or fail with an unrelated discovery error.
-	GloVars.reject_retired_cli_options(argc, argv);
 	GloVars.errorlog = NULL;
 	GloVars.pid = NULL;
 #ifdef PROXYSQL40
