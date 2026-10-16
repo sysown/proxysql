@@ -109,7 +109,8 @@ int main() {
  GloVars.cluster_sync_interfaces = cluster_sync_interfaces;
  const auto restored = events();
  ok(restored.find("web_bound") < restored.find("restore"), "web binds before restoration");
- ok(restored.find("bootstrap") == std::string::npos, "normal startup does not initialize empty deployment");
+ ok(restored.find("bootstrap") == std::string::npos,
+    "normal managed startup selects restore instead of explicit bootstrap");
  clear_events(); const std::string manifest = "{\"installation\":true}";
  ok(proxysql_start_managed_configuration(manager.get(), &web, bind, &manifest, error),
     "local bootstrap goes through same required service");
