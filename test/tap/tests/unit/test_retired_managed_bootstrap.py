@@ -23,9 +23,11 @@ for arguments in forms:
             result = subprocess.run([core, *help_arguments, *arguments, '--datadir', directory],
                                     cwd=directory, capture_output=True, text=True, timeout=5)
             assert result.returncode == 1, (arguments, result.returncode, result.stderr)
-            assert 'removed' in result.stderr and 'aws-deployment.json' in result.stderr, result.stderr
+            assert 'removed' in result.stderr, result.stderr
+            assert 'aws-deployment.json' in result.stderr, result.stderr
             assert not list(Path(directory).iterdir()), 'rejected invocation wrote startup state'
     print('PASS:', arguments[0], 'rejected before startup, with and without --help')
 result = subprocess.run([core, '--help'], capture_output=True, text=True, timeout=5)
-assert result.returncode == 0 and '--aws-managed-bootstrap' not in result.stdout
+assert result.returncode == 0, result.stderr
+assert '--aws-managed-bootstrap' not in result.stdout
 print('PASS: ordinary help remains available without the removed option')

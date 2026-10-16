@@ -80,9 +80,9 @@ int main() {
  GloVars.process_opts_pre();
  ok(GloVars.opt->isSet("-f"), "ordinary foreground option remains parsed");
  ok(!glovars.proxy_restart_on_error, "ordinary exit-on-error option remains effective");
- ok(rejects_retired_command({"unit", "--aws-managed-bootstrap", "/tmp/manifest.json"}),
+ ok(rejects_retired_command({"unit", "--aws-managed-bootstrap", "unused-manifest.json"}),
     "retired separate-argument command exits with a migration message");
- ok(rejects_retired_command({"unit", "--aws-managed-bootstrap=/tmp/manifest.json"}),
+ ok(rejects_retired_command({"unit", "--aws-managed-bootstrap=unused-manifest.json"}),
     "retired equals command exits with a migration message");
  ok(rejects_retired_command({"unit", "--aws-managed-bootstrap"}),
     "retired command without a manifest exits with a migration message");
