@@ -4975,7 +4975,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		uint64_t stmt_global_id=0;
 		memcpy(&client_stmt_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 		CurrentQuery.stmt_client_id=client_stmt_id;
-		stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_stmt_id);
+		MySQL_STMTs_local_v14::client_stmt_t *client_stmt =
+			client_myds->myconn->local_stmts->find_client_stmt(client_stmt_id);
+		if (client_stmt) stmt_global_id = client_stmt->global_id;
 		if (stmt_global_id == 0) {
 			l_free(pkt.size,pkt.ptr);
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -5038,7 +5040,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (stmt_info->num_params) {
 			size_t flag_offset = 14 + (stmt_info->num_params + 7) / 8;
 			size_t types_size = size_t(stmt_info->num_params) * 2;
-			auto &types = client_myds->myconn->local_stmts->client_stmt_to_param_types[client_stmt_id];
+			auto &types = client_stmt->param_types;
 			if (pkt.size <= flag_offset || execute_bytes[flag_offset] > 1) {
 				valid_types = false;
 			} else if (execute_bytes[flag_offset]) {
