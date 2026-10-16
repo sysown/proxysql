@@ -65,7 +65,9 @@ void set_userinfo(MySQL_Connection* connection) {
 	char password[] = "password";
 	char schema[] = "gtid_cache_schema";
 	connection->userinfo->set(username, password, schema, nullptr);
+#ifdef PROXYSQL40
 	connection->set_backend_auth_type(MySQLBackendAuthType::PASSWORD);
+#endif // PROXYSQL40
 }
 
 MySQL_Connection* cache_connection(MySQL_Thread& worker, MySrvC* server) {

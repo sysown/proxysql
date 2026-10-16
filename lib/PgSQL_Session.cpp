@@ -1233,12 +1233,13 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent == false) {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent = true;
-		char* tmp_init_connect = pgsql_thread___init_connect;
-		// A copy: a concurrent reload may replace the hostgroup attribute.
-		const std::string init_connect_hg = mybe->server_myds->myconn->parent->myhgc->attribute_init_connect();
-		if (!init_connect_hg.empty()) {
-			// mysql_hostgroup_attributes takes priority
-			tmp_init_connect = const_cast<char*>(init_connect_hg.c_str());
+		const char* tmp_init_connect = pgsql_thread___init_connect;
+		// This thread's copy: a concurrent reload replaces the hostgroup's own.
+		const HostgroupStrings* hg_strings =
+			thread->hostgroup_strings_for(mybe->server_myds->myconn->parent->myhgc->hid);
+		if (hg_strings != nullptr && !hg_strings->init_connect.empty()) {
+			// pgsql_hostgroup_attributes takes priority
+			tmp_init_connect = hg_strings->init_connect.c_str();
 		}
 		if (tmp_init_connect) {
 			// we send init connect queries only if set

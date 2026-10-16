@@ -520,7 +520,9 @@ MySQL_Query_Processor* GloMyQPro;
 PgSQL_Query_Processor* GloPgQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
+#ifdef PROXYSQL40
 AwsIamTokenSource* GloAwsIamTokenSource = NULL;
+#endif // PROXYSQL40
 PgSQL_Threads_Handler* GloPTH = NULL;
 
 // GloMCPH removed in Step 4.C; GloGATH/GloAI removed in Step 5 — the
@@ -2072,8 +2074,8 @@ GloAdmin->shutdown_threads();
 		MyHGM->aws_locality_manager()->shutdown();
 	}
 	shutdown_global_aws_metadata_provider();
-#endif
 	shutdown_global_aws_iam_token_source();
+#endif
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte
 	if (GloVars.global.nostart) {

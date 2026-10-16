@@ -1107,6 +1107,22 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 */
 	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers, bool ignore_aws_bgd = false);
 	unsigned int get_servers_table_version();
+	/**
+	 * @brief servers_table_version read with a relaxed atomic load: cheap
+	 *   enough for every worker loop iteration. No ordering is needed: when it
+	 *   changed, copy_hostgroup_strings() reads the strings under the Hostgroup
+	 *   Manager lock that the reload held when it changed them.
+	 */
+	unsigned int servers_table_version_relaxed() const {
+		return __atomic_load_n(&status.servers_table_version, __ATOMIC_RELAXED);
+	}
+	/**
+	 * @brief Copy the attribute strings worker threads need when they open
+	 *   backend connections, under the Hostgroup Manager lock.
+	 * @param out Replaced with one entry per hostgroup that has any of them set.
+	 * @return The servers table version the copy belongs to.
+	 */
+	unsigned int copy_hostgroup_strings(HostgroupStringsMap& out);
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);

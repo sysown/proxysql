@@ -7,7 +7,8 @@
  * SQLite's JSON_VALID accepts text nlohmann::json::parse() rejects. For such a
  * row v3.0.11 used attributes='' and the user kept working. These tests check:
  * - the user keeps working: PASSWORD backend policy, effective attributes '';
- * - a rejected text that configures 'backend_auth' still fails closed;
+ * - a rejected text that configures 'backend_auth' still fails closed (v4.0;
+ *   v3.0/v3.1 ignore 'backend_auth', so the row is PASSWORD there);
  * - runtime never holds a value that breaks the admin table CHECK:
  *   runtime_mysql_users and SAVE MYSQL USERS FROM RUNTIME round-trip the
  *   configured text and leave no row active=0.
@@ -49,6 +50,20 @@ const std::vector<rejected_case_t>& rejected_cases() {
 		{ "u_invalid_utf8", std::string("{\"a\":\"") + '\xff' + "\"}", "invalid UTF-8 byte" },
 	};
 	return cases;
+}
+
+/**
+ * @brief Whether 'policy' is what a backend row whose rejected attributes
+ *   configure 'backend_auth' resolves to: INVALID (fail closed) with
+ *   PROXYSQL40; PASSWORD on v3.0/v3.1, where AWS IAM is not available and
+ *   'backend_auth' is ignored as in v3.0.11.
+ */
+bool is_rejected_backend_auth_policy(const MySQLBackendAuthPolicy& policy) {
+#ifdef PROXYSQL40
+	return policy.type == MySQLBackendAuthType::INVALID && policy.failure_code == "attributes_not_object";
+#else
+	return policy.type == MySQLBackendAuthType::PASSWORD && policy.failure_code.empty();
+#endif // PROXYSQL40
 }
 
 // Rejected as above, but the text configures 'backend_auth'.
@@ -152,8 +167,8 @@ void test_rejected_backend_auth_fails_closed() {
 	ok(add_user("u_rejected_iam", USERNAME_BACKEND, k_rejected_backend_auth),
 		"backend row with rejected attributes configuring backend_auth is loaded");
 	const MySQLBackendAuthPolicy policy = resolve_mysql_backend_auth_policy(*GloMyAuth, "u_rejected_iam");
-	ok(policy.type == MySQLBackendAuthType::INVALID && policy.failure_code == "attributes_not_object",
-		"rejected attributes configuring backend_auth fail closed (not PASSWORD, not IAM)");
+	ok(is_rejected_backend_auth_policy(policy),
+		"rejected attributes configuring backend_auth fail closed (v3.x: ignored, PASSWORD)");
 	ok(dumped_attributes("u_rejected_iam", false) == k_rejected_backend_auth,
 		"rejected attributes configuring backend_auth dump the configured text");
 
@@ -161,14 +176,14 @@ void test_rejected_backend_auth_fails_closed() {
 		add_user("u_rejected_iam_escaped", USERNAME_BACKEND, attributes);
 		const MySQLBackendAuthPolicy escaped =
 			resolve_mysql_backend_auth_policy(*GloMyAuth, "u_rejected_iam_escaped");
-		ok(escaped.type == MySQLBackendAuthType::INVALID && escaped.failure_code == "attributes_not_object",
-			"rejected attributes with an escaped backend_auth key fail closed: %s", attributes.c_str());
+		ok(is_rejected_backend_auth_policy(escaped),
+			"rejected attributes with an escaped backend_auth key fail closed (v3.x: ignored): %s", attributes.c_str());
 	}
 }
 
 void test_reload_refreshes_rejected_rows() {
 	ok(add_user("u_reload", USERNAME_BACKEND, k_rejected_backend_auth) &&
-		resolve_mysql_backend_auth_policy(*GloMyAuth, "u_reload").type == MySQLBackendAuthType::INVALID,
+		is_rejected_backend_auth_policy(resolve_mysql_backend_auth_policy(*GloMyAuth, "u_reload")),
 		"reload fixture starts with rejected backend_auth attributes");
 	ok(add_user("u_reload", USERNAME_BACKEND, "") &&
 		resolve_mysql_backend_auth_policy(*GloMyAuth, "u_reload").type == MySQLBackendAuthType::PASSWORD &&
@@ -184,7 +199,7 @@ void test_reload_refreshes_rejected_rows() {
 		resolve_mysql_backend_auth_policy(*GloMyAuth, "u_reload_case").type == MySQLBackendAuthType::PASSWORD,
 		"rejected attributes with a differently-cased key do not configure backend_auth");
 	ok(add_user("u_reload_case", USERNAME_BACKEND, k_rejected_backend_auth) &&
-		resolve_mysql_backend_auth_policy(*GloMyAuth, "u_reload_case").type == MySQLBackendAuthType::INVALID &&
+		is_rejected_backend_auth_policy(resolve_mysql_backend_auth_policy(*GloMyAuth, "u_reload_case")) &&
 		dumped_attributes("u_reload_case", false) == k_rejected_backend_auth,
 		"reloading rejected attributes with a case-only key change refreshes the row");
 }

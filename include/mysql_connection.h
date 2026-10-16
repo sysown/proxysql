@@ -47,12 +47,14 @@ public:
 	void fill_client_internal_session(nlohmann::json &j, int idx);
 };
 
+#ifdef PROXYSQL40
 struct MySQLAwsIamIdentity {
 	AwsIamTokenKey key;
 	uint64_t token_generation{0};
 	uint8_t fresh_token_retries{0};
 	SecureString handshake_token;
 };
+#endif // PROXYSQL40
 
 enum charset_action {
 	UNKNOWN,
@@ -96,10 +98,12 @@ unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_co
 
 class MySQL_Connection {
 	private:
+#ifdef PROXYSQL40
 	MySQLBackendAuthType backend_auth_type_{MySQLBackendAuthType::PASSWORD};
 	std::unique_ptr<MySQLAwsIamIdentity> aws_iam_identity_;
 	bool aws_iam_connector_secret_active_{false};
 	bool aws_iam_async_connect_pending_{false};
+#endif // PROXYSQL40
 	void update_warning_count_from_connection();
 	void update_warning_count_from_statement();
 	unsigned long long inserted_into_pool;
@@ -228,6 +232,7 @@ class MySQL_Connection {
 
 	MySQL_Connection();
 	~MySQL_Connection();
+#ifdef PROXYSQL40
 	void set_backend_auth_type(MySQLBackendAuthType);
 	MySQLBackendAuthType backend_auth_type() const;
 	/** Check whether the current resolved policy permits password reset/reuse. */
@@ -235,6 +240,16 @@ class MySQL_Connection {
 	void attach_aws_iam_token(const AwsIamTokenKey&, AwsIamTokenResult&&);
 	void clear_aws_iam_handshake_secret();
 	bool has_aws_iam_handshake_secret() const;
+	/** @brief Region of the IAM token this connection authenticated with, '' if none. */
+	std::string aws_iam_region() const {
+		return aws_iam_identity_ ? aws_iam_identity_->key.region : std::string();
+	}
+#else
+	// AWS IAM backend authentication is a v4.0 feature: on v3.0/v3.1 every
+	// backend connection authenticates with a password, and checks of the
+	// connection's auth type fold away at compile time.
+	MySQLBackendAuthType backend_auth_type() const { return MySQLBackendAuthType::PASSWORD; }
+#endif // PROXYSQL40
 	bool set_autocommit(bool);
 	bool set_no_backslash_escapes(bool);
 	unsigned int set_charset(unsigned int, enum charset_action);
@@ -360,9 +375,11 @@ class MySQL_Connection {
 
 	bool match_ff_req_options(const MySQL_Connection *c);
 	bool match_tracked_options(const MySQL_Connection *c);
+#ifdef PROXYSQL40
 	bool backend_auth_compatible(
 		const char *requested_username,
 		MySQLBackendAuthType requested_type) const;
+#endif // PROXYSQL40
 	bool requires_CHANGE_USER(
 		const MySQL_Connection *client_conn,
 		MySQLBackendAuthType requested_type = MySQLBackendAuthType::PASSWORD) const;

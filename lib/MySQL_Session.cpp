@@ -82,10 +82,12 @@ using json = nlohmann::json;
 #define SHOW_STATUS_LIKE_SSL_VERSION "SHOW STATUS LIKE 'Ssl_version"
 #define SHOW_STATUS_LIKE_SSL_VERSION_LEN 29
 
+#ifdef PROXYSQL40
 static void record_aws_iam_backend_connection(bool success) {
 	AwsIamTokenSourceLease source = acquire_global_aws_iam_token_source();
 	if (source) source->record_backend_connection(success);
 }
+#endif // PROXYSQL40
 
 #define EXPMARIA
 
@@ -247,18 +249,20 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 extern SQLite3_Server *GloSQLite3Server;
 
-static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
-	MySQL_Session *session)
+#ifdef PROXYSQL40
+// Returns the session's cached policy by reference: the caller in
+// handler_again___verify_backend_user_schema() runs for every query.
+static const MySQLBackendAuthPolicy& resolved_backend_auth_policy_for_session(
+	MySQL_Session& session)
 {
 	const char *backend_username =
-		session != nullptr && session->client_myds != nullptr &&
-		session->client_myds->myconn != nullptr &&
-		session->client_myds->myconn->userinfo != nullptr
-			? session->client_myds->myconn->userinfo->username : nullptr;
-	return session != nullptr
-		? session->backend_auth_policy_for(backend_username)
-		: resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
+		session.client_myds != nullptr &&
+		session.client_myds->myconn != nullptr &&
+		session.client_myds->myconn->userinfo != nullptr
+			? session.client_myds->myconn->userinfo->username : nullptr;
+	return session.backend_auth_policy_for(backend_username);
 }
+#endif // PROXYSQL40
 
 #ifdef PROXYSQLCLICKHOUSE
 extern ClickHouse_Authentication *GloClickHouseAuth;
@@ -357,12 +361,14 @@ const char* KillArgs::get_host_address() const {
 	return host_address;
 }
 
+#ifdef PROXYSQL40
 static void cleanse_iam_connector_password(MYSQL *mysql) {
 	if (mysql == nullptr || mysql->passwd == nullptr) return;
 	OPENSSL_cleanse(mysql->passwd, strlen(mysql->passwd));
 	free(mysql->passwd);
 	mysql->passwd = nullptr;
 }
+#endif // PROXYSQL40
 
 
 /**
@@ -376,10 +382,15 @@ static void cleanse_iam_connector_password(MYSQL *mysql) {
  */
 void* kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
+#ifdef PROXYSQL40
 	const bool iam_mode =
 		ka->backend_auth_type == MySQLBackendAuthType::AWS_IAM;
 	AwsIamTokenResult iam_result;
 	AwsIamTokenSourceLease iam_source;
+#else
+	// AWS IAM backend authentication is a v4.0 feature.
+	constexpr bool iam_mode = false;
+#endif // PROXYSQL40
 	const char *connect_user = ka->username;
 	const char *connect_password = ka->password;
 	//! It initializes a new MySQL_Thread object to handle MySQL-related operations.
@@ -416,6 +427,7 @@ void* kill_query_thread(void *arg) {
 		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 
+#ifdef PROXYSQL40
 	if (iam_mode) {
 		iam_source = acquire_global_aws_iam_token_source();
 		AwsIamConnectionConfigInput input;
@@ -486,6 +498,7 @@ void* kill_query_thread(void *arg) {
 		connect_user = ka->database_user.c_str();
 		connect_password = iam_result.token.c_str();
 	}
+#endif // PROXYSQL40
 
 	MYSQL *ret;
 
@@ -522,11 +535,13 @@ void* kill_query_thread(void *arg) {
 		}
 		ret=mysql_real_connect(mysql,"localhost",connect_user,connect_password,NULL,0,ka->hostname,0);
 	}
+#ifdef PROXYSQL40
 	if (iam_mode) {
 		cleanse_iam_connector_password(mysql);
 		iam_result.token.clear();
 		iam_source->record_backend_connection(ret != nullptr);
 	}
+#endif // PROXYSQL40
 	if (!ret) {
 		int myerr = mysql_errno(mysql);
 		if (iam_mode) {
@@ -567,10 +582,12 @@ void* kill_query_thread(void *arg) {
 	mysql_query(mysql,buf);
 __exit_kill_query_thread:
 	//! clean-up
+#ifdef PROXYSQL40
 	if (iam_mode) {
 		cleanse_iam_connector_password(mysql);
 		iam_result.token.clear();
 	}
+#endif // PROXYSQL40
 	if (mysql)
 		mysql_close(mysql);
 	delete ka;
@@ -848,9 +865,11 @@ bool Query_Info::is_select_NOT_for_update() {
 
 
 void MySQL_Session::set_status(enum session_status e) {
+#ifdef PROXYSQL40
 	if (e != WAITING_AWS_IAM_TOKEN && aws_iam_waiter_id != 0) {
 		cancel_aws_iam_wait();
 	}
+#endif // PROXYSQL40
 	if (e==session_status___NONE) {
 		if (mybe) {
 			if (mybe->server_myds) {
@@ -864,6 +883,9 @@ void MySQL_Session::set_status(enum session_status e) {
 	status=e;
 }
 
+#ifdef PROXYSQL40
+// AWS IAM backend authentication (v4.0 only: the token source is installed by
+// the plugin chassis). Nothing below is compiled into v3.0/v3.1 builds.
 void MySQL_Session::accept_aws_iam_completion(
 	uint64_t opaque_id, AwsIamTokenResult&& result) {
 	// The worker registry has already consumed opaque_id. Re-check the
@@ -879,7 +901,34 @@ void MySQL_Session::accept_aws_iam_completion(
 	to_process = 1;
 }
 
+// Policy returned by backend_auth_policy_for() when no backend row can resolve
+// to anything but PASSWORD. Its database_user is empty: callers read it only for
+// AWS_IAM and INVALID.
+static const MySQLBackendAuthPolicy k_password_backend_auth_policy = [] {
+	MySQLBackendAuthPolicy policy;
+	policy.type = MySQLBackendAuthType::PASSWORD;
+	return policy;
+}();
+
 const MySQLBackendAuthPolicy& MySQL_Session::backend_auth_policy_for(const char *backend_username) {
+	// No backend row uses a non-PASSWORD policy (no AWS IAM user configured):
+	// skip the cache lookup and its username compare, which run for every query.
+	// Users apply to new client connections only, so the session keeps the
+	// policy it resolved across a later LOAD MYSQL USERS:
+	// - the first decision taken here is stored in the cache, so the session
+	//   keeps PASSWORD if its user gets another policy later;
+	// - a session that cached another policy (AWS IAM resolved while such rows
+	//   existed) takes the full path, which returns that cached policy.
+	// A null username still takes the full path (it resolves to INVALID).
+	if (backend_username != nullptr && !GloMyAuth->has_non_password_backend_auth() &&
+		(!cached_backend_auth_policy_valid || cached_backend_auth_policy.type == MySQLBackendAuthType::PASSWORD)) {
+		if (!cached_backend_auth_policy_valid) {
+			cached_backend_auth_policy = k_password_backend_auth_policy;
+			cached_backend_auth_policy_user = backend_username;
+			cached_backend_auth_policy_valid = true;
+		}
+		return k_password_backend_auth_policy;
+	}
 	const char *user = backend_username != nullptr ? backend_username : "";
 	if (!cached_backend_auth_policy_valid || cached_backend_auth_policy_user != user) {
 		cached_backend_auth_policy = resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
@@ -890,6 +939,11 @@ const MySQLBackendAuthPolicy& MySQL_Session::backend_auth_policy_for(const char 
 }
 
 void MySQL_Session::cancel_aws_iam_wait() {
+	if (!aws_iam_state_used) {
+		// Nothing to release or clear; keep the one side effect callers rely on.
+		pause_until = 0;
+		return;
+	}
 	if (!aws_iam_completion_ready && aws_iam_token_source_lease &&
 		aws_iam_request_handle.value != 0) {
 		aws_iam_token_source_lease->cancel(aws_iam_request_handle);
@@ -928,6 +982,7 @@ void MySQL_Session::cancel_aws_iam_wait() {
 	aws_iam_fresh_token_retry_attempted = false;
 	pause_until = 0;
 	aws_iam_token_source_lease = AwsIamTokenSourceLease {};
+	aws_iam_state_used = false;
 }
 
 void MySQL_Session::fail_aws_iam_backend(
@@ -1057,6 +1112,7 @@ int MySQL_Session::handler_again___status_WAITING_AWS_IAM_TOKEN() {
 	connection->reusable = true;
 	return 0;
 }
+#endif // PROXYSQL40
 
 /**
  * @brief Constructs a new MySQL session object.
@@ -1149,8 +1205,10 @@ MySQL_Session::MySQL_Session() {
  * @brief Resets the MySQL session to its initial state.
  */
 void MySQL_Session::reset() {
+#ifdef PROXYSQL40
 	cancel_aws_iam_wait();
 	cached_backend_auth_policy_valid = false;
+#endif // PROXYSQL40
 	pending_user_variable_set.reset();
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
@@ -1638,6 +1696,12 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
  *   enforced by the connector (see MySQL_Connection::apply_local_infile_policy()).
  */
 static bool is_load_data_local_infile(const char* query, size_t len) {
+	// Called for every COM_QUERY: reject on the first byte, without the keyword
+	// matcher, unless the statement can still start with LOAD (an 'L', or leading
+	// whitespace or a comment that the full parser below has to skip).
+	if (len < 4) return false;
+	const unsigned char first = static_cast<unsigned char>(query[0]);
+	if (first != 'L' && first != 'l' && first != '/' && !isspace(first)) return false;
 	const char* p = query;
 	const char* end = query + len;
 	auto skip_ws = [&]() {
@@ -2644,6 +2708,7 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, myds->fd, myds, thread->curtime);
 	}
+#ifdef PROXYSQL40
 	const char *backend_username = myconn->userinfo != nullptr
 		? myconn->userinfo->username : nullptr;
 	const MySQLBackendAuthPolicy policy =
@@ -2657,6 +2722,7 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 		set_status(session_status___NONE);
 		return -1;
 	}
+#endif // PROXYSQL40
 	myds->DSS=STATE_MARIADB_QUERY;
 	// we recreate local_stmts : see issue #752
 	delete myconn->local_stmts;
@@ -2761,12 +2827,12 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 
 			MySQL_Connection *connection = myds->myconn;
 			KillArgs *ka = nullptr;
+#ifdef PROXYSQL40
 			if (connection->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
 				const char *database_user = connection->userinfo != nullptr &&
 					connection->userinfo->username != nullptr
 						? connection->userinfo->username : "";
-				const std::string region_copy = connection->parent->myhgc != nullptr
-					? connection->parent->myhgc->attribute_aws_iam_region() : "";
+				const std::string region_copy = connection->aws_iam_region();
 				const char *region = region_copy.c_str();
 				ka = new KillArgs(
 					const_cast<char *>(database_user), nullptr,
@@ -2777,7 +2843,9 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 					MySQLBackendAuthType::AWS_IAM, connection->parent->address,
 					region, database_user,
 					std::chrono::steady_clock::now() + std::chrono::seconds(5));
-			} else {
+			} else
+#endif // PROXYSQL40
+			{
 				ka = new KillArgs(
 					ui->username, auth_password, connection->parent->address,
 					connection->parent->port, connection->parent->myhgc->hid,
@@ -2907,12 +2975,13 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent==false) {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent=true;
-		char * tmp_init_connect = mysql_thread___init_connect;
-		// A copy: a concurrent reload may replace the hostgroup attribute.
-		const std::string init_connect_hg = mybe->server_myds->myconn->parent->myhgc->attribute_init_connect();
-		if (!init_connect_hg.empty()) {
+		const char * tmp_init_connect = mysql_thread___init_connect;
+		// This thread's copy: a concurrent reload replaces the hostgroup's own.
+		const HostgroupStrings* hg_strings =
+			thread->hostgroup_strings_for(mybe->server_myds->myconn->parent->myhgc->hid);
+		if (hg_strings != nullptr && !hg_strings->init_connect.empty()) {
 			// mysql_hostgroup_attributes takes priority
-			tmp_init_connect = const_cast<char*>(init_connect_hg.c_str());
+			tmp_init_connect = hg_strings->init_connect.c_str();
 		}
 		if (tmp_init_connect) {
 			// we send init connect queries only if set
@@ -3306,14 +3375,16 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 
 bool MySQL_Session::handler_again___verify_backend_user_schema() {
 	MySQL_Data_Stream *myds=mybe->server_myds;
-	const MySQLBackendAuthPolicy requested_policy =
-		resolved_backend_auth_policy_for_session(this);
+#ifdef PROXYSQL40
+	const MySQLBackendAuthPolicy& requested_policy =
+		resolved_backend_auth_policy_for_session(*this);
 	if (requested_policy.type == MySQLBackendAuthType::INVALID) {
 		fail_invalid_backend_auth_policy(
 			myds, requested_policy.database_user.c_str(),
 			requested_policy.failure_code.c_str());
 		return true;
 	}
+#endif // PROXYSQL40
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->username, mybe->server_myds->myconn->userinfo->username);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->schemaname, mybe->server_myds->myconn->userinfo->schemaname);
 	if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
@@ -3330,9 +3401,13 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 		}
 	}
 	// if we reach here, the username is the same
+#ifdef PROXYSQL40
 	const MySQLBackendAuthType requested_type = requested_policy.type;
 	if (myds->myconn->requires_CHANGE_USER(
 		client_myds->myconn, requested_type)) {
+#else
+	if (myds->myconn->requires_CHANGE_USER(client_myds->myconn)) {
+#endif // PROXYSQL40
 		// if we reach here, even if the username is the same,
 		// the backend connection has some session variable set
 		// that the client never asked for
@@ -4051,6 +4126,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 	}
 	if (mybe->server_myds->max_connect_time) {
 		if (thread->curtime >= mybe->server_myds->max_connect_time) {
+#ifdef PROXYSQL40
 			MySQL_Connection *timed_out_connection = mybe->server_myds->myconn;
 			if (timed_out_connection != nullptr &&
 				timed_out_connection->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
@@ -4058,8 +4134,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				const char *database_user = timed_out_connection->userinfo != nullptr &&
 					timed_out_connection->userinfo->username != nullptr
 						? timed_out_connection->userinfo->username : "";
-				const std::string region_copy = timed_out_connection->parent->myhgc != nullptr
-					? timed_out_connection->parent->myhgc->attribute_aws_iam_region() : "";
+				const std::string region_copy = timed_out_connection->aws_iam_region();
 				const char *region = region_copy.c_str();
 				proxy_error(
 					"AWS IAM backend connection failure user='%s' hostgroup=%u endpoint='%s'"
@@ -4080,6 +4155,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				mybe->server_myds->max_connect_time = 0;
 				NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 			}
+#endif // PROXYSQL40
 			if (mirror) {
 				PROXY_TRACE();
 			}
@@ -4126,9 +4202,11 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 	}
 	if (mybe->server_myds->myconn==NULL) {
 		handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
+#ifdef PROXYSQL40
 		if (status != CONNECTING_SERVER) {
 			return true;
 		}
+#endif // PROXYSQL40
 	}
 	if (mybe->server_myds->myconn==NULL) {
 		if (mirror) {
@@ -4155,12 +4233,14 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}
 		enum session_status st=status;
 		if (mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE) {
+#ifdef PROXYSQL40
 			if (mybe->server_myds->myconn->backend_auth_type() ==
 				MySQLBackendAuthType::AWS_IAM) {
 				aws_iam_connect_token_key = AwsIamTokenKey {};
 				aws_iam_connect_token_generation = 0;
 				aws_iam_fresh_token_retry_attempted = false;
 			}
+#endif // PROXYSQL40
 			if (handle_session_track_capabilities() == false) {
 				pause_until = thread->curtime + mysql_thread___connect_retries_delay*1000;
 				return false;
@@ -4188,12 +4268,14 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}
 		switch (rc) {
 			case 0:
+#ifdef PROXYSQL40
 				if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
 					record_aws_iam_backend_connection(true);
 					aws_iam_connect_token_key = AwsIamTokenKey {};
 					aws_iam_connect_token_generation = 0;
 					aws_iam_fresh_token_retry_attempted = false;
 				}
+#endif // PROXYSQL40
 				myds->myds_type=MYDS_BACKEND;
 				myds->DSS=STATE_MARIADB_GENERIC;
 				status=WAITING_CLIENT_DATA;
@@ -4300,6 +4382,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				current_query_user_variable_context_change = false;
 				const unsigned int connect_errno = mysql_errno(myconn->mysql);
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, connect_errno);
+#ifdef PROXYSQL40
 				if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
 					record_aws_iam_backend_connection(false);
 					const AwsIamTokenKey failed_key = aws_iam_connect_token_key;
@@ -4358,6 +4441,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					myds->max_connect_time = 0;
 					NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 				}
+#endif // PROXYSQL40
 				/*
 				 * Pass-through divert (spec §6.4).
 				 *
@@ -4535,8 +4619,9 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 	}
-	const MySQLBackendAuthPolicy requested_policy =
-		resolved_backend_auth_policy_for_session(this);
+#ifdef PROXYSQL40
+	const MySQLBackendAuthPolicy& requested_policy =
+		resolved_backend_auth_policy_for_session(*this);
 	const MySQLBackendAuthType requested_type = requested_policy.type;
 	if (requested_type == MySQLBackendAuthType::INVALID) {
 		fail_invalid_backend_auth_policy(
@@ -4551,6 +4636,7 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 		myds->DSS = STATE_NOT_INITIALIZED;
 		NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
 	}
+#endif // PROXYSQL40
 	// we recreate local_stmts : see issue #752
 	delete myconn->local_stmts;
 	myconn->local_stmts=new MySQL_STMTs_local_v14(false); // false by default, it is a backend
@@ -4901,7 +4987,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		uint64_t stmt_global_id=0;
 		memcpy(&client_stmt_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 		CurrentQuery.stmt_client_id=client_stmt_id;
-		stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_stmt_id);
+		MySQL_STMTs_local_v14::client_stmt_t *client_stmt =
+			client_myds->myconn->local_stmts->find_client_stmt(client_stmt_id);
+		if (client_stmt) stmt_global_id = client_stmt->global_id;
 		if (stmt_global_id == 0) {
 			l_free(pkt.size,pkt.ptr);
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -4964,7 +5052,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (stmt_info->num_params) {
 			size_t flag_offset = 14 + (stmt_info->num_params + 7) / 8;
 			size_t types_size = size_t(stmt_info->num_params) * 2;
-			auto &types = client_myds->myconn->local_stmts->client_stmt_to_param_types[client_stmt_id];
+			auto &types = client_stmt->param_types;
 			if (pkt.size <= flag_offset || execute_bytes[flag_offset] > 1) {
 				valid_types = false;
 			} else if (execute_bytes[flag_offset]) {
@@ -7035,6 +7123,7 @@ handler_again:
 				}
 			}
 			break;
+#ifdef PROXYSQL40
 		case WAITING_AWS_IAM_TOKEN:
 			{
 				handler_again___status_WAITING_AWS_IAM_TOKEN();
@@ -7043,6 +7132,7 @@ handler_again:
 				}
 			}
 			break;
+#endif // PROXYSQL40
 		case PINGING_SERVER:
 			{
 				int rc=handler_again___status_PINGING_SERVER();
@@ -9827,21 +9917,29 @@ bool MySQL_Session::route_unusable_tracked_gtid_to_writer() {
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 		// Get a MySQL Connection
+#ifdef PROXYSQL40
 		const char *backend_username =
 			client_myds != nullptr && client_myds->myconn != nullptr &&
 			client_myds->myconn->userinfo != nullptr
 				? client_myds->myconn->userinfo->username : nullptr;
-		MySQLBackendAuthPolicy backend_auth_policy = backend_auth_policy_for(backend_username);
+		const MySQLBackendAuthPolicy& backend_auth_policy = backend_auth_policy_for(backend_username);
+		const MySQLBackendAuthType backend_auth_type = backend_auth_policy.type;
 		const bool force_fresh_iam_connection =
-			backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM &&
+			backend_auth_type == MySQLBackendAuthType::AWS_IAM &&
 			aws_iam_fresh_token_retry_attempted;
 		// Only a backend row whose 'backend_auth' is malformed is INVALID: a
 		// missing row is PASSWORD (issue #6413). It is not an AWS IAM failure.
-		if (backend_auth_policy.type == MySQLBackendAuthType::INVALID) {
+		if (backend_auth_type == MySQLBackendAuthType::INVALID) {
 			fail_invalid_backend_auth_policy(mybe != nullptr ? mybe->server_myds : nullptr,
 				backend_auth_policy.database_user.c_str(), backend_auth_policy.failure_code.c_str());
 			return;
 		}
+#else
+		// AWS IAM backend authentication is a v4.0 feature: v3.0/v3.1 always
+		// connect with a password, and the IAM terms below fold away.
+		constexpr MySQLBackendAuthType backend_auth_type = MySQLBackendAuthType::PASSWORD;
+		constexpr bool force_fresh_iam_connection = false;
+#endif // PROXYSQL40
 
 		MySQL_Connection *mc=NULL;
 		MySQL_Backend * _gtid_from_backend = NULL;
@@ -9941,7 +10039,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 			if (gtid_uuid != NULL) {
 #ifndef STRESSTEST_POOL
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1, backend_auth_policy.type);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1, backend_auth_type);
 #endif // STRESSTEST_POOL
 			} else {
 				// The causal-read constraint could not be honoured: when
@@ -9950,7 +10048,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				// read-your-writes.
 				const int fallback_max_lag = gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms;
 #ifndef STRESSTEST_POOL
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, fallback_max_lag, backend_auth_policy.type);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, fallback_max_lag, backend_auth_type);
 #endif // STRESSTEST_POOL
 			}
 		}
@@ -9975,23 +10073,23 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				// IAM checkouts may require asynchronous token acquisition or a fresh
 				// connection, so retain their separate waiter FIFO classification.
 				last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
-					backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM);
+					backend_auth_type == MySQLBackendAuthType::AWS_IAM);
 				last_pool_gtid = true;
 				last_pool_max_lag_ms = -1;
 #endif // PROXYSQL31
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
 					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
-					uuid, trxid, -1, backend_auth_policy.type);
+					uuid, trxid, -1, backend_auth_type);
 			} else {
 #ifdef PROXYSQL31
 				last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
-					backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM);
+					backend_auth_type == MySQLBackendAuthType::AWS_IAM);
 				last_pool_gtid = false;
 				last_pool_max_lag_ms = gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms;
 #endif // PROXYSQL31
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
 					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
-					NULL, 0, gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms, backend_auth_policy.type);
+					NULL, 0, gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms, backend_auth_type);
 			}
 			thread->note_pool_attempt(mc == NULL);
 #ifdef STRESSTEST_POOL
@@ -10080,10 +10178,12 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection has no FD\n", this);
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
 		myconn->userinfo->set(client_myds->myconn->userinfo);
+#ifdef PROXYSQL40
 		myconn->set_backend_auth_type(backend_auth_policy.type);
 
 		if (backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM) {
 			MySrvC *server = myconn->parent;
+			aws_iam_state_used = true;
 			aws_iam_connection = myconn;
 			std::unique_ptr<MySQLServers_SslParams> ssl_params(
 				MyHGM->get_Server_SSL_Params(
@@ -10092,8 +10192,10 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			input.database_user = backend_auth_policy.database_user;
 			input.configured_endpoint = server->address != nullptr ? server->address : "";
 			input.port = server->port;
-			input.region = server->myhgc != nullptr
-				? server->myhgc->attribute_aws_iam_region() : "";
+			// This thread's copy: a concurrent reload replaces the hostgroup's own.
+			const HostgroupStrings* hg_strings = server->myhgc != nullptr
+				? thread->hostgroup_strings_for(server->myhgc->hid) : nullptr;
+			input.region = hg_strings != nullptr ? hg_strings->aws_iam_region : "";
 			input.use_ssl = server->use_ssl != 0;
 			input.ssl_ca = ssl_params != nullptr
 				? ssl_params->ssl_ca
@@ -10147,6 +10249,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				thread->aws_iam_completion_sink());
 			return;
 		}
+#endif // PROXYSQL40
 
 		myconn->handler(0);
 		mybe->server_myds->fd=myconn->fd;
@@ -10637,10 +10740,12 @@ void MySQL_Session::Memory_Stats() {
 void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_myds) {
 	MySQL_Data_Stream *new_myds = NULL;
 	MySQL_Connection * mc = _myds->myconn;
+#ifdef PROXYSQL40
 	if (mc->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
 		_myds->destroy_MySQL_Connection_From_Pool(false);
 		return;
 	}
+#endif // PROXYSQL40
 	// we remove the connection from the original data stream
 	_myds->detach_connection();
 	_myds->unplug_backend();

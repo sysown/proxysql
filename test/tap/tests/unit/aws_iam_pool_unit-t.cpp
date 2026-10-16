@@ -865,6 +865,9 @@ void test_change_user_uses_requesting_policy(MySQL_Thread& worker) {
 		MySrvC *server = create_server(833, "change-user.abcdefghijkl.us-east-1.rds.amazonaws.com");
 		server->use_ssl = 1;
 		server->myhgc->attributes.aws_iam_region = make_owned_cstring("us-east-1").release();
+		// Sessions read aws_iam_region from the worker's copy of the hostgroup strings.
+		MyHGM->status.servers_table_version++;
+		worker.refresh_hostgroup_strings(MyHGM);
 		SessionFixture request(worker, 833, MySQLBackendAuthType::AWS_IAM, kOtherUser);
 		auto password = create_established_connection(server, kUser, MySQLBackendAuthType::PASSWORD);
 		server->ConnectionsUsed->add(password.get());
