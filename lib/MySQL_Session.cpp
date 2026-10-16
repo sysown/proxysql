@@ -913,11 +913,15 @@ static const MySQLBackendAuthPolicy k_password_backend_auth_policy = [] {
 const MySQLBackendAuthPolicy& MySQL_Session::backend_auth_policy_for(const char *backend_username) {
 	// No backend row uses a non-PASSWORD policy (no AWS IAM user configured):
 	// skip the cache lookup and its username compare, which run for every query.
-	// The first such decision is still stored in the cache, so the session keeps
-	// PASSWORD if a later LOAD MYSQL USERS gives its user another policy (users
-	// apply to new client connections). A null username still takes the full
-	// path (it resolves to INVALID).
-	if (backend_username != nullptr && !GloMyAuth->has_non_password_backend_auth()) {
+	// Users apply to new client connections only, so the session keeps the
+	// policy it resolved across a later LOAD MYSQL USERS:
+	// - the first decision taken here is stored in the cache, so the session
+	//   keeps PASSWORD if its user gets another policy later;
+	// - a session that cached another policy (AWS IAM resolved while such rows
+	//   existed) takes the full path, which returns that cached policy.
+	// A null username still takes the full path (it resolves to INVALID).
+	if (backend_username != nullptr && !GloMyAuth->has_non_password_backend_auth() &&
+		(!cached_backend_auth_policy_valid || cached_backend_auth_policy.type == MySQLBackendAuthType::PASSWORD)) {
 		if (!cached_backend_auth_policy_valid) {
 			cached_backend_auth_policy = k_password_backend_auth_policy;
 			cached_backend_auth_policy_user = backend_username;
