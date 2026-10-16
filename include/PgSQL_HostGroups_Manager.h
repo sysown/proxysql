@@ -871,11 +871,13 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	void read_only_action_v2(const std::list<read_only_server_t>& pgsql_servers, bool writer_is_also_reader);
 	unsigned int get_servers_table_version();
 	/**
-	 * @brief servers_table_version read with a plain atomic load (no locked
-	 *   instruction): cheap enough for every worker loop iteration.
+	 * @brief servers_table_version read with a relaxed atomic load: cheap
+	 *   enough for every worker loop iteration. No ordering is needed: when it
+	 *   changed, copy_hostgroup_strings() reads the strings under the Hostgroup
+	 *   Manager lock that the reload held when it changed them.
 	 */
 	unsigned int servers_table_version_relaxed() const {
-		return __atomic_load_n(&status.servers_table_version, __ATOMIC_ACQUIRE);
+		return __atomic_load_n(&status.servers_table_version, __ATOMIC_RELAXED);
 	}
 	/**
 	 * @brief Copy the attribute strings worker threads need when they open

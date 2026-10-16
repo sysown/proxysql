@@ -14,6 +14,10 @@
  *   INVALID for a null username and PASSWORD with database_user otherwise.
  */
 
+#ifndef PROXYSQL40
+#error "mysql_backend_auth_in_use_unit-t tests v4.0 code: build it with PROXYSQL40=1"
+#endif // PROXYSQL40
+
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -110,8 +114,8 @@ void test_fail_closed_rows_set_it() {
 
 void test_del_and_reset() {
 	add_user("iam_user", USERNAME_BACKEND, k_iam);
-	del_user("iam_user", USERNAME_BACKEND);
-	ok(in_use(), "del() leaves it set (conservative)");
+	const bool deleted = del_user("iam_user", USERNAME_BACKEND);
+	ok(deleted && in_use(), "del() removes the row and leaves it set (conservative)");
 	reload_backend_rows({ { "pw_plain", "" } });
 	ok(!in_use(), "the next reload recomputes it");
 
@@ -120,7 +124,6 @@ void test_del_and_reset() {
 	ok(!in_use(), "reset() clears it");
 }
 
-#ifdef PROXYSQL40
 // One backend+frontend row in the 13-column runtime layout.
 bool replace_with(const char* username, const char* attributes) {
 	SQLite3_result users(13);
@@ -134,16 +137,11 @@ void test_atomic_replace() {
 	ok(replace_with("iam_user", k_iam) && in_use(), "an atomic replace with an IAM row sets it");
 	ok(replace_with("pw_plain", "") && !in_use(), "an atomic replace with PASSWORD rows clears it");
 }
-#endif // PROXYSQL40
 
 } // namespace
 
 int main() {
-#ifdef PROXYSQL40
 	plan(6 + 6 + 6 + 3 + 2);
-#else
-	plan(6 + 6 + 6 + 3);
-#endif
 	test_init_minimal();
 	test_init_auth();
 
@@ -151,9 +149,7 @@ int main() {
 	test_iam_row_sets_and_reload_clears();
 	test_fail_closed_rows_set_it();
 	test_del_and_reset();
-#ifdef PROXYSQL40
 	test_atomic_replace();
-#endif
 
 	test_cleanup_auth();
 	test_cleanup_minimal();

@@ -1,5 +1,5 @@
-#ifndef PROXYSQL_HOSTGROUP_STRINGS_H
-#define PROXYSQL_HOSTGROUP_STRINGS_H
+#ifndef __CLASS_HOSTGROUP_STRINGS_H
+#define __CLASS_HOSTGROUP_STRINGS_H
 
 #include <string>
 #include <unordered_map>
@@ -23,4 +23,4 @@ struct HostgroupStrings {
 /** @brief Hostgroup id -> its attribute strings; hostgroups without any are absent. */
 using HostgroupStringsMap = std::unordered_map<unsigned int, HostgroupStrings>;
 
-#endif // PROXYSQL_HOSTGROUP_STRINGS_H
+#endif // __CLASS_HOSTGROUP_STRINGS_H

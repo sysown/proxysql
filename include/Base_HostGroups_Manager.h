@@ -140,9 +140,11 @@ class BaseHGC {	// MySQL Host Group Container
 		nlohmann::json * ignore_session_variables_json = nullptr; // the JSON format of ignore_session_variables
 	} attributes;
 	/**
-	 * @brief Replace an attribute string. Only called by the reload paths and
-	 *   reset_attributes(), under the Hostgroup Manager lock. Worker threads do
-	 *   not read these strings here: they use their own copy (HostgroupStrings).
+	 * @brief Replace an attribute string. Called by the reload paths and by
+	 *   reset_attributes(): under the Hostgroup Manager lock once the hostgroup
+	 *   is published, and without it only from the constructor, before any
+	 *   other thread can see the hostgroup. Worker threads do not read these
+	 *   strings here: they use their own copy (HostgroupStrings).
 	 */
 	void set_attribute_init_connect(const char* value);
 #ifdef PROXYSQL40
