@@ -301,15 +301,8 @@ void MySQL_Connection::compute_unknown_transaction_status() {
 			// do not change it
 			return;
 		}
-		if (_myerrno >= 1000 && _myerrno < 2000) { // server error
-			unknown_transaction_status = true;
-			return;
-		}
-		if (_myerrno >= 3000 && _myerrno < 4000) { // server error
-			unknown_transaction_status = true;
-			return;
-		}
-		// all other cases, server error
+		// all other cases are server errors (1xxx, 3xxx, and newer ranges such as 4xxx)
+		unknown_transaction_status = true;
 	}
 }
 
@@ -2843,6 +2836,10 @@ void MySQL_Connection::async_free_result() {
 	assert(mysql);
 	//assert(ret_mysql);
 	//assert(async_state_machine==ASYNC_QUERY_END);
+	// Compute the transaction status before freeing anything: 'mysql_stmt_free_result()' clears the
+	// connection-level error (MADB_RESET_ERROR), which would turn the unknown transaction status left by
+	// a failed COM_STMT_EXECUTE into a known 'no transaction'.
+	compute_unknown_transaction_status();
 	if (query.ptr) {
 		query.ptr=NULL;
 		query.length=0;
@@ -2878,7 +2875,6 @@ void MySQL_Connection::async_free_result() {
 			mysql_result=NULL;
 		}
 	}
-	compute_unknown_transaction_status();
 	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {
 		if (MyRS_reuse) {
@@ -2915,7 +2911,9 @@ bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
 	if (mysql) {
 		ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
-		if (ret == false && mysql->net.last_errno && unknown_transaction_status == true) {
+		// 'unknown_transaction_status' is latched when a server response is processed; the connection
+		// error itself may already be cleared (e.g. by 'mysql_stmt_free_result()').
+		if (ret == false && unknown_transaction_status == true) {
 			ret = true;
 		}
 		if (ret == false) {
