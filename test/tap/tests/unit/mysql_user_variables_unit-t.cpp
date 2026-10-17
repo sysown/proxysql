@@ -397,15 +397,20 @@ void test_rejected_value_recovery() {
 		!mysql_user_variable_replay_error_rejects_value(2013) &&
 		!mysql_user_variable_replay_error_rejects_value(ER_SERVER_SHUTDOWN) &&
 		!mysql_user_variable_replay_error_rejects_value(ER_QUERY_INTERRUPTED) &&
-		!mysql_user_variable_replay_error_rejects_value(ER_LOCK_WAIT_TIMEOUT),
-		"client, connection, and transient server errors do not reject the value");
+		!mysql_user_variable_replay_error_rejects_value(ER_LOCK_WAIT_TIMEOUT) &&
+		!mysql_user_variable_replay_error_rejects_value(ER_UNKNOWN_ERROR) &&
+		!mysql_user_variable_replay_error_rejects_value(3032 /* ER_SERVER_OFFLINE_MODE */) &&
+		!mysql_user_variable_replay_error_rejects_value(1820 /* ER_MUST_CHANGE_PASSWORD */),
+		"client, connection, session, server, and unknown errors do not reject the value");
 
 	const auto decimal = [](const std::string& literal) {
 		return assignment("d", "@d", literal, UserVariableLiteralKind::DECIMAL);
 	};
 	ok(mysql_user_variable_literal_overflows_double(decimal("1e999999999")) &&
 		mysql_user_variable_literal_overflows_double(decimal("-1E400")) &&
-		mysql_user_variable_literal_overflows_double(decimal("- .5e309")),
+		mysql_user_variable_literal_overflows_double(decimal("- .5e309")) &&
+		mysql_user_variable_literal_overflows_double(decimal("- /* 1.5 */ 1e999")) &&
+		mysql_user_variable_literal_overflows_double(decimal("-/*9*/-2E+400")),
 		"approximate literals beyond the double range overflow");
 	ok(!mysql_user_variable_literal_overflows_double(decimal("1e308")) &&
 		!mysql_user_variable_literal_overflows_double(decimal("1e-999999")) &&

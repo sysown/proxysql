@@ -1153,8 +1153,10 @@ int main() {
 		const bool rejected = overflow && execute_expect_error(overflow.get(),
 			"/* uv_hg_c */ SET @overflow_keep='keep',@overflow_rejected=1e999999999");
 		const auto count_after = overflow ? tracked_user_variable_count(overflow.get()) : std::nullopt;
+		const auto overflow_lock = overflow ? locked_hostgroup(overflow.get()) : std::nullopt;
 		const auto after = user_variable_counters(admin.get());
-		ok(rejected && count_after && *count_after == 0 && before && after &&
+		ok(rejected && count_after && *count_after == 0 && overflow_lock && *overflow_lock >= 0 &&
+			before && after &&
 			after->fallback_unsupported == before->fallback_unsupported + 1 &&
 			after->assignments == before->assignments,
 			"an overflowing approximate literal is forwarded with its statement and tracks nothing");
