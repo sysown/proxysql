@@ -7592,8 +7592,9 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	if (myds) {
 		// if there is a mysql connection, clean its status
 		if (myds->myconn) {
+			// 'async_free_result()' also computes the transaction status, before freeing
+			// anything that could clear the connection error
 			myds->myconn->async_free_result();
-			myds->myconn->compute_unknown_transaction_status();
 		}
 		myds->free_mysql_real_query();
 	}
