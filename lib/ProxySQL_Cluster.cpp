@@ -184,9 +184,11 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Thread started for peer %s:%d\n", node->hostname, node->port);
 
 	proxy_info("Cluster: starting thread for peer %s:%d\n", node->hostname, node->port);
+#ifdef PROXYSQL40
 	// Peers are configured during startup, before plugins initialize. Do not
 	// sync until the plugin lifecycle has finished (ProxySQL_StartupGate.h).
 	proxysql_startup_gate_wait_for_runtime([] { return glovars.shutdown != 0; });
+#endif /* PROXYSQL40 */
 	char *query1 = (char *)"SELECT GLOBAL_CHECKSUM()"; // in future this will be used for "light check"
 	char *query2 = (char *)"SELECT * FROM stats_mysql_global ORDER BY Variable_Name";
 	char *query3 = (char *)"SELECT * FROM runtime_checksums_values ORDER BY name";
