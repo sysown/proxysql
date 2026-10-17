@@ -434,6 +434,7 @@ public:
 			{
 				std::lock_guard<std::mutex> guard(failure_context.status_mutex);
 				failure_context.status.metadata_available = false;
+				if (failure_context.status.state == "ready") failure_context.status.state = "degraded";
 			}
 			if (failure_context.metrics.metadata_available) {
 				failure_context.metrics.metadata_available->Set(0);
@@ -477,6 +478,7 @@ public:
 					std::lock_guard<std::mutex> guard(context.status_mutex);
 					context.status.metadata_available = false;
 					context.status.registration_exists = true;
+					if (context.status.state == "ready") context.status.state = "degraded";
 				}
 				return snapshot;
 			}
@@ -672,7 +674,10 @@ public:
 		MysqlRouterContext& context = mysql_router_context();
 		std::lock_guard<std::mutex> guard(context.status_mutex);
 		context.status.gates_ready = ready;
-		if (ready) context.status.state = "ready";
+		// Open gates alone do not make the Router ready: an active issue or
+		// unavailable metadata keeps it degraded (#6447).
+		if (ready) context.status.state = context.status.last_error.empty() &&
+			context.status.metadata_available ? "ready" : "degraded";
 		else if (context.status.state != "registration_missing") context.status.state = "degraded";
 	}
 
@@ -716,7 +721,9 @@ public:
 		MysqlRouterContext& context = mysql_router_context();
 		std::lock_guard<std::mutex> guard(context.status_mutex);
 		context.status.last_error.clear();
-		if (context.status.gates_ready) context.status.state = "ready";
+		if (context.status.gates_ready) {
+			context.status.state = context.status.metadata_available ? "ready" : "degraded";
+		}
 	}
 
 	void record_refresh(std::string_view kind, bool success, uint64_t from,

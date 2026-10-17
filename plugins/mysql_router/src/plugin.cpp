@@ -149,8 +149,8 @@ bool runtime_ready(ProxySQL_PluginRuntimeContext* runtime_context) {
 			context.status.gates_ready = result.gates_ready;
 			if (!result.topology_error.empty()) context.status.last_error = result.topology_error;
 			else if (!result.user_error.empty()) context.status.last_error = result.user_error;
-			context.status.state = result.gates_ready && context.status.last_error.empty()
-				? "ready" : "degraded";
+			context.status.state = result.gates_ready && context.status.last_error.empty() &&
+				context.status.metadata_available ? "ready" : "degraded";
 		}
 		return context.reconciler->start(false);
 	} catch (const std::exception& error) {
@@ -215,8 +215,8 @@ ProxySQL_PluginCommandResult force_reconcile(
 			context.status.gates_ready = result.gates_ready;
 			if (!result.topology_error.empty()) context.status.last_error = result.topology_error;
 			else if (!result.user_error.empty()) context.status.last_error = result.user_error;
-			context.status.state = result.gates_ready && context.status.last_error.empty()
-				? "ready" : "degraded";
+			context.status.state = result.gates_ready && context.status.last_error.empty() &&
+				context.status.metadata_available ? "ready" : "degraded";
 		}
 		const bool success = result.topology_error.empty() && result.user_error.empty();
 		uint64_t collisions = 0;
