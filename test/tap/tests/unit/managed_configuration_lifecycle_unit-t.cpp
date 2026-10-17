@@ -69,7 +69,13 @@ std::unique_ptr<ProxySQL_PluginManager> provider(std::string& error) {
 }
 }
 int main() {
- plan(28); test_init_minimal();
+ plan(29); test_init_minimal();
+ const char* removed_option[] = {"proxysql", "--foreground", "--aws-managed-bootstrap", "manifest.json", "--exit-on-error"};
+ GloVars.parse(5, removed_option);
+ bool rejected_bootstrap = false;
+ for (const auto* argument : GloVars.opt->unknownArgs)
+  rejected_bootstrap |= *argument == "--aws-managed-bootstrap";
+ ok(rejected_bootstrap, "manual managed bootstrap is no longer a registered CLI option");
  char path[] = "/tmp/proxysql_managed_lifecycle.XXXXXX";
  int fd = mkstemp(path);
  if (fd < 0) BAIL_OUT("cannot create private managed lifecycle log");
@@ -103,7 +109,8 @@ int main() {
  GloVars.cluster_sync_interfaces = cluster_sync_interfaces;
  const auto restored = events();
  ok(restored.find("web_bound") < restored.find("restore"), "web binds before restoration");
- ok(restored.find("bootstrap") == std::string::npos, "normal startup does not initialize empty deployment");
+ ok(restored.find("bootstrap") == std::string::npos,
+    "normal managed startup selects restore instead of explicit bootstrap");
  clear_events(); const std::string manifest = "{\"installation\":true}";
  ok(proxysql_start_managed_configuration(manager.get(), &web, bind, &manifest, error),
     "local bootstrap goes through same required service");

@@ -26,7 +26,7 @@ struct ABI14Descriptor {
 };
 }
 int main() {
- plan(13); test_init_minimal();
+ plan(10); test_init_minimal();
  ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 15u, "abi15_debug_prefix_compatible: layout is ABI15");
  ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 15u,
     "ABI15 retains independent DEBUG tagging");
@@ -46,16 +46,7 @@ int main() {
  service.struct_size = sizeof(service); service.restore = nullptr;
  ok(!proxysql_validate_managed_configuration_service(&service, error), "managed restore callback required");
  ok(!proxysql_validate_managed_configuration_service(nullptr, error), "missing service rejected");
- const char* args[] = {"unit", "--aws-managed-bootstrap=/tmp/local-manifest.json"};
- GloVars.parse(2, args);
- ok(GloVars.opt->isSet("--aws-managed-bootstrap"), "documented bootstrap equals syntax is parsed");
- std::string manifest;
- GloVars.opt->get("--aws-managed-bootstrap")->getString(manifest);
- ok(manifest == "/tmp/local-manifest.json", "bootstrap manifest path is preserved");
- GloVars.global.foreground = false;
- glovars.proxy_restart_on_error = true;
- GloVars.process_opts_pre();
- ok(GloVars.global.foreground, "bootstrap defaults to synchronous foreground execution");
- ok(!glovars.proxy_restart_on_error, "bootstrap defaults to one invocation without supervisor retries");
+ ok(GloVars.opt->get("--aws-managed-bootstrap") == nullptr,
+    "manual managed bootstrap option is absent from the CLI contract");
  test_cleanup_minimal(); return exit_status();
 }
