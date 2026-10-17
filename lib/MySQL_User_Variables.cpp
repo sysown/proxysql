@@ -4,6 +4,9 @@
 #include "openssl/rand.h"
 #include "proxysql.h"
 
+#include <cerrno>
+#include <cmath>
+#include <cstdlib>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
@@ -108,6 +111,16 @@ void MySQL_User_Variable_State::apply(const std::vector<UserVariableAssignment>&
 	if (stage(assignments, staged) == MySQL_User_Variable_Apply_Result::OK) {
 		*this = staged;
 	}
+}
+
+bool MySQL_User_Variable_State::remove_exact(const UserVariableAssignment& assignment) {
+	const auto existing = entries_.find(assignment.canonical_name);
+	if (existing == entries_.end() || !existing->second.exactly_equals(entry_from(assignment))) {
+		return false;
+	}
+	stored_bytes_ -= existing->second.stored_bytes();
+	entries_.erase(existing);
+	return true;
 }
 
 void MySQL_User_Variable_State::clear() {
@@ -216,6 +229,77 @@ MySQL_User_Variable_Replay_Packet_Budget mysql_user_variable_replay_packet_budge
 			: MySQL_User_Variable_Replay_Packet_Budget_Status::OK,
 		packet_limit - framing_bytes
 	};
+}
+
+std::vector<MySQL_User_Variable_Replay_Batch> mysql_user_variable_split_replay_batch(
+	const MySQL_User_Variable_Replay_Batch& batch) {
+	std::vector<MySQL_User_Variable_Replay_Batch> singles;
+	singles.reserve(batch.assignments.size());
+	for (const UserVariableAssignment& assignment : batch.assignments) {
+		MySQL_User_Variable_Replay_Batch single;
+		single.sql = "SET " + assignment.replay_target + "=" + assignment.raw_literal;
+		single.assignments.push_back(assignment);
+		singles.push_back(std::move(single));
+	}
+	return singles;
+}
+
+bool mysql_user_variable_replay_error_rejects_value(unsigned int backend_error_code) {
+	if (backend_error_code == 0) {
+		return false;
+	}
+	// 2000-2999 are client library errors (lost connection, timeouts, ...).
+	if (backend_error_code >= 2000 && backend_error_code < 3000) {
+		return false;
+	}
+	switch (backend_error_code) {
+		case 1040: // ER_CON_COUNT_ERROR
+		case 1041: // ER_OUT_OF_RESOURCES
+		case 1043: // ER_HANDSHAKE_ERROR
+		case 1047: // ER_UNKNOWN_COM_ERROR
+		case 1053: // ER_SERVER_SHUTDOWN
+		case 1152: // ER_ABORTING_CONNECTION
+		case 1153: // ER_NET_PACKET_TOO_LARGE
+		case 1154: // ER_NET_READ_ERROR_FROM_PIPE
+		case 1155: // ER_NET_FCNTL_ERROR
+		case 1156: // ER_NET_PACKETS_OUT_OF_ORDER
+		case 1157: // ER_NET_UNCOMPRESS_ERROR
+		case 1158: // ER_NET_READ_ERROR
+		case 1159: // ER_NET_READ_INTERRUPTED
+		case 1160: // ER_NET_ERROR_ON_WRITE
+		case 1161: // ER_NET_WRITE_INTERRUPTED
+		case 1203: // ER_TOO_MANY_USER_CONNECTIONS
+		case 1205: // ER_LOCK_WAIT_TIMEOUT
+		case 1213: // ER_LOCK_DEADLOCK
+		case 1226: // ER_USER_LIMIT_REACHED
+		case 1290: // ER_OPTION_PREVENTS_STATEMENT
+		case 1317: // ER_QUERY_INTERRUPTED
+		case 1927: // ER_CONNECTION_KILLED (MariaDB)
+		case 3024: // ER_QUERY_TIMEOUT
+		case 3169: // ER_SESSION_WAS_KILLED
+		case 4031: // ER_CLIENT_INTERACTION_TIMEOUT
+			return false;
+		default:
+			return true;
+	}
+}
+
+bool mysql_user_variable_literal_overflows_double(const UserVariableAssignment& assignment) {
+	if (assignment.kind != UserVariableLiteralKind::DECIMAL) {
+		return false;
+	}
+	const std::string& literal = assignment.raw_literal;
+	if (literal.find_first_of("eE") == std::string::npos) {
+		return false; // an exact DECIMAL literal: MySQL does not reject it as a double
+	}
+	// Skip a unary sign and any whitespace before the number itself.
+	const size_t number_start = literal.find_first_of("0123456789.");
+	if (number_start == std::string::npos) {
+		return false;
+	}
+	errno = 0;
+	const double value = std::strtod(literal.c_str() + number_start, nullptr);
+	return errno == ERANGE && std::isinf(value);
 }
 
 std::string MySQL_User_Variable_State::diagnostic_fingerprint() const {

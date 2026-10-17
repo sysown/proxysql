@@ -1145,16 +1145,24 @@ int main() {
 		"plain reads, comparisons, strings, and comments containing at-signs remain unlocked");
 
 	{
-		MysqlPtr deferred = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
-		const bool staged = deferred && execute(deferred.get(), "SET @deferred_rejected=1e999999999");
-		const auto state = deferred ? internal_session(deferred.get()) : std::nullopt;
-		ok(staged && state && state->value("backends", json::array()).empty(),
-			"a parsed literal is acknowledged locally before backend semantic validation");
+		// MySQL rejects an approximate literal beyond the double range at parse
+		// time. It must not be acknowledged locally: a deferred replay of it could
+		// never succeed and would fail every later query of the session.
+		MysqlPtr overflow = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 		const auto before = user_variable_counters(admin.get());
-		const bool failed = deferred && execute_expect_error(deferred.get(), "SELECT 1");
+		const bool rejected = overflow && execute_expect_error(overflow.get(),
+			"/* uv_hg_c */ SET @overflow_keep='keep',@overflow_rejected=1e999999999");
+		const auto count_after = overflow ? tracked_user_variable_count(overflow.get()) : std::nullopt;
 		const auto after = user_variable_counters(admin.get());
-		ok(failed && before && after && after->replay_failures == before->replay_failures + 1,
-			"a backend rejection during deferred replay fails the pending query");
+		ok(rejected && count_after && *count_after == 0 && before && after &&
+			after->fallback_unsupported == before->fallback_unsupported + 1 &&
+			after->assignments == before->assignments,
+			"an overflowing approximate literal is forwarded with its statement and tracks nothing");
+		const bool later_query = overflow &&
+			scalar_equals(overflow.get(), "/* uv_hg_c */ SELECT @overflow_keep IS NULL", "1");
+		const auto after_query = user_variable_counters(admin.get());
+		ok(later_query && after_query && after && after_query->replay_failures == after->replay_failures,
+			"the session keeps working after the backend rejects the overflowing literal");
 	}
 	MysqlPtr rejected_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	const auto rejected_counter_before = user_variable_counters(admin.get());

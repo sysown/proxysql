@@ -120,6 +120,7 @@ public:
 		const std::vector<UserVariableAssignment>& assignments,
 		MySQL_User_Variable_State& staged) const;
 	void apply(const std::vector<UserVariableAssignment>& assignments);
+	bool remove_exact(const UserVariableAssignment& assignment);
 	void clear();
 	size_t size() const;
 	size_t stored_bytes() const;
@@ -145,6 +146,21 @@ MySQL_User_Variable_Replay_Completion mysql_user_variable_replay_complete(
 
 MySQL_User_Variable_Replay_Packet_Budget mysql_user_variable_replay_packet_budget(
 	uint32_t max_allowed_pkt, size_t framing_bytes);
+
+// One replay batch per assignment, in the same order, so that a value the backend
+// rejects can be identified and dropped without losing the other assignments.
+std::vector<MySQL_User_Variable_Replay_Batch> mysql_user_variable_split_replay_batch(
+	const MySQL_User_Variable_Replay_Batch& batch);
+
+// True when a replay SET failed because the backend rejected a value (a server
+// error about the statement), as opposed to a client, network, or transient
+// server condition after which the same assignment could still succeed.
+bool mysql_user_variable_replay_error_rejects_value(unsigned int backend_error_code);
+
+// True for an approximate-number literal (one with an exponent) whose magnitude
+// overflows a double. MySQL rejects such a literal at parse time, so it cannot be
+// acknowledged locally and validated later.
+bool mysql_user_variable_literal_overflows_double(const UserVariableAssignment& assignment);
 
 UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
 	const char* query, size_t query_length);

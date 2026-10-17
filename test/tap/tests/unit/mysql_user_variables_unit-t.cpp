@@ -365,8 +365,58 @@ void test_replay_error_code_policy() {
 
 } // namespace
 
+void test_rejected_value_recovery() {
+	const auto alpha = assignment("alpha", "@alpha", "'one'");
+	const auto bravo = assignment("bravo", "@Bravo", "1e999999999", UserVariableLiteralKind::DECIMAL, 7);
+	MySQL_User_Variable_State desired;
+	ok(stage_and_apply(desired, { alpha, bravo }) && desired.size() == 2,
+		"two desired assignments stage");
+	ok(!desired.remove_exact(assignment("bravo", "@Bravo", "2", UserVariableLiteralKind::DECIMAL, 7)) &&
+		desired.size() == 2, "remove_exact leaves an entry whose value has changed");
+	const size_t bytes_before = desired.stored_bytes();
+	ok(desired.remove_exact(bravo) && desired.size() == 1 &&
+		desired.stored_bytes() == bytes_before - (bravo.replay_target.size() + bravo.raw_literal.size()),
+		"remove_exact drops the exact rejected entry and its bytes");
+	ok(!desired.remove_exact(bravo), "remove_exact of a missing entry is a no-op");
+
+	MySQL_User_Variable_Replay_Batch batch;
+	batch.sql = "SET @alpha='one',@Bravo=1e999999999";
+	batch.assignments = { alpha, bravo };
+	const auto singles = mysql_user_variable_split_replay_batch(batch);
+	ok(singles.size() == 2 && singles[0].sql == "SET @alpha='one'" &&
+		singles[1].sql == "SET @Bravo=1e999999999" &&
+		singles[0].assignments.size() == 1 && singles[0].assignments[0].canonical_name == "alpha" &&
+		singles[1].assignments.size() == 1 && singles[1].assignments[0].canonical_name == "bravo",
+		"a failed batch splits into one ordered replay per assignment");
+
+	ok(mysql_user_variable_replay_error_rejects_value(ER_ILLEGAL_VALUE_FOR_TYPE) &&
+		mysql_user_variable_replay_error_rejects_value(ER_DATA_OUT_OF_RANGE) &&
+		mysql_user_variable_replay_error_rejects_value(ER_PARSE_ERROR),
+		"server errors about the statement reject the value");
+	ok(!mysql_user_variable_replay_error_rejects_value(0) &&
+		!mysql_user_variable_replay_error_rejects_value(2013) &&
+		!mysql_user_variable_replay_error_rejects_value(ER_SERVER_SHUTDOWN) &&
+		!mysql_user_variable_replay_error_rejects_value(ER_QUERY_INTERRUPTED) &&
+		!mysql_user_variable_replay_error_rejects_value(ER_LOCK_WAIT_TIMEOUT),
+		"client, connection, and transient server errors do not reject the value");
+
+	const auto decimal = [](const std::string& literal) {
+		return assignment("d", "@d", literal, UserVariableLiteralKind::DECIMAL);
+	};
+	ok(mysql_user_variable_literal_overflows_double(decimal("1e999999999")) &&
+		mysql_user_variable_literal_overflows_double(decimal("-1E400")) &&
+		mysql_user_variable_literal_overflows_double(decimal("- .5e309")),
+		"approximate literals beyond the double range overflow");
+	ok(!mysql_user_variable_literal_overflows_double(decimal("1e308")) &&
+		!mysql_user_variable_literal_overflows_double(decimal("1e-999999")) &&
+		!mysql_user_variable_literal_overflows_double(decimal(std::string(80, '9') + ".5")) &&
+		!mysql_user_variable_literal_overflows_double(
+			assignment("s", "@s", "'1e999999999'", UserVariableLiteralKind::STRING)),
+		"in-range, underflowing, exact DECIMAL, and string literals do not overflow");
+}
+
 int main() {
-	plan(74);
+	plan(83);
 	const int init_result = test_init_minimal();
 	ok(init_result == 0, "test_init_minimal() succeeds");
 	test_staging_and_limits();
@@ -379,6 +429,7 @@ int main() {
 	test_connection_state_integration();
 	test_simple_command_log_redaction();
 	test_replay_error_code_policy();
+	test_rejected_value_recovery();
 	test_cleanup_minimal();
 	return exit_status();
 }

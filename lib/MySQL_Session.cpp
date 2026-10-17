@@ -7668,6 +7668,32 @@ bool MySQL_Session::handler_again___status_SETTING_USER_VARIABLES(int* rc) {
 	}
 
 	const unsigned int error_code = mysql_errno(myconn->mysql);
+	// ASYNC_QUERY_END: the backend answered the SET with an error. A -1 without it
+	// (e.g. an unhealthy connection) leaves only a stale mysql_errno().
+	if (command_rc == -1 && myconn->async_state_machine == ASYNC_QUERY_END &&
+		mysql_user_variable_replay_error_rejects_value(error_code)) {
+		const MySQL_User_Variable_Replay_Batch failed_batch = batch;
+		if (failed_batch.assignments.size() > 1) {
+			// The backend rejected one of several values. Replay them one at a time
+			// on the same backend, so the next failure names the rejected assignment;
+			// repeating the ones the backend may already hold is harmless.
+			std::vector<MySQL_User_Variable_Replay_Batch> singles =
+				mysql_user_variable_split_replay_batch(failed_batch);
+			user_variable_replay_batches.erase(
+				user_variable_replay_batches.begin() + user_variable_replay_batch_index);
+			user_variable_replay_batches.insert(
+				user_variable_replay_batches.begin() + user_variable_replay_batch_index,
+				singles.begin(), singles.end());
+			myconn->async_state_machine = ASYNC_IDLE;
+			myds->revents |= POLLOUT;
+			return true;
+		}
+		// Forget the rejected value, so later queries do not replay it again. The
+		// other tracked values stay desired and are replayed when needed.
+		if (failed_batch.assignments.size() == 1 && client_myds && client_myds->myconn) {
+			client_myds->myconn->user_variables.remove_exact(failed_batch.assignments.front());
+		}
+	}
 	const char* sqlstate = error_code ? mysql_sqlstate(myconn->mysql) : "HY000";
 	const char* error_message = error_code ? mysql_error(myconn->mysql) : "User-variable replay failed";
 	handler_again___fail_user_variable_replay(
@@ -8485,6 +8511,17 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (accepts_new_udv_assignments && raw_query_has_at) {
 		UserVariableSetAnalysis analysis = parsersql_analyze_user_variable_set_mysql(
 			raw_query, CurrentQuery.QueryLength);
+		if (analysis.status == UserVariableSetStatus::SUPPORTED) {
+			// A literal MySQL rejects at parse time must reach the backend with the
+			// statement: acknowledging it locally would defer an error that can never
+			// succeed to every later query that replays it.
+			for (const UserVariableAssignment& assignment : analysis.assignments) {
+				if (mysql_user_variable_literal_overflows_double(assignment)) {
+					analysis.status = UserVariableSetStatus::UNSUPPORTED;
+					break;
+				}
+			}
+		}
 		if (analysis.is_set_statement) {
 			switch (analysis.status) {
 			case UserVariableSetStatus::SUPPORTED: {

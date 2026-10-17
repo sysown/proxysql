@@ -91,6 +91,20 @@ leave partial state on that backend, which is retired rather than reused. The
 failure is returned for the pending client query; backend semantic validation
 is therefore deferred until the state is needed.
 
+A literal that MySQL rejects at parse time is not acknowledged locally. An
+approximate-number literal (one with an exponent) whose magnitude overflows a
+double, such as `1e999999999`, makes the whole statement fall back, so the
+backend returns its error for the `SET` itself and nothing is tracked.
+
+If a backend still rejects a tracked value during replay, ProxySQL identifies
+the rejected assignment: a failed multi-assignment replay is retried on the same
+backend one assignment at a time. The rejected assignment is removed from the
+frontend's tracked state and its error is returned for the pending query; the
+other tracked values stay and are replayed when needed, so later queries do not
+fail on the same value again. Client, connection, and transient server errors
+(for example a lost connection, a killed query, or a lock wait timeout) do not
+remove anything.
+
 ### Mixed user/session-variable assignments
 
 Mode `1` also tracks statements containing literal user-variable assignments
