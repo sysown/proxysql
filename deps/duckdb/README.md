@@ -45,6 +45,17 @@ DUCKDB_IDIR := $(DUCKDB_PATH)/src/include
 DUCKDB_LDIR := $(DUCKDB_PATH)/build/release/src
 ```
 
+The plugin needs the complete static archive set, not only
+`libduckdb_static.a`. `list-static-archives.sh` reads the generated
+`build/release/DuckDBExports.cmake` and rejects any missing or empty archive
+before linking. It also validates existing builds on an incremental invocation.
+The expected set is configuration-dependent: the normal macOS build has 15
+archives, while the normal Linux build has 16 because DuckDB adds its jemalloc
+extension there. No platform-independent minimum count is used. A missing
+manifest requires reconfiguring/rebuilding DuckDB; it must not be bypassed by
+adding unrelated archives. Build-relative paths permit relocated dependency
+caches, provided the complete configured set and its manifest are copied.
+
 Note: `targets += duckdb` in `deps/Makefile`'s `PROXYSQL40` block only wires
 the target into the top-level `default` target of `deps/Makefile` itself.
 The top-level repo `Makefile`'s `build_deps_default` /
