@@ -11,7 +11,7 @@ Ensure you have [Homebrew](https://brew.sh/) installed.
 Run the following command to install the required build tools and libraries:
 
 ```bash
-brew install automake bzip2 cmake make git gpatch gnutls openssl@3 icu4c pkg-config libiconv libtool zlib
+brew install automake bzip2 cmake gettext make git gpatch gnutls openssl@3 icu4c pkg-config libiconv libtool zlib
 ```
 
 ## Compilation Steps
@@ -20,8 +20,13 @@ To compile ProxySQL, you must set the following environment variables so the bui
 
 ### 1. Set Environment Variables
 
+Homebrew installs GNU Make as `gmake`. Put its `gnubin` directory first in
+`PATH` so that `make` runs GNU Make: Apple's bundled Make is too old for the
+build and for some of the test Makefiles.
+
 ```bash
 export PATH="/opt/homebrew/bin:$PATH"
+export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
 export PKG_CONFIG_PATH="/opt/homebrew/opt/openssl@3/lib/pkgconfig:$PKG_CONFIG_PATH"
 export OPENSSL_ROOT_DIR="/opt/homebrew/opt/openssl@3"
 ```
@@ -46,7 +51,7 @@ the old `build_*_legacy` targets are compatibility aliases for the normal build.
 Compiling the support does not start the ClickHouse listener: use the
 `--clickhouse-server` runtime option when you want to enable it.
 
-For the v4 plugin chassis, build with `gmake -j$(sysctl -n hw.ncpu) PROXYSQL40=1`.
+For the v4 plugin chassis, build with `make -j$(sysctl -n hw.ncpu) PROXYSQL40=1`.
 Existing macOS/FreeBSD checkouts need a **clean rebuild of core and all plugins**
 when updating to this default; an incremental `make` can reuse incompatible
 objects built without ClickHouse. The same clean-rebuild requirement applies
@@ -59,12 +64,12 @@ must use that same value for **all** plugins, including the WebUI plugin.
 
 ### Local build regression checks
 
-Use Homebrew GNU Make for the CI checks as well as the build: Apple's bundled
-Make is too old for some of the test Makefiles. The shell checks below also
-work with macOS's bundled Bash 3.2.
+Run the CI checks with the same environment as the build (step 1), so that
+`make` is Homebrew GNU Make. `run-ci-lint.bash` also needs `envsubst`, which
+the `gettext` formula in the prerequisites provides. The shell checks below
+also work with macOS's bundled Bash 3.2.
 
 ```bash
-export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
 python3 -m unittest discover -s test/infra/control -p 'test_*.py'
 CI_ENGINE_REF="$(cat .github/ci-tier-engine-ref)" bash test/infra/control/run-ci-lint.bash
 ```
