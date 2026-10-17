@@ -37,10 +37,21 @@ struct UserVariableAssignment {
 	uint64_t hash;
 };
 
+enum class MixedSetSessionVariable : uint8_t {
+	MAX_EXECUTION_TIME,
+	WAIT_TIMEOUT
+};
+
+struct MixedSetSessionAssignment {
+	MixedSetSessionVariable variable;
+	uint32_t value;
+};
+
 struct UserVariableSetAnalysis {
 	UserVariableSetStatus status { UserVariableSetStatus::NOT_USER_VARIABLE_SET };
 	bool is_set_statement { false };
 	std::vector<UserVariableAssignment> assignments;
+	std::vector<MixedSetSessionAssignment> session_assignments;
 };
 
 struct MySQL_User_Variable_Entry {

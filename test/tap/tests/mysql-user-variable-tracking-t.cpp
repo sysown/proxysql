@@ -635,6 +635,140 @@ int main() {
 	if (!fixture_configured) {
 		return exit_status();
 	}
+	// The SET itself is local on every backend flavor. Only backend inspection
+	// of MySQL's max_execution_time depends on server support.
+	const bool supports_max_execution_time =
+		mysql_query(direct.get(), "SELECT @@session.max_execution_time") == 0;
+	if (supports_max_execution_time) {
+		MysqlResultPtr result(mysql_store_result(direct.get()), &mysql_free_result);
+	}
+	{
+		MysqlPtr local = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const bool assigned = local && execute(local.get(), "SET @local_only='first'") &&
+			execute(local.get(), "SET @local_only='last'");
+		const auto state = local ? internal_session(local.get()) : std::nullopt;
+		ok(assigned && state && state->value("backends", json::array()).empty(),
+			"parsed user-variable SETs return OK without creating a backend");
+	}
+	for (bool with_timeout : {false, true}) {
+		MysqlPtr mixed = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const std::string query =
+			"/* uv_hg_a */ SET @mixed_tag='web', SESSION max_execution_time=1000" +
+			std::string(with_timeout ? ", SESSION wait_timeout=600" : "");
+		const bool assigned = mixed && execute(mixed.get(), query);
+		const auto count = mixed ? tracked_user_variable_count(mixed.get()) : std::nullopt;
+		const auto locked = mixed ? locked_hostgroup(mixed.get()) : std::nullopt;
+		const auto mixed_state = mixed ? internal_session(mixed.get()) : std::nullopt;
+		ok(assigned && count && *count == 1 && locked && *locked == -1 &&
+			mixed_state && mixed_state->at("conn").value("max_execution_time", "") == "1000" &&
+			(!with_timeout || mixed_state->value("wait_timeout", 0ULL) == 600000),
+			"mixed SET%s tracks the user variable without locking the hostgroup",
+			with_timeout ? " with wait_timeout" : "");
+
+		ok(assigned && mixed_state && mixed_state->value("backends", json::array()).empty(),
+			"parsed mixed SET%s returns OK without creating a backend",
+			with_timeout ? " with wait_timeout" : "");
+
+		std::array<std::optional<ResultCell>, 2> ids;
+		bool replayed = mixed != nullptr;
+		for (size_t i = 0; i < ids.size() && mixed; ++i) {
+			const std::string route = i == 0 ? "/* uv_hg_a */ " : "/* uv_hg_b */ ";
+			replayed = execute(mixed.get(), route + "START TRANSACTION") && replayed;
+			ids[i] = query_scalar(mixed.get(), route + "SELECT CONNECTION_ID()");
+			const auto values = query_result(mixed.get(),
+				route + "SELECT @mixed_tag,@@session.wait_timeout=@@global.wait_timeout" +
+				(supports_max_execution_time ? ",@@session.max_execution_time" : ""));
+			replayed = values && values->rows.size() == 1 &&
+				values->rows[0].size() == (supports_max_execution_time ? 3U : 2U) &&
+				values->rows[0][0].bytes == "web" && values->rows[0][1].bytes == "1" &&
+				(!supports_max_execution_time || values->rows[0][2].bytes == "1000") && replayed;
+			replayed = execute(mixed.get(), "ROLLBACK") && replayed;
+		}
+		ok(replayed && ids[0] && ids[1] && ids[0]->bytes != ids[1]->bytes,
+			"mixed SET%s synchronizes values on different backends without sending wait_timeout",
+			with_timeout ? " with wait_timeout" : "");
+		mixed.reset();
+		MysqlPtr other = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const auto clean = other ? query_result(other.get(),
+			"/* uv_hg_a */ SELECT @mixed_tag IS NULL,@@session.wait_timeout=@@global.wait_timeout")
+			: std::nullopt;
+		ok(clean && clean->rows.size() == 1 && clean->rows[0].size() == 2 &&
+			clean->rows[0][0].bytes == "1" && clean->rows[0][1].bytes == "1",
+			"another client inherits neither the mixed user variable nor backend timeout");
+	}
+	{
+		MysqlPtr mixed = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const bool initial = mixed && execute(mixed.get(),
+			"SET @mixed_tag='old',max_execution_time=900");
+		const auto before = mixed ? user_variable_aggregate(mixed.get()) : std::nullopt;
+		const auto session_before = mixed ? internal_session(mixed.get()) : std::nullopt;
+		const bool rejected = mixed && execute_expect_error(mixed.get(),
+			"SET @mixed_tag=1e999999999+0,max_execution_time=1000,wait_timeout=600");
+		const auto after = mixed ? user_variable_aggregate(mixed.get()) : std::nullopt;
+		const auto session_after = mixed ? internal_session(mixed.get()) : std::nullopt;
+		const auto values = mixed ? query_result(mixed.get(),
+			std::string("SELECT @mixed_tag") +
+				(supports_max_execution_time ? ",@@session.max_execution_time" : "")) : std::nullopt;
+		const auto rejected_lock = mixed ? locked_hostgroup(mixed.get()) : std::nullopt;
+		ok(initial && rejected && rejected_lock && *rejected_lock >= 0 &&
+			before && after && aggregates_equal(*before, *after) &&
+			session_before && session_after &&
+			session_before->at("conn").value("max_execution_time", "") == "900" &&
+			session_after->at("conn").value("max_execution_time", "") == "900" &&
+			session_before->value("wait_timeout", 0ULL) == session_after->value("wait_timeout", 1ULL) &&
+			values && values->rows.size() == 1 &&
+			values->rows[0].size() == (supports_max_execution_time ? 2U : 1U) &&
+			values->rows[0][0].bytes == "old" &&
+			(!supports_max_execution_time || values->rows[0][1].bytes == "900"),
+			"unsupported mixed SET is forwarded, locks the hostgroup, and preserves tracked state on error");
+		mixed = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const bool transaction = mixed && execute(mixed.get(), "START TRANSACTION");
+		const auto attached_before = mixed ? internal_session(mixed.get()) : std::nullopt;
+		const bool updated = mixed && execute(mixed.get(),
+			"SET @mixed_tag='transaction',max_execution_time=1000,wait_timeout=600");
+		const bool still_active = mixed && (mixed->server_status & SERVER_STATUS_IN_TRANS);
+		const auto attached_after = mixed ? internal_session(mixed.get()) : std::nullopt;
+		ok(transaction && updated && still_active && attached_before && attached_after &&
+			attached_before->at("backends") == attached_after->at("backends"),
+			"parsed mixed SET changes no attached backend and preserves transaction status");
+		const auto synced = mixed ? query_result(mixed.get(),
+			std::string("SELECT @mixed_tag,@@session.wait_timeout=@@global.wait_timeout") +
+				(supports_max_execution_time ? ",@@session.max_execution_time" : "")) : std::nullopt;
+		ok(synced && synced->rows.size() == 1 &&
+			synced->rows[0].size() == (supports_max_execution_time ? 3U : 2U) &&
+			synced->rows[0][0].bytes == "transaction" && synced->rows[0][1].bytes == "1" &&
+			(!supports_max_execution_time || synced->rows[0][2].bytes == "1000") &&
+			execute(mixed.get(), "ROLLBACK"),
+			"the next query synchronizes the attached backend without changing backend wait_timeout");
+		const auto replays_before_unchanged = user_variable_counters(admin.get());
+		const bool unchanged = mixed && execute(mixed.get(),
+			"SET @mixed_tag='transaction',max_execution_time=1000,wait_timeout=600") &&
+			scalar_equals(mixed.get(), "SELECT @mixed_tag", "transaction");
+		const auto replays_after_unchanged = user_variable_counters(admin.get());
+		ok(unchanged && replays_before_unchanged && replays_after_unchanged &&
+			replays_before_unchanged->replay_commands == replays_after_unchanged->replay_commands,
+			"unchanged tracked values need no user-variable replay before the next query");
+		const auto timeout_commands_before = query_scalar(admin.get(),
+			"SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='mysql_set_wait_timeout_commands'");
+		const bool repeated = mixed && execute(mixed.get(),
+			"SET @mixed_tag='first',wait_timeout=600,max_execution_time=001000,"
+			"wait_timeout=500,max_execution_time=2000,@mixed_tag='last'");
+		const auto repeated_state = mixed ? internal_session(mixed.get()) : std::nullopt;
+		const auto repeated_values = mixed ? query_result(mixed.get(),
+			std::string("SELECT @mixed_tag") +
+				(supports_max_execution_time ? ",@@session.max_execution_time" : "")) : std::nullopt;
+		const auto timeout_commands_after = query_scalar(admin.get(),
+			"SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='mysql_set_wait_timeout_commands'");
+		ok(repeated && repeated_state && repeated_state->value("wait_timeout", 0ULL) == 500000 &&
+			repeated_state->at("conn").value("max_execution_time", "") == "2000" &&
+			repeated_values && repeated_values->rows.size() == 1 &&
+			repeated_values->rows[0].size() == (supports_max_execution_time ? 2U : 1U) &&
+			repeated_values->rows[0][0].bytes == "last" &&
+			(!supports_max_execution_time || repeated_values->rows[0][1].bytes == "2000") &&
+			timeout_commands_before && timeout_commands_after &&
+			std::stoull(timeout_commands_after->bytes) == std::stoull(timeout_commands_before->bytes) + 1,
+			"repeated mixed targets keep the last values and count one timeout command");
+	}
 	MysqlPtr proxy = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	if (!proxy) {
 		ok(false, "frontend test connection is available");
@@ -1001,12 +1135,24 @@ int main() {
 	ok(read_only_cases_unlocked,
 		"plain reads, comparisons, strings, and comments containing at-signs remain unlocked");
 
+	{
+		MysqlPtr deferred = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const bool staged = deferred && execute(deferred.get(), "SET @deferred_rejected=1e999999999");
+		const auto state = deferred ? internal_session(deferred.get()) : std::nullopt;
+		ok(staged && state && state->value("backends", json::array()).empty(),
+			"a parsed literal is acknowledged locally before backend semantic validation");
+		const auto before = user_variable_counters(admin.get());
+		const bool failed = deferred && execute_expect_error(deferred.get(), "SELECT 1");
+		const auto after = user_variable_counters(admin.get());
+		ok(failed && before && after && after->replay_failures == before->replay_failures + 1,
+			"a backend rejection during deferred replay fails the pending query");
+	}
 	MysqlPtr rejected_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	const auto rejected_counter_before = user_variable_counters(admin.get());
 	const auto rejected_count_before = rejected_session
 		? tracked_user_variable_count(rejected_session.get()) : std::nullopt;
 	const bool rejected_by_backend = rejected_session &&
-		execute_expect_error(rejected_session.get(), "SET @backend_rejected=1e999999999");
+		execute_expect_error(rejected_session.get(), "SET @backend_rejected=1e999999999+0");
 	const auto rejected_count_after = rejected_session
 		? tracked_user_variable_count(rejected_session.get()) : std::nullopt;
 	const auto rejected_counter_after = user_variable_counters(admin.get());
@@ -1027,7 +1173,8 @@ int main() {
 		first_128 += "@limit_" + std::to_string(i) + "=" + std::to_string(i);
 	}
 	const bool first_128_staged = variable_limit_session &&
-		execute(variable_limit_session.get(), first_128);
+		execute(variable_limit_session.get(), first_128) &&
+		scalar_equals(variable_limit_session.get(), "/* uv_hg_a */ SELECT @limit_127", "127");
 	const auto variable_limit_aggregate_before = variable_limit_session
 		? user_variable_aggregate(variable_limit_session.get()) : std::nullopt;
 	const auto variable_limit_counter_before = user_variable_counters(admin.get());
@@ -1051,17 +1198,23 @@ int main() {
 	variable_limit_session.reset();
 
 	MysqlPtr byte_limit_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
-	const std::string byte_target = "@byte_limit_base";
-	const size_t payload_size = 64 * 1024 - byte_target.size() - 2;
-	const std::string byte_limit_set =
-		"/* uv_hg_b */ SET " + byte_target + "='" + std::string(payload_size, 'x') + "'";
+	// Fill exactly 64 KiB with replayable assignments. Each fits the existing
+	// conservative replay packet budget when the backend limit is unknown.
+	std::string byte_limit_set = "/* uv_hg_b */ SET ";
+	for (size_t i = 0; i < 128; ++i) {
+		const std::string target = "@byte_limit_" + std::to_string(i);
+		if (i) byte_limit_set += ',';
+		byte_limit_set += target + "='" + std::string(512 - target.size() - 2, 'x') + "'";
+	}
 	const bool byte_limit_staged = byte_limit_session &&
-		execute(byte_limit_session.get(), byte_limit_set);
+		execute(byte_limit_session.get(), byte_limit_set) &&
+		execute(byte_limit_session.get(), "/* uv_hg_b */ SELECT 1");
 	const auto byte_limit_aggregate_before = byte_limit_session
 		? user_variable_aggregate(byte_limit_session.get()) : std::nullopt;
 	const auto byte_limit_counter_before = user_variable_counters(admin.get());
 	const bool byte_limit_fallback = byte_limit_session &&
-		execute(byte_limit_session.get(), "/* uv_hg_b */ SET @byte_limit_over=1");
+		execute(byte_limit_session.get(), "/* uv_hg_b */ SET @byte_limit_0='" +
+			std::string(513 - std::strlen("@byte_limit_0") - 2, 'y') + "'");
 	const auto byte_limit_aggregate_after = byte_limit_session
 		? user_variable_aggregate(byte_limit_session.get()) : std::nullopt;
 	const auto byte_limit_counter_after = user_variable_counters(admin.get());
@@ -1069,13 +1222,13 @@ int main() {
 		? locked_hostgroup(byte_limit_session.get()) : std::nullopt;
 	ok(byte_limit_staged && byte_limit_aggregate_before &&
 		byte_limit_aggregate_before->stored_bytes == 64 * 1024 &&
-		byte_limit_aggregate_before->count == 1 && byte_limit_fallback &&
+		byte_limit_aggregate_before->count == 128 && byte_limit_fallback &&
 		byte_limit_aggregate_after && aggregates_equal(
 			*byte_limit_aggregate_before, *byte_limit_aggregate_after) &&
 		byte_limit_counter_before && byte_limit_counter_after && only_limit_fallback_incremented(
 			*byte_limit_counter_before, *byte_limit_counter_after) &&
 		byte_limit_lock && *byte_limit_lock >= 0 &&
-		scalar_equals(byte_limit_session.get(), "/* uv_hg_b */ SELECT @byte_limit_over", "1"),
+		scalar_equals(byte_limit_session.get(), "/* uv_hg_b */ SELECT LENGTH(@byte_limit_0)", "498"),
 		"state over 64 KiB preserves its aggregate fingerprint, increments only limit fallback, and binds");
 	byte_limit_session.reset();
 
@@ -1392,10 +1545,13 @@ int main() {
 		change_user_probe && change_user_probe->rows.size() == 1 &&
 		change_user_probe->rows.front().size() == 2 &&
 		!change_user_probe->rows.front()[0].is_null &&
-		change_user_probe->rows.front()[0].bytes == change_user_id_before->bytes &&
+		(!multiplexing_enabled ||
+			change_user_probe->rows.front()[0].bytes == change_user_id_before->bytes) &&
 		!change_user_probe->rows.front()[1].is_null &&
 		change_user_probe->rows.front()[1].bytes == "1",
-		"one backend response proves change-user cleared the value on the exact recorded connection");
+		multiplexing_enabled
+			? "one backend response proves change-user cleared the value on the exact recorded connection"
+			: "one response proves change-user cleared state without assuming backend reuse");
 	change_user_session.reset();
 
 	MysqlPtr disconnect_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
@@ -1465,19 +1621,18 @@ int main() {
 	counter_unsupported_session.reset();
 
 	MysqlPtr counter_limit_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
-	const std::string counter_limit_target = "@counter_limit_base";
-	const size_t counter_limit_payload_size = 64 * 1024 - counter_limit_target.size() - 2;
 	const bool counter_limit_base = counter_limit_session && execute(
-		counter_limit_session.get(), "/* uv_hg_a */ SET " + counter_limit_target + "='" +
-			std::string(counter_limit_payload_size, 'y') + "'");
+		counter_limit_session.get(), "/* uv_hg_a */ SET @counter_limit_base='y'");
 	const bool counter_limit_overflow = counter_limit_session &&
-		execute(counter_limit_session.get(), "/* uv_hg_a */ SET @counter_limit_over=1");
+		execute(counter_limit_session.get(), "/* uv_hg_a */ SET @counter_limit_over='" +
+			std::string(64 * 1024, 'z') + "'");
 	counter_limit_session.reset();
 	const auto counter_final = user_variable_counters(admin.get());
 	ok(counter_baseline && counter_assignments_staged && counter_replays_observed &&
 		counter_unsupported && counter_limit_base && counter_limit_overflow && counter_final &&
 		counter_final->assignments == counter_baseline->assignments + 3 &&
-		counter_final->replay_commands == counter_baseline->replay_commands + 2 &&
+		// Two routed backends plus materialization before limit fallback.
+		counter_final->replay_commands == counter_baseline->replay_commands + 3 &&
 		counter_final->replay_failures == counter_baseline->replay_failures &&
 		counter_final->fallback_unsupported == counter_baseline->fallback_unsupported + 1 &&
 		counter_final->fallback_limits == counter_baseline->fallback_limits + 1,

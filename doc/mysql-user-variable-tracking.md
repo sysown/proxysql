@@ -2,7 +2,7 @@
 
 `mysql-user_variable_tracking` is an opt-in, conservative way to keep a
 small, proven subset of MySQL user-defined variables multiplexable. It tracks
-the literal syntax that MySQL accepted, then replays it when ProxySQL assigns a
+parsed literal syntax, then materializes it when ProxySQL assigns a
 different pooled backend to the same frontend session. It is intended for
 request metadata and similar values, not as a general user-variable evaluator.
 
@@ -49,8 +49,8 @@ hostgroup.
 ## Statements that are tracked
 
 Only a text-protocol, single-statement `SET` with complete ParserSQL input
-coverage is eligible. Every target must be a MySQL user variable and every
-right-hand side must be one of these exact forms:
+coverage is eligible. User-variable right-hand sides must be one of these
+exact forms:
 
 - single- or double-quoted string literals;
 - unsigned integers, or a direct unary `+` or `-` on an integer;
@@ -68,8 +68,7 @@ multi-statements, malformed input, and every other expression form are outside
 mode `1`.
 
 Analysis is all-or-nothing: one ineligible target or value makes the whole
-`SET` fall back. Mixed system and user-variable assignments are therefore not
-partially tracked. Targets are normalized case-insensitively, preserve a
+`SET` fall back. Targets are normalized case-insensitively, preserve a
 ParserSQL-validated replay spelling, and have MySQL's 64-byte decoded-name
 limit. Tracked names must be ASCII so case-insensitive canonicalization remains
 unambiguous; quoted target names containing a backslash are not eligible because
@@ -82,12 +81,51 @@ This is a supported deployment statement (shown exactly as accepted):
 SET @browser_lang = 'en-US', @browser_time = '2026-08-11 18:11:12', @browser_timezone = 'GMT+2', @ip_address = '167.235.198.244'
 ```
 
-ProxySQL forwards the original statement to MySQL. It stages, but does not
-commit, the resulting assignments before that backend returns `OK`. On `OK` it
-atomically commits the complete assignment group to both the frontend map and
-the selected backend map. A backend error, retry, or other query-error path
-discards pending assignments, so the original backend result remains
-authoritative.
+ProxySQL stages the complete assignment group against the frontend's resource
+limits, commits the desired frontend state, and returns `OK` locally. It does
+not acquire a backend or send the original `SET`. Before a subsequent backend
+query, the normal synchronization path materializes only assignments that differ
+from the selected backend's known state. Each successful replay batch updates
+the backend map before the next batch runs. A later batch failure can therefore
+leave partial state on that backend, which is retired rather than reused. The
+failure is returned for the pending client query; backend semantic validation
+is therefore deferred until the state is needed.
+
+### Mixed user/session-variable assignments
+
+Mode `1` also tracks statements containing literal user-variable assignments
+and either of these session variables:
+
+- `max_execution_time`: an unsigned decimal integer from 0 to 4294967295;
+- `wait_timeout`: an unsigned decimal integer from 1 to 1728000 seconds.
+
+Implicit session scope, `SESSION`, `LOCAL`, `@@`, `@@session.`, and `@@local.`
+are accepted. System-variable values must be plain decimal integer literals;
+quoted values, signs, expressions, and `DEFAULT` retain fallback. Repeated
+assignments retain source order and the last value wins.
+
+```sql
+SET @client_tag = 'web-6d8f9c7b5-x2k4p', SESSION max_execution_time = 1000;
+SET @client_tag = 'web-6d8f9c7b5-x2k4p', SESSION max_execution_time = 1000, SESSION wait_timeout = 600;
+```
+
+ProxySQL validates the whole statement, commits both kinds of desired frontend
+state, and returns `OK` locally. Neither the original SQL nor `wait_timeout`
+is sent to a backend. `max_execution_time` uses the existing system-variable
+synchronization path; user variables use the existing user-variable replay path.
+An attached backend, including one with an active transaction, is unchanged
+until the next backend query requires synchronization.
+
+Other system variables, global/persistent assignments, and context changes
+(including `sql_mode`, charset/collation, `NAMES`, and `CHARACTER SET`) retain
+whole-statement fallback. Unsupported syntax or resource-limit failure forwards
+the original statement through the existing hostgroup-locking policy, without
+partially committing desired state. ParserSQL 1.1.1 already provides the required
+AST; no dependency release is needed.
+
+As with standalone `wait_timeout`, the frontend timeout is enforced together
+with the global `mysql-wait_timeout` limit. The backend's `@@wait_timeout` remains
+unchanged. No extra backend reset or retirement is needed for a parsed mixed SET.
 
 ## Pooling and replay
 
@@ -164,8 +202,8 @@ normal fallback.
 
 `COM_RESET_CONNECTION` and `COM_CHANGE_USER` clear the frontend session state.
 Backend `COM_CHANGE_USER`, backend connection reset/reconnect, and backend
-destruction clear the corresponding backend map. A failed original `SET` clears
-only its pending data; it never changes a committed map.
+destruction clear the corresponding backend map. An unsupported `SET` forwarded
+to the backend never partially updates the tracked frontend map.
 
 ## Observability and confidentiality
 
