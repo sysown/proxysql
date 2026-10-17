@@ -7290,7 +7290,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 		// full rationale; reads are relaxed because the deadline is compared against
 		// 'curtime' and small reordering is harmless.
 		if (check_session_track_backoff) {
-			session_track_backoff_until = c->parent->session_track_backoff_until.load();
+			session_track_backoff_until = c->parent->session_track_backoff_until.load(std::memory_order_relaxed);
 			if (session_track_backoff_until > curtime) {
 				++i;
 				continue;
@@ -7363,7 +7363,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 			return false;
 		}
 		if (is_session_track_backoff_enabled &&
-			candidate->parent->session_track_backoff_until.load() > current_time) {
+			candidate->parent->session_track_backoff_until.load(std::memory_order_relaxed) > current_time) {
 			return false;
 		}
 		if (candidate->parent->myhgc->hid != _hid ||
