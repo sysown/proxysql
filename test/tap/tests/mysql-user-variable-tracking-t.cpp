@@ -471,12 +471,12 @@ bool configure_fixture(
 	MYSQL* admin, const CommandLine& cl, const BackendEndpoint& backend,
 	const std::string& tag, FixtureOwnership& owned) {
 	auto occupied = query_result(admin,
-		"SELECT (SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id IN (18110,18111)),"
-		"(SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id IN (18110,18111))");
+		"SELECT (SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id IN (18110,18111,18112)),"
+		"(SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id IN (18110,18111,18112))");
 	if (!occupied || occupied->rows.size() != 1 || occupied->rows.front().size() != 2 ||
 		occupied->rows.front()[0].is_null || occupied->rows.front()[0].bytes != "0" ||
 		occupied->rows.front()[1].is_null || occupied->rows.front()[1].bytes != "0") {
-		diag("Temporary hostgroups 18110/18111 are already in use");
+		diag("Temporary hostgroups 18110/18111/18112 are already in use");
 		return false;
 	}
 
@@ -490,6 +490,11 @@ bool configure_fixture(
 		"," + std::to_string(backend.weight) + "," + std::to_string(backend.compression) +
 		"," + std::to_string(backend.max_connections) + "," + std::to_string(backend.max_replication_lag) +
 		"," + std::to_string(backend.max_latency_ms) + "," + std::to_string(backend.use_ssl) +
+		"," + std::to_string(backend.gtid_port) + "," + sql_quote(admin, tag) + ")," +
+		"(18112," + sql_quote(admin, backend.hostname) + "," + std::to_string(backend.port) +
+		"," + std::to_string(backend.weight) + "," + std::to_string(backend.compression) +
+		"," + std::to_string(backend.max_connections) + "," + std::to_string(backend.max_replication_lag) +
+		"," + std::to_string(backend.max_latency_ms) + "," + std::to_string(backend.use_ssl) +
 		"," + std::to_string(backend.gtid_port) + "," + sql_quote(admin, tag) + ")";
 	if (!execute(admin,
 		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,weight,compression,max_connections,"
@@ -499,12 +504,14 @@ bool configure_fixture(
 	}
 	owned.hostgroups = true;
 
-	const long rule_base = -181100000L - (static_cast<long>(getpid()) % 100000L) * 2L;
+	const long rule_base = -181100000L - (static_cast<long>(getpid()) % 100000L) * 3L;
 	auto rule_collision = query_result(admin,
 		"SELECT (SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id IN (" +
-		std::to_string(rule_base) + "," + std::to_string(rule_base + 1) + "))," +
+		std::to_string(rule_base) + "," + std::to_string(rule_base + 1) + "," +
+		std::to_string(rule_base + 2) + "))," +
 		"(SELECT COUNT(*) FROM runtime_mysql_query_rules WHERE rule_id IN (" +
-		std::to_string(rule_base) + "," + std::to_string(rule_base + 1) + "))");
+		std::to_string(rule_base) + "," + std::to_string(rule_base + 1) + "," +
+		std::to_string(rule_base + 2) + "))");
 	if (!rule_collision || rule_collision->rows.size() != 1 ||
 		rule_collision->rows.front().size() != 2 ||
 		rule_collision->rows.front()[0].is_null ||
@@ -519,7 +526,9 @@ bool configure_fixture(
 		std::to_string(rule_base) + ",1," + sql_quote(admin, cl.username) +
 		"," + sql_quote(admin, "^/\\* uv_hg_a \\*/") + ",18110,1," + sql_quote(admin, tag) + "),(" +
 		std::to_string(rule_base + 1) + ",1," + sql_quote(admin, cl.username) +
-		"," + sql_quote(admin, "^/\\* uv_hg_b \\*/") + ",18111,1," + sql_quote(admin, tag) + ")")) {
+		"," + sql_quote(admin, "^/\\* uv_hg_b \\*/") + ",18111,1," + sql_quote(admin, tag) + "),(" +
+		std::to_string(rule_base + 2) + ",1," + sql_quote(admin, cl.username) +
+		"," + sql_quote(admin, "^/\\* uv_hg_c \\*/") + ",18112,1," + sql_quote(admin, tag) + ")")) {
 		return false;
 	}
 	owned.rules = true;
@@ -551,7 +560,7 @@ bool restore_config(
 	}
 	if (owned.hostgroups) {
 		success = execute(admin,
-			"DELETE FROM mysql_servers WHERE hostgroup_id IN (18110,18111) AND comment=" +
+			"DELETE FROM mysql_servers WHERE hostgroup_id IN (18110,18111,18112) AND comment=" +
 			sql_quote(admin, tag)) && success;
 	}
 	success = set_admin_variable(admin, "mysql-user_variable_tracking", saved.tracking) && success;
@@ -699,15 +708,15 @@ int main() {
 	{
 		MysqlPtr mixed = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 		const bool initial = mixed && execute(mixed.get(),
-			"SET @mixed_tag='old',max_execution_time=900");
+			"/* uv_hg_c */ SET @mixed_tag='old',max_execution_time=900");
 		const auto before = mixed ? user_variable_aggregate(mixed.get()) : std::nullopt;
 		const auto session_before = mixed ? internal_session(mixed.get()) : std::nullopt;
 		const bool rejected = mixed && execute_expect_error(mixed.get(),
-			"SET @mixed_tag=1e999999999+0,max_execution_time=1000,wait_timeout=600");
+			"/* uv_hg_c */ SET @mixed_tag=1e999999999+0,max_execution_time=1000,wait_timeout=600");
 		const auto after = mixed ? user_variable_aggregate(mixed.get()) : std::nullopt;
 		const auto session_after = mixed ? internal_session(mixed.get()) : std::nullopt;
 		const auto values = mixed ? query_result(mixed.get(),
-			std::string("SELECT @mixed_tag") +
+			std::string("/* uv_hg_c */ SELECT @mixed_tag") +
 				(supports_max_execution_time ? ",@@session.max_execution_time" : "")) : std::nullopt;
 		const auto rejected_lock = mixed ? locked_hostgroup(mixed.get()) : std::nullopt;
 		ok(initial && rejected && rejected_lock && *rejected_lock >= 0 &&
@@ -722,28 +731,28 @@ int main() {
 			(!supports_max_execution_time || values->rows[0][1].bytes == "900"),
 			"unsupported mixed SET is forwarded, locks the hostgroup, and preserves tracked state on error");
 		mixed = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
-		const bool transaction = mixed && execute(mixed.get(), "START TRANSACTION");
+		const bool transaction = mixed && execute(mixed.get(), "/* uv_hg_c */ START TRANSACTION");
 		const auto attached_before = mixed ? internal_session(mixed.get()) : std::nullopt;
 		const bool updated = mixed && execute(mixed.get(),
-			"SET @mixed_tag='transaction',max_execution_time=1000,wait_timeout=600");
+			"/* uv_hg_c */ SET @mixed_tag='transaction',max_execution_time=1000,wait_timeout=600");
 		const bool still_active = mixed && (mixed->server_status & SERVER_STATUS_IN_TRANS);
 		const auto attached_after = mixed ? internal_session(mixed.get()) : std::nullopt;
 		ok(transaction && updated && still_active && attached_before && attached_after &&
 			attached_before->at("backends") == attached_after->at("backends"),
 			"parsed mixed SET changes no attached backend and preserves transaction status");
 		const auto synced = mixed ? query_result(mixed.get(),
-			std::string("SELECT @mixed_tag,@@session.wait_timeout=@@global.wait_timeout") +
+			std::string("/* uv_hg_c */ SELECT @mixed_tag,@@session.wait_timeout=@@global.wait_timeout") +
 				(supports_max_execution_time ? ",@@session.max_execution_time" : "")) : std::nullopt;
 		ok(synced && synced->rows.size() == 1 &&
 			synced->rows[0].size() == (supports_max_execution_time ? 3U : 2U) &&
 			synced->rows[0][0].bytes == "transaction" && synced->rows[0][1].bytes == "1" &&
 			(!supports_max_execution_time || synced->rows[0][2].bytes == "1000") &&
-			execute(mixed.get(), "ROLLBACK"),
+			execute(mixed.get(), "/* uv_hg_c */ ROLLBACK"),
 			"the next query synchronizes the attached backend without changing backend wait_timeout");
 		const auto replays_before_unchanged = user_variable_counters(admin.get());
 		const bool unchanged = mixed && execute(mixed.get(),
-			"SET @mixed_tag='transaction',max_execution_time=1000,wait_timeout=600") &&
-			scalar_equals(mixed.get(), "SELECT @mixed_tag", "transaction");
+			"/* uv_hg_c */ SET @mixed_tag='transaction',max_execution_time=1000,wait_timeout=600") &&
+			scalar_equals(mixed.get(), "/* uv_hg_c */ SELECT @mixed_tag", "transaction");
 		const auto replays_after_unchanged = user_variable_counters(admin.get());
 		ok(unchanged && replays_before_unchanged && replays_after_unchanged &&
 			replays_before_unchanged->replay_commands == replays_after_unchanged->replay_commands,
