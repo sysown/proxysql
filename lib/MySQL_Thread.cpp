@@ -125,7 +125,9 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
+#ifdef PROXYSQL40
 static char mysql_thread_aws_locality_awareness_variable[] = "aws_locality_awareness";
+#endif /* PROXYSQL40 */
 
 typedef struct mythr_st_vars {
 	enum MySQL_Thread_status_variable v_idx;
