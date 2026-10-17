@@ -446,9 +446,18 @@ int main() {
     ok(elected_backend && execute(elected_backend.get(),
         "REVOKE SELECT, EXECUTE ON mysql_innodb_cluster_metadata.* FROM " + account),
         "metadata access is blocked while data access remains available");
+    // One SELECT reads metadata_available and runtime_state from the same status
+    // snapshot. The Router must never be 'ready' while metadata is unavailable (#6447).
+    bool ready_without_metadata = false;
+    auto metadata_state = [&] {
+        const std::string pair = scalar(admin.get(), "SELECT GROUP_CONCAT(status_value,'/') FROM "
+            "(SELECT status_value FROM runtime_mysql_router_status WHERE status_key IN "
+            "('metadata_available','runtime_state') ORDER BY status_key)");
+        if (pair == "0/ready") ready_without_metadata = true;
+        return pair;
+    };
     ok(wait_until([&] {
-        return scalar(admin.get(), "SELECT status_value FROM runtime_mysql_router_status "
-            "WHERE status_key='metadata_available'") == "0";
+        return metadata_state().rfind("0/", 0) == 0;
     }, 15), "the real plugin reports metadata unavailability");
     ok(scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_router_topology") == 4,
 		"metadata outage retains the last complete four-instance topology");
@@ -459,8 +468,14 @@ int main() {
         "metadata outage keeps the unhealthy former primary non-routable");
     ok(endpoint_uuid(admin_host, 6446, "app_writer", "router-app-password") == elected_primary,
         "last metadata plus live GR health keep the healthy writer available");
-    ok(scalar(admin.get(), "SELECT status_value FROM runtime_mysql_router_status "
-        "WHERE status_key='runtime_state'") == "degraded",
+    // Sample across several topology refreshes: each one used to publish 'ready'
+    // briefly before raising the metadata issue again.
+    const bool degraded = wait_until([&] { return metadata_state() == "0/degraded"; }, 15);
+    for (int sample = 0; sample < 40; ++sample) {
+        metadata_state();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    ok(degraded && !ready_without_metadata,
         "metadata loss degrades Router status without stopping ProxySQL");
     ok(mysql_ping(admin.get()) == 0 && operator_connection && mysql_ping(operator_connection.get()) == 0,
         "Admin and the operator-owned 6033 route remain reachable");
