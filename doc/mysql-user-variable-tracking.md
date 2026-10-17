@@ -85,10 +85,11 @@ ProxySQL stages the complete assignment group against the frontend's resource
 limits, commits the desired frontend state, and returns `OK` locally. It does
 not acquire a backend or send the original `SET`. Before a subsequent backend
 query, the normal synchronization path materializes only assignments that differ
-from the selected backend's known state. Backend maps change only after that
-synchronization succeeds. A backend error while materializing a literal fails
-that subsequent query and retires the backend; backend semantic validation is
-therefore deferred until the state is needed.
+from the selected backend's known state. Each successful replay batch updates
+the backend map before the next batch runs. A later batch failure can therefore
+leave partial state on that backend, which is retired rather than reused. The
+failure is returned for the pending client query; backend semantic validation
+is therefore deferred until the state is needed.
 
 ### Mixed user/session-variable assignments
 

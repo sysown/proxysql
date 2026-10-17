@@ -3,8 +3,9 @@
 **Goal:** Track the initialization statements in sysown/proxysql#6479 using
 ProxySQL's existing execution model: parsed SETs update desired frontend state
 and return OK locally; backend synchronization happens only when needed by a
-subsequent query. Only unsupported/unparsed SETs follow the existing forwarding
-and hostgroup-locking fallback policy.
+subsequent query. Unsupported/unparsed SETs and parsed SETs that exceed tracking
+resource limits follow the existing forwarding and hostgroup-locking fallback
+policy.
 
 **Correction:** The first PR revision incorrectly forwarded parsed SETs and
 committed frontend/backend maps after backend OK. The backend wait_timeout reset
