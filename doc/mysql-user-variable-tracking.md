@@ -101,9 +101,10 @@ the rejected assignment: a failed multi-assignment replay is retried on the same
 backend one assignment at a time. The rejected assignment is removed from the
 frontend's tracked state and its error is returned for the pending query; the
 other tracked values stay and are replayed when needed, so later queries do not
-fail on the same value again. Client, connection, and transient server errors
-(for example a lost connection, a killed query, or a lock wait timeout) do not
-remove anything.
+fail on the same value again. Only parse and value errors (for example
+ER_PARSE_ERROR, ER_ILLEGAL_VALUE_FOR_TYPE, or ER_DATA_OUT_OF_RANGE) count as a
+rejected value; any other error, such as a lost connection, a killed query, or a
+server in offline mode, removes nothing and only fails the pending query.
 
 ### Mixed user/session-variable assignments
 
