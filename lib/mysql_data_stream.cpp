@@ -2047,6 +2047,10 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 		jc2["client_flag"]["client_deprecate_eof"] = (myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
 		jc2["no_backslash_escapes"] = myconn->options.no_backslash_escapes;
 		jc2["status"]["compression"] = myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-		jc2["ps"]["client_stmt_to_global_ids"] = myconn->local_stmts->client_stmt_to_global_ids;
+		std::map<uint32_t, uint64_t> client_stmt_to_global_ids;
+		for (const auto& c : myconn->local_stmts->client_stmt_to_global_ids) {
+			client_stmt_to_global_ids.emplace(c.first, c.second.global_id);
+		}
+		jc2["ps"]["client_stmt_to_global_ids"] = client_stmt_to_global_ids;
 	}
 }

@@ -57,6 +57,7 @@
 
 extern class MySQL_Variables mysql_variables;
 
+#ifdef PROXYSQL40
 /**
  * Thread-safe, independently-lived delivery boundary between IAM provider
  * threads and one MySQL worker.  It deliberately owns no session or
@@ -73,6 +74,10 @@ private:
 
 	std::mutex mutex_;
 	BoundedCompletions completions_;
+	// Set (under mutex_) when completions_ becomes non-empty, cleared by drain().
+	// Lets the worker skip the lock and the deque construction on every loop
+	// iteration when no IAM completion is pending, which is the common case.
+	std::atomic<bool> pending_ { false };
 	bool closed_ { false };
 	int wake_fd_ { -1 };
 
@@ -91,6 +96,7 @@ public:
 		if (closed_ || completions_.values.size() >= completions_.maximum) return;
 		const bool wake_worker = completions_.values.empty();
 		completions_.values.emplace_back(std::move(completion));
+		pending_.store(true, std::memory_order_release);
 		if (wake_worker) {
 			const unsigned char byte = 0;
 			ssize_t ignored = ::write(wake_fd_, &byte, sizeof(byte));
@@ -98,10 +104,16 @@ public:
 		}
 	}
 
+	/** @brief Lock-free check used by the worker loop before calling drain(). */
+	bool has_pending() const {
+		return pending_.load(std::memory_order_acquire);
+	}
+
 	std::deque<AwsIamCompletion> drain() {
 		std::lock_guard<std::mutex> guard(mutex_);
 		std::deque<AwsIamCompletion> drained;
 		drained.swap(completions_.values);
+		pending_.store(false, std::memory_order_relaxed);
 		return drained;
 	}
 
@@ -115,12 +127,14 @@ public:
 		if (closed_) return;
 		closed_ = true;
 		completions_.values.clear();
+		pending_.store(false, std::memory_order_relaxed);
 		if (wake_fd_ >= 0) {
 			::close(wake_fd_);
 			wake_fd_ = -1;
 		}
 	}
 };
+#endif // PROXYSQL40
 
 #ifdef PROXYSQL31
 class MySQL_Caching_Sha2_RSA;
@@ -281,6 +295,8 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	ProxySQL_Poll<MySQL_Data_Stream> mypolls;
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Lists waiter_lists;
+	// Incremented by every process_all_sessions() call; see handled_in_pass.
+	unsigned long long sessions_pass { 0 };
 	unsigned long long last_b_rearm_us = 0;
 #endif // PROXYSQL31
 	pthread_t thread_id;
@@ -300,9 +316,11 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 #endif // IDLE_THREADS
 
 	int pipefd[2];
+#ifdef PROXYSQL40
 	std::shared_ptr<AwsIamWorkerInbox> aws_iam_inbox;
 	std::unordered_map<uint64_t, MySQL_Session*> aws_iam_waiters;
 	uint64_t next_aws_iam_waiter_id { 1 };
+#endif // PROXYSQL40
 //	int shutdown;
 	kill_queue_t kq;
 
@@ -334,12 +352,14 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	~MySQL_Thread();
 	//MySQL_Session * create_new_session_and_client_data_stream(int _fd);
 	bool init();
+#ifdef PROXYSQL40
 	uint64_t register_aws_iam_waiter(MySQL_Session *session);
 	void cancel_aws_iam_waiter(uint64_t opaque_id);
 	void drain_aws_iam_completions();
 	std::weak_ptr<AwsIamCompletionSink> aws_iam_completion_sink() const {
 		return aws_iam_inbox;
 	}
+#endif // PROXYSQL40
 	void run___get_multiple_idle_connections(int& num_idles);
 	void run___cleanup_mirror_queue();
   	//void ProcessAllMyDS_BeforePoll();

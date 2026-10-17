@@ -221,7 +221,6 @@ class ProxySQL_GlobalVariables {
 	// Append managed startup fields to preserve the older public data prefix.
 	// The profile only selects startup configuration/lifecycle.
 	bool aws_managed{false};
-	std::string aws_managed_bootstrap;
 #endif
 };
 

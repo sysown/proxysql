@@ -4381,9 +4381,20 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			return NULL;
 		}
 		memcpy(&new_params_bound_flag,p+null_bitmap_length,1);
-		uint8_t *null_bitmap=NULL;
-		null_bitmap=(uint8_t *)malloc(null_bitmap_length);
-		memcpy(null_bitmap,p,null_bitmap_length);
+		// With new_params_bound_flag set, 2 type bytes per parameter follow the flag,
+		// and the loop below reads them from the packet (GHSA-p5xc-69qx-m4q5).
+		if (new_params_bound_flag &&
+			pkt.size - (14+1+null_bitmap_length) < static_cast<size_t>(num_params) * 2) {
+			proxy_warning("Malformed COM_STMT_EXECUTE packet: %u parameter types exceed packet size %lu\n",
+				num_params, static_cast<unsigned long>(pkt.size));
+			// Same ownership rules as the NULL bitmap check above.
+			ret->pkt = NULL;
+			if (!*stmt_meta) { delete ret; }
+			return NULL;
+		}
+		// Read in place: the size check above covers the whole bitmap, and the
+		// packet outlives this function (see ret->pkt).
+		const uint8_t *null_bitmap=(const uint8_t *)p;
 		p+=null_bitmap_length;
 		p+=1; // new_params_bound_flag
 
@@ -4432,7 +4443,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			// initalized. See #3546.
 			binds[i].buffer = NULL;
 		}
-		free(null_bitmap); // we are done with it
 
 		if (new_params_bound_flag || effective_types) {
 			// the client is rebinding the parameters

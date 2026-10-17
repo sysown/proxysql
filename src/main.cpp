@@ -520,7 +520,9 @@ MySQL_Query_Processor* GloMyQPro;
 PgSQL_Query_Processor* GloPgQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
+#ifdef PROXYSQL40
 AwsIamTokenSource* GloAwsIamTokenSource = NULL;
+#endif // PROXYSQL40
 PgSQL_Threads_Handler* GloPTH = NULL;
 
 // GloMCPH removed in Step 4.C; GloGATH/GloAI removed in Step 5 — the
@@ -921,14 +923,6 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 		}
 	}
 #ifdef PROXYSQL40
-	if (GloVars.opt->isSet("--aws-managed-bootstrap") && GloVars.aws_managed_bootstrap.empty()) {
-		proxy_error("--aws-managed-bootstrap requires a manifest path\n");
-		exit(EXIT_FAILURE);
-	}
-	if (!GloVars.aws_managed && !GloVars.aws_managed_bootstrap.empty()) {
-		proxy_error("--aws-managed-bootstrap requires aws_managed=true\n");
-		exit(EXIT_FAILURE);
-	}
 	if (GloVars.aws_managed) {
 		std::string error;
 		if (GloVars.no_plugins || GloPluginManager == nullptr ||
@@ -1900,34 +1894,13 @@ bool ProxySQL_Main_init_phase3___start_all() {
 #ifdef PROXYSQL40
 	InitConfiguredPlugins();
 	if (GloVars.aws_managed) {
-		std::string manifest_json, error;
-		const std::string* manifest = nullptr;
-		if (!GloVars.aws_managed_bootstrap.empty()) {
-			std::ifstream input(GloVars.aws_managed_bootstrap);
-			if (!input) {
-				proxy_error("Cannot read managed bootstrap manifest\n");
-				managed_startup_exit_code = EXIT_FAILURE;
-				return false;
-			}
-			std::ostringstream contents;
-			contents << input.rdbuf();
-			if (input.bad()) {
-				proxy_error("Failed reading managed bootstrap manifest\n");
-				managed_startup_exit_code = EXIT_FAILURE;
-				return false;
-			}
-			manifest_json = contents.str();
-			manifest = &manifest_json;
-		}
+		// The provider owns automatic installation from launch inputs and
+		// recovery of durable state. Both use the ordinary startup path.
+		std::string error;
 		if (!proxysql_start_managed_configuration(GloPluginManager.get(),
-			GloWebInterface, managed_web_binder, manifest, error)) {
+			GloWebInterface, managed_web_binder, nullptr, error)) {
 			proxy_error("Managed configuration startup failed: %s\n", error.c_str());
 			managed_startup_exit_code = EXIT_FAILURE;
-			return false;
-		}
-		if (manifest != nullptr) {
-			// A local one-shot installation exits after normal draining/teardown.
-			managed_startup_exit_code = EXIT_SUCCESS;
 			return false;
 		}
 	}
@@ -2072,8 +2045,8 @@ GloAdmin->shutdown_threads();
 		MyHGM->aws_locality_manager()->shutdown();
 	}
 	shutdown_global_aws_metadata_provider();
-#endif
 	shutdown_global_aws_iam_token_source();
+#endif
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte
 	if (GloVars.global.nostart) {

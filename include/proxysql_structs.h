@@ -295,7 +295,6 @@ enum session_status {
 	CONNECTING_SERVER,
 	LDAP_AUTH_CLIENT,
 	AUTHENTICATING_BACKEND_FOR_CLIENT,
-	WAITING_AWS_IAM_TOKEN,
 	PINGING_SERVER,
 	WAITING_CLIENT_DATA,
 	WAITING_SERVER_DATA,
@@ -340,6 +339,11 @@ enum session_status {
 	// (CloseComplete '3' forwarded, registry entry evicted). Append-only, same
 	// rationale as PROCESSING_STMT_BIND above.
 	PROCESSING_STMT_CLOSE,
+#ifdef PROXYSQL40
+	// AWS IAM backend authentication waits here for its token. Appended, so every
+	// tier keeps the values above, which are also those of v3.0.11.
+	WAITING_AWS_IAM_TOKEN,
+#endif // PROXYSQL40
 	session_status___NONE // special marker
 };
 
