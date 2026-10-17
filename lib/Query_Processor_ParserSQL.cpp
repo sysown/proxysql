@@ -715,7 +715,7 @@ static bool assignment_has_user_target(const AstNode* assignment) {
 }
 
 // A deliberately small allowlist: accepting a system variable here also
-// requires a post-OK commit policy in MySQL_Session. Do not strip a scope
+// requires a local tracking policy in MySQL_Session. Do not strip a scope
 // until it has been checked, or GLOBAL/PERSIST assignments could be replayed
 // as session assignments on another backend.
 static bool mixed_set_session_assignment(

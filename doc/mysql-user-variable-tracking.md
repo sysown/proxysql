@@ -2,7 +2,7 @@
 
 `mysql-user_variable_tracking` is an opt-in, conservative way to keep a
 small, proven subset of MySQL user-defined variables multiplexable. It tracks
-the literal syntax that MySQL accepted, then replays it when ProxySQL assigns a
+parsed literal syntax, then materializes it when ProxySQL assigns a
 different pooled backend to the same frontend session. It is intended for
 request metadata and similar values, not as a general user-variable evaluator.
 
@@ -81,12 +81,14 @@ This is a supported deployment statement (shown exactly as accepted):
 SET @browser_lang = 'en-US', @browser_time = '2026-08-11 18:11:12', @browser_timezone = 'GMT+2', @ip_address = '167.235.198.244'
 ```
 
-ProxySQL forwards the original statement to MySQL. It stages, but does not
-commit, the resulting assignments before that backend returns `OK`. On `OK` it
-atomically commits the complete assignment group to both the frontend map and
-the selected backend map. A backend error, retry, or other query-error path
-discards pending assignments, so the original backend result remains
-authoritative.
+ProxySQL stages the complete assignment group against the frontend's resource
+limits, commits the desired frontend state, and returns `OK` locally. It does
+not acquire a backend or send the original `SET`. Before a subsequent backend
+query, the normal synchronization path materializes only assignments that differ
+from the selected backend's known state. Backend maps change only after that
+synchronization succeeds. A backend error while materializing a literal fails
+that subsequent query and retires the backend; backend semantic validation is
+therefore deferred until the state is needed.
 
 ### Mixed user/session-variable assignments
 
@@ -106,22 +108,23 @@ SET @client_tag = 'web-6d8f9c7b5-x2k4p', SESSION max_execution_time = 1000;
 SET @client_tag = 'web-6d8f9c7b5-x2k4p', SESSION max_execution_time = 1000, SESSION wait_timeout = 600;
 ```
 
-ProxySQL forwards the original SQL and commits both kinds of tracked state
-only after a backend `OK` without warnings. A backend error discards the
-entire pending change set. A successful mixed statement with warnings takes
-the connection-bound fallback because the backend may have adjusted a value.
+ProxySQL validates the whole statement, commits both kinds of desired frontend
+state, and returns `OK` locally. Neither the original SQL nor `wait_timeout`
+is sent to a backend. `max_execution_time` uses the existing system-variable
+synchronization path; user variables use the existing user-variable replay path.
+An attached backend, including one with an active transaction, is unchanged
+until the next backend query requires synchronization.
+
 Other system variables, global/persistent assignments, and context changes
 (including `sql_mode`, charset/collation, `NAMES`, and `CHARACTER SET`) retain
-whole-statement fallback. ParserSQL 1.1.1 already provides the required AST.
+whole-statement fallback. Unsupported syntax or resource-limit failure forwards
+the original statement through the existing hostgroup-locking policy, without
+partially committing desired state. ParserSQL 1.1.1 already provides the required
+AST; no dependency release is needed.
 
 As with standalone `wait_timeout`, the frontend timeout is enforced together
-with the global `mysql-wait_timeout` limit. The backend timeout is not replayed.
-Because forwarding the original mixed statement also changes that backend's
-timeout, ProxySQL resets the connection before returning it to the pool (or
-retires it when reset is unavailable). An attached transaction is not reset.
-This prevents the backend timeout from leaking to another client. A subsequent
-query may therefore see the backend's default `@@wait_timeout`, while the
-frontend retains its requested timeout.
+with the global `mysql-wait_timeout` limit. The backend's `@@wait_timeout` remains
+unchanged. No extra backend reset or retirement is needed for a parsed mixed SET.
 
 ## Pooling and replay
 
@@ -198,8 +201,8 @@ normal fallback.
 
 `COM_RESET_CONNECTION` and `COM_CHANGE_USER` clear the frontend session state.
 Backend `COM_CHANGE_USER`, backend connection reset/reconnect, and backend
-destruction clear the corresponding backend map. A failed original `SET` clears
-only its pending data; it never changes a committed map.
+destruction clear the corresponding backend map. An unsupported `SET` forwarded
+to the backend never partially updates the tracked frontend map.
 
 ## Observability and confidentiality
 

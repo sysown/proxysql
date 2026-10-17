@@ -88,10 +88,6 @@ bool mysql_user_variable_tracking_can_stage(
 bool mysql_user_variable_set_uses_qpo_epilogue(
 	UserVariableSetStatus analysis_status,
 	MySQL_User_Variable_Apply_Result preflight_result);
-bool mysql_user_variable_commit_post_ok(
-	MySQL_User_Variable_State& frontend,
-	MySQL_User_Variable_State& backend,
-	const std::vector<UserVariableAssignment>& assignments);
 unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code);
 
 class MySQL_Connection {
@@ -145,9 +141,6 @@ class MySQL_Connection {
 	Variable variables[SQL_NAME_LAST_HIGH_WM];
 	uint32_t var_hash[SQL_NAME_LAST_HIGH_WM];
 	MySQL_User_Variable_State user_variables;
-	// Mixed SETs may forward locally-intercepted variables (wait_timeout).
-	// Reset these backends only when detached, never during an active transaction.
-	bool reset_before_pool { false };
 	// for now we store possibly missing variables in the lower range
 	// we may need to fix that, but this will cost performance
 	bool var_absent[SQL_NAME_LAST_HIGH_WM] = {false};

@@ -3179,25 +3179,6 @@ bool mysql_user_variable_set_uses_qpo_epilogue(
 		preflight_result == MySQL_User_Variable_Apply_Result::OK;
 }
 
-bool mysql_user_variable_commit_post_ok(
-	MySQL_User_Variable_State& frontend,
-	MySQL_User_Variable_State& backend,
-	const std::vector<UserVariableAssignment>& assignments) {
-	MySQL_User_Variable_State staged_frontend;
-	MySQL_User_Variable_State staged_backend;
-	const MySQL_User_Variable_Apply_Result frontend_result =
-		frontend.stage(assignments, staged_frontend);
-	const MySQL_User_Variable_Apply_Result backend_result =
-		backend.stage(assignments, staged_backend);
-	if (frontend_result != MySQL_User_Variable_Apply_Result::OK ||
-		backend_result != MySQL_User_Variable_Apply_Result::OK) {
-		return false;
-	}
-	frontend = std::move(staged_frontend);
-	backend = std::move(staged_backend);
-	return true;
-}
-
 unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code) {
 	return backend_error_code == 0 ? ER_UNKNOWN_ERROR : backend_error_code;
 }
@@ -3458,7 +3439,6 @@ void MySQL_Connection::reset() {
 	}
 	dynamic_variables_idx.clear();
 	user_variables.clear();
-	reset_before_pool = false;
 
 	if (options.init_connect) {
 		free(options.init_connect);

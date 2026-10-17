@@ -459,7 +459,6 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	std::stack<enum session_status> previous_status;
 	std::vector<MySQL_User_Variable_Replay_Batch> user_variable_replay_batches;
 	size_t user_variable_replay_batch_index { 0 };
-	std::optional<UserVariableSetAnalysis> pending_user_variable_set;
 	bool current_query_user_variable_safe { false };
 	bool current_query_user_variable_unsafe_fallback { false };
 	bool current_query_user_variable_context_change { false };

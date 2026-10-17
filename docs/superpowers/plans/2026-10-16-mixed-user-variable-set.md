@@ -1,26 +1,58 @@
-# Mixed user-variable SET implementation plan
+# Mixed user-variable SET correction
 
-**Goal:** Track the two initialization statements in sysown/proxysql#6479 without binding a backend for the client's lifetime.
+**Goal:** Track the initialization statements in sysown/proxysql#6479 using
+ProxySQL's existing execution model: parsed SETs update desired frontend state
+and return OK locally; backend synchronization happens only when needed by a
+subsequent query. Only unsupported/unparsed SETs follow the existing forwarding
+and hostgroup-locking fallback policy.
 
-**Design:** Extend the existing pending user-variable SET analysis with ordered, validated session assignments. Initially accept only `max_execution_time` (unsigned decimal integer, 0..4294967295) and `wait_timeout` (unsigned decimal integer, 1..1728000 seconds), with implicit session scope, SESSION, LOCAL, or corresponding @@ qualifiers. Every other system target and every context-changing target falls back atomically. Retain original SQL and commit frontend/backend state only after a warning-free backend OK. Treat OK with warnings conservatively as backend-authoritative fallback. Apply wait_timeout to the frontend only after OK and reset its backend before pool reuse; never reset an attached active transaction.
+**Correction:** The first PR revision incorrectly forwarded parsed SETs and
+committed frontend/backend maps after backend OK. The backend wait_timeout reset
+and warning fallback added to compensate for that design are removed. The same
+forwarding behavior in the earlier literal user-variable path is corrected too.
 
-ParserSQL 1.1.1 already exposes the required typed AST; no dependency change is planned unless regression tests reveal a grammar/information-loss defect.
+**Scope:** Retain the narrow mixed-SET allowlist for max_execution_time and
+wait_timeout, ordered repeated assignments, scope checks, and atomic resource
+preflight. Use the existing system-variable and user-variable synchronization
+paths. wait_timeout remains frontend-only. ParserSQL 1.1.1 already exposes the
+required AST; no dependency release is needed.
 
-- [x] Add failing analyzer and integration coverage for successful mixed assignments, scope/order/repeats, failures, pool isolation and replay.
-- [x] Extend typed analysis and stage both kinds without mutating session state.
-- [x] Commit after clean backend OK; clear pending state on existing failure/reset paths; reset ignored backend timeout before pooling.
-- [x] Run parser/state unit tests, build the server and run the integration suite against isolated MySQL/ProxySQL instances.
-- [x] Update user-variable tracking documentation and review the final diff.
+- [x] Reproduce unwanted forwarding: new no-backend and attached-transaction
+      regression assertions fail on the original PR binary.
+- [x] Commit validated frontend state locally after query-rule routing checks.
+- [x] Remove asynchronous pending-SET state, post-OK commit helper, warning
+      fallback, and reset-before-pooling workaround.
+- [x] Cover mixed SET interception on MySQL and MariaDB. Only backend inspection
+      of max_execution_time depends on backend support.
+- [x] Build and run parser, state, digest, and integration checks.
 
-**Review focus:** inherited GLOBAL scope must never become session tracking; warnings cannot certify an exact backend value; resource-limit fallback cannot partially commit; ignored backend timeouts must not leak; active transactions must not be reset by cleanup.
 
+**Required evidence:** Parsed pure/mixed SET creates no backend; SET does not
+change an attached backend or transaction status; the next query synchronizes
+changed values; backend wait_timeout stays at its original value; unsupported
+mixed SET falls back without partial frontend commits; repeated values and
+counters remain correct; cross-hostgroup replay and client isolation pass.
 
-## Validation and review
+## Verification
 
-- Native server/core build completed with C++17 and the committed ParserSQL 1.1.1 archive; existing compiled dependencies were reused from a local cache.
-- Parser adapter: 271 checks; user-variable connection/state: 74 checks; digest fallback: 92 checks; MySQL 8.0.46 integration: 64 checks.
-- Live warning regression: a separate MySQL instance started with `--maximum-max-execution-time=100` clamps a mixed assignment requesting 1000. Before the review fix, the hostgroup stayed -1. After the fix, it is locked to the authoritative hostgroup, cross-hostgroup routing is rejected, and the backend retains its actual user-variable value and `max_execution_time=100`.
-- Independent code review found the missing post-OK hostgroup lock on warning fallback; fixed and verified with the live regression.
-- Repeated timeout targets initially incremented the command counter twice. A failing integration check now passes with last-value semantics and one counter increment per command.
-- Additional run with global multiplexing disabled passes all new mixed-SET checks but fails the existing exact-backend-ID assertion after COM_CHANGE_USER. The original integration test from HEAD reproduces the same failure without any mixed-SET traffic; that separate assertion is unchanged.
-- TAP clang-tidy cannot complete with its generated include paths (`jemalloc.h` missing), and reports existing style diagnostics. The native compiler build and runtime tests above pass.
+- Native core and server builds passed using the committed ParserSQL 1.1.1.
+- Parser adapter: 268 checks; user-variable state: 74; digest fallback: 92.
+- Integration: 71 checks each against MySQL 8.0.46, MariaDB 10.11, and
+  MySQL with global multiplexing disabled (213 integration checks).
+- Five new interception/transaction assertions failed against the original
+  PR binary and passed with local handling. Deferred replay rejection and
+  unchanged-value replay counters are also covered.
+- Resource-limit fixtures now explicitly materialize their desired state before
+  sampling fallback-only counters. Exact 64 KiB coverage uses bounded individual
+  assignments that fit the existing conservative replay packet budget.
+- Independent read-only review found no blocking correctness issues.
+
+GitHub CI must run on the correction; these local results do not establish that
+remote CI is green. Publication and linked task updates are performed after the
+verified correction is committed.
+
+The final no-multiplexing repeat reproduced the previously observed baseline
+COM_CHANGE_USER test failure: it unconditionally required the same physical
+backend ID. That assertion now follows the existing COM_RESET_CONNECTION test:
+require exact reuse with multiplexing, and permit replacement without it while
+still verifying cleared frontend diagnostics and a NULL backend value.

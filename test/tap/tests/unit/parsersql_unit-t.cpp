@@ -18,10 +18,6 @@ bool mysql_user_variable_tracking_can_stage(
 bool mysql_user_variable_set_uses_qpo_epilogue(
 	UserVariableSetStatus analysis_status,
 	MySQL_User_Variable_Apply_Result preflight_result);
-bool mysql_user_variable_commit_post_ok(
-	MySQL_User_Variable_State& frontend,
-	MySQL_User_Variable_State& backend,
-	const std::vector<UserVariableAssignment>& assignments);
 bool mysql_user_variable_must_classify_and_sync_policy(
 	int mode, int set_parser_algorithm, int query_processor_parser,
 	bool plain_text_com_query, bool connection_bound_fallback,
@@ -598,6 +594,7 @@ static void test_user_variable_mixed_sets() {
 	ok(ordered.session_assignments.size() == 2 &&
 		ordered.session_assignments[0].variable == MixedSetSessionVariable::MAX_EXECUTION_TIME &&
 		ordered.session_assignments[0].value == 1000 &&
+		ordered.session_assignments[1].variable == MixedSetSessionVariable::MAX_EXECUTION_TIME &&
 		ordered.session_assignments[1].value == 2000 && ordered.assignments.size() == 2 &&
 		ordered.assignments[0].raw_literal == "1" && ordered.assignments[1].raw_literal == "2",
 		"mixed SET keeps ordered repetitions and normalizes decimal session values");
@@ -742,7 +739,7 @@ static void test_user_variable_staging_preflight() {
 static void test_user_variable_routing_disposition() {
 	ok(mysql_user_variable_set_uses_qpo_epilogue(
 		UserVariableSetStatus::SUPPORTED, MySQL_User_Variable_Apply_Result::OK),
-		"supported preflighted UDV SET forwards through the qpo routing epilogue");
+		"supported preflighted UDV SET validates routing before local acknowledgment");
 	ok(!mysql_user_variable_set_uses_qpo_epilogue(
 		UserVariableSetStatus::SUPPORTED, MySQL_User_Variable_Apply_Result::VARIABLE_LIMIT),
 		"variable-limit UDV SET does not take the safe qpo routing disposition");
@@ -755,50 +752,6 @@ static void test_user_variable_routing_disposition() {
 	ok(!mysql_user_variable_set_uses_qpo_epilogue(
 		UserVariableSetStatus::UNSUPPORTED, MySQL_User_Variable_Apply_Result::OK),
 		"unsupported UDV SET takes connection-bound fallback instead of safe routing");
-}
-
-static void test_user_variable_post_ok_atomic_commit() {
-	auto initial = analyze_user_set("SET @kept=1");
-	auto update = analyze_user_set("SET @new='value'");
-	MySQL_User_Variable_State frontend;
-	MySQL_User_Variable_State backend;
-	frontend.apply(initial.assignments);
-	backend.apply(initial.assignments);
-	const bool committed = mysql_user_variable_commit_post_ok(
-		frontend, backend, update.assignments);
-	unsigned int frontend_not_matching = 0;
-	unsigned int backend_not_matching = 0;
-	ok(committed && frontend.size() == 2 && backend.size() == 2 &&
-		frontend.count_matches(backend, frontend_not_matching) == 2 &&
-		frontend_not_matching == 0 &&
-		backend.count_matches(frontend, backend_not_matching) == 2 &&
-		backend_not_matching == 0,
-		"post-OK helper commits the same supported assignments to both maps");
-
-	std::vector<UserVariableAssignment> fill;
-	for (size_t i = 0; i < MySQL_User_Variable_State::MAX_VARIABLES; ++i) {
-		const std::string name = "v" + std::to_string(i);
-		fill.push_back({name, "@" + name, "1", UserVariableLiteralKind::INTEGER, i + 1});
-	}
-	std::vector<UserVariableAssignment> overflow {
-		{"overflow", "@overflow", "2", UserVariableLiteralKind::INTEGER, 999}
-	};
-
-	MySQL_User_Variable_State full_frontend;
-	MySQL_User_Variable_State empty_backend;
-	full_frontend.apply(fill);
-	ok(!mysql_user_variable_commit_post_ok(full_frontend, empty_backend, overflow) &&
-		full_frontend.size() == MySQL_User_Variable_State::MAX_VARIABLES &&
-		empty_backend.size() == 0,
-		"frontend post-OK staging failure commits neither map and requests fallback");
-
-	MySQL_User_Variable_State empty_frontend;
-	MySQL_User_Variable_State full_backend;
-	full_backend.apply(fill);
-	ok(!mysql_user_variable_commit_post_ok(empty_frontend, full_backend, overflow) &&
-		empty_frontend.size() == 0 &&
-		full_backend.size() == MySQL_User_Variable_State::MAX_VARIABLES,
-		"backend post-OK staging failure commits neither map and requests fallback");
 }
 
 static void test_user_variable_query_disposition() {
@@ -979,7 +932,7 @@ static void test_user_variable_replay_context() {
 }
 
 int main() {
-	plan(271);
+	plan(268);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -1045,7 +998,6 @@ int main() {
 	test_user_variable_tracking_policy();
 	test_user_variable_staging_preflight();
 	test_user_variable_routing_disposition();
-	test_user_variable_post_ok_atomic_commit();
 	test_user_variable_query_disposition();
 	test_user_variable_runtime_drain_policy();
 	test_user_variable_digest_independent_runtime_policy();

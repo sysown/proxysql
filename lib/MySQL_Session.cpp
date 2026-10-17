@@ -1151,7 +1151,6 @@ MySQL_Session::MySQL_Session() {
 void MySQL_Session::reset() {
 	cancel_aws_iam_wait();
 	cached_backend_auth_policy_valid = false;
-	pending_user_variable_set.reset();
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
@@ -4294,7 +4293,6 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			case -1:
 			case -2:
 			{
-				pending_user_variable_set.reset();
 				current_query_user_variable_safe = false;
 				current_query_user_variable_unsafe_fallback = false;
 				current_query_user_variable_context_change = false;
@@ -5756,7 +5754,6 @@ void MySQL_Session::GPFC_QueryRule_FinalizeFastForwardHandoff() {
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
-	pending_user_variable_set.reset();
 }
 
 int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
@@ -7214,67 +7211,6 @@ handler_again:
 				}
 				gtid_hid = -1;
 				if (rc==0) {
-					if (status == PROCESSING_QUERY && pending_user_variable_set &&
-						!pending_user_variable_set->session_assignments.empty() &&
-						mysql_warning_count(myconn->mysql) != 0) {
-						// OK with warnings may have clamped a requested system value.
-						// Keep the actual backend authoritative instead of replaying
-						// unverified values or publishing only half of the change set.
-						pending_user_variable_set.reset();
-						current_query_user_variable_safe = false;
-						current_query_user_variable_unsafe_fallback = true;
-						thread->status_variables.stvar[st_var_user_variable_fallback_unsupported]++;
-						if (mysql_thread___set_query_lock_on_hostgroup == 1 &&
-							locked_on_hostgroup < 0 && current_hostgroup >= 0) {
-							locked_on_hostgroup = current_hostgroup;
-							thread->status_variables.stvar[st_var_hostgroup_locked]++;
-							thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
-						}
-					}
-					if (status == PROCESSING_QUERY && pending_user_variable_set) {
-						const std::vector<UserVariableAssignment>& assignments =
-							pending_user_variable_set->assignments;
-						if (mysql_user_variable_commit_post_ok(
-							client_myds->myconn->user_variables,
-							myconn->user_variables,
-							assignments)) {
-							user_variable_tracking_latched = true;
-							thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
-								assignments.size();
-							bool sets_wait_timeout = false;
-							for (const auto& assignment : pending_user_variable_set->session_assignments) {
-								if (assignment.variable == MixedSetSessionVariable::MAX_EXECUTION_TIME) {
-									const std::string value = std::to_string(assignment.value);
-									mysql_variables.client_set_value(this, SQL_MAX_EXECUTION_TIME, value);
-									mysql_variables.server_set_value(this, SQL_MAX_EXECUTION_TIME, value.c_str());
-								} else {
-									wait_timeout = static_cast<unsigned long long>(assignment.value) * 1000;
-									sets_wait_timeout = true;
-									// Unlike standalone wait_timeout, the original mixed SET
-									// changed a backend value we do not replay. Reset it
-									// before another frontend can borrow this connection.
-									myconn->reset_before_pool = true;
-								}
-							}
-							if (sets_wait_timeout) {
-								thread->status_variables.stvar[st_var_set_wait_timeout_commands]++;
-							}
-						} else {
-							current_query_user_variable_safe = false;
-							user_variable_backend_authoritative = true;
-							thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
-							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
-								"User-variable SET tracking fallback reason=RESOURCE_LIMIT\n");
-							myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
-							if (mysql_thread___set_query_lock_on_hostgroup == 1 &&
-								locked_on_hostgroup < 0 && current_hostgroup >= 0) {
-								locked_on_hostgroup = current_hostgroup;
-								thread->status_variables.stvar[st_var_hostgroup_locked]++;
-								thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
-							}
-						}
-						pending_user_variable_set.reset();
-					}
 					if (status == PROCESSING_QUERY &&
 						mysql_user_variable_backend_result_requires_binding(
 							true,
@@ -7362,7 +7298,6 @@ handler_again:
 					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 				} else {
 					if (rc==-1) {
-						pending_user_variable_set.reset();
 						current_query_user_variable_safe = false;
 						current_query_user_variable_unsafe_fallback = false;
 						current_query_user_variable_context_change = false;
@@ -8345,8 +8280,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		tracking for MySQL 5.7+
 */
 	bool exit_after_SetParse = true;
+	std::optional<UserVariableSetAnalysis> local_user_variable_set;
+	MySQL_User_Variable_State staged_user_variables;
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
-	pending_user_variable_set.reset();
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
@@ -8462,12 +8398,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (analysis.is_set_statement) {
 			switch (analysis.status) {
 			case UserVariableSetStatus::SUPPORTED: {
-				MySQL_User_Variable_State staged;
 				const MySQL_User_Variable_Apply_Result apply_result =
-					client_myds->myconn->user_variables.stage(analysis.assignments, staged);
+					client_myds->myconn->user_variables.stage(analysis.assignments, staged_user_variables);
 				if (mysql_user_variable_set_uses_qpo_epilogue(
 					analysis.status, apply_result)) {
-					pending_user_variable_set = std::move(analysis);
+					local_user_variable_set = std::move(analysis);
 					current_query_user_variable_safe = true;
 					goto __exit_set_destination_hostgroup;
 				}
@@ -8515,7 +8450,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			raw_query, CurrentQuery.QueryLength,
 			must_classify_and_sync_user_variables(),
 			plain_text_com_query,
-			pending_user_variable_set.has_value(),
+			local_user_variable_set.has_value(),
 			digest_available);
 	if (user_variable_decision.disposition == UserVariableQueryDisposition::SAFE) {
 		current_query_user_variable_safe =
@@ -9631,6 +9566,35 @@ __exit_set_destination_hostgroup:
 			}
 		}
 	}
+	if (local_user_variable_set) {
+		client_myds->myconn->user_variables = std::move(staged_user_variables);
+		user_variable_tracking_latched = true;
+		thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
+			local_user_variable_set->assignments.size();
+		bool sets_wait_timeout = false;
+		for (const auto& assignment : local_user_variable_set->session_assignments) {
+			if (assignment.variable == MixedSetSessionVariable::MAX_EXECUTION_TIME) {
+				mysql_variables.client_set_value(this, SQL_MAX_EXECUTION_TIME,
+					std::to_string(assignment.value));
+			} else {
+				wait_timeout = static_cast<unsigned long long>(assignment.value) * 1000;
+				sets_wait_timeout = true;
+			}
+		}
+		if (sets_wait_timeout) {
+			thread->status_variables.stvar[st_var_set_wait_timeout_commands]++;
+		}
+		// Acknowledge parsed SETs locally, like the existing system-variable
+		// handler. The normal pre-query synchronization updates a backend only
+		// when needed; wait_timeout remains a frontend idle-timeout policy.
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		uint16_t set_status = NumActiveTransactions() ? SERVER_STATUS_IN_TRANS : 0;
+		if (autocommit) set_status |= SERVER_STATUS_AUTOCOMMIT;
+		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, set_status, 0, NULL);
+		RequestEnd(NULL);
+		l_free(pkt->size, pkt->ptr);
+		return true;
+	}
 	return false;
 }
 
@@ -10527,7 +10491,6 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
-	pending_user_variable_set.reset();
 
 	switch (status) {
 		case PROCESSING_STMT_EXECUTE:
