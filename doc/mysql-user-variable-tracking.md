@@ -1,5 +1,11 @@
 # Literal MySQL user-variable tracking
 
+This page describes the current implementation. The
+[SET tracking review](internal/set-tracking-review.md) records the maintainer's
+requirement for frontend-local acceptance of supported assignments. The
+original-statement forwarding and post-backend-OK acceptance described below
+remain implementation behavior under review, not the desired acceptance model.
+
 `mysql-user_variable_tracking` is an opt-in, conservative way to keep a
 small, proven subset of MySQL user-defined variables multiplexable. It tracks
 the literal syntax that MySQL accepted, then replays it when ProxySQL assigns a
@@ -41,7 +47,11 @@ LOAD MYSQL VARIABLES TO RUNTIME;
 ```
 
 Using `mysql-query_processor_parser=1` instead of setting
-`mysql-set_parser_algorithm=3` is also sufficient. With the default
+`mysql-set_parser_algorithm=3` is also sufficient. This is a prerequisite for
+**user-variable analysis**, not an override of the ordinary system SET parser.
+For general system SETs, explicit algorithm 1 or 2 wins even when the
+query-processor parser is 1. See [MySQL parser selection](mysql-set-parser-selection.md)
+for the precedence table and earlier special handlers. With the default
 `mysql-set_query_lock_on_hostgroup=1`, an inactive, unsupported, or unsafe
 user-variable operation follows the established fallback and locks the
 hostgroup.
@@ -147,11 +157,17 @@ safeguard applies when backend session tracking reports one of those context
 changes. This avoids attempting to evaluate or reinterpret literals in
 ProxySQL.
 
-Do not use mode `1` when stored procedures, stored functions, or triggers can
-write user variables invisibly. MySQL session tracking does not report such
-writes, so ProxySQL cannot update its backend map; a later pooled use could see
-stale state. Backend-side code may read synchronized user variables, but hidden
-writes are unsupported.
+Using mode `1` with stored procedures, stored functions, or triggers that write
+user variables invisibly is not recommended. This usage is **not prevented**.
+Those writes do not update ProxySQL's recorded frontend assignment map; MySQL
+system-variable session tracking does not report them as user-variable values.
+
+For example, after an explicit `SET @x=1`, a routine can change the physical
+backend's `@x` to `2` without changing the recorded frontend value. When the
+client migrates to another backend, ProxySQL can replay the recorded `1`.
+That replay is correct for the recorded frontend state; it does not preserve
+the invisible backend mutation. Backend-side code may read synchronized user
+variables, but applications must not assume hidden writes become tracked values.
 
 ## Runtime and lifecycle behavior
 

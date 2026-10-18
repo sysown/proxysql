@@ -440,10 +440,12 @@ UDV status. It checks presence of a reported name, not equality of old/new
 context. [Backend notification consumer](../../lib/MySQL_Session.cpp#L6879).
 Hidden server-side UDV writes are not captured by these maps: a no-at-sign
 query takes the fast SAFE disposition and the implementation does not learn
-the written value from this system-variable context map. The old feature doc
-explicitly excludes invisible writes. Supporting those would need an explicit
-new ownership/detection policy; accepting literal SET locally is not permission
-to claim hidden-write replay is solved.
+the written value from this system-variable context map. As clarified by the
+maintainer in [U7](set-behavior-history-questions.md#u7--hidden-backend-writes-do-not-update-recorded-frontend-values--august-2026),
+this usage is not recommended and is not prevented. Replaying the recorded
+frontend value after migration is correct; hidden backend mutations do not
+become recorded frontend assignments. This does not assert that hidden writes
+are detected, rejected, or preserved during migration.
 [No-at-sign disposition](../../lib/Query_Processor_ParserSQL.cpp#L836),
 [notification processing](../../lib/MySQL_Session.cpp#L6879).
 

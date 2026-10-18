@@ -32,6 +32,14 @@ backend-OK documentation explains current history; it does not override them.
 The earlier [runtime evidence](set-tracking-runtime-evidence.md) supplies the
 long call trace; this file attributes changes to the integration history.
 
+Maintainer answers received 2026-10-18 are recorded in the
+[decision ledger](set-behavior-history-questions.md#maintainer-decisions--2026-10-18):
+E1=A, E2=A, P1=A and N6=A confirm current policy; W4=B requires a production
+change. U7 clarifies advice and hidden-write replay semantics. G1 remains open
+following the [origin investigation](pgsql-search-path-history.md); G8 is
+tracked in [issue #6504](https://github.com/sysown/proxysql/issues/6504) and an
+[investigation RFC](pgsql-pipeline-variable-reconciliation-rfc.md).
+
 ## Integration timeline and surviving changes
 
 | First-parent integration / timestamp | Relevant merged change | Behavior that remains at END |
@@ -43,7 +51,7 @@ long call trace; this file attributes changes to the integration history.
 | [PR #6441, `970a978ae`](https://github.com/sysown/proxysql/commit/970a978ae12eca4e4756bd0decd8bf27f2f53972), 2026-10-12T08:59:43+02:00 | [ParserSQL 1.1.1 `887b35b46`](https://github.com/sysown/proxysql/commit/887b35b460f3b83daec0a6f9f24eea5942f6d6da) | Later grammar/transaction fixes; no new literal-UDV acceptance policy. |
 | [PR #6461, `c52887003`](https://github.com/sysown/proxysql/commit/c5288700311d324df38b8095953d379861bcf81d), 2026-10-13T13:54:33+02:00 | [Tokenizer digests `aebb0c1e9`](https://github.com/sysown/proxysql/commit/aebb0c1e9fe0c36e459bb8d593dc9cb17abef2e1) | Full-query-parser mode uses legacy tokenizer digests and first-comment behavior. Raw UDV admission/classification remains independent of digest availability. Query-rule matching can change back to legacy digest semantics; this is an indirect routing change, not a change to UDV literal support. |
 
-Evidence of persistence: `git diff 57dc075ec..END` is empty for
+Evidence of source-endpoint persistence: `git diff 57dc075ec..END` is empty for
 `lib/MySQL_User_Variables.cpp`, `include/MySQL_User_Variables.h`,
 `doc/mysql-user-variable-tracking.md`, the 1,493-line runtime test and state-unit
 test. The literal analyzer and usage-disposition functions are also unchanged
@@ -217,7 +225,7 @@ All probes are proposed, **not run**; the detailed control flow is already in
 | H7 / #6043, `4013773cb` | Per-assignment staging and canonical replay order can transiently overflow although final map fits. A backend-successful replay then fails metadata acknowledgement and is retired. Draft silent metadata overflow was fixed before merge; current retirement prevents inconsistent reuse. **High confidence; new availability/fit limitation, no demonstrated leak.** [Stage](../../lib/MySQL_User_Variables.cpp#L84), [replay](../../lib/MySQL_User_Variables.cpp#L157), [unit fixture](../../test/tap/tests/unit/mysql_user_variables_unit-t.cpp#L178). | Actual near-limit large `@z`; desired `@a=1,@z=0`; real replay with fitting command budget. Check final-fit behavior and exact backend retirement if acknowledgement fails. |
 | H8 / #6043 | New replay failure path errors waiting client query and destroys backend; ordinary configured retries are bypassed, desired frontend state survives. **High confidence about current policy; not a claim I-8 requires every replay failure to retry.** [Replay state](../../lib/MySQL_Session.cpp#L7651), [fail/retire](../../lib/MySQL_Session.cpp#L3223). | Fail internal replay on clean first-borrow backend before actual query executes; compare retries 0/>0 and established-transaction case. Only eligible guarded retries could be considered. |
 | H9 / #6043, `2556c2a75` | New successful unsafe/context fallback adds USER_VARIABLE/backend authority regardless of multiplex argument, including2; older detector still has multiplex2 escape hatch. Default non-SET unsafe classification can lock before verdict; failed query does not undo lock. **High source confidence; new policy extension; reconcile intended override scope.** [Policy](../../lib/Query_Processor_ParserSQL.cpp#L887), [consumer](../../lib/MySQL_Session.cpp#L7333), [legacy override](../../lib/mysql_connection.cpp#L3111), [lock](../../lib/MySQL_Session.cpp#L8578). | Mode0/1 × multiplex -1/0/1/2 × lock policy 0/1, successful and rejected unsafe query; inspect independent flags/release. Current unit binding matrix covers -1/0/1 only. |
-| H10 / #6043 | Newly multiplexable literal state can be mutated invisibly by no-at-sign stored SQL, without updating maps. Before, original user SET normally pinned. Feature explicitly excludes mode1 deployments with hidden UDV writes. **High confidence about absent detection/documented boundary; consequence unverified.** [SAFE shortcut](../../lib/Query_Processor_ParserSQL.cpp#L836), [documented restriction](../mysql-user-variable-tracking.md#reads-unsafe-operations-and-context-changes). | Track value; call procedure/function/trigger-changing SQL with no visible at-sign; alternate backend IDs, then matching desired state on another frontend. Check actual value versus map. Read-only backend routines are already a positive test. |
+| H10 / #6043 | Newly multiplexable literal state can be mutated invisibly by no-at-sign stored SQL, without updating maps. Before, original user SET normally pinned. Hidden writes are not recommended and are not prevented; they do not update recorded frontend assignments. Replaying the recorded value on migration is correct (maintainer clarification U7). **High confidence about absent detection; runtime probe not executed.** [SAFE shortcut](../../lib/Query_Processor_ParserSQL.cpp#L836), [documented behavior](../mysql-user-variable-tracking.md#reads-unsafe-operations-and-context-changes). | Track value; call procedure/function/trigger-changing SQL with no visible at-sign; alternate backend IDs, then matching desired state on another frontend. Check actual value versus map. Read-only backend routines are already a positive test. |
 | H11 / #6156, `1c2f21dbf`, integrated 2026-09-01 | New query-rule permanent fast-forward clears pending UDV assignments and bypasses normal desired-state materialization onto a newly selected backend. **High confidence about missing guard/materializer; runtime unverified.** [Cleanup](../../lib/MySQL_Session.cpp#L5836), [handoff](../../lib/MySQL_Session.cpp#L5896), [raw path](../../lib/MySQL_Session.cpp#L5710). | Track on route A; fast-forward rule sends backend reader to unused route B. Check value/type/ID. Also place transition rule on supported SET itself and inspect pending ownership. Establish state or reject unsafe transition explicitly. |
 
 The compact probes above include numeric sizes/mode numbers intentionally;
@@ -307,10 +315,11 @@ or whether metadata/isolation bugs are allowed.
    multiplex 1/2 rules? **Yes / No.** If “No,” define the existing operator
    override's precise scope or explicitly reject an unsafe conflict; this does
    not authorize leaking untracked state or clearing unrelated pins.
-6. **Hidden writes:** Keep procedures/functions/triggers that invisibly change
-   UDVs an explicitly unsupported mode1 deployment condition? **Yes / No.**
-   A “No” needs a concrete declaration/detection/ownership policy, because
-   raw-query analysis and system-variable notifications cannot see those writes.
+6. **Hidden writes — clarified (U7):** Procedures/functions/triggers can write
+   UDVs invisibly; this usage is not recommended and not prevented. Those writes
+   do not update recorded frontend assignments. Replaying the recorded value
+   after migration is correct. No new declaration/detection/ownership policy
+   was requested; the earlier yes/no formulation is retired.
 
 Real context preservation, replay budgets, internal replay retry policy and
 fast-forward transitions remain technical decisions to document while applying
@@ -349,7 +358,7 @@ consequence, not an executed measurement. Existing
 [clamp cases](../../test/tap/tests/mysql-set_wait_timeout-t.cpp#L137) do not
 establish the intended live-global-increase policy.
 
-### Backend value-error suppression
+### Backend-variable absence classification
 
 [PR #5708](https://github.com/sysown/proxysql/pull/5708) integrated May 5 in
 [`012fe2821`](https://github.com/sysown/proxysql/commit/012fe2821). In addition
@@ -367,11 +376,12 @@ Subsequent verification skips that variable even if its desired value changes:
 The flag is initialized in
 [the connection member](../../include/mysql_connection.h#L154), but
 [ordinary connection reset](../../lib/mysql_connection.cpp#L3462) does not clear
-it. Thus value-error suppression survives ordinary session resets and lasts
-for that connection object's lifetime; it is not merely a cache of one bad
-value until the next reset.
-A runtime probe must establish a value the selected backend actually rejects,
-then try a demonstrably accepted value on the same physical connection.
+it. The maintainer confirmed E1=A and E2=A: this deliberately classifies the
+backend variable as absent, for the connection object's lifetime including
+ordinary resets. It is not a cache of one invalid value and is not an open
+request to retry whenever the frontend value changes. A regression probe
+should verify the absence flag, subsequent skip behavior, reset persistence,
+and initialization on a replacement object.
 
 ### Notifications, capability policy, and GTID coupling
 

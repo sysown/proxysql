@@ -23,6 +23,8 @@ accuracy or currency of every document it contains.
 - [Product invariants](agents/invariants.md): guarantees changes must preserve.
 - [Agent guidance](agents/README.md): repository conventions and known failure patterns.
 - [Domain terminology](../GLOSSARY.md): resolved architectural vocabulary.
+- [MySQL SET parser selection](mysql-set-parser-selection.md): runtime selector precedence and the separate user-variable prerequisite.
+- [MySQL user-variable tracking](mysql-user-variable-tracking.md): current feature behavior, replay and limits.
 - [Test infrastructure](../test/infra/README.md): supported isolated provisioning/test execution.
 - [CI architecture](GH-Actions/README.md): authoritative workflow architecture.
 - [DuckDB documentation](duckdb/index.md): plugin tutorial and reference.

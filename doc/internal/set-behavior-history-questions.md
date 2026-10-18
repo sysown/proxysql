@@ -1,6 +1,6 @@
 # SET/session-variable behavior: twelve-month intent questionnaire
 
-Status: awaiting maintainer answers. Prepared 2026-10-18 on
+Status: partially answered; maintainer decisions recorded 2026-10-18. Prepared on
 `docs/invariants-expansion`, in [PR #6491](https://github.com/sysown/proxysql/pull/6491).
 
 Scope assumed from the current discussion: MySQL SET/session-variable behavior,
@@ -22,6 +22,24 @@ provided in batches. Leave an ID unanswered if you want to discuss it first.
 The choices are design decisions, not instructions to implement an immediate
 patch. Supporting a previously unsupported case still requires correct protocol,
 transaction, error, and ownership handling.
+
+## Maintainer decisions — 2026-10-18
+
+These decisions describe intended behavior. They do not assert that pending
+production changes have been implemented by this documentation PR.
+
+| ID | Answer / status | Intended behavior and follow-up |
+| --- | --- | --- |
+| E1 | A — confirmed | Tolerate the listed setup errors broadly and classify the variable as absent on that backend. |
+| E2 | A — confirmed | The absence classification belongs to the backend connection object, survives ordinary reset, and is not a rejected-value cache. |
+| W4 | B — change required | A client with no explicit wait_timeout must follow later global changes. Current initialization-cap behavior still needs an implementation change. |
+| P1 | A — confirmed; documented | Explicit SET algorithm 1/2 wins for ordinary system SETs reaching the general parser. See the [parser selection reference](../mysql-set-parser-selection.md). |
+| N6 | A — confirmed | Preserve the configuration gate on enabling GTID session tracking. |
+| U7 | Clarified; misleading question retired | Hidden writes are not prevented; their use is not recommended. Replaying the frontend's recorded value on another backend is correct. |
+| G1 | Open — origin investigated | Explain the origin of tracking separately from the later configurable startup default; see the [history note](pgsql-search-path-history.md). No default policy chosen. |
+| G8 | Deferred — issue/RFC | Analyze pipeline reconciliation and protocol ordering in [issue #6504](https://github.com/sysown/proxysql/issues/6504) and the [RFC](pgsql-pipeline-variable-reconciliation-rfc.md) before selecting behavior. |
+
+All other IDs remain unanswered. Their presence here does not imply approval.
 
 ## MySQL client wait_timeout
 
@@ -75,7 +93,9 @@ client SET was ignored; the frontend idle timer used the global policy.
 
 **Question:** For a client that **never sets wait_timeout**, what should happen when an operator raises the global timeout? Current code retains the session-initialization value as a cap.
 
-**Answer:** A: keep that initialization cap; B: follow the new global value
+**Answer:** **B — follow the new global value.**
+
+**Decision:** For clients that have not explicitly set wait_timeout, later global changes must apply. The current saved initialization value is not an intended cap for those clients. Production behavior has not been changed in this PR.
 
 
 W4 is a consequence of copying the global value into the session and taking the
@@ -92,7 +112,7 @@ outside the existing named exceptions, returned an error and destroyed the
 affected backend. The new path marks the
 variable absent on that connection and resumes the waiting client operation.
 
-### E1 — Backend value errors become tolerated — May 2026
+### E1 — Additional setup errors classify the variable as absent — May 2026
 
 **Before:** Outside the existing named exceptions, backend error 1231 or 1210 during tracked-variable setup was reported to the waiting client operation and the affected backend was destroyed.
 
@@ -100,29 +120,32 @@ variable absent on that connection and resumes the waiting client operation.
 
 **Observable effect:** The client may already have received local OK for its earlier SET; a later query can now execute although the backend rejected the setting ProxySQL tried to establish.
 
-**Question:** When a backend rejects a tracked variable's **value or arguments** with 1231/1210, should the waiting client query continue without that setting? The implementation applies this broadly, beyond the wsrep cases that motivated it.
+**Question:** Should setup errors 1231/1210 classify the tracked variable as absent on that backend and let the waiting client query continue? The implementation applies this broadly, beyond the wsrep cases that motivated it.
 
-**Answer:** A: tolerate these codes for all tracked variables; B: tolerate only explicitly identified unsupported-variable/backend cases and report other failures
+**Answer:** **A — tolerate these codes broadly for tracked variables.**
 
-### E2 — A bad value can disable later values — consequence of the May change
+**Decision:** The backend variable is classified as absent. This is an intentional availability classification, not a cache declaring one requested value invalid.
+
+### E2 — Backend-variable absence lasts for the connection object — May change
 
 **Before:** The absence flag already persisted for unsupported variables. But an ordinary rejected value caused backend destruction, so that backend object did not survive carrying a newly suppressed variable.
 
 **After:** Errors added by E1 now set the same lifetime absence flag. Later desired values are skipped too. Ordinary MySQL connection reset clears values/hashes but does not clear this flag.
 
-**Observable effect:** A backend rejecting value X can subsequently skip a valid value Y for the same variable, including after ordinary session resets. This is a consequence of E1 using an older flag, not a separately introduced reset mechanism.
+**Observable effect:** Once classified absent, that variable is skipped for this backend connection object regardless of later frontend values, including after ordinary session resets. A new connection object initializes the absence flags again.
 
 **Question:** Should one such rejection suppress **all later values of that variable** for that backend connection object's lifetime, including ordinary session resets?
 
-**Answer:** A: keep that lifetime suppression; B: allow another attempt when the desired value changes
+**Answer:** **A — retain the absence classification for the connection object's lifetime.**
+
+**Decision:** A new requested value does not make an absent backend variable present. Ordinary reset must not be described as clearing this availability classification.
 
 
-These questions concern newly tolerated value errors. They do not propose
-changing the older handling of a genuinely nonexistent backend variable by
-accident. Skipping an unsupported feature and silently omitting a requested
-execution constraint have different consequences.
-The ordinary MySQL connection reset clears values/hashes but does not clear
-`var_absent`; replacing the connection object initializes that flag again.
+The historical change broadened which setup errors enter an existing absence
+classification. The maintainer confirmed both that classification and its
+connection-object lifetime. The ordinary MySQL connection reset clears
+values/hashes but does not clear `var_absent`; replacing the connection object
+initializes that flag again. E1/E2 are no longer open defect/policy questions.
 
 ## MySQL backend notifications and tracking modes
 
@@ -201,7 +224,9 @@ the frontend and backend maps for recognized variables.
 
 **Question:** Should `mysql-enable_server_deprecate_eof=false` prevent ProxySQL from **enabling GTID session tracking**, even when ordinary notification tracking is disabled, or ENFORCED mode requested deprecate-EOF? This extra gate entered with #5166.
 
-**Answer:** A: keep the configuration gate; B: decide from the negotiated backend capability instead
+**Answer:** **A — preserve the configuration gate.**
+
+**Decision:** A false mysql-enable_server_deprecate_eof setting prevents enabling GTID session tracking through this verifier, including the configuration combinations described above.
 
 
 N6 is separate from N2/N3: the GTID verifier checks the configuration flag, not
@@ -239,7 +264,9 @@ the new query-processor parser setting defaults to 0.
 
 **Question:** If `query_processor_parser=1` but `set_parser_algorithm=1` or `2`, which should parse ordinary system SETs **reaching the general parser**? The explicit SET setting currently wins.
 
-**Answer:** A: explicit SET algorithm wins; B: query-processor ParserSQL forces algorithm 3
+**Answer:** **A — explicit SET algorithm wins.**
+
+**Decision:** Document this precedence explicitly. It is separate from the UDV admission prerequisite: query_processor_parser=1 can enable that analysis without overriding algorithm 1/2 for general system SETs. See the [operator/developer reference](../mysql-set-parser-selection.md).
 
 ### P2 — Parser selection can change literal preprocessing — May/July 2026
 
@@ -379,17 +406,17 @@ The questions below do not reopen those decisions.
 
 **Answer:** A: keep that independent pin; B: preserve the applicable explicit variable-multiplex override
 
-### U7 — Hidden writes become an unsupported deployment boundary — August 2026
+### U7 — Hidden backend writes do not update recorded frontend values — August 2026
 
 **Before:** An ordinary user-variable SET normally pinned the backend. A routine changing that variable later could keep using that owned physical connection.
 
-**After:** Mode 1 makes supported literal state replayable and multiplexable. Raw-query analysis cannot learn a hidden UDV write from a routine/trigger with no visible assignment; the feature documentation excludes that usage.
+**After:** Mode 1 makes supported literal state replayable and multiplexable. A hidden UDV write in a procedure, function, or trigger does not update the frontend's recorded assignment map. ProxySQL does not prevent this usage.
 
-**Observable effect:** The real backend value can diverge from the replay map. After migration the old tracked value may be replayed. This is why the unsupported condition matters, rather than merely being a list of SQL syntax exclusions.
+**Observable effect:** After an explicit SET @x=1, a routine may change the physical backend's @x to 2 without changing the recorded frontend value. Migration to another backend can replay 1. Replaying that recorded value is correct under the tracking model; the hidden mutation has not become tracked frontend state.
 
-**Question:** Is it intended that UDV tracking **does not support sessions whose procedures, functions, or triggers invisibly change user variables**? Before this feature, an ordinary user-variable SET normally pinned the backend, so hidden changes could remain on that owned connection.
+**Clarification:** The earlier wording “excludes this usage” conflated advice with enforcement. Hidden writes are **not recommended and not prevented**. No new detection, introspection, rejection, or ownership policy was selected.
 
-**Answer:** Yes / No
+**Answer:** Clarified by the maintainer; the earlier yes/no question is retired.
 
 ### U8 — A new replay failure policy — August 2026
 
@@ -408,8 +435,9 @@ U2 asks about the capability boundary, not local evaluation of arbitrary SQL.
 Prepared-protocol support, typed values, and interpretation context still need
 their own correct implementation if that boundary expands. U6 requires a
 precise decision about each override's scope before any implementation change.
-Neither U5 choice silently forgets accepted state. A No for U7 requires a
-concrete way to declare, detect, or bind hidden writes. U8 preserves the
+Neither U5 choice silently forgets accepted state. U7 records the boundary
+between recorded frontend assignments and hidden backend mutations; it does not
+request new detection or enforcement. U8 preserves the
 transaction, execution-progress, and bounded-retry guards in I-8.
 
 ## PostgreSQL: separate decisions
@@ -419,7 +447,7 @@ Shared startup/default code can affect Stable/libpq even when a change arrived
 through the native-backend feature branch. The established transaction,
 isolation, and truthful-reset invariants remain requirements under every answer.
 
-### G1 — search_path becomes an imposed startup default — October 2026
+### G1 — search_path joins configured startup defaults — October 2026
 
 **Before:** search_path was optional dynamic state. When the client did not set it and no other override applied, the backend role/database default could determine it.
 
@@ -429,7 +457,11 @@ isolation, and truthful-reset invariants remain requirements under every answer.
 
 **Question:** If a client omits `search_path`, whose default should apply? October promoted it into ProxySQL's critical startup defaults, overriding reliance on backend role/database defaults.
 
-**Answer:** A: ProxySQL's configured default; B: backend role/database default
+**Answer:** Open. The maintainer requested the origin and rationale before choosing.
+
+**Follow-up:** The [search_path history note](pgsql-search-path-history.md) separates the original tracking support from the later critical-startup/default-variable change. The available policies remain A: ProxySQL's configured default; B: backend role/database default.
+
+**Why it was added:** Original tracking (October 2025, before this audit window) avoided hostgroup locking for SET search_path. It did not expose this configurable default. The October 2026 startup promotion exposed the knob through existing generic registration. Its stated reasons were a known baseline for omitted clients, SET TO DEFAULT, backend startup materialization, and PostgreSQL 18 ParameterStatus reporting. Establishing that baseline and choosing whose default wins are related but separate decisions. Explicit client startup input still wins over the configured fallback.
 
 ### G2 — Extended SET/RESET now also executes the original SQL — March 2026
 
@@ -513,7 +545,9 @@ isolation, and truthful-reset invariants remain requirements under every answer.
 
 **Question:** During an active Extended Query pipeline, should needing to synchronize a **second differing parameter** be an unsupported condition that terminates the session? This restriction entered in March.
 
-**Answer:** A: retain connection termination; B: support reconciliation of all required parameters
+**Answer:** Deferred to [issue #6504](https://github.com/sysown/proxysql/issues/6504) and the [RFC](pgsql-pipeline-variable-reconciliation-rfc.md). Neither A (retain termination) nor B (support reconciliation) has been chosen.
+
+**Follow-up:** Establish reachable client sequences, ordering requirements, backend-mode differences, error recovery, and tests before proposing a solution. The current fatal branch alone is not evidence that the previous implementation worked.
 
 
 G7 concerns an unidentified termination cause **after confirmed idle**; it does
@@ -573,7 +607,7 @@ source/history observations, not executed regression results.
 | P3 | [scope validation](https://github.com/sysown/proxysql/commit/596b84029); [session-only extraction](../../lib/Query_Processor_ParserSQL.cpp#L1185), [fallback policy](../../lib/MySQL_Session.cpp#L10992) |
 | P4 | [wrapper passthrough](https://github.com/sysown/proxysql/commit/0c832e5ce), [whitespace extension](https://github.com/sysown/proxysql/commit/960c8bcb7); [dispatch](../../lib/MySQL_Session.cpp#L8655) |
 | P5 | [tokenizer parity](https://github.com/sysown/proxysql/commit/aebb0c1e9); [adapter](../../lib/Query_Processor_ParserSQL.cpp#L446) |
-| U1–U8 | [single UDV integration](https://github.com/sysown/proxysql/commit/57dc075ec); [defaults](../../lib/MySQL_Thread.cpp#L1451), [admission gate](../../lib/mysql_connection.cpp#L3193), [bounds](../../include/MySQL_User_Variables.h#L100), [latched policy](../../lib/MySQL_Session.cpp#L3146), [independent binding policy](../../lib/Query_Processor_ParserSQL.cpp#L887), [hidden-write exclusion](../mysql-user-variable-tracking.md#reads-unsafe-operations-and-context-changes), [replay failure](../../lib/MySQL_Session.cpp#L3223) |
+| U1–U8 | [single UDV integration](https://github.com/sysown/proxysql/commit/57dc075ec); [defaults](../../lib/MySQL_Thread.cpp#L1451), [admission gate](../../lib/mysql_connection.cpp#L3193), [bounds](../../include/MySQL_User_Variables.h#L100), [latched policy](../../lib/MySQL_Session.cpp#L3146), [independent binding policy](../../lib/Query_Processor_ParserSQL.cpp#L887), [hidden-write behavior](../mysql-user-variable-tracking.md#reads-unsafe-operations-and-context-changes), [replay failure](../../lib/MySQL_Session.cpp#L3223) |
 | G1 | [critical search_path](https://github.com/sysown/proxysql/commit/212a62800), [October integration](https://github.com/sysown/proxysql/commit/2775bb222); [startup defaults](../../lib/PgSQL_Protocol.cpp#L1536), [startup baseline](../../lib/PgSQL_Connection.cpp#L1294) |
 | G2–G3 / G8 | [March extended changes](https://github.com/sysown/proxysql/commit/96bc66873), [integration](https://github.com/sysown/proxysql/commit/9d921bdda), [locked-reset exception](https://github.com/sysown/proxysql/commit/abb66cc19); [SET completion](../../lib/PgSQL_Session.cpp#L4829), [RESET ALL refusal](../../lib/PgSQL_Session.cpp#L4884), [locked-session RESET path](../../lib/PgSQL_Session.cpp#L5235), [multi-parameter pipeline restriction](../../lib/PgSQL_Session.cpp#L3435) |
 | G4 | [isolated DISCARD ALL](https://github.com/sysown/proxysql/commit/ddd30da59), [transaction-boundary correction](https://github.com/sysown/proxysql/commit/7a7dc7389); [DISCARD handling](../../lib/PgSQL_Session.cpp#L4995) |
@@ -583,9 +617,7 @@ source/history observations, not executed regression results.
 
 No executable tests were run for this history review. The current implementation
 review already records the unavailable local integration infrastructure. This
-questionnaire records no new maintainer decisions until answers are supplied.
+questionnaire records the maintainer decisions above; other questions remain open.
 
-The three changed review notes passed checks for 181 local references,
-171 numeric source anchors, two Markdown heading anchors, 78 cited commit
-objects reachable from the pinned endpoint, and unique IDs for all 34 questions.
-These are documentation/history checks, not runtime proof of proposed probes.
+Documentation validation for this revision is recorded in the PR description.
+Source/history checks do not establish the runtime results of proposed probes.
