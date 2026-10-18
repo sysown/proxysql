@@ -6,6 +6,7 @@
 #include "MySQL_Protocol.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
+#include "MySQL_Thread.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -93,8 +94,10 @@ void test_init_with_stmt(size_t length) {
 	MYSQL* mysql = mysql_init(nullptr);
 	MYSQL_STMT* stmt = mysql_stmt_init(mysql);
 	MYSQL_RES metadata {};
+	MySQL_Thread worker;
+	worker.atomic_curtime = 0;
 	MySQL_Session session;
-	session.thread = nullptr;
+	session.thread = &worker;
 	session.connections_handler = true; // No hostgroup client-counter registration.
 	MySQL_Data_Stream stream;
 	MySQL_Data_Stream* stream_ptr = &stream;
@@ -140,6 +143,10 @@ void test_init_with_stmt(size_t length) {
 			&& rs.sid == uint8_t(sid + 1) && rs.num_rows == 3
 			&& rs.resultset_completed && rs.resultset_size == initial_size + expected + 9,
 			"init_with_stmt payload=%zu: EOF follows complete rows with exact size and sequence accounting", length);
+		if (length == 33554430) {
+			ok(worker.atomic_curtime.load() != 0,
+				"init_with_stmt refreshes the worker heartbeat after 32 MiB of output");
+		}
 	}
 	mysql_stmt_close(stmt);
 	mysql_close(mysql);
@@ -147,7 +154,7 @@ void test_init_with_stmt(size_t length) {
 } // namespace
 
 int main() {
-	plan(5 * (sizeof(lengths) / sizeof(lengths[0])));
+	plan(5 * (sizeof(lengths) / sizeof(lengths[0])) + 1);
 	test_init_minimal();
 	for (size_t length : lengths) {
 		test_add_row2(length);
