@@ -713,6 +713,55 @@ static bool assignment_has_user_target(const AstNode* assignment) {
         target->first_child && target->first_child->type == NodeType::NODE_USER_VARIABLE;
 }
 
+struct ReplayContextTarget {
+    std::string name;
+    bool affects_session { false };
+};
+
+static bool is_scope(const std::string& value, const char* scope) {
+    const size_t scope_length = std::strlen(scope);
+    return value.size() == scope_length &&
+        strncasecmp(value.data(), scope, scope_length) == 0;
+}
+
+static ReplayContextTarget replay_context_target(const AstNode* target) {
+    if (!target || target->type != NodeType::NODE_VAR_TARGET) return {};
+
+    std::vector<std::string> identifiers;
+    for (const AstNode* child = target->first_child; child;
+         child = child->next_sibling) {
+        if (child->type == NodeType::NODE_USER_VARIABLE) return {};
+        if (child->type == NodeType::NODE_IDENTIFIER &&
+            child->value_ptr && child->value_len != 0) {
+            identifiers.emplace_back(child->value_ptr, child->value_len);
+        }
+    }
+    if (identifiers.empty()) return {};
+
+    bool affects_session = true;
+    std::string name = identifiers.back();
+    if (identifiers.size() > 1) {
+        // MySQL does not combine a scope keyword with an @/@@ target.
+        // In particular, LOCAL @@global.x must not mask the global scope.
+        if (!name.empty() && name[0] == '@') return {};
+        const std::string& scope = identifiers.front();
+        affects_session = is_scope(scope, "SESSION") || is_scope(scope, "LOCAL");
+    } else if (name.size() > 2 && name[0] == '@' && name[1] == '@') {
+        const size_t dot = name.find('.', 2);
+        if (dot != std::string::npos) {
+            const std::string scope = name.substr(2, dot - 2);
+            affects_session = is_scope(scope, "SESSION") || is_scope(scope, "LOCAL");
+        }
+    }
+
+    if (!name.empty() && name[0] == '@' &&
+        (name.size() == 1 || name[1] != '@')) {
+        return {};
+    }
+    return {normalize_set_var_name(std::move(name)), affects_session};
+}
+
+
 UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
     const char* query, size_t query_length)
 {
@@ -747,11 +796,31 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
     }
 
     std::vector<UserVariableAssignment> assignments;
+    std::vector<SessionVariableAssignment> session_assignments;
     for (const AstNode* child = result.ast->first_child; child; child = child->next_sibling) {
         if (!assignment_has_user_target(child)) {
-            analysis.status = UserVariableSetStatus::UNSUPPORTED;
-            tl_mysql_parser.reset();
-            return analysis;
+            const AstNode* target = child->type == NodeType::NODE_VAR_ASSIGNMENT
+                ? child->first_child : nullptr;
+            const ReplayContextTarget session_target = replay_context_target(target);
+            const AstNode* rhs = target ? target->next_sibling : nullptr;
+            UserVariableLiteralKind kind;
+            if (!session_target.affects_session || session_target.name.empty() ||
+                !rhs || rhs->next_sibling ||
+                !(supported_user_variable_rhs(rhs, kind) || rhs->type == NodeType::NODE_IDENTIFIER ||
+                    ((rhs->type == NodeType::NODE_COLUMN_REF || rhs->type == NodeType::NODE_LITERAL_INT) && !rhs->first_child))) {
+                analysis.status = UserVariableSetStatus::UNSUPPORTED;
+                tl_mysql_parser.reset();
+                return analysis;
+            }
+            const std::string value = rhs->source_ptr ? copy_ref(rhs->source()) : copy_ref(rhs->value());
+            if (rhs->type != NodeType::NODE_LITERAL_STRING && !strcasecmp(value.c_str(), "DEFAULT") &&
+                session_target.name != "sql_select_limit" && session_target.name != "max_join_size") {
+                analysis.status = UserVariableSetStatus::UNSUPPORTED;
+                tl_mysql_parser.reset();
+                return analysis;
+            }
+            session_assignments.push_back({session_target.name, value, rhs->type == NodeType::NODE_LITERAL_STRING});
+            continue;
         }
 
         const AstNode* target = child->first_child;
@@ -781,7 +850,7 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
             return analysis;
         }
 
-        if (!is_ascii(variable->value())) {
+        if (!is_ascii(variable->value()) || std::memchr(variable->value_ptr, '\0', variable->value_len)) {
             analysis.status = UserVariableSetStatus::UNSUPPORTED;
             analysis.assignments.clear();
             tl_mysql_parser.reset();
@@ -799,6 +868,7 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
 
     analysis.status = UserVariableSetStatus::SUPPORTED;
     analysis.assignments = std::move(assignments);
+    analysis.session_assignments = std::move(session_assignments);
     tl_mysql_parser.reset();
     return analysis;
 }
@@ -900,53 +970,6 @@ bool mysql_user_variable_fallback_uses_qpo_epilogue(
     return unsafe_fallback || replay_context_change;
 }
 
-struct ReplayContextTarget {
-    std::string name;
-    bool affects_session { false };
-};
-
-static bool is_scope(const std::string& value, const char* scope) {
-    const size_t scope_length = std::strlen(scope);
-    return value.size() == scope_length &&
-        strncasecmp(value.data(), scope, scope_length) == 0;
-}
-
-static ReplayContextTarget replay_context_target(const AstNode* target) {
-    if (!target || target->type != NodeType::NODE_VAR_TARGET) return {};
-
-    std::vector<std::string> identifiers;
-    for (const AstNode* child = target->first_child; child;
-         child = child->next_sibling) {
-        if (child->type == NodeType::NODE_USER_VARIABLE) return {};
-        if (child->type == NodeType::NODE_IDENTIFIER &&
-            child->value_ptr && child->value_len != 0) {
-            identifiers.emplace_back(child->value_ptr, child->value_len);
-        }
-    }
-    if (identifiers.empty()) return {};
-
-    bool affects_session = true;
-    std::string name = identifiers.back();
-    if (identifiers.size() > 1) {
-        // MySQL does not combine a scope keyword with an @/@@ target.
-        // In particular, LOCAL @@global.x must not mask the global scope.
-        if (!name.empty() && name[0] == '@') return {};
-        const std::string& scope = identifiers.front();
-        affects_session = is_scope(scope, "SESSION") || is_scope(scope, "LOCAL");
-    } else if (name.size() > 2 && name[0] == '@' && name[1] == '@') {
-        const size_t dot = name.find('.', 2);
-        if (dot != std::string::npos) {
-            const std::string scope = name.substr(2, dot - 2);
-            affects_session = is_scope(scope, "SESSION") || is_scope(scope, "LOCAL");
-        }
-    }
-
-    if (!name.empty() && name[0] == '@' &&
-        (name.size() == 1 || name[1] != '@')) {
-        return {};
-    }
-    return {normalize_set_var_name(std::move(name)), affects_session};
-}
 
 bool parsersql_set_changes_user_variable_replay_context_mysql(
     const char* query, size_t query_length)

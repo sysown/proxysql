@@ -1129,6 +1129,8 @@ MySQL_Session::MySQL_Session() {
 	autocommit=true;
 	autocommit_handled=false;
 	sending_set_autocommit=false;
+	committing_tracked_set=false;
+	pending_tracked_set.reset();
 	autocommit_on_hostgroup=-1;
 	killed=false;
 	session_type=PROXYSQL_SESSION_MYSQL;
@@ -1209,7 +1211,6 @@ void MySQL_Session::reset() {
 	cancel_aws_iam_wait();
 	cached_backend_auth_policy_valid = false;
 #endif // PROXYSQL40
-	pending_user_variable_set.reset();
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
@@ -1220,6 +1221,8 @@ void MySQL_Session::reset() {
 	autocommit=true;
 	autocommit_handled=false;
 	sending_set_autocommit=false;
+	committing_tracked_set=false;
+	pending_tracked_set.reset();
 	autocommit_on_hostgroup=-1;
 	warning_in_hg = -1;
 	current_hostgroup=-1;
@@ -3177,6 +3180,11 @@ bool MySQL_Session::handler_again___verify_backend_user_variables(MySQL_Connecti
 	}
 
 	const MySQL_User_Variable_State& desired = client_myds->myconn->user_variables;
+	UserVariableLiteralContext unresolved_context;
+	if (desired.unresolved_context(unresolved_context)) {
+		set_previous_status_mode3();
+		NEXT_IMMEDIATE_NEW(SETTING_USER_VARIABLE_CONTEXT);
+	}
 	unsigned int not_matching = 0;
 	const unsigned int matches = myconn->user_variables.count_matches(desired, not_matching);
 	if (
@@ -3187,9 +3195,14 @@ bool MySQL_Session::handler_again___verify_backend_user_variables(MySQL_Connecti
 	}
 
 	constexpr size_t query_packet_overhead = sizeof(mysql_hdr) + 1;
+	// The handshake does not advertise the server's max_allowed_packet, and
+	// options.max_allowed_pkt is normally unset on backend connections. Use
+	// the proxy's query limit in that case, as for ordinary client queries;
+	// a smaller actual server limit is reported by the replay error path.
+	const uint32_t packet_limit = myconn->options.max_allowed_pkt
+		? myconn->options.max_allowed_pkt : mysql_thread___max_allowed_packet;
 	const MySQL_User_Variable_Replay_Packet_Budget packet_budget =
-		mysql_user_variable_replay_packet_budget(
-			myconn->options.max_allowed_pkt, query_packet_overhead);
+		mysql_user_variable_replay_packet_budget(packet_limit, query_packet_overhead);
 	if (packet_budget.status == MySQL_User_Variable_Replay_Packet_Budget_Status::PACKET_LIMIT_TOO_SMALL) {
 		handler_again___fail_user_variable_replay(
 			mybe->server_myds,
@@ -3201,6 +3214,11 @@ bool MySQL_Session::handler_again___verify_backend_user_variables(MySQL_Connecti
 	}
 	const MySQL_User_Variable_Replay_Plan plan = desired.build_replay_plan(
 		myconn->user_variables, packet_budget.max_query_bytes);
+	if (plan.status == MySQL_User_Variable_Replay_Status::UNRESOLVED_CONTEXT) {
+		handler_again___fail_user_variable_replay(mybe->server_myds,
+			ER_UNKNOWN_ERROR, "HY000", "Unresolved user-variable literal context");
+		return true;
+	}
 	if (plan.status == MySQL_User_Variable_Replay_Status::ASSIGNMENT_TOO_LARGE) {
 		handler_again___fail_user_variable_replay(
 			mybe->server_myds,
@@ -4376,7 +4394,6 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			case -1:
 			case -2:
 			{
-				pending_user_variable_set.reset();
 				current_query_user_variable_safe = false;
 				current_query_user_variable_unsafe_fallback = false;
 				current_query_user_variable_context_change = false;
@@ -4727,7 +4744,7 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 	}
 	bool ac = autocommit;
-	if (autocommit == false) { // also IsAutoCommit==false
+	if (autocommit == false && !committing_tracked_set) { // also IsAutoCommit==false
 		if (mysql_thread___enforce_autocommit_on_reads == false) {
 			if (mybe->server_myds->myconn->IsAutoCommit() == false) {
 				if (mybe->server_myds->myconn->IsActiveTransaction() == false) {
@@ -4748,14 +4765,44 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 			}
 		}
 	}
-	int rc=myconn->async_set_autocommit(myds->revents, ac);
+	// Preserve intermediate OFF->ON transitions even if this backend started
+	// with autocommit enabled inside an explicit transaction.
+	static char commit_sql[] = "SET autocommit=0,autocommit=1";
+	int rc = committing_tracked_set
+		? myconn->async_send_simple_command(myds->revents, commit_sql, sizeof(commit_sql) - 1, true)
+		: myconn->async_set_autocommit(myds->revents, ac);
 	if (rc==0) {
 		st=previous_status.top();
 		previous_status.pop();
 		myds->DSS = STATE_MARIADB_GENERIC;
+		if (committing_tracked_set) {
+			assert(pending_tracked_set);
+			mysql_variables.apply_set_plan(this, pending_tracked_set->session_variables);
+			client_myds->myconn->user_variables = std::move(pending_tracked_set->user_variables);
+			user_variable_tracking_latched = true;
+			thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
+				pending_tracked_set->assignments;
+			pending_tracked_set.reset();
+			// Only the implicit commit reached this backend. All other desired
+			// values, including a final autocommit=0, remain deferred.
+			myconn->set_autocommit(true);
+			myconn->options.last_set_autocommit = 1;
+			myconn->set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+			handler_rc0_RefreshActiveTransactions(myconn);
+			gtid_hid = -1;
+			handler_rc0_Process_GTID(myconn);
+			uint16_t set_status = NumActiveTransactions() ? SERVER_STATUS_IN_TRANS : 0;
+			if (autocommit) set_status |= SERVER_STATUS_AUTOCOMMIT;
+			client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, set_status, 0, NULL);
+			RequestEnd(myds);
+			finishQuery(myds, myconn, false);
+			return false;
+		}
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
 		if (rc==-1) {
+			// Failed transaction effects must not publish the staged SET.
+			pending_tracked_set.reset();
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(
@@ -4769,7 +4816,7 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 				bool retry_conn=false;
 				// client error, serious
 				detected_broken_connection(__FILE__ , __LINE__ , __func__ , "during SET AUTOCOMMIT", myconn, myerr, mysql_error(myconn->mysql));
-				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+				if (!committing_tracked_set && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
 				}
 				myds->destroy_MySQL_Connection_From_Pool(false);
@@ -4790,6 +4837,13 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 					myds->destroy_MySQL_Connection_From_Pool(true);
 					myds->fd=0;
+				if (committing_tracked_set) {
+					if (transaction_persistent_hostgroup == current_hostgroup) {
+						transaction_persistent_hostgroup = -1;
+					}
+					active_transactions = NumActiveTransactions();
+					if (active_transactions == 0) transaction_started_at = 0;
+				}
 				RequestEnd(myds);
 				status=WAITING_CLIENT_DATA;
 				client_myds->DSS=STATE_SLEEP;
@@ -5844,7 +5898,6 @@ void MySQL_Session::GPFC_QueryRule_FinalizeFastForwardHandoff() {
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
-	pending_user_variable_set.reset();
 }
 
 int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
@@ -6915,7 +6968,11 @@ void MySQL_Session::handler_rc0_Process_Variables(MySQL_Connection *myconn) {
 					value = std::to_string(ci->nr);
 				}
 
+				const bool explicit_database_charset = client_myds->myconn->user_variable_database_charset_explicit;
 				mysql_variables.client_set_value(this, idx, value);
+				if (idx == SQL_CHARACTER_SET_DATABASE) {
+					client_myds->myconn->user_variable_database_charset_explicit = explicit_database_charset;
+				}
 				mysql_variables.server_set_value(this, idx, value.c_str());
 			}
 		}
@@ -7304,32 +7361,7 @@ handler_again:
 				}
 				gtid_hid = -1;
 				if (rc==0) {
-					if (status == PROCESSING_QUERY && pending_user_variable_set) {
-						const std::vector<UserVariableAssignment>& assignments =
-							pending_user_variable_set->assignments;
-						if (mysql_user_variable_commit_post_ok(
-							client_myds->myconn->user_variables,
-							myconn->user_variables,
-							assignments)) {
-							user_variable_tracking_latched = true;
-							thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
-								assignments.size();
-						} else {
-							current_query_user_variable_safe = false;
-							user_variable_backend_authoritative = true;
-							thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
-							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
-								"User-variable SET tracking fallback reason=RESOURCE_LIMIT\n");
-							myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
-							if (mysql_thread___set_query_lock_on_hostgroup == 1 &&
-								locked_on_hostgroup < 0 && current_hostgroup >= 0) {
-								locked_on_hostgroup = current_hostgroup;
-								thread->status_variables.stvar[st_var_hostgroup_locked]++;
-								thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
-							}
-						}
-						pending_user_variable_set.reset();
-					}
+
 					if (status == PROCESSING_QUERY &&
 						mysql_user_variable_backend_result_requires_binding(
 							true,
@@ -7417,7 +7449,6 @@ handler_again:
 					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 				} else {
 					if (rc==-1) {
-						pending_user_variable_set.reset();
 						current_query_user_variable_safe = false;
 						current_query_user_variable_unsafe_fallback = false;
 						current_query_user_variable_context_change = false;
@@ -7648,6 +7679,70 @@ bool MySQL_Session::handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream* myds
  *
  * @return True if the handling was successful and false otherwise.
  */
+bool MySQL_Session::handler_again___status_SETTING_USER_VARIABLE_CONTEXT(int* rc) {
+	MySQL_Data_Stream* myds = mybe->server_myds;
+	MySQL_Connection* myconn = myds->myconn;
+	UserVariableLiteralContext context;
+	if (!client_myds->myconn->user_variables.unresolved_context(context)) {
+		const auto saved = previous_status.top();
+		previous_status.pop();
+		NEXT_IMMEDIATE_NEW(saved);
+	}
+	const auto& schema = context.database_schema;
+	if (!schema) {
+		handler_again___fail_user_variable_replay(myds, ER_WRONG_DB_NAME, "42000",
+			"Invalid database identifier in captured user-variable context");
+		return true;
+	}
+	std::string query = "SELECT ID FROM information_schema.COLLATIONS WHERE COLLATION_NAME=@@collation_server";
+	if (context.database_charset) {
+		const auto* charset = proxysql_find_charset_nr(context.database_charset);
+		if (!charset) {
+			handler_again___fail_user_variable_replay(myds, ER_UNKNOWN_CHARACTER_SET, "HY000",
+				"Unknown captured database character set");
+			return true;
+		}
+		query = std::string("SELECT ID FROM information_schema.COLLATIONS WHERE COLLATION_NAME=COLLATION(CONVERT('' USING ") + charset->csname + "))";
+	} else if (!schema->empty()) {
+		const auto* schema_charset = proxysql_find_charset_nr(context.database_schema_charset);
+		if (!schema_charset) {
+			handler_again___fail_user_variable_replay(myds, ER_UNKNOWN_CHARACTER_SET, "HY000",
+				"Unknown captured database-name character set");
+			return true;
+		}
+		static constexpr char hex[] = "0123456789ABCDEF";
+		query = "SELECT c.ID FROM information_schema.COLLATIONS c JOIN information_schema.SCHEMATA s ON c.COLLATION_NAME=s.DEFAULT_COLLATION_NAME WHERE s.SCHEMA_NAME=CONVERT(CONVERT(X'";
+		for (unsigned char c : *schema) {
+			query.push_back(hex[c >> 4]);
+			query.push_back(hex[c & 15]);
+		}
+		query += std::string("' USING ") + schema_charset->csname + ") USING utf8mb4)";
+	}
+	myds->DSS = STATE_MARIADB_QUERY;
+	if (myds->mypolls == nullptr) {
+		thread->mypolls.add(POLLIN | POLLOUT, myds->fd, myds, thread->curtime);
+	}
+	std::string collation;
+	const int result = myconn->async_query_scalar(myds->revents, query, collation);
+	if (result == 1) return false;
+	char* end = nullptr;
+	const unsigned long id = strtoul(collation.c_str(), &end, 10);
+	const auto* charset = result == 0 && end != collation.c_str() && *end == 0 && id <= UINT32_MAX
+		? proxysql_find_charset_nr(id) : nullptr;
+	if (!charset) {
+		handler_again___fail_user_variable_replay(myds,
+			mysql_user_variable_replay_error_code(mysql_errno(myconn->mysql)), "HY000",
+			"Unable to resolve the captured user-variable database collation");
+		return true;
+	}
+	client_myds->myconn->user_variables.resolve_context(context, charset->nr);
+	myds->DSS = STATE_MARIADB_GENERIC;
+	myds->revents |= POLLOUT;
+	const auto saved = previous_status.top();
+	previous_status.pop();
+	NEXT_IMMEDIATE_NEW(saved);
+}
+
 bool MySQL_Session::handler_again___status_SETTING_USER_VARIABLES(int* rc) {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream* myds = mybe->server_myds;
@@ -7741,6 +7836,9 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 			break;
 		case SETTING_USER_VARIABLES:
 			ret = handler_again___status_SETTING_USER_VARIABLES(rc);
+			break;
+		case SETTING_USER_VARIABLE_CONTEXT:
+			ret = handler_again___status_SETTING_USER_VARIABLE_CONTEXT(rc);
 			break;
 		default:
 			break;
@@ -8206,7 +8304,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		__sync_fetch_and_add(&MyHGM->status.frontend_init_db, 1);
-		client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
+		client_myds->myconn->user_variable_database_charset_explicit = false;
+		const char* charset = mysql_variables.client_get_value(this, SQL_CHARACTER_SET_CLIENT);
+		client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,
+			pkt->size-sizeof(mysql_hdr)-1, charset && *charset ? strtoul(charset, nullptr, 10) : default_charset);
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		unsigned int nTrx=NumActiveTransactions();
@@ -8238,7 +8339,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		string errmsg = "";
 		string schemaname = parser.parse_USE_query(errmsg);
 		if (schemaname != "") {
-			client_myds->myconn->userinfo->set_schemaname((char *)schemaname.c_str(),schemaname.length());
+			client_myds->myconn->user_variable_database_charset_explicit = false;
+			const char* charset = mysql_variables.client_get_value(this, SQL_CHARACTER_SET_CLIENT);
+			client_myds->myconn->userinfo->set_schemaname((char *)schemaname.c_str(), schemaname.length(),
+				charset && *charset ? strtoul(charset, nullptr, 10) : default_charset);
 			if (mirror==false) {
 				RequestEnd(NULL);
 			}
@@ -8400,8 +8504,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		tracking for MySQL 5.7+
 */
 	bool exit_after_SetParse = true;
+	std::optional<UserVariableSetAnalysis> local_variable_set;
+	MySQL_User_Variable_State staged_user_variables;
+	MySQL_Session_Set_Plan staged_session_variables;
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
-	pending_user_variable_set.reset();
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
@@ -8514,15 +8620,73 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (accepts_new_udv_assignments && raw_query_has_at) {
 		UserVariableSetAnalysis analysis = parsersql_analyze_user_variable_set_mysql(
 			raw_query, CurrentQuery.QueryLength);
+		UserVariableLiteralContext context;
+		if (analysis.status == UserVariableSetStatus::SUPPORTED) {
+			auto charset_number = [&](int idx, uint32_t fallback) {
+				const char* value = mysql_variables.client_get_value(this, idx);
+				return value && *value ? static_cast<uint32_t>(strtoul(value, nullptr, 10)) : fallback;
+			};
+			const uint32_t charset = charset_number(SQL_CHARACTER_SET, 33);
+			const char* sql_mode = mysql_variables.client_get_value(this, SQL_SQL_MODE);
+			bool ansi_quotes = false;
+			if (sql_mode) {
+				for (auto mode : split_string(sql_mode, ',')) {
+					const auto begin = mode.find_first_not_of(" \t\r\n");
+					if (begin == std::string::npos) continue;
+					mode = mode.substr(begin, mode.find_last_not_of(" \t\r\n") - begin + 1);
+					for (const char* alias : {"ANSI_QUOTES", "ANSI", "DB2", "MAXDB", "MSSQL", "ORACLE", "POSTGRESQL"}) {
+						if (!strcasecmp(mode.c_str(), alias)) ansi_quotes = true;
+					}
+				}
+			}
+			context = {
+				charset_number(SQL_CHARACTER_SET_CLIENT, charset),
+				charset_number(SQL_COLLATION_CONNECTION,
+					charset_number(SQL_CHARACTER_SET_CONNECTION, charset)),
+				client_myds->myconn->options.no_backslash_escapes, ansi_quotes
+			};
+			const char* character_action = mysql_variables.client_get_value(this, SQL_CHARACTER_ACTION);
+			if (character_action && !strcmp(character_action, "2") &&
+				mysql_variables.client_get_hash(this, SQL_COLLATION_CONNECTION) == 0) {
+				context.connection_collation = 0;
+				context.resolve_database_collation = true;
+				context.database_charset = client_myds->myconn->user_variable_charset_database_charset;
+				context.database_schema_charset = client_myds->myconn->user_variable_charset_schema_charset;
+				context.database_schema = client_myds->myconn->user_variable_charset_schema;
+			}
+			for (auto& assignment : analysis.assignments) {
+				if (assignment.kind == UserVariableLiteralKind::STRING) assignment.context = context;
+				if (!mysql_user_variable_literal_is_replayable(assignment)) {
+					analysis.status = UserVariableSetStatus::UNSUPPORTED;
+					break;
+				}
+			}
+		}
+		if (analysis.status == UserVariableSetStatus::SUPPORTED) {
+			for (const auto& assignment : analysis.session_assignments) {
+				std::string value = assignment.value;
+				if (assignment.quoted_string) {
+					value.clear();
+					if (!mysql_decode_set_string(assignment.value, context, value)) {
+						analysis.status = UserVariableSetStatus::UNSUPPORTED;
+						break;
+					}
+				}
+				if (!mysql_variables.stage_set_variable(assignment.name, value,
+					staged_session_variables)) {
+					analysis.status = UserVariableSetStatus::UNSUPPORTED;
+					break;
+				}
+			}
+		}
 		if (analysis.is_set_statement) {
 			switch (analysis.status) {
 			case UserVariableSetStatus::SUPPORTED: {
-				MySQL_User_Variable_State staged;
 				const MySQL_User_Variable_Apply_Result apply_result =
-					client_myds->myconn->user_variables.stage(analysis.assignments, staged);
+					client_myds->myconn->user_variables.stage(analysis.assignments, staged_user_variables);
 				if (mysql_user_variable_set_uses_qpo_epilogue(
 					analysis.status, apply_result)) {
-					pending_user_variable_set = std::move(analysis);
+					local_variable_set = std::move(analysis);
 					current_query_user_variable_safe = true;
 					goto __exit_set_destination_hostgroup;
 				}
@@ -8553,24 +8717,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 	}
 
-	if (plain_text_com_query && client_myds && client_myds->myconn &&
-		client_myds->myconn->user_variables.size() != 0 &&
-		parsersql_set_changes_user_variable_replay_context_mysql(
-			raw_query, CurrentQuery.QueryLength)) {
-		current_query_user_variable_context_change = true;
-		unable_to_parse_set_statement(lock_hostgroup);
-		if (mysql_user_variable_fallback_uses_qpo_epilogue(false, true)) {
-			goto __exit_set_destination_hostgroup;
-		}
-		return false;
-	}
 
 	const UserVariableQueryDecision user_variable_decision =
 		mysql_user_variable_raw_query_disposition(
 			raw_query, CurrentQuery.QueryLength,
 			must_classify_and_sync_user_variables(),
 			plain_text_com_query,
-			pending_user_variable_set.has_value(),
+			local_variable_set.has_value(),
 			digest_available);
 	if (user_variable_decision.disposition == UserVariableQueryDisposition::SAFE) {
 		current_query_user_variable_safe =
@@ -8712,16 +8865,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					auto values = std::begin(it->second);
 					if (var == "sql_mode") {
 						std::string value1 = *values;
-						if (strcasestr(value1.c_str(),"NO_BACKSLASH_ESCAPES") != NULL) {
-							// client is setting NO_BACKSLASH_ESCAPES in sql_mode
-							// Because we will reply with an OK packet without
-							// first setting sql_mode to the backend (this is
-							// by design) we need to set no_backslash_escapes
-							// in the client connection
-							if (client_myds && client_myds->myconn) { // some extra sanity check
-								client_myds->myconn->set_no_backslash_escapes(true);
-							}
-						}
+						client_myds->myconn->set_no_backslash_escapes(
+							strcasestr(value1.c_str(), "NO_BACKSLASH_ESCAPES") != nullptr);
 						if (
 							( strcasecmp(value1.c_str(),(char *)"CONCAT") == 0 )
 							||
@@ -9686,6 +9831,50 @@ __exit_set_destination_hostgroup:
 			}
 		}
 	}
+	if (local_variable_set) {
+		bool prior_autocommit = autocommit;
+		bool implicit_commit = false;
+		for (bool value : staged_session_variables.autocommit) {
+			implicit_commit |= !prior_autocommit && value;
+			prior_autocommit = value;
+		}
+		const int commit_hostgroup = implicit_commit && NumActiveTransactions(true)
+			? FindOneActiveTransaction(true) : -1;
+		if (!staged_session_variables.autocommit.empty()) {
+			__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
+			if (commit_hostgroup < 0) __sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
+		}
+		if (commit_hostgroup >= 0) {
+			pending_tracked_set.emplace(PendingTrackedSet{
+				std::move(staged_session_variables), std::move(staged_user_variables),
+				local_variable_set->assignments.size()});
+			// Preserve SET autocommit's immediate transaction effect without
+			// forwarding the mixed statement or synchronizing its variables.
+			current_hostgroup = commit_hostgroup;
+			mybe = find_or_create_backend(commit_hostgroup);
+			assert(mybe->server_myds->myconn);
+			mybe->server_myds->mysql_real_query.init(pkt); // owns packet until RequestEnd
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			committing_tracked_set = true;
+			previous_status.push(WAITING_CLIENT_DATA);
+			status = CHANGING_AUTOCOMMIT;
+			return true;
+		}
+		mysql_variables.apply_set_plan(this, staged_session_variables);
+		client_myds->myconn->user_variables = std::move(staged_user_variables);
+		user_variable_tracking_latched = true;
+		thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
+			local_variable_set->assignments.size();
+		// Only frontend desired state changes; normal pre-query synchronization
+		// materializes it later.
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		uint16_t set_status = NumActiveTransactions() ? SERVER_STATUS_IN_TRANS : 0;
+		if (autocommit) set_status |= SERVER_STATUS_AUTOCOMMIT;
+		client_myds->myprot.generate_pkt_OK(true, NULL, NULL, 1, 0, 0, set_status, 0, NULL);
+		RequestEnd(NULL);
+		l_free(pkt->size, pkt->ptr);
+		return true;
+	}
 	return false;
 }
 
@@ -10589,13 +10778,17 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 		qdt = CurrentQuery.stmt_info->digest_text;
 	}
 
-	if (qdt && myds && myds->myconn) {
+	// A tracked mixed SET only sent the implicit autocommit operation. Its
+	// original digest must not update backend flags or overwrite frontend SQL
+	// mode with the backend's still-deferred value.
+	if (qdt && myds && myds->myconn && !committing_tracked_set) {
 		myds->myconn->ProcessQueryAndSetStatusFlags(qdt, current_query_user_variable_safe);
 	}
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
-	pending_user_variable_set.reset();
+	committing_tracked_set = false;
+	pending_tracked_set.reset();
 
 	switch (status) {
 		case PROCESSING_STMT_EXECUTE:

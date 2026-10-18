@@ -386,6 +386,7 @@ void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 
 void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
 	set(ui->username, ui->password, ui->schemaname, ui->sha1_pass);
+	schemaname_charset = ui->schemaname_charset;
 }
 
 
@@ -400,7 +401,14 @@ void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
  * @param l Length of the schema name string.
  * @return Returns true if the schema name was changed, false otherwise.
  */
-bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
+bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l, uint32_t charset) {
+	schemaname_charset = l ? charset : 45;
+	// Compare the effective default name, including when auth switching has
+	// already installed an empty database string in userinfo.
+	if (l == 0) {
+		_new = mysql_thread___default_schema;
+		l = strlen(_new);
+	}
 	int _l=0;
 	if (schemaname) {
 		_l=strlen(schemaname); // bug fix for #609
@@ -3204,25 +3212,6 @@ bool mysql_user_variable_set_uses_qpo_epilogue(
 		preflight_result == MySQL_User_Variable_Apply_Result::OK;
 }
 
-bool mysql_user_variable_commit_post_ok(
-	MySQL_User_Variable_State& frontend,
-	MySQL_User_Variable_State& backend,
-	const std::vector<UserVariableAssignment>& assignments) {
-	MySQL_User_Variable_State staged_frontend;
-	MySQL_User_Variable_State staged_backend;
-	const MySQL_User_Variable_Apply_Result frontend_result =
-		frontend.stage(assignments, staged_frontend);
-	const MySQL_User_Variable_Apply_Result backend_result =
-		backend.stage(assignments, staged_backend);
-	if (frontend_result != MySQL_User_Variable_Apply_Result::OK ||
-		backend_result != MySQL_User_Variable_Apply_Result::OK) {
-		return false;
-	}
-	frontend = std::move(staged_frontend);
-	backend = std::move(staged_backend);
-	return true;
-}
-
 unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code) {
 	return backend_error_code == 0 ? ER_UNKNOWN_ERROR : backend_error_code;
 }
@@ -3393,6 +3382,54 @@ const char* mysql_simple_command_log_text(const char* stmt, bool redact_statemen
 	return redact_statement ? "<redacted>" : stmt;
 }
 
+int MySQL_Connection::async_query_scalar(short event, const std::string& stmt, std::string& value) {
+	if (IsServerOffline()) return -1;
+	if (scalar_query_stage == 0) {
+		assert(async_state_machine == ASYNC_IDLE && mysql_result == nullptr && MyRS == nullptr);
+		scalar_query_sql = stmt;
+		scalar_query_stage = 1;
+		async_exit_status = mysql_real_query_start(&interr, mysql, scalar_query_sql.data(), scalar_query_sql.size());
+		__sync_fetch_and_add(&parent->queries_sent, 1);
+		__sync_fetch_and_add(&parent->bytes_sent, scalar_query_sql.size());
+		statuses.questions++;
+		myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_sent] += scalar_query_sql.size();
+		myds->bytes_info.bytes_sent += scalar_query_sql.size();
+		bytes_info.bytes_sent += scalar_query_sql.size();
+	} else if (scalar_query_stage == 1) {
+		async_exit_status = mysql_real_query_cont(&interr, mysql, mysql_status(event, true));
+	} else {
+		async_exit_status = mysql_store_result_cont(&mysql_result, mysql, mysql_status(event, true));
+	}
+	if (async_exit_status) {
+		next_event(scalar_query_stage == 1 ? ASYNC_QUERY_CONT : ASYNC_STORE_RESULT_CONT);
+		return 1;
+	}
+	if (scalar_query_stage == 1 && !interr) {
+		scalar_query_stage = 2;
+		async_exit_status = mysql_store_result_start(&mysql_result, mysql);
+		if (async_exit_status) {
+			next_event(ASYNC_STORE_RESULT_CONT);
+			return 1;
+		}
+	}
+	bool valid = !mysql_errno(mysql) && !interr && mysql_result &&
+		mysql_num_fields(mysql_result) == 1 && mysql_num_rows(mysql_result) == 1;
+	if (valid) {
+		MYSQL_ROW row = mysql_fetch_row(mysql_result);
+		valid = row && row[0];
+		if (valid) value.assign(row[0], mysql_fetch_lengths(mysql_result)[0]);
+	}
+	if (mysql_result) {
+		mysql_free_result(mysql_result);
+		mysql_result = nullptr;
+	}
+	scalar_query_stage = 0;
+	scalar_query_sql.clear();
+	async_state_machine = ASYNC_IDLE;
+	compute_unknown_transaction_status();
+	return valid ? 0 : -1;
+}
+
 // this function is identical to async_query() , with the only exception that MyRS should never be set
 int MySQL_Connection::async_send_simple_command(
 	short event, char *stmt, unsigned long length, bool redact_statement) {
@@ -3483,6 +3520,10 @@ void MySQL_Connection::reset() {
 	}
 	dynamic_variables_idx.clear();
 	user_variables.clear();
+	user_variable_charset_schema = std::string{};
+	user_variable_charset_database_charset = 0;
+	user_variable_charset_schema_charset = 45;
+	user_variable_database_charset_explicit = false;
 
 	if (options.init_connect) {
 		free(options.init_connect);

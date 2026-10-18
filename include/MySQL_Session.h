@@ -350,6 +350,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
 	bool handler_again___status_SETTING_USER_VARIABLES(int* rc);
+	bool handler_again___status_SETTING_USER_VARIABLE_CONTEXT(int* rc);
 	bool handler_again___multiple_statuses(int *rc);
 
 	//void init();
@@ -461,8 +462,15 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	std::stack<enum session_status> previous_status;
 	std::vector<MySQL_User_Variable_Replay_Batch> user_variable_replay_batches;
 	size_t user_variable_replay_batch_index { 0 };
-	std::optional<UserVariableSetAnalysis> pending_user_variable_set;
 	bool current_query_user_variable_safe { false };
+	// CHANGING_AUTOCOMMIT completes a locally tracked mixed SET after its implicit commit.
+	bool committing_tracked_set { false };
+	struct PendingTrackedSet {
+		MySQL_Session_Set_Plan session_variables;
+		MySQL_User_Variable_State user_variables;
+		size_t assignments;
+	};
+	std::optional<PendingTrackedSet> pending_tracked_set;
 	bool current_query_user_variable_unsafe_fallback { false };
 	bool current_query_user_variable_context_change { false };
 	bool user_variable_tracking_latched { false };

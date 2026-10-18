@@ -192,6 +192,7 @@
   "mysql_router_user_sync_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysql_server_version_by_interface_unit-t" : [ "unit-tests-g1","@proxysql_min_version:3.1" ],
   "mysql_set_transaction_characteristics_unit-t" : [ "unit-tests-g1" ],
+  "mysql_set_variable_tracking_unit-t" : [ "unit-tests-g1" ],
   "mysql_stmt_send_long_data-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
   "mysql_stmt_send_long_data_large-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
   "mysql_tls_write_retry_unit-t" : [ "unit-tests-g1" ],
