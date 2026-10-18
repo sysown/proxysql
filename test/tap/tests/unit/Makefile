@@ -631,7 +631,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	proxysql_utils_unit-t startup_gate_unit-t cluster_plugin_set_hash_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
-	pgsql_txn_state_unit-t \
+	pgsql_txn_state_unit-t pgsql_txn_end_classifier_unit-t \
 	pgsql_midbatch_reset_refused_unit-t \
 	pgsql_local_error_txn_state_unit-t \
 	pgsql_conn_liveness_unit-t \
