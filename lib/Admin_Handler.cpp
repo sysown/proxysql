@@ -5216,6 +5216,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		resultset->add_column_definition(SQLITE_TEXT,"Data");
 
 		if (__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 0) == 1) {
+			// Collected with the global SQL mutex held. The Cluster node metrics
+			// refresh reached from here only tries 'ProxySQL_Cluster_Nodes::mutex'
+			// (see ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics()), so
+			// this statement never waits for a Cluster peer thread.
 			auto result = pa->serial_exposer({});
 			pta[0] = (char*)result.second.c_str();
 			resultset->add_row(pta);

@@ -678,7 +678,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	connection_unhealthy_unit-t \
 	connection_max_age_unit-t \
-	cluster_sync_unit-t \
+	cluster_sync_unit-t cluster_admin_lock_order_unit-t \
 	parsersql_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
 	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
 	parsersql_in_values_digest_unit-t \
