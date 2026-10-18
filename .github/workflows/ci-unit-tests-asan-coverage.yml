@@ -110,6 +110,9 @@ jobs:
       contents: read
       id-token: write
     steps:
+    - name: Reclaim workspace before checkout
+      if: ${{ runner.environment == 'self-hosted' }}
+      uses: sysown/proxysql/.github/actions/reclaim-workspace@GH-Actions
     - name: Checkout repository
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -250,6 +253,9 @@ jobs:
         name: unit-tests-logs-${{ env.SHA }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: proxysql/unit-test-logs/
         if-no-files-found: warn
+    - name: Leave self-hosted workspace clean
+      if: ${{ always() && runner.environment == 'self-hosted' }}
+      uses: sysown/proxysql/.github/actions/reclaim-workspace@GH-Actions
     - name: Complete selected product test check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

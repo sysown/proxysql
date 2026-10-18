@@ -136,6 +136,9 @@ jobs:
       COVERAGE: ${{ matrix.coverage && '1' || '0' }}
     steps:
 
+    - name: Reclaim workspace before checkout
+      if: ${{ runner.environment == 'self-hosted' }}
+      uses: sysown/proxysql/.github/actions/reclaim-workspace@GH-Actions
     - name: Checkout CI control
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -386,6 +389,9 @@ jobs:
       if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
       run: |-
         echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
+    - name: Leave self-hosted workspace clean
+      if: ${{ always() && runner.environment == 'self-hosted' }}
+      uses: sysown/proxysql/.github/actions/reclaim-workspace@GH-Actions
     - name: Complete selected product test check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

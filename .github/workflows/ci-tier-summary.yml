@@ -23,6 +23,9 @@ jobs:
       group: ci-tier-summary-${{ fromJson(inputs.binding).execution_id }}
       cancel-in-progress: false
     steps:
+    - name: Reclaim workspace before checkout
+      if: ${{ runner.environment == 'self-hosted' }}
+      uses: sysown/proxysql/.github/actions/reclaim-workspace@GH-Actions
     - name: Checkout CI control
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -39,3 +42,6 @@ jobs:
         CI_BINDING: ${{ inputs.binding }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py summary
+    - name: Leave self-hosted workspace clean
+      if: ${{ always() && runner.environment == 'self-hosted' }}
+      uses: sysown/proxysql/.github/actions/reclaim-workspace@GH-Actions

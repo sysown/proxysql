@@ -1,0 +1,11 @@
+name: Reclaim self-hosted workspace ownership
+description: Let checkout and later jobs remove files written by Docker containers.
+runs:
+  using: composite
+  steps:
+    - name: Reclaim workspace
+      if: ${{ always() }}
+      shell: bash
+      env:
+        RUNNER_ENVIRONMENT: ${{ runner.environment }}
+      run: bash "${GITHUB_ACTION_PATH}/reclaim.bash"

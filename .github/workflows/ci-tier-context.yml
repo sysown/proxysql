@@ -53,6 +53,9 @@ jobs:
       control_sha: ${{ steps.context.outputs.control_sha }}
       sha: ${{ steps.context.outputs.sha }}
     steps:
+    - name: Reclaim workspace before checkout
+      if: ${{ runner.environment == 'self-hosted' }}
+      uses: sysown/proxysql/.github/actions/reclaim-workspace@GH-Actions
     - name: Checkout CI control
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -88,3 +91,6 @@ jobs:
           binding.json
           manifest.json
         retention-days: 3
+    - name: Leave self-hosted workspace clean
+      if: ${{ always() && runner.environment == 'self-hosted' }}
+      uses: sysown/proxysql/.github/actions/reclaim-workspace@GH-Actions

@@ -107,6 +107,9 @@ jobs:
     runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
     timeout-minutes: 120
     steps:
+    - name: Reclaim workspace before checkout
+      if: ${{ runner.environment == 'self-hosted' }}
+      uses: sysown/proxysql/.github/actions/reclaim-workspace@GH-Actions
     - name: Checkout repository
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -188,6 +191,9 @@ jobs:
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-logs-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: proxysql/ci_*_logs/
+    - name: Leave self-hosted workspace clean
+      if: ${{ always() && runner.environment == 'self-hosted' }}
+      uses: sysown/proxysql/.github/actions/reclaim-workspace@GH-Actions
     - name: Complete selected product test check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
