@@ -625,7 +625,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_decompress_payload_unit-t \
 	mysql_resolution_unit-t \
 	mariadb_tls_server_name_unit-t \
-	pgsql_variables_validator_unit-t \
+	pgsql_variables_validator_unit-t pgsql_startup_options_escape_unit-t \
 	pgsql_set_tracked_vars_regexp_unit-t \
 	pgsql_set_transaction_regexp_unit-t \
 	proxysql_utils_unit-t startup_gate_unit-t cluster_plugin_set_hash_unit-t \

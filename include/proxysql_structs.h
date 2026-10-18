@@ -2002,13 +2002,16 @@ extern const pgsql_variable_validator pgsql_variable_validator_extra_float_digit
 extern const pgsql_variable_validator pgsql_variable_validator_maintenance_work_mem;
 extern const pgsql_variable_validator pgsql_variable_validator_client_encoding;
 extern const pgsql_variable_validator pgsql_variable_validator_search_path;
+extern const pgsql_variable_validator pgsql_variable_validator_timezone;
 
 pgsql_variable_st pgsql_tracked_variables[]{
 	{ PGSQL_CLIENT_ENCODING,       SETTING_VARIABLE,	"client_encoding", "client_encoding", "UTF8", (PGTRACKED_VAR_OPT_QUOTE | PGTRACKED_VAR_OPT_PARAM_STATUS), &pgsql_variable_validator_client_encoding, { "names", nullptr } },
 	{ PGSQL_DATESTYLE,			   SETTING_VARIABLE,	"DateStyle", "datestyle", "ISO, MDY" , (PGTRACKED_VAR_OPT_QUOTE | PGTRACKED_VAR_OPT_PARAM_STATUS), &pgsql_variable_validator_datestyle, nullptr },
 	{ PGSQL_INTERVALSTYLE,		   SETTING_VARIABLE,	"IntervalStyle", "intervalstyle", "postgres" , (PGTRACKED_VAR_OPT_QUOTE | PGTRACKED_VAR_OPT_PARAM_STATUS), &pgsql_variable_validator_intervalstyle, nullptr },
 	{ PGSQL_STANDARD_CONFORMING_STRINGS, SETTING_VARIABLE, "standard_conforming_strings", "standard_conforming_strings", "on", PGTRACKED_VAR_OPT_PARAM_STATUS, &pgsql_variable_validator_bool, nullptr },
-	{ PGSQL_TIMEZONE,			   SETTING_VARIABLE,	"TimeZone", "timezone", "GMT" , (PGTRACKED_VAR_OPT_QUOTE | PGTRACKED_VAR_OPT_PARAM_STATUS), nullptr, { "TIME ZONE", nullptr } },
+	// TimeZone is sent to the backend inside the startup 'options'; its validator rejects control characters,
+	// which would otherwise act as option separators there.
+	{ PGSQL_TIMEZONE,			   SETTING_VARIABLE,	"TimeZone", "timezone", "GMT" , (PGTRACKED_VAR_OPT_QUOTE | PGTRACKED_VAR_OPT_PARAM_STATUS), &pgsql_variable_validator_timezone, { "TIME ZONE", nullptr } },
 	{ PGSQL_SEARCH_PATH,		   SETTING_VARIABLE,    "search_path", "search_path", "\"$user\", public", (PGTRACKED_VAR_OPT_NO_STRIP_VALUE | PGTRACKED_VAR_OPT_PARAM_STATUS), &pgsql_variable_validator_search_path, nullptr },
 	{ PGSQL_NAME_LAST_LOW_WM,      session_status___NONE, "placeholder", "placeholder", "0" , 0, nullptr, nullptr },  // this is just a placeholder to separate the previous index from the next block
 	{ PGSQL_ALLOW_IN_PLACE_TABLESPACES,	   SETTING_VARIABLE,	"allow_in_place_tablespaces", "allow_in_place_tablespaces", "off", 0, &pgsql_variable_validator_bool, nullptr },

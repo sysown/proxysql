@@ -392,6 +392,7 @@
   "pgsql_servers_ssl_params_unit-t" : [ "unit-tests-g1" ],
   "pgsql_set_tracked_vars_regexp_unit-t" : [ "unit-tests-g1" ],
   "pgsql_set_transaction_regexp_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_startup_options_escape_unit-t" : [ "unit-tests-g1" ],
   "pgsql_tokenizer_unit-t" : [ "unit-tests-g1" ],
   "pgsql_txn_end_classifier_unit-t" : [ "unit-tests-g1" ],
   "pgsql_txn_state_unit-t" : [ "unit-tests-g1" ],
