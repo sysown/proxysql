@@ -29,12 +29,54 @@ These changes entered mainline in December 2025 through
 [PR #4901](https://github.com/sysown/proxysql/pull/4901). Previously the recognized
 client SET was ignored; the frontend idle timer used the global policy.
 
-| ID | Question | Answers |
-| --- | --- | --- |
-| W1 | Should client `SET wait_timeout=N` control the **frontend connection's idle expiry**, without changing the backend server's wait_timeout? | Yes / No |
-| W2 | Should the global `mysql-wait_timeout` remain a hard upper bound, even when the client successfully sets a larger session value? | Yes / No |
-| W3 | Should out-of-range client values receive local OK and be clamped to **1 second through 20 days**, including `0` becoming 1 second? | A: keep clamping; B: reject out-of-range values |
-| W4 | For a client that **never sets wait_timeout**, what should happen when an operator raises the global timeout? Current code retains the session-initialization value as a cap. | A: keep that initialization cap; B: follow the new global value |
+### W1 — Frontend idle timeout — December 2025
+
+**Before:** A recognized client SET wait_timeout was ignored; frontend idle expiry followed the global mysql-wait_timeout.
+
+**After:** The client SET records a per-session frontend timeout. Idle checks use the smaller of the current global policy and that session value. The backend server variable is not changed.
+
+**Observable effect:** A client can now shorten its own frontend connection lifetime without changing backend idle expiry.
+
+**Question:** Should client `SET wait_timeout=N` control the **frontend connection's idle expiry**, without changing the backend server's wait_timeout?
+
+**Answer:** Yes / No
+
+### W2 — Global timeout remains a ceiling — December 2025
+
+**Before:** There was only a global frontend timeout; a client SET did not affect it.
+
+**After:** A client value is now recorded, but it cannot extend expiry beyond the current global timeout. A larger client value can receive OK while the global ceiling still applies.
+
+**Observable effect:** For example, global 60 seconds plus client SET wait_timeout=600 still gives an effective 60-second limit.
+
+**Question:** Should the global `mysql-wait_timeout` remain a hard upper bound, even when the client successfully sets a larger session value?
+
+**Answer:** Yes / No
+
+### W3 — New clamping policy — December 2025
+
+**Before:** Because client wait_timeout was ignored, its zero or out-of-range value did not create a frontend timeout policy.
+
+**After:** A parsed numeric value is clamped to 1–1,728,000 seconds. Zero becomes 1 second, values over 20 days become 20 days, and the client receives local OK.
+
+**Observable effect:** An application sending SET wait_timeout=0 can now cause its frontend to expire after about one idle second, subject to scheduling.
+
+**Question:** Should out-of-range client values receive local OK and be clamped to **1 second through 20 days**, including `0` becoming 1 second?
+
+**Answer:** A: keep clamping; B: reject out-of-range values
+
+### W4 — Existing sessions retain an initialization cap — December 2025
+
+**Before:** Idle enforcement used the current global timeout, including later increases.
+
+**After:** The session copies the global value at initialization. Enforcement subsequently takes min(current_global, saved_session_value), even if that client never sent SET wait_timeout.
+
+**Observable effect:** Open a client with global=10 seconds, then raise global to 60: that existing client remains capped at 10; a newly initialized client gets 60. Lowering global still affects existing clients.
+
+**Question:** For a client that **never sets wait_timeout**, what should happen when an operator raises the global timeout? Current code retains the session-initialization value as a cap.
+
+**Answer:** A: keep that initialization cap; B: follow the new global value
+
 
 W4 is a consequence of copying the global value into the session and taking the
 minimum of that saved value and the current global policy. Lowering the global
@@ -50,10 +92,30 @@ outside the existing named exceptions, returned an error and destroyed the
 affected backend. The new path marks the
 variable absent on that connection and resumes the waiting client operation.
 
-| ID | Question | Answers |
-| --- | --- | --- |
-| E1 | When a backend rejects a tracked variable's **value or arguments** with 1231/1210, should the waiting client query continue without that setting? The implementation applies this broadly, beyond the wsrep cases that motivated it. | A: tolerate these codes for all tracked variables; B: tolerate only explicitly identified unsupported-variable/backend cases and report other failures |
-| E2 | Should one such rejection suppress **all later values of that variable** for that backend connection object's lifetime, including ordinary session resets? | A: keep that lifetime suppression; B: allow another attempt when the desired value changes |
+### E1 — Backend value errors become tolerated — May 2026
+
+**Before:** Outside the existing named exceptions, backend error 1231 or 1210 during tracked-variable setup was reported to the waiting client operation and the affected backend was destroyed.
+
+**After:** Those codes now enter the generic tolerated-error path: mark the variable absent on that backend and resume the waiting operation. The change was motivated by wsrep, but the condition is not limited to wsrep variables.
+
+**Observable effect:** The client may already have received local OK for its earlier SET; a later query can now execute although the backend rejected the setting ProxySQL tried to establish.
+
+**Question:** When a backend rejects a tracked variable's **value or arguments** with 1231/1210, should the waiting client query continue without that setting? The implementation applies this broadly, beyond the wsrep cases that motivated it.
+
+**Answer:** A: tolerate these codes for all tracked variables; B: tolerate only explicitly identified unsupported-variable/backend cases and report other failures
+
+### E2 — A bad value can disable later values — consequence of the May change
+
+**Before:** The absence flag already persisted for unsupported variables. But an ordinary rejected value caused backend destruction, so that backend object did not survive carrying a newly suppressed variable.
+
+**After:** Errors added by E1 now set the same lifetime absence flag. Later desired values are skipped too. Ordinary MySQL connection reset clears values/hashes but does not clear this flag.
+
+**Observable effect:** A backend rejecting value X can subsequently skip a valid value Y for the same variable, including after ordinary session resets. This is a consequence of E1 using an older flag, not a separately introduced reset mechanism.
+
+**Question:** Should one such rejection suppress **all later values of that variable** for that backend connection object's lifetime, including ordinary session resets?
+
+**Answer:** A: keep that lifetime suppression; B: allow another attempt when the desired value changes
+
 
 These questions concern newly tolerated value errors. They do not propose
 changing the older handling of a genuinely nonexistent backend variable by
@@ -69,14 +131,78 @@ introduced optional backend notifications for system-variable changes, disabled
 by default. It can learn changes made inside server-side routines and updates
 the frontend and backend maps for recognized variables.
 
-| ID | Question | Answers |
-| --- | --- | --- |
-| N1 | With notifications enabled, should recognized values reported by the backend become the frontend's desired values, including changes made by stored routines? | Yes / No |
-| N2 | Should OPTIONAL mode do no system-variable notification tracking when `mysql-enable_server_deprecate_eof=false`? | Yes / No |
-| N3 | Should ENFORCED mode override that false setting and request backend deprecate-EOF anyway? | Yes / No |
-| N4 | For ordinary proxied sessions in ENFORCED mode, should a backend lacking either required capability be excluded from selection for **30 seconds**, so even unrelated queries may fail if no eligible server remains? | Yes / No |
-| N5 | When notifications are disabled at runtime, how should already connected sessions behave? Current code immediately stops consuming those notifications but keeps the values already recorded. | A: stop immediately, as today; B: continue tracking existing sessions until reset/disconnect |
-| N6 | Should `mysql-enable_server_deprecate_eof=false` prevent ProxySQL from **enabling GTID session tracking**, even when ordinary notification tracking is disabled, or ENFORCED mode requested deprecate-EOF? This extra gate entered with #5166. | A: keep the configuration gate; B: decide from the negotiated backend capability instead |
+### N1 — Backend reports update frontend desired state — April 2026
+
+**Before:** ProxySQL did not consume this new system-variable notification stream to learn changes made on the backend.
+
+**After:** With the feature enabled, recognized values reported after successful backend work update both frontend desired state and backend metadata. This includes changes originating in stored routines.
+
+**Observable effect:** Later backend reconciliation can reproduce the reported value instead of the older frontend value. The feature defaults to DISABLED.
+
+**Question:** With notifications enabled, should recognized values reported by the backend become the frontend's desired values, including changes made by stored routines?
+
+**Answer:** Yes / No
+
+### N2 — OPTIONAL mode depends on EOF configuration — April 2026
+
+**Before:** There was no OPTIONAL system-variable notification mode.
+
+**After:** The new OPTIONAL mode skips setup when mysql-enable_server_deprecate_eof=false, even if the operator selected OPTIONAL.
+
+**Observable effect:** Selecting OPTIONAL alone does not guarantee notifications are active. This is a newly introduced mode policy, not a change to the previous nonexistent mode.
+
+**Question:** Should OPTIONAL mode do no system-variable notification tracking when `mysql-enable_server_deprecate_eof=false`?
+
+**Answer:** Yes / No
+
+### N3 — ENFORCED mode overrides the EOF preference — April 2026
+
+**Before:** Normal proxied backend connections followed the enable-server-deprecate-EOF setting.
+
+**After:** Selecting the new ENFORCED notification mode requests backend deprecate-EOF even when that setting is false. Fast-forward has a separate negotiated-client-capability path.
+
+**Observable effect:** For ordinary proxied sessions, a previously false EOF preference no longer determines the requested capability when ENFORCED is selected.
+
+**Question:** Should ENFORCED mode override that false setting and request backend deprecate-EOF anyway?
+
+**Answer:** Yes / No
+
+### N4 — Capability enforcement changes server selection — April 2026
+
+**Before:** The new notification feature did not exclude servers for lacking its required capabilities.
+
+**After:** For ordinary proxied sessions in ENFORCED mode, a server missing required capabilities is backed off from selection for 30 seconds.
+
+**Observable effect:** A mixed hostgroup can use its compatible servers; a hostgroup with no eligible server may fail even an ordinary query that does not itself modify session variables. This is not Monitor shunning.
+
+**Question:** For ordinary proxied sessions in ENFORCED mode, should a backend lacking either required capability be excluded from selection for **30 seconds**, so even unrelated queries may fail if no eligible server remains?
+
+**Answer:** Yes / No
+
+### N5 — Notification disable takes effect immediately — April 2026
+
+**Before:** There was no notification-session state or runtime disable lifecycle for this feature.
+
+**After:** Changing the mode to DISABLED immediately stops consuming reports on existing sessions, while values already recorded remain in their frontend/backend maps.
+
+**Observable effect:** Unlike the UDV latch discussed in U5, existing notification sessions do not keep a per-session drain policy. Later hidden backend changes are no longer learned through this stream.
+
+**Question:** When notifications are disabled at runtime, how should already connected sessions behave? Current code immediately stops consuming those notifications but keeps the values already recorded.
+
+**Answer:** A: stop immediately, as today; B: continue tracking existing sessions until reset/disconnect
+
+### N6 — A new configuration gate on existing GTID setup — April 2026
+
+**Before:** The GTID setup verifier checked whether the backend advertised CLIENT_SESSION_TRACKING.
+
+**After:** The verifier additionally requires backend DEPRECATE_EOF and mysql-enable_server_deprecate_eof=true. This extra configuration gate is not conditional on the new notification mode.
+
+**Observable effect:** A false flag can skip GTID setup even when ordinary notifications are DISABLED, or when ENFORCED requested EOF despite that false flag. This skips setup; it does not prove that an already enabled backend stops emitting GTIDs.
+
+**Question:** Should `mysql-enable_server_deprecate_eof=false` prevent ProxySQL from **enabling GTID session tracking**, even when ordinary notification tracking is disabled, or ENFORCED mode requested deprecate-EOF? This extra gate entered with #5166.
+
+**Answer:** A: keep the configuration gate; B: decide from the negotiated backend capability instead
+
 
 N6 is separate from N2/N3: the GTID verifier checks the configuration flag, not
 just whether the connection actually negotiated the needed capabilities.
@@ -84,9 +210,18 @@ just whether the connection actually negotiated the needed capabilities.
 September's MariaDB GTID work added another independent source of backend SETs:
 [PR #6275](https://github.com/sysown/proxysql/pull/6275).
 
-| ID | Question | Answers |
-| --- | --- | --- |
-| N7 | When MariaDB GTID collection is needed, may ProxySQL add `last_gtid` to backend `session_track_system_variables` even while `mysql-session_track_variables=DISABLED`? | Yes / No |
+### N7 — MariaDB GTID setup modifies a different tracking list — September 2026
+
+**Before:** Earlier September implementations used global-position tracking and auxiliary lookup machinery. There was no retained own-transaction last_gtid setup of the current form.
+
+**After:** The retained implementation adds last_gtid to backend session_track_system_variables when MariaDB GTID collection needs it, preserving existing entries or the wildcard. This path is independent of the ordinary notification mode.
+
+**Observable effect:** Setting mysql-session_track_variables=DISABLED does not prevent this GTID-specific change to the backend tracking list.
+
+**Question:** When MariaDB GTID collection is needed, may ProxySQL add `last_gtid` to backend `session_track_system_variables` even while `mysql-session_track_variables=DISABLED`?
+
+**Answer:** Yes / No
+
 
 ## Parser selection and classification
 
@@ -94,13 +229,66 @@ These questions concern behavior introduced by selecting ParserSQL in May 2026
 and subsequent scope/dispatch changes. The default SET algorithm remains 2;
 the new query-processor parser setting defaults to 0.
 
-| ID | Question | Answers |
-| --- | --- | --- |
-| P1 | If `query_processor_parser=1` but `set_parser_algorithm=1` or `2`, which should parse ordinary system SETs **reaching the general parser**? The explicit SET setting currently wins. | A: explicit SET algorithm wins; B: query-processor ParserSQL forces algorithm 3 |
-| P2 | Must supported SET literal values preserve the **same whitespace and quoting meaning across parser algorithms**? ParserSQL preserves source text that legacy preprocessing can collapse. | Yes / No |
-| P3 | For a statement rejected by **ParserSQL's new session-only target-scope check**, should a GLOBAL/PERSIST/PERSIST_ONLY target request the normal hostgroup-locking fallback? Many standalone non-session SETs already used fallback before this change. | A: retain configured conservative binding; B: avoid a lasting pin when the whole statement is proven to have no session-state effects |
-| P4 | Should recognized MariaDB `SET STATEMENT ... FOR ...` execute as one temporary statement wrapper **without itself requesting a lasting hostgroup lock**? This changed from fallback/binding in May. | Yes / No |
-| P5 | Should switching query-processor parser mode preserve digest text, digest hash, and digest-based rule matching for the same SQL and digest settings? October changed parser mode to use tokenizer parity. | Yes / No |
+### P1 — Two parser selectors now have precedence — May 2026
+
+**Before:** Ordinary system SETs had algorithms 1/2; query_processor_parser was not available.
+
+**After:** Algorithm 3 and query_processor_parser=1 were added, but the general SET handler checks explicit algorithm 1, then 2, before its algorithm-3-or-QP-parser branch. Special handlers still run earlier.
+
+**Observable effect:** With QP parser=1 and SET algorithm=2, general system SETs still use algorithm 2. This is the contract of a new configuration combination, not a claim that an old QP setting changed meaning.
+
+**Question:** If `query_processor_parser=1` but `set_parser_algorithm=1` or `2`, which should parse ordinary system SETs **reaching the general parser**? The explicit SET setting currently wins.
+
+**Answer:** A: explicit SET algorithm wins; B: query-processor ParserSQL forces algorithm 3
+
+### P2 — Parser selection can change literal preprocessing — May/July 2026
+
+**Before:** Legacy SET preprocessing collapsed whitespace without quote awareness. Before ParserSQL integration, there was no algorithm-3 alternative.
+
+**After:** The new ParserSQL path preserves original literal/RHS source text; May and July follow-ups further preserve function and expression spelling. Legacy preprocessing was not changed to match.
+
+**Observable effect:** Changing parser mode can change preserved whitespace inside supported values. Equivalent value meaning is the question; identical SQL formatting is not required.
+
+**Question:** Must supported SET literal values preserve the **same whitespace and quoting meaning across parser algorithms**? ParserSQL preserves source text that legacy preprocessing can collapse.
+
+**Answer:** Yes / No
+
+### P3 — Scope checking changes ParserSQL disposition — October 2026
+
+**Before:** ParserSQL normalization could strip a target scope before session tracking decided whether the assignment belonged to frontend session state. Many standalone GLOBAL statements already took fallback through other paths.
+
+**After:** The session-only ParserSQL call validates scopes before normalization and rejects non-session or malformed targets as a whole. The caller then uses configured fallback/locking policy.
+
+**Observable effect:** Affected statements can move from incorrect local handling to backend execution and possible binding. The question is the binding policy for proven non-session-only operations, not whether scope validation should be removed.
+
+**Question:** For a statement rejected by **ParserSQL's new session-only target-scope check**, should a GLOBAL/PERSIST/PERSIST_ONLY target request the normal hostgroup-locking fallback? Many standalone non-session SETs already used fallback before this change.
+
+**Answer:** A: retain configured conservative binding; B: avoid a lasting pin when the whole statement is proven to have no session-state effects
+
+### P4 — Temporary MariaDB wrappers stop requesting a lasting lock — May 2026
+
+**Before:** An unrecognized SET STATEMENT ... FOR wrapper could enter unknown-SET fallback and request hostgroup locking.
+
+**After:** Recognized wrappers are forwarded unchanged without themselves requesting that lock. A follow-up extends recognition to whitespace such as newlines/tabs.
+
+**Observable effect:** A temporary setting for one wrapped statement no longer automatically makes later routing session-bound. Independent transaction/state pins still apply.
+
+**Question:** Should recognized MariaDB `SET STATEMENT ... FOR ...` execute as one temporary statement wrapper **without itself requesting a lasting hostgroup lock**? This changed from fallback/binding in May.
+
+**Answer:** Yes / No
+
+### P5 — Parser-mode digests return to tokenizer parity — October 2026
+
+**Before:** After ParserSQL introduction, parser mode could produce AST-derived digests differing from legacy tokenization, with fallback handling for incomplete ASTs.
+
+**After:** The retained October implementation uses the same tokenizer/options for digest text, digest hash and first-comment handling. ParserSQL remains responsible for additional classification and SET extraction.
+
+**Observable effect:** For operators already using parser mode, digest-based rule or statistics keys can change back to legacy-compatible forms. The proposed contract is parity for identical SQL and digest settings.
+
+**Question:** Should switching query-processor parser mode preserve digest text, digest hash, and digest-based rule matching for the same SQL and digest settings? October changed parser mode to use tokenizer parity.
+
+**Answer:** Yes / No
+
 
 P3 retains the configured lock policy and each query-rule override's scope. Its
 second choice is conditional on proven effects; it does not permit unknown
@@ -119,16 +307,102 @@ frontend desired state; they do not require a routable backend. Generic mixed
 composition and compatible reuse without mandatory reset are also decided.
 The questions below do not reopen those decisions.
 
-| ID | Question | Answers |
-| --- | --- | --- |
-| U1 | Should UDV tracking remain **opt-in and disabled by default**, with ParserSQL required for admission? | Yes / No |
-| U2 | Should the supported local-assignment subset remain restricted to the feature's current direct literal forms, excluding equivalent parenthesized literals, character-set introducers/COLLATE forms, and prepared assignments? | A: retain that initial subset; B: admit additional forms when their value and interpretation can be represented safely |
-| U3 | Should the fixed per-session limits remain **128 distinct names and 64 KiB of stored replay target/literal bytes**? | Yes / No |
-| U4 | When a supported assignment exceeds those limits, should ProxySQL change that session to backend-bound fallback instead of returning a local resource-limit error? | A: backend-bound fallback; B: local error with previous desired state preserved |
-| U5 | After UDV tracking/parser prerequisites are disabled at runtime, how should sessions with already tracked values be handled? | A: continue classification/replay until reset/disconnect, as today; B: synchronize and bind them on their next backend execution so pooled replay can stop |
-| U6 | While UDV tracking is active, should unsafe writes/context-change fallback force backend ownership even when query rules explicitly request multiplexing? The feature adds an independent USER_VARIABLE pin. | A: keep that independent pin; B: preserve the applicable explicit variable-multiplex override |
-| U7 | Is it intended that UDV tracking **does not support sessions whose procedures, functions, or triggers invisibly change user variables**? Before this feature, an ordinary user-variable SET normally pinned the backend, so hidden changes could remain on that owned connection. | Yes / No |
-| U8 | If internal UDV replay has a retryable transport failure on an eligible fresh backend **before client SQL executes**, should the waiting query fail immediately or use configured retry policy? | A: fail and retire the backend, as today; B: allow guarded retry on a replacement backend |
+### U1 — A new opt-in UDV feature — August 2026
+
+**Before:** There was no frontend UDV map, replay mode, or user_variable_tracking setting. Ordinary user-variable handling followed legacy fallback/pinning.
+
+**After:** The new setting defaults to 0. Mode 1 admits tracking only with SET parser 3 or QP parser 1 and the other admission gates.
+
+**Observable effect:** The feature is not enabled by default; applications opting in can acquire replayable user-variable state. The already decided correction is local acceptance of supported SETs.
+
+**Question:** Should UDV tracking remain **opt-in and disabled by default**, with ParserSQL required for admission?
+
+**Answer:** Yes / No
+
+### U2 — Only a strict subset becomes replayable — August 2026
+
+**Before:** There was no locally representable UDV assignment subset for pooled replay.
+
+**After:** The feature admits direct supported literal AST forms in plain text SETs, while equivalent parenthesized forms, introducers/COLLATE and prepared assignments remain outside admission.
+
+**Observable effect:** SET @x=1 can become tracked/replayable while SET @x=(1) takes fallback. These exclusions describe the new feature boundary; unsupported forms did not previously have working pooled replay.
+
+**Question:** Should the supported local-assignment subset remain restricted to the feature's current direct literal forms, excluding equivalent parenthesized literals, character-set introducers/COLLATE forms, and prepared assignments?
+
+**Answer:** A: retain that initial subset; B: admit additional forms when their value and interpretation can be represented safely
+
+### U3 — New per-session replay-map limits — August 2026
+
+**Before:** There was no frontend UDV replay map to impose these limits.
+
+**After:** The new map is bounded to 128 distinct names and 64 KiB of stored replay-target/raw-literal bytes.
+
+**Observable effect:** Applications using many names or large values can reach a tracking bound even when the database would accept the SQL.
+
+**Question:** Should the fixed per-session limits remain **128 distinct names and 64 KiB of stored replay target/literal bytes**?
+
+**Answer:** Yes / No
+
+### U4 — Overflow changes the ownership model — August 2026
+
+**Before:** User-variable SQL normally used legacy backend-bound handling, without a frontend replay-map overflow decision.
+
+**After:** An otherwise supported assignment that would exceed the new map bounds leaves the old map intact and takes backend-bound fallback instead of reporting a local resource-limit error.
+
+**Observable effect:** A session that was replayable can become bound as a consequence of map capacity. This is a new branch in the feature, not a new resource limit on MySQL itself.
+
+**Question:** When a supported assignment exceeds those limits, should ProxySQL change that session to backend-bound fallback instead of returning a local resource-limit error?
+
+**Answer:** A: backend-bound fallback; B: local error with previous desired state preserved
+
+### U5 — Disabling admission does not stop existing replay — August 2026
+
+**Before:** There was no UDV tracking state to drain when configuration changed.
+
+**After:** Disabling mode/parser prerequisites stops new admission, but sessions with committed tracked values keep classification and replay through a latch until reset/change-user/disconnect.
+
+**Observable effect:** Turning the feature off does not immediately eliminate its replay work for existing sessions. Accepted state is retained rather than silently forgotten.
+
+**Question:** After UDV tracking/parser prerequisites are disabled at runtime, how should sessions with already tracked values be handled?
+
+**Answer:** A: continue classification/replay until reset/disconnect, as today; B: synchronize and bind them on their next backend execution so pooled replay can stop
+
+### U6 — The new tracker adds an independent multiplex pin — August 2026
+
+**Before:** Legacy variable handling had its existing exemptions and query-rule overrides, including the applicable multiplex=2 escape path.
+
+**After:** Mode 1 adds successful unsafe/context-fallback USER_VARIABLE ownership independently of that legacy detector, including under explicit multiplex settings.
+
+**Observable effect:** An operator override that avoided a legacy variable pin may no longer prevent the new tracker from binding the backend. The question is which explicitly defined override scope should apply.
+
+**Question:** While UDV tracking is active, should unsafe writes/context-change fallback force backend ownership even when query rules explicitly request multiplexing? The feature adds an independent USER_VARIABLE pin.
+
+**Answer:** A: keep that independent pin; B: preserve the applicable explicit variable-multiplex override
+
+### U7 — Hidden writes become an unsupported deployment boundary — August 2026
+
+**Before:** An ordinary user-variable SET normally pinned the backend. A routine changing that variable later could keep using that owned physical connection.
+
+**After:** Mode 1 makes supported literal state replayable and multiplexable. Raw-query analysis cannot learn a hidden UDV write from a routine/trigger with no visible assignment; the feature documentation excludes that usage.
+
+**Observable effect:** The real backend value can diverge from the replay map. After migration the old tracked value may be replayed. This is why the unsupported condition matters, rather than merely being a list of SQL syntax exclusions.
+
+**Question:** Is it intended that UDV tracking **does not support sessions whose procedures, functions, or triggers invisibly change user variables**? Before this feature, an ordinary user-variable SET normally pinned the backend, so hidden changes could remain on that owned connection.
+
+**Answer:** Yes / No
+
+### U8 — A new replay failure policy — August 2026
+
+**Before:** There was no internal UDV replay command before the client query.
+
+**After:** Any internal UDV replay failure errors the waiting operation and retires the backend; this path does not use the ordinary configured query-retry decision.
+
+**Observable effect:** Even a retryable transport failure before the actual client SQL executes can surface as a client error. The question concerns eligible guarded retries, not retries inside an active/uncertain transaction.
+
+**Question:** If internal UDV replay has a retryable transport failure on an eligible fresh backend **before client SQL executes**, should the waiting query fail immediately or use configured retry policy?
+
+**Answer:** A: fail and retire the backend, as today; B: allow guarded retry on a replacement backend
+
 
 U2 asks about the capability boundary, not local evaluation of arbitrary SQL.
 Prepared-protocol support, typed values, and interpretation context still need
@@ -145,16 +419,102 @@ Shared startup/default code can affect Stable/libpq even when a change arrived
 through the native-backend feature branch. The established transaction,
 isolation, and truthful-reset invariants remain requirements under every answer.
 
-| ID | Question | Answers |
-| --- | --- | --- |
-| G1 | If a client omits `search_path`, whose default should apply? October promoted it into ProxySQL's critical startup defaults, overriding reliance on backend role/database defaults. | A: ProxySQL's configured default; B: backend role/database default |
-| G2 | Should supported tracked SET and **single-variable RESET** have frontend-local acceptance through both Simple and Extended Query? Since March the extended path updates frontend state and also forwards the original SQL. | A: local acceptance in both; B: retain backend execution for Extended Query |
-| G3 | Should `RESET ALL` remain unsupported for an **unlocked Extended Query session**, including an isolated invocation? Already locked sessions have a separate conditional forwarding path. | A: retain that restriction; B: support the safe isolated form |
-| G4 | Should an isolated, transaction-free Extended Query `DISCARD ALL` be supported when the batch has no earlier backend work or queued trailing statements? October added that supported form while retaining unsafe-batch refusal. | Yes / No |
-| G5 | If parsing fails for a recognized tracked SET name, should ProxySQL forward it **without requesting a lasting hostgroup lock**? That exception was added in May; unknown names request the configured locking fallback. | A: keep that exception; B: require proof of safe effects before omitting the lock |
-| G6 | Should `SET [LOCAL|SESSION] TRANSACTION ...` be forwarded **without itself requesting a session-long hostgroup lock**? October introduced this exception. | Yes / No |
-| G7 | If the backend is confirmed idle but the tracker cannot tell whether the transaction committed or rolled back, which setting state should survive? October retains frontend values and invalidates changed backend entries. | A: preserve/replay frontend desired values; B: establish actual post-transaction values before selecting frontend state |
-| G8 | During an active Extended Query pipeline, should needing to synchronize a **second differing parameter** be an unsupported condition that terminates the session? This restriction entered in March. | A: retain connection termination; B: support reconciliation of all required parameters |
+### G1 — search_path becomes an imposed startup default — October 2026
+
+**Before:** search_path was optional dynamic state. When the client did not set it and no other override applied, the backend role/database default could determine it.
+
+**After:** It is now in the critical startup group: ProxySQL fills an omitted value from pgsql-default_search_path, sends it during backend startup, and reports/records it as a startup parameter.
+
+**Observable effect:** A role configured with tenant_schema,public can instead receive ProxySQL's configured default. Unqualified names may therefore resolve differently. This shared code also affects Stable/libpq.
+
+**Question:** If a client omits `search_path`, whose default should apply? October promoted it into ProxySQL's critical startup defaults, overriding reliance on backend role/database defaults.
+
+**Answer:** A: ProxySQL's configured default; B: backend role/database default
+
+### G2 — Extended SET/RESET now also executes the original SQL — March 2026
+
+**Before:** The SET and single-variable RESET handlers could complete locally through the extended path.
+
+**After:** They update frontend state but return to backend execution for Extended Query; Simple Query retains local completion. October additionally repairs ParameterStatus reporting.
+
+**Observable effect:** Supported logical state changes have protocol-dependent backend requirements and work. This is separate from RESET ALL, covered by G3.
+
+**Question:** Should supported tracked SET and **single-variable RESET** have frontend-local acceptance through both Simple and Extended Query? Since March the extended path updates frontend state and also forwards the original SQL.
+
+**Answer:** A: local acceptance in both; B: retain backend execution for Extended Query
+
+### G3 — An explicit Extended Query RESET ALL refusal — March 2026
+
+**Before:** The handler did not have the new blanket extended-mode rejection and followed its local reset handling. This is not proof that every old extended sequence worked correctly.
+
+**After:** An unlocked extended session receives feature-not-supported for RESET ALL, even as an isolated command. Already locked sessions have a separately conditioned forwarding path.
+
+**Observable effect:** The same client reset command can succeed through Simple Query but be rejected through Extended Query.
+
+**Question:** Should `RESET ALL` remain unsupported for an **unlocked Extended Query session**, including an isolated invocation? Already locked sessions have a separate conditional forwarding path.
+
+**Answer:** A: retain that restriction; B: support the safe isolated form
+
+### G4 — A safe Extended Query DISCARD ALL form becomes supported — October 2026
+
+**Before:** The March implementation refused extended DISCARD ALL generally.
+
+**After:** The retained October path allows an isolated transaction-free request with no earlier backend work in the unsynced batch and no queued trailing statements. Unsafe cases remain refused.
+
+**Observable effect:** A safe isolated extended invocation can now succeed instead of receiving the blanket unsupported response.
+
+**Question:** Should an isolated, transaction-free Extended Query `DISCARD ALL` be supported when the batch has no earlier backend work or queued trailing statements? October added that supported form while retaining unsafe-batch refusal.
+
+**Answer:** Yes / No
+
+### G5 — Tracked-name parse failure stops requesting a lock — May 2026
+
+**Before:** A failure to parse a SET used ordinary fallback/locking policy.
+
+**After:** A parse failure for a recognized tracked name is forwarded without requesting that lasting lock. Unknown names use configured fallback; October tightens classification of lookalike names.
+
+**Observable effect:** A rejected malformed statement need not permanently bind a session, but the exception relies on the tracked-name classification. Query-rule and lock-policy conditions still apply.
+
+**Question:** If parsing fails for a recognized tracked SET name, should ProxySQL forward it **without requesting a lasting hostgroup lock**? That exception was added in May; unknown names request the configured locking fallback.
+
+**Answer:** A: keep that exception; B: require proof of safe effects before omitting the lock
+
+### G6 — Transaction SET gets a no-lasting-lock exception — October 2026
+
+**Before:** Transaction-control SETs could reach the general unparsed-SET locking fallback.
+
+**After:** Recognized SET [LOCAL|SESSION] TRANSACTION forms are forwarded without themselves requesting a session-long hostgroup lock; they are not materialized as ordinary tracked GUC assignments.
+
+**Observable effect:** Their classification no longer necessarily pins the session after the transaction ends. The active transaction remains subject to its normal ownership guards.
+
+**Question:** Should `SET [LOCAL|SESSION] TRANSACTION ...` be forwarded **without itself requesting a session-long hostgroup lock**? October introduced this exception.
+
+**Answer:** Yes / No
+
+### G7 — Unknown transaction end preserves desired values — October 2026
+
+**Before:** When the backend became idle without a recognized termination cause, the tracker could discard the transaction snapshot while leaving metadata for changes the server might have reverted.
+
+**After:** Known rollback restores the snapshot and known commit keeps changes. For an unidentified end after confirmed idle, the new path keeps frontend desired values and invalidates changed backend entries for later synchronization.
+
+**Observable effect:** If the actual end rolled back a setting, later reconciliation can reapply the frontend's changed value. This concerns choosing logical state after confirmed idle, not lending an uncertain active transaction.
+
+**Question:** If the backend is confirmed idle but the tracker cannot tell whether the transaction committed or rolled back, which setting state should survive? October retains frontend values and invalidates changed backend entries.
+
+**Answer:** A: preserve/replay frontend desired values; B: establish actual post-transaction values before selecting frontend state
+
+### G8 — An explicit second-parameter pipeline disconnect — March 2026
+
+**Before:** The verification loop used its ordinary variable-sync transition and had no explicit branch terminating the session on a second differing parameter. This does not establish that the older pipeline implementation handled all cases correctly.
+
+**After:** In an active Extended Query pipeline, one required variable can enter the special path; encountering a second differing variable returns a fatal session result.
+
+**Observable effect:** An eligible operation can disconnect because two supported parameters need reconciliation, rather than synchronizing all required state.
+
+**Question:** During an active Extended Query pipeline, should needing to synchronize a **second differing parameter** be an unsupported condition that terminates the session? This restriction entered in March.
+
+**Answer:** A: retain connection termination; B: support reconciliation of all required parameters
+
 
 G7 concerns an unidentified termination cause **after confirmed idle**; it does
 not authorize sharing a backend whose active transaction status is uncertain.
