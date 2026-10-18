@@ -481,6 +481,7 @@
   "reg_test_5639_stmt_execute_max_allowed_packet-t" : [ "mysql84-g6","mysql95-g1" ],
   "reg_test_5766_libconfig_escape_passthrough-t" : [ "mysql95-g4" ],
   "reg_test_5790-mariadb_collation_255-t" : [ "mariadb10-galera-g1" ],
+  "reg_test_5930_mysql_client_no_read_backpressure-t" : [ "mysql84-g1" ],
   "reg_test_5930_mysql_client_pipelining-t" : [ "mysql84-g1" ],
   "reg_test_5977_fast_forward_unix_socket_compression-t" : [ "legacy-g9" ],
   "reg_test_5988-caching_sha2_rsa-t" : [ "no-infra-g1","@proxysql_min_version:3.1" ],
