@@ -699,7 +699,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_waiter_list_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
-UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t
+UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
