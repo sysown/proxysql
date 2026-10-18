@@ -1,56 +1,45 @@
-# ProxySQL Documentation Guide
+# ProxySQL documentation guide
 
-## Documentation Structure
+## Architecture
 
-ProxySQL documentation is organized into different tiers to help developers find the information they need:
+Start with the [architecture entry point](architecture.md). The refreshed source-grounded
+collection retains the existing architecture's breadth and adds current module relationships,
+protocol/tier qualifications and source references:
 
-### 🔬 AI-Generated Documentation (Exploration Guides)
+- [Overview](ai-generated/architecture/ARCHITECTURE-OVERVIEW.md).
+- [Traffic runtime](ai-generated/architecture/RUNTIME-ARCHITECTURE.md).
+- [Backend resources and monitoring](ai-generated/architecture/BACKEND-MANAGEMENT.md).
+- [Administration, synchronization and statistics](ai-generated/architecture/ADMINISTRATION-AND-STATISTICS.md).
+- [Visual architecture](ai-generated/architecture/VISUAL-GUIDE.md).
+- [Project layout and composition](ai-generated/architecture/PROJECT-LAYOUT.md).
 
-The `ai-generated/` directory contains documentation created by AI assistants to help developers explore the codebase:
+Each document states the investigated source baseline and verification scope. A source-verified
+implementation detail is distinct from a maintainer-approved product contract. The
+[`ai-generated/` directory name](ai-generated/DOCUMENTATION-INDEX.md) does not establish the
+accuracy or currency of every document it contains.
 
-> **⚠️ Important Notice**: AI-generated documentation may contain inaccuracies and should be used as a starting point for exploration only. Always verify critical information against the actual source code.
+## Product and development references
 
-**Available AI-generated guides:**
-- **`ai-generated/DOCUMENTATION-INDEX.md`** - Comprehensive index of all documentation
-- **`ai-generated/architecture/ARCHITECTURE-OVERVIEW.md`** - System architecture and design patterns
-- **`ai-generated/architecture/PROJECT-LAYOUT.md`** - Directory structure and module organization
-- **`ai-generated/architecture/VISUAL-GUIDE.md`** - Architecture diagrams and visual references
-- **`ai-generated/architecture/TEST-PIPELINE.md`** - Testing framework and CI/CD workflows
-- **`ai-generated/architecture/RELEASE-PIPELINE.md`** - Release process and packaging
+- [Product invariants](agents/invariants.md): guarantees changes must preserve.
+- [Agent guidance](agents/README.md): repository conventions and known failure patterns.
+- [Domain terminology](../GLOSSARY.md): resolved architectural vocabulary.
+- [Test infrastructure](../test/infra/README.md): supported isolated provisioning/test execution.
+- [CI architecture](GH-Actions/README.md): authoritative workflow architecture.
+- [DuckDB documentation](duckdb/index.md): plugin tutorial and reference.
+- `internal/`: focused implementation guides and investigation evidence.
+- `release_notes/`: release history.
+- [Repository README](../README.md), [installation](../INSTALL.md) and [FAQ](../FAQ.md).
 
-**Status: NON-VERIFIED**
-- **Last AI Update**: 2025-09-11
-- **Maintainer**: Rene Cannao
+## Historical exploration guides
 
-### 📋 Human-Verified Documentation
+The September 2025 [test pipeline](ai-generated/architecture/TEST-PIPELINE.md),
+[release pipeline](ai-generated/architecture/RELEASE-PIPELINE.md) and
+[enhancement ideas](ai-generated/architecture/ENHANCEMENT-OPPORTUNITIES.md) remain historical
+exploration material. Their commands, counts, workflow descriptions and proposed extensions
+have not been refreshed by the runtime-architecture investigation. Use the current CI/test
+references above for execution. Proposed enhancement ideas are not current architecture or
+approved work.
 
-Critical documentation that has been reviewed and verified by maintainers:
-
-- **`README.md`** - Main project overview and quick start
-- **`INSTALL.md`** - Installation instructions
-- **`FAQ.md`** - Frequently asked questions
-- **[`duckdb/`](duckdb/index.md)** - DuckDB plugin tutorial, user guide,
-  reference manuals, security, operations, and troubleshooting
-
-### 🔧 Internal Documentation
-
-Detailed technical documentation for specific components:
-
-- **`doc/internal/`** - In-depth technical guides
-- **`doc/release_notes/`** - Release notes and changelogs
-
-## Using AI-Generated Documentation
-
-1. **Start Here**: Use AI-generated docs to understand the codebase structure
-2. **Verify Information**: Always cross-reference with actual source code
-3. **Report Issues**: Help improve accuracy by reporting discrepancies
-
-## Contributing to Documentation
-
-- **AI Documentation**: Contributions are welcome - please verify against source code
-- **Verified Documentation**: Follow the existing review process
-- **Framework**: See `AI-DOCUMENTATION-FRAMEWORK.md` for guidelines
-
----
-
-> This approach provides the benefits of AI-generated assistance while being transparent about limitations and reducing verification overhead.
+When updating documentation, preserve useful module and flow coverage, verify claims against
+the owning source, and identify current behavior separately from intended design. Avoid stale
+file counts, artifact sizes, fixed thread counts or deployment defaults without a scoped source.
