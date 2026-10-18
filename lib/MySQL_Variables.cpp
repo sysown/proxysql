@@ -657,6 +657,7 @@ bool MySQL_Variables::stage_set_variable(
 		const auto parsed = std::from_chars(input.data(), input.data() + input.size(), seconds);
 		if (input.empty() || parsed.ec != std::errc{} || parsed.ptr != input.data() + input.size()) return false;
 		change.wait_timeout_ms = std::clamp(seconds, 1ULL, 20ULL * 24 * 3600) * 1000;
+		change.requested_wait_timeout_seconds = seconds;
 	} else if (name == "session_track_gtids") {
 		if (!strcasecmp(input.c_str(), "ALL_GTIDS") || !strcasecmp(input.c_str(), "OWN_GTID")) {
 			change.session_track_gtids = "OWN_GTID";
@@ -721,7 +722,10 @@ bool MySQL_Variables::stage_set_variable(
 	}
 	plan.values.insert(plan.values.end(), change.values.begin(), change.values.end());
 	plan.autocommit.insert(plan.autocommit.end(), change.autocommit.begin(), change.autocommit.end());
-	if (change.wait_timeout_ms) plan.wait_timeout_ms = change.wait_timeout_ms;
+	if (change.wait_timeout_ms) {
+		plan.wait_timeout_ms = change.wait_timeout_ms;
+		plan.requested_wait_timeout_seconds = change.requested_wait_timeout_seconds;
+	}
 	if (change.session_track_gtids) plan.session_track_gtids = std::move(change.session_track_gtids);
 	return true;
 }
@@ -739,6 +743,17 @@ void MySQL_Variables::apply_set_plan(MySQL_Session* session, const MySQL_Session
 		session->client_myds->myconn->set_autocommit(plan.autocommit.back());
 	}
 	if (plan.wait_timeout_ms) {
+		const auto requested_seconds = *plan.requested_wait_timeout_seconds;
+		if (requested_seconds < 1 || requested_seconds > 20ULL * 24 * 3600) {
+			proxy_warning("Client [%s:%d] (user: %s) requested wait_timeout = %llu seconds, clamped to %llu ms (ProxySQL limits: 1s to 20 days)\n",
+				session->client_myds->addr.addr, session->client_myds->addr.port,
+				session->client_myds->myconn->userinfo->username, requested_seconds, *plan.wait_timeout_ms);
+		}
+		if (*plan.wait_timeout_ms > static_cast<unsigned long long>(mysql_thread___wait_timeout)) {
+			proxy_warning("Client [%s:%d] (user: %s) requested wait_timeout = %llu ms, exceeds the global mysql-wait_timeout = %d ms. Global timeout will still be enforced.\n",
+				session->client_myds->addr.addr, session->client_myds->addr.port,
+				session->client_myds->myconn->userinfo->username, *plan.wait_timeout_ms, mysql_thread___wait_timeout);
+		}
 		session->wait_timeout = *plan.wait_timeout_ms;
 		session->thread->status_variables.stvar[st_var_set_wait_timeout_commands]++;
 	}

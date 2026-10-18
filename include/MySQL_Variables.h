@@ -1,13 +1,12 @@
 #ifndef MYSQL_VARIABLES_H
 #define MYSQL_VARIABLES_H
 
-#include "proxysql.h"
-#include "cpp.h"
-
 #include <cstdint>
 #include <vector>
 #include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 
 /** Frontend changes prepared without acquiring or modifying a backend. */
 struct MySQL_Session_Set_Plan {
@@ -15,8 +14,12 @@ struct MySQL_Session_Set_Plan {
 	// Retain intermediate transitions: ON followed by OFF still commits.
 	std::vector<bool> autocommit;
 	std::optional<unsigned long long> wait_timeout_ms;
+	std::optional<unsigned long long> requested_wait_timeout_seconds;
 	std::optional<std::string> session_track_gtids;
 };
+
+#include "proxysql.h"
+#include "cpp.h"
 
 class MySQL_Session;
 

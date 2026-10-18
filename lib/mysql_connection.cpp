@@ -403,6 +403,12 @@ void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
  */
 bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l, uint32_t charset) {
 	schemaname_charset = l ? charset : 45;
+	// Compare the effective default name, including when auth switching has
+	// already installed an empty database string in userinfo.
+	if (l == 0) {
+		_new = mysql_thread___default_schema;
+		l = strlen(_new);
+	}
 	int _l=0;
 	if (schemaname) {
 		_l=strlen(schemaname); // bug fix for #609

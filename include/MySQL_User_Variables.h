@@ -172,10 +172,10 @@ MySQL_User_Variable_Replay_Packet_Budget mysql_user_variable_replay_packet_budge
 
 /** @brief Check that a captured literal can be replayed independently of later SETs. */
 bool mysql_user_variable_literal_is_replayable(const UserVariableAssignment& assignment);
-/** @brief Decode a quoted SET literal in the frontend's original parsing context. */
 /** @brief Capture a bounded database identifier for deferred metadata lookup. */
 std::optional<std::string> mysql_user_variable_capture_schema(const char* schema);
 
+/** @brief Decode a quoted SET literal in the frontend's original parsing context. */
 bool mysql_decode_set_string(const std::string& raw, const UserVariableLiteralContext& context, std::string& bytes);
 
 UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(

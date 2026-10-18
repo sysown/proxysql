@@ -1130,6 +1130,7 @@ MySQL_Session::MySQL_Session() {
 	autocommit_handled=false;
 	sending_set_autocommit=false;
 	committing_tracked_set=false;
+	pending_tracked_set.reset();
 	autocommit_on_hostgroup=-1;
 	killed=false;
 	session_type=PROXYSQL_SESSION_MYSQL;
@@ -1221,6 +1222,7 @@ void MySQL_Session::reset() {
 	autocommit_handled=false;
 	sending_set_autocommit=false;
 	committing_tracked_set=false;
+	pending_tracked_set.reset();
 	autocommit_on_hostgroup=-1;
 	warning_in_hg = -1;
 	current_hostgroup=-1;
@@ -4774,6 +4776,13 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 		previous_status.pop();
 		myds->DSS = STATE_MARIADB_GENERIC;
 		if (committing_tracked_set) {
+			assert(pending_tracked_set);
+			mysql_variables.apply_set_plan(this, pending_tracked_set->session_variables);
+			client_myds->myconn->user_variables = std::move(pending_tracked_set->user_variables);
+			user_variable_tracking_latched = true;
+			thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
+				pending_tracked_set->assignments;
+			pending_tracked_set.reset();
 			// Only the implicit commit reached this backend. All other desired
 			// values, including a final autocommit=0, remain deferred.
 			myconn->set_autocommit(true);
@@ -4792,6 +4801,8 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
 		if (rc==-1) {
+			// Failed transaction effects must not publish the staged SET.
+			pending_tracked_set.reset();
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(
@@ -4826,6 +4837,13 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 					myds->destroy_MySQL_Connection_From_Pool(true);
 					myds->fd=0;
+				if (committing_tracked_set) {
+					if (transaction_persistent_hostgroup == current_hostgroup) {
+						transaction_persistent_hostgroup = -1;
+					}
+					active_transactions = NumActiveTransactions();
+					if (active_transactions == 0) transaction_started_at = 0;
+				}
 				RequestEnd(myds);
 				status=WAITING_CLIENT_DATA;
 				client_myds->DSS=STATE_SLEEP;
@@ -9826,12 +9844,10 @@ __exit_set_destination_hostgroup:
 			__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
 			if (commit_hostgroup < 0) __sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
 		}
-		mysql_variables.apply_set_plan(this, staged_session_variables);
-		client_myds->myconn->user_variables = std::move(staged_user_variables);
-		user_variable_tracking_latched = true;
-		thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
-			local_variable_set->assignments.size();
 		if (commit_hostgroup >= 0) {
+			pending_tracked_set.emplace(PendingTrackedSet{
+				std::move(staged_session_variables), std::move(staged_user_variables),
+				local_variable_set->assignments.size()});
 			// Preserve SET autocommit's immediate transaction effect without
 			// forwarding the mixed statement or synchronizing its variables.
 			current_hostgroup = commit_hostgroup;
@@ -9844,6 +9860,11 @@ __exit_set_destination_hostgroup:
 			status = CHANGING_AUTOCOMMIT;
 			return true;
 		}
+		mysql_variables.apply_set_plan(this, staged_session_variables);
+		client_myds->myconn->user_variables = std::move(staged_user_variables);
+		user_variable_tracking_latched = true;
+		thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
+			local_variable_set->assignments.size();
 		// Only frontend desired state changes; normal pre-query synchronization
 		// materializes it later.
 		client_myds->DSS = STATE_QUERY_SENT_NET;
@@ -10767,6 +10788,7 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
 	committing_tracked_set = false;
+	pending_tracked_set.reset();
 
 	switch (status) {
 		case PROCESSING_STMT_EXECUTE:

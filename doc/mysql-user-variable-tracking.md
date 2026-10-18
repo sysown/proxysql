@@ -3,8 +3,9 @@
 `mysql-user_variable_tracking` is an opt-in, conservative way to keep a
 small, proven subset of MySQL user-defined variables multiplexable. It tracks
 literal assignments in the frontend session and applies them only when a real
-query needs a backend connection. It is intended for
-request metadata and similar values, not as a general user-variable evaluator.
+query needs a backend connection. Autocommit changes that end a transaction
+still take effect immediately. It is intended for request metadata and similar
+values, not as a general user-variable evaluator.
 
 ## Enable mode 1
 
@@ -91,9 +92,11 @@ backend or send a query, even if the default hostgroup has no servers or a backe
 is already attached. Existing transaction effects of `autocommit` are preserved:
 an OFF-to-ON assignment that commits an active transaction runs that operation
 immediately on the backend holding the transaction, before acknowledging the SET.
-The other variables remain tracked locally until the next real query. Intermediate
-autocommit assignments are retained, so `autocommit=1, autocommit=0` still commits
-an active transaction that began with autocommit disabled.
+The other variables remain tracked locally until the next real query. When an
+immediate commit is required, the staged frontend changes take effect only after
+it succeeds; a commit error discards them and preserves the prior desired values.
+Intermediate autocommit assignments are retained, so `autocommit=1, autocommit=0`
+still commits an active transaction that began with autocommit disabled.
 Repeated assignments replace the desired values. The next real query selects its
 normal destination; ProxySQL synchronizes session and user variables on that
 connection before executing the query.
