@@ -10,6 +10,11 @@ PostgreSQL SET handling has not been audited here. The independent runtime
 control-flow analysis is in
 [set-tracking-runtime-evidence.md](set-tracking-runtime-evidence.md).
 
+The separate [twelve-month intent questionnaire](set-behavior-history-questions.md)
+and [integration-history evidence](set-behavior-history-evidence.md) distinguish
+new behavior from inherited defects. Their unanswered choices are not product
+invariants or permission to implement a behavior change.
+
 ## Conclusion
 
 The implementation has two conflicting models. Supported system SETs normally
