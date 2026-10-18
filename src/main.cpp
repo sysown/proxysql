@@ -2020,9 +2020,12 @@ void ProxySQL_Main_init_phase4___shutdown() {
 	// Stop accepting admin work and wait for all detached admin clients before
 	// the modules used by admin queries are joined or destroyed.
 GloAdmin->shutdown_threads();
+#ifdef PROXYSQL40
 	// Admin cannot restart HTTP after this point. Drain web handlers while
 	// the AWS service and all core runtime dependencies are still alive.
+	// v3.x keeps the 3.0.11 order: plugins are unloaded before phase 4.
 	UnloadPlugins();
+#endif /* PROXYSQL40 */
 	// Every worker spins in run_BootstrapListener() while this flag is true and
 	// that loop never consults 'shutdown'. Reaching teardown before
 	// start_listeners() ran (a managed one-shot/recovery failure; a listener
@@ -3493,6 +3496,11 @@ __shutdown:
 #endif
 
 	proxy_info("Starting shutdown...\n");
+
+#ifndef PROXYSQL40
+	// First shutdown step is to unload plugins
+	UnloadPlugins();
+#endif /* PROXYSQL40 */
 
 	ProxySQL_Main_init_phase4___shutdown();
 

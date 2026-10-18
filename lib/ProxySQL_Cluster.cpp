@@ -184,9 +184,11 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Thread started for peer %s:%d\n", node->hostname, node->port);
 
 	proxy_info("Cluster: starting thread for peer %s:%d\n", node->hostname, node->port);
+#ifdef PROXYSQL40
 	// Peers are configured during startup, before plugins initialize. Do not
 	// sync until the plugin lifecycle has finished (ProxySQL_StartupGate.h).
 	proxysql_startup_gate_wait_for_runtime([] { return glovars.shutdown != 0; });
+#endif /* PROXYSQL40 */
 	char *query1 = (char *)"SELECT GLOBAL_CHECKSUM()"; // in future this will be used for "light check"
 	char *query2 = (char *)"SELECT * FROM stats_mysql_global ORDER BY Variable_Name";
 	char *query3 = (char *)"SELECT * FROM runtime_checksums_values ORDER BY name";
@@ -2074,9 +2076,13 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 					proxy_info("Cluster: Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 
 					if (computed_checksum == peer_checksum) {
+#ifdef PROXYSQL40
 						// Same order as an Admin LOAD: the global Admin SQL mutex, then the
-						// servers lock. The pull writes to the shared admin database.
+						// servers lock. The pull writes to the shared admin database, including
+						// the plugin server-module tables in a transaction. v3.x writes no
+						// transaction here and, as in 3.0.11, takes only the servers lock.
 						proxysql_admin_global_sql_lock(GloAdmin->sql_query_global_mutex);
+#endif /* PROXYSQL40 */
 						GloAdmin->mysql_servers_wrlock();
 						std::unique_ptr<SQLite3_result> runtime_mysql_servers_resultset = get_SQLite3_resulset(result);
 #ifdef PROXYSQL40
@@ -2101,7 +2107,9 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 							GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
 						}
 						GloAdmin->mysql_servers_wrunlock();
+#ifdef PROXYSQL40
 						proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
+#endif /* PROXYSQL40 */
 
 						// free result
 						mysql_free_result(result);
@@ -2362,9 +2370,13 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						// we are OK to sync!
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching checksum for 'MySQL Servers' from peer %s:%d successful. Checksum: %s\n", hostname, port, computed_checksum.c_str());
 						proxy_info("Cluster: Fetching checksum for 'MySQL Servers' from peer %s:%d successful. Checksum: %s\n", hostname, port, computed_checksum.c_str());
+#ifdef PROXYSQL40
 						// Same order as an Admin LOAD: the global Admin SQL mutex, then the
-						// servers lock. The pull writes to the shared admin database.
+						// servers lock. The pull writes to the shared admin database, including
+						// the plugin server-module tables in a transaction. v3.x writes no
+						// transaction here and, as in 3.0.11, takes only the servers lock.
 						proxysql_admin_global_sql_lock(GloAdmin->sql_query_global_mutex);
+#endif /* PROXYSQL40 */
 						GloAdmin->mysql_servers_wrlock();
 						// Convert only after every operation that can reject the fetched
 						// module state. The runtime load path takes ownership of these
@@ -2675,7 +2687,9 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							proxy_info("Cluster: Not saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
 						}
 						GloAdmin->mysql_servers_wrunlock();
+#ifdef PROXYSQL40
 						proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
+#endif /* PROXYSQL40 */
 					} else {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Servers v2 from peer %s:%d failed: Checksum changed from %s to %s\n",
 							hostname, port, peer_mysql_servers_v2_checksum, computed_checksum.c_str());
@@ -3629,9 +3643,13 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 				? string(peer_runtime_pgsql_servers_checksum) : peer_runtime_pgsql_server.value;
 
 			if (!expected_runtime_checksum.empty() && computed_checksum == expected_runtime_checksum) {
+#ifdef PROXYSQL40
 				// Same order as an Admin LOAD: the global Admin SQL mutex, then the
-				// servers lock. The pull writes to the shared admin database.
+				// servers lock. The pull writes to the shared admin database, including
+				// the plugin server-module tables in a transaction. v3.x writes no
+				// transaction here and, as in 3.0.11, takes only the servers lock.
 				proxysql_admin_global_sql_lock(GloAdmin->sql_query_global_mutex);
+#endif /* PROXYSQL40 */
 				GloAdmin->pgsql_servers_wrlock();
 				std::unique_ptr<SQLite3_result> runtime_pgsql_servers_resultset = get_SQLite3_resulset(result);
 #ifdef PROXYSQL40
@@ -3656,7 +3674,9 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 					GloAdmin->flush_GENERIC__from_to(ClusterModules::PGSQL_SERVERS, "memory_to_disk");
 				}
 				GloAdmin->pgsql_servers_wrunlock();
+#ifdef PROXYSQL40
 				proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
+#endif /* PROXYSQL40 */
 				if (!fetch_failed)
 					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_servers_success]->Increment();
 			} else {
@@ -3880,9 +3900,13 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					};
 
 					proxy_info("Cluster: Loading to runtime PostgreSQL Servers from peer %s:%d.\n", hostname, port);
+#ifdef PROXYSQL40
 					// Same order as an Admin LOAD: the global Admin SQL mutex, then the
-					// servers lock. The pull writes to the shared admin database.
+					// servers lock. The pull writes to the shared admin database, including
+					// the plugin server-module tables in a transaction. v3.x writes no
+					// transaction here and, as in 3.0.11, takes only the servers lock.
 					proxysql_admin_global_sql_lock(GloAdmin->sql_query_global_mutex);
+#endif /* PROXYSQL40 */
 					GloAdmin->pgsql_servers_wrlock();
 					const incoming_pgsql_servers_t incoming_pgsql_servers { convert_pgsql_servers_resultsets(results) };
 					update_pgsql_servers(incoming_pgsql_servers.incoming_pgsql_servers_v2);
@@ -3905,7 +3929,9 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 						GloAdmin->flush_GENERIC__from_to(ClusterModules::PGSQL_SERVERS, "memory_to_disk");
 					}
 					GloAdmin->pgsql_servers_wrunlock();
+#ifdef PROXYSQL40
 					proxysql_admin_global_sql_unlock(GloAdmin->sql_query_global_mutex);
+#endif /* PROXYSQL40 */
 					if (!fetch_failed)
 						metrics.p_counter_array[p_cluster_counter::pulled_pgsql_servers_success]->Increment();
 				} else {

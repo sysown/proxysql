@@ -125,7 +125,9 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
+#ifdef PROXYSQL40
 static char mysql_thread_aws_locality_awareness_variable[] = "aws_locality_awareness";
+#endif /* PROXYSQL40 */
 
 typedef struct mythr_st_vars {
 	enum MySQL_Thread_status_variable v_idx;
@@ -7290,7 +7292,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 		// full rationale; reads are relaxed because the deadline is compared against
 		// 'curtime' and small reordering is harmless.
 		if (check_session_track_backoff) {
-			session_track_backoff_until = c->parent->session_track_backoff_until.load();
+			session_track_backoff_until = c->parent->session_track_backoff_until.load(std::memory_order_relaxed);
 			if (session_track_backoff_until > curtime) {
 				++i;
 				continue;
@@ -7363,7 +7365,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 			return false;
 		}
 		if (is_session_track_backoff_enabled &&
-			candidate->parent->session_track_backoff_until.load() > current_time) {
+			candidate->parent->session_track_backoff_until.load(std::memory_order_relaxed) > current_time) {
 			return false;
 		}
 		if (candidate->parent->myhgc->hid != _hid ||
