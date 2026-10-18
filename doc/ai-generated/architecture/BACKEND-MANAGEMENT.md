@@ -212,7 +212,7 @@ availability recovery, rather than merely reading an immutable health list.
 | Per-query `max_lag_ms` | Constrains MySQL Aurora candidates using observed Aurora lag, with optional writer exclusion when enough replicas qualify | MySQL Aurora path |
 | AWS locality | Scales configured weight from a published metadata snapshot after ordinary candidate filtering | MySQL, `PROXYSQL40` |
 
-[MySQL primary/backup policy](../../../lib/MyHGC.cpp#L16), [PostgreSQL policy](../../../lib/PgSQL_HostGroups_Manager.cpp#L125), [MySQL latency and draw](../../../lib/MyHGC.cpp#L405),
+[MySQL primary/backup policy](../../../lib/MyHGC.cpp#L16), [PostgreSQL policy](../../../lib/PgSQL_HostGroups_Manager.cpp#L126), [MySQL latency and draw](../../../lib/MyHGC.cpp#L405),
 [PostgreSQL latency and draw](../../../lib/PgSQL_HostGroups_Manager.cpp#L2551).
 
 ### 4.4 Choose or create a connection for the selected server
@@ -317,7 +317,7 @@ connection; its HGM destroy path does not implement the MySQL reset queue. It
 can terminate a busy backend through a separate kill operation when configured.
 Native connections supply the backend PID/secret captured from
 `BackendKeyData`, rather than assuming a libpq handle owns that identity.
-[PostgreSQL cleanup decision](../../../lib/PgSQL_Data_Stream.cpp#L1427), [HGM destruction](../../../lib/PgSQL_HostGroups_Manager.cpp#L2922).
+[PostgreSQL cleanup decision](../../../lib/PgSQL_Data_Stream.cpp#L1428), [HGM destruction](../../../lib/PgSQL_HostGroups_Manager.cpp#L2922).
 
 ### 5.4 Server status is not a linear lifecycle
 
@@ -336,7 +336,7 @@ is misleading. These are different administrative/operational conditions:
 The endpoint can recover, change role, or be reconfigured without progressing
 through all these states. A removed server container stays alive while its used
 or free lists retain connections and is purged only after both lists empty.
-[MySQL hard-offline check](../../../lib/mysql_connection.cpp#L2424), [PostgreSQL check](../../../lib/PgSQL_Connection.cpp#L4282),
+[MySQL hard-offline check](../../../lib/mysql_connection.cpp#L2424), [PostgreSQL check](../../../lib/PgSQL_Connection.cpp#L4283),
 [MySQL removal/purge](../../../lib/MySQL_HostGroups_Manager.cpp#L1790), [purge condition](../../../lib/MySQL_HostGroups_Manager.cpp#L2311),
 [PostgreSQL removal](../../../lib/PgSQL_HostGroups_Manager.cpp#L1668), [purge condition](../../../lib/PgSQL_HostGroups_Manager.cpp#L1947).
 
@@ -518,7 +518,7 @@ a controller can post desired membership changes only through the registered
 service. Core queues them to its Admin owner, revalidates controller/generation
 and delegated hostgroups, reconciles through HGM, and optionally materializes
 MEMORY/DISK according to explicit persistence policy.
-[Types and contracts](../../../include/ProxySQL_ServerDiscovery.h#L13), [controller registration/post](../../../lib/ProxySQL_PluginManager.cpp#L1897),
+[Types and contracts](../../../include/ProxySQL_ServerDiscovery.h#L14), [controller registration/post](../../../lib/ProxySQL_PluginManager.cpp#L1897),
 [queue/apply](../../../lib/ProxySQL_ServerDiscovery.cpp#L423).
 
 The merge path preserves current endpoint health and topology placement unless

@@ -250,7 +250,8 @@ flowchart TB
     Store -->|Yes| Entry[Cache result with expiration / ownership]
     Store -->|No| Response[Return result]
     Entry --> Response
-    Purge[Background cache maintenance] --> Entry
+    Purge[Background cache maintenance] --> Evict[Remove eligible entries / reclaim storage]
+    Entry -.->|Expiry / memory pressure| Evict
 ```
 
 This concerns result data, not backend connection reuse or prepared-statement metadata caching.
@@ -532,9 +533,21 @@ Evidence: [top-level Makefile](../../../Makefile),
 
 ## Replacing unsupported legacy pictures
 
-The earlier guide's broad coverage is retained, but diagrams that asserted a universal digest
-thread pool, lock-free measurement architecture, relayed frontend/backend auth, leader-driven
-Cluster pushes, fabricated API names or mandatory server-status sequences have been replaced.
-Protocol-specific/topology details belong in the cited chapters where their actual consumer
-and state can be explained. A diagram should make an established relationship easier to inspect,
-not create an unimplemented subsystem or guarantee.
+This guide replaces the earlier 38 diagrams with 18 source-grounded views. It does not retain
+every earlier diagram or its level of detail. Topic coverage is distributed as follows:
+
+| Earlier topic | Current reference | Scope and remaining limit |
+| --- | --- | --- |
+| Galera and read-only management | [Backend monitoring](BACKEND-MANAGEMENT.md#63-observations-alter-specific-runtime-properties) | Probe/action ownership and protocol differences are covered; full topology-specific transition diagrams are not reproduced. |
+| Group Replication bootstrap | [Router bootstrap guide](../../mysql-router-plugin.md), [legacy core bootstrap source](../../../lib/Admin_Bootstrap.cpp#L222) | The Router plugin has separate documentation. Earlier core/GR bootstrap diagrams were not reverified; legacy bootstrap coverage still needs investigation. |
+| TLS and SPIFFE | [Runtime authentication](RUNTIME-ARCHITECTURE.md#32-frontend-and-backend-authentication-are-separate-exchanges), [X.509 guide](../../frontend_x509_authentication.md) | Identity/transport relationships are covered; trust-policy/resource detail remains a gap in the coverage audit. |
+| Digest generation and accounting | [Runtime query analysis](RUNTIME-ARCHITECTURE.md#51-query-analysis-is-distinct-from-execution), [query statistics](ADMINISTRATION-AND-STATISTICS.md#query-statistics-are-more-than-one-counter) | Owners, consumers and lifetimes are covered; the older normalization/hash algorithm diagrams are not retained as verified descriptions. |
+| Protocol, worker and pool flows | Sections 3 and 5–11 here, [runtime](RUNTIME-ARCHITECTURE.md), [backend resources](BACKEND-MANAGEMENT.md) | Replaced with current ownership and execution views, including protocol/tier qualifications. |
+| Configuration, SQL storage and Cluster | Sections 4 and 13–15 here, [administration/statistics](ADMINISTRATION-AND-STATISTICS.md) | Replaced with current representations and producers; earlier detailed ERDs and proposed API/class names are not verified contracts. |
+| Kubernetes and multi-region deployment | [Deployment context](#1-deployment-context-traffic-and-configuration-are-different-relationships) | External instance selection and configuration synchronization are distinguished. Earlier deployment recipes were not refreshed; no current Kubernetes recipe is supplied here. |
+| Class layout and performance sketches | [Project layout](PROJECT-LAYOUT.md) and subsystem chapters | Source ownership and current mechanisms replace the old sketches; this refresh does not establish benchmark results or a complete class diagram. |
+
+The [coverage audit](../../internal/architecture-coverage-audit.md) records further important
+missing contracts and subsystem detail. Pictures asserting a universal digest thread pool,
+lock-free measurement architecture, relayed frontend/backend auth, leader-driven Cluster pushes
+or mandatory server-status sequences were removed rather than carried forward as current design.

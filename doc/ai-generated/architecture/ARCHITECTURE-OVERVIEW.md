@@ -393,7 +393,7 @@ These questions supplement a full module architecture; they are not its substitu
 
 ## Corrections to the September 2025 baseline
 
-The refreshed collection retains the earlier breadth while removing unsupported diagrams or
+The refreshed collection reorganizes the earlier material while removing unsupported diagrams or
 claims: universal four-thread digest processing, lock-free digest maps, a transparent relayed
 PostgreSQL authentication exchange, Cluster leader/push coordination, one mandatory server-status
 progression, and generic query-cache keys derived from digest statistics. It also updates build

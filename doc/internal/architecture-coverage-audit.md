@@ -111,7 +111,7 @@ running a query with incorrectly reconstructed state.
 Evidence: [pooling/replay](../mysql-user-variable-tracking.md#L92),
 [unsafe operations and context](../mysql-user-variable-tracking.md#L129),
 [draining existing tracked state](../mysql-user-variable-tracking.md#L156),
-[map clearing](../../lib/mysql_connection.cpp#L784),
+[map clearing](../../lib/mysql_connection.cpp#L3485),
 [synchronization](../../lib/MySQL_Session.cpp#L3174), and
 [post-OK commit](../../lib/MySQL_Session.cpp#L7306).
 
@@ -220,7 +220,7 @@ entire traffic-serving runtime.
 - Indexed retrieval versus optional refetch from authoritative backend rows.
 - External ingestion tooling versus work performed by the running plugin.
 
-The [embedded-storage diagram](../ai-generated/architecture/VISUAL-GUIDE.md#L406) does not
+The [embedded-storage diagram](../ai-generated/architecture/VISUAL-GUIDE.md#L407) does not
 represent these stores. Missing authority and ingestion boundaries can lead an agent to treat an
 index as the source of truth or place external orchestration inside core worker execution.
 
@@ -316,7 +316,7 @@ considered together with its architecture document.
   frontend prefix/socketpair execution. The source explicitly records the removals in
   [MySQL Session](../../lib/MySQL_Session.cpp#L7066).
 - The old [MCP architecture auth example](../MCP/Architecture.md#L418) permits empty tokens.
-  The [current endpoint](../../plugins/genai/src/MCP_Endpoint.cpp#L94) refuses them; current
+  The [current endpoint](../../plugins/genai/src/MCP_Endpoint.cpp#L108) refuses them; current
   [VARIABLES](../MCP/VARIABLES.md#L47) documents the fail-closed behavior.
 - The AI handler's advertised conversion entry returns a
   [deprecation error](../../plugins/genai/src/AI_Tool_Handler.cpp#L201). Older tool lists do
@@ -329,7 +329,7 @@ considered together with its architecture document.
   conceptual. External-agent plans are not descriptions of in-process execution contexts.
 - Old TSDB [overview](../tsdb/embedded_tsdb_overview.md#L33) and
   [endpoint guide](../tsdb/ui_endpoints.md#L7) place the UI on the legacy web port. The refreshed
-  [REST-origin account](../ai-generated/architecture/ADMINISTRATION-AND-STATISTICS.md#L599)
+  [REST-origin account](../ai-generated/architecture/ADMINISTRATION-AND-STATISTICS.md#L600)
   follows current source/regression coverage.
 
 ## Navigation and next revision priorities
@@ -357,3 +357,9 @@ PR preparation subsequently corrected the three diagram findings and the query-h
 the remaining coverage findings stay open. No production code or new normative invariants were
 changed by the audit/preparation. No builds, integration tests or benchmarks were run;
 source/link checks do not establish runtime correctness.
+
+Automated review subsequently exposed an overbroad claim that all earlier visual coverage was
+retained. The visual guide now includes an explicit topic mapping: some material moved to chapters,
+some detailed diagrams were not reverified, and the older legacy/Group Replication bootstrap and
+Kubernetes/multi-region deployment detail remains outside the verified refresh. This adds a scope
+qualification to the inventory audit above rather than certifying that every old diagram was replaced.

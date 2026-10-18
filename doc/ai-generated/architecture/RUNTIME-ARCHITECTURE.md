@@ -479,7 +479,7 @@ shared. Session tears down its registry on transaction end and backend
 detachment, retaining detached bytes long enough for request logging where
 needed. Frame lifetime alone does not define portal lifetime.
 
-Sources: [PostgreSQL statement model](../../../include/PgSQL_PreparedStatement.h#L11),
+Sources: [PostgreSQL statement model](../../../include/PgSQL_PreparedStatement.h#L15),
 [backend operation dispatch](../../../lib/PgSQL_Session.cpp#L3091),
 [frame dispatch](../../../lib/PgSQL_Session.cpp#L8166),
 [Bind paths](../../../lib/PgSQL_Session.cpp#L7604),
@@ -623,7 +623,7 @@ frontend CancelRequest keys identify a proxy session; they are distinct from
 the backend's own cancellation credentials.
 
 Sources: [MySQL kill scheduling](../../../lib/MySQL_Session.cpp#L2811),
-[MySQL deadline policy](../../../lib/MySQL_Session.cpp#L6416),
+[MySQL deadline policy](../../../lib/MySQL_Session.cpp#L6417),
 [PostgreSQL cancel scheduling](../../../lib/PgSQL_Session.cpp#L1184),
 [PostgreSQL timeout handling](../../../lib/PgSQL_Session.cpp#L3366),
 [frontend cancel secret](../../../lib/PgSQL_Protocol.cpp#L1639).

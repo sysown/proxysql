@@ -2,8 +2,8 @@
 
 The architecture reference is the refreshed collection under
 [`doc/ai-generated/architecture/`](ai-generated/architecture/ARCHITECTURE-OVERVIEW.md).
-It preserves the existing module/flow coverage and updates it against source baseline
-`f8ada9117` on 2026-10-18. The directory name is historical; each document states its
+It updates the module/flow descriptions against source baseline `f8ada9117` on 2026-10-18;
+the linked coverage audit records omissions and depth limits. The directory name is historical; each document states its
 verification scope. Source-backed description is not automatic maintainer ratification
 of every observed mechanism, nor a claim that runtime tests passed.
 

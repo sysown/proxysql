@@ -3,8 +3,8 @@
 ## Architecture
 
 Start with the [architecture entry point](architecture.md). The refreshed source-grounded
-collection retains the existing architecture's breadth and adds current module relationships,
-protocol/tier qualifications and source references:
+collection describes current module relationships with protocol/tier qualifications and source
+references. Its [coverage audit](internal/architecture-coverage-audit.md) records remaining gaps:
 
 - [Overview](ai-generated/architecture/ARCHITECTURE-OVERVIEW.md).
 - [Traffic runtime](ai-generated/architecture/RUNTIME-ARCHITECTURE.md).
@@ -43,3 +43,9 @@ approved work.
 When updating documentation, preserve useful module and flow coverage, verify claims against
 the owning source, and identify current behavior separately from intended design. Avoid stale
 file counts, artifact sizes, fixed thread counts or deployment defaults without a scoped source.
+
+## Contributing to documentation
+
+Follow the [documentation framework](AI-DOCUMENTATION-FRAMEWORK.md) for contribution and review
+guidance. Record the source baseline, evidence checked and remaining verification limits;
+historical tier labels alone do not establish a document's current accuracy.

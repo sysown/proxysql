@@ -78,7 +78,8 @@ with the database server. Multiple frontend sessions can use the same backend co
 at different times; a frontend can remain connected while its former backend serves another.
 
 *Decision for I-4 through I-7: maintainer agreement on 2026-10-18 in the session and
-connection-pooling invariant discussion. The agreed contracts cover session isolation,
+connection-pooling invariant discussion, recorded in
+[PR #6491](https://github.com/sysown/proxysql/pull/6491). The agreed contracts cover session isolation,
 active or uncertain transactions, cleanup outcomes, direct reuse without mandatory reset,
 and truthful state tracking after reset. Existing operator overrides retain their specific scope.*
 
@@ -167,7 +168,8 @@ Motivating reset-tracking regression:
 
 ## I-8. Query retries respect transaction ownership, execution progress and configured policy
 
-*Decision: maintainer agreement on 2026-10-18 in the retry-policy discussion. Applies to
+*Decision: maintainer agreement on 2026-10-18 in the retry-policy discussion, recorded in
+[PR #6491](https://github.com/sysown/proxysql/pull/6491). Applies to
 MySQL and PostgreSQL. Retry eligibility does not guarantee that the original attempt had no effects.*
 
 A backend failure and a failed statement are different events. A backend connection can fail

@@ -68,10 +68,32 @@ The [documentation-tree coverage audit](../../internal/architecture-coverage-aud
 important remaining trust, state-replay, pool-measurement, migration and optional-service gaps.
 Closing diagram findings is not a claim that those coverage gaps are closed.
 
-Final local-reference checks cover all 27 changed Markdown files, including new evidence notes.
-All new/changed links passed. Five unchanged historical references remain in the explicitly
+Initial PR local-reference checks covered all 27 changed Markdown files, including new evidence
+notes. New/changed links passed target, heading and numeric-bounds checks. Five unchanged historical references remain in the explicitly
 historical enhancement/release guides: two missing exploration targets and three placeholder
 `link` destinations. These are not links introduced by this refresh.
+
+## Automated review follow-up
+
+The automated review found valid-target citations that named the wrong operation. The flagged
+links were checked against their statements and corrected: cache insertion, user-variable clearing,
+purge-thread creation, monitor enable gates, digest schema/extraction, bootstrap copy, and retention.
+This semantic check is distinct from testing whether a target exists or a line number is in bounds;
+the earlier mechanical results did not establish that every citation supported its label.
+
+The follow-up also corrected the quoted plugin configuration example, qualified core-linked
+`sqlite-vec` support, updated the infrastructure build tier, and clarified cache eviction separately
+from insertion. Historical footers, agent navigation, complete issue enumeration and durable
+invariant decision references were corrected. The visual guide now maps relocated topics and
+explicitly identifies unrefreshed legacy bootstrap and deployment detail instead of claiming all
+earlier coverage was retained. The normal Cluster retained-resultset path is qualified with its
+HGM-owned null fallback; that does not turn it into a read of editable Admin configuration.
+
+After these corrections, all 25 Mermaid diagrams rendered and their SVGs parsed successfully.
+Local-reference checks passed for all new/changed targets, heading anchors and numeric bounds
+across the cumulative 28-file Markdown-only PR. The five historical references listed above
+remain outside that pass. Source-label checks were targeted at the reviewed citations and
+nearby blank anchors; they are not an exhaustive certification of every source citation.
 
 Source inspection establishes implementation evidence, not all intended guarantees or correctness
 of every reachable execution. No database integration tests, protocol compatibility suites,

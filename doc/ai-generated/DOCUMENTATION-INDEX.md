@@ -40,7 +40,7 @@ Use the [current documentation guide](../README.md) for maintained entry points.
 ---
 
 ## Architecture Documentation
-Location: [`architecture/`](architecture/ARCHITECTURE-OVERVIEW.md).
+*Location: [`architecture/`](architecture/).*
 
 ### Architecture Guides
 

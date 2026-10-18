@@ -16,6 +16,11 @@ separately from the diagrams supported in the independent review. These are docu
 findings, not newly discovered production-code defects. Closing them does not close the
 broader gaps in the [coverage audit](architecture-coverage-audit.md).
 
+Subsequent automated review also identified an ambiguous edge from background cache maintenance
+to the cache-insertion step. The author clarified it as eviction/reclamation, with a separate
+flow from stored entries. The original independent verdict and the later clarification are
+distinguished in the ledger below.
+
 ## Findings
 
 ### Important: current SQL projections are incorrectly shown feeding historical storage
@@ -30,7 +35,7 @@ Periodic global/pool/cache sampling likewise reads the runtime producer APIs dir
 Evidence:
 
 - [FlushDigestTableToDisk owner access](../../lib/ProxySQL_Admin.cpp#L1108), including
-  [map detachment](../../lib/ProxySQL_Admin.cpp#L1112) and
+  [map detachment](../../lib/ProxySQL_Admin.cpp#L1114) and
   [history inserts](../../lib/ProxySQL_Admin.cpp#L1127).
 - [Periodic owner sampling](../../lib/ProxySQL_Admin.cpp#L2749).
 - [Current digest projection](../../lib/ProxySQL_Admin_Stats.cpp#L2021) is a separate consumer.
@@ -76,7 +81,7 @@ and later publication of retained inventory are separate edges.
 
 ### Minor: post-readiness traffic-listener startup needs core-protocol scope
 
-Location: [startup diagram, line 476](../ai-generated/architecture/VISUAL-GUIDE.md#L476).
+Location: [startup diagram, line 476](../ai-generated/architecture/VISUAL-GUIDE.md#L477).
 
 The label "Open traffic listeners" follows extension start and runtime-ready processing.
 That order describes the core MySQL/PostgreSQL listeners. Plugin listeners can already
@@ -111,7 +116,7 @@ correctness, race freedom or complete coverage of every optional deployment.
 | Visual §5: ordinary login/backend acquisition | Runtime | Supported | MySQL protocol credential verification; Session admission/attachment and later setup |
 | Visual §6: identity responsibilities | Runtime | Supported | Account policy, LDAP mapping, backend policy/provider calls, separate PostgreSQL credentials |
 | Visual §7: query-policy evaluation | Runtime | Supported | QP version refresh, rule matching/hits/action accumulation, Session enforcement |
-| Visual §8: result-cache execution | Runtime | Supported | Session lookup/store eligibility; Query Cache TTL/soft-refresh/storage; purge |
+| Visual §8: result-cache execution | Runtime | Clarified after automated review | Session lookup/store eligibility; separate background eviction/reclamation path |
 | Visual §9: backend acquisition | Backend/lifecycle | Supported | Local lookup/HGM fallback, fit selection, exclusive attachment before setup |
 | Visual §10: conceptual reuse states | Backend/lifecycle | Supported | finishQuery/disconnect guards; reset-success versus failure; unsafe-batch cleanup |
 | Visual §11: PostgreSQL extended protocol | Runtime | Supported | Typed frame dispatch, local Bind/cache completions, backend translation and release guards |
@@ -136,7 +141,7 @@ correctness, race freedom or complete coverage of every optional deployment.
   [Session acquisition](../../lib/MySQL_Session.cpp#L10042),
   [policy refresh](../../lib/Query_Processor.cpp#L2855),
   [rule hits](../../lib/Query_Processor.cpp#L3013),
-  [cache storage](../../lib/Query_Cache.cpp#L576),
+  [cache storage](../../lib/Query_Cache.cpp#L610),
   [PostgreSQL frame dispatch](../../lib/PgSQL_Session.cpp#L8166).
 - Backend/lifecycle: [HGM checkout](../../lib/MySQL_HostGroups_Manager.cpp#L3021),
   [PostgreSQL checkout](../../lib/PgSQL_HostGroups_Manager.cpp#L2899),
@@ -149,7 +154,7 @@ correctness, race freedom or complete coverage of every optional deployment.
   [metrics refresh](../../lib/ProxySQL_Admin.cpp#L2970),
   [Statistics storage](../../lib/ProxySQL_Statistics.cpp#L138),
   [query-event drain](../../lib/MySQL_Logger.cpp#L2264),
-  [Cluster checksums](../../lib/ProxySQL_Cluster.cpp#L1223).
+  [Cluster checksums](../../lib/ProxySQL_Cluster.cpp#L1226).
 
 ## Declined to judge and verification limits
 

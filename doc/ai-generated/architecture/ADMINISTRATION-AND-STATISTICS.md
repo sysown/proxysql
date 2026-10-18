@@ -160,7 +160,7 @@ configuration database is present, it normally takes precedence over the text co
 Initial/reload modes and absence of a database take the explicit configuration-file import path.
 Importing the file also copies the imported configuration into DISK in that path. [Schema/bootstrap
 sequence](../../../lib/Admin_Bootstrap.cpp#L1140), [default and DISK
-import](../../../lib/Admin_Bootstrap.cpp#L1212), [configuration-file
+import](../../../lib/Admin_Bootstrap.cpp#L1226), [configuration-file
 conditions](../../../lib/Admin_Bootstrap.cpp#L1243).
 
 These are startup-source choices, not runtime polling of the text file. Generic MEMORY/DISK copy
@@ -275,7 +275,7 @@ settings](../../../include/ProxySQL_Cluster.hpp#L626).
    metadata where supported. MEMORY updates depend on the family and apply mode.
 5. The family-specific `cluster_*_save_to_disk` option governs persistence.
 
-[Decision loop](../../../lib/ProxySQL_Cluster.cpp#L798), [query-rule fetch and
+[Decision loop](../../../lib/ProxySQL_Cluster.cpp#L805), [query-rule fetch and
 checksum](../../../lib/ProxySQL_Cluster.cpp#L1177), [query-rule local
 install](../../../lib/ProxySQL_Cluster.cpp#L1333), [server local
 apply/persist](../../../lib/ProxySQL_Cluster.cpp#L2657), [variables
@@ -313,7 +313,7 @@ replacement/getters](../../../lib/MySQL_HostGroups_Manager.cpp#L3714).
 Variable synchronization also has deliberate exclusions. For example, MySQL thread count is
 excluded, and interface settings can be preserved locally according to `cluster_sync_interfaces`.
 Copying all variables because their names share a prefix would bypass those deployment boundaries.
-[Variable query filtering](../../../lib/ProxySQL_Cluster.cpp#L2797).
+[Variable query filtering](../../../lib/ProxySQL_Cluster.cpp#L2799).
 
 ### Extension boundaries and historical rationale
 
@@ -490,7 +490,8 @@ initialization, which alone does not establish that every series populates daily
 history and the newer status tables require inspection of their own purge/retention paths; legacy
 series retention is not a universal history policy. [CPU
 storage/retention](../../../lib/ProxySQL_Statistics.cpp#L810), [MySQL
-aggregate/retention](../../../lib/ProxySQL_Statistics.cpp#L1248), [schema
+aggregation](../../../lib/ProxySQL_Statistics.cpp#L1265), [MySQL
+retention](../../../lib/ProxySQL_Statistics.cpp#L1282), [schema
 creation](../../../lib/ProxySQL_Statistics.cpp#L274).
 
 “On disk” here names a persistent storage destination, not a stronger crash-durability promise: both
@@ -528,7 +529,7 @@ MEMORY, DISK, or BOTH; periodic drains write the disk destination. A MEMORY dump
 dump is therefore not equivalent to a single BOTH dump of the original batch. [MySQL
 drain/export](../../../lib/MySQL_Logger.cpp#L2264), [PostgreSQL
 drain/export](../../../lib/PgSQL_Logger.cpp#L1649), [DUMP
-routing](../../../lib/Admin_Handler.cpp#L3314), [periodic
+routing](../../../lib/Admin_Handler.cpp#L3316), [periodic
 destination](../../../lib/ProxySQL_Admin.cpp#L2795).
 
 There are protocol-specific differences in event fields, prepared/extended-query representation, and
@@ -625,9 +626,9 @@ configuration-family locks, domain-owner locks, worker-local copies, digest-map 
 atomic measurement fields, and TSDB compound-operation serialization. They protect different things.
 For example, the core-owned per-thread nesting depth for Admin's global SQL lock lets plugin
 callbacks and core Admin paths share one reentrant ownership protocol; private depth copies would
-falsely claim ownership of a lock held elsewhere. [Shared lock
-protocol](../../../include/proxysql_admin_global_sql_lock.h#L1), [historical fix
-#6468](https://github.com/sysown/proxysql/commit/69e13bc3e2657ab004632aff2859bad96919a44e).
+falsely claim ownership of a lock held elsewhere.
+[Shared lock protocol](../../../include/proxysql_admin_global_sql_lock.h#L1),
+[historical fix #6468](https://github.com/sysown/proxysql/commit/69e13bc3e2657ab004632aff2859bad96919a44e).
 
 Architectural consequences for implementation and review:
 

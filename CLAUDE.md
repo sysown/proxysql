@@ -40,10 +40,10 @@ The same codebase produces three product tiers via feature flags:
 |------|------|---------|------|
 | Stable | (default) | v3.0.x | Core proxy |
 | Innovative | `PROXYSQL31=1` | v3.1.x | FFTO, TSDB |
-| Plugin Chassis | `PROXYSQL40=1` | v4.0.x | Plugin loader + ABI (4-phase lifecycle, query-hook, shared Prometheus); builds and packages all v4.0 plugins including mysqlx and genai/MCP |
+| Plugin Chassis | `PROXYSQL40=1` | v4.0.x | Plugin loader + ABI (lifecycle, query-hook, shared Prometheus); builds and packages all v4.0 plugins including mysqlx and genai/MCP |
 
 **`PROXYSQL40=1` implies `PROXYSQL31=1` which implies `PROXYSQLFFTO=1` and `PROXYSQLTSDB=1`.**
-There is no separate `PROXYSQLGENAI` flag — `PROXYSQL40=1` builds and packages all v4.0 plugins (mysqlx, genai/MCP, anomaly detection). All AI/MCP/RAG/LLM features live in `plugins/genai/` and load as a `.so` at runtime.
+There is no separate `PROXYSQLGENAI` flag — `PROXYSQL40=1` builds and packages all v4.0 plugins (mysqlx, genai/MCP, anomaly detection). GenAI services live in `plugins/genai/` and load as a `.so` at runtime. The v4.0 core also links `sqlite-vec` and registers its SQLite extension independently of plugin selection.
 
 ### Building a tier — pass the flag on EVERY make, and clean when switching (IMPORTANT)
 
@@ -246,10 +246,13 @@ MySQL and PostgreSQL share parallel class hierarchies with the same architecture
 - **FFTO** (Fast Forward Traffic Observer) — `MySQLFFTO.cpp`, `PgSQLFFTO.cpp`
 - **TSDB** — Time-series metrics with embedded dashboard
 - **ClickHouse** — Native ClickHouse protocol support
-- **GenAI / MCP / RAG / LLM** — Lives entirely in `plugins/genai/`
-  as of the carve-out completed in Step 7.  Loaded via `dlopen` when
-  `plugins = (genai)` is configured in `proxysql.cnf`; not part of
-  `libproxysql.a` or the `proxysql` binary.
+- **GenAI / MCP / RAG / LLM services** — Implemented in `plugins/genai/` and
+  loaded via `dlopen` when `plugins = ("genai")` is configured in `proxysql.cnf`.
+  The service implementations are outside `libproxysql.a`; v4.0 builds also link
+  the supporting `sqlite-vec` object into the executable and register it in core
+  Admin initialization, even when the GenAI plugin is not selected. See
+  [`src/Makefile`](src/Makefile#L188) and
+  [`Admin_Bootstrap.cpp`](lib/Admin_Bootstrap.cpp#L775).
 
 ## Code Layout
 
@@ -263,8 +266,9 @@ MySQL and PostgreSQL share parallel class hierarchies with the same architecture
 ## Agent Guidelines
 
 See `doc/agents/` for detailed guidance on working with AI coding agents:
-- `doc/architecture.md` — Read before implementation or review; entry point to the module, execution, state-ownership and lifecycle references, with source and protocol/tier qualifications.
+
 - `doc/agents/invariants.md` — **Read first.** Product contracts (e.g. LOAD ... SERVERS TO RUNTIME never fails; Stable unchanged by v3.1/v4.0 work). Touching one is a design change that needs a maintainer decision — never a `fix(...)`.
+- `doc/architecture.md` — Read before implementation or review; entry point to the module, execution, state-ownership and lifecycle references, with source and protocol/tier qualifications.
 - `doc/agents/project-conventions.md` — ProxySQL-specific rules (directories, build, test harness, git workflow)
 - `doc/agents/task-assignment-template.md` — Template for writing issues assignable to AI agents
 - `doc/agents/common-mistakes.md` — Known agent failure patterns with prevention and detection

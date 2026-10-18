@@ -1,6 +1,6 @@
 # Architecture evidence: statistics, telemetry, and supporting capabilities
 
-Investigated 2026-10-18 on `docs/invariants-expansion`.
+Investigated 2026-10-18 against `f8ada9117`, on `docs/invariants-expansion`.
 This records source-observed responsibilities, not newly ratified contracts.
 Source inspection only; no runtime tests were executed.
 
@@ -81,7 +81,7 @@ The inspected periodic digest dump explicitly invokes the MySQL digest path.
 Although PostgreSQL historical digest schemas and export APIs exist, that does not
 establish that every schedule or setting is symmetric across protocols.
 [Periodic digest dump](../../lib/ProxySQL_Admin.cpp#L2787),
-[PostgreSQL history schema](../../lib/ProxySQL_Statistics.cpp#L309).
+[PostgreSQL history schema](../../lib/ProxySQL_Statistics.cpp#L307).
 
 ## Data lifetimes are materially different
 
