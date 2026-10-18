@@ -3559,6 +3559,21 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 					native_copy_intercepted = true;
 					proxy_warning("native backend protocol: unexpected CopyInResponse/CopyBothResponse ('%c'); sending CopyFail\n", msg.type);
 					pg_native_build_copyfail(native_outbuf, "ProxySQL native backend protocol cannot drive COPY FROM STDIN on this path");
+					// A COPY started by an extended-query Execute fails differently from one
+					// started by a simple Query. PostgreSQL ignores Sync while in copy-in mode,
+					// so the Sync that followed the Execute in the same frame has already been
+					// consumed. The CopyFail then raises an error during an extended-query
+					// message, and the backend discards everything until the NEXT Sync and only
+					// then sends ReadyForQuery. Without a second Sync, the 'E' handling below
+					// would wait for a 'Z' that never comes, hanging the session and the
+					// backend until the client disconnects. Sending one right behind the
+					// CopyFail produces exactly one 'Z', which ends the step and leaves the
+					// connection synchronized and reusable, as for any other errored step.
+					// A Flush-terminated step needs nothing here: no Sync has reached the
+					// backend, and the 'E' handling below injects the one it needs.
+					if (native_stmt_step != PG_Native_Stmt_Step::NONE && native_stmt_sync_terminated) {
+						pg_build_sync(native_outbuf);
+					}
 					// native_send_or_buffer's native_st side effect only matters
 					// during the connect handshake; it is dead here (post-connect,
 					// mid-fetch) — only the flush result and async_exit_status count.
