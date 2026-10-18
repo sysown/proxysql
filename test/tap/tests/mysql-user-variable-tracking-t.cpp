@@ -641,7 +641,7 @@ void test_mixed_autocommit(MYSQL* admin, MYSQL* direct, const CommandLine& cl) {
 		MYSQL* direct;
 		std::string table;
 		bool created;
-		~DropTable() { if (created) execute(direct, "DROP TABLE " + table); }
+		~DropTable() { if (created) ok(execute(direct, "DROP TABLE " + table), "transaction visibility table is removed"); }
 	} cleanup {direct, table, created};
 	auto session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	ok(created && session, "transaction visibility fixture is available");
@@ -683,6 +683,72 @@ void test_mixed_autocommit(MYSQL* admin, MYSQL* direct, const CommandLine& cl) {
 	}
 }
 
+// XA rejects the internal implicit commit with a real server error, keeping
+// this regression independent of timing, disconnects, and backend fault hooks.
+void test_failed_mixed_autocommit(MYSQL* admin, const CommandLine& cl) {
+	const std::string user = sql_quote(admin, cl.username);
+	const auto saved_persistence = query_scalar(admin,
+		"SELECT transaction_persistent FROM mysql_users WHERE username=" + user + " AND frontend=1");
+	const bool configured = saved_persistence && execute(admin,
+		"UPDATE mysql_users SET transaction_persistent=1 WHERE username=" + user + " AND frontend=1") &&
+		execute(admin, "LOAD MYSQL USERS TO RUNTIME");
+	auto session = configured ? connect_mysql(cl.host, cl.port, cl.username, cl.password, "test")
+		: MysqlPtr(nullptr, &mysql_close);
+	const bool restored = saved_persistence && execute(admin,
+		"UPDATE mysql_users SET transaction_persistent=" + saved_persistence->bytes +
+		" WHERE username=" + user + " AND frontend=1") && execute(admin, "LOAD MYSQL USERS TO RUNTIME");
+	const std::string xid = "uv_commit_failure_" + std::to_string(getpid());
+	const bool prepared = session && execute(session.get(),
+		"SET @failure_tag='before',group_concat_max_len=4096,autocommit=0") &&
+		execute(session.get(), "/* uv_hg_a */ XA START '" + xid + "'");
+	if (!prepared && restored && session && mysql_errno(session.get()) == 1235) {
+		skip(2, "backend does not support XA transactions: %s", mysql_error(session.get()));
+		return;
+	}
+	ok(prepared && restored, "an XA transaction provides a deterministic implicit-commit rejection");
+	if (!prepared) return;
+	const auto before = user_variable_counters(admin);
+	const bool rejected = execute_expect_error(session.get(),
+		"SET @failure_tag='after',@failed_only=1,group_concat_max_len=8192,autocommit=1");
+	const unsigned int error = mysql_errno(session.get());
+	const auto after = user_variable_counters(admin);
+	auto count = tracked_user_variable_count(session.get());
+	const auto state = internal_session(session.get());
+	auto values = query_result(session.get(),
+		"/* uv_hg_b */ SELECT @failure_tag,@@group_concat_max_len,@failed_only");
+	const auto routed_state = internal_session(session.get());
+	ok(rejected && error == 1399 && count && *count == 1 && before && after &&
+		state && (*state)["active_transactions"] == 0 &&
+		routed_state && inspect_backend_user_variable_status(*routed_state, 18111).matching_hostgroups == 1 &&
+		before->assignments == after->assignments && values &&
+		values->rows.size() == 1 && values->rows[0].size() == 3 &&
+		values->rows[0][0].bytes == "before" && values->rows[0][1].bytes == "4096" &&
+		values->rows[0][2].is_null && !(session->server_status & SERVER_STATUS_AUTOCOMMIT),
+		"a failed implicit commit discards both staged variable classes and their tracking counter");
+}
+
+// Send an empty inline password to exercise ProxySQL's native auth-switch path,
+// then answer its challenge with the real password through the client library.
+bool change_user_with_auth_switch(MYSQL* connection, const CommandLine& cl,
+	const std::string& schema, uint16_t charset) {
+	std::string payload = std::string(cl.username) + '\0' + '\0' + schema + '\0';
+	payload.push_back(static_cast<char>(charset & 0xff));
+	payload.push_back(static_cast<char>(charset >> 8));
+	payload += std::string("mysql_native_password") + '\0';
+	if (ma_simple_command(connection, COM_CHANGE_USER, payload.data(), payload.size(), 1, nullptr)) return false;
+	const unsigned long length = mysql_net_read_packet(connection);
+	if (length < 23 || length > 256 || connection->net.read_pos[0] != 0xfe) return false;
+	const unsigned char* packet = connection->net.read_pos;
+	const size_t plugin_length = strnlen(reinterpret_cast<const char*>(packet + 1), length - 1);
+	if (plugin_length + 1 + 1 + 20 > length ||
+		std::string(reinterpret_cast<const char*>(packet + 1), plugin_length) != "mysql_native_password") return false;
+	unsigned char reply[20];
+	ma_scramble_41(reply, reinterpret_cast<const char*>(packet + plugin_length + 2), cl.password);
+	if (ma_net_write(&connection->net, reply, sizeof(reply)) || ma_net_flush(&connection->net)) return false;
+	const unsigned long result_length = mysql_net_read_packet(connection);
+	return result_length >= 7 && result_length < 256 && connection->net.read_pos[0] == 0;
+}
+
 // Return the variable's own bytes and collation in protocol metadata. Stored
 // routine user-variable expressions cache their initial type/collation in MySQL.
 bool mixed_rows_equal(MYSQL* proxy, MYSQL* direct, const std::string& query) {
@@ -690,7 +756,7 @@ bool mixed_rows_equal(MYSQL* proxy, MYSQL* direct, const std::string& query) {
 		execute(direct, "SET character_set_results=NULL") && query_rows_equal(proxy, direct, query, true);
 }
 
-void test_mixed_literal_context(const CommandLine& cl, const BackendEndpoint& endpoint, FixtureOwnership& owned) {
+void test_mixed_literal_context(MYSQL* admin, const CommandLine& cl, const BackendEndpoint& endpoint, FixtureOwnership& owned) {
 	auto proxy = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	auto direct = connect_mysql(endpoint.hostname.c_str(), endpoint.port,
 		cl.mysql_username, cl.mysql_password, "test", endpoint.use_ssl != 0);
@@ -773,6 +839,62 @@ void test_mixed_literal_context(const CommandLine& cl, const BackendEndpoint& en
 	ok(encoded_schema && mixed_rows_equal(proxy.get(), direct.get(),
 		"/* uv_hg_a */ SELECT @mixed_ctx"),
 		"captured non-ASCII database names retain the encoding used when selected");
+	// The configured default schema is UTF-8, independently of the client.
+	const auto saved_schema = admin_variable(admin, "mysql-default_schema");
+	struct RestoreSchema {
+		MYSQL* admin;
+		std::optional<std::string> value;
+		~RestoreSchema() {
+			if (value) {
+				execute(admin, "SET mysql-default_schema=" + sql_quote(admin, *value));
+				execute(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+			}
+		}
+	} restore_schema {admin, saved_schema};
+	const bool default_changed = saved_schema && unicode_created &&
+		execute(admin, "SET mysql-default_schema=" + sql_quote(admin, unicode_schema)) &&
+		execute(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	auto change_default = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool changed_default = default_changed && change_default &&
+		mysql_set_character_set(change_default.get(), "latin1", 0) == 0 &&
+		mysql_change_user(change_default.get(), cl.username, cl.password, nullptr) == 0 &&
+		execute(change_default.get(), "SET CHARACTER SET latin1") &&
+		execute(change_default.get(), encoded_set) &&
+		execute(change_default.get(), "SET NAMES utf8mb4");
+	execute(direct.get(), "SET NAMES utf8mb4");
+	const bool default_oracle = mysql_select_db(direct.get(), unicode_schema.c_str()) == 0 &&
+		execute(direct.get(), "SET CHARACTER SET latin1") && execute(direct.get(), encoded_set) &&
+		execute(direct.get(), "SET NAMES utf8mb4");
+	ok(changed_default && default_oracle && mixed_rows_equal(change_default.get(), direct.get(),
+		"/* uv_hg_a */ SELECT @mixed_ctx"),
+		"CHANGE_USER without a database preserves the configured schema's UTF-8 encoding");
+	auto change_switch = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool changed_switch = change_switch && unicode_created &&
+		change_user_with_auth_switch(change_switch.get(), cl, latin1_schema, 8) &&
+		execute(change_switch.get(), "SET CHARACTER SET latin1") &&
+		mysql_select_db(change_switch.get(), "test") == 0 &&
+		execute(change_switch.get(), encoded_set) &&
+		execute(change_switch.get(), "SET NAMES utf8mb4");
+	ok(changed_switch && default_oracle && mixed_rows_equal(change_switch.get(), direct.get(),
+		"/* uv_hg_b */ SELECT @mixed_ctx"),
+		"CHANGE_USER auth switching preserves the new database name's client encoding");
+	auto switch_default = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool switched_default = default_changed && switch_default &&
+		change_user_with_auth_switch(switch_default.get(), cl, "", 8) &&
+		execute(switch_default.get(), "SET CHARACTER SET latin1") &&
+		mysql_select_db(switch_default.get(), "test") == 0 &&
+		execute(switch_default.get(), encoded_set) &&
+		execute(switch_default.get(), "SET NAMES utf8mb4");
+	ok(switched_default && default_oracle && mixed_rows_equal(switch_default.get(), direct.get(),
+		"/* uv_hg_a */ SELECT @mixed_ctx"),
+		"CHANGE_USER auth switching with an omitted database preserves the configured schema");
+	// Restore before subsequent independent context cases, including their schema.
+	if (saved_schema) {
+		execute(admin, "SET mysql-default_schema=" + sql_quote(admin, *saved_schema));
+		execute(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	}
+	execute(direct.get(), "SET NAMES utf8mb4");
+	mysql_select_db(direct.get(), "test");
 	const bool explicit_database_charset =
 		execute(proxy.get(), "SET character_set_database=utf8mb4") &&
 		execute(direct.get(), "SET character_set_database=utf8mb4") &&
@@ -955,7 +1077,8 @@ int main() {
 	}
 	test_deferred_sets(admin.get(), cl);
 	test_mixed_autocommit(admin.get(), direct.get(), cl);
-	test_mixed_literal_context(cl, *endpoint, owned);
+	test_failed_mixed_autocommit(admin.get(), cl);
+	test_mixed_literal_context(admin.get(), cl, *endpoint, owned);
 	MysqlPtr proxy = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	if (!proxy) {
 		ok(false, "frontend test connection is available");
