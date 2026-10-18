@@ -1,6 +1,9 @@
 /**
  * @file parsersql_digest_fallback_unit-t.cpp
  * @brief Parser failures retain token digests and cannot bypass digest rules.
+ *
+ * Parser mode always produces a digest when *-query_digests=1, so a statement
+ * ParserSQL cannot parse is still matched against digest rules (test_routing).
  */
 #include "tap.h"
 #include "test_globals.h"
@@ -48,24 +51,26 @@ static void test_routing(const char* dialect, DigestInit initialize, const char*
 	release_digest(qp);
 }
 
-// Missing metadata must not turn a digest-constrained rule into a catch-all.
+// Without a digest (*-query_digests=0: hash 0, text NULL) the digest criteria
+// are not applicable and the other criteria decide, as in v3.0.11. An empty
+// digest text is a real digest and is matched like any other.
 static void test_missing_digest_rules() {
 	for (int engine : {1, 2}) {
 		SQP_par_t qp {};
 		QP_rule_t rule {};
 		rule.proxy_port = -1;
 		rule.digest = 123;
-		ok(!matches(rule, qp, "/* no SQL */", engine), "Missing hash cannot satisfy a digest rule (%d)", engine);
+		ok(matches(rule, qp, "/* no SQL */", engine), "A missing hash skips the digest criterion (%d)", engine);
 		rule.digest = 0;
 		rule.match_digest = const_cast<char*>("^SELECT");
-		ok(!matches(rule, qp, "/* no SQL */", engine), "Missing text cannot satisfy a digest regex (%d)", engine);
+		ok(matches(rule, qp, "/* no SQL */", engine), "Missing text skips the digest regex (%d)", engine);
 		qp.digest_text = qp.buf;
-		ok(!matches(rule, qp, "/* no SQL */", engine), "Empty text cannot satisfy a digest regex (%d)", engine);
+		ok(!matches(rule, qp, "/* no SQL */", engine), "Empty text does not satisfy a digest regex (%d)", engine);
 		rule.negate_match_pattern = true;
 		qp.digest_text = nullptr;
-		ok(!matches(rule, qp, "/* no SQL */", engine), "Missing text cannot satisfy a negated digest regex (%d)", engine);
+		ok(matches(rule, qp, "/* no SQL */", engine), "Missing text skips a negated digest regex (%d)", engine);
 		qp.digest_text = qp.buf;
-		ok(!matches(rule, qp, "/* no SQL */", engine), "Empty text cannot satisfy a negated digest regex (%d)", engine);
+		ok(matches(rule, qp, "/* no SQL */", engine), "Empty text satisfies a negated digest regex (%d)", engine);
 		rule.match_digest = nullptr;
 		ok(matches(rule, qp, "/* no SQL */", engine), "Unconstrained rules still match without digest metadata (%d)", engine);
 	}

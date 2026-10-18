@@ -607,7 +607,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	protocol_unit-t auth_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
 	stmt_long_data_param_type_unit-t \
-	rule_matching_unit-t query_processor_regex_default_unit-t pcre1_query_rule_limits_unit-t hostgroups_unit-t hgc_attribute_strings_unit-t hgm_mapping_commit_sentinel_unit-t monitor_health_unit-t \
+	rule_matching_unit-t rule_matching_missing_digest_unit-t query_processor_regex_default_unit-t pcre1_query_rule_limits_unit-t hostgroups_unit-t hgc_attribute_strings_unit-t hgm_mapping_commit_sentinel_unit-t monitor_health_unit-t \
 	pgsql_backend_framing-t pgsql_backend_auth-t pgsql_backend_extq-t \
 	pgsql_command_complete_unit-t \
 	ffto_protocol_unit-t \
