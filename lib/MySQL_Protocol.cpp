@@ -2049,6 +2049,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		}
 		// set the default charset for this session
 		(*myds)->sess->default_charset = charset;
+		userinfo->schemaname_charset = charset;
 		if ((*myds)->sess->user_attributes) {
 #ifndef PROXYSQL31
 			if (user_attributes_has_spiffe(__LINE__, __func__, user)) {
@@ -2481,7 +2482,7 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 		if (vars1.db) {
 			// TODO: Not ideal, but the flow is currently complex. Resource management should be simplified in
 			// a future rework, so we can 'centralize' the update to the session state with auth results.
-			userinfo->set_schemaname(vars1.db, strlen(vars1.db));
+			userinfo->set_schemaname(vars1.db, strlen(vars1.db), vars1.charset);
 		}
 	} else {
 		vars1.db = NULL;
@@ -4112,7 +4113,7 @@ __exit_do_auth:
 			userinfo->username=strdup((const char *)vars1.user);
 		userinfo->clear_password();
 		userinfo->password=strdup((const char *)vars1.password);
-		if (vars1.db) userinfo->set_schemaname(vars1.db,strlen(vars1.db));
+		if (vars1.db) userinfo->set_schemaname(vars1.db,strlen(vars1.db), vars1.charset);
 		userinfo->passtype = vars1.passtype;
 	} else {
 		// we always duplicate username and password, or crashes happen

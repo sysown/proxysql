@@ -7,6 +7,16 @@
 #include <cstdint>
 #include <vector>
 #include <memory>
+#include <optional>
+
+/** Frontend changes prepared without acquiring or modifying a backend. */
+struct MySQL_Session_Set_Plan {
+	std::vector<std::pair<int, std::string>> values;
+	// Retain intermediate transitions: ON followed by OFF still commits.
+	std::vector<bool> autocommit;
+	std::optional<unsigned long long> wait_timeout_ms;
+	std::optional<std::string> session_track_gtids;
+};
 
 class MySQL_Session;
 
@@ -51,6 +61,11 @@ public:
 	bool update_variable(MySQL_Session* session, session_status status, int &_rc);
 	bool parse_variable_boolean(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
 	bool parse_variable_number(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
+	/** @brief Validate one session assignment and append its frontend changes. */
+	bool stage_set_variable(const std::string& name, const std::string& value,
+		MySQL_Session_Set_Plan& plan) const;
+	/** @brief Commit a validated SET plan to the frontend only. */
+	void apply_set_plan(MySQL_Session* session, const MySQL_Session_Set_Plan& plan);
 };
 
 #endif // #ifndef MYSQL_VARIABLES_H

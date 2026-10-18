@@ -344,6 +344,7 @@ enum session_status {
 	// tier keeps the values above, which are also those of v3.0.11.
 	WAITING_AWS_IAM_TOKEN,
 #endif // PROXYSQL40
+	SETTING_USER_VARIABLE_CONTEXT,
 	session_status___NONE // special marker
 };
 
