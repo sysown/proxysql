@@ -1237,7 +1237,17 @@ enum p_st process_dollar_quote_string(shared_st* shared_st, dollar_quote_string_
 			return st_no_mark_found;
 		}
 	} else {
-		// Not enough bytes left to form a closing delimiter -> safe exit
+		// Not enough bytes left to form a closing delimiter: the string is unterminated
+		// and runs to the end of the input. Consume the rest of the input and forget the
+		// tag, so the string ends here, the same way an unterminated quoted literal does.
+		// Returning without consuming anything is not safe: the caller would call
+		// get_next_st() on the same '$', which can match '$$' or '$tag$' again and bring
+		// it straight back here with no progress, looping forever (e.g. "SELECT $ab$ x$$").
+		// It would also copy the unterminated string's tail into the digest.
+		shared_st->q += remaining;
+		shared_st->q_cur_pos = shared_st->q_len;
+		dq_st->tag_start = NULL;
+		dq_st->tag_len = 0;
 		return st_no_mark_found;
 	}
 
