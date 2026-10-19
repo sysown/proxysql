@@ -31,6 +31,7 @@ using json = nlohmann::json;
 #endif
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_ExplicitTxnStateMgr.h"
+#include "PgSQLTxnEndClassifier.h"
 #include "PgSQL_Extended_Query_Message.h"
 #include "libinjection.h"
 #include "libinjection_sqli.h"
@@ -164,97 +165,9 @@ static void write_tx_poisoned_warning_notice(PG_pkt& pgpkt, PGSQL_ERROR_CODES co
 // Shared by the simple-query path (handler_poisoned_simple_query) and the
 // extended-query one (classify_poisoned_extq_message).
 static char classify_poisoned_txn_end(const char* sql, unsigned int sql_len) {
-	// A Simple Query packet body, and a prepared statement's text, is a null-terminated
-	// string. Trim it so the "is any non-whitespace content remaining?" check does not
-	// treat the null byte itself as trailing junk and reject an otherwise-valid
-	// statement (e.g. "ROLLBACK\0" or "ROLLBACK WORK\0").
-	if (sql_len > 0 && sql[sql_len - 1] == '\0') {
-		sql_len--;
-	}
-
-	// skip whitespace and SQL comments (-- to EOL, /* ... */ non-nesting) in-place.
-	auto skip_ws_and_comments = [](const char*& p, unsigned int& n) {
-		for (;;) {
-			while (n > 0 && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) { p++; n--; }
-			if (n >= 2 && p[0] == '-' && p[1] == '-') {
-				p += 2; n -= 2;
-				while (n > 0 && *p != '\n') { p++; n--; }
-				continue;
-			}
-			if (n >= 2 && p[0] == '/' && p[1] == '*') {
-				p += 2; n -= 2;
-				while (n >= 2 && !(p[0] == '*' && p[1] == '/')) { p++; n--; }
-				if (n >= 2) { p += 2; n -= 2; } else { n = 0; }
-				continue;
-			}
-			break;
-		}
-	};
-
-	// Skip leading whitespace and comments. An ORM-prepended `/* query tag */ ROLLBACK`
-	// must recover, not be rejected.
-	skip_ws_and_comments(sql, sql_len);
-
-	char kind = 0;
-
-	// Case-insensitive prefix match, followed by a word boundary so "ROLLBACKET"
-	// doesn't get classified as ROLLBACK.
-	auto matches_kw = [](const char* p, unsigned int n, const char* kw, unsigned int klen) -> bool {
-		if (n < klen) return false;
-		if (strncasecmp(p, kw, klen) != 0) return false;
-		if (n == klen) return true;
-		char ch = p[klen];
-		return !(ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'));
-	};
-
-	// ABORT is a Postgres synonym for ROLLBACK. END is a Postgres synonym for COMMIT.
-	// Both ROLLBACK and COMMIT recover the session to IDLE.
-	unsigned int verb_len = 0;
-	if (matches_kw(sql, sql_len, "ROLLBACK", 8)) { kind = 'R'; verb_len = 8; }
-	else if (matches_kw(sql, sql_len, "ABORT", 5)) { kind = 'R'; verb_len = 5; }
-	else if (matches_kw(sql, sql_len, "COMMIT", 6)) { kind = 'C'; verb_len = 6; }
-	else if (matches_kw(sql, sql_len, "END", 3))    { kind = 'C'; verb_len = 3; }
-
-	// Having identified a recovery verb, verify the rest of the statement is a
-	// *plain* whole-tx end — no modifiers that change the semantics into
-	// something we can't honor on a dead backend, and no second statement
-	// pipelined after it. The only modifiers we accept are:
-	//   WORK | TRANSACTION   (Postgres noise-word aliases; no semantic effect)
-	// Anything else — specifically ROLLBACK TO SAVEPOINT (partial rollback,
-	// keeps tx open) and AND CHAIN (rolls back and opens a new tx) — would
-	// leave the client's transaction-status view inconsistent with what we can
-	// actually deliver once the backend is gone. Reject those with 25P02 and
-	// keep the session poisoned; the client can then issue a plain ROLLBACK.
-	//
-	// Multi-statement Simple Query (e.g. "ROLLBACK; SELECT 1;") is rejected for
-	// the same reason: we would recover, synthesize a ROLLBACK response, and
-	// silently drop the second statement. Safer to make the client split.
-	if (kind != 0) {
-		const char* rest = sql + verb_len;
-		unsigned int rest_len = sql_len - verb_len;
-		skip_ws_and_comments(rest, rest_len);
-		// Optionally consume a single WORK or TRANSACTION noise word.
-		if (matches_kw(rest, rest_len, "WORK", 4)) {
-			rest += 4; rest_len -= 4;
-			skip_ws_and_comments(rest, rest_len);
-		} else if (matches_kw(rest, rest_len, "TRANSACTION", 11)) {
-			rest += 11; rest_len -= 11;
-			skip_ws_and_comments(rest, rest_len);
-		}
-		// Optional trailing semicolon.
-		if (rest_len > 0 && *rest == ';') {
-			rest++; rest_len--;
-			skip_ws_and_comments(rest, rest_len);
-		}
-		// Anything remaining is either a savepoint/chain modifier or a second
-		// pipelined statement. Either way, reject.
-		if (rest_len > 0) {
-			kind = 0;
-		}
-	}
-	// RELEASE SAVEPOINT and anything else: rejected. Matches Postgres: only
-	// plain ROLLBACK / COMMIT / ABORT / END end an aborted tx cleanly.
-	return kind;
+	// The grammar (and its rationale) lives in PgSQLTxnEndClassifier.h, shared with
+	// handler_CommitRollback so both local answers accept exactly the same statements.
+	return pgsql_classify_plain_txn_end(sql, sql_len);
 }
 
 // The answer to the plain ROLLBACK ('R') or COMMIT ('C') that ends a poisoned
@@ -687,7 +600,22 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 		return false;
 	}
 	else {
-		// there is no active transaction, we will just reply OK
+		// There is no active transaction. Only a lone, plain transaction end
+		// (COMMIT | END | ROLLBACK | ABORT [WORK | TRANSACTION] [;]) is a no-op that
+		// can be answered locally. The prefix match above also catches statements
+		// that do real work outside a transaction block, and those must reach
+		// PostgreSQL:
+		//   - COMMIT PREPARED 'gid' / ROLLBACK PREPARED 'gid' (two-phase commit;
+		//     PostgreSQL requires them to run outside a transaction block);
+		//   - "COMMIT; INSERT ..." and other multi-statement queries;
+		//   - ROLLBACK TO SAVEPOINT and AND [NO] CHAIN, which PostgreSQL rejects
+		//     or warns about here, so the client must see its own answer;
+		//   - words that only start with a verb, such as "ENDx".
+		// Forwarding them goes through the normal query rules and routing.
+		if (pgsql_classify_plain_txn_end((const char*)pkt->ptr + 5, pkt->size - 5) == 0) {
+			return false;
+		}
+		// plain transaction end with no active transaction, we will just reply OK
 		client_myds->DSS = STATE_QUERY_SENT_NET;
 		//uint16_t setStatus = 0;
 		//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
