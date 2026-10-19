@@ -1080,7 +1080,7 @@ void test_v30_tracking_flow(MYSQL* admin, const CommandLine& cl) {
     const bool mixed = execute(session.get(), "/* uv_hg_a */ SET @v30_mixed=8, wait_timeout=600");
     const auto locked = locked_hostgroup(session.get());
     const auto after_mixed = user_variable_aggregate(session.get());
-    const auto mixed_value = query_scalar(session.get(), "SELECT @v30_mixed");
+    const auto mixed_value = query_scalar(session.get(), "/* uv_hg_a */ SELECT @v30_mixed");
     ok(mixed && locked && *locked >= 0 && tracked && after_mixed &&
         aggregates_equal(*tracked, *after_mixed) && mixed_value && mixed_value->bytes == "8",
         "v3.0 mixed SET executes through backend-bound fallback without partial tracking");
@@ -1092,7 +1092,7 @@ void test_v30_tracking_flow(MYSQL* admin, const CommandLine& cl) {
     const bool changed = context && execute(context.get(), "/* uv_hg_a */ SET @v30_context='hello'") &&
         execute(context.get(), "/* uv_hg_a */ SET sql_mode='NO_BACKSLASH_ESCAPES'");
     const auto context_lock = context ? locked_hostgroup(context.get()) : std::nullopt;
-    const auto context_value = context ? query_scalar(context.get(), "SELECT @v30_context") : std::nullopt;
+    const auto context_value = context ? query_scalar(context.get(), "/* uv_hg_a */ SELECT @v30_context") : std::nullopt;
     ok(changed && context_lock && *context_lock >= 0 && context_value && context_value->bytes == "hello",
         "v3.0 interpretation-context changes use the established connection-bound fallback");
 }
