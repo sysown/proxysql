@@ -1845,10 +1845,10 @@ int main(int argc, char** argv) {
             return false;
         }
 
-        // Send BEGIN, invalid SET, ROLLBACK
+        // Recover after Sync: PostgreSQL skips commands queued after an
+        // error until that boundary, including a ROLLBACK in the same batch.
         if (PQsendQueryParams(conn.get(), "BEGIN", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
-            PQsendQueryParams(conn.get(), "SET datestyle = 'INVALID_VALUE'", 0, NULL, NULL, NULL, NULL, 0) == 0 ||
-            PQsendQueryParams(conn.get(), "ROLLBACK", 0, NULL, NULL, NULL, NULL, 0) == 0) {
+            PQsendQueryParams(conn.get(), "SET datestyle = 'INVALID_VALUE'", 0, NULL, NULL, NULL, NULL, 0) == 0) {
             diag("Failed to send queries");
             PQexitPipelineMode(conn.get());
             return false;
@@ -1863,7 +1863,7 @@ int main(int argc, char** argv) {
         int sock = PQsocket(conn.get());
         PGresult* res;
 
-        while (count < 4) {
+        while (count < 3) {
             if (PQconsumeInput(conn.get()) == 0) {
                 diag("PQconsumeInput failed");
                 PQexitPipelineMode(conn.get());
@@ -1884,7 +1884,7 @@ int main(int argc, char** argv) {
                 PQclear(res);
                 count++;
             }
-            if (count >= 4) break;
+            if (count >= 3) break;
             if (!PQisBusy(conn.get())) continue;
             fd_set input_mask;
             FD_ZERO(&input_mask);
@@ -1893,12 +1893,22 @@ int main(int argc, char** argv) {
             select(sock + 1, &input_mask, NULL, NULL, &timeout);
         }
 
-        PQexitPipelineMode(conn.get());
+        if (PQexitPipelineMode(conn.get()) != 1) {
+            diag("Failed to exit pipeline mode after error recovery Sync");
+            return false;
+        }
 
         diag("Pipeline completed: successes=%d, errors=%d", success_count, error_count);
 
         if (error_count < 1) {
             diag("Expected at least 1 error, got %d", error_count);
+            return false;
+        }
+
+        auto rollback = executeQuery(conn.get(), "ROLLBACK");
+        if (PQresultStatus(rollback.get()) != PGRES_COMMAND_OK ||
+            PQtransactionStatus(conn.get()) != PQTRANS_IDLE) {
+            diag("ROLLBACK after error recovery Sync did not end the transaction");
             return false;
         }
 
