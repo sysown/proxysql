@@ -352,6 +352,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	CompPktIN.pkt.ptr=NULL;
 	CompPktIN.pkt.size=0;
 	CompPktIN.partial=0;
+	CompPktIN.hdr_len=0;
 	CompPktOUT.pkt.ptr=NULL;
 	CompPktOUT.pkt.size=0;
 	CompPktOUT.partial=0;
@@ -586,10 +587,31 @@ int MySQL_Data_Stream::read_from_net() {
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 4, 0);
 				if (r == 4) {
-					// let's try to read a whole packet
-					mysql_hdr Hdr;
-					memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
-					r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					// Check for PROXY protocol before treating as MySQL header
+					// PROXY protocol starts with "PROXY " (6 bytes), but we only have 4 bytes here
+					// If first 4 bytes are "PROX", don't interpret as MySQL header
+					if (strncmp((char *)queueIN.buffer, "PROX", 4) == 0) {
+						// PROXY protocol detected - read more data without MySQL header parsing
+						int r2 = recv(fd, queue_w_ptr(queueIN)+4, s-4, 0);
+						// the 4 bytes already read must be kept even if this read would block
+						if (r2 > 0) r += r2;
+					} else {
+						// let's try to read a whole packet
+						mysql_hdr Hdr;
+						memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
+						// GHSA-58ww-865x-grpr: bound the declared packet length by the
+						// remaining capacity of queueIN. Without this check an unauthenticated
+						// client can drive a heap out-of-bounds write into the fixed-size
+						// 32KB input queue by sending an oversized first MySQL packet.
+						if (Hdr.pkt_length > (unsigned int)(s - 4)) {
+							proxy_error("Oversized first packet from client: pkt_length=%u exceeds queue capacity (%d). Closing fd=%d\n",
+								Hdr.pkt_length, s - 4, fd);
+							shut_soft();
+							return -1;
+						}
+						int r2 = recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+						if (r2 > 0) r += r2;
+					}
 				}
 			} else {
 				r = recv(fd, queue_w_ptr(queueIN), s, 0);
@@ -1061,6 +1083,13 @@ int MySQL_Data_Stream::buffer2array() {
 	} else {
 
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
+			// The start of a PROXY header, shorter than the 8 bytes the check below
+			// needs: wait for the rest instead of reading "PROX" as a MySQL header
+			// (a ~5MB packet length).
+			if (pkts_recv==0 && queueIN.tail==0 && queueIN.head < 8 &&
+				strncmp((char *)queueIN.buffer,"PROXY ",(queueIN.head < 6 ? queueIN.head : 6)) == 0) {
+				return 0;
+			}
 			// check if this is a PROXY protocol packet
 			if (
 				pkts_recv==0 && // checks if no packets have been received yet
@@ -1123,6 +1152,18 @@ int MySQL_Data_Stream::buffer2array() {
 							// we override old address/port
 							addr.addr = strdup(PROXY_info->source_address);
 							addr.port = PROXY_info->source_port;
+						} else if (ppi.header_was_unknown) {
+							// GHSA-gw94-85m2-x8v2: PP1 UNKNOWN frame.
+							// Per HAProxy spec the receiver MUST ignore
+							// any address fields that follow UNKNOWN, so
+							// addr.addr stays pointing at the real TCP
+							// peer. We still record that we observed a
+							// PROXY header so audit/log code can see the
+							// frame was present.
+							PROXY_info = new ProxyProtocolInfo(ppi);
+							if (addr.addr) {
+								proxy_info("Ignoring PROXY UNKNOWN header from IP %s; using real TCP peer as client address\n", addr.addr);
+							}
 						} else {
 							if (addr.addr) {
 								proxy_warning("Unable to parse PROXY header from IP %s . Skipping PROXY header\n", addr.addr);
@@ -1139,12 +1180,14 @@ int MySQL_Data_Stream::buffer2array() {
 					queueIN.pkt.size=0;
 					queueIN.pkt.ptr=NULL;
 					return b;
-				} else {
-					// set the connection unhealthy , this will cause the session to be destroyed
+				} else if (queueIN.head >= 107) {
+					// a PROXY v1 header is at most 107 bytes: without a delimiter by now it is invalid.
+					// Set the connection unhealthy , this will cause the session to be destroyed
 					if (sess) {
 						sess->set_unhealthy();
 					}
 				}
+				// otherwise the header is incomplete: wait for the rest
 				return 0; // we always return
 			}
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Reading the header of a new packet\n", sess);
@@ -1189,11 +1232,41 @@ int MySQL_Data_Stream::buffer2array() {
 				destLen=payload_length;
 				//dest=(Bytef *)l_alloc(destLen);
 				dest=(Bytef *)malloc(destLen);
+				const uLongf claimed_len=destLen;
+				const unsigned long long body_len=(unsigned long long)(queueIN.pkt.size-7);
 				int rc=uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
-				if (rc!=Z_OK) {
+				if (rc==Z_OK) {
+					// GHSA-fvch-fpgq-pwfx: uncompress() rewrites destLen with
+					// the number of bytes it actually produced. If that is
+					// smaller than the length declared in the packet header,
+					// the tail of 'dest' is uninitialized heap memory, and the
+					// packet walk below would parse it as MySQL packet headers.
+					if (destLen != claimed_len) {
+						proxy_error("Decompressed length %lu does not match the declared length %lu . Dropping compressed packet\n",
+							(unsigned long)destLen, (unsigned long)claimed_len);
+						free(dest);
+						shut_soft();
+						return ret;
+					}
+					datalength=payload_length;
+				} else {
 					// for some reason, uncompress failed
 					// accoding to debugging on #1410 , it seems some library may send uncompress data claiming it is compressed
 					// we try to assume it is not compressed, and we do some sanity check
+					//
+					// 'dest' is only 'claimed_len' bytes, while the body below is
+					// 'body_len' bytes, and the two are independent fields taken
+					// straight off the wire. Falling back to the uncompressed
+					// interpretation when the body is the larger of the two
+					// therefore overflows 'dest', so refuse instead.
+					// The sanity check below also reads the 3 bytes at u+7..u+9,
+					// so a body shorter than that would be read past its end.
+					if (body_len < 3 || body_len > (unsigned long long)claimed_len) {
+						proxy_error("Unable to uncompress a compressed packet\n");
+						free(dest);
+						shut_soft();
+						return ret;
+					}
 					memcpy(dest, _ptr, queueIN.pkt.size-7);
 					datalength=queueIN.pkt.size-7;
 					// some sanity check now
@@ -1214,11 +1287,11 @@ int MySQL_Data_Stream::buffer2array() {
 					}
 					if (sanity_check == false) {
 						proxy_error("Unable to uncompress a compressed packet\n");
+						free(dest);
 						shut_soft();
 						return ret;
 					}
 				}
-				datalength=payload_length;
 				// change _ptr to the new buffer
 				_ptr=dest;
 			} else {
@@ -1227,22 +1300,36 @@ int MySQL_Data_Stream::buffer2array() {
 			}
 			while (progress<datalength) {
 				if (CompPktIN.partial==0) {
+					// The compressed protocol is a byte stream: an inner packet header can be split
+					// across compressed frames. Keep the bytes available and complete the header
+					// with the next frame, instead of reading past the payload (GHSA-qg2m-q3ch-cg9v).
+					// The frame does not even need to be compressed for this to happen.
+					const unsigned int hdr_missing = sizeof(mysql_hdr) - CompPktIN.hdr_len;
+					if ((datalength-progress) < hdr_missing) {
+						memcpy(CompPktIN.hdr + CompPktIN.hdr_len, _ptr+progress, (datalength-progress));
+						CompPktIN.hdr_len+=(datalength-progress);
+						progress=datalength; // we reached the end
+						continue;
+					}
+					memcpy(CompPktIN.hdr + CompPktIN.hdr_len, _ptr+progress, hdr_missing);
+					progress+=hdr_missing;
+					CompPktIN.hdr_len=0;
 					mysql_hdr _a;
-					assert(datalength >= progress + sizeof(mysql_hdr)); // FIXME: this is a too optimistic assumption
-					memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
+					memcpy(&_a,CompPktIN.hdr,sizeof(mysql_hdr));
 					CompPktIN.pkt.size=_a.pkt_length+sizeof(mysql_hdr);
 					CompPktIN.pkt.ptr=(unsigned char *)l_alloc(CompPktIN.pkt.size);
-					if ((datalength-progress) >= CompPktIN.pkt.size) {
+					memcpy(CompPktIN.pkt.ptr, CompPktIN.hdr, sizeof(mysql_hdr));
+					if ((datalength-progress) >= _a.pkt_length) {
 						// we can copy the whole packet
-						memcpy(CompPktIN.pkt.ptr, _ptr+progress, CompPktIN.pkt.size);
+						memcpy((char *)CompPktIN.pkt.ptr + sizeof(mysql_hdr), _ptr+progress, _a.pkt_length);
 						CompPktIN.partial=0; // stays 0
-						progress+=CompPktIN.pkt.size;
+						progress+=_a.pkt_length;
 						PSarrayIN->add(CompPktIN.pkt.ptr, CompPktIN.pkt.size);
 						CompPktIN.pkt.ptr=NULL; // sanity
 					} else {
 						// not enough data for the whole packet
-						memcpy(CompPktIN.pkt.ptr, _ptr+progress, (datalength-progress));
-						CompPktIN.partial+=(datalength-progress);
+						memcpy((char *)CompPktIN.pkt.ptr + sizeof(mysql_hdr), _ptr+progress, (datalength-progress));
+						CompPktIN.partial=sizeof(mysql_hdr)+(datalength-progress);
 						progress=datalength; // we reached the end
 					}
 				} else {

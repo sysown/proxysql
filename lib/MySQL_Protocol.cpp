@@ -1272,32 +1272,73 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	char *db=NULL;
 	char* user_attributes=NULL;
 	mysql_hdr hdr;
+	const unsigned char *packet_end = pkt + len;
+	// GHSA-8mqj-34cf-rj43: this parser had no bounds checks at all. Validate
+	// each field before consuming it. The user, database and auth-plugin
+	// fields were each read with an unbounded strlen(), and the one-byte
+	// auth-response length was memcpy'd into a fixed 128-byte *stack* buffer,
+	// so a single post-authentication packet could write up to 255
+	// attacker-controlled bytes past the frame.
+	if (len <= sizeof(mysql_hdr)) {
+		return false;
+	}
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	int default_hostgroup=-1;
 	bool transaction_persistent = true;
 	bool _ret_use_ssl=false;
 	cur++;
-	user=pkt+cur;
-	cur+=strlen((const char *)user);
-	cur++;
+	const unsigned char *user_ptr = pkt + cur;
+	const unsigned char *user_end = (const unsigned char*)memchr(user_ptr, 0, packet_end - user_ptr);
+	if (user_end == NULL) {
+		return false; // unterminated user
+	}
+	user=(unsigned char *)user_ptr;
+	cur+= (user_end - user_ptr) + 1;
+	if (pkt + cur >= packet_end) {
+		return false;
+	}
 	unsigned char pass_len=pkt[cur];
 	cur++;
-	unsigned char pass[128];
-	memset(pass,0,128);
+	const unsigned char *pass_ptr = pkt + cur;
+	if ((size_t)(packet_end - pass_ptr) < pass_len) {
+		return false;
+	}
+	// allocate instead of using a fixed stack buffer: 'pass_len' is a full byte
+	unsigned char *pass = (unsigned char *)malloc(pass_len+1);
+	if (pass == NULL) {
+		return false;
+	}
+	memset(pass,0,pass_len+1);
 	//pkt+=sizeof(mysql_hdr);
-	memcpy(pass, pkt+cur, pass_len);
+	memcpy(pass, pass_ptr, pass_len);
 	cur+=pass_len;
-	db=(char *)pkt+cur;
+	const char *db_ptr = (const char *)(pkt + cur);
+	const char *db_end = (const char*)memchr(db_ptr, 0, packet_end - (pkt + cur));
+	if (db_end == NULL) {
+		free(pass);
+		return false; // unterminated database name
+	}
+	db=(char *)db_ptr;
 	// Move to field after 'database'
-	cur += strlen(db) + 1;
+	cur += (db_end - db_ptr) + 1;
 	// Skipt field 'character-set' (size 2)
+	if ((size_t)(packet_end - (pkt + cur)) < sizeof(uint16_t)) {
+		free(pass);
+		return false;
+	}
 	cur += 2;
 	// Check and get 'Client Auth Plugin' if capability is supported
 	char* client_auth_plugin = nullptr;
-	if (pkt + len > pkt + cur) {
+	if (pkt + cur < packet_end) {
 		int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
 		if (capabilities & CLIENT_PLUGIN_AUTH) {
-			client_auth_plugin = reinterpret_cast<char*>(pkt + cur);
+			const char *auth_plugin_ptr = (const char *)(pkt + cur);
+			const char *auth_plugin_end = (const char*)memchr(auth_plugin_ptr, 0, packet_end - (pkt + cur));
+			if (auth_plugin_end == NULL) {
+				free(pass);
+				return false; // unterminated auth plugin name
+			}
+			client_auth_plugin = const_cast<char*>(auth_plugin_ptr);
 		}
 	}
 	// Default to 'mysql_native_password' in case 'auth_plugin' is not found.
@@ -1360,6 +1401,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		//	ret=false;
 		//}
 	}
+	// 'pass' is no longer needed once the authentication decision is made;
+	// release it here so the early 'return ret' paths below do not leak it.
+	free(pass);
+	pass = NULL;
 	if (userinfo->username) free(userinfo->username);
 	if (userinfo->password) free(userinfo->password);
 	if (ret==true) {
@@ -1482,10 +1527,22 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 		return 1;
 	}
 	auth_plugin_id = (*myds)->switching_auth_type;
+	// GHSA-24vm-gh4h-hfr3: the NUL-terminated form was read with an
+	// unbounded strlen() over client bytes, and the raw length below
+	// underflowed for a packet shorter than a header. Bound both by the
+	// number of payload bytes actually present.
+	const size_t payload_length = len >= sizeof(mysql_hdr) ? len - sizeof(mysql_hdr) : 0;
 	if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
-		vars1.pass_len = len - sizeof(mysql_hdr);
+		vars1.pass_len = payload_length;
 	} else {
-		vars1.pass_len=strlen((char *)pkt);
+		const unsigned char* terminator = (const unsigned char*)memchr(pkt, '\0', payload_length);
+		if (terminator == NULL) {
+			ret = false;
+			vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p . Rejected malformed NUL-terminated authentication response\n", (*myds)->sess, (*myds));
+			return 1;
+		}
+		vars1.pass_len = (uint32_t)(terminator - pkt);
 	}
 	vars1.pass = (unsigned char *)malloc(vars1.pass_len+1);
 	memcpy(vars1.pass, pkt, vars1.pass_len);
@@ -1501,6 +1558,21 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 
 // this function was inline in process_pkt_handshake_response() , split for readibility
 bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 2
+	// GHSA-24vm-gh4h-hfr3: HandshakeResponse41 carries a 32-byte fixed
+	// header (4 capabilities + 4 max packet + 1 charset + 23 reserved)
+	// before any variable-length field. This function read that header
+	// unconditionally, so a shorter packet was parsed from out-of-bounds
+	// memory before authentication.
+	const unsigned int handshake_response_header_len = sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t) + 23;
+	if (len < sizeof(mysql_hdr) + handshake_response_header_len) {
+		ret = false;
+		return false;
+	}
+	// GHSA-24vm-gh4h-hfr3: every variable-length field below is bounded
+	// against this rather than trusting a NUL terminator to exist inside
+	// the packet.
+	unsigned char* packet_end = vars1._ptr + len;
+
 	vars1.capabilities = CPY4(pkt);
 	// see bug #2916. If CLIENT_MULTI_STATEMENTS is set by the client
 	// we enforce setting CLIENT_MULTI_RESULTS, this is the proper and expected
@@ -1555,12 +1627,30 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 //		(*myds)->encrypted=true;
 //		use_ssl=true;
 //	} else {
+	// GHSA-24vm-gh4h-hfr3: do not strlen() an unterminated username -- it
+	// scans past the end of the packet when the field is truncated.
+	unsigned char* user_end = (unsigned char*)memchr(pkt, 0, packet_end - pkt);
+	if (user_end == NULL) {
+		ret = false;
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p . malformed username in handshake response\n", (*myds), (*myds)->sess);
+		return false;
+	}
 	vars1.user = pkt;
-	pkt += strlen((char *)vars1.user) + 1;
+	pkt = user_end + 1;
 
 	if (vars1.capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
-		uint64_t passlen64;
-		int pass_len_enc=mysql_decode_length(pkt,&passlen64);
+		uint64_t passlen64=0;
+		// GHSA-x23w-3v26-vgvj: this length-encoded prefix is attacker
+		// controlled and the 0xfe form reads 8 bytes past it, so a
+		// truncated prefix at the end of the handshake response read
+		// past the packet, before authentication. Bound the decode by
+		// the bytes actually remaining.
+		int pass_len_enc=mysql_decode_length_checked(pkt, packet_end - pkt, &passlen64);
+		if (pass_len_enc == 0) {
+			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth response length in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+			return false;
+		}
 		vars1.pass_len = passlen64;
 		pkt	+= pass_len_enc;
 		if (vars1.pass_len > (len - (pkt - vars1._ptr))) {
@@ -1569,7 +1659,27 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 			return false;
 		}
 	} else {
-		vars1.pass_len = (vars1.capabilities & CLIENT_SECURE_CONNECTION ? *pkt++ : strlen((char *)pkt));
+		// GHSA-24vm-gh4h-hfr3: bound the auth-response length. The
+		// fixed-width byte was dereferenced without checking it exists,
+		// and the NUL-terminated form was strlen()'d without a bound.
+		if (vars1.capabilities & CLIENT_SECURE_CONNECTION) {
+			if (packet_end <= pkt) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . missing auth response in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			vars1.pass_len = *pkt++;
+		} else {
+			unsigned char* pass_end = (unsigned char*)memchr(pkt, 0, packet_end - pkt);
+			if (pass_end == NULL) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . unterminated auth response in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
+			vars1.pass_len = (uint32_t)(pass_end - pkt);
+			// note: 'pkt' is deliberately not advanced here; the caller
+			// advances it by 'vars1.pass_len' after the memcpy below
+		}
 		if (vars1.pass_len > (len - (pkt - vars1._ptr))) {
 			ret = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response\n", (*myds), (*myds)->sess, vars1.user);
@@ -1599,8 +1709,17 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 			vars1.pass_len--; // remove the extra 0 if present
 		}
 	}
-	if (vars1._ptr+len > pkt) {
+	if (packet_end > pkt) {
 		if (vars1.capabilities & CLIENT_PLUGIN_AUTH) {
+			// GHSA-24vm-gh4h-hfr3: reject an unterminated plugin name
+			// rather than letting PPHR_3 compare past the end of the
+			// packet.
+			unsigned char* plugin_end = (unsigned char*)memchr(pkt, 0, packet_end - pkt);
+			if (plugin_end == NULL) {
+				ret = false;
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth plugin name in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
+			}
 			vars1.auth_plugin = pkt;
 		}
 	}
@@ -2448,9 +2567,9 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	} else { // this is the first time that this PS is executed
 		ret= new stmt_execute_metadata_t();
 	}
-	if (*stmt_meta==NULL) {
-		memcpy(&ret->stmt_id,p,4); // stmt-id
-	}
+	// The metadata is cached per global statement, and several client handles can
+	// share it: always take the handle of this packet, it keys the long data (SLDH).
+	memcpy(&ret->stmt_id,p,4); // stmt-id
 	p+=4; // stmt-id
 	memcpy(&ret->flags,p,1); p+=1; // flags
 	p+=4; // iteration-count
@@ -2467,7 +2586,12 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 		size_t null_bitmap_length=(num_params+7)/8;
 		if (size < (14+1+null_bitmap_length)) {
 			// some data missing?
-			delete ret;
+			// The packet is still owned (and freed) by the caller: detach it,
+			// or the destructor frees it too (double-free).
+			ret->pkt = NULL;
+			// Only free when metadata not obtained from cache (i.e. first execute),
+			// or sess_STMTs_meta is left with a dangling pointer.
+			if (!*stmt_meta) { delete ret; }
 			return NULL;
 		}
 		memcpy(&new_params_bound_flag,p+null_bitmap_length,1);
@@ -2525,11 +2649,41 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 		}
 		free(null_bitmap); // we are done with it
 
+		// Every read below must stay within the packet. Parameter values are
+		// forwarded to the backend, so an over-read does not just crash: it
+		// discloses ProxySQL's own heap to the client, which then reads it back
+		// from the backend (GHSA-r23x-jg5r-jmcc).
+		const char * const end = (const char *)ptr + size;
+		auto avail = [&](size_t n) -> bool { return p <= end && (size_t)(end - p) >= n; };
+		auto malformed = [&](uint16_t processed) -> stmt_execute_metadata_t* {
+			proxy_warning("Malformed COM_STMT_EXECUTE packet: parameter %u exceeds packet size %lu\n",
+				processed, (unsigned long)size);
+			// Free the temporal buffers allocated so far. Do NOT free the ones
+			// owned by the SLDH, which get() reports back unchanged.
+			for (uint16_t j = 0; j < processed; j++) {
+				const enum enum_field_types t = binds[j].buffer_type;
+				if (t == MYSQL_TYPE_TIME || t == MYSQL_TYPE_DATE || t == MYSQL_TYPE_TIMESTAMP || t == MYSQL_TYPE_DATETIME) {
+					unsigned long *_l = NULL;
+					my_bool *_is_null = NULL;
+					if (binds[j].buffer && binds[j].buffer != (*myds)->sess->SLDH->get(ret->stmt_id, j, &_l, &_is_null)) {
+						free(binds[j].buffer);
+					}
+				}
+				binds[j].buffer = NULL;
+			}
+			// Required to prevent double-free in dtor
+			if (ret->pkt) { ret->pkt = NULL; }
+			// Only free when metadata not obtained from cache (i.e. first execute)
+			if (!*stmt_meta) { delete ret; }
+			return NULL;
+		};
+
 		if (new_params_bound_flag) {
 			// the client is rebinding the parameters
 			// the client is sending again the type of each parameter
 			for (i=0;i<num_params;i++) {
 				// set buffer_type and is_unsigned
+				if (!avail(2)) return malformed(i);
 				uint16_t buffer_type=0;
 				memcpy(&buffer_type,p,2);
 				binds[i].is_unsigned=0;
@@ -2567,27 +2721,36 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 			enum enum_field_types buffer_type=binds[i].buffer_type;
 			switch (buffer_type) {
 				case MYSQL_TYPE_TINY:
+					if (!avail(1)) return malformed(i);
 					binds[i].buffer=p;
 					p+=1;
 					break;
 				case MYSQL_TYPE_SHORT:
 				case MYSQL_TYPE_YEAR:
+					if (!avail(2)) return malformed(i);
 					binds[i].buffer=p;
 					p+=2;
 					break;
 				case MYSQL_TYPE_FLOAT:
 				case MYSQL_TYPE_LONG:
 				case MYSQL_TYPE_INT24:
+					if (!avail(4)) return malformed(i);
 					binds[i].buffer=p;
 					p+=4;
 					break;
 				case MYSQL_TYPE_DOUBLE:
 				case MYSQL_TYPE_LONGLONG:
+					if (!avail(8)) return malformed(i);
 					binds[i].buffer=p;
 					p+=8;
 					break;
 				case MYSQL_TYPE_TIME:
 					{
+						// The decoding below reads fixed offsets: only the lengths
+						// defined by the protocol are valid.
+						if (!avail(1)) return malformed(i);
+						const uint8_t tlen = (uint8_t)p[0];
+						if ((tlen != 0 && tlen != 8 && tlen != 12) || !avail(1 + tlen)) return malformed(i);
 						binds[i].buffer=malloc(sizeof(MYSQL_TIME)); // NOTE: remember to free() this
 						uint8_t l;
 						memcpy(&l,p,1);
@@ -2612,6 +2775,11 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				case MYSQL_TYPE_TIMESTAMP:
 				case MYSQL_TYPE_DATETIME:
 					{
+						// The decoding below reads fixed offsets: only the lengths
+						// defined by the protocol are valid.
+						if (!avail(1)) return malformed(i);
+						const uint8_t dlen = (uint8_t)p[0];
+						if ((dlen != 0 && dlen != 4 && dlen != 7 && dlen != 11) || !avail(1 + dlen)) return malformed(i);
 						binds[i].buffer=malloc(sizeof(MYSQL_TIME)); // NOTE: remember to free() this
 						uint8_t l;
 						memcpy(&l,p,1);
@@ -2652,7 +2820,13 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					{
 						uint8_t l=0;
 						uint64_t len;
-						l=mysql_decode_length((unsigned char *)p, &len);
+						// GHSA-x23w-3v26-vgvj: the length-encoded prefix is read
+						// with no bound (the 0xfe form reads 8 bytes past it), and
+						// 'len' used to be validated against the whole packet rather
+						// than the bytes remaining after the prefix.
+						if (!avail(1)) return malformed(i);
+						l=mysql_decode_length_checked((unsigned char *)p, end - p, &len);
+						if (l == 0 || !avail(l) || (size_t)(end - (p + l)) < len) return malformed(i);
 						if (l>1) {
 							PROXY_TRACE();
 						}
@@ -2663,13 +2837,10 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					}
 					break;
 				default:
-					// LCOV_EXCL_START
 					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
 							"of query %s from user %s with default schema %s\n",
 							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
+					return malformed(i);
 			}
 		}
 	}
