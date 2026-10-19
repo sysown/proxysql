@@ -526,6 +526,9 @@ public:
 	// STATUS_PGSQL_CONNECTION_LISTEN from the statements of a digest: the last LISTEN or
 	// UNLISTEN * decides (see the definition).
 	void update_listen_status(const char* query_digest_text);
+	// Set once update_listen_status() has seen this connection pinned; from then on it
+	// always reads the digest (see the definition).
+	bool listen_scan = false;
 	// The same for a query with no digest (pgsql-query_digests off): releases the pin on
 	// UNLISTEN *, which nothing else does in that mode.
 	void update_listen_status_from_query(const char* query);

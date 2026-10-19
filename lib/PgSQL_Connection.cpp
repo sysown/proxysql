@@ -5547,14 +5547,18 @@ void PgSQL_Connection::unhandled_notice_cb(void* arg, const PGresult* result) {
 	// unpinning while one does sends the next notification to the wrong client.
 	// DISCARD ALL is the other way out, and it clears every flag through reset().
 	// A Simple Query can carry several statements, so each one is looked at and the last
-	// LISTEN or UNLISTEN * decides: `SELECT 1; LISTEN ch` pins, `UNLISTEN *; LISTEN ch`
-	// stays pinned, and `LISTEN ch; UNLISTEN *` leaves nothing subscribed (issue #6438).
-	// Statements are taken past any comment kept by query_digests_keep_comment, and once the
-	// scan loses track of the digest (a kept comment cut short of its terminator) a LISTEN
-	// anywhere from that comment's opening on pins -- the word inside the cut comment's own
-	// text included, which fails closed -- while nothing there unpins.
+	// LISTEN or UNLISTEN * decides: `UNLISTEN *; LISTEN ch` stays pinned and
+	// `LISTEN ch; UNLISTEN *` leaves nothing subscribed (issue #6438). Past a kept comment
+	// cut short of its terminator a LISTEN keeps the pin and nothing there releases it.
 void PgSQL_Connection::update_listen_status(const char* query_digest_text) {
 	bool listening = get_status(STATUS_PGSQL_CONNECTION_LISTEN);
+	// LISTEN only runs on a native connection, and there every LISTEN that ran has pinned it
+	// already from its CommandComplete tag, so an unpinned one has nothing to find. A batch
+	// reads several replies before this runs for each statement: a later LISTEN's tag can pin
+	// before an earlier UNLISTEN * releases, so a connection ever seen pinned keeps reading.
+	// ponytail: such a connection reads every digest until it is closed.
+	if (listening == false && native_mode && listen_scan == false) return;
+	listen_scan = true;
 	const char* lost = NULL;
 	for (const char* stmt = pgsql_stmt_skip_lead(query_digest_text, &lost); stmt != NULL;
 		stmt = pgsql_digest_next_stmt(stmt, &lost)) {
