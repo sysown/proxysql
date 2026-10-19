@@ -405,12 +405,15 @@ to observe re-enabling. DNS management has an independent loop.
 
 PostgreSQL's role probe is `pg_is_in_recovery()`, not MySQL `@@read_only`.
 Its normal lag probe compares WAL receive/replay progress and replay timestamp;
-it also supports a configured heartbeat query. A database being writable in
+its configured heartbeat-query branch is disabled and currently uses the same
+WAL-based query instead. A database being writable in
 other circumstances is not equivalent to the topology role ProxySQL obtains
 from this probe. MySQL read-only configuration supports several server-variable
 forms and compound variants. The two protocols share architectural purpose,
 not identical health signals or topology support.
-[PostgreSQL probes](../../../lib/PgSQL_Monitor.cpp#L40), [MySQL probe construction](../../../lib/MySQL_Monitor.cpp#L682).
+[PostgreSQL probes](../../../lib/PgSQL_Monitor.cpp#L40),
+[disabled PostgreSQL heartbeat branch](../../../lib/PgSQL_Monitor.cpp#L825),
+[MySQL probe construction](../../../lib/MySQL_Monitor.cpp#L682).
 
 Monitor failure handling is policy-driven. Read-only timeouts can become an
 assumption of read-only only after the configured consecutive timeout threshold;

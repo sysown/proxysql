@@ -21,6 +21,7 @@ accuracy or currency of every document it contains.
 ## Product and development references
 
 - [Product invariants](agents/invariants.md): guarantees changes must preserve.
+- [Twelve-month behavior review](internal/behavior-history-review.md): repository-wide before/after evidence, intent questions and integration coverage; existing SET answers are preserved.
 - [Agent guidance](agents/README.md): repository conventions and known failure patterns.
 - [Domain terminology](../GLOSSARY.md): resolved architectural vocabulary.
 - [MySQL SET parser selection](mysql-set-parser-selection.md): runtime selector precedence and the separate user-variable prerequisite.
