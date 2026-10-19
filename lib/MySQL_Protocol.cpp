@@ -1765,6 +1765,20 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		cleanse_and_free_auth_response(pass, pass_len + 1);
 		return false;
 	}
+	uint16_t charset = 0;
+	memcpy(&charset, pkt + cur, sizeof(charset));
+	if (charset == 0) {
+		const MARIADB_CHARSET_INFO* default_charset =
+			proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+		assert(default_charset);
+		charset = default_charset->nr;
+	}
+	if (!proxysql_find_charset_nr(charset)) {
+		proxy_error("Client %s:%d is trying to use unknown charset %u. Disconnecting\n",
+			(*myds)->addr.addr, (*myds)->addr.port, charset);
+		cleanse_and_free_auth_response(pass, pass_len + 1);
+		return false;
+	}
 	cur += 2;
 	// Check and get 'Client Auth Plugin' if capability is supported
 	char* client_auth_plugin = nullptr;
@@ -2006,7 +2020,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 
 		userinfo->username=strdup((const char *)user);
 		userinfo->password=strdup((const char *)password);
-		if (db) userinfo->set_schemaname(db,strlen(db));
+		if (db) userinfo->set_schemaname(db,strlen(db), charset);
 	} else {
 		// we always duplicate username and password, or crashes happen
 		userinfo->username=strdup((const char *)user);
@@ -2014,40 +2028,15 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	}
 	cleanse_and_free_password(password);
 	free_account_details(account_details);
+	if ((*myds)->sess->change_user_auth_switch) {
+		// Auth Switch Response has no charset field. Retain the CHANGE_USER
+		// packet's charset and the selected schema's independent encoding.
+		(*myds)->tmp_charset = charset;
+		userinfo->set_schemaname(db, db_len, charset);
+	}
 	userinfo->set(NULL,NULL,NULL,NULL); // just to call compute_hash()
 	if (ret) {
-		// we need to process charset if present in CHANGE_USER
-		uint16_t charset=0;
-		int bytes_processed = (db-(char *)pkt);
-		bytes_processed += strlen(db) + 1;
-		int bytes_left = len - bytes_processed;
-		if (bytes_left > 2) {
-			char *p = db;
-			p += strlen(db);
-			p++; // null byte
-			memcpy(&charset, p, sizeof(charset));
-		}
-		// see bug #810
-		if (charset==0) {
-			const MARIADB_CHARSET_INFO *ci = NULL;
-			ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
-			if (!ci) {
-				// LCOV_EXCL_START
-				proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
-				assert(0);
-				// LCOV_EXCL_STOP
-			}
-			charset=ci->nr;
-		}
-		// reject connections from unknown charsets
-		const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(charset);
-		if (!c) {
-			proxy_error("Client %s:%d is trying to use unknown charset %u. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port, charset);
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client %s:%d is trying to use unknown charset %u. Disconnecting\n", (*myds), (*myds)->sess, user, (*myds)->addr.addr, (*myds)->addr.port, charset);
-			ret = false;
-			return ret;
-		}
-		// set the default charset for this session
+		// The database field may be empty, selecting the configured UTF-8 schema.
 		(*myds)->sess->default_charset = charset;
 		if ((*myds)->sess->user_attributes) {
 #ifndef PROXYSQL31
@@ -2481,7 +2470,7 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 		if (vars1.db) {
 			// TODO: Not ideal, but the flow is currently complex. Resource management should be simplified in
 			// a future rework, so we can 'centralize' the update to the session state with auth results.
-			userinfo->set_schemaname(vars1.db, strlen(vars1.db));
+			userinfo->set_schemaname(vars1.db, strlen(vars1.db), vars1.charset);
 		}
 	} else {
 		vars1.db = NULL;
@@ -4112,7 +4101,11 @@ __exit_do_auth:
 			userinfo->username=strdup((const char *)vars1.user);
 		userinfo->clear_password();
 		userinfo->password=strdup((const char *)vars1.password);
-		if (vars1.db) userinfo->set_schemaname(vars1.db,strlen(vars1.db));
+		if (vars1.db) {
+			const uint32_t schema_charset = (*myds)->sess->change_user_auth_switch
+				? userinfo->schemaname_charset : vars1.charset;
+			userinfo->set_schemaname(vars1.db, strlen(vars1.db), schema_charset);
+		}
 		userinfo->passtype = vars1.passtype;
 	} else {
 		// we always duplicate username and password, or crashes happen
@@ -4381,9 +4374,20 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			return NULL;
 		}
 		memcpy(&new_params_bound_flag,p+null_bitmap_length,1);
-		uint8_t *null_bitmap=NULL;
-		null_bitmap=(uint8_t *)malloc(null_bitmap_length);
-		memcpy(null_bitmap,p,null_bitmap_length);
+		// With new_params_bound_flag set, 2 type bytes per parameter follow the flag,
+		// and the loop below reads them from the packet (GHSA-p5xc-69qx-m4q5).
+		if (new_params_bound_flag &&
+			pkt.size - (14+1+null_bitmap_length) < static_cast<size_t>(num_params) * 2) {
+			proxy_warning("Malformed COM_STMT_EXECUTE packet: %u parameter types exceed packet size %lu\n",
+				num_params, static_cast<unsigned long>(pkt.size));
+			// Same ownership rules as the NULL bitmap check above.
+			ret->pkt = NULL;
+			if (!*stmt_meta) { delete ret; }
+			return NULL;
+		}
+		// Read in place: the size check above covers the whole bitmap, and the
+		// packet outlives this function (see ret->pkt).
+		const uint8_t *null_bitmap=(const uint8_t *)p;
 		p+=null_bitmap_length;
 		p+=1; // new_params_bound_flag
 
@@ -4432,7 +4436,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			// initalized. See #3546.
 			binds[i].buffer = NULL;
 		}
-		free(null_bitmap); // we are done with it
 
 		if (new_params_bound_flag || effective_types) {
 			// the client is rebinding the parameters

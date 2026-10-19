@@ -130,6 +130,7 @@ test/infra/control/test-openssl-package-contract.bash
 test/infra/control/validate-openssl-checkout-workflows.bash
 test/infra/control/test-re2-platform-link.bash
 test/infra/control/test-libusual-incremental.bash
+python3 test/infra/control/test_router_openssl_build.py
 ```
 
 Then perform clean Stable 3.0, Innovative 3.1, and Chassis 4.0 builds. Check the

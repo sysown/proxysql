@@ -125,7 +125,9 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
+#ifdef PROXYSQL40
 static char mysql_thread_aws_locality_awareness_variable[] = "aws_locality_awareness";
+#endif /* PROXYSQL40 */
 
 typedef struct mythr_st_vars {
 	enum MySQL_Thread_status_variable v_idx;
@@ -3695,6 +3697,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 }
 
 MySQL_Thread::~MySQL_Thread() {
+#ifdef PROXYSQL40
 	// First sever every session-to-request association while the sessions and
 	// token source are still alive. Only then close the independently-held
 	// inbox duplicate so late provider publications are harmless drops.
@@ -3711,6 +3714,7 @@ MySQL_Thread::~MySQL_Thread() {
 		aws_iam_inbox->close();
 		aws_iam_inbox.reset();
 	}
+#endif // PROXYSQL40
 
 	if (mysql_sessions) {
 		while(mysql_sessions->len) {
@@ -3890,7 +3894,9 @@ bool MySQL_Thread::init() {
 	ioctl_FIONBIO(pipefd[0],1);
 	ioctl_FIONBIO(pipefd[1],1);
 	mypolls.add(POLLIN, pipefd[0], NULL, 0);
+#ifdef PROXYSQL40
 	aws_iam_inbox = std::make_shared<AwsIamWorkerInbox>(pipefd[1]);
+#endif // PROXYSQL40
 
 	thr_SetParser = new MySQL_Set_Stmt_Parser("");
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
@@ -3907,6 +3913,7 @@ bool MySQL_Thread::init() {
 	return true;
 }
 
+#ifdef PROXYSQL40
 uint64_t MySQL_Thread::register_aws_iam_waiter(MySQL_Session *session) {
 	if (session == nullptr || !aws_iam_inbox || !aws_iam_inbox->available()) return 0;
 	for (;;) {
@@ -3921,7 +3928,7 @@ void MySQL_Thread::cancel_aws_iam_waiter(uint64_t opaque_id) {
 }
 
 void MySQL_Thread::drain_aws_iam_completions() {
-	if (!aws_iam_inbox) return;
+	if (!aws_iam_inbox || !aws_iam_inbox->has_pending()) return;
 	auto completions = aws_iam_inbox->drain();
 	for (auto& completion : completions) {
 		auto waiter = aws_iam_waiters.find(completion.opaque_id);
@@ -3934,6 +3941,7 @@ void MySQL_Thread::drain_aws_iam_completions() {
 		}
 	}
 }
+#endif // PROXYSQL40
 
 struct pollfd * MySQL_Thread::get_pollfd(unsigned int i) {
 	return &mypolls.fds[i];
@@ -4395,6 +4403,9 @@ __run_skip_1:
 		} else {
 			maintenance_loop=false;
 		}
+		// Sessions read init_connect (and aws_iam_region) from this thread's
+		// copy; refresh it if LOAD MYSQL SERVERS TO RUNTIME changed them.
+		refresh_hostgroup_strings(MyHGM);
 
 		handle_kill_queues();
 
@@ -4478,9 +4489,11 @@ __run_skip_1:
 				});
 			}
 #endif // PROXYSQL31
+#ifdef PROXYSQL40
 			// IAM providers only enqueue opaque completions. Resolve them to
 			// live sessions here, on the owning worker, before session dispatch.
 			drain_aws_iam_completions();
+#endif // PROXYSQL40
 			// iterate through all sessions and process the session logic
 			process_all_sessions();
 			return_local_connections();
@@ -5159,6 +5172,14 @@ void MySQL_Thread::process_all_sessions() {
 	if (sess_sort && mysql_sessions->len > 3 && partition_wanted) {
 		ProcessAllSessions_Partition<MySQL_Session>();
 	}
+#ifdef PROXYSQL31
+	// Sessions holding a backend run first, then the backend waiters, then the
+	// sessions without a backend. A session handled in the first loop that has
+	// since returned its connection to the pool must not run a second time in
+	// the last loop: it has nothing new to do until the next poll.
+	const unsigned long long pass = ++sessions_pass;
+	bool no_backend_loop_needed = false;
+#endif // PROXYSQL31
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
 #ifdef DEBUG
@@ -5232,8 +5253,10 @@ void MySQL_Thread::process_all_sessions() {
 				if (sess->pause_until <= curtime) {
 #ifdef PROXYSQL31
 					if (!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
+						no_backend_loop_needed = true;
 						continue;
 					}
+					sess->handled_in_pass = pass;
 #endif // PROXYSQL31
 					rc=sess->handler();
 
@@ -5308,6 +5331,7 @@ void MySQL_Thread::process_all_sessions() {
 					// A checkout timeout can finish the request without a connection.
 					// Restore the client so its error response and next query can flow.
 					leave_waiter(sess);
+					no_backend_loop_needed = true;
 				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
 					break;
 				}
@@ -5316,9 +5340,10 @@ void MySQL_Thread::process_all_sessions() {
 			(void)waiter_count;
 		});
 	}
-	for (n=0; n<mysql_sessions->len; n++) {
+	for (n=0; no_backend_loop_needed && n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
 		if (sess->waiter_node.session) continue;
+		if (sess->handled_in_pass == pass) continue;
 		if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
 		if (sess->to_process==1 && sess->pause_until <= curtime) {
 			rc=sess->handler();
@@ -6672,9 +6697,11 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 					case CONNECTING_SERVER:
 						pta[11]=strdup("Connect");
 						break;
+#ifdef PROXYSQL40
 					case WAITING_AWS_IAM_TOKEN:
 						pta[11]=strdup("Waiting AWS IAM token");
 						break;
+#endif // PROXYSQL40
 					case PROCESSING_QUERY:
 						if (sess->pause_until > sess->thread->curtime) {
 							pta[11]=strdup("Delay");
@@ -7265,7 +7292,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 		// full rationale; reads are relaxed because the deadline is compared against
 		// 'curtime' and small reordering is harmless.
 		if (check_session_track_backoff) {
-			session_track_backoff_until = c->parent->session_track_backoff_until.load();
+			session_track_backoff_until = c->parent->session_track_backoff_until.load(std::memory_order_relaxed);
 			if (session_track_backoff_until > curtime) {
 				++i;
 				continue;
@@ -7338,7 +7365,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 			return false;
 		}
 		if (is_session_track_backoff_enabled &&
-			candidate->parent->session_track_backoff_until.load() > current_time) {
+			candidate->parent->session_track_backoff_until.load(std::memory_order_relaxed) > current_time) {
 			return false;
 		}
 		if (candidate->parent->myhgc->hid != _hid ||

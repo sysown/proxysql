@@ -64,13 +64,17 @@ extern ProxySQL_Statistics *GloProxyStats;
 extern MySQL_Logger *GloMyLogger;
 extern PgSQL_Logger *GloPgSQL_Logger;
 
+#ifdef PROXYSQL40
 static AwsIamStatsSnapshot global_aws_iam_stats_snapshot() {
 	AwsIamTokenSourceLease source = acquire_global_aws_iam_token_source();
 	return source ? source->snapshot() : AwsIamStatsSnapshot {};
 }
+#endif // PROXYSQL40
 
 void ProxySQL_Admin::p_update_metrics() {
+#ifdef PROXYSQL40
 	update_aws_iam_prometheus_metrics(global_aws_iam_stats_snapshot());
+#endif // PROXYSQL40
 	// Update proxysql_uptime
 	auto t1 = monotonic_time();
 	auto new_uptime = (t1 - GloVars.global.start_time)/1000/1000;
@@ -677,10 +681,12 @@ void ProxySQL_Admin::stats___mysql_global() {
 		}
 	}
 
+#ifdef PROXYSQL40
 	for (const AwsIamNamedStat& row :
 		aws_iam_stats_mysql_global_rows(global_aws_iam_stats_snapshot())) {
 		sqlite3_global_stats_row_step(statsdb, row_stmt, row.name, row.value);
 	}
+#endif // PROXYSQL40
 
 	statsdb->execute("COMMIT");
 }

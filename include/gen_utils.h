@@ -49,8 +49,11 @@ static thread_local uint8_t seeded = 0;
  * Important:
  * - Uses CLOCK_MONOTONIC to reduce susceptibility to wall-clock changes.
  * - Not cryptographically secure. Do not use for security-sensitive code.
+ * - Kept out of line (and cold): inlined into xoshiro128_plus_plus() it makes
+ *   that function too big to inline in its callers, which then pay a full
+ *   call frame and stack-protector check on every draw.
  */
-static void init_seed(void) {
+__attribute__((noinline, cold)) static void init_seed(void) {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 
@@ -101,8 +104,8 @@ static inline uint32_t rotl(uint32_t x, int k) {
  *
  * @return A 32-bit pseudo-random number.
  */
-static uint32_t xoshiro128_plus_plus(void) {
-	if (!seeded) init_seed();
+static inline uint32_t xoshiro128_plus_plus(void) {
+	if (__builtin_expect(!seeded, 0)) init_seed();
 
 	const uint32_t result = rotl(s[0] + s[3], 7) + s[0];
 	const uint32_t t = s[1] << 9;

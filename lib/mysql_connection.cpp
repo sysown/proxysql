@@ -301,15 +301,8 @@ void MySQL_Connection::compute_unknown_transaction_status() {
 			// do not change it
 			return;
 		}
-		if (_myerrno >= 1000 && _myerrno < 2000) { // server error
-			unknown_transaction_status = true;
-			return;
-		}
-		if (_myerrno >= 3000 && _myerrno < 4000) { // server error
-			unknown_transaction_status = true;
-			return;
-		}
-		// all other cases, server error
+		// all other cases are server errors (1xxx, 3xxx, and newer ranges such as 4xxx)
+		unknown_transaction_status = true;
 	}
 }
 
@@ -393,6 +386,7 @@ void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 
 void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
 	set(ui->username, ui->password, ui->schemaname, ui->sha1_pass);
+	schemaname_charset = ui->schemaname_charset;
 }
 
 
@@ -407,7 +401,14 @@ void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
  * @param l Length of the schema name string.
  * @return Returns true if the schema name was changed, false otherwise.
  */
-bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
+bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l, uint32_t charset) {
+	schemaname_charset = l ? charset : 45;
+	// Compare the effective default name, including when auth switching has
+	// already installed an empty database string in userinfo.
+	if (l == 0) {
+		_new = mysql_thread___default_schema;
+		l = strlen(_new);
+	}
 	int _l=0;
 	if (schemaname) {
 		_l=strlen(schemaname); // bug fix for #609
@@ -517,7 +518,9 @@ MySQL_Connection::MySQL_Connection() {
 
 MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
+#ifdef PROXYSQL40
 	clear_aws_iam_handshake_secret();
+#endif // PROXYSQL40
 	if (options.server_version) free(options.server_version);
 	if (options.init_connect) free(options.init_connect);
 	if (options.ldap_user_variable) free(options.ldap_user_variable);
@@ -585,6 +588,7 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 };
 
+#ifdef PROXYSQL40
 void MySQL_Connection::set_backend_auth_type(MySQLBackendAuthType type) {
 	if (type != MySQLBackendAuthType::AWS_IAM) {
 		clear_aws_iam_handshake_secret();
@@ -650,6 +654,7 @@ void MySQL_Connection::clear_aws_iam_handshake_secret() {
 bool MySQL_Connection::has_aws_iam_handshake_secret() const {
 	return aws_iam_identity_ && !aws_iam_identity_->handshake_token.empty();
 }
+#endif // PROXYSQL40
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting autocommit %d\n", _ac);
@@ -737,6 +742,7 @@ bool MySQL_Connection::get_status_sql_log_bin0() {
 	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
 
+#ifdef PROXYSQL40
 bool MySQL_Connection::backend_auth_compatible(
 	const char *requested_username, MySQLBackendAuthType) const
 {
@@ -746,11 +752,13 @@ bool MySQL_Connection::backend_auth_compatible(
 		userinfo->username != nullptr &&
 		strcmp(userinfo->username, requested_username) == 0;
 }
+#endif // PROXYSQL40
 
 bool MySQL_Connection::requires_CHANGE_USER(
 	const MySQL_Connection *client_conn,
 	MySQLBackendAuthType requested_type) const
 {
+#ifdef PROXYSQL40
 	const char *username = client_conn != nullptr && client_conn->userinfo != nullptr
 		? client_conn->userinfo->username : nullptr;
 	if (!backend_auth_compatible(username, requested_type)) {
@@ -758,6 +766,14 @@ bool MySQL_Connection::requires_CHANGE_USER(
 		// policy. The caller chooses CHANGE_USER or a fresh connection.
 		return true;
 	}
+#else
+	(void)requested_type;
+	if (strcmp(userinfo->username, client_conn->userinfo->username)) {
+		// the two connections use different usernames
+		// The connection need to be reset with CHANGE_USER
+		return true;
+	}
+#endif // PROXYSQL40
 	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		if (client_conn->var_hash[i] == 0) {
 			if (var_hash[i]) {
@@ -1165,6 +1181,7 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 #endif
+#ifdef PROXYSQL40
 	if (backend_auth_type_ == MySQLBackendAuthType::AWS_IAM) {
 		const bool valid_iam_handshake = parent->port != 0 && aws_iam_identity_ &&
 			!aws_iam_identity_->handshake_token.empty();
@@ -1191,6 +1208,7 @@ void MySQL_Connection::connect_start() {
 			aws_iam_identity_->key.endpoint.c_str());
 		aws_iam_connector_secret_active_ = true;
 	}
+#endif // PROXYSQL40
 	if (parent->port) {
 		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
@@ -1201,9 +1219,11 @@ void MySQL_Connection::connect_start() {
 		}
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
+#ifdef PROXYSQL40
 	if (aws_iam_connector_secret_active_) {
 		aws_iam_async_connect_pending_ = async_exit_status != 0;
 	}
+#endif // PROXYSQL40
 	fd=mysql_get_socket(mysql);
 //	{
 //		// FIXME: THIS IS FOR TESTING PURPOSE ONLY
@@ -1222,9 +1242,11 @@ void MySQL_Connection::connect_start() {
 void MySQL_Connection::connect_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, mysql_status(event, true));
+#ifdef PROXYSQL40
 	if (aws_iam_connector_secret_active_) {
 		aws_iam_async_connect_pending_ = async_exit_status != 0;
 	}
+#endif // PROXYSQL40
 }
 
 void MySQL_Connection::change_user_start() {
@@ -1232,8 +1254,10 @@ void MySQL_Connection::change_user_start() {
 	// IAM credentials exist only for the initial TLS handshake. Reaching this
 	// path with an IAM identity would turn an ephemeral token into a reusable
 	// password; all session/reset callers must replace the connection instead.
+#ifdef PROXYSQL40
 	assert(backend_auth_type_ != MySQLBackendAuthType::AWS_IAM);
 	assert(!has_aws_iam_handshake_secret());
+#endif // PROXYSQL40
 	//fprintf(stderr,"change_user_start FD %d\n", fd);
 	MySQL_Connection_userinfo *_ui = NULL;
 	if (myds->sess->client_myds == NULL) {
@@ -1472,8 +1496,10 @@ handler_again:
     break;
 			break;
 		case ASYNC_CONNECT_END:
+#ifdef PROXYSQL40
 			aws_iam_async_connect_pending_ = false;
 			clear_aws_iam_handshake_secret();
+#endif // PROXYSQL40
 			if (myds) {
 				if (myds->sess) {
 					if (myds->sess->thread) {
@@ -1484,7 +1510,7 @@ handler_again:
 			}
 			if (!ret_mysql) {
 				int myerr = mysql_errno(mysql);
-				if (backend_auth_type_ == MySQLBackendAuthType::AWS_IAM) {
+				if (backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
 					proxy_error("Failed to connect IAM backend on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: authentication details redacted.\n",
 						parent->myhgc->hid, parent->address, parent->port,
 						mysql->net.fd, myds->fd, myerr);
@@ -1580,7 +1606,9 @@ handler_again:
 		case ASYNC_CONNECT_TIMEOUT:
 			{
 			const int myerr = mysql != nullptr ? mysql_errno(mysql) : CR_CONNECTION_ERROR;
+#ifdef PROXYSQL40
 			clear_aws_iam_handshake_secret();
+#endif // PROXYSQL40
 			//proxy_error("Connect timeout on %s:%d : %llu - %llu = %llu\n",  parent->address, parent->port, myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
 			proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, myerr);
@@ -2816,6 +2844,10 @@ void MySQL_Connection::async_free_result() {
 	assert(mysql);
 	//assert(ret_mysql);
 	//assert(async_state_machine==ASYNC_QUERY_END);
+	// Compute the transaction status before freeing anything: 'mysql_stmt_free_result()' clears the
+	// connection-level error (MADB_RESET_ERROR), which would turn the unknown transaction status left by
+	// a failed COM_STMT_EXECUTE into a known 'no transaction'.
+	compute_unknown_transaction_status();
 	if (query.ptr) {
 		query.ptr=NULL;
 		query.length=0;
@@ -2851,7 +2883,6 @@ void MySQL_Connection::async_free_result() {
 			mysql_result=NULL;
 		}
 	}
-	compute_unknown_transaction_status();
 	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {
 		if (MyRS_reuse) {
@@ -2888,7 +2919,9 @@ bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
 	if (mysql) {
 		ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
-		if (ret == false && mysql->net.last_errno && unknown_transaction_status == true) {
+		// 'unknown_transaction_status' is latched when a server response is processed; the connection
+		// error itself may already be cleared (e.g. by 'mysql_stmt_free_result()').
+		if (ret == false && unknown_transaction_status == true) {
 			ret = true;
 		}
 		if (ret == false) {
@@ -3179,25 +3212,6 @@ bool mysql_user_variable_set_uses_qpo_epilogue(
 		preflight_result == MySQL_User_Variable_Apply_Result::OK;
 }
 
-bool mysql_user_variable_commit_post_ok(
-	MySQL_User_Variable_State& frontend,
-	MySQL_User_Variable_State& backend,
-	const std::vector<UserVariableAssignment>& assignments) {
-	MySQL_User_Variable_State staged_frontend;
-	MySQL_User_Variable_State staged_backend;
-	const MySQL_User_Variable_Apply_Result frontend_result =
-		frontend.stage(assignments, staged_frontend);
-	const MySQL_User_Variable_Apply_Result backend_result =
-		backend.stage(assignments, staged_backend);
-	if (frontend_result != MySQL_User_Variable_Apply_Result::OK ||
-		backend_result != MySQL_User_Variable_Apply_Result::OK) {
-		return false;
-	}
-	frontend = std::move(staged_frontend);
-	backend = std::move(staged_backend);
-	return true;
-}
-
 unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code) {
 	return backend_error_code == 0 ? ER_UNKNOWN_ERROR : backend_error_code;
 }
@@ -3368,6 +3382,54 @@ const char* mysql_simple_command_log_text(const char* stmt, bool redact_statemen
 	return redact_statement ? "<redacted>" : stmt;
 }
 
+int MySQL_Connection::async_query_scalar(short event, const std::string& stmt, std::string& value) {
+	if (IsServerOffline()) return -1;
+	if (scalar_query_stage == 0) {
+		assert(async_state_machine == ASYNC_IDLE && mysql_result == nullptr && MyRS == nullptr);
+		scalar_query_sql = stmt;
+		scalar_query_stage = 1;
+		async_exit_status = mysql_real_query_start(&interr, mysql, scalar_query_sql.data(), scalar_query_sql.size());
+		__sync_fetch_and_add(&parent->queries_sent, 1);
+		__sync_fetch_and_add(&parent->bytes_sent, scalar_query_sql.size());
+		statuses.questions++;
+		myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_sent] += scalar_query_sql.size();
+		myds->bytes_info.bytes_sent += scalar_query_sql.size();
+		bytes_info.bytes_sent += scalar_query_sql.size();
+	} else if (scalar_query_stage == 1) {
+		async_exit_status = mysql_real_query_cont(&interr, mysql, mysql_status(event, true));
+	} else {
+		async_exit_status = mysql_store_result_cont(&mysql_result, mysql, mysql_status(event, true));
+	}
+	if (async_exit_status) {
+		next_event(scalar_query_stage == 1 ? ASYNC_QUERY_CONT : ASYNC_STORE_RESULT_CONT);
+		return 1;
+	}
+	if (scalar_query_stage == 1 && !interr) {
+		scalar_query_stage = 2;
+		async_exit_status = mysql_store_result_start(&mysql_result, mysql);
+		if (async_exit_status) {
+			next_event(ASYNC_STORE_RESULT_CONT);
+			return 1;
+		}
+	}
+	bool valid = !mysql_errno(mysql) && !interr && mysql_result &&
+		mysql_num_fields(mysql_result) == 1 && mysql_num_rows(mysql_result) == 1;
+	if (valid) {
+		MYSQL_ROW row = mysql_fetch_row(mysql_result);
+		valid = row && row[0];
+		if (valid) value.assign(row[0], mysql_fetch_lengths(mysql_result)[0]);
+	}
+	if (mysql_result) {
+		mysql_free_result(mysql_result);
+		mysql_result = nullptr;
+	}
+	scalar_query_stage = 0;
+	scalar_query_sql.clear();
+	async_state_machine = ASYNC_IDLE;
+	compute_unknown_transaction_status();
+	return valid ? 0 : -1;
+}
+
 // this function is identical to async_query() , with the only exception that MyRS should never be set
 int MySQL_Connection::async_send_simple_command(
 	short event, char *stmt, unsigned long length, bool redact_statement) {
@@ -3458,6 +3520,10 @@ void MySQL_Connection::reset() {
 	}
 	dynamic_variables_idx.clear();
 	user_variables.clear();
+	user_variable_charset_schema = std::string{};
+	user_variable_charset_database_charset = 0;
+	user_variable_charset_schema_charset = 45;
+	user_variable_database_charset_explicit = false;
 
 	if (options.init_connect) {
 		free(options.init_connect);

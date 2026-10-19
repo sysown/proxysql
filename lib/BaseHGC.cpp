@@ -66,7 +66,9 @@ void BaseHGC<HGC>::reset_attributes() {
 		attributes.init_connect = NULL;
 		attributes.comment = NULL;
 		attributes.ignore_session_variables_text = NULL;
+#ifdef PROXYSQL40
 		attributes.aws_iam_region = NULL;
+#endif // PROXYSQL40
 	}
 	attributes.initialized = true;
 	attributes.configured = false;
@@ -88,8 +90,8 @@ void BaseHGC<HGC>::reset_attributes() {
 	attributes.comment = NULL;
 	free(attributes.ignore_session_variables_text);
 	attributes.ignore_session_variables_text = NULL;
-	set_attribute_aws_iam_region(NULL);
 #ifdef PROXYSQL40
+	set_attribute_aws_iam_region(NULL);
 	attributes.aws_locality_policy = {};
 #endif
 	if (attributes.ignore_session_variables_json) {
@@ -98,33 +100,20 @@ void BaseHGC<HGC>::reset_attributes() {
 	}
 }
 
-template<typename HGC>
-std::string BaseHGC<HGC>::attribute_init_connect() const {
-	std::shared_lock<std::shared_mutex> lock(attributes_strings_lock);
-	return attributes.init_connect != NULL ? attributes.init_connect : "";
-}
-
-template<typename HGC>
-std::string BaseHGC<HGC>::attribute_aws_iam_region() const {
-	std::shared_lock<std::shared_mutex> lock(attributes_strings_lock);
-	return attributes.aws_iam_region != NULL ? attributes.aws_iam_region : "";
-}
 
 template<typename HGC>
 void BaseHGC<HGC>::set_attribute_init_connect(const char* value) {
-	char* replacement = value != NULL ? strdup(value) : NULL;
-	std::unique_lock<std::shared_mutex> lock(attributes_strings_lock);
 	free(attributes.init_connect);
-	attributes.init_connect = replacement;
+	attributes.init_connect = value != NULL ? strdup(value) : NULL;
 }
 
+#ifdef PROXYSQL40
 template<typename HGC>
 void BaseHGC<HGC>::set_attribute_aws_iam_region(const char* value) {
-	char* replacement = value != NULL ? strdup(value) : NULL;
-	std::unique_lock<std::shared_mutex> lock(attributes_strings_lock);
 	free(attributes.aws_iam_region);
-	attributes.aws_iam_region = replacement;
+	attributes.aws_iam_region = value != NULL ? strdup(value) : NULL;
 }
+#endif // PROXYSQL40
 
 template<typename HGC>
 BaseHGC<HGC>::~BaseHGC() {
@@ -164,11 +153,11 @@ void BaseHGC<HGC>::log_num_online_server_count_error() {
 	}
 }
 
-template std::string BaseHGC<MyHGC>::attribute_init_connect() const;
-template std::string BaseHGC<MyHGC>::attribute_aws_iam_region() const;
 template void BaseHGC<MyHGC>::set_attribute_init_connect(const char*);
+#ifdef PROXYSQL40
 template void BaseHGC<MyHGC>::set_attribute_aws_iam_region(const char*);
-template std::string BaseHGC<PgSQL_HGC>::attribute_init_connect() const;
-template std::string BaseHGC<PgSQL_HGC>::attribute_aws_iam_region() const;
+#endif // PROXYSQL40
 template void BaseHGC<PgSQL_HGC>::set_attribute_init_connect(const char*);
+#ifdef PROXYSQL40
 template void BaseHGC<PgSQL_HGC>::set_attribute_aws_iam_region(const char*);
+#endif // PROXYSQL40

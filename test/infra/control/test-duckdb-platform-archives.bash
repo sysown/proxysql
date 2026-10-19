@@ -13,12 +13,19 @@ LINKER
 chmod +x "$fixture/linker"
 
 check_archives() {
-    local platform=$1 count=$2 expected=$3 result=0
+    local platform=$1 count=$2 expected=$3 result=0 required=16
+    [[ "$platform" == Darwin ]] && required=15
     rm -rf "$fixture/build"
-    mkdir -p "$fixture/build/release/src"
-    touch "$fixture/build/release/src/libduckdb_static.a"
+    mkdir -p "$fixture/build/release/src" "$fixture/build/release/third_party"
+    printf '!<arch>\n' > "$fixture/build/release/src/libduckdb_static.a"
+    printf '  IMPORTED_LOCATION_RELEASE "%s/build/release/src/libduckdb_static.a"\n' "$fixture" \
+        > "$fixture/build/release/DuckDBExports.cmake"
+    for ((i=1; i<required; i++)); do
+        printf '  IMPORTED_LOCATION_RELEASE "%s/build/release/third_party/library%s.a"\n' "$fixture" "$i" \
+            >> "$fixture/build/release/DuckDBExports.cmake"
+    done
     for ((i=1; i<count; i++)); do
-        touch "$fixture/build/release/library${i}.a"
+        printf '!<arch>\n' > "$fixture/build/release/third_party/library${i}.a"
     done
     make --no-print-directory -s -C "$repo_root/plugins/duckdb" \
         UNAME_S="$platform" PROXYSQL_PATH="$repo_root" \
@@ -37,7 +44,7 @@ check_archives() {
             echo "$platform with $count archives should fail before linking" >&2
             exit 1
         fi
-        if ! grep -q 'ERROR: expected at least' "$fixture/output"; then
+        if ! grep -q 'ERROR: missing or empty DuckDB static archive' "$fixture/output"; then
             cat "$fixture/output" >&2
             echo "$platform with $count archives failed for an unexpected reason" >&2
             exit 1

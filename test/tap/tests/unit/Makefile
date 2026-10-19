@@ -605,7 +605,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	str_ends_with_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
 	gtid_local_cache_unit-t gtid_writer_fallback_route_unit-t mysql_resultset_add_row2_unit-t \
-	protocol_unit-t auth_unit-t aws_iam_policy_unit-t aws_iam_connection_config_unit-t aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
+	protocol_unit-t auth_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
 	stmt_long_data_param_type_unit-t \
 	rule_matching_unit-t query_processor_regex_default_unit-t pcre1_query_rule_limits_unit-t hostgroups_unit-t hgc_attribute_strings_unit-t hgm_mapping_commit_sentinel_unit-t monitor_health_unit-t \
@@ -701,7 +701,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_waiter_list_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
-UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t
+UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
@@ -721,6 +721,12 @@ include $(PROXYSQL_PATH)/test/tap/ai_genai_unit_tests.mk
 # mysqlx plugin source references chassis types, so none of these are
 # compilable under !PROXYSQL40.
 ifeq ($(PROXYSQL40),1)
+# AWS IAM backend authentication is compiled only with PROXYSQL40.
+UNIT_TESTS += aws_iam_policy_unit-t aws_iam_connection_config_unit-t \
+	aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t \
+	aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t \
+	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t \
+	mysql_backend_auth_in_use_unit-t
 # mysqlx + plugin + test_mysqlx unit tests: always built under PROXYSQL40=1.
 UNIT_TESTS += \
 	managed_configuration_contract_unit-t \

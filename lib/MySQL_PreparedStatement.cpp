@@ -756,9 +756,9 @@ MySQL_STMTs_local_v14::~MySQL_STMTs_local_v14() {
 	// if we call this destructor the connection is being destroyed anyway
 
 	if (is_client_) {
-		for (std::map<uint32_t, uint64_t>::iterator it = client_stmt_to_global_ids.begin();
+		for (auto it = client_stmt_to_global_ids.begin();
 			it != client_stmt_to_global_ids.end(); ++it) {
-			uint64_t global_stmt_id = it->second;
+			uint64_t global_stmt_id = it->second.global_id;
 			GloMyStmt->ref_count_client(global_stmt_id, -1);
 		}
 	} else {
@@ -811,7 +811,7 @@ uint32_t MySQL_STMTs_local_v14::generate_new_client_stmt_id(uint64_t global_stat
 		ret=local_max_stmt_id;
 	}
 	assert(ret);
-	client_stmt_to_global_ids.insert(std::make_pair(ret,global_statement_id));
+	client_stmt_to_global_ids.insert(std::make_pair(ret, client_stmt_t{ global_statement_id, {} }));
 	global_stmt_to_client_ids.insert(std::make_pair(global_statement_id,ret));
 	GloMyStmt->ref_count_client(global_statement_id, 1, false); // do not lock!
 	return ret;
@@ -821,7 +821,7 @@ uint64_t MySQL_STMTs_local_v14::find_global_stmt_id_from_client(uint32_t client_
 	uint64_t ret=0;
 	auto s = client_stmt_to_global_ids.find(client_stmt_id);
 	if (s != client_stmt_to_global_ids.end()) {
-		ret = s->second;
+		ret = s->second.global_id;
 	}
 	return ret;
 }
@@ -849,9 +849,8 @@ void MySQL_STMTs_local_v14::erase_client_min_gtid(uint32_t client_stmt_id) {
 bool MySQL_STMTs_local_v14::client_close(uint32_t client_statement_id) {
 	auto s = client_stmt_to_global_ids.find(client_statement_id);
 	if (s != client_stmt_to_global_ids.end()) {  // found
-		uint64_t global_stmt_id = s->second;
+		uint64_t global_stmt_id = s->second.global_id;
 		erase_client_min_gtid(client_statement_id);
-		client_stmt_to_param_types.erase(client_statement_id);
 		client_stmt_to_global_ids.erase(s);
 		GloMyStmt->ref_count_client(global_stmt_id, -1);
 		//auto s2 = global_stmt_to_client_ids.find(global_stmt_id);

@@ -265,10 +265,12 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// caches the credential and completes the client handshake, on
 	// failure sends a generic ERR and tears down the session.
 	int handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT();
+#ifdef PROXYSQL40
 	void fail_aws_iam_backend(const char *failure_code,
 		const AwsIamRedactedFailure *provider_failure = nullptr);
 	void fail_invalid_backend_auth_policy(MySQL_Data_Stream *backend,
 		const char *database_user, const char *failure_code);
+#endif // PROXYSQL40
 	bool handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream *, bool);
 	void handler_again___new_thread_to_kill_connection();
 	void handler_KillConnectionIfNeeded();
@@ -348,6 +350,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
 	bool handler_again___status_SETTING_USER_VARIABLES(int* rc);
+	bool handler_again___status_SETTING_USER_VARIABLE_CONTEXT(int* rc);
 	bool handler_again___multiple_statuses(int *rc);
 
 	//void init();
@@ -459,8 +462,15 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	std::stack<enum session_status> previous_status;
 	std::vector<MySQL_User_Variable_Replay_Batch> user_variable_replay_batches;
 	size_t user_variable_replay_batch_index { 0 };
-	std::optional<UserVariableSetAnalysis> pending_user_variable_set;
 	bool current_query_user_variable_safe { false };
+	// CHANGING_AUTOCOMMIT completes a locally tracked mixed SET after its implicit commit.
+	bool committing_tracked_set { false };
+	struct PendingTrackedSet {
+		MySQL_Session_Set_Plan session_variables;
+		MySQL_User_Variable_State user_variables;
+		size_t assignments;
+	};
+	std::optional<PendingTrackedSet> pending_tracked_set;
 	bool current_query_user_variable_unsafe_fallback { false };
 	bool current_query_user_variable_context_change { false };
 	bool user_variable_tracking_latched { false };
@@ -468,6 +478,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
+	// process_all_sessions() pass in which handler() last ran from the first
+	// (sessions holding a backend) loop; the no-backend loop skips it.
+	unsigned long long handled_in_pass { 0 };
 	bool last_pool_ff{ false };
 	bool last_pool_gtid{ false };
 	int last_pool_max_lag_ms{ -1 };
@@ -658,6 +671,8 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool passthrough_connect_failed;
 	const char *passthrough_connect_fail_reason;
 
+#ifdef PROXYSQL40
+	// AWS IAM backend authentication state (v4.0 only).
 	// Owner-thread state for a fresh backend connection parked while an IAM
 	// token is acquired. Provider threads never receive any of these pointers.
 	AwsIamTokenSourceLease aws_iam_token_source_lease {};
@@ -684,6 +699,11 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	AwsIamTokenKey aws_iam_connect_token_key {};
 	uint64_t aws_iam_connect_token_generation { 0 };
 	bool aws_iam_fresh_token_retry_attempted { false };
+	// True once this session entered the AWS IAM backend-connect path, until
+	// cancel_aws_iam_wait() clears the IAM state again. Lets the reset and
+	// destroy paths of non-IAM sessions skip that cleanup entirely.
+	bool aws_iam_state_used { false };
+#endif // PROXYSQL40
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
 	bool backend_closed_in_fast_forward;
@@ -727,9 +747,11 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 *   or deferring them (see client_pkts_must_be_deferred()).
 	 */
 	bool client_may_pipeline() const;
+#ifdef PROXYSQL40
 	int handler_again___status_WAITING_AWS_IAM_TOKEN();
 	void accept_aws_iam_completion(uint64_t opaque_id, AwsIamTokenResult&& result);
 	void cancel_aws_iam_wait();
+#endif // PROXYSQL40
 
 	void (*handler_function) (MySQL_Session* sess, void *, PtrSize_t *pkt);
 	//MySQL_Backend * find_backend(int);

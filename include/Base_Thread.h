@@ -2,6 +2,7 @@
 #define CLASS_BASE_THREAD_H
 
 #include "proxysql.h"
+#include "Hostgroup_Strings.h"
 
 typedef struct _thr_id_username_t {
 	uint32_t id;
@@ -130,6 +131,35 @@ public:
 	std::atomic<unsigned int> worker_load {0};
 #endif // PROXYSQL31 && IDLE_THREADS
 	Session_Regex **match_regexes;
+
+	/**
+	 * @brief This thread's copy of the hostgroup attribute strings
+	 *   (init_connect, aws_iam_region) that sessions need when they open
+	 *   backend connections. See refresh_hostgroup_strings().
+	 */
+	HostgroupStringsMap hostgroup_strings;
+	/** @brief servers_table_version that 'hostgroup_strings' was copied at. */
+	unsigned int hostgroup_strings_version { 0 };
+	/**
+	 * @brief Re-copy 'hostgroup_strings' if the servers table changed.
+	 * @details Called once per event loop iteration. The check is a plain
+	 *   atomic load; the copy (under the Hostgroup Manager lock) happens only
+	 *   after a LOAD ... SERVERS TO RUNTIME.
+	 */
+	template<typename HGM>
+	void refresh_hostgroup_strings(HGM* hgm) {
+		if (hgm == nullptr || hgm->servers_table_version_relaxed() == hostgroup_strings_version) {
+			return;
+		}
+		HostgroupStringsMap fresh;
+		hostgroup_strings_version = hgm->copy_hostgroup_strings(fresh);
+		hostgroup_strings.swap(fresh);
+	}
+	/** @brief This thread's copy of hostgroup 'hid' attribute strings, nullptr if none is set. */
+	const HostgroupStrings* hostgroup_strings_for(unsigned int hid) const {
+		const auto it = hostgroup_strings.find(hid);
+		return it != hostgroup_strings.end() ? &it->second : nullptr;
+	}
 	Base_Thread();
 	~Base_Thread();
 	template<typename T, typename S>

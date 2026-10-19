@@ -55,6 +55,14 @@ run_check "Check system OpenSSL audit regressions" \
 	test/infra/control/test-no-system-openssl-links-regressions.bash
 run_check "Check RE2 platform and unit linker flags" \
 	test/infra/control/test-re2-platform-link.bash
+run_check "Check ClickHouse feature propagation and platform linker flags" \
+	python3 test/infra/control/test_clickhouse_build.py
+run_check "Check configured DuckDB static archives" \
+	python3 test/infra/control/test_duckdb_archives.py
+run_check "Check Router vendored OpenSSL headers" \
+	python3 test/infra/control/test_router_openssl_build.py
+run_check "Check MariaDB TLS option patch portability" \
+	python3 test/infra/control/test_mariadb_tls_patch.py
 run_check "Check DuckDB platform archive completeness" \
 	test/infra/control/test-duckdb-platform-archives.bash
 run_check "Check libusual incremental patch dependency" \

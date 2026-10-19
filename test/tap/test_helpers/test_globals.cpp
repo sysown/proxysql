@@ -94,7 +94,9 @@ MySQL_Query_Processor *GloMyQPro = nullptr;
 PgSQL_Query_Processor *GloPgQPro = nullptr;
 ProxySQL_Admin *GloAdmin = nullptr;
 MySQL_Threads_Handler *GloMTH = nullptr;
+#ifdef PROXYSQL40
 AwsIamTokenSource *GloAwsIamTokenSource = nullptr;
+#endif // PROXYSQL40
 PgSQL_Threads_Handler *GloPTH = nullptr;
 
 // MCP_Threads_Handler *GloMCPH stub removed in Step 4.C; GloGATH and

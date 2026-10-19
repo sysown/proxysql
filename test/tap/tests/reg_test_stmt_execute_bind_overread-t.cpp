@@ -9,6 +9,10 @@
  *   For each parameter kind, the test sends a COM_STMT_EXECUTE whose last parameter claims more
  *   bytes than the packet holds, and checks that ProxySQL rejects it with an ERR packet (instead
  *   of executing the statement), and that the connection remains usable.
+ *
+ *   GHSA-p5xc-69qx-m4q5: with new_params_bound_flag set, the 2-byte type of every parameter
+ *   was read from the packet without checking its size. A last case sends the types of only one
+ *   of two parameters, both NULL so that no value is read, and expects the same ERR.
  */
 
 #include <cstdlib>
@@ -159,7 +163,7 @@ int main(int argc, char** argv) {
 		{ "unsupported parameter type NEWDATE", MYSQL_TYPE_NEWDATE, { 0x00 } },
 	};
 
-	plan(2 + cases.size() * 2);
+	plan(2 + cases.size() * 2 + 2);
 
 	MYSQL* mysql = mysql_init(nullptr);
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, nullptr, cl.port, nullptr, 0)) {
@@ -197,6 +201,41 @@ int main(int argc, char** argv) {
 		}
 		ok(query_returns_one(mysql), "%s: connection still usable", c.name);
 		mysql_stmt_close(stmt);
+	}
+
+	{
+		const char* name = "type block missing a parameter type";
+		MYSQL_STMT* stmt = mysql_stmt_init(mysql);
+		const char q[] = "SELECT ?, ?";
+		std::vector<uint8_t> reply;
+		if (stmt != nullptr && mysql_stmt_prepare(stmt, q, sizeof(q) - 1) == 0) {
+			const uint32_t id = static_cast<uint32_t>(stmt->stmt_id);
+			const std::vector<uint8_t> payload {
+				0x17,                   // COM_STMT_EXECUTE
+				uint8_t(id), uint8_t(id >> 8), uint8_t(id >> 16), uint8_t(id >> 24),
+				0x00,                   // flags: CURSOR_TYPE_NO_CURSOR
+				0x01, 0x00, 0x00, 0x00, // iteration count
+				0x03,                   // NULL bitmap: both parameters are NULL
+				0x01,                   // new_params_bound_flag
+				uint8_t(MYSQL_TYPE_LONG), 0x00, // type of parameter 0 only
+			};
+			std::vector<uint8_t> pkt { uint8_t(payload.size()), 0x00, 0x00, 0x00 };
+			pkt.insert(pkt.end(), payload.begin(), payload.end());
+			if (send_all(mysql->net.fd, pkt)) reply = read_packet(mysql->net.fd);
+		} else {
+			diag("Prepare failed: %s", stmt ? mysql_stmt_error(stmt) : "stmt_init");
+		}
+		const bool is_err = !reply.empty() && reply[0] == 0xff;
+		ok(is_err, "%s: rejected with ERR", name);
+		if (!is_err) {
+			mysql_close(mysql);
+			mysql = mysql_init(nullptr);
+			mysql_real_connect(mysql, cl.host, cl.username, cl.password, nullptr, cl.port, nullptr, 0);
+			ok(false, "%s: connection still usable", name);
+		} else {
+			ok(query_returns_one(mysql), "%s: connection still usable", name);
+		}
+		if (stmt) mysql_stmt_close(stmt);
 	}
 
 	ok(prepared_echo_works(mysql), "Well-formed prepared statements still work at the end");

@@ -44,6 +44,8 @@ static inline unsigned long long mysql_framed_len(unsigned long long length) {
 	return length + (length / 0xFFFFFF + 1) * sizeof(mysql_hdr);
 }
 
+static constexpr unsigned long long PS_RESULTSET_HEARTBEAT_BYTES = 32ULL * 1024 * 1024;
+
 
 MySQL_ResultSet::MySQL_ResultSet() {
 	buffer = NULL;
@@ -196,8 +198,8 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 					total_size+=mysql_framed_len(r->length);
 				}
 				PSarrayOUT.add(pkt.ptr,pkt.size);
-				if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
-					// generate a heartbeat every 256MB
+				if (resultset_size/PS_RESULTSET_HEARTBEAT_BYTES != ((resultset_size+pkt.size)/PS_RESULTSET_HEARTBEAT_BYTES)) {
+					// generate a heartbeat every 32 MiB
 					unsigned long long curtime=monotonic_time();
 					c_myds->sess->thread->atomic_curtime=curtime;
 				}
@@ -216,8 +218,8 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 						pkt.ptr=malloc(pkt.size);
 						add_row2(r,(unsigned char *)pkt.ptr);
 						PSarrayOUT.add(pkt.ptr,pkt.size);
-						if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
-							// generate a heartbeat every 256MB
+						if (resultset_size/PS_RESULTSET_HEARTBEAT_BYTES != ((resultset_size+pkt.size)/PS_RESULTSET_HEARTBEAT_BYTES)) {
+							// generate a heartbeat every 32 MiB
 							unsigned long long curtime=monotonic_time();
 							c_myds->sess->thread->atomic_curtime=curtime;
 						}
@@ -246,8 +248,8 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 								r = r->next;
 							}
 							PSarrayOUT.add(pkt.ptr,pkt.size);
-							if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
-								// generate a heartbeat every 256MB
+							if (resultset_size/PS_RESULTSET_HEARTBEAT_BYTES != ((resultset_size+pkt.size)/PS_RESULTSET_HEARTBEAT_BYTES)) {
+								// generate a heartbeat every 32 MiB
 								unsigned long long curtime=monotonic_time();
 								c_myds->sess->thread->atomic_curtime=curtime;
 							}
@@ -313,7 +315,7 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROWS *rows) {
 	sid=myprot->generate_pkt_row3(this, &pkt_length, sid, 0, NULL, row, row_length);
 	const unsigned long long next_resultset_size = resultset_size + pkt_length;
 	if (
-		resultset_size / 0xFFFFFFF != next_resultset_size / 0xFFFFFFF
+		resultset_size / PS_RESULTSET_HEARTBEAT_BYTES != next_resultset_size / PS_RESULTSET_HEARTBEAT_BYTES
 		&& myds && myds->sess && myds->sess->thread
 	) {
 		myds->sess->thread->atomic_curtime = monotonic_time();

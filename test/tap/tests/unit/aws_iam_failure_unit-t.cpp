@@ -607,6 +607,10 @@ int main() {
 	{
 		MySQL_Thread worker;
 		if (!worker.init()) BAIL_OUT("MySQL_Thread::init() failed");
+		// Sessions read aws_iam_region from the worker's copy of the hostgroup
+		// strings, refreshed when the servers table version changes.
+		MyHGM->status.servers_table_version++;
+		worker.refresh_hostgroup_strings(MyHGM);
 		free(mysql_thread___ssl_p2s_ca);
 		mysql_thread___ssl_p2s_ca = strdup("/unit/fake-ca.pem");
 		worker.curtime = 10000000;

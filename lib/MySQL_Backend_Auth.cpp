@@ -259,6 +259,14 @@ MySQLBackendAuthPolicy resolve_mysql_backend_auth_policy(
 	if (mapped_backend_username == nullptr) {
 		return invalid_backend_auth_policy(database_user, "backend_user_not_found");
 	}
+	if (!authentication.has_non_password_backend_auth()) {
+		// No backend row has a non-PASSWORD policy: the lookup below can only
+		// return PASSWORD, so skip it (and its read lock).
+		MySQLBackendAuthPolicy policy;
+		policy.database_user = database_user;
+		policy.type = MySQLBackendAuthType::PASSWORD;
+		return policy;
+	}
 
 	account_details_t account = authentication.lookup(
 		const_cast<char*>(mapped_backend_username), USERNAME_BACKEND, { false, false, true });
