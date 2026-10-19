@@ -290,8 +290,8 @@ static void test_parse2() {
 /** SET statements without a TRANSACTION clause must also get the legacy digest. */
 static void test_other_set_unchanged(const Dialect& d, const char* sql, const char* expected) {
 	const Digest parser = parser_digest(d, sql);
-	const Digest legacy = legacy_digest(d, sql);
 #ifdef PROXYSQL31
+	const Digest legacy = legacy_digest(d, sql);
 	ok(parser.found && legacy.found && parser.text == legacy.text && parser.text == expected,
 		"%s parser digest equals legacy and the documented digest for [%s] (got: '%s', legacy: '%s', documented: '%s')",
 		d.name, sql, parser.text.c_str(), legacy.text.c_str(), expected);

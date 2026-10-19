@@ -50,7 +50,8 @@ struct UserVariableQueryDecision {
 /**
  * @brief Initialize digest metadata for the selected ParserSQL integration.
  *
- * v3.0 uses ParserSQL's AST emitter/token digest and SpookyHash. Its
+ * v3.0 uses ParserSQL's AST emitter for eligible complete statements and the
+ * legacy tokenizer for fallback cases; both use SpookyHash. Its
  * experimental parser mode does not extract first-comment annotations.
  * Newer tiers retain legacy-tokenizer digests pending the design in #6508.
  * The caller owns allocated digest text unless it points at qp->buf.

@@ -7382,6 +7382,8 @@ handler_again:
 							client_myds->myconn->user_variables,
 							myconn->user_variables,
 							assignments)) {
+							// Temporary v3.0 path (#6507): retries clear this flag.
+							current_query_user_variable_safe = true;
 							user_variable_tracking_latched = true;
 							thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
 								assignments.size();

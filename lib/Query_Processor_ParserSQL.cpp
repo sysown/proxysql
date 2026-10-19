@@ -530,8 +530,8 @@ static bool parsersql_digest_hides_expression(const AstNode* node) {
     return false;
 }
 
-// v3.0 retains the experimental ParserSQL digest flow. Incomplete ASTs use
-// ParserSQL's token digest, so a parsed prefix does not discard trailing SQL.
+// Temporary v3.0 compatibility path pending #6508. Incomplete ASTs use the
+// legacy digest, so a parsed prefix does not discard trailing SQL.
 // First-comment annotations remain unavailable in this mode (#6507).
 template <Dialect D>
 static void parsersql_native_digest(SQP_par_t* qp, const char* query,
@@ -546,6 +546,7 @@ static void parsersql_native_digest(SQP_par_t* qp, const char* query,
         // Retain the bounded legacy fallback for unsupported/incomplete input,
         // arena exhaustion and expressions hidden by DIGEST emission (#6428).
         // This is conditional; ordinary parsed queries never run this tokenizer.
+        qp->parsersql_command_type = -1;
         parsersql_tokenizer_digest<D>(qp, query, query_length);
         free(qp->first_comment);
         qp->first_comment = nullptr;

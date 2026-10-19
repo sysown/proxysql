@@ -217,7 +217,8 @@ static void test_kept(const Dialect& d, const KeptCase& c) {
 		emitter.emit(result.ast);
 		auto text = emitter.result(); expected.assign(text.ptr, text.len);
 	}
-	ok(parser.found && parser.text == expected,
+	ok(parser.found && parser.text == expected &&
+		parser.hash == SpookyHash::Hash64(expected.data(), expected.size(), 0),
 		"%s v3.0 keeps ParserSQL digest emission for [%s] (got: %s)", d.name, c.sql, parser.text.c_str());
 #endif
 }

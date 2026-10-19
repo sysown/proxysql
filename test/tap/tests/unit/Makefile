@@ -836,7 +836,9 @@ ifneq ($(UNAME_S),Darwin)
 endif
 
 ifeq ($(UNAME_S),Linux)
+ifneq ($(PROXYSQL31),1)
 parsersql_v30_flow_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_query_digest_and_first_comment -Wl,--wrap=pgsql_query_digest_and_first_comment -Wl,--wrap=_Z28parsersql_command_type_mysqlPKci -Wl,--wrap=_Z28parsersql_command_type_pgsqlPKci
+endif
 gtid_local_cache_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN24MySQL_HostGroups_Manager11gtid_existsEP6MySrvCPcm
 endif
 

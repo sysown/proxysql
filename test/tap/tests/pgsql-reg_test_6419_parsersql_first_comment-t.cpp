@@ -136,7 +136,9 @@ static PGConn connect_proxy(const CommandLine& cl) {
 static bool run_checks(const CommandLine& cl, MYSQL* admin, int target, int parser, int parsing) {
 	PGConn client = connect_proxy(cl);
 	if (!client) return false;
-	const bool v30 = scalar(admin, "SELECT @@version").rfind("3.0.", 0) == 0;
+	const std::string version = scalar(admin, "SELECT @@version");
+	if (version.empty()) return false;
+	const bool v30 = version.rfind("3.0.", 0) == 0;
 	const bool expect_annotation = !v30 || parser == 0;
 	const std::string annotation = "/* hostgroup=" + std::to_string(target) + " */ ";
 	const char* param[] = { "6419" };

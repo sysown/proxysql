@@ -134,7 +134,9 @@ static bool run_checks(const CommandLine& cl, MYSQL* admin, int target, int pars
 		diag("Client connection failed");
 		return false;
 	}
-	const bool v30 = scalar(admin, "SELECT @@version").rfind("3.0.", 0) == 0;
+	const std::string version = scalar(admin, "SELECT @@version");
+	if (version.empty()) return false;
+	const bool v30 = version.rfind("3.0.", 0) == 0;
 	const bool expect_annotation = !v30 || parser == 0;
 	const std::string annotation = "/* hostgroup=" + std::to_string(target) + " */ ";
 	// Prepared statement metadata, including the first comment, is cached per query text;

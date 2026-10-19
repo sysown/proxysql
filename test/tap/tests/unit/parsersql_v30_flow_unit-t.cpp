@@ -89,6 +89,25 @@ int main() {
 	const std::string long_query = "SELECT " + std::string(512, 'a');
 	check<sql_parser::Dialect::MySQL>(long_query.c_str());
 	check<sql_parser::Dialect::PostgreSQL>(long_query.c_str());
+	// Rejected or incomplete input must take the ordinary classification path.
+	for (const char* sql : {"WITH c AS (SELECT 1) SELECT FROM", "SELECT 1; UPDATE t SET a=1"}) {
+		for (const auto initialize : {parsersql_digest_init_mysql, parsersql_digest_init_pgsql}) {
+			SQP_par_t qp {};
+			legacy_calls = command_parse_calls = 0;
+			initialize(&qp, sql, strlen(sql));
+			ok(legacy_calls == 1 && qp.digest_text,
+				"rejected/incomplete SQL retains the whole-input fallback digest: %s", sql);
+			if (initialize == parsersql_digest_init_mysql) {
+				MySQL_Query_Processor::query_parser_command_type(&qp);
+			} else {
+				PgSQL_Query_Processor::query_parser_command_type(&qp);
+			}
+			ok(command_parse_calls == 1,
+				"rejected/incomplete SQL does not reuse a parsed-prefix classification: %s", sql);
+			if (qp.digest_text != qp.buf) free(qp.digest_text);
+			free(qp.first_comment);
+		}
+	}
 	// The AST can fit while digest emission exhausts its arena.
 	const std::string large_identifier = "SELECT " + std::string(600000, 'a');
 	for (const auto initialize : {parsersql_digest_init_mysql, parsersql_digest_init_pgsql}) {

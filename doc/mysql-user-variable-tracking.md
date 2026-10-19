@@ -15,6 +15,8 @@ The newer tracking extension is gated to `PROXYSQL31` builds and documented
 [separately](internal/mysql-user-variable-tracking-v31.md). The restoration is
 tracked in [#6507](https://github.com/sysown/proxysql/issues/6507); the v3.1
 analysis and performance design is tracked in [#6508](https://github.com/sysown/proxysql/issues/6508).
+This restoration is a temporary compatibility measure for v3.0; it does not
+define the parser architecture for v3.1.
 
 
 `mysql-user_variable_tracking` is an opt-in, conservative way to keep a
