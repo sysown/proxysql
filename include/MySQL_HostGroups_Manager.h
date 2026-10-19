@@ -658,7 +658,6 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
 #ifdef PROXYSQL40
 	// Exact managed-discovery claims used to invalidate the derived role map.
-	std::vector<ProxySQL_ServerHostgroupClaim> hgsm_server_hostgroup_claims_ {};
 #endif
 
 

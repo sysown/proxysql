@@ -99,10 +99,19 @@ const SQLite3_row* find_row(const SQLite3_result& rows, uint32_t hg,
 	return nullptr;
 }
 
+ProxySQL_ServerHostgroupClaim role_claim(ProxySQL_ServerProtocol protocol,
+    uint32_t writer, uint32_t reader) {
+    ProxySQL_ServerHostgroupClaim claim {writer, reader};
+    claim.role_monitor.kind = protocol == ProxySQL_ServerProtocol::mysql
+        ? ProxySQL_ServerRoleMonitor::mysql_replication
+        : ProxySQL_ServerRoleMonitor::pgsql_replication;
+    return claim;
+}
+
 
 } // namespace
 int main() {
-    plan(37);
+    plan(38);
     test_init_minimal();
     test_init_query_processor();
     test_init_hostgroups();
@@ -139,23 +148,27 @@ int main() {
         const bool shunned = mysql ? MyHGM->shun_and_killall(const_cast<char*>("managed.example"),port) :
             PgHGM->shun_and_killall(const_cast<char*>("managed.example"),port);
         ok(shunned, "real HGM has monitor-owned SHUNNED state before policy installation");
-        const uint64_t monitor_epoch = proxysql_server_read_only_monitor_epoch(protocol);
         uint64_t generation=0;
         proxysql_lock_configuration();
-        bool installed = proxysql_install_managed_discovery_locked(protocol, 1, {{701,702}}, generation,error);
+        bool installed = proxysql_install_managed_discovery_locked(
+            protocol, 1, {role_claim(protocol,701,702)}, generation,error);
         proxysql_unlock_configuration();
         ok(installed && generation == configured_generation+1 && observed.snapshot.generation == generation,
-            "new policy installs without LOAD or SQL policy tables: %s",error.c_str());
+            "typed policy installs its native topology row and publishes one generation: %s",error.c_str());
         const auto claims = proxysql_active_server_hostgroup_claims(protocol);
-        ok(claims.size()==1 && claims[0].writer_hostgroup==701 && claims[0].reader_hostgroup==702,
-            "explicit managed claim pair is active");
+        ok(claims.size()==1 && claims[0].writer_hostgroup==701 &&
+            claims[0].reader_hostgroup==702 &&
+            claims[0].role_monitor.kind==(mysql
+                ? ProxySQL_ServerRoleMonitor::mysql_replication
+                : ProxySQL_ServerRoleMonitor::pgsql_replication),
+            "explicit typed managed claim pair is active");
         std::unique_ptr<SQLite3_result> readonly(mysql ? MyHGM->get_read_only_servers() : PgHGM->get_read_only_servers());
         bool monitors_seed = false;
         if (readonly) for (const auto* row : readonly->rows) {
             if (row && row->fields[mysql?0:1] && std::string(row->fields[mysql?0:1])=="managed.example") monitors_seed=true;
         }
-        ok(monitors_seed && proxysql_server_read_only_monitor_epoch(protocol)==monitor_epoch+1,
-            "new claims immediately enumerate for the existing read-only monitor without LOAD");
+        ok(monitors_seed,
+            "typed claims materialize a native topology row for monitor enumeration");
         ok(observed.snapshot.servers.size()==2 && observed.snapshot.servers[0].status=="ONLINE",
             "monitor SHUNNED state is not materialized into authoritative configuration snapshot");
         std::unique_ptr<SQLite3_result> health(mysql ? MyHGM->dump_table_mysql("mysql_servers") : PgHGM->dump_table_pgsql("pgsql_servers"));
@@ -166,7 +179,8 @@ int main() {
         ok(manager->post_server_desired_set(old), "old generation work queues before revision change");
         uint64_t next=0;
         proxysql_lock_configuration();
-        installed=proxysql_install_managed_discovery_locked(protocol,2,{{703,704}},next,error);
+        installed=proxysql_install_managed_discovery_locked(
+            protocol,2,{role_claim(protocol,703,704)},next,error);
         proxysql_unlock_configuration();
         ok(installed && next==generation+1 && !manager->revalidate_server_desired_set(protocol,controller,old),
             "new revision fences old generation before its delayed apply");
@@ -179,8 +193,10 @@ int main() {
         health.reset(mysql ? MyHGM->dump_table_mysql("mysql_servers") : PgHGM->dump_table_pgsql("pgsql_servers"));
         ok(find_row(*health,799,"unrelated.example",port) != nullptr, "runtime-only discovery preserves unrelated hostgroup");
         proxysql_lock_configuration();
-        bool stale=proxysql_install_managed_discovery_locked(protocol,1,{{705,706}},generation,error);
-        bool overlap=proxysql_install_managed_discovery_locked(protocol,3,{{705,706},{706,707}},generation,error);
+        bool stale=proxysql_install_managed_discovery_locked(
+            protocol,1,{role_claim(protocol,705,706)},generation,error);
+        bool overlap=proxysql_install_managed_discovery_locked(protocol,3,
+            {role_claim(protocol,705,706),role_claim(protocol,706,707)},generation,error);
         proxysql_unlock_configuration();
         ok(!stale && !overlap && proxysql_pending_server_runtime_generation(protocol)==next+1,
             "stale revisions and overlapping claims reject without consuming a generation");
@@ -201,7 +217,15 @@ int main() {
         proxysql_unlock_configuration();
         ok(removed && proxysql_active_server_hostgroup_claims(protocol).empty(),
             "empty managed policy removes claims without a server LOAD");
-        ok(manager->uninstall_server_discovery_controller(protocol), "controller shuts down cleanly");
+        proxysql_lock_configuration();
+        installed=proxysql_install_managed_discovery_locked(
+            protocol,4,{role_claim(protocol,703,704)},next,error);
+        proxysql_unlock_configuration();
+        ok(installed && proxysql_active_server_hostgroup_claims(protocol).size()==1,
+            "controller owns a live claim before lifecycle retirement");
+        ok(manager->uninstall_server_discovery_controller(protocol) &&
+            proxysql_active_server_hostgroup_claims(protocol).empty(),
+            "controller retirement releases its claims and native topology rows");
     }
     return exit_status();
 }

@@ -65,8 +65,9 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
   the remaining layout must be in `[1, PROXYSQL_PLUGIN_ABI_VERSION_MAX]`.
   ABI 11 and 12 are reserved and rejected with the same error.
   Else: load fails with "unsupported plugin ABI version".
-- The plugin named `aws` must use layout 14 or newer. Older AWS binaries used
-  conflicting service offsets and must be rebuilt before loading.
+- The plugin named `aws` must use layout 16 or newer. Older AWS binaries used
+  incompatible discovery payloads or conflicting service offsets and must be
+  rebuilt before loading.
 - The descriptor's DEBUG tag must exactly match the running core. A release
   plugin cannot load into a DEBUG core, or vice versa.
 - `descriptor->register_schemas`, if read at all, is read only when the
@@ -76,8 +77,8 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 
 ```cpp
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 15u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 15u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 16u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 16u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION =
@@ -90,8 +91,8 @@ constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX =
     PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
 ```
 
-`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `15` in a release build and
-`0x4000000F` in a DEBUG build. Plugins must use that constant rather than a
+`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `16` in a release build and
+`0x40000010` in a DEBUG build. Plugins must use that constant rather than a
 literal so the loader can validate both the layout and build mode.
 
 ABI evolution so far:
@@ -143,6 +144,16 @@ ABI evolution so far:
   and caller-held configuration lock, database and runtime-adapter callbacks.
   Descriptor accessor reads require layout 15 or newer. The separate managed
   service descriptor remains version 1.
+- **ABI 15 → ABI 16:** changes the provider-neutral server-discovery payload.
+  A hostgroup claim now selects a native role monitor and supplies that
+  monitor's typed parameters. `ProxySQL_ServerRow` no longer carries
+  `topology_role_epoch` or `force_topology_role`; desired sets publish server
+  inventory, while the selected native monitor owns writer/reader placement.
+  Because these are payload-layout changes rather than tail additions, core
+  rejects ABI-14 and ABI-15 plugins at load time. Their services table already
+  exposes the by-value desired-set callback, so allowing them to load would
+  permit old-layout rows to cross the ABI boundary. ABI-13 and older plugins
+  do not expose that callback and retain their compatible prefix.
 
 Future ABI versions append fields. The chassis bumps the layout/version
 constants and gates each new field's read on the masked layout version being
@@ -359,7 +370,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // 15 release, 0x4000000F DEBUG
+    PROXYSQL_PLUGIN_ABI_VERSION,          // 16 release, 0x40000010 DEBUG
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop

@@ -81,6 +81,11 @@ namespace prometheus { class Registry; }
 //
 //   ABI 15: appends the managed configuration service descriptor accessor
 //          and configuration-lock/runtime adapter service callbacks.
+//   ABI 16: changes server-discovery claims to select a native role monitor
+//          and removes plugin role-forcing metadata from desired server rows.
+//          Because ABI 14 already exposed the desired-set callback by value,
+//          ABI 14 and 15 binaries cannot be converted safely and are rejected
+//          by an ABI-16 core. ABI 13 and older prefixes remain loadable.
 //
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //
@@ -99,8 +104,8 @@ namespace prometheus { class Registry; }
 // A plugin built without -DDEBUG, loaded into a core built with
 // -DDEBUG (or vice versa), silently disagrees with the core about these
 // offsets while still reporting a numerically "compatible" abi_version
-// under the plain ABI 1..15 scheme above (e.g. a release plugin's
-// abi_version=14 is <= a debug core's max=15, so the ordinary
+// under the plain ABI 1..16 scheme above (e.g. a release plugin's
+// abi_version=14 is <= a debug core's max=16, so the ordinary
 // forward-compatibility range check does not catch it).
 //
 // What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
@@ -142,23 +147,23 @@ namespace prometheus { class Registry; }
 //
 // PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
 // (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
-// in a numeric space (bit 30) the plain layout-version numbers (1..15,
+// in a numeric space (bit 30) the plain layout-version numbers (1..16,
 // and unlikely to reach 2^30 for a long time) never touch, so a
 // DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
 // "compatible" via ordinary integer range comparison -- the loader
 // checks this bit for an EXACT match, as a step separate from (and in
-// addition to) the ABI 1..15 forward-compatibility range check below.
+// addition to) the ABI 1..16 forward-compatibility range check below.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
 
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 15u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 15u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 16u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 16u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 #else
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
 #endif
-// Layout-only ceiling used for the ABI 1..15 range check. Callers must mask
+// Layout-only ceiling used for the ABI 1..16 range check. Callers must mask
 // off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
 // against this constant -- see lib/ProxySQL_PluginManager.cpp.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
