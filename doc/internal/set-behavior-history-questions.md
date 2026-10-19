@@ -3,15 +3,9 @@
 Status: partially answered; maintainer decisions recorded 2026-10-18. Prepared on
 `docs/invariants-expansion`, in [PR #6491](https://github.com/sysown/proxysql/pull/6491).
 
-This is the SET/session-variable portion of the
-[repository-wide twelve-month behavior review](behavior-history-review.md).
-The original request covered all areas; narrowing the first questionnaire to
-session tracking was not an agreed scope restriction. Its existing IDs and
-maintainer answers are preserved. No unanswered question is treated as approval.
-
-The observations below remain pinned to their original endpoint. The broader
-review also screens later mainline changes through `9516441f7`, including
-PR #6503, without silently rewriting this dated implementation history.
+Scope assumed from the current discussion: MySQL SET/session-variable behavior,
+with a separate PostgreSQL section. This is not a whole-product behavior audit.
+The scope clarification is pending; no unanswered question is treated as approval.
 
 The window is 2025-10-18 through 2026-10-18. The comparison is from
 `70228332135431229940279e49b6db186c6e4241` (last first-parent integration before
