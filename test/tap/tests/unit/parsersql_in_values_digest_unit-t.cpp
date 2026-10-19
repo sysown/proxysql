@@ -23,6 +23,8 @@
 #include "query_processor.h"
 #include "Query_Processor_ParserSQL.h"
 #include "c_tokenizer.h"
+#include "sql_parser/parser.h"
+#include "sql_parser/emitter.h"
 
 #include <cstring>
 #include <string>
@@ -191,14 +193,34 @@ static void test_hidden_mysql(const Dialect& d, const HiddenCase& c) {
 // exactly what the tokenizer produces. 'expected' pins that tokenizer output, so a
 // change in both paths at once is still caught.
 static void test_kept(const Dialect& d, const KeptCase& c) {
+#ifdef PROXYSQL31
+
 	const Digest parser = parser_digest(d, c.sql);
 	const Digest legacy = legacy_digest(d, c.sql);
 	ok(parser.found && legacy.found && parser.text == legacy.text && parser.hash == legacy.hash &&
 		parser.text == c.expected,
 		"%s parser digest and hash equal legacy for [%s] (got: '%s', legacy: '%s', expected: '%s')",
 		d.name, c.sql, parser.text.c_str(), legacy.text.c_str(), c.expected);
+#else
+	const Digest parser = parser_digest(d, c.sql);
+	std::string expected;
+	if (d.pgsql) {
+		sql_parser::Parser<sql_parser::Dialect::PostgreSQL> native;
+		auto result = native.parse(c.sql, strlen(c.sql));
+		sql_parser::Emitter<sql_parser::Dialect::PostgreSQL> emitter(native.arena(), sql_parser::EmitMode::DIGEST);
+		emitter.emit(result.ast);
+		auto text = emitter.result(); expected.assign(text.ptr, text.len);
+	} else {
+		sql_parser::Parser<sql_parser::Dialect::MySQL> native;
+		auto result = native.parse(c.sql, strlen(c.sql));
+		sql_parser::Emitter<sql_parser::Dialect::MySQL> emitter(native.arena(), sql_parser::EmitMode::DIGEST);
+		emitter.emit(result.ast);
+		auto text = emitter.result(); expected.assign(text.ptr, text.len);
+	}
+	ok(parser.found && parser.text == expected,
+		"%s v3.0 keeps ParserSQL digest emission for [%s] (got: %s)", d.name, c.sql, parser.text.c_str());
+#endif
 }
-
 int main() {
 	const size_t n_mysql_hidden = sizeof(mysql_hidden_cases) / sizeof(mysql_hidden_cases[0]);
 	const size_t n_mysql_kept = sizeof(mysql_kept_cases) / sizeof(mysql_kept_cases[0]);
@@ -222,9 +244,14 @@ int main() {
 	const char* annotated = "/* hostgroup=1 */ SELECT * FROM t WHERE id IN (LAST_INSERT_ID())";
 	SQP_par_t qp {};
 	mysql.parser_init(&qp, annotated, std::strlen(annotated));
+#ifdef PROXYSQL31
 	ok(qp.first_comment && std::strstr(qp.first_comment, "hostgroup=1"),
 		"MySQL first comment kept for a collapsed IN list (got: %s)",
 		qp.first_comment ? qp.first_comment : "NULL");
+#else
+	ok(qp.first_comment == nullptr, "v3.0 conditional fallback does not enable first-comment hints");
+#endif
+
 	release_digest(qp);
 
 	// A large literal-only multi-row INSERT also gets the legacy tokenizer digest.
@@ -232,9 +259,14 @@ int main() {
 	for (int i = 0; i < 5000; i++) big += ", (" + std::to_string(i) + ", 'y')";
 	const Digest parser = parser_digest(mysql, big);
 	const Digest legacy = legacy_digest(mysql, big);
+#ifdef PROXYSQL31
 	ok(parser.found && legacy.found && parser.text == legacy.text,
 		"MySQL parser digest equals legacy for a 5001-row literal INSERT (got: '%s', legacy: '%s')",
 		parser.text.c_str(), legacy.text.c_str());
+#else
+	ok(parser.found && parser.text == "INSERT INTO t (a, b) VALUES (?, ?)",
+		"v3.0 keeps native ParserSQL literal-row grouping for a large INSERT");
+#endif
 
 	test_cleanup_minimal();
 	return exit_status();

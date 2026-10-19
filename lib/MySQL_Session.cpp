@@ -1207,6 +1207,10 @@ MySQL_Session::MySQL_Session() {
  * @brief Resets the MySQL session to its initial state.
  */
 void MySQL_Session::reset() {
+#ifndef PROXYSQL31
+	pending_user_variable_set.reset();
+#endif
+
 #ifdef PROXYSQL40
 	cancel_aws_iam_wait();
 	cached_backend_auth_policy_valid = false;
@@ -3199,8 +3203,12 @@ bool MySQL_Session::handler_again___verify_backend_user_variables(MySQL_Connecti
 	// options.max_allowed_pkt is normally unset on backend connections. Use
 	// the proxy's query limit in that case, as for ordinary client queries;
 	// a smaller actual server limit is reported by the replay error path.
+#ifdef PROXYSQL31
 	const uint32_t packet_limit = myconn->options.max_allowed_pkt
 		? myconn->options.max_allowed_pkt : mysql_thread___max_allowed_packet;
+#else
+	const uint32_t packet_limit = myconn->options.max_allowed_pkt;
+#endif
 	const MySQL_User_Variable_Replay_Packet_Budget packet_budget =
 		mysql_user_variable_replay_packet_budget(packet_limit, query_packet_overhead);
 	if (packet_budget.status == MySQL_User_Variable_Replay_Packet_Budget_Status::PACKET_LIMIT_TOO_SMALL) {
@@ -5888,6 +5896,10 @@ int MySQL_Session::enter_permanent_fast_forward(PtrSize_t& pkt, int destination_
 }
 
 void MySQL_Session::GPFC_QueryRule_FinalizeFastForwardHandoff() {
+#ifndef PROXYSQL31
+	pending_user_variable_set.reset();
+#endif
+
 	CurrentQuery.set_end_time(thread->curtime);
 	CurrentQuery.end();
 	CurrentQuery.MyComQueryCmd = MYSQL_COM_QUERY___NONE;
@@ -7362,6 +7374,34 @@ handler_again:
 				gtid_hid = -1;
 				if (rc==0) {
 
+#ifndef PROXYSQL31
+					if (status == PROCESSING_QUERY && pending_user_variable_set) {
+						const std::vector<UserVariableAssignment>& assignments =
+							pending_user_variable_set->assignments;
+						if (mysql_user_variable_commit_post_ok(
+							client_myds->myconn->user_variables,
+							myconn->user_variables,
+							assignments)) {
+							user_variable_tracking_latched = true;
+							thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
+								assignments.size();
+						} else {
+							current_query_user_variable_safe = false;
+							user_variable_backend_authoritative = true;
+							thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+								"User-variable SET tracking fallback reason=RESOURCE_LIMIT\n");
+							myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
+							if (mysql_thread___set_query_lock_on_hostgroup == 1 &&
+								locked_on_hostgroup < 0 && current_hostgroup >= 0) {
+								locked_on_hostgroup = current_hostgroup;
+								thread->status_variables.stvar[st_var_hostgroup_locked]++;
+								thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+							}
+						}
+						pending_user_variable_set.reset();
+					}
+#endif
 					if (status == PROCESSING_QUERY &&
 						mysql_user_variable_backend_result_requires_binding(
 							true,
@@ -8504,9 +8544,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		tracking for MySQL 5.7+
 */
 	bool exit_after_SetParse = true;
+#ifdef PROXYSQL31
 	std::optional<UserVariableSetAnalysis> local_variable_set;
 	MySQL_User_Variable_State staged_user_variables;
 	MySQL_Session_Set_Plan staged_session_variables;
+#endif
+#ifndef PROXYSQL31
+	pending_user_variable_set.reset();
+#endif
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
@@ -8620,6 +8665,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (accepts_new_udv_assignments && raw_query_has_at) {
 		UserVariableSetAnalysis analysis = parsersql_analyze_user_variable_set_mysql(
 			raw_query, CurrentQuery.QueryLength);
+#ifdef PROXYSQL31
 		UserVariableLiteralContext context;
 		if (analysis.status == UserVariableSetStatus::SUPPORTED) {
 			auto charset_number = [&](int idx, uint32_t fallback) {
@@ -8679,14 +8725,22 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				}
 			}
 		}
+#endif
 		if (analysis.is_set_statement) {
 			switch (analysis.status) {
 			case UserVariableSetStatus::SUPPORTED: {
+#ifndef PROXYSQL31
+				MySQL_User_Variable_State staged_user_variables;
+#endif
 				const MySQL_User_Variable_Apply_Result apply_result =
 					client_myds->myconn->user_variables.stage(analysis.assignments, staged_user_variables);
 				if (mysql_user_variable_set_uses_qpo_epilogue(
 					analysis.status, apply_result)) {
+#ifdef PROXYSQL31
 					local_variable_set = std::move(analysis);
+#else
+					pending_user_variable_set = std::move(analysis);
+#endif
 					current_query_user_variable_safe = true;
 					goto __exit_set_destination_hostgroup;
 				}
@@ -8718,12 +8772,30 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 
 
+#ifndef PROXYSQL31
+	if (plain_text_com_query && client_myds && client_myds->myconn &&
+		client_myds->myconn->user_variables.size() != 0 &&
+		parsersql_set_changes_user_variable_replay_context_mysql(
+			raw_query, CurrentQuery.QueryLength)) {
+		current_query_user_variable_context_change = true;
+		unable_to_parse_set_statement(lock_hostgroup);
+		if (mysql_user_variable_fallback_uses_qpo_epilogue(false, true)) {
+			goto __exit_set_destination_hostgroup;
+		}
+		return false;
+	}
+
+#endif
 	const UserVariableQueryDecision user_variable_decision =
 		mysql_user_variable_raw_query_disposition(
 			raw_query, CurrentQuery.QueryLength,
 			must_classify_and_sync_user_variables(),
 			plain_text_com_query,
+#ifdef PROXYSQL31
 			local_variable_set.has_value(),
+#else
+			pending_user_variable_set.has_value(),
+#endif
 			digest_available);
 	if (user_variable_decision.disposition == UserVariableQueryDisposition::SAFE) {
 		current_query_user_variable_safe =
@@ -9831,6 +9903,7 @@ __exit_set_destination_hostgroup:
 			}
 		}
 	}
+#ifdef PROXYSQL31
 	if (local_variable_set) {
 		bool prior_autocommit = autocommit;
 		bool implicit_commit = false;
@@ -9875,6 +9948,7 @@ __exit_set_destination_hostgroup:
 		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
+#endif
 	return false;
 }
 
@@ -10766,6 +10840,10 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds, const unsigned int myerrno
 }
 
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrno, const char * errmsg) {
+#ifndef PROXYSQL31
+	pending_user_variable_set.reset();
+#endif
+
 #ifdef PROXYSQL31
 	hostgroup_pool_wait.finish(thread ? thread->curtime : monotonic_time());
 #endif

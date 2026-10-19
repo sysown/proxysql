@@ -91,6 +91,12 @@ bool mysql_user_variable_tracking_can_stage(
 bool mysql_user_variable_set_uses_qpo_epilogue(
 	UserVariableSetStatus analysis_status,
 	MySQL_User_Variable_Apply_Result preflight_result);
+#ifndef PROXYSQL31
+bool mysql_user_variable_commit_post_ok(
+	MySQL_User_Variable_State& frontend,
+	MySQL_User_Variable_State& backend,
+	const std::vector<UserVariableAssignment>& assignments);
+#endif
 unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code);
 
 class MySQL_Connection {

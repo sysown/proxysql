@@ -620,8 +620,13 @@ static void test_mixed_session_and_user_assignments() {
 	};
 	for (const char* query : cases) {
 		auto parsed = analyze_user_set(query);
+#ifdef PROXYSQL31
 		ok(parsed.status == UserVariableSetStatus::SUPPORTED && parsed.assignments.size() == 1,
 			"mixed SET retains user literals alongside session assignments: %s", query);
+#else
+		ok(parsed.status == UserVariableSetStatus::UNSUPPORTED && parsed.assignments.empty(),
+			"v3.0 mixed SET remains a backend-bound fallback: %s", query);
+#endif
 	}
 }
 

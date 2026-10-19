@@ -134,6 +134,8 @@ static bool run_checks(const CommandLine& cl, MYSQL* admin, int target, int pars
 		diag("Client connection failed");
 		return false;
 	}
+	const bool v30 = scalar(admin, "SELECT @@version").rfind("3.0.", 0) == 0;
+	const bool expect_annotation = !v30 || parser == 0;
 	const std::string annotation = "/* hostgroup=" + std::to_string(target) + " */ ";
 	// Prepared statement metadata, including the first comment, is cached per query text;
 	// a unique alias keeps one mode from reusing the metadata computed under another.
@@ -144,12 +146,12 @@ static bool run_checks(const CommandLine& cl, MYSQL* admin, int target, int pars
 		"parser=%d first_comment_parsing=%d: unannotated query stays off hostgroup %d", parser, parsing, target);
 
 	before = queries(admin, target);
-	ok(scalar(client.get(), annotation + "SELECT 1 AS a6419_text") == "1" && queries(admin, target) > before,
-		"parser=%d first_comment_parsing=%d: annotated text query reaches hostgroup %d", parser, parsing, target);
+	ok(scalar(client.get(), annotation + "SELECT 1 AS a6419_text") == "1" && (queries(admin, target) > before) == expect_annotation,
+		"parser=%d first_comment_parsing=%d: annotated text routing expectation=%d for hostgroup %d", parser, parsing, expect_annotation, target);
 
 	before = queries(admin, target);
-	ok(run_stmt(client.get(), annotation + "SELECT ? AS a6419_stmt" + suffix) && queries(admin, target) > before,
-		"parser=%d first_comment_parsing=%d: annotated prepared statement reaches hostgroup %d", parser, parsing, target);
+	ok(run_stmt(client.get(), annotation + "SELECT ? AS a6419_stmt" + suffix) && (queries(admin, target) > before) == expect_annotation,
+		"parser=%d first_comment_parsing=%d: annotated prepared routing expectation=%d for hostgroup %d", parser, parsing, expect_annotation, target);
 	return true;
 }
 

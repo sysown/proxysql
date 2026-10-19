@@ -48,26 +48,17 @@ struct UserVariableQueryDecision {
 };
 
 /**
- * @brief Computes a query digest using the legacy MySQL tokenizer.
+ * @brief Initialize digest metadata for the selected ParserSQL integration.
  *
- * In parser mode the digest must be identical to the one produced with
- * `mysql-query_processor_parser=0`, so ParserSQL is not asked to emit it from
- * its AST. The query is tokenized, normalised (literals replaced, comments
- * handled per `query_digests_*`) and hashed with SpookyHash, exactly as the
- * legacy path does. The command type is computed lazily by
- * query_parser_command_type().
- *
- * Controlled by `mysql-query_processor_parser`.
- *
- * @param qp           Output structure. `digest_text`, `first_comment`, and
- *                      `query_prefix` are set; `digest` receives the 64-bit hash.
- * @param query         Raw SQL query bytes.
- * @param query_length  Length of `query` in bytes.
+ * v3.0 uses ParserSQL's AST emitter/token digest and SpookyHash. Its
+ * experimental parser mode does not extract first-comment annotations.
+ * Newer tiers retain legacy-tokenizer digests pending the design in #6508.
+ * The caller owns allocated digest text unless it points at qp->buf.
  */
 void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_length);
 
 /**
- * @brief Computes a query digest using the legacy PostgreSQL tokenizer.
+ * @brief PostgreSQL variant of the selected ParserSQL digest integration.
  *
  * Identical to parsersql_digest_init_mysql() but targets PostgreSQL syntax.
  *

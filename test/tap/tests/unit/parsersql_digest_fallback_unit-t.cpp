@@ -28,8 +28,13 @@ static bool matches(const QP_rule_t& rule, const SQP_par_t& qp, const char* sql,
 		"127.0.0.1", nullptr, 6033, qp.digest, qp.digest_text, sql, nullptr, engine);
 }
 
+static const char* expected_digest(const char*, const char* expected) {
+	return expected;
+}
+
 static void test_routing(const char* dialect, DigestInit initialize, const char* sql,
 	const char* expected) {
+	expected = expected_digest(dialect, expected);
 	SQP_par_t qp {};
 	initialize(&qp, sql, std::strlen(sql));
 	for (int engine : {1, 2}) {
@@ -93,10 +98,11 @@ static void test_digests(const char* dialect, DigestInit initialize) {
 	for (const auto& c : cases) {
 		SQP_par_t qp {};
 		initialize(&qp, c.sql, std::strlen(c.sql));
-		ok(qp.digest_text && std::strcmp(qp.digest_text, c.expected) == 0,
+		const char* expected = expected_digest(dialect, c.expected);
+		ok(qp.digest_text && std::strcmp(qp.digest_text, expected) == 0,
 			"%s normalizes complete input even without a complete AST: %s (got: %s)",
 			dialect, c.sql, qp.digest_text ? qp.digest_text : "NULL");
-		ok(qp.digest == SpookyHash::Hash64(c.expected, std::strlen(c.expected), 0),
+		ok(qp.digest == SpookyHash::Hash64(expected, std::strlen(expected), 0),
 			"%s hashes the expected token digest: %s", dialect, c.sql);
 		release_digest(qp);
 	}
@@ -129,9 +135,10 @@ static void test_pgsql_protocol_terminator() {
 		SQP_par_t qp {};
 		// PgSQL_Query_Info passes a length including the wire terminator.
 		parsersql_digest_init_pgsql(&qp, c.sql, std::strlen(c.sql) + 1);
-		ok(qp.digest_text && std::strcmp(qp.digest_text, c.expected) == 0,
+		const char* expected = expected_digest("PostgreSQL", c.expected);
+		ok(qp.digest_text && std::strcmp(qp.digest_text, expected) == 0,
 			"PostgreSQL wire terminator does not change normalized SQL: %s", c.sql);
-		ok(qp.digest == SpookyHash::Hash64(c.expected, std::strlen(c.expected), 0),
+		ok(qp.digest == SpookyHash::Hash64(expected, std::strlen(expected), 0),
 			"PostgreSQL wire terminator does not change the digest hash: %s", c.sql);
 		release_digest(qp);
 	}
@@ -174,8 +181,12 @@ static void test_fallback_options(const char* dialect, DigestInit initialize,
 	initialize(&qp, commented.data(), commented.size());
 	ok(qp.digest_text && std::strcmp(qp.digest_text, "alter table t discard tablespace") == 0,
 		"%s fallback honors lowercase normalization", dialect);
+#ifdef PROXYSQL31
 	ok(qp.first_comment && std::strstr(qp.first_comment, "routehint"),
 		"%s fallback preserves first-comment metadata", dialect);
+#else
+	ok(qp.first_comment == nullptr, "%s v3.0 fallback does not enable first-comment hints", dialect);
+#endif
 	release_digest(qp);
 	lowercase = saved_lowercase;
 }

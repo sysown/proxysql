@@ -3430,6 +3430,9 @@ static void qp_digest_legacy(SQP_par_t* qp, const char* query, int query_length)
 
 template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *query, int query_length, int flags) {
+#ifndef PROXYSQL31
+	qp->parsersql_command_type = -1;
+#endif
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
@@ -3444,11 +3447,8 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 		}
 	}
 	if (GET_THREAD_VARIABLE(query_digests)) {
-		// Parser mode no longer changes the digest (#6454): parsersql_digest_init_*()
-		// now delegates to the legacy tokenizer, so both branches below yield the
-		// same digest, digest text and first comment. The *-query_processor_parser
-		// variable only selects the command-type classifier, consulted lazily by
-		// query_parser_command_type().
+		// v3.0 keeps the experimental ParserSQL digest path; newer tiers retain
+		// the legacy-digest integration while its redesign is tracked in #6508.
 		if (GET_THREAD_VARIABLE(query_processor_parser) == 1) {
 			qp_digest_parsersql<QP_DERIVED>(qp, query, query_length);
 		} else {

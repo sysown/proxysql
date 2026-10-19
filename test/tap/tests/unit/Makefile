@@ -679,7 +679,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	connection_unhealthy_unit-t \
 	connection_max_age_unit-t \
 	cluster_sync_unit-t \
-	parsersql_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
+	parsersql_unit-t parsersql_v30_flow_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
 	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
 	parsersql_in_values_digest_unit-t \
 	query_digest_parser_parity_unit-t \
@@ -836,6 +836,7 @@ ifneq ($(UNAME_S),Darwin)
 endif
 
 ifeq ($(UNAME_S),Linux)
+parsersql_v30_flow_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_query_digest_and_first_comment -Wl,--wrap=pgsql_query_digest_and_first_comment -Wl,--wrap=_Z28parsersql_command_type_mysqlPKci -Wl,--wrap=_Z28parsersql_command_type_pgsqlPKci
 gtid_local_cache_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN24MySQL_HostGroups_Manager11gtid_existsEP6MySrvCPcm
 endif
 
@@ -1452,7 +1453,7 @@ aws_iam_kill_helper_unit-t: ALLOW_MULTI_DEF += \
 worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
 
 STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
-	gtid_local_cache_unit-t \
+	gtid_local_cache_unit-t parsersql_v30_flow_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
