@@ -27,10 +27,23 @@
  *      one query and then reads nothing more, like a host that crashed or a network
  *      cut: the ping gets no reply, the proxy logs one "Ping timeout" line and drops
  *      the connection.
+ *   E. Edge cases (plaintext only, once per mode), with the mock scripting the reply
+ *      to the ping:
+ *      E1  a reply 300 ms late keeps the connection under a 1000 ms timeout;
+ *      E2  the same reply drops it once the timeout is lowered to 100 ms at runtime;
+ *      E3  ParameterStatus and NoticeResponse ahead of the reply are absorbed;
+ *      E4  an ErrorResponse drops the connection and logs the backend's message;
+ *      E5  a backend that closes on receiving the ping is dropped;
+ *      E6  a reply split into single bytes is still read;
+ *      E7  a reply saying a transaction is open keeps the connection out of the pool;
+ *      E8  raising the interval at runtime stops the pings, lowering it resumes them;
+ *      E9  a server removed while its connection is being pinged ends with that
+ *          connection destroyed rather than pooled.
  *
  * The test uses roles and a hostgroup of its own, so killing by role, giving a role a
- * 4 s idle timeout or registering the mock cannot touch any other test. Variables are
- * changed at runtime only.
+ * 4 s idle timeout or registering the mock cannot touch any other test. The monitor is
+ * off for the run, so its own probes cannot reach the mock. Variables are changed at
+ * runtime only.
  */
 #include <chrono>
 #include <cstdlib>
@@ -331,6 +344,24 @@ static void phaseKeptAlive(PGconn* admin, PGconn* be, const std::string& tag) {
 		tag.c_str(), alive, pooled, broken.size());
 }
 
+// EmptyQueryResponse and ReadyForQuery: what a real server answers to an empty query.
+static std::string reply_ok(char txn = 'I') {
+	std::string r;
+	pgmb_append_msg(r, 'I', "");
+	return r + pgmb_ready_for_query(txn);
+}
+
+static std::string notice(const std::string& msg) {
+	std::string body;
+	body += 'S'; body += "NOTICE"; body += '\0';
+	body += 'C'; body += "00000"; body += '\0';
+	body += 'M'; body += msg; body += '\0';
+	body += '\0';
+	std::string r;
+	pgmb_append_msg(r, 'N', body);
+	return r;
+}
+
 static bool registerMock(PGconn* admin, const std::string& mock_host, uint16_t port, bool on) {
 	const std::string hg = std::to_string(MOCK_HG);
 	return execOk(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + hg)
@@ -341,17 +372,12 @@ static bool registerMock(PGconn* admin, const std::string& mock_host, uint16_t p
 
 // D: a backend that stops answering is dropped when the ping gets no reply in time.
 //
-// The mock answers the first query on each connection with EmptyQueryResponse. The
-// pgsql monitor probes every registered server with an empty query too, and asserts
-// if one comes back with rows; so the mock is only registered for this phase, and its
-// one answer is the one a real server gives an empty query.
+// The mock answers the client's query with EmptyQueryResponse, a valid reply to any
+// query, and is only registered for the seconds a phase needs it.
 static void phaseSilentBackend(PGconn* admin, PgSQL_Mock_Backend& mock, const std::string& mock_host, const std::string& tag, const char* mode) {
-	std::string empty_reply;
-	pgmb_append_msg(empty_reply, 'I', "");
-	empty_reply += pgmb_ready_for_query('I');
 	std::vector<Step> script = pgmb_script_accept_trust();
 	script.push_back(step_expect_query());
-	script.push_back(step_send(empty_reply));
+	script.push_back(step_send(reply_ok()));
 	script.push_back(step_sleep(6000));  // reads nothing more, so the ping's query is never answered
 	script.push_back(step_close());
 	mock.set_script(script);
@@ -384,6 +410,185 @@ static void phaseSilentBackend(PGconn* admin, PgSQL_Mock_Backend& mock, const st
 		tag.c_str(), served, pooled, got_mode.c_str(), left, timeouts.size(), broken.size());
 }
 
+// ---------------------------------------------------------------- E: edge cases
+
+struct MockCase {
+	PGconn* admin;
+	PgSQL_Mock_Backend& mock;
+	const std::string& host;
+	const char* mode;
+};
+
+// Register the mock with `ping_steps` scripted after the client's query, then run one
+// client query so that exactly one connection, in the mode under test, sits in the pool.
+static bool startCase(MockCase& f, const std::vector<Step>& ping_steps) {
+	std::vector<Step> script = pgmb_script_accept_trust();
+	script.push_back(step_expect_query());
+	script.push_back(step_send(reply_ok()));
+	for (const auto& st : ping_steps) script.push_back(st);
+	script.push_back(step_expect_message());  // hold the socket until the proxy lets go of it
+	f.mock.set_script(script);
+	f.mock.reset_stats();
+	if (!registerMock(f.admin, f.host, f.mock.port(), true)) return false;
+	bool served = false;
+	{
+		PGConnPtr c = openClient(MOCK_USER);
+		if (PQstatus(c.get()) == CONNECTION_OK) {
+			PGresult* r = PQexec(c.get(), "SELECT 1");
+			served = PQresultStatus(r) == PGRES_EMPTY_QUERY;
+			PQclear(r);
+		} else {
+			diag("client connect to the mock failed: %s", PQerrorMessage(c.get()));
+		}
+	}
+	markLog();
+	if (!served || poolConnsWithin(f.admin, 1, 5, MOCK_HG) != 1) return false;
+	const std::string got_mode = poolMode(f.admin, MOCK_HG);  // before the first ping, 1 s from now
+	if (got_mode != f.mode) {
+		diag("the pooled connection is %s, not %s", got_mode.c_str(), f.mode);
+		return false;
+	}
+	return true;
+}
+
+// Wait until the mock has received `n` queries in total; the client's query is the first.
+static bool waitQueries(MockCase& f, int n, int seconds) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+	while (f.mock.queries_observed() < n && std::chrono::steady_clock::now() < deadline) usleep(50000);
+	return f.mock.queries_observed() >= n;
+}
+
+static void endCase(MockCase& f) {
+	registerMock(f.admin, f.host, f.mock.port(), false);
+	poolConnsWithin(f.admin, 0, 5, MOCK_HG);
+}
+
+static const char* PING_LINES = ".*(Detected a broken connection|Ping timeout).*";
+
+// The connection survives the ping: the mock got it, and one connection is still pooled
+// with nothing logged against it.
+static void expectKept(MockCase& f, const std::string& tag, const char* what, int reply_ms) {
+	const bool pinged = waitQueries(f, 2, 5);
+	usleep((reply_ms + 400) * 1000);
+	const int pooled = poolConns(f.admin, MOCK_HG);
+	const auto lines = logLinesSince(PING_LINES);
+	for (const auto& l : lines) diag("%s", l.c_str());
+	ok(pinged && pooled == 1 && lines.empty(), "%s: %s keeps the connection (pinged=%d pooled=%d logged=%zu)",
+		tag.c_str(), what, pinged, pooled, lines.size());
+}
+
+// The ping drops the connection, with exactly one log line and that one matching `line_re`.
+static void expectDropped(MockCase& f, const std::string& tag, const char* what, const std::string& line_re) {
+	const bool pinged = waitQueries(f, 2, 5);
+	const int left = poolConnsWithin(f.admin, 0, 5, MOCK_HG);
+	usleep(500000);  // the log is written asynchronously
+	const auto lines = logLinesSince(PING_LINES);
+	const auto matching = logLinesSince(line_re);
+	for (const auto& l : lines) diag("%s", l.c_str());
+	ok(pinged && left == 0 && lines.size() == 1 && matching.size() == 1,
+		"%s: %s drops the connection with one log line (pinged=%d left=%d lines=%zu matching=%zu)",
+		tag.c_str(), what, pinged, left, lines.size(), matching.size());
+}
+
+static void phaseEdgeCases(MockCase& f, const std::string& tag, const std::string& saved_ping_timeout) {
+	const std::string me = f.host + ":" + std::to_string(f.mock.port());
+
+	// E1: 300 ms is far slower than a real reply, but inside a 1 s timeout.
+	setVar(f.admin, "pgsql-ping_timeout_server", "1000");
+	if (startCase(f, { step_expect_query(), step_sleep(300), step_send(reply_ok()) }))
+		expectKept(f, tag, "a reply 300 ms late with a 1000 ms timeout", 300);
+	else ok(false, "%s: E1 setup failed", tag.c_str());
+	endCase(f);
+
+	// E2: the same reply after the timeout is lowered at runtime.
+	setVar(f.admin, "pgsql-ping_timeout_server", "100");
+	if (startCase(f, { step_expect_query(), step_sleep(300), step_send(reply_ok()) }))
+		expectDropped(f, tag, "a reply 300 ms late with the timeout lowered to 100 ms",
+			".*Ping timeout during ping on " + me + " .*timeout 100ms.*");
+	else ok(false, "%s: E2 setup failed", tag.c_str());
+	endCase(f);
+	setVar(f.admin, "pgsql-ping_timeout_server", "1000");
+
+	// E3: messages a backend may send on its own, ahead of the reply.
+	if (startCase(f, { step_expect_query(),
+			step_send(pgmb_parameter_status("TimeZone", "UTC") + notice("idle ping notice") + reply_ok()) }))
+		expectKept(f, tag, "ParameterStatus and NoticeResponse ahead of the reply", 0);
+	else ok(false, "%s: E3 setup failed", tag.c_str());
+	endCase(f);
+
+	// E4: an ordinary error in place of EmptyQueryResponse.
+	if (startCase(f, { step_expect_query(), step_send(pgmb_error_response("XX000", "idle ping refused") + pgmb_ready_for_query('I')) }))
+		expectDropped(f, tag, "an ErrorResponse", ".*during ping on .*idle ping refused.*");
+	else ok(false, "%s: E4 setup failed", tag.c_str());
+	endCase(f);
+
+	// E5: the backend goes away the moment the ping arrives, without a FATAL.
+	if (startCase(f, { step_expect_query(), step_close() }))
+		expectDropped(f, tag, "a close on receiving the ping", ".*Detected a broken connection while during ping on .*");
+	else ok(false, "%s: E5 setup failed", tag.c_str());
+	endCase(f);
+
+	// E6: the reply arrives one byte at a time.
+	if (startCase(f, { step_expect_query(), step_send(reply_ok(), 1, 10000) }))
+		expectKept(f, tag, "a reply split into single bytes", 100);
+	else ok(false, "%s: E6 setup failed", tag.c_str());
+	endCase(f);
+
+	// E7: a pooled connection the backend says is inside a transaction must not be reused.
+	if (startCase(f, { step_expect_query(), step_send(reply_ok('T')) })) {
+		const bool pinged = waitQueries(f, 2, 5);
+		const int left = poolConnsWithin(f.admin, 0, 5, MOCK_HG);
+		const auto lines = logLinesSince(PING_LINES);
+		ok(pinged && left == 0 && lines.empty(),
+			"%s: a reply saying a transaction is open keeps the connection out of the pool (pinged=%d left=%d logged=%zu)",
+			tag.c_str(), pinged, left, lines.size());
+	} else {
+		ok(false, "%s: E7 setup failed", tag.c_str());
+	}
+	endCase(f);
+
+	// E8: the interval is honoured as it changes. Every ping is answered, so the mock's
+	// query count is the pings plus the client's query.
+	{
+		std::vector<Step> pings;
+		for (int i = 0; i < 40; i++) { pings.push_back(step_expect_query()); pings.push_back(step_send(reply_ok())); }
+		bool good = startCase(f, pings);
+		sleep(3);
+		const int at_1s = f.mock.queries_observed() - 1;
+		good = good && setVar(f.admin, "pgsql-ping_interval_server_msec", "60000");
+		usleep(1500000);  // let a round already started finish
+		const int frozen_from = f.mock.queries_observed();
+		sleep(4);
+		const int frozen_to = f.mock.queries_observed();
+		good = good && setVar(f.admin, "pgsql-ping_interval_server_msec", "1000");
+		sleep(3);
+		const int resumed = f.mock.queries_observed();
+		const int pooled = poolConns(f.admin, MOCK_HG);
+		ok(good && at_1s >= 1 && frozen_to == frozen_from && resumed > frozen_to && pooled == 1,
+			"%s: pings follow the interval as it changes (1 s: %d pings; 60 s: %d -> %d; back to 1 s: %d; pooled=%d)",
+			tag.c_str(), at_1s, frozen_from, frozen_to, resumed, pooled);
+		endCase(f);
+	}
+
+	// E9: the server leaves the configuration while its connection is out being pinged.
+	if (startCase(f, { step_expect_query(), step_sleep(800), step_send(reply_ok()) })) {
+		const bool pinged = waitQueries(f, 2, 5);
+		const bool removed = registerMock(f.admin, f.host, f.mock.port(), false);
+		const int left = poolConnsWithin(f.admin, 0, 5, MOCK_HG);
+		const bool alive = scalar(f.admin, "SELECT 1") == "1";
+		const auto lines = logLinesSince(PING_LINES);
+		for (const auto& l : lines) diag("%s", l.c_str());
+		ok(pinged && removed && left == 0 && alive,
+			"%s: a server removed mid-ping ends with its connection destroyed (pinged=%d left=%d alive=%d logged=%zu)",
+			tag.c_str(), pinged, left, alive, lines.size());
+	} else {
+		ok(false, "%s: E9 setup failed", tag.c_str());
+	}
+	endCase(f);
+
+	setVar(f.admin, "pgsql-ping_timeout_server", saved_ping_timeout.empty() ? "200" : saved_ping_timeout);
+}
+
 int main(int, char**) {
 	if (cl.getEnv()) return exit_status();
 
@@ -394,8 +599,8 @@ int main(int, char**) {
 
 	const bool native_supported = pgsql_native_supported(admin.get());
 	const int modes = native_supported ? 2 : 1;
-	// Per mode: plaintext A(2) + B(3) + C + D, TLS A(3) + B(3).
-	plan(modes * (2 + 3 + 1 + 1 + 3 + 3));
+	// Per mode: plaintext A(2) + B(3) + C + D + E(9), TLS A(3) + B(3).
+	plan(modes * (2 + 3 + 1 + 1 + 9 + 3 + 3));
 
 	const std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
 	if (open_file_and_seek_end(log_path, f_proxysql_log) != EXIT_SUCCESS) {
@@ -406,6 +611,8 @@ int main(int, char**) {
 	const std::string saved_interval = runtimeVar(admin.get(), "pgsql-ping_interval_server_msec");
 	const std::string saved_pct = runtimeVar(admin.get(), "pgsql-free_connections_pct");
 	const std::string saved_poll = runtimeVar(admin.get(), "pgsql-poll_timeout");
+	const std::string saved_ping_timeout = runtimeVar(admin.get(), "pgsql-ping_timeout_server");
+	const std::string saved_monitor = runtimeVar(admin.get(), "pgsql-monitor_enabled");
 	const std::string saved_native = native_supported ? runtimeVar(admin.get(), "pgsql-use_native_backend_protocol") : "";
 	const std::string saved_ssl = scalar(admin.get(), "SELECT use_ssl FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(HG) + " LIMIT 1");
 
@@ -431,7 +638,7 @@ int main(int, char**) {
 	// An idle worker only checks whether a ping round is due when its poll() wakes up, so
 	// pings come no faster than pgsql-poll_timeout. Pin it below the 1 s ping interval.
 	if (!setVar(admin.get(), "pgsql-ping_interval_server_msec", "1000") || !setVar(admin.get(), "pgsql-free_connections_pct", "100")
-		|| !setVar(admin.get(), "pgsql-poll_timeout", "500")) {
+		|| !setVar(admin.get(), "pgsql-poll_timeout", "500") || !setVar(admin.get(), "pgsql-monitor_enabled", "false")) {
 		BAIL_OUT("could not set the ping variables");
 		return exit_status();
 	}
@@ -450,6 +657,8 @@ int main(int, char**) {
 				if (has_idle_timeout) phaseKeptAlive(admin.get(), be.get(), tag);
 				else skip(1, "%s: idle_session_timeout needs PostgreSQL 14+", tag.c_str());
 				phaseSilentBackend(admin.get(), mock, mock_host, tag, mode);
+				MockCase mc { admin.get(), mock, mock_host, mode };
+				phaseEdgeCases(mc, tag, saved_ping_timeout);
 			}
 		}
 	}
@@ -462,6 +671,7 @@ int main(int, char**) {
 	setVar(admin.get(), "pgsql-ping_interval_server_msec", saved_interval.empty() ? "10000" : saved_interval);
 	setVar(admin.get(), "pgsql-free_connections_pct", saved_pct.empty() ? "10" : saved_pct);
 	setVar(admin.get(), "pgsql-poll_timeout", saved_poll.empty() ? "2000" : saved_poll);
+	if (!saved_monitor.empty()) setVar(admin.get(), "pgsql-monitor_enabled", saved_monitor);
 	if (native_supported && !saved_native.empty()) setVar(admin.get(), "pgsql-use_native_backend_protocol", saved_native);
 	flushPool(admin.get());
 
