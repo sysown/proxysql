@@ -1162,6 +1162,57 @@ handler_again:
 	case ASYNC_RESET_SESSION_TIMEOUT:
 		break;
 
+	case ASYNC_PING_START:
+		ping_start();
+		if (async_exit_status) {
+			next_event(ASYNC_PING_CONT);
+		} else {
+			if (is_error_present()) {
+				NEXT_IMMEDIATE(ASYNC_PING_END);
+			}
+			NEXT_IMMEDIATE(ASYNC_PING_CONT);
+		}
+		break;
+	case ASYNC_PING_CONT:
+	{
+		if (event) {
+			ping_cont(event);
+		}
+		if (async_exit_status) {
+			// pgsql-ping_timeout_server, set by the thread that started the ping.
+			if (myds->wait_until != 0 && myds->sess->thread->curtime >= myds->wait_until) {
+				NEXT_IMMEDIATE(ASYNC_PING_TIMEOUT);
+			}
+			next_event(ASYNC_PING_CONT);
+			break;
+		}
+		if (is_error_present()) {
+			NEXT_IMMEDIATE(ASYNC_PING_END);
+		}
+		// libpq only; a native ping keeps no result.
+		PGresult* result = get_result();
+		if (result) {
+			if (PQresultStatus(result) != PGRES_EMPTY_QUERY) {
+				set_error_from_result(result, PGSQL_ERROR_FIELD_ALL);
+			}
+			PQclear(result);
+			NEXT_IMMEDIATE(ASYNC_PING_CONT);
+		}
+		NEXT_IMMEDIATE(ASYNC_PING_END);
+	}
+	break;
+	case ASYNC_PING_END:
+		PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
+		if (is_error_present()) {
+			NEXT_IMMEDIATE(ASYNC_PING_FAILED);
+		}
+		NEXT_IMMEDIATE(ASYNC_PING_SUCCESSFUL);
+		break;
+	case ASYNC_PING_FAILED:
+	case ASYNC_PING_SUCCESSFUL:
+	case ASYNC_PING_TIMEOUT:
+		break;
+
 	default:
 		// The connection is in a state nothing here knows how to handle. Log which
 		// state it was, so the abort below is not a bare assert with no clue, then stop.
@@ -4291,14 +4342,11 @@ int PgSQL_Connection::async_reset_session(short event) {
 // the calling function should check pgsql error in pgsql struct
 int PgSQL_Connection::async_ping(short event) {
 	PROXY_TRACE();
-	// In native_mode pgsql_conn is permanently NULL; the libpq ping path is
-	// not applicable. Pretend the ping succeeded; the native path keeps its
-	// own liveness state via the socket readiness callback.
-	if (native_mode) {
-		async_state_machine = ASYNC_PING_SUCCESSFUL;
-		return 0;
-	}
-	assert(pgsql_conn);
+	// A real round trip, like MySQL's COM_PING: an empty query and its ReadyForQuery.
+	// A backend killed while pooled answers with its FATAL or a closed socket, and one
+	// that is silently gone does not answer before pgsql-ping_timeout_server. The
+	// traffic also keeps idle_session_timeout and NAT idle timers from ending it.
+	assert(native_mode || pgsql_conn);
 	switch (async_state_machine) {
 	case ASYNC_PING_SUCCESSFUL:
 		unknown_transaction_status = false;
@@ -4313,10 +4361,18 @@ int PgSQL_Connection::async_ping(short event) {
 		break;
 	case ASYNC_IDLE:
 		async_state_machine = ASYNC_PING_START;
-	default:
-		//handler(event);
-		async_state_machine = ASYNC_PING_SUCCESSFUL;
+		// fall through
+	case ASYNC_PING_START:
+	case ASYNC_PING_CONT:
+	case ASYNC_PING_END:
+		handler(event);
 		break;
+	default:
+		// A pooled connection is always ASYNC_IDLE. Driving any other state from here
+		// would replay that step on an idle socket, so fail the ping and let the
+		// session destroy the connection instead.
+		set_error(PGSQL_ERROR_CODES::ERRCODE_INTERNAL_ERROR, "connection was not idle when pinged", false);
+		return -1;
 	}
 
 	// check again
@@ -5195,7 +5251,7 @@ void PgSQL_Connection::native_reset_session_cont() {
 	// can arrive.
 	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
 		if (!native_flush_outbuf()) {
-			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed during reset");
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed");
 			return;
 		}
 		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -5214,13 +5270,21 @@ void PgSQL_Connection::native_reset_session_cont() {
 				return;
 			}
 			if (r < 0) {
-				native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during reset");
+				// A killed backend sends its FATAL (57P01, 57P05) just before it closes.
+				// Keep that as the reason; the close on its own only says it went away.
+				if (is_error_present()) {
+					const std::string code = get_error_code_str();
+					const std::string message = get_error_message();
+					native_result_fatal(code.c_str(), message.c_str());
+				} else {
+					native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed the connection");
+				}
 				return;
 			}
 			continue;
 		}
 		if (fr == FRAME_ERROR) {
-			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during reset");
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message");
 			return;
 		}
 		switch (msg.type) {
@@ -5270,6 +5334,59 @@ void PgSQL_Connection::reset_session_cont(short event) {
 		return;
 	}
 
+	pgsql_result = PQgetResult(pgsql_conn);
+}
+
+void PgSQL_Connection::ping_start() {
+	PROXY_TRACE();
+	if (native_mode) {
+		set_query("", 0);
+		query_start();
+		if (async_exit_status == PG_EVENT_NONE && is_error_present() == false) {
+			// Sent in full: what is left is the reply (see reset_session_start()).
+			async_exit_status = PG_EVENT_READ;
+		}
+		return;
+	}
+	reset_error();
+	async_exit_status = PG_EVENT_NONE;
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
+	if (PQsendQuery(pgsql_conn, "") == 0) {
+		set_error_from_PQerrorMessage();
+		return;
+	}
+	// ping_cont() flushes it once the socket is writable.
+	async_exit_status = PG_EVENT_WRITE;
+}
+
+// reset_session_cont() without its log lines: the session prints one line per dead
+// connection, from the error recorded here.
+void PgSQL_Connection::ping_cont(short event) {
+	PROXY_TRACE();
+	if (native_mode) {
+		native_reset_session_cont();
+		return;
+	}
+	async_exit_status = PG_EVENT_NONE;
+	if (event & POLLOUT) {
+		const int res = PQflush(pgsql_conn);
+		if (res < 0) {
+			set_error_from_PQerrorMessage();
+		} else {
+			async_exit_status = (res > 0) ? PG_EVENT_WRITE : PG_EVENT_READ;
+		}
+		return;
+	}
+	if (PQconsumeInput(pgsql_conn) == 0) {
+		if (is_error_present() == false) {
+			set_error_from_PQerrorMessage();
+		}
+		return;
+	}
+	if (PQisBusy(pgsql_conn)) {
+		async_exit_status = PG_EVENT_READ;
+		return;
+	}
 	pgsql_result = PQgetResult(pgsql_conn);
 }
 

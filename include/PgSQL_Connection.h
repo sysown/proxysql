@@ -373,6 +373,12 @@ public:
      */
     void reset_session_cont(short event);
 
+    // Idle-connection ping: send an empty query and wait for its ReadyForQuery.
+    // Neither prints anything; a failure only records the error, which the
+    // session logs as the one line for that connection.
+    void ping_start();
+    void ping_cont(short event);
+
     /**
      * @brief Start a resynchronization attempt for the current backend connection.
      *
