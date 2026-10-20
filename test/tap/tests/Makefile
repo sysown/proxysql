@@ -543,6 +543,7 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-native_extq_batch-t \
 	pgsql-native_extq_named_portals-t \
 	pgsql-extq_local_error_in_txn-t \
+	pgsql-extq_implicit_prepare_refused-t \
 	pgsql-extq_rule_error_stops_batch-t \
 	pgsql-discard_all_txn_block-t \
 	pgsql-local_error_txn_state-t \
