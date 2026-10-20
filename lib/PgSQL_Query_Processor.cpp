@@ -728,10 +728,16 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	enum PGSQL_QUERY_command ret = PGSQL_QUERY_UNKNOWN;
 
 	if (pgsql_thread___query_processor_parser == 1) {
-		// The digest no longer classifies the statement (#6454): ask ParserSQL
-		// lazily, and only when the command type is actually needed.
-		if (text) {
-			ret = parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
+#ifndef PROXYSQL31
+		if (qp->parsersql_command_type >= 0) {
+			ret = static_cast<PGSQL_QUERY_command>(qp->parsersql_command_type);
+		} else
+#endif
+		{
+			// Prefix-only callers have no digest parse to reuse.
+			if (text) {
+				ret = parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
+			}
 		}
 		if (text && (ret == PGSQL_QUERY_SELECT || ret == PGSQL_QUERY_UNKNOWN)) {
 			ret = parser_refine_command_type(ret, text);

@@ -12,12 +12,8 @@
  * The file is organised into three sections:
  *
  *   **Section 1 — Digest adapter**
- *   Produces the same digest text and SpookyHash hash as the dialect tokenizer
- *   used with `*-query_processor_parser=0`. Parser mode never changes a digest:
- *   the AST is no longer used to emit one, because a parsed AST drops comments
- *   (losing query-rule hints and first_comment) and would have to reimplement
- *   every `query_digests_*` option. ParserSQL is used only as an add-on, for the
- *   command type and for SET / user-variable analysis.
+ *   v3.0 retains experimental ParserSQL-generated digests without first-comment
+ *   extraction. Newer tiers retain legacy-tokenizer digests pending #6508.
  *
  *   **Section 2 — Command type mapping**
  *   Translates ParserSQL's `StmtType` enum to ProxySQL's `MYSQL_COM_QUERY_command` /
@@ -34,6 +30,7 @@
 #include "proxysql.h"
 #include "Query_Processor_ParserSQL.h"
 #include "sql_parser/parser.h"
+#include "sql_parser/digest.h"
 #include "sql_parser/set_parser.h"
 #include "sql_parser/subquery_parse_callback.h"
 #include "c_tokenizer.h"
@@ -399,12 +396,8 @@ static std::string emit_delimited_ident_raw(
 // Section 1: Digest adapter
 // ---------------------------------------------------------------------------
 //
-// The digest, the digest text and the first comment always come from the legacy
-// tokenizer, with the same query_digests_* options as in legacy mode. ParserSQL
-// is deliberately not asked to emit the digest from its AST: an AST drops
-// comments (so query-rule hints and first_comment would be lost) and would have
-// to reimplement every digest option. ParserSQL is used only for the command
-// type (Section 2), SET parsing and user-variable analysis (Section 4). See #6454.
+// v3.0 restores its established ParserSQL digest flow (#6507), keeping 1.1.1.
+// The existing newer-tier integration remains gated separately.
 
 /** Load the legacy tokenizer options for dialect @p D. */
 template <Dialect D>
@@ -469,13 +462,133 @@ static void parsersql_tokenizer_digest(SQP_par_t* qp, const char* query, int que
         qp->digest = SpookyHash::Hash64(qp->digest_text, length, 0);
     }
 }
+#ifndef PROXYSQL31
+static enum MYSQL_COM_QUERY_command stmt_type_to_mysql_command(StmtType st);
+static enum PGSQL_QUERY_command stmt_type_to_pgsql_command(StmtType st);
+
+static bool parsersql_is_literal_expr(const AstNode* node) {
+    switch (node->type) {
+        case NodeType::NODE_LITERAL_INT:
+        case NodeType::NODE_LITERAL_FLOAT:
+        case NodeType::NODE_LITERAL_STRING:
+        case NodeType::NODE_LITERAL_NULL:
+        case NodeType::NODE_LITERAL_HEX:
+        case NodeType::NODE_LITERAL_BIT:
+        case NodeType::NODE_PLACEHOLDER:
+            return true;
+        case NodeType::NODE_UNARY_OP:
+            if (node->value_len != 1 || (node->value_ptr[0] != '-' && node->value_ptr[0] != '+')) {
+                return false;
+            }
+            [[fallthrough]];
+        case NodeType::NODE_EXPRESSION:
+        case NodeType::NODE_TUPLE:
+        case NodeType::NODE_VALUES_ROW:
+            for (const AstNode* child = node->first_child; child; child = child->next_sibling) {
+                if (!parsersql_is_literal_expr(child)) return false;
+            }
+            return true;
+        default:
+            return false;
+    }
+}
 
 /**
- * @brief Normalize the query with the legacy tokenizer, as legacy mode does.
+ * @brief True if the DIGEST emitter would hide a non-literal expression in @p node.
  *
- * Grammar coverage does not take part: every query is digested with the same
- * token path, so a statement that ParserSQL cannot fully parse now gets the
- * exact digest it would get with *-query_processor_parser=0.
+ * In DIGEST mode ParserSQL renders every IN / NOT IN list that is not a single
+ * subquery as "IN (?)", and keeps only the first row of a VALUES clause,
+ * whatever the omitted elements are. The legacy tokenizer only replaces
+ * literals. ProxySQL string-matches the digest text for routing and
+ * multiplexing decisions (LAST_INSERT_ID / @@IDENTITY routing, GET_LOCK(,
+ * user variables, ...), so hiding e.g. "IN (LAST_INSERT_ID())" or
+ * "VALUES (1),(GET_LOCK('x',1))" changed behaviour versus
+ * query_processor_parser=0 (#6428). Such statements must use the legacy
+ * tokenizer. Lists made only of literals and placeholders lose nothing.
+ */
+static bool parsersql_digest_hides_expression(const AstNode* node) {
+    // The collapsed children, if any, are always a suffix of the child list.
+    const AstNode* hidden = nullptr;
+    if (node->type == NodeType::NODE_IN_LIST) {
+        const AstNode* expr = node->first_child;
+        const AstNode* first_val = expr ? expr->next_sibling : nullptr;
+        // A single subquery is emitted in full, not collapsed.
+        if (!first_val || first_val->type != NodeType::NODE_SUBQUERY || first_val->next_sibling) {
+            hidden = first_val;
+        }
+    } else if (node->type == NodeType::NODE_VALUES_CLAUSE && node->value_len == 0) {
+        // Only the first row is emitted.
+        hidden = node->first_child ? node->first_child->next_sibling : nullptr;
+    }
+    for (const AstNode* child = hidden; child; child = child->next_sibling) {
+        if (!parsersql_is_literal_expr(child)) return true;
+    }
+    // Literal-only children cannot contain another list: search only the emitted ones.
+    for (const AstNode* child = node->first_child; child != hidden; child = child->next_sibling) {
+        if (parsersql_digest_hides_expression(child)) return true;
+    }
+    return false;
+}
+
+// Temporary v3.0 compatibility path pending #6508. Incomplete ASTs use the
+// legacy digest, so a parsed prefix does not discard trailing SQL.
+// First-comment annotations remain unavailable in this mode (#6507).
+template <Dialect D>
+static void parsersql_native_digest(SQP_par_t* qp, const char* query,
+                                   int query_length, Parser<D>& parser) {
+    const auto parsed = parser.parse(query, query_length);
+    if constexpr (D == Dialect::MySQL) {
+        qp->parsersql_command_type = stmt_type_to_mysql_command(parsed.stmt_type);
+    } else {
+        qp->parsersql_command_type = stmt_type_to_pgsql_command(parsed.stmt_type);
+    }
+    const auto fallback = [&]() {
+        // Retain the bounded legacy fallback for unsupported/incomplete input,
+        // arena exhaustion and expressions hidden by DIGEST emission (#6428).
+        // This is conditional; ordinary parsed queries never run this tokenizer.
+        qp->parsersql_command_type = -1;
+        parsersql_tokenizer_digest<D>(qp, query, query_length);
+        free(qp->first_comment);
+        qp->first_comment = nullptr;
+        parser.reset();
+    };
+    if (parsed.status != ParseResult::OK || !parsed.full_input || !parsed.ast ||
+        parsersql_digest_hides_expression(parsed.ast)) {
+        fallback();
+        return;
+    }
+    Emitter<D> emitter(parser.arena(), EmitMode::DIGEST);
+    emitter.emit(parsed.ast);
+    const StringRef normalized = emitter.result();
+    // AST allocation can succeed while the emitter exhausts the same arena.
+    // Digest consumers require C strings, so embedded NUL also needs fallback.
+    if (!normalized.ptr || memchr(normalized.ptr, '\0', normalized.len)) {
+        fallback();
+        return;
+    }
+    // Copy before reset: both emitter and token-digest output live in the arena.
+    if (normalized.len < QUERY_DIGEST_BUF) {
+        if (normalized.len) memcpy(qp->buf, normalized.ptr, normalized.len);
+        qp->buf[normalized.len] = '\0';
+        qp->digest_text = qp->buf;
+    } else {
+        qp->digest_text = static_cast<char*>(malloc(static_cast<size_t>(normalized.len) + 1));
+        if (!qp->digest_text) {
+            fallback();
+            return;
+        }
+        memcpy(qp->digest_text, normalized.ptr, normalized.len);
+        qp->digest_text[normalized.len] = '\0';
+    }
+    if (qp->digest_text) {
+        qp->digest = SpookyHash::Hash64(qp->digest_text, normalized.len, 0);
+    }
+    parser.reset();
+}
+#endif
+
+/**
+ * @brief Dispatch digest generation according to the build-tier contract.
  */
 template <Dialect D>
 static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_length) {
@@ -483,6 +596,9 @@ static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_le
     qp->first_comment = NULL;
     qp->query_prefix = NULL;
     qp->digest = 0;
+#ifndef PROXYSQL31
+    qp->parsersql_command_type = -1;
+#endif
     if (!query || query_length < 0) return;
     if constexpr (D == Dialect::PostgreSQL) {
         // PgSQL_Query_Info includes the protocol terminator in QueryLength.
@@ -490,7 +606,15 @@ static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_le
     }
     // An empty query is digested too, as in legacy mode: it gets digest text ""
     // and the hash of "" (#6454).
+#ifdef PROXYSQL31
     parsersql_tokenizer_digest<D>(qp, query, query_length);
+#else
+    if constexpr (D == Dialect::MySQL) {
+        parsersql_native_digest<D>(qp, query, query_length, tl_mysql_parser);
+    } else {
+        parsersql_native_digest<D>(qp, query, query_length, tl_pgsql_parser);
+    }
+#endif
 }
 
 void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_length) {
@@ -799,6 +923,11 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
     std::vector<SessionVariableAssignment> session_assignments;
     for (const AstNode* child = result.ast->first_child; child; child = child->next_sibling) {
         if (!assignment_has_user_target(child)) {
+#ifndef PROXYSQL31
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            tl_mysql_parser.reset();
+            return analysis;
+#else
             const AstNode* target = child->type == NodeType::NODE_VAR_ASSIGNMENT
                 ? child->first_child : nullptr;
             const ReplayContextTarget session_target = replay_context_target(target);
@@ -821,6 +950,7 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
             }
             session_assignments.push_back({session_target.name, value, rhs->type == NodeType::NODE_LITERAL_STRING});
             continue;
+#endif
         }
 
         const AstNode* target = child->first_child;

@@ -1113,6 +1113,29 @@ void MySQL_Data_Stream::set_pollout() {
 			// packets have been processed.
 			_pollfd->events = 0;
 		}
+		if (myds_type == MYDS_FRONTEND && PSarrayOUT->len && sess && sess->client_myds == this && sess->client_may_pipeline()) {
+			// Client pipelining (#5930): check_data_flow() no longer disconnects a
+			// client that sends new commands while the responses to the previous
+			// ones are still queued, so a client that never reads its responses
+			// would make PSarrayOUT grow without limit (each locally answered
+			// command, e.g. COM_PING, appends a packet). Stop reading from the
+			// client while the pending output is above the limit at which the
+			// frontend is considered slow for backend reads (see
+			// Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(), same
+			// estimate): its commands stay in the kernel buffers and TCP flow
+			// control applies, as with a MySQL server whose writes block. Output
+			// mostly accumulates here while the socket send buffer is full, so a
+			// client that reads its responses, pipelining or not, is not affected.
+			// (A single read of many pipelined commands can also cross the limit
+			// briefly; reading then pauses only until those responses are sent.) Reading
+			// resumes as soon as the client drains its responses: POLLOUT stays armed
+			// (below) because PSarrayOUT is not empty.
+			const uint64_t buffered_data =
+				(static_cast<uint64_t>(PSarrayOUT->len) + resultset->len) * RESULTSET_BUFLEN;
+			if (buffered_data > 4 * static_cast<uint64_t>(mysql_thread___threshold_resultset_size)) {
+				_pollfd->events = 0;
+			}
+		}
 		//if (PSarrayOUT->len || available_data_out() || queueOUT.partial || (encrypted && !SSL_is_init_finished(ssl))) {
 		if (PSarrayOUT->len || available_data_out() || queueOUT.partial) {
 			_pollfd->events |= POLLOUT;

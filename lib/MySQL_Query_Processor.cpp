@@ -568,10 +568,16 @@ enum MYSQL_COM_QUERY_command MySQL_Query_Processor::query_parser_command_type(SQ
 	enum MYSQL_COM_QUERY_command ret = MYSQL_COM_QUERY_UNKNOWN;
 
 	if (mysql_thread___query_processor_parser == 1) {
-		// The digest no longer classifies the statement (#6454): ask ParserSQL
-		// lazily, and only when the command type is actually needed.
-		if (text) {
-			ret = parsersql_command_type_mysql(text, strlen(text)); // NOSONAR
+#ifndef PROXYSQL31
+		if (qp->parsersql_command_type >= 0) {
+			ret = static_cast<MYSQL_COM_QUERY_command>(qp->parsersql_command_type);
+		} else
+#endif
+		{
+			// Prefix-only callers have no digest parse to reuse.
+			if (text) {
+				ret = parsersql_command_type_mysql(text, strlen(text)); // NOSONAR
+			}
 		}
 	}
 	// ParserSQL has no statement type for several statements the legacy

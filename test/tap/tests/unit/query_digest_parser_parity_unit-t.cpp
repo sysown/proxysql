@@ -194,6 +194,12 @@ static void test_no_sql_tokens(const char* dialect, DigestResult (*digest)(const
 }
 
 int main() {
+#ifndef PROXYSQL31
+	plan(1);
+	skip(1, "v3.0 experimental ParserSQL digests do not promise legacy parity (#6507)");
+	return exit_status();
+#else
+
 	const size_t parity_tests = 4 * (2 * common_queries.size() + mysql_queries.size() + pgsql_queries.size());
 	plan(parity_tests + 2 * 7 + 2 * 6);
 
@@ -224,4 +230,5 @@ int main() {
 	test_cleanup_query_processor();
 	test_cleanup_minimal();
 	return exit_status();
+#endif
 }

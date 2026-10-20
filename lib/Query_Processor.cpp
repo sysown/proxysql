@@ -1300,15 +1300,21 @@ bool rule_matches_query(
 		return false;
 	}
 
-	// Digest predicates require their input. Missing metadata must not make
-	// a digest-specific rule act as an unconditional match.
-	if (qr->digest && (!digest || qr->digest != digest)) {
+	// The digest criteria apply only when the query has a digest, as in v3.0.11.
+	// With *-query_digests=0 there is none (digest 0, digest_text NULL), so
+	// 'digest' and 'match_digest' are not applicable and the rule's other
+	// criteria decide. Whenever digests are enabled both query_parser_init()
+	// paths, legacy and parser mode, always produce a digest text and its hash:
+	// parser mode falls back to the token digest when ParserSQL cannot build a
+	// complete AST. A statement ParserSQL cannot parse therefore cannot skip
+	// these criteria. An empty digest text ("", a query without SQL tokens) is
+	// a real digest: match_digest is evaluated on it, negation included.
+	if (qr->digest && digest && qr->digest != digest) {
 		return false;
 	}
 
-	if (qr->match_digest) {
-		if (!digest_text || !*digest_text ||
-			rule_matches_regex(qr, qr->regex_engine1, 1, digest_text, query_processor_regex) == false) {
+	if (qr->match_digest && digest_text) {
+		if (rule_matches_regex(qr, qr->regex_engine1, 1, digest_text, query_processor_regex) == false) {
 			return false;
 		}
 	}
@@ -3430,6 +3436,9 @@ static void qp_digest_legacy(SQP_par_t* qp, const char* query, int query_length)
 
 template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *query, int query_length, int flags) {
+#ifndef PROXYSQL31
+	qp->parsersql_command_type = -1;
+#endif
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
@@ -3444,11 +3453,8 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 		}
 	}
 	if (GET_THREAD_VARIABLE(query_digests)) {
-		// Parser mode no longer changes the digest (#6454): parsersql_digest_init_*()
-		// now delegates to the legacy tokenizer, so both branches below yield the
-		// same digest, digest text and first comment. The *-query_processor_parser
-		// variable only selects the command-type classifier, consulted lazily by
-		// query_parser_command_type().
+		// v3.0 keeps the experimental ParserSQL digest path; newer tiers retain
+		// the legacy-digest integration while its redesign is tracked in #6508.
 		if (GET_THREAD_VARIABLE(query_processor_parser) == 1) {
 			qp_digest_parsersql<QP_DERIVED>(qp, query, query_length);
 		} else {
