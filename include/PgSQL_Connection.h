@@ -1008,6 +1008,9 @@ public:
 	// down, so the connection is classified non-reusable instead of being pooled.
 	// See the definition in PgSQL_Connection.cpp for why the teardown is required.
 	void native_result_fatal(const char* code, const char* message);
+	// The backend closed while a reply was expected. native_result_fatal() with the
+	// FATAL the backend sent just before closing, if any, as the reason.
+	void native_result_backend_closed();
 	// A post-connect send() of `what` (e.g. "send(Query)") failed: 08006 with errno's text,
 	// then native_result_fatal(). Must be called right after native_flush_outbuf() returned
 	// false, before anything else can overwrite errno.

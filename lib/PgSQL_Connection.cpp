@@ -1823,6 +1823,18 @@ void PgSQL_Connection::native_result_fatal(const char* code, const char* message
 	native_result_complete = true;   // nothing more will come from this connection
 }
 
+// A killed backend sends its FATAL (57P01, 57P05) just before it closes. Keep that as the
+// reason; the close on its own only says the backend went away.
+void PgSQL_Connection::native_result_backend_closed() {
+	if (!is_error_present()) {
+		native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed the connection");
+		return;
+	}
+	const std::string code = get_error_code_str();
+	const std::string message = get_error_message();
+	native_result_fatal(code.c_str(), message.c_str());
+}
+
 // A failed send() after login means the socket is dead (ECONNRESET / EPIPE), so it gets the
 // same teardown as a failed recv(). Recording the error alone left fd open and native_connected
 // set: the connection kept reporting itself live and reusable, the session skipped its
@@ -5270,15 +5282,7 @@ void PgSQL_Connection::native_reset_session_cont() {
 				return;
 			}
 			if (r < 0) {
-				// A killed backend sends its FATAL (57P01, 57P05) just before it closes.
-				// Keep that as the reason; the close on its own only says it went away.
-				if (is_error_present()) {
-					const std::string code = get_error_code_str();
-					const std::string message = get_error_message();
-					native_result_fatal(code.c_str(), message.c_str());
-				} else {
-					native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed the connection");
-				}
+				native_result_backend_closed();
 				return;
 			}
 			continue;
