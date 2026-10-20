@@ -328,7 +328,7 @@ ProxySQL_ServerDesiredSet pgsql_desired(uint64_t generation,
 
 /** Check server reconciliation and teardown of constructor-only Admin fixtures. */
 int main() {
-	plan(83);
+	plan(84);
 	proxysql_server_discovery_after_final_revalidation_for_test = &after_final_revalidation_hook;
 	proxysql_server_reconcile_after_hgm_snapshot_for_test = &after_hgm_snapshot_hook;
 	proxysql_server_discovery_retirement_attempt_for_test = &retirement_attempt_hook;
@@ -397,15 +397,25 @@ int main() {
 		pgsql_claims[0].writer_hostgroup == 17 && pgsql_claims[0].reader_hostgroup == 18 &&
 		pgsql_claims[1].writer_hostgroup == 27 && pgsql_claims[1].reader_hostgroup == 28,
 		"the exact two claim pairs are active for each protocol");
-	const ProxySQL_ServerDesiredSet valid_single {ProxySQL_ServerProtocol::mysql, generation,
+	const ProxySQL_ServerDesiredSet partial_writer {ProxySQL_ServerProtocol::mysql, generation,
 		{17}, {}, ProxySQL_ServerPersistence::runtime_only};
-	const ProxySQL_ServerDesiredSet valid_pair {ProxySQL_ServerProtocol::mysql, generation,
+	const ProxySQL_ServerDesiredSet partial_reader {ProxySQL_ServerProtocol::mysql, generation,
+		{18}, {}, ProxySQL_ServerPersistence::runtime_only};
+	const ProxySQL_ServerDesiredSet partial_mixed {ProxySQL_ServerProtocol::mysql, generation,
+		{17, 27, 28}, {}, ProxySQL_ServerPersistence::runtime_only};
+	const ProxySQL_ServerDesiredSet valid_first_claim {ProxySQL_ServerProtocol::mysql, generation,
 		{17, 18}, {}, ProxySQL_ServerPersistence::runtime_only};
+	const ProxySQL_ServerDesiredSet valid_second_claim {ProxySQL_ServerProtocol::mysql, generation,
+		{27, 28}, {}, ProxySQL_ServerPersistence::runtime_only};
+	const ProxySQL_ServerDesiredSet valid_both_claims {ProxySQL_ServerProtocol::mysql, generation,
+		{17, 18, 27, 28}, {}, ProxySQL_ServerPersistence::runtime_only};
 	ok(manager->revalidate_server_desired_set(ProxySQL_ServerProtocol::mysql,
-		mysql_controller, valid_single) &&
+		mysql_controller, valid_first_claim) &&
 		manager->revalidate_server_desired_set(ProxySQL_ServerProtocol::mysql,
-			mysql_controller, valid_pair),
-		"nonempty sorted singleton and pair scopes contained in installed claims revalidate");
+			mysql_controller, valid_second_claim) &&
+		manager->revalidate_server_desired_set(ProxySQL_ServerProtocol::mysql,
+			mysql_controller, valid_both_claims),
+		"one or more complete managed discovery claims revalidate");
 	const auto rejected_by_both = [&](ProxySQL_ServerDesiredSet candidate,
 		ProxySQL_ServerProtocol callback_protocol = ProxySQL_ServerProtocol::mysql,
 		const ProxySQL_ServerDiscoveryController* callback_controller = nullptr) {
@@ -416,20 +426,31 @@ int main() {
 				callback_protocol, callback_controller, candidate);
 	};
 	Controller wrong_controller(&acks);
-	ok(rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {}, {},
+	ok(rejected_by_both(partial_writer) && rejected_by_both(partial_reader) &&
+		rejected_by_both(partial_mixed) &&
+		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {}, {},
 			ProxySQL_ServerPersistence::runtime_only}) &&
 		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {18, 17}, {},
 			ProxySQL_ServerPersistence::runtime_only}) &&
-		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {17, 17}, {},
+		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {17, 17, 18}, {},
 			ProxySQL_ServerPersistence::runtime_only}) &&
-		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {17, 29}, {},
+		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {17, 18, 29}, {},
 			ProxySQL_ServerPersistence::runtime_only}) &&
-		rejected_by_both({ProxySQL_ServerProtocol::pgsql, generation, {17}, {},
+		rejected_by_both({ProxySQL_ServerProtocol::pgsql, generation, {17, 18}, {},
 			ProxySQL_ServerPersistence::runtime_only}) &&
-		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation + 1, {17}, {},
+		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation + 1, {17, 18}, {},
 			ProxySQL_ServerPersistence::runtime_only}) &&
-		rejected_by_both(valid_single, ProxySQL_ServerProtocol::mysql, &wrong_controller),
-		"empty, unsorted, duplicate, out-of-claim, protocol, generation, and controller mismatches reject");
+		rejected_by_both(valid_first_claim, ProxySQL_ServerProtocol::mysql, &wrong_controller),
+		"partial claims and invalid scope, protocol, generation, or controller inputs reject");
+	const auto merge_accepts = [&](const ProxySQL_ServerDesiredSet& candidate) {
+		std::vector<ProxySQL_ServerRow> merged;
+		std::string merge_error;
+		return proxysql_merge_server_desired_set(installed, candidate, merged, merge_error);
+	};
+	ok(merge_accepts(valid_first_claim) && merge_accepts(valid_second_claim) &&
+		merge_accepts(valid_both_claims) && !merge_accepts(partial_writer) &&
+		!merge_accepts(partial_reader) && !merge_accepts(partial_mixed),
+		"the merge boundary accepts complete claims and rejects partial claims");
 	GloAdmin = nullptr;
 	const bool unavailable_post = manager->post_server_desired_set(desired(generation, {}));
 	GloAdmin = admin;
@@ -445,8 +466,9 @@ int main() {
 	ok(apply_scope({17, 18}) && apply_scope({27, 28}) &&
 		ack_count(acks, generation, true) == 2,
 		"two independent claimed policy pairs under one protocol each apply");
-	ok(apply_scope({17}) && ack_count(acks, generation, true) == 3,
-		"a singleton desired scope contained in the installed claim union applies");
+	ok(apply_scope({17}) && ack_count(acks, generation, true) == 2 &&
+		ack_count(acks, generation, false) == 1,
+		"a partial desired claim is rejected without applying inventory changes");
 	clear_acks(acks);
 
 	auto initial = mysql_rows({

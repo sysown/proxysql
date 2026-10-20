@@ -390,9 +390,23 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 			claim_by_hostgroup.emplace(claim.role_monitor.green_reader_hostgroup, index);
 		}
 	}
+	std::set<size_t> selected_claims;
 	for (uint32_t hostgroup : delegated) {
-		if (claim_by_hostgroup.count(hostgroup) == 0) {
+		const auto claim = claim_by_hostgroup.find(hostgroup);
+		if (claim == claim_by_hostgroup.end()) {
 			error = "delegated hostgroup has no active discovery claim";
+			return false;
+		}
+		selected_claims.insert(claim->second);
+	}
+	for (size_t index : selected_claims) {
+		const auto& claim = claims[index];
+		if (delegated.count(claim.writer_hostgroup) == 0 ||
+			delegated.count(claim.reader_hostgroup) == 0 ||
+			(claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green &&
+			 (delegated.count(claim.role_monitor.green_writer_hostgroup) == 0 ||
+			  delegated.count(claim.role_monitor.green_reader_hostgroup) == 0))) {
+			error = "delegated hostgroups contain an incomplete discovery claim";
 			return false;
 		}
 	}

@@ -1870,11 +1870,23 @@ bool replace_managed_topology_rows(SQLite3DB& db, ProxySQL_ServerProtocol protoc
 	return true;
 }
 
-bool is_nonempty_sorted_unique_subset(const std::vector<uint32_t>& installed,
+bool is_complete_managed_claim_scope(
+	const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
 	const std::vector<uint32_t>& desired) {
-	return !desired.empty() && std::is_sorted(desired.begin(), desired.end()) &&
-		std::adjacent_find(desired.begin(), desired.end()) == desired.end() &&
-		std::includes(installed.begin(), installed.end(), desired.begin(), desired.end());
+	if (desired.empty() || !std::is_sorted(desired.begin(), desired.end()) ||
+		std::adjacent_find(desired.begin(), desired.end()) != desired.end()) return false;
+	std::set<uint32_t> accepted;
+	for (const auto& claim : claims) {
+		const auto hostgroups = managed_claim_hostgroups(claim);
+		const size_t selected = std::count_if(hostgroups.begin(), hostgroups.end(),
+			[&](uint32_t hostgroup) {
+				return std::binary_search(desired.begin(), desired.end(), hostgroup);
+			});
+		if (selected != 0 && selected != hostgroups.size()) return false;
+		if (selected == hostgroups.size())
+			accepted.insert(hostgroups.begin(), hostgroups.end());
+	}
+	return accepted.size() == desired.size();
 }
 
 // A callback lease pins its module/controller object while its callback runs.
@@ -2427,7 +2439,7 @@ bool ProxySQL_PluginManager::revalidate_server_desired_set(
 		!server_controller_retiring_[index] &&
 		server_snapshots_present_[index] &&
 		server_snapshots_[index].generation == desired_set.generation &&
-		is_nonempty_sorted_unique_subset(server_delegated_hostgroups_[index],
+		is_complete_managed_claim_scope(managed_server_hostgroup_claims_[index],
 			desired_set.delegated_hostgroups);
 }
 
@@ -2441,7 +2453,7 @@ bool ProxySQL_PluginManager::begin_server_desired_set_apply(
 		server_controller_retiring_[index] ||
 		!server_snapshots_present_[index] ||
 		server_snapshots_[index].generation != desired_set.generation ||
-		!is_nonempty_sorted_unique_subset(server_delegated_hostgroups_[index],
+		!is_complete_managed_claim_scope(managed_server_hostgroup_claims_[index],
 			desired_set.delegated_hostgroups)) return false;
 	++server_desired_applies_inflight_[index];
 	return true;
