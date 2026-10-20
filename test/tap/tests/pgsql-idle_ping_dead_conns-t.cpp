@@ -71,6 +71,9 @@ static const char* KA_USER  = "idle_ping_ka";     // phase C, idle_session_timeo
 static const char* MOCK_USER = "idle_ping_mock";  // phase D, routed to the mock
 static const int   MOCK_HG  = 61;
 static const char* PASS     = "idle_ping_pass";
+// The test's own pgsql-ping_timeout_server. The phases that wait for a ping to fail are
+// sized for it, so the environment's value must not leak in.
+static const char* PING_TIMEOUT_MS = "500";
 
 static std::fstream f_proxysql_log{};
 
@@ -520,7 +523,7 @@ static void expectDropped(MockCase& f, const std::string& tag, const char* what,
 		tag.c_str(), what, pinged, left, lines.size(), matching.size());
 }
 
-static void phaseEdgeCases(MockCase& f, const std::string& tag, const std::string& saved_ping_timeout) {
+static void phaseEdgeCases(MockCase& f, const std::string& tag) {
 	const std::string me = f.host + ":" + std::to_string(f.mock.port());
 
 	// E1: 300 ms is far slower than a real reply, but inside a 1 s timeout.
@@ -616,12 +619,12 @@ static void phaseEdgeCases(MockCase& f, const std::string& tag, const std::strin
 	}
 	endCase(f);
 
-	setVar(f.admin, "pgsql-ping_timeout_server", saved_ping_timeout.empty() ? "200" : saved_ping_timeout);
+	setVar(f.admin, "pgsql-ping_timeout_server", PING_TIMEOUT_MS);
 }
 
 // Every phase for one backend mode: A and B over plaintext and TLS; C, D and E over plaintext.
 static void runMode(PGconn* admin, PGconn* be, PgSQL_Mock_Backend& mock, const std::string& mock_host,
-		const char* mode, bool has_idle_timeout, const std::string& saved_ping_timeout) {
+		const char* mode, bool has_idle_timeout) {
 	for (int tls = 0; tls <= 1; tls++) {
 		execOk(admin, "UPDATE pgsql_servers SET use_ssl=" + std::to_string(tls) + " WHERE hostgroup_id=" + std::to_string(HG));
 		execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME");
@@ -633,7 +636,7 @@ static void runMode(PGconn* admin, PGconn* be, PgSQL_Mock_Backend& mock, const s
 		else skip(1, "%s: idle_session_timeout needs PostgreSQL 14+", tag.c_str());
 		phaseSilentBackend(admin, mock, mock_host, tag, mode);
 		MockCase mc { admin, mock, mock_host, mode };
-		phaseEdgeCases(mc, tag, saved_ping_timeout);
+		phaseEdgeCases(mc, tag);
 	}
 }
 
@@ -642,6 +645,19 @@ static const char* TOUCHED_VARS[] = {
 	"pgsql-ping_interval_server_msec", "pgsql-free_connections_pct", "pgsql-poll_timeout",
 	"pgsql-ping_timeout_server", "pgsql-monitor_enabled", "pgsql-use_native_backend_protocol",
 };
+
+// Undo everything the test changed: the mock's server row, the test's roles and users,
+// hostgroup 0's rows and every touched variable. Also the exit path of a setup step that
+// fails after something was already changed.
+static void restoreAll(PGconn* admin, PGconn* be, const std::vector<ServerRow>& servers, const std::vector<std::string>& vars) {
+	flushPool(admin);
+	execOk(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(MOCK_HG));
+	cleanupUsers(admin, be);
+	restoreServers(admin, HG, servers);
+	for (size_t i = 0; i < vars.size(); i++)
+		if (!vars[i].empty()) setVar(admin, TOUCHED_VARS[i], vars[i]);
+	flushPool(admin);
+}
 
 int main(int, char**) {
 	if (cl.getEnv()) return exit_status();
@@ -665,9 +681,14 @@ int main(int, char**) {
 	// A variable this build does not have reads back empty and is left alone.
 	std::vector<std::string> saved_vars;
 	for (const char* v : TOUCHED_VARS) saved_vars.push_back(runtimeVar(admin.get(), v));
-	const std::string saved_ping_timeout = runtimeVar(admin.get(), "pgsql-ping_timeout_server");
 	const std::vector<ServerRow> saved_servers = readServers(admin.get(), HG);
 	if (saved_servers.empty()) { BAIL_OUT("cannot read the pgsql_servers rows of hostgroup %d", HG); return exit_status(); }
+	// The mock's hostgroup is deleted and refilled as the test goes, so it must hold
+	// nothing of anyone else's.
+	if (scalar(admin.get(), "SELECT count(*) FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(MOCK_HG)) != "0") {
+		BAIL_OUT("hostgroup %d is not empty; the test registers its mock backend there", MOCK_HG);
+		return exit_status();
+	}
 
 	// idle_session_timeout exists from PostgreSQL 14 on; phase C is skipped below that.
 	const bool has_idle_timeout = atoi(scalar(be.get(), "SHOW server_version_num").c_str()) >= 140000;
@@ -675,23 +696,29 @@ int main(int, char**) {
 	cleanupUsers(admin.get(), be.get());  // rows or roles left by an aborted run
 	if (!createUser(admin.get(), be.get(), USER, nullptr)
 		|| (has_idle_timeout && !createUser(admin.get(), be.get(), KA_USER, "idle_session_timeout = '4s'"))) {
-		cleanupUsers(admin.get(), be.get());
+		restoreAll(admin.get(), be.get(), saved_servers, saved_vars);
 		BAIL_OUT("could not create the test roles");
 		return exit_status();
 	}
 
 	PgSQL_Mock_Backend mock;
-	if (!mock.start()) { BAIL_OUT("mock backend failed to listen"); return exit_status(); }
-	const std::string mock_host = pgmb_local_ip_towards(cl.pgsql_host, cl.pgsql_port);
-	if (mock_host.empty()) { BAIL_OUT("could not find this container's IP toward ProxySQL"); return exit_status(); }
+	const std::string mock_host = mock.start() ? pgmb_local_ip_towards(cl.pgsql_host, cl.pgsql_port) : "";
+	if (mock_host.empty()) {
+		restoreAll(admin.get(), be.get(), saved_servers, saved_vars);
+		BAIL_OUT("mock backend failed to listen, or this container's IP toward ProxySQL is unknown");
+		return exit_status();
+	}
 	if (!addProxyUser(admin.get(), MOCK_USER, MOCK_HG)) {
+		restoreAll(admin.get(), be.get(), saved_servers, saved_vars);
 		BAIL_OUT("could not add the mock's proxy user");
 		return exit_status();
 	}
 	// An idle worker only checks whether a ping round is due when its poll() wakes up, so
 	// pings come no faster than pgsql-poll_timeout. Pin it below the 1 s ping interval.
 	if (!setVar(admin.get(), "pgsql-ping_interval_server_msec", "1000") || !setVar(admin.get(), "pgsql-free_connections_pct", "100")
-		|| !setVar(admin.get(), "pgsql-poll_timeout", "500") || !setVar(admin.get(), "pgsql-monitor_enabled", "false")) {
+		|| !setVar(admin.get(), "pgsql-poll_timeout", "500") || !setVar(admin.get(), "pgsql-monitor_enabled", "false")
+		|| !setVar(admin.get(), "pgsql-ping_timeout_server", PING_TIMEOUT_MS)) {
+		restoreAll(admin.get(), be.get(), saved_servers, saved_vars);
 		BAIL_OUT("could not set the ping variables");
 		return exit_status();
 	}
@@ -699,16 +726,10 @@ int main(int, char**) {
 	for (int m = 0; m < modes; m++) {
 		const bool native = (m == 1);
 		if (native_supported) setVar(admin.get(), "pgsql-use_native_backend_protocol", native ? "true" : "false");
-		runMode(admin.get(), be.get(), mock, mock_host, native ? "native" : "libpq", has_idle_timeout, saved_ping_timeout);
+		runMode(admin.get(), be.get(), mock, mock_host, native ? "native" : "libpq", has_idle_timeout);
 	}
 
-	flushPool(admin.get());
-	execOk(admin.get(), "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(MOCK_HG));
-	cleanupUsers(admin.get(), be.get());
-	restoreServers(admin.get(), HG, saved_servers);
-	for (size_t i = 0; i < saved_vars.size(); i++)
-		if (!saved_vars[i].empty()) setVar(admin.get(), TOUCHED_VARS[i], saved_vars[i]);
-	flushPool(admin.get());
+	restoreAll(admin.get(), be.get(), saved_servers, saved_vars);
 
 	return exit_status();
 }
