@@ -694,12 +694,16 @@ int main() {
 	admin->pgsql_servers_wrlock();
 	admin->save_pgsql_servers_runtime_to_database(false);
 	admin->pgsql_servers_wrunlock();
-	ok(snapshot(admin_db, "main.mysql_servers").find("operator-save.mysql") != std::string::npos &&
-		snapshot(admin_db, "main.mysql_servers").find("runtime-unrelated.mysql") != std::string::npos,
-		"ordinary full SAVE MYSQL SERVERS copies discovered and unrelated runtime hostgroups");
-	ok(snapshot(admin_db, "main.pgsql_servers").find("operator-save.pgsql") != std::string::npos &&
-		snapshot(admin_db, "main.pgsql_servers").find("runtime-unrelated.pgsql") != std::string::npos,
-		"ordinary full SAVE PGSQL SERVERS copies discovered and unrelated runtime hostgroups");
+	const std::string mysql_saved = snapshot(admin_db, "main.mysql_servers");
+	ok(mysql_saved.find("exception-checksum.mysql") != std::string::npos &&
+		mysql_saved.find("pending-memory.mysql") != std::string::npos &&
+		mysql_saved.find("operator-save.mysql") == std::string::npos,
+		"ordinary full SAVE MYSQL SERVERS copies the active runtime inventory");
+	const std::string pgsql_saved = snapshot(admin_db, "main.pgsql_servers");
+	ok(pgsql_saved.find("exception-checksum.pgsql") != std::string::npos &&
+		pgsql_saved.find("pending-memory.pgsql") != std::string::npos &&
+		pgsql_saved.find("operator-save.pgsql") == std::string::npos,
+		"ordinary full SAVE PGSQL SERVERS copies the active runtime inventory");
 	ok(mysql_acks.destroyed.load() == 1 && pgsql_acks.destroyed.load() == 1,
 		"no hidden persistence mode changes controller or runtime lifetime semantics");
 

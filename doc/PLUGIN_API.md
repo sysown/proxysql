@@ -257,7 +257,14 @@ shunning.
 set updates inventory attributes but preserves the native monitor's current
 hostgroup placement. The desired set supplies initial placement for a new
 endpoint. A claim with monitor kind `none` leaves placement under plugin
-control.
+control. In both cases, core preserves the effective runtime status of an
+existing endpoint. The desired row status initializes only a new endpoint.
+
+An installed discovery controller with active claims owns the complete runtime
+server inventory for its protocol. A desired set replaces its selected claimed
+pair, preserves rows in other active claims, and removes runtime rows outside
+all active claims. This convergence changes runtime only; it does not remove
+rows from Admin MEMORY or disk.
 
 These structures changed layout, so core accepts server-discovery controller
 registration only from ABI-16 plugins. Build the controller and core from

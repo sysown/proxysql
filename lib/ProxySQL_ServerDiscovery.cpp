@@ -406,7 +406,7 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 	}
 	for (const auto& row : current.servers) {
 		if (delegated.count(row.hostgroup_id) == 0) {
-			merged.push_back(row);
+			if (claim_by_hostgroup.count(row.hostgroup_id) != 0) merged.push_back(row);
 			continue;
 		}
 		current_by_claim[claim_by_hostgroup.at(row.hostgroup_id)]
@@ -418,8 +418,20 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 			claims[index].role_monitor.kind == ProxySQL_ServerRoleMonitor::none;
 		for (const auto& desired_entry : desired_by_claim[index]) {
 			const auto current_it = current_by_claim[index].find(desired_entry.first);
-			if (current_it == current_by_claim[index].end() || plugin_owns_placement) {
+			if (current_it == current_by_claim[index].end()) {
 				merged.insert(merged.end(), desired_entry.second.begin(), desired_entry.second.end());
+				continue;
+			}
+			if (plugin_owns_placement) {
+				for (const auto& desired_row : desired_entry.second) {
+					const auto exact = std::find_if(current_it->second.begin(), current_it->second.end(),
+						[&](const ProxySQL_ServerRow& row) {
+							return row.hostgroup_id == desired_row.hostgroup_id;
+						});
+					ProxySQL_ServerRow row = desired_row;
+					row.status = (exact != current_it->second.end() ? *exact : current_it->second.front()).status;
+					merged.push_back(std::move(row));
+				}
 				continue;
 			}
 			for (const auto& current_row : current_it->second) {

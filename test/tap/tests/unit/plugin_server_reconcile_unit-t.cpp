@@ -513,6 +513,8 @@ int main() {
 		"MySQL desired-set scope treats hostgroup 0 as an ordinary inventory claim");
 	clear_acks(acks);
 	set_claims(ProxySQL_ServerProtocol::mysql, mysql_claims);
+	MyHGM->servers_add(initial.get());
+	const bool mysql_inventory_restored = MyHGM->commit({}, {}, false);
 	std::atomic<unsigned int> concurrent_posts {0};
 	std::vector<std::thread> producers;
 	for (unsigned int index = 0; index < 4; ++index) {
@@ -524,7 +526,8 @@ int main() {
 		});
 	}
 	for (auto& producer : producers) producer.join();
-	ok(concurrent_posts.load() == 4 && find_row(*runtime_rows(), 17, "old.example", 3306) != nullptr,
+	ok(mysql_inventory_restored && concurrent_posts.load() == 4 &&
+		find_row(*runtime_rows(), 17, "old.example", 3306) != nullptr,
 		"multiple worker threads post without mutating owner-thread runtime state");
 	ok(admin->drain_server_discovery_updates() == 4 && ack_count(acks, generation, false) == 4,
 		"owner thread rejects and acknowledges every accepted concurrent malformed update once");
@@ -544,27 +547,21 @@ int main() {
 		if (MyHGM->shun_and_killall(const_cast<char*>("old.example"), 3306))
 			monitor_updates.fetch_add(1);
 	});
-	std::thread unrelated_monitor([&] {
-		monitor_threads_started.fetch_add(1);
-		if (MyHGM->shun_and_killall(const_cast<char*>("unrelated.example"), 3306))
-			monitor_updates.fetch_add(1);
-	});
-	while (monitor_threads_started.load() != 2) std::this_thread::yield();
+	while (monitor_threads_started.load() != 1) std::this_thread::yield();
 	release_reconcile_hook();
 	delegated_monitor.join();
-	unrelated_monitor.join();
 	atomic_drain.join();
 	arm_reconcile_hook(ReconcileHookMode::none);
 	ok(snapshot_barrier_reached,
 		"HGM reconciliation exposes the deterministic locked-snapshot interleave barrier");
 	auto atomic_rows = runtime_rows();
 	const SQLite3_row* atomic_delegated = find_row(*atomic_rows, 17, "old.example", 3306);
-	const SQLite3_row* atomic_unrelated = find_row(*atomic_rows, 99, "unrelated.example", 3306);
-	ok(monitor_updates.load() == 2 && atomic_delegated != nullptr && atomic_unrelated != nullptr &&
+	ok(monitor_updates.load() == 1 && atomic_delegated != nullptr &&
 		std::string(atomic_delegated->fields[4]) == "SHUNNED" &&
 		std::string(atomic_delegated->fields[5]) == "11" &&
-		std::string(atomic_unrelated->fields[4]) == "SHUNNED",
-		"monitor status and unrelated-row updates after the locked snapshot survive reconcile commit");
+		find_row(*atomic_rows, 99, "unrelated.example", 3306) == nullptr &&
+		find_row(*atomic_rows, 27, "second-writer.example", 3306) != nullptr,
+		"monitor status survives reconcile while unclaimed rows are removed and other claims remain");
 	clear_acks(acks);
 
 	ProxySQL_ServerRow copied {17, "deep-copy.example", 3306, 0, "ONLINE", 31, 0, 101, 0, 1, 0, "copied"};
@@ -584,9 +581,10 @@ int main() {
 	ok(copied_row != nullptr && std::string(copied_row->fields[11]) == "copied" &&
 		find_row(*after_copy, 17, "mutated-after-post.example", 3306) == nullptr,
 		"drain applies the copied strings, not producer-owned storage");
-	ok(find_row(*after_copy, 99, "unrelated.example", 3306) != nullptr &&
+	ok(find_row(*after_copy, 99, "unrelated.example", 3306) == nullptr &&
+		find_row(*after_copy, 27, "second-writer.example", 3306) != nullptr &&
 		ack_count(acks, generation, true) == 1,
-		"delegated replacement preserves unrelated runtime state and acknowledges once after apply");
+		"replacement removes unclaimed runtime rows, preserves other claims, and acknowledges once");
 
 	ProxySQL_ServerRow malformed {77, "outside.example", 3306};
 	ok(manager->post_server_desired_set(desired(generation, {malformed})) &&
@@ -692,6 +690,7 @@ int main() {
 
 	auto pgsql_initial = pgsql_rows({
 		{17, "pgsql-old.example", 5432, 0, "ONLINE", 61, 0, 131, 0, 1, 0, "old"},
+		{27, "pgsql-second-writer.example", 5432, 0, "ONLINE", 65, 0, 135, 0, 1, 0, "writer"},
 		{1, "pgsql-zero-writer.example", 5432, 0, "ONLINE", 63, 0, 133, 0, 1, 0, "zero"},
 		{0, "pgsql-zero-reader.example", 5432, 0, "ONLINE", 64, 0, 134, 0, 1, 0, "zero"},
 		{99, "pgsql-unrelated.example", 5432, 0, "ONLINE", 62, 0, 132, 0, 1, 0, "keep"}});
@@ -736,26 +735,31 @@ int main() {
 	large_pgsql_readonly.reset(PgHGM->get_read_only_servers());
 	PgHGM->read_only_action_v2({{"pgsql-zero-writer.example", 5432, 1}}, false);
 	large_pgsql_runtime.reset(PgHGM->dump_table_pgsql("pgsql_servers"));
-	const bool pgsql_zero_mapped = large_pgsql_runtime &&
-		find_row(*large_pgsql_runtime, 0, "pgsql-zero-writer.example", 5432) != nullptr;
+	const bool pgsql_zero_unmapped = large_pgsql_runtime &&
+		find_row(*large_pgsql_runtime, 1, "pgsql-zero-writer.example", 5432) != nullptr &&
+		find_row(*large_pgsql_runtime, 0, "pgsql-zero-writer.example", 5432) == nullptr;
 	const bool pgsql_zero_applied = manager->post_server_desired_set(pgsql_zero_scope) &&
 		admin->drain_server_discovery_updates() == 1 &&
 		ack_count(pgsql_acks, pgsql_generation, true) == 1;
 	ok(pgsql_zero_revalidated && pgsql_zero_applied && large_pgsql_readonly &&
 		large_pgsql_readonly->rows_count == 0 &&
-		pgsql_zero_mapped,
+		pgsql_zero_unmapped,
 		"PostgreSQL desired-set scope treats hostgroup 0 as an ordinary inventory claim");
 	clear_acks(pgsql_acks);
 	set_claims(ProxySQL_ServerProtocol::pgsql, pgsql_claims);
+	PgHGM->servers_add(pgsql_initial.get());
+	const bool pgsql_inventory_restored = PgHGM->commit({}, {}, false);
 	ProxySQL_ServerRow pgsql_new {18, "pgsql-new.example", 5432, 0, "ONLINE", 71, 0, 141, 0, 1, 0, "new"};
-	ok(manager->post_server_desired_set(pgsql_desired(pgsql_generation, {pgsql_new})) &&
+	ok(pgsql_inventory_restored &&
+		manager->post_server_desired_set(pgsql_desired(pgsql_generation, {pgsql_new})) &&
 		admin->drain_server_discovery_updates() == 1,
 		"shared owner queue drains a PostgreSQL desired set through its 11-column adapter");
 	std::unique_ptr<SQLite3_result> pgsql_runtime(PgHGM->dump_table_pgsql("pgsql_servers"));
 	ok(find_row(*pgsql_runtime, 18, "pgsql-new.example", 5432) != nullptr &&
-		find_row(*pgsql_runtime, 99, "pgsql-unrelated.example", 5432) != nullptr &&
+		find_row(*pgsql_runtime, 99, "pgsql-unrelated.example", 5432) == nullptr &&
+		find_row(*pgsql_runtime, 27, "pgsql-second-writer.example", 5432) != nullptr &&
 		ack_count(pgsql_acks, pgsql_generation, true) == 1,
-		"PostgreSQL replacement preserves unrelated rows and acknowledges exactly once");
+		"PostgreSQL replacement removes unclaimed rows, preserves other claims, and acknowledges once");
 	std::unique_ptr<SQLite3_result> pgsql_replication_table(
 		PgHGM->dump_table_pgsql("pgsql_replication_hostgroups"));
 	std::unique_ptr<SQLite3_result> pgsql_readonly(PgHGM->get_read_only_servers());

@@ -740,11 +740,19 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 }
 
 ProxySQL_PluginManager::~ProxySQL_PluginManager() {
-	stop_all();
+	try {
+		stop_all();
+	} catch (...) {
+		proxy_warning("Plugin shutdown threw during manager destruction\n");
+	}
 	#ifdef PROXYSQL40
 	for (ProxySQL_ServerProtocol protocol : {ProxySQL_ServerProtocol::mysql,
 	                                         ProxySQL_ServerProtocol::pgsql}) {
-		uninstall_server_discovery_controller(protocol);
+		try {
+			uninstall_server_discovery_controller(protocol);
+		} catch (...) {
+			proxy_warning("Server discovery controller removal threw during manager destruction\n");
+		}
 	}
 	#endif /* PROXYSQL40 */
 	// Note: g_active_plugin_manager is cleared by callers under the mutex

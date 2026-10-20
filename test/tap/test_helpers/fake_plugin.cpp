@@ -617,6 +617,20 @@ const ProxySQL_PluginDescriptor fake_descriptor_with_runtime_ready = {
 	&fake_runtime_ready,
 };
 
+const ProxySQL_PluginDescriptor fake_descriptor_with_server_discovery = {
+	FAKE_PLUGIN_NAME,
+	PROXYSQL_PLUGIN_ABI_VERSION,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	nullptr,
+	nullptr,
+	nullptr,
+	nullptr,
+	nullptr,
+};
+
 // This object intentionally uses the ABI-5 descriptor shape. It has no ABI-6
 // tail field. Returning it through the current descriptor pointer type models
 // a plugin compiled before register_cli_options existed; the manager must not
@@ -700,6 +714,9 @@ extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 	}
 	if (env("ENABLE_RUNTIME_READY") != nullptr) {
 		return &fake_descriptor_with_runtime_ready;
+	}
+	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
+		return &fake_descriptor_with_server_discovery;
 	}
 	if (env("ENABLE_PHASE_B") != nullptr) {
 		return &fake_descriptor_with_phase_b;

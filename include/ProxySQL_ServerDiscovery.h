@@ -45,6 +45,9 @@ struct ProxySQL_ServerRuntimeSnapshot {
 struct ProxySQL_ServerDesiredSet {
 	ProxySQL_ServerProtocol protocol;
 	uint64_t generation {0};
+	// An active discovery controller owns the complete protocol runtime
+	// inventory. This scope selects the claimed pair updated by this set;
+	// runtime rows in other active claims remain, and unclaimed rows do not.
 	std::vector<uint32_t> delegated_hostgroups;
 	std::vector<ProxySQL_ServerRow> servers;
 	ProxySQL_ServerPersistence persistence { ProxySQL_ServerPersistence::runtime_only };
