@@ -229,9 +229,14 @@ static void test_mysql_scope(const Dialect& d) {
 	const char* annotated = "/* hostgroup=1 */ SET GLOBAL TRANSACTION READ ONLY";
 	SQP_par_t qp {};
 	d.parser_init(&qp, annotated, std::strlen(annotated));
+#ifdef PROXYSQL31
 	ok(qp.first_comment && std::strstr(qp.first_comment, "hostgroup=1"),
 		"%s first comment kept for SET GLOBAL TRANSACTION (got: %s)", d.name,
 		qp.first_comment ? qp.first_comment : "NULL");
+#else
+	ok(qp.first_comment == nullptr, "%s v3.0 leaves SET first-comment hints unavailable", d.name);
+#endif
+
 	ok(parsersql_command_type_mysql(annotated, std::strlen(annotated)) == MYSQL_COM_QUERY_SET,
 		"%s SET GLOBAL TRANSACTION is still classified as SET", d.name);
 	release_digest(qp);
@@ -285,10 +290,24 @@ static void test_parse2() {
 /** SET statements without a TRANSACTION clause must also get the legacy digest. */
 static void test_other_set_unchanged(const Dialect& d, const char* sql, const char* expected) {
 	const Digest parser = parser_digest(d, sql);
+#ifdef PROXYSQL31
 	const Digest legacy = legacy_digest(d, sql);
 	ok(parser.found && legacy.found && parser.text == legacy.text && parser.text == expected,
 		"%s parser digest equals legacy and the documented digest for [%s] (got: '%s', legacy: '%s', documented: '%s')",
 		d.name, sql, parser.text.c_str(), legacy.text.c_str(), expected);
+#else
+	auto compact = [](const std::string& value) {
+		std::string result;
+		for (unsigned char c : value) if (!isspace(c)) result.push_back(tolower(c));
+		return result;
+	};
+	std::string native_expected = expected;
+	if (d.pgsql && native_expected.find("SET search_path TO ") == 0) {
+		native_expected.replace(native_expected.find(" TO "), 4, " = ");
+	}
+	ok(parser.found && compact(parser.text) == compact(native_expected),
+		"%s v3.0 ParserSQL SET digest retains the statement: [%s] -> [%s]", d.name, sql, parser.text.c_str());
+#endif
 }
 
 int main() {

@@ -655,11 +655,12 @@ else
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 endif
 
+parsersql_digest_test: private PARSERSQL_DIGEST_TIER_FLAGS := $(if $(filter 1,$(PROXYSQL31) $(PROXYSQL40)),-DPROXYSQL31)
 parsersql_digest_test: parsersql_digest_test.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a
 ifeq ($(PROXYSQL40),1)
-	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o $(PARSERSQL_LDIR)/libsqlparser.a -o $@
+	$(CXX) $< $(PARSERSQL_DIGEST_TIER_FLAGS) -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 else
-	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
+	$(CXX) $< $(PARSERSQL_DIGEST_TIER_FLAGS) -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 endif
 
 parsersql_digest_test-t: parsersql_digest_test

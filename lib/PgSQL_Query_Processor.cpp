@@ -737,6 +737,20 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	enum PGSQL_QUERY_command ret = PGSQL_QUERY_UNKNOWN;
 
 	if (pgsql_thread___query_processor_parser == 1) {
+#ifndef PROXYSQL31
+		if (qp->parsersql_command_type >= 0) {
+			ret = static_cast<PGSQL_QUERY_command>(qp->parsersql_command_type);
+		} else
+		{
+			// Prefix-only callers have no digest parse to reuse.
+			if (text) {
+				ret = parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
+			}
+		}
+		if (text && (ret == PGSQL_QUERY_SELECT || ret == PGSQL_QUERY_UNKNOWN)) {
+			ret = parser_refine_command_type(ret, text);
+		}
+#else
 		// ParserSQL is asked only where its answer can differ: a SELECT is decided by
 		// parser_refine_command_type(), and the legacy classifier names the rest the same way except
 		// CREATE/ALTER/DROP (no subtypes in ParserSQL) and ROLLBACK (ROLLBACK TO SAVEPOINT).
@@ -757,6 +771,7 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 				}
 			}
 		}
+#endif
 		// ParserSQL cannot parse the tokenizer digest when it holds '?' placeholders or
 		// statements outside its grammar. Fall back to the legacy classifier, as MySQL
 		// does, so the command counters keep a meaningful value (#6454).

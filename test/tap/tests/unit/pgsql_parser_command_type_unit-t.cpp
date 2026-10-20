@@ -104,10 +104,8 @@ static const ClassifyCase keep_comment_cases[] = {
 	{"SELECT pg_terminate_backend /* x */ (123)", PGSQL_QUERY_TERMINATE_BACKEND},
 };
 
-// Parser mode answers for statements other than SELECT. Most of them come from the legacy
-// classifier without asking ParserSQL; CREATE/ALTER/DROP/ROLLBACK and what the legacy classifier
-// cannot name still go through ParserSQL. These pin the answers parser mode gave when every
-// statement was parsed, so skipping the parse changes none of them.
+// v3.0 reuses the original-query parse from digest generation (#6511). Newer tiers
+// classify the legacy digest lazily, retaining the answers from before that optimization.
 static const ClassifyCase type_cases[] = {
 	{"UPDATE t SET a = 1 WHERE b = 2", PGSQL_QUERY_UPDATE},
 	{"DELETE FROM t WHERE a = 1", PGSQL_QUERY_DELETE},
@@ -144,18 +142,32 @@ static const ClassifyCase type_cases[] = {
 	// The legacy classifier cannot name these.
 	{"END", PGSQL_QUERY_COMMIT},
 	{"WITH x AS (SELECT a FROM s) INSERT INTO t SELECT * FROM x", PGSQL_QUERY_INSERT},
-	// The digest turns 1 into '?', which ParserSQL cannot parse: it names nothing.
+	// Only newer tiers parse the '?' placeholder rather than reuse the original parse.
+#ifdef PROXYSQL31
 	{"WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", PGSQL_QUERY_UNKNOWN},
+#else
+	{"WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", PGSQL_QUERY_INSERT},
+#endif
 	{"VALUES (1)", PGSQL_QUERY_UNKNOWN},
 };
 
-// The same with pgsql-query_digests_keep_comment=1, where the digest starts with the comment.
+// With keep_comment=1, newer tiers retain the comment in the legacy digest;
+// v3.0's native emitter omits it.
 static const ClassifyCase type_keep_comment_cases[] = {
 	{"/* c */ UPDATE t SET a = b", PGSQL_QUERY_UPDATE},
-	// '?' again: ParserSQL fails, and the legacy classifier stops at the comment.
+#ifdef PROXYSQL31
+	// Parsing '?' fails; the legacy classifier stops at the kept comment.
 	{"/* c */ UPDATE t SET a = 1", PGSQL_QUERY_UNKNOWN},
+#else
+	{"/* c */ UPDATE t SET a = 1", PGSQL_QUERY_UPDATE},
+#endif
 	{"/* c */ BEGIN", PGSQL_QUERY_BEGIN},
+#ifdef PROXYSQL31
 	{"/* c */ COPY t FROM STDIN", PGSQL_QUERY_UNKNOWN},
+#else
+	// The native digest omits the comment before legacy classification.
+	{"/* c */ COPY t FROM STDIN", PGSQL_QUERY_COPY},
+#endif
 	{"/* c */ CREATE INDEX i ON t (a)", PGSQL_QUERY_CREATE_TABLE},
 };
 
@@ -250,8 +262,7 @@ static void test_parsersql_skip_guard() {
 	}
 }
 
-// With digests enabled the parser path classifies the digest text with ParserSQL
-// and refines SELECT from it.
+// With digests enabled, classify using the tier's parser path and refine SELECT.
 static void test_parser_with_digests() {
 	pgsql_thread___query_processor_parser = 1;
 	pgsql_thread___query_digests = true;
@@ -260,10 +271,8 @@ static void test_parser_with_digests() {
 		ok(got == c.expected, "parser=1 digests=1: '%s' -> %s (got %s)",
 			c.sql, cmd_name(c.expected), cmd_name(got));
 	}
-	// The classification is exercised through the digest text: the tokenizer turns
-	// PostgreSQL arguments into '?' placeholders that ParserSQL cannot parse, so the
-	// refinement must promote a plain SELECT rather than trust its UNKNOWN. The
-	// adapter still reports SELECT for these statements on the raw query.
+	// The raw-query adapter reports SELECT for these statements. Refinement must
+	// handle both this result and UNKNOWN from parsing placeholders in newer tiers.
 	for (const char* sql : {"SELECT pg_cancel_backend(1234)", "SELECT pg_terminate_backend($1)",
 		"WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d"}) {
 		const enum PGSQL_QUERY_command direct = parsersql_command_type_pgsql(sql, std::strlen(sql));

@@ -435,8 +435,10 @@ void __reset_rules(std::vector<QP_rule_t*>* qrs);
  * @param proxy_sa Proxy listener address, as a parsed sockaddr. Required for
  *        rules whose proxy_addr is a CIDR prefix; may be NULL otherwise.
  * @param proxy_port Proxy listener port.
- * @param digest Parsed query digest.
- * @param digest_text Parsed digest text.
+ * @param digest Parsed query digest, or 0 when the query has none
+ *   (*-query_digests=0). The rule's 'digest' criterion is skipped when 0.
+ * @param digest_text Parsed digest text, or NULL when the query has none. The
+ *   rule's 'match_digest' criterion is skipped when NULL; "" is evaluated.
  * @param query_text Original query text.
  * @param rewritten_query Rewritten query text produced by a previous rule, if any.
  * @param query_processor_regex Regex engine selector: PCRE (1), RE2 (2) or

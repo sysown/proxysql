@@ -69,7 +69,7 @@ Phase 1 limitations (documented in code + spec):
 - Cluster sync of variables works via the standard `mysql_variables`
   path; metric counters are per-node
 
-#### PostgreSQL query digest fixes and ParserSQL digest removal
+#### PostgreSQL digest fixes and v3.0 experimental ParserSQL compatibility
 
 - Fixed `pgsql-query_digests_keep_comment`: a kept comment is followed by a
   separator space, and the digest buffer now accounts for it, so the last
@@ -77,16 +77,23 @@ Phase 1 limitations (documented in code + spec):
 - Fixed an unterminated `/*` comment leaking its last character into the
   digest. An unterminated comment now contributes nothing; its partial text is
   preserved when `pgsql-query_digests_keep_comment` is on (#6451).
-- Parser mode (`*-query_processor_parser=1`) no longer changes the digest: the
-  digest, digest text and first comment always come from the legacy tokenizer,
-  with every `*-query_digests_*` option honoured. ParserSQL is now used only as
-  an add-on, for the command type and for SET / user-variable parsing (#6454).
-  Digests of some statements that ParserSQL fully parsed may change on upgrade
-  (for example IN lists and multi-row VALUES, no longer collapsed), so rules
-  that match on `digest` and saved digest statistics must be reviewed.
-
-**Note:** the ParserSQL digest change (#6454) must land with or after the
-tokenizer fixes in #6451, because the tokenizer becomes the only digest source.
+- v3.0 restores the established ParserSQL digest and backend-confirmed literal
+  user-variable tracking flows while retaining ParserSQL 1.1.1 (#6507).
+  ParserSQL-generated digests can differ from legacy mode, and first-comment
+  annotations remain unavailable with `*-query_processor_parser=1`.
+- Parser classification reuses the result obtained during digest parsing;
+  intercepted commands and isolated SET scope/completeness fixes are retained.
+  Unsupported/incomplete input, arena exhaustion and expressions hidden by the
+  AST digest retain a targeted legacy fallback, without exposing first-comment
+  hints in parser mode.
+- Mixed session/user-variable SET tracking, local acknowledgement/deferred
+  backend application and captured-context replay are gated to newer builds.
+  In v3.0, mixed assignments use the existing backend-bound fallback and
+  supported pure user-variable SETs update tracked state after backend success.
+  The v3.1 redesign is tracked independently in #6508.
+- The legacy-tokenizer-only digest model (#6454), including parser-mode first
+  comments and cross-mode digest parity, remains limited to `PROXYSQL31`
+  builds pending that redesign. Its tokenizer fixes remain in every build.
 
 #### New Features (3.1)
 

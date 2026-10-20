@@ -260,9 +260,10 @@ std::optional<uint64_t> parse_uint64(const std::string& text) {
 }
 
 bool limit_fallback_materialized_state(
-	const UserVariableCounters& before, const UserVariableCounters& after) {
+	const UserVariableCounters& before, const UserVariableCounters& after,
+	uint64_t expected_replay_commands) {
 	return after.assignments == before.assignments &&
-		after.replay_commands == before.replay_commands + 1 &&
+		after.replay_commands == before.replay_commands + expected_replay_commands &&
 		after.replay_failures == before.replay_failures &&
 		after.fallback_unsupported == before.fallback_unsupported &&
 		after.fallback_limits == before.fallback_limits + 1;
@@ -388,6 +389,7 @@ struct SavedConfig {
 	std::string query_parser;
 	std::string set_lock;
 	std::string multiplexing;
+	std::string free_connections_pct;
 };
 
 struct BackendEndpoint {
@@ -446,11 +448,12 @@ std::optional<SavedConfig> save_config(MYSQL* admin) {
 	auto query_parser = admin_variable(admin, "mysql-query_processor_parser");
 	auto set_lock = admin_variable(admin, "mysql-set_query_lock_on_hostgroup");
 	auto multiplexing = admin_variable(admin, "mysql-multiplexing");
-	if (!tracking || !set_parser || !query_parser || !set_lock || !multiplexing) {
+	auto free_connections_pct = admin_variable(admin, "mysql-free_connections_pct");
+	if (!tracking || !set_parser || !query_parser || !set_lock || !multiplexing || !free_connections_pct) {
 		return std::nullopt;
 	}
 	return SavedConfig {
-		*tracking, *set_parser, *query_parser, *set_lock, *multiplexing
+		*tracking, *set_parser, *query_parser, *set_lock, *multiplexing, *free_connections_pct
 	};
 }
 
@@ -473,6 +476,40 @@ std::optional<BackendEndpoint> select_backend(MYSQL* admin) {
 		std::stoi(row[4].bytes), std::stoi(row[5].bytes), std::stoi(row[6].bytes),
 		std::stoi(row[7].bytes), std::stoi(row[8].bytes)
 	};
+}
+
+// Exact-ID cleanup checks need a single eligible physical connection. Earlier
+// context tests can leave several equally valid pooled connections behind.
+bool prepare_single_connection_pools(MYSQL* admin, const std::string& tag) {
+	const std::string owned_servers =
+		" WHERE hostgroup_id IN (18110,18111) AND comment=" + sql_quote(admin, tag);
+	if (!execute(admin, "UPDATE mysql_servers SET status='OFFLINE_HARD'" + owned_servers) ||
+		!execute(admin, "LOAD MYSQL SERVERS TO RUNTIME")) {
+		return false;
+	}
+	bool drained = false;
+	for (int attempt = 0; attempt < 50; ++attempt) {
+		auto count = query_scalar(admin,
+			"SELECT COALESCE(SUM(ConnUsed+ConnFree),0) FROM stats_mysql_connection_pool "
+			"WHERE hostgroup IN (18110,18111)");
+		if (count && !count->is_null && count->bytes == "0") {
+			drained = true;
+			break;
+		}
+		usleep(100000);
+	}
+	if (!drained) diag("Temporary cleanup pools did not drain within five seconds");
+	return drained && set_admin_variable(admin, "mysql-free_connections_pct", "100") &&
+		execute(admin, "LOAD MYSQL VARIABLES TO RUNTIME") &&
+		execute(admin, "UPDATE mysql_servers SET status='ONLINE',max_connections=1" + owned_servers) &&
+		execute(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+}
+
+bool restore_pool_capacity(MYSQL* admin, const std::string& tag, const BackendEndpoint& backend) {
+	return execute(admin,
+		"UPDATE mysql_servers SET max_connections=" + std::to_string(backend.max_connections) +
+		" WHERE hostgroup_id IN (18110,18111) AND comment=" + sql_quote(admin, tag)) &&
+		execute(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 }
 
 bool configure_fixture(
@@ -915,7 +952,8 @@ void test_mixed_literal_context(MYSQL* admin, const CommandLine& cl, const Backe
 		"ANSI_QUOTES identifiers are not silently accepted as strings or committed to frontend state");
 }
 
-void test_backend_packet_limit(MYSQL* admin, MYSQL* direct, const CommandLine& cl, const std::string& tag) {
+void test_backend_packet_limit(
+	MYSQL* admin, MYSQL* direct, const CommandLine& cl, const std::string& tag, bool v30) {
 	const auto previous = query_scalar(direct, "SELECT @@GLOBAL.max_allowed_packet");
 	const auto previous_buffer = query_scalar(direct, "SELECT @@GLOBAL.net_buffer_length");
 	const auto occupied = query_scalar(admin, "SELECT (SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=18112)+(SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=18112)");
@@ -939,16 +977,18 @@ void test_backend_packet_limit(MYSQL* admin, MYSQL* direct, const CommandLine& c
 			if (created) execute(direct, "DROP TABLE " + table);
 		}
 	} restore {admin, direct, previous, previous_buffer, table, tag, created};
+	auto session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool staged_before_limit = !v30 || (session && execute(session.get(),
+		"SET @packet_value='" + std::string(20000, 'x') + "'"));
 	const bool configured = previous && !previous->is_null && previous_buffer && !previous_buffer->is_null &&
-		occupied && occupied->bytes == "0" && created &&
+		occupied && occupied->bytes == "0" && created && staged_before_limit &&
 		execute(direct, "SET GLOBAL max_allowed_packet=4096") &&
 		execute(direct, "SET GLOBAL net_buffer_length=1024") &&
 		execute(admin, "INSERT INTO mysql_servers(hostgroup_id,hostname,port,use_ssl,comment) SELECT 18112,hostname,port,use_ssl,comment FROM mysql_servers WHERE hostgroup_id=18110") &&
 		execute(admin, "LOAD MYSQL SERVERS TO RUNTIME") &&
 		execute(admin, "UPDATE mysql_query_rules SET destination_hostgroup=18112 WHERE destination_hostgroup=18110 AND comment=" + sql_quote(admin, tag)) &&
 		execute(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
-	auto session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
-	const bool staged = session && execute(session.get(),
+	const bool staged = v30 ? staged_before_limit : session && execute(session.get(),
 		"SET @packet_value='" + std::string(20000, 'x') + "'");
 	const auto before = user_variable_counters(admin);
 	const bool rejected = configured && staged && execute_expect_error(session.get(),
@@ -958,7 +998,13 @@ void test_backend_packet_limit(MYSQL* admin, MYSQL* direct, const CommandLine& c
 	const auto count = session ? tracked_user_variable_count(session.get()) : std::nullopt;
 	bool retired = state.has_value();
 	if (state && state->contains("backends")) {
-		for (const auto& backend : (*state)["backends"]) retired = retired && !backend.contains("conn");
+		// With multiplexing disabled, v3.0 can retain the original SET's
+		// healthy backend. Only the failed replay destination must retire.
+		for (const auto& backend : (*state)["backends"]) {
+			if (backend.value("hostgroup_id", -1) == 18112) {
+				retired = retired && !backend.contains("conn");
+			}
+		}
 	}
 	const auto inserted = created ? query_scalar(direct, "SELECT COUNT(*) FROM " + table) : std::nullopt;
 	ok(rejected && retired && count && *count == 1 && inserted && inserted->bytes == "0" &&
@@ -995,6 +1041,7 @@ bool restore_config(
 	success = set_admin_variable(admin, "mysql-set_parser_algorithm", saved.set_parser) && success;
 	success = set_admin_variable(admin, "mysql-query_processor_parser", saved.query_parser) && success;
 	success = set_admin_variable(admin, "mysql-set_query_lock_on_hostgroup", saved.set_lock) && success;
+	success = set_admin_variable(admin, "mysql-free_connections_pct", saved.free_connections_pct) && success;
 	success = execute(admin, "LOAD MYSQL VARIABLES TO RUNTIME") && success;
 	success = execute(admin, "LOAD MYSQL QUERY RULES TO RUNTIME") && success;
 	success = execute(admin, "LOAD MYSQL SERVERS TO RUNTIME") && success;
@@ -1002,6 +1049,53 @@ bool restore_config(
 }
 
 } // namespace
+
+// v3.0 keeps backend-confirmed literal tracking; the extension tests below
+// remain applicable to newer releases. Query the running daemon's version so
+// one TAP build can exercise either release tier.
+void test_v30_tracking_flow(MYSQL* admin, const CommandLine& cl) {
+    auto session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+    ok(session != nullptr, "v3.0 tracking frontend connects");
+    if (!session) return;
+    const auto before = query_scalar(admin,
+        "SELECT COALESCE(SUM(Queries),0) FROM stats_mysql_connection_pool WHERE hostgroup=18110");
+    const bool assigned = execute(session.get(), "/* uv_hg_a */ SET @v30_value=7");
+    const auto after = query_scalar(admin,
+        "SELECT COALESCE(SUM(Queries),0) FROM stats_mysql_connection_pool WHERE hostgroup=18110");
+    ok(assigned && before && after && std::stoull(after->bytes) > std::stoull(before->bytes),
+        "v3.0 pure user-variable SET reaches the backend before acknowledgement");
+    const auto tracked = user_variable_aggregate(session.get());
+    const auto unlocked = locked_hostgroup(session.get());
+    ok(tracked && tracked->count == 1 && unlocked && *unlocked == -1,
+        "v3.0 backend-confirmed literal remains tracked and multiplexable");
+    const auto value = query_scalar(session.get(), "/* uv_hg_b */ SELECT @v30_value");
+    ok(value && value->bytes == "7", "v3.0 replays a confirmed literal on another hostgroup");
+
+    const bool rejected = !execute(session.get(), "/* uv_hg_a */ SET @v30_value=1e999");
+    const auto after_error = user_variable_aggregate(session.get());
+    const auto unchanged = query_scalar(session.get(), "/* uv_hg_a */ SELECT @v30_value");
+    ok(rejected && tracked && after_error && aggregates_equal(*tracked, *after_error) &&
+        unchanged && unchanged->bytes == "7", "v3.0 backend SET error leaves committed values unchanged");
+
+    const bool mixed = execute(session.get(), "/* uv_hg_a */ SET @v30_mixed=8, wait_timeout=600");
+    const auto locked = locked_hostgroup(session.get());
+    const auto after_mixed = user_variable_aggregate(session.get());
+    const auto mixed_value = query_scalar(session.get(), "/* uv_hg_a */ SELECT @v30_mixed");
+    ok(mixed && locked && *locked >= 0 && tracked && after_mixed &&
+        aggregates_equal(*tracked, *after_mixed) && mixed_value && mixed_value->bytes == "8",
+        "v3.0 mixed SET executes through backend-bound fallback without partial tracking");
+    ok(mysql_reset_connection(session.get()) == 0, "v3.0 frontend reset succeeds");
+    const auto reset = user_variable_aggregate(session.get());
+    ok(reset && reset->count == 0, "v3.0 frontend reset clears tracked user variables");
+
+    auto context = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+    const bool changed = context && execute(context.get(), "/* uv_hg_a */ SET @v30_context='hello'") &&
+        execute(context.get(), "/* uv_hg_a */ SET sql_mode='NO_BACKSLASH_ESCAPES'");
+    const auto context_lock = context ? locked_hostgroup(context.get()) : std::nullopt;
+    const auto context_value = context ? query_scalar(context.get(), "/* uv_hg_a */ SELECT @v30_context") : std::nullopt;
+    ok(changed && context_lock && *context_lock >= 0 && context_value && context_value->bytes == "hello",
+        "v3.0 interpretation-context changes use the established connection-bound fallback");
+}
 
 int main() {
 	plan(NO_PLAN);
@@ -1075,10 +1169,20 @@ int main() {
 	if (!fixture_configured) {
 		return exit_status();
 	}
-	test_deferred_sets(admin.get(), cl);
-	test_mixed_autocommit(admin.get(), direct.get(), cl);
-	test_failed_mixed_autocommit(admin.get(), cl);
-	test_mixed_literal_context(admin.get(), cl, *endpoint, owned);
+	const auto proxy_version = query_scalar(admin.get(), "SELECT @@version");
+	const bool v30 = proxy_version && proxy_version->bytes.rfind("3.0.", 0) == 0;
+	if (v30) {
+		test_v30_tracking_flow(admin.get(), cl);
+	} else {
+		test_deferred_sets(admin.get(), cl);
+		test_mixed_autocommit(admin.get(), direct.get(), cl);
+		test_failed_mixed_autocommit(admin.get(), cl);
+		test_mixed_literal_context(admin.get(), cl, *endpoint, owned);
+	}
+	const bool cleanup_pools_ready = !multiplexing_enabled ||
+		prepare_single_connection_pools(admin.get(), tag);
+	ok(cleanup_pools_ready, "cleanup pools are ready for the configured multiplexing mode");
+	if (!cleanup_pools_ready) return exit_status();
 	MysqlPtr proxy = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	if (!proxy) {
 		ok(false, "frontend test connection is available");
@@ -1316,6 +1420,8 @@ int main() {
 			continue;
 		}
 		const auto& row = result->rows.front();
+		diag("Route %zu cleanup backend: original=%s fresh=%s", route_index,
+			route_connection_ids[route_index]->c_str(), row[0].bytes.c_str());
 		isolated_id_condition[route_index] = multiplexing_enabled
 			? row[0].bytes == *route_connection_ids[route_index]
 			: row[0].bytes != *route_connection_ids[route_index];
@@ -1370,6 +1476,10 @@ int main() {
 			? "one response proves reset cleared the value on the exact recorded connection"
 			: "one response proves reset cleared the value without assuming backend reuse");
 	reset_session.reset();
+	const bool capacity_restored = !multiplexing_enabled ||
+		restore_pool_capacity(admin.get(), tag, *endpoint);
+	ok(capacity_restored, "pool capacity is restored after exact-ID reset coverage");
+	if (!capacity_restored) return exit_status();
 
 	struct FallbackCase {
 		const char* label;
@@ -1487,7 +1597,7 @@ int main() {
 		variable_limit_aggregate_after && aggregates_equal(
 			*variable_limit_aggregate_before, *variable_limit_aggregate_after) &&
 		variable_limit_counter_before && variable_limit_counter_after && limit_fallback_materialized_state(
-			*variable_limit_counter_before, *variable_limit_counter_after) &&
+			*variable_limit_counter_before, *variable_limit_counter_after, v30 ? 0 : 1) &&
 		variable_limit_lock && *variable_limit_lock >= 0 &&
 		scalar_equals(variable_limit_session.get(), "/* uv_hg_a */ SELECT @limit_0", "0") &&
 		scalar_equals(variable_limit_session.get(), "/* uv_hg_a */ SELECT @limit_128", "129"),
@@ -1517,7 +1627,7 @@ int main() {
 		byte_limit_aggregate_after && aggregates_equal(
 			*byte_limit_aggregate_before, *byte_limit_aggregate_after) &&
 		byte_limit_counter_before && byte_limit_counter_after && limit_fallback_materialized_state(
-			*byte_limit_counter_before, *byte_limit_counter_after) &&
+			*byte_limit_counter_before, *byte_limit_counter_after, v30 ? 0 : 1) &&
 		byte_limit_lock && *byte_limit_lock >= 0 &&
 		scalar_equals(byte_limit_session.get(), "/* uv_hg_b */ SELECT @byte_limit_over", "1"),
 		"state over 64 KiB preserves its aggregate fingerprint, materializes prior state, increments limit fallback, and binds");
@@ -1543,7 +1653,7 @@ int main() {
 			"/* uv_hg_a */ SELECT test.proxysql_uv_context_metadata()");
 	const auto sql_mode_lock = sql_mode_proxy
 		? locked_hostgroup(sql_mode_proxy.get()) : std::nullopt;
-	ok(sql_mode_context_preserved && sql_mode_lock && *sql_mode_lock == -1,
+	ok(sql_mode_context_preserved && sql_mode_lock && (v30 ? *sql_mode_lock >= 0 : *sql_mode_lock == -1),
 		"sql_mode changes remain local and preserve prior user-value bytes, charset, and collation");
 	sql_mode_proxy.reset();
 	sql_mode_direct.reset();
@@ -1560,7 +1670,7 @@ int main() {
 		query_rows_equal(names_proxy.get(), names_direct.get(),
 			"/* uv_hg_b */ SELECT test.proxysql_uv_context_metadata()");
 	const auto names_lock = names_proxy ? locked_hostgroup(names_proxy.get()) : std::nullopt;
-	ok(names_context_preserved && names_lock && *names_lock == -1,
+	ok(names_context_preserved && names_lock && (v30 ? *names_lock >= 0 : *names_lock == -1),
 		"SET NAMES remains local and preserves prior user-value bytes, charset, and collation");
 	names_proxy.reset();
 	names_direct.reset();
@@ -1843,6 +1953,10 @@ int main() {
 		"change-user clears frontend tracking and exposes NULL on the next routed query");
 	change_user_session.reset();
 
+	const bool disconnect_pool_ready = !multiplexing_enabled ||
+		prepare_single_connection_pools(admin.get(), tag);
+	ok(disconnect_pool_ready, "disconnect cleanup pool is ready for the configured multiplexing mode");
+	if (!disconnect_pool_ready) return exit_status();
 	MysqlPtr disconnect_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	const bool disconnect_staged = disconnect_session &&
 		execute(disconnect_session.get(), "/* uv_hg_a */ SET @disconnect_lifecycle='disconnect-value'");
@@ -1877,6 +1991,10 @@ int main() {
 			? "one response proves disconnect clears state on the exact reused pooled backend"
 			: "one response proves a fresh backend ID and NULL state after disconnect without multiplexing");
 	after_disconnect.reset();
+	const bool disconnect_capacity_restored = !multiplexing_enabled ||
+		restore_pool_capacity(admin.get(), tag, *endpoint);
+	ok(disconnect_capacity_restored, "pool capacity is restored after exact-ID disconnect coverage");
+	if (!disconnect_capacity_restored) return exit_status();
 
 	const auto counter_baseline = user_variable_counters(admin.get());
 	MysqlPtr counter_replay_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
@@ -1922,13 +2040,13 @@ int main() {
 	ok(counter_baseline && counter_assignments_staged && counter_replays_observed &&
 		counter_unsupported && counter_limit_base && counter_limit_overflow && counter_final &&
 		counter_final->assignments == counter_baseline->assignments + 3 &&
-		counter_final->replay_commands == counter_baseline->replay_commands + 3 &&
+		counter_final->replay_commands == counter_baseline->replay_commands + (v30 ? 2 : 3) &&
 		counter_final->replay_failures == counter_baseline->replay_failures &&
 		counter_final->fallback_unsupported == counter_baseline->fallback_unsupported + 1 &&
 		counter_final->fallback_limits == counter_baseline->fallback_limits + 1,
 		"controlled traffic produces exact deltas for all five user-variable counters");
 
-	test_backend_packet_limit(admin.get(), direct.get(), cl, tag);
+	test_backend_packet_limit(admin.get(), direct.get(), cl, tag, v30);
 
 	ok(cleanup.run(),
 		"temporary functions, rules, hostgroups, and runtime variables are restored");

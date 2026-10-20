@@ -146,7 +146,9 @@ int main(int argc, char** argv) {
 	}
 
 	const std::string marker = unique_marker();
-	const std::string query = "SELECT $1::int AS " + marker;
+	// v3.0's ParserSQL digest omits SELECT aliases. Keep the marker in an
+	// expression too, so both digest implementations can identify this probe.
+	const std::string query = "SELECT $1::int AS " + marker + " ORDER BY " + marker;
 	diag("Probe query: %s", query.c_str());
 
 	PGConnPtr conn1 = createNewConnection(BACKEND);
