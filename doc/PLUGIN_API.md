@@ -121,7 +121,7 @@ struct ProxySQL_PluginDescriptor {
 | Field              | Type          | Description                                               |
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
-| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. The current PROXYSQL40 core accepts layout versions `[1, 16]` except reserved 11/12 after masking the build-mode tag, and requires the plugin's DEBUG tag to match the core. See the ABI reference for the per-version matrix. |
+| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. An ABI-16 core accepts generic plugin layouts 1–10, 13, and 16. Layouts 11 and 12 are reserved and rejected. Layouts 14 and 15 are rejected because their by-value discovery payload is incompatible with ABI 16. The plugin's DEBUG tag must also match the core. See the ABI reference for the per-version matrix. |
 | `init`             | callback      | Phase E — called with live services; register commands, hooks, and non-persistent tables here. Persistent `config_db` tables must have been declared through `register_schemas` in Phase B. |
 | `start`            | callback      | Phase F — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
@@ -151,10 +151,10 @@ therefore `16` in a release build and `0x40000010` in a DEBUG build.
 Plugins MUST assign `abi_version` from `PROXYSQL_PLUGIN_ABI_VERSION` rather
 than hard-coding either raw value. The loader first requires the DEBUG bit to
 match the running core exactly, because DEBUG-only fields change core object
-layouts. It then masks that bit and checks that the layout portion is in the
-supported `[1, 16]` range, excluding versions 11, 12, 14, and 15. ABI 11 and
-12 are reserved; ABI 14 and 15 have the incompatible pre-ABI-16 discovery
-payload. A release plugin cannot load into a DEBUG core, or
+layouts. It then masks that bit. An ABI-16 core accepts generic plugin layouts
+1–10, 13, and 16. Layouts 11 and 12 are reserved and rejected. Layouts 14 and
+15 are rejected because their by-value discovery payload is incompatible with
+ABI 16. A release plugin cannot load into a DEBUG core, or
 vice versa, even when both use layout version 16.
 
 The plugin named `aws` requires layout 16 or newer. Pre-integration AWS
@@ -164,7 +164,8 @@ Upstream ABI-10 plugins retain their original `with_admin_db_lock` offset;
 AWS services are appended at ABI 13 and discovery services at ABI 14.
 
 Pre-chassis builds do not expose this API. Their legacy six-field descriptor
-uses `abi_version = 1`. Layouts through ABI 13 remain prefix-compatible.
+uses `abi_version = 1`. Accepted layouts through ABI 13 (1–10 and 13) remain
+prefix-compatible.
 ABI 16 intentionally rejects ABI 14 and 15 because their by-value discovery
 payload cannot be converted safely through the unversioned callback. See
 `ProxySQL_Plugin.h` for the exact rules.
@@ -232,12 +233,13 @@ struct ProxySQL_PluginServices {
 
 #### Managed configuration (ABI 15)
 
-ABI 15 appends the management-provider descriptor accessor and the configuration
+ABI 15 introduced the management-provider descriptor accessor and the configuration
 lock/database/runtime callbacks declared in `ProxySQL_Plugin.h`. The complete
 ABI-14 service prefix remains unchanged. Core reads the descriptor accessor only
-for layout 15 or newer; the separate `ProxySQL_ManagedConfigurationServiceV1`
-contract stays at version 1. Rebuild both plugins against the matching core
-headers and DEBUG setting.
+for compatible layouts that include this tail; the separate
+`ProxySQL_ManagedConfigurationServiceV1` contract stays at version 1. This is
+layout history, not a statement that ABI-15 binaries can load into an ABI-16
+core. Rebuild both plugins against the matching core headers and DEBUG setting.
 
 Managed configuration does not include listener addresses or ports. Listener
 configuration remains part of ordinary ProxySQL startup configuration; the
@@ -715,9 +717,11 @@ void register_stats_table(ProxySQL_PluginServices& services,
 - **No dependency resolution**: Plugins are loaded in the order listed in
   `proxysql.cnf`. If one plugin depends on another, the dependency must be
   listed first.
-- **ABI compatibility**: The current core accepts layout versions `[1, 16]`, except reserved 11/12,
-  after masking `PROXYSQL_PLUGIN_ABI_DEBUG_BIT`, and separately requires that
-  DEBUG bit to exactly match the core. Newly built plugins must set
+- **ABI compatibility**: An ABI-16 core accepts generic plugin layouts 1–10,
+  13, and 16. Layouts 11 and 12 are reserved and rejected. Layouts 14 and 15
+  are rejected because their by-value discovery payload is incompatible with
+  ABI 16. The core also requires the `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` setting to
+  match exactly. Newly built plugins must set
   `abi_version = PROXYSQL_PLUGIN_ABI_VERSION`.
 - **Compiler coupling**: Plugins must match the ProxySQL core's C++ compiler
   and standard library due to `std::string` in `ProxySQL_PluginCommandResult`.

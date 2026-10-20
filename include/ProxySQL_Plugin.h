@@ -85,7 +85,8 @@ namespace prometheus { class Registry; }
 //          and removes plugin role-forcing metadata from desired server rows.
 //          Because ABI 14 already exposed the desired-set callback by value,
 //          ABI 14 and 15 binaries cannot be converted safely and are rejected
-//          by an ABI-16 core. ABI 13 and older prefixes remain loadable.
+//          by an ABI-16 core. Generic layouts 1-10 and 13 retain compatible
+//          prefixes and remain loadable; reserved layouts 11 and 12 do not.
 //
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //

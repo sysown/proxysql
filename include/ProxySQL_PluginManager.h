@@ -69,7 +69,7 @@ public:
 	bool start_all(std::string &err);
 	bool runtime_ready_all(ProxySQL_PluginRuntimeContext& context, std::string& err);
 	bool stop_all();
-	/** @brief Require exactly one ABI12 managed provider before startup. */
+	/** @brief Require exactly one managed configuration provider before startup. */
 	bool check_managed_configuration_provider(std::string& error) const;
 	/** @brief Borrow the initialized provider service until plugin shutdown. */
 	const ProxySQL_ManagedConfigurationServiceV1* managed_configuration_service(std::string& error) const;

@@ -61,10 +61,11 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 - `dlsym` resolves `proxysql_plugin_descriptor_v1`. Else: load fails.
 - The function returns non-null. Else: load fails.
 - `descriptor->name` is non-null and non-empty. Else: load fails.
-- `descriptor->abi_version` has its `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` masked;
-  the remaining layout must be in `[1, PROXYSQL_PLUGIN_ABI_VERSION_MAX]`.
-  ABI 11 and 12 are reserved and rejected with the same error.
-  Else: load fails with "unsupported plugin ABI version".
+- `descriptor->abi_version` has its `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` masked.
+  An ABI-16 core accepts generic plugin layouts 1–10, 13, and 16. Layouts 11
+  and 12 are reserved and rejected. Layouts 14 and 15 are rejected because
+  their by-value discovery payload is incompatible with ABI 16. Otherwise,
+  loading fails with "unsupported plugin ABI version".
 - The plugin named `aws` must use layout 16 or newer. Older AWS binaries used
   incompatible discovery payloads or conflicting service offsets and must be
   rebuilt before loading.
