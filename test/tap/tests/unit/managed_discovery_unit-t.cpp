@@ -58,6 +58,29 @@ const SQLite3_row* find_row(const SQLite3_result& rows, uint32_t hg,
 	return nullptr;
 }
 
+bool has_topology_pair(const SQLite3_result& rows, uint32_t writer, uint32_t reader) {
+	for (const auto* row : rows.rows) {
+		if (row != nullptr && row->fields != nullptr && row->fields[0] != nullptr &&
+			row->fields[1] != nullptr &&
+			static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10)) == writer &&
+			static_cast<uint32_t>(strtoul(row->fields[1], nullptr, 10)) == reader) return true;
+	}
+	return false;
+}
+
+bool has_monitor_endpoint(const SQLite3_result& rows, bool mysql,
+		const std::string& hostname, uint16_t port) {
+	const size_t hostname_index = mysql ? 0 : 1;
+	const size_t port_index = mysql ? 1 : 2;
+	for (const auto* row : rows.rows) {
+		if (row != nullptr && row->fields != nullptr &&
+			row->fields[hostname_index] != nullptr && row->fields[port_index] != nullptr &&
+			hostname == row->fields[hostname_index] &&
+			static_cast<uint16_t>(strtoul(row->fields[port_index], nullptr, 10)) == port) return true;
+	}
+	return false;
+}
+
 ProxySQL_ServerHostgroupClaim role_claim(ProxySQL_ServerProtocol protocol,
     uint32_t writer, uint32_t reader) {
     ProxySQL_ServerHostgroupClaim claim {writer, reader};
@@ -201,7 +224,15 @@ int main() {
         proxysql_lock_configuration();
         const bool removed=proxysql_install_managed_discovery_locked(protocol,3,{},next,error);
         proxysql_unlock_configuration();
-        ok(removed && proxysql_active_server_hostgroup_claims(protocol).empty(),
+		std::unique_ptr<SQLite3_result> removed_topology(mysql
+			? MyHGM->dump_table_mysql("mysql_replication_hostgroups")
+			: PgHGM->dump_table_pgsql("pgsql_replication_hostgroups"));
+		std::unique_ptr<SQLite3_result> removed_monitor(mysql
+			? MyHGM->get_read_only_servers() : PgHGM->get_read_only_servers());
+		ok(removed && proxysql_active_server_hostgroup_claims(protocol).empty() &&
+			removed_topology && !has_topology_pair(*removed_topology,703,704) &&
+			removed_monitor && !has_monitor_endpoint(*removed_monitor,mysql,
+				"managed.example",port),
 			"empty managed policy removes claims and native topology rows");
         proxysql_lock_configuration();
         installed=proxysql_install_managed_discovery_locked(
@@ -209,8 +240,16 @@ int main() {
         proxysql_unlock_configuration();
         ok(installed && proxysql_active_server_hostgroup_claims(protocol).size()==1,
             "controller owns a live claim before lifecycle retirement");
-        ok(manager->uninstall_server_discovery_controller(protocol) &&
-            proxysql_active_server_hostgroup_claims(protocol).empty(),
+		const bool retired = manager->uninstall_server_discovery_controller(protocol);
+		std::unique_ptr<SQLite3_result> retired_topology(mysql
+			? MyHGM->dump_table_mysql("mysql_replication_hostgroups")
+			: PgHGM->dump_table_pgsql("pgsql_replication_hostgroups"));
+		std::unique_ptr<SQLite3_result> retired_monitor(mysql
+			? MyHGM->get_read_only_servers() : PgHGM->get_read_only_servers());
+		ok(retired && proxysql_active_server_hostgroup_claims(protocol).empty() &&
+			retired_topology && !has_topology_pair(*retired_topology,703,704) &&
+			retired_monitor && !has_monitor_endpoint(*retired_monitor,mysql,
+				"managed.example",port),
             "controller retirement releases its claims and native topology rows");
     }
     return exit_status();

@@ -161,6 +161,42 @@ bool g_registry_registration_failed = false;
 std::string g_registry_registration_error {};
 bool g_registry_accepts_config_table_registration = false;
 
+void publish_configured_plugin_manager_retirement(
+	const std::unique_ptr<ProxySQL_PluginManager>& manager) {
+	std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+	g_retiring_plugin_manager.store(manager.get(), std::memory_order_release);
+	g_active_plugin_manager.store(nullptr, std::memory_order_release);
+}
+
+#ifdef PROXYSQL40
+void release_configured_plugin_server_controllers(ProxySQL_PluginManager* manager) {
+	if (manager == nullptr) return;
+	for (ProxySQL_ServerProtocol protocol : {ProxySQL_ServerProtocol::mysql,
+	                                         ProxySQL_ServerProtocol::pgsql}) {
+		try {
+			manager->uninstall_server_discovery_controller(protocol);
+		} catch (...) {
+			proxy_warning("Server discovery controller removal threw during manager retirement\n");
+		}
+	}
+}
+#endif
+
+void finish_configured_plugin_manager_retirement(
+	std::unique_ptr<ProxySQL_PluginManager>& manager) {
+	{
+		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+		g_retiring_plugin_manager.store(nullptr, std::memory_order_release);
+	}
+#ifdef PROXYSQL40
+	// A reader can load the retiring pointer immediately before it is cleared.
+	// Fence both protocol domains before destroying the object it referenced.
+	{ ScopedServerDiscoveryProtocolLock lock(ProxySQL_ServerProtocol::mysql); }
+	{ ScopedServerDiscoveryProtocolLock lock(ProxySQL_ServerProtocol::pgsql); }
+#endif
+	manager.reset();
+}
+
 // RAII guard that sets g_registry_target to `mgr` on construction and
 // clears it on destruction.  Also resets the registration-failure sticky
 // bits. Used to bracket each plugin callback invocation during Phase B
@@ -746,14 +782,7 @@ ProxySQL_PluginManager::~ProxySQL_PluginManager() {
 		proxy_warning("Plugin shutdown threw during manager destruction\n");
 	}
 	#ifdef PROXYSQL40
-	for (ProxySQL_ServerProtocol protocol : {ProxySQL_ServerProtocol::mysql,
-	                                         ProxySQL_ServerProtocol::pgsql}) {
-		try {
-			uninstall_server_discovery_controller(protocol);
-		} catch (...) {
-			proxy_warning("Server discovery controller removal threw during manager destruction\n");
-		}
-	}
+	release_configured_plugin_server_controllers(this);
 	#endif /* PROXYSQL40 */
 	// Note: g_active_plugin_manager is cleared by callers under the mutex
 	// before reset() triggers this destructor.  No unsynchronized access here.
@@ -2669,12 +2698,14 @@ bool proxysql_discover_configured_plugins(
 	g_active_mysql_query_hook.store(false, std::memory_order_release);
 	g_active_pgsql_query_hook.store(false, std::memory_order_release);
 #endif
-	{
-		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-		g_retiring_plugin_manager.store(manager.get(), std::memory_order_release);
-		g_active_plugin_manager.store(nullptr, std::memory_order_release);
+	publish_configured_plugin_manager_retirement(manager);
+	if (manager != nullptr) {
+		(void)manager->stop_all();
+#ifdef PROXYSQL40
+		release_configured_plugin_server_controllers(manager.get());
+#endif
 	}
-	manager.reset();
+	finish_configured_plugin_manager_retirement(manager);
 
 	if (plugin_modules.empty()) {
 		return true;
@@ -2821,11 +2852,11 @@ static bool stop_configured_plugins_impl(
 	g_active_mysql_query_hook.store(false, std::memory_order_release);
 	g_active_pgsql_query_hook.store(false, std::memory_order_release);
 #endif
-	{
-		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-		g_active_plugin_manager.store(nullptr, std::memory_order_release);
-	}
+	publish_configured_plugin_manager_retirement(manager);
 	const bool stop_ok = !manager || manager->stop_all();
+#ifdef PROXYSQL40
+	release_configured_plugin_server_controllers(manager.get());
+#endif
 	// The caller has drained handlers. Stop provider controllers first, then
 	// destroy web while both DSOs are still mapped, then retire the chassis.
 	if (drained_web != nullptr) {
@@ -2836,13 +2867,7 @@ static bool stop_configured_plugins_impl(
 	// pointers remain reachable. stop_all() is idempotent across failure (each
 	// plugin is marked stopped after one attempt) so the destructor's stop_all()
 	// will be a no-op.
-	g_retiring_plugin_manager.store(nullptr, std::memory_order_release);
-	// Fence protocol-locked monitor readers that may have loaded the retiring
-	// pointer just before it was cleared. After these two barriers no new
-	// reader can obtain that pointer, so manager destruction cannot race one.
-	{ ScopedServerDiscoveryProtocolLock lock(ProxySQL_ServerProtocol::mysql); }
-	{ ScopedServerDiscoveryProtocolLock lock(ProxySQL_ServerProtocol::pgsql); }
-	manager.reset();
+	finish_configured_plugin_manager_retirement(manager);
 	if (!stop_ok) {
 		err = "plugin stop failed";
 		return false;
