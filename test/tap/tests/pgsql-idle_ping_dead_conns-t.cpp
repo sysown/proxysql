@@ -74,7 +74,7 @@ static const char* PASS     = "idle_ping_pass";
 
 static std::fstream f_proxysql_log{};
 
-static void silenceNotices(void*, const char*) {}
+static void silenceNotices(void*, const char*) { /* client-side notices are not what this test checks */ }
 
 static PGConnPtr openConn(const char* h, int p, const char* u, const char* pw, const char* db) {
 	std::stringstream ss;
@@ -159,11 +159,33 @@ static int poolFreeWithin(PGconn* admin, int want, int seconds) {
 	}
 }
 
+// One pgsql_servers row of a hostgroup, as it was before the test touched it.
+struct ServerRow { std::string hostname, port, status, use_ssl; };
+
+static std::vector<ServerRow> readServers(PGconn* admin, int hg) {
+	std::vector<ServerRow> rows;
+	PGresult* r = PQexec(admin, ("SELECT hostname, port, status, use_ssl FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg)).c_str());
+	if (PQresultStatus(r) == PGRES_TUPLES_OK)
+		for (int i = 0; i < PQntuples(r); i++)
+			rows.push_back({ PQgetvalue(r, i, 0), PQgetvalue(r, i, 1), PQgetvalue(r, i, 2), PQgetvalue(r, i, 3) });
+	PQclear(r);
+	return rows;
+}
+
+// Put back each row's own status and use_ssl: a hostgroup can mix them, so one value
+// for all rows would change the configuration the test was given.
+static bool restoreServers(PGconn* admin, int hg, const std::vector<ServerRow>& rows) {
+	for (const auto& row : rows) {
+		if (!execOk(admin, "UPDATE pgsql_servers SET status='" + row.status + "', use_ssl=" + row.use_ssl
+				+ " WHERE hostgroup_id=" + std::to_string(hg) + " AND hostname='" + row.hostname + "' AND port=" + row.port)) return false;
+	}
+	return execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+}
+
 // OFFLINE_HARD and back empties the pool; re-inserting identical rows would not. Also the
 // only way to make a flipped native mode or use_ssl apply: pooled connections keep theirs.
 static bool flushPool(PGconn* admin, int hg = HG) {
-	std::string prev = scalar(admin, "SELECT status FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg) + " LIMIT 1");
-	if (prev.empty()) prev = "ONLINE";
+	const std::vector<ServerRow> rows = readServers(admin, hg);
 	if (!execOk(admin, "UPDATE pgsql_servers SET status='OFFLINE_HARD' WHERE hostgroup_id=" + std::to_string(hg))) return false;
 	if (!execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -173,8 +195,7 @@ static bool flushPool(PGconn* admin, int hg = HG) {
 		if (left == "0") break;
 		usleep(100000);
 	}
-	if (!execOk(admin, "UPDATE pgsql_servers SET status='" + prev + "' WHERE hostgroup_id=" + std::to_string(hg))) return false;
-	if (!execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
+	if (!restoreServers(admin, hg, rows)) return false;
 	return left == "0";
 }
 
@@ -589,6 +610,30 @@ static void phaseEdgeCases(MockCase& f, const std::string& tag, const std::strin
 	setVar(f.admin, "pgsql-ping_timeout_server", saved_ping_timeout.empty() ? "200" : saved_ping_timeout);
 }
 
+// Every phase for one backend mode: A and B over plaintext and TLS; C, D and E over plaintext.
+static void runMode(PGconn* admin, PGconn* be, PgSQL_Mock_Backend& mock, const std::string& mock_host,
+		const char* mode, bool has_idle_timeout, const std::string& saved_ping_timeout) {
+	for (int tls = 0; tls <= 1; tls++) {
+		execOk(admin, "UPDATE pgsql_servers SET use_ssl=" + std::to_string(tls) + " WHERE hostgroup_id=" + std::to_string(HG));
+		execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+		const std::string tag = std::string(mode) + (tls ? "/tls" : "/plain");
+		phasePingsReachServer(admin, be, tag, tls, mode);
+		phaseKilledWhileIdle(admin, be, tag);
+		if (tls) continue;
+		if (has_idle_timeout) phaseKeptAlive(admin, be, tag);
+		else skip(1, "%s: idle_session_timeout needs PostgreSQL 14+", tag.c_str());
+		phaseSilentBackend(admin, mock, mock_host, tag, mode);
+		MockCase mc { admin, mock, mock_host, mode };
+		phaseEdgeCases(mc, tag, saved_ping_timeout);
+	}
+}
+
+// Every variable the test changes; each is put back to the value it had before.
+static const char* TOUCHED_VARS[] = {
+	"pgsql-ping_interval_server_msec", "pgsql-free_connections_pct", "pgsql-poll_timeout",
+	"pgsql-ping_timeout_server", "pgsql-monitor_enabled", "pgsql-use_native_backend_protocol",
+};
+
 int main(int, char**) {
 	if (cl.getEnv()) return exit_status();
 
@@ -608,13 +653,11 @@ int main(int, char**) {
 		return exit_status();
 	}
 
-	const std::string saved_interval = runtimeVar(admin.get(), "pgsql-ping_interval_server_msec");
-	const std::string saved_pct = runtimeVar(admin.get(), "pgsql-free_connections_pct");
-	const std::string saved_poll = runtimeVar(admin.get(), "pgsql-poll_timeout");
+	// A variable this build does not have reads back empty and is left alone.
+	std::vector<std::string> saved_vars;
+	for (const char* v : TOUCHED_VARS) saved_vars.push_back(runtimeVar(admin.get(), v));
 	const std::string saved_ping_timeout = runtimeVar(admin.get(), "pgsql-ping_timeout_server");
-	const std::string saved_monitor = runtimeVar(admin.get(), "pgsql-monitor_enabled");
-	const std::string saved_native = native_supported ? runtimeVar(admin.get(), "pgsql-use_native_backend_protocol") : "";
-	const std::string saved_ssl = scalar(admin.get(), "SELECT use_ssl FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(HG) + " LIMIT 1");
+	const std::vector<ServerRow> saved_servers = readServers(admin.get(), HG);
 
 	// idle_session_timeout exists from PostgreSQL 14 on; phase C is skipped below that.
 	const bool has_idle_timeout = atoi(scalar(be.get(), "SHOW server_version_num").c_str()) >= 140000;
@@ -646,33 +689,15 @@ int main(int, char**) {
 	for (int m = 0; m < modes; m++) {
 		const bool native = (m == 1);
 		if (native_supported) setVar(admin.get(), "pgsql-use_native_backend_protocol", native ? "true" : "false");
-		for (int tls = 0; tls <= 1; tls++) {
-			execOk(admin.get(), "UPDATE pgsql_servers SET use_ssl=" + std::to_string(tls) + " WHERE hostgroup_id=" + std::to_string(HG));
-			execOk(admin.get(), "LOAD PGSQL SERVERS TO RUNTIME");
-			const char* mode = native ? "native" : "libpq";
-			const std::string tag = std::string(mode) + (tls ? "/tls" : "/plain");
-			phasePingsReachServer(admin.get(), be.get(), tag, tls, mode);
-			phaseKilledWhileIdle(admin.get(), be.get(), tag);
-			if (!tls) {
-				if (has_idle_timeout) phaseKeptAlive(admin.get(), be.get(), tag);
-				else skip(1, "%s: idle_session_timeout needs PostgreSQL 14+", tag.c_str());
-				phaseSilentBackend(admin.get(), mock, mock_host, tag, mode);
-				MockCase mc { admin.get(), mock, mock_host, mode };
-				phaseEdgeCases(mc, tag, saved_ping_timeout);
-			}
-		}
+		runMode(admin.get(), be.get(), mock, mock_host, native ? "native" : "libpq", has_idle_timeout, saved_ping_timeout);
 	}
 
 	flushPool(admin.get());
 	execOk(admin.get(), "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(MOCK_HG));
 	cleanupUsers(admin.get(), be.get());
-	execOk(admin.get(), "UPDATE pgsql_servers SET use_ssl=" + (saved_ssl.empty() ? std::string("0") : saved_ssl) + " WHERE hostgroup_id=" + std::to_string(HG));
-	execOk(admin.get(), "LOAD PGSQL SERVERS TO RUNTIME");
-	setVar(admin.get(), "pgsql-ping_interval_server_msec", saved_interval.empty() ? "10000" : saved_interval);
-	setVar(admin.get(), "pgsql-free_connections_pct", saved_pct.empty() ? "10" : saved_pct);
-	setVar(admin.get(), "pgsql-poll_timeout", saved_poll.empty() ? "2000" : saved_poll);
-	if (!saved_monitor.empty()) setVar(admin.get(), "pgsql-monitor_enabled", saved_monitor);
-	if (native_supported && !saved_native.empty()) setVar(admin.get(), "pgsql-use_native_backend_protocol", saved_native);
+	restoreServers(admin.get(), HG, saved_servers);
+	for (size_t i = 0; i < saved_vars.size(); i++)
+		if (!saved_vars[i].empty()) setVar(admin.get(), TOUCHED_VARS[i], saved_vars[i]);
 	flushPool(admin.get());
 
 	return exit_status();
