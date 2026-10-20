@@ -3905,9 +3905,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
 					thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
-					RequestEnd(NULL, 9005, buf);
+					RequestEnd_and_free_pkt(&pkt, 9005, buf);
 					free(buf);
-					l_free(pkt.size,pkt.ptr);
 					return;
 				}
 			}
@@ -6345,6 +6344,29 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt) {
 }
 
 /**
+ * @brief Complete the current request and release the client packet exactly once.
+ *
+ * For COM_STMT_EXECUTE, MySQL_Protocol::get_binds_from_pkt() stores the client
+ * packet in stmt_meta->pkt, and RequestEnd() -> Query_Info::end() frees it
+ * (fix for bug #796). Calling l_free() on the same packet afterwards is a
+ * double-free that silently corrupts the heap (#5639, #6233). Capture the
+ * ownership before RequestEnd(), which resets CurrentQuery.stmt_meta, and only
+ * free the packet here when stmt_meta does not own it.
+ *
+ * @param[in,out] pkt The client packet being answered without a backend.
+ * @param myerrno Error code forwarded to RequestEnd().
+ * @param errmsg Error message forwarded to RequestEnd().
+ */
+void MySQL_Session::RequestEnd_and_free_pkt(PtrSize_t *pkt, const unsigned int myerrno, const char *errmsg) {
+	const bool stmt_meta_owns_pkt =
+		(CurrentQuery.stmt_meta != NULL && CurrentQuery.stmt_meta->pkt == pkt->ptr);
+	RequestEnd(NULL, myerrno, errmsg);
+	if (!stmt_meta_owns_pkt) {
+		l_free(pkt->size,pkt->ptr);
+	}
+}
+
+/**
  * @brief Handle the generation and sending of an OK message packet in response to a successful query execution.
  *
  * This (formely inline) function is responsible for setting up and sending an OK message packet to the client in response
@@ -6360,8 +6382,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt) {
 	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 	if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 	client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,0,0,setStatus,0,qpo->OK_msg);
-	RequestEnd(NULL);
-	l_free(pkt->size,pkt->ptr);
+	RequestEnd_and_free_pkt(pkt, 0);
 }
 
 /**
@@ -6377,8 +6398,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt) {
 	client_myds->DSS=STATE_QUERY_SENT_NET;
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",qpo->error_msg);
 	MyHGM->add_mysql_errors(current_hostgroup, (char *)"", 0, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, 1148, (char *)qpo->error_msg);
-	RequestEnd(NULL, 1148, qpo->error_msg);
-	l_free(pkt->size,pkt->ptr);
+	RequestEnd_and_free_pkt(pkt, 1148, qpo->error_msg);
 }
 
 /**
@@ -6397,8 +6417,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
 	string errmsg = "Got a packet bigger than 'max_allowed_packet' bytes";
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1153,(char *)"08S01", errmsg.c_str(), true);
 	MyHGM->add_mysql_errors(current_hostgroup, (char *)"", 0, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, 1153, (char *)errmsg.c_str());
-	RequestEnd(NULL, 1153, errmsg.c_str());
-	l_free(pkt->size,pkt->ptr);
+	RequestEnd_and_free_pkt(pkt, 1153, errmsg.c_str());
 }
 
 /*
@@ -7489,8 +7508,7 @@ __exit_set_destination_hostgroup:
 				sprintf(buf,"ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d", locked_on_hostgroup, current_hostgroup);
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9006,(char *)"Y0000",buf);
 				thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
-				RequestEnd(NULL, 9006, buf);
-				l_free(pkt->size,pkt->ptr);
+				RequestEnd_and_free_pkt(pkt, 9006, buf);
 				return true;
 			}
 		}
