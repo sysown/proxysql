@@ -81,6 +81,23 @@ bool has_monitor_endpoint(const SQLite3_result& rows, bool mysql,
 	return false;
 }
 
+bool has_aurora_monitor_endpoint(const std::string& hostname, uint16_t port) {
+	bool found = false;
+	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+	if (GloMyMon->AWS_Aurora_Hosts_resultset != nullptr) {
+		for (const auto* row : GloMyMon->AWS_Aurora_Hosts_resultset->rows) {
+			if (row != nullptr && row->fields != nullptr && row->fields[2] != nullptr &&
+				row->fields[3] != nullptr && hostname == row->fields[2] &&
+				static_cast<uint16_t>(strtoul(row->fields[3], nullptr, 10)) == port) {
+				found = true;
+				break;
+			}
+		}
+	}
+	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+	return found;
+}
+
 ProxySQL_ServerHostgroupClaim role_claim(ProxySQL_ServerProtocol protocol,
     uint32_t writer, uint32_t reader) {
     ProxySQL_ServerHostgroupClaim claim {writer, reader};
@@ -108,7 +125,7 @@ void create_server_load_schema(SQLite3DB& db) {
 
 } // namespace
 int main() {
-    plan(39);
+    plan(50);
     test_init_minimal();
     test_init_query_processor();
     test_init_hostgroups();
@@ -201,6 +218,34 @@ int main() {
         health.reset(mysql ? MyHGM->dump_table_mysql("mysql_servers") : PgHGM->dump_table_pgsql("pgsql_servers"));
 		ok(find_row(*health,703,"managed.example",port) != nullptr,
 			"runtime-only discovery applies the active claimed inventory");
+		if (mysql) {
+			ProxySQL_ServerRow reader_one {704, "reader-one.example", 3306};
+			ProxySQL_ServerRow reader_two {704, "reader-two.example", 3306};
+			ProxySQL_ServerDesiredSet replicated {
+				protocol, next, {703, 704}, {seed, reader_one, reader_two},
+				ProxySQL_ServerPersistence::runtime_only
+			};
+			ok(manager->post_server_desired_set(replicated) &&
+				GloAdmin->drain_server_discovery_updates() == 1 &&
+				observed.acks.back().second,
+				"replication inventory applies one writer and two readers");
+			std::unique_ptr<SQLite3_result> replication_monitor(MyHGM->get_read_only_servers());
+			ok(replication_monitor &&
+				has_monitor_endpoint(*replication_monitor, true, "managed.example", 3306) &&
+				has_monitor_endpoint(*replication_monitor, true, "reader-one.example", 3306) &&
+				has_monitor_endpoint(*replication_monitor, true, "reader-two.example", 3306),
+				"replication monitor enumerates the reconciled writer and readers");
+			ProxySQL_ServerRow reader_three {704, "reader-three.example", 3306};
+			replicated.servers.push_back(reader_three);
+			ok(manager->post_server_desired_set(replicated) &&
+				GloAdmin->drain_server_discovery_updates() == 1 &&
+				observed.acks.back().second,
+				"replication inventory adds a reader without reinstalling topology");
+			replication_monitor.reset(MyHGM->get_read_only_servers());
+			ok(replication_monitor &&
+				has_monitor_endpoint(*replication_monitor, true, "reader-three.example", 3306),
+				"replication monitor enumerates the later-added reader");
+		}
         proxysql_lock_configuration();
         bool stale=proxysql_install_managed_discovery_locked(
             protocol,1,{role_claim(protocol,705,706)},generation,error);
@@ -252,5 +297,51 @@ int main() {
 				"managed.example",port),
             "controller retirement releases its claims and native topology rows");
     }
+
+	Observed aurora_observed;
+	auto* aurora_controller = new ManagedController(aurora_observed);
+	ok(manager->install_server_discovery_controller(
+		ProxySQL_ServerProtocol::mysql, aurora_controller, destroy_controller,
+		dlopen(PROXYSQL_FAKE_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL)),
+		"Aurora discovery controller installs");
+	ProxySQL_ServerHostgroupClaim aurora_claim {801, 802};
+	aurora_claim.role_monitor.kind = ProxySQL_ServerRoleMonitor::mysql_aws_aurora;
+	aurora_claim.role_monitor.domain_name = ".example";
+	uint64_t aurora_generation = 0;
+	proxysql_lock_configuration();
+	const bool aurora_installed = proxysql_install_managed_discovery_locked(
+		ProxySQL_ServerProtocol::mysql, 1, {aurora_claim}, aurora_generation, error);
+	proxysql_unlock_configuration();
+	ok(aurora_installed && aurora_generation != 0 &&
+		!has_aurora_monitor_endpoint("aurora-writer.example", 3306),
+		"Aurora topology installs before its runtime inventory");
+	ProxySQL_ServerRow aurora_writer {801, "aurora-writer.example", 3306};
+	ProxySQL_ServerRow aurora_reader {802, "aurora-reader.example", 3306};
+	ProxySQL_ServerDesiredSet aurora_initial {
+		ProxySQL_ServerProtocol::mysql, aurora_generation, {801, 802},
+		{aurora_writer, aurora_reader}, ProxySQL_ServerPersistence::runtime_only
+	};
+	ok(manager->post_server_desired_set(aurora_initial) &&
+		GloAdmin->drain_server_discovery_updates() == 1 &&
+		aurora_observed.acks.back().second,
+		"runtime-only Aurora inventory applies after topology installation");
+	ok(has_aurora_monitor_endpoint("aurora-writer.example", 3306) &&
+		has_aurora_monitor_endpoint("aurora-reader.example", 3306),
+		"runtime-only inventory refreshes the Aurora monitor input");
+	ProxySQL_ServerRow replacement_reader {802, "aurora-reader-2.example", 3306};
+	ProxySQL_ServerDesiredSet aurora_replacement {
+		ProxySQL_ServerProtocol::mysql, aurora_generation, {801, 802},
+		{aurora_writer, replacement_reader}, ProxySQL_ServerPersistence::runtime_only
+	};
+	ok(manager->post_server_desired_set(aurora_replacement) &&
+		GloAdmin->drain_server_discovery_updates() == 1 &&
+		aurora_observed.acks.back().second,
+		"a complete Aurora desired set replaces runtime inventory");
+	ok(has_aurora_monitor_endpoint("aurora-writer.example", 3306) &&
+		!has_aurora_monitor_endpoint("aurora-reader.example", 3306) &&
+		has_aurora_monitor_endpoint("aurora-reader-2.example", 3306),
+		"the refreshed Aurora monitor input removes stale endpoints");
+	ok(manager->uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql),
+		"Aurora discovery controller retires cleanly");
     return exit_status();
 }

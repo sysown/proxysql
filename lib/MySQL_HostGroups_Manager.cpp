@@ -2025,6 +2025,7 @@ bool MySQL_HostGroups_Manager::commit_locked(
 	// NOTE: In order to guarantee the latest generated version, this should be kept after all the
 	// calls to 'generate_mysql_servers'.
 	update_table_mysql_servers_for_monitor(false);
+	update_aws_aurora_hosts_monitor_resultset();
 	// Refresh BGD monitoring after all runtime server changes are applied.
 	update_aws_rds_bgd_hosts_monitor_resultset();
 
@@ -7387,11 +7388,6 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	// TODO: it is now time to compute all the changes
 
 
-	// it is now time to build a new structure in Monitor
-	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-	update_aws_aurora_hosts_monitor_resultset(false);
-	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-
 	pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 }
 
@@ -8215,6 +8211,10 @@ const char SELECT_AWS_AURORA_SERVERS_FOR_MONITOR[] {
 };
 
 void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lock) {
+	if (!GloMyMon) {
+		return;
+	}
+
 	if (lock) {
 		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
 		pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);

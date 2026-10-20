@@ -1274,7 +1274,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @param lock Wether if both 'AWS_Aurora_Info_mutex' and 'MySQL_Monitor::aws_aurora_mutex' mutexes should
 	 *   be taken or not.
 	 */
-	void update_aws_aurora_hosts_monitor_resultset(bool lock=false);
+	void update_aws_aurora_hosts_monitor_resultset(bool lock=true);
 	/**
 	 * @brief Rebuilds the AWS RDS BGD monitor's host resultset.
 	 *
