@@ -159,6 +159,13 @@ static int poolFreeWithin(PGconn* admin, int want, int seconds) {
 	}
 }
 
+// A single-quoted SQL literal, with any quote in the value doubled.
+static std::string sqlLiteral(const std::string& v) {
+	std::string out = "'";
+	for (const char c : v) { if (c == '\'') out += '\''; out += c; }
+	return out + "'";
+}
+
 // One pgsql_servers row of a hostgroup, as it was before the test touched it.
 struct ServerRow { std::string hostname, port, status, use_ssl; };
 
@@ -176,8 +183,8 @@ static std::vector<ServerRow> readServers(PGconn* admin, int hg) {
 // for all rows would change the configuration the test was given.
 static bool restoreServers(PGconn* admin, int hg, const std::vector<ServerRow>& rows) {
 	for (const auto& row : rows) {
-		if (!execOk(admin, "UPDATE pgsql_servers SET status='" + row.status + "', use_ssl=" + row.use_ssl
-				+ " WHERE hostgroup_id=" + std::to_string(hg) + " AND hostname='" + row.hostname + "' AND port=" + row.port)) return false;
+		if (!execOk(admin, "UPDATE pgsql_servers SET status=" + sqlLiteral(row.status) + ", use_ssl=" + row.use_ssl
+				+ " WHERE hostgroup_id=" + std::to_string(hg) + " AND hostname=" + sqlLiteral(row.hostname) + " AND port=" + row.port)) return false;
 	}
 	return execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 }
@@ -186,6 +193,8 @@ static bool restoreServers(PGconn* admin, int hg, const std::vector<ServerRow>& 
 // only way to make a flipped native mode or use_ssl apply: pooled connections keep theirs.
 static bool flushPool(PGconn* admin, int hg = HG) {
 	const std::vector<ServerRow> rows = readServers(admin, hg);
+	// Without the rows there is nothing to put back, and the hostgroup would stay offline.
+	if (rows.empty()) return false;
 	if (!execOk(admin, "UPDATE pgsql_servers SET status='OFFLINE_HARD' WHERE hostgroup_id=" + std::to_string(hg))) return false;
 	if (!execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -216,7 +225,7 @@ static bool fillPool(PGconn* admin, const char* user) {
 	return poolFreeWithin(admin, N, 10) == N;
 }
 
-static std::string q(const char* s) { return std::string("'") + s + "'"; }
+static std::string q(const char* s) { return sqlLiteral(s); }
 
 // The backend protocol of every free connection in `hg`, as ProxySQL records it:
 // "native", "libpq", or the counts when it is mixed or empty.
@@ -658,6 +667,7 @@ int main(int, char**) {
 	for (const char* v : TOUCHED_VARS) saved_vars.push_back(runtimeVar(admin.get(), v));
 	const std::string saved_ping_timeout = runtimeVar(admin.get(), "pgsql-ping_timeout_server");
 	const std::vector<ServerRow> saved_servers = readServers(admin.get(), HG);
+	if (saved_servers.empty()) { BAIL_OUT("cannot read the pgsql_servers rows of hostgroup %d", HG); return exit_status(); }
 
 	// idle_session_timeout exists from PostgreSQL 14 on; phase C is skipped below that.
 	const bool has_idle_timeout = atoi(scalar(be.get(), "SHOW server_version_num").c_str()) >= 140000;
