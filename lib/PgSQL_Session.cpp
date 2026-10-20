@@ -9148,6 +9148,10 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 		// The error ended the unit: PostgreSQL skips the rest of it, until the client's Sync.
 		reset_extended_query_frame(true);
 	}
+	// The unit is over: correct the transaction tracker from the backend's ReadyForQuery, as
+	// the one-message-at-a-time path does. Without it COMMIT AND CHAIN leaves the tracker saying
+	// no transaction, and a later DISCARD ALL is refused with the wrong error (#6417).
+	sync_txn_tracker_with_backend(myconn, false, backend_error);
 	// At 'I' the backend has destroyed every portal; otherwise an open one pins the connection.
 	const bool clear_portals = myconn->last_ready_for_query_status() == 'I';
 	const bool sticky = !clear_portals && named_portals.empty() == false;
