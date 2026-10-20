@@ -1865,10 +1865,15 @@ __exit_monitor_read_only_thread:
 	if (mmsd->get_task_type() == MON_AWS_RDS_TOPOLOGY_DISCOVERY) {
 		if (mmsd->interr == 0 && mmsd->result) {
 #ifdef PROXYSQL40
-			ScopedServerDiscoveryProtocolLock inventory_lock(ProxySQL_ServerProtocol::mysql);
-			if (!proxysql_is_server_inventory_managed_locked(ProxySQL_ServerProtocol::mysql,
-				mmsd->hostgroup_id, mmsd->reader_hostgroup))
-				GloMyMon->process_aws_rds_topology(mmsd);
+			bool inventory_managed = false;
+			{
+				ScopedServerDiscoveryProtocolLock inventory_lock(
+					ProxySQL_ServerProtocol::mysql);
+				inventory_managed = proxysql_is_server_inventory_managed_locked(
+					ProxySQL_ServerProtocol::mysql, mmsd->writer_hostgroup,
+					mmsd->reader_hostgroup);
+			}
+			if (!inventory_managed) GloMyMon->process_aws_rds_topology(mmsd);
 #else
 			GloMyMon->process_aws_rds_topology(mmsd);
 #endif
@@ -9185,11 +9190,15 @@ bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQ
 				__sync_fetch_and_add(&read_only_check_OK, 1);
 				if (mmsd->interr == 0 && mmsd->result) {
 #ifdef PROXYSQL40
-					ScopedServerDiscoveryProtocolLock inventory_lock(
-						ProxySQL_ServerProtocol::mysql);
-					if (!proxysql_is_server_inventory_managed_locked(
-						ProxySQL_ServerProtocol::mysql, mmsd->hostgroup_id,
-						mmsd->reader_hostgroup)) process_aws_rds_topology(mmsd);
+					bool inventory_managed = false;
+					{
+						ScopedServerDiscoveryProtocolLock inventory_lock(
+							ProxySQL_ServerProtocol::mysql);
+						inventory_managed = proxysql_is_server_inventory_managed_locked(
+							ProxySQL_ServerProtocol::mysql, mmsd->writer_hostgroup,
+							mmsd->reader_hostgroup);
+					}
+					if (!inventory_managed) process_aws_rds_topology(mmsd);
 #else
 					process_aws_rds_topology(mmsd);
 #endif
@@ -9413,6 +9422,7 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset, bool do_d
 				std::unique_ptr<MySQL_Monitor_State_Data> tmmsd(
 					new MySQL_Monitor_State_Data(MON_AWS_RDS_TOPOLOGY_DISCOVERY, r->fields[0], atoi(r->fields[1]), atoi(r->fields[2])));
 				tmmsd->reader_hostgroup = atoi(r->fields[4]);
+				tmmsd->writer_hostgroup = atoi(r->fields[5]);
 				tmmsd->mondb = monitordb;
 				tmmsd->mysql = My_Conn_Pool->get_connection(tmmsd->hostname, tmmsd->port, tmmsd.get());
 				if (tmmsd->mysql) {
