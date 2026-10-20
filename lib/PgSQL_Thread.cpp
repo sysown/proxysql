@@ -3242,7 +3242,8 @@ void PgSQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 
 		sess->to_process = 1;
 		myds->wait_until = curtime + pgsql_thread___ping_timeout_server * 1000;	// max_timeout
-		mc->last_time_used = curtime;
+		// last_time_used is left alone so a failed ping logs how long the connection sat
+		// idle; a successful one re-stamps it when the connection goes back to the pool.
 		myds->myprot.init(&myds, myds->myconn->userinfo, NULL);
 		sess->status = PINGING_SERVER;
 		myds->DSS = STATE_MARIADB_PING;
