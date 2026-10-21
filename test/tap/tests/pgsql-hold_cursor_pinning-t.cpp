@@ -120,23 +120,6 @@ static std::vector<ServerRow> readServers(PGconn* admin, int hg) {
 	return rows;
 }
 
-// Drops every pooled connection: deleting the servers sends them OFFLINE_HARD. New connections
-// also pick up the current pgsql-use_native_backend_protocol, which pooled ones never do.
-static bool flushBackendPool(PGconn* admin, const std::vector<ServerRow>& saved) {
-	if (saved.empty()) return false;
-	if (!execSQL(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(BACKEND_HG))) return false;
-	if (!execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
-	for (const auto& r : saved) {
-		const std::string mc = r.max_connections.empty() ? std::string("1000") : r.max_connections;
-		if (!execSQL(admin, "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment) VALUES ("
-			+ std::to_string(BACKEND_HG) + ",'" + r.hostname + "'," + r.port + "," + mc + "," + r.use_ssl
-			+ ",'" + r.comment + "')")) return false;
-	}
-	if (!execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
-	usleep(300000);
-	return true;
-}
-
 static uint64_t now_ms() {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -161,6 +144,32 @@ static long waitConnUsed(PGconn* admin, long expected, int timeout_ms) {
 	return v;
 }
 
+// Drops every pooled connection: deleting the servers sends them OFFLINE_HARD, which closes the
+// free ones at once. A connection still held by a client that has just gone would come back into
+// the pool once the servers are re-added, so that wait comes first, and the pool must end empty.
+// New connections also pick up the current pgsql-use_native_backend_protocol, which pooled ones never do.
+static bool flushBackendPool(PGconn* admin, const std::vector<ServerRow>& saved) {
+	if (saved.empty()) return false;
+	const long held = waitConnUsed(admin, 0, 5000);
+	if (held != 0) {
+		diag("pool flush: %ld connections still in use", held);
+		return false;
+	}
+	if (!execSQL(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(BACKEND_HG))) return false;
+	if (!execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
+	for (const auto& r : saved) {
+		const std::string mc = r.max_connections.empty() ? std::string("1000") : r.max_connections;
+		if (!execSQL(admin, "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment) VALUES ("
+			+ std::to_string(BACKEND_HG) + ",'" + r.hostname + "'," + r.port + "," + mc + "," + r.use_ssl
+			+ ",'" + r.comment + "')")) return false;
+	}
+	if (!execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
+	usleep(300000);
+	const long left = poolSum(admin, "ConnUsed") + poolSum(admin, "ConnFree");
+	if (left != 0) diag("pool flush: %ld connections left in the pool", left);
+	return left == 0;
+}
+
 static int backendPid(PGconn* c) {
 	const std::string v = scalar(c, "SELECT pid FROM pg_stat_activity WHERE pid = pg_backend_pid()");
 	return v.empty() ? -1 : atoi(v.c_str());
@@ -171,6 +180,29 @@ static std::vector<ServerRow> g_servers;
 static std::string g_mode;
 
 static const char* SERIES = "SELECT g FROM generate_series(1,6) g";
+
+// Runs fn with pgsql-query_digests_keep_comment on, so the digest starts with the query's leading
+// comment. A worker thread picks up new variables between two of its loops, so c's own thread is
+// waited for: a marker comment shows up in the digest once it digests with comments kept.
+static bool withKeptComments(PGconn* c, const std::function<bool()>& fn) {
+	const char* var = "pgsql-query_digests_keep_comment";
+	const std::string prev = scalar(g_admin,
+		std::string("SELECT variable_value FROM global_variables WHERE variable_name='") + var + "'");
+	const std::string marker = "hold_kc_" + g_mode + "_" + std::to_string(getpid());
+	const bool set = setVar(g_admin, var, "true");
+	bool kept = false;
+	for (int i = 0; set && kept == false && i < 50; i++) {
+		scalar(c, "SELECT /*" + marker + "*/ 1");
+		const std::string n = scalar(g_admin,
+			"SELECT COUNT(*) FROM stats_pgsql_query_digest WHERE digest_text LIKE '%" + marker + "%'");
+		kept = !n.empty() && n != "0";
+		if (!kept) usleep(100000);
+	}
+	if (!kept) diag("digests never kept the marker comment");
+	const bool good = kept && fn();
+	setVar(g_admin, var, prev.empty() ? "false" : prev);
+	return good;
+}
 
 struct Spelling {
 	const char* name;
@@ -195,6 +227,12 @@ static const std::vector<Spelling> spellings() {
 		{ "comment before DECLARE", [=](PGconn* c) {
 			return execSQL(c, "BEGIN") && execSQL(c, "/* app */ DECLARE c4 CURSOR WITH HOLD FOR " + series) && execSQL(c, "COMMIT");
 		}, "FETCH 2 FROM c4" },
+		{ "comment before DECLARE, kept in the digest", [=](PGconn* c) {
+			return withKeptComments(c, [&]() {
+				return execSQL(c, "BEGIN") && execSQL(c, "/* app */ DECLARE c11 CURSOR WITH HOLD FOR " + series) &&
+				       execSQL(c, "COMMIT");
+			});
+		}, "FETCH 2 FROM c11" },
 		{ "INSENSITIVE SCROLL options", [=](PGconn* c) {
 			return execSQL(c, "BEGIN") && execSQL(c, "DECLARE c5 INSENSITIVE SCROLL CURSOR WITH HOLD FOR " + series) && execSQL(c, "COMMIT");
 		}, "FETCH 2 FROM c5" },
