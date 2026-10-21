@@ -678,6 +678,18 @@ static enum PGSQL_QUERY_command select_target_command_type(const char* p) {
 static enum PGSQL_QUERY_command legacy_command_type(const char* text);
 
 /**
+ * @brief Where the first keyword of @p text starts: past whitespace of any kind, comments,
+ * '(' and ';'. NULL when there is no keyword.
+ */
+static const char* first_keyword(const char* text) {
+	const char* p = pgsql_stmt_skip_lead(text, NULL);
+	while (p != NULL && (*p == '(' || *p == ';')) {
+		p = pgsql_stmt_skip_lead(p + 1, NULL);
+	}
+	return p;
+}
+
+/**
  * @brief Refines a SELECT or UNKNOWN reported by ParserSQL with the legacy classification (#6422).
  *
  * ParserSQL reports SELECT for "SELECT pg_cancel_backend(N)" and for data-modifying CTEs
@@ -699,10 +711,7 @@ static enum PGSQL_QUERY_command legacy_command_type(const char* text);
  * @param text Digest text or query prefix. Must not be NULL.
  */
 static enum PGSQL_QUERY_command parser_refine_command_type(enum PGSQL_QUERY_command ret, const char* text) {
-	const char* p = pgsql_stmt_skip_lead(text, NULL);
-	while (p != NULL && (*p == '(' || *p == ';')) {
-		p = pgsql_stmt_skip_lead(p + 1, NULL);
-	}
+	const char* p = first_keyword(text);
 	if (p == NULL) return ret;
 	if (pgsql_stmt_first_keyword_is(p, "SELECT") == false) {
 		return ret == PGSQL_QUERY_SELECT ? legacy_command_type(p) : ret;
@@ -732,7 +741,6 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 		if (qp->parsersql_command_type >= 0) {
 			ret = static_cast<PGSQL_QUERY_command>(qp->parsersql_command_type);
 		} else
-#endif
 		{
 			// Prefix-only callers have no digest parse to reuse.
 			if (text) {
@@ -742,6 +750,28 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 		if (text && (ret == PGSQL_QUERY_SELECT || ret == PGSQL_QUERY_UNKNOWN)) {
 			ret = parser_refine_command_type(ret, text);
 		}
+#else
+		// ParserSQL is asked only where its answer can differ: a SELECT is decided by
+		// parser_refine_command_type(), and the legacy classifier names the rest the same way except
+		// CREATE/ALTER/DROP (no subtypes in ParserSQL) and ROLLBACK (ROLLBACK TO SAVEPOINT).
+		// pgsql_parser_command_type_unit-t fails if a ParserSQL change breaks that.
+		if (text) {
+			ret = parser_refine_command_type(PGSQL_QUERY_UNKNOWN, text);
+			if (ret == PGSQL_QUERY_UNKNOWN) {
+				const char* p = first_keyword(text);
+				if (pgsql_stmt_first_keyword_is(p, "CREATE") == false && pgsql_stmt_first_keyword_is(p, "ALTER") == false &&
+					pgsql_stmt_first_keyword_is(p, "DROP") == false && pgsql_stmt_first_keyword_is(p, "ROLLBACK") == false) {
+					ret = legacy_command_type(text);
+				}
+			}
+			if (ret == PGSQL_QUERY_UNKNOWN) {
+				ret = parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
+				if (ret == PGSQL_QUERY_SELECT || ret == PGSQL_QUERY_UNKNOWN) {
+					ret = parser_refine_command_type(ret, text);
+				}
+			}
+		}
+#endif
 		// ParserSQL cannot parse the tokenizer digest when it holds '?' placeholders or
 		// statements outside its grammar. Fall back to the legacy classifier, as MySQL
 		// does, so the command counters keep a meaningful value (#6454).

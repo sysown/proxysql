@@ -6,6 +6,7 @@
 #include <functional>
 #include <vector>
 #include <variant>
+#include <deque>
 #include <map>
 #include <memory>
 #include <string>
@@ -15,6 +16,7 @@
 #include "PgSQL_Error_Helper.h"
 #include "PgSQL_Variables.h"
 #include "PgSQL_Variables_Validator.h"
+#include "PgSQL_Extq_Batch.h"
 #ifdef PROXYSQL31
 #include "PgSQL_Waiter_List.h"
 #endif // PROXYSQL31
@@ -42,6 +44,7 @@ enum PgSQL_Extended_Query_Type : uint8_t {
 	PGSQL_EXTENDED_QUERY_TYPE_EXECUTE			 = 0x04,
 	PGSQL_EXTENDED_QUERY_TYPE_BIND				 = 0x08,
 	PGSQL_EXTENDED_QUERY_TYPE_CLOSE				 = 0x10,
+	PGSQL_EXTENDED_QUERY_TYPE_BATCH				 = 0x20,
 };
 
 /* Enumerated types for output format and date order */
@@ -152,6 +155,10 @@ enum ExtendedQueryPhase : uint8_t {
 	EXTQ_PHASE_PROCESSING_EXECUTE		= 0x80	// Processing Execute message after Sync
 };
 
+// What a handler did with a message ProxySQL may answer itself: nothing (it goes on to the backend),
+// sent a reply, or sent an error. An error ends an extended-query unit, so the caller has to know.
+enum class PgSQL_Local_Reply : uint8_t { NONE, SENT, SENT_ERROR };
+
 #define EXTQ_PHASE_PROCESSING_MASK \
     (EXTQ_PHASE_PROCESSING_PARSE | EXTQ_PHASE_PROCESSING_DESCRIBE | \
      EXTQ_PHASE_PROCESSING_CLOSE | EXTQ_PHASE_PROCESSING_BIND | \
@@ -171,6 +178,9 @@ struct PgSQL_Extended_Query_Info {
 	uint8_t stmt_type;
 	uint8_t flags;
 	Parse_Param_Types parse_param_types;
+	// A batch only: the bytes to send and the replies they expect.
+	std::string* batch_out = nullptr;
+	PgSQL_Extq_Registry* batch_registry = nullptr;
 };
 
 // Named-portal registry entry (native-mode only). A named Bind is dispatched to
@@ -190,6 +200,14 @@ struct PgSQL_Portal_Entry {
 	// for identity only, never dereferenced: it says which connection's teardown takes
 	// this entry down with it.
 	const PgSQL_Connection* bound_conn = nullptr;
+};
+
+// A portal as a message being handled finds it: opened by a Bind earlier in the unit being
+// buffered, or held in named_portals. 'name' is the map's key, which outlives the message.
+struct PgSQL_Portal_Ref {
+	const char* name = nullptr;
+	const PgSQL_Bind_Message* bind = nullptr;
+	std::shared_ptr<const PgSQL_STMT_Global_info> stmt;
 };
 
 class PgSQL_Query_Info {
@@ -220,10 +238,15 @@ public:
 	enum PGSQL_QUERY_command query_parser_command_type();
 	void query_parser_free();
 	unsigned long long query_parser_update_counters();
-	void begin(unsigned char* _p, int len, bool header = false);
+	// 'cached' is a statement with the same text: its digest is copied instead of parsing the text again.
+	void begin(unsigned char* _p, int len, bool header = false, const PgSQL_STMT_Global_info* cached = nullptr);
 	void end();
 	char* get_digest_text();
 	void set_end_time(unsigned long long time);
+	// Exchanges everything but sess with o. A buffered statement keeps its own query info until
+	// its reply arrives and swaps it into CurrentQuery to log it; copying would free the parser
+	// strings twice.
+	void swap(PgSQL_Query_Info& o) noexcept;
 
 private:
 	void reset_extended_query_info();
@@ -281,6 +304,57 @@ private:
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
 
+	// --- Buffered extended-query units (native protocol) ---
+	// From the first message of a unit bound for the backend, each such message is added to one
+	// batch instead of being sent with a Flush; at the Sync the batch goes out in one write and the
+	// registry matches the replies. Replies ProxySQL gives itself meanwhile wait in the registry, and
+	// what they change waits until they settle.
+	struct PgSQL_Extq_Entry {
+		char type = 0;                    // 'P', 'B', 'D', 'E' or 'C' when sent; 0 for ProxySQL's own reply
+		char target = 0;                  // Describe: 'S' or 'P'
+		char commit = 0;                  // once it succeeds: 'I' adds name to the client's statements, 'C' removes it
+		bool describe_portal = false;     // Execute: the client's Describe('P') goes with it
+		bool logged = false;
+		std::string local;                // ProxySQL's own reply, or its error when 'error' is set
+		bool error = false;               // made the backend's error too, by a Parse that fails there
+		std::string name;                 // the client's statement name
+		std::string portal;               // a named portal: its Bind, Close, Execute or Describe
+		uint32_t max_rows = 0;            // a named Execute: its row limit
+		std::shared_ptr<const PgSQL_STMT_Global_info> stmt;
+		std::unique_ptr<const PgSQL_Bind_Message> bind;  // Execute: the client's Bind, which it carries
+		std::string bind_bytes;           // Describe('P'): the Bind of the portal, sent before it
+		PtrSize_t pkt { 0, nullptr };     // the client's packet, which info points into
+		uint32_t parse_id = 0;            // a Parse sent for this entry creates proxysql_ps_<parse_id>
+		enum session_status log_status = session_status___NONE;
+		int qpo_log = -1;
+		int qpo_multiplex = -1;
+		int qpo_timeout = -1;
+		int qpo_retries = -1;
+		PgSQL_Query_Info info;            // CurrentQuery as the handler left it
+		PgSQL_Extq_Entry() = default;
+		~PgSQL_Extq_Entry();
+	};
+	struct PgSQL_Extq_Commit {
+		char commit = 0;
+		std::string name;
+		std::shared_ptr<const PgSQL_STMT_Global_info> stmt;
+	};
+	bool extq_allowed = false;            // this unit may be buffered; decided at its Sync
+	bool extq_buffering = false;
+	bool extq_in_handler = false;         // a message's handler is running; its errors end the unit
+	bool extq_sync = false;               // the batch ends in a Sync; false when cut short (ends in Flush)
+	bool extq_resume = false;             // cut short by its size: the rest of the unit is buffered again
+	std::deque<PgSQL_Extq_Entry> extq_entries;
+	PgSQL_Extq_Registry extq_registry;
+	std::string extq_out;
+	PgSQL_Extended_Query_Info extq_eqi {};
+	std::map<std::string, std::shared_ptr<const PgSQL_STMT_Global_info>> extq_names;  // Parsed in this unit (null: closed)
+	std::map<uint64_t, std::shared_ptr<const PgSQL_STMT_Global_info>> extq_new_stmts; // texts no backend had, by hash
+	std::map<std::string, PgSQL_Extq_Entry*> extq_portals;  // opened (the Bind's entry) or closed (null) in this unit
+	PgSQL_Extq_Commit extq_pending;       // what the reply a handler just gave commits once it settles
+	unsigned long long extq_last_settle = 0;
+	int extq_swapped = -1;                // entry whose query info the error path is holding in CurrentQuery
+
 	// --- Named-portal registry (native-mode only, Task P1) ---
 	// portal name -> bound entry. Populated on a successful named-Bind BindComplete;
 	// cleared when a completed cycle's ReadyForQuery carried txn-state 'I' (backend
@@ -318,12 +392,12 @@ private:
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
 	bool is_multi_statement_command(const char* cmd);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command(const char* dig, bool* lock_hostgroup);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_RESET_command(const char* dig, bool* lock_hostgroup);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DISCARD_command(const char* dig);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DEALLOCATE_command(const char* dig);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(const char* dig, bool* lock_hostgroup);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo(PtrSize_t*, bool* lock_hostgroup, 
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command(const char* dig, bool* lock_hostgroup);
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_RESET_command(const char* dig, bool* lock_hostgroup);
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DISCARD_command(const char* dig);
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DEALLOCATE_command(const char* dig);
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(const char* dig, bool* lock_hostgroup);
+	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo(PtrSize_t*, bool* lock_hostgroup, 
 		PgSQL_Extended_Query_Type stmt_type = PGSQL_EXTENDED_QUERY_TYPE_NOT_SET);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_PARSE(PtrSize_t& pkt);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_DESCRIBE(PtrSize_t& pkt);
@@ -335,6 +409,24 @@ private:
 	// FIXME: unused. Remove in next iteration
 	//void handler___rc0_PROCESSING_STMT_DESCRIBE_PREPARE(PgSQL_Data_Stream* myds);
 	int handler___status_PROCESSING_EXTENDED_QUERY_SYNC();
+	bool extq_can_buffer();
+	bool extq_must_stop(const PktType& msg);
+	std::shared_ptr<const PgSQL_STMT_Global_info> extq_find_stmt(const char* name);
+	bool extq_find_portal(const char* name, PgSQL_Portal_Ref& ref);
+	void extq_buffer_message();
+	std::string extq_take_replies(unsigned int out_before, bool& error);
+	int extq_after_message(int rc, unsigned int out_before, enum session_status st_before);
+	PgSQL_Backend* extq_error_holder();
+	int extq_fail_on_backend(unsigned int out_before);
+	int extq_finish(bool synced);
+	bool extq_render(PgSQL_Connection* myconn);
+	bool extq_settle(PgSQL_Data_Stream* myds);
+	void extq_commit(PgSQL_Extq_Entry& e);
+	void extq_log(PgSQL_Extq_Entry& e, const Extq_Event& ev, PgSQL_Data_Stream* myds);
+	void extq_arm_timeout();
+	int extq_unit_done(PgSQL_Data_Stream* myds);
+	void extq_unit_failed(PgSQL_Data_Stream* myds);
+	void extq_clear();
 	int handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg);
 	int handle_post_sync_describe_message(PgSQL_Describe_Message* describe_msg);
 	int handle_post_sync_close_message(PgSQL_Close_Message* close_msg);
@@ -438,7 +530,7 @@ private:
 	void end_poisoned_transaction();
 	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn);
 	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret);
-	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, bool& wrong_pass);
+	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds);
 	void handler_minus1_HandleBackendConnection(PgSQL_Data_Stream* myds);
 	int RunQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn);
 	void handler___status_WAITING_CLIENT_DATA();
@@ -688,7 +780,7 @@ public:
 	//void writeout();
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds) override;
-	bool handle_command_query_kill(PtrSize_t*);
+	PgSQL_Local_Reply handle_command_query_kill(PtrSize_t*);
 
 	//void update_expired_conns(const std::vector<std::function<bool(PgSQL_Connection*)>>&);
 	/**
@@ -718,6 +810,7 @@ public:
 	// otherwise. Poisons the session when the backend still holds the transaction open.
 	// Call it before anything that discards the backend connection.
 	char txn_state_for_local_error(bool backend_lost = false);
+	bool txn_failed_on_backend();
 	// Put the tracked SET variables back to their values at BEGIN (as ROLLBACK does)
 	// for a transaction ProxySQL ends itself; drops the snapshot if no backend is attached.
 	void rollback_tracked_txn_state();

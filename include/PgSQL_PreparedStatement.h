@@ -33,9 +33,6 @@ public:
 		Parse_Param_Types&& _ppt, const char* _first_comment, uint64_t _h);
 	~PgSQL_STMT_Global_info();
 	void calculate_mem_usage();
-
-private:
-	void compute_hash();
 };
 
 // class PgSQL_STMT_Local represents prepared statements local to a session/connection
@@ -46,7 +43,9 @@ public:
 
 	inline void set_is_client(PgSQL_Session *_s) { sess=_s; is_client_ = true; }
 	inline bool is_client() const { return is_client_; }
-	inline unsigned int get_num_backend_stmts() const { return backend_stmt_to_global_info.size(); }
+	// Counts the forgotten statements the backend still holds too (see backend_erase()), so the
+	// max_stmts_per_connection reset also frees those.
+	inline unsigned int get_num_backend_stmts() const { return backend_stmt_to_global_info.size() + stale_backend_stmts; }
 	
 	/**
 	 * Map client statement name to a global prepared statement.
@@ -127,6 +126,15 @@ public:
 	void backend_insert(std::shared_ptr<const PgSQL_STMT_Global_info>& stmt_info, uint32_t backend_stmt_id);
 
 	/**
+	 * @brief Forget a statement, releasing its server reference.
+	 *
+	 * Does nothing when the map does not hold it.
+	 * @param still_on_backend true when the backend still holds it (it refused it after a schema change,
+	 *        and nothing closes it): it keeps counting in get_num_backend_stmts().
+	 */
+	void backend_erase(uint64_t global_id, bool still_on_backend);
+
+	/**
 	 * @brief Find backend statement ID from global statement ID.
 	 *
 	 * Looks up the backend statement ID associated with the given global statement ID.
@@ -146,10 +154,12 @@ public:
 	 * @param query The SQL query string.
 	 * @param query_length The length of the query string.
 	 * @param param_types The parameter types for the prepared statement.
+	 * @param search_path_hash The client's search_path hash (var_hash[PGSQL_SEARCH_PATH]). The same
+	 *        text can mean another table under another search_path, so it must be another statement.
 	 * @return A computed hash value representing the prepared statement.
 	 */
 	static uint64_t compute_hash(const char* user, const char* database, const char* query, 
-		unsigned int query_length, const Parse_Param_Types& param_types);
+		unsigned int query_length, const Parse_Param_Types& param_types, uint32_t search_path_hash);
 
 private:
 	// this map associate client_stmt_id to global_stmt_info : this is used only for client connections
@@ -168,6 +178,9 @@ private:
 
 	// maximum assigned statement id in this session
 	uint32_t local_max_stmt_id = 0;
+
+	// forgotten statements the backend still holds, see backend_erase()
+	uint32_t stale_backend_stmts = 0;
 
 	// is client session ?
 	bool is_client_;
@@ -193,7 +206,7 @@ public:
 	/**
 	 * @brief Retrieve existing or create a new global prepared statement.
 	 *
-	 * Computes a hash from user, database, query and parameter types. If an entry with that hash
+	 * hash is the statement's key from PgSQL_STMT_Local::compute_hash(). If an entry with that hash
 	 * exists it is returned. Otherwise a new PgSQL_STMT_Global_info is allocated, assigned a
 	 * statement_id (preferring reused IDs from free_stmt_ids), optional digest metadata copied,
 	 * inserted into map_stmt_hash_to_info, and zero-refcount tracking counters updated.
@@ -201,6 +214,7 @@ public:
 	 *
 	 * Concurrency: Acquires/release write lock when lock == true.
 	 *
+	 * @param hash          The statement's key, from PgSQL_STMT_Local::compute_hash().
 	 * @param user          Client username (null-terminated).
 	 * @param database      Database/schema name.
 	 * @param query         SQL text.
@@ -213,7 +227,7 @@ public:
 	 * @param lock          If true, method manages locking internally.
 	 * @return shared_ptr to the global prepared statement (never nullptr).
 	 */
-	std::shared_ptr<const PgSQL_STMT_Global_info> add_prepared_statement(const char* user, const char* database, const char* query, 
+	std::shared_ptr<const PgSQL_STMT_Global_info> add_prepared_statement(uint64_t hash, const char* user, const char* database, const char* query, 
 		unsigned int query_len, Parse_Param_Types&& ppt, const char* first_comment, const char* digest_text, uint64_t digest, 
 		PGSQL_QUERY_command PgQueryCmd, bool lock = true);
 

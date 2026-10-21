@@ -636,6 +636,8 @@ public:
 	inline unsigned long long get_num_rows() const { return num_rows; }
 	inline unsigned long long get_affected_rows() const { return affected_rows; }
 	inline unsigned int get_num_fields() const { return num_fields; }
+	// More than one CommandComplete/EmptyQueryResponse: a multi-statement query's replies.
+	inline bool has_multiple_results() const { return native_command_count > 1; }
 	inline unsigned long long get_resultset_size() const { return resultset_size; }
 	inline uint8_t get_result_packet_type() const { return result_packet_type; }
 
@@ -706,6 +708,7 @@ private:
 	unsigned long long pkt_count;
 	unsigned long long affected_rows;
 	unsigned int num_fields;
+	unsigned int native_command_count = 0;
 	unsigned int buffer_used;
 	unsigned char* buffer;
 	PgSQL_Protocol* proto;

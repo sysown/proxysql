@@ -16,6 +16,7 @@
 
 #include "openssl/x509v3.h" // X509_VERIFY_PARAM_set1_host / set_hostflags (native backend TLS)
 #include "openssl/evp.h"     // EVP_MAX_MD_SIZE for cbind digest buffer (SCRAM-PLUS)
+#include "PgSQLErrorFields.h"
 #include "PgSQL_Backend_Protocol.h"  // pg_tls_server_end_point / pg_scram_build_cbind_input_* / pg_scram_set_cbind (SCRAM-PLUS)
 #include "openssl/crypto.h"   // OPENSSL_cleanse — non-elidable wipe of harvested SCRAM key material
 
@@ -555,10 +556,17 @@ handler_again:
 			}
 			init_query_result();
 			if (native_mode) {
+				if (native_stmt_step == PG_Native_Stmt_Step::BATCH) {
+					// ProxySQL's own replies that come before any backend reply.
+					std::string local;
+					query.extended_query_info->batch_registry->start(local);
+					add_local_replies(local);
+				}
 				// The request was flushed a moment ago and the backend has not had time to
 				// answer, so reading now returns EAGAIN almost every time. Let poll() report
-				// the reply instead; if it is already there, poll() returns at once.
-				async_exit_status = PG_EVENT_READ;
+				// the reply instead; if it is already there, poll() returns at once. A batch
+				// may still have bytes to write.
+				async_exit_status = PG_EVENT_READ | (native_outbuf.empty() && native_ssl_outbuf.empty() ? 0 : PG_EVENT_WRITE);
 				next_event(ASYNC_USE_RESULT_CONT);
 				break;
 			}
@@ -1761,6 +1769,7 @@ void PgSQL_Connection::native_result_fatal(const char* code, const char* message
 	set_error(code, message, false);
 	native_result_aborted = true;
 	native_teardown();
+	native_result_complete = true;   // nothing more will come from this connection
 }
 
 // A failed send() after login means the socket is dead (ECONNRESET / EPIPE), so it gets the
@@ -1784,6 +1793,7 @@ void PgSQL_Connection::native_result_protocol_violation(const char* message) {
 	native_result_aborted = true;
 	reusable = false;
 	healthy = false;
+	native_result_complete = true;   // nothing more from this connection can be trusted
 	if (myds && myds->sess) {
 		myds->sess->set_unhealthy();
 	}
@@ -2784,6 +2794,9 @@ void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, ui
 	std::string severity = "ERROR";
 	std::string sqlstate = "08000"; // connection_exception default
 	std::string message  = "native handshake error";
+	if (error_info.ext_info) {
+		error_info.ext_info->source_function.clear();
+	}
 	uint32_t i = 0;
 	while (i < len && payload[i] != 0) {
 		char ftype = (char)payload[i++];
@@ -2798,6 +2811,12 @@ void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, ui
 				break;
 			case 'C': sqlstate = val; break;
 			case 'M': message = val; break;
+			case 'R': // Routine: what is_stale_stmt_error() checks
+				if (error_info.ext_info == nullptr) {
+					error_info.ext_info = new PgSQL_ErrorInfo_Ext();
+				}
+				error_info.ext_info->source_function = val;
+				break;
 			default: break;
 		}
 	}
@@ -3434,6 +3453,19 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 	}
 }
 
+// Adds ProxySQL's own replies (complete wire messages) to the result, in their place in the stream.
+unsigned int PgSQL_Connection::add_local_replies(const std::string& bytes) {
+	unsigned int n = 0;
+	size_t off = 0;
+	while (off + 5 <= bytes.size()) {
+		const unsigned char* p = (const unsigned char*)bytes.data() + off;
+		const uint32_t len = ((uint32_t)p[1] << 24) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 8) | (uint32_t)p[4];
+		n += query_result->add_native_backend_message((char)p[0], p + 5, len - 4);
+		off += 1 + len;
+	}
+	return n;
+}
+
 void PgSQL_Connection::native_stmt_send_or_wait() {
 	// Flush the extended-query step just built into native_outbuf. Mirrors the tail
 	// of query_start()'s native branch: on a fatal send record the error and tear the
@@ -3477,6 +3509,10 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 	// the caller compares against pgsql-threshold_resultset_size to decide when
 	// to pause the fetch.
 	auto count_bytes = [&](unsigned int n) { if (processed_bytes) *processed_bytes += n; };
+	// Waiting for the backend: a batch that still has bytes to send waits to write as well.
+	auto wait_for_read = [&]() {
+		async_exit_status = PG_EVENT_READ | (native_outbuf.empty() && native_ssl_outbuf.empty() ? 0 : PG_EVENT_WRITE);
+	};
 	// Enough bytes for this event: stop and let the client drain, the same rule the
 	// libpq fetch loop applies per row. Asked only right after a DataRow or CopyData,
 	// the messages a result can have without limit. Never once an ErrorResponse is
@@ -3514,8 +3550,10 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed during result fetch");
 			return;
 		}
-		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
-			// Still bytes pending → keep waiting for writable.
+		// Still bytes pending → keep waiting for writable. A batch reads meanwhile: the backend
+		// answers the first messages while the rest is still arriving, and stops reading once its
+		// own send buffer is full.
+		if ((!native_outbuf.empty() || !native_ssl_outbuf.empty()) && native_stmt_step != PG_Native_Stmt_Step::BATCH) {
 			async_exit_status = PG_EVENT_WRITE;
 			return;
 		}
@@ -3533,7 +3571,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 		}
 		if (r == 0) {
 			// EAGAIN: no bytes available yet → wait for the socket to become readable.
-			async_exit_status = PG_EVENT_READ;
+			wait_for_read();
 			return;
 		}
 	}
@@ -3622,6 +3660,61 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 			if (msg.type == 'C' && msg.payload_len == sizeof("LISTEN") &&
 				memcmp(msg.payload, "LISTEN", sizeof("LISTEN")) == 0) {
 				set_status(true, STATUS_PGSQL_CONNECTION_LISTEN);
+			}
+
+			// A buffered unit: its registry says, message by message, what reaches the client and
+			// when the unit is over. A reply it cannot place means the stream no longer matches
+			// what was sent, so nothing more from this connection can be trusted.
+			if (native_stmt_step == PG_Native_Stmt_Step::BATCH) {
+				PgSQL_Extq_Registry& reg = *query.extended_query_info->batch_registry;
+				// A FATAL error before any reply is the backend closing the connection, not a reply to
+				// the unit: one killed while idle in the pool sends it before reading anything. Taken as
+				// a reply it made the unit look answered, and an answered unit is never sent again
+				// elsewhere. After a reply it is not sent again anyway, so the registry still takes it.
+				if (msg.type == 'E' && reg.answered() == false) {
+					const PgSQLErrorResult e = pgsql_parse_error_response(msg.payload, msg.payload_len);
+					if (e.severity_len == 5 && (memcmp(e.severity, "FATAL", 5) == 0 || memcmp(e.severity, "PANIC", 5) == 0)) {
+						native_result_fatal(e.sqlstate, std::string(e.message ? e.message : "", e.message_len).c_str());
+						return;
+					}
+				}
+				std::string local;
+				const Extq_Verdict v = reg.on_message(msg.type, msg.payload, msg.payload_len, local);
+				if (v == Extq_Verdict::BAD) {
+					proxy_error("native backend protocol: reply '%c' does not fit the batched extended-query unit on fd=%d; discarding connection\n",
+						msg.type, fd);
+					native_result_protocol_violation("backend reply does not match the batched extended-query unit");
+					return;
+				}
+				if (v == Extq_Verdict::RELAY) {
+					count_bytes(query_result->add_native_backend_message(msg.type, msg.payload, msg.payload_len));
+				} else if (msg.type == 'Z') {
+					// The ReadyForQuery of the Sync added before a simple Query: the client waits
+					// for the simple Query's own.
+					if (msg.payload_len >= 1) set_ready_for_query_status((char)msg.payload[0]);
+					query_result->buffer_to_PSarrayOut();
+				}
+				count_bytes(add_local_replies(local));
+				if (reg.needs_sync()) {
+					// An error in a unit sent without a Sync: the backend skips everything until one.
+					pg_build_sync(native_outbuf);
+					reg.sync_sent();
+					if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
+						native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Sync) failed");
+						return;
+					}
+					if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
+						async_exit_status = PG_EVENT_READ | PG_EVENT_WRITE;
+						return;
+					}
+				}
+				if (reg.complete()) {
+					native_result_complete = true;
+					return;
+				}
+				// A large result in a unit pauses here too, or the whole of it is read in one event.
+				if (pause_after(msg.type)) return;
+				continue;
 			}
 
 			// --- Extended-query (prepared-statement) drain (Task C) ---
@@ -3824,7 +3917,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 		}
 		if (fr == FRAME_NEED_MORE) {
 			// Incomplete trailing message → need more bytes from the socket.
-			async_exit_status = PG_EVENT_READ;
+			wait_for_read();
 			return;
 		}
 		// FRAME_ERROR: malformed backend message length.
@@ -4064,6 +4157,11 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 				// (CloseComplete). Task P2.
 				async_state_machine = ASYNC_STMT_EXECUTE_START;
 				native_close_only = true;
+			} else if (type == PGSQL_EXTENDED_QUERY_TYPE_BATCH) {
+				// A buffered unit also runs through the EXECUTE states; stmt_execute_start()
+				// and the result drain take it from there. Native connections only.
+				assert(native_mode);
+				async_state_machine = ASYNC_STMT_EXECUTE_START;
 			} else {
 				assert(0); // should never reach here
 			}
@@ -4614,6 +4712,21 @@ void PgSQL_Connection::stmt_execute_start() {
 	reset_error();
 	processing_multi_statement = false;
 	async_exit_status = PG_EVENT_NONE;
+
+	if (native_mode && query.extended_query_info->batch_registry) {
+		// A buffered unit goes out in one write. What the socket does not take now is written
+		// while the replies are read, so a unit larger than the socket buffers cannot leave both
+		// sides waiting for the other to read.
+		native_stmt_reset_step();
+		native_outbuf.swap(*query.extended_query_info->batch_out);
+		update_bytes_sent(native_outbuf.size());
+		native_stmt_step = PG_Native_Stmt_Step::BATCH;
+		native_stmt_send_or_wait();
+		if (async_exit_status == PG_EVENT_WRITE) {
+			async_exit_status = PG_EVENT_NONE;
+		}
+		return;
+	}
 
 	if (native_mode && native_bind_only) {
 		// Native named-portal Bind drive (Task P1): emit ONLY a Bind on the CLIENT'S
@@ -5434,14 +5547,18 @@ void PgSQL_Connection::unhandled_notice_cb(void* arg, const PGresult* result) {
 	// unpinning while one does sends the next notification to the wrong client.
 	// DISCARD ALL is the other way out, and it clears every flag through reset().
 	// A Simple Query can carry several statements, so each one is looked at and the last
-	// LISTEN or UNLISTEN * decides: `SELECT 1; LISTEN ch` pins, `UNLISTEN *; LISTEN ch`
-	// stays pinned, and `LISTEN ch; UNLISTEN *` leaves nothing subscribed (issue #6438).
-	// Statements are taken past any comment kept by query_digests_keep_comment, and once the
-	// scan loses track of the digest (a kept comment cut short of its terminator) a LISTEN
-	// anywhere from that comment's opening on pins -- the word inside the cut comment's own
-	// text included, which fails closed -- while nothing there unpins.
+	// LISTEN or UNLISTEN * decides: `UNLISTEN *; LISTEN ch` stays pinned and
+	// `LISTEN ch; UNLISTEN *` leaves nothing subscribed (issue #6438). Past a kept comment
+	// cut short of its terminator a LISTEN keeps the pin and nothing there releases it.
 void PgSQL_Connection::update_listen_status(const char* query_digest_text) {
 	bool listening = get_status(STATUS_PGSQL_CONNECTION_LISTEN);
+	// LISTEN only runs on a native connection, and there every LISTEN that ran has pinned it
+	// already from its CommandComplete tag, so an unpinned one has nothing to find. A batch
+	// reads several replies before this runs for each statement: a later LISTEN's tag can pin
+	// before an earlier UNLISTEN * releases, so a connection ever seen pinned keeps reading.
+	// ponytail: such a connection reads every digest until it is closed.
+	if (listening == false && native_mode && listen_scan == false) return;
+	listen_scan = true;
 	const char* lost = NULL;
 	for (const char* stmt = pgsql_stmt_skip_lead(query_digest_text, &lost); stmt != NULL;
 		stmt = pgsql_digest_next_stmt(stmt, &lost)) {
@@ -5585,6 +5702,23 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 	}
 
 	update_listen_status(query_digest_text);
+
+	// A WITH HOLD cursor survives COMMIT on the backend connection; pooled, the next client
+	// could FETCH this client's rows from it. Cursors are not tracked one by one, so only
+	// CLOSE ALL clears the flag (DISCARD ALL clears it through reset()). With
+	// query_digests_keep_comment the digest can start with a comment, so it is skipped first.
+	const char* first_stmt = pgsql_stmt_skip_lead(query_digest_text, NULL);
+	if (get_status(STATUS_PGSQL_CONNECTION_HOLD_CURSOR) == false) {
+		// ';': a multi-statement query whose DECLARE is not the first statement
+		if ((pgsql_stmt_first_keyword_is(first_stmt, "DECLARE") || strchr(query_digest_text, ';')) &&
+			strcasestr(query_digest_text, "CURSOR WITH HOLD")) {
+			set_status(true, STATUS_PGSQL_CONNECTION_HOLD_CURSOR);
+		}
+	} else {
+		if (pgsql_stmt_first_keyword_is(first_stmt, "CLOSE ALL")) {
+			set_status(false, STATUS_PGSQL_CONNECTION_HOLD_CURSOR);
+		}
+	}
 
 	// CREATE SEQUENCE vs CREATE TEMP SEQUENCE:
 	/// - CREATE SEQUENCE: Persistent; survives across sessions until explicitly dropped.
@@ -5875,7 +6009,7 @@ bool PgSQL_Connection::MultiplexDisabled(bool check_delay_token) {
 		STATUS_PGSQL_CONNECTION_LOCK_TABLES | STATUS_PGSQL_CONNECTION_TEMPORARY_TABLE | STATUS_PGSQL_CONNECTION_ADVISORY_LOCK | 
 		STATUS_PGSQL_CONNECTION_NO_MULTIPLEX | STATUS_PGSQL_CONNECTION_HAS_SEQUENCES | STATUS_PGSQL_CONNECTION_ADVISORY_XACT_LOCK | 
 		STATUS_PGSQL_CONNECTION_NO_MULTIPLEX_HG | STATUS_PGSQL_CONNECTION_HAS_SAVEPOINT |
-		STATUS_PGSQL_CONNECTION_LISTEN )) {
+		STATUS_PGSQL_CONNECTION_LISTEN | STATUS_PGSQL_CONNECTION_HOLD_CURSOR )) {
 		ret = true;
 	}
 	if (check_delay_token && auto_increment_delay_token) return true;

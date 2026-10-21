@@ -2782,6 +2782,7 @@ PgSQL_Query_Result::PgSQL_Query_Result() {
 	buffer_used = 0;
 	resultset_size = 0;
 	num_fields = 0;
+	native_command_count = 0;
 	num_rows = 0;
 	pkt_count = 0;
 	affected_rows = -1;
@@ -2993,6 +2994,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		// its own result, the last DML count of the batch wins; counts are not summed.
 		const bool had_tuple = stmt_had_tuple;
 		stmt_had_tuple = false;
+		native_command_count++;
 		result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
 		// Parse the trailing integer of the tag for affected rows. For INSERT the
 		// tag is "INSERT <oid> <rows>" (rows is the 2nd/last number); for UPDATE/
@@ -3018,6 +3020,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		break;
 	}
 	case 'I': // EmptyQueryResponse
+		native_command_count++;
 		result_packet_type |= PGSQL_QUERY_RESULT_EMPTY;
 		stmt_had_tuple = false; // ends the statement, as 'C' does
 		break;
@@ -3197,6 +3200,7 @@ unsigned char* PgSQL_Query_Result::buffer_reserve_space(unsigned int size) {
 void PgSQL_Query_Result::reset() {
 	resultset_size = 0;
 	num_fields = 0;
+	native_command_count = 0;
 	num_rows = 0;
 	pkt_count = 0;
 	affected_rows = -1;

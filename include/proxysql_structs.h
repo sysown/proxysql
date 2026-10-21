@@ -345,6 +345,8 @@ enum session_status {
 	WAITING_AWS_IAM_TOKEN,
 #endif // PROXYSQL40
 	SETTING_USER_VARIABLE_CONTEXT,
+	// A buffered extended-query unit sent in one write. Append-only, as above.
+	PROCESSING_EXTQ_BATCH,
 	session_status___NONE // special marker
 };
 

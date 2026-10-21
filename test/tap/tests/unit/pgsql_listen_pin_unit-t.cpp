@@ -8,11 +8,12 @@
  * that subscribed. It used to be set only when the digest STARTED with LISTEN, so
  * "SELECT 1; LISTEN ch" subscribed on the backend without pinning: the client got
  * none of its notifications and the connection went back to the pool subscribed.
- * These cases pin both ways the flag is now taken, without a server:
- *   - ProcessQueryAndSetStatusFlags() walks every statement of the digest;
+ * These cases check both halves, without a server:
  *   - native_fetch_result_cont() sets it from a CommandComplete tagged LISTEN, which
  *     does not depend on a digest, and before ReadyForQuery, so a notification in
- *     the same reply is forwarded rather than dropped.
+ *     the same reply is forwarded rather than dropped;
+ *   - on a pinned connection ProcessQueryAndSetStatusFlags() walks every statement of
+ *     the digest to find an UNLISTEN * that releases it.
  * The end-to-end cases live in pgsql-native_notify-t and pgsql-listen_notify_contract-t.
  */
 
@@ -68,44 +69,34 @@ static bool pin_after(bool pinned_before, const char* digest) {
 	return r;
 }
 
-static void test_digest_pins() {
-	ok(pin_after(false, "listen ch"), "digest: a lone LISTEN pins");
-	ok(pin_after(false, "select ?; listen ch"), "digest: LISTEN behind another statement pins");
-	ok(pin_after(false, "select ?;listen ch"), "digest: LISTEN right after the ';' pins");
-	ok(!pin_after(false, "select ? as \"a; listen b\""),
-	   "digest: a ';' inside a quoted identifier is no statement boundary");
-	ok(!pin_after(false, "select ?; select listener from t"),
-	   "digest: an identifier starting with LISTEN does not pin");
-}
-
 // Individual channels are not tracked, so only UNLISTEN * may release the pin, and only
 // when no LISTEN follows it in the same message.
 static void test_digest_last_statement_decides() {
-	ok(!pin_after(false, "listen a; unlisten *"), "digest: LISTEN a; UNLISTEN * leaves nothing pinned");
+	ok(!pin_after(true, "listen a; unlisten *"), "digest: LISTEN a; UNLISTEN * leaves nothing pinned");
 	ok(pin_after(true, "unlisten *; listen b"), "digest: UNLISTEN *; LISTEN b keeps the pin");
 	ok(pin_after(true, "listen a; unlisten *; listen b"), "digest: LISTEN a; UNLISTEN *; LISTEN b keeps the pin");
 	ok(!pin_after(true, "select ?; unlisten *"), "digest: UNLISTEN * behind another statement releases the pin");
 	ok(!pin_after(true, "unlisten*"), "digest: UNLISTEN* with no space releases the pin");
 	ok(pin_after(true, "unlisten ch"), "digest: UNLISTEN <channel> keeps the pin");
 	ok(pin_after(true, "select ?"), "digest: an unrelated statement keeps the pin");
+	// Only a real statement starting with LISTEN pins again after the UNLISTEN *.
+	ok(!pin_after(true, "unlisten *; select ? as \"a; listen b\""),
+	   "digest: a ';' inside a quoted identifier is no statement boundary");
+	ok(!pin_after(true, "unlisten *; select listener from t"),
+	   "digest: an identifier starting with LISTEN does not pin");
 }
 
 // With query_digests_keep_comment the digest keeps each statement's leading comments.
 static void test_digest_kept_comments() {
-	ok(pin_after(false, "/*c*/ listen ch"), "digest: LISTEN behind a kept comment pins");
-	ok(pin_after(false, "select ?; /*c*/ listen ch"), "digest: a later LISTEN behind a kept comment pins");
 	ok(!pin_after(true, "/*c*/ unlisten *"), "digest: UNLISTEN * behind a kept comment releases the pin");
 	ok(!pin_after(true, "unlisten /*c*/ *"), "digest: so does UNLISTEN /*c*/ *");
-	ok(!pin_after(false, "select ?; /* listen ch */ select ?"), "digest: LISTEN only inside a kept comment does not pin");
+	ok(!pin_after(true, "unlisten *; /* listen ch */ select ?"), "digest: LISTEN only inside a kept comment does not pin");
 }
 
 // A kept comment longer than FIRST_COMMENT_MAX_LENGTH is cut before its "*/". Past it the
-// statements cannot be told apart: a LISTEN anywhere pins, and nothing unpins.
+// statements cannot be told apart, and nothing there unpins.
 static void test_digest_lost_scan() {
-	ok(pin_after(false, "/*xxx select ?; listen ch"), "digest: LISTEN after a comment cut short pins");
-	ok(pin_after(false, "/*xxx listen ch"), "digest: LISTEN right after a comment cut short pins");
 	ok(pin_after(true, "/*xxx select ?; unlisten *"), "digest: UNLISTEN * after a comment cut short keeps the pin");
-	ok(!pin_after(false, "/*xxx select ?; select ?"), "digest: a comment cut short alone does not pin");
 }
 
 // ---------------------------------------------------------------------------
@@ -209,18 +200,30 @@ static void test_command_complete_tag() {
 	ok(c->native_result_complete && !pinned(c),
 	   "native: UNLISTEN and other tags that merely contain the word do not pin");
 	destroy(c);
+
+	// Only the tag pins a native connection: a LISTEN that did not run left none.
+	ok(!pin_after(false, "listen ch"), "native: the digest alone does not pin an unpinned connection");
+
+	// A batch reads every reply before its statements are settled one by one: LISTEN's tag has
+	// pinned when the earlier UNLISTEN * releases, and the LISTEN must pin again after it.
+	c = make_conn();
+	drain(c, wire_C("UNLISTEN") + wire_C("LISTEN") + wire_Z());
+	c->ProcessQueryAndSetStatusFlags("unlisten *", -1);
+	const bool released = !pinned(c);
+	c->ProcessQueryAndSetStatusFlags("listen ch", -1);
+	ok(released && pinned(c), "native batch: UNLISTEN * then LISTEN settled after both tags keeps the pin");
+	destroy(c);
 }
 
 int main() {
-	plan(32);
+	plan(26);
 	test_init_minimal();
 
-	test_digest_pins();                    // 5
-	test_digest_last_statement_decides();  // 7
-	test_digest_kept_comments();           // 5
-	test_digest_lost_scan();               // 4
+	test_digest_last_statement_decides();  // 9
+	test_digest_kept_comments();           // 3
+	test_digest_lost_scan();               // 1
 	test_no_digest_unlisten();             // 7
-	test_command_complete_tag();           // 4
+	test_command_complete_tag();           // 6
 
 	test_cleanup_minimal();
 	return exit_status();
