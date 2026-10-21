@@ -2826,8 +2826,9 @@ void PgSQL_Session::SetQueryTimeout() {
 // without having to reconnect. Called only from handler_minus1_ClientLibraryError
 // when we are certain: (a) admin variable is on, (b) the session was in an
 // explicit transaction, (c) the result-set transfer has not already started to
-// the client (synthesizing 25P02 mid-stream would corrupt the protocol), and
-// (d) the client data stream is valid.
+// the client (synthesizing 25P02 mid-stream would corrupt the protocol),
+// (d) the client data stream is valid, and (e) nothing the backend left
+// unanswered could have committed the transaction.
 //
 // On success: the three messages are queued on client_myds->PSarrayOUT,
 // tx_poisoned is set to true, and the pgsql_tx_poisoned_total counter is
@@ -2854,6 +2855,10 @@ bool PgSQL_Session::handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds) {
 		return false;
 	}
 	if (client_myds == nullptr || client_myds->PSarrayOUT == nullptr) return false;
+	// A COMMIT that got no reply may still have committed: the backend can die after the commit
+	// is durable (pg_terminate_backend while it waits for a synchronous standby). 25P02 would say
+	// the work was lost and the client may run it again. Unpoisoned, the client is disconnected.
+	if (commit_unanswered()) return false;
 
 	// Sanitize + cap the backend message before embedding into a NoticeResponse.
 	// See sanitize_backend_err_msg() comment for NUL / length rationale.
@@ -2900,6 +2905,31 @@ bool PgSQL_Session::handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds) {
 		myconn->get_backend_pid(), fe_user, client_addr, fe_db, digest,
 		myconn->get_error_code_with_message().c_str());
 	return true;
+}
+
+bool PgSQL_Session::commit_unanswered() {
+	switch (status) {
+	case PROCESSING_QUERY:
+		// A digest stops at query_digests_max_query_length, so a longer query may hide one past it.
+		return CurrentQuery.QueryLength > pgsql_thread___query_digests_max_query_length ||
+			PgSQL_ExplicitTxnStateMgr::commit_in_digest(CurrentQuery.get_digest_text());
+	case PROCESSING_STMT_EXECUTE:
+		return CurrentQuery.extended_query_info.stmt_info &&
+			PgSQL_ExplicitTxnStateMgr::commit_in_digest(CurrentQuery.extended_query_info.stmt_info->digest_text);
+	case PROCESSING_EXTQ_BATCH:
+		// Every Execute of the batch, answered or not: the batch's replies are held here until it
+		// ends, so a COMMIT the backend confirmed has not reached the client, and the poison would
+		// drop that reply and answer the COMMIT with 25P02.
+		for (const PgSQL_Extq_Entry& e : extq_entries) {
+			if (e.type == 'E' && e.stmt &&
+				PgSQL_ExplicitTxnStateMgr::commit_in_digest(e.stmt->digest_text)) {
+				return true;
+			}
+		}
+		return false;
+	default:
+		return false;
+	}
 }
 
 // Whether the statement whose backend connection just failed may be run again on a

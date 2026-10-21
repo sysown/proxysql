@@ -515,6 +515,10 @@ private:
 	// caller must fall back to the current terminate-the-session flow (e.g.
 	// admin var off, result transfer already started, or a preflight failed).
 	bool handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds);
+	// Whether the work a failed backend left unfinished holds a COMMIT whose reply never reached
+	// the client: it may have taken effect before the backend died. The client is then
+	// disconnected, as PostgreSQL does.
+	bool commit_unanswered();
 	// While tx_poisoned, classify a 'Q' packet and either clear the poison
 	// and synthesize a ROLLBACK response (for plain whole-transaction
 	// ROLLBACK / COMMIT / ABORT / END) or reject with ERROR 25P02

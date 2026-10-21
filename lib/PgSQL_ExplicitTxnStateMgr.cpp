@@ -363,6 +363,20 @@ char PgSQL_ExplicitTxnStateMgr::txn_end_in_digest(const char* digest) {
 	return lost != NULL ? 0 : kind;
 }
 
+bool PgSQL_ExplicitTxnStateMgr::commit_in_digest(const char* digest) {
+	const char* lost = NULL;
+	for (const char* stmt = pgsql_stmt_skip_lead(digest, &lost); stmt != NULL;
+		stmt = pgsql_digest_next_stmt(stmt, &lost)) {
+		if (pgsql_stmt_first_keyword_is(stmt, "COMMIT") || pgsql_stmt_first_keyword_is(stmt, "END")) return true;
+		// PREPARE alone is SQL PREPARE, which only creates a statement.
+		if (pgsql_stmt_first_keyword_is(stmt, "PREPARE") &&
+			pgsql_stmt_first_keyword_is(pgsql_stmt_skip_lead(stmt + sizeof("PREPARE") - 1, NULL), "TRANSACTION")) {
+			return true;
+		}
+	}
+	return lost != NULL;
+}
+
 void PgSQL_ExplicitTxnStateMgr::sync_with_backend(bool backend_in_txn, char ended_by) {
 	if (backend_in_txn == false) {
 		if (transaction_state.empty()) return;

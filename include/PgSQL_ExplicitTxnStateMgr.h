@@ -117,6 +117,10 @@ public:
     // 'C' for COMMIT / END, 0 for neither or when the digest cannot be followed to its
     // end. ROLLBACK TO SAVEPOINT and the PREPARED forms end no transaction block.
     static char txn_end_in_digest(const char* digest);
+    // Whether running the statements of `digest` could have made a transaction's work durable:
+    // a COMMIT (any form), END, or PREPARE TRANSACTION. A digest that cannot be followed to its
+    // end counts as one, so a caller asking about a COMMIT that got no reply errs on the safe side.
+    static bool commit_in_digest(const char* digest);
     void fill_internal_session(nlohmann::json& j);
 
 private:
