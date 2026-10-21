@@ -138,13 +138,17 @@ bool proxysql_install_managed_discovery_locked(ProxySQL_ServerProtocol protocol,
  uint64_t& runtime_generation_out, std::string& error);
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgroup_claims(
  ProxySQL_ServerProtocol protocol);
+// Returns true for an active exact-pair claim. The optional output is reset to
+// zero before lookup and receives the claim's writer placement value on match.
 bool proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
-	uint32_t writer_hostgroup, uint32_t reader_hostgroup);
+	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+	uint8_t* writer_is_also_reader = nullptr);
 // Caller holds ScopedServerDiscoveryProtocolLock. This variant deliberately
 // avoids the active-manager lifetime gate so monitor mutation cannot invert
 // the lifecycle lock order (active manager -> protocol).
 bool proxysql_is_server_inventory_managed_locked(ProxySQL_ServerProtocol protocol,
-	uint32_t writer_hostgroup, uint32_t reader_hostgroup);
+	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+	uint8_t* writer_is_also_reader = nullptr);
 #endif
 
 struct ProxySQL_ServerBuiltinTopologyInputs {

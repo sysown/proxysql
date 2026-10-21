@@ -4198,8 +4198,35 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 		const std::vector<HostGroup_Server_Mapping::Node>& writer_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::WRITER);
 
 		is_writer = !writer_map.empty();
+		const auto remove_disallowed_reader_nodes = [&](bool native_placement_changed) {
+			auto& reader_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::READER);
+			bool removed = false;
+			for (size_t index = reader_map.size(); index > 0; --index) {
+				const auto& reader_node = reader_map[index - 1];
+				bool writer_is_also_reader = mysql_thread___monitor_writer_is_also_reader;
+				bool inventory_managed = false;
+#ifdef PROXYSQL40
+				uint8_t managed_writer_is_also_reader = 0;
+				inventory_managed = proxysql_is_server_inventory_managed_locked(
+					ProxySQL_ServerProtocol::mysql,
+					reader_node.writer_hostgroup_id,
+					reader_node.reader_hostgroup_id,
+					&managed_writer_is_also_reader);
+				if (inventory_managed) {
+					writer_is_also_reader = managed_writer_is_also_reader != 0;
+				}
+#endif
+				if (!writer_is_also_reader && (inventory_managed || native_placement_changed)) {
+					host_server_mapping->remove(
+						HostGroup_Server_Mapping::Type::READER, index - 1);
+					removed = true;
+				}
+			}
+			return removed;
+		};
 
 		if (read_only == 0) {
+			bool writer_placement_changed = false;
 			if (is_writer == false) {
 				// the server has read_only=0 (writer), but we can't find any writer, 
 				// so we copy all reader nodes to writer
@@ -4207,11 +4234,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 				proxy_debug(PROXY_DEBUG_MONITOR, 5, "Server '%s:%d' found with 'read_only=0', but not found as writer\n", hostname.c_str(), port);
 				host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
-				if (mysql_thread___monitor_writer_is_also_reader == false) {
-					// remove node from reader
-					host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
-				}
-
+				writer_placement_changed = true;
 				update_mysql_servers_table = true;
 				proxy_info("Regenerating table 'mysql_servers' due to actions on server '%s:%d'\n", hostname.c_str(), port);
 			} else {
@@ -4253,14 +4276,15 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 					// copy all reader nodes to writer
 					host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
-					if (mysql_thread___monitor_writer_is_also_reader == false) {
-						// remove node from reader
-						host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
-					}
-
+					writer_placement_changed = true;
 					update_mysql_servers_table = true;
 					proxy_info("Regenerating table 'mysql_servers' due to actions on server '%s:%d'\n", hostname.c_str(), port);
 				}
+			}
+			if (remove_disallowed_reader_nodes(writer_placement_changed)) {
+				update_mysql_servers_table = true;
+				proxy_info("Regenerating table 'mysql_servers' after applying writer placement for server '%s:%d'\n",
+					hostname.c_str(), port);
 			}
 		} else if (read_only == 1) {
 			if (is_writer) {

@@ -130,7 +130,8 @@ public:
 	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims(
 		ProxySQL_ServerProtocol protocol) const;
 	bool is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
-		uint32_t writer_hostgroup, uint32_t reader_hostgroup) const;
+		uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+		uint8_t* writer_is_also_reader = nullptr) const;
 	bool install_managed_discovery(ProxySQL_ServerProtocol protocol, uint64_t desired_revision,
 		const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
 		uint64_t& runtime_generation_out, std::string& error);

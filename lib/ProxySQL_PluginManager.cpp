@@ -2114,17 +2114,23 @@ std::vector<ProxySQL_ServerHostgroupClaim> ProxySQL_PluginManager::managed_serve
 }
 
 bool ProxySQL_PluginManager::is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
-	uint32_t writer_hostgroup, uint32_t reader_hostgroup) const {
+	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+	uint8_t* writer_is_also_reader) const {
+	if (writer_is_also_reader != nullptr) *writer_is_also_reader = 0;
 	const int index = server_protocol_index(protocol);
 	if (index < 0) return false;
 	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 	if (server_controllers_[index].controller == nullptr) return false;
-	return std::any_of(managed_server_hostgroup_claims_[index].begin(),
-		managed_server_hostgroup_claims_[index].end(),
-		[&](const ProxySQL_ServerHostgroupClaim& claim) {
-			return claim.writer_hostgroup == writer_hostgroup &&
-				claim.reader_hostgroup == reader_hostgroup;
+	const auto& claims = managed_server_hostgroup_claims_[index];
+	const auto claim = std::find_if(claims.begin(), claims.end(),
+		[&](const ProxySQL_ServerHostgroupClaim& candidate) {
+			return candidate.writer_hostgroup == writer_hostgroup &&
+				candidate.reader_hostgroup == reader_hostgroup;
 		});
+	if (claim == claims.end()) return false;
+	if (writer_is_also_reader != nullptr)
+		*writer_is_also_reader = claim->role_monitor.writer_is_also_reader;
+	return true;
 }
 
 bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol protocol,
@@ -2956,20 +2962,24 @@ std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgr
 }
 
 bool proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
-	uint32_t writer_hostgroup, uint32_t reader_hostgroup) {
+	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+	uint8_t* writer_is_also_reader) {
+	if (writer_is_also_reader != nullptr) *writer_is_also_reader = 0;
 	ScopedActiveManagerPin pin;
 	return pin.manager() != nullptr && pin.manager()->is_server_inventory_managed(
-		protocol, writer_hostgroup, reader_hostgroup);
+		protocol, writer_hostgroup, reader_hostgroup, writer_is_also_reader);
 }
 
 bool proxysql_is_server_inventory_managed_locked(ProxySQL_ServerProtocol protocol,
-	uint32_t writer_hostgroup, uint32_t reader_hostgroup) {
+	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+	uint8_t* writer_is_also_reader) {
+	if (writer_is_also_reader != nullptr) *writer_is_also_reader = 0;
 	ProxySQL_PluginManager *manager =
 		g_active_plugin_manager.load(std::memory_order_acquire);
 	if (manager == nullptr)
 		manager = g_retiring_plugin_manager.load(std::memory_order_acquire);
 	return manager != nullptr && manager->is_server_inventory_managed(
-		protocol, writer_hostgroup, reader_hostgroup);
+		protocol, writer_hostgroup, reader_hostgroup, writer_is_also_reader);
 }
 
 #endif /* PROXYSQL40 */

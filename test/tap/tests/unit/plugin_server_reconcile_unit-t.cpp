@@ -190,15 +190,22 @@ std::unique_ptr<SQLite3_result> mysql_rows(std::initializer_list<ProxySQL_Server
 	return result;
 }
 
-std::unique_ptr<SQLite3_result> replication_rows(uint32_t writer, uint32_t reader) {
+std::unique_ptr<SQLite3_result> replication_rows(
+	std::initializer_list<std::pair<uint32_t, uint32_t>> pairs) {
 	auto result = std::make_unique<SQLite3_result>(4);
-	std::string writer_text = std::to_string(writer);
-	std::string reader_text = std::to_string(reader);
-	char check[] = "read_only";
-	char comment[] = "discovery test";
-	char* fields[] = {writer_text.data(), reader_text.data(), check, comment};
-	result->add_row(fields);
+	for (const auto& [writer, reader] : pairs) {
+		std::string writer_text = std::to_string(writer);
+		std::string reader_text = std::to_string(reader);
+		char check[] = "read_only";
+		char comment[] = "discovery test";
+		char* fields[] = {writer_text.data(), reader_text.data(), check, comment};
+		result->add_row(fields);
+	}
 	return result;
+}
+
+std::unique_ptr<SQLite3_result> replication_rows(uint32_t writer, uint32_t reader) {
+	return replication_rows({{writer, reader}});
 }
 
 std::unique_ptr<SQLite3_result> pgsql_rows(std::initializer_list<ProxySQL_ServerRow> rows) {
@@ -328,7 +335,7 @@ ProxySQL_ServerDesiredSet pgsql_desired(uint64_t generation,
 
 /** Check server reconciliation and teardown of constructor-only Admin fixtures. */
 int main() {
-	plan(84);
+	plan(91);
 	proxysql_server_discovery_after_final_revalidation_for_test = &after_final_revalidation_hook;
 	proxysql_server_reconcile_after_hgm_snapshot_for_test = &after_hgm_snapshot_hook;
 	proxysql_server_discovery_retirement_attempt_for_test = &retirement_attempt_hook;
@@ -697,6 +704,59 @@ int main() {
 		MyHGM->find_server_in_hg(17, shunned.hostname, shunned.port) == shunned_pool,
 		"ordinary same-key runtime reconciliation preserves the existing connection pool object");
 
+	ProxySQL_ServerHostgroupClaim writer_only_claim {117, 118};
+	writer_only_claim.role_monitor.kind = ProxySQL_ServerRoleMonitor::mysql_replication;
+	writer_only_claim.role_monitor.writer_is_also_reader = 0;
+	ProxySQL_ServerHostgroupClaim writer_reader_claim {127, 128};
+	writer_reader_claim.role_monitor.kind = ProxySQL_ServerRoleMonitor::mysql_replication;
+	writer_reader_claim.role_monitor.writer_is_also_reader = 1;
+	auto placement_topologies = replication_rows({{117, 118}, {127, 128}, {137, 138}});
+	auto placement_servers = mysql_rows({
+		{117, "managed-writer-only.example", 3306, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "writer"},
+		{118, "managed-writer-only.example", 3306, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "reader"},
+		{117, "mixed-managed.example", 3306, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "writer"},
+		{118, "mixed-managed.example", 3306, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "reader"},
+		{128, "mixed-managed.example", 3306, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "reader"},
+		{138, "native-writer.example", 3306, 0, "ONLINE", 1, 0, 100, 0, 1, 0, "reader"}});
+	MyHGM->save_incoming_mysql_table(placement_topologies.get(),
+		"mysql_replication_hostgroups");
+	MyHGM->servers_add(placement_servers.get());
+	ok(MyHGM->commit({}, {}, false),
+		"writer placement fixture installs three native replication pairs");
+	set_claims(ProxySQL_ServerProtocol::mysql, {writer_only_claim, writer_reader_claim});
+	uint8_t writer_only_value = 1;
+	uint8_t writer_reader_value = 0;
+	uint8_t unclaimed_value = 1;
+	ok(proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql,
+			117, 118, &writer_only_value) && writer_only_value == 0 &&
+		proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql,
+			127, 128, &writer_reader_value) && writer_reader_value == 1 &&
+		!proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql,
+			137, 138, &unclaimed_value) && unclaimed_value == 0,
+		"managed inventory lookup returns each claim value and clears an unclaimed output");
+	const bool original_writer_is_also_reader = mysql_thread___monitor_writer_is_also_reader;
+	mysql_thread___monitor_writer_is_also_reader = true;
+	MyHGM->read_only_action_v2({{"managed-writer-only.example", 3306, 0}});
+	auto writer_only_rows = runtime_rows();
+	ok(find_row(*writer_only_rows, 117, "managed-writer-only.example", 3306) != nullptr &&
+		find_row(*writer_only_rows, 118, "managed-writer-only.example", 3306) == nullptr,
+		"managed writer_is_also_reader=0 removes an existing reader copy when the global value is true");
+	mysql_thread___monitor_writer_is_also_reader = false;
+	MyHGM->read_only_action_v2({{"mixed-managed.example", 3306, 0}});
+	auto writer_reader_rows = runtime_rows();
+	ok(find_row(*writer_reader_rows, 117, "mixed-managed.example", 3306) != nullptr &&
+		find_row(*writer_reader_rows, 118, "mixed-managed.example", 3306) == nullptr &&
+		find_row(*writer_reader_rows, 127, "mixed-managed.example", 3306) != nullptr &&
+		find_row(*writer_reader_rows, 128, "mixed-managed.example", 3306) != nullptr,
+		"one monitor result applies each managed writer placement value to its matching pair");
+	MyHGM->read_only_action_v2({{"native-writer.example", 3306, 0}});
+	auto native_writer_rows = runtime_rows();
+	ok(find_row(*native_writer_rows, 137, "native-writer.example", 3306) != nullptr &&
+		find_row(*native_writer_rows, 138, "native-writer.example", 3306) == nullptr,
+		"an unclaimed replication pair continues to use the global writer placement value");
+	mysql_thread___monitor_writer_is_also_reader = original_writer_is_also_reader;
+	set_claims(ProxySQL_ServerProtocol::mysql, mysql_claims);
+
 	ProxySQL_ServerDesiredSet stale = desired(generation, {shunned});
 	ok(manager->post_server_desired_set(stale), "currently valid generation queues successfully");
 	ProxySQL_ServerRuntimeSnapshot newer {};
@@ -907,6 +967,11 @@ int main() {
 		"shutdown releases all queued leases before one destroy per protocol controller");
 	ok(!manager->post_server_desired_set(desired(newer_generation, {shunned})),
 		"an unregistered controller rejects desired work without an acknowledgement");
+	uint8_t unregistered_writer_is_also_reader = 1;
+	ok(!proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql,
+			17, 18, &unregistered_writer_is_also_reader) &&
+		unregistered_writer_is_also_reader == 0,
+		"an unregistered controller clears the managed writer placement output");
 	// The duplicate Admin above exists only to exercise inbox reopening. Restore
 	// the fully initialized fixture before later HGM commits consult GloAdmin's
 	// admindb while recomputing their v2 checksums.
@@ -996,6 +1061,13 @@ int main() {
 		configured_pgsql_runtime && find_row(*configured_pgsql_runtime,
 			32, "configured-pgsql.example", 5432) != nullptr,
 		"configured MySQL and PostgreSQL replication pairs still enumerate and map normally");
+
+	manager.reset();
+	uint8_t missing_manager_writer_is_also_reader = 1;
+	ok(!proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql,
+			31, 32, &missing_manager_writer_is_also_reader) &&
+		missing_manager_writer_is_also_reader == 0,
+		"a missing plugin manager clears the managed writer placement output");
 
 	const std::vector<int> scoped_admin_descriptors {
 		admin->pipefd[0], admin->pipefd[1],
