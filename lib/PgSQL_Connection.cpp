@@ -5705,15 +5705,17 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 
 	// A WITH HOLD cursor survives COMMIT on the backend connection; pooled, the next client
 	// could FETCH this client's rows from it. Cursors are not tracked one by one, so only
-	// CLOSE ALL clears the flag (DISCARD ALL clears it through reset()).
+	// CLOSE ALL clears the flag (DISCARD ALL clears it through reset()). With
+	// query_digests_keep_comment the digest can start with a comment, so it is skipped first.
+	const char* first_stmt = pgsql_stmt_skip_lead(query_digest_text, NULL);
 	if (get_status(STATUS_PGSQL_CONNECTION_HOLD_CURSOR) == false) {
 		// ';': a multi-statement query whose DECLARE is not the first statement
-		if ((pgsql_stmt_first_keyword_is(query_digest_text, "DECLARE") || strchr(query_digest_text, ';')) &&
+		if ((pgsql_stmt_first_keyword_is(first_stmt, "DECLARE") || strchr(query_digest_text, ';')) &&
 			strcasestr(query_digest_text, "CURSOR WITH HOLD")) {
 			set_status(true, STATUS_PGSQL_CONNECTION_HOLD_CURSOR);
 		}
 	} else {
-		if (pgsql_stmt_first_keyword_is(query_digest_text, "CLOSE ALL")) {
+		if (pgsql_stmt_first_keyword_is(first_stmt, "CLOSE ALL")) {
 			set_status(false, STATUS_PGSQL_CONNECTION_HOLD_CURSOR);
 		}
 	}
