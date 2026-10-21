@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <string>
+#include <utility>
 
 enum class Extq_Kind : uint8_t { PARSE, BIND, DESCRIBE_S, DESCRIBE_P, EXECUTE, CLOSE, SYNC };
 

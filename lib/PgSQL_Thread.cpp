@@ -5709,6 +5709,12 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 				case PROCESSING_STMT_PREPARE:
 					pta[13] = strdup("Prepare");
 					break;
+				case PROCESSING_STMT_BIND:
+					pta[13] = strdup("Bind");
+					break;
+				case PROCESSING_STMT_CLOSE:
+					pta[13] = strdup("Close");
+					break;
 				case CONNECTING_CLIENT:
 					pta[13] = strdup("Connecting client");
 					break;
