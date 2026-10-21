@@ -48,6 +48,10 @@
  *     received frame. Native mode sends the frame as one batch ending in
  *     the client's Sync, so the error is followed by the skipped messages'
  *     silence and one ReadyForQuery; the result must match libpq exactly.
+ *     A second run connects with an untracked startup option, which keeps
+ *     the first unit out of a batch: the native path sends one message at a
+ *     time, the bad Parse goes out Flush-terminated, and ProxySQL must
+ *     inject its own Sync (asserted from its log line).
  *
  * KNOWN ISSUES (discovered by this test)
  * --------------------------------------
@@ -639,13 +643,15 @@ static std::string run_midframe_err_case(PGconn* c, const std::string& bad_sql) 
 	return out;
 }
 
-static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_sql,
+// conn_opts, when set, is an untracked startup option: until the session is locked to a hostgroup
+// its unit cannot be batched, so the native path runs it one message at a time.
+static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_sql, const std::string& conn_opts,
                                           const std::vector<ServerRow>& saved) {
 	// ---- libpq control ----
 	if (!setNativeMode(admin, false) || !flushBackendPool(admin, BACKEND_HG, saved)) {
 		return {false, false, "admin: set libpq mode failed"};
 	}
-	PGConnPtr lp = open_client_conn();
+	PGConnPtr lp = open_client_conn(conn_opts);
 	if (!lp || PQstatus(lp.get()) != CONNECTION_OK) return {false, false, "libpq conn failed"};
 	std::string lp_out = run_midframe_err_case(lp.get(), bad_sql);
 
@@ -660,7 +666,7 @@ static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_
 		return {false, false, "admin: set native mode failed"};
 	}
 	drainLogToNow();
-	PGConnPtr nt = open_client_conn();
+	PGConnPtr nt = open_client_conn(conn_opts);
 	if (!nt || PQstatus(nt.get()) != CONNECTION_OK) return {false, false, "native conn failed"};
 	std::string nt_out = run_midframe_err_case(nt.get(), bad_sql);
 	// Single combined scan: the fallback tripwire AND a POSITIVE assertion that
@@ -675,10 +681,10 @@ static ExtQCaseRunResult run_midframe_err(PGconn* admin, const std::string& bad_
 	// the WRONG code.
 	bool sqlstate_ok = (nt_out.find("sqlstate=42601") != std::string::npos);
 
-	// The native path sends the whole frame as one batch, ending in the client's own Sync, so the
-	// backend needs no Sync from ProxySQL after the error; whether the injected-Sync line appears is
-	// reported, not required.
-	bool result_match = (lp_out == nt_out) && sqlstate_ok;
+	// Sent as one batch, the frame ends in the client's own Sync, so the backend needs no Sync from
+	// ProxySQL after the error. Sent one message at a time, the bad Parse goes out Flush-terminated,
+	// and only ProxySQL's injected Sync gets a ReadyForQuery back.
+	bool result_match = (lp_out == nt_out) && sqlstate_ok && (conn_opts.empty() || resync_logged);
 	std::stringstream det;
 	det << "midframe error-recovery; sqlstate_ok=" << (sqlstate_ok ? "yes" : "no")
 	    << "; injected_sync_observed=" << (resync_logged ? "yes" : "no");
@@ -1322,7 +1328,7 @@ static void run_varsync_reuse_regression(PGconn* admin, const std::vector<Server
 int main(int /*argc*/, char** /*argv*/) {
 	auto sql_cases = build_sql_cases();
 	auto extq_cases = build_extq_cases();
-	const int n_extra_cases = 6; // EXT_MULTI_CYCLE, EXT_REUSE, EXT_GLOBAL_DEDUP, EXT_PARSE_ERR_MIDFRAME, 2x EXT_DESCRIBE_CACHED
+	const int n_extra_cases = 7; // EXT_MULTI_CYCLE, EXT_REUSE, EXT_GLOBAL_DEDUP, 2x EXT_PARSE_ERR_MIDFRAME, 2x EXT_DESCRIBE_CACHED
 	int n_cases = (int)(sql_cases.size() + extq_cases.size()) + n_extra_cases;
 	const int n_dealloc_reg = N_DEALLOC_REG_PER_MODE;      // SQL DEALLOCATE forwarding, native path
 	const int n_dealloc_xproto = N_DEALLOC_XPROTO_PER_MODE; // binary-prepare + SQL DEALLOCATE, native path
@@ -1414,8 +1420,16 @@ int main(int /*argc*/, char** /*argv*/) {
 
 		diag("=== EXT_PARSE_ERR_MIDFRAME: injected-Sync error-recovery (PQsendQueryParams) ===");
 		{
-			ExtQCaseRunResult cr = run_midframe_err(admin.get(), "NOT VALID SQL AT ALL", saved);
+			ExtQCaseRunResult cr = run_midframe_err(admin.get(), "NOT VALID SQL AT ALL", "", saved);
 			cov.record({native_transport_label("P24: EXT_PARSE_ERR_MIDFRAME (mid-frame Parse error, connection reused after)"),
+				"EXT_PARSE_ERR_MIDFRAME", cr.result_match, !cr.fell_back, cr.detail});
+		}
+
+		diag("=== EXT_PARSE_ERR_MIDFRAME: injected-Sync error-recovery (unit run one message at a time) ===");
+		{
+			// work_mem is not a tracked variable.
+			ExtQCaseRunResult cr = run_midframe_err(admin.get(), "NOT VALID SQL AT ALL", "options='-c work_mem=4MB'", saved);
+			cov.record({native_transport_label("P24b: EXT_PARSE_ERR_MIDFRAME (unbatched unit: ProxySQL injects the Sync)"),
 				"EXT_PARSE_ERR_MIDFRAME", cr.result_match, !cr.fell_back, cr.detail});
 		}
 

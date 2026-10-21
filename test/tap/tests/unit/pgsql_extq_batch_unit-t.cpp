@@ -123,8 +123,8 @@ static void test_own_parse() {
 	reg2.start(out);
 	ok(feed(reg2, 'E', "relation does not exist", out) == Extq_Verdict::RELAY, "own parse: its error is relayed");
 	ev = events(reg2);
-	ok(ev.size() == 2 && ev[0].entry == 0 && ev[0].outcome == Extq_Outcome::ERROR &&
-		ev[1].entry == 0 && ev[1].outcome == Extq_Outcome::SKIPPED,
+	ok(ev.size() == 2 && ev[0].kind == Extq_Kind::PARSE && ev[0].entry == 0 && ev[0].outcome == Extq_Outcome::ERROR &&
+		ev[1].kind == Extq_Kind::BIND && ev[1].entry == 0 && ev[1].outcome == Extq_Outcome::SKIPPED,
 		"own parse: the error belongs to the client's Bind entry");
 }
 
@@ -248,7 +248,7 @@ static void test_suspended_execute() {
 // error is swapped for ProxySQL's, the backend's ReadyForQuery reaches the client.
 static void test_substitute() {
 	PgSQL_Extq_Registry reg;
-	const std::string own_error("E\0\0\0\x0bS26000\0\0", 12);
+	const std::string own_error("E\0\0\0\x0cS26000\0\0", 13);
 	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::RELAY, 0));
 	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::SUBSTITUTE, 1, own_error));
 	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 2));

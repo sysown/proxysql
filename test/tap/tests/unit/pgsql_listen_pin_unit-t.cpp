@@ -79,12 +79,18 @@ static void test_digest_last_statement_decides() {
 	ok(!pin_after(true, "unlisten*"), "digest: UNLISTEN* with no space releases the pin");
 	ok(pin_after(true, "unlisten ch"), "digest: UNLISTEN <channel> keeps the pin");
 	ok(pin_after(true, "select ?"), "digest: an unrelated statement keeps the pin");
+	// Only a real statement starting with LISTEN pins again after the UNLISTEN *.
+	ok(!pin_after(true, "unlisten *; select ? as \"a; listen b\""),
+	   "digest: a ';' inside a quoted identifier is no statement boundary");
+	ok(!pin_after(true, "unlisten *; select listener from t"),
+	   "digest: an identifier starting with LISTEN does not pin");
 }
 
 // With query_digests_keep_comment the digest keeps each statement's leading comments.
 static void test_digest_kept_comments() {
 	ok(!pin_after(true, "/*c*/ unlisten *"), "digest: UNLISTEN * behind a kept comment releases the pin");
 	ok(!pin_after(true, "unlisten /*c*/ *"), "digest: so does UNLISTEN /*c*/ *");
+	ok(!pin_after(true, "unlisten *; /* listen ch */ select ?"), "digest: LISTEN only inside a kept comment does not pin");
 }
 
 // A kept comment longer than FIRST_COMMENT_MAX_LENGTH is cut before its "*/". Past it the
@@ -210,11 +216,11 @@ static void test_command_complete_tag() {
 }
 
 int main() {
-	plan(23);
+	plan(26);
 	test_init_minimal();
 
-	test_digest_last_statement_decides();  // 7
-	test_digest_kept_comments();           // 2
+	test_digest_last_statement_decides();  // 9
+	test_digest_kept_comments();           // 3
 	test_digest_lost_scan();               // 1
 	test_no_digest_unlisten();             // 7
 	test_command_complete_tag();           // 6
