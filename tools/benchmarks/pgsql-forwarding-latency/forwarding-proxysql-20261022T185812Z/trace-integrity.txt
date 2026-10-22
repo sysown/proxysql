@@ -1,0 +1,57 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 94K of event 'syscalls:sys_enter_recvfrom'
+# Event count (approx.): 94468
+#
+# Overhead  Trace output
+# ........  .................................................................................................................
+#
+
+
+# Samples: 94K of event 'syscalls:sys_exit_recvfrom'
+# Event count (approx.): 94468
+#
+# Overhead  Trace output
+# ........  ............
+#
+
+
+# Samples: 94K of event 'syscalls:sys_enter_sendto'
+# Event count (approx.): 94468
+#
+# Overhead  Trace output
+# ........  ................................................................................................................
+#
+
+
+# Samples: 94K of event 'syscalls:sys_exit_sendto'
+# Event count (approx.): 94468
+#
+# Overhead  Trace output
+# ........  ............
+#
+
+
+# Samples: 94K of event 'syscalls:sys_enter_poll'
+# Event count (approx.): 94468
+#
+# Overhead  Trace output
+# ........  .................................................................
+#
+
+
+# Samples: 94K of event 'syscalls:sys_exit_poll'
+# Event count (approx.): 94468
+#
+# Overhead  Trace output
+# ........  ............
+#
+   100.00%  0x1
+
+
+#
+# (Tip: If you prefer Intel style assembly, try: perf annotate -M intel)
+#
