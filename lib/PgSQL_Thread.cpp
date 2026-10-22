@@ -75,6 +75,7 @@ struct PgSQL_Ready_State {
     std::vector<PgSQL_Ready_Event> events;
     std::deque<PgSQL_Session*> ready;
     std::vector<PgSQL_Session*> carry;
+    std::vector<PgSQL_Session*> waiter_batch;
     uint64_t epoch = 0;
 };
 static thread_local PgSQL_Ready_State pgsql_ready_state;
@@ -3582,7 +3583,11 @@ void PgSQL_Thread::run() {
 
 #ifdef PROXYSQL31
         static const bool unified_enabled = getenv("PX_PGSQL_UNIFIED_LOOP") != nullptr;
-        const bool unified_iteration = unified_enabled && !maintenance_loop;
+        const bool unified_iteration = unified_enabled && !maintenance_loop
+#ifdef IDLE_THREADS
+            && !GloVars.global.idle_threads
+#endif
+            ;
         if (!unified_iteration)
 #endif
 		run_SetAllSession_ToProcess0<PgSQL_Thread,PgSQL_Session>();
@@ -4206,6 +4211,7 @@ void PgSQL_Thread::process_ready_sessions() {
     // Wait queues are not runnable queues. Only actual availability or a
     // release makes a waiter runnable; no speculative empty-pool retries.
     auto schedule_waiters = [&](unsigned hid, size_t budget) {
+        state.waiter_batch.clear();
         for (auto *node = waiter_lists.head(hid); node && budget; node = node->next) {
             auto *sess = static_cast<PgSQL_Session*>(node->session);
             if (sess->killed || !sess->healthy) {
@@ -4213,9 +4219,12 @@ void PgSQL_Thread::process_ready_sessions() {
                 continue;
             }
             if (sess->pause_until > curtime) continue;
-            enqueue(sess, true);
+            state.waiter_batch.push_back(sess);
             --budget;
         }
+        // push_front is urgent, so reverse insertion preserves FIFO order.
+        for (auto it = state.waiter_batch.rbegin(); it != state.waiter_batch.rend(); ++it)
+            enqueue(*it, true);
     };
     auto carried = std::move(state.carry);
     state.carry.clear();
@@ -4326,7 +4335,11 @@ void PgSQL_Thread::process_ready_sessions() {
             if (ds->fd != event.fd || idx < 0 || static_cast<unsigned>(idx) >= mypolls.len ||
                 mypolls.myds[idx] != ds) continue;
             mypolls.fds[idx].revents = event.revents;
-            if (process_data_on_data_stream(ds, idx)) enqueue(sess, true);
+            (void)process_data_on_data_stream(ds, idx);
+            // A failed I/O handler may have marked the session unhealthy.
+            // Queue its deferred cleanup as well; migrated sessions belong
+            // to their new worker and must not be run here.
+            if (sess->thread == this) enqueue(sess, true);
         }
         // Optional bounded readiness refresh. Preserve already captured events;
         // a DS pending in the queue is not captured twice. No blocking poll here.
