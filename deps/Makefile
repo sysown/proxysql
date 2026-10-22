@@ -107,13 +107,6 @@ include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
 
 include $(PROXYSQL_PATH)/deps/libssl/build.mk
 
-$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH): $(OPENSSL_BUILD_STAMP)
-	@test -f $@
-
-.PHONY: libssl
-libssl: $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
-
-
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz

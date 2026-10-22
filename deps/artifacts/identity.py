@@ -49,7 +49,7 @@ def load_json(path, limit=4 * 1024 * 1024):
 
 def assignment(path, name):
     text = Path(path).read_text().replace('\\\n', ' ')
-    match = re.search(r'^' + re.escape(name) + r'\s*:?=\s*(.*?)\s*$', text, re.M)
+    match = re.search(r'^' + re.escape(name) + r'\s*[:?]?=\s*(.*?)\s*$', text, re.M)
     if not match:
         raise ValueError('missing dependency setting: ' + name)
     return match.group(1)
@@ -75,8 +75,11 @@ def configuration(dependency, root):
 
 
 def command_output(args, environ, input_data=None):
+    environment = dict(os.environ)
+    environment.update(environ)
+    environment['LC_ALL'] = 'C'
     try:
-        return subprocess.check_output(args, env=dict(os.environ, **environ, LC_ALL='C'),
+        return subprocess.check_output(args, env=environment,
                                        input=input_data, stderr=subprocess.PIPE,
                                        timeout=30).decode().strip()
     except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
@@ -86,10 +89,8 @@ def command_output(args, environ, input_data=None):
 def toolchain_identity(environ):
     env = dict(environ)
     system = platform.system()
-    if system not in ('Linux', 'Darwin'):
-        raise ValueError('artifact toolchain unsupported on ' + system)
     facts = {'os': system, 'arch': platform.machine()}
-    for name, default, language in (('CC', 'cc', 'c'), ('CXX', 'c++', 'c++')):
+    for name, default, language in (('CC', 'cc', 'c'), ('CXX', 'g++', 'c++')):
         command = shlex.split(env.get(name) or default)
         flags = shlex.split(env.get('CPPFLAGS', '') + ' ' +
                             env.get('CXXFLAGS' if language == 'c++' else 'CFLAGS', ''))
@@ -98,7 +99,7 @@ def toolchain_identity(environ):
                                'version': command_output(command + ['--version'], env),
                                'target': command_output(command + ['-dumpmachine'], env),
                                'macros': hashlib.sha256(macros.encode()).hexdigest()}
-    runtime = command_output(shlex.split(env.get('CXX') or 'c++') +
+    runtime = command_output(shlex.split(env.get('CXX') or 'g++') +
                              shlex.split(env.get('CPPFLAGS', '') + ' ' + env.get('CXXFLAGS', '')) +
                              ['-dM', '-E', '-x', 'c++', '-include', 'cstddef', '-'], env, b'')
     facts['runtime'] = hashlib.sha256(runtime.encode()).hexdigest()
@@ -113,7 +114,7 @@ def toolchain_identity(environ):
         facts.update(distro=[release['ID'], release['VERSION_ID']], libc=list(platform.libc_ver()))
         if not all(facts['libc']):
             raise ValueError('missing libc identity')
-    else:
+    elif system == 'Darwin':
         facts['sdk'] = command_output(['xcrun', '--show-sdk-version'], env)
         facts['deployment_target'] = env.get('MACOSX_DEPLOYMENT_TARGET', '')
     return facts
@@ -137,11 +138,13 @@ def build_identity(dependency, root, environ):
     eligible = not (flags['CMAKE_TOOLCHAIN_FILE'] or 'CMAKE_TOOLCHAIN_FILE=' in setting or
                     environ.get('CPATH') or environ.get('CPLUS_INCLUDE_PATH') or
                     environ.get('C_INCLUDE_PATH') or environ.get('LIBRARY_PATH'))
+    toolchain = toolchain_identity(environ)
+    eligible = eligible and toolchain.get('os') in ('Linux', 'Darwin')
     return {'format_version': FORMAT_VERSION, 'dependency': dependency,
             'version': conf['version'], 'source_sha256': actual,
             'recipe_sha256': digest_file(conf['recipe']),
             'verifier_sha256': digest_file(archive.parent / 'verify-source.bash'),
-            'helper': helper, 'toolchain': toolchain_identity(environ),
+            'helper': helper, 'toolchain': toolchain,
             'settings': shlex.split(setting), 'flags': flags,
             'eligible': eligible,
             'custom_paths': {key: environ.get(key, '') for key in

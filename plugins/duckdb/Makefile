@@ -102,9 +102,19 @@ DEPFLAGS := -MMD -MP
 $(ODIR):
 	mkdir -p $(ODIR)
 
+# Reevaluate identity before compiling, including an already present archive.
+# Explicit external DUCKDB_PATH overrides remain validated by the archive checker.
+ifeq ($(abspath $(DUCKDB_PATH)),$(abspath $(PROXYSQL_PATH)/deps/duckdb/duckdb))
+.PHONY: prepare-duckdb
+prepare-duckdb:
+$(DUCKDB_AR): prepare-duckdb
+	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 DEPS_MODE=$(or $(DEPS_MODE),auto) duckdb
+	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
+else
 $(DUCKDB_AR):
 	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
 	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
+endif
 
 # Build-flag freshness stamp (root cause C1 fix, part 2). The .o rule below
 # previously depended only on sources, headers and $(DUCKDB_AR) -- NOT on

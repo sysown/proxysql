@@ -18,11 +18,16 @@ contract_fixture="${tmp_dir}/build-contract-fixture"
 mkdir -p \
 	"${contract_fixture}/common_mk" \
 	"${contract_fixture}/deps/libssl" \
+	"${contract_fixture}/deps/duckdb" \
+	"${contract_fixture}/deps/artifacts" \
 	"${contract_fixture}/include" \
 	"${contract_fixture}/src" \
 	"${contract_fixture}/test/deps/mariadb-connector-c"
 cp "${repo_root}/common_mk/openssl_flags.mk" "${contract_fixture}/common_mk/"
 cp "${repo_root}/deps/Makefile" "${contract_fixture}/deps/"
+cp "${repo_root}/deps/libssl/build.mk" "${contract_fixture}/deps/libssl/"
+cp "${repo_root}/deps/duckdb/build.mk" "${contract_fixture}/deps/duckdb/"
+cp "${repo_root}/deps/artifacts/prepare.bash" "${contract_fixture}/deps/artifacts/"
 cp "${repo_root}/include/makefiles_vars.mk" \
 	"${repo_root}/include/makefiles_paths.mk" "${contract_fixture}/include/"
 cp "${repo_root}/test/deps/Makefile" "${contract_fixture}/test/deps/"

@@ -63,6 +63,11 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(self.api.fingerprint({'a': 1, 'b': 2}),
                          self.api.fingerprint({'b': 2, 'a': 1}))
 
+    def test_toolchain_commands_override_an_inherited_locale(self):
+        self.assertEqual('C', self.api.command_output(
+            [sys.executable, '-c', 'import os; print(os.environ["LC_ALL"])'],
+            {'LC_ALL': 'C.UTF-8'}))
+
     def test_source_recipe_toolchain_and_flags_invalidate(self):
         first = self.api.fingerprint(self.identity())
         for key in ('CFLAGS', 'CPPFLAGS', 'CXXFLAGS', 'LDFLAGS', 'DUCKDB_CMAKE_FLAGS'):
@@ -95,6 +100,13 @@ class IdentityTests(unittest.TestCase):
                 self.identity()
         with self.assertRaises(ValueError):
             self.identity('unknown')
+
+    def test_custom_paths_and_unregistered_operating_system_are_ineligible(self):
+        self.env['CPATH'] = '/custom/includes'
+        self.assertFalse(self.identity()['eligible'])
+        self.env.pop('CPATH')
+        with patch.object(self.api, 'toolchain_identity', return_value={**self.facts, 'os': 'FreeBSD'}):
+            self.assertFalse(self.identity()['eligible'])
 
     def test_registry_accepts_empty_or_exact_entry(self):
         self.assertEqual([], self.registry([])['artifacts'])

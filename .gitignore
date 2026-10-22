@@ -7,6 +7,9 @@ deps/pcre2/pcre2/
 # Git worktrees
 .worktrees/
 
+# Verified compiled dependency downloads and preparation locks.
+/.cache/dependency-artifacts/
+
 # Lint output (do not commit)
 /lint/
 

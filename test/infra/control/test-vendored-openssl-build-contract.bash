@@ -59,10 +59,14 @@ do
 done
 
 if ! commands=$(make -C "${repo_root}/deps" --no-print-directory \
-	-B -n libssl MAKE=/bin/true 2>&1); then
+	-B -n dependency-source-openssl MAKE=/bin/true 2>&1); then
 	printf '%s\n' "${commands}" >&2
 	fail "make -C deps -n libssl did not produce the vendored build recipe"
 fi
+
+bridge_commands=$(make -C "${repo_root}/deps" --no-print-directory -n libssl MAKE=/bin/true 2>&1)
+[[ "${bridge_commands}" == *'prepare.bash openssl'* ]] || \
+	fail 'public OpenSSL target does not reevaluate artifact/source preparation'
 
 line_number() {
 	local needle=$1
