@@ -3713,7 +3713,10 @@ void PgSQL_Thread::run() {
         if (unified_iteration) process_ready_sessions();
         else
 #endif
-		ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
+		{
+			ProcessAllMyDS_AfterPoll();
+			process_poll_housekeeping();
+		}
 #ifdef PROXYSQL31
         pgsql_loop_timing_point(7); // begin waiter-rearm cleanup
 #endif
@@ -3947,6 +3950,50 @@ void PgSQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 #endif // IDLE_THREADS
 
 
+void PgSQL_Thread::ProcessAllMyDS_AfterPoll() {
+	// Do not accept, read, decrypt, frame packets or relay notifications here.
+	// Capture every stream's readiness before a handler can mutate the poll set.
+	ready_listeners.clear();
+	notification_pipe_ready = false;
+	for (unsigned n = 0; n < mypolls.len; ++n) {
+		auto *ds = mypolls.myds[n];
+		if (!ds) {
+			if (mypolls.fds[n].fd == pipefd[0] && mypolls.fds[n].revents)
+				notification_pipe_ready = true;
+			continue;
+		}
+		if (!mypolls.fds[n].revents) {
+			if (poll_timeout_bool) check_timing_out_session<PgSQL_Thread>(n);
+			continue;
+		}
+		check_for_invalid_fd<PgSQL_Thread>(n);
+		if (ds->myds_type == MYDS_LISTENER) {
+			ready_listeners.push_back(ds);
+			continue;
+		}
+		if (!process_data_on_data_stream(ds, n)) --n;
+	}
+}
+
+void PgSQL_Thread::process_poll_housekeeping() {
+	// The notification pipe and listeners have no owning session handler.
+	if (notification_pipe_ready) {
+		for (unsigned n = 0; n < mypolls.len; ++n) {
+			if (!mypolls.myds[n] && mypolls.fds[n].fd == pipefd[0]) {
+				read_one_byte_from_pipe<PgSQL_Thread>(n);
+				break;
+			}
+		}
+		notification_pipe_ready = false;
+	}
+	for (auto *ds : ready_listeners) {
+		const int n = ds->poll_fds_idx;
+		if (n >= 0 && static_cast<unsigned>(n) < mypolls.len && mypolls.myds[n] == ds)
+			listener_handle_new_connection(ds, n);
+	}
+	ready_listeners.clear();
+}
+
 bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigned int n) {
 	if (mypolls.fds[n].revents) {
 #ifdef IDLE_THREADS
@@ -3970,6 +4017,8 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 #endif // IDLE_THREADS
 		mypolls.last_recv[n] = curtime;
 		myds->revents = mypolls.fds[n].revents;
+		myds->pending_poll_revents |= mypolls.fds[n].revents;
+		myds->pending_poll_events |= mypolls.fds[n].events;
 		myds->sess->to_process = 1;
 		assert(myds->sess->status != session_status___NONE);
 	}
@@ -3991,8 +4040,19 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 			myds->sess->to_process = 1;
 		}
 	}
+	return true;
+}
+
+bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
+	const short ready = myds->pending_poll_revents;
+	if (!ready) return true;
+	const short requested = myds->pending_poll_events;
+	// Clear before doing work: handler() can re-enter and a connection can be
+	// detached/reused. A poll notification must never be consumed twice.
+	myds->pending_poll_revents = myds->pending_poll_events = 0;
+	myds->revents = ready;
 	if (myds->myds_type == MYDS_BACKEND && myds->sess->status != FAST_FORWARD) {
-		if (mypolls.fds[n].revents) {
+		if (ready) {
 			// this part of the code fixes an important bug
 			// if a connection in use but idle (ex: running a transaction)
 			// get data, immediately destroy the session
@@ -4021,8 +4081,8 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 		}
 		return true;
 	}
-	if (mypolls.fds[n].revents) {
-		if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {
+	if (ready) {
+		if (myds->DSS < STATE_MARIADB_BEGIN || myds->DSS > STATE_MARIADB_END) {
 			// only if we aren't using MariaDB Client Library
 			int rb = 0;
 			do {
@@ -4061,7 +4121,7 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 						else { // we are in fast_forward mode and encrypted == false
 							struct pollfd _fds;
 							nfds_t _nfds = 1;
-							_fds.fd = mypolls.fds[n].fd;
+							_fds.fd = myds->fd;
 							_fds.events = POLLIN;
 							_fds.revents = 0;
 							int _rc = poll(&_fds, _nfds, 0);
@@ -4096,13 +4156,13 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 
 		}
 		else {
-			if (mypolls.fds[n].revents) {
-				myds->myconn->handler(mypolls.fds[n].revents);
+			if (ready) {
+				myds->myconn->handler(ready);
 			}
 		}
-		if ((mypolls.fds[n].events & POLLOUT)
+		if ((requested & POLLOUT)
 			&&
-			((mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP))
+			((ready & POLLERR) || (ready & POLLHUP))
 			) {
 			myds->set_net_failure();
 		}
@@ -4649,6 +4709,13 @@ void PgSQL_Thread::process_all_sessions() {
 			// removing this logic in 2.0.15
 			//sess->active_transactions = -1;
 		}
+#ifdef PROXYSQL31
+		if (sess->healthy && !sess->killed && sess->waiter_node.session &&
+			sess->client_myds && sess->client_myds->pending_poll_revents) {
+			sess->to_process = 1;
+			if (sess->handler(true) == -1) sess->healthy = 0;
+		}
+#endif
 		if (sess->healthy == 0) {
 			char _buf[1024];
 			if (sess->client_myds) {

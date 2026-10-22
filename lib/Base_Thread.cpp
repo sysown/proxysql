@@ -17,6 +17,10 @@ template void Base_Thread::ProcessAllSessions_Partition<MySQL_Session>();
 template void Base_Thread::ProcessAllSessions_Partition<PgSQL_Session>();
 template void Base_Thread::ProcessAllMyDS_AfterPoll<MySQL_Thread>();
 template void Base_Thread::ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
+// Called directly by PostgreSQL's readiness-only scan and housekeeping.
+template void Base_Thread::check_timing_out_session<PgSQL_Thread>(unsigned int);
+template void Base_Thread::check_for_invalid_fd<PgSQL_Thread>(unsigned int);
+template void Base_Thread::read_one_byte_from_pipe<PgSQL_Thread>(unsigned int);
 template void Base_Thread::ProcessAllMyDS_BeforePoll<MySQL_Thread>();
 template void Base_Thread::ProcessAllMyDS_BeforePoll<PgSQL_Thread>();
 template void Base_Thread::register_session(MySQL_Thread*, MySQL_Session*, bool);

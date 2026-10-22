@@ -752,7 +752,9 @@ public:
 	//void set_unhealthy();
 
 	void set_status(enum session_status e);
-	int handler();
+	// io_only drains deferred readiness for a parked connection waiter without
+	// retrying pool checkout or advancing its query state machine.
+	int handler(bool io_only = false);
 
 	void (*handler_function) (PgSQL_Session* sess, void*, PtrSize_t* pkt);
 	//PgSQL_Backend* find_backend(int);
