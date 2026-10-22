@@ -1,0 +1,50 @@
+[
+  {
+    "path": "/home/rene/pg-network-bench/results/remaining-hotspots-bounded-20261022T223141Z/perf.data",
+    "bytes": 3672372,
+    "sha256": "e681bb7bb9a085037c11b1845dbe6b2c1fb1d7940614628848439b3718b8ce7f",
+    "compressed_path": "/home/rene/pg-network-bench/results/remaining-hotspots-bounded-20261022T223141Z/perf.data.gz",
+    "compressed_bytes": 517538,
+    "compressed_sha256": "700c5daf6946f9f075837fecd060980600d9de8e75828cb309f624c27dae6b93"
+  },
+  {
+    "path": "/home/rene/pg-network-bench/results/remaining-hotspots-bounded-20261022T223141Z/stacks.txt",
+    "bytes": 24644814,
+    "sha256": "d6db394f5b05074384494a56b0846f3e598edab77203ba96bb74d9fc32e97e1a",
+    "compressed_path": "/home/rene/pg-network-bench/results/remaining-hotspots-bounded-20261022T223141Z/stacks.txt.gz",
+    "compressed_bytes": 1044229,
+    "compressed_sha256": "64ce177fabd4f0b757cd4f07e3b94c1c5ceb31323ab1230526193c529bd089c5"
+  },
+  {
+    "path": "/home/rene/pg-network-bench/results/remaining-hotspots-bounded-20261022T223141Z/leaves.txt",
+    "bytes": 5184029,
+    "sha256": "0d90891f15cfc2585b61dbd86ff7e0302a1fd2a7ed360455441fb71d70dc3e15",
+    "compressed_path": "/home/rene/pg-network-bench/results/remaining-hotspots-bounded-20261022T223141Z/leaves.txt.gz",
+    "compressed_bytes": 538840,
+    "compressed_sha256": "41f6193daf298b94456202a18f25ad6887f4bc4daadca2bfbf6bd798a0b38a96"
+  },
+  {
+    "path": "/home/rene/pg-network-bench/results/remaining-hotspots-dwarf-bounded-20261022T223507Z/perf.data",
+    "bytes": 112692324,
+    "sha256": "ff8b237d86b3b4a5b4e44045a1261fb9dc657781d6ed87aa6eec5414927f2310",
+    "compressed_path": "/home/rene/pg-network-bench/results/remaining-hotspots-dwarf-bounded-20261022T223507Z/perf.data.gz",
+    "compressed_bytes": 3496058,
+    "compressed_sha256": "792d264abd36e1c65f33795bd538487f6bde88d5917d607006ff0aa55f618570"
+  },
+  {
+    "path": "/home/rene/pg-network-bench/results/remaining-hotspots-dwarf-bounded-20261022T223507Z/stacks.txt",
+    "bytes": 11853630,
+    "sha256": "1c27d1e8b953aaec4df73acc9e530642d1fda16aec991a132ada44d5a059c788",
+    "compressed_path": "/home/rene/pg-network-bench/results/remaining-hotspots-dwarf-bounded-20261022T223507Z/stacks.txt.gz",
+    "compressed_bytes": 489270,
+    "compressed_sha256": "9f6841bd34088cf1e4525a53f404801f32581daa3a4474f00d41dfb77be675d3"
+  },
+  {
+    "path": "/home/rene/pg-network-bench/results/remaining-hotspots-dwarf-bounded-20261022T223507Z/leaves.txt",
+    "bytes": 2038649,
+    "sha256": "4fdb4ca0b0db8adad398b5118580866a8d0ccc077764dc999b9642890c1c85c4",
+    "compressed_path": "/home/rene/pg-network-bench/results/remaining-hotspots-dwarf-bounded-20261022T223507Z/leaves.txt.gz",
+    "compressed_bytes": 216670,
+    "compressed_sha256": "4091d54ab4026cbd27fce92983e460db067e6c921f03727ae953d0df049c9d71"
+  }
+]

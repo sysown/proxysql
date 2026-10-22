@@ -1,0 +1,46 @@
+{
+  "start": {
+    "wall_ns": 657166936162097,
+    "cpu_user_ticks": 550,
+    "cpu_system_ticks": 914,
+    "ConnUsed": "1",
+    "ConnFree": "63",
+    "ConnOK": "64",
+    "ConnERR": "0",
+    "Queries": "317300",
+    "before_ns": 657166873587013,
+    "after_ns": 657166936167824,
+    "mid_ns": 657166904877418,
+    "worker_user_ticks": 523,
+    "worker_system_ticks": 910
+  },
+  "end": {
+    "wall_ns": 657206948773274,
+    "cpu_user_ticks": 1217,
+    "cpu_system_ticks": 2222,
+    "ConnUsed": "1",
+    "ConnFree": "63",
+    "ConnOK": "64",
+    "ConnERR": "0",
+    "Queries": "697802",
+    "before_ns": 657206876255645,
+    "after_ns": 657206948779082,
+    "mid_ns": 657206912517363,
+    "worker_user_ticks": 1166,
+    "worker_system_ticks": 2212
+  },
+  "enable": {
+    "before_ns": 657166936241737,
+    "after_ns": 657166937730835,
+    "mid_ns": 657166936986286
+  },
+  "disable": {
+    "before_ns": 657206874890308,
+    "after_ns": 657206876250208,
+    "mid_ns": 657206875570258
+  },
+  "queries": 380502,
+  "enabled_seconds": 39.938583972,
+  "boundary_slack_ms": 138.032596,
+  "boundary_slack_pct": 0.34561214312648486
+}

@@ -1,0 +1,14 @@
+{
+  "path": "results/remaining-hotspots-dwarf-bounded-20261022T223507Z/perf.data",
+  "bytes": 112692324,
+  "sha256": "ff8b237d86b3b4a5b4e44045a1261fb9dc657781d6ed87aa6eec5414927f2310",
+  "binary": {
+    "sha256": "9a3e63ec57d69f5033891ecd7147a0e1f8301f7ebe280f3c51a3c0049a977479",
+    "commit": "4699f3175",
+    "scheduler": "phased",
+    "timers": false,
+    "profiling": true,
+    "mode": "bounded",
+    "pid": 369246
+  }
+}
