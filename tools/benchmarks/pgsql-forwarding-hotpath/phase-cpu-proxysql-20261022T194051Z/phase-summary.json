@@ -1,0 +1,1812 @@
+{
+  "complete_responses": 190843,
+  "samples": 38158,
+  "phases": {
+    "request": {
+      "samples": 22040,
+      "percent_all_samples": 57.759840662508516,
+      "rows": [
+        {
+          "symbol": "[unknown]",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 4707,
+          "percent": 21.356624319419236
+        },
+        {
+          "symbol": "pgsql_query_digest_and_first_comment",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 2989,
+          "percent": 13.561705989110708
+        },
+        {
+          "symbol": "PgSQL_Session::get_pkts_from_client",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 973,
+          "percent": 4.41470054446461
+        },
+        {
+          "symbol": "Query_Processor<PgSQL_Query_Processor>::process_query",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 793,
+          "percent": 3.598003629764065
+        },
+        {
+          "symbol": "PgSQL_Session::handler",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 724,
+          "percent": 3.2849364791288567
+        },
+        {
+          "symbol": "tolower",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 712,
+          "percent": 3.2304900181488203
+        },
+        {
+          "symbol": "PgSQL_HGC::get_random_MySrvC",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 449,
+          "percent": 2.0372050816696916
+        },
+        {
+          "symbol": "PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 425,
+          "percent": 1.928312159709619
+        },
+        {
+          "symbol": "__strcasestr",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 396,
+          "percent": 1.7967332123411979
+        },
+        {
+          "symbol": "legacy_command_type",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 371,
+          "percent": 1.6833030852994555
+        },
+        {
+          "symbol": "Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_find",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 327,
+          "percent": 1.4836660617059891
+        },
+        {
+          "symbol": "Query_Processor<PgSQL_Query_Processor>::query_parser_init",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 303,
+          "percent": 1.3747731397459164
+        },
+        {
+          "symbol": "PgSQL_Query_Info::begin",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 276,
+          "percent": 1.252268602540835
+        },
+        {
+          "symbol": "PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 271,
+          "percent": 1.2295825771324864
+        },
+        {
+          "symbol": "__snprintf",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 270,
+          "percent": 1.2250453720508168
+        },
+        {
+          "symbol": "SpookyHash::Short",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 264,
+          "percent": 1.1978221415607986
+        },
+        {
+          "symbol": "SpookyHash::Hash128",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 231,
+          "percent": 1.0480943738656987
+        },
+        {
+          "symbol": "tokenizer",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 226,
+          "percent": 1.0254083484573502
+        },
+        {
+          "symbol": "PgSQL_SrvConnList::get_random_MyConn_inner_search",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 216,
+          "percent": 0.9800362976406534
+        },
+        {
+          "symbol": "PgSQL_Connection::has_same_connection_options",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 213,
+          "percent": 0.9664246823956443
+        },
+        {
+          "symbol": "PgSQL_Session::handle_command_query_kill",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 204,
+          "percent": 0.925589836660617
+        },
+        {
+          "symbol": "malloc",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 203,
+          "percent": 0.9210526315789473
+        },
+        {
+          "symbol": "_IO_setb",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 196,
+          "percent": 0.8892921960072595
+        },
+        {
+          "symbol": "PgSQL_Session::set_previous_status_mode3",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 195,
+          "percent": 0.8847549909255898
+        },
+        {
+          "symbol": "pgsql_stmt_first_keyword_is",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 179,
+          "percent": 0.8121597096188747
+        },
+        {
+          "symbol": "PgSQL_Connection::number_of_matching_session_variables",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 178,
+          "percent": 0.8076225045372051
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::buffer2array",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 177,
+          "percent": 0.8030852994555354
+        },
+        {
+          "symbol": "PgSQL_Session::handler_again___status_CONNECTING_SERVER",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 176,
+          "percent": 0.7985480943738656
+        },
+        {
+          "symbol": "isspace",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 166,
+          "percent": 0.7531760435571688
+        },
+        {
+          "symbol": "_IO_default_xsputn",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 165,
+          "percent": 0.7486388384754991
+        },
+        {
+          "symbol": "PgSQL_Connection::query_start",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 164,
+          "percent": 0.7441016333938294
+        },
+        {
+          "symbol": "PgSQL_Query_Processor::query_parser_command_type",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 163,
+          "percent": 0.7395644283121597
+        },
+        {
+          "symbol": "PgSQL_Session::txn_failed_on_backend",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 152,
+          "percent": 0.6896551724137931
+        },
+        {
+          "symbol": "PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 150,
+          "percent": 0.6805807622504537
+        },
+        {
+          "symbol": "PgSQL_HostGroups_Manager::get_MyConn_from_pool",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 143,
+          "percent": 0.6488203266787659
+        },
+        {
+          "symbol": "PgSQL_Thread::get_MyConn_local",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 141,
+          "percent": 0.6397459165154264
+        },
+        {
+          "symbol": "PgSQL_Session::handler_again___verify_init_connect",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 133,
+          "percent": 0.603448275862069
+        },
+        {
+          "symbol": "(anonymous namespace)::pgsql_apply_backup_weight_threshold",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 129,
+          "percent": 0.5852994555353902
+        },
+        {
+          "symbol": "PgSQL_SrvConnList::add",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 126,
+          "percent": 0.5716878402903811
+        },
+        {
+          "symbol": "PgSQL_Session::handler_special_queries",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 120,
+          "percent": 0.5444646098003629
+        },
+        {
+          "symbol": "PgSQL_Session::handler_CommitRollback",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 120,
+          "percent": 0.5444646098003629
+        },
+        {
+          "symbol": "PgSQL_Connection::requires_RESETTING_CONNECTION",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 113,
+          "percent": 0.5127041742286751
+        },
+        {
+          "symbol": "pgsql_query_digest_buffer_size",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 109,
+          "percent": 0.4945553539019964
+        },
+        {
+          "symbol": "pthread_mutex_lock",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 107,
+          "percent": 0.48548094373865697
+        },
+        {
+          "symbol": "PgSQL_Session::SetQueryTimeout",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 106,
+          "percent": 0.4809437386569873
+        },
+        {
+          "symbol": "Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::find_or_create_backend",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 102,
+          "percent": 0.4627949183303085
+        },
+        {
+          "symbol": "pgsql_stmt_skip_lead",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 100,
+          "percent": 0.4537205081669691
+        },
+        {
+          "symbol": "PgSQL_SrvConnList::get_random_MyConn",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 99,
+          "percent": 0.44918330308529947
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::read_pkts",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 99,
+          "percent": 0.44918330308529947
+        },
+        {
+          "symbol": "pg_append_typed_msg",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 94,
+          "percent": 0.426497277676951
+        },
+        {
+          "symbol": "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_replace",
+          "dso": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30",
+          "samples": 91,
+          "percent": 0.4128856624319419
+        },
+        {
+          "symbol": "PgSQL_Query_Processor::process_query",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 87,
+          "percent": 0.39473684210526316
+        },
+        {
+          "symbol": "PgSQL_Connection::handler",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 86,
+          "percent": 0.39019963702359345
+        },
+        {
+          "symbol": "strlen@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 86,
+          "percent": 0.39019963702359345
+        },
+        {
+          "symbol": "PgSQL_Connection::async_query",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 83,
+          "percent": 0.3765880217785844
+        },
+        {
+          "symbol": "Base_HostGroups_Manager<PgSQL_HGC>::wrlock",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 81,
+          "percent": 0.367513611615245
+        },
+        {
+          "symbol": "[unknown]",
+          "dso": "[vdso]",
+          "samples": 80,
+          "percent": 0.3629764065335753
+        },
+        {
+          "symbol": "PgSQL_Connection::native_flush_outbuf",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 79,
+          "percent": 0.3584392014519056
+        },
+        {
+          "symbol": "snprintf@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 76,
+          "percent": 0.3448275862068966
+        },
+        {
+          "symbol": "PgSQL_Connection::backend_is_live",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 76,
+          "percent": 0.3448275862068966
+        },
+        {
+          "symbol": "PgSQL_Thread::leave_waiter",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 71,
+          "percent": 0.3221415607985481
+        },
+        {
+          "symbol": "PgSQL_Thread::consume_data_stream_readiness",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 71,
+          "percent": 0.3221415607985481
+        },
+        {
+          "symbol": "realloc@plt",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 69,
+          "percent": 0.31306715063520874
+        },
+        {
+          "symbol": "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_append",
+          "dso": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30",
+          "samples": 69,
+          "percent": 0.31306715063520874
+        },
+        {
+          "symbol": "__vdso_clock_gettime",
+          "dso": "[vdso]",
+          "samples": 67,
+          "percent": 0.3039927404718693
+        },
+        {
+          "symbol": "ProxySQL_Poll<PgSQL_Data_Stream>::add",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 66,
+          "percent": 0.29945553539019965
+        },
+        {
+          "symbol": "reset_error_info",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 60,
+          "percent": 0.27223230490018147
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::assign_fd_from_pgsql_conn",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 59,
+          "percent": 0.2676950998185118
+        },
+        {
+          "symbol": "clock_gettime",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 58,
+          "percent": 0.2631578947368421
+        },
+        {
+          "symbol": "memcpy@plt",
+          "dso": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30",
+          "samples": 58,
+          "percent": 0.2631578947368421
+        },
+        {
+          "symbol": "isspace@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 58,
+          "percent": 0.2631578947368421
+        },
+        {
+          "symbol": "PgSQL_Query_Info::get_digest_text",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 56,
+          "percent": 0.2540834845735027
+        },
+        {
+          "symbol": "tokenize",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 55,
+          "percent": 0.24954627949183303
+        },
+        {
+          "symbol": "__errno_location",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 55,
+          "percent": 0.24954627949183303
+        },
+        {
+          "symbol": "PgSQL_Session::RunQuery",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 52,
+          "percent": 0.23593466424682397
+        },
+        {
+          "symbol": "__send",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 49,
+          "percent": 0.22232304900181488
+        },
+        {
+          "symbol": "is_digit_string_2",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 45,
+          "percent": 0.20417422867513613
+        },
+        {
+          "symbol": "PgSQL_Session::handler_again___verify_backend_user_db",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 44,
+          "percent": 0.1996370235934664
+        },
+        {
+          "symbol": "Base_HostGroups_Manager<PgSQL_HGC>::wrunlock",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 43,
+          "percent": 0.19509981851179672
+        },
+        {
+          "symbol": "PgSQL_Connection::set_query",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 40,
+          "percent": 0.18148820326678766
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::read_from_net",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 40,
+          "percent": 0.18148820326678766
+        },
+        {
+          "symbol": "free_tokenizer",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 38,
+          "percent": 0.1724137931034483
+        },
+        {
+          "symbol": "select_target_command_type",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 38,
+          "percent": 0.1724137931034483
+        },
+        {
+          "symbol": "pgsql_digest_next_stmt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 34,
+          "percent": 0.1542649727767695
+        },
+        {
+          "symbol": "__errno_location@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 31,
+          "percent": 0.14065335753176045
+        },
+        {
+          "symbol": "strnlen@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 30,
+          "percent": 0.13611615245009073
+        },
+        {
+          "symbol": "pgsql_digest_has_stmt_keyword",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 27,
+          "percent": 0.12250453720508167
+        },
+        {
+          "symbol": "pthread_mutex_unlock@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 27,
+          "percent": 0.12250453720508167
+        },
+        {
+          "symbol": "pthread_mutex_unlock",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 25,
+          "percent": 0.11343012704174228
+        },
+        {
+          "symbol": "PgSQL_Query_Info::query_parser_command_type",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 24,
+          "percent": 0.1088929219600726
+        },
+        {
+          "symbol": "pgsql_query_has_stmt_keyword",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 24,
+          "percent": 0.1088929219600726
+        },
+        {
+          "symbol": "strcasestr@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 23,
+          "percent": 0.10435571687840291
+        },
+        {
+          "symbol": "entry_SYSCALL_64",
+          "dso": "[kernel.kallsyms]",
+          "samples": 22,
+          "percent": 0.0998185117967332
+        },
+        {
+          "symbol": "PgSQL_Connection::native_send_or_buffer",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 20,
+          "percent": 0.09074410163339383
+        },
+        {
+          "symbol": "recv",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 19,
+          "percent": 0.08620689655172414
+        },
+        {
+          "symbol": "strncasecmp@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 18,
+          "percent": 0.08166969147005444
+        },
+        {
+          "symbol": "send@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 17,
+          "percent": 0.07713248638838476
+        },
+        {
+          "symbol": "strcasecmp@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 16,
+          "percent": 0.07259528130671507
+        },
+        {
+          "symbol": "tolower@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 16,
+          "percent": 0.07259528130671507
+        },
+        {
+          "symbol": "strpbrk@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 15,
+          "percent": 0.06805807622504537
+        },
+        {
+          "symbol": "PgSQL_Query_Info::reset_extended_query_info",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 14,
+          "percent": 0.06352087114337568
+        },
+        {
+          "symbol": "_dl_find_dso_for_object@plt",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 12,
+          "percent": 0.0544464609800363
+        },
+        {
+          "symbol": "PgSQL_Connection::IsServerOffline",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 12,
+          "percent": 0.0544464609800363
+        },
+        {
+          "symbol": "Query_Processor<PgSQL_Query_Processor>::get_digest_text",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 12,
+          "percent": 0.0544464609800363
+        },
+        {
+          "symbol": "Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_lookup",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 9,
+          "percent": 0.04083484573502722
+        },
+        {
+          "symbol": "@plt",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 8,
+          "percent": 0.036297640653357534
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::check_data_flow",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 8,
+          "percent": 0.036297640653357534
+        },
+        {
+          "symbol": "PgSQL_Session::set_status",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 7,
+          "percent": 0.03176043557168784
+        },
+        {
+          "symbol": "PgSQL_Backend_Msg_Framer::reset",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 7,
+          "percent": 0.03176043557168784
+        },
+        {
+          "symbol": "pgsql_text_has_word",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 6,
+          "percent": 0.02722323049001815
+        },
+        {
+          "symbol": "PgSQL_Query_Info::query_parser_init",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 5,
+          "percent": 0.022686025408348458
+        },
+        {
+          "symbol": "PgSQL_Query_Info::init",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 5,
+          "percent": 0.022686025408348458
+        },
+        {
+          "symbol": "strspn@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 4,
+          "percent": 0.018148820326678767
+        },
+        {
+          "symbol": "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_replace@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 3,
+          "percent": 0.013611615245009074
+        },
+        {
+          "symbol": "clock_gettime@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 2,
+          "percent": 0.009074410163339383
+        },
+        {
+          "symbol": "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_append@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 2,
+          "percent": 0.009074410163339383
+        },
+        {
+          "symbol": "pthread_mutex_lock@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 2,
+          "percent": 0.009074410163339383
+        },
+        {
+          "symbol": "je_malloc_default",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.004537205081669692
+        },
+        {
+          "symbol": "je_tcache_event_hard",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.004537205081669692
+        },
+        {
+          "symbol": "asm_sysvec_apic_timer_interrupt",
+          "dso": "[kernel.kallsyms]",
+          "samples": 1,
+          "percent": 0.004537205081669692
+        }
+      ],
+      "mean_us": 8.195710620772546,
+      "median_us": 7.799
+    },
+    "response": {
+      "samples": 4592,
+      "percent_all_samples": 12.034173698831175,
+      "rows": [
+        {
+          "symbol": "[unknown]",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 627,
+          "percent": 13.654181184668989
+        },
+        {
+          "symbol": "je_arena_ralloc",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 257,
+          "percent": 5.596689895470384
+        },
+        {
+          "symbol": "PgSQL_Query_Result::add_native_backend_message",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 204,
+          "percent": 4.442508710801394
+        },
+        {
+          "symbol": "PgSQL_Session::handler",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 156,
+          "percent": 3.397212543554007
+        },
+        {
+          "symbol": "realloc",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 139,
+          "percent": 3.0270034843205575
+        },
+        {
+          "symbol": "je_malloc_default",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 137,
+          "percent": 2.9834494773519165
+        },
+        {
+          "symbol": "PgSQL_TxnCmdParser::parse",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 119,
+          "percent": 2.591463414634146
+        },
+        {
+          "symbol": "isspace",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 118,
+          "percent": 2.5696864111498257
+        },
+        {
+          "symbol": "Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::NumActiveTransactions",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 109,
+          "percent": 2.3736933797909407
+        },
+        {
+          "symbol": "PgSQL_Session::PgSQL_Result_to_PgSQL_wire",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 99,
+          "percent": 2.1559233449477353
+        },
+        {
+          "symbol": "PgSQL_Connection::native_fetch_result_cont",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 97,
+          "percent": 2.112369337979094
+        },
+        {
+          "symbol": "je_arena_ralloc_no_move",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 96,
+          "percent": 2.0905923344947737
+        },
+        {
+          "symbol": "free",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 89,
+          "percent": 1.9381533101045296
+        },
+        {
+          "symbol": "PgSQL_Session::RequestEnd",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 87,
+          "percent": 1.8945993031358885
+        },
+        {
+          "symbol": "PgSQL_Connection::ProcessQueryAndSetStatusFlags",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 87,
+          "percent": 1.8945993031358885
+        },
+        {
+          "symbol": "PgSQL_Session::finishQuery",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 84,
+          "percent": 1.829268292682927
+        },
+        {
+          "symbol": "PgSQL_Connection::handler",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 83,
+          "percent": 1.8074912891986064
+        },
+        {
+          "symbol": "PgSQL_Session::sync_txn_tracker_with_backend",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 81,
+          "percent": 1.7639372822299653
+        },
+        {
+          "symbol": "Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::writeout",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 76,
+          "percent": 1.6550522648083623
+        },
+        {
+          "symbol": "PgSQL_ExplicitTxnStateMgr::handle_transaction",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 74,
+          "percent": 1.6114982578397212
+        },
+        {
+          "symbol": "PgSQL_Query_Processor::query_parser_update_counters",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 73,
+          "percent": 1.5897212543554007
+        },
+        {
+          "symbol": "pthread_rwlock_rdlock",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 70,
+          "percent": 1.524390243902439
+        },
+        {
+          "symbol": "std::_Hashtable<unsigned long, std::pair<unsigned long const, void*>, std::allocator<std::pair<unsigned long const, void*> >, std::__detail::_Select1st, std::equal_to<unsigned long>, std::hash<unsigned long>, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits<false, false, true> >::find",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 69,
+          "percent": 1.5026132404181185
+        },
+        {
+          "symbol": "pgsql_stmt_skip_lead",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 69,
+          "percent": 1.5026132404181185
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::return_MySQL_Connection_To_Pool",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 68,
+          "percent": 1.480836236933798
+        },
+        {
+          "symbol": "PgSQL_Query_Result::buffer_reserve_space",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 67,
+          "percent": 1.4590592334494774
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::array2buffer",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 67,
+          "percent": 1.4590592334494774
+        },
+        {
+          "symbol": "QP_query_digest_stats::add_time",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 64,
+          "percent": 1.3937282229965158
+        },
+        {
+          "symbol": "Query_Processor<PgSQL_Query_Processor>::query_parser_update_counters",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 62,
+          "percent": 1.3501742160278745
+        },
+        {
+          "symbol": "PgSQL_Thread::push_MyConn_local",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 62,
+          "percent": 1.3501742160278745
+        },
+        {
+          "symbol": "SpookyHash::Short",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 61,
+          "percent": 1.328397212543554
+        },
+        {
+          "symbol": "PgSQL_Backend_Msg_Framer::feed",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 59,
+          "percent": 1.2848432055749128
+        },
+        {
+          "symbol": "je_large_prof_tctx_get",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 54,
+          "percent": 1.17595818815331
+        },
+        {
+          "symbol": "je_hook_invoke_alloc",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 54,
+          "percent": 1.17595818815331
+        },
+        {
+          "symbol": "malloc",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 47,
+          "percent": 1.0235191637630663
+        },
+        {
+          "symbol": "PgSQL_Query_Info::end",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 47,
+          "percent": 1.0235191637630663
+        },
+        {
+          "symbol": "PgSQL_Backend_Msg_Framer::next",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 46,
+          "percent": 1.0017421602787457
+        },
+        {
+          "symbol": "PgSQL_Connection::suspend_resultset_fetch",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 46,
+          "percent": 1.0017421602787457
+        },
+        {
+          "symbol": "PtrSizeArray::copy_add",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 45,
+          "percent": 0.9799651567944251
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::free_pgsql_real_query",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 39,
+          "percent": 0.8493031358885017
+        },
+        {
+          "symbol": "PgSQL_Session::handle_transaction_state",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 33,
+          "percent": 0.7186411149825784
+        },
+        {
+          "symbol": "Query_Processor<PgSQL_Query_Processor>::query_parser_free",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 33,
+          "percent": 0.7186411149825784
+        },
+        {
+          "symbol": "PgSQL_Session::LogQuery",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 27,
+          "percent": 0.587979094076655
+        },
+        {
+          "symbol": "PgSQL_Connection::IsKnownActiveTransaction",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 26,
+          "percent": 0.5662020905923345
+        },
+        {
+          "symbol": "SpookyHash::Init",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 26,
+          "percent": 0.5662020905923345
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::unplug_backend",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 26,
+          "percent": 0.5662020905923345
+        },
+        {
+          "symbol": "SpookyHash::Final",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 26,
+          "percent": 0.5662020905923345
+        },
+        {
+          "symbol": "PgSQL_Connection::async_query",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 24,
+          "percent": 0.5226480836236934
+        },
+        {
+          "symbol": "SpookyHash::Update",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 23,
+          "percent": 0.5008710801393729
+        },
+        {
+          "symbol": "PgSQL_Connection::compute_unknown_transaction_status",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 21,
+          "percent": 0.4573170731707317
+        },
+        {
+          "symbol": "strchr@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 19,
+          "percent": 0.4137630662020906
+        },
+        {
+          "symbol": "entry_SYSCALL_64",
+          "dso": "[kernel.kallsyms]",
+          "samples": 17,
+          "percent": 0.3702090592334495
+        },
+        {
+          "symbol": "strncasecmp@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 17,
+          "percent": 0.3702090592334495
+        },
+        {
+          "symbol": "__send",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 15,
+          "percent": 0.32665505226480834
+        },
+        {
+          "symbol": "PgSQL_Connection::async_free_result",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 15,
+          "percent": 0.32665505226480834
+        },
+        {
+          "symbol": "recv",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 15,
+          "percent": 0.32665505226480834
+        },
+        {
+          "symbol": "PgSQL_ExplicitTxnStateMgr::reset_state",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 15,
+          "percent": 0.32665505226480834
+        },
+        {
+          "symbol": "PgSQL_Connection::reject_result_without_outcome",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 14,
+          "percent": 0.3048780487804878
+        },
+        {
+          "symbol": "PgSQL_Connection::get_status",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 13,
+          "percent": 0.28310104529616725
+        },
+        {
+          "symbol": "PgSQL_Session::backend_connection_detached",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 13,
+          "percent": 0.28310104529616725
+        },
+        {
+          "symbol": "PgSQL_Connection::MultiplexDisabled",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 13,
+          "percent": 0.28310104529616725
+        },
+        {
+          "symbol": "PgSQL_Connection::native_recv_into_framer",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 12,
+          "percent": 0.2613240418118467
+        },
+        {
+          "symbol": "isspace@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 11,
+          "percent": 0.23954703832752614
+        },
+        {
+          "symbol": "pthread_rwlock_unlock",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 11,
+          "percent": 0.23954703832752614
+        },
+        {
+          "symbol": "PgSQL_Query_Info::get_digest_text",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 10,
+          "percent": 0.21777003484320556
+        },
+        {
+          "symbol": "ProxySQL_Poll<PgSQL_Data_Stream>::remove_index_fast",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 10,
+          "percent": 0.21777003484320556
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::array2buffer_full",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 10,
+          "percent": 0.21777003484320556
+        },
+        {
+          "symbol": "PgSQL_Query_Result::buffer_to_PSarrayOut",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 10,
+          "percent": 0.21777003484320556
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::write_to_net",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 9,
+          "percent": 0.19599303135888502
+        },
+        {
+          "symbol": "PgSQL_Connection::update_listen_status",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 8,
+          "percent": 0.17421602787456447
+        },
+        {
+          "symbol": "Query_Processor<PgSQL_Query_Processor>::update_query_digest",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 8,
+          "percent": 0.17421602787456447
+        },
+        {
+          "symbol": "PgSQL_Connection::IsActiveTransaction",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 7,
+          "percent": 0.1524390243902439
+        },
+        {
+          "symbol": "pgsql_stmt_first_keyword_is",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 7,
+          "percent": 0.1524390243902439
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::release_backend_tls",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 6,
+          "percent": 0.13066202090592335
+        },
+        {
+          "symbol": "PgSQL_Query_Result::get_resultset",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 6,
+          "percent": 0.13066202090592335
+        },
+        {
+          "symbol": "strlen@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 6,
+          "percent": 0.13066202090592335
+        },
+        {
+          "symbol": "PgSQL_Session::RunQuery",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 5,
+          "percent": 0.10888501742160278
+        },
+        {
+          "symbol": "PgSQL_Query_Result::reset",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 5,
+          "percent": 0.10888501742160278
+        },
+        {
+          "symbol": "je_large_prof_tctx_set",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 4,
+          "percent": 0.08710801393728224
+        },
+        {
+          "symbol": "pthread_rwlock_rdlock@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 4,
+          "percent": 0.08710801393728224
+        },
+        {
+          "symbol": "PgSQL_Query_Info::query_parser_update_counters",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 4,
+          "percent": 0.08710801393728224
+        },
+        {
+          "symbol": "memcpy@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 3,
+          "percent": 0.06533101045296168
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::write_to_net_poll",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 3,
+          "percent": 0.06533101045296168
+        },
+        {
+          "symbol": "pthread_rwlock_unlock@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 2,
+          "percent": 0.04355400696864112
+        },
+        {
+          "symbol": "Query_Processor<PgSQL_Query_Processor>::delete_QP_out",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 2,
+          "percent": 0.04355400696864112
+        },
+        {
+          "symbol": "PgSQL_Connection::is_expired",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 2,
+          "percent": 0.04355400696864112
+        },
+        {
+          "symbol": "PgSQL_Connection::backend_is_live",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 2,
+          "percent": 0.04355400696864112
+        },
+        {
+          "symbol": "PgSQL_Query_Info::query_parser_free",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.02177700348432056
+        },
+        {
+          "symbol": "send@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.02177700348432056
+        },
+        {
+          "symbol": "Query_Processor<PgSQL_Query_Processor>::get_digest_text",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.02177700348432056
+        },
+        {
+          "symbol": "je_tcache_event_hard",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.02177700348432056
+        },
+        {
+          "symbol": "pthread_mutex_unlock",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 1,
+          "percent": 0.02177700348432056
+        },
+        {
+          "symbol": "asm_sysvec_apic_timer_interrupt",
+          "dso": "[kernel.kallsyms]",
+          "samples": 1,
+          "percent": 0.02177700348432056
+        }
+      ],
+      "mean_us": 4.9395371954957765,
+      "median_us": 4.819
+    },
+    "other": {
+      "samples": 11526,
+      "percent_all_samples": 30.20598563866031,
+      "rows": [
+        {
+          "symbol": "PgSQL_Thread::process_all_sessions",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1099,
+          "percent": 9.534964428249175
+        },
+        {
+          "symbol": "PgSQL_Thread::run",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 953,
+          "percent": 8.268263057435364
+        },
+        {
+          "symbol": "pgsql_loop_timing_point",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 663,
+          "percent": 5.752212389380531
+        },
+        {
+          "symbol": "pthread_mutex_lock",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 661,
+          "percent": 5.734860315807739
+        },
+        {
+          "symbol": "[unknown]",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 631,
+          "percent": 5.474579212215859
+        },
+        {
+          "symbol": "PgSQL_Session::handler",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 474,
+          "percent": 4.112441436751692
+        },
+        {
+          "symbol": "Base_Thread::ProcessAllMyDS_BeforePoll<PgSQL_Thread>",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 448,
+          "percent": 3.8868644803053964
+        },
+        {
+          "symbol": "__poll",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 344,
+          "percent": 2.9845566545202153
+        },
+        {
+          "symbol": "__vdso_clock_gettime",
+          "dso": "[vdso]",
+          "samples": 328,
+          "percent": 2.8457400659378798
+        },
+        {
+          "symbol": "PgSQL_HostGroups_Manager::push_MyConn_to_pool",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 294,
+          "percent": 2.5507548152004165
+        },
+        {
+          "symbol": "recv",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 287,
+          "percent": 2.4900225576956445
+        },
+        {
+          "symbol": "clock_gettime",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 282,
+          "percent": 2.4466423737636647
+        },
+        {
+          "symbol": "pthread_mutex_unlock",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 222,
+          "percent": 1.9260801665799063
+        },
+        {
+          "symbol": "PgSQL_Thread::process_data_on_data_stream",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 217,
+          "percent": 1.8826999826479265
+        },
+        {
+          "symbol": "PgSQL_Logger::is_events_logfile_open",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 215,
+          "percent": 1.8653479090751344
+        },
+        {
+          "symbol": "Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::writeout",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 214,
+          "percent": 1.8566718722887385
+        },
+        {
+          "symbol": "PgSQL_Thread::ProcessAllMyDS_AfterPoll",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 192,
+          "percent": 1.665799062988027
+        },
+        {
+          "symbol": "PgSQL_Connection::async_query",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 181,
+          "percent": 1.5703626583376713
+        },
+        {
+          "symbol": "PgSQL_Thread::return_local_connections",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 177,
+          "percent": 1.5356585111920875
+        },
+        {
+          "symbol": "Base_Thread::check_for_invalid_fd<PgSQL_Thread>",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 173,
+          "percent": 1.5009543640465035
+        },
+        {
+          "symbol": "Base_Thread::run_SetAllSession_ToProcess0<PgSQL_Thread, PgSQL_Session>",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 172,
+          "percent": 1.4922783272601077
+        },
+        {
+          "symbol": "PgSQL_Thread::process_poll_housekeeping",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 159,
+          "percent": 1.3794898490369598
+        },
+        {
+          "symbol": "std::vector<unsigned int, std::allocator<unsigned int> >::reserve",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 146,
+          "percent": 1.2667013708138122
+        },
+        {
+          "symbol": "PgSQL_Connection::handler",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 143,
+          "percent": 1.2406732604546242
+        },
+        {
+          "symbol": "PgSQL_Thread::run_ComputePollTimeout",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 140,
+          "percent": 1.2146451500954365
+        },
+        {
+          "symbol": "PgSQL_SrvConnList::add",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 137,
+          "percent": 1.1886170397362485
+        },
+        {
+          "symbol": "PgSQL_Thread::handle_mirror_queue_mysql_sessions",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 135,
+          "percent": 1.1712649661634564
+        },
+        {
+          "symbol": "PgSQL_Logger::is_audit_logfile_open",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 124,
+          "percent": 1.075828561513101
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::read_from_net",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 119,
+          "percent": 1.0324483775811208
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::set_pollout",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 117,
+          "percent": 1.015096304008329
+        },
+        {
+          "symbol": "PgSQL_HostGroups_Manager::push_MyConn_to_pool_array",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 114,
+          "percent": 0.9890681936491411
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::write_to_net_poll",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 103,
+          "percent": 0.8936317889987854
+        },
+        {
+          "symbol": "PgSQL_Thread::handle_kill_queues",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 101,
+          "percent": 0.8762797154259934
+        },
+        {
+          "symbol": "PgSQL_Logger::flush",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 99,
+          "percent": 0.8589276418532015
+        },
+        {
+          "symbol": "PgSQL_Thread::apt_update_window",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 95,
+          "percent": 0.8242234947076176
+        },
+        {
+          "symbol": "PgSQL_Connection::init_query_result",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 78,
+          "percent": 0.676730869338886
+        },
+        {
+          "symbol": "PgSQL_Session::handler_again___verify_backend_user_db",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 77,
+          "percent": 0.66805483255249
+        },
+        {
+          "symbol": "entry_SYSCALL_64",
+          "dso": "[kernel.kallsyms]",
+          "samples": 73,
+          "percent": 0.6333506854069061
+        },
+        {
+          "symbol": "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_erase",
+          "dso": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30",
+          "samples": 70,
+          "percent": 0.6073225750477182
+        },
+        {
+          "symbol": "Base_HostGroups_Manager<PgSQL_HGC>::wrlock",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 70,
+          "percent": 0.6073225750477182
+        },
+        {
+          "symbol": "PgSQL_Session::RunQuery",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 68,
+          "percent": 0.5899705014749262
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::array2buffer",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 67,
+          "percent": 0.5812944646885303
+        },
+        {
+          "symbol": "PgSQL_Thread::process_all_sessions()::{lambda(unsigned int, unsigned long)#1}::operator()",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 67,
+          "percent": 0.5812944646885303
+        },
+        {
+          "symbol": "Base_HostGroups_Manager<PgSQL_HGC>::wrunlock",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 64,
+          "percent": 0.5552663543293423
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::write_to_net",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 59,
+          "percent": 0.5118861703973625
+        },
+        {
+          "symbol": "PgSQL_Connection::native_fetch_result_cont",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 58,
+          "percent": 0.5032101336109666
+        },
+        {
+          "symbol": "PgSQL_Connection::native_recv_into_framer",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 56,
+          "percent": 0.48585806003817456
+        },
+        {
+          "symbol": "[unknown]",
+          "dso": "[vdso]",
+          "samples": 55,
+          "percent": 0.4771820232517786
+        },
+        {
+          "symbol": "Base_Thread::configure_pollout<PgSQL_Thread, PgSQL_Data_Stream>",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 52,
+          "percent": 0.45115391289259066
+        },
+        {
+          "symbol": "PgSQL_Session::get_pkts_from_client",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 52,
+          "percent": 0.45115391289259066
+        },
+        {
+          "symbol": "Query_Processor<PgSQL_Query_Processor>::get_digest_text",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 48,
+          "percent": 0.41644976574700676
+        },
+        {
+          "symbol": "PgSQL_Connection::requires_RESETTING_CONNECTION",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 46,
+          "percent": 0.3990976921742148
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::available_data_out",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 43,
+          "percent": 0.3730695818150269
+        },
+        {
+          "symbol": "__send",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 42,
+          "percent": 0.3643935450286309
+        },
+        {
+          "symbol": "PgSQL_Query_Result::init",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 41,
+          "percent": 0.35571750824223497
+        },
+        {
+          "symbol": "PgSQL_Connection::update_bytes_sent",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 40,
+          "percent": 0.34704147145583897
+        },
+        {
+          "symbol": "PQsocket",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 37,
+          "percent": 0.3210133610966511
+        },
+        {
+          "symbol": "pthread_mutex_unlock@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 35,
+          "percent": 0.3036612875238591
+        },
+        {
+          "symbol": "PgSQL_Query_Result::clear",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 33,
+          "percent": 0.2863092139510672
+        },
+        {
+          "symbol": "PgSQL_Connection::query_start",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 28,
+          "percent": 0.24292903001908728
+        },
+        {
+          "symbol": "PgSQL_Connection::next_event",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 26,
+          "percent": 0.22557695644629533
+        },
+        {
+          "symbol": "PgSQL_Query_Result::reset",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 24,
+          "percent": 0.20822488287350338
+        },
+        {
+          "symbol": "PgSQL_Query_Info::get_digest_text",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 22,
+          "percent": 0.19087280930071143
+        },
+        {
+          "symbol": "PgSQL_Connection::fetch_result_start",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 21,
+          "percent": 0.18219677251431546
+        },
+        {
+          "symbol": "PgSQL_Connection::native_flush_outbuf",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 20,
+          "percent": 0.17352073572791948
+        },
+        {
+          "symbol": "recv@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 15,
+          "percent": 0.1301405517959396
+        },
+        {
+          "symbol": "reset_error_info",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 13,
+          "percent": 0.11278847822314766
+        },
+        {
+          "symbol": "PgSQL_Thread::consume_data_stream_readiness",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 13,
+          "percent": 0.11278847822314766
+        },
+        {
+          "symbol": "PgSQL_Connection::native_send_or_buffer",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 10,
+          "percent": 0.08676036786395974
+        },
+        {
+          "symbol": "PgSQL_Data_Stream::array2buffer_full",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 10,
+          "percent": 0.08676036786395974
+        },
+        {
+          "symbol": "PgSQL_Query_Result::buffer_init",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 5,
+          "percent": 0.04338018393197987
+        },
+        {
+          "symbol": "Base_Thread::update_partition_gate",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 4,
+          "percent": 0.0347041471455839
+        },
+        {
+          "symbol": "clock_gettime@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 4,
+          "percent": 0.0347041471455839
+        },
+        {
+          "symbol": "PgSQL_Connection::IsServerOffline",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 4,
+          "percent": 0.0347041471455839
+        },
+        {
+          "symbol": "poll@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 4,
+          "percent": 0.0347041471455839
+        },
+        {
+          "symbol": "pthread_mutex_lock@plt",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 3,
+          "percent": 0.026028110359187923
+        },
+        {
+          "symbol": "asm_sysvec_apic_timer_interrupt",
+          "dso": "[kernel.kallsyms]",
+          "samples": 3,
+          "percent": 0.026028110359187923
+        },
+        {
+          "symbol": "PgSQL_HostGroups_Manager::get_multiple_idle_connections",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.008676036786395974
+        },
+        {
+          "symbol": "malloc",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.008676036786395974
+        },
+        {
+          "symbol": "asm_exc_page_fault",
+          "dso": "[kernel.kallsyms]",
+          "samples": 1,
+          "percent": 0.008676036786395974
+        },
+        {
+          "symbol": "pthread_mutex_trylock",
+          "dso": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "samples": 1,
+          "percent": 0.008676036786395974
+        },
+        {
+          "symbol": "je_extent_avail_first",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.008676036786395974
+        },
+        {
+          "symbol": "sdallocx",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.008676036786395974
+        },
+        {
+          "symbol": "PgSQL_Session::handler___status_WAITING_CLIENT_DATA",
+          "dso": "/home/rene/pg-network-bench/src/proxysql-head-deferred-session-io",
+          "samples": 1,
+          "percent": 0.008676036786395974
+        }
+      ],
+      "mean_us": null,
+      "median_us": null
+    }
+  }
+}

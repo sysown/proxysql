@@ -1,0 +1,51 @@
+From 4699f31752958fe31887707031a6f2e9ef6d63db Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Thu, 22 Oct 2026 20:17:52 +0000
+Subject: [PATCH] Preserve bounded tokenizer copy and explicit NUL termination
+
+Keep the measured removal of printf formatting, but make the replacement
+match snprintf's bounded, explicitly terminated copy instead of assuming
+the source byte after s_length is always its NUL. s_length is an int fed
+from a size_t string length, so narrowing can produce a negative precision
+or a smaller positive prefix. The ordinary short-query path remains a
+small memcpy; the copied prefix is always bounded to the 128-byte buffer.
+
+Copy at most buffer_size - 1 bytes and write the terminator explicitly.
+This preserves the original negative-precision truncation behavior without
+allocating multi-gigabyte input to exercise that edge during validation.
+Long-input strdup selection and token splitting/ownership are unchanged.
+
+Validation: optimized build passed; 31,694 ordinary differential tokenizer
+cases still match the original implementation. Another 16 forced-length
+cases exercise size_t-to-int narrowing, empty length and buffer boundaries,
+checking copied bytes and termination against the original snprintf path.
+No repository test files were modified. Benchmark results from 73f822839
+remain labeled as that intermediate binary; this final bounded version
+will receive its own matching unprofiled measurements.
+---
+ lib/c_tokenizer.cpp | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/lib/c_tokenizer.cpp b/lib/c_tokenizer.cpp
+index 72c889c79..858315a6b 100644
+--- a/lib/c_tokenizer.cpp
++++ b/lib/c_tokenizer.cpp
+@@ -32,9 +32,12 @@ void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int e
+ 		if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
+ 			result->s = strdup(s);
+ 		} else {
+-			// The length is already known and fits, including the terminator.
+-			// Avoid invoking printf formatting for this per-query text copy.
+-			memcpy(result->buffer, s, result->s_length + 1);
++			// Avoid printf formatting for this per-query text copy. Preserve its
++			// bound and explicit terminator even if s_length narrowed from size_t.
++			const size_t copy_length = (size_t)result->s_length < sizeof(result->buffer)
++				? (size_t)result->s_length : sizeof(result->buffer) - 1;
++			memcpy(result->buffer, s, copy_length);
++			result->buffer[copy_length] = '\0';
+ 			result->s = result->buffer;
+ 		}
+ 		}
+-- 
+2.39.5
+

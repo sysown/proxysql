@@ -1,0 +1,14 @@
+count-forwarding-candidate-20261022T200653Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+count-forwarding-optimized-20261022T200821Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+phase-cpu-proxysql-20261022T194051Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+phase-cpu-tokenizer-copy-20261022T195701Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+phase-precise-candidate-20261022T200127Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+phase-precise-optimized-20261022T200259Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+tokenizer-copy-one-plain-candidate-20261022T195055Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+tokenizer-copy-one-plain-candidate-20261022T195517Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+tokenizer-copy-one-plain-optimized-20261022T195222Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+tokenizer-copy-one-plain-optimized-20261022T195350Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+tokenizer-final-one-plain-bounded-20261022T201824Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+tokenizer-final-one-plain-bounded-20261022T202247Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+tokenizer-final-one-plain-candidate-20261022T201951Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
+tokenizer-final-one-plain-candidate-20261022T202119Z: PASS; 64 retained backends, ConnOK=64, ConnERR=0, 62 snapshots, zero failed queries; native, plaintext, one worker, query digests enabled.
