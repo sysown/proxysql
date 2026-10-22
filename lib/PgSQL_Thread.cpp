@@ -6385,7 +6385,13 @@ bool PgSQL_Thread::Scan_Sessions_to_Kill___handle_query_cancellation(PgSQL_Sessi
 					should_kill = true;
 				}
 			}
-			if (should_kill && sess->mybe && sess->mybe->server_myds) {
+			// Only a session running a query acts on cancel_query: PROCESSING_QUERY sends the
+			// cancel and clears it. An idle session has nothing to cancel (PostgreSQL ignores
+			// the request too) and fast forward never reads the flag, so there it stayed set,
+			// and BeforePoll, which wakes at once while it is set, spun the thread until the
+			// next query, or for the life of a fast-forward session.
+			if (should_kill && sess->mybe && sess->mybe->server_myds &&
+				sess->status != WAITING_CLIENT_DATA && sess->status != FAST_FORWARD) {
 				proxy_info("Query cancellation requested [Session ID=%u]\n", it->thread_id);
 				sess->mybe->server_myds->cancel_query = true;
 				sess->mybe->server_myds->kill_type = 1;
