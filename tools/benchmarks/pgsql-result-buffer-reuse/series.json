@@ -1,0 +1,104 @@
+[
+  {
+    "index": 1,
+    "mode": "base16",
+    "path": "/home/rene/pg-network-bench/results/result-buffer-one-plain-base16-20261022T230524Z",
+    "summary": {
+      "mode": "base16",
+      "tps": 10671.448451,
+      "latency_ms": 0.094,
+      "conn_ok_start": "64",
+      "conn_ok_end": "64",
+      "conn_err_end": "0",
+      "snapshots": 62,
+      "cpu_us_per_query": 43.31918739955481,
+      "user_us_per_query": 15.339868092136724,
+      "system_us_per_query": 27.979319307418084
+    }
+  },
+  {
+    "index": 2,
+    "mode": "reuse16",
+    "path": "/home/rene/pg-network-bench/results/result-buffer-one-plain-reuse16-20261022T230652Z",
+    "summary": {
+      "mode": "reuse16",
+      "tps": 10316.256216,
+      "latency_ms": 0.097,
+      "conn_ok_start": "64",
+      "conn_ok_end": "64",
+      "conn_err_end": "0",
+      "snapshots": 62,
+      "cpu_us_per_query": 46.616887780683804,
+      "user_us_per_query": 16.861839392431726,
+      "system_us_per_query": 29.755048388252078
+    }
+  },
+  {
+    "index": 3,
+    "mode": "reuse8",
+    "path": "/home/rene/pg-network-bench/results/result-buffer-one-plain-reuse8-20261022T230819Z",
+    "summary": {
+      "mode": "reuse8",
+      "tps": 10447.259242,
+      "latency_ms": 0.096,
+      "conn_ok_start": "64",
+      "conn_ok_end": "64",
+      "conn_err_end": "0",
+      "snapshots": 62,
+      "cpu_us_per_query": 45.17559139826112,
+      "user_us_per_query": 16.38572298174217,
+      "system_us_per_query": 28.789868416518953
+    }
+  },
+  {
+    "index": 4,
+    "mode": "reuse8",
+    "path": "/home/rene/pg-network-bench/results/result-buffer-one-plain-reuse8-20261022T230947Z",
+    "summary": {
+      "mode": "reuse8",
+      "tps": 10748.591196,
+      "latency_ms": 0.093,
+      "conn_ok_start": "64",
+      "conn_ok_end": "64",
+      "conn_err_end": "0",
+      "snapshots": 62,
+      "cpu_us_per_query": 42.8453322608035,
+      "user_us_per_query": 15.566578778805619,
+      "system_us_per_query": 27.278753481997885
+    }
+  },
+  {
+    "index": 5,
+    "mode": "reuse16",
+    "path": "/home/rene/pg-network-bench/results/result-buffer-one-plain-reuse16-20261022T231114Z",
+    "summary": {
+      "mode": "reuse16",
+      "tps": 10663.67027,
+      "latency_ms": 0.094,
+      "conn_ok_start": "64",
+      "conn_ok_end": "64",
+      "conn_err_end": "0",
+      "snapshots": 62,
+      "cpu_us_per_query": 44.02509824518622,
+      "user_us_per_query": 16.37576087262359,
+      "system_us_per_query": 27.649337372562627
+    }
+  },
+  {
+    "index": 6,
+    "mode": "base16",
+    "path": "/home/rene/pg-network-bench/results/result-buffer-one-plain-base16-20261022T231242Z",
+    "summary": {
+      "mode": "base16",
+      "tps": 10519.076615,
+      "latency_ms": 0.095,
+      "conn_ok_start": "64",
+      "conn_ok_end": "64",
+      "conn_err_end": "0",
+      "snapshots": 62,
+      "cpu_us_per_query": 44.139367867984895,
+      "user_us_per_query": 16.69007966756707,
+      "system_us_per_query": 27.449288200417822
+    }
+  }
+]

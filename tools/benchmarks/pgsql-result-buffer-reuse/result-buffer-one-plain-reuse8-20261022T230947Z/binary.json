@@ -1,0 +1,11 @@
+{
+  "sha256": "31c154aa5074b9ed846f6c573c201d50d801d9696234b33e82cf81224c543861",
+  "commit": "17d43c15fb63d076fec33f83bdb01ba184c5a73e",
+  "result_buffer_bytes": 8192,
+  "result_buffer_reuse": true,
+  "scheduler": "phased",
+  "timers": false,
+  "profiling": false,
+  "mode": "reuse8",
+  "pid": 372846
+}
