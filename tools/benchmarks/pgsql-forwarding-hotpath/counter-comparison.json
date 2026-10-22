@@ -1,0 +1,26 @@
+[
+  {
+    "metric": "Retired userspace instructions/query",
+    "before": 17923.409190549646,
+    "after": 17334.06450626881,
+    "percent_change": -3.288128268541546
+  },
+  {
+    "metric": "Userspace cycles/query",
+    "before": 36886.78400689318,
+    "after": 34785.03766027752,
+    "percent_change": -5.697830274991967
+  },
+  {
+    "metric": "Userspace branch misses/query",
+    "before": 9.28943212501997,
+    "after": 8.099270615391912,
+    "percent_change": -12.811994249061787
+  },
+  {
+    "metric": "Userspace L1 instruction-cache misses/query",
+    "before": 1142.1017974108693,
+    "after": 1079.091565699951,
+    "percent_change": -5.517041637948717
+  }
+]

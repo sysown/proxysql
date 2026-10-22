@@ -1,0 +1,42 @@
+# ========
+# captured on    : Thu Oct 22 20:03:54 2026
+# header version : 1
+# data offset    : 1960
+# data size      : 127248584
+# feat offset    : 127250544
+# hostname : lon104
+# os release : 6.1.0-53-amd64
+# perf version : 6.1.190
+# arch : x86_64
+# nrcpus online : 40
+# nrcpus avail : 40
+# cpudesc : Intel(R) Xeon(R) CPU E5-2630 v4 @ 2.20GHz
+# cpuid : GenuineIntel,6,79,1
+# total memory : 131899732 kB
+# cmdline : /usr/bin/perf record -m 512 -t 363949 -o /home/rene/pg-network-bench/results/phase-precise-optimized-20261022T200259Z/phase.data -e cycles/period=200003/upp -e syscalls:sys_enter_recvfrom -e syscalls:sys_exit_recvfrom -e syscalls:sys_enter_sendto -- sleep 20
+# event : name = cycles/period=200003/upp, , id = { 69347, 69348, 69349, 69350, 69351, 69352, 69353, 69354, 69355, 69356, 69357, 69358, 69359, 69360, 69361, 69362, 69363, 69364, 69365, 69366, 69367, 69368, 69369, 69370, 69371, 69372, 69373, 69374, 69375, 69376, 69377, 69378, 69379, 69380, 69381, 69382, 69383, 69384, 69385, 69386 }, size = 128, { sample_period, sample_freq } = 200003, sample_type = IP|TID|TIME|IDENTIFIER, read_format = ID|LOST, disabled = 1, exclude_kernel = 1, exclude_hv = 1, mmap = 1, comm = 1, task = 1, precise_ip = 2, sample_id_all = 1, exclude_guest = 1, mmap2 = 1, comm_exec = 1, ksymbol = 1, bpf_event = 1
+# event : name = syscalls:sys_enter_recvfrom, , id = { 69387, 69388, 69389, 69390, 69391, 69392, 69393, 69394, 69395, 69396, 69397, 69398, 69399, 69400, 69401, 69402, 69403, 69404, 69405, 69406, 69407, 69408, 69409, 69410, 69411, 69412, 69413, 69414, 69415, 69416, 69417, 69418, 69419, 69420, 69421, 69422, 69423, 69424, 69425, 69426 }, type = 2, size = 128, config = 0x4dc, { sample_period, sample_freq } = 1, sample_type = IP|TID|TIME|CPU|PERIOD|RAW|IDENTIFIER, read_format = ID|LOST, disabled = 1, sample_id_all = 1, exclude_guest = 1
+# event : name = syscalls:sys_exit_recvfrom, , id = { 69427, 69428, 69429, 69430, 69431, 69432, 69433, 69434, 69435, 69436, 69437, 69438, 69439, 69440, 69441, 69442, 69443, 69444, 69445, 69446, 69447, 69448, 69449, 69450, 69451, 69452, 69453, 69454, 69455, 69456, 69457, 69458, 69459, 69460, 69461, 69462, 69463, 69464, 69465, 69466 }, type = 2, size = 128, config = 0x4db, { sample_period, sample_freq } = 1, sample_type = IP|TID|TIME|CPU|PERIOD|RAW|IDENTIFIER, read_format = ID|LOST, disabled = 1, sample_id_all = 1, exclude_guest = 1
+# event : name = syscalls:sys_enter_sendto, , id = { 69467, 69468, 69469, 69470, 69471, 69472, 69473, 69474, 69475, 69476, 69477, 69478, 69479, 69480, 69481, 69482, 69483, 69484, 69485, 69486, 69487, 69488, 69489, 69490, 69491, 69492, 69493, 69494, 69495, 69496, 69497, 69498, 69499, 69500, 69501, 69502, 69503, 69504, 69505, 69506 }, type = 2, size = 128, config = 0x4de, { sample_period, sample_freq } = 1, sample_type = IP|TID|TIME|CPU|PERIOD|RAW|IDENTIFIER, read_format = ID|LOST, disabled = 1, sample_id_all = 1, exclude_guest = 1
+# CPU_TOPOLOGY info available, use -I to display
+# NUMA_TOPOLOGY info available, use -I to display
+# pmu mappings: software = 1, uncore_cbox_8 = 30, uncore_imc_3 = 19, uncore_r2pcie = 14, uncore_qpi_1 = 11, uncore_cbox_6 = 28, uncore_imc_1 = 17, power = 35, uncore_cbox_4 = 26, uprobe = 7, cpu = 4, uncore_r3qpi_0 = 12, cstate_core = 33, uncore_cbox_2 = 24, breakpoint = 5, uncore_ha_0 = 15, uncore_cbox_0 = 22, tracepoint = 2, uncore_cbox_9 = 31, cstate_pkg = 34, uncore_imc_4 = 20, uncore_ubox = 21, uncore_cbox_7 = 29, uncore_imc_2 = 18, kprobe = 6, uncore_qpi_0 = 10, uncore_cbox_5 = 27, uncore_imc_0 = 16, uncore_pcu = 32, uncore_r3qpi_1 = 13, msr = 9, uncore_cbox_3 = 25, intel_pt = 8, uncore_cbox_1 = 23
+# CACHE info available, use -I to display
+# time of first sample : 648236.431916
+# time of last sample : 648256.434634
+# sample duration :  20002.718 ms
+# MEM_TOPOLOGY info available, use -I to display
+# bpf_prog_info 125: bpf_prog_6deef7357e7b4530_sd_fw_egress addr 0xffffffffc03cb678 size 55
+# bpf_prog_info 126: bpf_prog_6deef7357e7b4530_sd_fw_ingress addr 0xffffffffc03cb83c size 55
+# bpf_prog_info 127: bpf_prog_3650d9673c54ce30_sd_devices addr 0xffffffffc03cb8b8 size 310
+# bpf_prog_info 128: bpf_prog_6deef7357e7b4530_sd_fw_egress addr 0xffffffffc03cdba4 size 55
+# bpf_prog_info 129: bpf_prog_6deef7357e7b4530_sd_fw_ingress addr 0xffffffffc03cdc2c size 55
+# bpf_prog_info 130: bpf_prog_8470ed2b25b99116_sd_devices addr 0xffffffffc03d43bc size 448
+# bpf_prog_info 131: bpf_prog_6deef7357e7b4530_sd_fw_egress addr 0xffffffffc03d1b74 size 55
+# bpf_prog_info 132: bpf_prog_6deef7357e7b4530_sd_fw_ingress addr 0xffffffffc03d1be4 size 55
+# bpf_prog_info 133: bpf_prog_ee0e253c78993a24_sd_devices addr 0xffffffffc03d7d20 size 259
+# cpu pmu capabilities: branches=16, max_precise=3, pmu_name=broadwell
+# intel_pt pmu capabilities: topa_multiple_entries=0, psb_cyc=0, single_range_output=0, mtc_periods=0, ip_filtering=0, output_subsys=0, cr3_filtering=1, psb_periods=0, event_trace=0, cycle_thresholds=0, power_event_trace=0, mtc=0, payloads_lip=0, ptwrite=0, num_address_ranges=0, max_subleaf=0, topa_output=1, tnt_disable=0
+# missing features: BRANCH_STACK GROUP_DESC AUXTRACE STAT CLOCKID DIR_FORMAT COMPRESSED CLOCK_DATA HYBRID_TOPOLOGY
+# ========
+#

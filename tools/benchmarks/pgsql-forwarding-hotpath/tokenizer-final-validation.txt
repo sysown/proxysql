@@ -1,0 +1,3 @@
+PASS: 31,694 ordinary differential tokenizer cases matched the original implementation.
+PASS: 16 forced-length cases matched bounded bytes and explicit NUL termination across size_t-to-int narrowing.
+Optimized build completed; no repository test files modified.

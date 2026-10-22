@@ -1,0 +1,74 @@
+{
+  "candidate": {
+    "runs": [
+      {
+        "path": "tokenizer-copy-one-plain-candidate-20261022T195517Z",
+        "mode": "candidate",
+        "tps": 10536.550937,
+        "latency_ms": 0.095,
+        "conn_ok_start": "64",
+        "conn_ok_end": "64",
+        "conn_err_end": "0",
+        "snapshots": 62,
+        "cpu_us_per_query": 43.957877809236464,
+        "user_us_per_query": 16.403608414577025,
+        "system_us_per_query": 27.55426939465944
+      },
+      {
+        "path": "tokenizer-copy-one-plain-candidate-20261022T195055Z",
+        "mode": "candidate",
+        "tps": 10627.109372,
+        "latency_ms": 0.094,
+        "conn_ok_start": "64",
+        "conn_ok_end": "64",
+        "conn_err_end": "0",
+        "snapshots": 62,
+        "cpu_us_per_query": 44.55391475627163,
+        "user_us_per_query": 16.081590533328814,
+        "system_us_per_query": 28.472324222942817
+      }
+    ],
+    "means": {
+      "tps": 10581.8301545,
+      "cpu_us_per_query": 44.25589628275405,
+      "user_us_per_query": 16.24259947395292,
+      "system_us_per_query": 28.01329680880113
+    }
+  },
+  "optimized": {
+    "runs": [
+      {
+        "path": "tokenizer-copy-one-plain-optimized-20261022T195350Z",
+        "mode": "optimized",
+        "tps": 10304.237425,
+        "latency_ms": 0.097,
+        "conn_ok_start": "64",
+        "conn_ok_end": "64",
+        "conn_err_end": "0",
+        "snapshots": 62,
+        "cpu_us_per_query": 45.97295867858257,
+        "user_us_per_query": 17.726614913992016,
+        "system_us_per_query": 28.246343764590552
+      },
+      {
+        "path": "tokenizer-copy-one-plain-optimized-20261022T195222Z",
+        "mode": "optimized",
+        "tps": 10487.272739,
+        "latency_ms": 0.095,
+        "conn_ok_start": "64",
+        "conn_ok_end": "64",
+        "conn_err_end": "0",
+        "snapshots": 62,
+        "cpu_us_per_query": 45.83449269506817,
+        "user_us_per_query": 17.323723018634915,
+        "system_us_per_query": 28.510769676433256
+      }
+    ],
+    "means": {
+      "tps": 10395.755082,
+      "cpu_us_per_query": 45.90372568682537,
+      "user_us_per_query": 17.525168966313466,
+      "system_us_per_query": 28.378556720511902
+    }
+  }
+}

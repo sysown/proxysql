@@ -1,0 +1,60 @@
+{
+  "worker": 364815,
+  "threads": [
+    {
+      "tid": 364809,
+      "ticks": 10,
+      "comm": "proxysql-head-t"
+    },
+    {
+      "tid": 364811,
+      "ticks": 0,
+      "comm": "MyHGCU"
+    },
+    {
+      "tid": 364812,
+      "ticks": 0,
+      "comm": "GTID"
+    },
+    {
+      "tid": 364813,
+      "ticks": 0,
+      "comm": "Admin"
+    },
+    {
+      "tid": 364814,
+      "ticks": 0,
+      "comm": "MySQLWorker0"
+    },
+    {
+      "tid": 364815,
+      "ticks": 945,
+      "comm": "PgSQLWorker0"
+    },
+    {
+      "tid": 364816,
+      "ticks": 0,
+      "comm": "QCPurgeThread"
+    },
+    {
+      "tid": 364817,
+      "ticks": 0,
+      "comm": "proxysql-head-t"
+    },
+    {
+      "tid": 364818,
+      "ticks": 0,
+      "comm": "proxysql-head-t"
+    },
+    {
+      "tid": 364819,
+      "ticks": 0,
+      "comm": "proxysql-head-t"
+    },
+    {
+      "tid": 364820,
+      "ticks": 0,
+      "comm": "MonitorDNSCache"
+    }
+  ]
+}
