@@ -1,0 +1,63 @@
+Phased scheduler: finer timers and syscall/query diagnostics
+
+Fixed workload: 50 clients, 64-backend cap, end-to-end TLS 1.3 / AES256-GCM, 42-row approximately 4KB result, simple protocol, 16 pgbench threads, localhost on lon104. One proxy worker on CPU0; client CPU placement unchanged. No unified scheduler, no readiness-refresh experiment, no workload matrix.
+
+TIMER RUN
+One 20-second warmup and 60-second measurement. CLOCK_MONOTONIC and CLOCK_THREAD_CPUTIME_ID at the existing outer boundaries and the new inner boundaries. Per-second aggregate records; no per-iteration file output. Source instrumentation commit 34ae472da. Select 39 full reports inside measurement seconds10..50. There are 29,805 intervals per phase. All CPU shares use total phase CPU excluding separately measured hook work; residual timestamp overhead remains in phase durations.
+
+ 0 Post-poll housekeeping: 0.0601% CPU; mean 0.7752us CPU / 0.7856us wall; maximum 0.0084ms CPU / 0.1983ms wall.
+ 1 Poll-error and runtime-variable checks: 0.0406% CPU; mean 0.5230us CPU / 0.5239us wall; maximum 0.0117ms CPU / 0.0273ms wall.
+ 5 Clear session runnable flags: 0.0504% CPU; mean 0.6498us CPU / 0.6460us wall; maximum 0.0165ms CPU / 0.0730ms wall.
+ 6 AfterPoll socket/input handling: 6.2322% CPU; mean 80.3497us CPU / 80.4439us wall; maximum 108.1233ms CPU / 108.2656ms wall.
+ 7 Cleanup temporarily rearmed waiters: 0.0398% CPU; mean 0.5131us CPU / 0.5162us wall; maximum 0.0096ms CPU / 0.0218ms wall.
+ 8 Session setup and optional partitioning: 0.0545% CPU; mean 0.7022us CPU / 0.7002us wall; maximum 0.0101ms CPU / 0.0101ms wall.
+11 Existing waiter availability/retries: 0.0431% CPU; mean 0.5555us CPU / 0.5575us wall; maximum 0.0112ms CPU / 0.0397ms wall.
+12 Early frontend dispatch: 39.2885% CPU; mean 506.5344us CPU / 509.5605us wall; maximum 1.1894ms CPU / 6.2337ms wall.
+13 Backend-owning session processing: 51.3514% CPU; mean 662.0576us CPU / 669.4335us wall; maximum 6.2116ms CPU / 6.3674ms wall.
+14 Remaining backendless sessions: 0.9585% CPU; mean 12.3572us CPU / 12.3381us wall; maximum 1.8245ms CPU / 1.9001ms wall.
+15 Session accounting and return: 0.0439% CPU; mean 0.5655us CPU / 0.5697us wall; maximum 0.0100ms CPU / 0.0307ms wall.
+ 9 Publish local connections: 0.1801% CPU; mean 2.3221us CPU / 2.3240us wall; maximum 0.0138ms CPU / 0.0658ms wall.
+10 Outer-iteration tail: 0.0402% CPU; mean 0.5186us CPU / 0.5191us wall; maximum 0.0096ms CPU / 0.0281ms wall.
+ 2 Next-iteration / pre-poll preparation: 0.3258% CPU; mean 4.2009us CPU / 4.1945us wall; maximum 1.9625ms CPU / 1.9619ms wall.
+ 3 Periodic waiter rearm: 0.0392% CPU; mean 0.5057us CPU / 0.5064us wall; maximum 0.0094ms CPU / 0.0260ms wall.
+ 4 Main poll syscall: 1.2518% CPU; mean 16.1393us CPU / 16.2848us wall; maximum 0.0446ms CPU / 5.2703ms wall.
+
+The main costs are backend-owning handlers51.35%, early frontend dispatch39.29%, and AfterPoll input handling6.23%. These are phase-inclusive CPU costs: they include socket/kernel, TLS, parsing, routing and protocol work performed in their handlers, not just scheduler bookkeeping. Remaining backendless work0.96%; local connection publication0.18%. Other individual non-poll blocks are below0.4%.
+
+This run's largest CPU outlier is108.123ms in AfterPoll socket/input processing. That locates the stage; it does not identify which read, TLS operation, allocation or other function caused the spike. It is a different observation from the59.4ms outlier in the previous coarse run; no claim is made that both have the same cause.
+
+SYSCALL RUNS
+Separate clean ProxySQL and PgBouncer1.26.1 runs, one each, with the same50/64/TLS/4KB conditions. ProxySQL uses preserved phased early-dispatch binary07be750d95e4515f99a2bfddc32b92e5f22fc3c94d5e28e05ccef4e7dde89d6e, with no loop-timing or unified flags. PgBouncer is in transaction mode, reserve0; its original default cap50 was temporarily changed to64 and restored after measurement.
+
+Each candidate uses20s warmup and a50s continuous workload. perf stat tracepoint counters are attached after5s with events initially disabled, then explicitly enabled/disabled with acknowledged FIFO controls for a30s steady window. Count all syscall entries in the target proxy process plus named I/O, poll and connection entries; separately count ret==-11 exit events to identify EAGAIN. Exit counters are not added to total syscall entries. All event running percentages are100%: no event multiplex scaling. No ptrace/strace stop-resume instrumentation is used.
+
+Query-counter snapshots bracket the perf control interval. ProxySQL's pool Queries counter counts backend query submissions; its completion delta can differ by at most the outstanding requests in this closed-loop workload. PgBouncer uses networkbench total_query_count. Snapshot and event-enable timing differ slightly; both raw ratios and timing metadata are preserved. Reported calls/query are approximate, with the timing alignment span under1%of the30s window; this is not a strict statistical error bound. read/write counters include all descriptors in the proxy process, not an fd-filtered frontend/backend breakdown. Counter tracing can perturb execution, so diagnostic TPS is not a throughput comparison.
+
+
+proxysql: queries=537362; query-counter bracket=30.080957s; perf enable/disable ack interval=30.001388s; perf event active time range=[29.916108102, 29.91624878]; bracketing control/snapshot slack=159.121ms.
+  raw_syscalls:sys_enter: 2167600 calls, 4.033780/query
+  syscalls:sys_enter_recvfrom: 1072263 calls, 1.995420/query
+  syscalls:sys_enter_read: 0 calls, 0.000000/query
+  syscalls:sys_enter_sendto: 536184 calls, 0.997808/query
+  syscalls:sys_enter_write: 536052 calls, 0.997562/query
+  syscalls:sys_enter_poll: 22055 calls, 0.041043/query
+  syscalls:sys_enter_epoll_wait: 0 calls, 0.000000/query
+  syscalls:sys_exit_recvfrom: 49 calls, 0.000091/query
+  syscalls:sys_exit_read: 0 calls, 0.000000/query
+
+pgbouncer: queries=683556; query-counter bracket=30.068328s; perf enable/disable ack interval=30.000350s; perf event active time range=[29.909580287, 29.909709374]; bracketing control/snapshot slack=135.943ms.
+  raw_syscalls:sys_enter: 4124198 calls, 6.033446/query
+  syscalls:sys_enter_recvfrom: 0 calls, 0.000000/query
+  syscalls:sys_enter_read: 2728026 calls, 3.990933/query
+  syscalls:sys_enter_sendto: 0 calls, 0.000000/query
+  syscalls:sys_enter_write: 1364014 calls, 1.995468/query
+  syscalls:sys_enter_poll: 0 calls, 0.000000/query
+  syscalls:sys_enter_epoll_wait: 32157 calls, 0.047044/query
+  syscalls:sys_exit_recvfrom: 0 calls, 0.000000/query
+  syscalls:sys_exit_read: 0 calls, 0.000000/query
+
+Rounded interpretation: ProxySQL makes about2receive calls and2send/write calls per query, plus0.041poll calls; about4total syscalls/query. PgBouncer makes about4read calls and2write calls per query, plus0.047epoll_wait calls; about6total syscalls/query. On this Linux, libc recv/send appear as recvfrom/sendto syscalls. ProxySQL has49recvfrom EAGAIN returns in the traced window (0.000091/query); the tracked PgBouncer EAGAIN counters are zero. This does not explain the extra PgBouncer read calls as failed reads. Read sizes/TLS record boundaries were not measured, so their cause is not established here.
+
+Conclusion: syscall quantity alone does not explain ProxySQL's lower throughput in the earlier matched benchmark; PgBouncer issues more calls/query in this diagnostic. This measurement does not prove equal per-call costs, equal bytes copied, or equal TLS work. The timer breakdown identifies dispatch/response work as the dominant groups but does not distinguish their nested functions.
+
+All three diagnostic workloads completed with zero failed transactions. Original PgBouncer config and prior clean inline-only ProxySQL TLS runtime were restored, no pgbench remains, and no additional configurations were tested.
