@@ -26,29 +26,44 @@ env:
 
 jobs:
   plan:
+    # Dispatch this workflow from protected v3.0; source_ref is build input only.
+    if: github.ref == 'refs/heads/v3.0'
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       source_sha: ${{ steps.matrix.outputs.source_sha }}
+      control_sha: ${{ steps.matrix.outputs.control_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: refs/heads/v3.0
+          path: control
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
           ref: ${{ inputs.source_ref || github.ref }}
+          path: source
           fetch-depth: 0
           persist-credentials: false
       - name: Select exact build profiles
         id: matrix
+        working-directory: control
         env:
           PROFILE_GROUP: ${{ inputs.group }}
           DEPENDENCY: ${{ inputs.dependency }}
         run: |
-          python3 deps/artifacts/publish.py matrix --group "$PROFILE_GROUP" --dependency "$DEPENDENCY" > expected-matrix.json
-          echo "matrix=$(cat expected-matrix.json)" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python3 -E deps/artifacts/publish.py matrix --group "$PROFILE_GROUP" --dependency "$DEPENDENCY" > expected-matrix.json
+          {
+            echo "matrix=$(cat expected-matrix.json)"
+            echo "source_sha=$(git -C ../source rev-parse HEAD)"
+            echo "control_sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dependency-plan-${{ github.run_attempt }}
-          path: expected-matrix.json
+          path: control/expected-matrix.json
           if-no-files-found: error
 
   build:
@@ -82,6 +97,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    timeout-minutes: 20
     needs: [plan, build]
     runs-on: ubuntu-24.04
     permissions:
@@ -89,13 +105,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.plan.outputs.source_sha }}
+          ref: ${{ needs.plan.outputs.control_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dependency-plan-${{ github.run_attempt }}
-          path: .cache/dependency-artifacts/batch
+          path: .cache/dependency-artifacts/plan
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: dependency-bundle-${{ github.run_attempt }}-*
@@ -104,9 +120,11 @@ jobs:
       - name: Publish complete immutable batch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
         run: |
-          python3 deps/artifacts/publish.py publish --input .cache/dependency-artifacts/batch \
-            --repository "$GITHUB_REPOSITORY" --tag "$DEPS_TAG"
+          cp .cache/dependency-artifacts/plan/expected-matrix.json .cache/dependency-artifacts/batch/expected-matrix.json
+          python3 -E deps/artifacts/publish.py publish --input .cache/dependency-artifacts/batch \
+            --repository "$GITHUB_REPOSITORY" --tag "$DEPS_TAG" --source-sha "$SOURCE_SHA"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dependency-lock-entries-${{ github.run_attempt }}

@@ -51,6 +51,8 @@ def download_artifact(entry, cache):
                         if received > entry['size']:
                             raise ValueError('dependency archive exceeds registered size')
                         output.write(data)
+                    if received < entry['size']:
+                        raise Unavailable('artifact download ended before registered size')
             except (HTTPError, URLError, TimeoutError, socket.timeout, ConnectionError) as exc:
                 raise Unavailable('artifact download unavailable: ' + str(exc)) from exc
         verify_archive(temporary, entry)

@@ -8,19 +8,30 @@ repository=${4:?repository}
 tag=${5:?release tag}
 repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo_root"
-export CC=${CC:-cc} CXX=${CXX:-g++}
+if [[ "$profile" == *-clang ]]; then
+    default_cc=clang
+    default_cxx=clang++
+else
+    default_cc=cc
+    default_cxx=g++
+fi
+export CC=${CC:-$default_cc} CXX=${CXX:-$default_cxx}
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$repo_root"
 export GIT_VERSION=$(git describe --long --abbrev=7 --tags)
 jobs=${DEPS_BUILD_JOBS:-2}
 [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid DEPS_BUILD_JOBS' >&2; exit 1; }
 case "$dependency" in openssl) target=libssl;; duckdb) target=duckdb;; *) exit 1;; esac
-read -r -a compiler_command <<< "$CC"
-macros=$("${compiler_command[@]}" -dM -E -x c /dev/null)
-if [[ "$profile" == *-clang ]]; then
-    [[ "$macros" == *'__clang__'* ]] || { echo 'Profile requires Clang' >&2; exit 1; }
-else
-    [[ "$macros" != *'__clang__'* && "$macros" == *'__GNUC__'* ]] || { echo 'Profile requires GCC' >&2; exit 1; }
-fi
+for compiler_variable in CC CXX; do
+    read -r -a compiler_command <<< "${!compiler_variable}"
+    language=c
+    if [[ "$compiler_variable" == CXX ]]; then language=c++; fi
+    macros=$("${compiler_command[@]}" -dM -E -x "$language" /dev/null)
+    if [[ "$profile" == *-clang ]]; then
+        [[ "$macros" == *'__clang__'* ]] || { echo "Profile requires Clang for $compiler_variable" >&2; exit 1; }
+    else
+        [[ "$macros" != *'__clang__'* && "$macros" == *'__GNUC__'* ]] || { echo "Profile requires GCC for $compiler_variable" >&2; exit 1; }
+    fi
+done
 mkdir -p "$output"
 make -j"$jobs" -C deps NPROCS="$jobs" DEPS_MODE=source "$target"
 key=$(python3 "$repo_root/deps/artifacts/manage.py" identity --dependency "$dependency" |

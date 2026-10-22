@@ -171,7 +171,21 @@ def build_identity(dependency, root, environ):
     native_cpu = re.search(r'-(?:march|mtune|mcpu)\s*=\s*native\b',
                            ' '.join([setting] + [environ.get(key, '') for key in
                                                 FLAGS + ('CC', 'CXX')]))
-    eligible = eligible and not (unprobed_setting or native_cpu or
+    # DuckDB's NATIVE_ARCH option enables CPU-dependent compilation without
+    # adding a native flag to these inputs. CMake cache booleans treat every
+    # value other than a false constant as enabled when read as a variable.
+    native_arch = False
+    if dependency == 'duckdb':
+        tokens = iter(setting_tokens)
+        for token in tokens:
+            definition = next(tokens, '') if token == '-D' else token[2:] if token.startswith('-D') else ''
+            match = re.fullmatch(r'NATIVE_ARCH(?::[^=]+)?=(.*)', definition, re.S)
+            if match:
+                value = match.group(1).upper()
+                native_arch = native_arch or (value not in
+                    ('', '0', 'OFF', 'NO', 'FALSE', 'N', 'IGNORE', 'NOTFOUND')
+                    and not value.endswith('-NOTFOUND'))
+    eligible = eligible and not (unprobed_setting or native_cpu or native_arch or
                                  flags['CMAKE_C_FLAGS'] or flags['CMAKE_CXX_FLAGS'] or
                                  flags['CMAKE_EXE_LINKER_FLAGS'] or flags['CROSS_COMPILE'])
     toolchain = toolchain_identity(environ)

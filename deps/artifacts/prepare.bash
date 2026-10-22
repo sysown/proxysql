@@ -41,15 +41,19 @@ case "$dependency" in
         ;;
     *) echo 'ERROR: unknown dependency' >&2; exit 1;;
 esac
+archive="$repo_root/deps/$directory/$dependency-$version.tar.gz"
+# Source integrity remains mandatory even when a completed tree is reusable.
+bash "$repo_root/deps/$directory/verify-source.bash" "$archive"
 signature=$({
     printf '%s\n' "${CC:-cc}" "${CXX:-g++}" "${CFLAGS:-}" "${CPPFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}" \
         "${OPENSSL_CONFIGURE_FLAGS:-}" "${DUCKDB_CMAKE_FLAGS:-}" "${SDKROOT:-}" "${MACOSX_DEPLOYMENT_TARGET:-}"
-    cat "$repo_root/deps/artifacts/prepare.bash" "$repo_root/deps/$directory/build.mk" "$repo_root/deps/$directory/verify-source.bash"
+    cat "$repo_root/deps/artifacts/prepare.bash" "$repo_root/deps/$directory/build.mk" \
+        "$repo_root/deps/$directory/verify-source.bash" "$archive.sha256"
     read -r -a compiler_command <<< "${CC:-cc}"
     "${compiler_command[@]}" --version || printf 'C compiler identity unavailable\n'
     read -r -a compiler_command <<< "${CXX:-g++}"
     "${compiler_command[@]}" --version || printf 'C++ compiler identity unavailable\n'
-    cksum "$repo_root/deps/$directory/$dependency-$version.tar.gz"
+    cksum < "$archive"
 } | cksum)
 # Keep a complete inventory of public outputs even when Python is unavailable.
 # Paths are relative to the tree so source reuse also survives checkout moves.

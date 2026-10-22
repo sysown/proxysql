@@ -113,7 +113,7 @@ Modify `deps/Makefile`, root `Makefile`, `plugins/duckdb/Makefile`, `docker-comp
 - [x] Run the complete affected fixture/contract suite once after final changes. Broaden testing only if failures or remaining concerns justify it.
 - [x] Write `doc/dependency-artifacts.md` and update `deps/duckdb/README.md`, `deps/libssl/README.md`, and `doc/vendored_openssl.md`. Include exact commands for all modes, initial publication, importing/merging candidate lock entries, source updates, cache location, and fallback diagnostics. Correct the stale root `PROXYSQL40` export statement.
 - [x] Document activation precisely: local implementation can pass with an empty production lock; operational acceleration requires a maintainer-dispatched publication and committed real entries. Report measured timings only for the tested runner class.
-- [x] Commit as `docs: document dependency artifact reuse and validation` and obtain the chosen final independent review before presenting the implementation as complete.
+- [x] Commit as `docs: document dependency artifact reuse and validation`, obtain the chosen independent review, and address its findings with regression tests before presenting the implementation as complete.
 
 ## Execution Handoff
 
@@ -124,9 +124,6 @@ directories must remain untouched. **Subagent-driven** execution is also
 available if the user prefers separate implementation/review gates per task.
 
 The user approved this plan and selected native execution in the current
-checkout. All implementation tasks and acceptance checks have run. Known baseline
-validation failures are recorded in doc/dependency-artifacts.md. Independent
-whole-change review found six Important issues and no Critical or Minor issues.
-All six were reproduced and fixed in one regression-driven pass. The final 50
-artifact fixtures pass on the host and AlmaLinux 8/Python 3.6.8; affected build
-contracts and both real relocated runtime smoke probes also pass.
+checkout. Execution results, validation limits, and subsequent PR review fixes
+are recorded in `doc/dependency-artifacts.md`; this plan records the agreed
+implementation steps.

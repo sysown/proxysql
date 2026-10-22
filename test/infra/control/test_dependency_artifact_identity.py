@@ -4,6 +4,7 @@ import hashlib
 import importlib
 import json
 from pathlib import Path
+import shlex
 import sys
 import tempfile
 import unittest
@@ -134,11 +135,25 @@ class IdentityTests(unittest.TestCase):
         with patch.object(self.api.platform, 'system', return_value='Linux'), \
                 patch.object(self.api.platform, 'libc_ver', return_value=('glibc', '2.3.4')), \
                 patch.object(self.api.os, 'confstr', return_value='glibc 2.28'), \
+                patch.object(self.api.Path, 'read_text', return_value='ID=fixture\nVERSION_ID="1.0"\n'), \
                 patch.object(self.api, 'command_output', return_value='fixture'):
-            self.assertEqual(['glibc', '2.28'], self.actual_toolchain_identity(self.env)['libc'])
+            facts = self.actual_toolchain_identity(self.env)
+            self.assertEqual(['glibc', '2.28'], facts['libc'])
+            self.assertEqual(['fixture', '1.0'], facts['distro'])
             with patch.object(self.api.os, 'confstr', side_effect=ValueError('unavailable')):
                 with self.assertRaises(self.api.ToolchainUnavailable):
                     self.actual_toolchain_identity(self.env)
+
+    def test_duckdb_native_arch_cmake_boolean_overrides_are_ineligible(self):
+        for value in ('ON', 'on', 'YES', 'TRUE', 'Y', '1', '2', 'custom', 'OFF '):
+            for option in ('-DNATIVE_ARCH=', '-DNATIVE_ARCH:BOOL=', '-D NATIVE_ARCH:BOOL='):
+                with self.subTest(option=option, value=value):
+                    self.env['DUCKDB_CMAKE_FLAGS'] = option + shlex.quote(value)
+                    self.assertFalse(self.identity()['eligible'])
+        for value in ('OFF', 'off', 'NO', 'FALSE', 'N', '0', '', 'IGNORE', 'NOTFOUND', 'cpu-NOTFOUND'):
+            with self.subTest(value=value):
+                self.env['DUCKDB_CMAKE_FLAGS'] = '-D NATIVE_ARCH:BOOL=' + value
+                self.assertTrue(self.identity()['eligible'])
 
     def test_registry_accepts_empty_or_exact_entry(self):
         self.assertEqual([], self.registry([])['artifacts'])

@@ -203,7 +203,9 @@ def restore_bundle(archive, entry, destination):
     verify_archive(archive, entry)
     destination = Path(destination).absolute()
     if destination.is_symlink():
-        expected = destination.parent / ('openssl-' + entry['identity']['version'])
+        # Resolve checkout aliases while retaining the versioned directory as
+        # the exact allowed target; a second symlink must not redirect it.
+        expected = destination.parent.resolve() / ('openssl-' + entry['identity']['version'])
         if entry['dependency'] != 'openssl' or destination.resolve() != expected:
             raise ValueError('unexpected dependency destination symlink')
         destination = expected

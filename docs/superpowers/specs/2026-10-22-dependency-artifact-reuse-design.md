@@ -66,7 +66,12 @@ Introduce `DEPS_MODE`, exported by the root Makefile and forwarded by Compose:
 The setting applies only to these two dependencies. A v3 build does not acquire
 a DuckDB dependency. Existing complete source builds can be reused in `auto`
 or `source` mode after their build identity is validated; `prebuilt` requires
-artifact provenance. Unknown mode values fail with a clear message.
+artifact provenance. A tree created before provenance metadata was introduced
+is rebuilt: existing archives or timestamps alone never prove its identity.
+Python-backed preparation requires accepted identity/output metadata; the
+Python-free source path requires its own matching source signature, current
+source checksum verification, and complete output inventory. Unknown mode
+values fail with a clear message.
 
 An unregistered platform, missing artifact, unavailable network, or absent
 optional restore tooling is a source fallback in `auto`. A registered artifact

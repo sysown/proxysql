@@ -1,6 +1,7 @@
 """Preparation modes, concurrency, and the real Make-facing source recipe."""
 import importlib
 import fcntl
+import io
 import json
 import os
 from pathlib import Path
@@ -165,6 +166,41 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(list(cache.glob('*.tar.gz')))
         self.assertFalse(list(cache.glob('.download-*')))
 
+    def test_short_download_eof_falls_back_only_in_auto(self):
+        entry = self.register()
+        shutil.rmtree(str(self.tree))
+        cache = self.root / '.cache/dependency-artifacts'
+        archive = cache / (entry['sha256'] + '.tar.gz')
+        partial = archive.read_bytes()[:-1]
+        archive.unlink()
+        class ShortResponse(io.BytesIO):
+            def geturl(self): return entry['url']
+        with patch.object(self.api, 'urlopen', side_effect=lambda *a, **kw: ShortResponse(partial)):
+            with self.assertRaises(self.api.Unavailable):
+                self.prepare('prebuilt')
+            self.assertEqual(1, self.count())
+            self.assertEqual('source', self.prepare('auto')['origin'])
+        self.assertEqual(2, self.count())
+        self.assertFalse(archive.exists())
+        self.assertFalse(list(cache.glob('.download-*')))
+
+    def test_complete_download_with_wrong_digest_fails_without_fallback(self):
+        entry = self.register()
+        shutil.rmtree(str(self.tree))
+        cache = self.root / '.cache/dependency-artifacts'
+        archive = cache / (entry['sha256'] + '.tar.gz')
+        data = archive.read_bytes()
+        wrong = bytes([data[0] ^ 1]) + data[1:]
+        archive.unlink()
+        class WrongResponse(io.BytesIO):
+            def geturl(self): return entry['url']
+        with patch.object(self.api, 'urlopen', side_effect=lambda *a, **kw: WrongResponse(wrong)):
+            with self.assertRaisesRegex(ValueError, 'SHA-256'):
+                self.prepare('auto')
+        self.assertEqual(1, self.count())
+        self.assertFalse(self.tree.exists())
+        self.assertFalse(list(cache.glob('.download-*')))
+
     def test_python36_response_read_timeout_is_unavailable(self):
         # Before Python 3.10 socket.timeout was not a TimeoutError subclass.
         class LegacySocketTimeout(OSError): pass
@@ -275,11 +311,81 @@ class PreparationTests(unittest.TestCase):
         tools.mkdir(exist_ok=True)
         for name in ('bash', 'perl', 'make', 'dirname', 'sed', 'cksum', 'cat', 'rm', 'cp',
                      'mkdir', 'tar', 'gzip', 'uname', 'cc', 'c++', 'touch', 'sleep', 'sh',
-                     'awk', 'nproc', 'test', 'find', 'sort', 'grep'):
+                     'awk', 'nproc', 'test', 'find', 'sort', 'grep', 'basename', 'tr',
+                     'sha256sum', 'shasum', 'sha256'):
             path = shutil.which(name)
             if path and not (tools / name).exists():
                 (tools / name).symlink_to(path)
         return dict(self.env, PATH=str(tools))
+
+    def install_real_source_verifier(self):
+        directory = self.root / 'deps/libssl'
+        shutil.copy(ROOT / 'deps/libssl/verify-source.bash', directory)
+        template = self.root / 'template/openssl-3.5.7'
+        (template / 'Configure').write_text('# fixture configure\n')
+        source = directory / 'openssl-3.5.7.tar.gz'
+        with tarfile.open(str(source), 'w:gz') as archive:
+            archive.add(str(template), arcname=template.name)
+        Path(str(source) + '.sha256').write_text(self.identity.digest_file(source) + '  ' + source.name + '\n')
+        return source
+
+    def test_python_free_reuse_verifies_checksum_sidecar_before_accepting_tree(self):
+        source = self.install_real_source_verifier()
+        env = self.python_free_environment()
+        result = self.make('libssl', 'DEPS_MODE=source', env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        checksum = Path(str(source) + '.sha256')
+        before = checksum.stat()
+        checksum.write_text('0' * 64 + '  ' + source.name + '\n')
+        os.utime(str(checksum), ns=(before.st_atime_ns, before.st_mtime_ns))
+        result = self.make('libssl', 'DEPS_MODE=source', env=env)
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn('SHA-256 mismatch', result.stderr)
+        self.assertEqual(1, self.count())
+
+    def test_python_free_sidecar_contents_participate_in_source_signature(self):
+        source = self.install_real_source_verifier()
+        env = self.python_free_environment()
+        result = self.make('libssl', 'DEPS_MODE=source', env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        checksum = Path(str(source) + '.sha256')
+        before = checksum.stat()
+        checksum.write_text(checksum.read_text().replace('  ', ' '))
+        os.utime(str(checksum), ns=(before.st_atime_ns, before.st_mtime_ns))
+        result = self.make('libssl', 'DEPS_MODE=source', env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(2, self.count())
+
+    def test_python_free_source_archive_corruption_fails_hard(self):
+        source = self.install_real_source_verifier()
+        env = self.python_free_environment()
+        result = self.make('libssl', 'DEPS_MODE=source', env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        source.write_bytes(b'corrupt')
+        result = self.make('libssl', 'DEPS_MODE=source', env=env)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('SHA-256 mismatch', result.stderr)
+        self.assertEqual(1, self.count())
+
+    def test_relocated_python_free_source_tree_is_a_noop(self):
+        self.install_real_source_verifier()
+        env = self.python_free_environment()
+        result = self.make('libssl', 'DEPS_MODE=source', env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        before = (self.tree / '.proxysql-build-complete').stat().st_mtime_ns
+        original = self.root
+        self.root = original.with_name(original.name + '-relocated')
+        original.rename(self.root)
+        # Python 3.6's TemporaryDirectory cleanup requires its original path.
+        self.addCleanup(self.root.rename, original)
+        self.tree = self.root / 'deps/libssl/openssl-3.5.7'
+        makefile = self.root / 'deps/Makefile'
+        makefile.write_text(makefile.read_text().replace(str(original), str(self.root)))
+        env['PATH'] = str(self.root / 'bin')
+        result = self.make('libssl', 'DEPS_MODE=source', env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(before, (self.tree / '.proxysql-build-complete').stat().st_mtime_ns)
+        self.assertEqual(1, self.count())
 
     def test_python_free_lock_survives_exec_and_serializes_preparation(self):
         env = self.python_free_environment()
@@ -333,6 +439,7 @@ class PreparationTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('public output')
         (directory / 'duckdb-1.4.5.tar.gz').write_bytes(b'fixture source')
+        (directory / 'duckdb-1.4.5.tar.gz.sha256').write_text('fixture checksum\n')
         with (self.root / 'deps/Makefile').open('a') as stream:
             stream.write('\n.PHONY: dependency-source-duckdb\ndependency-source-duckdb:\n'
                          '\t@cp -R ' + str(template) + ' ' + str(tree) + '\n'

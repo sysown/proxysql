@@ -1,6 +1,8 @@
 """Publisher profile selection, batch completeness and immutable releases."""
 import importlib
 import json
+import os
+import shutil
 from pathlib import Path
 import re
 import subprocess
@@ -35,6 +37,10 @@ class PublicationTests(unittest.TestCase):
                  'provenance': {'commit': 'b' * 40, 'profile': profile}}
         (self.root / (profile + '-' + dep + '.entry.json')).write_text(json.dumps(entry))
         return entry
+
+    def expected_matrix(self):
+        (self.root / 'expected-matrix.json').write_text(json.dumps(
+            {'include': [{'profile': 'ubuntu24-amd64-gcc', 'dependency': 'openssl'}]}))
 
     def test_profile_matrix_uses_real_services_and_native_architectures(self):
         matrix = self.api.build_matrix('all', 'both')
@@ -89,21 +95,127 @@ class PublicationTests(unittest.TestCase):
 
     def test_existing_release_is_never_changed(self):
         self.candidate()
+        self.expected_matrix()
         with patch.object(self.api.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{}', '')) as run:
             with self.assertRaisesRegex(ValueError, 'exists'):
-                self.api.publish_batch(self.root, 'sysown/proxysql', 'dependency-artifacts-v1-1-1')
+                self.api.publish_batch(self.root, 'sysown/proxysql', 'dependency-artifacts-v1-1-1', 'b' * 40)
         self.assertEqual(1, run.call_count)
 
     def test_publication_stages_then_publishes_without_clobber(self):
         self.candidate()
+        self.expected_matrix()
         responses = [subprocess.CompletedProcess([], 1, '', 'HTTP 404'),
                      subprocess.CompletedProcess([], 0, '', '')]
         with patch.object(self.api.subprocess, 'run', side_effect=lambda *a, **k: responses.pop(0) if responses else subprocess.CompletedProcess([], 0, '', '')) as run:
-            self.api.publish_batch(self.root, 'sysown/proxysql', 'dependency-artifacts-v1-1-1')
+            self.api.publish_batch(self.root, 'sysown/proxysql', 'dependency-artifacts-v1-1-1', 'b' * 40)
         commands = [call[0][0] for call in run.call_args_list]
-        self.assertTrue(any('create' in c and '--draft' in c and '--latest=false' in c for c in commands))
-        self.assertTrue(any('edit' in c and '--draft=false' in c for c in commands))
+        self.assertEqual(['api', 'release', 'release', 'release'], [c[1] for c in commands])
+        self.assertEqual(['create', 'upload', 'edit'], [c[2] for c in commands[1:]])
+        self.assertIn('--draft', commands[1])
+        self.assertIn('--latest=false', commands[1])
+        self.assertIn('--draft=false', commands[3])
+        self.assertIn(str(self.root / 'ubuntu24-amd64-gcc-openssl.tar.gz'), commands[2])
+        self.assertIn(str(self.root / 'lock-entries.json'), commands[2])
+        self.assertEqual([60, 60, 600, 60], [c[1].get('timeout') for c in run.call_args_list])
         self.assertFalse(any('--clobber' in c for c in commands))
+
+    def test_publish_requires_plan_before_any_release_request(self):
+        self.candidate()
+        with patch.object(self.api.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'expected-matrix'):
+                self.api.publish_batch(self.root, 'sysown/proxysql', 'dependency-artifacts-v1-1-1', 'b' * 40)
+        self.assertFalse(run.called)
+
+    def test_publish_rejects_nested_and_query_archive_urls(self):
+        entry = self.candidate()
+        self.expected_matrix()
+        path = self.root / 'ubuntu24-amd64-gcc-openssl.entry.json'
+        original = entry['url']
+        for url in (original.rsplit('/', 1)[0] + '/nested/' + original.rsplit('/', 1)[1],
+                    original + '?download=1'):
+            entry['url'] = url
+            path.write_text(json.dumps(entry))
+            with self.subTest(url=url), patch.object(self.api.subprocess, 'run') as run:
+                with self.assertRaisesRegex(ValueError, 'URL'):
+                    self.api.publish_batch(self.root, 'sysown/proxysql', 'dependency-artifacts-v1-1-1', 'b' * 40)
+                self.assertFalse(run.called)
+
+    def test_publish_rejects_build_provenance_outside_trusted_source(self):
+        self.candidate()
+        self.expected_matrix()
+        with patch.object(self.api.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'source commit'):
+                self.api.publish_batch(self.root, 'sysown/proxysql', 'dependency-artifacts-v1-1-1',
+                                       expected_source_sha='c' * 40)
+        self.assertFalse(run.called)
+
+    def test_build_operations_have_distinct_bounded_timeouts(self):
+        profile = self.api.build_matrix('ubuntu24-amd64-gcc', 'openssl')['include'][0]
+        def respond(command, **kwargs):
+            stdout = json.dumps({'services': {profile['service']: {'image': 'build:fixture'}}}) if command[:3] == ['docker', 'compose', 'config'] else 'build@sha256:fixture'
+            return subprocess.CompletedProcess(command, 0, stdout, '')
+        with patch.object(self.api, 'ROOT', self.root), \
+                patch.object(self.api, 'profiles', return_value=[profile]), \
+                patch.object(self.api.platform, 'machine', return_value='x86_64'), \
+                patch.object(self.api.platform, 'system', return_value='Linux'), \
+                patch.object(self.api.subprocess, 'run', side_effect=respond) as run, \
+                patch.object(self.api.subprocess, 'check_call') as build:
+            self.api.build_profile(profile['profile'], 'openssl', self.root / 'output',
+                                   'sysown/proxysql', 'dependency-artifacts-v1-1-1')
+        self.assertEqual([60, 600, 60], [call[1].get('timeout') for call in run.call_args_list])
+        self.assertEqual(5400, build.call_args[1].get('timeout'))
+
+    def test_upload_failure_keeps_release_as_draft(self):
+        self.candidate()
+        self.expected_matrix()
+        responses = [subprocess.CompletedProcess([], 1, '', 'HTTP 404'),
+                     subprocess.CompletedProcess([], 0, '', ''),
+                     subprocess.CompletedProcess([], 1, '', 'upload failed')]
+        with patch.object(self.api.subprocess, 'run', side_effect=responses) as run:
+            with self.assertRaisesRegex(ValueError, 'upload failed'):
+                self.api.publish_batch(self.root, 'sysown/proxysql', 'dependency-artifacts-v1-1-1', 'b' * 40)
+        self.assertEqual(['create', 'upload'], [call[0][0][2] for call in run.call_args_list[1:]])
+
+    def test_external_command_timeout_terminates_the_command(self):
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.api.run([sys.executable, '-c', 'import time; time.sleep(30)'], timeout=0.05)
+
+    def test_workflow_plan_uses_trusted_control_with_untrusted_source(self):
+        workflow = (ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text()
+        plan = workflow.split('  plan:', 1)[1].split('  build:', 1)[0]
+        self.assertIn("if: github.ref == 'refs/heads/v3.0'", plan)
+        self.assertIn('ref: refs/heads/v3.0', plan)
+        self.assertIn('path: control', plan)
+        self.assertIn('path: source', plan)
+        self.assertIn('working-directory: control', plan)
+        step = plan.split('      - name: Select exact build profiles', 1)[1]
+        body = step.split('        run: |\n', 1)[1].split('      - uses:', 1)[0]
+        script = '\n'.join(line[10:] for line in body.splitlines())
+        control = self.root / 'control'
+        source = self.root / 'source'
+        shutil.copytree(str(ROOT / 'deps/artifacts'), str(control / 'deps/artifacts'))
+        source.mkdir()
+        gitdir = subprocess.check_output(['git', 'rev-parse', '--absolute-git-dir'], cwd=str(ROOT)).decode().strip()
+        (source / '.git').write_text('gitdir: ' + gitdir + '\n')
+        (control / '.git').write_text('gitdir: ' + gitdir + '\n')
+        (source / 'json.py').write_text('raise RuntimeError("untrusted import executed")\n')
+        (source / 'deps/artifacts').mkdir(parents=True)
+        (source / 'deps/artifacts/publish.py').write_text('raise RuntimeError("untrusted plan executed")\n')
+        output = self.root / 'outputs'
+        env = dict(os.environ, PROFILE_GROUP='ubuntu24', DEPENDENCY='openssl',
+                   GITHUB_OUTPUT=str(output), PYTHONPATH=str(source))
+        subprocess.check_call(['bash', '-e', '-c', script], cwd=str(control), env=env)
+        values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+        self.assertEqual(4, len(json.loads(values['matrix'])['include']))
+        self.assertRegex(values['source_sha'], r'^[0-9a-f]{40}$')
+        self.assertRegex(values['control_sha'], r'^[0-9a-f]{40}$')
+        publish = workflow.split('  publish:', 1)[1]
+        self.assertIn('ref: ${{ needs.plan.outputs.control_sha }}', publish)
+        self.assertNotIn('ref: ${{ needs.plan.outputs.source_sha }}', publish)
+        self.assertIn('--source-sha', publish)
+        self.assertIn('path: .cache/dependency-artifacts/plan', publish)
+        self.assertLess(publish.index('pattern: dependency-bundle-'),
+                        publish.index('cp .cache/dependency-artifacts/plan/expected-matrix.json'))
 
     def test_workflow_publication_permissions_and_dependencies(self):
         workflow = (ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text()

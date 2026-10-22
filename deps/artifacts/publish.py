@@ -81,9 +81,9 @@ def merge_entries(directory, base=None):
     return {'format_version': FORMAT_VERSION, 'artifacts': entries}
 
 
-def run(args):
+def run(args, timeout=60):
     result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            universal_newlines=True)
+                            universal_newlines=True, timeout=timeout)
     if result.returncode:
         raise ValueError('command failed: ' + ' '.join(args) + '\n' + result.stderr)
     return result.stdout.strip()
@@ -103,20 +103,25 @@ def register_entries(candidate, registry_path):
     os.replace(temporary, registry_path)
 
 
-def publish_batch(directory, repository, tag):
+def publish_batch(directory, repository, tag, expected_source_sha):
     if (not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository) or
             not re.fullmatch(r'dependency-artifacts-v1-[0-9]+-[0-9]+', tag)):
         raise ValueError('invalid dependency repository/tag')
     directory = Path(directory)
+    if not (directory / 'expected-matrix.json').is_file():
+        raise ValueError('publication requires expected-matrix.json')
     registry = merge_entries(directory)
     prefix = 'https://github.com/' + repository + '/releases/download/' + tag + '/'
-    if any(not entry['url'].startswith(prefix) for entry in registry['artifacts']):
+    if any(entry['url'] != prefix + Path(urlsplit(entry['url']).path).name
+           for entry in registry['artifacts']):
         raise ValueError('artifact URL does not match publication repository/tag')
     commits = {entry['provenance'].get('commit') for entry in registry['artifacts']}
     if len(commits) != 1 or not re.fullmatch(r'[0-9a-f]{40}', next(iter(commits)) or ''):
         raise ValueError('batch must come from one source commit')
+    if commits != {expected_source_sha}:
+        raise ValueError('batch does not match planned source commit')
     existing = subprocess.run(['gh', 'api', 'repos/' + repository + '/releases/tags/' + tag],
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
     if existing.returncode == 0:
         raise ValueError('dependency release already exists; assets are never replaced')
     if '404' not in existing.stderr:
@@ -127,7 +132,7 @@ def publish_batch(directory, repository, tag):
          '--draft', '--prerelease', '--latest=false', '--title', tag,
          '--notes', 'Verified pinned DuckDB/OpenSSL dependency builds. Import lock-entries.json to enable reuse.'])
     assets = [str(directory / Path(urlsplit(entry['url']).path).name) for entry in registry['artifacts']]
-    run(['gh', 'release', 'upload', tag, '--repo', repository] + assets + [str(lock)])
+    run(['gh', 'release', 'upload', tag, '--repo', repository] + assets + [str(lock)], timeout=600)
     run(['gh', 'release', 'edit', tag, '--repo', repository, '--draft=false', '--prerelease', '--latest=false'])
 
 
@@ -145,7 +150,7 @@ def build_profile(profile_name, dependency, output, repository, tag):
     if profile['service']:
         services = json.loads(run(['docker', 'compose', 'config', '--format', 'json']))['services']
         image = services[profile['service']]['image']
-        run(['docker', 'pull', '--platform', 'linux/' + profile['arch'], image])
+        run(['docker', 'pull', '--platform', 'linux/' + profile['arch'], image], timeout=600)
         digest = run(['docker', 'image', 'inspect', '--format', '{{index .RepoDigests 0}}', image])
         command = ['docker', 'run', '--rm', '--platform', 'linux/' + profile['arch'],
                    '--entrypoint', '/bin/bash', '-v', str(ROOT) + ':/opt/proxysql',
@@ -156,7 +161,7 @@ def build_profile(profile_name, dependency, output, repository, tag):
     else:
         command = ['bash', str(ROOT / 'deps/artifacts/build.bash'), profile_name, dependency,
                    str(output), repository, tag]
-    subprocess.check_call(command)
+    subprocess.check_call(command, timeout=5400)
 
 
 def main():
@@ -173,6 +178,7 @@ def main():
     publish.add_argument('--input', type=Path, required=True)
     publish.add_argument('--repository', required=True)
     publish.add_argument('--tag', required=True)
+    publish.add_argument('--source-sha', required=True)
     build = sub.add_parser('build')
     build.add_argument('--profile', required=True)
     build.add_argument('--dependency', choices=DEPENDENCIES, required=True)
@@ -188,7 +194,7 @@ def main():
     elif args.command == 'merge':
         args.output.write_text(json.dumps(merge_entries(args.input, args.base), indent=2, sort_keys=True) + '\n')
     elif args.command == 'publish':
-        publish_batch(args.input, args.repository, args.tag)
+        publish_batch(args.input, args.repository, args.tag, args.source_sha)
     elif args.command == 'build':
         build_profile(args.profile, args.dependency, args.output, args.repository, args.tag)
     elif args.command == 'register':

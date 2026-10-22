@@ -135,7 +135,7 @@ class BundleTests(unittest.TestCase):
                 result = []
                 for member, data in members:
                     if mutation == 'digest' and member.name.endswith('duckdb.h'):
-                        data = b'changed'
+                        data = b'change'
                     if mutation == 'identity' and member.name == 'manifest.json':
                         manifest = json.loads(data)
                         manifest['identity']['version'] = '9.9.9'
@@ -143,7 +143,8 @@ class BundleTests(unittest.TestCase):
                     result.append((member, data))
                 return result
             self.rewrite(archive, entry, change)
-            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+            message = 'SHA-256 mismatch' if mutation == 'digest' else 'identity|incomplete'
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, message):
                 self.api.restore_bundle(archive, entry, self.root / 'destination')
 
     def test_promotion_failure_preserves_previous_tree(self):
@@ -171,6 +172,46 @@ class BundleTests(unittest.TestCase):
         self.api.restore_bundle(archive, entry, link)
         self.assertTrue(link.is_symlink())
         self.assertTrue((link / 'include/openssl/configuration.h').is_file())
+
+    def test_openssl_tracked_symlink_below_symlinked_checkout_is_preserved(self):
+        tree = self.root / 'ssl'
+        fixture_tree(tree, 'openssl')
+        archive, entry = self.bundle('openssl', tree)
+        directory = self.root / 'checkout/libssl'
+        directory.mkdir(parents=True)
+        (self.root / 'checkout-link').symlink_to('checkout', target_is_directory=True)
+        link = self.root / 'checkout-link/libssl/openssl'
+        link.symlink_to('openssl-3.5.7')
+        self.api.restore_bundle(archive, entry, link)
+        self.assertTrue(link.is_symlink())
+        self.assertTrue((link / 'include/openssl/configuration.h').is_file())
+
+    def test_unexpected_openssl_symlink_redirection_is_rejected(self):
+        tree = self.root / 'ssl'
+        fixture_tree(tree, 'openssl')
+        archive, entry = self.bundle('openssl', tree)
+        link = self.root / 'libssl/openssl'
+        link.parent.mkdir()
+        outside = self.root / 'outside'
+        outside.mkdir()
+        link.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, 'unexpected.*symlink'):
+            self.api.restore_bundle(archive, entry, link)
+        self.assertEqual([], list(outside.iterdir()))
+
+    def test_openssl_versioned_directory_symlink_redirection_is_rejected(self):
+        tree = self.root / 'ssl'
+        fixture_tree(tree, 'openssl')
+        archive, entry = self.bundle('openssl', tree)
+        link = self.root / 'libssl/openssl'
+        link.parent.mkdir()
+        outside = self.root / 'outside'
+        outside.mkdir()
+        (link.parent / 'openssl-3.5.7').symlink_to(outside)
+        link.symlink_to('openssl-3.5.7')
+        with self.assertRaisesRegex(ValueError, 'unexpected.*symlink'):
+            self.api.restore_bundle(archive, entry, link)
+        self.assertEqual([], list(outside.iterdir()))
 
 
 if __name__ == '__main__':

@@ -50,9 +50,13 @@ Compiler/platform changes conservatively require another artifact. Custom
 toolchain files, external include/library search paths, compiler/flag overrides
 inside dependency configuration options, and host-native CPU tuning are
 ineligible for prebuilt selection; use the source path for those configurations.
+This includes DuckDB `NATIVE_ARCH` enabled with any CMake true value.
 Linux libc is queried from the running system, including with Python 3.6.
 Python-free source preparation uses the same dependency lock and records all
 public outputs so a missing header, archive, provider, or license triggers a rebuild.
+It verifies the current vendored checksum sidecar before reusing source outputs.
+Existing trees without accepted provenance metadata are rebuilt once; presence
+of an archive alone is not sufficient for reuse.
 
 DuckDB artifacts contain the headers, complete configured static archive set,
 generated archive manifest, and licenses. OpenSSL artifacts contain generated
@@ -70,8 +74,21 @@ gh workflow run CI-dependency-artifacts.yml --ref v3.0 \
   -f source_ref="$(git rev-parse HEAD)" -f group=ubuntu24 -f dependency=both
 ```
 
-Use a reviewed source commit that has been pushed to GitHub. Supported groups
-are `ubuntu24`, `almalinux8`, `macos`, and `all`. Linux groups cover amd64/arm64
+Use a reviewed source commit that has been pushed to GitHub. Dispatch this
+workflow from `v3.0`: profile selection and publication run control code from
+that branch, pinned to one SHA for the workflow. The selected `source_ref` is
+checked out separately and executes only in read-only build jobs. Publication
+checks the trusted plan's exact matrix and source SHA, and build artifacts cannot
+overwrite the trusted plan or control code. Only the final publication job has
+`contents: write`; its publisher command receives `GH_TOKEN`.
+
+The protected `v3.0` branch is the publication trust root. No environment with
+required reviewers is currently configured for this publication; the workflow
+does not silently create an unprotected environment or claim an approval gate.
+Repository administrators can add a protected publication environment as an
+additional approval policy.
+
+Supported groups are `ubuntu24`, `almalinux8`, `macos`, and `all`. Linux groups cover amd64/arm64
 and the existing GCC/Clang packaging images; macOS covers the native macos-14
 arm64 runner. Unsupported build configurations continue to build from source.
 
@@ -159,11 +176,17 @@ preparation processes may still be running.
 
 ## Validation recorded during implementation
 
-All 50 artifact fixtures pass on the development host and in the AlmaLinux 8
-packaging image with Python 3.6.8. Regression coverage includes Python-free
+All 77 artifact and workflow fixtures pass on the development host. The
+AlmaLinux 8 packaging image with Python 3.6.8 passes all 70 runtime/helper
+fixtures; the workflow test module explicitly skips when optional PyYAML is
+absent. Regression coverage includes Python-free
 concurrent preparation and complete output inventories, dependency-to-plugin
 flag preservation, unprobed compiler/CPU settings, the running libc version,
-and download response-read timeouts on older Python versions.
+and download response-read timeouts on older Python versions. PR #6520 review
+coverage additionally verifies native CMake CPU options, truncated response
+fallback, Python-free checksum sidecars and relocation, aliased checkout paths,
+C/C++ compiler family consistency, publication ordering/completeness/timeouts,
+trusted control/source separation, and CI event gates.
 
 On the development Linux host, a fresh combined source build using
 `make -j4 ... NPROCS=4 DEPS_MODE=source libssl duckdb` took 612.71 seconds.
