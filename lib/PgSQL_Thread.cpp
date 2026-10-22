@@ -101,7 +101,7 @@ static void pgsql_loop_timing_point(unsigned phase, int poll_rc = 0) {
         Stamp last{};
         uint64_t report_wall=0, hook_wall=0, hook_cpu=0;
         uint64_t poll_ready=0, poll_timeout=0, poll_errors=0;
-        Bucket buckets[5];
+        Bucket buckets[16];
     };
     static thread_local State st;
     const Stamp now=stamp();
@@ -125,7 +125,7 @@ static void pgsql_loop_timing_point(unsigned phase, int poll_rc = 0) {
                 (unsigned long long)now.wall,(unsigned long long)(now.wall-st.report_wall),
                 (unsigned long long)st.poll_ready,(unsigned long long)st.poll_timeout,(unsigned long long)st.poll_errors,
                 (unsigned long long)st.hook_wall,(unsigned long long)st.hook_cpu);
-            for (unsigned i=0;i<5;++i) {
+            for (unsigned i=0;i<16;++i) {
                 auto &b=st.buckets[i];
                 fprintf(st.file,"%s{\"phase\":%u,\"count\":%llu,\"wall_ns\":%llu,\"cpu_ns\":%llu,\"max_wall_ns\":%llu,\"max_cpu_ns\":%llu}",i?",":"",i,
                     (unsigned long long)b.count,(unsigned long long)b.wall,(unsigned long long)b.cpu,
@@ -3660,6 +3660,9 @@ void PgSQL_Thread::run() {
 		}
 
 #ifdef PROXYSQL31
+        pgsql_loop_timing_point(5); // begin runnable-flag reset
+#endif
+#ifdef PROXYSQL31
         static const bool unified_enabled = getenv("PX_PGSQL_UNIFIED_LOOP") != nullptr;
         const bool unified_iteration = unified_enabled && !maintenance_loop
 #ifdef IDLE_THREADS
@@ -3669,6 +3672,9 @@ void PgSQL_Thread::run() {
         if (!unified_iteration)
 #endif
 		run_SetAllSession_ToProcess0<PgSQL_Thread,PgSQL_Session>();
+#ifdef PROXYSQL31
+        pgsql_loop_timing_point(6); // begin after-poll I/O stage
+#endif
 
 #ifdef IDLE_THREADS
 		// here we handle epoll_wait()
@@ -3708,6 +3714,9 @@ void PgSQL_Thread::run() {
         else
 #endif
 		ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
+#ifdef PROXYSQL31
+        pgsql_loop_timing_point(7); // begin waiter-rearm cleanup
+#endif
 #ifdef PROXYSQL31
 		if (last_b_rearm_us == pre_poll_time) {
 			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
@@ -3758,11 +3767,20 @@ void PgSQL_Thread::run() {
 #endif // IDLE_THREADS
 			// iterate through all sessions and process the session logic
 #ifdef PROXYSQL31
+            pgsql_loop_timing_point(8); // begin session-processing setup
+#endif
+#ifdef PROXYSQL31
             if (!unified_iteration)
 #endif
 			process_all_sessions();
+#ifdef PROXYSQL31
+            pgsql_loop_timing_point(9); // begin local-pool publication
+#endif
 
 			return_local_connections();
+#ifdef PROXYSQL31
+            pgsql_loop_timing_point(10); // outer-iteration tail
+#endif
 #ifdef IDLE_THREADS
 		}
 #endif // IDLE_THREADS
@@ -4527,6 +4545,7 @@ void PgSQL_Thread::process_all_sessions() {
     // If waiters consume all known capacity, avoid another frontend scan.
     // This is deliberately a global gate; hostgroup scheduling comes later.
     bool early_capacity_available = waiter_lists.empty();
+    pgsql_loop_timing_point(11); // begin availability and waiter retries
     waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node*, size_t count) {
         size_t available = 0;
         for (unsigned i = 0; i < cached_connections->len; ++i) {
@@ -4549,6 +4568,7 @@ void PgSQL_Thread::process_all_sessions() {
         }
     });
     dispatch_released();
+    pgsql_loop_timing_point(12); // begin early frontend dispatch
     // Try new frontend work before response processing, stopping globally on
     // the first established-connection miss. Hostgroup scheduling is deferred.
     for (unsigned i = 0; early_capacity_available && i < mysql_sessions->len; ++i) {
@@ -4579,6 +4599,7 @@ void PgSQL_Thread::process_all_sessions() {
         dispatch_released();
         if (pgsql_dispatch_existing_miss) break;
     }
+    pgsql_loop_timing_point(13); // begin backend-owning session scan
 #endif
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4711,6 +4732,7 @@ void PgSQL_Thread::process_all_sessions() {
 	}
 #ifdef PROXYSQL31
 	dispatch_released();
+    pgsql_loop_timing_point(14); // begin remaining backendless session scan
 
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4734,6 +4756,7 @@ void PgSQL_Thread::process_all_sessions() {
 		}
 	}
 
+    pgsql_loop_timing_point(15); // begin session accounting and return
 #endif // PROXYSQL31
 	if (maintenance_loop) {
 		unsigned int total_active_transactions_tmp;
