@@ -1,0 +1,30 @@
+{
+  "rows": {
+    "baseline": {
+      "mode": "baseline",
+      "tps": 32074.491186,
+      "latency_ms": 1.559,
+      "conn_ok_start": "64",
+      "conn_ok_end": "64",
+      "conn_err_end": "0",
+      "snapshots": 62,
+      "cpu_us_per_query": 31.096866176825536,
+      "user_us_per_query": 11.407173733937807,
+      "system_us_per_query": 19.68969244288773
+    },
+    "candidate": {
+      "mode": "candidate",
+      "tps": 32705.212682,
+      "latency_ms": 1.529,
+      "conn_ok_start": "64",
+      "conn_ok_end": "64",
+      "conn_err_end": "0",
+      "snapshots": 62,
+      "cpu_us_per_query": 30.50231259763248,
+      "user_us_per_query": 11.41313721820377,
+      "system_us_per_query": 19.089175379428706
+    }
+  },
+  "tps_change_pct": 1.9664271284693058,
+  "verified": true
+}
