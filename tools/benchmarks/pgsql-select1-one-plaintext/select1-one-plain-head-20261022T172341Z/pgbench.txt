@@ -1,0 +1,26 @@
+pgbench (15.19 (Debian 15.19-0+deb12u1), server 16.1)
+progress: 5.0 s, 9816.9 tps, lat 0.101 ms stddev 0.022, 0 failed
+progress: 10.0 s, 9876.7 tps, lat 0.101 ms stddev 0.017, 0 failed
+progress: 15.0 s, 9825.3 tps, lat 0.102 ms stddev 0.016, 0 failed
+progress: 20.0 s, 9809.5 tps, lat 0.102 ms stddev 0.015, 0 failed
+progress: 25.0 s, 9862.4 tps, lat 0.101 ms stddev 0.024, 0 failed
+progress: 30.0 s, 9865.4 tps, lat 0.101 ms stddev 0.015, 0 failed
+progress: 35.0 s, 9853.7 tps, lat 0.101 ms stddev 0.017, 0 failed
+progress: 40.0 s, 9827.4 tps, lat 0.102 ms stddev 0.018, 0 failed
+progress: 45.0 s, 9776.6 tps, lat 0.102 ms stddev 0.027, 0 failed
+progress: 50.0 s, 9788.2 tps, lat 0.102 ms stddev 0.015, 0 failed
+progress: 55.0 s, 9800.7 tps, lat 0.102 ms stddev 0.016, 0 failed
+progress: 60.0 s, 9853.0 tps, lat 0.101 ms stddev 0.015, 0 failed
+transaction type: select1.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+duration: 60 s
+number of transactions actually processed: 589781
+number of failed transactions: 0 (0.000%)
+latency average = 0.102 ms
+latency stddev = 0.019 ms
+initial connection time = 10.735 ms
+tps = 9831.410057 (without initial connection time)
