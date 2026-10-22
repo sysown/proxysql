@@ -79,6 +79,71 @@ struct PgSQL_Ready_State {
     uint64_t epoch = 0;
 };
 static thread_local PgSQL_Ready_State pgsql_ready_state;
+// Opt-in diagnostics for the phased outer worker loop. Preserve errno because
+// the first boundary is immediately after poll(), before its error handling.
+static void pgsql_loop_timing_point(unsigned phase, int poll_rc = 0) {
+    static const char *path = getenv("PX_PGSQL_LOOP_TIMING");
+    if (!path) return;
+    const int saved_errno = errno;
+    struct Stamp { uint64_t wall, cpu; };
+    auto stamp = []() -> Stamp {
+        timespec wall{}, cpu{};
+        clock_gettime(CLOCK_MONOTONIC, &wall);
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu);
+        return {uint64_t(wall.tv_sec)*1000000000ULL+uint64_t(wall.tv_nsec),
+                uint64_t(cpu.tv_sec)*1000000000ULL+uint64_t(cpu.tv_nsec)};
+    };
+    struct Bucket { uint64_t count=0, wall=0, cpu=0, max_wall=0, max_cpu=0; };
+    struct State {
+        FILE *file=nullptr;
+        bool valid=false;
+        unsigned previous=0;
+        Stamp last{};
+        uint64_t report_wall=0, hook_wall=0, hook_cpu=0;
+        uint64_t poll_ready=0, poll_timeout=0, poll_errors=0;
+        Bucket buckets[5];
+    };
+    static thread_local State st;
+    const Stamp now=stamp();
+    if (st.valid) {
+        auto &b=st.buckets[st.previous];
+        const uint64_t wall=now.wall-st.last.wall, cpu=now.cpu-st.last.cpu;
+        ++b.count; b.wall+=wall; b.cpu+=cpu;
+        b.max_wall=std::max(b.max_wall,wall); b.max_cpu=std::max(b.max_cpu,cpu);
+    }
+    st.valid=true; st.previous=phase;
+    if (!st.report_wall) st.report_wall=now.wall;
+    if (phase==0) {
+        if (poll_rc>0) ++st.poll_ready;
+        else if (!poll_rc) ++st.poll_timeout;
+        else ++st.poll_errors;
+    }
+    if (phase==4 && now.wall-st.report_wall>=1000000000ULL) {
+        if (!st.file) st.file=fopen(path,"a");
+        if (st.file) {
+            fprintf(st.file,"{\"wall_ns\":%llu,\"interval_ns\":%llu,\"poll_ready\":%llu,\"poll_timeout\":%llu,\"poll_errors\":%llu,\"hook_wall_ns\":%llu,\"hook_cpu_ns\":%llu,\"phases\":[",
+                (unsigned long long)now.wall,(unsigned long long)(now.wall-st.report_wall),
+                (unsigned long long)st.poll_ready,(unsigned long long)st.poll_timeout,(unsigned long long)st.poll_errors,
+                (unsigned long long)st.hook_wall,(unsigned long long)st.hook_cpu);
+            for (unsigned i=0;i<5;++i) {
+                auto &b=st.buckets[i];
+                fprintf(st.file,"%s{\"phase\":%u,\"count\":%llu,\"wall_ns\":%llu,\"cpu_ns\":%llu,\"max_wall_ns\":%llu,\"max_cpu_ns\":%llu}",i?",":"",i,
+                    (unsigned long long)b.count,(unsigned long long)b.wall,(unsigned long long)b.cpu,
+                    (unsigned long long)b.max_wall,(unsigned long long)b.max_cpu);
+            }
+            fprintf(st.file,"]}\n"); fflush(st.file);
+        }
+        for (auto &b:st.buckets) b=Bucket{};
+        st.poll_ready=st.poll_timeout=st.poll_errors=0;
+        st.hook_wall=st.hook_cpu=0; st.report_wall=now.wall;
+    }
+    const Stamp done=stamp();
+    st.hook_wall+=done.wall-now.wall; st.hook_cpu+=done.cpu-now.cpu;
+    // Keep aggregation/file I/O out of the following phase, especially poll.
+    st.last=done;
+    errno=saved_errno;
+}
+
 // Experimental dispatch phase: never create a backend on its behalf.
 thread_local bool pgsql_dispatch_existing_only = false;
 thread_local bool pgsql_dispatch_existing_miss = false;
@@ -3366,6 +3431,9 @@ void PgSQL_Thread::run() {
 
 	pthread_mutex_lock(&thread_mutex);
 	while (shutdown == 0) {
+#ifdef PROXYSQL31
+        pgsql_loop_timing_point(2); // next outer iteration begins
+#endif
 
 #ifdef IDLE_THREADS
 		if (idle_maintenance_thread) {
@@ -3475,6 +3543,7 @@ void PgSQL_Thread::run() {
 	 */
 	// poll is called with a timeout of mypolls.poll_timeout if set , or pgsql_thread___poll_timeout
 #ifdef PROXYSQL31
+            pgsql_loop_timing_point(3); // before periodic waiter rearm
 			const bool b_rearm = (curtime >= last_b_rearm_us + 50000);
 			if (b_rearm) {
 				last_b_rearm_us = curtime;
@@ -3491,7 +3560,13 @@ void PgSQL_Thread::run() {
 				});
 			}
 #endif // PROXYSQL31
+#ifdef PROXYSQL31
+            pgsql_loop_timing_point(4); // immediately before main poll
+#endif
 			rc = poll(mypolls.fds, mypolls.len, ttw);
+#ifdef PROXYSQL31
+            pgsql_loop_timing_point(0, rc); // immediately after main poll
+#endif
 			proxy_debug(PROXY_DEBUG_NET, 5, "%s\n", "Returning poll");
 #ifdef IDLE_THREADS
 		}
@@ -3566,6 +3641,9 @@ void PgSQL_Thread::run() {
 			GloPgQPro->update_query_processor_stats();
 		}
 
+#ifdef PROXYSQL31
+        pgsql_loop_timing_point(1); // before poll-error check
+#endif
 		if (rc == -1 && errno == EINTR)
 			// poll() timeout, try again
 			continue;
