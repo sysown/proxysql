@@ -63,6 +63,9 @@ struct PgSQL_Inline_Handoff_State {
     std::vector<PgSQL_Session*> dispatched;
 };
 static thread_local PgSQL_Inline_Handoff_State pgsql_inline_handoff;
+// Experimental dispatch phase: never create a backend on its behalf.
+thread_local bool pgsql_dispatch_existing_only = false;
+thread_local bool pgsql_dispatch_existing_miss = false;
 #endif
 
 typedef struct mythr_st_vars {
@@ -4209,6 +4212,7 @@ void PgSQL_Thread::process_all_sessions() {
             }
             node = next;
         }
+        return served;
     };
     auto dispatch_released = [&]() {
         // A synchronous completion may release again. Bound the chain rather
@@ -4222,6 +4226,9 @@ void PgSQL_Thread::process_all_sessions() {
     };
     // Reuse connections already available before doing more response work,
     // including connections published by another worker.
+    // If waiters consume all known capacity, avoid another frontend scan.
+    // This is deliberately a global gate; hostgroup scheduling comes later.
+    bool early_capacity_available = waiter_lists.empty();
     waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node*, size_t count) {
         size_t available = 0;
         for (unsigned i = 0; i < cached_connections->len; ++i) {
@@ -4238,9 +4245,42 @@ void PgSQL_Thread::process_all_sessions() {
         PgHGM->wrunlock();
         // An empty-pool retry would pause the oldest waiter just before the
         // response scan releases a connection. Only attempt real availability.
-        if (available) serve_waiters(hid, std::min(count, available));
+        if (available) {
+            const size_t served = serve_waiters(hid, std::min(count, available));
+            if (available > served) early_capacity_available = true;
+        }
     });
     dispatch_released();
+    // Try new frontend work before response processing, stopping globally on
+    // the first established-connection miss. Hostgroup scheduling is deferred.
+    for (unsigned i = 0; early_capacity_available && i < mysql_sessions->len; ++i) {
+        auto *sess = static_cast<PgSQL_Session*>(mysql_sessions->index(i));
+        if (sess->healthy == 0 || sess->killed || sess->mirror || sess->waiter_node.session)
+            continue;
+        if (sess->to_process != 1 || sess->pause_until > curtime) continue;
+        if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
+        // Authentication and connection maintenance retain their normal order.
+        if (sess->status != WAITING_CLIENT_DATA && sess->status != CONNECTING_SERVER) continue;
+        const auto saved_pause = sess->pause_until;
+        pgsql_dispatch_existing_miss = false;
+        pgsql_dispatch_existing_only = true;
+        const int early_rc = sess->handler();
+        pgsql_dispatch_existing_only = false;
+        if (early_rc == -1 || sess->killed) {
+            sess->healthy = 0;
+            leave_waiter(sess, false);
+        } else if (pgsql_dispatch_existing_miss) {
+            // The normal backendless scan below must be allowed to create a
+            // connection if needed. Do not leave a speculative waiter paused.
+            leave_waiter(sess);
+            sess->pause_until = saved_pause;
+            sess->to_process = 1;
+        } else {
+            handoff.dispatched.push_back(sess);
+        }
+        dispatch_released();
+        if (pgsql_dispatch_existing_miss) break;
+    }
 #endif
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4378,6 +4418,8 @@ void PgSQL_Thread::process_all_sessions() {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
 		if (sess->waiter_node.session) continue;
 		if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
+		if (std::find(handoff.dispatched.begin(), handoff.dispatched.end(), sess) != handoff.dispatched.end()) continue;
+
 		if (sess->to_process == 1 && sess->pause_until <= curtime) {
 			rc = sess->handler();
 			if (rc == -1 || sess->killed == true) {
