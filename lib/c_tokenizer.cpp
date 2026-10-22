@@ -32,7 +32,9 @@ void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int e
 		if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
 			result->s = strdup(s);
 		} else {
-			snprintf(result->buffer, sizeof(result->buffer), "%.*s", (int)result->s_length, s);
+			// The length is already known and fits, including the terminator.
+			// Avoid invoking printf formatting for this per-query text copy.
+			memcpy(result->buffer, s, result->s_length + 1);
 			result->s = result->buffer;
 		}
 		}
