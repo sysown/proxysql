@@ -1,7 +1,7 @@
 # Reuse compiled DuckDB and OpenSSL dependencies
 
 Date: 2026-10-22
-Status: Approved by the user on 2026-10-22; implementation-plan review pending.
+Status: Design and implementation plan approved; native execution selected on 2026-10-22.
 
 ## Purpose and scope
 

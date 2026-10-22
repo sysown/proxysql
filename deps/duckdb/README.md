@@ -1,6 +1,6 @@
 # Vendored DuckDB
 
-DuckDB source is vendored under this directory and built from source as a
+DuckDB source is vendored under this directory and prepared as a
 static library (`libduckdb_static.a`) for the `PROXYSQL40` plugin-chassis
 tier. The release archive is committed directly to git (like every other
 dependency under `deps/`), alongside a committed SHA-256 sidecar and a
@@ -31,6 +31,12 @@ LFS-related `actions/checkout` setting.
 
 ## Building
 
+The default `DEPS_MODE=auto` restores an exact verified compiled artifact when
+registered, and otherwise builds this vendored source. Use `DEPS_MODE=source`
+for source-only preparation or `DEPS_MODE=prebuilt` to require an artifact.
+See [compiled dependency reuse](../../doc/dependency-artifacts.md) for publication,
+registration, supported configurations, and cache behavior.
+
 ```bash
 make -C deps PROXYSQL40=1 duckdb
 ```
@@ -56,15 +62,10 @@ manifest requires reconfiguring/rebuilding DuckDB; it must not be bypassed by
 adding unrelated archives. Build-relative paths permit relocated dependency
 caches, provided the complete configured set and its manifest are copied.
 
-Note: `targets += duckdb` in `deps/Makefile`'s `PROXYSQL40` block only wires
-the target into the top-level `default` target of `deps/Makefile` itself.
-The top-level repo `Makefile`'s `build_deps_default` /
-`build_deps_debug_default` rules do **not** propagate `PROXYSQL40` into the
-deps sub-make, so a bare `make` at the repo root will not build DuckDB. The
-DuckDB plugin's own Makefile (added in a later task) is expected to invoke
-`make -C deps PROXYSQL40=1 duckdb` (or depend on
-`deps/duckdb/duckdb/build/release/src/libduckdb_static.a` directly) as part
-of its on-demand build rule.
+The root Makefile exports `PROXYSQL40` to dependency sub-makes, so
+`PROXYSQL40=1 make` prepares DuckDB and builds the plugin. Direct plugin builds
+also reevaluate DuckDB preparation before compiling. The focused source recipe
+and its version/configure settings are in `deps/duckdb/build.mk`.
 
 ## Bumping the version
 
@@ -81,9 +82,10 @@ of its on-demand build rule.
    - `archive` default path -> `duckdb-<new-version>.tar.gz`
    - `required_root` -> the root printed by `tar -tzf ... | head -1` (usually
      `duckdb-<new-version>`, but verify — do not assume)
-3. If the archive root pattern changed (unlikely — it has always been
-   `duckdb-<version>/`), update the `tar -zxf duckdb-*.tar.gz && mv
-   duckdb-*/ duckdb` glob in `deps/Makefile`'s `duckdb` recipe accordingly.
+3. Update `DUCKDB_VERSION` and the explicit DuckDB version in
+   `deps/duckdb/build.mk`. If the archive root changed, update its extraction
+   command as well. Publish/register new compiled artifacts for the changed
+   dependency; old registry entries cannot match the new source/recipe digest.
 4. Commit the new archive and checksum file directly (`git add
    deps/duckdb/duckdb-<new-version>.tar.gz
    deps/duckdb/duckdb-<new-version>.tar.gz.sha256`) — no Git LFS.
