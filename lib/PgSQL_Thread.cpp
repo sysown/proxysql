@@ -4445,7 +4445,15 @@ void PgSQL_Thread::process_ready_sessions() {
                 have_dead = true;
                 continue;
             }
-            if (sess->pause_until > curtime) continue;
+            if (sess->pause_until > curtime) {
+                sess->to_process = 1;
+                if (sess->handler(true) == -1) {
+                    sess->healthy = 0;
+                    leave_waiter(sess, false);
+                    have_dead = true;
+                }
+                continue;
+            }
             sess->to_process = 1;
             const int rc = sess->handler();
             sess->to_process = 0;
@@ -4709,13 +4717,17 @@ void PgSQL_Thread::process_all_sessions() {
 			// removing this logic in 2.0.15
 			//sess->active_transactions = -1;
 		}
+		// Pauses and pool starvation stop query execution, not socket I/O.
+		// POLLIN stays armed during a pause; drain it (including disconnects)
+		// here instead of repeatedly waking poll until the query delay expires.
+		if (sess->healthy && !sess->killed && sess->to_process &&
+			(sess->pause_until > curtime
 #ifdef PROXYSQL31
-		if (sess->healthy && !sess->killed && sess->waiter_node.session &&
-			sess->client_myds && sess->client_myds->pending_poll_revents) {
-			sess->to_process = 1;
+			 || sess->waiter_node.session
+#endif
+			)) {
 			if (sess->handler(true) == -1) sess->healthy = 0;
 		}
-#endif
 		if (sess->healthy == 0) {
 			char _buf[1024];
 			if (sess->client_myds) {
