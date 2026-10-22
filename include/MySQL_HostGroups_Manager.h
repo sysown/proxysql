@@ -1260,8 +1260,8 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	//void update_aws_aurora_set_writer(int _whid, int _rhid, char *address, unsigned int port, bool verbose=true);
 	//void update_aws_aurora_set_reader(int _whid, int _rhid, char *_hostname, int _port);
 	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
-	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
-	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id);
+	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool inventory_managed, bool verbose=true);
+	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id, bool inventory_managed);
 	/**
 	 * @brief Updates the resultset and corresponding checksum used by Monitor for AWS Aurora.
 	 * @details This is required to be called when:

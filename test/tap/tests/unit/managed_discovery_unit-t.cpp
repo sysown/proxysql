@@ -98,6 +98,16 @@ bool has_aurora_monitor_endpoint(const std::string& hostname, uint16_t port) {
 	return found;
 }
 
+template <typename HGM>
+bool execute_hgm_statement(HGM* hgm, const char* sql) {
+	char* error = nullptr;
+	std::unique_ptr<SQLite3_result> ignored(
+		hgm->execute_query(const_cast<char*>(sql), &error));
+	const bool success = error == nullptr;
+	if (error != nullptr) free(error);
+	return success;
+}
+
 ProxySQL_ServerHostgroupClaim role_claim(ProxySQL_ServerProtocol protocol,
     uint32_t writer, uint32_t reader) {
     ProxySQL_ServerHostgroupClaim claim {writer, reader};
@@ -125,7 +135,7 @@ void create_server_load_schema(SQLite3DB& db) {
 
 } // namespace
 int main() {
-    plan(50);
+    plan(54);
     test_init_minimal();
     test_init_query_processor();
     test_init_hostgroups();
@@ -328,6 +338,39 @@ int main() {
 	ok(has_aurora_monitor_endpoint("aurora-writer.example", 3306) &&
 		has_aurora_monitor_endpoint("aurora-reader.example", 3306),
 		"runtime-only inventory refreshes the Aurora monitor input");
+	MyHGM->update_aws_aurora_set_reader(
+		801, 802, const_cast<char*>("aurora-absent"), true);
+	std::unique_ptr<SQLite3_result> aurora_runtime(
+		MyHGM->dump_table_mysql("mysql_servers"));
+	ok(find_row(*aurora_runtime, 802, "aurora-absent.example", 3306) == nullptr,
+		"managed Aurora monitoring does not discover an endpoint outside plugin inventory");
+	MySrvC* offline_reader = MyHGM->find_server_in_hg(
+		802, "aurora-reader.example", 3306);
+	if (offline_reader != nullptr)
+		offline_reader->set_status(MYSQL_SERVER_STATUS_OFFLINE_HARD);
+	const bool offline_recorded = execute_hgm_statement(MyHGM,
+		"UPDATE mysql_servers SET status=3 WHERE hostgroup_id=802 "
+		"AND hostname='aurora-reader.example' AND port=3306");
+	MyHGM->update_aws_aurora_set_reader(
+		801, 802, const_cast<char*>("aurora-reader"), true);
+	aurora_runtime.reset(MyHGM->dump_table_mysql("mysql_servers"));
+	const SQLite3_row* revived_reader = find_row(
+		*aurora_runtime, 802, "aurora-reader.example", 3306);
+	ok(offline_reader != nullptr && offline_recorded && revived_reader != nullptr &&
+		std::string(revived_reader->fields[4]) == "ONLINE",
+		"managed Aurora monitoring restores an existing OFFLINE_HARD endpoint");
+	MyHGM->update_aws_aurora_set_writer(
+		801, 802, const_cast<char*>("aurora-reader"), true);
+	aurora_runtime.reset(MyHGM->dump_table_mysql("mysql_servers"));
+	ok(find_row(*aurora_runtime, 801, "aurora-reader.example", 3306) != nullptr &&
+		find_row(*aurora_runtime, 802, "aurora-reader.example", 3306) == nullptr &&
+		find_row(*aurora_runtime, 802, "aurora-writer.example", 3306) != nullptr,
+		"managed Aurora monitoring continues to apply writer and reader placement");
+	MyHGM->update_aws_aurora_set_reader(
+		801, 802, const_cast<char*>("aurora-native"), false);
+	aurora_runtime.reset(MyHGM->dump_table_mysql("mysql_servers"));
+	ok(find_row(*aurora_runtime, 802, "aurora-native.example", 3306) != nullptr,
+		"unmanaged Aurora monitoring retains native endpoint discovery");
 	ProxySQL_ServerRow replacement_reader {802, "aurora-reader-2.example", 3306};
 	ProxySQL_ServerDesiredSet aurora_replacement {
 		ProxySQL_ServerProtocol::mysql, aurora_generation, {801, 802},
@@ -339,6 +382,7 @@ int main() {
 		"a complete Aurora desired set replaces runtime inventory");
 	ok(has_aurora_monitor_endpoint("aurora-writer.example", 3306) &&
 		!has_aurora_monitor_endpoint("aurora-reader.example", 3306) &&
+		!has_aurora_monitor_endpoint("aurora-native.example", 3306) &&
 		has_aurora_monitor_endpoint("aurora-reader-2.example", 3306),
 		"the refreshed Aurora monitor input removes stale endpoints");
 	ok(manager->uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql),

@@ -6145,6 +6145,16 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	}
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 
+	bool inventory_managed = false;
+#ifdef PROXYSQL40
+	{
+		ScopedServerDiscoveryProtocolLock inventory_lock(
+			ProxySQL_ServerProtocol::mysql);
+		inventory_managed = proxysql_is_server_inventory_managed_locked(
+			ProxySQL_ServerProtocol::mysql, wHG, rHG);
+	}
+#endif
+
 	bool exit_now = false;
 	unsigned long long t1 = 0;
 	//unsigned long long t2 = 0;
@@ -6430,22 +6440,16 @@ __exit_monitor_aws_aurora_HG_thread:
 				delete l_ase;
 			}
 			lasts_ase[ase_idx] = ase_l;
-			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
+			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, inventory_managed);
 
 			// Auto-purge servers that disappear from REPLICA_HOST_STATUS
 			// Only process if autopurge is enabled and query was successful with results
 #ifdef PROXYSQL40
-			{
-				ScopedServerDiscoveryProtocolLock inventory_lock(
-					ProxySQL_ServerProtocol::mysql);
-				if (!proxysql_is_server_inventory_managed_locked(
-						ProxySQL_ServerProtocol::mysql, wHG, rHG) &&
-					autopurge_missing_checks > 0 && mmsd->interr == 0 &&
-					ase->host_statuses->size() > 0) {
-					GloMyMon->aws_aurora_autopurge_servers(
-						wHG, rHG, ase, autopurge_missing_checks,
-						autopurge_counter, domain_name);
-				}
+			if (!inventory_managed && autopurge_missing_checks > 0 &&
+				mmsd->interr == 0 && ase->host_statuses->size() > 0) {
+				GloMyMon->aws_aurora_autopurge_servers(
+					wHG, rHG, ase, autopurge_missing_checks,
+					autopurge_counter, domain_name);
 			}
 #else
 			if (autopurge_missing_checks > 0 &&
@@ -8329,7 +8333,7 @@ void MySQL_Monitor::aws_aurora_autopurge_servers(unsigned int wHG, unsigned int 
 	MyHGM->wrunlock();
 }
 
-void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
+void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks, bool inventory_managed) {
 #ifdef TEST_AURORA
 	unsigned int i = 0;
 	bool verbose = false;
@@ -8417,7 +8421,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					proxy_info("Calling update_aws_aurora_set_writer for %s\n", hse->server_id);
 #endif // TEST_AURORA
-					MyHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id);
+					MyHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id, inventory_managed);
 					time_t __timer;
 					char lut[30];
 					struct tm __tm_info;
@@ -8433,7 +8437,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					proxy_info("Calling update_aws_aurora_set_reader for %s\n", hse->server_id);
 #endif // TEST_AURORA
-					MyHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id);
+					MyHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id, inventory_managed);
 				}
 				}
 			}

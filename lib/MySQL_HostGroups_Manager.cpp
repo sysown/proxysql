@@ -7755,15 +7755,10 @@ int MySQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& ad
 }
 
 // FIXME: complete this!!
-void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid, char *_server_id, bool verbose) {
+void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid, char *_server_id, bool inventory_managed, bool verbose) {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	bool inventory_managed = false;
-#ifdef PROXYSQL40
-	inventory_managed = proxysql_is_server_inventory_managed(
-		ProxySQL_ServerProtocol::mysql, _whid, _rhid);
-#endif
 	auto execute = [&](const char *sql, auto bind) {
 		auto [rc, statement_unique] = mydb->prepare_v2(sql);
 		ASSERT_SQLITE_OK(rc, mydb);
@@ -8056,15 +8051,10 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	free(domain_name);
 }
 
-void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid, char *_server_id) {
+void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid, char *_server_id, bool inventory_managed) {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	bool inventory_managed = false;
-#ifdef PROXYSQL40
-	inventory_managed = proxysql_is_server_inventory_managed(
-		ProxySQL_ServerProtocol::mysql, _whid, _rhid);
-#endif
 	auto execute = [&](const char *sql, auto bind) {
 		auto [rc, statement_unique] = mydb->prepare_v2(sql);
 		ASSERT_SQLITE_OK(rc, mydb);
