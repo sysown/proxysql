@@ -1,0 +1,11 @@
+{
+  "mode": "pgbouncer",
+  "tps": 5126.153826,
+  "latency_ms": 0.195,
+  "snapshots": 62,
+  "conn_created_steady": 0,
+  "backend_identities_unchanged": true,
+  "cpu_us_per_query": 144.90532387733208,
+  "user_us_per_query": 6.316385912601654,
+  "system_us_per_query": 138.5889379647304
+}

@@ -1,0 +1,12 @@
+{
+  "mode": "candidate",
+  "tps": 9468.835768,
+  "latency_ms": 0.105,
+  "conn_ok_start": "64",
+  "conn_ok_end": "64",
+  "conn_err_end": "0",
+  "snapshots": 62,
+  "cpu_us_per_query": 53.34688444839449,
+  "user_us_per_query": 18.77453127458443,
+  "system_us_per_query": 34.57235317381006
+}
