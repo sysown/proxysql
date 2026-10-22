@@ -79,6 +79,7 @@ struct PgSQL_Ready_State {
     uint64_t epoch = 0;
 };
 static thread_local PgSQL_Ready_State pgsql_ready_state;
+#if 0 // Diagnostic timing is compiled out, including its state and clock reads.
 // Opt-in diagnostics for the phased outer worker loop. Preserve errno because
 // the first boundary is immediately after poll(), before its error handling.
 static void pgsql_loop_timing_point(unsigned phase, int poll_rc = 0) {
@@ -143,6 +144,7 @@ static void pgsql_loop_timing_point(unsigned phase, int poll_rc = 0) {
     st.last=done;
     errno=saved_errno;
 }
+#endif
 
 // Experimental dispatch phase: never create a backend on its behalf.
 thread_local bool pgsql_dispatch_existing_only = false;
@@ -3431,7 +3433,7 @@ void PgSQL_Thread::run() {
 
 	pthread_mutex_lock(&thread_mutex);
 	while (shutdown == 0) {
-#ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
         pgsql_loop_timing_point(2); // next outer iteration begins
 #endif
 
@@ -3543,7 +3545,9 @@ void PgSQL_Thread::run() {
 	 */
 	// poll is called with a timeout of mypolls.poll_timeout if set , or pgsql_thread___poll_timeout
 #ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
             pgsql_loop_timing_point(3); // before periodic waiter rearm
+#endif
 			const bool b_rearm = (curtime >= last_b_rearm_us + 50000);
 			if (b_rearm) {
 				last_b_rearm_us = curtime;
@@ -3560,11 +3564,11 @@ void PgSQL_Thread::run() {
 				});
 			}
 #endif // PROXYSQL31
-#ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
             pgsql_loop_timing_point(4); // immediately before main poll
 #endif
 			rc = poll(mypolls.fds, mypolls.len, ttw);
-#ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
             pgsql_loop_timing_point(0, rc); // immediately after main poll
 #endif
 			proxy_debug(PROXY_DEBUG_NET, 5, "%s\n", "Returning poll");
@@ -3641,7 +3645,7 @@ void PgSQL_Thread::run() {
 			GloPgQPro->update_query_processor_stats();
 		}
 
-#ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
         pgsql_loop_timing_point(1); // before poll-error check
 #endif
 		if (rc == -1 && errno == EINTR)
@@ -3659,7 +3663,7 @@ void PgSQL_Thread::run() {
 			refresh_variables();
 		}
 
-#ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
         pgsql_loop_timing_point(5); // begin runnable-flag reset
 #endif
 #ifdef PROXYSQL31
@@ -3672,7 +3676,7 @@ void PgSQL_Thread::run() {
         if (!unified_iteration)
 #endif
 		run_SetAllSession_ToProcess0<PgSQL_Thread,PgSQL_Session>();
-#ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
         pgsql_loop_timing_point(6); // begin after-poll I/O stage
 #endif
 
@@ -3717,7 +3721,7 @@ void PgSQL_Thread::run() {
 			ProcessAllMyDS_AfterPoll();
 			process_poll_housekeeping();
 		}
-#ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
         pgsql_loop_timing_point(7); // begin waiter-rearm cleanup
 #endif
 #ifdef PROXYSQL31
@@ -3769,19 +3773,19 @@ void PgSQL_Thread::run() {
 		else {
 #endif // IDLE_THREADS
 			// iterate through all sessions and process the session logic
-#ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
             pgsql_loop_timing_point(8); // begin session-processing setup
 #endif
 #ifdef PROXYSQL31
             if (!unified_iteration)
 #endif
 			process_all_sessions();
-#ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
             pgsql_loop_timing_point(9); // begin local-pool publication
 #endif
 
 			return_local_connections();
-#ifdef PROXYSQL31
+#if 0 // Compile out diagnostic timing calls.
             pgsql_loop_timing_point(10); // outer-iteration tail
 #endif
 #ifdef IDLE_THREADS
@@ -4613,7 +4617,9 @@ void PgSQL_Thread::process_all_sessions() {
     // If waiters consume all known capacity, avoid another frontend scan.
     // This is deliberately a global gate; hostgroup scheduling comes later.
     bool early_capacity_available = waiter_lists.empty();
+#if 0 // Compile out diagnostic timing calls.
     pgsql_loop_timing_point(11); // begin availability and waiter retries
+#endif
     waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node*, size_t count) {
         size_t available = 0;
         for (unsigned i = 0; i < cached_connections->len; ++i) {
@@ -4636,7 +4642,9 @@ void PgSQL_Thread::process_all_sessions() {
         }
     });
     dispatch_released();
+#if 0 // Compile out diagnostic timing calls.
     pgsql_loop_timing_point(12); // begin early frontend dispatch
+#endif
     // Try new frontend work before response processing, stopping globally on
     // the first established-connection miss. Hostgroup scheduling is deferred.
     for (unsigned i = 0; early_capacity_available && i < mysql_sessions->len; ++i) {
@@ -4667,7 +4675,9 @@ void PgSQL_Thread::process_all_sessions() {
         dispatch_released();
         if (pgsql_dispatch_existing_miss) break;
     }
+#if 0 // Compile out diagnostic timing calls.
     pgsql_loop_timing_point(13); // begin backend-owning session scan
+#endif
 #endif
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4811,7 +4821,9 @@ void PgSQL_Thread::process_all_sessions() {
 	}
 #ifdef PROXYSQL31
 	dispatch_released();
+#if 0 // Compile out diagnostic timing calls.
     pgsql_loop_timing_point(14); // begin remaining backendless session scan
+#endif
 
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4835,7 +4847,9 @@ void PgSQL_Thread::process_all_sessions() {
 		}
 	}
 
+#if 0 // Compile out diagnostic timing calls.
     pgsql_loop_timing_point(15); // begin session accounting and return
+#endif
 #endif // PROXYSQL31
 	if (maintenance_loop) {
 		unsigned int total_active_transactions_tmp;
