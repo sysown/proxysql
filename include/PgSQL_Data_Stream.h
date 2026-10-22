@@ -175,6 +175,10 @@ public:
 	unsigned int tmp_charset;
 
 	short revents;
+	// Readiness belongs to the stream, not its movable poll-array slot.
+	// Waiter rearm cleanup may remove the slot before handler() consumes it.
+	short pending_poll_revents = 0;
+	short pending_poll_events = 0;
 
 	char kill_type;
 
@@ -231,6 +235,7 @@ public:
     bool scheduler_event_queued = false;
 #endif
 	void attach_connection(PgSQL_Connection* mc) {
+		pending_poll_revents = pending_poll_events = 0;
 #ifdef PROXYSQL31
         ++scheduler_attachment_generation;
         scheduler_event_queued = false;
@@ -258,6 +263,7 @@ public:
 
 	// safe way to detach a PgSQL Connection
 	void detach_connection() {
+		pending_poll_revents = pending_poll_events = 0;
 #ifdef PROXYSQL31
         ++scheduler_attachment_generation;
         scheduler_event_queued = false;
