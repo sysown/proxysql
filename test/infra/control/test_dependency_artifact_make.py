@@ -1,11 +1,13 @@
 """Preparation modes, concurrency, and the real Make-facing source recipe."""
 import importlib
+import fcntl
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import tarfile
 import tempfile
 import unittest
@@ -163,6 +165,39 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(list(cache.glob('*.tar.gz')))
         self.assertFalse(list(cache.glob('.download-*')))
 
+    def test_python36_response_read_timeout_is_unavailable(self):
+        # Before Python 3.10 socket.timeout was not a TimeoutError subclass.
+        class LegacySocketTimeout(OSError): pass
+        class TimedOut:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def geturl(self): return 'https://example.com/dependency.tar.gz'
+            def read(self, size): raise LegacySocketTimeout('read timed out')
+        entry = dict(url='https://example.com/dependency.tar.gz', sha256='a' * 64, size=10)
+        with patch('socket.timeout', LegacySocketTimeout), \
+                patch.object(self.api, 'urlopen', return_value=TimedOut()):
+            with self.assertRaises(self.api.Unavailable):
+                self.api.download_artifact(entry, self.root / 'download-cache')
+        self.assertFalse(list((self.root / 'download-cache').iterdir()))
+
+    def test_exported_cxxflags_match_dependency_then_plugin_preparation(self):
+        for name in ('makefiles_vars.mk', 'makefiles_paths.mk'):
+            (self.root / 'include').mkdir(exist_ok=True)
+            shutil.copy(ROOT / 'include' / name, self.root / 'include' / name)
+        archive = self.root / 'deps/duckdb/duckdb/build/release/src/libduckdb_static.a'
+        with (self.root / 'deps/Makefile').open('a') as stream:
+            stream.write('\n.PHONY: duckdb\nduckdb:\n\t@echo "$(CXXFLAGS)" >> ../dependency-flags\n'
+                         '\t@mkdir -p ' + str(archive.parent) + '\n\t@touch ' + str(archive) + '\n')
+        env = dict(self.env, CXXFLAGS='-O2')
+        result = self.make('duckdb', 'DEPS_MODE=prebuilt', env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        result = subprocess.run(['make', '--no-print-directory', '-C', str(ROOT / 'plugins/duckdb'),
+                                 'PROXYSQL_PATH=' + str(self.root), str(archive), 'DEPS_MODE=prebuilt'],
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                universal_newlines=True, timeout=30)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(['-O2', '-O2'], (self.root / 'dependency-flags').read_text().splitlines())
+
     def test_v3_target_set_does_not_include_duckdb(self):
         result = subprocess.run(['make', '-s', '-C', str(ROOT / 'deps'), '-f', 'Makefile',
                                  '-f', '-', 'print-targets', 'PROXYSQL40=0'],
@@ -235,18 +270,93 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn('jobserver unavailable', result.stderr)
 
+    def python_free_environment(self):
+        tools = self.root / 'bin'
+        tools.mkdir(exist_ok=True)
+        for name in ('bash', 'perl', 'make', 'dirname', 'sed', 'cksum', 'cat', 'rm', 'cp',
+                     'mkdir', 'tar', 'gzip', 'uname', 'cc', 'c++', 'touch', 'sleep', 'sh',
+                     'awk', 'nproc', 'test', 'find', 'sort', 'grep'):
+            path = shutil.which(name)
+            if path and not (tools / name).exists():
+                (tools / name).symlink_to(path)
+        return dict(self.env, PATH=str(tools))
+
+    def test_python_free_lock_survives_exec_and_serializes_preparation(self):
+        env = self.python_free_environment()
+        entered, release = self.root / 'entered', self.root / 'release'
+        (self.root / 'deps/libssl/verify-source.bash').write_text(
+            '#!/bin/sh\ntouch ' + str(entered) + '\nwhile [ ! -f ' + str(release) +
+            ' ]; do sleep 0.02; done\n')
+        cli = ['make', '--no-print-directory', '-C', str(self.root / 'deps'),
+               'libssl', 'DEPS_MODE=source']
+        processes = [subprocess.Popen(cli, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      universal_newlines=True)]
+        try:
+            deadline = time.monotonic() + 10
+            while not entered.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(entered.exists(), 'source recipe did not start')
+            with (self.root / '.cache/dependency-artifacts/openssl.lock').open('a') as lock:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            processes.append(subprocess.Popen(cli, env=env, stdout=subprocess.PIPE,
+                                               stderr=subprocess.PIPE, universal_newlines=True))
+        finally:
+            release.touch()
+            results = [process.communicate(timeout=30) for process in processes]
+        for process, (out, err) in zip(processes, results):
+            self.assertEqual(0, process.returncode, out + err)
+        self.assertEqual(1, self.count())
+
+    def test_python_free_missing_payload_rebuilds(self):
+        env = self.python_free_environment()
+        result = self.make('libssl', 'DEPS_MODE=source', env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for index, name in enumerate(('include/openssl/x509.h', 'apps/openssl.cnf', 'LICENSE', 'providers/legacy.so'), 2):
+            with self.subTest(name=name):
+                (self.tree / name).unlink()
+                result = self.make('libssl', 'DEPS_MODE=source', env=env)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertTrue((self.tree / name).is_file())
+                self.assertEqual(index, self.count())
+
+    def test_python_free_duckdb_inventory_includes_headers_archives_and_licenses(self):
+        directory = self.root / 'deps/duckdb'
+        directory.mkdir()
+        for name in ('build.mk', 'list-static-archives.sh'):
+            shutil.copy(ROOT / 'deps/duckdb' / name, directory / name)
+        (directory / 'verify-source.bash').write_text('# fixture verifier\n')
+        template, tree = self.root / 'duckdb-template', directory / 'duckdb'
+        fixture_tree(template, 'duckdb')
+        for name in ('src/include/duckdb.hpp', 'third_party/library/LICENSE'):
+            path = template / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('public output')
+        (directory / 'duckdb-1.4.5.tar.gz').write_bytes(b'fixture source')
+        with (self.root / 'deps/Makefile').open('a') as stream:
+            stream.write('\n.PHONY: dependency-source-duckdb\ndependency-source-duckdb:\n'
+                         '\t@cp -R ' + str(template) + ' ' + str(tree) + '\n'
+                         '\t@echo built >> ../source-builds\n')
+        env = self.python_free_environment()
+        cli = ['bash', str(self.root / 'deps/artifacts/prepare.bash'),
+               'duckdb', str(self.root), 'source']
+        result = subprocess.run(cli, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                universal_newlines=True, timeout=30)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for index, name in enumerate(('src/include/duckdb.hpp', 'third_party/library/LICENSE',
+                                     'build/release/extension/parquet/libparquet_extension.a'), 2):
+            with self.subTest(name=name):
+                (tree / name).unlink()
+                result = subprocess.run(cli, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        universal_newlines=True, timeout=30)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertTrue((tree / name).is_file())
+                self.assertEqual(index, self.count())
+
     def test_python_free_source_mode_is_incremental_and_rejects_prebuilt_origin(self):
         self.register()
         self.prepare('prebuilt')
-        tools = self.root / 'bin'
-        tools.mkdir()
-        for name in ('bash', 'perl', 'make', 'dirname', 'sed', 'cksum', 'cat', 'rm', 'cp',
-                     'mkdir', 'tar', 'gzip', 'uname', 'cc', 'c++', 'touch', 'sleep', 'sh',
-                     'awk', 'nproc', 'test'):
-            path = shutil.which(name)
-            if path:
-                (tools / name).symlink_to(path)
-        env = dict(self.env, PATH=str(tools))
+        env = self.python_free_environment()
         for _ in range(2):
             result = self.make('libssl', 'DEPS_MODE=source', env=env)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)

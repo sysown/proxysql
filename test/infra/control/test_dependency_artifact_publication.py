@@ -100,7 +100,7 @@ class PublicationTests(unittest.TestCase):
                      subprocess.CompletedProcess([], 0, '', '')]
         with patch.object(self.api.subprocess, 'run', side_effect=lambda *a, **k: responses.pop(0) if responses else subprocess.CompletedProcess([], 0, '', '')) as run:
             self.api.publish_batch(self.root, 'sysown/proxysql', 'dependency-artifacts-v1-1-1')
-        commands = [call.args[0] for call in run.call_args_list]
+        commands = [call[0][0] for call in run.call_args_list]
         self.assertTrue(any('create' in c and '--draft' in c and '--latest=false' in c for c in commands))
         self.assertTrue(any('edit' in c and '--draft=false' in c for c in commands))
         self.assertFalse(any('--clobber' in c for c in commands))

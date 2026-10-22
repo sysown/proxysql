@@ -25,7 +25,7 @@ mkdir -p "$cache"
 if [[ "${4:-}" != --locked ]]; then
     # Flock is the same POSIX lock used by the Python path. Perl is already an
     # OpenSSL build prerequisite, including on macOS where flock(1) is absent.
-    exec perl -MFcntl=:flock -e 'open(my $lock, ">>", shift @ARGV) or die $!; flock($lock, LOCK_EX) or die $!; $^F = 1024; exec @ARGV or die $!;' \
+    exec perl -MFcntl=:flock -e '$^F = 1024; open(my $lock, ">>", shift @ARGV) or die $!; flock($lock, LOCK_EX) or die $!; exec @ARGV or die $!;' \
         "$cache/$dependency.lock" bash "$0" "$dependency" "$repo_root" "$mode" --locked
 fi
 case "$dependency" in
@@ -44,17 +44,50 @@ esac
 signature=$({
     printf '%s\n' "${CC:-cc}" "${CXX:-g++}" "${CFLAGS:-}" "${CPPFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}" \
         "${OPENSSL_CONFIGURE_FLAGS:-}" "${DUCKDB_CMAKE_FLAGS:-}" "${SDKROOT:-}" "${MACOSX_DEPLOYMENT_TARGET:-}"
-    cat "$repo_root/deps/$directory/build.mk" "$repo_root/deps/$directory/verify-source.bash"
+    cat "$repo_root/deps/artifacts/prepare.bash" "$repo_root/deps/$directory/build.mk" "$repo_root/deps/$directory/verify-source.bash"
     read -r -a compiler_command <<< "${CC:-cc}"
     "${compiler_command[@]}" --version || printf 'C compiler identity unavailable\n'
     read -r -a compiler_command <<< "${CXX:-g++}"
     "${compiler_command[@]}" --version || printf 'C++ compiler identity unavailable\n'
     cksum "$repo_root/deps/$directory/$dependency-$version.tar.gz"
 } | cksum)
+# Keep a complete inventory of public outputs even when Python is unavailable.
+# Paths are relative to the tree so source reuse also survives checkout moves.
+source_outputs() (
+    cd "$tree"
+    if [[ "$dependency" == openssl ]]; then
+        printf '%s\n' libssl.a libcrypto.a apps/openssl.cnf
+        find include/openssl -type f -print
+        find providers -type f \( -name '*.so' -o -name '*.dylib' \) -print
+    else
+        printf '%s\n' build/release/DuckDBExports.cmake
+        find src/include -type f -print
+        sh "$repo_root/deps/duckdb/list-static-archives.sh" build/release
+        for directory in third_party extension; do
+            if [[ -d "$directory" ]]; then
+                find "$directory" -type f \( -iname 'LICENSE*' -o -iname 'NOTICE*' -o -iname 'COPYING*' \) -print
+            fi
+        done
+    fi
+    for name in *; do
+        case "$name" in
+            [Ll][Ii][Cc][Ee][Nn][Ss][Ee]*|[Nn][Oo][Tt][Ii][Cc][Ee]*|[Cc][Oo][Pp][Yy][Ii][Nn][Gg]*)
+                if [[ -f "$name" ]]; then printf '%s\n' "$name"; fi;;
+        esac
+    done
+)
+outputs_present() {
+    [[ -s "$tree/.proxysql-source-outputs" ]] || return 1
+    local name
+    while IFS= read -r name; do
+        [[ -n "$name" && "$name" != /* && "/$name/" != */../* &&
+           -f "$tree/$name" && ! -L "$tree/$name" ]] || return 1
+    done < "$tree/.proxysql-source-outputs"
+}
 valid=0
 if [[ -f "$tree/.proxysql-source-signature" && -f "$tree/.proxysql-origin" &&
       "$(cat "$tree/.proxysql-origin")" == source &&
-      "$(cat "$tree/.proxysql-source-signature")" == "$signature" ]]; then
+      "$(cat "$tree/.proxysql-source-signature")" == "$signature" ]] && outputs_present; then
     if [[ "$dependency" == openssl ]]; then
         if [[ -s "$tree/libssl.a" && -s "$tree/libcrypto.a" && -s "$tree/include/openssl/configuration.h" &&
               -s "$tree/include/openssl/ssl.h" && -s "$tree/include/openssl/opensslv.h" &&
@@ -65,6 +98,8 @@ fi
 if [[ "$valid" == 0 ]]; then
     rm -rf "$tree"
     "${MAKE:-make}" --no-print-directory -C "$repo_root/deps" "dependency-source-$dependency"
+    source_outputs > "$tree/.proxysql-source-outputs"
+    outputs_present || { echo 'ERROR: incomplete dependency source outputs' >&2; exit 1; }
     printf '%s\n' "$signature" > "$tree/.proxysql-source-signature"
     printf 'source\n' > "$tree/.proxysql-origin"
 fi

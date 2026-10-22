@@ -47,8 +47,12 @@ ProxySQL branch, commit, version, and plugin DEBUG mode do not invalidate a
 dependency unless they change its actual compilation settings. DuckDB remains a
 Release dependency in DEBUG ProxySQL builds, matching its existing source recipe.
 Compiler/platform changes conservatively require another artifact. Custom
-toolchain files and external include/library search paths are ineligible for
-prebuilt selection; use the source path for those configurations.
+toolchain files, external include/library search paths, compiler/flag overrides
+inside dependency configuration options, and host-native CPU tuning are
+ineligible for prebuilt selection; use the source path for those configurations.
+Linux libc is queried from the running system, including with Python 3.6.
+Python-free source preparation uses the same dependency lock and records all
+public outputs so a missing header, archive, provider, or license triggers a rebuild.
 
 DuckDB artifacts contain the headers, complete configured static archive set,
 generated archive manifest, and licenses. OpenSSL artifacts contain generated
@@ -154,6 +158,12 @@ the digest-named `.tar.gz` files under the cache. Keep the lock files while
 preparation processes may still be running.
 
 ## Validation recorded during implementation
+
+All 50 artifact fixtures pass on the development host and in the AlmaLinux 8
+packaging image with Python 3.6.8. Regression coverage includes Python-free
+concurrent preparation and complete output inventories, dependency-to-plugin
+flag preservation, unprobed compiler/CPU settings, the running libc version,
+and download response-read timeouts on older Python versions.
 
 On the development Linux host, a fresh combined source build using
 `make -j4 ... NPROCS=4 DEPS_MODE=source libssl duckdb` took 612.71 seconds.

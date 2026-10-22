@@ -125,5 +125,8 @@ available if the user prefers separate implementation/review gates per task.
 
 The user approved this plan and selected native execution in the current
 checkout. All implementation tasks and acceptance checks have run. Known baseline
-validation failures are recorded in doc/dependency-artifacts.md; independent
-whole-change review is the remaining gate.
+validation failures are recorded in doc/dependency-artifacts.md. Independent
+whole-change review found six Important issues and no Critical or Minor issues.
+All six were reproduced and fixed in one regression-driven pass. The final 50
+artifact fixtures pass on the host and AlmaLinux 8/Python 3.6.8; affected build
+contracts and both real relocated runtime smoke probes also pass.

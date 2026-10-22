@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -50,7 +51,7 @@ def download_artifact(entry, cache):
                         if received > entry['size']:
                             raise ValueError('dependency archive exceeds registered size')
                         output.write(data)
-            except (HTTPError, URLError, TimeoutError, ConnectionError) as exc:
+            except (HTTPError, URLError, TimeoutError, socket.timeout, ConnectionError) as exc:
                 raise Unavailable('artifact download unavailable: ' + str(exc)) from exc
         verify_archive(temporary, entry)
         os.replace(temporary, target)

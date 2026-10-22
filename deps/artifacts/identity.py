@@ -90,6 +90,19 @@ def command_output(args, environ, input_data=None):
         raise ToolchainUnavailable('unable to identify toolchain: ' + ' '.join(shlex.quote(arg) for arg in args)) from exc
 
 
+def linux_libc_identity():
+    # Python 3.6's platform.libc_ver() reports Python's symbol requirements,
+    # which can be much older than the running libc (e.g. 2.3.4 vs 2.28).
+    try:
+        version = os.confstr('CS_GNU_LIBC_VERSION')
+    except (AttributeError, OSError, ValueError) as exc:
+        raise ToolchainUnavailable('unable to query running libc') from exc
+    match = re.fullmatch(r'glibc ([0-9]+(?:\.[0-9]+)+)', version or '')
+    if not match:
+        raise ToolchainUnavailable('unsupported or missing running libc identity')
+    return ['glibc', match.group(1)]
+
+
 def toolchain_identity(environ):
     env = dict(environ)
     system = platform.system()
@@ -119,7 +132,7 @@ def toolchain_identity(environ):
                 release[key] = value.strip('"\'')
         if not release.get('ID') or not release.get('VERSION_ID'):
             raise ToolchainUnavailable('missing distribution identity')
-        facts.update(distro=[release['ID'], release['VERSION_ID']], libc=list(platform.libc_ver()))
+        facts.update(distro=[release['ID'], release['VERSION_ID']], libc=linux_libc_identity())
         if not all(facts['libc']):
             raise ToolchainUnavailable('missing libc identity')
     elif system == 'Darwin':
@@ -146,6 +159,21 @@ def build_identity(dependency, root, environ):
     eligible = not (flags['CMAKE_TOOLCHAIN_FILE'] or 'CMAKE_TOOLCHAIN_FILE=' in setting or
                     environ.get('CPATH') or environ.get('CPLUS_INCLUDE_PATH') or
                     environ.get('C_INCLUDE_PATH') or environ.get('LIBRARY_PATH'))
+    # These settings can replace the probed compiler/flags or depend on host
+    # CPU facts not represented by the probes. Preserve source builds, but do
+    # not advertise compatibility for configurations we cannot identify.
+    setting_tokens = shlex.split(setting)
+    unprobed_setting = re.search(
+        r'CMAKE_(?:[A-Z0-9_]*COMPILER[A-Z0-9_]*|[A-Z0-9_]*FLAGS[A-Z0-9_]*|'
+        r'TOOLCHAIN_FILE|SYSROOT[A-Z0-9_]*|OSX_SYSROOT)\b|'
+        r'(?:^|\s)(?:CC|CXX|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS)\s*=|'
+        r'--(?:cross-compile-prefix|sysroot)(?:=|\s)', ' '.join(setting_tokens))
+    native_cpu = re.search(r'-(?:march|mtune|mcpu)\s*=\s*native\b',
+                           ' '.join([setting] + [environ.get(key, '') for key in
+                                                FLAGS + ('CC', 'CXX')]))
+    eligible = eligible and not (unprobed_setting or native_cpu or
+                                 flags['CMAKE_C_FLAGS'] or flags['CMAKE_CXX_FLAGS'] or
+                                 flags['CMAKE_EXE_LINKER_FLAGS'] or flags['CROSS_COMPILE'])
     toolchain = toolchain_identity(environ)
     eligible = eligible and toolchain.get('os') in ('Linux', 'Darwin')
     return {'format_version': FORMAT_VERSION, 'dependency': dependency,
@@ -153,7 +181,7 @@ def build_identity(dependency, root, environ):
             'recipe_sha256': digest_file(conf['recipe']),
             'verifier_sha256': digest_file(archive.parent / 'verify-source.bash'),
             'helper': helper, 'toolchain': toolchain,
-            'settings': shlex.split(setting), 'flags': flags,
+            'settings': setting_tokens, 'flags': flags,
             'eligible': eligible,
             'custom_paths': {key: environ.get(key, '') for key in
                              ('CPATH', 'CPLUS_INCLUDE_PATH', 'C_INCLUDE_PATH', 'LIBRARY_PATH')}}

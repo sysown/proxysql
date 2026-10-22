@@ -37,6 +37,7 @@ class IdentityTests(unittest.TestCase):
         self.facts = {'os': 'Linux', 'arch': 'x86_64', 'distro': ['ubuntu', '24.04'],
                       'libc': ['glibc', '2.39'], 'cc': 'gcc 13', 'cxx': 'gcc 13',
                       'target': 'x86_64-linux-gnu', 'runtime': 'libstdc++'}
+        self.actual_toolchain_identity = self.api.toolchain_identity
         self.probe = patch.object(self.api, 'toolchain_identity', return_value=self.facts)
         self.probe.start()
         self.addCleanup(self.probe.stop)
@@ -107,6 +108,37 @@ class IdentityTests(unittest.TestCase):
         self.env.pop('CPATH')
         with patch.object(self.api, 'toolchain_identity', return_value={**self.facts, 'os': 'FreeBSD'}):
             self.assertFalse(self.identity()['eligible'])
+
+    def test_unprobed_dependency_compiler_and_cpu_overrides_are_ineligible(self):
+        cases = [
+            ('duckdb', 'DUCKDB_CMAKE_FLAGS', '-DCMAKE_CXX_COMPILER=/custom/compiler'),
+            ('duckdb', 'DUCKDB_CMAKE_FLAGS', '-D CMAKE_C_COMPILER:FILEPATH=/custom/cc'),
+            ('duckdb', 'DUCKDB_CMAKE_FLAGS', '-DCMAKE_CXX_FLAGS=-march=native'),
+            ('duckdb', 'DUCKDB_CMAKE_FLAGS', '-DCMAKE_CXX_FLAGS:STRING=-O3'),
+            ('openssl', 'OPENSSL_CONFIGURE_FLAGS', 'no-shared CC=/custom/cc'),
+            ('openssl', 'OPENSSL_CONFIGURE_FLAGS', 'no-shared "CC=/custom/cc"'),
+            ('openssl', 'OPENSSL_CONFIGURE_FLAGS', 'no-shared -mtune=native'),
+            ('openssl', 'OPENSSL_CONFIGURE_FLAGS', '--cross-compile-prefix=/custom/'),
+            ('duckdb', 'CXXFLAGS', '-mcpu=native'),
+            ('duckdb', 'CMAKE_CXX_FLAGS', '-O3'),
+        ]
+        for dependency, name, value in cases:
+            with self.subTest(name=name, value=value):
+                self.env[name] = value
+                self.assertFalse(self.identity(dependency)['eligible'])
+                del self.env[name]
+        self.assertTrue(self.identity()['eligible'])
+        self.assertTrue(self.identity('openssl')['eligible'])
+
+    def test_libc_is_running_version_independent_of_python_linkage(self):
+        with patch.object(self.api.platform, 'system', return_value='Linux'), \
+                patch.object(self.api.platform, 'libc_ver', return_value=('glibc', '2.3.4')), \
+                patch.object(self.api.os, 'confstr', return_value='glibc 2.28'), \
+                patch.object(self.api, 'command_output', return_value='fixture'):
+            self.assertEqual(['glibc', '2.28'], self.actual_toolchain_identity(self.env)['libc'])
+            with patch.object(self.api.os, 'confstr', side_effect=ValueError('unavailable')):
+                with self.assertRaises(self.api.ToolchainUnavailable):
+                    self.actual_toolchain_identity(self.env)
 
     def test_registry_accepts_empty_or_exact_entry(self):
         self.assertEqual([], self.registry([])['artifacts'])
