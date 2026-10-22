@@ -3347,6 +3347,12 @@ handler_again:
 		break;
 	case FAST_FORWARD:
 	{
+			// Every cancel goes to the backend, which ignores it when idle. No query start
+			// resets killed_at here, so reset it or only the first cancel would be sent.
+			if (mybe->server_myds->cancel_query) {
+				mybe->server_myds->killed_at = 0;
+				handler_again___new_thread_to_cancel_query();
+			}
 			if (mybe->server_myds->mypolls == NULL) {
 				// register the PgSQL_Data_Stream
 				thread->mypolls.add(POLLIN | POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
