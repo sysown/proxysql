@@ -1062,9 +1062,10 @@ int main() {
 			32, "configured-pgsql.example", 5432) != nullptr,
 		"configured MySQL and PostgreSQL replication pairs still enumerate and map normally");
 
-	manager.reset();
+	const bool stopped = proxysql_stop_configured_plugins(manager, error);
 	uint8_t missing_manager_writer_is_also_reader = 1;
-	ok(!proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql,
+	ok(stopped && !manager &&
+		!proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql,
 			31, 32, &missing_manager_writer_is_also_reader) &&
 		missing_manager_writer_is_also_reader == 0,
 		"a missing plugin manager clears the managed writer placement output");
