@@ -1,0 +1,31 @@
+Deferred I/O with TLS disabled on both hops — 2026-10-22
+
+50 clients, 64 pre-established backend connections, 16 pgbench threads,
+42-row approximately 4KB workload, native backend protocol, one worker on
+CPU0, localhost TCP. Same configuration as the TLS case except TLS disabled
+at frontend listener/user/client and backend use_ssl=0. Plaintext verified
+with frontend PGSSLMODE=disable and backend pg_stat_ssl.ssl=false.
+20-second warmup and one 60-second measurement per binary. No profiling,
+custom timers, source changes, or additional variants.
+
+Version               TPS          Latency ms   CPU us/query
+Baseline 9f92e9d84     32074.491    1.559        31.097
+Deferred b17a986f3     32705.213    1.529        30.502
+
+Deferred I/O TPS change: +1.97%.
+Process userspace CPU/query: 11.407 -> 11.413 us.
+Process kernel CPU/query: 19.690 -> 19.089 us.
+
+Both runs retained ConnOK=64 and ConnERR=0, with ConnUsed+ConnFree=64 in all
+62 snapshots. No backend connection creation during warmup or measurement.
+Zero failed transactions. Retention=100%, connection ageing disabled.
+
+This single pair shows no deferred-I/O regression without TLS; deferred I/O
+is slightly faster. It does not establish a precise repeatable gain or prove
+a particular mechanism inside TLS. No additional runs were performed.
+The initial preflight attempt failed because the benchmark user still
+required TLS; this was corrected before either measured run began.
+
+Prior runtime restored after measurement; no benchmark remains running.
+Raw logs, snapshots, plaintext checks, binary hashes and settings accompany
+this report. The plaintext listener used by older tests was not restarted.
