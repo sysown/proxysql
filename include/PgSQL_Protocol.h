@@ -663,8 +663,8 @@ private:
 	 * This method checks if there is enough space in the internal `buffer`
 	 * to store the requested `size` of data. If there is space, it returns
 	 * a pointer to the available location and updates `buffer_used`.
-	 * Otherwise, it flushes the buffer to `PSarrayOUT`, allocates a new
-	 * buffer, and returns a pointer to the available location.
+	 * Otherwise, it flushes the buffer to `PSarrayOUT`, retains or replaces
+	 * the accumulation buffer, and returns a pointer to the available location.
 	 *
 	 * @param size The number of bytes of space to reserve.
 	 *
@@ -679,9 +679,10 @@ private:
 	/**
 	 * @brief Flushes the internal buffer to the PSarrayOUT.
 	 *
-	 * This method moves the data currently stored in the internal `buffer`
-	 * to the `PSarrayOUT` (a `PtrSizeArray`). It then resizes the
-	 * `buffer` to the default size `PGSQL_RESULTSET_BUFLEN` and resets
+	 * For small results, this method copies the occupied bytes into a separate
+	 * packet owned by `PSarrayOUT`, retaining the accumulation buffer for reuse.
+	 * Larger buffers are handed to `PSarrayOUT` without copying and replaced
+	 * with a new `PGSQL_RESULTSET_BUFLEN` allocation. Both paths reset
 	 * `buffer_used` to 0.
 	 *
 	 * @note This method is used when the internal `buffer` is full and

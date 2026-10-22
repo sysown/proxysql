@@ -3120,10 +3120,17 @@ void PgSQL_Query_Result::buffer_to_PSarrayOut() {
 	if (buffer_used == 0)
 		return;	// exit immediately if the buffer is empty
 	if (buffer_used < PGSQL_RESULTSET_BUFLEN / 2) {
-		buffer = (unsigned char*)realloc(buffer, buffer_used);
+		// Keep the accumulation buffer for the next result. Shrinking it with
+		// realloc and allocating a replacement churns a large allocation for
+		// every small result; the output queue only needs the occupied bytes.
+		unsigned char* packet = (unsigned char*)malloc(buffer_used);
+		memcpy(packet, buffer, buffer_used);
+		PSarrayOUT.add(packet, buffer_used);
+	} else {
+		// Hand off larger buffers without copying their contents.
+		PSarrayOUT.add(buffer, buffer_used);
+		buffer = (unsigned char*)malloc(PGSQL_RESULTSET_BUFLEN);
 	}
-	PSarrayOUT.add(buffer, buffer_used);
-	buffer = (unsigned char*)malloc(PGSQL_RESULTSET_BUFLEN);
 	buffer_used = 0;
 }
 
