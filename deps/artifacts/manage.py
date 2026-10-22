@@ -12,9 +12,10 @@ import tempfile
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
-from bundles import create_bundle, restore_bundle, validate_tree, verify_archive
+from bundles import (collect_payload, create_bundle, restore_bundle, safe_path,
+                     validate_tree, verify_archive)
 from identity import (DEPENDENCIES, FORMAT_VERSION, build_identity, configuration,
-                      fingerprint, load_json, load_registry, validate_entry)
+                      fingerprint, load_json, load_registry, validate_entry, ToolchainUnavailable)
 
 
 class Unavailable(ValueError):
@@ -59,7 +60,8 @@ def download_artifact(entry, cache):
             temporary.unlink()
 
 
-def write_metadata(tree, metadata):
+def write_metadata(dependency, tree, metadata):
+    metadata['outputs'] = collect_payload(dependency, tree)
     target = tree / '.proxysql-dependency.json'
     temporary = target.with_suffix('.tmp')
     temporary.write_text(json.dumps(metadata, sort_keys=True) + '\n')
@@ -78,7 +80,19 @@ def prepare_dependency(dependency, root, mode, environ):
     with (cache / (dependency + '.lock')).open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         os.set_inheritable(lock.fileno(), True)
-        identity = build_identity(dependency, root, environ)
+        try:
+            identity = build_identity(dependency, root, environ)
+        except ToolchainUnavailable as exc:
+            if mode == 'prebuilt':
+                raise
+            report(dependency, mode + ': ' + str(exc) + '; using source escape hatch')
+            before = (conf['tree'] / '.proxysql-source-complete')
+            previous = before.stat().st_mtime_ns if before.exists() else None
+            subprocess.check_call(['bash', str(root / 'deps/artifacts/prepare.bash'),
+                                   dependency, str(root), mode, '--locked'],
+                                  env=dict(environ), close_fds=False)
+            return dict(origin='source', fingerprint=None,
+                        changed=previous != before.stat().st_mtime_ns)
         key = fingerprint(identity)
         entry = None
         if mode != 'source':
@@ -91,6 +105,12 @@ def prepare_dependency(dependency, root, mode, environ):
             try:
                 old = load_json(tree / '.proxysql-dependency.json')
                 validate_tree(dependency, tree, conf['version'])
+                if not isinstance(old, dict) or not isinstance(old.get('outputs'), list) or not old['outputs']:
+                    raise ValueError('missing prepared-output manifest')
+                for relative in old['outputs']:
+                    path = tree / safe_path(relative)
+                    if not path.is_file() or path.is_symlink():
+                        raise ValueError('missing prepared dependency output: ' + relative)
             except (ValueError, OSError):
                 old = None
         if (isinstance(old, dict) and old.get('fingerprint') == key and
@@ -111,7 +131,7 @@ def prepare_dependency(dependency, root, mode, environ):
                 report(dependency, 'auto: ' + str(exc) + '; building source')
             else:
                 restore_bundle(archive, entry, tree)
-                write_metadata(tree, dict(origin='prebuilt', fingerprint=key,
+                write_metadata(dependency, tree, dict(origin='prebuilt', fingerprint=key,
                                           archive_sha256=entry['sha256']))
                 report(dependency, mode + ': restored verified artifact ' + key[:12])
                 return dict(origin='prebuilt', fingerprint=key, changed=True)
@@ -132,7 +152,7 @@ def prepare_dependency(dependency, root, mode, environ):
         if result.returncode:
             raise ValueError(dependency + ' source build failed')
         validate_tree(dependency, tree, conf['version'])
-        write_metadata(tree, dict(origin='source', fingerprint=key))
+        write_metadata(dependency, tree, dict(origin='source', fingerprint=key))
         report(dependency, mode + ': source build complete ' + key[:12])
         return dict(origin='source', fingerprint=key, changed=True)
 

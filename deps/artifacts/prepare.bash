@@ -46,9 +46,9 @@ signature=$({
         "${OPENSSL_CONFIGURE_FLAGS:-}" "${DUCKDB_CMAKE_FLAGS:-}" "${SDKROOT:-}" "${MACOSX_DEPLOYMENT_TARGET:-}"
     cat "$repo_root/deps/$directory/build.mk" "$repo_root/deps/$directory/verify-source.bash"
     read -r -a compiler_command <<< "${CC:-cc}"
-    "${compiler_command[@]}" --version
+    "${compiler_command[@]}" --version || printf 'C compiler identity unavailable\n'
     read -r -a compiler_command <<< "${CXX:-g++}"
-    "${compiler_command[@]}" --version
+    "${compiler_command[@]}" --version || printf 'C++ compiler identity unavailable\n'
     cksum "$repo_root/deps/$directory/$dependency-$version.tar.gz"
 } | cksum)
 valid=0

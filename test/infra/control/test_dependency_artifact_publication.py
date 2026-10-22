@@ -72,6 +72,21 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'SHA-256'):
             self.api.merge_entries(self.root)
 
+    def test_registration_merges_verified_metadata_without_downloads(self):
+        candidate = self.root / 'lock-entries.json'
+        registry = self.root / 'registered.json'
+        first = self.candidate()
+        candidate.write_text(json.dumps({'format_version': 1, 'artifacts': [first]}))
+        registry.write_text('{"format_version":1,"artifacts":[]}')
+        self.api.register_entries(candidate, registry)
+        second = self.candidate('ubuntu24-arm64-gcc')
+        candidate.write_text(json.dumps({'format_version': 1, 'artifacts': [second]}))
+        self.api.register_entries(candidate, registry)
+        self.assertEqual(2, len(self.identity.load_registry(registry)['artifacts']))
+        with self.assertRaisesRegex(ValueError, 'already registered'):
+            self.api.register_entries(candidate, registry)
+        self.assertEqual(2, len(self.identity.load_registry(registry)['artifacts']))
+
     def test_existing_release_is_never_changed(self):
         self.candidate()
         with patch.object(self.api.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{}', '')) as run:

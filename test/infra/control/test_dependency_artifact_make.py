@@ -43,6 +43,7 @@ class PreparationTests(unittest.TestCase):
         (directory / 'openssl').symlink_to('openssl-3.5.7')
         template = self.root / 'template/openssl-3.5.7'
         fixture_tree(template, 'openssl')
+        (template / 'include/openssl/x509.h').write_text('another public header')
         (template / 'config').write_text('#!/bin/sh\nexit 0\n')
         (template / 'config').chmod(0o755)
         (template / 'Makefile').write_text('all:\n\t@sleep 0.05\n\t@echo built >> ' +
@@ -99,6 +100,20 @@ class PreparationTests(unittest.TestCase):
         for mode in ('prebuilt', 'typo'):
             with self.subTest(mode=mode), self.assertRaises(ValueError):
                 self.prepare(mode)
+        self.assertEqual(0, self.count())
+
+    def test_unavailable_optional_identity_probe_uses_source_escape_hatch(self):
+        with patch.object(self.api, 'build_identity', side_effect=self.identity.ToolchainUnavailable('C++ runtime probe unavailable')):
+            result = self.prepare('auto')
+            self.assertEqual('source', result['origin'])
+            self.assertEqual(1, self.count())
+            with self.assertRaises(ValueError):
+                self.prepare('prebuilt')
+
+    def test_corrupt_vendored_source_is_not_an_availability_miss(self):
+        (self.root / 'deps/libssl/openssl-3.5.7.tar.gz').write_bytes(b'corrupt')
+        with self.assertRaisesRegex(ValueError, 'SHA-256'):
+            self.prepare('auto')
         self.assertEqual(0, self.count())
 
     def test_prebuilt_hit_relocated_and_mode_transitions(self):
@@ -177,6 +192,13 @@ class PreparationTests(unittest.TestCase):
         self.env['CFLAGS'] = '-fPIC'
         self.prepare('source')
         self.assertEqual(3, self.count())
+
+    def test_missing_other_public_header_invalidates_prepared_outputs(self):
+        self.prepare('source')
+        (self.tree / 'include/openssl/x509.h').unlink()
+        self.prepare('source')
+        self.assertTrue((self.tree / 'include/openssl/x509.h').is_file())
+        self.assertEqual(2, self.count())
 
     def test_make_clean_restore_and_incremental_consumers(self):
         self.register()

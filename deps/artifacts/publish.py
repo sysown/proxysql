@@ -89,6 +89,20 @@ def run(args):
     return result.stdout.strip()
 
 
+def register_entries(candidate, registry_path):
+    registry_path = Path(registry_path)
+    existing = load_registry(registry_path)
+    incoming = load_registry(candidate)
+    keys = {(entry['dependency'], entry['fingerprint']) for entry in existing['artifacts']}
+    for entry in incoming['artifacts']:
+        if (entry['dependency'], entry['fingerprint']) in keys:
+            raise ValueError('artifact already registered; retain or explicitly remove the old entry')
+    existing['artifacts'].extend(incoming['artifacts'])
+    temporary = registry_path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(existing, indent=2, sort_keys=True) + '\n')
+    os.replace(temporary, registry_path)
+
+
 def publish_batch(directory, repository, tag):
     if (not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository) or
             not re.fullmatch(r'dependency-artifacts-v1-[0-9]+-[0-9]+', tag)):
@@ -165,6 +179,9 @@ def main():
     build.add_argument('--output', type=Path, required=True)
     build.add_argument('--repository', required=True)
     build.add_argument('--tag', required=True)
+    register = sub.add_parser('register')
+    register.add_argument('--entries', type=Path, required=True)
+    register.add_argument('--registry', type=Path, required=True)
     args = parser.parse_args()
     if args.command == 'matrix':
         print(json.dumps(build_matrix(args.group, args.dependency), separators=(',', ':')))
@@ -174,6 +191,8 @@ def main():
         publish_batch(args.input, args.repository, args.tag)
     elif args.command == 'build':
         build_profile(args.profile, args.dependency, args.output, args.repository, args.tag)
+    elif args.command == 'register':
+        register_entries(args.entries, args.registry)
     else:
         parser.error('a subcommand is required')
 

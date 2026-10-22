@@ -17,6 +17,10 @@ FLAGS = ('CFLAGS', 'CPPFLAGS', 'CXXFLAGS', 'LDFLAGS', 'MACOSX_DEPLOYMENT_TARGET'
          'CMAKE_C_FLAGS', 'CMAKE_CXX_FLAGS', 'CMAKE_EXE_LINKER_FLAGS')
 
 
+class ToolchainUnavailable(ValueError):
+    """Optional artifact compatibility probes cannot identify this environment."""
+
+
 def digest_file(path):
     digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
@@ -83,7 +87,7 @@ def command_output(args, environ, input_data=None):
                                        input=input_data, stderr=subprocess.PIPE,
                                        timeout=30).decode().strip()
     except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
-        raise ValueError('unable to identify toolchain: ' + ' '.join(shlex.quote(arg) for arg in args)) from exc
+        raise ToolchainUnavailable('unable to identify toolchain: ' + ' '.join(shlex.quote(arg) for arg in args)) from exc
 
 
 def toolchain_identity(environ):
@@ -105,15 +109,19 @@ def toolchain_identity(environ):
     facts['runtime'] = hashlib.sha256(runtime.encode()).hexdigest()
     if system == 'Linux':
         release = {}
-        for line in Path('/etc/os-release').read_text().splitlines():
+        try:
+            release_text = Path('/etc/os-release').read_text()
+        except OSError as exc:
+            raise ToolchainUnavailable('missing distribution identity') from exc
+        for line in release_text.splitlines():
             if '=' in line:
                 key, value = line.split('=', 1)
                 release[key] = value.strip('"\'')
         if not release.get('ID') or not release.get('VERSION_ID'):
-            raise ValueError('missing distribution identity')
+            raise ToolchainUnavailable('missing distribution identity')
         facts.update(distro=[release['ID'], release['VERSION_ID']], libc=list(platform.libc_ver()))
         if not all(facts['libc']):
-            raise ValueError('missing libc identity')
+            raise ToolchainUnavailable('missing libc identity')
     elif system == 'Darwin':
         facts['sdk'] = command_output(['xcrun', '--show-sdk-version'], env)
         facts['deployment_target'] = env.get('MACOSX_DEPLOYMENT_TARGET', '')
