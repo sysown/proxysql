@@ -1,0 +1,20 @@
+{
+  "base16": {
+    "file": "proxysql-head-tokenizer-bounded",
+    "commit": "4699f3175",
+    "buffer_bytes": 16384,
+    "sha256": "9a3e63ec57d69f5033891ecd7147a0e1f8301f7ebe280f3c51a3c0049a977479"
+  },
+  "reuse16": {
+    "file": "proxysql-head-result-reuse-16k",
+    "commit": "8d5c3230f",
+    "buffer_bytes": 16384,
+    "sha256": "362180904a30849076e8e93a931c621b0e715b8dfcb47e32f41a94395fc919f3"
+  },
+  "reuse8": {
+    "file": "proxysql-head-result-reuse-8k",
+    "commit": "17d43c15fb63d076fec33f83bdb01ba184c5a73e",
+    "buffer_bytes": 8192,
+    "sha256": "31c154aa5074b9ed846f6c573c201d50d801d9696234b33e82cf81224c543861"
+  }
+}

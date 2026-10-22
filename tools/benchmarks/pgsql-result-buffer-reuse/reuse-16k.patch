@@ -1,0 +1,85 @@
+commit 8d5c3230f4e116ccd5f78db37c2dc7d26649c8ad
+Author:     Codex <codex@openai.com>
+AuthorDate: Thu Oct 22 23:02:37 2026 +0000
+Commit:     Codex <codex@openai.com>
+CommitDate: Thu Oct 22 23:02:37 2026 +0000
+
+    Reuse PostgreSQL result accumulation buffers when flushing small packets
+    
+    The native SELECT 1 completion path shrank a 16 KiB result buffer with realloc,
+    queued the shrunken allocation and immediately allocated a new 16 KiB buffer.
+    The result object was reused, but its accumulation buffer was replaced for every
+    small result. DWARF profiling attributed 4.47 percent of sampled worker
+    userspace cycles to this flush path, mostly allocator work.
+    
+    For results smaller than half the accumulation capacity, allocate a packet sized
+    to the occupied bytes and copy those bytes into the output queue. Retain the
+    accumulation buffer for the next result. Keep the existing ownership handoff
+    and replacement allocation for larger buffers, avoiding a new large-result copy.
+    Preserve empty-buffer behavior and reset buffer_used on both nonempty paths.
+    Update the header documentation to describe retained versus transferred buffers.
+    
+    Keep the default capacity at 16 KiB so reuse can be measured independently of
+    the proposed 8 KiB capacity experiment. Do not alter classification, diagnostic
+    hooks, query digests or worker scheduling.
+    
+    Validation: optimized PROXYSQL31 build completed. An isolated ASan/UBSan harness
+    using the actual original and patched reserve/flush functions verified payload
+    identity, queue ownership and reuse across all lengths through capacity plus
+    random reserve/flush sequences at both 16 KiB and 8 KiB. Repository tests were
+    not modified. End-to-end performance measurement follows this source checkpoint.
+
+diff --git a/include/PgSQL_Protocol.h b/include/PgSQL_Protocol.h
+index 53d1fbe1b..4b8984a84 100644
+--- a/include/PgSQL_Protocol.h
++++ b/include/PgSQL_Protocol.h
+@@ -663,8 +663,8 @@ private:
+ 	 * This method checks if there is enough space in the internal `buffer`
+ 	 * to store the requested `size` of data. If there is space, it returns
+ 	 * a pointer to the available location and updates `buffer_used`.
+-	 * Otherwise, it flushes the buffer to `PSarrayOUT`, allocates a new
+-	 * buffer, and returns a pointer to the available location.
++	 * Otherwise, it flushes the buffer to `PSarrayOUT`, retains or replaces
++	 * the accumulation buffer, and returns a pointer to the available location.
+ 	 *
+ 	 * @param size The number of bytes of space to reserve.
+ 	 *
+@@ -679,9 +679,10 @@ private:
+ 	/**
+ 	 * @brief Flushes the internal buffer to the PSarrayOUT.
+ 	 *
+-	 * This method moves the data currently stored in the internal `buffer`
+-	 * to the `PSarrayOUT` (a `PtrSizeArray`). It then resizes the
+-	 * `buffer` to the default size `PGSQL_RESULTSET_BUFLEN` and resets
++	 * For small results, this method copies the occupied bytes into a separate
++	 * packet owned by `PSarrayOUT`, retaining the accumulation buffer for reuse.
++	 * Larger buffers are handed to `PSarrayOUT` without copying and replaced
++	 * with a new `PGSQL_RESULTSET_BUFLEN` allocation. Both paths reset
+ 	 * `buffer_used` to 0.
+ 	 *
+ 	 * @note This method is used when the internal `buffer` is full and
+diff --git a/lib/PgSQL_Protocol.cpp b/lib/PgSQL_Protocol.cpp
+index b62324778..b24a98838 100644
+--- a/lib/PgSQL_Protocol.cpp
++++ b/lib/PgSQL_Protocol.cpp
+@@ -3120,10 +3120,17 @@ void PgSQL_Query_Result::buffer_to_PSarrayOut() {
+ 	if (buffer_used == 0)
+ 		return;	// exit immediately if the buffer is empty
+ 	if (buffer_used < PGSQL_RESULTSET_BUFLEN / 2) {
+-		buffer = (unsigned char*)realloc(buffer, buffer_used);
++		// Keep the accumulation buffer for the next result. Shrinking it with
++		// realloc and allocating a replacement churns a large allocation for
++		// every small result; the output queue only needs the occupied bytes.
++		unsigned char* packet = (unsigned char*)malloc(buffer_used);
++		memcpy(packet, buffer, buffer_used);
++		PSarrayOUT.add(packet, buffer_used);
++	} else {
++		// Hand off larger buffers without copying their contents.
++		PSarrayOUT.add(buffer, buffer_used);
++		buffer = (unsigned char*)malloc(PGSQL_RESULTSET_BUFLEN);
+ 	}
+-	PSarrayOUT.add(buffer, buffer_used);
+-	buffer = (unsigned char*)malloc(PGSQL_RESULTSET_BUFLEN);
+ 	buffer_used = 0;
+ }
+ 

@@ -1,0 +1,12 @@
+{
+  "mode": "reuse16",
+  "tps": 9767.330546,
+  "latency_ms": 0.102,
+  "conn_ok_start": "64",
+  "conn_ok_end": "64",
+  "conn_err_end": "0",
+  "snapshots": 62,
+  "cpu_us_per_query": 50.45712588289656,
+  "user_us_per_query": 17.327876427486963,
+  "system_us_per_query": 33.1292494554096
+}

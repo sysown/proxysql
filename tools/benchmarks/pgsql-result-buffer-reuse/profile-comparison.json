@@ -1,0 +1,12 @@
+{
+  "baseline_run": "remaining-hotspots-dwarf-bounded-20261022T223507Z",
+  "patched_run": "profile-result-buffer-reuse16-20261022T231442Z",
+  "baseline_samples": 13344,
+  "patched_samples": 13677,
+  "baseline_buffer_percent": 4.473920863309353,
+  "patched_buffer_percent": 0.7823353074504643,
+  "baseline_allocator_self_percent": 5.418165467625899,
+  "patched_allocator_self_percent": 1.6450976091248082,
+  "baseline_buffer_samples": 597,
+  "patched_buffer_samples": 107
+}

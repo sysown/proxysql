@@ -1,0 +1,13 @@
+pgbench (15.19 (Debian 15.19-0+deb12u1), server 16.1)
+transaction type: /home/rene/pg-network-bench/results/profile-result-buffer-reuse16-20261022T231442Z/prewarm.sql
+scaling factor: 1
+query mode: simple
+number of clients: 64
+number of threads: 16
+maximum number of tries: 1
+number of transactions per client: 1
+number of transactions actually processed: 64/64
+number of failed transactions: 0 (0.000%)
+latency average = 2364.261 ms
+initial connection time = 354.966 ms
+tps = 27.069769 (without initial connection time)

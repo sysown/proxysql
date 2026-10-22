@@ -1,0 +1,37 @@
+commit 17d43c15fb63d076fec33f83bdb01ba184c5a73e
+Author:     Codex <codex@openai.com>
+AuthorDate: Thu Oct 22 23:05:03 2026 +0000
+Commit:     Codex <codex@openai.com>
+CommitDate: Thu Oct 22 23:05:03 2026 +0000
+
+    Experiment with an 8 KiB PostgreSQL result accumulation buffer
+    
+    Reduce PGSQL_RESULTSET_BUFLEN from 16 KiB to 8 KiB on top of the small-result
+    buffer-reuse change. Keep this on experiment/pgsql-result-buffer-8k so capacity
+    can be measured independently of allocation reuse, while the optimization
+    branch retains the 16 KiB default.
+    
+    The constant also determines the half-buffer copy threshold, flush boundaries,
+    and several queued-byte/backpressure estimates. Rebuild every dependent object
+    rather than changing only the result protocol object. The initial comparison
+    uses the existing one-client plaintext SELECT 1 workload and does not establish
+    large-result or high-concurrency behavior.
+    
+    Validation: the optimized PROXYSQL31 build completed with the 8 KiB header.
+    The isolated ASan/UBSan reserve/flush validation covered every length through
+    8 KiB and randomized sequences, checking unchanged packet bytes and independent
+    queued ownership. No scheduler, classification or timer-hook change is included.
+
+diff --git a/include/PgSQL_Protocol.h b/include/PgSQL_Protocol.h
+index 4b8984a84..2ab340db7 100644
+--- a/include/PgSQL_Protocol.h
++++ b/include/PgSQL_Protocol.h
+@@ -55,7 +55,7 @@
+ /* new style V3 packet header len - type:1b, len:4b */
+ #define NEW_HEADER_LEN  5
+ 
+-#define PGSQL_RESULTSET_BUFLEN		(16 * 1024)
++#define PGSQL_RESULTSET_BUFLEN		(8 * 1024)
+ 
+ class ProxySQL_Admin;
+ struct PgCredentials;
