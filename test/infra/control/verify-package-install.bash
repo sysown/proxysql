@@ -73,6 +73,7 @@ fi
 case "$DISTRO" in
     ubuntu22) IMAGE="ubuntu:22.04" ;;
     ubuntu24) IMAGE="ubuntu:24.04" ;;
+    ubuntu26) IMAGE="ubuntu:26.04" ;;
     debian12) IMAGE="debian:bookworm-slim" ;;
     debian13) IMAGE="debian:trixie-slim" ;;
     centos9) IMAGE="quay.io/centos/centos:stream9" ;;
