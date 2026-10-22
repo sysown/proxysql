@@ -619,7 +619,7 @@ const ProxySQL_PluginDescriptor fake_descriptor_with_runtime_ready = {
 
 const ProxySQL_PluginDescriptor fake_descriptor_with_server_discovery = {
 	FAKE_PLUGIN_NAME,
-	PROXYSQL_PLUGIN_ABI_VERSION,
+	PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
