@@ -1,0 +1,40 @@
+# ========
+# captured on    : Thu Oct 22 17:39:10 2026
+# header version : 1
+# data offset    : 1032
+# data size      : 5920688
+# feat offset    : 5921720
+# hostname : lon104
+# os release : 6.1.0-53-amd64
+# perf version : 6.1.190
+# arch : x86_64
+# nrcpus online : 40
+# nrcpus avail : 40
+# cpudesc : Intel(R) Xeon(R) CPU E5-2630 v4 @ 2.20GHz
+# cpuid : GenuineIntel,6,79,1
+# total memory : 131899732 kB
+# cmdline : /usr/bin/perf record -D -1 --control=fifo:/home/rene/pg-network-bench/results/profile-one-cpu-proxysql-20261022T173747Z/perf-control,/home/rene/pg-network-bench/results/profile-one-cpu-proxysql-20261022T173747Z/perf-ack -F 999 -e cycles --call-graph fp -t 357443 -o /home/rene/pg-network-bench/results/profile-one-cpu-proxysql-20261022T173747Z/perf.data -- sleep 58
+# event : name = cycles, , id = { 67673, 67674, 67675, 67676, 67677, 67678, 67679, 67680, 67681, 67682, 67683, 67684, 67685, 67686, 67687, 67688, 67689, 67690, 67691, 67692, 67693, 67694, 67695, 67696, 67697, 67698, 67699, 67700, 67701, 67702, 67703, 67704, 67705, 67706, 67707, 67708, 67709, 67710, 67711, 67712 }, size = 128, { sample_period, sample_freq } = 999, sample_type = IP|TID|TIME|CALLCHAIN|ID|PERIOD, read_format = ID|LOST, disabled = 1, freq = 1, sample_id_all = 1, exclude_guest = 1
+# event : name = dummy:HG, , id = { 67713, 67714, 67715, 67716, 67717, 67718, 67719, 67720, 67721, 67722, 67723, 67724, 67725, 67726, 67727, 67728, 67729, 67730, 67731, 67732, 67733, 67734, 67735, 67736, 67737, 67738, 67739, 67740, 67741, 67742, 67743, 67744, 67745, 67746, 67747, 67748, 67749, 67750, 67751, 67752 }, type = 1, size = 128, config = 0x9, { sample_period, sample_freq } = 999, sample_type = IP|TID|TIME|CALLCHAIN|ID|PERIOD, read_format = ID|LOST, disabled = 1, mmap = 1, comm = 1, freq = 1, enable_on_exec = 1, task = 1, sample_id_all = 1, mmap2 = 1, comm_exec = 1, ksymbol = 1, bpf_event = 1
+# CPU_TOPOLOGY info available, use -I to display
+# NUMA_TOPOLOGY info available, use -I to display
+# pmu mappings: software = 1, uncore_cbox_8 = 30, uncore_imc_3 = 19, uncore_r2pcie = 14, uncore_qpi_1 = 11, uncore_cbox_6 = 28, uncore_imc_1 = 17, power = 35, uncore_cbox_4 = 26, uprobe = 7, cpu = 4, uncore_r3qpi_0 = 12, cstate_core = 33, uncore_cbox_2 = 24, breakpoint = 5, uncore_ha_0 = 15, uncore_cbox_0 = 22, tracepoint = 2, uncore_cbox_9 = 31, cstate_pkg = 34, uncore_imc_4 = 20, uncore_ubox = 21, uncore_cbox_7 = 29, uncore_imc_2 = 18, kprobe = 6, uncore_qpi_0 = 10, uncore_cbox_5 = 27, uncore_imc_0 = 16, uncore_pcu = 32, uncore_r3qpi_1 = 13, msr = 9, uncore_cbox_3 = 25, intel_pt = 8, uncore_cbox_1 = 23
+# CACHE info available, use -I to display
+# time of first sample : 639524.824588
+# time of last sample : 639564.763812
+# sample duration :  39939.224 ms
+# MEM_TOPOLOGY info available, use -I to display
+# bpf_prog_info 125: bpf_prog_6deef7357e7b4530_sd_fw_egress addr 0xffffffffc03cb678 size 55
+# bpf_prog_info 126: bpf_prog_6deef7357e7b4530_sd_fw_ingress addr 0xffffffffc03cb83c size 55
+# bpf_prog_info 127: bpf_prog_3650d9673c54ce30_sd_devices addr 0xffffffffc03cb8b8 size 310
+# bpf_prog_info 128: bpf_prog_6deef7357e7b4530_sd_fw_egress addr 0xffffffffc03cdba4 size 55
+# bpf_prog_info 129: bpf_prog_6deef7357e7b4530_sd_fw_ingress addr 0xffffffffc03cdc2c size 55
+# bpf_prog_info 130: bpf_prog_8470ed2b25b99116_sd_devices addr 0xffffffffc03d43bc size 448
+# bpf_prog_info 131: bpf_prog_6deef7357e7b4530_sd_fw_egress addr 0xffffffffc03d1b74 size 55
+# bpf_prog_info 132: bpf_prog_6deef7357e7b4530_sd_fw_ingress addr 0xffffffffc03d1be4 size 55
+# bpf_prog_info 133: bpf_prog_ee0e253c78993a24_sd_devices addr 0xffffffffc03d7d20 size 259
+# cpu pmu capabilities: branches=16, max_precise=3, pmu_name=broadwell
+# intel_pt pmu capabilities: topa_multiple_entries=0, psb_cyc=0, single_range_output=0, mtc_periods=0, ip_filtering=0, output_subsys=0, cr3_filtering=1, psb_periods=0, event_trace=0, cycle_thresholds=0, power_event_trace=0, mtc=0, payloads_lip=0, ptwrite=0, num_address_ranges=0, max_subleaf=0, topa_output=1, tnt_disable=0
+# missing features: TRACING_DATA BRANCH_STACK GROUP_DESC AUXTRACE STAT CLOCKID DIR_FORMAT COMPRESSED CLOCK_DATA HYBRID_TOPOLOGY
+# ========
+#

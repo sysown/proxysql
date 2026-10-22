@@ -1,0 +1,14 @@
+{
+  "path": "/home/rene/pg-network-bench/results/profile-one-cpu-proxysql-20261022T173747Z/perf.data",
+  "bytes": 5950860,
+  "sha256": "6dcb1caf461172bba11e7cdadda9ff856b9f9a80f6d282639b96cac86c09fe37",
+  "binary": {
+    "sha256": "961419b9503186758a2d7d772429f0bc36d6f2127422be3784bac3002acc0f82",
+    "commit": "b17a986f3",
+    "scheduler": "phased",
+    "timers": false,
+    "profiling": true,
+    "mode": "candidate",
+    "pid": 357437
+  }
+}
