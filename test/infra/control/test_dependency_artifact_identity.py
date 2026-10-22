@@ -1,0 +1,127 @@
+"""Dependency identities are independent of ProxySQL revisions, not toolchains."""
+import copy
+import hashlib
+import importlib
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / 'deps/artifacts'))
+
+
+class IdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.api = importlib.import_module('identity')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.env = {'CC': 'cc', 'CXX': 'c++'}
+        for dep, directory, version in [('duckdb', 'duckdb', '1.4.5'),
+                                         ('openssl', 'libssl', '3.5.7')]:
+            d = self.root / 'deps' / directory
+            d.mkdir(parents=True)
+            source = d / (dep + '-' + version + '.tar.gz')
+            source.write_bytes(b'vendored source')
+            source.with_suffix('.gz.sha256').write_text(
+                hashlib.sha256(source.read_bytes()).hexdigest() + '  ' + source.name + '\n')
+            (d / 'build.mk').write_text(
+                'DUCKDB_VERSION := 1.4.5\nDUCKDB_CMAKE_FLAGS := -DCMAKE_BUILD_TYPE=Release\n'
+                if dep == 'duckdb' else 'OPENSSL_CONFIGURE_FLAGS := no-shared no-tests -fPIC\n')
+            (d / 'verify-source.bash').write_text('# verifier\n')
+        (self.root / 'common_mk').mkdir()
+        (self.root / 'common_mk/openssl_flags.mk').write_text('OPENSSL_VERSION := 3.5.7\n')
+        self.facts = {'os': 'Linux', 'arch': 'x86_64', 'distro': ['ubuntu', '24.04'],
+                      'libc': ['glibc', '2.39'], 'cc': 'gcc 13', 'cxx': 'gcc 13',
+                      'target': 'x86_64-linux-gnu', 'runtime': 'libstdc++'}
+        self.probe = patch.object(self.api, 'toolchain_identity', return_value=self.facts)
+        self.probe.start()
+        self.addCleanup(self.probe.stop)
+
+    def identity(self, dep='duckdb'):
+        return self.api.build_identity(dep, self.root, self.env)
+
+    def entry(self):
+        identity = self.identity()
+        return {'dependency': 'duckdb', 'identity': identity,
+                'fingerprint': self.api.fingerprint(identity),
+                'url': 'https://github.com/sysown/proxysql/releases/download/deps-v1/a.tar.gz',
+                'sha256': 'a' * 64, 'size': 123, 'provenance': {'commit': 'b' * 40}}
+
+    def registry(self, entries):
+        path = self.root / 'lock.json'
+        path.write_text(json.dumps({'format_version': 1, 'artifacts': entries}))
+        return self.api.load_registry(path)
+
+    def test_canonical_fingerprint_and_revision_independence(self):
+        first = self.identity()
+        self.env.update(GIT_VERSION='4.0.1', GITHUB_SHA='other', PROXYSQL40='1', DEBUG='1')
+        self.assertEqual(first, self.identity())
+        self.assertEqual(self.api.fingerprint({'a': 1, 'b': 2}),
+                         self.api.fingerprint({'b': 2, 'a': 1}))
+
+    def test_source_recipe_toolchain_and_flags_invalidate(self):
+        first = self.api.fingerprint(self.identity())
+        for key in ('CFLAGS', 'CPPFLAGS', 'CXXFLAGS', 'LDFLAGS', 'DUCKDB_CMAKE_FLAGS'):
+            with self.subTest(key=key):
+                self.env[key] = '-fPIC'
+                self.assertNotEqual(first, self.api.fingerprint(self.identity()))
+                del self.env[key]
+        for key in ('cxx', 'libc', 'arch', 'runtime', 'distro'):
+            with self.subTest(key=key), patch.object(self.api, 'toolchain_identity',
+                    return_value={**self.facts, key: 'different'}):
+                self.assertNotEqual(first, self.api.fingerprint(self.identity()))
+        recipe = self.root / 'deps/duckdb/build.mk'
+        recipe.write_text(recipe.read_text() + '# changed recipe\n')
+        self.assertNotEqual(first, self.api.fingerprint(self.identity()))
+
+    def test_actual_source_digest_is_checked(self):
+        (self.root / 'deps/duckdb/duckdb-1.4.5.tar.gz').write_bytes(b'corrupted')
+        with self.assertRaisesRegex(ValueError, 'SHA-256'):
+            self.identity()
+
+    def test_other_dependency_and_root_makefile_do_not_invalidate(self):
+        first = self.identity()
+        (self.root / 'deps/libssl/build.mk').write_text('unrelated')
+        (self.root / 'deps/Makefile').write_text('other dependency change')
+        self.assertEqual(first, self.identity())
+
+    def test_missing_toolchain_facts_and_unknown_dependencies_fail(self):
+        with patch.object(self.api, 'toolchain_identity', side_effect=ValueError('compiler unavailable')):
+            with self.assertRaisesRegex(ValueError, 'compiler'):
+                self.identity()
+        with self.assertRaises(ValueError):
+            self.identity('unknown')
+
+    def test_registry_accepts_empty_or_exact_entry(self):
+        self.assertEqual([], self.registry([])['artifacts'])
+        entry = self.entry()
+        self.assertEqual([entry], self.registry([entry])['artifacts'])
+
+    def test_registry_rejects_duplicates_and_invalid_entries(self):
+        entry = self.entry()
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            self.registry([entry, entry])
+        for key, value in [('sha256', 'bad'), ('fingerprint', '0' * 64),
+                           ('size', -1), ('url', 'http://example.com/a'),
+                           ('dependency', 'other')]:
+            with self.subTest(key=key):
+                invalid = copy.deepcopy(entry)
+                invalid[key] = value
+                with self.assertRaises(ValueError):
+                    self.registry([invalid])
+
+    def test_registry_rejects_unknown_schema_and_duplicate_json_keys(self):
+        path = self.root / 'lock.json'
+        for data in ('{"format_version":2,"artifacts":[]}',
+                     '{"format_version":1,"format_version":1,"artifacts":[]}'):
+            path.write_text(data)
+            with self.assertRaises(ValueError):
+                self.api.load_registry(path)
+
+
+if __name__ == '__main__':
+    unittest.main()
