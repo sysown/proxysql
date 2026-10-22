@@ -344,10 +344,12 @@ int main() {
 		MyHGM->dump_table_mysql("mysql_servers"));
 	ok(find_row(*aurora_runtime, 802, "aurora-absent.example", 3306) == nullptr,
 		"managed Aurora monitoring does not discover an endpoint outside plugin inventory");
+	MyHGM->wrlock();
 	MySrvC* offline_reader = MyHGM->find_server_in_hg(
 		802, "aurora-reader.example", 3306);
 	if (offline_reader != nullptr)
 		offline_reader->set_status(MYSQL_SERVER_STATUS_OFFLINE_HARD);
+	MyHGM->wrunlock();
 	const bool offline_recorded = execute_hgm_statement(MyHGM,
 		"UPDATE mysql_servers SET status=3 WHERE hostgroup_id=802 "
 		"AND hostname='aurora-reader.example' AND port=3306");
