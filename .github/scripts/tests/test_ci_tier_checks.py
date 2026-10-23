@@ -139,4 +139,88 @@ class CheckTests(unittest.TestCase):
   api=Mock();api.request.return_value={'run_attempt':2};api.pages.return_value=checks
   self.assertEqual(reconcile(plan,api)['conclusion'],'success')
 
+class RetainedNativeTests(unittest.TestCase):
+ def fixture(self):
+  import copy,json
+  from unittest.mock import Mock
+  plan=dict(repository='sysown/proxysql',sha='a'*40,execution_id='run',checks=[
+   dict(key=k,name='cell '+k,check_id=i+1,workflow='CI-tests',required=True,applicable=True) for i,k in enumerate(('a','b'))])
+  original=[dict(id=10+i,name='run / cell '+k,run_attempt=1,status='completed',conclusion='success',
+                 started_at='2026-10-23T09:54:51Z',completed_at='2026-10-23T11:00:05Z') for i,k in enumerate(('a','b'))]
+  state=dict(plan=plan,previous=original,current=[dict(j,id=j['id']+10,run_attempt=2) for j in original],history_reads=0)
+  state['checks']=[dict(id=i+1,external_id='run:'+k,status='completed',conclusion='success',
+                        output={'text':json.dumps(dict(run_id=7,attempt=1))}) for i,k in enumerate(('a','b'))]
+  api=Mock();api.request.return_value={'run_attempt':2}
+  def pages(path,key):
+   if key=='check_runs':return copy.deepcopy(state['checks'])
+   if path.endswith('/attempts/2/jobs'):return copy.deepcopy(state['current'])
+   if path.endswith('/attempts/1/jobs'):
+    state['history_reads']+=1
+    return copy.deepcopy(state['previous'])
+   self.fail('unexpected historical job lookup: '+path)
+  api.pages.side_effect=pages;state['api']=api
+  return state
+
+ def result(self,state):
+  from ci_tier_checks import observations
+  return aggregate_state(state['plan'],observations(state['plan'],state['api']))
+
+ def set_attempt(self,state,index,attempt):
+  import json
+  state['checks'][index]['output']['text']=json.dumps(dict(run_id=7,attempt=attempt))
+
+ def test_retained_native_clones_preserve_success(self):
+  state=self.fixture()
+  self.assertEqual(self.result(state).get('conclusion'),'success')
+  self.assertEqual(state['history_reads'],1)
+
+ def test_fresh_native_success_cannot_reuse_old_custom_success(self):
+  state=self.fixture()
+  state['current'][0].update(started_at='2026-10-23T11:17:40Z',completed_at='2026-10-23T11:18:00Z')
+  self.assertEqual(self.result(state)['status'],'in_progress')
+
+ def test_retained_peer_survives_a_current_cell_result(self):
+  state=self.fixture();self.set_attempt(state,0,2)
+  state['current'][0].update(started_at='2026-10-23T11:17:40Z',completed_at='2026-10-23T11:18:00Z')
+  self.assertEqual(self.result(state).get('conclusion'),'success')
+
+ def test_retained_success_requires_unambiguous_execution_intervals(self):
+  for mutation in ('missing','duplicate','old_start','old_end','new_start','new_end','prefix','old_failure'):
+   with self.subTest(mutation=mutation):
+    state=self.fixture()
+    if mutation=='missing':state['previous']=[]
+    elif mutation=='duplicate':state['previous'].append(dict(state['previous'][0],id=99))
+    elif mutation=='old_start':state['previous'][0]['started_at']=None
+    elif mutation=='old_end':state['previous'][0]['completed_at']=''
+    elif mutation=='new_start':state['current'][0]['started_at']=''
+    elif mutation=='new_end':state['current'][0]['completed_at']=None
+    elif mutation=='prefix':state['current'][0]['name']='different / cell a'
+    elif mutation=='old_failure':state['previous'][0]['conclusion']='failure'
+    self.assertEqual(self.result(state)['status'],'in_progress')
+
+ def test_native_failure_always_overrides_retained_custom_success(self):
+  for outcome in ('failure','cancelled','timed_out','skipped','neutral'):
+   with self.subTest(outcome=outcome):
+    state=self.fixture();state['current'][0]['conclusion']=outcome
+    self.assertEqual(self.result(state).get('conclusion'),'failure')
+    self.assertEqual(state['history_reads'],1)  # Only the other, successful cell needs history.
+
+ def test_unfinished_native_rerun_does_not_reuse_old_success(self):
+  for status in ('queued','in_progress'):
+   with self.subTest(status=status):
+    state=self.fixture();state['current'][0].update(status=status,conclusion=None)
+    self.assertEqual(self.result(state)['status'],'in_progress')
+
+ def test_current_native_success_does_not_need_history(self):
+  state=self.fixture();self.set_attempt(state,0,2);self.set_attempt(state,1,2)
+  state['previous']=[]
+  self.assertEqual(self.result(state).get('conclusion'),'success')
+  self.assertEqual(state['history_reads'],0)
+
+ def test_future_or_invalid_attempt_cannot_qualify_as_retained(self):
+  for attempt in (3,None,'1',True,0,-1):
+   with self.subTest(attempt=attempt):
+    state=self.fixture();self.set_attempt(state,0,attempt)
+    self.assertEqual(self.result(state)['status'],'in_progress')
+
 if __name__=='__main__':unittest.main()

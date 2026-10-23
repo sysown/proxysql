@@ -31,7 +31,9 @@ jobs:
   analyze:
     name: ${{ matrix.check_name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Native C++ extraction and analysis can consume two hours; leave time
+    # for result processing and job finalization to complete successfully.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
