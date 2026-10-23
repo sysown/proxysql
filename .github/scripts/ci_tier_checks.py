@@ -60,6 +60,18 @@ def publish_result(plan,key,status,api,run_id,attempt,run_repository=None):
                     {'status':'in_progress','output':{'title':'Selected product tiers','summary':'Execution in progress'}},
                     retry_safe=True,before_retry=verify_attempt)
 
+def successful_executions(records):
+    """Identify executions independently of GitHub's retained-job clone IDs."""
+    if not records:return None
+    intervals=[]
+    for record in records:
+        if record['status']!='completed' or record.get('conclusion')!='success':return None
+        interval=tuple(record.get(key) for key in ('name','started_at','completed_at'))
+        if not all(isinstance(value,str) and value for value in interval):return None
+        intervals.append(interval)
+    if len({item[0] for item in intervals})!=len(intervals):return None
+    return sorted(intervals)
+
 def observations(plan,api,verify_native=True):
     observed=[];runs={};jobs={}
     all_checks=api.pages(f"repos/{reporting_repository(plan)}/commits/{plan.get('reporting',{}).get('sha',plan['sha'])}/check-runs?filter=all",'check_runs')
@@ -77,16 +89,31 @@ def observations(plan,api,verify_native=True):
             latest=runs[identity]['run_attempt']
             # Successful producer artifacts are immutable and accepted by the
             # trigger. A full producer rerun creates a different execution.
-            if identity not in jobs:
-                jobs[identity]=api.pages(f"repos/{repo}/actions/runs/{rid}/attempts/{latest}/jobs",'jobs')
+            native=identity+(latest,)
+            if native not in jobs:
+                jobs[native]=api.pages(f"repos/{repo}/actions/runs/{rid}/attempts/{latest}/jobs",'jobs')
             # Partial reruns retain cells absent from this attempt. Reusable jobs
             # have caller prefixes, so compare the complete explicit name suffix.
-            rerun=[j for j in jobs[identity] if j['name']==check['name'] or j['name'].endswith(' / '+check['name'])]
+            rerun=[j for j in jobs[native] if j['name']==check['name'] or j['name'].endswith(' / '+check['name'])]
             if rerun:
                 if any(j['status']=='completed' and j.get('conclusion')!='success' for j in rerun):
                     row.update(status='completed',conclusion='failure')
-                elif latest!=meta.get('attempt') or any(j['status']!='completed' for j in rerun):
+                elif any(j['status']!='completed' for j in rerun):
                     row['status']='in_progress'
+                elif latest!=meta.get('attempt'):
+                    recorded=meta.get('attempt')
+                    if type(recorded) is not int or recorded<1 or recorded>=latest:
+                        row['status']='in_progress'
+                    else:
+                        previous=identity+(recorded,)
+                        if previous not in jobs:
+                            jobs[previous]=api.pages(f"repos/{repo}/actions/runs/{rid}/attempts/{recorded}/jobs",'jobs')
+                        original=[j for j in jobs[previous] if j['name']==check['name'] or j['name'].endswith(' / '+check['name'])]
+                        # Retained jobs acquire new IDs and attempt numbers. Only
+                        # an unchanged successful execution interval proves reuse.
+                        intervals=successful_executions(rerun)
+                        if intervals is None or intervals!=successful_executions(original):
+                            row['status']='in_progress'
             elif latest==meta.get('attempt'):
                 # A terminal custom check alone cannot prove the native job ran.
                 row['status']='in_progress'
