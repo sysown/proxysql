@@ -58,33 +58,6 @@ std::unique_ptr<SQLite3_result> mysql_desired_rows(
 	return result;
 }
 
-bool same_server_hostgroup_claims(const std::vector<ProxySQL_ServerHostgroupClaim>& left,
-	const std::vector<ProxySQL_ServerHostgroupClaim>& right) {
-	return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin(),
-		[](const ProxySQL_ServerHostgroupClaim& lhs, const ProxySQL_ServerHostgroupClaim& rhs) {
-			return lhs.writer_hostgroup == rhs.writer_hostgroup &&
-				lhs.reader_hostgroup == rhs.reader_hostgroup;
-		});
-}
-
-std::string mysql_active_replication_hostgroups_cte(
-	const std::vector<ProxySQL_ServerHostgroupClaim>& claims) {
-	std::string query =
-		"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
-		"SELECT writer_hostgroup,reader_hostgroup,check_type FROM mysql_replication_hostgroups";
-	if (!claims.empty()) {
-		query += " UNION ALL SELECT column1,column2,'read_only' FROM (VALUES ";
-		for (size_t index = 0; index < claims.size(); ++index) {
-			if (index != 0) query += ",";
-			query += "(" + std::to_string(claims[index].writer_hostgroup) + "," +
-				std::to_string(claims[index].reader_hostgroup) + ")";
-		}
-		query += ")";
-	}
-	query += ") ";
-	return query;
-}
-
 class ScopedMySQLHostgroupLock {
 public:
 	explicit ScopedMySQLHostgroupLock(MySQL_HostGroups_Manager* manager) : manager_(manager) {
@@ -1366,18 +1339,10 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 */
 bool MySQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_context) {
 
-#ifdef PROXYSQL40
-	auto active_claims = proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql);
-	const bool server_hostgroup_claims_changed =
-		!same_server_hostgroup_claims(active_claims, hgsm_server_hostgroup_claims_);
-#else
-	const bool server_hostgroup_claims_changed = false;
-#endif
-
 	const bool config_changed = commit_context && (
 		hgsm_mysql_servers_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] ||
 		hgsm_mysql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS]);
-	if (config_changed || server_hostgroup_claims_changed)
+	if (config_changed)
 	{
 		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - mysql_servers { old: 0x%lX, new: 0x%lX }, mysql_replication_hostgroups { old:0x%lX, new:0x%lX }\n",
 			hgsm_mysql_servers_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS],
@@ -1388,21 +1353,12 @@ bool MySQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_con
 		int affected_rows = 0;
 		SQLite3_result* resultset = NULL;
 
-		std::string query;
-#ifdef PROXYSQL40
-		query = mysql_active_replication_hostgroups_cte(active_claims);
-#endif
-		query += "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
-			"active_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 "
+		std::string query = "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
+			"mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 "
 			"UNION "
 			"SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
-			"active_replication_hostgroups JOIN mysql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 "
+			"mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 "
 			"ORDER BY hostname, port";
-#ifndef PROXYSQL40
-		query.replace(0, 0,
-			"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
-			"SELECT writer_hostgroup,reader_hostgroup,check_type FROM mysql_replication_hostgroups) ");
-#endif
 
 		const bool query_ok = mydb->execute_statement(
 			query.c_str(), &error, &cols, &affected_rows, &resultset);
@@ -1458,9 +1414,6 @@ bool MySQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_con
 			hgsm_mysql_servers_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
 			hgsm_mysql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS];
 		}
-#ifdef PROXYSQL40
-		hgsm_server_hostgroup_claims_ = std::move(active_claims);
-#endif
 	}
 	return true;
 }
@@ -1469,17 +1422,11 @@ SQLite3_result* MySQL_HostGroups_Manager::get_read_only_servers(char** error) {
 	char* local_error = nullptr;
 	char** error_target = error == nullptr ? &local_error : error;
 #ifdef PROXYSQL40
-	ScopedServerDiscoveryProtocolLock protocol_lock(ProxySQL_ServerProtocol::mysql);
 	ScopedMySQLHostgroupLock hostgroup_lock(this);
-	std::string query = mysql_active_replication_hostgroups_cte(
-		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql));
-#else
-	std::string query =
-		"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
-		"SELECT writer_hostgroup,reader_hostgroup,check_type FROM mysql_replication_hostgroups) ";
 #endif
-	query += "SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup "
-		"FROM mysql_servers JOIN active_replication_hostgroups "
+	std::string query =
+		"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup, writer_hostgroup "
+		"FROM mysql_servers JOIN mysql_replication_hostgroups "
 		"ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup "
 		"WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
 #ifdef PROXYSQL40
@@ -1490,7 +1437,7 @@ SQLite3_result* MySQL_HostGroups_Manager::get_read_only_servers(char** error) {
 #else
 	SQLite3_result* result = execute_query(const_cast<char*>(query.c_str()), error_target);
 #endif
-	if (result == nullptr) result = new SQLite3_result(5);
+	if (result == nullptr) result = new SQLite3_result(6);
 	if (error == nullptr && local_error != nullptr) {
 		proxy_error("Error enumerating read-only monitor servers: %s\n", local_error);
 		free(local_error);
@@ -2078,6 +2025,7 @@ bool MySQL_HostGroups_Manager::commit_locked(
 	// NOTE: In order to guarantee the latest generated version, this should be kept after all the
 	// calls to 'generate_mysql_servers'.
 	update_table_mysql_servers_for_monitor(false);
+	update_aws_aurora_hosts_monitor_resultset();
 	// Refresh BGD monitoring after all runtime server changes are applied.
 	update_aws_rds_bgd_hosts_monitor_resultset();
 
@@ -4250,8 +4198,35 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 		const std::vector<HostGroup_Server_Mapping::Node>& writer_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::WRITER);
 
 		is_writer = !writer_map.empty();
+		const auto remove_disallowed_reader_nodes = [&](bool native_placement_changed) {
+			auto& reader_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::READER);
+			bool removed = false;
+			for (size_t index = reader_map.size(); index > 0; --index) {
+				const auto& reader_node = reader_map[index - 1];
+				bool writer_is_also_reader = mysql_thread___monitor_writer_is_also_reader;
+				bool inventory_managed = false;
+#ifdef PROXYSQL40
+				uint8_t managed_writer_is_also_reader = 0;
+				inventory_managed = proxysql_is_server_inventory_managed_locked(
+					ProxySQL_ServerProtocol::mysql,
+					reader_node.writer_hostgroup_id,
+					reader_node.reader_hostgroup_id,
+					&managed_writer_is_also_reader);
+				if (inventory_managed) {
+					writer_is_also_reader = managed_writer_is_also_reader != 0;
+				}
+#endif
+				if (!writer_is_also_reader && (inventory_managed || native_placement_changed)) {
+					host_server_mapping->remove(
+						HostGroup_Server_Mapping::Type::READER, index - 1);
+					removed = true;
+				}
+			}
+			return removed;
+		};
 
 		if (read_only == 0) {
+			bool writer_placement_changed = false;
 			if (is_writer == false) {
 				// the server has read_only=0 (writer), but we can't find any writer, 
 				// so we copy all reader nodes to writer
@@ -4259,11 +4234,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 				proxy_debug(PROXY_DEBUG_MONITOR, 5, "Server '%s:%d' found with 'read_only=0', but not found as writer\n", hostname.c_str(), port);
 				host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
-				if (mysql_thread___monitor_writer_is_also_reader == false) {
-					// remove node from reader
-					host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
-				}
-
+				writer_placement_changed = true;
 				update_mysql_servers_table = true;
 				proxy_info("Regenerating table 'mysql_servers' due to actions on server '%s:%d'\n", hostname.c_str(), port);
 			} else {
@@ -4305,14 +4276,15 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 					// copy all reader nodes to writer
 					host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
-					if (mysql_thread___monitor_writer_is_also_reader == false) {
-						// remove node from reader
-						host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
-					}
-
+					writer_placement_changed = true;
 					update_mysql_servers_table = true;
 					proxy_info("Regenerating table 'mysql_servers' due to actions on server '%s:%d'\n", hostname.c_str(), port);
 				}
+			}
+			if (remove_disallowed_reader_nodes(writer_placement_changed)) {
+				update_mysql_servers_table = true;
+				proxy_info("Regenerating table 'mysql_servers' after applying writer placement for server '%s:%d'\n",
+					hostname.c_str(), port);
 			}
 		} else if (read_only == 1) {
 			if (is_writer) {
@@ -7440,11 +7412,6 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	// TODO: it is now time to compute all the changes
 
 
-	// it is now time to build a new structure in Monitor
-	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-	update_aws_aurora_hosts_monitor_resultset(false);
-	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-
 	pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 }
 
@@ -7788,7 +7755,7 @@ int MySQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& ad
 }
 
 // FIXME: complete this!!
-void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid, char *_server_id, bool verbose) {
+void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid, char *_server_id, bool inventory_managed, bool verbose) {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -7844,6 +7811,20 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			rc = (*proxy_sqlite3_bind_int64)(statement, 4, _rhid); ASSERT_SQLITE_OK(rc, mydb);
 		}
 	);
+	bool may_create_or_revive = !inventory_managed;
+	if (inventory_managed && resultset && resultset->rows_count == 0) {
+		SQLite3_result* offline = execute(
+			"SELECT 1 FROM mysql_servers WHERE hostname=?1 AND port=?2 AND status=3 AND hostgroup_id IN (?3,?4) LIMIT 1",
+			[&](sqlite3_stmt *statement) {
+				int rc = (*proxy_sqlite3_bind_text)(statement, 1, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 2, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 3, _whid); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 4, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+			}
+		);
+		may_create_or_revive = offline && offline->rows_count > 0;
+		delete offline;
+	}
 
 	if (resultset) {
 		if (resultset->rows_count) {
@@ -8007,7 +7988,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				}
 			}
 			GloAdmin->mysql_servers_wrunlock();
-		} else {
+		} else if (may_create_or_revive) {
 			GloAdmin->mysql_servers_wrlock();
 			wrlock();
 
@@ -8070,7 +8051,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	free(domain_name);
 }
 
-void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid, char *_server_id) {
+void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid, char *_server_id, bool inventory_managed) {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -8118,6 +8099,20 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			rc = (*proxy_sqlite3_bind_int64)(statement, 4, _rhid); ASSERT_SQLITE_OK(rc, mydb);
 		}
 	);
+	bool may_create_or_revive = !inventory_managed;
+	if (inventory_managed && resultset && resultset->rows_count == 0) {
+		SQLite3_result* offline = execute(
+			"SELECT 1 FROM mysql_servers WHERE hostname=?1 AND port=?2 AND status=3 AND hostgroup_id IN (?3,?4) LIMIT 1",
+			[&](sqlite3_stmt *statement) {
+				int rc = (*proxy_sqlite3_bind_text)(statement, 1, full_hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 2, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 3, _whid); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 4, _rhid); ASSERT_SQLITE_OK(rc, mydb);
+			}
+		);
+		may_create_or_revive = offline && offline->rows_count > 0;
+		delete offline;
+	}
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
 			proxy_warning("AWS Aurora: setting host %s%s:%d (part of cluster with writer_hostgroup=%d) in a reader, moving from writer_hostgroup %d to reader_hostgroup %d\n", _server_id, domain_name, aurora_port, _whid, _whid, _rhid);
@@ -8167,7 +8162,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 
 			wrunlock();
 			GloAdmin->mysql_servers_wrunlock();
-		} else {
+		} else if (may_create_or_revive) {
 			// we couldn't find the server
 			// autodiscovery algorithm here
 			GloAdmin->mysql_servers_wrlock();
@@ -8230,6 +8225,10 @@ const char SELECT_AWS_AURORA_SERVERS_FOR_MONITOR[] {
 };
 
 void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lock) {
+	if (!GloMyMon) {
+		return;
+	}
+
 	if (lock) {
 		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
 		pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);

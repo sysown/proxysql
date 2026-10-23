@@ -273,16 +273,16 @@ void test_abi13_fixture_and_invalid_registration() {
 	ok(abi13_fixture != nullptr && abi13_tail_called != nullptr &&
 		mgr.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err) && mgr.init_all(err) && mgr.start_all(err) &&
 		abi13_tail_called(),
-		"a frozen ABI-13 DSO calls its ABI-13 tail through ABI-15 loader/init lifecycle");
+		"a frozen ABI-13 DSO calls its ABI-13 tail through ABI-16 loader/init lifecycle");
 	ok(mgr.stop_all(), "ABI-13 fixture stops cleanly");
 	dlclose(abi13_fixture);
-	setenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI16", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI17", "1", 1);
 	ProxySQL_PluginManager newer_abi_manager;
 	ok(!newer_abi_manager.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err),
-		"ABI-16 descriptor is rejected by the ABI-15 core");
+		"ABI-17 descriptor is rejected by the ABI-16 core");
 	ok(err.find("ABI") != std::string::npos && newer_abi_manager.size() == 0,
-		"ABI-16 rejection does not retain a plugin handle");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI16");
+		"ABI-17 rejection does not retain a plugin handle");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI17");
 	for (const char *version : {"10", "11", "12", "13"}) {
 		setenv("PROXYSQL_FAKE_PLUGIN_LEGACY_AWS_ABI", version, 1);
 		ProxySQL_PluginManager legacy_aws_manager;
@@ -292,11 +292,11 @@ void test_abi13_fixture_and_invalid_registration() {
 			"aws ABI-%s rejection explains the rebuild requirement and retains no handle", version);
 	}
 	unsetenv("PROXYSQL_FAKE_PLUGIN_LEGACY_AWS_ABI");
-	for (const char *version : {"11", "12"}) {
+	for (const char *version : {"11", "12", "14", "15"}) {
 		setenv("PROXYSQL_FAKE_PLUGIN_RESERVED_ABI", version, 1);
 		ProxySQL_PluginManager reserved_manager;
 		ok(!reserved_manager.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err),
-			"reject reserved ABI-%s even when the plugin is not named aws", version);
+			"reject reserved or discovery-incompatible ABI-%s for every plugin", version);
 		ok(err.find("unsupported plugin ABI version") != std::string::npos && reserved_manager.size() == 0,
 			"reserved ABI-%s rejection retains no handle", version);
 	}
@@ -643,7 +643,7 @@ void test_controller_callback_lease_barrier() {
 } // namespace
 
 int main() {
-	plan(56);
+	plan(60);
 	test_abi13_fixture_and_invalid_registration();
 	test_service_phase_availability();
 	test_reserved_register_server_module();
