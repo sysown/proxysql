@@ -182,7 +182,14 @@ def consumer():
     binding_name='ci-tier-binding-'+instance+suffix
     attempt=int(gh['run_attempt'])
     if attempt>1:
-        producer=GitHubAPI(gh['repository']).json_artifact(int(gh['run_id']),binding_name,'binding.json')
+        own=GitHubAPI(gh['repository'])
+        existing=[a for a in own.artifacts(int(gh['run_id'])) if a['name']==binding_name]
+        # Only absence permits recovery. Existing expired, ambiguous or corrupt
+        # snapshots must still fail through normal artifact validation.
+        if existing or ctx['event']=='workflow_dispatch' or ctx['repository']!=gh['repository']:
+            producer=own.json_artifact(int(gh['run_id']),binding_name,'binding.json')
+        else:
+            producer=api.json_artifact(ctx['trigger_id'],f"ci-accepted-producer-a{ctx['trigger_attempt']}",'producer.json')
         if ctx['event']!='workflow_dispatch':verify_binding(producer,ctx)
     elif os.environ.get('PRODUCER_RUN_ID'):
         run=int(os.environ['PRODUCER_RUN_ID'])

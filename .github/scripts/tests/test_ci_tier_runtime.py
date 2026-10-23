@@ -231,4 +231,105 @@ class RuntimeTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'requires producer_attempt'):runtime.consumer()
    api.return_value.artifacts.assert_not_called()
 
+class ConsumerRerunTests(unittest.TestCase):
+ def archive(self,filename,payload):
+  output=io.BytesIO()
+  with zipfile.ZipFile(output,'w') as z:z.writestr(filename,json.dumps(payload))
+  return output.getvalue()
+
+ @contextlib.contextmanager
+ def fixture(self,event='pull_request',foreign=False,workflow='CI-g1'):
+  ctx=dict(repository='source/tests' if foreign else 'sysown/proxysql',sha='a'*40,control_sha='b'*40,
+           trigger_id=1,trigger_attempt=2,build_id=2,build_attempt=1,event=event,pull_requests=[{'number':42}],variables={})
+  plan=make_plan(ctx,dict(tiers=['v40'],mode='normal'),{'consumers':[
+   dict(workflow='CI-g1',file='ci-g1.yml',job='tests',automatic=True,tiers=['v40'],groups=[],cells=[{}])]})
+  producer={k:plan[k] for k in ('repository','sha','trigger_id','trigger_attempt','build_id','build_attempt','execution_id','control_sha')}
+  gh=dict(repository='sysown/proxysql',sha='a'*40,workflow=workflow,run_id='8',run_attempt='3')
+  state=dict(own=[],binding=dict(producer),accepted=dict(producer),manifest=plan,requests=[],deny_acceptance=False)
+  api=runtime.GitHubAPI(gh['repository'])
+  def request(path,**kwargs):
+   state['requests'].append(path)
+   if path.endswith('/pulls/42'):return {'state':'open','head':{'sha':'a'*40}}
+   if '/runs/8/artifacts?' in path:
+    if state.get('list_error'):raise RuntimeError('fixture artifact API unavailable')
+    return {'artifacts':state['own']}
+   if '/runs/1/artifacts?' in path:
+    if state['deny_acceptance']:self.fail('existing/manual binding must not be replaced with acceptance')
+    return {'artifacts':state.get('acceptance_records',[dict(id=32,name='ci-accepted-producer-a2',expired=False)])}
+   if '/runs/2/artifacts?' in path:return {'artifacts':[dict(id=33,name='ci-manifest-t1-a2-b2-a1',expired=False)]}
+   if path.endswith('/artifacts/31/zip'):return state.get('binding_bytes',self.archive('binding.json',state['binding']))
+   if path.endswith('/artifacts/32/zip'):return state.get('accepted_bytes',self.archive('producer.json',state['accepted']))
+   if path.endswith('/artifacts/33/zip'):return self.archive('manifest.json',state['manifest'])
+   self.fail('unexpected API request: '+path)
+  with tempfile.TemporaryDirectory() as folder:
+   prior=os.getcwd();os.chdir(folder)
+   try:
+    with patch.object(runtime,'context',return_value=ctx),patch.object(runtime,'GitHubAPI',return_value=api),patch.object(api,'request',side_effect=request),patch.dict(os.environ,{
+     'GITHUB_JSON':json.dumps(gh),'GITHUB_OUTPUT':str(Path(folder)/'out'),'CONSUMER_INPUTS':'{}','CONSUMER_INSTANCE':'run',
+     'CONSUMER_FILE':'not-in-current-catalogue.yml','PRODUCER_RUN_ID':'99','PRODUCER_ATTEMPT':'9'}):
+     yield state
+   finally:os.chdir(prior)
+
+ def test_automatic_rerun_recovers_original_accepted_producer(self):
+  with self.fixture() as state:
+   runtime.consumer()
+   binding=json.loads(Path('binding.json').read_text())
+   self.assertEqual((binding['trigger_id'],binding['trigger_attempt'],binding['build_id'],binding['build_attempt']),(1,2,2,1))
+   outputs=dict(line.split('=',1) for line in Path(os.environ['GITHUB_OUTPUT']).read_text().splitlines())
+   cells=json.loads(outputs['matrices'])['tests']
+   self.assertEqual([(c['tier'],c['build_id'],c['execution_id']) for c in cells],[('v40',2,'t1-a2-b2-a1')])
+
+ def test_existing_binding_takes_precedence(self):
+  with self.fixture() as state:
+   state['own']=[dict(id=31,name='ci-tier-binding-run',expired=False)]
+   state['deny_acceptance']=True
+   runtime.consumer()
+   self.assertEqual(json.loads(Path('binding.json').read_text())['build_id'],2)
+
+ def test_existing_unreadable_binding_does_not_recover(self):
+  live=dict(id=31,name='ci-tier-binding-run',expired=False)
+  cases=[([dict(live,expired=True)],None,ValueError),([live,dict(live,id=34)],None,ValueError),([live],b'bad zip',zipfile.BadZipFile)]
+  for records,raw,error in cases:
+   with self.subTest(records=records),self.fixture() as state:
+    state['own']=records;state['deny_acceptance']=True
+    if raw is not None:state['binding_bytes']=raw
+    with self.assertRaises(error):runtime.consumer()
+    self.assertFalse(Path('binding.json').exists())
+
+ def test_existing_mismatched_binding_does_not_recover(self):
+  with self.fixture() as state:
+   state['own']=[dict(id=31,name='ci-tier-binding-run',expired=False)]
+   state['binding']['sha']='c'*40;state['deny_acceptance']=True
+   with self.assertRaisesRegex(ValueError,'producer binding mismatch: sha'):runtime.consumer()
+
+ def test_recovery_rejects_wrong_original_identity(self):
+  for key,value in [('repository','other/repo'),('sha','c'*40),('trigger_id',9),('trigger_attempt',9)]:
+   with self.subTest(key=key),self.fixture() as state:
+    state['accepted'][key]=value
+    with self.assertRaisesRegex(ValueError,'producer binding mismatch: '+key):runtime.consumer()
+
+ def test_recovery_preserves_acceptance_validation(self):
+  cases=[([],None,ValueError),([dict(id=32,name='ci-accepted-producer-a2',expired=True)],None,ValueError),
+         ([dict(id=32,name='ci-accepted-producer-a2',expired=False)],b'bad zip',zipfile.BadZipFile)]
+  for records,raw,error in cases:
+   with self.subTest(records=records),self.fixture() as state:
+    state['acceptance_records']=records
+    if raw is not None:state['accepted_bytes']=raw
+    with self.assertRaises(error):runtime.consumer()
+
+ def test_missing_manual_or_foreign_snapshot_does_not_recover(self):
+  for event,foreign in [('workflow_dispatch',False),('pull_request',True)]:
+   with self.subTest(event=event,foreign=foreign),self.fixture(event,foreign) as state:
+    state['deny_acceptance']=True
+    with self.assertRaisesRegex(ValueError,'ci-tier-binding-run'):runtime.consumer()
+
+ def test_artifact_api_error_does_not_recover(self):
+  with self.fixture() as state:
+   state['list_error']=True;state['deny_acceptance']=True
+   with self.assertRaisesRegex(RuntimeError,'fixture artifact API unavailable'):runtime.consumer()
+
+ def test_recovery_cannot_rebuild_a_missing_original_consumer(self):
+  with self.fixture(workflow='CI-new'):
+   with self.assertRaisesRegex(ValueError,'rerun has no original consumer manifest'):runtime.consumer()
+
 if __name__=='__main__':unittest.main()
