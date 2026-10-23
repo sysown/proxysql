@@ -243,7 +243,10 @@ class PublicationTests(unittest.TestCase):
 
     def test_workflow_default_source_is_dispatch_commit(self):
         workflow = (ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text()
-        self.assertIn('ref: ${{ inputs.source_ref || github.sha }}', workflow)
+        plan = workflow.split('  plan:', 1)[1].split('  build:', 1)[0]
+        source_checkout = next(step for step in plan.split('      - uses:')
+                               if '\n          path: source\n' in step)
+        self.assertIn('ref: ${{ inputs.source_ref || github.sha }}', source_checkout)
 
     def test_workflow_publication_permissions_and_dependencies(self):
         workflow = (ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text()
