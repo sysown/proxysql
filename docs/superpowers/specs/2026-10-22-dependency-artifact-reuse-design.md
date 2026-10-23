@@ -53,6 +53,12 @@ dependencies and contains unnecessary objects and generated build machinery.
 It also preserves the current static-linking contract more directly than
 adopting arbitrary upstream binaries.
 
+Publication control code comes from protected `v3.0`, pinned to one revision for
+planning and publishing. Source inputs must be commits reachable from that
+trusted revision; unmerged topic branches cannot publish artifacts. Dependency
+source updates are merged through review before publishing and registering their
+new bundles.
+
 ### Build modes
 
 Introduce `DEPS_MODE`, exported by the root Makefile and forwarded by Compose:

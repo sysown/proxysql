@@ -2,6 +2,7 @@
 import fnmatch
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,8 @@ import unittest
 try:
     import yaml
 except ImportError:
+    if os.environ.get('DEPS_ARTIFACT_CI_REQUIRED') == '1':
+        raise
     raise unittest.SkipTest('workflow validation requires PyYAML')
 
 from ci_tier_conditions import condition_allows
@@ -29,12 +32,76 @@ class DependencyArtifactCITests(unittest.TestCase):
         self.workflow = yaml.safe_load(WORKFLOW.read_text())
 
     def test_runtime_fixture_suite_can_skip_optional_workflow_dependencies(self):
+        env = dict(os.environ)
+        env.pop('DEPS_ARTIFACT_CI_REQUIRED', None)
         result = subprocess.run(
             [sys.executable, '-S', '-m', 'unittest', 'discover', '-s',
              str(ROOT / 'test/infra/control'), '-p', 'test_dependency_artifact_ci.py', '-v'],
-            universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            env=env, universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('workflow validation requires PyYAML', result.stderr)
+
+    def test_required_workflow_validation_fails_if_yaml_is_missing(self):
+        result = subprocess.run(
+            [sys.executable, '-S', '-m', 'unittest', 'discover', '-s',
+             str(ROOT / 'test/infra/control'), '-p', 'test_dependency_artifact_ci.py', '-v'],
+            env=dict(os.environ, DEPS_ARTIFACT_CI_REQUIRED='1'),
+            universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('yaml', result.stderr)
+        self.assertNotIn('OK (skipped=', result.stderr)
+
+    def test_fixture_job_requires_workflow_validation(self):
+        job = self.workflow['jobs']['fixtures']
+        env = dict(os.environ)
+        env.pop('DEPS_ARTIFACT_CI_REQUIRED', None)
+        env.update(job.get('env', {}))
+        result = subprocess.run(
+            [sys.executable, '-S', '-m', 'unittest', 'discover', '-s',
+             str(ROOT / 'test/infra/control'), '-p', 'test_dependency_artifact_ci.py', '-v'],
+            env=env,
+            universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_workflow_installs_and_imports_yaml_before_fixture_discovery(self):
+        steps = self.workflow['jobs']['fixtures']['steps']
+        discovery = next(i for i, step in enumerate(steps)
+                         if 'unittest discover' in step.get('run', ''))
+        setup = [step['run'] for step in steps[:discovery]
+                 if 'pip install' in step.get('run', '')]
+        self.assertEqual(len(setup), 1, 'install workflow dependencies before discovery')
+        # Keep the Python import real. Replace only package download/installation
+        # with a local copy of the installed package, without using the network.
+        for installed, install_fails, expected in ((False, False, True),
+                                                  (True, True, True),
+                                                  (False, True, False)):
+            with self.subTest(installed=installed, install_fails=install_fails), \
+                    tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                site = root / 'site'
+                site.mkdir()
+                package = Path(yaml.__file__).parent
+                if installed:
+                    shutil.copytree(str(package), str(site / 'yaml'))
+                (site / 'pip.py').write_text(
+                    'import os, shutil, sys\n'
+                    'assert sys.argv[1] == "install"\n'
+                    'assert any(arg.startswith("PyYAML") for arg in sys.argv[2:])\n'
+                    'if os.environ["INSTALL_FAILS"] == "1": sys.exit(53)\n'
+                    'shutil.copytree(' + repr(str(package)) + ', ' + repr(str(site / 'yaml')) + ')\n')
+                python = root / 'python3'
+                python.write_text('#!/bin/sh\nexec ' + repr(sys.executable) + ' -S "$@"\n')
+                python.chmod(0o755)
+                env = dict(os.environ, PATH=tmp + os.pathsep + os.environ['PATH'],
+                           PYTHONPATH=str(site), INSTALL_FAILS='1' if install_fails else '0')
+                result = subprocess.run(['bash', '-e', '-c', setup[0]], env=env,
+                                        universal_newlines=True,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
+                if expected:
+                    imported = subprocess.run([str(python), '-c', 'import yaml'], env=env,
+                                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    self.assertEqual(imported.returncode, 0, imported.stderr)
 
     def allows(self, job, event, **context):
         values = {

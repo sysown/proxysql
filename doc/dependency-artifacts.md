@@ -51,7 +51,22 @@ toolchain files, external include/library search paths, compiler/flag overrides
 inside dependency configuration options, and host-native CPU tuning are
 ineligible for prebuilt selection; use the source path for those configurations.
 This includes DuckDB `NATIVE_ARCH` enabled with any CMake true value.
+Clang publication profiles use `clang` and `clang++` by default. Consumers must
+select those same commands explicitly, for example:
+
+```bash
+CC=clang CXX=clang++ make -j4 PROXYSQL40=1 DEPS_MODE=prebuilt
+```
+
+The compiler commands, versions and runtime facts must match the artifact.
+Leaving consumer defaults as `cc`/`g++` selects that configuration instead;
+`auto` compiles source if no exact artifact exists.
+
 Linux libc is queried from the running system, including with Python 3.6.
+Restored dependency directories have mode `0755`, so a host build user can traverse
+a tree prepared by a root-run container in a shared checkout. Staging remains
+private until payload verification succeeds.
+
 Python-free source preparation uses the same dependency lock and records all
 public outputs so a missing header, archive, provider, or license triggers a rebuild.
 It verifies the current vendored checksum sidecar before reusing source outputs.
@@ -71,11 +86,14 @@ using manual dispatch. A maintainer can then select it in Actions or run:
 
 ```bash
 gh workflow run CI-dependency-artifacts.yml --ref v3.0 \
-  -f source_ref="$(git rev-parse HEAD)" -f group=ubuntu24 -f dependency=both
+  -f group=ubuntu24 -f dependency=both
 ```
 
-Use a reviewed source commit that has been pushed to GitHub. Dispatch this
-workflow from `v3.0`: profile selection and publication run control code from
+Omitting `source_ref` builds the immutable `v3.0` revision used for the dispatch.
+An explicit `source_ref` must resolve to a commit reachable from the trusted
+`v3.0` control revision. Merge dependency source changes through review before
+publishing their artifacts; unmerged topic commits are rejected before the
+matrix or build jobs are created. Dispatch this workflow from `v3.0`: profile selection and publication run control code from
 that branch, pinned to one SHA for the workflow. The selected `source_ref` is
 checked out separately and executes only in read-only build jobs. Publication
 checks the trusted plan's exact matrix and source SHA, and build artifacts cannot
@@ -176,8 +194,8 @@ preparation processes may still be running.
 
 ## Validation recorded during implementation
 
-All 77 artifact and workflow fixtures pass on the development host. The
-AlmaLinux 8 packaging image with Python 3.6.8 passes all 70 runtime/helper
+All 83 artifact and workflow fixtures pass on the development host. The
+AlmaLinux 8 packaging image with Python 3.6.8 passes all 73 runtime/helper
 fixtures; the workflow test module explicitly skips when optional PyYAML is
 absent. Regression coverage includes Python-free
 concurrent preparation and complete output inventories, dependency-to-plugin
@@ -185,6 +203,7 @@ flag preservation, unprobed compiler/CPU settings, the running libc version,
 and download response-read timeouts on older Python versions. PR #6520 review
 coverage additionally verifies native CMake CPU options, truncated response
 fallback, Python-free checksum sidecars and relocation, aliased checkout paths,
+and shared-checkout permissions,
 C/C++ compiler family consistency, publication ordering/completeness/timeouts,
 trusted control/source separation, and CI event gates.
 

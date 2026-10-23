@@ -4,8 +4,10 @@ import hashlib
 import importlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
+import stat
 import tarfile
 import tempfile
 import unittest
@@ -87,6 +89,21 @@ class BundleTests(unittest.TestCase):
                 for name, data in files.items():
                     self.assertEqual(data, (target / name).read_bytes())
 
+    def test_restored_root_is_traversable_by_other_build_users(self):
+        for dep in ('duckdb', 'openssl'):
+            with self.subTest(dep=dep):
+                tree = self.root / dep
+                fixture_tree(tree, dep)
+                bundle, entry = self.bundle(dep, tree)
+                target = self.root / 'shared-checkout' / dep
+                previous = os.umask(0o077)
+                try:
+                    self.api.restore_bundle(bundle, entry, target)
+                finally:
+                    os.umask(previous)
+                for directory in [target] + [p for p in target.rglob('*') if p.is_dir()]:
+                    self.assertEqual(0o755, stat.S_IMODE(directory.stat().st_mode), str(directory))
+
     def test_missing_required_archive_or_generated_header_fails_packaging(self):
         for dep, missing in [('duckdb', 'build/release/extension/parquet/libparquet_extension.a'),
                               ('openssl', 'include/openssl/configuration.h')]:
@@ -143,7 +160,9 @@ class BundleTests(unittest.TestCase):
                     result.append((member, data))
                 return result
             self.rewrite(archive, entry, change)
-            message = 'SHA-256 mismatch' if mutation == 'digest' else 'identity|incomplete'
+            message = {'digest': 'SHA-256 mismatch',
+                       'identity': 'identity/schema mismatch',
+                       'missing': 'incomplete dependency payload'}[mutation]
             with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, message):
                 self.api.restore_bundle(archive, entry, self.root / 'destination')
 

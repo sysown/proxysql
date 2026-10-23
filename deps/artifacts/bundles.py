@@ -214,6 +214,13 @@ def restore_bundle(archive, entry, destination):
     backup = None
     try:
         extract_verified(archive, entry, stage)
+        # Keep unverified staging private, then allow shared-checkout consumers
+        # (for example host users after a root-run container) to traverse it,
+        # including directories created under a restrictive build umask.
+        for directory in stage.rglob('*'):
+            if directory.is_dir():
+                directory.chmod(0o755)
+        stage.chmod(0o755)
         if destination.exists():
             backup = Path(tempfile.mkdtemp(prefix='.dependency-backup-', dir=str(destination.parent)))
             backup.rmdir()

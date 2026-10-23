@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Reviewed source branch, tag, or commit to build
+        description: Source branch, tag, or commit already merged into protected v3.0
         type: string
         required: false
       group:
@@ -26,7 +26,7 @@ env:
 
 jobs:
   plan:
-    # Dispatch this workflow from protected v3.0; source_ref is build input only.
+    # Dispatch from protected v3.0 and publish only its reviewed history.
     if: github.ref == 'refs/heads/v3.0'
     timeout-minutes: 10
     runs-on: ubuntu-24.04
@@ -43,7 +43,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.source_ref || github.ref }}
+          ref: ${{ inputs.source_ref || github.sha }}
           path: source
           fetch-depth: 0
           persist-credentials: false
@@ -54,10 +54,15 @@ jobs:
           PROFILE_GROUP: ${{ inputs.group }}
           DEPENDENCY: ${{ inputs.dependency }}
         run: |
+          source_sha=$(git -C ../source rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$source_sha" HEAD; then
+            echo "Source commit must be reachable from protected v3.0 control HEAD" >&2
+            exit 1
+          fi
           python3 -E deps/artifacts/publish.py matrix --group "$PROFILE_GROUP" --dependency "$DEPENDENCY" > expected-matrix.json
           {
             echo "matrix=$(cat expected-matrix.json)"
-            echo "source_sha=$(git -C ../source rev-parse HEAD)"
+            echo "source_sha=$source_sha"
             echo "control_sha=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

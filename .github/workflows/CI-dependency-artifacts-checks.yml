@@ -75,11 +75,19 @@ jobs:
     needs: push-label
     if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (github.event_name != 'push' || (needs.push-label.result == 'success' && needs.push-label.outputs.skip == 'false')) }}
     runs-on: ubuntu-24.04
+    env:
+      DEPS_ARTIFACT_CI_REQUIRED: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install workflow test dependencies
+        run: |
+          if ! python3 -c 'import yaml'; then
+            python3 -m pip install PyYAML==6.0.2
+          fi
+          python3 -c 'import yaml'
       - name: Artifact behavior and existing build contracts
         run: |
           python3 -m unittest discover -s test/infra/control -p 'test_dependency_artifact_*.py' -v
