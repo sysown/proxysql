@@ -1566,6 +1566,36 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 		mybe->server_myds->wait_until = thread->curtime + pgsql_thread___connect_timeout_server * 1000;
 		pause_until = 0;
 	}
+	// Gives up the wait with an error for the client. The rest of an extended-query unit goes too:
+	// left queued, it would run ahead of the client's next unit and fail it.
+	auto give_up_waiting = [this](const char* msg, PGSQL_ERROR_CODES code) {
+		const char txn_state = txn_state_for_local_error();
+		reset_extended_query_frame();
+		client_myds->myprot.generate_error_packet(true, true, msg, code, false, true, NULL, txn_state);
+		RequestEnd(mybe->server_myds, true);
+		while (previous_status.size()) {
+			previous_status.pop();
+		}
+		if (mybe->server_myds->myconn) {
+			// NOTE-3404: Created connection never reached 'connect_cont' phase, due to that internal
+			// structures of 'pgsql->net' are not fully initialized.  This induces a leak of the 'fd'
+			// associated with the socket opened by the library. To prevent this, we need to call
+			// `mysql_real_connect_cont` through `connect_cont`. This way we ensure a proper cleanup of
+			// all the resources when 'mysql_close' is later called. For more context see issue #3404.
+			mybe->server_myds->myconn->connect_cont(PG_EVENT_NONE);
+			mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+		}
+		mybe->server_myds->max_connect_time = 0;
+	};
+	// A cancel for a statement still waiting here ends the wait: nothing has reached the backend, so
+	// the statement never runs. Left for later, it only stopped a statement slow enough to still be
+	// running, and a native batch built after the wait dropped it.
+	if (mybe->server_myds->cancel_query && session_fast_forward == SESSION_FORWARD_TYPE_NONE && mirror == false) {
+		proxy_info("Query cancelled while waiting for a backend connection [Session ID=%u]\n", thread_session_id);
+		mybe->server_myds->cancel_query = false;
+		give_up_waiting("canceling statement due to user request", PGSQL_ERROR_CODES::ERRCODE_QUERY_CANCELED);
+		NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+	}
 	if (mybe->server_myds->max_connect_time ) {
 		if (thread->curtime >= mybe->server_myds->max_connect_time) {
 			if (mirror) {
@@ -1584,31 +1614,10 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 			if (thread) {
 				thread->status_variables.stvar[st_var_max_connect_timeout_err]++;
 			}
-			client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION, 
-				false, true); 
-			RequestEnd(mybe->server_myds, true);
-
 			string hg_status{};
 			generate_status_one_hostgroup(current_hostgroup, hg_status);
+			give_up_waiting(errmsg.c_str(), PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION);
 			proxy_error("%s . HG status: %s\n", errmsg.c_str(), hg_status.c_str());
-
-			while (previous_status.size()) {
-				previous_status.pop();
-			}
-			if (mybe->server_myds->myconn) {
-				// NOTE-3404: Created connection never reached 'connect_cont' phase, due to that internal
-				// structures of 'pgsql->net' are not fully initialized.  This induces a leak of the 'fd'
-				// associated with the socket opened by the library. To prevent this, we need to call
-				// `mysql_real_connect_cont` through `connect_cont`. This way we ensure a proper cleanup of
-				// all the resources when 'mysql_close' is later called. For more context see issue #3404.
-				mybe->server_myds->myconn->connect_cont(PG_EVENT_NONE);
-				mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
-				if (mirror) {
-					PROXY_TRACE();
-					NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
-				}
-			}
-			mybe->server_myds->max_connect_time = 0;
 			NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 		}
 	}
@@ -1764,14 +1773,18 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 			else {
 __exit_handler_again___status_CONNECTING_SERVER_with_err:
 				bool is_error_present = myconn->is_error_present();
+				// as in give_up_waiting(): an open transaction is failed, so COMMIT cannot save it, and
+				// the rest of the unit must not run ahead of the next one
+				const char txn_state = txn_state_for_local_error();
+				reset_extended_query_frame();
 				if (is_error_present) {
-					client_myds->myprot.generate_error_packet(true, true, myconn->error_info.message.c_str(), 
-						myconn->error_info.code, false, true);
+					client_myds->myprot.generate_error_packet(true, true, myconn->error_info.message.c_str(),
+						myconn->error_info.code, false, true, NULL, txn_state);
 				} else {
 					char buf[256];
 					snprintf(buf, sizeof(buf), "Max connect failure while reaching hostgroup %d", current_hostgroup);
 					client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
-						false, true); 
+						false, true, NULL, txn_state);
 					if (thread) {
 						thread->status_variables.stvar[st_var_max_connect_timeout_err]++;
 					}
