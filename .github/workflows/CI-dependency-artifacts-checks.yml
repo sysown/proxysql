@@ -85,7 +85,7 @@ jobs:
       - name: Install workflow test dependencies
         run: |
           if ! python3 -c 'import yaml'; then
-            python3 -m pip install PyYAML==6.0.2
+            python3 -m pip install --only-binary=:all: PyYAML==6.0.2
           fi
           python3 -c 'import yaml'
       - name: Artifact behavior and existing build contracts
