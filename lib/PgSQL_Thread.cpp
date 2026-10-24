@@ -4798,6 +4798,18 @@ void PgSQL_Thread::process_all_sessions() {
 						n--;
 						delete sess;
 					}
+#ifdef PROXYSQL31
+					else if (sess->status == WAITING_CLIENT_DATA &&
+						!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) &&
+						sess->client_myds && !sess->client_myds->pending_poll_revents &&
+						sess->client_myds->PSarrayIN && sess->client_myds->PSarrayIN->len == 0) {
+						// handler() consumed readiness and drained queued commands.
+						// Releasing its backend makes this session eligible for the
+						// backendless scan below, but it has no work left in this pass.
+						// Pending output remains armed for the next poll readiness.
+						sess->to_process = 0;
+					}
+#endif // PROXYSQL31
 				}
 			}
 			else {
