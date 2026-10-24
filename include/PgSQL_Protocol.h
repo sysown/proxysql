@@ -503,6 +503,8 @@ public:
 	 * @return The number of bytes appended to the query result.
 	 */
 	unsigned int add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len);
+	// Validated contiguous DataRows including their original wire headers.
+	unsigned int add_native_data_rows(const unsigned char* wire, unsigned int size, unsigned int rows);
 
     /**
      * @brief Adds the start of a COPY OUT response to the packet.

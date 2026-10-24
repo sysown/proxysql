@@ -2915,6 +2915,23 @@ unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_st
 	return bytes;
 }
 
+unsigned int PgSQL_Query_Result::add_native_data_rows(const unsigned char* wire, unsigned int size, unsigned int rows) {
+	unsigned char* packet = buffer_reserve_space(size);
+	if (packet) {
+		memcpy(packet, wire, size);
+	} else {
+		packet = (unsigned char*)l_alloc(size);
+		memcpy(packet, wire, size);
+		PSarrayOUT.add(packet, size);
+	}
+	resultset_size += size;
+	pkt_count += rows;
+	num_rows += rows;
+	result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+	stmt_had_tuple = true;
+	return size;
+}
+
 unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len) {
 	// Reconstruct the raw client-wire message: type(1) + be32 length(4) + payload.
 	// The length field is (payload_len + 4) per the PostgreSQL wire protocol (it
