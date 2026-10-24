@@ -562,8 +562,13 @@ void PgSQL_Session::reset() {
 		transaction_state_manager->reset_state();
 	}
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	extq_flush_active = false;
+	extq_frame_has_execute = false;
+	extq_discard_until_sync = false;
 	extq_backend_used = false;
 	extq_clear();
+	// bind_waiting_for_execute is not released here: CurrentQuery may still point into it (an
+	// Execute running DISCARD ALL), and the DISCARD ALL handler releases it after RequestEnd().
 	// Drop any named portals + in-flight named Bind (Task P1): a session reset is
 	// well past the scope of any open portal.
 	clear_named_portals();
@@ -2284,6 +2289,23 @@ __implicit_sync:
 						}
 					} else {
 						char command = c = *((unsigned char*)pkt.ptr);
+						// After an error in messages run for a client Flush: discard everything up
+						// to the client's Sync (Terminate excepted), then answer it with ReadyForQuery.
+						if (extq_discard_until_sync && command != 'X') {
+							if (command == 'S') {
+								extq_discard_until_sync = false;
+								extended_query_phase = EXTQ_PHASE_IDLE;
+								extq_flush_active = false;
+								extq_backend_used = false;
+								// A Bind kept from before the failed Flush ends with this Sync.
+								bind_waiting_for_execute.reset(nullptr);
+								client_myds->setDSS_STATE_QUERY_SENT_NET();
+								client_myds->myprot.generate_ready_for_query_packet(true, txn_state_for_local_error());
+								client_myds->DSS = STATE_SLEEP;
+							}
+							l_free(pkt.size, pkt.ptr);
+							continue;
+						}
 						// Poisoned-session gate for Extended Query messages.
 						// Simple Query ('Q') falls through to handler_special_queries,
 						// which dispatches to handler_poisoned_simple_query. QUIT ('X')
@@ -2343,7 +2365,10 @@ __implicit_sync:
 						case 'Q':
 						{
 							extended_query_phase = EXTQ_PHASE_IDLE;
+							extq_flush_active = false;
 							extq_backend_used = false;
+							// A simple Query ends the unnamed portal, e.g. one bound before a client Flush.
+							bind_waiting_for_execute.reset(nullptr);
 							__sync_add_and_fetch(&thread->status_variables.stvar[st_var_queries], 1);
 							if (session_type == PROXYSQL_SESSION_PGSQL) {
 								bool rc_break = false;
@@ -2617,14 +2642,55 @@ __implicit_sync:
 							break;
 						case 'E':
 							extended_query_phase = EXTQ_PHASE_BUILDING;
+							extq_frame_has_execute = true;
 							if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_EXECUTE(pkt) == false) {
 								handler_ret = -1;
 								return handler_ret;
 							}
 							if (tx_poisoned) classify_poisoned_extq_message();
 							break;
+						case 'H':
+							// Flush: the client wants the replies to what it has sent so far, without a
+							// Sync (e.g. Parse + Describe + Flush to learn parameter types, as postgres.js
+							// does). Nothing queued: every reply is already written out, so it is a no-op.
+							if (extended_query_frame.empty()) {
+								l_free(pkt.size, pkt.ptr);
+								pkt = { 0, nullptr };
+								break;
+							}
+							// A frame with an Execute is not supported: running it now, behind an implicit
+							// Sync, would end its implicit transaction (and close its portal) before the
+							// client's Sync. It fails the way PostgreSQL fails a message: one ErrorResponse,
+							// everything up to the client's Sync discarded, that Sync gets ReadyForQuery.
+							if (extq_frame_has_execute) {
+								const char txn_state = txn_state_for_local_error();
+								reset_extended_query_frame();
+								proxy_warning("Flush after Execute is not supported. Client '%s:%d'\n",
+									client_myds->addr.addr ? client_myds->addr.addr : "", client_myds->addr.port);
+								PtrSize_t err_pkt {};
+								client_myds->myprot.generate_error_packet(false, false,
+									"Flush after Execute is not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+									false, true, &err_pkt, txn_state);
+								client_myds->PSarrayOUT->add(err_pkt.ptr, err_pkt.size);
+								extq_discard_until_sync = true;
+								l_free(pkt.size, pkt.ptr);
+								pkt = { 0, nullptr };
+								break;
+							}
+							// Parse/Describe/Bind/Close only: served like the implicit Sync before a simple
+							// Query -- replies are sent, ReadyForQuery is held for the client's own Sync.
+							// Statements are tracked per session, so the client's later Bind/Execute find
+							// them on whichever backend connection serves them.
+							extended_query_phase = EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT;
+							extq_flush_active = true;
+							[[fallthrough]];
 						case 'S':
 						{
+							extq_frame_has_execute = false;
+							if (command == 'S') {
+								// A Sync -- the client's, or the one implied by a simple Query -- not a Flush.
+								extq_flush_active = false;
+							}
 							if (extended_query_phase != EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) {
 								extended_query_phase = EXTQ_PHASE_EXECUTING_SYNC_CLIENT;
 							}
@@ -2634,7 +2700,9 @@ __implicit_sync:
 							// we do not need sync packet anymore
 							l_free(pkt.size, pkt.ptr);
 							pkt = { 0, nullptr };
-							bind_waiting_for_execute.reset(nullptr);
+							// The unnamed portal's Bind is not dropped here: one kept from a frame cut short
+							// by a client Flush (Parse + Bind + Flush) is the one this frame's Execute runs.
+							// Every frame end releases it instead, see extq_frame_done_release_bind().
 							extended_query_exec_qp = true;
 #ifdef PROXYSQL31
 							extended_cache_frame_eligible = extended_cache_frame_stage == 3 &&
@@ -2654,6 +2722,16 @@ __implicit_sync:
 							// and there are more messages in the queue, sync needs to be executed again
 							if (rc == 0 && extended_query_frame.empty() == false) {
 								goto __run_sync_again;
+							}
+							if (rc == 0) {
+								// Every message was answered here, none reached the backend: the frame is over,
+								// and nothing else ends it. Without this a Flush served this way would leave
+								// extq_flush_active set into the client's next frame, and its Sync's own
+								// error would lose its ReadyForQuery.
+								extq_frame_done_release_bind();
+								extended_query_phase = EXTQ_PHASE_IDLE;
+								extq_flush_active = false;
+								extq_backend_used = false;
 							}
 						}
 							break;
@@ -3317,8 +3395,9 @@ handler_again:
 
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Extended query sync completed for session %p\n", this);
 			// we are done with extended query sync
-			bind_waiting_for_execute.reset(nullptr);
+			extq_frame_done_release_bind();
 			extended_query_phase = EXTQ_PHASE_IDLE;
+			extq_flush_active = false;
 			extq_backend_used = false;
 
 			if (PgSQL_Backend* _mybe = find_backend(current_hostgroup)) {
@@ -3699,14 +3778,15 @@ handler_again:
 				if (batch && (libpq_retry || extq_render(myconn) == false)) {
 					// Nothing was sent, and the batch cannot be: a retry landed on a libpq connection (a
 					// Unix-socket server), which cannot carry it, or a message cannot be encoded for the
-					// backend. The unit fails, as when no connection can be had.
-					if (libpq_retry) {
-						client_myds->myprot.generate_error_packet(true, true, "Lost connection to PostgreSQL server during query",
-							PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE, false);
-					} else {
-						client_myds->myprot.generate_error_packet(true, true, "invalid Bind message",
-							PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, false);
-					}
+				// backend. The unit fails, as when no connection can be had.
+				// In a frame served for a client Flush the ReadyForQuery waits for the client's own
+				// Sync: the frame reset below sets extq_discard_until_sync, which answers it.
+				if (libpq_retry) {
+					generate_extq_error("Lost connection to PostgreSQL server during query",
+						PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE, false, 'I');
+				} else {
+					generate_extq_error("invalid Bind message", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, false, 'I');
+				}
 					RequestEnd(myds, true);
 					finishQuery(myds, myconn, false);
 					reset_extended_query_frame(true);
@@ -3951,7 +4031,7 @@ handler_again:
 				if (processing_extended_query) {
 					if (!has_pending_messages) {
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Extended query sync completed for session %p\n", this);
-						bind_waiting_for_execute.reset(nullptr);
+						extq_frame_done_release_bind();
 					} else if (old_status == PROCESSING_STMT_EXECUTE) {
 						// Handle edge case: After Execute, the Bind message is no longer valid on the backend. 
 						// We must reset bind_waiting_for_execute, in case the client sends a sequence like
@@ -3965,6 +4045,7 @@ handler_again:
 						NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC);
 					}
 					extended_query_phase = EXTQ_PHASE_IDLE;
+					extq_flush_active = false;
 					extq_backend_used = false;
 				}
 			} else {
@@ -4709,8 +4790,9 @@ void PgSQL_Session::handler_refuse_listen(PtrSize_t* pkt) {
 // this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo
 void PgSQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t* pkt) {
 	client_myds->DSS = STATE_QUERY_SENT_NET;
-	client_myds->myprot.generate_error_packet(true, true, qpo->error_msg, 
-		PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE, false, false, NULL, txn_state_for_local_error());
+	// Without ReadyForQuery while a client Flush is served (a Parse): the client's Sync gets it.
+	generate_extq_error(qpo->error_msg, PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE, false,
+		txn_state_for_local_error());
 	RequestEnd(NULL, true);
 	l_free(pkt->size, pkt->ptr);
 }
@@ -4719,8 +4801,9 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t* pkt) {
 void PgSQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t* pkt) {
 	// ER_NET_PACKET_TOO_LARGE
 	client_myds->DSS = STATE_QUERY_SENT_NET;
-	client_myds->myprot.generate_error_packet(true, true, "Got a packet bigger than 'max_allowed_packet' bytes",
-		PGSQL_ERROR_CODES::ERRCODE_PROGRAM_LIMIT_EXCEEDED, false, false, NULL, txn_state_for_local_error());
+	// Without ReadyForQuery while a client Flush is served (a Parse): the client's Sync gets it.
+	generate_extq_error("Got a packet bigger than 'max_allowed_packet' bytes",
+		PGSQL_ERROR_CODES::ERRCODE_PROGRAM_LIMIT_EXCEEDED, false, txn_state_for_local_error());
 	RequestEnd(NULL, true);
 	l_free(pkt->size, pkt->ptr);
 }
@@ -5162,6 +5245,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing DISCARD command %s\n", nq.c_str());
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing DISCARD command = %s\n", nq.c_str());
 	bool handled = false;
+	bool discard_all = false;
 	const char* discard_value = nq.c_str();
 	// Reported GUCs this command puts back, for the ParameterStatus messages owed to the
 	// client. Collected before reset(), which is what actually reverts them.
@@ -5204,6 +5288,9 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 			// Throws the frame away, and with it the backend connection when the backend
 			// is mid-batch: it never saw this error and concluding the batch would commit
 			// the work the client is about to be told failed.
+			// The frame reset also releases the unnamed portal's Bind, which the Execute logged by
+			// RequestEnd() below still points into (statement name, bind_msg): keep it until then.
+			auto refused_bind = std::move(bind_waiting_for_execute);
 			reset_extended_query_frame();
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 			// The Describe folded into this Execute is answered before the Execute
@@ -5247,6 +5334,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 					PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, NULL, queued_txn_state);
 			}
 			RequestEnd(NULL, true);
+			refused_bind.reset();
 			return PgSQL_Local_Reply::SENT_ERROR; // Handled (with error)
 		}
 
@@ -5275,6 +5363,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		this->default_hostgroup = default_hostgroup;
 		this->transaction_persistent = transaction_persistent;
 		handled = true;
+		discard_all = true;
 	} else if (strncasecmp(discard_value, "PLANS", 5) == 0) {
 		// ignore
 		handled = true;
@@ -5295,6 +5384,12 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		} else {
 			client_myds->DSS = STATE_SLEEP;
 			status = WAITING_CLIENT_DATA;
+		}
+		if (discard_all) {
+			// DISCARD ALL drops the unnamed portal too (one bound before a client Flush can
+			// outlive its frame). Only now: logging an Execute that ran this command, in
+			// RequestEnd() above, reads the statement name inside that Bind.
+			bind_waiting_for_execute.reset(nullptr);
 		}
 		return PgSQL_Local_Reply::SENT;
 	}
@@ -7236,10 +7331,29 @@ void PgSQL_Session::switch_fast_forward_to_normal_mode() {
 	}
 }
 
+// A non-fatal ErrorResponse for the client, with its ReadyForQuery -- unless a client Flush is
+// being served: then the ReadyForQuery waits for the client's own Sync, and the frame reset that
+// follows the error discards everything up to it (extq_discard_until_sync). The packet is built
+// detached for that: generate_error_packet() adds the ReadyForQuery to every non-fatal error it
+// sends itself, whatever 'ready' says.
+void PgSQL_Session::generate_extq_error(const char* msg, PGSQL_ERROR_CODES code, bool track, char txn_state) {
+	if (extq_flush_active) {
+		PtrSize_t err_pkt {};
+		client_myds->myprot.generate_error_packet(false, false, msg, code, false, track, &err_pkt, txn_state);
+		client_myds->PSarrayOUT->add(err_pkt.ptr, err_pkt.size);
+	} else {
+		client_myds->myprot.generate_error_packet(true, true, msg, code, false, track, NULL, txn_state);
+	}
+}
+
 void PgSQL_Session::handle_post_sync_error(PGSQL_ERROR_CODES errcode, const char* errmsg, bool fatal) {
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	client_myds->myprot.generate_error_packet(true, true, errmsg, errcode, fatal, true, NULL,
-		txn_state_for_local_error());
+	if (fatal) {
+		client_myds->myprot.generate_error_packet(true, true, errmsg, errcode, true, true, NULL,
+			txn_state_for_local_error());
+	} else {
+		generate_extq_error(errmsg, errcode, true, txn_state_for_local_error());
+	}
 	client_myds->DSS = STATE_SLEEP;
 	status = WAITING_CLIENT_DATA;
 }
@@ -7256,8 +7370,8 @@ void PgSQL_Session::handle_post_sync_locked_on_hostgroup_error(const char* query
 	const char* err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
 	char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
 	snprintf(buf, strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
-	client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
-		false, true, NULL, txn_state_for_local_error());
+	// Without ReadyForQuery while a client Flush is served: the client's Sync gets it.
+	generate_extq_error(buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, true, txn_state_for_local_error());
 	free(buf);
 	thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 	RequestEnd(NULL, true);
@@ -8079,6 +8193,7 @@ bool PgSQL_Session::try_extended_query_cache(PgSQL_Execute_Message* execute_msg)
 	RequestEnd(nullptr, false);
 	bind_waiting_for_execute.reset(nullptr);
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	extq_flush_active = false;
 	return true;
 }
 #endif // PROXYSQL31
@@ -8329,6 +8444,10 @@ void PgSQL_Session::reset_extended_query_frame(bool backend_saw_error) {
 			"discarding the backend connection so its work is rolled back\n");
 		mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
 	}
+	extq_frame_has_execute = false;
+	if (extq_flush_active) {
+		extq_discard_until_sync = true;
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session=%p client_myds=%p. Discarding all '%lu' messages in extended query frame\n",
 		this, client_myds, extended_query_frame.size());
 	// Reset the extended query frame and bind to execute
@@ -8337,10 +8456,22 @@ void PgSQL_Session::reset_extended_query_frame(bool backend_saw_error) {
 	}
 	bind_waiting_for_execute.reset(nullptr);
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	extq_flush_active = false;
 	extq_backend_used = false;
 	// NOTE: named_portals are deliberately NOT cleared here — portals outlive an
 	// extended-query frame within a transaction. They are dropped only at txn end
 	// (native_txn_status=='I' after a completed cycle) and in reset()/destructor.
+}
+
+// The frame now running is over. A Sync -- the client's, or the one implied by a simple Query --
+// ends the unnamed portal, so its Bind goes. A frame cut short by a client Flush keeps it: the
+// client sends the Execute for it (e.g. Parse + Bind + Flush, then Execute + Sync) in a later frame,
+// and it stays until that Execute, a replacement Bind, a Close of the portal or the client's Sync.
+// Call before extq_flush_active is cleared.
+void PgSQL_Session::extq_frame_done_release_bind() {
+	if (extq_flush_active == false) {
+		bind_waiting_for_execute.reset(nullptr);
+	}
 }
 
 // Discard the named-portal registry. Called when a completed cycle's ReadyForQuery
@@ -8714,7 +8845,7 @@ int PgSQL_Session::extq_after_message(int rc, unsigned int out_before, enum sess
 		// ProxySQL's own error: PostgreSQL would skip the rest of the unit and fail its transaction,
 		// explicit or implicit. The backend is made to fail at this same point, so the work before it
 		// ends as it would there, including a BEGIN earlier in this unit that has not run yet.
-		reset_extended_query_frame(true);
+		extq_reset_frame_for_error_batch();
 		return extq_finish(true);
 	}
 	if (extended_query_frame.empty()) {
@@ -8743,6 +8874,18 @@ PgSQL_Backend* PgSQL_Session::extq_error_holder() {
 	return nullptr;
 }
 
+// ProxySQL's own error ends the unit, and the batch that carries it to the backend ends in the unit's
+// Sync. The frame is thrown away first, which also clears extq_flush_active: in a frame served for a
+// client Flush that Sync is the implicit one, and its ReadyForQuery is not the client's, which gets
+// one at its own Sync (extq_discard_until_sync, set by the reset). So extq_flush_active is kept for
+// extq_render() to hold that ReadyForQuery back, on every attempt, until the batch ends:
+// extq_unit_done(), or an error path, which resets the frame again.
+void PgSQL_Session::extq_reset_frame_for_error_batch() {
+	const bool flush = extq_flush_active;
+	reset_extended_query_frame(true);
+	extq_flush_active = flush;
+}
+
 // ProxySQL's own error in a unit that is not being buffered. The backend never saw it, so it goes as a
 // one-entry batch that fails on extq_error_holder(). Returns 2, the error staying local, when there
 // is no such connection.
@@ -8753,7 +8896,7 @@ int PgSQL_Session::extq_fail_on_backend(unsigned int out_before) {
 	}
 	bool error = true;
 	std::string bytes = extq_take_replies(out_before, error);
-	reset_extended_query_frame(true);
+	extq_reset_frame_for_error_batch();
 	extq_entries.emplace_back();
 	PgSQL_Extq_Entry& e = extq_entries.back();
 	e.local = std::move(bytes);
@@ -8919,12 +9062,22 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 		}
 	}
 	if (extq_sync) {
-		// The Sync added before a simple Query: its ReadyForQuery is not the client's.
-		const bool implicit = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) != 0;
+		// The Sync added before a simple Query or for a client Flush: its ReadyForQuery is not the
+		// client's. A batch carrying ProxySQL's own error was set up after the frame reset, which
+		// leaves the phase IDLE; extq_flush_active is kept for it (extq_reset_frame_for_error_batch()).
+		const bool implicit = extq_flush_active ||
+			(extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) != 0;
 		pg_build_sync(extq_out);
 		extq_registry.push({ Extq_Kind::SYNC, implicit ? Extq_Reply::DROP : Extq_Reply::RELAY, (uint32_t)extq_entries.size(), std::string() });
 	} else {
 		pg_build_flush(extq_out);
+	}
+	if (extq_flush_active) {
+		// Serving a client Flush, no Sync this batch ends in is the client's: neither the one added
+		// above nor the one the connection adds after an error in a batch cut short without one
+		// (PgSQL_Extq_Registry::needs_sync()). After an error the client's own Sync gets the
+		// ReadyForQuery (extq_discard_until_sync).
+		extq_registry.hold_ready_after_error();
 	}
 	extq_eqi = {};
 	extq_eqi.flags = PGSQL_EXTENDED_QUERY_FLAG_SYNC;
@@ -9117,6 +9270,10 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 		return -1;
 	}
 	const bool backend_error = myconn->is_error_present();
+	if (backend_error && extq_flush_active) {
+		// The unit ran for a client Flush: the rest of the client's cycle is discarded until its Sync.
+		extq_discard_until_sync = true;
+	}
 	if (backend_error) {
 		// The error reached the client in its place in the batch, and the backend has concluded it.
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid,
@@ -9160,8 +9317,9 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 		clear_named_portals();
 	}
 	finishQuery(myds, myconn, sticky);
-	bind_waiting_for_execute.reset(nullptr);
+	extq_frame_done_release_bind();
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	extq_flush_active = false;
 	extq_backend_used = false;
 	extq_clear();
 	return 0;
@@ -9232,7 +9390,10 @@ int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_S
 		writeout();
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
+		// A Sync with nothing queued, e.g. after Parse + Bind + Flush: it ends the unnamed portal.
+		extq_frame_done_release_bind();
 		extended_query_phase = EXTQ_PHASE_IDLE;
+		extq_flush_active = false;
 		extq_backend_used = false;
 		return 0;
 	}
