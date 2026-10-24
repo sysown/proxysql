@@ -869,9 +869,13 @@ handler_again:
 			}
 		}
 
-		// finally add ready for query packet
-		query_result->add_ready_status(PQtransactionStatus(pgsql_conn));
-		update_bytes_recv(6);
+		// finally add ready for query packet -- unless a message run for a client Flush failed:
+		// its ReadyForQuery is held back until the client's own Sync (see PgSQL_Session, case 'H')
+		if (myds->sess->is_extq_flush_active() == false ||
+			(query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_ERROR) == 0) {
+			query_result->add_ready_status(PQtransactionStatus(pgsql_conn));
+			update_bytes_recv(6);
+		}
 		//processing_multi_statement = false;
 		NEXT_IMMEDIATE(fetch_result_end_st);
 	}
@@ -3838,11 +3842,14 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				// Sync error recovery above).
 				if (t == 'Z') {
 					const bool has_error = (query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_ERROR) != 0;
-					if (!myds->sess->is_extended_query_ready_for_query() && !has_error) {
+					if ((!myds->sess->is_extended_query_ready_for_query() && !has_error) ||
+						(has_error && myds->sess->is_extq_flush_active())) {
 						// An implicit Sync before a simple query ends the backend
 						// extended cycle, but the client awaits the simple query's
 						// ReadyForQuery. Match the libpq path while still recording
 						// the backend transaction state and flushing its result.
+						// Likewise for an error in messages run for a client Flush:
+						// its ReadyForQuery waits for the client's own Sync.
 						if (msg.payload_len >= 1) set_ready_for_query_status((char)msg.payload[0]);
 						query_result->buffer_to_PSarrayOut();
 					} else {
