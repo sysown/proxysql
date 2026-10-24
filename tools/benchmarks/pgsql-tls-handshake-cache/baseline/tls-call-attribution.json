@@ -1,0 +1,408 @@
+{
+  "mode": "optimized",
+  "query_response_equivalents": 103650,
+  "normalization": "Backend TLS plaintext / fixed 4063-byte response; independently bracketed pool Queries retained",
+  "pool_query_bracket": 104040,
+  "boundary_slack_pct": 0.7079040677921026,
+  "handler_totals": {
+    "all": 607782,
+    "full": 414612,
+    "io_only": 193170,
+    "io_without_readiness": 193170
+  },
+  "handler_totals_per_query": {
+    "all": 5.863791606367583,
+    "full": 4.000115774240231,
+    "io_only": 1.8636758321273517,
+    "io_without_readiness": 1.8636758321273517
+  },
+  "sites": [
+    {
+      "metric": "BIO_number_read",
+      "count": 518265,
+      "per_query": 5.000144717800289,
+      "return_address": "0x7b1f0b",
+      "function": "PgSQL_Data_Stream::set_pollout()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:903 (discriminator 2)"
+    },
+    {
+      "metric": "BIO_number_read",
+      "count": 310961,
+      "per_query": 3.000106126386879,
+      "return_address": "0x7b2039",
+      "function": "PgSQL_Data_Stream::write_to_net_poll()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1008 (discriminator 2)"
+    },
+    {
+      "metric": "BIO_number_read",
+      "count": 103651,
+      "per_query": 1.0000096478533527,
+      "return_address": "0x7b1d8b",
+      "function": "PgSQL_Data_Stream::write_to_net()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:751 (discriminator 2)"
+    },
+    {
+      "metric": "BIO_number_read",
+      "count": 103650,
+      "per_query": 1.0,
+      "return_address": "0x7b2915",
+      "function": "PgSQL_Data_Stream::data_in_rbio()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1451"
+    },
+    {
+      "metric": "BIO_number_written",
+      "count": 518265,
+      "per_query": 5.000144717800289,
+      "return_address": "0x7b1efc",
+      "function": "PgSQL_Data_Stream::set_pollout()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:903 (discriminator 2)"
+    },
+    {
+      "metric": "BIO_number_written",
+      "count": 310961,
+      "per_query": 3.000106126386879,
+      "return_address": "0x7b202a",
+      "function": "PgSQL_Data_Stream::write_to_net_poll()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1008 (discriminator 2)"
+    },
+    {
+      "metric": "BIO_number_written",
+      "count": 103651,
+      "per_query": 1.0000096478533527,
+      "return_address": "0x7b1d7c",
+      "function": "PgSQL_Data_Stream::write_to_net()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:751 (discriminator 2)"
+    },
+    {
+      "metric": "BIO_number_written",
+      "count": 103650,
+      "per_query": 1.0,
+      "return_address": "0x7b2906",
+      "function": "PgSQL_Data_Stream::data_in_rbio()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1451"
+    },
+    {
+      "metric": "SSL_is_init_finished",
+      "count": 518265,
+      "per_query": 5.000144717800289,
+      "return_address": "0x7b1f20",
+      "function": "PgSQL_Data_Stream::set_pollout()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:907"
+    },
+    {
+      "metric": "SSL_is_init_finished",
+      "count": 414611,
+      "per_query": 4.000106126386879,
+      "return_address": "0x7b1fe4",
+      "function": "PgSQL_Data_Stream::write_to_net_poll()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:945"
+    },
+    {
+      "metric": "SSL_is_init_finished",
+      "count": 103650,
+      "per_query": 1.0,
+      "return_address": "0x79bdbe",
+      "function": "PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream*)",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4149"
+    },
+    {
+      "metric": "SSL_is_init_finished",
+      "count": 103650,
+      "per_query": 1.0,
+      "return_address": "0x7b17e8",
+      "function": "PgSQL_Data_Stream::read_from_net()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:614"
+    },
+    {
+      "metric": "session_writeout",
+      "count": 414611,
+      "per_query": 4.000106126386879,
+      "return_address": "0x7dbaf8",
+      "function": "PgSQL_Session::handler(bool)",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Session.cpp:4168"
+    }
+  ],
+  "handlers": [
+    {
+      "io_only": 1,
+      "to_process": 1,
+      "status": 1,
+      "frontend_ready": 0,
+      "backend_ready": 0,
+      "backend_slots": 1,
+      "count": 193170,
+      "per_query": 1.8636758321273517,
+      "return_address": "0x7ac13e",
+      "function": "PgSQL_Thread::process_all_sessions()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4739"
+    },
+    {
+      "io_only": 0,
+      "to_process": 1,
+      "status": 5,
+      "frontend_ready": 0,
+      "backend_ready": 0,
+      "backend_slots": 1,
+      "count": 103660,
+      "per_query": 1.0000964785335262,
+      "return_address": "0x7abf4f",
+      "function": "PgSQL_Thread::process_all_sessions()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4835"
+    },
+    {
+      "io_only": 0,
+      "to_process": 1,
+      "status": 5,
+      "frontend_ready": 1,
+      "backend_ready": 0,
+      "backend_slots": 1,
+      "count": 103650,
+      "per_query": 1.0,
+      "return_address": "0x7abf4f",
+      "function": "PgSQL_Thread::process_all_sessions()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4835"
+    },
+    {
+      "io_only": 0,
+      "to_process": 1,
+      "status": 1,
+      "frontend_ready": 0,
+      "backend_ready": 0,
+      "backend_slots": 1,
+      "count": 103649,
+      "per_query": 0.9999903521466473,
+      "return_address": "0x7a01a9",
+      "function": "PgSQL_Thread::process_all_sessions()::{lambda(unsigned int, unsigned long)#1}::operator()(unsigned int, unsigned long) const",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4578"
+    },
+    {
+      "io_only": 0,
+      "to_process": 1,
+      "status": 7,
+      "frontend_ready": 0,
+      "backend_ready": 1,
+      "backend_slots": 1,
+      "count": 103644,
+      "per_query": 0.9999421128798842,
+      "return_address": "0x7ac403",
+      "function": "PgSQL_Thread::process_all_sessions()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4789"
+    },
+    {
+      "io_only": 0,
+      "to_process": 1,
+      "status": 7,
+      "frontend_ready": 0,
+      "backend_ready": 0,
+      "backend_slots": 1,
+      "count": 5,
+      "per_query": 4.82392667631452e-05,
+      "return_address": "0x7ac403",
+      "function": "PgSQL_Thread::process_all_sessions()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4789"
+    },
+    {
+      "io_only": 0,
+      "to_process": 1,
+      "status": 1,
+      "frontend_ready": 0,
+      "backend_ready": 0,
+      "backend_slots": 0,
+      "count": 2,
+      "per_query": 1.929570670525808e-05,
+      "return_address": "0x7a01a9",
+      "function": "PgSQL_Thread::process_all_sessions()::{lambda(unsigned int, unsigned long)#1}::operator()(unsigned int, unsigned long) const",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4578"
+    },
+    {
+      "io_only": 0,
+      "to_process": 1,
+      "status": 7,
+      "frontend_ready": 0,
+      "backend_ready": 0,
+      "backend_slots": 0,
+      "count": 1,
+      "per_query": 9.64785335262904e-06,
+      "return_address": "0x7ac403",
+      "function": "PgSQL_Thread::process_all_sessions()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4789"
+    },
+    {
+      "io_only": 0,
+      "to_process": 1,
+      "status": 5,
+      "frontend_ready": 1,
+      "backend_ready": 0,
+      "backend_slots": 0,
+      "count": 1,
+      "per_query": 9.64785335262904e-06,
+      "return_address": "0x7abf4f",
+      "function": "PgSQL_Thread::process_all_sessions()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4835"
+    }
+  ],
+  "streams": [
+    {
+      "metric": "set_pollout",
+      "encrypted": 1,
+      "empty": 1,
+      "count": 414612,
+      "per_query": 4.000115774240231,
+      "return_address": "0x7b1fcd",
+      "function": "PgSQL_Data_Stream::write_to_net_poll()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1031"
+    },
+    {
+      "metric": "set_pollout",
+      "encrypted": 1,
+      "empty": 1,
+      "count": 207303,
+      "per_query": 2.000028943560058,
+      "return_address": "0x78300d",
+      "function": "void Base_Thread::configure_pollout<PgSQL_Thread, PgSQL_Data_Stream>(PgSQL_Data_Stream*, unsigned int)",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/Base_Thread.cpp:510"
+    },
+    {
+      "metric": "set_pollout",
+      "encrypted": 0,
+      "empty": 0,
+      "count": 103651,
+      "per_query": 1.0000096478533527,
+      "return_address": "0x7b1fcd",
+      "function": "PgSQL_Data_Stream::write_to_net_poll()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1031"
+    },
+    {
+      "metric": "write_to_net_poll",
+      "encrypted": 0,
+      "empty": 0,
+      "count": 414612,
+      "per_query": 4.000115774240231,
+      "return_address": "0x7dbaf8",
+      "function": "PgSQL_Session::handler(bool)",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Session.cpp:4168"
+    },
+    {
+      "metric": "write_to_net_poll",
+      "encrypted": 1,
+      "empty": 1,
+      "count": 310961,
+      "per_query": 3.000106126386879,
+      "return_address": "0x77eabd",
+      "function": "Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::writeout()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/Base_Session.cpp:236"
+    },
+    {
+      "metric": "write_to_net_poll",
+      "encrypted": 1,
+      "empty": 0,
+      "count": 103650,
+      "per_query": 1.0,
+      "return_address": "0x77eabd",
+      "function": "Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::writeout()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/Base_Session.cpp:236"
+    }
+  ],
+  "addresses": {
+    "0x77eabd": {
+      "return_address": "0x77eabd",
+      "function": "Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::writeout()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/Base_Session.cpp:236"
+    },
+    "0x78300d": {
+      "return_address": "0x78300d",
+      "function": "void Base_Thread::configure_pollout<PgSQL_Thread, PgSQL_Data_Stream>(PgSQL_Data_Stream*, unsigned int)",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/Base_Thread.cpp:510"
+    },
+    "0x79bdbe": {
+      "return_address": "0x79bdbe",
+      "function": "PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream*)",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4149"
+    },
+    "0x7a01a9": {
+      "return_address": "0x7a01a9",
+      "function": "PgSQL_Thread::process_all_sessions()::{lambda(unsigned int, unsigned long)#1}::operator()(unsigned int, unsigned long) const",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4578"
+    },
+    "0x7abf4f": {
+      "return_address": "0x7abf4f",
+      "function": "PgSQL_Thread::process_all_sessions()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4835"
+    },
+    "0x7ac13e": {
+      "return_address": "0x7ac13e",
+      "function": "PgSQL_Thread::process_all_sessions()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4739"
+    },
+    "0x7ac403": {
+      "return_address": "0x7ac403",
+      "function": "PgSQL_Thread::process_all_sessions()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Thread.cpp:4789"
+    },
+    "0x7b17e8": {
+      "return_address": "0x7b17e8",
+      "function": "PgSQL_Data_Stream::read_from_net()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:614"
+    },
+    "0x7b1d7c": {
+      "return_address": "0x7b1d7c",
+      "function": "PgSQL_Data_Stream::write_to_net()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:751 (discriminator 2)"
+    },
+    "0x7b1d8b": {
+      "return_address": "0x7b1d8b",
+      "function": "PgSQL_Data_Stream::write_to_net()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:751 (discriminator 2)"
+    },
+    "0x7b1efc": {
+      "return_address": "0x7b1efc",
+      "function": "PgSQL_Data_Stream::set_pollout()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:903 (discriminator 2)"
+    },
+    "0x7b1f0b": {
+      "return_address": "0x7b1f0b",
+      "function": "PgSQL_Data_Stream::set_pollout()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:903 (discriminator 2)"
+    },
+    "0x7b1f20": {
+      "return_address": "0x7b1f20",
+      "function": "PgSQL_Data_Stream::set_pollout()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:907"
+    },
+    "0x7b1fcd": {
+      "return_address": "0x7b1fcd",
+      "function": "PgSQL_Data_Stream::write_to_net_poll()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1031"
+    },
+    "0x7b1fe4": {
+      "return_address": "0x7b1fe4",
+      "function": "PgSQL_Data_Stream::write_to_net_poll()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:945"
+    },
+    "0x7b202a": {
+      "return_address": "0x7b202a",
+      "function": "PgSQL_Data_Stream::write_to_net_poll()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1008 (discriminator 2)"
+    },
+    "0x7b2039": {
+      "return_address": "0x7b2039",
+      "function": "PgSQL_Data_Stream::write_to_net_poll()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1008 (discriminator 2)"
+    },
+    "0x7b2906": {
+      "return_address": "0x7b2906",
+      "function": "PgSQL_Data_Stream::data_in_rbio()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1451"
+    },
+    "0x7b2915": {
+      "return_address": "0x7b2915",
+      "function": "PgSQL_Data_Stream::data_in_rbio()",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Data_Stream.cpp:1451"
+    },
+    "0x7dbaf8": {
+      "return_address": "0x7dbaf8",
+      "function": "PgSQL_Session::handler(bool)",
+      "source": "/home/rene/pg-network-bench/src/proxysql-head/lib/PgSQL_Session.cpp:4168"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "commit": "bd2353e922cb5cb13e5f6941f1079fd1685511ff",
+  "parent": "f3163c8646ba24eea1130a0a20b759ae4bef2ce9",
+  "sha256": {
+    "include/PgSQL_Data_Stream.h": "79ced11b7efd0a3696992dac87dd59f2abfae9ad240d99a98cc6e40a93a1663c",
+    "lib/PgSQL_Data_Stream.cpp": "c049e3806c4c0bce40eb845b1c3e9a8a8c0fc07039ba1f8a5a8dce24b4e2fc99",
+    "lib/PgSQL_Thread.cpp": "ad4694cba84b80821378fd8ed67b834ca3d83419bc488061fa8c7c1c145ed9b7",
+    "lib/PgSQL_Session.cpp": "75c69bacd5e29e6f817975944ebdec906bc9225216a21baf2f55a4cd4180065d"
+  }
+}

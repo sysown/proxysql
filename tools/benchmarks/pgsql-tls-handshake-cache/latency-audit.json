@@ -1,0 +1,6 @@
+{
+  "raw_records_verified": 1097545,
+  "clients_with_completions": 500,
+  "quantile_rank_checks_passed": true,
+  "all_uncompressed_log_hashes_match": true
+}
