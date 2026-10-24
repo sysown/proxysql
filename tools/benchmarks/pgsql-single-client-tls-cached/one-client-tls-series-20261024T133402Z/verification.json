@@ -1,0 +1,50 @@
+{
+  "runs": [
+    {
+      "proxy": "cached",
+      "workload": "select1",
+      "records_verified": 455435,
+      "log_hashes_match": true,
+      "percentile_ranks_verified": true,
+      "binary_hash_matches": true,
+      "isolated_instance_stopped": true
+    },
+    {
+      "proxy": "pgbouncer",
+      "workload": "select1",
+      "records_verified": 462426,
+      "log_hashes_match": true,
+      "percentile_ranks_verified": true,
+      "binary_hash_matches": true,
+      "isolated_instance_stopped": true
+    },
+    {
+      "proxy": "cached",
+      "workload": "4kb",
+      "records_verified": 254495,
+      "log_hashes_match": true,
+      "percentile_ranks_verified": true,
+      "binary_hash_matches": true,
+      "isolated_instance_stopped": true
+    },
+    {
+      "proxy": "pgbouncer",
+      "workload": "4kb",
+      "records_verified": 244107,
+      "log_hashes_match": true,
+      "percentile_ranks_verified": true,
+      "binary_hash_matches": true,
+      "isolated_instance_stopped": true
+    }
+  ],
+  "records_verified": 1416463,
+  "no_profiling_process_remaining": true,
+  "main_staged_files_unchanged": true,
+  "rewritten_commits_content_identical": true,
+  "commit_descriptions_contain_no_digits": true,
+  "profiling_tools_absent": [
+    "bpftrace",
+    "perf",
+    "strace"
+  ]
+}

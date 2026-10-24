@@ -1,0 +1,21 @@
+{
+  "mode": "pgbouncer",
+  "workload": "select1",
+  "clients": 1,
+  "jobs": 1,
+  "backend_cap": 10,
+  "tls": true,
+  "tps": 7708.855306,
+  "latency_ms": 0.127,
+  "snapshots": 62,
+  "conn_created_steady": 0,
+  "backend_identities_unchanged": true,
+  "cpu_us_per_query": 55.46693922640526,
+  "user_us_per_query": 23.43600782576825,
+  "system_us_per_query": 32.030931400637,
+  "p50_ms": 0.122,
+  "p95_ms": 0.16,
+  "p99_ms": 0.192,
+  "logged_transactions": 462426,
+  "clients_with_completions": 1
+}

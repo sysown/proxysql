@@ -1,0 +1,4652 @@
+[
+  {
+    "wall_ns": 797783165341887,
+    "cpu_user_ticks": 396,
+    "cpu_system_ticks": 481,
+    "Queries": "155149",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "0",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "10",
+    "sv_used": "0",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797784318106472,
+    "cpu_user_ticks": 417,
+    "cpu_system_ticks": 502,
+    "Queries": "163034",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "9",
+    "sv_used": "0",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797785316204459,
+    "cpu_user_ticks": 435,
+    "cpu_system_ticks": 525,
+    "Queries": "170293",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "9",
+    "sv_used": "0",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797786316164980,
+    "cpu_user_ticks": 454,
+    "cpu_system_ticks": 548,
+    "Queries": "177578",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "9",
+    "sv_used": "0",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797787315567887,
+    "cpu_user_ticks": 474,
+    "cpu_system_ticks": 569,
+    "Queries": "184776",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "10",
+    "sv_used": "0",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797788316130256,
+    "cpu_user_ticks": 488,
+    "cpu_system_ticks": 595,
+    "Queries": "192014",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "9",
+    "sv_used": "0",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797789316015533,
+    "cpu_user_ticks": 505,
+    "cpu_system_ticks": 620,
+    "Queries": "199291",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "10",
+    "sv_used": "0",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797790319763344,
+    "cpu_user_ticks": 525,
+    "cpu_system_ticks": 643,
+    "Queries": "206782",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "9",
+    "sv_used": "0",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797791315543038,
+    "cpu_user_ticks": 543,
+    "cpu_system_ticks": 668,
+    "Queries": "214555",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "9",
+    "sv_used": "0",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797792316988547,
+    "cpu_user_ticks": 557,
+    "cpu_system_ticks": 695,
+    "Queries": "222011",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "10",
+    "sv_used": "0",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797793316475838,
+    "cpu_user_ticks": 574,
+    "cpu_system_ticks": 721,
+    "Queries": "229759",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797794315189387,
+    "cpu_user_ticks": 589,
+    "cpu_system_ticks": 749,
+    "Queries": "237552",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797795316245747,
+    "cpu_user_ticks": 608,
+    "cpu_system_ticks": 773,
+    "Queries": "245363",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797796316480122,
+    "cpu_user_ticks": 625,
+    "cpu_system_ticks": 800,
+    "Queries": "253166",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797797315572621,
+    "cpu_user_ticks": 643,
+    "cpu_system_ticks": 824,
+    "Queries": "260902",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797798316302359,
+    "cpu_user_ticks": 661,
+    "cpu_system_ticks": 848,
+    "Queries": "268433",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797799317038174,
+    "cpu_user_ticks": 672,
+    "cpu_system_ticks": 878,
+    "Queries": "275736",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797800317747864,
+    "cpu_user_ticks": 691,
+    "cpu_system_ticks": 902,
+    "Queries": "283375",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797801317786514,
+    "cpu_user_ticks": 709,
+    "cpu_system_ticks": 927,
+    "Queries": "291162",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797802316461720,
+    "cpu_user_ticks": 727,
+    "cpu_system_ticks": 952,
+    "Queries": "298957",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797803315708122,
+    "cpu_user_ticks": 744,
+    "cpu_system_ticks": 979,
+    "Queries": "306751",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797804315611757,
+    "cpu_user_ticks": 761,
+    "cpu_system_ticks": 1005,
+    "Queries": "314518",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797805315366045,
+    "cpu_user_ticks": 784,
+    "cpu_system_ticks": 1025,
+    "Queries": "322278",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797806315950971,
+    "cpu_user_ticks": 803,
+    "cpu_system_ticks": 1049,
+    "Queries": "330082",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797807315962273,
+    "cpu_user_ticks": 819,
+    "cpu_system_ticks": 1076,
+    "Queries": "337874",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797808316323296,
+    "cpu_user_ticks": 837,
+    "cpu_system_ticks": 1102,
+    "Queries": "345662",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797809316760198,
+    "cpu_user_ticks": 854,
+    "cpu_system_ticks": 1127,
+    "Queries": "353493",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797810317624630,
+    "cpu_user_ticks": 874,
+    "cpu_system_ticks": 1150,
+    "Queries": "361294",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797811316028530,
+    "cpu_user_ticks": 892,
+    "cpu_system_ticks": 1176,
+    "Queries": "369052",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797812316442161,
+    "cpu_user_ticks": 907,
+    "cpu_system_ticks": 1203,
+    "Queries": "376846",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797813317836871,
+    "cpu_user_ticks": 927,
+    "cpu_system_ticks": 1227,
+    "Queries": "384650",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797814315239566,
+    "cpu_user_ticks": 941,
+    "cpu_system_ticks": 1255,
+    "Queries": "392378",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797815315933097,
+    "cpu_user_ticks": 962,
+    "cpu_system_ticks": 1278,
+    "Queries": "400219",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797816315921541,
+    "cpu_user_ticks": 980,
+    "cpu_system_ticks": 1303,
+    "Queries": "408034",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797817315441119,
+    "cpu_user_ticks": 997,
+    "cpu_system_ticks": 1329,
+    "Queries": "415801",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797818316059645,
+    "cpu_user_ticks": 1017,
+    "cpu_system_ticks": 1352,
+    "Queries": "423587",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797819315568237,
+    "cpu_user_ticks": 1032,
+    "cpu_system_ticks": 1380,
+    "Queries": "431374",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797820316997283,
+    "cpu_user_ticks": 1050,
+    "cpu_system_ticks": 1405,
+    "Queries": "439145",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797821315538255,
+    "cpu_user_ticks": 1069,
+    "cpu_system_ticks": 1429,
+    "Queries": "446929",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797822316258038,
+    "cpu_user_ticks": 1087,
+    "cpu_system_ticks": 1455,
+    "Queries": "454741",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797823316202428,
+    "cpu_user_ticks": 1105,
+    "cpu_system_ticks": 1480,
+    "Queries": "462518",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797824315512014,
+    "cpu_user_ticks": 1125,
+    "cpu_system_ticks": 1503,
+    "Queries": "470321",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797825316322081,
+    "cpu_user_ticks": 1143,
+    "cpu_system_ticks": 1529,
+    "Queries": "478133",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797826317097910,
+    "cpu_user_ticks": 1160,
+    "cpu_system_ticks": 1555,
+    "Queries": "485927",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797827316192696,
+    "cpu_user_ticks": 1179,
+    "cpu_system_ticks": 1578,
+    "Queries": "493724",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797828317664201,
+    "cpu_user_ticks": 1202,
+    "cpu_system_ticks": 1599,
+    "Queries": "501506",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797829316506501,
+    "cpu_user_ticks": 1225,
+    "cpu_system_ticks": 1619,
+    "Queries": "509277",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797830319112931,
+    "cpu_user_ticks": 1244,
+    "cpu_system_ticks": 1643,
+    "Queries": "517078",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797831316625231,
+    "cpu_user_ticks": 1265,
+    "cpu_system_ticks": 1665,
+    "Queries": "524884",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797832317371843,
+    "cpu_user_ticks": 1283,
+    "cpu_system_ticks": 1690,
+    "Queries": "532684",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797833316665345,
+    "cpu_user_ticks": 1304,
+    "cpu_system_ticks": 1713,
+    "Queries": "540479",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797834316901857,
+    "cpu_user_ticks": 1326,
+    "cpu_system_ticks": 1734,
+    "Queries": "548297",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797835315415338,
+    "cpu_user_ticks": 1345,
+    "cpu_system_ticks": 1758,
+    "Queries": "556076",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797836318635335,
+    "cpu_user_ticks": 1363,
+    "cpu_system_ticks": 1783,
+    "Queries": "563916",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797837315823941,
+    "cpu_user_ticks": 1377,
+    "cpu_system_ticks": 1812,
+    "Queries": "571660",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797838316321802,
+    "cpu_user_ticks": 1396,
+    "cpu_system_ticks": 1836,
+    "Queries": "579452",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797839315942987,
+    "cpu_user_ticks": 1414,
+    "cpu_system_ticks": 1862,
+    "Queries": "587244",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797840318447600,
+    "cpu_user_ticks": 1435,
+    "cpu_system_ticks": 1884,
+    "Queries": "595030",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797841317116332,
+    "cpu_user_ticks": 1453,
+    "cpu_system_ticks": 1909,
+    "Queries": "602795",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797842315697167,
+    "cpu_user_ticks": 1471,
+    "cpu_system_ticks": 1935,
+    "Queries": "610564",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797843317150142,
+    "cpu_user_ticks": 1487,
+    "cpu_system_ticks": 1960,
+    "Queries": "617575",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "1",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "1",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "0",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  },
+  {
+    "wall_ns": 797843470372605,
+    "cpu_user_ticks": 1487,
+    "cpu_system_ticks": 1960,
+    "Queries": "617575",
+    "identities": [
+      [
+        "420008",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574ba880"
+      ],
+      [
+        "420020",
+        "2026-10-24 13:35:30 UTC",
+        "0x557d574bab68"
+      ],
+      [
+        "420021",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bae50"
+      ],
+      [
+        "420022",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb138"
+      ],
+      [
+        "420023",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb420"
+      ],
+      [
+        "420024",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb708"
+      ],
+      [
+        "420025",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bb9f0"
+      ],
+      [
+        "420026",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbcd8"
+      ],
+      [
+        "420027",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bbfc0"
+      ],
+      [
+        "420028",
+        "2026-10-24 13:35:31 UTC",
+        "0x557d574bc2a8"
+      ]
+    ],
+    "database": "networkbench",
+    "user": "networkbench",
+    "cl_active": "0",
+    "cl_waiting": "0",
+    "cl_active_cancel_req": "0",
+    "cl_waiting_cancel_req": "0",
+    "sv_active": "0",
+    "sv_active_cancel": "0",
+    "sv_being_canceled": "0",
+    "sv_idle": "1",
+    "sv_used": "9",
+    "sv_tested": "0",
+    "sv_login": "0",
+    "maxwait": "0",
+    "maxwait_us": "0",
+    "pool_mode": "transaction",
+    "load_balance_hosts": ""
+  }
+]
