@@ -3676,6 +3676,11 @@ handler_again:
 					query_to_match = digest_text;
 				} else {
 					query_to_match = (char*)CurrentQuery.QueryPointer;
+					// Without a digest, retain the regex for any possible COPY.
+					// Searching only the keyword is conservative across raw SQL
+					// whitespace, comments, and multiple statements.
+					if (run_match && strcasestr(query_to_match, "COPY") == NULL)
+						run_match = false;
 				}
 				if (run_match && copy_cmd_matcher->match(query_to_match, &matched)) {
 
