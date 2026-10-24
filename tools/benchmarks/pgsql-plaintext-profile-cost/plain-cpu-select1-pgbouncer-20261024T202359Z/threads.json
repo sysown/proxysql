@@ -1,0 +1,10 @@
+{
+  "worker": 427773,
+  "threads": [
+    {
+      "tid": 427773,
+      "ticks": 759,
+      "comm": "pgbouncer"
+    }
+  ]
+}

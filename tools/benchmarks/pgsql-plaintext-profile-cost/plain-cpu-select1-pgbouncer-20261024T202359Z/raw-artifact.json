@@ -1,0 +1,10 @@
+{
+  "path": "results/plain-cpu-select1-pgbouncer-20261024T202359Z/perf.data",
+  "bytes": 93808052,
+  "sha256": "223e10258730a35eea2f83379c888e2e8229c362b52f0479efa43f2f2a0146ce",
+  "binary": {
+    "version": "PgBouncer 1.26.1\nlibevent 2.1.12-stable\nadns: evdns2\ntls: OpenSSL 3.0.22 25 Aug 2026",
+    "sha256": "eac4bff64ec9798d69102d7c862f55b7af05a6090e58f130715de51b16d69e1d",
+    "pid": 427773
+  }
+}

@@ -1,0 +1,183 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 10K of event 'cycles'
+# Event count (approx.): 24949543352
+#
+# Children|    Self|Shared Object                    |Symbol                                                                                                 |IPC   [IPC Coverage]
+ 71.97% | 0.73%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::run                                                                                  |-      -
+ 71.95% | 0.00%  |libc.so.6                        |[.] 0x00007fec302a71f4                                                                                 |-      -
+ 71.95% | 0.00%  |libc.so.6                        |[.] 0x00007fec303278eb                                                                                 |-      -
+ 71.95% | 0.00%  |proxysql-head-tls-handshake-cache|[.] pgsql_worker_thread_func                                                                           |-      -
+ 66.73% | 0.22%  |[kernel.kallsyms]                |[k] entry_SYSCALL_64_after_hwframe                                                                     |-      -
+ 66.51% | 0.08%  |[kernel.kallsyms]                |[k] do_syscall_64                                                                                      |-      -
+ 44.52% | 1.08%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::process_all_sessions                                                                 |-      -
+ 43.34% | 1.37%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler                                                                             |-      -
+ 39.81% | 0.14%  |libc.so.6                        |[.] __send                                                                                             |-      -
+ 38.05% | 0.03%  |[kernel.kallsyms]                |[k] __x64_sys_sendto                                                                                   |-      -
+ 38.01% | 0.18%  |[kernel.kallsyms]                |[k] __sys_sendto                                                                                       |-      -
+ 37.50% | 0.08%  |[kernel.kallsyms]                |[k] __sock_sendmsg                                                                                     |-      -
+ 36.80% | 0.04%  |[kernel.kallsyms]                |[k] tcp_sendmsg                                                                                        |-      -
+ 36.29% | 1.31%  |[kernel.kallsyms]                |[k] tcp_sendmsg_locked                                                                                 |-      -
+ 29.91% | 0.44%  |[kernel.kallsyms]                |[k] tcp_write_xmit                                                                                     |-      -
+ 29.91% | 0.00%  |[kernel.kallsyms]                |[k] __tcp_push_pending_frames                                                                          |-      -
+ 28.56% | 0.12%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::RunQuery                                                                            |-      -
+ 28.44% | 0.34%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::async_query                                                                      |-      -
+ 28.38% | 0.69%  |[kernel.kallsyms]                |[k] __tcp_transmit_skb                                                                                 |-      -
+ 28.23% | 0.58%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::handler                                                                          |-      -
+ 27.49% | 0.00%  |[unknown]                        |[k] 0xffffffffffffffff                                                                                 |-      -
+ 27.00% | 0.35%  |[kernel.kallsyms]                |[k] __ip_queue_xmit                                                                                    |-      -
+ 22.90% | 0.26%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::query_start                                                                      |-      -
+ 22.81% | 0.37%  |libc.so.6                        |[.] __poll                                                                                             |-      -
+ 21.68% | 0.10%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::native_send_or_buffer                                                            |-      -
+ 21.59% | 0.07%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::native_flush_outbuf                                                              |-      -
+ 20.95% | 0.16%  |[kernel.kallsyms]                |[k] ip_output                                                                                          |-      -
+ 20.62% | 0.15%  |[kernel.kallsyms]                |[k] __x64_sys_poll                                                                                     |-      -
+ 20.20% | 1.49%  |[kernel.kallsyms]                |[k] do_sys_poll                                                                                        |-      -
+ 20.11% | 0.60%  |[kernel.kallsyms]                |[k] ip_finish_output2                                                                                  |-      -
+ 19.52% | 0.20%  |[kernel.kallsyms]                |[k] __dev_queue_xmit                                                                                   |-      -
+ 18.63% | 0.07%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::write_to_net                                                                    |-      -
+ 17.86% | 0.11%  |[kernel.kallsyms]                |[k] __local_bh_enable_ip                                                                               |-      -
+ 17.75% | 0.15%  |[kernel.kallsyms]                |[k] do_softirq.part.0                                                                                  |-      -
+ 17.60% | 0.31%  |[kernel.kallsyms]                |[k] handle_softirqs                                                                                    |-      -
+ 17.25% | 0.57%  |[kernel.kallsyms]                |[k] net_rx_action                                                                                      |-      -
+ 15.72% | 0.05%  |[kernel.kallsyms]                |[k] __napi_poll                                                                                        |-      -
+ 15.68% | 0.23%  |[kernel.kallsyms]                |[k] process_backlog                                                                                    |-      -
+ 15.28% | 0.01%  |[kernel.kallsyms]                |[k] __netif_receive_skb_one_core                                                                       |-      -
+ 12.82% | 0.27%  |[kernel.kallsyms]                |[k] schedule_hrtimeout_range_clock                                                                     |-      -
+ 11.67% | 0.02%  |[kernel.kallsyms]                |[k] ip_local_deliver_finish                                                                            |-      -
+ 11.63% | 0.13%  |[kernel.kallsyms]                |[k] ip_protocol_deliver_rcu                                                                            |-      -
+ 11.32% | 0.48%  |[kernel.kallsyms]                |[k] tcp_v4_rcv                                                                                         |-      -
+ 10.96% | 0.03%  |[kernel.kallsyms]                |[k] schedule                                                                                           |-      -
+ 10.93% | 0.27%  |[kernel.kallsyms]                |[k] __schedule                                                                                         |-      -
+ 9.27%  | 0.00%  |[kernel.kallsyms]                |[k] tcp_v4_do_rcv                                                                                      |-      -
+ 9.07%  | 0.45%  |[kernel.kallsyms]                |[k] tcp_rcv_established                                                                                |-      -
+ 8.27%  | 0.32%  |libc.so.6                        |[.] recv                                                                                               |-      -
+ 7.68%  | 0.40%  |[kernel.kallsyms]                |[k] nf_hook_slow                                                                                       |-      -
+ 6.77%  | 0.04%  |[kernel.kallsyms]                |[k] __x64_sys_recvfrom                                                                                 |-      -
+ 6.73%  | 0.14%  |[kernel.kallsyms]                |[k] __sys_recvfrom                                                                                     |-      -
+ 6.33%  | 0.11%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::native_recv_into_framer                                                          |-      -
+ 5.86%  | 0.02%  |[kernel.kallsyms]                |[k] inet_recvmsg                                                                                       |-      -
+ 5.84%  | 0.03%  |[kernel.kallsyms]                |[k] tcp_recvmsg                                                                                        |-      -
+ 5.61%  | 0.52%  |[kernel.kallsyms]                |[k] tcp_recvmsg_locked                                                                                 |-      -
+ 5.50%  | 0.13%  |[kernel.kallsyms]                |[k] ip_local_out                                                                                       |-      -
+ 5.37%  | 0.08%  |[kernel.kallsyms]                |[k] __ip_local_out                                                                                     |-      -
+ 4.55%  | 0.72%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::get_pkts_from_client                                                                |-      -
+ 4.26%  | 0.73%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::native_fetch_result_cont                                                         |-      -
+ 3.78%  | 0.70%  |[kernel.kallsyms]                |[k] nf_conntrack_in                                                                                    |-      -
+ 3.67%  | 1.43%  |[kernel.kallsyms]                |[k] tcp_ack                                                                                            |-      -
+ 3.10%  | 0.31%  |[kernel.kallsyms]                |[k] dequeue_task_fair                                                                                  |-      -
+ 3.09%  | 0.04%  |[kernel.kallsyms]                |[k] finish_task_switch.isra.0                                                                          |-      -
+ 3.08%  | 0.04%  |[kernel.kallsyms]                |[k] skb_copy_datagram_iter                                                                             |-      -
+ 3.04%  | 0.63%  |[kernel.kallsyms]                |[k] __skb_datagram_iter                                                                                |-      -
+ 3.02%  | 0.10%  |[kernel.kallsyms]                |[k] __perf_event_task_sched_in                                                                         |-      -
+ 2.92%  | 0.31%  |[kernel.kallsyms]                |[k] sock_def_readable                                                                                  |-      -
+ 2.79%  | 0.69%  |[kernel.kallsyms]                |[k] dequeue_entity                                                                                     |-      -
+ 2.73%  | 0.15%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::read_from_net                                                                   |-      -
+ 2.67%  | 0.31%  |[kernel.kallsyms]                |[k] nft_do_chain_ipv4                                                                                  |-      -
+ 2.62%  | 1.23%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Result::add_native_backend_message                                                     |-      -
+ 2.60%  | 0.11%  |[kernel.kallsyms]                |[k] __wake_up_common_lock                                                                              |-      -
+ 2.59%  | 0.13%  |[kernel.kallsyms]                |[k] ctx_sched_in                                                                                       |-      -
+ 2.43%  | 2.43%  |[kernel.kallsyms]                |[k] copy_user_enhanced_fast_string                                                                     |-      -
+ 2.42%  | 0.20%  |[kernel.kallsyms]                |[k] visit_groups_merge.constprop.0.isra.0                                                              |-      -
+ 2.37%  | 0.25%  |[kernel.kallsyms]                |[k] __wake_up_common                                                                                   |-      -
+ 2.37%  | 0.70%  |[kernel.kallsyms]                |[k] sock_poll                                                                                          |-      -
+ 2.37%  | 1.12%  |[kernel.kallsyms]                |[k] nft_do_chain                                                                                       |-      -
+ 2.13%  | 0.05%  |[kernel.kallsyms]                |[k] ip_local_deliver                                                                                   |-      -
+ 2.07%  | 0.01%  |[kernel.kallsyms]                |[k] tcp_stream_alloc_skb                                                                               |-      -
+ 2.07%  | 0.15%  |[kernel.kallsyms]                |[k] tcp_data_queue                                                                                     |-      -
+ 2.04%  | 0.13%  |proxysql-head-tls-handshake-cache|[.] re2::RE2::PartialMatchN                                                                            |-      -
+ 2.03%  | 0.06%  |[kernel.kallsyms]                |[k] pick_next_task_fair                                                                                |-      -
+ 2.02%  | 0.10%  |proxysql-head-tls-handshake-cache|[.] pgsql_query_has_stmt_keyword                                                                       |-      -
+ 1.98%  | 0.08%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler_again___status_CONNECTING_SERVER                                            |-      -
+ 1.94%  | 0.36%  |[kernel.kallsyms]                |[k] sched_balance_newidle                                                                              |-      -
+ 1.92%  | 0.09%  |proxysql-head-tls-handshake-cache|[.] re2::RE2::DoMatch                                                                                  |-      -
+ 1.91%  | 0.35%  |proxysql-head-tls-handshake-cache|[.] pgsql_text_has_word                                                                                |-      -
+ 1.91%  | 0.33%  |[kernel.kallsyms]                |[k] merge_sched_in                                                                                     |-      -
+ 1.85%  | 0.14%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection        |-      -
+ 1.85%  | 0.08%  |[kernel.kallsyms]                |[k] _copy_to_iter                                                                                      |-      -
+ 1.83%  | 0.21%  |proxysql-head-tls-handshake-cache|[.] re2::RE2::Match                                                                                    |-      -
+ 1.75%  | 1.75%  |[kernel.kallsyms]                |[k] _raw_spin_lock_irqsave                                                                             |-      -
+ 1.67%  | 0.16%  |[kernel.kallsyms]                |[k] __alloc_skb                                                                                        |-      -
+ 1.67%  | 0.99%  |[kernel.kallsyms]                |[k] tcp_poll                                                                                           |-      -
+ 1.66%  | 0.11%  |[kernel.kallsyms]                |[k] ep_poll_callback                                                                                   |-      -
+ 1.64%  | 0.11%  |proxysql-head-tls-handshake-cache|[.] PgSQL_HostGroups_Manager::get_MyConn_from_pool                                                     |-      -
+ 1.62%  | 0.14%  |proxysql-head-tls-handshake-cache|[.] re2::Prog::SearchDFA                                                                               |-      -
+ 1.59%  | 0.23%  |[kernel.kallsyms]                |[k] try_to_wake_up                                                                                     |-      -
+ 1.51%  | 0.85%  |[kernel.kallsyms]                |[k] update_blocked_averages                                                                            |-      -
+ 1.48%  | 1.24%  |[kernel.kallsyms]                |[k] nf_conntrack_tcp_packet                                                                            |-      -
+ 1.45%  | 0.18%  |[kernel.kallsyms]                |[k] poll_freewait                                                                                      |-      -
+ 1.42%  | 0.22%  |[kernel.kallsyms]                |[k] event_sched_in.part.0                                                                              |-      -
+ 1.38%  | 0.10%  |proxysql-head-tls-handshake-cache|[.] re2::DFA::Search                                                                                   |-      -
+ 1.21%  | 0.13%  |[kernel.kallsyms]                |[k] mem_cgroup_charge_skmem                                                                            |-      -
+ 1.20%  | 0.21%  |[kernel.kallsyms]                |[k] psi_task_switch                                                                                    |-      -
+ 1.20%  | 1.09%  |[kernel.kallsyms]                |[k] __fget_light                                                                                       |-      -
+ 1.19%  | 1.19%  |[kernel.kallsyms]                |[k] syscall_return_via_sysret                                                                          |-      -
+ 1.18%  | 0.04%  |[kernel.kallsyms]                |[k] __sk_mem_reduce_allocated                                                                          |-      -
+ 1.16%  | 0.32%  |proxysql-head-tls-handshake-cache|[.] Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::writeout              |-      -
+ 1.12%  | 0.17%  |[kernel.kallsyms]                |[k] hrtimer_start_range_ns                                                                             |-      -
+ 1.07%  | 1.07%  |proxysql-head-tls-handshake-cache|[.] re2::DFA::InlinedSearchLoop<false, false, true>                                                    |-      -
+ 1.06%  | 0.04%  |[kernel.kallsyms]                |[k] ep_autoremove_wake_function                                                                        |-      -
+ 1.06%  | 1.06%  |[kernel.kallsyms]                |[k] entry_SYSCALL_64                                                                                   |-      -
+ 1.05%  | 0.18%  |[kernel.kallsyms]                |[k] dev_hard_start_xmit                                                                                |-      -
+ 0.97%  | 0.25%  |proxysql-head-tls-handshake-cache|[.] pgsql_stmt_first_keyword_is                                                                        |-      -
+ 0.97%  | 0.10%  |[kernel.kallsyms]                |[k] refill_stock                                                                                       |-      -
+ 0.96%  | 0.60%  |[kernel.kallsyms]                |[k] __check_object_size                                                                                |-      -
+ 0.96%  | 0.39%  |[kernel.kallsyms]                |[k] update_curr                                                                                        |-      -
+ 0.96%  | 0.96%  |[kernel.kallsyms]                |[k] fput                                                                                               |-      -
+ 0.94%  | 0.76%  |[kernel.kallsyms]                |[k] psi_group_change                                                                                   |-      -
+ 0.94%  | 0.02%  |[kernel.kallsyms]                |[k] sk_page_frag_refill                                                                                |-      -
+ 0.93%  | 0.06%  |[kernel.kallsyms]                |[k] ip_rcv                                                                                             |-      -
+ 0.93%  | 0.78%  |[kernel.kallsyms]                |[k] __inet_lookup_established                                                                          |-      -
+ 0.92%  | 0.19%  |[kernel.kallsyms]                |[k] skb_page_frag_refill                                                                               |-      -
+ 0.90%  | 0.32%  |[kernel.kallsyms]                |[k] try_charge_memcg                                                                                   |-      -
+ 0.87%  | 0.07%  |[kernel.kallsyms]                |[k] __refill_stock                                                                                     |-      -
+ 0.87%  | 0.25%  |[kernel.kallsyms]                |[k] loopback_xmit                                                                                      |-      -
+ 0.85%  | 0.01%  |[kernel.kallsyms]                |[k] syscall_exit_to_user_mode                                                                          |-      -
+ 0.84%  | 0.33%  |[kernel.kallsyms]                |[k] perf_swevent_add                                                                                   |-      -
+ 0.84%  | 0.01%  |[kernel.kallsyms]                |[k] kmalloc_reserve                                                                                    |-      -
+ 0.82%  | 0.28%  |[kernel.kallsyms]                |[k] ttwu_queue_wakelist                                                                                |-      -
+ 0.81%  | 0.35%  |[kernel.kallsyms]                |[k] nft_match_eval                                                                                     |-      -
+ 0.79%  | 0.28%  |[kernel.kallsyms]                |[k] exit_to_user_mode_prepare                                                                          |-      -
+ 0.78%  | 0.03%  |[kernel.kallsyms]                |[k] drain_stock                                                                                        |-      -
+ 0.78%  | 0.76%  |[kernel.kallsyms]                |[k] __nf_conntrack_find_get                                                                            |-      -
+ 0.74%  | 0.71%  |[kernel.kallsyms]                |[k] page_counter_uncharge                                                                              |-      -
+ 0.72%  | 0.11%  |[kernel.kallsyms]                |[k] _copy_from_iter                                                                                    |-      -
+ 0.72%  | 0.69%  |[kernel.kallsyms]                |[k] timerqueue_add                                                                                     |-      -
+ 0.69%  | 0.57%  |proxysql-head-tls-handshake-cache|[.] PgSQL_HGC::get_random_MySrvC                                                                       |-      -
+ 0.69%  | 0.12%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::finishQuery                                                                         |-      -
+ 0.68%  | 0.01%  |[kernel.kallsyms]                |[k] get_page_from_freelist                                                                             |-      -
+ 0.68%  | 0.00%  |[kernel.kallsyms]                |[k] __alloc_pages                                                                                      |-      -
+ 0.67%  | 0.02%  |[kernel.kallsyms]                |[k] __kmalloc_node_track_caller                                                                        |-      -
+ 0.67%  | 0.02%  |[kernel.kallsyms]                |[k] remove_wait_queue                                                                                  |-      -
+ 0.66%  | 0.11%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::return_local_connections                                                             |-      -
+ 0.66%  | 0.11%  |[kernel.kallsyms]                |[k] pollwake                                                                                           |-      -
+ 0.66%  | 0.32%  |libc.so.6                        |[.] clock_gettime                                                                                      |-      -
+ 0.65%  | 0.12%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::array2buffer_full                                                               |-      -
+ 0.65%  | 0.65%  |[kernel.kallsyms]                |[k] clear_page_erms                                                                                    |-      -
+ 0.65%  | 0.29%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::ProcessAllMyDS_AfterPoll                                                             |-      -
+ 0.64%  | 0.22%  |[kernel.kallsyms]                |[k] __perf_event_task_sched_out                                                                        |-      -
+ 0.62%  | 0.49%  |[kernel.kallsyms]                |[k] __kmem_cache_alloc_node                                                                            |-      -
+ 0.59%  | 0.12%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Processor::process_query                                                               |-      -
+ 0.58%  | 0.58%  |[kernel.kallsyms]                |[k] aa_sk_perm                                                                                         |-      -
+ 0.58%  | 0.40%  |[kernel.kallsyms]                |[k] skb_release_data                                                                                   |-      -
+ 0.57%  | 0.21%  |[kernel.kallsyms]                |[k] update_load_avg                                                                                    |-      -
+ 0.56%  | 0.54%  |[kernel.kallsyms]                |[k] page_counter_try_charge                                                                            |-      -
+ 0.55%  | 0.05%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::RequestEnd                                                                          |-      -
+ 0.55%  | 0.00%  |[kernel.kallsyms]                |[k] simple_copy_to_iter                                                                                |-      -
+ 0.54%  | 0.54%  |libc.so.6                        |[.] pthread_mutex_lock                                                                                 |-      -
+ 0.54%  | 0.54%  |[kernel.kallsyms]                |[k] __netif_receive_skb_core.constprop.0                                                               |-      -
+ 0.53%  | 0.04%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::consume_data_stream_readiness                                                        |-      -
+ 0.53%  | 0.24%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::array2buffer                                                                    |-      -
+ 0.53%  | 0.07%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Backend_Msg_Framer::feed                                                                     |-      -
+ 0.51%  | 0.09%  |proxysql-head-tls-handshake-cache|[.] PgSQL_HostGroups_Manager::push_MyConn_to_pool_array                                                |-      -
+ 0.50%  | 0.37%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Result::buffer_to_PSarrayOut                                                           |-      -
+ 0.50%  | 0.24%  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo                |-      -
+ 0.50%  | 0.05%  |[kernel.kallsyms]                |[k] napi_consume_skb                                                                                   |-      -
+
+
+#
+# (Tip: To see callchains in a more compact form: perf report -g folded)
+#

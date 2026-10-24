@@ -1,0 +1,169 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cycles'
+# Event count (approx.): 33939514971
+#
+# Children|    Self|Shared Object        |Symbol                                    |IPC   [IPC Coverage]
+ 98.12% | 0.09%  |pgbouncer            |[.] main                                  |-      -
+ 98.12% | 0.00%  |libc.so.6            |[.] 0x00007f997ba45249                    |-      -
+ 98.11% | 0.00%  |libc.so.6            |[.] __libc_start_main                     |-      -
+ 98.11% | 0.00%  |pgbouncer            |[.] _start                                |-      -
+ 96.94% | 0.66%  |libevent-2.1.so.7.0.1|[.] event_base_loop                       |-      -
+ 80.46% | 0.28%  |[kernel.kallsyms]    |[k] entry_SYSCALL_64_after_hwframe        |-      -
+ 80.18% | 0.30%  |[kernel.kallsyms]    |[k] do_syscall_64                         |-      -
+ 66.32% | 0.00%  |libevent-2.1.so.7.0.1|[.] 0x00007f997c2c15a4                    |-      -
+ 66.28% | 0.14%  |pgbouncer            |[.] sbuf_main_loop.part.0                 |-      -
+ 55.34% | 0.29%  |pgbouncer            |[.] sbuf_process_pending                  |-      -
+ 50.34% | 0.07%  |pgbouncer            |[.] sbuf_send_pending_iobuf               |-      -
+ 50.04% | 0.20%  |pgbouncer            |[.] safe_send                             |-      -
+ 49.81% | 0.34%  |libc.so.6            |[.] __send                                |-      -
+ 47.41% | 0.04%  |[kernel.kallsyms]    |[k] __x64_sys_sendto                      |-      -
+ 47.36% | 0.30%  |[kernel.kallsyms]    |[k] __sys_sendto                          |-      -
+ 46.74% | 0.06%  |[kernel.kallsyms]    |[k] __sock_sendmsg                        |-      -
+ 45.82% | 0.03%  |[kernel.kallsyms]    |[k] tcp_sendmsg                           |-      -
+ 45.43% | 1.31%  |[kernel.kallsyms]    |[k] tcp_sendmsg_locked                    |-      -
+ 39.07% | 0.01%  |[kernel.kallsyms]    |[k] __tcp_push_pending_frames             |-      -
+ 39.06% | 0.32%  |[kernel.kallsyms]    |[k] tcp_write_xmit                        |-      -
+ 36.97% | 0.91%  |[kernel.kallsyms]    |[k] __tcp_transmit_skb                    |-      -
+ 35.15% | 0.38%  |[kernel.kallsyms]    |[k] __ip_queue_xmit                       |-      -
+ 27.62% | 0.22%  |[kernel.kallsyms]    |[k] ip_output                             |-      -
+ 26.65% | 0.17%  |libc.so.6            |[.] epoll_wait                            |-      -
+ 26.58% | 0.69%  |[kernel.kallsyms]    |[k] ip_finish_output2                     |-      -
+ 26.04% | 0.00%  |libevent-2.1.so.7.0.1|[.] 0x00007f997c2caf33                    |-      -
+ 25.86% | 0.27%  |[kernel.kallsyms]    |[k] __dev_queue_xmit                      |-      -
+ 24.10% | 0.20%  |[kernel.kallsyms]    |[k] __local_bh_enable_ip                  |-      -
+ 23.89% | 0.10%  |[kernel.kallsyms]    |[k] do_softirq.part.0                     |-      -
+ 23.84% | 0.11%  |[kernel.kallsyms]    |[k] __x64_sys_epoll_wait                  |-      -
+ 23.71% | 0.29%  |[kernel.kallsyms]    |[k] handle_softirqs                       |-      -
+ 23.41% | 1.12%  |[kernel.kallsyms]    |[k] do_epoll_wait                         |-      -
+ 23.36% | 0.98%  |[kernel.kallsyms]    |[k] net_rx_action                         |-      -
+ 21.25% | 0.06%  |[kernel.kallsyms]    |[k] __napi_poll                           |-      -
+ 21.19% | 0.24%  |[kernel.kallsyms]    |[k] process_backlog                       |-      -
+ 20.69% | 0.08%  |[kernel.kallsyms]    |[k] __netif_receive_skb_one_core          |-      -
+ 17.36% | 0.30%  |[kernel.kallsyms]    |[k] schedule_hrtimeout_range_clock        |-      -
+ 16.08% | 0.13%  |[kernel.kallsyms]    |[k] ip_local_deliver_finish               |-      -
+ 15.95% | 0.12%  |[kernel.kallsyms]    |[k] ip_protocol_deliver_rcu               |-      -
+ 15.69% | 1.07%  |[kernel.kallsyms]    |[k] tcp_v4_rcv                            |-      -
+ 15.68% | 0.03%  |[kernel.kallsyms]    |[k] schedule                              |-      -
+ 15.66% | 0.52%  |[kernel.kallsyms]    |[k] __schedule                            |-      -
+ 12.37% | 0.02%  |[kernel.kallsyms]    |[k] tcp_v4_do_rcv                         |-      -
+ 12.31% | 1.19%  |[kernel.kallsyms]    |[k] tcp_rcv_established                   |-      -
+ 9.81%  | 0.43%  |[kernel.kallsyms]    |[k] nf_hook_slow                          |-      -
+ 9.22%  | 0.48%  |libc.so.6            |[.] recv                                  |-      -
+ 9.17%  | 0.47%  |pgbouncer            |[.] safe_recv                             |-      -
+ 7.24%  | 0.26%  |[kernel.kallsyms]    |[k] __sys_recvfrom                        |-      -
+ 7.24%  | 0.00%  |[kernel.kallsyms]    |[k] __x64_sys_recvfrom                    |-      -
+ 7.00%  | 0.02%  |[kernel.kallsyms]    |[k] ip_local_out                          |-      -
+ 6.97%  | 0.09%  |[kernel.kallsyms]    |[k] __ip_local_out                        |-      -
+ 5.94%  | 0.01%  |[kernel.kallsyms]    |[k] inet_recvmsg                          |-      -
+ 5.92%  | 0.10%  |[kernel.kallsyms]    |[k] tcp_recvmsg                           |-      -
+ 5.43%  | 0.80%  |[kernel.kallsyms]    |[k] tcp_recvmsg_locked                    |-      -
+ 5.34%  | 0.25%  |[kernel.kallsyms]    |[k] sock_def_readable                     |-      -
+ 5.07%  | 0.24%  |[kernel.kallsyms]    |[k] __wake_up_common_lock                 |-      -
+ 4.81%  | 0.92%  |[kernel.kallsyms]    |[k] nf_conntrack_in                       |-      -
+ 4.73%  | 0.64%  |[kernel.kallsyms]    |[k] dequeue_task_fair                     |-      -
+ 4.67%  | 0.64%  |[kernel.kallsyms]    |[k] __wake_up_common                      |-      -
+ 4.19%  | 1.98%  |[kernel.kallsyms]    |[k] tcp_ack                               |-      -
+ 4.13%  | 0.06%  |[kernel.kallsyms]    |[k] finish_task_switch.isra.0             |-      -
+ 4.09%  | 0.67%  |[kernel.kallsyms]    |[k] dequeue_entity                        |-      -
+ 4.03%  | 0.20%  |[kernel.kallsyms]    |[k] __perf_event_task_sched_in            |-      -
+ 3.45%  | 0.15%  |[kernel.kallsyms]    |[k] ep_poll_callback                      |-      -
+ 3.44%  | 0.13%  |[kernel.kallsyms]    |[k] ctx_sched_in                          |-      -
+ 3.37%  | 0.34%  |[kernel.kallsyms]    |[k] nft_do_chain_ipv4                     |-      -
+ 3.25%  | 0.27%  |[kernel.kallsyms]    |[k] visit_groups_merge.constprop.0.isra.0 |-      -
+ 3.02%  | 1.58%  |[kernel.kallsyms]    |[k] nft_do_chain                          |-      -
+ 2.98%  | 0.12%  |pgbouncer            |[.] client_proto                          |-      -
+ 2.89%  | 0.36%  |pgbouncer            |[.] server_proto                          |-      -
+ 2.88%  | 0.55%  |[kernel.kallsyms]    |[k] try_to_wake_up                        |-      -
+ 2.69%  | 0.06%  |[kernel.kallsyms]    |[k] tcp_stream_alloc_skb                  |-      -
+ 2.69%  | 0.12%  |[kernel.kallsyms]    |[k] pick_next_task_fair                   |-      -
+ 2.63%  | 0.30%  |[kernel.kallsyms]    |[k] ep_item_poll.isra.0                   |-      -
+ 2.60%  | 0.09%  |[kernel.kallsyms]    |[k] ip_local_deliver                      |-      -
+ 2.57%  | 0.42%  |[kernel.kallsyms]    |[k] merge_sched_in                        |-      -
+ 2.56%  | 0.47%  |[kernel.kallsyms]    |[k] sched_balance_newidle                 |-      -
+ 2.36%  | 0.01%  |[kernel.kallsyms]    |[k] skb_copy_datagram_iter                |-      -
+ 2.35%  | 0.93%  |[kernel.kallsyms]    |[k] __skb_datagram_iter                   |-      -
+ 2.26%  | 0.25%  |pgbouncer            |[.] handle_client_work                    |-      -
+ 2.21%  | 0.16%  |[kernel.kallsyms]    |[k] __alloc_skb                           |-      -
+ 2.05%  | 0.05%  |[kernel.kallsyms]    |[k] ep_autoremove_wake_function           |-      -
+ 1.95%  | 0.34%  |[kernel.kallsyms]    |[k] event_sched_in.part.0                 |-      -
+ 1.88%  | 1.88%  |[kernel.kallsyms]    |[k] entry_SYSCALL_64                      |-      -
+ 1.87%  | 1.87%  |[kernel.kallsyms]    |[k] _raw_spin_lock_irqsave                |-      -
+ 1.84%  | 1.19%  |[kernel.kallsyms]    |[k] update_blocked_averages               |-      -
+ 1.82%  | 0.83%  |[kernel.kallsyms]    |[k] sock_poll                             |-      -
+ 1.75%  | 0.31%  |[kernel.kallsyms]    |[k] psi_task_switch                       |-      -
+ 1.74%  | 1.38%  |[kernel.kallsyms]    |[k] nf_conntrack_tcp_packet               |-      -
+ 1.66%  | 0.34%  |libevent-2.1.so.7.0.1|[.] evutil_gettime_monotonic_             |-      -
+ 1.65%  | 0.70%  |[kernel.kallsyms]    |[k] update_curr                           |-      -
+ 1.63%  | 1.63%  |[kernel.kallsyms]    |[k] syscall_return_via_sysret             |-      -
+ 1.56%  | 0.25%  |[kernel.kallsyms]    |[k] ip_rcv                                |-      -
+ 1.54%  | 0.23%  |pgbouncer            |[.] find_server                           |-      -
+ 1.40%  | 0.54%  |[kernel.kallsyms]    |[k] ttwu_queue_wakelist                   |-      -
+ 1.37%  | 1.14%  |[kernel.kallsyms]    |[k] __inet_lookup_established             |-      -
+ 1.36%  | 1.15%  |[kernel.kallsyms]    |[k] psi_group_change                      |-      -
+ 1.29%  | 0.04%  |[kernel.kallsyms]    |[k] kmalloc_reserve                       |-      -
+ 1.28%  | 0.26%  |libc.so.6            |[.] clock_gettime                         |-      -
+ 1.27%  | 0.25%  |[kernel.kallsyms]    |[k] dev_hard_start_xmit                   |-      -
+ 1.27%  | 0.05%  |[kernel.kallsyms]    |[k] syscall_exit_to_user_mode             |-      -
+ 1.17%  | 1.15%  |[kernel.kallsyms]    |[k] __nf_conntrack_find_get               |-      -
+ 1.16%  | 0.38%  |[kernel.kallsyms]    |[k] exit_to_user_mode_prepare             |-      -
+ 1.12%  | 0.44%  |pgbouncer            |[.] varcache_apply                        |-      -
+ 1.10%  | 0.37%  |[kernel.kallsyms]    |[k] perf_swevent_add                      |-      -
+ 1.10%  | 0.59%  |[kernel.kallsyms]    |[k] __check_object_size                   |-      -
+ 1.09%  | 0.04%  |[kernel.kallsyms]    |[k] __kmalloc_node_track_caller           |-      -
+ 1.04%  | 0.19%  |[kernel.kallsyms]    |[k] pollwake                              |-      -
+ 1.04%  | 0.84%  |[kernel.kallsyms]    |[k] __kmem_cache_alloc_node               |-      -
+ 1.03%  | 0.49%  |libevent-2.1.so.7.0.1|[.] evmap_io_active_                      |-      -
+ 1.03%  | 0.00%  |libevent-2.1.so.7.0.1|[.] 0x00007f997c2cafc7                    |-      -
+ 1.02%  | 0.22%  |[kernel.kallsyms]    |[k] loopback_xmit                         |-      -
+ 0.99%  | 0.28%  |pgbouncer            |[.] release_server                        |-      -
+ 0.99%  | 0.88%  |[kernel.kallsyms]    |[k] tcp_poll                              |-      -
+ 0.98%  | 0.04%  |[kernel.kallsyms]    |[k] sk_reset_timer                        |-      -
+ 0.97%  | 0.42%  |pgbouncer            |[.] handle_server_work                    |-      -
+ 0.97%  | 0.37%  |[kernel.kallsyms]    |[k] update_load_avg                       |-      -
+ 0.93%  | 0.93%  |[kernel.kallsyms]    |[k] tcp_check_space                       |-      -
+ 0.92%  | 0.00%  |libevent-2.1.so.7.0.1|[.] 0x00007f997c2bc736                    |-      -
+ 0.91%  | 0.88%  |[kernel.kallsyms]    |[k] __mod_timer                           |-      -
+ 0.86%  | 0.15%  |[kernel.kallsyms]    |[k] hrtimer_start_range_ns                |-      -
+ 0.85%  | 0.40%  |[kernel.kallsyms]    |[k] nft_match_eval                        |-      -
+ 0.83%  | 0.72%  |[kernel.kallsyms]    |[k] skb_release_data                      |-      -
+ 0.83%  | 0.38%  |[kernel.kallsyms]    |[k] tcp_send_mss                          |-      -
+ 0.82%  | 0.37%  |[kernel.kallsyms]    |[k] __perf_event_task_sched_out           |-      -
+ 0.80%  | 0.78%  |[kernel.kallsyms]    |[k] aa_sk_perm                            |-      -
+ 0.80%  | 0.01%  |[kernel.kallsyms]    |[k] simple_copy_to_iter                   |-      -
+ 0.80%  | 0.36%  |pgbouncer            |[.] sbuf_recv_cb                          |-      -
+ 0.78%  | 0.30%  |[kernel.kallsyms]    |[k] tcp_rcv_space_adjust                  |-      -
+ 0.77%  | 0.22%  |[kernel.kallsyms]    |[k] tcp_event_new_data_sent               |-      -
+ 0.75%  | 0.02%  |[kernel.kallsyms]    |[k] security_socket_recvmsg               |-      -
+ 0.75%  | 0.00%  |[kernel.kallsyms]    |[k] sock_recvmsg                          |-      -
+ 0.75%  | 0.00%  |[unknown]            |[k] 0xadda17f5d507e1ff                    |-      -
+ 0.73%  | 0.23%  |[kernel.kallsyms]    |[k] perf_event_update_userpage            |-      -
+ 0.72%  | 0.72%  |[kernel.kallsyms]    |[k] __fget_light                          |-      -
+ 0.69%  | 0.13%  |[kernel.kallsyms]    |[k] security_socket_sendmsg               |-      -
+ 0.68%  | 0.20%  |pgbouncer            |[.] get_cached_time                       |-      -
+ 0.64%  | 0.64%  |[kernel.kallsyms]    |[k] read_tsc                              |-      -
+ 0.64%  | 0.24%  |[kernel.kallsyms]    |[k] ktime_get                             |-      -
+ 0.63%  | 0.63%  |[kernel.kallsyms]    |[k] __update_load_avg_cfs_rq              |-      -
+ 0.63%  | 0.11%  |[kernel.kallsyms]    |[k] tcp_mstamp_refresh                    |-      -
+ 0.61%  | 0.05%  |[kernel.kallsyms]    |[k] napi_consume_skb                      |-      -
+ 0.61%  | 0.06%  |[kernel.kallsyms]    |[k] _copy_to_iter                         |-      -
+ 0.59%  | 0.36%  |[kernel.kallsyms]    |[k] skb_attempt_defer_free                |-      -
+ 0.58%  | 0.57%  |[kernel.kallsyms]    |[k] timerqueue_add                        |-      -
+ 0.58%  | 0.42%  |pgbouncer            |[.] slab_alloc                            |-      -
+ 0.58%  | 0.10%  |[kernel.kallsyms]    |[k] sched_clock_cpu                       |-      -
+ 0.56%  | 0.56%  |[kernel.kallsyms]    |[k] update_cfs_group                      |-      -
+ 0.56%  | 0.53%  |[kernel.kallsyms]    |[k] tcp_ack_update_rtt                    |-      -
+ 0.55%  | 0.55%  |[kernel.kallsyms]    |[k] entry_SYSRETQ_unsafe_stack            |-      -
+ 0.54%  | 0.53%  |[kernel.kallsyms]    |[k] mutex_lock                            |-      -
+ 0.54%  | 0.54%  |[kernel.kallsyms]    |[k] copy_user_enhanced_fast_string        |-      -
+ 0.53%  | 0.53%  |[kernel.kallsyms]    |[k] _raw_spin_lock_irq                    |-      -
+ 0.52%  | 0.03%  |[kernel.kallsyms]    |[k] select_task_rq_fair                   |-      -
+ 0.51%  | 0.51%  |[kernel.kallsyms]    |[k] __calc_delta                          |-      -
+
+
+#
+# (Tip: To show IPC for sampling periods use perf record -e '{cycles,instructions}:S' and then browse context)
+#
