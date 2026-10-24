@@ -1566,12 +1566,23 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 		mybe->server_myds->wait_until = thread->curtime + pgsql_thread___connect_timeout_server * 1000;
 		pause_until = 0;
 	}
+	// The error that ends the wait. A Sync implied by a simple Query that follows leaves the
+	// ReadyForQuery to that Query, but generate_error_packet() adds one to every error it sends,
+	// so that error is built and queued here.
+	auto send_wait_error = [this](const char* msg, PGSQL_ERROR_CODES code, char txn_state) {
+		if ((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0) {
+			client_myds->myprot.generate_error_packet(true, true, msg, code, false, true, NULL, txn_state);
+			return;
+		}
+		PtrSize_t err {};
+		client_myds->myprot.generate_error_packet(false, false, msg, code, false, true, &err, txn_state);
+		client_myds->PSarrayOUT->add(err.ptr, err.size);
+	};
 	// Gives up the wait with an error for the client. The rest of an extended-query unit goes too:
 	// left queued, it would run ahead of the client's next unit and fail it.
-	auto give_up_waiting = [this](const char* msg, PGSQL_ERROR_CODES code) {
-		const char txn_state = txn_state_for_local_error();
+	auto give_up_waiting = [this, &send_wait_error](const char* msg, PGSQL_ERROR_CODES code) {
+		send_wait_error(msg, code, txn_state_for_local_error());
 		reset_extended_query_frame();
-		client_myds->myprot.generate_error_packet(true, true, msg, code, false, true, NULL, txn_state);
 		RequestEnd(mybe->server_myds, true);
 		while (previous_status.size()) {
 			previous_status.pop();
@@ -1776,19 +1787,17 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 				// as in give_up_waiting(): an open transaction is failed, so COMMIT cannot save it, and
 				// the rest of the unit must not run ahead of the next one
 				const char txn_state = txn_state_for_local_error();
-				reset_extended_query_frame();
 				if (is_error_present) {
-					client_myds->myprot.generate_error_packet(true, true, myconn->error_info.message.c_str(),
-						myconn->error_info.code, false, true, NULL, txn_state);
+					send_wait_error(myconn->error_info.message.c_str(), myconn->error_info.code, txn_state);
 				} else {
 					char buf[256];
 					snprintf(buf, sizeof(buf), "Max connect failure while reaching hostgroup %d", current_hostgroup);
-					client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
-						false, true, NULL, txn_state);
+					send_wait_error(buf, PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION, txn_state);
 					if (thread) {
 						thread->status_variables.stvar[st_var_max_connect_timeout_err]++;
 					}
 				}
+				reset_extended_query_frame();
 				if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 					// see bug #979
 					RequestEnd(myds, true);
