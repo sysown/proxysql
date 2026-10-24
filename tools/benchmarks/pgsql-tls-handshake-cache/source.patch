@@ -1,0 +1,122 @@
+diff --git a/include/PgSQL_Data_Stream.h b/include/PgSQL_Data_Stream.h
+index 4c42d3de2..69a797a9e 100644
+--- a/include/PgSQL_Data_Stream.h
++++ b/include/PgSQL_Data_Stream.h
+@@ -187,6 +187,9 @@ public:
+ 	bool cancel_query;
+ 
+ 	bool com_field_list;
++	// Verified frontend TLS 1.3 handshakes have no renegotiation phase.
++	// Older TLS and borrowed backend streams retain OpenSSL state checks.
++	bool tls13_handshake_complete = false;
+ 	char* com_field_wild;
+ 
+ 	PgSQL_Data_Stream();
+@@ -196,6 +199,9 @@ public:
+ 	void init(PgSQL_DS_type, PgSQL_Session*, int); // initialize with arguments
+ 	void shut_soft();
+ 	void shut_hard();
++	bool ssl_handshake_is_complete() const {
++		return tls13_handshake_complete || SSL_is_init_finished(ssl);
++	}
+ 	int read_from_net();
+ 	int write_to_net();
+ 	int write_to_net_poll();
+diff --git a/lib/PgSQL_Data_Stream.cpp b/lib/PgSQL_Data_Stream.cpp
+index 0648a18d4..457213a2e 100644
+--- a/lib/PgSQL_Data_Stream.cpp
++++ b/lib/PgSQL_Data_Stream.cpp
+@@ -189,6 +189,9 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
+ 				return PGSQL_SSLSTATUS_FAIL;
+ 			}
+ 		}
++		// Publish the fast path only after the certificate checks above.
++		tls13_handshake_complete = myds_type == MYDS_FRONTEND &&
++			SSL_version(ssl) == TLS1_3_VERSION;
+ 	}
+ 	status = get_sslstatus(ssl, n);
+ 	//proxy_info("SSL status = %d\n", status);
+@@ -611,14 +614,14 @@ int PgSQL_Data_Stream::read_from_net() {
+ 				}
+ 				src += n2;
+ 				len -= n2;
+-				if (!SSL_is_init_finished(ssl)) {
++				if (!ssl_handshake_is_complete()) {
+ 					//proxy_info("SSL_is_init_finished NOT completed\n");
+ 					if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
+ 						//proxy_info("SSL_is_init_finished failed!!\n");
+ 						shut_soft();
+ 						return -1;
+ 					}
+-					if (!SSL_is_init_finished(ssl)) {
++					if (!ssl_handshake_is_complete()) {
+ 						//proxy_info("SSL_is_init_finished yet NOT completed\n");
+ 						return 0;
+ 					}
+@@ -904,14 +907,14 @@ void PgSQL_Data_Stream::set_pollout() {
+ 				_pollfd->events |= POLLOUT;
+ 			}
+ 			else {
+-				if (!SSL_is_init_finished(ssl)) {
++				if (!ssl_handshake_is_complete()) {
+ 					//proxy_info("SSL_is_init_finished NOT completed\n");
+ 					if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
+ 						//proxy_info("SSL_is_init_finished failed!!\n");
+ 						shut_soft();
+ 						return;
+ 					}
+-					if (!SSL_is_init_finished(ssl)) {
++					if (!ssl_handshake_is_complete()) {
+ 						//proxy_info("SSL_is_init_finished yet NOT completed\n");
+ 						return;
+ 					}
+@@ -942,7 +945,7 @@ int PgSQL_Data_Stream::write_to_net_poll() {
+ 		}
+ 	*/
+ 	if (encrypted) {
+-		if (!SSL_is_init_finished(ssl)) {
++		if (!ssl_handshake_is_complete()) {
+ 			//proxy_info("SSL_is_init_finished completed: NO!\n");
+ 			if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
+ 				//proxy_info("SSL_is_init_finished failed!!\n");
+@@ -1226,6 +1229,7 @@ bool PgSQL_Data_Stream::adopt_backend_tls() {
+ 		myconn->reusable = false;
+ 		return false;
+ 	}
++	tls13_handshake_complete = false;
+ 	encrypted = true;
+ 	ssl = ssl_obj;
+ 	if (myconn->native_mode) {
+@@ -1298,6 +1302,7 @@ void PgSQL_Data_Stream::refuse_reuse_on_stranded_tls() {
+ // libpq keeps writing into our buffers and the next query never reaches the
+ // backend, in this session or in whichever one gets the connection next.
+ void PgSQL_Data_Stream::release_backend_tls() {
++	tls13_handshake_complete = false;
+ 	if (backend_tls_adopted == false) {
+ 		if (myconn != NULL && myconn->native_mode && ssl != NULL) {
+ 			// A native borrow shares the connection's own BIOs, so there is nothing to
+diff --git a/lib/PgSQL_Session.cpp b/lib/PgSQL_Session.cpp
+index 63c0213b0..a90fb8ed8 100644
+--- a/lib/PgSQL_Session.cpp
++++ b/lib/PgSQL_Session.cpp
+@@ -4273,6 +4273,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
+ 			client_myds->DSS = STATE_SSL_INIT;
+ 			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
+ 			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
++			client_myds->tls13_handshake_complete = false;
+ 			client_myds->ssl = GloVars.get_SSL_new();
+ 			SSL_set_fd(client_myds->ssl, client_myds->fd);
+ 			SSL_set_accept_state(client_myds->ssl);
+diff --git a/lib/PgSQL_Thread.cpp b/lib/PgSQL_Thread.cpp
+index 976f62f37..0ebb0837e 100644
+--- a/lib/PgSQL_Thread.cpp
++++ b/lib/PgSQL_Thread.cpp
+@@ -4146,7 +4146,7 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
+ 					bool set_rb_zero = true;
+ 					if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
+ 						if (myds->encrypted == true) {
+-							if (SSL_is_init_finished(myds->ssl)) {
++							if (myds->ssl_handshake_is_complete()) {
+ 								if (myds->data_in_rbio()) {
+ 									set_rb_zero = false;
+ 								}

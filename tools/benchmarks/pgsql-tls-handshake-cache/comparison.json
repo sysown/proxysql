@@ -1,0 +1,83 @@
+{
+  "baseline": {
+    "mode": "optimized",
+    "tls": true,
+    "commands_stats": false,
+    "query_digests": false,
+    "digest_map_unchanged": true,
+    "tps": 17626.92611,
+    "latency_ms": 28.349,
+    "conn_ok_start": "10",
+    "conn_ok_end": "10",
+    "conn_err_end": "0",
+    "snapshots": 62,
+    "cpu_us_per_query": 56.54807153376433,
+    "user_us_per_query": 31.371472269433863,
+    "system_us_per_query": 25.176599264330466,
+    "p50_ms": 28.142,
+    "p95_ms": 29.186,
+    "p99_ms": 34.842,
+    "logged_transactions": 1006079,
+    "clients_with_completions": 500
+  },
+  "cached": {
+    "mode": "cached",
+    "tls": true,
+    "commands_stats": false,
+    "query_digests": false,
+    "digest_map_unchanged": true,
+    "tps": 19199.896243,
+    "latency_ms": 26.026,
+    "conn_ok_start": "10",
+    "conn_ok_end": "10",
+    "conn_err_end": "0",
+    "snapshots": 62,
+    "cpu_us_per_query": 51.89990732159407,
+    "user_us_per_query": 28.615759494329957,
+    "system_us_per_query": 23.284147827264114,
+    "p50_ms": 25.855,
+    "p95_ms": 26.854,
+    "p99_ms": 32.267,
+    "logged_transactions": 1097545,
+    "clients_with_completions": 500
+  },
+  "percent_change": {
+    "tps": 8.923678032028693,
+    "latency_ms": -8.194292567639073,
+    "p50_ms": -8.12664345106957,
+    "p95_ms": -7.990132255190852,
+    "p99_ms": -7.3905057114976085,
+    "user_us_per_query": -8.784135954591065,
+    "system_us_per_query": -7.516707944537715,
+    "cpu_us_per_query": -8.21984567483417
+  },
+  "baseline_kind": "previously recorded unprofiled run; not a fresh paired control",
+  "steady_pool": {
+    "used_min": 10,
+    "used_max": 10,
+    "free_min": 0,
+    "free_max": 0
+  },
+  "pool_checks": {
+    "tls-handshake-cache-benchmark-cached-20261024T125711Z": {
+      "snapshots": 62,
+      "conn_ok": "10",
+      "conn_err": "0"
+    },
+    "tls-handshake-cache-counts-cached-20261024T130056Z": {
+      "snapshots": 24,
+      "conn_ok": "10",
+      "conn_err": "0"
+    }
+  },
+  "call_check": {
+    "steady_ssl_is_init_finished": 0,
+    "baseline_calls_per_query": 11.000250844187168,
+    "enabled_seconds": 20.072675206,
+    "pool_query_bracket": 389142,
+    "outside_gate_positive_control_calls": 35
+  },
+  "source_commit": "bd2353e922cb5cb13e5f6941f1079fd1685511ff",
+  "source_base_commit": "f3163c8646ba24eea1130a0a20b759ae4bef2ce9",
+  "binary_sha256": "3fa61772707b3edee8342c84a1dfd1b6b4b2b18cd9c94b5e8a856fb3ad8a16f1"
+}
