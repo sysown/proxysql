@@ -10,9 +10,12 @@
  * and the statement ran later anyway. It must end the wait with 57014. A wait that
  * ends on a timeout or a refused connection must not leave the rest of the unit
  * queued, and inside a transaction any of the three must fail the transaction.
+ * When a simple Query closed the unit with an implicit Sync, the client must get
+ * one ReadyForQuery, after the Query.
  */
 #include "command_line.h"
 #include "libpq-fe.h"
+#include "pg_lite_client.h"  // raw frontend messages (MUST precede utils.h: mysql.h clash)
 #include "tap.h"
 #include "utils.h"
 #include <chrono>
@@ -93,7 +96,7 @@ static PGConnPtr backend() {
 // Each backend mode gets its own hostgroup with one connection, reached through a query rule
 // matching "conn_wait"; a holder session keeps that connection busy.
 static const int WAIT_RULE_ID = 1729;
-static const int WAIT_CHECKS_PER_MODE = 33;
+static const int WAIT_CHECKS_PER_MODE = 35;
 
 static bool exec_ok(PGconn* conn, const std::string& q) {
 	PGresult* res = PQexec(conn, q.c_str());
@@ -138,6 +141,29 @@ static bool pq_cancel(PGconn* conn) {
 	bool sent = cancel && PQcancel(cancel, errbuf, sizeof(errbuf)) == 1;
 	if (cancel) PQfreeCancel(cancel);
 	return sent;
+}
+
+// Parse/Bind/Execute with no Sync, then a simple Query, which closes the unit with an implicit Sync.
+// Returns the type of each reply up to the first ReadyForQuery, e.g. "ETDCZ".
+static std::string unit_then_simple_query(const char* sql) {
+	std::string out;
+	try {
+		PgConnection c(15000); // a refused connection is retried for several seconds
+		c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+		c.prepareStatement("", sql, false);
+		c.bindStatement("", "", {}, {}, false);
+		c.executePortal("", 0, false);
+		c.sendQuery("SELECT 13");
+		char type = 0;
+		do {
+			std::vector<uint8_t> buf;
+			c.readMessage(type, buf);
+			if (type != 'N' && type != 'S') out += type;
+		} while (type != 'Z');
+	} catch (const PgException& e) {
+		out += std::string(" threw: ") + e.what();
+	}
+	return out;
 }
 
 // Straight to the backend, as its superuser: the test user may not be allowed to create tables.
@@ -283,6 +309,8 @@ static void cancel_while_waiting_checks(PGconn* admin, bool native, int hg, int 
 		msg = msg.substr(0, msg.find('\n'));
 		ok(msg.find("Max connect timeout") != std::string::npos, "[%s] extended statement times out waiting for a connection: '%s'", mode, msg.c_str());
 		ok(next_statement_works(victim.get()), "[%s] the session runs its next statement after the timeout", mode);
+		const std::string got = unit_then_simple_query("SELECT 1 AS conn_wait");
+		ok(got == "ETDCZ", "[%s] timeout, then the simple Query that closed the unit: one ReadyForQuery, after the Query: '%s'", mode, got.c_str());
 		drain(holder.get());
 		exec_ok(admin, "SET pgsql-connect_timeout_server_max=" + saved);
 		exec_ok(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
@@ -296,6 +324,11 @@ static void cancel_while_waiting_checks(PGconn* admin, bool native, int hg, int 
 		PQclear(res);
 		ok(failed, "[%s] extended statement to a backend that refuses connections fails", mode);
 		ok(next_statement_works(victim.get()), "[%s] the session runs its next statement after the failure", mode);
+		// a refused server is shunned: the next failure needs a fresh one
+		exec_ok(admin, "UPDATE pgsql_query_rules SET destination_hostgroup=" + std::to_string(dead_hg + 1) + " WHERE rule_id=" + std::to_string(WAIT_RULE_ID + 1));
+		exec_ok(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+		const std::string got = unit_then_simple_query("SELECT 1 AS conn_dead");
+		ok(got == "ETDCZ", "[%s] refused connection, then the simple Query that closed the unit: one ReadyForQuery, after the Query: '%s'", mode, got.c_str());
 	}
 	{
 		// Inside a transaction, a statement routed to another hostgroup fails there: cancelled or timed
@@ -310,7 +343,7 @@ static void cancel_while_waiting_checks(PGconn* admin, bool native, int hg, int 
 		exec_ok(admin, "LOAD PGSQL USERS TO RUNTIME");
 		enum class End { CANCEL, TIMEOUT, CONNECT_FAILURE };
 		auto holder = hold_connection(6); // keeps the wait hostgroup busy for the cancel and timeout cases
-		int next_dead_hg = dead_hg + 1;   // the case above already used dead_hg
+		int next_dead_hg = dead_hg + 2;   // the cases above already used dead_hg and dead_hg + 1
 		for (End how : { End::CANCEL, End::TIMEOUT, End::CONNECT_FAILURE }) {
 			if (how == End::TIMEOUT) {
 				exec_ok(admin, "SET pgsql-connect_timeout_server_max=1000");
@@ -394,11 +427,11 @@ static void test_cancel_while_waiting_for_connection(PGconn* a) {
 		exec_ok(a, "INSERT INTO pgsql_servers (hostgroup_id, hostname, port, max_connections, use_ssl) VALUES (" +
 			std::to_string(hg) + ", '" + host + "', " + port + ", 1, " + ssl + ")");
 	}
-	// and three per mode whose server refuses connections (port 1), one per connect failure below:
+	// and four per mode whose server refuses connections (port 1), one per connect failure below:
 	// each failure meets a fresh, unshunned server
-	const int dead_hgs[2] = { WAIT_RULE_ID + 2, WAIT_RULE_ID + 5 };
+	const int dead_hgs[2] = { WAIT_RULE_ID + 2, WAIT_RULE_ID + 6 };
 	for (int hg : dead_hgs) {
-		for (int k = 0; k < 3; k++) {
+		for (int k = 0; k < 4; k++) {
 			exec_ok(a, "INSERT INTO pgsql_servers (hostgroup_id, hostname, port, max_connections, use_ssl) VALUES (" +
 				std::to_string(hg + k) + ", '" + host + "', 1, 1, 0)");
 		}
@@ -431,7 +464,7 @@ static void test_cancel_while_waiting_for_connection(PGconn* a) {
 	}
 	exec_ok(a, "DELETE FROM pgsql_query_rules WHERE rule_id IN (" + std::to_string(WAIT_RULE_ID) + ", " + std::to_string(WAIT_RULE_ID + 1) + ")");
 	exec_ok(a, "LOAD PGSQL QUERY RULES TO RUNTIME");
-	exec_ok(a, "DELETE FROM pgsql_servers WHERE hostgroup_id BETWEEN " + std::to_string(WAIT_RULE_ID) + " AND " + std::to_string(WAIT_RULE_ID + 7));
+	exec_ok(a, "DELETE FROM pgsql_servers WHERE hostgroup_id BETWEEN " + std::to_string(WAIT_RULE_ID) + " AND " + std::to_string(WAIT_RULE_ID + 9));
 	exec_ok(a, "LOAD PGSQL SERVERS TO RUNTIME");
 	exec_ok(a, "SET pgsql-use_native_backend_protocol='" + native_saved + "'");
 	exec_ok(a, "LOAD PGSQL VARIABLES TO RUNTIME");
