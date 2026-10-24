@@ -4146,7 +4146,7 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 					bool set_rb_zero = true;
 					if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
 						if (myds->encrypted == true) {
-							if (SSL_is_init_finished(myds->ssl)) {
+							if (myds->ssl_handshake_is_complete()) {
 								if (myds->data_in_rbio()) {
 									set_rb_zero = false;
 								}
