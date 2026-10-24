@@ -1,0 +1,123 @@
+{
+  "build_id": "93ac61ec5a8eb1396f9fbd350e3169a558528a40",
+  "library": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+  "debug_file": "/tmp/pgsql-libc.debug",
+  "symbols": {
+    "108ee0": {
+      "function": "epoll_wait",
+      "line": "./misc/../sysdeps/unix/sysv/linux/epoll_wait.c:30"
+    },
+    "108ee7": {
+      "function": "epoll_wait",
+      "line": "./misc/../sysdeps/unix/sysv/linux/epoll_wait.c:28"
+    },
+    "108ef3": {
+      "function": "epoll_wait",
+      "line": "./misc/../sysdeps/unix/sysv/linux/epoll_wait.c:30 (discriminator 1)"
+    },
+    "108efb": {
+      "function": "epoll_wait",
+      "line": "./misc/../sysdeps/unix/sysv/linux/epoll_wait.c:34"
+    },
+    "10a910": {
+      "function": "__libc_recv",
+      "line": "./socket/../sysdeps/unix/sysv/linux/recv.c:28"
+    },
+    "10a917": {
+      "function": "__libc_recv",
+      "line": "./socket/../sysdeps/unix/sysv/linux/recv.c:24"
+    },
+    "10a929": {
+      "function": "__libc_recv",
+      "line": "./socket/../sysdeps/unix/sysv/linux/recv.c:28 (discriminator 1)"
+    },
+    "10ab40": {
+      "function": "__libc_send",
+      "line": "./socket/../sysdeps/unix/sysv/linux/send.c:28"
+    },
+    "10ab47": {
+      "function": "__libc_send",
+      "line": "./socket/../sysdeps/unix/sysv/linux/send.c:24"
+    },
+    "10ab59": {
+      "function": "__libc_send",
+      "line": "./socket/../sysdeps/unix/sysv/linux/send.c:28 (discriminator 1)"
+    },
+    "10ab61": {
+      "function": "__libc_send",
+      "line": "./socket/../sysdeps/unix/sysv/linux/send.c:32"
+    },
+    "15b4c0": {
+      "function": "__memcpy_avx_unaligned_erms_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:264"
+    },
+    "15bf44": {
+      "function": "__memset_avx2_unaligned_erms_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:167"
+    },
+    "15bf60": {
+      "function": "__memset_avx2_unaligned_erms_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:179"
+    },
+    "15bffb": {
+      "function": "__memset_avx2_unaligned_erms_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:322"
+    },
+    "15e020": {
+      "function": "__strchr_avx2_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/strchr-avx2.S:55"
+    },
+    "15e024": {
+      "function": "__strchr_avx2_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/strchr-avx2.S:56"
+    },
+    "15e043": {
+      "function": "__strchr_avx2_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/strchr-avx2.S:68"
+    },
+    "15e053": {
+      "function": "__strchr_avx2_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/strchr-avx2.S:72"
+    },
+    "15e05b": {
+      "function": "__strchr_avx2_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/strchr-avx2.S:77"
+    },
+    "15e06c": {
+      "function": "__strchr_avx2_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/strchr-avx2.S:89"
+    },
+    "15e071": {
+      "function": "__strchr_avx2_rtm",
+      "line": "./string/../sysdeps/x86_64/multiarch/strchr-avx2.S:93"
+    },
+    "83278": {
+      "function": "__GI__IO_default_xsputn",
+      "line": "./libio/./libio/genops.c:393"
+    },
+    "98970": {
+      "function": "__GI___libc_malloc",
+      "line": "./malloc/./malloc/malloc.c:3300"
+    },
+    "cc9ad": {
+      "function": "__GI___strftime_l",
+      "line": "./time/./time/strftime_l.c:455"
+    },
+    "cf420": {
+      "function": "__GI___clock_gettime",
+      "line": "./time/../sysdeps/unix/sysv/linux/clock_gettime.c:38"
+    },
+    "cf427": {
+      "function": "__GI___clock_gettime",
+      "line": "./time/../sysdeps/unix/sysv/linux/clock_gettime.c:38"
+    },
+    "cf42e": {
+      "function": "__GI___clock_gettime",
+      "line": "./time/../sysdeps/unix/sysv/linux/clock_gettime.c:40"
+    },
+    "cf439": {
+      "function": "__GI___clock_gettime",
+      "line": "./time/../sysdeps/unix/sysv/linux/clock_gettime.c:43"
+    }
+  }
+}

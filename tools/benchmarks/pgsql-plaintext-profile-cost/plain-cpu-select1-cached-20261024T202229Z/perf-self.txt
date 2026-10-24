@@ -1,0 +1,604 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 11K of event 'cycles'
+# Event count (approx.): 40425763332
+#
+# Overhead|     Samples|      Period|Shared Object                    |Symbol                                                                                                 |IPC   [IPC Coverage]
+ 2.62%  | 308        | 1057556671 |[kernel.kallsyms]                |[k] _raw_spin_lock_irqsave                                                                             |-      -
+ 1.71%  | 194        | 689752872  |[kernel.kallsyms]                |[k] do_sys_poll                                                                                        |-      -
+ 1.69%  | 196        | 684544591  |[kernel.kallsyms]                |[k] tcp_sendmsg_locked                                                                                 |-      -
+ 1.58%  | 185        | 637213467  |[kernel.kallsyms]                |[k] entry_SYSCALL_64                                                                                   |-      -
+ 1.52%  | 179        | 613130557  |[kernel.kallsyms]                |[k] nft_do_chain                                                                                       |-      -
+ 1.50%  | 173        | 604426756  |[kernel.kallsyms]                |[k] tcp_ack                                                                                            |-      -
+ 1.33%  | 154        | 537984564  |[kernel.kallsyms]                |[k] nf_conntrack_tcp_packet                                                                            |-      -
+ 1.30%  | 156        | 526944244  |[kernel.kallsyms]                |[k] __fget_light                                                                                       |-      -
+ 1.21%  | 141        | 491127216  |[kernel.kallsyms]                |[k] tcp_poll                                                                                           |-      -
+ 1.21%  | 145        | 490321808  |[kernel.kallsyms]                |[k] syscall_return_via_sysret                                                                          |-      -
+ 1.21%  | 142        | 490234830  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler                                                                             |-      -
+ 1.17%  | 136        | 474316469  |[kernel.kallsyms]                |[k] update_blocked_averages                                                                            |-      -
+ 1.09%  | 127        | 441377339  |[kernel.kallsyms]                |[k] fput                                                                                               |-      -
+ 0.89%  | 104        | 361150578  |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::run                                                                                  |-      -
+ 0.89%  | 102        | 358603575  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::get_pkts_from_client                                                                |-      -
+ 0.85%  | 99         | 343509227  |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::process_all_sessions                                                                 |-      -
+ 0.84%  | 98         | 338727324  |[kernel.kallsyms]                |[k] sock_poll                                                                                          |-      -
+ 0.82%  | 96         | 333085110  |[kernel.kallsyms]                |[k] tcp_v4_rcv                                                                                         |-      -
+ 0.82%  | 97         | 330826384  |[kernel.kallsyms]                |[k] dequeue_entity                                                                                     |-      -
+ 0.81%  | 96         | 328146531  |[kernel.kallsyms]                |[k] psi_group_change                                                                                   |-      -
+ 0.80%  | 93         | 322904309  |[kernel.kallsyms]                |[k] nf_conntrack_in                                                                                    |-      -
+ 0.79%  | 94         | 320018924  |[kernel.kallsyms]                |[k] __skb_datagram_iter                                                                                |-      -
+ 0.79%  | 92         | 319924693  |[kernel.kallsyms]                |[k] tcp_check_space                                                                                    |-      -
+ 0.78%  | 90         | 316386099  |[kernel.kallsyms]                |[k] __inet_lookup_established                                                                          |-      -
+ 0.77%  | 90         | 311345637  |[kernel.kallsyms]                |[k] __nf_conntrack_find_get                                                                            |-      -
+ 0.76%  | 88         | 308362713  |[kernel.kallsyms]                |[k] tcp_recvmsg_locked                                                                                 |-      -
+ 0.74%  | 88         | 298470469  |[kernel.kallsyms]                |[k] skb_release_data                                                                                   |-      -
+ 0.70%  | 83         | 284227394  |[kernel.kallsyms]                |[k] read_tsc                                                                                           |-      -
+ 0.70%  | 82         | 282259119  |libc.so.6                        |[.] pthread_mutex_lock                                                                                 |-      -
+ 0.69%  | 80         | 279963396  |[kernel.kallsyms]                |[k] __tcp_transmit_skb                                                                                 |-      -
+ 0.67%  | 78         | 272399262  |[kernel.kallsyms]                |[k] tcp_rate_check_app_limited                                                                         |-      -
+ 0.66%  | 79         | 264907425  |[kernel.kallsyms]                |[k] ip_finish_output2                                                                                  |-      -
+ 0.64%  | 75         | 257369795  |[kernel.kallsyms]                |[k] copy_user_enhanced_fast_string                                                                     |-      -
+ 0.62%  | 73         | 249227628  |[kernel.kallsyms]                |[k] net_rx_action                                                                                      |-      -
+ 0.58%  | 65         | 235044462  |[kernel.kallsyms]                |[k] nf_hook_slow                                                                                       |-      -
+ 0.58%  | 68         | 233651163  |[kernel.kallsyms]                |[k] tcp_rcv_established                                                                                |-      -
+ 0.54%  | 65         | 218507111  |[kernel.kallsyms]                |[k] update_cfs_group                                                                                   |-      -
+ 0.54%  | 64         | 216894208  |[kernel.kallsyms]                |[k] timerqueue_add                                                                                     |-      -
+ 0.53%  | 64         | 212863905  |[kernel.kallsyms]                |[k] __kmem_cache_alloc_node                                                                            |-      -
+ 0.51%  | 60         | 205924211  |proxysql-head-tls-handshake-cache|[.] re2::DFA::InlinedSearchLoop<false, false, true>                                                    |-      -
+ 0.50%  | 57         | 200517218  |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::handler                                                                          |-      -
+ 0.50%  | 59         | 200464500  |[kernel.kallsyms]                |[k] aa_sk_perm                                                                                         |-      -
+ 0.47%  | 55         | 190953192  |proxysql-head-tls-handshake-cache|[.] Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::writeout              |-      -
+ 0.46%  | 55         | 187741427  |proxysql-head-tls-handshake-cache|[.] Query_Processor<PgSQL_Query_Processor>::process_query                                              |-      -
+ 0.46%  | 53         | 185808237  |[kernel.kallsyms]                |[k] __ip_queue_xmit                                                                                    |-      -
+ 0.45%  | 55         | 180643056  |[kernel.kallsyms]                |[k] __pollwait                                                                                         |-      -
+ 0.44%  | 51         | 179517096  |[kernel.kallsyms]                |[k] native_sched_clock                                                                                 |-      -
+ 0.44%  | 51         | 176828932  |[kernel.kallsyms]                |[k] nft_match_eval                                                                                     |-      -
+ 0.44%  | 50         | 176629082  |[kernel.kallsyms]                |[k] update_curr                                                                                        |-      -
+ 0.43%  | 52         | 175006371  |libc.so.6                        |[.] recv                                                                                               |-      -
+ 0.42%  | 50         | 170900791  |[kernel.kallsyms]                |[k] sched_balance_newidle                                                                              |-      -
+ 0.41%  | 47         | 164601459  |[kernel.kallsyms]                |[k] handle_softirqs                                                                                    |-      -
+ 0.40%  | 47         | 160064534  |[kernel.kallsyms]                |[k] __netif_receive_skb_core.constprop.0                                                               |-      -
+ 0.39%  | 46         | 158775347  |[kernel.kallsyms]                |[k] __build_skb_around                                                                                 |-      -
+ 0.39%  | 46         | 158733826  |[kernel.kallsyms]                |[k] __update_load_avg_cfs_rq                                                                           |-      -
+ 0.39%  | 44         | 157462961  |[kernel.kallsyms]                |[k] available_idle_cpu                                                                                 |-      -
+ 0.39%  | 45         | 157382206  |[kernel.kallsyms]                |[k] ttwu_queue_wakelist                                                                                |-      -
+ 0.38%  | 44         | 155185817  |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Result::add_native_backend_message                                                     |-      -
+ 0.38%  | 42         | 152976618  |[kernel.kallsyms]                |[k] __wake_up_common                                                                                   |-      -
+ 0.38%  | 45         | 152264020  |[kernel.kallsyms]                |[k] llist_add_batch                                                                                    |-      -
+ 0.37%  | 42         | 151044850  |proxysql-head-tls-handshake-cache|[.] Base_Thread::ProcessAllMyDS_BeforePoll<PgSQL_Thread>                                               |-      -
+ 0.37%  | 42         | 149339602  |[kernel.kallsyms]                |[k] perf_log_itrace_start                                                                              |-      -
+ 0.37%  | 43         | 149285836  |[kernel.kallsyms]                |[k] entry_SYSRETQ_unsafe_stack                                                                         |-      -
+ 0.37%  | 42         | 148559427  |[kernel.kallsyms]                |[k] __rcu_read_lock                                                                                    |-      -
+ 0.37%  | 44         | 148404543  |libc.so.6                        |[.] clock_gettime                                                                                      |-      -
+ 0.36%  | 44         | 144807717  |[kernel.kallsyms]                |[k] __schedule                                                                                         |-      -
+ 0.36%  | 41         | 144052800  |[kernel.kallsyms]                |[k] merge_sched_in                                                                                     |-      -
+ 0.35%  | 41         | 143204921  |[kernel.kallsyms]                |[k] __calc_delta                                                                                       |-      -
+ 0.35%  | 40         | 142565663  |[kernel.kallsyms]                |[k] __check_object_size                                                                                |-      -
+ 0.35%  | 42         | 142050729  |proxysql-head-tls-handshake-cache|[.] malloc                                                                                             |-      -
+ 0.35%  | 41         | 141864842  |[kernel.kallsyms]                |[k] _raw_spin_lock_bh                                                                                  |-      -
+ 0.35%  | 40         | 141316705  |[kernel.kallsyms]                |[k] _raw_spin_lock                                                                                     |-      -
+ 0.35%  | 41         | 140951103  |[kernel.kallsyms]                |[k] ipv4_conntrack_defrag                                                                              |-      -
+ 0.34%  | 40         | 139388815  |[kernel.kallsyms]                |[k] dequeue_task_fair                                                                                  |-      -
+ 0.34%  | 40         | 139032373  |[kernel.kallsyms]                |[k] skb_attempt_defer_free                                                                             |-      -
+ 0.34%  | 40         | 138248676  |[kernel.kallsyms]                |[k] __static_call_text_end                                                                             |-      -
+ 0.34%  | 39         | 137784421  |[kernel.kallsyms]                |[k] perf_swevent_add                                                                                   |-      -
+ 0.34%  | 37         | 135641718  |[kernel.kallsyms]                |[k] __rcu_read_unlock                                                                                  |-      -
+ 0.33%  | 38         | 132246301  |proxysql-head-tls-handshake-cache|[.] free                                                                                               |-      -
+ 0.33%  | 38         | 131986441  |[kernel.kallsyms]                |[k] try_to_wake_up                                                                                     |-      -
+ 0.31%  | 35         | 125602205  |[kernel.kallsyms]                |[k] exit_to_user_mode_prepare                                                                          |-      -
+ 0.31%  | 36         | 125427092  |[kernel.kallsyms]                |[k] __siphash_unaligned                                                                                |-      -
+ 0.30%  | 35         | 122532222  |[kernel.kallsyms]                |[k] ipv4_mtu                                                                                           |-      -
+ 0.30%  | 36         | 121582761  |[kernel.kallsyms]                |[k] native_write_msr                                                                                   |-      -
+ 0.29%  | 34         | 118572898  |[vdso]                           |[.] __vdso_clock_gettime                                                                               |-      -
+ 0.29%  | 34         | 118223271  |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::ProcessAllMyDS_AfterPoll                                                             |-      -
+ 0.29%  | 34         | 116675661  |[kernel.kallsyms]                |[k] skb_page_frag_refill                                                                               |-      -
+ 0.29%  | 33         | 116167384  |[kernel.kallsyms]                |[k] tcp_current_mss                                                                                    |-      -
+ 0.28%  | 32         | 114789487  |libc.so.6                        |[.] __poll                                                                                             |-      -
+ 0.28%  | 32         | 114139688  |proxysql-head-tls-handshake-cache|[.] Base_Thread::run_SetAllSession_ToProcess0<PgSQL_Thread, PgSQL_Session>                             |-      -
+ 0.28%  | 32         | 112984073  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler_again___verify_backend_user_db                                              |-      -
+ 0.27%  | 31         | 110199599  |[kernel.kallsyms]                |[k] tcp_write_xmit                                                                                     |-      -
+ 0.27%  | 34         | 109796974  |[kernel.kallsyms]                |[k] nft_immediate_eval                                                                                 |-      -
+ 0.27%  | 31         | 109063494  |[kernel.kallsyms]                |[k] ip_send_check                                                                                      |-      -
+ 0.27%  | 30         | 109043883  |[kernel.kallsyms]                |[k] update_load_avg                                                                                    |-      -
+ 0.27%  | 32         | 108885100  |[kernel.kallsyms]                |[k] tcp_ack_update_rtt                                                                                 |-      -
+ 0.27%  | 30         | 108686755  |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection        |-      -
+ 0.27%  | 31         | 107440146  |[kernel.kallsyms]                |[k] nft_do_chain_ipv4                                                                                  |-      -
+ 0.27%  | 30         | 107181910  |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::process_data_on_data_stream                                                          |-      -
+ 0.27%  | 30         | 107139610  |[kernel.kallsyms]                |[k] _raw_spin_unlock_irqrestore                                                                        |-      -
+ 0.26%  | 29         | 106835776  |[kernel.kallsyms]                |[k] perf_event_update_userpage                                                                         |-      -
+ 0.26%  | 30         | 106640765  |[kernel.kallsyms]                |[k] pipe_poll                                                                                          |-      -
+ 0.26%  | 31         | 106375157  |[kernel.kallsyms]                |[k] __perf_event_task_sched_out                                                                        |-      -
+ 0.26%  | 31         | 106296115  |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::async_query                                                                      |-      -
+ 0.26%  | 30         | 105590486  |[kernel.kallsyms]                |[k] psi_task_switch                                                                                    |-      -
+ 0.26%  | 31         | 105248102  |[kernel.kallsyms]                |[k] __mod_timer                                                                                        |-      -
+ 0.26%  | 31         | 104494352  |[kernel.kallsyms]                |[k] tcp_update_pacing_rate                                                                             |-      -
+ 0.25%  | 30         | 102906760  |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::native_fetch_result_cont                                                         |-      -
+ 0.25%  | 28         | 101828392  |[kernel.kallsyms]                |[k] tcp_wfree                                                                                          |-      -
+ 0.25%  | 28         | 101626460  |[kernel.kallsyms]                |[k] reweight_entity                                                                                    |-      -
+ 0.25%  | 29         | 101606673  |[kernel.kallsyms]                |[k] ip_output                                                                                          |-      -
+ 0.25%  | 29         | 101349010  |[kernel.kallsyms]                |[k] loopback_xmit                                                                                      |-      -
+ 0.25%  | 29         | 101278375  |[kernel.kallsyms]                |[k] cpuacct_charge                                                                                     |-      -
+ 0.25%  | 29         | 99136362   |[kernel.kallsyms]                |[k] tcp_event_new_data_sent                                                                            |-      -
+ 0.24%  | 29         | 98915381   |[kernel.kallsyms]                |[k] perf_event_groups_first                                                                            |-      -
+ 0.24%  | 29         | 98879450   |[kernel.kallsyms]                |[k] entry_SYSCALL_64_safe_stack                                                                        |-      -
+ 0.24%  | 26         | 98661420   |[kernel.kallsyms]                |[k] tcp_in_ack_event                                                                                   |-      -
+ 0.24%  | 28         | 96835410   |[kernel.kallsyms]                |[k] ip_rcv_finish_core.constprop.0                                                                     |-      -
+ 0.24%  | 26         | 95747670   |[kernel.kallsyms]                |[k] check_spread.isra.0                                                                                |-      -
+ 0.23%  | 27         | 94536423   |[kernel.kallsyms]                |[k] copy_user_short_string                                                                             |-      -
+ 0.23%  | 28         | 93986263   |[kernel.kallsyms]                |[k] do_softirq.part.0                                                                                  |-      -
+ 0.23%  | 26         | 92629926   |proxysql-head-tls-handshake-cache|[.] PgSQL_HGC::get_random_MySrvC                                                                       |-      -
+ 0.23%  | 27         | 92609027   |[kernel.kallsyms]                |[k] event_sched_in.part.0                                                                              |-      -
+ 0.23%  | 27         | 92142418   |[kernel.kallsyms]                |[k] sock_rfree                                                                                         |-      -
+ 0.23%  | 27         | 91962865   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::array2buffer                                                                    |-      -
+ 0.23%  | 26         | 91639618   |[kernel.kallsyms]                |[k] send_call_function_single_ipi                                                                      |-      -
+ 0.23%  | 27         | 91540944   |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::run_ComputePollTimeout                                                               |-      -
+ 0.23%  | 25         | 91323825   |[kernel.kallsyms]                |[k] kmem_cache_alloc_node                                                                              |-      -
+ 0.23%  | 27         | 91178333   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo                |-      -
+ 0.22%  | 25         | 89642896   |libc.so.6                        |[.] __send                                                                                             |-      -
+ 0.22%  | 26         | 88534632   |[kernel.kallsyms]                |[k] __local_bh_enable_ip                                                                               |-      -
+ 0.22%  | 25         | 87984627   |[kernel.kallsyms]                |[k] nf_ct_get_tuple                                                                                    |-      -
+ 0.22%  | 25         | 87769320   |[kernel.kallsyms]                |[k] schedule_hrtimeout_range_clock                                                                     |-      -
+ 0.21%  | 26         | 86320547   |[kernel.kallsyms]                |[k] poll_freewait                                                                                      |-      -
+ 0.21%  | 25         | 85871840   |[kernel.kallsyms]                |[k] ipv4_confirm                                                                                       |-      -
+ 0.21%  | 25         | 85104322   |libc.so.6                        |[.] 0x00000000000858d1                                                                                 |-      -
+ 0.21%  | 24         | 84549570   |proxysql-head-tls-handshake-cache|[.] Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_find                                                     |-      -
+ 0.21%  | 25         | 84233626   |[kernel.kallsyms]                |[k] conntrack_mt.isra.0                                                                                |-      -
+ 0.21%  | 25         | 83490325   |[kernel.kallsyms]                |[k] __update_load_avg_se                                                                               |-      -
+ 0.21%  | 24         | 83088456   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler_again___status_CONNECTING_SERVER                                            |-      -
+ 0.20%  | 23         | 81820667   |[kernel.kallsyms]                |[k] __perf_event_task_sched_in                                                                         |-      -
+ 0.20%  | 25         | 81677045   |[kernel.kallsyms]                |[k] rb_insert_color                                                                                    |-      -
+ 0.20%  | 24         | 80871862   |[kernel.kallsyms]                |[k] measure_achieved_throughput                                                                        |-      -
+ 0.20%  | 25         | 80155185   |proxysql-head-tls-handshake-cache|[.] Query_Processor<PgSQL_Query_Processor>::get_digest_text                                            |-      -
+ 0.20%  | 23         | 80144400   |[kernel.kallsyms]                |[k] entry_SYSCALL_64_after_hwframe                                                                     |-      -
+ 0.20%  | 23         | 79415675   |proxysql-head-tls-handshake-cache|[.] PgSQL_Logger::is_events_logfile_open                                                               |-      -
+ 0.20%  | 23         | 79376221   |proxysql-head-tls-handshake-cache|[.] PgSQL_SrvConnList::add                                                                             |-      -
+ 0.20%  | 23         | 79217704   |proxysql-head-tls-handshake-cache|[.] re2::RE2::Match                                                                                    |-      -
+ 0.20%  | 23         | 78886240   |[kernel.kallsyms]                |[k] __virt_addr_valid                                                                                  |-      -
+ 0.19%  | 22         | 78826092   |libc.so.6                        |[.] isalnum                                                                                            |-      -
+ 0.19%  | 22         | 78049448   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::number_of_matching_session_variables                                             |-      -
+ 0.19%  | 22         | 77485102   |[kernel.kallsyms]                |[k] ipv4_conntrack_local                                                                               |-      -
+ 0.19%  | 22         | 76389222   |[kernel.kallsyms]                |[k] conntrack_mt_v3                                                                                    |-      -
+ 0.19%  | 22         | 76081457   |[kernel.kallsyms]                |[k] visit_groups_merge.constprop.0.isra.0                                                              |-      -
+ 0.19%  | 21         | 75378928   |[kernel.kallsyms]                |[k] hrtimer_start_range_ns                                                                             |-      -
+ 0.19%  | 21         | 75059983   |[kernel.kallsyms]                |[k] memset_erms                                                                                        |-      -
+ 0.18%  | 22         | 74585424   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::write_to_net_poll                                                               |-      -
+ 0.18%  | 21         | 74206624   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::query_start                                                                      |-      -
+ 0.18%  | 20         | 74067569   |[kernel.kallsyms]                |[k] rb_first                                                                                           |-      -
+ 0.18%  | 21         | 73827206   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::RequestEnd                                                                          |-      -
+ 0.18%  | 21         | 72883403   |[kernel.kallsyms]                |[k] tomoyo_socket_sendmsg_permission                                                                   |-      -
+ 0.18%  | 20         | 72751058   |[kernel.kallsyms]                |[k] tcp_queue_rcv                                                                                      |-      -
+ 0.18%  | 20         | 72375941   |proxysql-head-tls-handshake-cache|[.] PgSQL_HostGroups_Manager::push_MyConn_to_pool                                                      |-      -
+ 0.18%  | 21         | 71748087   |[kernel.kallsyms]                |[k] tcp_rcv_space_adjust                                                                               |-      -
+ 0.17%  | 20         | 70216867   |[kernel.kallsyms]                |[k] __sys_sendto                                                                                       |-      -
+ 0.17%  | 21         | 69983353   |[kernel.kallsyms]                |[k] ktime_get_ts64                                                                                     |-      -
+ 0.17%  | 21         | 69781401   |[kernel.kallsyms]                |[k] get_l4proto                                                                                        |-      -
+ 0.17%  | 19         | 68775939   |[kernel.kallsyms]                |[k] select_estimate_accuracy                                                                           |-      -
+ 0.17%  | 20         | 68721807   |[kernel.kallsyms]                |[k] eth_type_trans                                                                                     |-      -
+ 0.17%  | 19         | 68439656   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::set_pollout                                                                     |-      -
+ 0.17%  | 21         | 68232467   |[kernel.kallsyms]                |[k] kfree_skbmem                                                                                       |-      -
+ 0.17%  | 20         | 68047650   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::RunQuery                                                                            |-      -
+ 0.17%  | 20         | 67976348   |proxysql-head-tls-handshake-cache|[.] re2::Prog::SearchDFA                                                                               |-      -
+ 0.17%  | 19         | 67603063   |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::return_local_connections                                                             |-      -
+ 0.16%  | 19         | 66622450   |[kernel.kallsyms]                |[k] __wake_up_common_lock                                                                              |-      -
+ 0.16%  | 19         | 65838131   |libc.so.6                        |[.] 0x0000000000085845                                                                                 |-      -
+ 0.16%  | 19         | 65738745   |[kernel.kallsyms]                |[k] __sys_recvfrom                                                                                     |-      -
+ 0.16%  | 19         | 63895105   |[kernel.kallsyms]                |[k] nf_ct_seq_offset                                                                                   |-      -
+ 0.16%  | 20         | 63892163   |[kernel.kallsyms]                |[k] hash_conntrack_raw                                                                                 |-      -
+ 0.16%  | 19         | 63753629   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Result::buffer_reserve_space                                                           |-      -
+ 0.16%  | 18         | 63545281   |[kernel.kallsyms]                |[k] __dev_queue_xmit                                                                                   |-      -
+ 0.16%  | 18         | 63396078   |[kernel.kallsyms]                |[k] process_backlog                                                                                    |-      -
+ 0.16%  | 18         | 63131315   |[kernel.kallsyms]                |[k] put_prev_entity                                                                                    |-      -
+ 0.15%  | 18         | 62597712   |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::handle_kill_queues                                                                   |-      -
+ 0.15%  | 17         | 62037814   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Processor::process_query                                                               |-      -
+ 0.15%  | 18         | 61952132   |[kernel.kallsyms]                |[k] ctx_sched_in                                                                                       |-      -
+ 0.15%  | 18         | 61922095   |proxysql-head-tls-handshake-cache|[.] PgSQL_HostGroups_Manager::get_MyConn_from_pool                                                     |-      -
+ 0.15%  | 19         | 61892996   |[kernel.kallsyms]                |[k] ktime_get                                                                                          |-      -
+ 0.15%  | 17         | 61752624   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::PgSQL_Result_to_PgSQL_wire                                                          |-      -
+ 0.15%  | 19         | 61725607   |libstdc++.so.6.0.30              |[.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_replace        |-      -
+ 0.15%  | 17         | 61316793   |proxysql-head-tls-handshake-cache|[.] PgSQL_Backend_Msg_Framer::feed                                                                     |-      -
+ 0.15%  | 18         | 61025682   |[kernel.kallsyms]                |[k] security_sock_rcv_skb                                                                              |-      -
+ 0.15%  | 19         | 61014274   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::has_same_connection_options                                                      |-      -
+ 0.15%  | 18         | 60757653   |[kernel.kallsyms]                |[k] __skb_clone                                                                                        |-      -
+ 0.15%  | 18         | 60371651   |[kernel.kallsyms]                |[k] nft_counter_eval                                                                                   |-      -
+ 0.15%  | 18         | 60124321   |libstdc++.so.6.0.30              |[.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_erase          |-      -
+ 0.15%  | 18         | 59684907   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::requires_RESETTING_CONNECTION                                                    |-      -
+ 0.15%  | 18         | 59660858   |[kernel.kallsyms]                |[k] __mod_memcg_state                                                                                  |-      -
+ 0.15%  | 16         | 59566200   |[kernel.kallsyms]                |[k] dst_release                                                                                        |-      -
+ 0.15%  | 18         | 58779877   |[kernel.kallsyms]                |[k] apparmor_socket_recvmsg                                                                            |-      -
+ 0.15%  | 17         | 58730855   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::read_from_net                                                                   |-      -
+ 0.14%  | 16         | 57446570   |[kernel.kallsyms]                |[k] update_rt_rq_load_avg                                                                              |-      -
+ 0.14%  | 17         | 57332290   |[kernel.kallsyms]                |[k] tcp_rearm_rto                                                                                      |-      -
+ 0.14%  | 17         | 56656885   |libc.so.6                        |[.] 0x000000000008dca4                                                                                 |-      -
+ 0.14%  | 16         | 56113935   |[kernel.kallsyms]                |[k] ip_rcv_core                                                                                        |-      -
+ 0.14%  | 17         | 55780128   |[kernel.kallsyms]                |[k] __softirqentry_text_start                                                                          |-      -
+ 0.14%  | 17         | 55631449   |libc.so.6                        |[.] 0x000000000015b4c0                                                                                 |-      -
+ 0.14%  | 15         | 55559054   |libc.so.6                        |[.] 0x000000000015ed7d                                                                                 |-      -
+ 0.14%  | 15         | 55432183   |[kernel.kallsyms]                |[k] pollwake                                                                                           |-      -
+ 0.14%  | 16         | 54973340   |libstdc++.so.6.0.30              |[.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_append         |-      -
+ 0.14%  | 16         | 54809827   |libc.so.6                        |[.] 0x000000000015b4c3                                                                                 |-      -
+ 0.14%  | 16         | 54755063   |proxysql-head-tls-handshake-cache|[.] Base_Thread::configure_pollout<PgSQL_Thread, PgSQL_Data_Stream>                                    |-      -
+ 0.14%  | 16         | 54638274   |[kernel.kallsyms]                |[k] inet_sendmsg                                                                                       |-      -
+ 0.13%  | 15         | 54440392   |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::process_poll_housekeeping                                                            |-      -
+ 0.13%  | 16         | 54308567   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::sync_txn_tracker_with_backend                                                       |-      -
+ 0.13%  | 15         | 54173250   |proxysql-head-tls-handshake-cache|[.] PgSQL_Logger::flush                                                                                |-      -
+ 0.13%  | 16         | 53625087   |[kernel.kallsyms]                |[k] dev_hard_start_xmit                                                                                |-      -
+ 0.13%  | 16         | 53303361   |[kernel.kallsyms]                |[k] ep_poll_callback                                                                                   |-      -
+ 0.13%  | 16         | 53220991   |proxysql-head-tls-handshake-cache|[.] PgSQL_Backend_Msg_Framer::reset                                                                    |-      -
+ 0.13%  | 16         | 52716796   |[kernel.kallsyms]                |[k] ip_protocol_deliver_rcu                                                                            |-      -
+ 0.13%  | 15         | 52612094   |[kernel.kallsyms]                |[k] __alloc_skb                                                                                        |-      -
+ 0.13%  | 15         | 52583401   |[kernel.kallsyms]                |[k] arch_perf_update_userpage                                                                          |-      -
+ 0.13%  | 16         | 52261096   |[kernel.kallsyms]                |[k] ip_skb_dst_mtu                                                                                     |-      -
+ 0.13%  | 15         | 52030520   |[kernel.kallsyms]                |[k] validate_xmit_xfrm                                                                                 |-      -
+ 0.13%  | 15         | 51952116   |[kernel.kallsyms]                |[k] ip_rcv                                                                                             |-      -
+ 0.13%  | 14         | 51173526   |proxysql-head-tls-handshake-cache|[.] PgSQL_SrvConnList::get_random_MyConn                                                               |-      -
+ 0.13%  | 15         | 51092420   |[kernel.kallsyms]                |[k] tcp_v4_fill_cb                                                                                     |-      -
+ 0.12%  | 15         | 50444392   |[kernel.kallsyms]                |[k] __hrtimer_init                                                                                     |-      -
+ 0.12%  | 15         | 50293645   |[kernel.kallsyms]                |[k] sock_def_readable                                                                                  |-      -
+ 0.12%  | 15         | 49556708   |[kernel.kallsyms]                |[k] _raw_spin_lock_irq                                                                                 |-      -
+ 0.12%  | 14         | 49309081   |proxysql-head-tls-handshake-cache|[.] re2::Prog::GetDFA                                                                                  |-      -
+ 0.12%  | 14         | 48497458   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::buffer2array                                                                    |-      -
+ 0.12%  | 14         | 47176450   |[kernel.kallsyms]                |[k] _raw_spin_unlock                                                                                   |-      -
+ 0.12%  | 14         | 47138467   |libc.so.6                        |[.] pthread_mutex_unlock                                                                               |-      -
+ 0.12%  | 13         | 47131450   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::return_MySQL_Connection_To_Pool                                                 |-      -
+ 0.12%  | 14         | 47057578   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::native_send_or_buffer                                                            |-      -
+ 0.12%  | 14         | 47024535   |proxysql-head-tls-handshake-cache|[.] pg_append_typed_msg                                                                                |-      -
+ 0.12%  | 14         | 46878463   |proxysql-head-tls-handshake-cache|[.] PgSQL_Backend_Msg_Framer::next                                                                     |-      -
+ 0.12%  | 13         | 46833664   |[kernel.kallsyms]                |[k] validate_xmit_skb                                                                                  |-      -
+ 0.12%  | 13         | 46746365   |proxysql-head-tls-handshake-cache|[.] std::vector<unsigned int, std::allocator<unsigned int> >::reserve                                  |-      -
+ 0.11%  | 12         | 45907015   |[kernel.kallsyms]                |[k] security_socket_recvmsg                                                                            |-      -
+ 0.11%  | 13         | 45311732   |[kernel.kallsyms]                |[k] security_socket_sendmsg                                                                            |-      -
+ 0.11%  | 13         | 45291157   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::txn_failed_on_backend                                                               |-      -
+ 0.11%  | 13         | 45167744   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::finishQuery                                                                         |-      -
+ 0.11%  | 14         | 44942541   |proxysql-head-tls-handshake-cache|[.] Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::NumActiveTransactions |-      -
+ 0.11%  | 13         | 44466236   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::available_data_out                                                              |-      -
+ 0.11%  | 12         | 44376836   |[kernel.kallsyms]                |[k] tcp_recvmsg                                                                                        |-      -
+ 0.11%  | 13         | 44276245   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Info::begin                                                                            |-      -
+ 0.11%  | 13         | 43985418   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::set_previous_status_mode3                                                           |-      -
+ 0.11%  | 12         | 43813165   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::init_query_result                                                                |-      -
+ 0.11%  | 13         | 43641961   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::array2buffer_full                                                               |-      -
+ 0.10%  | 13         | 42369018   |proxysql-head-tls-handshake-cache|[.] PgSQL_SrvConnList::get_random_MyConn_inner_search                                                  |-      -
+ 0.10%  | 12         | 42338660   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Result::reset                                                                          |-      -
+ 0.10%  | 12         | 41937343   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Result::init                                                                           |-      -
+ 0.10%  | 12         | 41689949   |[kernel.kallsyms]                |[k] skb_csum_hwoffload_help                                                                            |-      -
+ 0.10%  | 12         | 41524653   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handle_command_query_kill                                                           |-      -
+ 0.10%  | 12         | 41477900   |[kernel.kallsyms]                |[k] __update_idle_core                                                                                 |-      -
+ 0.10%  | 12         | 41181352   |[kernel.kallsyms]                |[k] __tcp_cleanup_rbuf                                                                                 |-      -
+ 0.10%  | 13         | 41146174   |[kernel.kallsyms]                |[k] tcp_small_queue_check.isra.0                                                                       |-      -
+ 0.10%  | 12         | 41062332   |[kernel.kallsyms]                |[k] add_wait_queue                                                                                     |-      -
+ 0.10%  | 13         | 40922764   |[kernel.kallsyms]                |[k] kmalloc_slab                                                                                       |-      -
+ 0.10%  | 12         | 40834479   |[kernel.kallsyms]                |[k] pmu_filter_match                                                                                   |-      -
+ 0.10%  | 11         | 40471318   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::native_flush_outbuf                                                              |-      -
+ 0.10%  | 12         | 40239550   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handle_transaction_state                                                            |-      -
+ 0.10%  | 12         | 40216074   |[kernel.kallsyms]                |[k] __slab_free                                                                                        |-      -
+ 0.10%  | 12         | 40209838   |[kernel.kallsyms]                |[k] select_task_rq_fair                                                                                |-      -
+ 0.10%  | 12         | 39651270   |[kernel.kallsyms]                |[k] ip_local_out                                                                                       |-      -
+ 0.10%  | 11         | 39136783   |[kernel.kallsyms]                |[k] kmem_cache_free                                                                                    |-      -
+ 0.10%  | 12         | 39110474   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::reject_result_without_outcome                                                    |-      -
+ 0.10%  | 12         | 39026552   |[kernel.kallsyms]                |[k] cgroup_rstat_updated                                                                               |-      -
+ 0.10%  | 10         | 38510043   |[kernel.kallsyms]                |[k] switch_fpu_return                                                                                  |-      -
+ 0.09%  | 11         | 38261512   |libc.so.6                        |[.] __errno_location                                                                                   |-      -
+ 0.09%  | 11         | 38256612   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler_CommitRollback                                                              |-      -
+ 0.09%  | 11         | 38153846   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::write_to_net                                                                    |-      -
+ 0.09%  | 11         | 38118891   |[kernel.kallsyms]                |[k] finish_task_switch.isra.0                                                                          |-      -
+ 0.09%  | 11         | 37716457   |[kernel.kallsyms]                |[k] update_min_vruntime                                                                                |-      -
+ 0.09%  | 11         | 37656953   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::set_status                                                                          |-      -
+ 0.09%  | 11         | 37600048   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::free_pgsql_real_query                                                           |-      -
+ 0.09%  | 11         | 37490439   |proxysql-head-tls-handshake-cache|[.] ProxySQL_Poll<PgSQL_Data_Stream>::add                                                              |-      -
+ 0.09%  | 12         | 37276200   |[kernel.kallsyms]                |[k] __copy_skb_header                                                                                  |-      -
+ 0.09%  | 11         | 37115109   |proxysql-head-tls-handshake-cache|[.] PQsocket                                                                                           |-      -
+ 0.09%  | 10         | 36955898   |proxysql-head-tls-handshake-cache|[.] pgsql_query_has_stmt_keyword                                                                       |-      -
+ 0.09%  | 12         | 36599381   |[kernel.kallsyms]                |[k] import_single_range                                                                                |-      -
+ 0.09%  | 10         | 36364600   |proxysql-head-tls-handshake-cache|[.] Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::find_or_create_backend|-      -
+ 0.09%  | 11         | 36189295   |proxysql-head-tls-handshake-cache|[.] Base_Thread::check_for_invalid_fd<PgSQL_Thread>                                                    |-      -
+ 0.09%  | 10         | 36187359   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::SetQueryTimeout                                                                     |-      -
+ 0.09%  | 10         | 36170196   |[kernel.kallsyms]                |[k] tcp_release_cb                                                                                     |-      -
+ 0.09%  | 10         | 36143265   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler_again___verify_init_connect                                                 |-      -
+ 0.09%  | 11         | 36132960   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::native_recv_into_framer                                                          |-      -
+ 0.09%  | 10         | 35881381   |[kernel.kallsyms]                |[k] tcp_schedule_loss_probe.part.0                                                                     |-      -
+ 0.09%  | 10         | 35736690   |[kernel.kallsyms]                |[k] tcp_tso_segs                                                                                       |-      -
+ 0.09%  | 10         | 35503891   |[kernel.kallsyms]                |[k] inet_ehashfn                                                                                       |-      -
+ 0.09%  | 10         | 35364581   |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::apt_update_window                                                                    |-      -
+ 0.09%  | 10         | 35319774   |[kernel.kallsyms]                |[k] update_dl_rq_load_avg                                                                              |-      -
+ 0.09%  | 10         | 35123084   |[vdso]                           |[.] 0x00000000000006b8                                                                                 |-      -
+ 0.09%  | 9          | 34847284   |[kernel.kallsyms]                |[k] set_next_task_idle                                                                                 |-      -
+ 0.09%  | 11         | 34554324   |[kernel.kallsyms]                |[k] try_charge_memcg                                                                                   |-      -
+ 0.09%  | 10         | 34541872   |[kernel.kallsyms]                |[k] __kmem_cache_free                                                                                  |-      -
+ 0.09%  | 10         | 34441780   |[kernel.kallsyms]                |[k] __nf_ct_refresh_acct                                                                               |-      -
+ 0.08%  | 10         | 33456122   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::read_pkts                                                                       |-      -
+ 0.08%  | 10         | 32992675   |[kernel.kallsyms]                |[k] __rseq_handle_notify_resume                                                                        |-      -
+ 0.08%  | 10         | 32912119   |[kernel.kallsyms]                |[k] do_syscall_64                                                                                      |-      -
+ 0.08%  | 10         | 32697501   |proxysql-head-tls-handshake-cache|[.] PgSQL_Logger::is_audit_logfile_open                                                                |-      -
+ 0.08%  | 10         | 32622208   |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::push_MyConn_local                                                                    |-      -
+ 0.08%  | 10         | 32556776   |[kernel.kallsyms]                |[k] apparmor_socket_sendmsg                                                                            |-      -
+ 0.08%  | 9          | 32239118   |[kernel.kallsyms]                |[k] bpf_lsm_socket_sock_rcv_skb                                                                        |-      -
+ 0.08%  | 9          | 32223266   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::IsKnownActiveTransaction                                                         |-      -
+ 0.08%  | 9          | 31760104   |[kernel.kallsyms]                |[k] tcp_skb_entail                                                                                     |-      -
+ 0.08%  | 8          | 31682886   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Info::reset_extended_query_info                                                        |-      -
+ 0.08%  | 9          | 31653888   |proxysql-head-tls-handshake-cache|[.] absl::lts_20260107::Mutex::lock_shared                                                             |-      -
+ 0.08%  | 9          | 31625325   |[kernel.kallsyms]                |[k] tcp_send_mss                                                                                       |-      -
+ 0.08%  | 8          | 31091007   |[kernel.kallsyms]                |[k] sched_clock_cpu                                                                                    |-      -
+ 0.08%  | 8          | 30598110   |[kernel.kallsyms]                |[k] hrtimer_active                                                                                     |-      -
+ 0.08%  | 9          | 30554295   |[kernel.kallsyms]                |[k] tcp_stream_memory_free                                                                             |-      -
+ 0.08%  | 9          | 30549482   |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::get_MyConn_local                                                                     |-      -
+ 0.08%  | 9          | 30458823   |proxysql-head-tls-handshake-cache|[.] reset_error_info                                                                                   |-      -
+ 0.08%  | 9          | 30338205   |[kernel.kallsyms]                |[k] __ip_local_out                                                                                     |-      -
+ 0.07%  | 9          | 29369445   |proxysql-head-tls-handshake-cache|[.] ProxySQL_Poll<PgSQL_Data_Stream>::remove_index_fast                                                |-      -
+ 0.07%  | 9          | 28967643   |[kernel.kallsyms]                |[k] bpf_skops_write_hdr_opt.isra.0                                                                     |-      -
+ 0.07%  | 9          | 28613294   |[kernel.kallsyms]                |[k] tcp_rate_gen                                                                                       |-      -
+ 0.07%  | 8          | 28537225   |[kernel.kallsyms]                |[k] perf_pmu_nop_int                                                                                   |-      -
+ 0.07%  | 8          | 28165142   |[kernel.kallsyms]                |[k] x64_sys_call                                                                                       |-      -
+ 0.07%  | 8          | 27971281   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Result::buffer_to_PSarrayOut                                                           |-      -
+ 0.07%  | 8          | 27937997   |[kernel.kallsyms]                |[k] __fdget                                                                                            |-      -
+ 0.07%  | 8          | 27770110   |[kernel.kallsyms]                |[k] __sock_sendmsg                                                                                     |-      -
+ 0.07%  | 8          | 27681441   |[kernel.kallsyms]                |[k] _raw_spin_unlock_irq                                                                               |-      -
+ 0.07%  | 7          | 27590906   |[kernel.kallsyms]                |[k] enqueue_to_backlog                                                                                 |-      -
+ 0.07%  | 8          | 27532197   |libc.so.6                        |[.] 0x00000000000858b9                                                                                 |-      -
+ 0.07%  | 8          | 27403775   |[kernel.kallsyms]                |[k] rcu_note_context_switch                                                                            |-      -
+ 0.07%  | 7          | 27259172   |[kernel.kallsyms]                |[k] mod_memcg_state                                                                                    |-      -
+ 0.07%  | 7          | 27052020   |proxysql-head-tls-handshake-cache|[.] PgSQL_ExplicitTxnStateMgr::reset_state                                                             |-      -
+ 0.07%  | 8          | 26940880   |[kernel.kallsyms]                |[k] release_sock                                                                                       |-      -
+ 0.07%  | 8          | 26896364   |[kernel.kallsyms]                |[k] ipv4_dst_check                                                                                     |-      -
+ 0.07%  | 8          | 26866820   |[kernel.kallsyms]                |[k] sk_reset_timer                                                                                     |-      -
+ 0.07%  | 8          | 26683281   |[kernel.kallsyms]                |[k] _copy_from_iter                                                                                    |-      -
+ 0.07%  | 8          | 26651709   |proxysql-head-tls-handshake-cache|[.] re2::DFA::Search                                                                                   |-      -
+ 0.07%  | 8          | 26629272   |[kernel.kallsyms]                |[k] apparmor_socket_sock_rcv_skb                                                                       |-      -
+ 0.07%  | 7          | 26605880   |[kernel.kallsyms]                |[k] syscall_enter_from_user_mode                                                                       |-      -
+ 0.07%  | 8          | 26453152   |[kernel.kallsyms]                |[k] ip_local_deliver                                                                                   |-      -
+ 0.06%  | 7          | 26119744   |[kernel.kallsyms]                |[k] raw_local_deliver                                                                                  |-      -
+ 0.06%  | 7          | 26048168   |proxysql-head-tls-handshake-cache|[.] Base_HostGroups_Manager<PgSQL_HGC>::wrlock                                                         |-      -
+ 0.06%  | 7          | 25905758   |[kernel.kallsyms]                |[k] update_rq_clock                                                                                    |-      -
+ 0.06%  | 8          | 25601529   |[kernel.kallsyms]                |[k] __list_add_valid                                                                                   |-      -
+ 0.06%  | 7          | 25477958   |[kernel.kallsyms]                |[k] __netif_receive_skb_one_core                                                                       |-      -
+ 0.06%  | 7          | 25448539   |[kernel.kallsyms]                |[k] __usecs_to_jiffies                                                                                 |-      -
+ 0.06%  | 7          | 25267806   |proxysql-head-tls-handshake-cache|[.] PgSQL_HostGroups_Manager::push_MyConn_to_pool_array                                                |-      -
+ 0.06%  | 7          | 25265172   |libc.so.6                        |[.] 0x000000000015b597                                                                                 |-      -
+ 0.06%  | 7          | 25100831   |[kernel.kallsyms]                |[k] refill_stock                                                                                       |-      -
+ 0.06%  | 7          | 24717752   |[kernel.kallsyms]                |[k] timerqueue_del                                                                                     |-      -
+ 0.06%  | 7          | 24538504   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Info::get_digest_text                                                                  |-      -
+ 0.06%  | 8          | 24330360   |[kernel.kallsyms]                |[k] blkcg_maybe_throttle_current                                                                       |-      -
+ 0.06%  | 8          | 24149428   |[kernel.kallsyms]                |[k] __list_del_entry_valid                                                                             |-      -
+ 0.06%  | 7          | 23730929   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::set_query                                                                        |-      -
+ 0.06%  | 7          | 23659732   |[kernel.kallsyms]                |[k] put_prev_task_fair                                                                                 |-      -
+ 0.06%  | 7          | 23540327   |[kernel.kallsyms]                |[k] mem_cgroup_charge_skmem                                                                            |-      -
+ 0.06%  | 7          | 23393528   |[kernel.kallsyms]                |[k] __tcp_select_window                                                                                |-      -
+ 0.06%  | 7          | 23389278   |proxysql-head-tls-handshake-cache|[.] re2::RE2::DoMatch                                                                                  |-      -
+ 0.06%  | 7          | 23099208   |[kernel.kallsyms]                |[k] nf_confirm                                                                                         |-      -
+ 0.06%  | 7          | 23056686   |[kernel.kallsyms]                |[k] tcp_update_skb_after_send                                                                          |-      -
+ 0.06%  | 6          | 23045675   |[kernel.kallsyms]                |[k] x86_pmu_disable                                                                                    |-      -
+ 0.06%  | 7          | 22609349   |[kernel.kallsyms]                |[k] __cond_resched                                                                                     |-      -
+ 0.06%  | 6          | 22486163   |[kernel.kallsyms]                |[k] __x64_sys_poll                                                                                     |-      -
+ 0.06%  | 7          | 22468922   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Info::end                                                                              |-      -
+ 0.05%  | 7          | 21794935   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::release_backend_tls                                                             |-      -
+ 0.05%  | 6          | 21432594   |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::consume_data_stream_readiness                                                        |-      -
+ 0.05%  | 6          | 20739667   |proxysql-head-tls-handshake-cache|[.] Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_lookup                                                   |-      -
+ 0.05%  | 6          | 20632370   |proxysql-head-tls-handshake-cache|[.] (anonymous namespace)::pgsql_apply_backup_weight_threshold                                         |-      -
+ 0.05%  | 6          | 20614779   |[kernel.kallsyms]                |[k] napi_consume_skb                                                                                   |-      -
+ 0.05%  | 6          | 20560536   |[kernel.kallsyms]                |[k] tcp_rate_skb_delivered                                                                             |-      -
+ 0.05%  | 6          | 20500258   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler_special_queries                                                             |-      -
+ 0.05%  | 6          | 20457318   |[kernel.kallsyms]                |[k] _copy_to_iter                                                                                      |-      -
+ 0.05%  | 6          | 20390341   |[kernel.kallsyms]                |[k] sock_put                                                                                           |-      -
+ 0.05%  | 6          | 20157199   |libc.so.6                        |[.] 0x000000000015b500                                                                                 |-      -
+ 0.05%  | 6          | 19871092   |[kernel.kallsyms]                |[k] tcp_rate_skb_sent                                                                                  |-      -
+ 0.05%  | 5          | 19843143   |[kernel.kallsyms]                |[k] nf_conntrack_put                                                                                   |-      -
+ 0.05%  | 5          | 19831967   |[kernel.kallsyms]                |[k] record_times                                                                                       |-      -
+ 0.05%  | 5          | 19582670   |[kernel.kallsyms]                |[k] calc_timer_values                                                                                  |-      -
+ 0.05%  | 6          | 19520339   |[kernel.kallsyms]                |[k] rb_erase                                                                                           |-      -
+ 0.05%  | 5          | 19208808   |[kernel.kallsyms]                |[k] ip_finish_output                                                                                   |-      -
+ 0.05%  | 5          | 19166685   |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::unplug_backend                                                                  |-      -
+ 0.05%  | 6          | 18961061   |[kernel.kallsyms]                |[k] __cgroup_account_cputime                                                                           |-      -
+ 0.05%  | 6          | 18737470   |[kernel.kallsyms]                |[k] apparmor_ip_postroute                                                                              |-      -
+ 0.05%  | 5          | 18595140   |proxysql-head-tls-handshake-cache|[.] PgSQL_Thread::process_all_sessions()::{lambda(unsigned int, unsigned long)#1}::operator()          |-      -
+ 0.05%  | 5          | 18382756   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::suspend_resultset_fetch                                                          |-      -
+ 0.05%  | 5          | 18303736   |[kernel.kallsyms]                |[k] tcp_inbound_md5_hash                                                                               |-      -
+ 0.04%  | 5          | 18089506   |proxysql-head-tls-handshake-cache|[.] pgsql_text_has_word                                                                                |-      -
+ 0.04%  | 5          | 17904549   |[kernel.kallsyms]                |[k] __x86_indirect_thunk_rcx                                                                           |-      -
+ 0.04%  | 5          | 17760195   |proxysql-head-tls-handshake-cache|[.] re2::DFA::FastSearchLoop                                                                           |-      -
+ 0.04%  | 6          | 17524880   |[kernel.kallsyms]                |[k] ipv4_conntrack_in                                                                                  |-      -
+ 0.04%  | 5          | 17516083   |[kernel.kallsyms]                |[k] perf_event_set_state                                                                               |-      -
+ 0.04%  | 5          | 17456782   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::LogQuery                                                                            |-      -
+ 0.04%  | 5          | 17319906   |[kernel.kallsyms]                |[k] kmalloc_reserve                                                                                    |-      -
+ 0.04%  | 5          | 17303136   |[kernel.kallsyms]                |[k] get_nohz_timer_target                                                                              |-      -
+ 0.04%  | 6          | 17270075   |proxysql-head-tls-handshake-cache|[.] PtrSizeArray::copy_add                                                                             |-      -
+ 0.04%  | 5          | 17268080   |proxysql-head-tls-handshake-cache|[.] can_hold_client_output                                                                             |-      -
+ 0.04%  | 5          | 17061000   |[kernel.kallsyms]                |[k] __put_user_nocheck_8                                                                               |-      -
+ 0.04%  | 4          | 16984802   |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::backend_connection_detached                                                         |-      -
+ 0.04%  | 4          | 16882356   |[kernel.kallsyms]                |[k] hrtimer_try_to_cancel                                                                              |-      -
+ 0.04%  | 5          | 16881390   |libc.so.6                        |[.] 0x0000000000085829                                                                                 |-      -
+ 0.04%  | 5          | 16773521   |[kernel.kallsyms]                |[k] prandom_u32_state                                                                                  |-      -
+ 0.04%  | 5          | 16666705   |libc.so.6                        |[.] 0x000000000015eeed                                                                                 |-      -
+ 0.04%  | 5          | 16661713   |libc.so.6                        |[.] 0x000000000015eee3                                                                                 |-      -
+ 0.04%  | 5          | 16592208   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::next_event                                                                       |-      -
+ 0.04%  | 5          | 16575641   |[kernel.kallsyms]                |[k] ep_autoremove_wake_function                                                                        |-      -
+ 0.04%  | 5          | 16429551   |[kernel.kallsyms]                |[k] sock_recvmsg                                                                                       |-      -
+ 0.04%  | 5          | 16421102   |libc.so.6                        |[.] 0x000000000015ed62                                                                                 |-      -
+ 0.04%  | 5          | 16273024   |[kernel.kallsyms]                |[k] htcp_cong_avoid                                                                                    |-      -
+ 0.04%  | 5          | 16060480   |[kernel.kallsyms]                |[k] perf_event_idx_default                                                                             |-      -
+ 0.04%  | 5          | 15966426   |[kernel.kallsyms]                |[k] tcp_established_options                                                                            |-      -
+ 0.04%  | 5          | 15837725   |[kernel.kallsyms]                |[k] tcp_rbtree_insert                                                                                  |-      -
+ 0.04%  | 5          | 15661273   |[kernel.kallsyms]                |[k] __sk_dst_check                                                                                     |-      -
+ 0.04%  | 4          | 15607415   |proxysql-head-tls-handshake-cache|[.] re2::DFA::AnalyzeSearchHelper                                                                      |-      -
+ 0.04%  | 5          | 15500976   |[kernel.kallsyms]                |[k] bpf_lsm_socket_sendmsg                                                                             |-      -
+ 0.04%  | 5          | 15412710   |[kernel.kallsyms]                |[k] memcg_slab_post_alloc_hook                                                                         |-      -
+ 0.04%  | 5          | 15221797   |proxysql-head-tls-handshake-cache|[.] absl::lts_20260107::Mutex::unlock_shared                                                           |-      -
+ 0.04%  | 4          | 15212524   |proxysql-head-tls-handshake-cache|[.] re2::DFA::AnalyzeSearch                                                                            |-      -
+ 0.04%  | 4          | 15151606   |[kernel.kallsyms]                |[k] update_sd_lb_stats.constprop.0                                                                     |-      -
+ 0.04%  | 4          | 15118941   |[kernel.kallsyms]                |[k] tcp_v4_send_check                                                                                  |-      -
+ 0.04%  | 4          | 14864794   |[kernel.kallsyms]                |[k] tcp_chrono_start                                                                                   |-      -
+ 0.04%  | 4          | 14802361   |[kernel.kallsyms]                |[k] inet_recvmsg                                                                                       |-      -
+ 0.04%  | 4          | 14737449   |[kernel.kallsyms]                |[k] __ip_finish_output                                                                                 |-      -
+ 0.04%  | 4          | 14271454   |[kernel.kallsyms]                |[k] tcp_event_data_recv                                                                                |-      -
+ 0.03%  | 4          | 13997267   |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::backend_is_live                                                                  |-      -
+ 0.03%  | 4          | 13922148   |[kernel.kallsyms]                |[k] rb_next                                                                                            |-      -
+ 0.03%  | 4          | 13869008   |[kernel.kallsyms]                |[k] skb_push                                                                                           |-      -
+ 0.03%  | 4          | 13815420   |[kernel.kallsyms]                |[k] kfree                                                                                              |-      -
+ 0.03%  | 4          | 13735064   |[kernel.kallsyms]                |[k] __x64_sys_sendto                                                                                   |-      -
+ 0.03%  | 4          | 13722804   |libc.so.6                        |[.] 0x00000000000858bf                                                                                 |-      -
+ 0.03%  | 4          | 13697222   |[kernel.kallsyms]                |[k] schedule                                                                                           |-      -
+ 0.03%  | 4          | 13661497   |[kernel.kallsyms]                |[k] kmalloc_size_roundup                                                                               |-      -
+ 0.03%  | 4          | 13616116   |[kernel.kallsyms]                |[k] __kmalloc_node_track_caller                                                                        |-      -
+ 0.03%  | 4          | 13600649   |[kernel.kallsyms]                |[k] __refill_stock                                                                                     |-      -
+ 0.03%  | 4          | 13569529   |[kernel.kallsyms]                |[k] perf_event_task_tick                                                                               |-      -
+ 0.03%  | 4          | 13202191   |libc.so.6                        |[.] 0x000000000015ed60                                                                                 |-      -
+ 0.03%  | 4          | 13188543   |[kernel.kallsyms]                |[k] tcp_sendmsg                                                                                        |-      -
+ 0.03%  | 4          | 13132332   |[kernel.kallsyms]                |[k] check_cfs_rq_runtime                                                                               |-      -
+ 0.03%  | 4          | 12596744   |proxysql-head-tls-handshake-cache|[.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_erase@plt      |-      -
+ 0.03%  | 4          | 12568358   |[kernel.kallsyms]                |[k] netif_skb_features                                                                                 |-      -
+ 0.03%  | 4          | 12537544   |[kernel.kallsyms]                |[k] tcp_newly_delivered                                                                                |-      -
+ 0.03%  | 4          | 12508115   |[kernel.kallsyms]                |[k] tcp_chrono_stop                                                                                    |-      -
+ 0.03%  | 4          | 12499480   |[kernel.kallsyms]                |[k] tcp_mstamp_refresh                                                                                 |-      -
+ 0.03%  | 4          | 11742748   |libc.so.6                        |[.] 0x00000000000858cd                                                                                 |-      -
+ 0.03%  | 3          | 11693138   |libc.so.6                        |[.] 0x000000000015ef91                                                                                 |-      -
+ 0.03%  | 3          | 11641839   |[kernel.kallsyms]                |[k] tomoyo_socket_sendmsg                                                                              |-      -
+ 0.03%  | 3          | 11580457   |libc.so.6                        |[.] 0x000000000008dc6e                                                                                 |-      -
+ 0.03%  | 3          | 11480588   |[kernel.kallsyms]                |[k] _copy_from_user                                                                                    |-      -
+ 0.03%  | 3          | 11376960   |[kernel.kallsyms]                |[k] netdev_core_pick_tx                                                                                |-      -
+ 0.03%  | 3          | 10971052   |[kernel.kallsyms]                |[k] skb_clone_tx_timestamp                                                                             |-      -
+ 0.03%  | 3          | 10917563   |libc.so.6                        |[.] 0x00000000000858b0                                                                                 |-      -
+ 0.03%  | 3          | 10772599   |[kernel.kallsyms]                |[k] syscall_exit_to_user_mode_prepare                                                                  |-      -
+ 0.03%  | 3          | 10741637   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Result::get_resultset                                                                  |-      -
+ 0.03%  | 3          | 10729382   |proxysql-head-tls-handshake-cache|[.] re2::RE2::PartialMatchN                                                                            |-      -
+ 0.03%  | 3          | 10729248   |[kernel.kallsyms]                |[k] __sk_mem_reduce_allocated                                                                          |-      -
+ 0.03%  | 3          | 10619436   |proxysql-head-tls-handshake-cache|[.] Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread>::NumActiveTransactions |-      -
+ 0.03%  | 3          | 10282272   |[kernel.kallsyms]                |[k] _raw_spin_rq_lock_irqsave                                                                          |-      -
+ 0.03%  | 3          | 10153226   |[kernel.kallsyms]                |[k] __x64_sys_recvfrom                                                                                 |-      -
+ 0.03%  | 3          | 10113137   |proxysql-head-tls-handshake-cache|[.] pgsql_stmt_first_keyword_is                                                                        |-      -
+ 0.02%  | 3          | 10105767   |[kernel.kallsyms]                |[k] sockfd_lookup_light                                                                                |-      -
+ 0.02%  | 3          | 10061746   |[kernel.kallsyms]                |[k] poll_select_set_timeout                                                                            |-      -
+ 0.02%  | 3          | 10049365   |[kernel.kallsyms]                |[k] pick_next_task_idle                                                                                |-      -
+ 0.02%  | 3          | 10049037   |[kernel.kallsyms]                |[k] skb_copy_datagram_iter                                                                             |-      -
+ 0.02%  | 3          | 10030596   |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Result::clear                                                                          |-      -
+ 0.02%  | 3          | 9924332    |libc.so.6                        |[.] 0x000000000015b567                                                                                 |-      -
+ 0.02%  | 3          | 9846791    |[kernel.kallsyms]                |[k] perf_pmu_nop_void                                                                                  |-      -
+ 0.02%  | 3          | 9818042    |libc.so.6                        |[.] 0x000000000015b555                                                                                 |-      -
+ 0.02%  | 3          | 9808071    |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::handler___status_WAITING_CLIENT_DATA                                                |-      -
+ 0.02%  | 3          | 9754483    |libc.so.6                        |[.] 0x000000000015b550                                                                                 |-      -
+ 0.02%  | 3          | 9607856    |[kernel.kallsyms]                |[k] mem_cgroup_handle_over_high                                                                        |-      -
+ 0.02%  | 3          | 9507882    |proxysql-head-tls-handshake-cache|[.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_replace@plt    |-      -
+ 0.02%  | 3          | 9441554    |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::update_bytes_sent                                                                |-      -
+ 0.02%  | 3          | 9386410    |[kernel.kallsyms]                |[k] perf_event_update_time                                                                             |-      -
+ 0.02%  | 3          | 9311920    |[kernel.kallsyms]                |[k] nft_update_chain_stats                                                                             |-      -
+ 0.02%  | 3          | 9251425    |[kernel.kallsyms]                |[k] tcp_rack_update_reo_wnd                                                                            |-      -
+ 0.02%  | 3          | 8572625    |[kernel.kallsyms]                |[k] tcp_schedule_loss_probe                                                                            |-      -
+ 0.02%  | 2          | 8273868    |[kernel.kallsyms]                |[k] skb_clone                                                                                          |-      -
+ 0.02%  | 2          | 8190753    |[kernel.kallsyms]                |[k] tcp_v4_do_rcv                                                                                      |-      -
+ 0.02%  | 2          | 8049649    |libc.so.6                        |[.] 0x000000000008dc50                                                                                 |-      -
+ 0.02%  | 2          | 7977835    |libstdc++.so.6.0.30              |[.] memcpy@plt                                                                                         |-      -
+ 0.02%  | 2          | 7883498    |[kernel.kallsyms]                |[k] __intel_pmu_enable_all.constprop.0                                                                 |-      -
+ 0.02%  | 2          | 7852194    |proxysql-head-tls-handshake-cache|[.] recv@plt                                                                                           |-      -
+ 0.02%  | 2          | 7752724    |[kernel.kallsyms]                |[k] simple_copy_to_iter                                                                                |-      -
+ 0.02%  | 2          | 7647966    |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::fetch_result_start                                                               |-      -
+ 0.02%  | 2          | 7550818    |[kernel.kallsyms]                |[k] skb_release_head_state                                                                             |-      -
+ 0.02%  | 2          | 7413844    |[kernel.kallsyms]                |[k] tcp_send_delayed_ack                                                                               |-      -
+ 0.02%  | 2          | 7391603    |[kernel.kallsyms]                |[k] sk_free                                                                                            |-      -
+ 0.02%  | 2          | 7331685    |[kernel.kallsyms]                |[k] netif_rx_internal                                                                                  |-      -
+ 0.02%  | 2          | 7267702    |[kernel.kallsyms]                |[k] raise_softirq_irqoff                                                                               |-      -
+ 0.02%  | 2          | 7224407    |libc.so.6                        |[.] 0x000000000015b529                                                                                 |-      -
+ 0.02%  | 2          | 7088729    |libc.so.6                        |[.] 0x000000000015b590                                                                                 |-      -
+ 0.02%  | 2          | 7033415    |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::assign_fd_from_pgsql_conn                                                       |-      -
+ 0.02%  | 2          | 7003976    |[kernel.kallsyms]                |[k] tcp_parse_md5sig_option                                                                            |-      -
+ 0.02%  | 2          | 6994720    |[kernel.kallsyms]                |[k] cmpxchg_double_slab.constprop.0.isra.0                                                             |-      -
+ 0.02%  | 2          | 6974040    |[kernel.kallsyms]                |[k] cache_from_obj                                                                                     |-      -
+ 0.02%  | 2          | 6922127    |[kernel.kallsyms]                |[k] __netif_rx                                                                                         |-      -
+ 0.02%  | 2          | 6903140    |libc.so.6                        |[.] 0x000000000008dc67                                                                                 |-      -
+ 0.02%  | 2          | 6862243    |[kernel.kallsyms]                |[k] psi_task_change                                                                                    |-      -
+ 0.02%  | 2          | 6813264    |[kernel.kallsyms]                |[k] hrtimer_init_sleeper                                                                               |-      -
+ 0.02%  | 2          | 6811447    |[kernel.kallsyms]                |[k] skb_network_protocol                                                                               |-      -
+ 0.02%  | 2          | 6771963    |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Info::query_parser_update_counters                                                     |-      -
+ 0.02%  | 2          | 6757427    |[kernel.kallsyms]                |[k] tcp_push                                                                                           |-      -
+ 0.02%  | 2          | 6630145    |[kernel.kallsyms]                |[k] remove_wait_queue                                                                                  |-      -
+ 0.02%  | 2          | 6513665    |[kernel.kallsyms]                |[k] ip_queue_xmit                                                                                      |-      -
+ 0.02%  | 2          | 6417233    |proxysql-head-tls-handshake-cache|[.] clock_gettime@plt                                                                                  |-      -
+ 0.02%  | 2          | 6403756    |[kernel.kallsyms]                |[k] ip_local_deliver_finish                                                                            |-      -
+ 0.02%  | 2          | 6276605    |[kernel.kallsyms]                |[k] memset                                                                                             |-      -
+ 0.02%  | 2          | 6274227    |libc.so.6                        |[.] 0x000000000008dc92                                                                                 |-      -
+ 0.02%  | 2          | 6237875    |[kernel.kallsyms]                |[k] amd_clear_divider                                                                                  |-      -
+ 0.02%  | 2          | 6221102    |libc.so.6                        |[.] 0x000000000008583b                                                                                 |-      -
+ 0.02%  | 2          | 6209606    |[kernel.kallsyms]                |[k] psi_flags_change                                                                                   |-      -
+ 0.02%  | 2          | 6073150    |proxysql-head-tls-handshake-cache|[.] send@plt                                                                                           |-      -
+ 0.01%  | 2          | 5964996    |[kernel.kallsyms]                |[k] cyc2ns_read_begin                                                                                  |-      -
+ 0.01%  | 2          | 5896380    |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::async_free_result                                                                |-      -
+ 0.01%  | 2          | 5889978    |libc.so.6                        |[.] 0x000000000015eec6                                                                                 |-      -
+ 0.01%  | 2          | 5791954    |[kernel.kallsyms]                |[k] sk_forced_mem_schedule                                                                             |-      -
+ 0.01%  | 2          | 5645398    |libc.so.6                        |[.] 0x0000000000085820                                                                                 |-      -
+ 0.01%  | 2          | 5556537    |[kernel.kallsyms]                |[k] sk_filter_trim_cap                                                                                 |-      -
+ 0.01%  | 2          | 5405683    |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::IsServerOffline                                                                  |-      -
+ 0.01%  | 1          | 5126057    |[kernel.kallsyms]                |[k] calc_wheel_index                                                                                   |-      -
+ 0.01%  | 1          | 4665269    |proxysql-head-tls-handshake-cache|[.] PgSQL_Data_Stream::check_data_flow                                                                 |-      -
+ 0.01%  | 1          | 4500437    |libc.so.6                        |[.] 0x000000000015efab                                                                                 |-      -
+ 0.01%  | 1          | 4470601    |[kernel.kallsyms]                |[k] native_flush_tlb_one_user                                                                          |-      -
+ 0.01%  | 1          | 4301864    |proxysql-head-tls-handshake-cache|[.] operator new                                                                                       |-      -
+ 0.01%  | 1          | 4227942    |libc.so.6                        |[.] 0x00000000000858d6                                                                                 |-      -
+ 0.01%  | 1          | 4127632    |[kernel.kallsyms]                |[k] tcp_options_write                                                                                  |-      -
+ 0.01%  | 1          | 4064954    |[kernel.kallsyms]                |[k] syscall_exit_to_user_mode                                                                          |-      -
+ 0.01%  | 1          | 3986229    |[kernel.kallsyms]                |[k] should_failslab                                                                                    |-      -
+ 0.01%  | 1          | 3974277    |[kernel.kallsyms]                |[k] raw_spin_rq_lock_nested                                                                            |-      -
+ 0.01%  | 1          | 3913459    |[kernel.kallsyms]                |[k] cyc2ns_read_end                                                                                    |-      -
+ 0.01%  | 1          | 3815299    |libc.so.6                        |[.] 0x000000000015b531                                                                                 |-      -
+ 0.01%  | 1          | 3807333    |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::get_status                                                                       |-      -
+ 0.01%  | 1          | 3794584    |[kernel.kallsyms]                |[k] lock_sock_nested                                                                                   |-      -
+ 0.01%  | 1          | 3773997    |proxysql-head-tls-handshake-cache|[.] je_tcache_event_hard                                                                               |-      -
+ 0.01%  | 1          | 3711550    |[kernel.kallsyms]                |[k] check_stack_object                                                                                 |-      -
+ 0.01%  | 1          | 3701256    |[kernel.kallsyms]                |[k] sched_clock_stable                                                                                 |-      -
+ 0.01%  | 1          | 3694762    |libc.so.6                        |[.] 0x000000000015eedb                                                                                 |-      -
+ 0.01%  | 1          | 3689891    |[kernel.kallsyms]                |[k] clear_page_erms                                                                                    |-      -
+ 0.01%  | 1          | 3665401    |libc.so.6                        |[.] 0x000000000015b5ab                                                                                 |-      -
+ 0.01%  | 1          | 3664097    |[kernel.kallsyms]                |[k] pick_next_task_fair                                                                                |-      -
+ 0.01%  | 1          | 3659742    |[kernel.kallsyms]                |[k] trigger_load_balance                                                                               |-      -
+ 0.01%  | 1          | 3570160    |libc.so.6                        |[.] 0x000000000008dc5f                                                                                 |-      -
+ 0.01%  | 1          | 3562219    |[kernel.kallsyms]                |[k] __x86_indirect_thunk_r8                                                                            |-      -
+ 0.01%  | 1          | 3530140    |[kernel.kallsyms]                |[k] perf_pmu_nop_txn                                                                                   |-      -
+ 0.01%  | 1          | 3506175    |proxysql-head-tls-handshake-cache|[.] PgSQL_Query_Result::buffer_init                                                                    |-      -
+ 0.01%  | 1          | 3500567    |[kernel.kallsyms]                |[k] tcp_tx_timestamp                                                                                   |-      -
+ 0.01%  | 1          | 3495813    |[kernel.kallsyms]                |[k] nf_ct_acct_add                                                                                     |-      -
+ 0.01%  | 1          | 3484410    |[kernel.kallsyms]                |[k] clear_buddies                                                                                      |-      -
+ 0.01%  | 1          | 3435640    |[kernel.kallsyms]                |[k] asm_sysvec_apic_timer_interrupt                                                                    |-      -
+ 0.01%  | 1          | 3433137    |[kernel.kallsyms]                |[k] __get_user_8                                                                                       |-      -
+ 0.01%  | 1          | 3427753    |[kernel.kallsyms]                |[k] is_vmalloc_addr                                                                                    |-      -
+ 0.01%  | 1          | 3403081    |[kernel.kallsyms]                |[k] detach_if_pending                                                                                  |-      -
+ 0.01%  | 1          | 3385993    |[kernel.kallsyms]                |[k] set_normalized_timespec64                                                                          |-      -
+ 0.01%  | 1          | 3369552    |libc.so.6                        |[.] 0x000000000015b4cd                                                                                 |-      -
+ 0.01%  | 1          | 3361995    |libc.so.6                        |[.] 0x0000000000085856                                                                                 |-      -
+ 0.01%  | 1          | 3332534    |[kernel.kallsyms]                |[k] __msecs_to_jiffies                                                                                 |-      -
+ 0.01%  | 1          | 3306251    |[kernel.kallsyms]                |[k] perf_event_sched_in                                                                                |-      -
+ 0.01%  | 1          | 3297000    |[kernel.kallsyms]                |[k] __tcp_ack_snd_check                                                                                |-      -
+ 0.01%  | 1          | 3295019    |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::compute_unknown_transaction_status                                               |-      -
+ 0.01%  | 1          | 3282922    |[kernel.kallsyms]                |[k] timespec64_add_safe                                                                                |-      -
+ 0.01%  | 1          | 3265050    |[kernel.kallsyms]                |[k] using_native_sched_clock                                                                           |-      -
+ 0.01%  | 1          | 3248175    |[kernel.kallsyms]                |[k] pick_next_entity                                                                                   |-      -
+ 0.01%  | 1          | 3243021    |[kernel.kallsyms]                |[k] __remove_hrtimer                                                                                   |-      -
+ 0.01%  | 1          | 3207529    |[kernel.kallsyms]                |[k] intel_pmu_disable_all                                                                              |-      -
+ 0.01%  | 1          | 3206734    |libc.so.6                        |[.] 0x000000000015ef40                                                                                 |-      -
+ 0.01%  | 1          | 3160790    |[kernel.kallsyms]                |[k] free_pcp_prepare                                                                                   |-      -
+ 0.01%  | 1          | 3159064    |[kernel.kallsyms]                |[k] tcp_ack_tstamp                                                                                     |-      -
+ 0.01%  | 1          | 3148291    |[kernel.kallsyms]                |[k] sk_page_frag_refill                                                                                |-      -
+ 0.01%  | 1          | 3122725    |[kernel.kallsyms]                |[k] update_vsyscall                                                                                    |-      -
+ 0.01%  | 1          | 3113409    |[kernel.kallsyms]                |[k] __napi_poll                                                                                        |-      -
+ 0.01%  | 1          | 3109246    |[kernel.kallsyms]                |[k] fpregs_assert_state_consistent                                                                     |-      -
+ 0.01%  | 1          | 3099250    |libc.so.6                        |[.] 0x000000000008dc53                                                                                 |-      -
+ 0.01%  | 1          | 3071101    |libc.so.6                        |[.] 0x000000000015ef19                                                                                 |-      -
+ 0.01%  | 1          | 3065372    |libc.so.6                        |[.] 0x000000000015b536                                                                                 |-      -
+ 0.01%  | 1          | 3043247    |[kernel.kallsyms]                |[k] load_balance                                                                                       |-      -
+ 0.01%  | 1          | 3037010    |proxysql-head-tls-handshake-cache|[.] PgSQL_Connection::IsActiveTransaction                                                              |-      -
+ 0.01%  | 1          | 3024913    |[kernel.kallsyms]                |[k] rebalance_domains                                                                                  |-      -
+ 0.01%  | 1          | 3008025    |[kernel.kallsyms]                |[k] tcp_data_ready                                                                                     |-      -
+ 0.01%  | 1          | 3007807    |libc.so.6                        |[.] 0x000000000008582f                                                                                 |-      -
+ 0.01%  | 1          | 2953969    |[kernel.kallsyms]                |[k] __irqentry_text_end                                                                                |-      -
+ 0.01%  | 1          | 2912491    |proxysql-head-tls-handshake-cache|[.] PgSQL_Session::clear_named_portals                                                                 |-      -
+ 0.01%  | 1          | 2911395    |[kernel.kallsyms]                |[k] mod_timer                                                                                          |-      -
+ 0.01%  | 1          | 2857722    |libc.so.6                        |[.] 0x0000000000085854                                                                                 |-      -
+ 0.01%  | 1          | 2853468    |[kernel.kallsyms]                |[k] bpf_lsm_socket_recvmsg                                                                             |-      -
+ 0.01%  | 1          | 2839359    |[kernel.kallsyms]                |[k] tcp_stream_alloc_skb                                                                               |-      -
+ 0.01%  | 1          | 2766663    |[kernel.kallsyms]                |[k] _raw_spin_unlock_bh                                                                                |-      -
+ 0.01%  | 1          | 2726915    |[kernel.kallsyms]                |[k] _raw_spin_trylock                                                                                  |-      -
+ 0.01%  | 1          | 2713411    |libc.so.6                        |[.] 0x000000000015b576                                                                                 |-      -
+ 0.01%  | 1          | 2694669    |libc.so.6                        |[.] 0x000000000008dc76                                                                                 |-      -
+ 0.01%  | 1          | 2684187    |[kernel.kallsyms]                |[k] ktime_get_update_offsets_now                                                                       |-      -
+ 0.01%  | 1          | 2662483    |libc.so.6                        |[.] 0x000000000015ef23                                                                                 |-      -
+ 0.01%  | 1          | 2661531    |[kernel.kallsyms]                |[k] __tcp_push_pending_frames                                                                          |-      -
+
+
+#
+# (Tip: Sample related events with: perf record -e '{cycles,instructions}:S')
+#
