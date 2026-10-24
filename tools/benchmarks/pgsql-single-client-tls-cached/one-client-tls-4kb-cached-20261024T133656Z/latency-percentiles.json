@@ -1,0 +1,20 @@
+{
+  "method": "nearest rank over all successful measured transactions; pgbench raw log third column in microseconds",
+  "samples": 254495,
+  "mean_ms": 0.23271939723766674,
+  "max_ms": 7.764,
+  "p50_ms": 0.214,
+  "p95_ms": 0.313,
+  "p99_ms": 0.361,
+  "clients_with_completions": 1,
+  "completed_per_client_min": 254495,
+  "completed_per_client_max": 254495,
+  "logs": [
+    {
+      "file": "transactions.420341.gz",
+      "uncompressed_sha256": "4a12c62d2303904d5c5279d614bd14f8f78f9b1dd042c43e8d4f9c32a72ea1a9"
+    }
+  ],
+  "log_storage_during_measurement": "tmpfs /dev/shm",
+  "sampling_rate": 1.0
+}

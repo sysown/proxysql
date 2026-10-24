@@ -1,0 +1,12 @@
+{
+  "code": {
+    "old": "bd2353e922cb5cb13e5f6941f1079fd1685511ff",
+    "new": "de5cfbba7de79151cf8c9e847b9d293d65a29b57"
+  },
+  "report": {
+    "old": "f3b020f33676b90ed036bf6c45777e11a20f7f3d",
+    "new": "78127bad1cf3b37df41a2288931ab5014998d6d8"
+  },
+  "content_identical": true,
+  "original_commits_preserved_under": "refs/benchmarks/tls-handshake-cache"
+}

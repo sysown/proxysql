@@ -1,0 +1,10 @@
+{
+  "pool_mode": "transaction",
+  "default_pool_size": "10",
+  "min_pool_size": "10",
+  "reserve_pool_size": "0",
+  "server_idle_timeout": "86400",
+  "server_lifetime": "86400",
+  "client_tls_sslmode": "allow",
+  "server_tls_sslmode": "require"
+}
