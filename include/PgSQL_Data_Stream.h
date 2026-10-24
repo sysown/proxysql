@@ -187,6 +187,9 @@ public:
 	bool cancel_query;
 
 	bool com_field_list;
+	// Verified frontend TLS 1.3 handshakes have no renegotiation phase.
+	// Older TLS and borrowed backend streams retain OpenSSL state checks.
+	bool tls13_handshake_complete = false;
 	char* com_field_wild;
 
 	PgSQL_Data_Stream();
@@ -196,6 +199,9 @@ public:
 	void init(PgSQL_DS_type, PgSQL_Session*, int); // initialize with arguments
 	void shut_soft();
 	void shut_hard();
+	bool ssl_handshake_is_complete() const {
+		return tls13_handshake_complete || SSL_is_init_finished(ssl);
+	}
 	int read_from_net();
 	int write_to_net();
 	int write_to_net_poll();
