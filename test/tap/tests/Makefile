@@ -547,6 +547,7 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-extq_rule_error_stops_batch-t \
 	pgsql-discard_all_txn_block-t \
 	pgsql-local_error_txn_state-t \
+	pgsql-reg_test_6521_cancel_idle_session_busy_poll-t \
 	pgsql-reg_test_6345_admin_extended_query_sync-t \
 	pgsql-reg_test_6349_auth_anti_enumeration-t \
 	test_ffto_pgsql_pipeline-t \
