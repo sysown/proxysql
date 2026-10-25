@@ -1,10 +1,10 @@
 # PostgreSQL session scheduling: previous order, current order, and the completion boundary
 
-**Status:** this document describes the checked-in `PROXYSQL31` implementation through `c94fbe056`, present in PR #6532 at `24f6e3d84`. The later boundary described below is a requested design correction, **not implemented**. The diagnostic yield switch used to investigate performance is not in the PR.
+**Status:** the request-boundary correction is implemented in `4facb95bf`. The diagrams distinguish the older phased scheduler, the superseded pre-write continuation design, and the current implementation. The diagnostic yield switch used during the investigation is not in the PR.
 
-The current implementation can stop processing session A **after its backend request and cleanup have finished but before its completion writeout**, process a waiting session B, and then enter A's handler again to finish response work. Calling that simply “after the request completes” was ambiguous: backend/protocol cleanup is complete, but the response-completion path is not.
+The current handler finishes request/protocol cleanup and attempts the nonblocking client reply write **before returning to the worker**. If releasing the backend found waiters, another buffered command from the same client is retained as runnable work rather than started immediately. The worker then dispatches released capacity to an eligible waiter.
 
-The requested boundary is later: finish A's current request handling, attempt its client write, and return to the scheduler **before starting another buffered request from A**. The scheduler can then choose an eligible waiter B. This avoids splitting A's completion work merely to hand off the backend.
+A client with no buffered next request needs no artificial continuation to finish its reply. Unsent output after a short write remains normal `POLLOUT` work.
 
 ## What “finish a session” means here
 
@@ -28,8 +28,8 @@ For the completed simple-query case discussed here, there are three different bo
 |---|---|---|
 | Upstream base of this PR | `f02fbf1bb` | After-poll socket processing performs reads. Backend-session scan precedes a separate waiter retry scan and the remaining backendless sessions. |
 | Previous phased implementation used as the benchmark control | `9dfe548bc` | Reads are deferred into handlers. Initial waiter service and early frontend dispatch precede backend-session processing. Releases dispatch waiters after a handler returns. No completion-continuation queue. |
-| Current PR implementation | `c94fbe056` | Keeps those phases, adds explicit step/checkout outcomes, and can return before completion writeout. A continuation queue finishes that work later. |
-| Requested completion boundary | Not implemented | Complete the current request's response work, return before another buffered request, then select the next eligible session. |
+| Superseded completion split | `c94fbe056` | Keeps those phases, adds explicit step/checkout outcomes, and can return before completion writeout. A continuation queue finishes that work later. |
+| Current request boundary | `4facb95bf` | Complete the current request's response work, return before another buffered request, then select the next eligible session. |
 
 These are the development scheduling paths compiled with `PROXYSQL31`; the diagrams do not describe the stable build without that define.
 
@@ -56,19 +56,19 @@ flowchart LR
         P4 --> P5["Waiter recovery / deadlines, remaining backendless sessions"]
         P5 --> P6["Remaining outer-loop work, next poll"]
     end
-    subgraph C["Current c94fbe056"]
+    subgraph C["Current request boundary"]
         direction TB
         C0["poll returns"] --> C1["Capture readiness, defer socket reads to handlers"]
         C1 --> C2["Retry existing waiters using established-only checkout"]
         C2 --> C3["Early frontend dispatch, stop at first established-backend miss"]
-        C3 --> C4["Scan backend sessions, completion may return BEFORE writeout, enqueue A and dispatch waiter B"]
+        C3 --> C4["Scan backend sessions, finish cleanup and attempt reply write, return before buffered A2, dispatch waiter B"]
         C4 --> C5["Waiter recovery / deadlines, remaining backendless sessions"]
-        C5 --> C6["Drain continuation snapshot: enter A again for writeout and buffered-input epilogue"]
-        C6 --> C7["Remaining outer-loop work, next poll cannot block if continuations remain"]
+        C5 --> C6["Drain bounded buffered-next-command queue, respect pauses"]
+        C6 --> C7["Remaining outer-loop work, poll cannot block with eligible buffered work"]
     end
 ```
 
-Both phased versions interleave waiter dispatch with backend-session processing. The recent change is **where A returns** and whether it needs another visit to finish its reply. In the current code, A normally resumes after the remaining scans, not immediately after B has been dispatched. Release dispatch is also checked after initial waiter service, early frontend handlers, recovery, remaining backendless handlers and continuation steps.
+All phased versions interleave waiter dispatch with backend-session processing. The boundary correction changes **where A returns**: its current reply write is attempted before B runs. A later queue visit is necessary only for an already-buffered next command. Release dispatch is also checked after initial waiter service, early frontend handlers, recovery, remaining backendless handlers and queued steps.
 
 ## Previous phased order: finish the handler, then dispatch a waiter
 
@@ -102,16 +102,16 @@ There are two cases:
 
 This is the distinction between finishing the **current request** and allowing the current handler to drain more work from the same client.
 
-## Current order: split A's completion around other sessions
+## Superseded order at c94fbe056: split A's completion around other sessions
 
-The current release guard is:
+The release notification guard, retained in the current implementation, is:
 
 ```cpp
 if (scheduler_managed && thread && thread->waiter_lists.head(hostgroup))
     yield_after_release = true;
 ```
 
-It checks for waiters, not for a buffered A2. The handler later reaches its completion label with `status == WAITING_CLIENT_DATA`, sets `resume_after_handoff`, and returns before the normal `writeout()` call. `run_step()` reports `Runnable`, and the worker queues A once.
+It checks for waiters, not for a buffered A2. **In the superseded implementation**, the handler later reached its completion label with `status == WAITING_CLIENT_DATA`, set `resume_after_handoff`, and returned before the normal `writeout()` call. `run_step()` reported `Runnable`, and the worker queued A once. The current code removes that resume flag and pre-write return.
 
 ```mermaid
 sequenceDiagram
@@ -148,9 +148,9 @@ The pending reply belongs to A; it is not handed to B. The continuation preserve
 
 For the small `SELECT 1` response, this postpones the reply itself. For a response that already streamed data, it postpones the completion writeout rather than necessarily the entire response.
 
-## Requested order: switch after current response work, before the next request
+## Current order: switch after current response work, before the next request
 
-**This is the proposed correction, not the current code.** It expresses the requested scheduling boundary without prescribing a new queue implementation or enum value.
+The handler now reaches `writeout()` before deciding whether to return `Runnable`. It returns that outcome only when it is back in `WAITING_CLIENT_DATA`, has buffered packets in `PSarrayIN`, and the request's backend release found waiters. Without buffered packets, it returns normally and the worker dispatches the release without scheduling another completion visit.
 
 ```mermaid
 sequenceDiagram
@@ -174,14 +174,16 @@ sequenceDiagram
     end
 ```
 
-This separates two decisions that the current patch coupled:
+This separates two decisions that the superseded patch coupled:
 
 1. **End A's current request turn at the proper boundary.** Cleanup and the normal output attempt belong to that turn. Another buffered command must not silently extend it past an eligible waiter.
 2. **Choose the right session next.** The worker can prefer B using the released connection's hostgroup and eligibility. It need not simply advance to the next array element.
 
-There must still be a durable way to schedule an already-buffered A2 without waiting for a new `POLLIN` event. Likewise, a short write must retain its normal writable-event path. These are real pending work; they do not require deliberately skipping the current request's first completion writeout.
+The existing deduplicated queue now holds buffered next-command work. Its bounded drain enters the normal handler, not a special completion epilogue. This work survives `to_process` resets and does not depend on another `POLLIN`. A pause introduced by reply throttling keeps the entry queued until its deadline; poll sleeps until that deadline unless another entry is eligible. Killed/unhealthy entries are eligible for immediate cleanup. Teardown cancels entries and idle migration remains blocked while queued.
 
-This boundary must be defined at a completed protocol operation. Extended-query Sync/portal bookkeeping, transaction pinning, cancellation and error cleanup cannot be bypassed by treating every PostgreSQL message as a completed request. Those details require implementation review before changing the scheduler; this documentation update changes no code.
+A short write retains its normal writable-event path. It does not queue a completion-only handler visit. The scheduler never waits for the client to drain its socket before serving other sessions.
+
+This boundary must be defined at a completed protocol operation. Extended-query Sync/portal bookkeeping, transaction pinning, cancellation and error cleanup cannot be bypassed by treating every PostgreSQL message as a completed request. The change leaves those cleanup paths in place and moves only the scheduling decision at the existing completed-operation tail.
 
 ## What the measurements establish
 
@@ -203,7 +205,7 @@ This isolates the cost of the **whole yield path**, including queueing, handler 
 
 ## Other implemented contracts
 
-`run_step()` reports waiting for I/O, waiting for a backend, an established-only miss, runnable continuation, or close. Consumed work clears `to_process`; an established-only miss remains eligible for ordinary recovery. The previous dispatched-session vector and its linear membership searches were removed.
+`run_step()` reports waiting for I/O, waiting for a backend, an established-only miss, runnable buffered work, or close. Consumed work clears `to_process`; an established-only miss remains eligible for ordinary recovery. The previous dispatched-session vector and its linear membership searches were removed.
 
 Established-only checkout can acquire a compatible, connected, idle backend. It cannot create, warm or evict a connection, park the session, impose a retry delay, or account an ordinary checkout failure. Initial and inline waiter dispatch use this policy; recovery/deadline processing retains normal acquisition. Early frontend dispatch retains its global stop on the first established-only miss.
 
@@ -219,11 +221,13 @@ Allocation ownership is a separate change. Native result-buffer failure remains 
 | Previous handler writeout then buffered-command loop | [`PgSQL_Session.cpp` at `9dfe548bc`](https://github.com/sysown/proxysql/blob/9dfe548bc/lib/PgSQL_Session.cpp#L4160) |
 | Previous release dispatch after handler return | [`PgSQL_Thread.cpp` at `9dfe548bc`](https://github.com/sysown/proxysql/blob/9dfe548bc/lib/PgSQL_Thread.cpp#L4450) |
 | Current step outcome and waiter-based release guard | [`PgSQL_Session.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/PgSQL_Session.cpp#L3251) |
-| Current resume before completion epilogue | [`PgSQL_Session.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/PgSQL_Session.cpp#L3315) |
-| Current yield before writeout, then buffered-input loop | [`PgSQL_Session.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/PgSQL_Session.cpp#L4207) |
-| Current phases, release dispatch and continuation drain | [`PgSQL_Thread.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/PgSQL_Thread.cpp#L4227) |
+| Superseded resume before completion epilogue | [`PgSQL_Session.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/PgSQL_Session.cpp#L3315) |
+| Superseded yield before writeout, then buffered-input loop | [`PgSQL_Session.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/PgSQL_Session.cpp#L4207) |
+| Superseded phases and completion-continuation drain | [`PgSQL_Thread.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/PgSQL_Thread.cpp#L4227) |
+| Current writeout before buffered-command return | [`PgSQL_Session.cpp`](https://github.com/sysown/proxysql/blob/4facb95bf/lib/PgSQL_Session.cpp#L4200) |
+| Current buffered-work deadlines and drain | [`PgSQL_Thread.cpp`](https://github.com/sysown/proxysql/blob/4facb95bf/lib/PgSQL_Thread.cpp#L3288) |
 | Nonblocking output implementation | [`Base_Session.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/Base_Session.cpp#L192) |
 
-The existing [implementation/benchmark report](../../benchmarks/2026-10-25-pgsql-scheduler-contract.md) records the release build, focused scheduler/allocation/worker checks, native/libpq buffered-request ordering tests and initial comparison. Those tests validate the current implementation; they do not implement or validate the proposed later scheduling boundary.
+The existing [implementation/benchmark report](../../benchmarks/2026-10-25-pgsql-scheduler-contract.md) records the release build, focused scheduler/allocation/worker checks, native/libpq buffered-request ordering tests and initial comparison. The newer [request-boundary report](../../benchmarks/2026-10-25-pgsql-request-boundary.md) records verification and performance for the current boundary.
 
 The causal investigation and raw artifacts are retained on lon104 under `/home/rene/pg-network-bench/scheduler-regression-root-cause.md`, `scheduler-regression-causal-summary.json`, and `scheduler-regression-evidence.tar.gz`.

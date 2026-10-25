@@ -1,5 +1,7 @@
 # PostgreSQL scheduler contract: implementation and focused benchmark
 
+**Superseded scheduler boundary:** the later [request-boundary implementation and benchmark](2026-10-25-pgsql-request-boundary.md) completes client writeout before waiter handoff and records the new comparison. This report retains the earlier results.
+
 The explicit scheduler contract is implemented and committed. It fixes the demonstrated ordering problem: an existing backend waiter executes before the releasing client's next buffered query. This benchmark did **not** show a throughput improvement. The candidate was 1.48% slower in this single comparison.
 
 ## Measured results
