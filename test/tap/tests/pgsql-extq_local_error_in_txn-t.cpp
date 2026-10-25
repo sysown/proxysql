@@ -523,15 +523,14 @@ int main(int, char**) {
 		});
 
 		// L10: the unit ends with a simple Query instead of a Sync. PostgreSQL itself ignores the Query
-		// after the error and waits for a Sync, so this is ProxySQL only: the error ends the unit with
-		// a ReadyForQuery, the Query then runs in the failed transaction, and ROLLBACK ends it.
+		// after the error and waits for a Sync, so this is ProxySQL only: the error ends the unit, the
+		// Query then runs in the failed transaction and gets the one ReadyForQuery, and ROLLBACK ends it.
 		checkProxy(mode, "L10 refused message in a unit ended by a simple Query",
-			"C Z(T) | E(26000) Z(E) | E(25P02) Z(E) | C Z(I)", [&](PgConnection& c) {
+			"C Z(T) | E(26000) E(25P02) Z(E) | C Z(I)", [&](PgConnection& c) {
 			std::string out = simple(c, "BEGIN");
 			c.bindStatement("none_" + tag, "", {}, {}, false);
 			c.executePortal("", 0, false);
 			c.sendQuery("SELECT 1");
-			out += " | " + replies(c);
 			out += " | " + replies(c);
 			return out + " | " + simple(c, "ROLLBACK");
 		});
