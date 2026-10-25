@@ -1454,7 +1454,7 @@ aws_iam_kill_helper_unit-t: ALLOW_MULTI_DEF += \
 # libproxysql.a so their wrappers can reach core-library calls.
 # AWS IAM wrap tests also need the static archive for their --wrap link flags
 # to reach core-library calls (same requirement as caching_sha2_rsa_unit-t).
-worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
+worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEb -Wl,--wrap=_ZN13PgSQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb
 
 pgsql_result_flush_allocation_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=free -Wl,--wrap=PQgetCopyData
 

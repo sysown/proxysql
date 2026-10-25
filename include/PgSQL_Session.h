@@ -647,6 +647,10 @@ public:
 	PgSQL_Waiter_Node waiter_node;
 	PgSQL_Pool_Acquire_Mode pool_acquire_mode = PgSQL_Pool_Acquire_Mode::Normal;
 	bool established_checkout_unavailable = false;
+	bool scheduler_managed = false;
+	bool yield_after_release = false;
+	bool resume_after_handoff = false;
+	bool continuation_queued = false;
 	bool last_pool_ff{ false };
 	bool last_pool_gtid{ false };
 	int last_pool_max_lag_ms{ -1 };
@@ -757,6 +761,7 @@ public:
 #ifdef PROXYSQL31
 	PgSQL_Session_Run_Result run_step(PgSQL_Pool_Acquire_Mode mode = PgSQL_Pool_Acquire_Mode::Normal,
 		bool io_only = false);
+	void note_backend_release(unsigned int hostgroup);
 #endif
 
 	void (*handler_function) (PgSQL_Session* sess, void*, PtrSize_t* pkt);

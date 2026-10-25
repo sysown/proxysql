@@ -37,7 +37,20 @@ template<class Session> int handle(Session *sess) {
 	return outcome == Outcome::error ? -1 : 0;
 }
 extern "C" int __wrap__ZN13MySQL_Session7handlerEv(MySQL_Session *s) { return handle(s); }
-extern "C" int __wrap__ZN13PgSQL_Session7handlerEv(PgSQL_Session *s) { return handle(s); }
+extern "C" int __wrap__ZN13PgSQL_Session7handlerEb(PgSQL_Session *s, bool io_only) {
+	return io_only ? 0 : handle(s);
+}
+extern "C" PgSQL_Session_Run_Result __wrap__ZN13PgSQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb(
+	PgSQL_Session *s, PgSQL_Pool_Acquire_Mode, bool io_only) {
+	if (io_only) return PgSQL_Session_Run_Result::WaitIO;
+	const int rc = handle(s);
+	s->to_process = 0;
+	if (rc == -1 || s->killed) {
+		s->healthy = false;
+		return PgSQL_Session_Run_Result::Close;
+	}
+	return s->status == CONNECTING_SERVER ? PgSQL_Session_Run_Result::WaitBackend : PgSQL_Session_Run_Result::WaitIO;
+}
 
 template<class Worker, class Session, class Stream>
 Session *new_waiter(Worker& worker, int& peer) {
@@ -283,7 +296,7 @@ static void test_pgsql_timeout() {
 static void test_pgsql_cache() {
 	PgSQL_Thread worker;
 	if (!worker.init()) BAIL_OUT("worker init failed");
-	GloPTH->num_threads = 1;
+	GloPTH->num_threads = 2;
 	PgSQL_srv_info_t info {"waiter-cache-unit", 5432, "unit"};
 	PgSQL_srv_opts_t opts {1, 100, 0};
 	PgHGM->wrlock();
@@ -303,7 +316,7 @@ static void test_pgsql_cache() {
 	worker.waiter_lists.push_back(node);
 	worker.push_MyConn_local(conn);
 	ok(server->ConnectionsUsed->conns_length() == 0 && server->ConnectionsFree->conns_length() == 1,
-		"PgSQL: queued waiter bypasses the local cache with zero failure counters");
+		"PgSQL: queued waiter publishes releases when peer workers need access");
 	worker.waiter_lists.unlink(node);
 	worker.return_local_connections();
 }

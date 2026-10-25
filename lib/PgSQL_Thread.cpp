@@ -54,15 +54,6 @@ extern MySQL_Monitor* GloMyMon;
 extern PgSQL_Monitor* GloPgMon;
 extern PgSQL_Logger* GloPgSQL_Logger;
 
-#ifdef PROXYSQL31
-// Collect releases while processing a worker pass. Dispatch only after the
-// releasing handler returns: never re-enter a session or hold a pool lock.
-struct PgSQL_Inline_Handoff_State {
-    bool collecting = false;
-    std::vector<unsigned> released_hostgroups;
-};
-static thread_local PgSQL_Inline_Handoff_State pgsql_inline_handoff;
-#endif
 
 typedef struct mythr_st_vars {
 	enum PgSQL_Thread_status_variable v_idx;
@@ -3203,6 +3194,7 @@ void PgSQL_Thread::unregister_session(int idx) {
 	if (mysql_sessions == NULL) return;
 #ifdef PROXYSQL31
 	PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(idx);
+	cancel_session_continuation(sess);
 	leave_waiter(sess, false);
 	drop_from_poll(sess->client_myds);
 	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
@@ -3213,6 +3205,19 @@ void PgSQL_Thread::unregister_session(int idx) {
 	mysql_sessions->remove_index_fast(idx);
 }
 #ifdef PROXYSQL31
+
+void PgSQL_Thread::queue_session_continuation(PgSQL_Session *sess) {
+	if (sess->continuation_queued) return;
+	sess->continuation_queued = true;
+	session_continuations.push_back(sess);
+}
+
+void PgSQL_Thread::cancel_session_continuation(PgSQL_Session *sess) {
+	if (!sess->continuation_queued) return;
+	session_continuations.erase(std::remove(session_continuations.begin(), session_continuations.end(), sess),
+		session_continuations.end());
+	sess->continuation_queued = false;
+}
 
 void PgSQL_Thread::enter_waiter(PgSQL_Session *sess, unsigned hid) {
 	if (sess->waiter_node.session) return;
@@ -3283,6 +3288,10 @@ void PgSQL_Thread::run___cleanup_mirror_queue() {
 #ifdef PROXYSQL31
 
 int PgSQL_Thread::run_ComputePollTimeout() {
+	// Buffered work is independent of socket readiness and must survive the
+	// next run_SetAllSession_ToProcess0(). Poll may discover more ready I/O,
+	// but it must not sleep while a continuation is runnable.
+	if (!session_continuations.empty()) return 0;
 	int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
 
 	// Adaptive poll timeout. partition_pool_nulls holds the count from the
@@ -4220,13 +4229,19 @@ void PgSQL_Thread::process_all_sessions() {
 		ProcessAllSessions_Partition<PgSQL_Session>();
 	}
 #ifdef PROXYSQL31
-    auto &handoff = pgsql_inline_handoff;
-    handoff.released_hostgroups.clear();
-    handoff.collecting = true;
+    released_hostgroups.clear();
+    collecting_releases = true;
     struct CollectScope {
-        PgSQL_Inline_Handoff_State &state;
-        ~CollectScope() { state.collecting = false; state.released_hostgroups.clear(); }
-    } collect_scope{handoff};
+        bool &collecting;
+        std::vector<unsigned> &released;
+        ~CollectScope() { collecting = false; released.clear(); }
+    } collect_scope{collecting_releases, released_hostgroups};
+    auto run_session = [&](PgSQL_Session *sess, PgSQL_Pool_Acquire_Mode mode = PgSQL_Pool_Acquire_Mode::Normal,
+                           bool io_only = false) {
+        const auto result = sess->run_step(mode, io_only);
+        if (result == PgSQL_Session_Run_Result::Runnable) queue_session_continuation(sess);
+        return result;
+    };
 
     auto serve_waiters = [&](unsigned hid, size_t budget, bool retry_unavailable = false) {
         size_t served = 0;
@@ -4250,7 +4265,7 @@ void PgSQL_Thread::process_all_sessions() {
             if (waiting->pause_until > curtime && !deadline_due) { node = next; continue; }
             if (deadline_due) waiting->pause_until = 0;
             waiting->to_process = 1;
-            const auto waiting_result = waiting->run_step(retry_unavailable
+            const auto waiting_result = run_session(waiting, retry_unavailable
                 ? PgSQL_Pool_Acquire_Mode::Normal : PgSQL_Pool_Acquire_Mode::EstablishedOnly);
             if (waiting_result == PgSQL_Session_Run_Result::Close) {
                 waiting->healthy = 0;
@@ -4281,11 +4296,11 @@ void PgSQL_Thread::process_all_sessions() {
         // A synchronous completion may release again. Bound the chain rather
         // than recurse; remaining availability is retried at the next pass.
         size_t i = 0;
-        while (i < handoff.released_hostgroups.size() && i < 64) {
-            const unsigned hid = handoff.released_hostgroups[i++];
+        while (i < released_hostgroups.size() && i < 64) {
+            const unsigned hid = released_hostgroups[i++];
             serve_waiters(hid, 1);
         }
-        handoff.released_hostgroups.clear();
+        released_hostgroups.clear();
     };
     // Reuse connections already available before doing more response work,
     // including connections published by another worker.
@@ -4318,13 +4333,13 @@ void PgSQL_Thread::process_all_sessions() {
     // the first established-connection miss. Hostgroup scheduling is deferred.
     for (unsigned i = 0; early_capacity_available && i < mysql_sessions->len; ++i) {
         auto *sess = static_cast<PgSQL_Session*>(mysql_sessions->index(i));
-        if (sess->healthy == 0 || sess->killed || sess->mirror || sess->waiter_node.session)
+        if (sess->healthy == 0 || sess->killed || sess->mirror || sess->waiter_node.session || sess->continuation_queued)
             continue;
         if (sess->to_process != 1 || sess->pause_until > curtime) continue;
         if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
         // Authentication and connection maintenance retain their normal order.
         if (sess->status != WAITING_CLIENT_DATA && sess->status != CONNECTING_SERVER) continue;
-        const auto early_result = sess->run_step(PgSQL_Pool_Acquire_Mode::EstablishedOnly);
+        const auto early_result = run_session(sess, PgSQL_Pool_Acquire_Mode::EstablishedOnly);
         if (early_result == PgSQL_Session_Run_Result::Close)
             leave_waiter(sess, false);
         dispatch_released();
@@ -4389,7 +4404,7 @@ void PgSQL_Thread::process_all_sessions() {
 #endif
 			)) {
 			#ifdef PROXYSQL31
-			if (sess->run_step(PgSQL_Pool_Acquire_Mode::Normal, true) == PgSQL_Session_Run_Result::Close) sess->healthy = 0;
+			if (run_session(sess, PgSQL_Pool_Acquire_Mode::Normal, true) == PgSQL_Session_Run_Result::Close) sess->healthy = 0;
 #else
 			if (sess->handler(true) == -1) sess->healthy = 0;
 #endif
@@ -4436,12 +4451,12 @@ void PgSQL_Thread::process_all_sessions() {
 			if (sess->to_process == 1) {
 				if (sess->pause_until <= curtime) {
 #ifdef PROXYSQL31
-					if (!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
+					if (sess->continuation_queued || !(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
 						continue;
 					}
 #endif // PROXYSQL31
 #ifdef PROXYSQL31
-					rc = sess->run_step() == PgSQL_Session_Run_Result::Close ? -1 : 0;
+					rc = run_session(sess) == PgSQL_Session_Run_Result::Close ? -1 : 0;
 #else
 					rc = sess->handler();
 #endif
@@ -4498,11 +4513,11 @@ void PgSQL_Thread::process_all_sessions() {
 			delete sess;
 			continue;
 		}
-		if (sess->waiter_node.session) continue;
+		if (sess->waiter_node.session || sess->continuation_queued) continue;
 		if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
 
 		if (sess->to_process == 1 && sess->pause_until <= curtime) {
-			rc = sess->run_step() == PgSQL_Session_Run_Result::Close ? -1 : 0;
+			rc = run_session(sess) == PgSQL_Session_Run_Result::Close ? -1 : 0;
 			if (rc == -1 || sess->killed == true) {
 				char _buf[1024];
 				if (sess->client_myds && sess->killed)
@@ -4515,6 +4530,27 @@ void PgSQL_Thread::process_all_sessions() {
 			}
             dispatch_released();
 		}
+	}
+
+	// Drain only the current snapshot. A newly yielded continuation remains
+	// durable work for the next nonblocking poll, rather than extending this
+	// pass indefinitely. Inline waiters always run before the releasing client.
+	size_t continuations = session_continuations.size();
+	while (continuations-- && !session_continuations.empty()) {
+		auto *sess = session_continuations.front();
+		session_continuations.pop_front();
+		sess->continuation_queued = false;
+		const auto result = (!sess->healthy || sess->killed) ? PgSQL_Session_Run_Result::Close : run_session(sess);
+		if (result == PgSQL_Session_Run_Result::Close) {
+			char location[1024];
+			snprintf(location, sizeof(location), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+			GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, location);
+			for (unsigned i = 0; i < mysql_sessions->len; ++i) {
+				if (mysql_sessions->index(i) == sess) { unregister_session(i); break; }
+			}
+			delete sess;
+		}
+		dispatch_released();
 	}
 
 #endif // PROXYSQL31
@@ -6437,7 +6473,7 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 	return NULL;
 }
 
-void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
+void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c, PgSQL_Session *releasing_session) {
 	// Bounded local cache: cache 1-in-N releases (N = pgsql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
 	// At N=1 always cache (no sibling to share with).
@@ -6448,8 +6484,8 @@ void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
 #ifdef PROXYSQL31
-            if (pgsql_inline_handoff.collecting)
-                pgsql_inline_handoff.released_hostgroups.push_back(mysrvc->myhgc->hid);
+            if (collecting_releases) released_hostgroups.push_back(mysrvc->myhgc->hid);
+            if (releasing_session) releasing_session->note_backend_release(mysrvc->myhgc->hid);
 #endif
 			unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
 #ifdef PROXYSQL31

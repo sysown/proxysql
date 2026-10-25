@@ -10,6 +10,34 @@ After a request completes, protocol bookkeeping, transaction state, result owner
 
 Yielded sessions enter a worker-owned continuation list once. Teardown removes a queued session. A bounded snapshot of that list is drained after the normal phases; any remaining continuation forces a nonblocking poll on the next iteration. Partial writes retain the normal POLLOUT path. Readiness remains attached to streams and is cleared before consumption or connection reassignment.
 
+```mermaid
+flowchart TD
+    P["poll returns: capture stream readiness, no socket reads"] --> W["Retry existing waiters against established capacity"]
+    W --> E["Early frontend dispatch: EstablishedOnly"]
+    E --> M{"Compatible established backend available?"}
+    M -->|Yes| E
+    M -->|No: explicit miss, no waiter or retry side effects| B["Process sessions with backends"]
+    B --> R{"Request completed and reusable backend released?"}
+    R -->|No| B
+    R -->|Yes| C["Finish request, transaction and protocol cleanup"]
+    C --> H{"Hostgroup has waiters?"}
+    H -->|No| O["Normal writeout and buffered input handling"]
+    H -->|Yes| Y["Return Runnable; enqueue releasing session once"]
+    Y --> D["Worker dispatches released backend to eligible waiter"]
+    D --> B
+    O --> B
+    B --> F["Normal recovery/deadlines and remaining backendless sessions"]
+    F --> Q["Drain snapshot of continuation queue"]
+    Q --> X["Resume writeout and buffered input epilogue"]
+    X --> N{"New continuations remain?"}
+    N -->|Yes| Z["Next poll timeout is zero"]
+    N -->|No| T["Normal poll timeout and socket readiness"]
+```
+
+`run_step()` owns clearing consumed `to_process` work. An established-only miss remains runnable for ordinary recovery; a safe yield is represented by the continuation queue. The old dispatched-session vector and its linear membership searches are removed. Release dispatch is bounded and happens after the handler returns, avoiding recursive entry from pool code.
+
+The partial-write regression also exposed an existing plaintext error path: after a writable event, one send can consume socket capacity and a subsequent send can return `EAGAIN`. Writable readiness is not a capacity reservation. The development path now retains output on `EINTR`, `EAGAIN`, or `EWOULDBLOCK`, including after `POLLOUT`, while other send errors still close the stream.
+
 ## Pool policy
 
 Checkout explicitly accepts normal or established-only policy. Established-only checkout can remove a compatible, connected, idle backend but cannot create, warm, evict, park the session, impose retry delay, or record an ordinary checkout failure. A speculative miss is a returned outcome, not a normal failure followed by rollback. Both initial waiter service and inline release service use this policy. The recovery/deadline phase uses normal policy and remains responsible for reconnecting and timeout errors. The existing global early-dispatch stop is retained.

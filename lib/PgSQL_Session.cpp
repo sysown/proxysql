@@ -589,6 +589,7 @@ void PgSQL_Session::reset() {
 PgSQL_Session::~PgSQL_Session() {
 #ifdef PROXYSQL31
 	if (thread) {
+		thread->cancel_session_continuation(this);
 		thread->leave_waiter(this);
 	}
 #endif // PROXYSQL31
@@ -3250,13 +3251,20 @@ static bool can_hold_client_output(bool extended_query, PgSQL_Data_Stream* clien
 PgSQL_Session_Run_Result PgSQL_Session::run_step(PgSQL_Pool_Acquire_Mode mode, bool io_only) {
 	pool_acquire_mode = mode;
 	established_checkout_unavailable = false;
+	scheduler_managed = true;
+	yield_after_release = false;
 	to_process = 1;
 	const int rc = handler(io_only);
+	scheduler_managed = false;
 	pool_acquire_mode = PgSQL_Pool_Acquire_Mode::Normal;
 	if (rc == -1 || !healthy || killed) {
 		healthy = false;
 		to_process = 0;
 		return PgSQL_Session_Run_Result::Close;
+	}
+	if (rc == 1) {
+		to_process = 0;
+		return PgSQL_Session_Run_Result::Runnable;
 	}
 	if (established_checkout_unavailable) {
 		// Normal scheduling can retry later in this pass without undoing a
@@ -3266,6 +3274,10 @@ PgSQL_Session_Run_Result PgSQL_Session::run_step(PgSQL_Pool_Acquire_Mode mode, b
 	}
 	to_process = 0;
 	return waiter_node.session ? PgSQL_Session_Run_Result::WaitBackend : PgSQL_Session_Run_Result::WaitIO;
+}
+void PgSQL_Session::note_backend_release(unsigned int hostgroup) {
+	if (scheduler_managed && thread && thread->waiter_lists.head(hostgroup))
+		yield_after_release = true;
 }
 #endif
 
@@ -3300,6 +3312,12 @@ int PgSQL_Session::handler(bool io_only) try {
 			client_myds->ssl_write_len || (client_myds->encrypted &&
 			BIO_ctrl_pending(client_myds->wbio_ssl))) ? 0 : -1;
 	}
+#ifdef PROXYSQL31
+	if (resume_after_handoff) {
+		resume_after_handoff = false;
+		goto __exit_DSS__STATE_NOT_INITIALIZED;
+	}
+#endif
 	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Processing session %p\n", this->thread, this, this);
 	//unsigned int j;
 	//unsigned char c;
@@ -4188,6 +4206,16 @@ handler_again:
 
 __exit_DSS__STATE_NOT_INITIALIZED:
 
+#ifdef PROXYSQL31
+	// The completed request has settled protocol and transaction state and
+	// transferred response ownership. Yield before writeout or another queued
+	// command; the worker can now serve an older waiter without re-entry here.
+	if (scheduler_managed && yield_after_release && status == WAITING_CLIENT_DATA) {
+		yield_after_release = false;
+		resume_after_handoff = true;
+		return 1;
+	}
+#endif
 	if (mybe && mybe->server_myds) {
 		if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
 #ifdef DEBUG

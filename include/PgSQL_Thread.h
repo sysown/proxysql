@@ -14,6 +14,7 @@
 #include <sys/epoll.h>
 #endif // IDLE_THREADS
 #include <atomic>
+#include <deque>
 
 #include "prometheus_helpers.h"
 
@@ -164,6 +165,11 @@ private:
 
 	PtrArray* cached_connections;
 	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = pgsql_threads
+#ifdef PROXYSQL31
+	bool collecting_releases = false;
+	std::vector<unsigned> released_hostgroups;
+	std::deque<PgSQL_Session*> session_continuations;
+#endif
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
@@ -477,6 +483,8 @@ public:
 	void enter_waiter(PgSQL_Session *sess, unsigned hid);
 	void leave_waiter(PgSQL_Session *sess, bool restore_client = true);
 	void drop_from_poll(PgSQL_Data_Stream *ds);
+	void queue_session_continuation(PgSQL_Session *sess);
+	void cancel_session_continuation(PgSQL_Session *sess);
 #endif // PROXYSQL31
 
 	/**
@@ -690,7 +698,7 @@ public:
 	 * @note This function is used to manage the thread's local connection cache.
 	 *
 	 */
-	void push_MyConn_local(PgSQL_Connection*);
+	void push_MyConn_local(PgSQL_Connection*, PgSQL_Session* releasing_session = nullptr);
 
 	/**
 	 * @brief Returns all connections in the thread's local cache to the global pool.

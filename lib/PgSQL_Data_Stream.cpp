@@ -821,12 +821,11 @@ int PgSQL_Data_Stream::write_to_net() {
 	if (bytes_io < 0) {
 		if (encrypted == false) {
 #ifdef PROXYSQL31
-			if (poll_fds_idx < 0 || !mypolls) {
-				if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-					shut_soft();
-			} else if (mypolls->fds[poll_fds_idx].revents & POLLOUT) {
+			// Readiness is a snapshot, not a reservation of socket capacity.
+			// A previous send in this pass can consume it; retain queued bytes
+			// and let POLLOUT retry instead of closing a healthy slow client.
+			if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
 				shut_soft();
-			}
 #else
 			if (poll_fds_idx < 0 || !mypolls || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
 				shut_soft();
@@ -1414,7 +1413,7 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 #ifdef STRESSTEST_POOL
 		PgHGM->push_MyConn_to_pool(mc);  // #644
 #else
-		sess->thread->push_MyConn_local(mc);
+		sess->thread->push_MyConn_local(mc, sess);
 #endif
 	}
 }
