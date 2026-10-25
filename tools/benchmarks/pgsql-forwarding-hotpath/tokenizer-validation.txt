@@ -1,1 +1,0 @@
-PASS: 31694 differential tokenizer cases, both empty-token modes; NULL, terminator, delimiter and 127/128-byte allocation boundaries; repository tests unchanged.

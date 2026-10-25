@@ -504,9 +504,6 @@ public:
 	 */
 	bool process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigned int n);
 	bool consume_data_stream_readiness(PgSQL_Data_Stream *myds);
-#ifdef PROXYSQL31
-    void process_ready_sessions();
-#endif
 
 	//void ProcessAllSessions_SortingSessions();
 

@@ -1,8 +1,0 @@
-{"type": "attached_probes", "data": {"probes": 4}}
-{"type": "printf", "data": "READY\n"}
-
-
-{"type": "map", "data": {"@gate_count": 2}}
-{"type": "map", "data": {"@observed_tls_checks": 35}}
-{"type": "map", "data": {"@start_ns": 795724235740254}}
-{"type": "map", "data": {"@stop_ns": 795744308415460}}

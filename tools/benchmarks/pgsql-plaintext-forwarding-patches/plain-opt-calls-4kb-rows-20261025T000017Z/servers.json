@@ -1,9 +1,0 @@
-[
-  {
-    "hostgroup_id": "0",
-    "hostname": "127.0.0.1",
-    "port": "5432",
-    "max_connections": "10",
-    "use_ssl": "0"
-  }
-]

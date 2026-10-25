@@ -1,9 +1,0 @@
-{
-  "sha256": "961419b9503186758a2d7d772429f0bc36d6f2127422be3784bac3002acc0f82",
-  "commit": "b17a986f3",
-  "scheduler": "phased",
-  "timers": false,
-  "profiling": true,
-  "mode": "candidate",
-  "pid": 356741
-}
