@@ -603,7 +603,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_tls_write_retry_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	str_ends_with_unit-t \
-	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
+	query_cache_unit-t pgsql_query_cache_allocation_unit-t pgsql_result_flush_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
 	gtid_local_cache_unit-t gtid_writer_fallback_route_unit-t mysql_resultset_add_row2_unit-t \
 	protocol_unit-t auth_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
@@ -1476,6 +1476,9 @@ vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERS
 
 # This test includes the cache source to inject allocator failure locally.
 pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
+
+# This test includes the protocol source to inject result-buffer allocation failure.
+pgsql_result_flush_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Protocol.cpp
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

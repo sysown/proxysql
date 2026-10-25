@@ -3240,7 +3240,7 @@ static bool can_hold_client_output(bool extended_query, PgSQL_Data_Stream* clien
 		client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN <= overflow_safe_multiply<4, unsigned int>(pgsql_thread___threshold_resultset_size);
 }
 
-int PgSQL_Session::handler(bool io_only) {
+int PgSQL_Session::handler(bool io_only) try {
 #if ENABLE_TIMER
 	Timer timer(thread->Timers.Sessions_Handlers);
 #endif // ENABLE_TIMER
@@ -4192,6 +4192,18 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 
 	handler_ret = 0;
 	return handler_ret;
+} catch (const PgSQL_Query_Result::AllocationError&) {
+	// A partial backend response cannot be retried or pooled. Teardown must
+	// destroy attached connections even if their last transaction status is idle.
+	healthy = false;
+	for (unsigned int i = 0; mybes && i < mybes->len; ++i) {
+		auto* backend = static_cast<PgSQL_Backend*>(mybes->index(i));
+		if (backend->server_myds && backend->server_myds->myconn)
+			backend->server_myds->myconn->healthy = false;
+	}
+	// Do not allocate an error packet while handling allocation failure.
+	proxy_error("Unable to allocate PostgreSQL result buffer; closing session %p\n", this);
+	return -1;
 }
 // end ::handler()
 

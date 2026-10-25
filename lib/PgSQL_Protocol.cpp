@@ -3141,12 +3141,16 @@ void PgSQL_Query_Result::buffer_to_PSarrayOut() {
 		// realloc and allocating a replacement churns a large allocation for
 		// every small result; the output queue only needs the occupied bytes.
 		unsigned char* packet = (unsigned char*)malloc(buffer_used);
+		if (packet == nullptr) throw AllocationError{};
 		memcpy(packet, buffer, buffer_used);
 		PSarrayOUT.add(packet, buffer_used);
 	} else {
+		// Allocate first so failure leaves the occupied buffer and queue intact.
+		unsigned char* replacement = (unsigned char*)malloc(PGSQL_RESULTSET_BUFLEN);
+		if (replacement == nullptr) throw AllocationError{};
 		// Hand off larger buffers without copying their contents.
 		PSarrayOUT.add(buffer, buffer_used);
-		buffer = (unsigned char*)malloc(PGSQL_RESULTSET_BUFLEN);
+		buffer = replacement;
 	}
 	buffer_used = 0;
 }
