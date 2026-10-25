@@ -1456,7 +1456,9 @@ aws_iam_kill_helper_unit-t: ALLOW_MULTI_DEF += \
 # to reach core-library calls (same requirement as caching_sha2_rsa_unit-t).
 worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
 
-STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
+pgsql_result_flush_allocation_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=free -Wl,--wrap=PQgetCopyData
+
+STATIC_LIBPROXYSQL_TESTS := pgsql_result_flush_allocation_unit-t caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
 	gtid_local_cache_unit-t parsersql_v30_flow_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
