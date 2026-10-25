@@ -1,0 +1,923 @@
+{
+  "results": {
+    "select1:previous": {
+      "directory": "tls50-b10-select1-previous-20261025T011652Z",
+      "summary": {
+        "mode": "previous",
+        "workload": "select1",
+        "clients": 50,
+        "jobs": 16,
+        "backend_cap": 10,
+        "client_cpus": "2,4,6,8,10,12,14,16",
+        "tls": true,
+        "commands_stats": false,
+        "query_digests": false,
+        "digest_map_unchanged": true,
+        "tps": 30852.108543,
+        "latency_ms": 1.617,
+        "conn_ok_start": "10",
+        "conn_ok_end": "10",
+        "conn_err_end": "0",
+        "snapshots": 62,
+        "cpu_us_per_query": 32.33026771457603,
+        "user_us_per_query": 14.593658627625821,
+        "system_us_per_query": 17.73660908695021,
+        "p50_ms": 1.695,
+        "p95_ms": 1.969,
+        "p99_ms": 2.036,
+        "logged_transactions": 1841738,
+        "clients_with_completions": 50
+      },
+      "latency": {
+        "method": "nearest rank over all successful measured transactions; pgbench raw log third column in microseconds",
+        "samples": 1841738,
+        "mean_ms": 1.6172434515658578,
+        "max_ms": 7.539,
+        "p50_ms": 1.695,
+        "p95_ms": 1.969,
+        "p99_ms": 2.036,
+        "clients_with_completions": 50,
+        "completed_per_client_min": 36638,
+        "completed_per_client_max": 37035,
+        "logs": [
+          {
+            "file": "transactions.439924.gz",
+            "uncompressed_sha256": "d324e1e3a0b52ef3d896266c33046275101755a89984bac5f5e2909090a8d9be"
+          },
+          {
+            "file": "transactions.439924.1.gz",
+            "uncompressed_sha256": "88809a7927aa85127bb5b56b1ef04f6640c2bad2b4d5020635cd87f8ed21e704"
+          },
+          {
+            "file": "transactions.439924.10.gz",
+            "uncompressed_sha256": "7f8a80a8d84c96d9ea439c5f7a1d3e0fbecb4662dced3fc3e4419f32f85acac7"
+          },
+          {
+            "file": "transactions.439924.11.gz",
+            "uncompressed_sha256": "faccbf96cdc28d01f0408de4791ba953a742fa9775e5b312a80bce363049792f"
+          },
+          {
+            "file": "transactions.439924.12.gz",
+            "uncompressed_sha256": "83ed23bf4bed3f2340838ac7f8226a8d9c760c8644949f57888c632efd264017"
+          },
+          {
+            "file": "transactions.439924.13.gz",
+            "uncompressed_sha256": "eb4e052877baf427d7b04a1fc7ae7cc3a970e505932b82ceaf6b922c2f5857fb"
+          },
+          {
+            "file": "transactions.439924.14.gz",
+            "uncompressed_sha256": "e319995426d9ef4c396865bd370fad570b64ca31671946b024419564636ef627"
+          },
+          {
+            "file": "transactions.439924.15.gz",
+            "uncompressed_sha256": "13e378dce78e4a84f19829fcb4ee55f59b8e071c55671385ab13203b993ad1a1"
+          },
+          {
+            "file": "transactions.439924.2.gz",
+            "uncompressed_sha256": "c7f725b8c68ba9a152dcaeda7a062088f57ebdedfa4f8027ec416a00e484a352"
+          },
+          {
+            "file": "transactions.439924.3.gz",
+            "uncompressed_sha256": "b0de656a40329140cf7e596805129d6286ef0243ae3b1198d1e0a7115e45834e"
+          },
+          {
+            "file": "transactions.439924.4.gz",
+            "uncompressed_sha256": "af4d2942e159f4019fc4d1a09d57db836c7f1f4e41f92465ea737065e2210a55"
+          },
+          {
+            "file": "transactions.439924.5.gz",
+            "uncompressed_sha256": "8e39b341d7653da17665cc3c996916586c2986ad90d854b535e918fbaf62ffbc"
+          },
+          {
+            "file": "transactions.439924.6.gz",
+            "uncompressed_sha256": "0f59332614a6ed80b2a1c4f541a7cb1da9b30222e4ddcdba9d24c1c5b2540285"
+          },
+          {
+            "file": "transactions.439924.7.gz",
+            "uncompressed_sha256": "4b28e35a8841f277bfcb1b6f0295e1e4d5673fa59e67b859c08ef0d3ed301c3e"
+          },
+          {
+            "file": "transactions.439924.8.gz",
+            "uncompressed_sha256": "6bbc58a5f1d62d0f23374d13dfdb7727a27b8266f14ab21a77c4aef7ef9cb1c7"
+          },
+          {
+            "file": "transactions.439924.9.gz",
+            "uncompressed_sha256": "67d9f25efac8da1d398001211bac7c377b9317967b801db830c9bd2fec59a9ca"
+          }
+        ],
+        "log_storage_during_measurement": "tmpfs /dev/shm",
+        "sampling_rate": 1.0
+      },
+      "binary": {
+        "version": "ProxySQL version 3.1.11-dev-ga0781dd, codename Truls",
+        "version_stderr": "2026-10-25 01:16:52 [INFO] Using OpenSSL version: OpenSSL 3.5.7 9 Jun 2026",
+        "sha256": "3fa61772707b3edee8342c84a1dfd1b6b4b2b18cd9c94b5e8a856fb3ad8a16f1",
+        "backend": "native",
+        "native_backend_setting_present": true,
+        "metadata": {
+          "file": "src/proxysql-head-tls-handshake-cache",
+          "version_prefix": "3.1.",
+          "label": "Cached verified frontend TLS 1.3 handshake",
+          "commit": "de5cfbba7de79151cf8c9e847b9d293d65a29b57",
+          "base_commit": "f3163c8646ba24eea1130a0a20b759ae4bef2ce9",
+          "sha256": "3fa61772707b3edee8342c84a1dfd1b6b4b2b18cd9c94b5e8a856fb3ad8a16f1",
+          "original_build_commit": "bd2353e922cb5cb13e5f6941f1079fd1685511ff",
+          "message_rewrite_only": true
+        },
+        "profiling": false,
+        "transaction_logging": true,
+        "pid": 439801
+      },
+      "pool": {
+        "used_min": 10,
+        "used_max": 10,
+        "free_min": 0,
+        "free_max": 0,
+        "used_mean": 10.0,
+        "free_mean": 0.0,
+        "free_positive_samples": 0,
+        "central_samples": 51
+      }
+    },
+    "select1:latest": {
+      "directory": "tls50-b10-select1-latest-20261025T011826Z",
+      "summary": {
+        "mode": "latest",
+        "workload": "select1",
+        "clients": 50,
+        "jobs": 16,
+        "backend_cap": 10,
+        "client_cpus": "2,4,6,8,10,12,14,16",
+        "tls": true,
+        "commands_stats": false,
+        "query_digests": false,
+        "digest_map_unchanged": true,
+        "tps": 30454.38651,
+        "latency_ms": 1.639,
+        "conn_ok_start": "10",
+        "conn_ok_end": "10",
+        "conn_err_end": "0",
+        "snapshots": 62,
+        "cpu_us_per_query": 32.74119235680157,
+        "user_us_per_query": 14.677764990413852,
+        "system_us_per_query": 18.06342736638772,
+        "p50_ms": 1.718,
+        "p95_ms": 1.995,
+        "p99_ms": 2.063,
+        "logged_transactions": 1818146,
+        "clients_with_completions": 50
+      },
+      "latency": {
+        "method": "nearest rank over all successful measured transactions; pgbench raw log third column in microseconds",
+        "samples": 1818146,
+        "mean_ms": 1.6388995080703088,
+        "max_ms": 8.915,
+        "p50_ms": 1.718,
+        "p95_ms": 1.995,
+        "p99_ms": 2.063,
+        "clients_with_completions": 50,
+        "completed_per_client_min": 36165,
+        "completed_per_client_max": 36551,
+        "logs": [
+          {
+            "file": "transactions.440210.gz",
+            "uncompressed_sha256": "ec4c2cc72607c0d7cdd824add7aba3f16b67b27003fb4fcdf2ad7142f9e96e86"
+          },
+          {
+            "file": "transactions.440210.1.gz",
+            "uncompressed_sha256": "2318dbe1940f6a52dd067f85240308c1e3c99f1b1a338c2878d27ed2644014db"
+          },
+          {
+            "file": "transactions.440210.10.gz",
+            "uncompressed_sha256": "79f19dfbc1fcc2ddb85b0c09f3ed2d246efd041d3e725fe63cbca6a02f661380"
+          },
+          {
+            "file": "transactions.440210.11.gz",
+            "uncompressed_sha256": "09b8f74e05a149a1a44f27ea39f10c046183edabb5b1a70f169bfcc0124032ba"
+          },
+          {
+            "file": "transactions.440210.12.gz",
+            "uncompressed_sha256": "754d7d061757ca46c476045669394aab49e6d7cd01e7d7a9109021cc0a3aa1c4"
+          },
+          {
+            "file": "transactions.440210.13.gz",
+            "uncompressed_sha256": "c729410feb3d6f8e23252aadcc2d01a3f498373a643513fac7689ad588d82478"
+          },
+          {
+            "file": "transactions.440210.14.gz",
+            "uncompressed_sha256": "4c38c4f0ed096d898a82294693885118376fccb9421226ae6822c1fed3952c99"
+          },
+          {
+            "file": "transactions.440210.15.gz",
+            "uncompressed_sha256": "845e0fd752abaa5591e599cac5d4caba8b0df3ffd93c165c3cf644cd6eeaa531"
+          },
+          {
+            "file": "transactions.440210.2.gz",
+            "uncompressed_sha256": "236f2fd88c9cc322b45ea29570d74bd013c464c86b752ff9471a788d50df19c8"
+          },
+          {
+            "file": "transactions.440210.3.gz",
+            "uncompressed_sha256": "4999c2d5ffc2e04ab93fd92b3ff46e99318209afeaa45c7e1e7d3977d894bd55"
+          },
+          {
+            "file": "transactions.440210.4.gz",
+            "uncompressed_sha256": "9fb6cf88c2e12a0119b188e4903ac775c764870cacf67bac3a871211aa96c6f8"
+          },
+          {
+            "file": "transactions.440210.5.gz",
+            "uncompressed_sha256": "47a24ba5b57f58ce1948df8bb2ff34d3ad90b8e84b007b8ee8bb57f87fecf7dd"
+          },
+          {
+            "file": "transactions.440210.6.gz",
+            "uncompressed_sha256": "7cea2caaec98752e85d7dd855e4dc96e9bf060156f8f88bc4a60d320a48957e3"
+          },
+          {
+            "file": "transactions.440210.7.gz",
+            "uncompressed_sha256": "0b46d0205424fa5d9eb4c48c50537dee3db78b1dc20ee9a739b6bf2bb68af461"
+          },
+          {
+            "file": "transactions.440210.8.gz",
+            "uncompressed_sha256": "5174ca73429731b3a0760f7047dd23f96f0a9c3465ffc516aa279074dec40889"
+          },
+          {
+            "file": "transactions.440210.9.gz",
+            "uncompressed_sha256": "9333c8fd3853874d779ff29e4bf6c1f1516b4c5bc83cec9c367fc766f89ddf84"
+          }
+        ],
+        "log_storage_during_measurement": "tmpfs /dev/shm",
+        "sampling_rate": 1.0
+      },
+      "binary": {
+        "version": "ProxySQL version 3.1.11-dev-ga0781dd, codename Truls",
+        "version_stderr": "2026-10-25 01:18:27 [INFO] Using OpenSSL version: OpenSSL 3.5.7 9 Jun 2026",
+        "sha256": "7fd4064c6551cf63899dff09f5ca658974e5eb896157eac76889dc14125aaa55",
+        "backend": "native",
+        "native_backend_setting_present": true,
+        "metadata": {
+          "file": "src/proxysql-plain-rows",
+          "version_prefix": "3.1.",
+          "label": "COPY and scheduling fixes with native DataRow spans",
+          "commit": "754dc4af4792b22c825d9663c4a86739bc0cbaff",
+          "base_commit": "84c6a56626acb79e3968ad75112e9e0e7e100052",
+          "sha256": "7fd4064c6551cf63899dff09f5ca658974e5eb896157eac76889dc14125aaa55"
+        },
+        "profiling": false,
+        "transaction_logging": true,
+        "pid": 440091
+      },
+      "pool": {
+        "used_min": 10,
+        "used_max": 10,
+        "free_min": 0,
+        "free_max": 0,
+        "used_mean": 10.0,
+        "free_mean": 0.0,
+        "free_positive_samples": 0,
+        "central_samples": 51
+      }
+    },
+    "select1:pgbouncer": {
+      "directory": "tls50-b10-select1-pgbouncer-20261025T012001Z",
+      "summary": {
+        "mode": "pgbouncer",
+        "workload": "select1",
+        "clients": 50,
+        "jobs": 16,
+        "backend_cap": 10,
+        "client_cpus": "2,4,6,8,10,12,14,16",
+        "tls": true,
+        "tps": 26764.485012,
+        "latency_ms": 1.865,
+        "snapshots": 62,
+        "conn_created_steady": 0,
+        "backend_identities_unchanged": true,
+        "cpu_us_per_query": 37.17711073905764,
+        "user_us_per_query": 15.195228414254963,
+        "system_us_per_query": 21.98188232480268,
+        "p50_ms": 1.853,
+        "p95_ms": 1.944,
+        "p99_ms": 2.013,
+        "logged_transactions": 1597261,
+        "clients_with_completions": 50
+      },
+      "latency": {
+        "method": "nearest rank over all successful measured transactions; pgbench raw log third column in microseconds",
+        "samples": 1597261,
+        "mean_ms": 1.8651305084140912,
+        "max_ms": 4.943,
+        "p50_ms": 1.853,
+        "p95_ms": 1.944,
+        "p99_ms": 2.013,
+        "clients_with_completions": 50,
+        "completed_per_client_min": 31942,
+        "completed_per_client_max": 31949,
+        "logs": [
+          {
+            "file": "transactions.440449.gz",
+            "uncompressed_sha256": "8dd5b125c714a3c596f0752cc26c5ece971990780bdf6035f6b46f94cbff7080"
+          },
+          {
+            "file": "transactions.440449.1.gz",
+            "uncompressed_sha256": "88edeed8365eab621f510a778c9dbd9f9b5327730fb59054ad0f29982fbeb928"
+          },
+          {
+            "file": "transactions.440449.10.gz",
+            "uncompressed_sha256": "613fe8019a41593af27a9daa69eb083837ceebe562c46b669a776308c92c596b"
+          },
+          {
+            "file": "transactions.440449.11.gz",
+            "uncompressed_sha256": "117942ea8023cb0828ea6fac201a250d4fe0c4f378d07749abe2e9d5601d52f8"
+          },
+          {
+            "file": "transactions.440449.12.gz",
+            "uncompressed_sha256": "99f4d97525f86000a50aad320196a5f0d400cc47275139babaad1120de52dda0"
+          },
+          {
+            "file": "transactions.440449.13.gz",
+            "uncompressed_sha256": "3cf6ce6785e5203a1c963b35f5c8f0eb05c8c4ca259993c8008d22438078447e"
+          },
+          {
+            "file": "transactions.440449.14.gz",
+            "uncompressed_sha256": "a51f9fb31a60c05e64e8aa1331e75164b1cf77eb974ff6d139428d356eddd351"
+          },
+          {
+            "file": "transactions.440449.15.gz",
+            "uncompressed_sha256": "6b9d571fbf69df6524929b7eba7caa1e13442c7144376face07cc08b35fd0a71"
+          },
+          {
+            "file": "transactions.440449.2.gz",
+            "uncompressed_sha256": "f452d047da7b565aad2d002e8986a87418e50b8ee621d2e97c8d2ec0a186118f"
+          },
+          {
+            "file": "transactions.440449.3.gz",
+            "uncompressed_sha256": "1fb2a562e87f95daf67921f3d2ba12668ba4d2f68a1c0a94439db8508b824211"
+          },
+          {
+            "file": "transactions.440449.4.gz",
+            "uncompressed_sha256": "710e91c846d5f245f14b0e19c81c522fb12c2d210a439c69a3a58fc00d262cd4"
+          },
+          {
+            "file": "transactions.440449.5.gz",
+            "uncompressed_sha256": "b0926b5e77419739d67cd2579cfd7db9bdc6f0fb4a597265c2ed4b432f0c06c2"
+          },
+          {
+            "file": "transactions.440449.6.gz",
+            "uncompressed_sha256": "de8772d99345afca5e3b2b418b88c13e1639468d3bb84a1054385a84612d882a"
+          },
+          {
+            "file": "transactions.440449.7.gz",
+            "uncompressed_sha256": "503816366f0426db3b761a57ac6c732ad5dea5cb05998525835f05a8c6bc3701"
+          },
+          {
+            "file": "transactions.440449.8.gz",
+            "uncompressed_sha256": "6685e6df54d1c6543eac6b09476a65824cdca9272ab9c2ec36226f270f76079d"
+          },
+          {
+            "file": "transactions.440449.9.gz",
+            "uncompressed_sha256": "30be4c1c3a89c6b4088a6244cbb61b3f97b38e761ee7ed23bf9b2435cb4e3f12"
+          }
+        ],
+        "log_storage_during_measurement": "tmpfs /dev/shm",
+        "sampling_rate": 1.0
+      },
+      "binary": {
+        "version": "PgBouncer 1.26.1\nlibevent 2.1.12-stable\nadns: evdns2\ntls: OpenSSL 3.0.22 25 Aug 2026",
+        "sha256": "eac4bff64ec9798d69102d7c862f55b7af05a6090e58f130715de51b16d69e1d",
+        "pid": 440393
+      },
+      "pool": {
+        "active_min": 10,
+        "active_max": 10,
+        "idle_min": 0,
+        "idle_max": 0,
+        "other_min": 0,
+        "other_max": 0
+      }
+    },
+    "4kb:latest": {
+      "directory": "tls50-b10-4kb-latest-20261025T012131Z",
+      "summary": {
+        "mode": "latest",
+        "workload": "4kb",
+        "clients": 50,
+        "jobs": 16,
+        "backend_cap": 10,
+        "client_cpus": "2,4,6,8,10,12,14,16",
+        "tls": true,
+        "commands_stats": false,
+        "query_digests": false,
+        "digest_map_unchanged": true,
+        "tps": 22852.609749,
+        "latency_ms": 2.185,
+        "conn_ok_start": "10",
+        "conn_ok_end": "10",
+        "conn_err_end": "0",
+        "snapshots": 62,
+        "cpu_us_per_query": 43.64497654191842,
+        "user_us_per_query": 22.443488939190914,
+        "system_us_per_query": 21.201487602727504,
+        "p50_ms": 2.147,
+        "p95_ms": 2.45,
+        "p99_ms": 2.538,
+        "logged_transactions": 1364138,
+        "clients_with_completions": 50
+      },
+      "latency": {
+        "method": "nearest rank over all successful measured transactions; pgbench raw log third column in microseconds",
+        "samples": 1364138,
+        "mean_ms": 2.185160484496437,
+        "max_ms": 9.272,
+        "p50_ms": 2.147,
+        "p95_ms": 2.45,
+        "p99_ms": 2.538,
+        "clients_with_completions": 50,
+        "completed_per_client_min": 27236,
+        "completed_per_client_max": 27327,
+        "logs": [
+          {
+            "file": "transactions.440814.gz",
+            "uncompressed_sha256": "143f8129f11189a7b33bd02a99c8dc28b784d8c230fe42187ce993700be8822c"
+          },
+          {
+            "file": "transactions.440814.1.gz",
+            "uncompressed_sha256": "e4ee981c2cb324835b3ca301e0328575397efc2b86a5dc1228a5853eda208c52"
+          },
+          {
+            "file": "transactions.440814.10.gz",
+            "uncompressed_sha256": "b47fc42dae1e1226c9d95e0746e8684fd36765c77dde3ae33b11738727029425"
+          },
+          {
+            "file": "transactions.440814.11.gz",
+            "uncompressed_sha256": "8c4cd6fb0582ed5e19cc07e7928166a5e7f0852a124ea4dffe20509c8116b513"
+          },
+          {
+            "file": "transactions.440814.12.gz",
+            "uncompressed_sha256": "b74f2d2637a73f0c48f66bddbdfdc6e4986668de9a30bc80726f17167750fd97"
+          },
+          {
+            "file": "transactions.440814.13.gz",
+            "uncompressed_sha256": "4abb1f9e662399ab52ff4d4c042f4aa46e654cf55f956855945168e56e39c9d5"
+          },
+          {
+            "file": "transactions.440814.14.gz",
+            "uncompressed_sha256": "8a67bb028660d3229ef9a1a907db4316f08872b272b1f0eadf3e927fd56b323c"
+          },
+          {
+            "file": "transactions.440814.15.gz",
+            "uncompressed_sha256": "86d578ec80643630fdff6afe83d7a2f44e0add2482d5edcb9fb64071f1de0af4"
+          },
+          {
+            "file": "transactions.440814.2.gz",
+            "uncompressed_sha256": "d5cbed4dc4d6e9ad9a064412a708c06c44056b76a5ed3088f1830b8bbf50cbf2"
+          },
+          {
+            "file": "transactions.440814.3.gz",
+            "uncompressed_sha256": "b4c25d0cfbd48190ac368d8e813c888ff4663d57af350e09c696fc4e7e8b543d"
+          },
+          {
+            "file": "transactions.440814.4.gz",
+            "uncompressed_sha256": "caa554be090cde0823705b5f4db77b2c3de6a582064b4c9988aefcb10c90ea81"
+          },
+          {
+            "file": "transactions.440814.5.gz",
+            "uncompressed_sha256": "54b355a1419b99c8eb6e1660c2b030cf5f179b1db6dab8fd38a86aed2f2e1520"
+          },
+          {
+            "file": "transactions.440814.6.gz",
+            "uncompressed_sha256": "3694f1e93c7ebd4c0ad950fb51db34a30e482d7407e17ed3677d9049c27b346f"
+          },
+          {
+            "file": "transactions.440814.7.gz",
+            "uncompressed_sha256": "4a7343dc37d20e920c153e5df91d358a9d2eadbb306c0077c73e506432f4655d"
+          },
+          {
+            "file": "transactions.440814.8.gz",
+            "uncompressed_sha256": "eb08b2b890e1336ef35e62bfaa689acce669d21857a26abd9702c0c7fc014887"
+          },
+          {
+            "file": "transactions.440814.9.gz",
+            "uncompressed_sha256": "7c5a00c6f549915b544d39a2343167cde3f5559aea24ff0665166d88e3ce3f8f"
+          }
+        ],
+        "log_storage_during_measurement": "tmpfs /dev/shm",
+        "sampling_rate": 1.0
+      },
+      "binary": {
+        "version": "ProxySQL version 3.1.11-dev-ga0781dd, codename Truls",
+        "version_stderr": "2026-10-25 01:21:32 [INFO] Using OpenSSL version: OpenSSL 3.5.7 9 Jun 2026",
+        "sha256": "7fd4064c6551cf63899dff09f5ca658974e5eb896157eac76889dc14125aaa55",
+        "backend": "native",
+        "native_backend_setting_present": true,
+        "metadata": {
+          "file": "src/proxysql-plain-rows",
+          "version_prefix": "3.1.",
+          "label": "COPY and scheduling fixes with native DataRow spans",
+          "commit": "754dc4af4792b22c825d9663c4a86739bc0cbaff",
+          "base_commit": "84c6a56626acb79e3968ad75112e9e0e7e100052",
+          "sha256": "7fd4064c6551cf63899dff09f5ca658974e5eb896157eac76889dc14125aaa55"
+        },
+        "profiling": false,
+        "transaction_logging": true,
+        "pid": 440677
+      },
+      "pool": {
+        "used_min": 10,
+        "used_max": 10,
+        "free_min": 0,
+        "free_max": 0,
+        "used_mean": 10.0,
+        "free_mean": 0.0,
+        "free_positive_samples": 0,
+        "central_samples": 51
+      }
+    },
+    "4kb:previous": {
+      "directory": "tls50-b10-4kb-previous-20261025T012304Z",
+      "summary": {
+        "mode": "previous",
+        "workload": "4kb",
+        "clients": 50,
+        "jobs": 16,
+        "backend_cap": 10,
+        "client_cpus": "2,4,6,8,10,12,14,16",
+        "tls": true,
+        "commands_stats": false,
+        "query_digests": false,
+        "digest_map_unchanged": true,
+        "tps": 22011.739753,
+        "latency_ms": 2.268,
+        "conn_ok_start": "10",
+        "conn_ok_end": "10",
+        "conn_err_end": "0",
+        "snapshots": 62,
+        "cpu_us_per_query": 45.329836356382664,
+        "user_us_per_query": 24.109874870385568,
+        "system_us_per_query": 21.219961485997096,
+        "p50_ms": 2.196,
+        "p95_ms": 2.559,
+        "p99_ms": 2.64,
+        "logged_transactions": 1314061,
+        "clients_with_completions": 50
+      },
+      "latency": {
+        "method": "nearest rank over all successful measured transactions; pgbench raw log third column in microseconds",
+        "samples": 1314061,
+        "mean_ms": 2.2683816245973363,
+        "max_ms": 9.783,
+        "p50_ms": 2.196,
+        "p95_ms": 2.559,
+        "p99_ms": 2.64,
+        "clients_with_completions": 50,
+        "completed_per_client_min": 26186,
+        "completed_per_client_max": 26346,
+        "logs": [
+          {
+            "file": "transactions.441092.gz",
+            "uncompressed_sha256": "8e8f3e175eb38fb11a90308d20b5215aa90584f48c254a81994d7999cb934fe6"
+          },
+          {
+            "file": "transactions.441092.1.gz",
+            "uncompressed_sha256": "e6e3e81f605a1a7ba80a310ebc4ff4a1a05864f6e1ff2ac60970815671be2025"
+          },
+          {
+            "file": "transactions.441092.10.gz",
+            "uncompressed_sha256": "2e49c6251eade6560ab31eb58f275d4f012661ebd7651313af03b566bd138163"
+          },
+          {
+            "file": "transactions.441092.11.gz",
+            "uncompressed_sha256": "3eb6eb111f42f78c476ee72ead4838122ef151ead413cca7f2745d730eeb47c5"
+          },
+          {
+            "file": "transactions.441092.12.gz",
+            "uncompressed_sha256": "b8d985abb0af3266ece23914801ec777d930aa4250201ebc44aff1023fdd1abc"
+          },
+          {
+            "file": "transactions.441092.13.gz",
+            "uncompressed_sha256": "bf3296a4bf34c498088354676020618c0d85dc5bdef38d1cbcc9b3fdcfc04cf9"
+          },
+          {
+            "file": "transactions.441092.14.gz",
+            "uncompressed_sha256": "965ea0ad7394c982bcec3252e8c4cdec85ded841c4d5bca548b8131227baf2bc"
+          },
+          {
+            "file": "transactions.441092.15.gz",
+            "uncompressed_sha256": "07dfb03ea64c6c88d52fc554dc731f030e58ca34e7eb83c1ce7a142db1509477"
+          },
+          {
+            "file": "transactions.441092.2.gz",
+            "uncompressed_sha256": "a42d75de7fe1273cbc6af8bc65265c5832bd1f86c7363122587645556af38ad5"
+          },
+          {
+            "file": "transactions.441092.3.gz",
+            "uncompressed_sha256": "de823715a200dee52aa01716f137bc8501b1765b5728a151cb996037f18ee1af"
+          },
+          {
+            "file": "transactions.441092.4.gz",
+            "uncompressed_sha256": "50a7c7690c3a960a46d7ebf8ce37ea8964877ea7a56b170259451d1faa76b957"
+          },
+          {
+            "file": "transactions.441092.5.gz",
+            "uncompressed_sha256": "6c2ee6cd7949fd95abd8e0d87509406982dd2937ea4a7ce6b91362f721be9c01"
+          },
+          {
+            "file": "transactions.441092.6.gz",
+            "uncompressed_sha256": "410789013999d3a45dfeec8bf1eecad721e8c7481eacac4d90c257a4d6552531"
+          },
+          {
+            "file": "transactions.441092.7.gz",
+            "uncompressed_sha256": "1abac28e533993c6375c14b7e521c2e60a37bfb38f6e43f5eb64051e1cb0b57a"
+          },
+          {
+            "file": "transactions.441092.8.gz",
+            "uncompressed_sha256": "99a76a132ba23fcd20e680165ec9f549031d10444f65652a64bf61950ce9a534"
+          },
+          {
+            "file": "transactions.441092.9.gz",
+            "uncompressed_sha256": "01302f03c1fec609e714019620f02cbc1d1f0299eb4dac2c2450302eadbcee25"
+          }
+        ],
+        "log_storage_during_measurement": "tmpfs /dev/shm",
+        "sampling_rate": 1.0
+      },
+      "binary": {
+        "version": "ProxySQL version 3.1.11-dev-ga0781dd, codename Truls",
+        "version_stderr": "2026-10-25 01:23:04 [INFO] Using OpenSSL version: OpenSSL 3.5.7 9 Jun 2026",
+        "sha256": "3fa61772707b3edee8342c84a1dfd1b6b4b2b18cd9c94b5e8a856fb3ad8a16f1",
+        "backend": "native",
+        "native_backend_setting_present": true,
+        "metadata": {
+          "file": "src/proxysql-head-tls-handshake-cache",
+          "version_prefix": "3.1.",
+          "label": "Cached verified frontend TLS 1.3 handshake",
+          "commit": "de5cfbba7de79151cf8c9e847b9d293d65a29b57",
+          "base_commit": "f3163c8646ba24eea1130a0a20b759ae4bef2ce9",
+          "sha256": "3fa61772707b3edee8342c84a1dfd1b6b4b2b18cd9c94b5e8a856fb3ad8a16f1",
+          "original_build_commit": "bd2353e922cb5cb13e5f6941f1079fd1685511ff",
+          "message_rewrite_only": true
+        },
+        "profiling": false,
+        "transaction_logging": true,
+        "pid": 440972
+      },
+      "pool": {
+        "used_min": 10,
+        "used_max": 10,
+        "free_min": 0,
+        "free_max": 0,
+        "used_mean": 10.0,
+        "free_mean": 0.0,
+        "free_positive_samples": 0,
+        "central_samples": 51
+      }
+    },
+    "4kb:pgbouncer": {
+      "directory": "tls50-b10-4kb-pgbouncer-20261025T012436Z",
+      "summary": {
+        "mode": "pgbouncer",
+        "workload": "4kb",
+        "clients": 50,
+        "jobs": 16,
+        "backend_cap": 10,
+        "client_cpus": "2,4,6,8,10,12,14,16",
+        "tls": true,
+        "tps": 20368.515669,
+        "latency_ms": 2.452,
+        "snapshots": 62,
+        "conn_created_steady": 0,
+        "backend_identities_unchanged": true,
+        "cpu_us_per_query": 48.8683607305712,
+        "user_us_per_query": 22.41190589551909,
+        "system_us_per_query": 26.456454835052103,
+        "p50_ms": 2.357,
+        "p95_ms": 2.771,
+        "p99_ms": 2.825,
+        "logged_transactions": 1215454,
+        "clients_with_completions": 50
+      },
+      "latency": {
+        "method": "nearest rank over all successful measured transactions; pgbench raw log third column in microseconds",
+        "samples": 1215454,
+        "mean_ms": 2.451847093349481,
+        "max_ms": 11.984,
+        "p50_ms": 2.357,
+        "p95_ms": 2.771,
+        "p99_ms": 2.825,
+        "clients_with_completions": 50,
+        "completed_per_client_min": 24209,
+        "completed_per_client_max": 24426,
+        "logs": [
+          {
+            "file": "transactions.441324.gz",
+            "uncompressed_sha256": "1164842c86603b18ff5b4719f279acef0acf9981fffbfbdf5de21766368e1de1"
+          },
+          {
+            "file": "transactions.441324.1.gz",
+            "uncompressed_sha256": "ef058a15220b296378ee45e6cc6ab70989160d70e2ca8591edf5ffb2852b4006"
+          },
+          {
+            "file": "transactions.441324.10.gz",
+            "uncompressed_sha256": "0df703d8cb1715676eb3b0400c5143370f23e07db106412ac3e89f5b09f79043"
+          },
+          {
+            "file": "transactions.441324.11.gz",
+            "uncompressed_sha256": "ba665ce1d54f18f30a0c6e083845c1cc98543e6ea82882c45ccabb7d3915770f"
+          },
+          {
+            "file": "transactions.441324.12.gz",
+            "uncompressed_sha256": "46585660b4e46fab8d3f865849b0c588ffcb1ca80ef3fdd915a0f854af814ce9"
+          },
+          {
+            "file": "transactions.441324.13.gz",
+            "uncompressed_sha256": "b210967b97367db1e6a52f2d6f255da0453725cb4a5f5b98c2a66a502db47ca6"
+          },
+          {
+            "file": "transactions.441324.14.gz",
+            "uncompressed_sha256": "f1d60da5d2097bdf919a203a693a7870d1fe22a87dffb338696ed23bdb3cc87c"
+          },
+          {
+            "file": "transactions.441324.15.gz",
+            "uncompressed_sha256": "5928bdfae2ebdab1a6e8da8a5fc5bb2e10fdfaafdb8ca20a4f12f48ada833fd4"
+          },
+          {
+            "file": "transactions.441324.2.gz",
+            "uncompressed_sha256": "abc1b7e8311c107196d2ab039ac51e94e726d454321aefe382e59f6baa83c55d"
+          },
+          {
+            "file": "transactions.441324.3.gz",
+            "uncompressed_sha256": "20edd9cf90d7b58d4448b238c64dc03d1d0b0127d7295ea32bcdfbf58ac3ae67"
+          },
+          {
+            "file": "transactions.441324.4.gz",
+            "uncompressed_sha256": "935bf5b16115dca032f80b3cfccc3adde31757ded9f68519e483b72a43937baa"
+          },
+          {
+            "file": "transactions.441324.5.gz",
+            "uncompressed_sha256": "258108ea773b4f491ec09946fada9d46aba89817940c7194b063d46079a529a9"
+          },
+          {
+            "file": "transactions.441324.6.gz",
+            "uncompressed_sha256": "3257b5b72476fbc4d93d39fdcbd720afbbc4cd8f6bf7d0b677b94cbc65394324"
+          },
+          {
+            "file": "transactions.441324.7.gz",
+            "uncompressed_sha256": "9ee35ebdf55daa2670b3039da7fb836904662f5f35543ec2baefabe7840edc32"
+          },
+          {
+            "file": "transactions.441324.8.gz",
+            "uncompressed_sha256": "794eee521575b64a04c6a199af05543f304d4056855e6e4ff4a0e774cdc330db"
+          },
+          {
+            "file": "transactions.441324.9.gz",
+            "uncompressed_sha256": "55e9baeca96b2796ba5c5d2bd98c798cee49c4f44c03db21f4725389208bc74f"
+          }
+        ],
+        "log_storage_during_measurement": "tmpfs /dev/shm",
+        "sampling_rate": 1.0
+      },
+      "binary": {
+        "version": "PgBouncer 1.26.1\nlibevent 2.1.12-stable\nadns: evdns2\ntls: OpenSSL 3.0.22 25 Aug 2026",
+        "sha256": "eac4bff64ec9798d69102d7c862f55b7af05a6090e58f130715de51b16d69e1d",
+        "pid": 441257
+      },
+      "pool": {
+        "active_min": 10,
+        "active_max": 10,
+        "idle_min": 0,
+        "idle_max": 0,
+        "other_min": 0,
+        "other_max": 0
+      }
+    }
+  },
+  "relative": {
+    "select1": {
+      "latest_vs_previous_pct": -1.289124315265766,
+      "latest_vs_pgbouncer_pct": 13.786558928167736,
+      "previous_vs_pgbouncer_pct": 15.272565600149935,
+      "latest_user_cpu_change_pct": 0.5763212977232257
+    },
+    "4kb": {
+      "latest_vs_previous_pct": 3.820097845220949,
+      "latest_vs_pgbouncer_pct": 12.195754076379185,
+      "previous_vs_pgbouncer_pct": 8.067470947335242,
+      "latest_user_cpu_change_pct": -6.911632433403847
+    }
+  },
+  "verification": {
+    "runs": [
+      {
+        "proxy": "previous",
+        "workload": "select1",
+        "records_verified": 1841738,
+        "log_hashes_match": true,
+        "percentile_ranks_verified": true,
+        "binary_hash_matches": true,
+        "backend_pool_retained": true,
+        "backend_cap": 10,
+        "clients_verified": 50,
+        "tls_both_hops": true,
+        "native_backend": true,
+        "output_matches_backend": true,
+        "isolated_instance_stopped": true
+      },
+      {
+        "proxy": "latest",
+        "workload": "select1",
+        "records_verified": 1818146,
+        "log_hashes_match": true,
+        "percentile_ranks_verified": true,
+        "binary_hash_matches": true,
+        "backend_pool_retained": true,
+        "backend_cap": 10,
+        "clients_verified": 50,
+        "tls_both_hops": true,
+        "native_backend": true,
+        "output_matches_backend": true,
+        "isolated_instance_stopped": true
+      },
+      {
+        "proxy": "pgbouncer",
+        "workload": "select1",
+        "records_verified": 1597261,
+        "log_hashes_match": true,
+        "percentile_ranks_verified": true,
+        "binary_hash_matches": true,
+        "backend_pool_retained": true,
+        "backend_cap": 10,
+        "clients_verified": 50,
+        "tls_both_hops": true,
+        "native_backend": null,
+        "output_matches_backend": true,
+        "isolated_instance_stopped": true
+      },
+      {
+        "proxy": "latest",
+        "workload": "4kb",
+        "records_verified": 1364138,
+        "log_hashes_match": true,
+        "percentile_ranks_verified": true,
+        "binary_hash_matches": true,
+        "backend_pool_retained": true,
+        "backend_cap": 10,
+        "clients_verified": 50,
+        "tls_both_hops": true,
+        "native_backend": true,
+        "output_matches_backend": true,
+        "isolated_instance_stopped": true
+      },
+      {
+        "proxy": "previous",
+        "workload": "4kb",
+        "records_verified": 1314061,
+        "log_hashes_match": true,
+        "percentile_ranks_verified": true,
+        "binary_hash_matches": true,
+        "backend_pool_retained": true,
+        "backend_cap": 10,
+        "clients_verified": 50,
+        "tls_both_hops": true,
+        "native_backend": true,
+        "output_matches_backend": true,
+        "isolated_instance_stopped": true
+      },
+      {
+        "proxy": "pgbouncer",
+        "workload": "4kb",
+        "records_verified": 1215454,
+        "log_hashes_match": true,
+        "percentile_ranks_verified": true,
+        "binary_hash_matches": true,
+        "backend_pool_retained": true,
+        "backend_cap": 10,
+        "clients_verified": 50,
+        "tls_both_hops": true,
+        "native_backend": null,
+        "output_matches_backend": true,
+        "isolated_instance_stopped": true
+      }
+    ],
+    "records_verified": 9150798,
+    "profiling_tools_absent": true,
+    "main_staged_files_unchanged": true
+  },
+  "binaries": {
+    "previous": {
+      "file": "src/proxysql-head-tls-handshake-cache",
+      "version_prefix": "3.1.",
+      "label": "Cached verified frontend TLS 1.3 handshake",
+      "commit": "de5cfbba7de79151cf8c9e847b9d293d65a29b57",
+      "base_commit": "f3163c8646ba24eea1130a0a20b759ae4bef2ce9",
+      "sha256": "3fa61772707b3edee8342c84a1dfd1b6b4b2b18cd9c94b5e8a856fb3ad8a16f1",
+      "original_build_commit": "bd2353e922cb5cb13e5f6941f1079fd1685511ff",
+      "message_rewrite_only": true
+    },
+    "latest": {
+      "file": "src/proxysql-plain-rows",
+      "version_prefix": "3.1.",
+      "label": "COPY and scheduling fixes with native DataRow spans",
+      "commit": "754dc4af4792b22c825d9663c4a86739bc0cbaff",
+      "base_commit": "84c6a56626acb79e3968ad75112e9e0e7e100052",
+      "sha256": "7fd4064c6551cf63899dff09f5ca658974e5eb896157eac76889dc14125aaa55"
+    }
+  }
+}

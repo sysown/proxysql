@@ -1,0 +1,13 @@
+pgbench (15.19 (Debian 15.19-0+deb12u1))
+transaction type: select42_4kb.sql
+scaling factor: 1
+query mode: simple
+number of clients: 50
+number of threads: 16
+maximum number of tries: 1
+duration: 20 s
+number of transactions actually processed: 402269
+number of failed transactions: 0 (0.000%)
+latency average = 2.451 ms
+initial connection time = 286.734 ms
+tps = 20400.916251 (without initial connection time)

@@ -1,0 +1,80 @@
+{
+  "method": "nearest rank over all successful measured transactions; pgbench raw log third column in microseconds",
+  "samples": 1818146,
+  "mean_ms": 1.6388995080703088,
+  "max_ms": 8.915,
+  "p50_ms": 1.718,
+  "p95_ms": 1.995,
+  "p99_ms": 2.063,
+  "clients_with_completions": 50,
+  "completed_per_client_min": 36165,
+  "completed_per_client_max": 36551,
+  "logs": [
+    {
+      "file": "transactions.440210.gz",
+      "uncompressed_sha256": "ec4c2cc72607c0d7cdd824add7aba3f16b67b27003fb4fcdf2ad7142f9e96e86"
+    },
+    {
+      "file": "transactions.440210.1.gz",
+      "uncompressed_sha256": "2318dbe1940f6a52dd067f85240308c1e3c99f1b1a338c2878d27ed2644014db"
+    },
+    {
+      "file": "transactions.440210.10.gz",
+      "uncompressed_sha256": "79f19dfbc1fcc2ddb85b0c09f3ed2d246efd041d3e725fe63cbca6a02f661380"
+    },
+    {
+      "file": "transactions.440210.11.gz",
+      "uncompressed_sha256": "09b8f74e05a149a1a44f27ea39f10c046183edabb5b1a70f169bfcc0124032ba"
+    },
+    {
+      "file": "transactions.440210.12.gz",
+      "uncompressed_sha256": "754d7d061757ca46c476045669394aab49e6d7cd01e7d7a9109021cc0a3aa1c4"
+    },
+    {
+      "file": "transactions.440210.13.gz",
+      "uncompressed_sha256": "c729410feb3d6f8e23252aadcc2d01a3f498373a643513fac7689ad588d82478"
+    },
+    {
+      "file": "transactions.440210.14.gz",
+      "uncompressed_sha256": "4c38c4f0ed096d898a82294693885118376fccb9421226ae6822c1fed3952c99"
+    },
+    {
+      "file": "transactions.440210.15.gz",
+      "uncompressed_sha256": "845e0fd752abaa5591e599cac5d4caba8b0df3ffd93c165c3cf644cd6eeaa531"
+    },
+    {
+      "file": "transactions.440210.2.gz",
+      "uncompressed_sha256": "236f2fd88c9cc322b45ea29570d74bd013c464c86b752ff9471a788d50df19c8"
+    },
+    {
+      "file": "transactions.440210.3.gz",
+      "uncompressed_sha256": "4999c2d5ffc2e04ab93fd92b3ff46e99318209afeaa45c7e1e7d3977d894bd55"
+    },
+    {
+      "file": "transactions.440210.4.gz",
+      "uncompressed_sha256": "9fb6cf88c2e12a0119b188e4903ac775c764870cacf67bac3a871211aa96c6f8"
+    },
+    {
+      "file": "transactions.440210.5.gz",
+      "uncompressed_sha256": "47a24ba5b57f58ce1948df8bb2ff34d3ad90b8e84b007b8ee8bb57f87fecf7dd"
+    },
+    {
+      "file": "transactions.440210.6.gz",
+      "uncompressed_sha256": "7cea2caaec98752e85d7dd855e4dc96e9bf060156f8f88bc4a60d320a48957e3"
+    },
+    {
+      "file": "transactions.440210.7.gz",
+      "uncompressed_sha256": "0b46d0205424fa5d9eb4c48c50537dee3db78b1dc20ee9a739b6bf2bb68af461"
+    },
+    {
+      "file": "transactions.440210.8.gz",
+      "uncompressed_sha256": "5174ca73429731b3a0760f7047dd23f96f0a9c3465ffc516aa279074dec40889"
+    },
+    {
+      "file": "transactions.440210.9.gz",
+      "uncompressed_sha256": "9333c8fd3853874d779ff29e4bf6c1f1516b4c5bc83cec9c367fc766f89ddf84"
+    }
+  ],
+  "log_storage_during_measurement": "tmpfs /dev/shm",
+  "sampling_rate": 1.0
+}
