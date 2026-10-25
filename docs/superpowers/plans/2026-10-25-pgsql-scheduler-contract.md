@@ -32,10 +32,10 @@
 
 **Interfaces:** pool checkout policy enum; PgSQL_Session::run_step(policy, io_only) returning an explicit result; existing handler callers retain their normal interface.
 
-- [ ] Add real pool/session tests asserting speculative miss causes no creation, waiter admission, retry pause or failure-accounting change; observe baseline failure.
-- [ ] Thread policy through shared-pool checkout and session acquisition, removing thread-local speculative flags and rollback logic.
-- [ ] Replace scheduler full-handler calls with outcome-aware steps, retaining normal recovery/deadline service.
-- [ ] Run focused tests and commit the pool/step contract with rationale.
+- [x] Add real pool/session tests asserting speculative miss causes no creation, waiter admission, retry pause or failure-accounting change; observe baseline failure.
+- [x] Thread policy through shared-pool checkout and session acquisition, removing thread-local speculative flags and rollback logic.
+- [x] Replace scheduler full-handler calls with outcome-aware steps, retaining normal recovery/deadline service.
+- [x] Run focused tests and commit the pool/step contract with rationale.
 
 ## Task two: safe release yield and continuation ownership
 
@@ -43,22 +43,24 @@
 
 **Interfaces:** session completion yield; worker-owned continuation membership/drain; unregister cancellation; pending continuation forces nonblocking poll.
 
-- [ ] Add tests with real request completion, queued input, an older waiter and blocked client output; observe missing safe yield on baseline.
-- [ ] Yield only after cleanup, preserve response and buffered input, and resume through the handler epilogue after handoff.
-- [ ] Remove dispatched-session linear searches; clear consumed runnable work and explicitly retain yielded work.
-- [ ] Verify teardown, timeout/recovery, protocol variants and continuation progress; commit.
+- [x] Add tests with real request completion, queued input, an older waiter and blocked client output; observe missing safe yield on baseline.
+- [x] Yield only after cleanup, preserve response and buffered input, and resume through the handler epilogue after handoff.
+- [x] Remove dispatched-session linear searches; clear consumed runnable work and explicitly retain yielded work.
+- [x] Verify teardown, timeout/recovery, protocol variants and continuation progress; commit.
 
 ## Task three: allocation ownership
 
 **Files:** PgSQL_Connection.cpp/.h and existing result allocation TAP test; Protocol.cpp/.h only if required by the audited boundary.
 
-- [ ] Exercise notice/COPY allocation failures through real libpq paths; observe failure before the fix.
-- [ ] Contain callback exceptions, secure owned temporary results, and surface terminal failure before normal completion.
-- [ ] Run allocation regression tests and commit separately.
+- [x] Exercise notice/COPY allocation failures through real libpq paths; observe failure before the fix.
+- [x] Contain callback exceptions, secure owned temporary results, and surface terminal failure before normal completion.
+- [x] Run allocation regression tests and commit separately.
 
 ## Task four: integration, review and benchmark
 
-- [ ] Rebuild the complete affected library and executable coherently; run relevant worker, protocol, scheduler and allocation tests plus required lint.
-- [ ] Obtain fresh review of the contract and implementation, address concrete correctness findings, and commit verified changes.
-- [ ] Run only the agreed control/candidate benchmark comparison, validate pool stability and raw latency logs, and record exact binary provenance.
-- [ ] Document final architecture, verification, measured results and limitations; commit documentation and report to the user.
+- [x] Rebuild the complete affected library and executable coherently; run relevant worker, protocol, scheduler and allocation tests plus required lint.
+- [x] Obtain fresh review of the contract and implementation, address concrete correctness findings, and commit verified changes.
+- [x] Run only the agreed control/candidate benchmark comparison, validate pool stability and raw latency logs, and record exact binary provenance.
+- [x] Document final architecture, verification, measured results and limitations; commit documentation and report to the user.
+
+Results and validation: ../../benchmarks/2026-10-25-pgsql-scheduler-contract.md.
