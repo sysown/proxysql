@@ -69,7 +69,9 @@ jobs:
     # Route to the self-hosted proxysql-ci pool only when: the actor is renecannao or rahim-kanji
     # (trusted) AND this workflow is listed in the SELFHOSTED_WORKFLOWS repo variable.
     # Otherwise fall back to GitHub-hosted ubuntu-24.04. Empty/absent variable = no routing.
-    runs-on: ${{ inputs.trusted && ((contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (inputs.trigger && contains(fromJson('["renecannao","rahim-kanji"]'), fromJson(inputs.trigger).event.workflow_run.actor.login))) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
+    # Builds additionally require the proxysql-build label, carried only by the
+    # dedicated build runners; tests keep using the shared proxysql-ci pool.
+    runs-on: ${{ inputs.trusted && ((contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (inputs.trigger && contains(fromJson('["renecannao","rahim-kanji"]'), fromJson(inputs.trigger).event.workflow_run.actor.login))) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci","proxysql-build"]')) || 'ubuntu-24.04' }}
     timeout-minutes: 120
 #    needs: [ lock ]
 #    outputs:
