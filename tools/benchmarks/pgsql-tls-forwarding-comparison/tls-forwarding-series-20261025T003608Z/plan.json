@@ -1,0 +1,35 @@
+{
+  "order": [
+    [
+      "previous",
+      "select1"
+    ],
+    [
+      "latest",
+      "select1"
+    ],
+    [
+      "pgbouncer",
+      "select1"
+    ],
+    [
+      "latest",
+      "4kb"
+    ],
+    [
+      "previous",
+      "4kb"
+    ],
+    [
+      "pgbouncer",
+      "4kb"
+    ]
+  ],
+  "clients": 1,
+  "jobs": 1,
+  "backend_cap": 10,
+  "tls_both_hops": true,
+  "warmup_seconds": 20,
+  "measure_seconds": 60,
+  "profiling": false
+}

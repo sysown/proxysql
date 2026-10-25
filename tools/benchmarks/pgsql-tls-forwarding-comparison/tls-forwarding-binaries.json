@@ -1,0 +1,20 @@
+{
+  "previous": {
+    "file": "src/proxysql-head-tls-handshake-cache",
+    "version_prefix": "3.1.",
+    "label": "Cached verified frontend TLS 1.3 handshake",
+    "commit": "de5cfbba7de79151cf8c9e847b9d293d65a29b57",
+    "base_commit": "f3163c8646ba24eea1130a0a20b759ae4bef2ce9",
+    "sha256": "3fa61772707b3edee8342c84a1dfd1b6b4b2b18cd9c94b5e8a856fb3ad8a16f1",
+    "original_build_commit": "bd2353e922cb5cb13e5f6941f1079fd1685511ff",
+    "message_rewrite_only": true
+  },
+  "latest": {
+    "file": "src/proxysql-plain-rows",
+    "version_prefix": "3.1.",
+    "label": "COPY and scheduling fixes with native DataRow spans",
+    "commit": "754dc4af4792b22c825d9663c4a86739bc0cbaff",
+    "base_commit": "84c6a56626acb79e3968ad75112e9e0e7e100052",
+    "sha256": "7fd4064c6551cf63899dff09f5ca658974e5eb896157eac76889dc14125aaa55"
+  }
+}
