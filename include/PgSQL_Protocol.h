@@ -341,6 +341,10 @@ struct ColumnMetadata {
 
 class PgSQL_Query_Result {
 public:
+	// Only result-buffer allocation failures use this signal. The session handler
+	// catches it and closes the session without allocating another response.
+	struct AllocationError {};
+
 	PgSQL_Query_Result();
 	~PgSQL_Query_Result();
 
@@ -685,7 +689,8 @@ private:
 	 * packet owned by `PSarrayOUT`, retaining the accumulation buffer for reuse.
 	 * Larger buffers are handed to `PSarrayOUT` without copying and replaced
 	 * with a new `PGSQL_RESULTSET_BUFLEN` allocation. Both paths reset
-	 * `buffer_used` to 0.
+	 * `buffer_used` to 0. Allocation failure throws `AllocationError` before
+	 * changing the buffer or output queue, preserving their bytes and ownership.
 	 *
 	 * @note This method is used when the internal `buffer` is full and
 	 *       needs to be flushed to release the memory and continue adding
