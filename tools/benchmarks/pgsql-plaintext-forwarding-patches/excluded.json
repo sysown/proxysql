@@ -1,0 +1,17 @@
+[
+  {
+    "directory": "/home/rene/pg-network-bench/results/plain-opt-4kb-scheduler-20261024T234538Z",
+    "excluded": true,
+    "reason": "Diagnostic overlap during measurement; not used in comparisons"
+  },
+  {
+    "directory": "/home/rene/pg-network-bench/results/plain-opt-calls-select1-scheduler-20261024T234626Z",
+    "excluded": true,
+    "reason": "Overlapping diagnostic processes; not used in comparisons"
+  },
+  {
+    "directory": "/home/rene/pg-network-bench/results/plain-opt-calls-select1-scheduler-20261024T234707Z",
+    "excluded": true,
+    "reason": "Overlapping diagnostic processes; not used in comparisons"
+  }
+]

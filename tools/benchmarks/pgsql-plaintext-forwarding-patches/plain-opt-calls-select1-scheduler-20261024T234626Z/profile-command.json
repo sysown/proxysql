@@ -1,0 +1,11 @@
+[
+  "sudo",
+  "-n",
+  "taskset",
+  "-c",
+  "18",
+  "bpftrace",
+  "-f",
+  "json",
+  "/home/rene/pg-network-bench/results/plain-opt-calls-select1-scheduler-20261024T234626Z/counter.bt"
+]

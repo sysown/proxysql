@@ -1,0 +1,2 @@
+You are connected to database "networkbench" as user "networkbench" on host "127.0.0.1" at port "45093".
+Frontend PGSSLMODE=disable; backend pg_stat_ssl: f||

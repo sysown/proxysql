@@ -1,0 +1,18 @@
+{
+  "version": "ProxySQL version 3.1.11-dev-ga0781dd, codename Truls",
+  "version_stderr": "2026-10-24 23:40:49 [INFO] Using OpenSSL version: OpenSSL 3.5.7 9 Jun 2026",
+  "sha256": "29ff29034f51b548c3e52f07c697d7d78b02212858c7b326f281535c9d846171",
+  "backend": "native",
+  "native_backend_setting_present": true,
+  "metadata": {
+    "file": "src/proxysql-plain-copy",
+    "version_prefix": "3.1.",
+    "label": "Raw COPY negative filter",
+    "commit": "81c0b3a55b3475cbcf4a56fc80cba5057fdbfac0",
+    "base_commit": "de5cfbba7de79151cf8c9e847b9d293d65a29b57",
+    "sha256": "29ff29034f51b548c3e52f07c697d7d78b02212858c7b326f281535c9d846171"
+  },
+  "profiling": false,
+  "transaction_logging": true,
+  "pid": 432532
+}

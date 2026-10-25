@@ -1,0 +1,13 @@
+pgbench (15.19 (Debian 15.19-0+deb12u1), server 16.1)
+transaction type: /home/rene/pg-network-bench/results/plain-opt-select1-copy-20261024T234845Z/prewarm.sql
+scaling factor: 1
+query mode: simple
+number of clients: 10
+number of threads: 10
+maximum number of tries: 1
+number of transactions per client: 1
+number of transactions actually processed: 10/10
+number of failed transactions: 0 (0.000%)
+latency average = 2054.333 ms
+initial connection time = 109.859 ms
+tps = 4.867760 (without initial connection time)

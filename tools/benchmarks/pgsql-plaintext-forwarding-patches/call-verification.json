@@ -1,0 +1,18 @@
+{
+  "queries": 196761,
+  "seconds": 39.941966618,
+  "boundary_slack_pct": 0.2969799713030244,
+  "calls_per_query": {
+    "6": 0.998363496831181,
+    "2": 1.9967320759703397,
+    "1": 1.996894709825626,
+    "4": 2.995090490493543,
+    "3": 4.991832731079838
+  },
+  "rows_per_query": 41.9312668669096,
+  "row_wire_bytes_per_query": 3932.553814018022,
+  "extra_handler_removed": true,
+  "copy_regex_calls": 0,
+  "ten_backends_retained": true,
+  "no_connect_calls": true
+}
