@@ -170,7 +170,7 @@ const ProxySQL_PluginDescriptor descriptor {
 };
 
 const ProxySQL_PluginDescriptor unsupported_descriptor {
-	"fake_plugin_abi16", 16u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr,
+	"fake_plugin_abi17", 17u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr,
 	nullptr, nullptr, nullptr
 };
 
@@ -183,13 +183,15 @@ const ProxySQL_PluginDescriptor legacy_aws_descriptors[] = {
 
 const ProxySQL_PluginDescriptor reserved_descriptors[] = {
 	{"reserved_layout", 11u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr},
-	{"reserved_layout", 12u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr}
+	{"reserved_layout", 12u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr},
+	{"incompatible_discovery_layout", 14u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr},
+	{"incompatible_discovery_layout", 15u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr, nullptr, nullptr, nullptr}
 };
 
 } // namespace frozen_abi13
 
 extern "C" const frozen_abi13::ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
-	if (std::getenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI16") != nullptr) {
+	if (std::getenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI17") != nullptr) {
 		return &frozen_abi13::unsupported_descriptor;
 	}
 	const char *legacy = std::getenv("PROXYSQL_FAKE_PLUGIN_LEGACY_AWS_ABI");
@@ -200,7 +202,10 @@ extern "C" const frozen_abi13::ProxySQL_PluginDescriptor *proxysql_plugin_descri
 	const char *reserved = std::getenv("PROXYSQL_FAKE_PLUGIN_RESERVED_ABI");
 	if (reserved != nullptr) {
 		const int version = std::atoi(reserved);
-		if (version >= 11 && version <= 12) return &frozen_abi13::reserved_descriptors[version - 11];
+		if (version == 11 || version == 12)
+			return &frozen_abi13::reserved_descriptors[version - 11];
+		if (version == 14 || version == 15)
+			return &frozen_abi13::reserved_descriptors[version - 12];
 	}
 	return &frozen_abi13::descriptor;
 }

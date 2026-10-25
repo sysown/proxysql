@@ -16,6 +16,7 @@
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_Plugin.h"
 #include "ProxySQL_PluginListenerGate.h"
+#include "ProxySQL_ServerDiscovery.h"
 #include "tap.h"
 
 #include <cstdio>
@@ -46,6 +47,13 @@ char g_fake_config_db = '\0';
 char g_fake_stats_db  = '\0';
 
 std::string g_log_path {};
+bool g_retirement_saw_managed_inventory = false;
+
+void observe_managed_inventory_during_retirement(ProxySQL_ServerProtocol protocol) {
+	ScopedServerDiscoveryProtocolLock lock(protocol);
+	if (proxysql_is_server_inventory_managed_locked(protocol, 701, 702))
+		g_retirement_saw_managed_inventory = true;
+}
 
 void make_log_path() {
 	char tpl[] = "/tmp/proxysql_plugin_lifecycle_log.XXXXXX";
@@ -593,8 +601,17 @@ static void test_stop_uninstalls_controller_through_retained_service() {
 	   proxysql_init_configured_plugins(mgr.get(), err) &&
 	   proxysql_start_configured_plugins(mgr.get(), err),
 	   "real plugin installs a discovery controller during init");
+	mgr->replace_managed_server_hostgroup_claims_for_test(
+		ProxySQL_ServerProtocol::mysql, {{701, 702}});
+	g_retirement_saw_managed_inventory = false;
+	proxysql_server_discovery_retirement_attempt_for_test =
+		&observe_managed_inventory_during_retirement;
 	ok(proxysql_stop_configured_plugins(mgr, err) && !mgr,
 	   "retained uninstall service succeeds from stop and manager teardown completes");
+	proxysql_server_discovery_retirement_attempt_for_test = nullptr;
+	ok(g_retirement_saw_managed_inventory &&
+	   !proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql, 701, 702),
+	   "stop preserves managed inventory ownership until controller retirement completes");
 
 	const std::string log = read_log();
 	ok(contains_in_order(log, "fake_plugin:server_controller_shutdown",
@@ -615,6 +632,38 @@ static void test_stop_uninstalls_controller_through_retained_service() {
 	dlclose(fixture_handle);
 	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_CHECK_SERVER_DISCOVERY_PHASE");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
+}
+
+static void test_rediscovery_clears_retiring_manager() {
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	const bool started = proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err);
+	if (started) {
+		mgr->replace_managed_server_hostgroup_claims_for_test(
+			ProxySQL_ServerProtocol::mysql, {{701, 702}});
+	}
+	g_retirement_saw_managed_inventory = false;
+	proxysql_server_discovery_retirement_attempt_for_test =
+		&observe_managed_inventory_during_retirement;
+	const bool rediscovered = started &&
+		proxysql_discover_configured_plugins(mgr, {}, err);
+	proxysql_server_discovery_retirement_attempt_for_test = nullptr;
+	bool managed_after = true;
+	{
+		ScopedServerDiscoveryProtocolLock lock(ProxySQL_ServerProtocol::mysql);
+		managed_after = proxysql_is_server_inventory_managed_locked(
+			ProxySQL_ServerProtocol::mysql, 701, 702);
+	}
+	ok(rediscovered && !mgr && g_retirement_saw_managed_inventory && !managed_after,
+	   "rediscovery keeps the retiring manager live through controller release and clears it before return");
+
 	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
 }
 
@@ -850,7 +899,7 @@ static void test_debug_abi_mismatch_rejected() {
 }
 
 int main() {
-	plan(96);
+	plan(98);
 
 	ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) <=
 		PROXYSQL_PLUGIN_ABI_VERSION_MAX,
@@ -875,6 +924,7 @@ int main() {
 	test_phase_b_mismatched_config_table_is_rejected();
 	test_stop_runs_when_start_fails();
 	test_stop_uninstalls_controller_through_retained_service();
+	test_rediscovery_clears_retiring_manager();
 	test_stop_uninstall_is_scoped_to_controller_owner();
 	test_failed_stop_cleanup_is_idempotent("PROXYSQL_FAKE_PLUGIN_STOP_FAIL",
 		"fake_plugin:stop_fail", "false-returning stop still tears down the manager");

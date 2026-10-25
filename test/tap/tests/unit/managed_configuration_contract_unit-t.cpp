@@ -27,14 +27,14 @@ struct ABI14Descriptor {
 }
 int main() {
  plan(10); test_init_minimal();
- ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 15u, "abi15_debug_prefix_compatible: layout is ABI15");
- ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 15u,
-    "ABI15 retains independent DEBUG tagging");
+ ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 16u, "abi16_debug_prefix_compatible: layout is ABI16");
+ ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 16u,
+    "ABI16 retains independent DEBUG tagging");
  ok(offsetof(ProxySQL_PluginDescriptor, managed_configuration_service) == sizeof(ABI14Descriptor),
     "ABI14 descriptor prefix remains byte-compatible");
  ok(offsetof(ProxySQL_PluginServices, lock_configuration) ==
     offsetof(ProxySQL_PluginServices, post_server_desired_set) + sizeof(proxysql_plugin_post_server_desired_set_cb),
-    "ABI15 service callbacks append after the complete ABI14 prefix");
+    "ABI16 retains the complete ABI15 service-table prefix");
  ProxySQL_ManagedConfigurationServiceV1 service {PROXYSQL_MANAGED_CONFIGURATION_ABI,
   sizeof(ProxySQL_ManagedConfigurationServiceV1), nullptr, verify, invoke, bootstrap, restore};
  std::string error;

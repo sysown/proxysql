@@ -658,7 +658,6 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
 #ifdef PROXYSQL40
 	// Exact managed-discovery claims used to invalidate the derived role map.
-	std::vector<ProxySQL_ServerHostgroupClaim> hgsm_server_hostgroup_claims_ {};
 #endif
 
 
@@ -1261,8 +1260,8 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	//void update_aws_aurora_set_writer(int _whid, int _rhid, char *address, unsigned int port, bool verbose=true);
 	//void update_aws_aurora_set_reader(int _whid, int _rhid, char *_hostname, int _port);
 	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
-	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
-	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id);
+	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool inventory_managed, bool verbose=true);
+	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id, bool inventory_managed);
 	/**
 	 * @brief Updates the resultset and corresponding checksum used by Monitor for AWS Aurora.
 	 * @details This is required to be called when:
@@ -1275,7 +1274,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @param lock Wether if both 'AWS_Aurora_Info_mutex' and 'MySQL_Monitor::aws_aurora_mutex' mutexes should
 	 *   be taken or not.
 	 */
-	void update_aws_aurora_hosts_monitor_resultset(bool lock=false);
+	void update_aws_aurora_hosts_monitor_resultset(bool lock=true);
 	/**
 	 * @brief Rebuilds the AWS RDS BGD monitor's host resultset.
 	 *
