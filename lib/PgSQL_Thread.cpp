@@ -3288,11 +3288,16 @@ void PgSQL_Thread::run___cleanup_mirror_queue() {
 #ifdef PROXYSQL31
 
 int PgSQL_Thread::run_ComputePollTimeout() {
-	// Buffered work is independent of socket readiness and must survive the
-	// next run_SetAllSession_ToProcess0(). Poll may discover more ready I/O,
-	// but it must not sleep while a continuation is runnable.
-	if (!session_continuations.empty()) return 0;
 	int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
+	// Buffered next-command work survives run_SetAllSession_ToProcess0().
+	// A reply throttle may have paused it during the preceding writeout;
+	// sleep until its deadline, but never block with eligible work queued.
+	for (const auto *sess : session_continuations) {
+		if (!sess->healthy || sess->killed || sess->pause_until <= curtime) return 0;
+		const auto remaining = sess->pause_until - curtime;
+		const auto delay_ms = remaining / 1000 + (remaining % 1000 != 0);
+		if (delay_ms < static_cast<unsigned long long>(ttw)) ttw = static_cast<int>(delay_ms);
+	}
 
 	// Adaptive poll timeout. partition_pool_nulls holds the count from the
 	// process_all_sessions() pass that just ran: update_partition_gate()
@@ -4532,14 +4537,18 @@ void PgSQL_Thread::process_all_sessions() {
 		}
 	}
 
-	// Drain only the current snapshot. A newly yielded continuation remains
-	// durable work for the next nonblocking poll, rather than extending this
-	// pass indefinitely. Inline waiters always run before the releasing client.
+	// Drain only the current snapshot of buffered next-command work. Newly
+	// queued or paused sessions remain durable without extending this pass.
+	// The releasing request's writeout already ran before inline waiter service.
 	size_t continuations = session_continuations.size();
 	while (continuations-- && !session_continuations.empty()) {
 		auto *sess = session_continuations.front();
 		session_continuations.pop_front();
 		sess->continuation_queued = false;
+		if (sess->healthy && !sess->killed && sess->pause_until > curtime) {
+			queue_session_continuation(sess);
+			continue;
+		}
 		const auto result = (!sess->healthy || sess->killed) ? PgSQL_Session_Run_Result::Close : run_session(sess);
 		if (result == PgSQL_Session_Run_Result::Close) {
 			char location[1024];

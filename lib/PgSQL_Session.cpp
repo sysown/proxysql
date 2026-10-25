@@ -3312,12 +3312,6 @@ int PgSQL_Session::handler(bool io_only) try {
 			client_myds->ssl_write_len || (client_myds->encrypted &&
 			BIO_ctrl_pending(client_myds->wbio_ssl))) ? 0 : -1;
 	}
-#ifdef PROXYSQL31
-	if (resume_after_handoff) {
-		resume_after_handoff = false;
-		goto __exit_DSS__STATE_NOT_INITIALIZED;
-	}
-#endif
 	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Processing session %p\n", this->thread, this, this);
 	//unsigned int j;
 	//unsigned char c;
@@ -4206,16 +4200,6 @@ handler_again:
 
 __exit_DSS__STATE_NOT_INITIALIZED:
 
-#ifdef PROXYSQL31
-	// The completed request has settled protocol and transaction state and
-	// transferred response ownership. Yield before writeout or another queued
-	// command; the worker can now serve an older waiter without re-entry here.
-	if (scheduler_managed && yield_after_release && status == WAITING_CLIENT_DATA) {
-		yield_after_release = false;
-		resume_after_handoff = true;
-		return 1;
-	}
-#endif
 	if (mybe && mybe->server_myds) {
 		if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
 #ifdef DEBUG
@@ -4236,11 +4220,19 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		return handler_ret;
 	}
 
-	// previously active query has been fully processed and its response has been sent to the client.
-	// At this point, check whether deferred packets from the client exist in PSarrayIN.
-	// If so, control is redirected to get_pkts_from_client() to process them.
+	// Current-request cleanup and its nonblocking output attempt are complete.
+	// Short writes retain their bytes for POLLOUT; they do not split completion
+	// into a separate handler invocation. Only the next buffered command yields.
 	if (status == WAITING_CLIENT_DATA) {
 		if (client_myds->PSarrayIN && client_myds->PSarrayIN->len) {
+#ifdef PROXYSQL31
+			if (scheduler_managed && yield_after_release) {
+				// Let the worker dispatch released capacity to an older waiter
+				// before this client starts another request. Runnable preserves
+				// that buffered work even when no further POLLIN arrives.
+				return 1;
+			}
+#endif
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p client_myds %p . Client PSarrayIN has '%d' deferred packets, redirecting to get_pkts_from_client()\n",
 				client_myds, this, client_myds->PSarrayIN->len);
 			goto __handler_again_get_pkts_from_client;

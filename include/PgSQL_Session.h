@@ -649,7 +649,6 @@ public:
 	bool established_checkout_unavailable = false;
 	bool scheduler_managed = false;
 	bool yield_after_release = false;
-	bool resume_after_handoff = false;
 	bool continuation_queued = false;
 	bool last_pool_ff{ false };
 	bool last_pool_gtid{ false };

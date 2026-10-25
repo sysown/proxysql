@@ -80,7 +80,7 @@ static void test_speculative_miss() {
 	close(fds[1]);
 }
 
-static void test_continuation_output() {
+static void test_completion_output() {
 	PgSQL_Thread worker;
 	if (!worker.init()) BAIL_OUT("worker initialization failed");
 	worker.curtime = 1000000;
@@ -104,16 +104,19 @@ static void test_continuation_output() {
 	void* packet = malloc(expected.size());
 	memcpy(packet, expected.data(), expected.size());
 	sess->client_myds->PSarrayOUT->add(packet, expected.size());
-	// Resume the exact post-cleanup state left by a yield, without supplying
-	// fresh readable bytes. A short write must retain the rest for POLLOUT.
-	sess->resume_after_handoff = true;
-	sess->to_process = 0;
-	worker.queue_session_continuation(sess);
-	ok(worker.run_ComputePollTimeout() == 0, "runnable continuation prevents a blocking poll without socket readiness");
-	worker.process_all_sessions();
-	ok(!sess->resume_after_handoff && !sess->continuation_queued,
-		"worker resumes the completed-request epilogue without new frontend input");
-	ok(sess->client_myds->available_data_out(), "short client write retains unsent output after continuation");
+	// Enter with settled request state and a release notification. The real
+	// handler must attempt output before returning, with no next command to run.
+	sess->scheduler_managed = true;
+	sess->yield_after_release = true;
+	sess->to_process = 1;
+	const int rc = sess->handler();
+	sess->scheduler_managed = false;
+	ok(rc == 0 && !sess->continuation_queued,
+		"completed request without buffered input needs no completion continuation");
+	char first_byte;
+	ok(recv(fds[1], &first_byte, 1, MSG_DONTWAIT | MSG_PEEK) == 1 && first_byte == 'x',
+		"completed request attempts client output before returning to the scheduler");
+	ok(sess->client_myds->available_data_out(), "short client write retains unsent output after completion");
 	std::string received;
 	for (int attempts = 0; attempts < 100 && worker.mysql_sessions->len && received.size() < expected.size(); ++attempts) {
 		char bytes[16384];
@@ -135,17 +138,58 @@ static void test_continuation_output() {
 	ok(worker.run_ComputePollTimeout() == 2000, "session teardown cancels queued continuation and restores idle polling");
 	close(fds[1]);
 }
+static void test_paused_buffered_work() {
+	PgSQL_Thread worker;
+	if (!worker.init()) BAIL_OUT("worker initialization failed");
+	worker.curtime = 1000000;
+	pgsql_thread___poll_timeout = 2000;
+	int fds[2];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds)) BAIL_OUT("socketpair failed");
+	auto* sess = new PgSQL_Session();
+	sess->thread = &worker;
+	sess->connections_handler = true;
+	sess->status = WAITING_CLIENT_DATA;
+	sess->client_myds = new PgSQL_Data_Stream();
+	sess->client_myds->init(MYDS_FRONTEND, sess, fds[0]);
+	sess->client_myds->myconn = new PgSQL_Connection(true);
+	sess->client_myds->DSS = STATE_SLEEP;
+	worker.mysql_sessions->add(sess);
+	worker.mypolls.add(POLLIN, fds[0], sess->client_myds, worker.curtime);
+	// Already buffered Terminate proves normal packet processing resumes
+	// without another POLLIN event. While paused it must remain untouched.
+	const unsigned char terminate[] = {'X', 0, 0, 0, 4};
+	void* packet = malloc(sizeof(terminate));
+	memcpy(packet, terminate, sizeof(terminate));
+	sess->client_myds->PSarrayIN->add(packet, sizeof(terminate));
+	sess->pause_until = worker.curtime + 100000;
+	sess->to_process = 0;
+	worker.queue_session_continuation(sess);
+	ok(worker.run_ComputePollTimeout() == 100,
+		"paused buffered work uses its deadline instead of spinning poll");
+	worker.process_all_sessions();
+	ok(worker.mysql_sessions->len == 1,
+		"queued next command does not execute before its pause expires");
+	worker.curtime += 100000;
+	ok(worker.run_ComputePollTimeout() == 0,
+		"buffered work is runnable at its deadline without fresh socket input");
+	worker.process_all_sessions();
+	ok(worker.mysql_sessions->len == 0 && worker.run_ComputePollTimeout() == 2000,
+		"normal handler consumes queued Terminate and removes its runnable entry");
+	close(fds[1]);
+}
+
 #endif
 
 int main() {
 #ifdef PROXYSQL31
-	plan(13);
+	plan(17);
 	if (test_init_minimal() || test_init_query_processor() || test_init_hostgroups())
 		BAIL_OUT("scheduler test initialization failed");
 	GloPgSQL_Logger = new PgSQL_Logger();
 	pgsql_thread___connect_retries_delay = 1;
 	test_speculative_miss();
-	test_continuation_output();
+	test_completion_output();
+	test_paused_buffered_work();
 	delete GloPgSQL_Logger;
 	GloPgSQL_Logger = nullptr;
 	test_cleanup_hostgroups();
