@@ -44,7 +44,7 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         REPO: ${{ github.repository }}
         POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
-        ELIGIBLE: ${{ (github.actor == 'renecannao' || (github.event.workflow_run && github.event.workflow_run.actor.login == 'renecannao'))
+        ELIGIBLE: ${{ (contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (github.event.workflow_run && contains(fromJson('["renecannao","rahim-kanji"]'), github.event.workflow_run.actor.login)))
           && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
       run: |
         set -uo pipefail
