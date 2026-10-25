@@ -60,12 +60,8 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 struct PgSQL_Inline_Handoff_State {
     bool collecting = false;
     std::vector<unsigned> released_hostgroups;
-    std::vector<PgSQL_Session*> dispatched;
 };
 static thread_local PgSQL_Inline_Handoff_State pgsql_inline_handoff;
-// Early dispatch uses established connections only; normal handlers may create backends.
-thread_local bool pgsql_dispatch_existing_only = false;
-thread_local bool pgsql_dispatch_existing_miss = false;
 #endif
 
 typedef struct mythr_st_vars {
@@ -4226,7 +4222,6 @@ void PgSQL_Thread::process_all_sessions() {
 #ifdef PROXYSQL31
     auto &handoff = pgsql_inline_handoff;
     handoff.released_hostgroups.clear();
-    handoff.dispatched.clear();
     handoff.collecting = true;
     struct CollectScope {
         PgSQL_Inline_Handoff_State &state;
@@ -4255,22 +4250,21 @@ void PgSQL_Thread::process_all_sessions() {
             if (waiting->pause_until > curtime && !deadline_due) { node = next; continue; }
             if (deadline_due) waiting->pause_until = 0;
             waiting->to_process = 1;
-            const int waiting_rc = waiting->handler();
-            if (waiting_rc == -1 || waiting->killed) {
+            const auto waiting_result = waiting->run_step(retry_unavailable
+                ? PgSQL_Pool_Acquire_Mode::Normal : PgSQL_Pool_Acquire_Mode::EstablishedOnly);
+            if (waiting_result == PgSQL_Session_Run_Result::Close) {
                 waiting->healthy = 0;
                 leave_waiter(waiting, false);
                 node = next;
                 continue;
             }
+            if (waiting_result == PgSQL_Session_Run_Result::EstablishedUnavailable) break;
             const bool got = waiting->mybe && waiting->mybe->server_myds && waiting->mybe->server_myds->myconn;
             if (got) {
                 leave_waiter(waiting);
                 auto *bds = waiting->mybe->server_myds;
                 if (bds->fd >= 0 && bds->poll_fds_idx < 0)
                     mypolls.add(POLLIN | POLLOUT, bds->fd, bds, curtime);
-                // Do not run a newly dispatched session again in this scan;
-                // preserve its to_process flag for buffered/protocol work.
-                handoff.dispatched.push_back(waiting);
                 ++served;
             } else if (waiting->status != CONNECTING_SERVER) {
                 leave_waiter(waiting);
@@ -4330,25 +4324,11 @@ void PgSQL_Thread::process_all_sessions() {
         if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
         // Authentication and connection maintenance retain their normal order.
         if (sess->status != WAITING_CLIENT_DATA && sess->status != CONNECTING_SERVER) continue;
-        const auto saved_pause = sess->pause_until;
-        pgsql_dispatch_existing_miss = false;
-        pgsql_dispatch_existing_only = true;
-        const int early_rc = sess->handler();
-        pgsql_dispatch_existing_only = false;
-        if (early_rc == -1 || sess->killed) {
-            sess->healthy = 0;
+        const auto early_result = sess->run_step(PgSQL_Pool_Acquire_Mode::EstablishedOnly);
+        if (early_result == PgSQL_Session_Run_Result::Close)
             leave_waiter(sess, false);
-        } else if (pgsql_dispatch_existing_miss) {
-            // The normal backendless scan below must be allowed to create a
-            // connection if needed. Do not leave a speculative waiter paused.
-            leave_waiter(sess);
-            sess->pause_until = saved_pause;
-            sess->to_process = 1;
-        } else {
-            handoff.dispatched.push_back(sess);
-        }
         dispatch_released();
-        if (pgsql_dispatch_existing_miss) break;
+        if (early_result == PgSQL_Session_Run_Result::EstablishedUnavailable) break;
     }
 #endif
 	for (n = 0; n < mysql_sessions->len; n++) {
@@ -4408,7 +4388,11 @@ void PgSQL_Thread::process_all_sessions() {
 			 || sess->waiter_node.session
 #endif
 			)) {
+			#ifdef PROXYSQL31
+			if (sess->run_step(PgSQL_Pool_Acquire_Mode::Normal, true) == PgSQL_Session_Run_Result::Close) sess->healthy = 0;
+#else
 			if (sess->handler(true) == -1) sess->healthy = 0;
+#endif
 		}
 		if (sess->healthy == 0) {
 			char _buf[1024];
@@ -4455,10 +4439,12 @@ void PgSQL_Thread::process_all_sessions() {
 					if (!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
 						continue;
 					}
-                    if (std::find(handoff.dispatched.begin(), handoff.dispatched.end(), sess) != handoff.dispatched.end())
-                        continue;
 #endif // PROXYSQL31
+#ifdef PROXYSQL31
+					rc = sess->run_step() == PgSQL_Session_Run_Result::Close ? -1 : 0;
+#else
 					rc = sess->handler();
+#endif
 					//total_active_transactions_+=sess->active_transactions;
 					if (rc == -1 || sess->killed == true) {
 						char _buf[1024];
@@ -4470,18 +4456,7 @@ void PgSQL_Thread::process_all_sessions() {
 						n--;
 						delete sess;
 					}
-#ifdef PROXYSQL31
-					else if (sess->status == WAITING_CLIENT_DATA &&
-						!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) &&
-						sess->client_myds && !sess->client_myds->pending_poll_revents &&
-						sess->client_myds->PSarrayIN && sess->client_myds->PSarrayIN->len == 0) {
-						// handler() consumed readiness and drained queued commands.
-						// Releasing its backend makes this session eligible for the
-						// backendless scan below, but it has no work left in this pass.
-						// Pending output remains armed for the next poll readiness.
-						sess->to_process = 0;
-					}
-#endif // PROXYSQL31
+
 				}
 			}
 			else {
@@ -4515,12 +4490,19 @@ void PgSQL_Thread::process_all_sessions() {
 
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
+		if (!sess->healthy || sess->killed) {
+			char location[1024];
+			snprintf(location, sizeof(location), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+			GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, location);
+			unregister_session(n--);
+			delete sess;
+			continue;
+		}
 		if (sess->waiter_node.session) continue;
 		if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
-		if (std::find(handoff.dispatched.begin(), handoff.dispatched.end(), sess) != handoff.dispatched.end()) continue;
 
 		if (sess->to_process == 1 && sess->pause_until <= curtime) {
-			rc = sess->handler();
+			rc = sess->run_step() == PgSQL_Session_Run_Result::Close ? -1 : 0;
 			if (rc == -1 || sess->killed == true) {
 				char _buf[1024];
 				if (sess->client_myds && sess->killed)

@@ -400,6 +400,7 @@
   "pgsql_response_framer_traffic_unit-t" : [ "unit-tests-g1","@proxysql_min_version:3.1" ],
   "pgsql_response_framer_unit-t" : [ "unit-tests-g1","@proxysql_min_version:3.1" ],
   "pgsql_result_flush_allocation_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_scheduler_contract_unit-t" : [ "unit-tests-g1" ],
   "pgsql_servers_ssl_params_unit-t" : [ "unit-tests-g1" ],
   "pgsql_set_tracked_vars_regexp_unit-t" : [ "unit-tests-g1" ],
   "pgsql_set_transaction_regexp_unit-t" : [ "unit-tests-g1" ],

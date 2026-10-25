@@ -2658,11 +2658,7 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 	}
 }
 
-#ifdef PROXYSQL31
-extern thread_local bool pgsql_dispatch_existing_only;
-extern thread_local bool pgsql_dispatch_existing_miss;
-#endif
-PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, bool ff) {
+PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, bool ff, PgSQL_Pool_Acquire_Mode mode) {
 	PgSQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int conn_found_idx = 0;
@@ -2684,9 +2680,8 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 	}
 	unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
 	unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
-#ifdef PROXYSQL31
-    if (pgsql_dispatch_existing_only) {
-        if (l && !ff && sess && sess->client_myds && sess->client_myds->myconn) {
+    if (mode == PgSQL_Pool_Acquire_Mode::EstablishedOnly) {
+        if (l && !ff && sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
             auto *client_conn = sess->client_myds->myconn;
             get_random_MyConn_inner_search(0, l, conn_found_idx, connection_quality_level,
                                           number_of_matching_session_variables, client_conn);
@@ -2696,10 +2691,8 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
                     return static_cast<PgSQL_Connection*>(conns->remove_index_fast(conn_found_idx));
             }
         }
-        pgsql_dispatch_existing_miss = true;
         return nullptr;
     }
-#endif
 	if (connection_warming == true) {
 		unsigned int total_connections = conns_free + conns_used;
 		unsigned int expected_warm_connections = (unsigned int)free_connections_pct * mysrvc->max_connections / 100;
@@ -2863,7 +2856,7 @@ void PgSQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	}
 }
 
-PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, PgSQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, PgSQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, PgSQL_Pool_Acquire_Mode mode) {
 	PgSQL_Connection * conn=NULL;
 	wrlock();
 	status.pgconnpoll_get++;
@@ -2874,16 +2867,13 @@ PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 #endif // TEST_AURORA
 	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a PgSQL_SrvC exists. If not, we return NULL = no targets
-		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
+		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff, mode);
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
 			status.pgconnpoll_get_ok++;
 			mysrvc->update_max_connections_used();
 		}
 	}
-#ifdef PROXYSQL31
-    if (pgsql_dispatch_existing_only && !conn) pgsql_dispatch_existing_miss = true;
-#endif
 	wrunlock();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, (conn ? conn->parent->address : "") , (conn ? conn->parent->port : 0 ));
 	return conn;

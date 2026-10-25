@@ -1626,6 +1626,12 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 	// 'pgsql_thread___connect_retries_delay'. In case of 'async_connect' failing, 'pause_until' should also
 	// be set to 'pgsql_thread___connect_retries_delay'. Complementary NOTE below.
 	if (mybe->server_myds->myconn == NULL) {
+#ifdef PROXYSQL31
+		if (established_checkout_unavailable) {
+			*_rc = 1;
+			return false;
+		}
+#endif
 		pause_until = thread->curtime + pgsql_thread___connect_retries_delay * 1000;
 		*_rc = 1;
 		return false;
@@ -3239,6 +3245,29 @@ static bool can_hold_client_output(bool extended_query, PgSQL_Data_Stream* clien
 	return extended_query && client_myds && mirror == false &&
 		client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN <= overflow_safe_multiply<4, unsigned int>(pgsql_thread___threshold_resultset_size);
 }
+
+#ifdef PROXYSQL31
+PgSQL_Session_Run_Result PgSQL_Session::run_step(PgSQL_Pool_Acquire_Mode mode, bool io_only) {
+	pool_acquire_mode = mode;
+	established_checkout_unavailable = false;
+	to_process = 1;
+	const int rc = handler(io_only);
+	pool_acquire_mode = PgSQL_Pool_Acquire_Mode::Normal;
+	if (rc == -1 || !healthy || killed) {
+		healthy = false;
+		to_process = 0;
+		return PgSQL_Session_Run_Result::Close;
+	}
+	if (established_checkout_unavailable) {
+		// Normal scheduling can retry later in this pass without undoing a
+		// speculative admission to the waiter list or an artificial pause.
+		to_process = 1;
+		return PgSQL_Session_Run_Result::EstablishedUnavailable;
+	}
+	to_process = 0;
+	return waiter_node.session ? PgSQL_Session_Run_Result::WaitBackend : PgSQL_Session_Run_Result::WaitIO;
+}
+#endif
 
 int PgSQL_Session::handler(bool io_only) try {
 #if ENABLE_TIMER
@@ -5738,6 +5767,12 @@ __exit_set_destination_hostgroup:
 void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 	// Get a MySQL Connection
 
+	const auto acquire_mode =
+#ifdef PROXYSQL31
+		pool_acquire_mode;
+#else
+		PgSQL_Pool_Acquire_Mode::Normal;
+#endif
 	PgSQL_Connection* mc = NULL;
 	char uuid[64];
 	uint64_t trxid = 0;
@@ -5781,7 +5816,7 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				last_pool_gtid = true;
 				last_pool_max_lag_ms = -1;
 #endif // PROXYSQL31
-				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
+				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1, acquire_mode);
 			}
 			else {
 #ifdef PROXYSQL31
@@ -5789,8 +5824,14 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				last_pool_gtid = false;
 				last_pool_max_lag_ms = (int)qpo->max_lag_ms;
 #endif // PROXYSQL31
-				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
+				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms, acquire_mode);
 			}
+#ifdef PROXYSQL31
+			if (!mc && acquire_mode == PgSQL_Pool_Acquire_Mode::EstablishedOnly) {
+				established_checkout_unavailable = true;
+				return;
+			}
+#endif
 			thread->note_pool_attempt(mc == NULL);
 #ifdef STRESSTEST_POOL
 			if (mc && (loops < NUM_SLOW_LOOPS - 1)) {
