@@ -396,7 +396,11 @@ public:
 	void run___cleanup_mirror_queue();
 
 	//void ProcessAllMyDS_BeforePoll();
-	//void ProcessAllMyDS_AfterPoll();
+	// PostgreSQL's scan records readiness only; session handlers perform I/O.
+	void ProcessAllMyDS_AfterPoll();
+	void process_poll_housekeeping();
+	std::vector<PgSQL_Data_Stream*> ready_listeners;
+	bool notification_pipe_ready = false;
 
 	/**
 	 * @brief The main loop for the PgSQL_Thread object.
@@ -493,24 +497,13 @@ public:
 	struct pollfd* get_pollfd(unsigned int i);
 
 	/**
-	 * @brief Processes data on a specific data stream.
-	 *                       
-	 * @param myds A pointer to the `PgSQL_Data_Stream` object to process.
-	 * @param n The index of the data stream in the `mypolls` array.
-	 *
-	 * @return `true` if processing is successful, `false` if the session should be removed.
-	 *
-	 * @details This function handles data events on a specific data stream. It checks for events
-	 * such as `POLLIN`, `POLLOUT`, `POLLERR`, and `POLLHUP`. Based on the events, it reads data
-	 * from the network, processes packets, and updates the session's status. It also handles
-	 * timeout events and connection failures.
-	 *
-	 * @note This function is called by the `run()` function after the `poll()` call to process
-	 * events on each data stream. It is responsible for managing data flow and updating
-	 * session states.
-	 *
+	 * Record poll readiness and mark the owning session runnable. No socket
+	 * I/O is performed here. Returns false only when idle-thread migration
+	 * removed this poll slot, so the scan must revisit the swapped-in slot.
+	 * consume_data_stream_readiness() performs the deferred work in handler().
 	 */
 	bool process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigned int n);
+	bool consume_data_stream_readiness(PgSQL_Data_Stream *myds);
 
 	//void ProcessAllSessions_SortingSessions();
 

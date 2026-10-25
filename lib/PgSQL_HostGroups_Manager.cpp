@@ -2658,6 +2658,10 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 	}
 }
 
+#ifdef PROXYSQL31
+extern thread_local bool pgsql_dispatch_existing_only;
+extern thread_local bool pgsql_dispatch_existing_miss;
+#endif
 PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, bool ff) {
 	PgSQL_Connection * conn=NULL;
 	unsigned int i;
@@ -2680,6 +2684,22 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 	}
 	unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
 	unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
+#ifdef PROXYSQL31
+    if (pgsql_dispatch_existing_only) {
+        if (l && !ff && sess && sess->client_myds && sess->client_myds->myconn) {
+            auto *client_conn = sess->client_myds->myconn;
+            get_random_MyConn_inner_search(0, l, conn_found_idx, connection_quality_level,
+                                          number_of_matching_session_variables, client_conn);
+            if (connection_quality_level >= 2) {
+                auto *candidate = static_cast<PgSQL_Connection*>(conns->index(conn_found_idx));
+                if (candidate->fd >= 0 && candidate->is_connected() && candidate->async_state_machine == ASYNC_IDLE)
+                    return static_cast<PgSQL_Connection*>(conns->remove_index_fast(conn_found_idx));
+            }
+        }
+        pgsql_dispatch_existing_miss = true;
+        return nullptr;
+    }
+#endif
 	if (connection_warming == true) {
 		unsigned int total_connections = conns_free + conns_used;
 		unsigned int expected_warm_connections = (unsigned int)free_connections_pct * mysrvc->max_connections / 100;
@@ -2861,6 +2881,9 @@ PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 			mysrvc->update_max_connections_used();
 		}
 	}
+#ifdef PROXYSQL31
+    if (pgsql_dispatch_existing_only && !conn) pgsql_dispatch_existing_miss = true;
+#endif
 	wrunlock();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, (conn ? conn->parent->address : "") , (conn ? conn->parent->port : 0 ));
 	return conn;

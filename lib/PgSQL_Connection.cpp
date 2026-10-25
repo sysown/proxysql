@@ -3894,6 +3894,24 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				continue;
 			}
 
+			// For simple-query DataRows, preserve and copy a bounded span of the
+			// original wire bytes instead of rebuilding and copying each message.
+			// All special messages above and all extended-query paths keep their
+			// existing ordering and side effects. The complete buffered byte count
+			// is an upper bound: batch only if no row inside it could trigger the
+			// existing fetch/throttle pause. Otherwise retain the per-row path.
+			const unsigned int row_size = 5U + msg.payload_len;
+			if (msg.type == 'D' && row_size <= PGSQL_RESULTSET_BUFLEN &&
+				!is_error_present() && (!processed_bytes ||
+				!suspend_resultset_fetch(*processed_bytes + row_size + native_framer.buffered_bytes()))) {
+				unsigned int rows = 1;
+				const unsigned int extra = (unsigned int)native_framer.coalesce_data_rows(
+					PGSQL_RESULTSET_BUFLEN - row_size, rows);
+				count_bytes(query_result->add_native_data_rows(msg.payload - 5, row_size + extra, rows));
+				if (pause_after('D')) return;
+				continue;
+			}
+
 			// Native simple queries collect all results through ReadyForQuery.
 			// A second CommandComplete means this is a multi-statement response,
 			// which must not be admitted to the single-result query cache.

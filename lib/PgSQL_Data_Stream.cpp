@@ -189,6 +189,9 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 				return PGSQL_SSLSTATUS_FAIL;
 			}
 		}
+		// Publish the fast path only after the certificate checks above.
+		tls13_handshake_complete = myds_type == MYDS_FRONTEND &&
+			SSL_version(ssl) == TLS1_3_VERSION;
 	}
 	status = get_sslstatus(ssl, n);
 	//proxy_info("SSL status = %d\n", status);
@@ -611,14 +614,14 @@ int PgSQL_Data_Stream::read_from_net() {
 				}
 				src += n2;
 				len -= n2;
-				if (!SSL_is_init_finished(ssl)) {
+				if (!ssl_handshake_is_complete()) {
 					//proxy_info("SSL_is_init_finished NOT completed\n");
 					if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 						//proxy_info("SSL_is_init_finished failed!!\n");
 						shut_soft();
 						return -1;
 					}
-					if (!SSL_is_init_finished(ssl)) {
+					if (!ssl_handshake_is_complete()) {
 						//proxy_info("SSL_is_init_finished yet NOT completed\n");
 						return 0;
 					}
@@ -904,14 +907,14 @@ void PgSQL_Data_Stream::set_pollout() {
 				_pollfd->events |= POLLOUT;
 			}
 			else {
-				if (!SSL_is_init_finished(ssl)) {
+				if (!ssl_handshake_is_complete()) {
 					//proxy_info("SSL_is_init_finished NOT completed\n");
 					if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 						//proxy_info("SSL_is_init_finished failed!!\n");
 						shut_soft();
 						return;
 					}
-					if (!SSL_is_init_finished(ssl)) {
+					if (!ssl_handshake_is_complete()) {
 						//proxy_info("SSL_is_init_finished yet NOT completed\n");
 						return;
 					}
@@ -942,7 +945,7 @@ int PgSQL_Data_Stream::write_to_net_poll() {
 		}
 	*/
 	if (encrypted) {
-		if (!SSL_is_init_finished(ssl)) {
+		if (!ssl_handshake_is_complete()) {
 			//proxy_info("SSL_is_init_finished completed: NO!\n");
 			if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 				//proxy_info("SSL_is_init_finished failed!!\n");
@@ -1226,6 +1229,7 @@ bool PgSQL_Data_Stream::adopt_backend_tls() {
 		myconn->reusable = false;
 		return false;
 	}
+	tls13_handshake_complete = false;
 	encrypted = true;
 	ssl = ssl_obj;
 	if (myconn->native_mode) {
@@ -1298,6 +1302,7 @@ void PgSQL_Data_Stream::refuse_reuse_on_stranded_tls() {
 // libpq keeps writing into our buffers and the next query never reaches the
 // backend, in this session or in whichever one gets the connection next.
 void PgSQL_Data_Stream::release_backend_tls() {
+	tls13_handshake_complete = false;
 	if (backend_tls_adopted == false) {
 		if (myconn != NULL && myconn->native_mode && ssl != NULL) {
 			// A native borrow shares the connection's own BIOs, so there is nothing to

@@ -2915,6 +2915,23 @@ unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_st
 	return bytes;
 }
 
+unsigned int PgSQL_Query_Result::add_native_data_rows(const unsigned char* wire, unsigned int size, unsigned int rows) {
+	unsigned char* packet = buffer_reserve_space(size);
+	if (packet) {
+		memcpy(packet, wire, size);
+	} else {
+		packet = (unsigned char*)l_alloc(size);
+		memcpy(packet, wire, size);
+		PSarrayOUT.add(packet, size);
+	}
+	resultset_size += size;
+	pkt_count += rows;
+	num_rows += rows;
+	result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+	stmt_had_tuple = true;
+	return size;
+}
+
 unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len) {
 	// Reconstruct the raw client-wire message: type(1) + be32 length(4) + payload.
 	// The length field is (payload_len + 4) per the PostgreSQL wire protocol (it
@@ -3120,10 +3137,17 @@ void PgSQL_Query_Result::buffer_to_PSarrayOut() {
 	if (buffer_used == 0)
 		return;	// exit immediately if the buffer is empty
 	if (buffer_used < PGSQL_RESULTSET_BUFLEN / 2) {
-		buffer = (unsigned char*)realloc(buffer, buffer_used);
+		// Keep the accumulation buffer for the next result. Shrinking it with
+		// realloc and allocating a replacement churns a large allocation for
+		// every small result; the output queue only needs the occupied bytes.
+		unsigned char* packet = (unsigned char*)malloc(buffer_used);
+		memcpy(packet, buffer, buffer_used);
+		PSarrayOUT.add(packet, buffer_used);
+	} else {
+		// Hand off larger buffers without copying their contents.
+		PSarrayOUT.add(buffer, buffer_used);
+		buffer = (unsigned char*)malloc(PGSQL_RESULTSET_BUFLEN);
 	}
-	PSarrayOUT.add(buffer, buffer_used);
-	buffer = (unsigned char*)malloc(PGSQL_RESULTSET_BUFLEN);
 	buffer_used = 0;
 }
 

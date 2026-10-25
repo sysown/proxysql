@@ -3240,7 +3240,7 @@ static bool can_hold_client_output(bool extended_query, PgSQL_Data_Stream* clien
 		client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN <= overflow_safe_multiply<4, unsigned int>(pgsql_thread___threshold_resultset_size);
 }
 
-int PgSQL_Session::handler() {
+int PgSQL_Session::handler(bool io_only) {
 #if ENABLE_TIMER
 	Timer timer(thread->Timers.Sessions_Handlers);
 #endif // ENABLE_TIMER
@@ -3248,6 +3248,20 @@ int PgSQL_Session::handler() {
 	bool wrong_pass = false;
 	bool in_pending_state = false;
 	if (to_process == 0) return 0; // this should be redundant if the called does the same check
+	// Preserve idle-backend error/notification handling before a frontend
+	// request can change the session state. Include pinned non-current backends.
+	if (mybes) {
+		for (unsigned i = 0; i < mybes->len; ++i) {
+			auto *backend = static_cast<PgSQL_Backend*>(mybes->index(i));
+			if (backend->server_myds && backend->server_myds->pending_poll_revents)
+				thread->consume_data_stream_readiness(backend->server_myds);
+			if (!healthy) return -1;
+		}
+	}
+	if (client_myds && client_myds->pending_poll_revents)
+		thread->consume_data_stream_readiness(client_myds);
+	if (!healthy) return -1;
+	if (io_only) return 0;
 	if (offline_fatal_pending) {
 		writeout();
 		// Include encrypted bytes retained after a short write. The normal poll
@@ -3662,6 +3676,11 @@ handler_again:
 					query_to_match = digest_text;
 				} else {
 					query_to_match = (char*)CurrentQuery.QueryPointer;
+					// Without a digest, retain the regex for any possible COPY.
+					// Searching only the keyword is conservative across raw SQL
+					// whitespace, comments, and multiple statements.
+					if (run_match && strcasestr(query_to_match, "COPY") == NULL)
+						run_match = false;
 				}
 				if (run_match && copy_cmd_matcher->match(query_to_match, &matched)) {
 
@@ -4259,6 +4278,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			client_myds->DSS = STATE_SSL_INIT;
 			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
+			client_myds->tls13_handshake_complete = false;
 			client_myds->ssl = GloVars.get_SSL_new();
 			SSL_set_fd(client_myds->ssl, client_myds->fd);
 			SSL_set_accept_state(client_myds->ssl);
