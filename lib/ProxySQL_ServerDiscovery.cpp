@@ -33,7 +33,6 @@ namespace {
 // before, with no install mutex and no generation counter.
 std::atomic<uint64_t> mysql_generation {0};
 std::atomic<uint64_t> pgsql_generation {0};
-std::atomic<uint64_t> read_only_monitor_epochs[2] {{0}, {0}};
 std::mutex mysql_install_mutex;
 std::mutex pgsql_install_mutex;
 thread_local bool install_lock_held[2] {false, false};
@@ -161,15 +160,6 @@ uint64_t proxysql_publish_server_runtime(ProxySQL_ServerRuntimeSnapshot snapshot
 	return generation;
 }
 
-uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol) {
-	const int index = protocol_index(protocol);
-	return index < 0 ? 0 : read_only_monitor_epochs[index].load(std::memory_order_acquire);
-}
-
-void proxysql_request_server_read_only_monitor(ProxySQL_ServerProtocol protocol) {
-	const int index = protocol_index(protocol);
-	if (index >= 0) read_only_monitor_epochs[index].fetch_add(1, std::memory_order_release);
-}
 #endif
 
 static bool collect_active_builtin_server_topology(SQLite3DB* db,
@@ -385,34 +375,92 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 		desired_by_endpoint[{row.hostname, row.port}].push_back(row);
 	}
 
-	std::map<EndpointKey, std::vector<ProxySQL_ServerRow>> current_by_endpoint;
-	for (const auto& row : current.servers) {
-		if (delegated.count(row.hostgroup_id) == 0) merged.push_back(row);
-		else current_by_endpoint[{row.hostname, row.port}].push_back(row);
+	// Placement ownership is evaluated per claim, not per endpoint globally.
+	// The same backend can legitimately appear in two independent claimed
+	// pairs; preserving its placement in one pair must not retain or overwrite
+	// its row in the other pair.
+	const auto claims = proxysql_active_server_hostgroup_claims(desired_set.protocol);
+	std::map<uint32_t, size_t> claim_by_hostgroup;
+	for (size_t index = 0; index < claims.size(); ++index) {
+		const auto& claim = claims[index];
+		claim_by_hostgroup.emplace(claim.writer_hostgroup, index);
+		claim_by_hostgroup.emplace(claim.reader_hostgroup, index);
+		if (claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green) {
+			claim_by_hostgroup.emplace(claim.role_monitor.green_writer_hostgroup, index);
+			claim_by_hostgroup.emplace(claim.role_monitor.green_reader_hostgroup, index);
+		}
+	}
+	std::set<size_t> selected_claims;
+	for (uint32_t hostgroup : delegated) {
+		const auto claim = claim_by_hostgroup.find(hostgroup);
+		if (claim == claim_by_hostgroup.end()) {
+			error = "delegated hostgroup has no active discovery claim";
+			return false;
+		}
+		selected_claims.insert(claim->second);
+	}
+	for (size_t index : selected_claims) {
+		const auto& claim = claims[index];
+		if (delegated.count(claim.writer_hostgroup) == 0 ||
+			delegated.count(claim.reader_hostgroup) == 0 ||
+			(claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green &&
+			 (delegated.count(claim.role_monitor.green_writer_hostgroup) == 0 ||
+			  delegated.count(claim.role_monitor.green_reader_hostgroup) == 0))) {
+			error = "delegated hostgroups contain an incomplete discovery claim";
+			return false;
+		}
 	}
 
-	for (const auto& desired_entry : desired_by_endpoint) {
-		const auto current_it = current_by_endpoint.find(desired_entry.first);
-		const bool force_role = std::any_of(desired_entry.second.begin(), desired_entry.second.end(),
-			[](const ProxySQL_ServerRow& row) { return row.force_topology_role; });
-		if (current_it == current_by_endpoint.end() || force_role) {
-			merged.insert(merged.end(), desired_entry.second.begin(), desired_entry.second.end());
+	using EndpointRows = std::map<EndpointKey, std::vector<ProxySQL_ServerRow>>;
+	std::vector<EndpointRows> desired_by_claim(claims.size());
+	std::vector<EndpointRows> current_by_claim(claims.size());
+	for (const auto& entry : desired_by_endpoint) {
+		for (const auto& row : entry.second)
+			desired_by_claim[claim_by_hostgroup.at(row.hostgroup_id)][entry.first].push_back(row);
+	}
+	for (const auto& row : current.servers) {
+		if (delegated.count(row.hostgroup_id) == 0) {
+			if (claim_by_hostgroup.count(row.hostgroup_id) != 0) merged.push_back(row);
 			continue;
 		}
-		for (const auto& current_row : current_it->second) {
-			const auto exact = std::find_if(desired_entry.second.begin(), desired_entry.second.end(),
-				[&](const ProxySQL_ServerRow& row) {
-					return row.hostgroup_id == current_row.hostgroup_id;
-				});
-			ProxySQL_ServerRow row = exact != desired_entry.second.end() ? *exact :
-				desired_entry.second.front();
-			row.hostgroup_id = current_row.hostgroup_id;
-			row.hostname = current_row.hostname;
-			row.port = current_row.port;
-			row.status = current_row.status;
-			row.topology_role_epoch = 0;
-			row.force_topology_role = false;
-			merged.push_back(std::move(row));
+		current_by_claim[claim_by_hostgroup.at(row.hostgroup_id)]
+			[{row.hostname, row.port}].push_back(row);
+	}
+
+	for (size_t index = 0; index < claims.size(); ++index) {
+		const bool plugin_owns_placement =
+			claims[index].role_monitor.kind == ProxySQL_ServerRoleMonitor::none;
+		for (const auto& desired_entry : desired_by_claim[index]) {
+			const auto current_it = current_by_claim[index].find(desired_entry.first);
+			if (current_it == current_by_claim[index].end()) {
+				merged.insert(merged.end(), desired_entry.second.begin(), desired_entry.second.end());
+				continue;
+			}
+			if (plugin_owns_placement) {
+				for (const auto& desired_row : desired_entry.second) {
+					const auto exact = std::find_if(current_it->second.begin(), current_it->second.end(),
+						[&](const ProxySQL_ServerRow& row) {
+							return row.hostgroup_id == desired_row.hostgroup_id;
+						});
+					ProxySQL_ServerRow row = desired_row;
+					row.status = (exact != current_it->second.end() ? *exact : current_it->second.front()).status;
+					merged.push_back(std::move(row));
+				}
+				continue;
+			}
+			for (const auto& current_row : current_it->second) {
+				const auto exact = std::find_if(desired_entry.second.begin(), desired_entry.second.end(),
+					[&](const ProxySQL_ServerRow& row) {
+						return row.hostgroup_id == current_row.hostgroup_id;
+					});
+				ProxySQL_ServerRow row = exact != desired_entry.second.end() ? *exact :
+					desired_entry.second.front();
+				row.hostgroup_id = current_row.hostgroup_id;
+				row.hostname = current_row.hostname;
+				row.port = current_row.port;
+				row.status = current_row.status;
+				merged.push_back(std::move(row));
+			}
 		}
 	}
 	std::sort(merged.begin(), merged.end(), server_row_less);
@@ -491,11 +539,6 @@ size_t proxysql_drain_server_desired_sets() {
 				applied = false;
 				error = "unknown reconciliation failure";
 			}
-		}
-		if (applied && std::any_of(queued.desired_set.servers.begin(),
-			queued.desired_set.servers.end(),
-			[](const ProxySQL_ServerRow& row) { return row.force_topology_role; })) {
-			proxysql_request_server_read_only_monitor(queued.desired_set.protocol);
 		}
 		complete_accepted_server_desired_set(
 			queued.completion, queued.desired_set.generation, applied);

@@ -69,7 +69,7 @@ public:
 	bool start_all(std::string &err);
 	bool runtime_ready_all(ProxySQL_PluginRuntimeContext& context, std::string& err);
 	bool stop_all();
-	/** @brief Require exactly one ABI12 managed provider before startup. */
+	/** @brief Require exactly one managed configuration provider before startup. */
 	bool check_managed_configuration_provider(std::string& error) const;
 	/** @brief Borrow the initialized provider service until plugin shutdown. */
 	const ProxySQL_ManagedConfigurationServiceV1* managed_configuration_service(std::string& error) const;
@@ -129,6 +129,9 @@ public:
 	std::vector<uint32_t> server_topology_hostgroups(ProxySQL_ServerProtocol protocol) const;
 	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims(
 		ProxySQL_ServerProtocol protocol) const;
+	bool is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
+		uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+		uint8_t* writer_is_also_reader = nullptr) const;
 	bool install_managed_discovery(ProxySQL_ServerProtocol protocol, uint64_t desired_revision,
 		const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
 		uint64_t& runtime_generation_out, std::string& error);
@@ -246,7 +249,10 @@ private:
 	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
 	std::vector<uint32_t> server_delegated_hostgroups_[2] {};
 	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims_[2] {};
+	const ProxySQL_PluginDescriptor *managed_server_claim_owner_[2] {nullptr, nullptr};
 	uint64_t managed_server_revisions_[2] {0, 0};
+	bool release_managed_discovery(ProxySQL_ServerProtocol protocol,
+		const ProxySQL_PluginDescriptor *owner, std::string& error);
 	// Requires server_discovery_mutex_.
 	void rebuild_server_delegated_hostgroups(int index);
 	// With only_if_newer, a snapshot older than the stored one is dropped

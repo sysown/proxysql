@@ -1864,7 +1864,19 @@ __exit_monitor_read_only_thread:
 	mmsd->t2=monotonic_time();
 	if (mmsd->get_task_type() == MON_AWS_RDS_TOPOLOGY_DISCOVERY) {
 		if (mmsd->interr == 0 && mmsd->result) {
+#ifdef PROXYSQL40
+			bool inventory_managed = false;
+			{
+				ScopedServerDiscoveryProtocolLock inventory_lock(
+					ProxySQL_ServerProtocol::mysql);
+				inventory_managed = proxysql_is_server_inventory_managed_locked(
+					ProxySQL_ServerProtocol::mysql, mmsd->writer_hostgroup,
+					mmsd->reader_hostgroup);
+			}
+			if (!inventory_managed) GloMyMon->process_aws_rds_topology(mmsd);
+#else
 			GloMyMon->process_aws_rds_topology(mmsd);
+#endif
 			mysql_free_result(mmsd->result);
 			mmsd->result = NULL;
 			read_only_success = true;
@@ -3705,10 +3717,6 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
 	int topology_loop = 0;
-#ifdef PROXYSQL40
-	uint64_t read_only_wake_epoch = proxysql_server_read_only_monitor_epoch(
-		ProxySQL_ServerProtocol::mysql);
-#endif
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 		int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
@@ -3720,15 +3728,6 @@ void * MySQL_Monitor::monitor_read_only() {
 		// add support for SSL
 		const char* query = "read-only monitor server enumeration";
 		t1=monotonic_time();
-
-#ifdef PROXYSQL40
-		const uint64_t current_wake_epoch = proxysql_server_read_only_monitor_epoch(
-			ProxySQL_ServerProtocol::mysql);
-		if (current_wake_epoch != read_only_wake_epoch) {
-			read_only_wake_epoch = current_wake_epoch;
-			next_loop_at = 0;
-		}
-#endif
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 		glover=GloMTH->get_global_version();
@@ -6146,6 +6145,16 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	}
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 
+	bool inventory_managed = false;
+#ifdef PROXYSQL40
+	{
+		ScopedServerDiscoveryProtocolLock inventory_lock(
+			ProxySQL_ServerProtocol::mysql);
+		inventory_managed = proxysql_is_server_inventory_managed_locked(
+			ProxySQL_ServerProtocol::mysql, wHG, rHG);
+	}
+#endif
+
 	bool exit_now = false;
 	unsigned long long t1 = 0;
 	//unsigned long long t2 = 0;
@@ -6431,13 +6440,23 @@ __exit_monitor_aws_aurora_HG_thread:
 				delete l_ase;
 			}
 			lasts_ase[ase_idx] = ase_l;
-			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
+			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, inventory_managed);
 
 			// Auto-purge servers that disappear from REPLICA_HOST_STATUS
 			// Only process if autopurge is enabled and query was successful with results
-			if (autopurge_missing_checks > 0 && mmsd->interr == 0 && ase->host_statuses->size() > 0) {
+#ifdef PROXYSQL40
+			if (!inventory_managed && autopurge_missing_checks > 0 &&
+				mmsd->interr == 0 && ase->host_statuses->size() > 0) {
+				GloMyMon->aws_aurora_autopurge_servers(
+					wHG, rHG, ase, autopurge_missing_checks,
+					autopurge_counter, domain_name);
+			}
+#else
+			if (autopurge_missing_checks > 0 &&
+				mmsd->interr == 0 && ase->host_statuses->size() > 0) {
 				GloMyMon->aws_aurora_autopurge_servers(wHG, rHG, ase, autopurge_missing_checks, autopurge_counter, domain_name);
 			}
+#endif
 
 			for (auto h : *(ase_l->host_statuses)) {
 				for (auto h2 : *(ase->host_statuses)) {
@@ -7371,6 +7390,11 @@ void MySQL_Monitor::aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 	if (st.green_writer_hg < 0) {
 		return;
 	}
+#ifdef PROXYSQL40
+	ScopedServerDiscoveryProtocolLock inventory_lock(ProxySQL_ServerProtocol::mysql);
+	if (proxysql_is_server_inventory_managed_locked(
+		ProxySQL_ServerProtocol::mysql, st.writer_hg, st.reader_hg)) return;
+#endif
 	for (AWS_RDS_BlueGreenPair& p : st.bg_map) {
 		if (!p.is_writer) {
 			continue;
@@ -8309,7 +8333,7 @@ void MySQL_Monitor::aws_aurora_autopurge_servers(unsigned int wHG, unsigned int 
 	MyHGM->wrunlock();
 }
 
-void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
+void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks, bool inventory_managed) {
 #ifdef TEST_AURORA
 	unsigned int i = 0;
 	bool verbose = false;
@@ -8397,7 +8421,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					proxy_info("Calling update_aws_aurora_set_writer for %s\n", hse->server_id);
 #endif // TEST_AURORA
-					MyHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id);
+					MyHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id, inventory_managed);
 					time_t __timer;
 					char lut[30];
 					struct tm __tm_info;
@@ -8413,7 +8437,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					proxy_info("Calling update_aws_aurora_set_reader for %s\n", hse->server_id);
 #endif // TEST_AURORA
-					MyHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id);
+					MyHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id, inventory_managed);
 				}
 				}
 			}
@@ -9169,7 +9193,19 @@ bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQ
 			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 				__sync_fetch_and_add(&read_only_check_OK, 1);
 				if (mmsd->interr == 0 && mmsd->result) {
+#ifdef PROXYSQL40
+					bool inventory_managed = false;
+					{
+						ScopedServerDiscoveryProtocolLock inventory_lock(
+							ProxySQL_ServerProtocol::mysql);
+						inventory_managed = proxysql_is_server_inventory_managed_locked(
+							ProxySQL_ServerProtocol::mysql, mmsd->writer_hostgroup,
+							mmsd->reader_hostgroup);
+					}
+					if (!inventory_managed) process_aws_rds_topology(mmsd);
+#else
 					process_aws_rds_topology(mmsd);
+#endif
 				}
 				if (mmsd->result) {
 					mysql_free_result(mmsd->result);
@@ -9380,10 +9416,17 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset, bool do_d
 			// On discovery cycles, enqueue an additional standalone topology-discovery
 			// task for AWS RDS endpoints. The read_only check above is unaffected.
 			string hostname = r->fields[0];
-			if (do_discovery_check && hostname.find(AWS_ENDPOINT_SUFFIX_STRING) != std::string::npos) {
+			bool inventory_managed = false;
+#ifdef PROXYSQL40
+			inventory_managed = proxysql_is_server_inventory_managed(
+				ProxySQL_ServerProtocol::mysql, atoi(r->fields[5]), atoi(r->fields[4]));
+#endif
+			if (do_discovery_check && !inventory_managed &&
+				hostname.find(AWS_ENDPOINT_SUFFIX_STRING) != std::string::npos) {
 				std::unique_ptr<MySQL_Monitor_State_Data> tmmsd(
 					new MySQL_Monitor_State_Data(MON_AWS_RDS_TOPOLOGY_DISCOVERY, r->fields[0], atoi(r->fields[1]), atoi(r->fields[2])));
 				tmmsd->reader_hostgroup = atoi(r->fields[4]);
+				tmmsd->writer_hostgroup = atoi(r->fields[5]);
 				tmmsd->mondb = monitordb;
 				tmmsd->mysql = My_Conn_Pool->get_connection(tmmsd->hostname, tmmsd->port, tmmsd.get());
 				if (tmmsd->mysql) {
