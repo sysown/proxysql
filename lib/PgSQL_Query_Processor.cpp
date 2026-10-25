@@ -791,8 +791,8 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	return ret;
 }
 
-// A legacy classifier token borrows the digest/prefix storage. Only space and
-// semicolon delimit tokens here, exactly as in the former " ;" tokenizer.
+// A legacy classifier token borrows the digest/prefix storage. SQL whitespace,
+// comments and semicolons separate command keywords, including in raw prefixes.
 struct PgSQL_Command_Token {
 	const char* data = NULL;
 	size_t length = 0;
@@ -817,12 +817,16 @@ class PgSQL_Command_Cursor {
 	const char* next;
 public:
 	explicit PgSQL_Command_Cursor(const char* text) : next(text) {}
-	PgSQL_Command_Token take() {
+	PgSQL_Command_Token take(bool split_comments = true) {
+		next = pgsql_stmt_skip_lead(next, NULL);
+		while (next != NULL && *next == ';') next = pgsql_stmt_skip_lead(next + 1, NULL);
 		if (next == NULL) return {};
-		while (*next == ' ' || *next == ';') ++next;
-		if (*next == '\0') return {};
 		const char* start = next;
-		while (*next != '\0' && *next != ' ' && *next != ';') ++next;
+		while (*next != '\0' && !isspace((unsigned char)*next) && *next != ';') {
+			if (split_comments && ((next[0] == '/' && next[1] == '*') ||
+				(next[0] == '-' && next[1] == '-'))) break;
+			++next;
+		}
 		return {start, (size_t)(next - start)};
 	}
 };
@@ -1304,7 +1308,9 @@ __remove_parenthesis:
 			break;
 		}
 		if (token.is("SELECT")) {
-			token = cursor.take();
+			// Retain inline comments for the bounded function-call refinement: a
+			// suffix such as "pg_cancel_backend/**/.x" must remain a SELECT.
+			token = cursor.take(false);
 			if (token.data == NULL) break;
 			ret = select_target_command_type(token);
 			break;
