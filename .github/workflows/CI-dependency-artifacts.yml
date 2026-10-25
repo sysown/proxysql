@@ -1,0 +1,138 @@
+name: CI-dependency-artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Source branch, tag, or commit already merged into protected v3.0
+        type: string
+        required: false
+      group:
+        description: Native build profiles to publish
+        type: choice
+        options: [ubuntu24, almalinux8, macos, all]
+        default: ubuntu24
+      dependency:
+        description: Dependencies to compile
+        type: choice
+        options: [both, duckdb, openssl]
+        default: both
+
+permissions:
+  contents: read
+
+env:
+  DEPS_TAG: dependency-artifacts-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  plan:
+    # Dispatch from protected v3.0 and publish only its reviewed history.
+    if: github.ref == 'refs/heads/v3.0'
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      source_sha: ${{ steps.matrix.outputs.source_sha }}
+      control_sha: ${{ steps.matrix.outputs.control_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/v3.0
+          path: control
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select exact build profiles
+        id: matrix
+        working-directory: control
+        env:
+          PROFILE_GROUP: ${{ inputs.group }}
+          DEPENDENCY: ${{ inputs.dependency }}
+        run: |
+          source_sha=$(git -C ../source rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$source_sha" HEAD; then
+            echo "Source commit must be reachable from protected v3.0 control HEAD" >&2
+            exit 1
+          fi
+          python3 -E deps/artifacts/publish.py matrix --group "$PROFILE_GROUP" --dependency "$DEPENDENCY" > expected-matrix.json
+          {
+            echo "matrix=$(cat expected-matrix.json)"
+            echo "source_sha=$source_sha"
+            echo "control_sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-plan-${{ github.run_attempt }}
+          path: control/expected-matrix.json
+          if-no-files-found: error
+
+  build:
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install native build tools
+        if: runner.os == 'macOS'
+        run: brew install cmake
+      - name: Compile, package, relocate and smoke-test
+        env:
+          PROFILE: ${{ matrix.profile }}
+          DEPENDENCY: ${{ matrix.dependency }}
+        run: |
+          python3 deps/artifacts/publish.py build --profile "$PROFILE" --dependency "$DEPENDENCY" \
+            --output .cache/dependency-artifacts/publication --repository "$GITHUB_REPOSITORY" --tag "$DEPS_TAG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-bundle-${{ github.run_attempt }}-${{ matrix.profile }}-${{ matrix.dependency }}
+          path: .cache/dependency-artifacts/publication/*
+          include-hidden-files: true
+          if-no-files-found: error
+
+  publish:
+    timeout-minutes: 20
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.control_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dependency-plan-${{ github.run_attempt }}
+          path: .cache/dependency-artifacts/plan
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: dependency-bundle-${{ github.run_attempt }}-*
+          merge-multiple: true
+          path: .cache/dependency-artifacts/batch
+      - name: Publish complete immutable batch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
+        run: |
+          cp .cache/dependency-artifacts/plan/expected-matrix.json .cache/dependency-artifacts/batch/expected-matrix.json
+          python3 -E deps/artifacts/publish.py publish --input .cache/dependency-artifacts/batch \
+            --repository "$GITHUB_REPOSITORY" --tag "$DEPS_TAG" --source-sha "$SOURCE_SHA"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-lock-entries-${{ github.run_attempt }}
+          path: .cache/dependency-artifacts/batch/lock-entries.json
+          include-hidden-files: true
+          if-no-files-found: error

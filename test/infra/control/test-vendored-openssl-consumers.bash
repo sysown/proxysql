@@ -95,7 +95,9 @@ assert_vendored_first() {
 	local verify_line
 	local consumer_line
 
-	verify_line=$(printf '%s\n' "${output}" | awk 'index($0, "cd libssl && ./verify-source.bash") { print NR; exit }')
+	# The preparation bridge verifies/restores artifacts or invokes the separately
+	# checked source-verification recipe before the consumer can configure.
+	verify_line=$(printf '%s\n' "${output}" | awk 'index($0, "prepare.bash openssl") { print NR; exit }')
 	consumer_line=$(printf '%s\n' "${output}" | awk -v marker="${consumer_marker}" 'index($0, marker) { print NR; exit }')
 	[[ -n "${verify_line}" ]] || fail "${context} has no vendored OpenSSL prerequisite"
 	[[ -n "${consumer_line}" ]] || fail "${context} has no expected configure command"

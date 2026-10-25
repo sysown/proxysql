@@ -103,6 +103,7 @@ ifeq ($(CURVER_CHECK),0)
 endif
 
 export CURVER
+export DEPS_MODE ?= auto
 export PROXYSQL40
 export PROXYSQL31
 export PROXYSQLFFTO
