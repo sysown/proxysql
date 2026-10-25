@@ -1,0 +1,32 @@
+[
+  {
+    "raw": "93863853067186,0",
+    "count": 32,
+    "calls_per_query": 0.00016263385528636265,
+    "address": "0x79cbb1",
+    "source": [
+      "PgSQL_Thread::run___get_multiple_idle_connections(int&)",
+      "/home/rene/pg-network-bench/src/proxysql-tls-handshake-cache/lib/PgSQL_Thread.cpp:3350"
+    ]
+  },
+  {
+    "raw": "93863853131075,0",
+    "count": 196439,
+    "calls_per_query": 0.998363496831181,
+    "address": "0x7ac542",
+    "source": [
+      "PgSQL_Thread::process_all_sessions()",
+      "/home/rene/pg-network-bench/src/proxysql-tls-handshake-cache/lib/PgSQL_Thread.cpp:4789"
+    ]
+  },
+  {
+    "raw": "93863853127879,0",
+    "count": 196440,
+    "calls_per_query": 0.9983685791391587,
+    "address": "0x7ab8c6",
+    "source": [
+      "PgSQL_Thread::process_all_sessions()",
+      "/home/rene/pg-network-bench/src/proxysql-tls-handshake-cache/lib/PgSQL_Thread.cpp:4661"
+    ]
+  }
+]

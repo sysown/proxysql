@@ -1,0 +1,37 @@
+commit 81c0b3a55b3475cbcf4a56fc80cba5057fdbfac0
+Author: Codex <codex@openai.com>
+Commit: Codex <codex@openai.com>
+
+    Skip impossible COPY matches when raw queries have no digest
+    
+    Keep the query-start guard that avoids repeated COPY detection while a backend reply is being consumed. Preserve the existing digest-based prefilter and add a conservative case-insensitive substring check to the raw SQL fallback used when digest parsing is disabled.
+    
+    Only bypass the regular expression when COPY is absent entirely. Queries containing the keyword still use the existing matcher, including comments, unusual whitespace, mixed case, string literals and multiple statements. This removes the unnecessary negative match without narrowing the set of raw queries accepted by the existing COPY handling.
+    
+    Build with the established release flags and native backend support. Keep connection pooling, scheduling, result handling and repository tests unchanged so this optimization can be measured independently.
+
+commit 84c6a56626acb79e3968ad75112e9e0e7e100052
+Author: Codex <codex@openai.com>
+Commit: Codex <codex@openai.com>
+
+    Consume completed session work before the backendless scheduling scan
+    
+    A session processed by the backend-owning scan can complete its query and release its connection while retaining the work flag from the poll event. The later backendless scan then sees that same session as eligible and enters the full handler again even though its readiness and queued commands have already been consumed.
+    
+    Clear the work flag after a successful backend handler only when the session is waiting for client input, its current backend is detached, its frontend has no pending readiness, and its input packet queue is empty. Leave all other states and pending command work under the existing scheduling rules. Output buffered after a partial write remains registered for the next writable poll event.
+    
+    Use the existing work flag rather than expanding the linearly searched dispatched-session list. Preserve inline waiter handoff, shared pool behavior, and the handler epilogue that drains buffered client commands. Keep the change isolated from COPY detection and result batching so its call counts and benchmark behavior can be checked independently.
+
+commit 754dc4af4792b22c825d9663c4a86739bc0cbaff
+Author: Codex <codex@openai.com>
+Commit: Codex <codex@openai.com>
+
+    Batch adjacent native DataRows without rebuilding their wire headers
+    
+    Extend the backend framer with a bounded coalescer that consumes complete adjacent DataRow frames while leaving other message types, malformed lengths and incomplete messages for the normal fetch loop. Keep the framer storage stationary and copy the borrowed span into owned result storage before another socket feed can move it.
+    
+    Use the span only in the native simple-query result path, after the existing extended-query handlers. Preserve the original wire headers and update result bytes, packet count, row count and tuple state in bulk. Keep special-message ordering, error and notification handling, transaction status, query-cache decisions and the existing output-buffer ownership unchanged.
+    
+    Allow batching only when the buffered-byte upper bound cannot trigger the current fetch or throttle suspension policy. Retain the per-row path near those limits and for large individual messages. Bound each batch by the result accumulation buffer capacity, so the optimization removes repeated small copies and header construction without introducing unbounded buffering or a new lifetime model.
+    
+    Keep shared connection-pool behavior and repository tests unchanged. A fresh read-only review found no correctness blocker in framing, accounting, scheduling or backpressure; validate runtime output and benchmark this change separately from its preceding patches.

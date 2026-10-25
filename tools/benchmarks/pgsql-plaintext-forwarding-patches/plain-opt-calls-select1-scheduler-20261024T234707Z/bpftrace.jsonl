@@ -1,0 +1,10 @@
+{"type": "attached_probes", "data": {"probes": 12}}
+{"type": "printf", "data": "READY\n"}
+
+
+{"type": "map", "data": {"@calls": {"2": 226706, "1": 226740, "4": 453412, "3": 566765}}}
+{"type": "map", "data": {"@end": 834537225932626}}
+{"type": "map", "data": {"@gates": 2}}
+{"type": "map", "data": {"@handler": {"94793597983442,0": 34, "94793598044135,0": 113353, "94793598047331,0": 113353}}}
+{"type": "map", "data": {"@start": 834497329365186}}
+{"type": "map", "data": {"@syscalls": {"tracepoint:syscalls:sys_enter_sendto": 226706, "tracepoint:syscalls:sys_enter_recvfrom": 226706, "tracepoint:syscalls:sys_enter_poll": 226719}}}

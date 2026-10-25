@@ -1,0 +1,80 @@
+[
+  {
+    "case": "scalar",
+    "bytes": 2,
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "identical": true
+  },
+  {
+    "case": "raw-copy-text",
+    "bytes": 11,
+    "sha256": "e47cf87b5fcf2baaae33ee95b876049bec15244407cfa850835683cc8bdd5759",
+    "identical": true
+  },
+  {
+    "case": "rows",
+    "bytes": 3141,
+    "sha256": "07fdef22e15a8091967dfc14aae96ad2af1b4875ec04f6cc3408642b3f2c2f7a",
+    "identical": true
+  },
+  {
+    "case": "empty",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "identical": true
+  },
+  {
+    "case": "large-message",
+    "bytes": 70001,
+    "sha256": "737991d2a97b47a01f926ba94ce586adc076c9a1751489890c0f027d34927a61",
+    "identical": true
+  },
+  {
+    "case": "many-rows",
+    "bytes": 1412893,
+    "sha256": "0b593f0858f1eb140d6e06d050ab944d0ac1dfa74f7459967efcb86568d99efc",
+    "identical": true
+  },
+  {
+    "case": "multiple-statements",
+    "bytes": 4,
+    "sha256": "a6e2b7a040683432de03a18fd8a1939a2fdf82585b364bfc874bdd4095c4cae1",
+    "identical": true
+  },
+  {
+    "case": "transaction",
+    "bytes": 2,
+    "sha256": "2e6d31a5983a91251bfae5aefa1c0a19d8ba3cf601d0e8a706b4cfa9661a6b8a",
+    "identical": true
+  },
+  {
+    "case": "copy-out",
+    "bytes": 6,
+    "sha256": "14c5e74c4b96ccef41cd94db73a9ec3348038ac094feca4fd897cecffa07cdae",
+    "identical": true
+  },
+  {
+    "case": "error",
+    "expected_error": true,
+    "stdout_identical": true
+  },
+  {
+    "case": "error-after-rows",
+    "expected_error": true,
+    "stdout_identical": true
+  },
+  {
+    "case": "large-message-low-threshold",
+    "bytes": 70001,
+    "sha256": "737991d2a97b47a01f926ba94ce586adc076c9a1751489890c0f027d34927a61",
+    "identical": true,
+    "resultset_threshold": 1024
+  },
+  {
+    "case": "many-rows-low-threshold",
+    "bytes": 1412893,
+    "sha256": "0b593f0858f1eb140d6e06d050ab944d0ac1dfa74f7459967efcb86568d99efc",
+    "identical": true,
+    "resultset_threshold": 1024
+  }
+]

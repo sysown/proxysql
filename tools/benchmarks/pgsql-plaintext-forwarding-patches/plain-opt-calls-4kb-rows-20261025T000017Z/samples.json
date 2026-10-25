@@ -1,0 +1,622 @@
+[
+  {
+    "wall_ns": 835274034361767,
+    "cpu_user_ticks": 229,
+    "cpu_system_ticks": 405,
+    "ConnUsed": "0",
+    "ConnFree": "10",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "111520"
+  },
+  {
+    "wall_ns": 835276473954671,
+    "cpu_user_ticks": 242,
+    "cpu_system_ticks": 434,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "116711"
+  },
+  {
+    "wall_ns": 835277472721725,
+    "cpu_user_ticks": 253,
+    "cpu_system_ticks": 464,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "121852"
+  },
+  {
+    "wall_ns": 835278473274396,
+    "cpu_user_ticks": 262,
+    "cpu_system_ticks": 496,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "126981"
+  },
+  {
+    "wall_ns": 835279473027757,
+    "cpu_user_ticks": 271,
+    "cpu_system_ticks": 529,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "132185"
+  },
+  {
+    "wall_ns": 835280475097513,
+    "cpu_user_ticks": 279,
+    "cpu_system_ticks": 561,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "137210"
+  },
+  {
+    "wall_ns": 835281472985226,
+    "cpu_user_ticks": 290,
+    "cpu_system_ticks": 591,
+    "ConnUsed": "0",
+    "ConnFree": "10",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "142196"
+  },
+  {
+    "wall_ns": 835282473462701,
+    "cpu_user_ticks": 299,
+    "cpu_system_ticks": 622,
+    "ConnUsed": "0",
+    "ConnFree": "10",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "147205"
+  },
+  {
+    "wall_ns": 835283473089273,
+    "cpu_user_ticks": 308,
+    "cpu_system_ticks": 655,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "152134"
+  },
+  {
+    "wall_ns": 835284472499497,
+    "cpu_user_ticks": 320,
+    "cpu_system_ticks": 684,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "157138"
+  },
+  {
+    "wall_ns": 835285472646542,
+    "cpu_user_ticks": 334,
+    "cpu_system_ticks": 710,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "162290"
+  },
+  {
+    "wall_ns": 835286472798098,
+    "cpu_user_ticks": 344,
+    "cpu_system_ticks": 744,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "167273"
+  },
+  {
+    "wall_ns": 835287473084943,
+    "cpu_user_ticks": 358,
+    "cpu_system_ticks": 772,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "172141"
+  },
+  {
+    "wall_ns": 835288472486091,
+    "cpu_user_ticks": 370,
+    "cpu_system_ticks": 802,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "177095"
+  },
+  {
+    "wall_ns": 835289472804881,
+    "cpu_user_ticks": 379,
+    "cpu_system_ticks": 835,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "182175"
+  },
+  {
+    "wall_ns": 835290475067652,
+    "cpu_user_ticks": 392,
+    "cpu_system_ticks": 864,
+    "ConnUsed": "0",
+    "ConnFree": "10",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "187091"
+  },
+  {
+    "wall_ns": 835291473058571,
+    "cpu_user_ticks": 406,
+    "cpu_system_ticks": 893,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "191988"
+  },
+  {
+    "wall_ns": 835292472269623,
+    "cpu_user_ticks": 419,
+    "cpu_system_ticks": 921,
+    "ConnUsed": "0",
+    "ConnFree": "10",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "196859"
+  },
+  {
+    "wall_ns": 835293472910501,
+    "cpu_user_ticks": 432,
+    "cpu_system_ticks": 950,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "201738"
+  },
+  {
+    "wall_ns": 835294472625051,
+    "cpu_user_ticks": 443,
+    "cpu_system_ticks": 981,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "206600"
+  },
+  {
+    "wall_ns": 835295473471136,
+    "cpu_user_ticks": 457,
+    "cpu_system_ticks": 1009,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "211457"
+  },
+  {
+    "wall_ns": 835296472765579,
+    "cpu_user_ticks": 468,
+    "cpu_system_ticks": 1040,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "216276"
+  },
+  {
+    "wall_ns": 835297471813440,
+    "cpu_user_ticks": 480,
+    "cpu_system_ticks": 1071,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "221101"
+  },
+  {
+    "wall_ns": 835298472740596,
+    "cpu_user_ticks": 495,
+    "cpu_system_ticks": 1098,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "226043"
+  },
+  {
+    "wall_ns": 835299473503181,
+    "cpu_user_ticks": 502,
+    "cpu_system_ticks": 1132,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "230885"
+  },
+  {
+    "wall_ns": 835300475685964,
+    "cpu_user_ticks": 518,
+    "cpu_system_ticks": 1158,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "235766"
+  },
+  {
+    "wall_ns": 835301472591097,
+    "cpu_user_ticks": 530,
+    "cpu_system_ticks": 1188,
+    "ConnUsed": "0",
+    "ConnFree": "10",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "240605"
+  },
+  {
+    "wall_ns": 835302473769670,
+    "cpu_user_ticks": 543,
+    "cpu_system_ticks": 1218,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "245484"
+  },
+  {
+    "wall_ns": 835303473119485,
+    "cpu_user_ticks": 554,
+    "cpu_system_ticks": 1249,
+    "ConnUsed": "0",
+    "ConnFree": "10",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "250356"
+  },
+  {
+    "wall_ns": 835304472806051,
+    "cpu_user_ticks": 563,
+    "cpu_system_ticks": 1281,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "255274"
+  },
+  {
+    "wall_ns": 835305473019743,
+    "cpu_user_ticks": 578,
+    "cpu_system_ticks": 1309,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "260122"
+  },
+  {
+    "wall_ns": 835306472839888,
+    "cpu_user_ticks": 592,
+    "cpu_system_ticks": 1337,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "264998"
+  },
+  {
+    "wall_ns": 835307472544125,
+    "cpu_user_ticks": 604,
+    "cpu_system_ticks": 1367,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "269860"
+  },
+  {
+    "wall_ns": 835308475165729,
+    "cpu_user_ticks": 619,
+    "cpu_system_ticks": 1394,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "274802"
+  },
+  {
+    "wall_ns": 835309473050694,
+    "cpu_user_ticks": 632,
+    "cpu_system_ticks": 1424,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "279800"
+  },
+  {
+    "wall_ns": 835310475224832,
+    "cpu_user_ticks": 645,
+    "cpu_system_ticks": 1453,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "284730"
+  },
+  {
+    "wall_ns": 835311472225736,
+    "cpu_user_ticks": 654,
+    "cpu_system_ticks": 1486,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "289597"
+  },
+  {
+    "wall_ns": 835312472982080,
+    "cpu_user_ticks": 662,
+    "cpu_system_ticks": 1519,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "294505"
+  },
+  {
+    "wall_ns": 835313472834638,
+    "cpu_user_ticks": 673,
+    "cpu_system_ticks": 1551,
+    "ConnUsed": "0",
+    "ConnFree": "10",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "299406"
+  },
+  {
+    "wall_ns": 835314472808999,
+    "cpu_user_ticks": 686,
+    "cpu_system_ticks": 1581,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "304325"
+  },
+  {
+    "wall_ns": 835315472437752,
+    "cpu_user_ticks": 699,
+    "cpu_system_ticks": 1609,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "309203"
+  },
+  {
+    "wall_ns": 835316472429783,
+    "cpu_user_ticks": 713,
+    "cpu_system_ticks": 1638,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "314120"
+  },
+  {
+    "wall_ns": 835317474153228,
+    "cpu_user_ticks": 728,
+    "cpu_system_ticks": 1665,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "319031"
+  },
+  {
+    "wall_ns": 835318474529491,
+    "cpu_user_ticks": 742,
+    "cpu_system_ticks": 1693,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "323969"
+  },
+  {
+    "wall_ns": 835319473067627,
+    "cpu_user_ticks": 752,
+    "cpu_system_ticks": 1725,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "328959"
+  },
+  {
+    "wall_ns": 835320474821557,
+    "cpu_user_ticks": 765,
+    "cpu_system_ticks": 1755,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "334028"
+  },
+  {
+    "wall_ns": 835321473315545,
+    "cpu_user_ticks": 776,
+    "cpu_system_ticks": 1786,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "339062"
+  },
+  {
+    "wall_ns": 835322472490165,
+    "cpu_user_ticks": 794,
+    "cpu_system_ticks": 1810,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "344075"
+  },
+  {
+    "wall_ns": 835323472772589,
+    "cpu_user_ticks": 810,
+    "cpu_system_ticks": 1836,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "349045"
+  },
+  {
+    "wall_ns": 835324472310047,
+    "cpu_user_ticks": 826,
+    "cpu_system_ticks": 1863,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "354079"
+  },
+  {
+    "wall_ns": 835325473724628,
+    "cpu_user_ticks": 837,
+    "cpu_system_ticks": 1894,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "359061"
+  },
+  {
+    "wall_ns": 835326472560111,
+    "cpu_user_ticks": 851,
+    "cpu_system_ticks": 1921,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "364064"
+  },
+  {
+    "wall_ns": 835327472379348,
+    "cpu_user_ticks": 864,
+    "cpu_system_ticks": 1949,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "369103"
+  },
+  {
+    "wall_ns": 835328472646997,
+    "cpu_user_ticks": 875,
+    "cpu_system_ticks": 1979,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "374246"
+  },
+  {
+    "wall_ns": 835329473233167,
+    "cpu_user_ticks": 888,
+    "cpu_system_ticks": 2007,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "379359"
+  },
+  {
+    "wall_ns": 835330475028854,
+    "cpu_user_ticks": 903,
+    "cpu_system_ticks": 2033,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "384490"
+  },
+  {
+    "wall_ns": 835331473915697,
+    "cpu_user_ticks": 917,
+    "cpu_system_ticks": 2061,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "389544"
+  },
+  {
+    "wall_ns": 835332473039425,
+    "cpu_user_ticks": 930,
+    "cpu_system_ticks": 2088,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "394592"
+  },
+  {
+    "wall_ns": 835333472282648,
+    "cpu_user_ticks": 942,
+    "cpu_system_ticks": 2117,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "399665"
+  },
+  {
+    "wall_ns": 835334472882071,
+    "cpu_user_ticks": 954,
+    "cpu_system_ticks": 2145,
+    "ConnUsed": "1",
+    "ConnFree": "9",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "404744"
+  },
+  {
+    "wall_ns": 835335473880296,
+    "cpu_user_ticks": 964,
+    "cpu_system_ticks": 2175,
+    "ConnUsed": "0",
+    "ConnFree": "10",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "409762"
+  },
+  {
+    "wall_ns": 835336556586033,
+    "cpu_user_ticks": 965,
+    "cpu_system_ticks": 2175,
+    "ConnUsed": "0",
+    "ConnFree": "10",
+    "ConnOK": "10",
+    "ConnERR": "0",
+    "Queries": "409762"
+  }
+]

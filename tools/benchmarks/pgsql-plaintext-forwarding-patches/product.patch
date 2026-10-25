@@ -1,0 +1,150 @@
+diff --git a/include/PgSQL_Backend_Protocol.h b/include/PgSQL_Backend_Protocol.h
+index b94905780..954a35e6d 100644
+--- a/include/PgSQL_Backend_Protocol.h
++++ b/include/PgSQL_Backend_Protocol.h
+@@ -31,6 +31,10 @@ class PgSQL_Backend_Msg_Framer {
+     ~PgSQL_Backend_Msg_Framer() { free(buf); }
+     void feed(const unsigned char* data, size_t len);
+     PgSQL_Frame_Result next(PgSQL_Backend_Msg& out);
++    // Consume only complete adjacent DataRows, leaving other/invalid/incomplete
++    // frames for next(). Does not feed or move storage; outstanding views stay valid.
++    size_t coalesce_data_rows(size_t max_bytes, unsigned int& rows);
++    size_t buffered_bytes() const { return len - pos; }
+     void reset();
+     // True when every fed byte has been framed out. reset() throws away whatever is
+     // left, so callers that reset between queries must not do so while a partially
+diff --git a/include/PgSQL_Protocol.h b/include/PgSQL_Protocol.h
+index 4b8984a84..27384e1eb 100644
+--- a/include/PgSQL_Protocol.h
++++ b/include/PgSQL_Protocol.h
+@@ -503,6 +503,8 @@ public:
+ 	 * @return The number of bytes appended to the query result.
+ 	 */
+ 	unsigned int add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len);
++	// Validated contiguous DataRows including their original wire headers.
++	unsigned int add_native_data_rows(const unsigned char* wire, unsigned int size, unsigned int rows);
+ 
+     /**
+      * @brief Adds the start of a COPY OUT response to the packet.
+diff --git a/lib/PgSQL_Backend_Protocol.cpp b/lib/PgSQL_Backend_Protocol.cpp
+index c7641c8ee..c92268894 100644
+--- a/lib/PgSQL_Backend_Protocol.cpp
++++ b/lib/PgSQL_Backend_Protocol.cpp
+@@ -98,6 +98,21 @@ PgSQL_Frame_Result PgSQL_Backend_Msg_Framer::next(PgSQL_Backend_Msg& out) {
+     return FRAME_OK;
+ }
+ 
++size_t PgSQL_Backend_Msg_Framer::coalesce_data_rows(size_t max_bytes, unsigned int& rows) {
++    size_t bytes = 0;
++    while (!failed && len - pos >= 5 && buf[pos] == 'D') {
++        const uint32_t msglen = be32(buf + pos + 1);
++        if (msglen < 4 || msglen > PGSQL_MAX_BACKEND_MSG_LEN) break;
++        const size_t total = 1 + (size_t)msglen;
++        if (total > len - pos || total > max_bytes - bytes) break;
++        pos += total;
++        bytes += total;
++        ++rows;
++    }
++    if (pos == len) { pos = 0; len = 0; }
++    return bytes;
++}
++
+ void PgSQL_Backend_Msg_Framer::reset() { pos = 0; len = 0; failed = false; }
+ 
+ static void pg_native_append_be32(std::string& out, uint32_t v) {
+diff --git a/lib/PgSQL_Connection.cpp b/lib/PgSQL_Connection.cpp
+index af57763e9..6d36e0374 100644
+--- a/lib/PgSQL_Connection.cpp
++++ b/lib/PgSQL_Connection.cpp
+@@ -3894,6 +3894,24 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
+ 				continue;
+ 			}
+ 
++			// For simple-query DataRows, preserve and copy a bounded span of the
++			// original wire bytes instead of rebuilding and copying each message.
++			// All special messages above and all extended-query paths keep their
++			// existing ordering and side effects. The complete buffered byte count
++			// is an upper bound: batch only if no row inside it could trigger the
++			// existing fetch/throttle pause. Otherwise retain the per-row path.
++			const unsigned int row_size = 5U + msg.payload_len;
++			if (msg.type == 'D' && row_size <= PGSQL_RESULTSET_BUFLEN &&
++				!is_error_present() && (!processed_bytes ||
++				!suspend_resultset_fetch(*processed_bytes + row_size + native_framer.buffered_bytes()))) {
++				unsigned int rows = 1;
++				const unsigned int extra = (unsigned int)native_framer.coalesce_data_rows(
++					PGSQL_RESULTSET_BUFLEN - row_size, rows);
++				count_bytes(query_result->add_native_data_rows(msg.payload - 5, row_size + extra, rows));
++				if (pause_after('D')) return;
++				continue;
++			}
++
+ 			// Native simple queries collect all results through ReadyForQuery.
+ 			// A second CommandComplete means this is a multi-statement response,
+ 			// which must not be admitted to the single-result query cache.
+diff --git a/lib/PgSQL_Protocol.cpp b/lib/PgSQL_Protocol.cpp
+index b24a98838..bb1f3682b 100644
+--- a/lib/PgSQL_Protocol.cpp
++++ b/lib/PgSQL_Protocol.cpp
+@@ -2915,6 +2915,23 @@ unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_st
+ 	return bytes;
+ }
+ 
++unsigned int PgSQL_Query_Result::add_native_data_rows(const unsigned char* wire, unsigned int size, unsigned int rows) {
++	unsigned char* packet = buffer_reserve_space(size);
++	if (packet) {
++		memcpy(packet, wire, size);
++	} else {
++		packet = (unsigned char*)l_alloc(size);
++		memcpy(packet, wire, size);
++		PSarrayOUT.add(packet, size);
++	}
++	resultset_size += size;
++	pkt_count += rows;
++	num_rows += rows;
++	result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
++	stmt_had_tuple = true;
++	return size;
++}
++
+ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len) {
+ 	// Reconstruct the raw client-wire message: type(1) + be32 length(4) + payload.
+ 	// The length field is (payload_len + 4) per the PostgreSQL wire protocol (it
+diff --git a/lib/PgSQL_Session.cpp b/lib/PgSQL_Session.cpp
+index a90fb8ed8..11b876407 100644
+--- a/lib/PgSQL_Session.cpp
++++ b/lib/PgSQL_Session.cpp
+@@ -3676,6 +3676,11 @@ handler_again:
+ 					query_to_match = digest_text;
+ 				} else {
+ 					query_to_match = (char*)CurrentQuery.QueryPointer;
++					// Without a digest, retain the regex for any possible COPY.
++					// Searching only the keyword is conservative across raw SQL
++					// whitespace, comments, and multiple statements.
++					if (run_match && strcasestr(query_to_match, "COPY") == NULL)
++						run_match = false;
+ 				}
+ 				if (run_match && copy_cmd_matcher->match(query_to_match, &matched)) {
+ 
+diff --git a/lib/PgSQL_Thread.cpp b/lib/PgSQL_Thread.cpp
+index 0ebb0837e..cec29a32d 100644
+--- a/lib/PgSQL_Thread.cpp
++++ b/lib/PgSQL_Thread.cpp
+@@ -4798,6 +4798,18 @@ void PgSQL_Thread::process_all_sessions() {
+ 						n--;
+ 						delete sess;
+ 					}
++#ifdef PROXYSQL31
++					else if (sess->status == WAITING_CLIENT_DATA &&
++						!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) &&
++						sess->client_myds && !sess->client_myds->pending_poll_revents &&
++						sess->client_myds->PSarrayIN && sess->client_myds->PSarrayIN->len == 0) {
++						// handler() consumed readiness and drained queued commands.
++						// Releasing its backend makes this session eligible for the
++						// backendless scan below, but it has no work left in this pass.
++						// Pending output remains armed for the next poll readiness.
++						sess->to_process = 0;
++					}
++#endif // PROXYSQL31
+ 				}
+ 			}
+ 			else {

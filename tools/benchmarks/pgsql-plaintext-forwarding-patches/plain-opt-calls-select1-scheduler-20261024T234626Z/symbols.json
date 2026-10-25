@@ -1,0 +1,7 @@
+{
+  "1": "_ZN13PgSQL_Session7handlerEb",
+  "2": "_ZN12Base_SessionI13PgSQL_Session17PgSQL_Data_Stream13PgSQL_Backend12PgSQL_ThreadE8writeoutEv",
+  "3": "_ZN17PgSQL_Data_Stream11set_polloutEv",
+  "4": "_ZN18PgSQL_Query_Result26add_native_backend_messageEcPKhj",
+  "5": "_ZN3re23RE213PartialMatchNESt17basic_string_viewIcSt11char_traitsIcEERKS0_PKPKNS0_3ArgEi"
+}

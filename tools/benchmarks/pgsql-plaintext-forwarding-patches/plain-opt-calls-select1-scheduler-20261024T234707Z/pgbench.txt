@@ -1,0 +1,5 @@
+pgbench (15.19 (Debian 15.19-0+deb12u1), server 16.1)
+progress: 5.0 s, 6445.7 tps, lat 0.152 ms stddev 0.083, 0 failed
+progress: 10.0 s, 6481.6 tps, lat 0.151 ms stddev 0.093, 0 failed
+progress: 15.0 s, 6339.4 tps, lat 0.155 ms stddev 0.084, 0 failed
+progress: 20.0 s, 7366.2 tps, lat 0.133 ms stddev 0.325, 0 failed
