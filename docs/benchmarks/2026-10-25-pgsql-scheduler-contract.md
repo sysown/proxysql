@@ -47,7 +47,7 @@ The control is the committed PR state immediately before this work, including ea
 - Retryable plaintext send errors retain output even after `POLLOUT`. The regression trace showed a successful partial send followed by `EAGAIN` being treated as fatal in the preceding implementation.
 - Allocation exceptions stay inside the C++ boundary around libpq parsing. Notice callbacks return to libpq for cleanup, sticky failure prevents completion/reuse, and COPY buffers have scoped ownership.
 
-[Scheduler contract and Mermaid flow](https://github.com/sysown/proxysql/blob/c94fbe056450bd331c151a7855a34d6b9d0454fc/docs/superpowers/specs/2026-10-25-pgsql-scheduler-contract.md).
+[Scheduling documentation: previous order, current order, and proposed request boundary](../superpowers/specs/2026-10-25-pgsql-scheduler-contract.md). This document also records the subsequent same-process yield investigation. The benchmark tables above remain the initial comparison, not measurements of the proposed scheduling boundary.
 
 ## Verification
 
