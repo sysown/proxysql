@@ -12,6 +12,7 @@
 #include "PgSQL_Data_Stream.h"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include <type_traits>
 
 extern MySQL_Logger *GloMyLogger;
 extern PgSQL_Logger *GloPgSQL_Logger;
@@ -52,7 +53,11 @@ void test_deadlines(const char *protocol) {
 		session.pause_until = c.pause_until;
 		session.to_process = 0;
 		worker.mypolls.fds[stream.poll_fds_idx].revents = 0;
-		worker.template ProcessAllMyDS_AfterPoll<Worker>();
+		if constexpr (std::is_same<Worker, PgSQL_Thread>::value) {
+			worker.ProcessAllMyDS_AfterPoll();
+		} else {
+			worker.template ProcessAllMyDS_AfterPoll<Worker>();
+		}
 		ok(session.to_process == c.expected, "%s: %s", protocol, c.label);
 	}
 	worker.mypolls.remove_index_fast(stream.poll_fds_idx);
