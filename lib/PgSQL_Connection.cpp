@@ -867,6 +867,12 @@ handler_again:
 			if (!exit_pipeline_mode && has_error) {
 				NEXT_IMMEDIATE(ASYNC_RESYNC_START);
 			}
+
+			// The backend is in sync again. After an implicit Sync the client's ReadyForQuery comes
+			// once the simple Query that closed the unit has run, after an error too.
+			if (myds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) {
+				NEXT_IMMEDIATE(fetch_result_end_st);
+			}
 		}
 
 		// finally add ready for query packet
@@ -3838,11 +3844,12 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				// Sync error recovery above).
 				if (t == 'Z') {
 					const bool has_error = (query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_ERROR) != 0;
-					if (!myds->sess->is_extended_query_ready_for_query() && !has_error) {
+					const bool implicit = (myds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) != 0;
+					if (implicit || (!myds->sess->is_extended_query_frame_empty() && !has_error)) {
 						// An implicit Sync before a simple query ends the backend
 						// extended cycle, but the client awaits the simple query's
-						// ReadyForQuery. Match the libpq path while still recording
-						// the backend transaction state and flushing its result.
+						// ReadyForQuery, after an error too. Match the libpq path while
+						// still recording the backend transaction state and flushing its result.
 						if (msg.payload_len >= 1) set_ready_for_query_status((char)msg.payload[0]);
 						query_result->buffer_to_PSarrayOut();
 					} else {

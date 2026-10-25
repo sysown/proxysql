@@ -60,6 +60,9 @@ public:
 	// gets one, so the caller sends a Sync and then calls sync_sent().
 	bool needs_sync() const { return need_sync_ && !sync_sent_; }
 	void sync_sent() { sync_sent_ = true; }
+	// The batch ends a unit closed by a simple Query. The ReadyForQuery that ends the batch is then
+	// not the client's, error or not: the client gets the simple Query's own.
+	void implicit_sync() { implicit_sync_ = true; }
 private:
 	void emit_due(std::string& out);
 	void on_error();
@@ -73,6 +76,7 @@ private:
 	bool aborted_ = false;       // an ErrorResponse came; only ReadyForQuery may follow
 	bool need_sync_ = false;
 	bool sync_sent_ = false;
+	bool implicit_sync_ = false;
 	bool saw_param_desc_ = false;
 	uint64_t rows_ = 0;
 	uint64_t affected_rows_ = UINT64_MAX;
