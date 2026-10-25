@@ -4233,9 +4233,10 @@ void PgSQL_Thread::process_all_sessions() {
         ~CollectScope() { state.collecting = false; state.released_hostgroups.clear(); }
     } collect_scope{handoff};
 
-    auto serve_waiters = [&](unsigned hid, size_t budget) {
+    auto serve_waiters = [&](unsigned hid, size_t budget, bool retry_unavailable = false) {
         size_t served = 0;
-        for (auto *node = waiter_lists.head(hid); node && served < budget;) {
+        bool checkout_blocked = false;
+        for (auto *node = waiter_lists.head(hid); node && (retry_unavailable || served < budget);) {
             auto *next = node->next;
             auto *waiting = static_cast<PgSQL_Session*>(node->session);
             if (waiting->killed || waiting->healthy == 0) {
@@ -4246,7 +4247,13 @@ void PgSQL_Thread::process_all_sessions() {
                 node = next;
                 continue;
             }
-            if (waiting->pause_until > curtime) { node = next; continue; }
+            auto *bds = waiting->mybe ? waiting->mybe->server_myds : nullptr;
+            const bool deadline_due = bds && bds->max_connect_time && curtime >= bds->max_connect_time;
+            // A failed ordinary checkout can stop further speculative retries,
+            // but every expired waiter still needs its timeout state machine.
+            if (retry_unavailable && !deadline_due && checkout_blocked) { node = next; continue; }
+            if (waiting->pause_until > curtime && !deadline_due) { node = next; continue; }
+            if (deadline_due) waiting->pause_until = 0;
             waiting->to_process = 1;
             const int waiting_rc = waiting->handler();
             if (waiting_rc == -1 || waiting->killed) {
@@ -4269,7 +4276,8 @@ void PgSQL_Thread::process_all_sessions() {
                 leave_waiter(waiting);
             } else if (vanilla_pool_checkout(waiting->last_pool_ff,
                        waiting->last_pool_gtid ? "" : nullptr, waiting->last_pool_max_lag_ms)) {
-                break;
+                if (!retry_unavailable) break;
+                checkout_blocked = true;
             }
             node = next;
         }
@@ -4497,6 +4505,13 @@ void PgSQL_Thread::process_all_sessions() {
 	}
 #ifdef PROXYSQL31
 	dispatch_released();
+    // Releases remain the fast path. Once response work is finished, also
+    // service deadlines and retry creation/recovery without requiring a free
+    // connection. Do not pause the oldest waiter before processing responses.
+    waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node*, size_t count) {
+        serve_waiters(hid, count, true);
+    });
+    dispatch_released();
 
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
