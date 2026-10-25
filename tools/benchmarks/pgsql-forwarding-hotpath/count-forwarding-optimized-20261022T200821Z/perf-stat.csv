@@ -1,6 +1,0 @@
-# started on Thu Oct 22 20:08:46 2026
-
-13200852222;;cycles:u;19529306855;100.00;;
-6578242812;;instructions:u;19529303146;100.00;0.50;insn per cycle
-3073657;;branch-misses:u;19529301629;100.00;;
-409513091;;L1-icache-load-misses;19529299338;100.00;;

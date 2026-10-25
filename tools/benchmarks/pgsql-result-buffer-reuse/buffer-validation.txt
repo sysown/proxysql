@@ -1,2 +1,0 @@
-PASS buffer=16384: 18385 cases; payload equivalence, small-buffer retention, queued-packet independence, reserve/flush boundaries
-PASS buffer=8192: 10193 cases; payload equivalence, small-buffer retention, queued-packet independence, reserve/flush boundaries

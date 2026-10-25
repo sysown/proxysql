@@ -1,9 +1,0 @@
-{
-  "sha256": "8451ea4f29158aa0b3728089b8de67b12a84ad7ad32b26d801b0e19cb1704467",
-  "commit": "a0781dd90",
-  "scheduler": "upstream",
-  "timers": false,
-  "profiling": false,
-  "mode": "head",
-  "pid": 355508
-}

@@ -644,10 +644,6 @@ public:
 	bool offline_fatal_pending = false;
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
-    PgSQL_Thread *scheduler_owner = nullptr;
-    uint64_t scheduler_epoch = 0;
-    unsigned scheduler_visits = 0;
-    bool scheduler_queued = false;
 	bool last_pool_ff{ false };
 	bool last_pool_gtid{ false };
 	int last_pool_max_lag_ms{ -1 };

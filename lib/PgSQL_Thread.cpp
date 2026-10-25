@@ -63,90 +63,7 @@ struct PgSQL_Inline_Handoff_State {
     std::vector<PgSQL_Session*> dispatched;
 };
 static thread_local PgSQL_Inline_Handoff_State pgsql_inline_handoff;
-struct PgSQL_Ready_Event {
-    PgSQL_Session *owner;
-    PgSQL_Data_Stream *stream;
-    int fd;
-    short revents;
-    uint64_t attachment_generation;
-    bool frontend;
-};
-struct PgSQL_Ready_State {
-    std::vector<PgSQL_Ready_Event> events;
-    std::deque<PgSQL_Session*> ready;
-    std::vector<PgSQL_Session*> carry;
-    std::vector<PgSQL_Session*> waiter_batch;
-    uint64_t epoch = 0;
-};
-static thread_local PgSQL_Ready_State pgsql_ready_state;
-#if 0 // Diagnostic timing is compiled out, including its state and clock reads.
-// Opt-in diagnostics for the phased outer worker loop. Preserve errno because
-// the first boundary is immediately after poll(), before its error handling.
-static void pgsql_loop_timing_point(unsigned phase, int poll_rc = 0) {
-    static const char *path = getenv("PX_PGSQL_LOOP_TIMING");
-    if (!path) return;
-    const int saved_errno = errno;
-    struct Stamp { uint64_t wall, cpu; };
-    auto stamp = []() -> Stamp {
-        timespec wall{}, cpu{};
-        clock_gettime(CLOCK_MONOTONIC, &wall);
-        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu);
-        return {uint64_t(wall.tv_sec)*1000000000ULL+uint64_t(wall.tv_nsec),
-                uint64_t(cpu.tv_sec)*1000000000ULL+uint64_t(cpu.tv_nsec)};
-    };
-    struct Bucket { uint64_t count=0, wall=0, cpu=0, max_wall=0, max_cpu=0; };
-    struct State {
-        FILE *file=nullptr;
-        bool valid=false;
-        unsigned previous=0;
-        Stamp last{};
-        uint64_t report_wall=0, hook_wall=0, hook_cpu=0;
-        uint64_t poll_ready=0, poll_timeout=0, poll_errors=0;
-        Bucket buckets[16];
-    };
-    static thread_local State st;
-    const Stamp now=stamp();
-    if (st.valid) {
-        auto &b=st.buckets[st.previous];
-        const uint64_t wall=now.wall-st.last.wall, cpu=now.cpu-st.last.cpu;
-        ++b.count; b.wall+=wall; b.cpu+=cpu;
-        b.max_wall=std::max(b.max_wall,wall); b.max_cpu=std::max(b.max_cpu,cpu);
-    }
-    st.valid=true; st.previous=phase;
-    if (!st.report_wall) st.report_wall=now.wall;
-    if (phase==0) {
-        if (poll_rc>0) ++st.poll_ready;
-        else if (!poll_rc) ++st.poll_timeout;
-        else ++st.poll_errors;
-    }
-    if (phase==4 && now.wall-st.report_wall>=1000000000ULL) {
-        if (!st.file) st.file=fopen(path,"a");
-        if (st.file) {
-            fprintf(st.file,"{\"wall_ns\":%llu,\"interval_ns\":%llu,\"poll_ready\":%llu,\"poll_timeout\":%llu,\"poll_errors\":%llu,\"hook_wall_ns\":%llu,\"hook_cpu_ns\":%llu,\"phases\":[",
-                (unsigned long long)now.wall,(unsigned long long)(now.wall-st.report_wall),
-                (unsigned long long)st.poll_ready,(unsigned long long)st.poll_timeout,(unsigned long long)st.poll_errors,
-                (unsigned long long)st.hook_wall,(unsigned long long)st.hook_cpu);
-            for (unsigned i=0;i<16;++i) {
-                auto &b=st.buckets[i];
-                fprintf(st.file,"%s{\"phase\":%u,\"count\":%llu,\"wall_ns\":%llu,\"cpu_ns\":%llu,\"max_wall_ns\":%llu,\"max_cpu_ns\":%llu}",i?",":"",i,
-                    (unsigned long long)b.count,(unsigned long long)b.wall,(unsigned long long)b.cpu,
-                    (unsigned long long)b.max_wall,(unsigned long long)b.max_cpu);
-            }
-            fprintf(st.file,"]}\n"); fflush(st.file);
-        }
-        for (auto &b:st.buckets) b=Bucket{};
-        st.poll_ready=st.poll_timeout=st.poll_errors=0;
-        st.hook_wall=st.hook_cpu=0; st.report_wall=now.wall;
-    }
-    const Stamp done=stamp();
-    st.hook_wall+=done.wall-now.wall; st.hook_cpu+=done.cpu-now.cpu;
-    // Keep aggregation/file I/O out of the following phase, especially poll.
-    st.last=done;
-    errno=saved_errno;
-}
-#endif
-
-// Experimental dispatch phase: never create a backend on its behalf.
+// Early dispatch uses established connections only; normal handlers may create backends.
 thread_local bool pgsql_dispatch_existing_only = false;
 thread_local bool pgsql_dispatch_existing_miss = false;
 #endif
@@ -3290,9 +3207,6 @@ void PgSQL_Thread::unregister_session(int idx) {
 	if (mysql_sessions == NULL) return;
 #ifdef PROXYSQL31
 	PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(idx);
-    // Maintenance can delete a session carried from a bounded ready pass.
-    for (auto &pending : pgsql_ready_state.carry) if (pending == sess) pending = nullptr;
-    sess->scheduler_queued = false;
 	leave_waiter(sess, false);
 	drop_from_poll(sess->client_myds);
 	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
@@ -3433,9 +3347,6 @@ void PgSQL_Thread::run() {
 
 	pthread_mutex_lock(&thread_mutex);
 	while (shutdown == 0) {
-#if 0 // Compile out diagnostic timing calls.
-        pgsql_loop_timing_point(2); // next outer iteration begins
-#endif
 
 #ifdef IDLE_THREADS
 		if (idle_maintenance_thread) {
@@ -3545,9 +3456,6 @@ void PgSQL_Thread::run() {
 	 */
 	// poll is called with a timeout of mypolls.poll_timeout if set , or pgsql_thread___poll_timeout
 #ifdef PROXYSQL31
-#if 0 // Compile out diagnostic timing calls.
-            pgsql_loop_timing_point(3); // before periodic waiter rearm
-#endif
 			const bool b_rearm = (curtime >= last_b_rearm_us + 50000);
 			if (b_rearm) {
 				last_b_rearm_us = curtime;
@@ -3564,13 +3472,7 @@ void PgSQL_Thread::run() {
 				});
 			}
 #endif // PROXYSQL31
-#if 0 // Compile out diagnostic timing calls.
-            pgsql_loop_timing_point(4); // immediately before main poll
-#endif
 			rc = poll(mypolls.fds, mypolls.len, ttw);
-#if 0 // Compile out diagnostic timing calls.
-            pgsql_loop_timing_point(0, rc); // immediately after main poll
-#endif
 			proxy_debug(PROXY_DEBUG_NET, 5, "%s\n", "Returning poll");
 #ifdef IDLE_THREADS
 		}
@@ -3645,9 +3547,6 @@ void PgSQL_Thread::run() {
 			GloPgQPro->update_query_processor_stats();
 		}
 
-#if 0 // Compile out diagnostic timing calls.
-        pgsql_loop_timing_point(1); // before poll-error check
-#endif
 		if (rc == -1 && errno == EINTR)
 			// poll() timeout, try again
 			continue;
@@ -3663,22 +3562,7 @@ void PgSQL_Thread::run() {
 			refresh_variables();
 		}
 
-#if 0 // Compile out diagnostic timing calls.
-        pgsql_loop_timing_point(5); // begin runnable-flag reset
-#endif
-#ifdef PROXYSQL31
-        static const bool unified_enabled = getenv("PX_PGSQL_UNIFIED_LOOP") != nullptr;
-        const bool unified_iteration = unified_enabled && !maintenance_loop
-#ifdef IDLE_THREADS
-            && !GloVars.global.idle_threads
-#endif
-            ;
-        if (!unified_iteration)
-#endif
 		run_SetAllSession_ToProcess0<PgSQL_Thread,PgSQL_Session>();
-#if 0 // Compile out diagnostic timing calls.
-        pgsql_loop_timing_point(6); // begin after-poll I/O stage
-#endif
 
 #ifdef IDLE_THREADS
 		// here we handle epoll_wait()
@@ -3713,17 +3597,10 @@ void PgSQL_Thread::run() {
 		}
 #endif // IDLE_THREADS
 
-#ifdef PROXYSQL31
-        if (unified_iteration) process_ready_sessions();
-        else
-#endif
 		{
 			ProcessAllMyDS_AfterPoll();
 			process_poll_housekeeping();
 		}
-#if 0 // Compile out diagnostic timing calls.
-        pgsql_loop_timing_point(7); // begin waiter-rearm cleanup
-#endif
 #ifdef PROXYSQL31
 		if (last_b_rearm_us == pre_poll_time) {
 			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
@@ -3773,21 +3650,9 @@ void PgSQL_Thread::run() {
 		else {
 #endif // IDLE_THREADS
 			// iterate through all sessions and process the session logic
-#if 0 // Compile out diagnostic timing calls.
-            pgsql_loop_timing_point(8); // begin session-processing setup
-#endif
-#ifdef PROXYSQL31
-            if (!unified_iteration)
-#endif
 			process_all_sessions();
-#if 0 // Compile out diagnostic timing calls.
-            pgsql_loop_timing_point(9); // begin local-pool publication
-#endif
 
 			return_local_connections();
-#if 0 // Compile out diagnostic timing calls.
-            pgsql_loop_timing_point(10); // outer-iteration tail
-#endif
 #ifdef IDLE_THREADS
 		}
 #endif // IDLE_THREADS
@@ -4341,198 +4206,6 @@ void PgSQL_Thread::apt_update_window() {
 
 #endif // PROXYSQL31
 
-#ifdef PROXYSQL31
-void PgSQL_Thread::process_ready_sessions() {
-    auto &state = pgsql_ready_state;
-    auto &handoff = pgsql_inline_handoff;
-    state.events.clear();
-    ++state.epoch;
-    handoff.released_hostgroups.clear();
-    handoff.collecting = true;
-    struct CollectScope {
-        PgSQL_Inline_Handoff_State &state;
-        ~CollectScope() { state.collecting = false; state.released_hostgroups.clear(); }
-    } collect_scope{handoff};
-    (void)update_partition_gate();
-    bool have_dead = false;
-
-    auto enqueue = [&](PgSQL_Session *sess, bool urgent) {
-        if (!sess || sess->scheduler_queued) return;
-        if (sess->scheduler_owner != this || sess->scheduler_epoch != state.epoch) {
-            sess->scheduler_owner = this;
-            sess->scheduler_epoch = state.epoch;
-            sess->scheduler_visits = 0;
-        }
-        sess->scheduler_queued = true;
-        if (sess->scheduler_visits >= 4) state.carry.push_back(sess);
-        else if (urgent) state.ready.push_front(sess);
-        else state.ready.push_back(sess);
-    };
-    // Wait queues are not runnable queues. Only actual availability or a
-    // release makes a waiter runnable; no speculative empty-pool retries.
-    auto schedule_waiters = [&](unsigned hid, size_t budget) {
-        state.waiter_batch.clear();
-        for (auto *node = waiter_lists.head(hid); node && budget; node = node->next) {
-            auto *sess = static_cast<PgSQL_Session*>(node->session);
-            if (sess->killed || !sess->healthy) {
-                enqueue(sess, true);
-                continue;
-            }
-            if (sess->pause_until > curtime) continue;
-            state.waiter_batch.push_back(sess);
-            --budget;
-        }
-        // push_front is urgent, so reverse insertion preserves FIFO order.
-        for (auto it = state.waiter_batch.rbegin(); it != state.waiter_batch.rend(); ++it)
-            enqueue(*it, true);
-    };
-    auto carried = std::move(state.carry);
-    state.carry.clear();
-    for (auto *sess : carried) if (sess) {
-        sess->scheduler_queued = false;
-        enqueue(sess, false);
-    }
-    waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head, size_t count) {
-        size_t available = 0;
-        for (unsigned i = 0; i < cached_connections->len; ++i) {
-            auto *conn = static_cast<PgSQL_Connection*>(cached_connections->index(i));
-            if (conn->parent->myhgc->hid == hid) ++available;
-        }
-        PgHGM->wrlock();
-        auto *hg = PgHGM->MyHGC_find(hid);
-        if (hg) for (unsigned i = 0; i < hg->mysrvs->cnt(); ++i) {
-            auto *server = hg->mysrvs->idx(i);
-            if (server->status == MYSQL_SERVER_STATUS_ONLINE)
-                available += server->ConnectionsFree->conns_length();
-        }
-        PgHGM->wrunlock();
-        schedule_waiters(hid, std::min(count, available));
-        for (auto *node = head; node; node = node->next) {
-            auto *sess = static_cast<PgSQL_Session*>(node->session);
-            if (sess->killed || !sess->healthy) enqueue(sess, true);
-        }
-    });
-    auto capture_events = [&]() {
-        for (unsigned i = 0; i < mypolls.len; ++i) {
-            auto *ds = mypolls.myds[i];
-            const short revents = mypolls.fds[i].revents;
-            if (!ds || ds->myds_type == MYDS_LISTENER) {
-                if (revents) state.events.push_back({nullptr, ds, mypolls.fds[i].fd, revents, 0, false});
-                continue;
-            }
-            auto *sess = ds->sess;
-            if (!sess) continue;
-            if (sess->killed || !sess->healthy ||
-                (ds->wait_until && curtime >= ds->wait_until) ||
-                (sess->pause_until && curtime >= sess->pause_until) || ds->cancel_query)
-                enqueue(sess, false);
-            if (!revents || ds->scheduler_event_queued) continue;
-            ds->scheduler_event_queued = true;
-            state.events.push_back({sess, ds, mypolls.fds[i].fd, revents,
-                                    ds->scheduler_attachment_generation, ds->myds_type == MYDS_FRONTEND});
-        }
-    };
-    capture_events();
-    size_t event_index = 0;
-    unsigned handlers_since_refresh = 0;
-    unsigned refreshes = 0;
-    static const bool refresh_enabled = getenv("PX_PGSQL_UNIFIED_REFRESH") != nullptr;
-    while (!state.ready.empty() || event_index < state.events.size()) {
-        if (!state.ready.empty()) {
-            auto *sess = state.ready.front();
-            state.ready.pop_front();
-            sess->scheduler_queued = false;
-            ++sess->scheduler_visits;
-            if (sess->killed || !sess->healthy) {
-                sess->healthy = 0;
-                leave_waiter(sess, false);
-                have_dead = true;
-                continue;
-            }
-            if (sess->pause_until > curtime) {
-                sess->to_process = 1;
-                if (sess->handler(true) == -1) {
-                    sess->healthy = 0;
-                    leave_waiter(sess, false);
-                    have_dead = true;
-                }
-                continue;
-            }
-            sess->to_process = 1;
-            const int rc = sess->handler();
-            sess->to_process = 0;
-            ++handlers_since_refresh;
-            if (rc == -1 || sess->killed || !sess->healthy) {
-                sess->healthy = 0;
-                leave_waiter(sess, false);
-                have_dead = true;
-            } else {
-                if (!sess->waiter_node.session && sess->mybe && sess->mybe->server_myds) {
-                    auto *ds = sess->mybe->server_myds;
-                    if (ds->myconn && ds->fd >= 0 && ds->poll_fds_idx < 0)
-                        mypolls.add(POLLIN | POLLOUT, ds->fd, ds, curtime);
-                }
-                if (!sess->waiter_node.session && sess->status == WAITING_CLIENT_DATA &&
-                    sess->client_myds && sess->client_myds->PSarrayIN->len)
-                    enqueue(sess, false);
-            }
-            // Handler has returned: give the next runnable slot to a waiter
-            // without recursive handler calls or a separate session scan.
-            for (unsigned hid : handoff.released_hostgroups) schedule_waiters(hid, 1);
-            handoff.released_hostgroups.clear();
-        } else {
-            const auto event = state.events[event_index++];
-            if (!event.owner) {
-                const int idx = mypolls.find_index(event.fd);
-                if (idx < 0 || mypolls.myds[idx] != event.stream) continue;
-                mypolls.fds[idx].revents = event.revents;
-                if (!event.stream) read_one_byte_from_pipe<PgSQL_Thread>(idx);
-                else listener_handle_new_connection(event.stream, idx);
-                continue;
-            }
-            auto *sess = event.owner;
-            if (!sess->healthy || sess->killed) { enqueue(sess, true); continue; }
-            // Sessions are not deleted until all captured events are consumed.
-            // Validate ownership before dereferencing a possibly detached DS.
-            auto *ds = event.frontend ? sess->client_myds :
-                ((sess->mybe) ? sess->mybe->server_myds : nullptr);
-            if (ds != event.stream || ds->scheduler_attachment_generation != event.attachment_generation)
-                continue;
-            ds->scheduler_event_queued = false;
-            const int idx = ds->poll_fds_idx;
-            if (ds->fd != event.fd || idx < 0 || static_cast<unsigned>(idx) >= mypolls.len ||
-                mypolls.myds[idx] != ds) continue;
-            mypolls.fds[idx].revents = event.revents;
-            (void)process_data_on_data_stream(ds, idx);
-            // A failed I/O handler may have marked the session unhealthy.
-            // Queue its deferred cleanup as well; migrated sessions belong
-            // to their new worker and must not be run here.
-            if (sess->thread == this) enqueue(sess, true);
-        }
-        // Optional bounded readiness refresh. Preserve already captured events;
-        // a DS pending in the queue is not captured twice. No blocking poll here.
-        if (refresh_enabled && refreshes < 2 && handlers_since_refresh >= 16) {
-            ProcessAllMyDS_BeforePoll<PgSQL_Thread>();
-            const int ready = poll(mypolls.fds, mypolls.len, 0);
-            curtime = monotonic_time();
-            atomic_curtime = curtime;
-            if (ready > 0) capture_events();
-            handlers_since_refresh = 0;
-            ++refreshes;
-        }
-    }
-    if (have_dead) {
-        for (unsigned i = 0; i < mysql_sessions->len;) {
-            auto *sess = static_cast<PgSQL_Session*>(mysql_sessions->index(i));
-            if (sess->healthy) { ++i; continue; }
-            unregister_session(i);
-            delete sess;
-        }
-    }
-    if (!state.carry.empty()) mypolls.poll_timeout = 1; // existing microsecond field => poll(0)
-}
-#endif // PROXYSQL31
-
 void PgSQL_Thread::process_all_sessions() {
 	unsigned int n;
 	unsigned int total_active_transactions_ = 0;
@@ -4617,9 +4290,6 @@ void PgSQL_Thread::process_all_sessions() {
     // If waiters consume all known capacity, avoid another frontend scan.
     // This is deliberately a global gate; hostgroup scheduling comes later.
     bool early_capacity_available = waiter_lists.empty();
-#if 0 // Compile out diagnostic timing calls.
-    pgsql_loop_timing_point(11); // begin availability and waiter retries
-#endif
     waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node*, size_t count) {
         size_t available = 0;
         for (unsigned i = 0; i < cached_connections->len; ++i) {
@@ -4642,9 +4312,6 @@ void PgSQL_Thread::process_all_sessions() {
         }
     });
     dispatch_released();
-#if 0 // Compile out diagnostic timing calls.
-    pgsql_loop_timing_point(12); // begin early frontend dispatch
-#endif
     // Try new frontend work before response processing, stopping globally on
     // the first established-connection miss. Hostgroup scheduling is deferred.
     for (unsigned i = 0; early_capacity_available && i < mysql_sessions->len; ++i) {
@@ -4675,9 +4342,6 @@ void PgSQL_Thread::process_all_sessions() {
         dispatch_released();
         if (pgsql_dispatch_existing_miss) break;
     }
-#if 0 // Compile out diagnostic timing calls.
-    pgsql_loop_timing_point(13); // begin backend-owning session scan
-#endif
 #endif
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4833,9 +4497,6 @@ void PgSQL_Thread::process_all_sessions() {
 	}
 #ifdef PROXYSQL31
 	dispatch_released();
-#if 0 // Compile out diagnostic timing calls.
-    pgsql_loop_timing_point(14); // begin remaining backendless session scan
-#endif
 
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4859,9 +4520,6 @@ void PgSQL_Thread::process_all_sessions() {
 		}
 	}
 
-#if 0 // Compile out diagnostic timing calls.
-    pgsql_loop_timing_point(15); // begin session accounting and return
-#endif
 #endif // PROXYSQL31
 	if (maintenance_loop) {
 		unsigned int total_active_transactions_tmp;

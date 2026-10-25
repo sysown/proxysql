@@ -1,9 +1,0 @@
-{
-  "sha256": "9a3e63ec57d69f5033891ecd7147a0e1f8301f7ebe280f3c51a3c0049a977479",
-  "commit": "4699f3175",
-  "scheduler": "phased",
-  "timers": false,
-  "profiling": false,
-  "mode": "bounded",
-  "pid": 365570
-}

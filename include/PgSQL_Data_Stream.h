@@ -236,16 +236,8 @@ public:
 	void refuse_reuse_on_stranded_tls();
 
 	// safe way to attach a PgSQL Connection
-#ifdef PROXYSQL31
-    uint64_t scheduler_attachment_generation = 0;
-    bool scheduler_event_queued = false;
-#endif
 	void attach_connection(PgSQL_Connection* mc) {
 		pending_poll_revents = pending_poll_events = 0;
-#ifdef PROXYSQL31
-        ++scheduler_attachment_generation;
-        scheduler_event_queued = false;
-#endif
 		statuses.pgconnpoll_get++;
 		myconn = mc;
 		myconn->statuses.pgconnpoll_get++;
@@ -270,10 +262,6 @@ public:
 	// safe way to detach a PgSQL Connection
 	void detach_connection() {
 		pending_poll_revents = pending_poll_events = 0;
-#ifdef PROXYSQL31
-        ++scheduler_attachment_generation;
-        scheduler_event_queued = false;
-#endif
 		assert(myconn);
 		myconn->statuses.pgconnpoll_put++;
 		statuses.pgconnpoll_put++;
