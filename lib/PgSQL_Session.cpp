@@ -5257,10 +5257,45 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		// pipelined refusal with 'I', as it did before #6417.
 		const bool explicit_txn = extq_backend_used ? is_in_transaction() : (NumActiveTransactions() > 0);
 		const bool in_txn_block = explicit_txn || extq_backend_used;
+		// Inside an explicit transaction the backend refuses DISCARD ALL itself. It aborts the
+		// transaction on its own and keeps the session, as it does for any error it raises, so the
+		// statement goes to the backend and nothing is dropped here.
+		if (explicit_txn) {
+			// On the libpq path the Describe folded into this Execute is not sent on, so the NoData
+			// it is owed is sent here, as when the refusal is local; a native batch carries it.
+			if (owes_no_data && !pgsql_thread___use_native_backend_protocol) {
+				client_myds->myprot.generate_no_data_packet(true);
+			}
+			return PgSQL_Local_Reply::NONE;
+		}
 		// Anything still queued behind this command in the same unsynced batch would be
 		// processed against the session state reset()/init() below is about to replace.
 		const bool more_queued = (extended_query_phase != EXTQ_PHASE_IDLE) &&
 			!is_extended_query_ready_for_query();
+		// Outside a transaction, in an extended unit on a native connection, the refusal is failed on
+		// the backend itself (extq_fail_on_backend(), reached because SENT_ERROR is returned as 2): the
+		// backend fails the unit and keeps its session. Dropping the backend here first would leave
+		// nothing to fail, and take the session state with it.
+		if ((in_txn_block || more_queued) && extended_query_phase != EXTQ_PHASE_IDLE &&
+			pgsql_thread___use_native_backend_protocol && extq_error_holder() != nullptr) {
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			if (owes_no_data) {
+				client_myds->myprot.generate_no_data_packet(true);
+			}
+			if (in_txn_block) {
+				const char* errmsg = explicit_txn
+					? "DISCARD ALL cannot run inside a transaction block"
+					: "DISCARD ALL cannot be executed within a pipeline";
+				proxy_error("%s\n", errmsg);
+				client_myds->myprot.generate_error_packet(true, false, errmsg,
+					PGSQL_ERROR_CODES::ERRCODE_ACTIVE_SQL_TRANSACTION, false, true);
+			} else {
+				proxy_error("DISCARD ALL is not supported when pipelined with further statements before Sync. Send it as the only statement before Sync, or use Simple Query mode\n");
+				client_myds->myprot.generate_error_packet(true, false, "DISCARD ALL is not supported in pipeline mode",
+					PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+			}
+			return PgSQL_Local_Reply::SENT_ERROR;
+		}
 		if (in_txn_block || more_queued) {
 			// Asked before the frame reset below can drop a mid-batch backend. Only the
 			// pipelined refusal uses it: the in-transaction one settles the state itself.

@@ -47,8 +47,8 @@
  *     may be taken in the killed transaction, an earlier one or over the extended
  *     protocol; an untracked SET counts. A multiplex=0 rule alone is no state: the
  *     client is still poisoned. Run with both protocols.
- *   * An error ProxySQL raises itself inside a transaction (a rejected DISCARD ALL,
- *     a query rule's error_msg) poisons the session with the backend alive. Ending it
+ *   * An error ProxySQL raises itself inside a transaction (a query rule's error_msg,
+ *     which poisons the session with the backend alive. Ending it
  *     (ROLLBACK or COMMIT, simple or extended protocol) rolls the backend back instead
  *     of dropping it, so a session advisory lock survives and the work is not committed.
  *     The next statement may go to another hostgroup or be pipelined right behind
@@ -1113,7 +1113,7 @@ static void case_F_session_state(const char* mode, bool native) {
 }
 
 // --------------------------------------------------------------------------
-// Case G: an error ProxySQL raises itself inside a transaction (a rejected DISCARD ALL, a query
+// Case G: an error ProxySQL raises itself inside a transaction (a query
 // rule's error_msg) poisons the session while the backend is alive. The backend holds the client's
 // session advisory lock, which PostgreSQL would keep: ending the poisoned transaction must roll it
 // back, not drop the connection, and a COMMIT must not commit the work. Run once per protocol.
@@ -1121,6 +1121,9 @@ static void case_F_session_state(const char* mode, bool native) {
 
 static const int CASE_G_CHECKS = 9;
 static const int RULE_G_ID = 7901;
+// Case G provokes a ProxySQL-made error with the query rule above: a DISCARD ALL in a transaction is
+// now refused by the backend, not by ProxySQL.
+static const char* const kRuleError = "SELECT 1 AS txp_g_blocked";
 static const int RULE_F_MUX_ID = 7902;
 static const int RULE_G_HG_ID = 7903;
 static const int HG_G = 1;
@@ -1188,7 +1191,7 @@ static void check_pipelined_behind_rollback(const char* mode) {
 	for (int round = 0; round < rounds; round++) {
 		bool ready = exec_ok(cli, "DELETE FROM txp_g_rows") && exec_ok(cli, "SELECT pg_advisory_lock(72608)") &&
 		             exec_ok(cli, "BEGIN") && exec_ok(cli, "INSERT INTO txp_g_rows VALUES (1)");
-		if (!ready || !fails(cli, "DISCARD ALL")) break;
+		if (!ready || !fails(cli, kRuleError)) break;
 		const char* stmts[] = { "ROLLBACK", "INSERT INTO txp_g_rows VALUES (2)", "COMMIT", "SELECT pg_advisory_unlock(72608)" };
 		bool sent = PQenterPipelineMode(cli) == 1;
 		for (const char* q : stmts) {
@@ -1292,7 +1295,7 @@ static void check_simple_pipelined_behind_rollback(const char* mode) {
 	for (int round = 0; round < rounds; round++) {
 		bool ready = exec_ok(cli, "DELETE FROM txp_g_rows") && exec_ok(cli, "SELECT pg_advisory_lock(72609)") &&
 		             exec_ok(cli, "BEGIN") && exec_ok(cli, "INSERT INTO txp_g_rows VALUES (1)");
-		if (!ready || !fails(cli, "DISCARD ALL")) break;
+		if (!ready || !fails(cli, kRuleError)) break;
 		const std::string wire = simple_query_msg("ROLLBACK") + simple_query_msg("INSERT INTO txp_g_rows VALUES (2)") +
 		                         simple_query_msg("COMMIT") + simple_query_msg("SELECT pg_advisory_unlock(72609)");
 		std::string unlocked;
@@ -1319,7 +1322,7 @@ static void check_set_values_after_rollback(const char* mode) {
 		if (cli) PQfinish(cli);
 		return;
 	}
-	const bool provoked = fails(cli, "DISCARD ALL");
+	const bool provoked = fails(cli, kRuleError);
 	const bool ended = exec_ok(cli, "ROLLBACK");
 	const std::string sp1 = scalar(cli, "SHOW search_path"), wm1 = scalar(cli, "SHOW work_mem");
 	const bool kept_lock = scalar(cli, "SELECT pg_advisory_unlock(72606)") == "t";
@@ -1339,12 +1342,12 @@ static void case_G_local_error_keeps_session_state(const char* mode, PGconn* adm
 			return ok_;
 		};
 	};
-	check_lock_survives(mode, "rejected DISCARD ALL, ended by ROLLBACK", 72601, false, "DISCARD ALL", simple("ROLLBACK"));
-	check_lock_survives(mode, "rejected DISCARD ALL, ended by COMMIT", 72602, false, "DISCARD ALL", simple("COMMIT"));
+	check_lock_survives(mode, "query rule error, ended by ROLLBACK", 72601, false, kRuleError, simple("ROLLBACK"));
+	check_lock_survives(mode, "query rule error, ended by COMMIT", 72602, false, kRuleError, simple("COMMIT"));
 	check_lock_survives(mode, "query rule error, ended by ROLLBACK over the extended protocol", 72603, false,
 	                    "SELECT 1 AS txp_g_blocked", extended("ROLLBACK"));
 	check_lock_survives(mode, "query rule error, ended by COMMIT", 72604, false, "SELECT 1 AS txp_g_blocked", simple("COMMIT"));
-	check_lock_survives(mode, "lock taken with pg_try_advisory_lock", 72605, true, "DISCARD ALL", simple("ROLLBACK"));
+	check_lock_survives(mode, "lock taken with pg_try_advisory_lock", 72605, true, kRuleError, simple("ROLLBACK"));
 	check_set_values_after_rollback(mode);
 	check_pipelined_behind_rollback(mode);
 	check_simple_pipelined_behind_rollback(mode);
@@ -1362,7 +1365,7 @@ static void case_G_local_error_keeps_session_state(const char* mode, PGconn* adm
 		exec_ok(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	if (hg_ok) {
 		check_lock_survives(mode, "next statement on another hostgroup, then a stray COMMIT", 72607, false,
-		                    "DISCARD ALL", simple("ROLLBACK"),
+		                    kRuleError, simple("ROLLBACK"),
 		                    [](PGconn* c) { return exec_ok(c, "SELECT 1 AS txp_g_hg") && exec_ok(c, "COMMIT"); });
 	} else {
 		ok(0, "case G [%s] another hostgroup: cannot set up the second hostgroup", mode);
