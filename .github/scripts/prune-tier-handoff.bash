@@ -50,7 +50,7 @@ while [ $# -gt 0 ]; do
     --groups) GROUPS_JSON="${2:-}"; shift 2 ;;
     --version)
       VERSION_OUTPUT="${2:-}"
-      [ -n "${VERSION_OUTPUT}" ] || { echo "ERROR: --version requires a value" >&2; exit 2; }
+      [[ -n "${VERSION_OUTPUT}" ]] || { echo "ERROR: --version requires a value" >&2; exit 2; }
       shift 2 ;;
     -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown argument '$1'" >&2; exit 2 ;;
@@ -70,7 +70,7 @@ if [ ! -f "${GROUPS_JSON}" ]; then
   exit 1
 fi
 
-if [ -z "${VERSION_OUTPUT}" ]; then
+if [[ -z "${VERSION_OUTPUT}" ]]; then
   script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   if ! VERSION_OUTPUT="$(python3 - "$script_dir" "$BINARY" <<'PY_VERSION'
 import sys
