@@ -912,6 +912,7 @@ int main(int, char**) {
             }
             std::string warm_err;
             runLeg(true, sc_warm_pool, 1, warm_err);   // the pooled backend opens under !native
+            const bool warmed = warm_err.empty();
             usleep(300000);
             if (!setNativeMode(admin, native)) { cleanup(); BAIL_OUT("cannot flip the protocol"); }
             std::string oerr, perr;
@@ -923,8 +924,10 @@ int main(int, char**) {
                 diag("  oracle stream: %s", streamSummary(oracle).c_str());
                 diag("  proxy  stream: %s", streamSummary(proxy).c_str());
             }
-            ok(same, "mixed pool: DISCARD ALL in a transaction, extended protocol, on a backend opened under the other protocol [%s]: identical to direct PostgreSQL%s%s",
-               MODE_NAME[mode], same ? "" : " -- ", same ? "" : why.c_str());
+            // Without a warmed pool the scenario did not run: the check fails rather than passes.
+            if (!warmed) why = "pool warm-up failed: " + warm_err;
+            ok(warmed && same, "mixed pool: DISCARD ALL in a transaction, extended protocol, on a backend opened under the other protocol [%s]: identical to direct PostgreSQL%s%s",
+               MODE_NAME[mode], (warmed && same) ? "" : " -- ", (warmed && same) ? "" : why.c_str());
             // Put the pool and the setting back for the parity cases.
             if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved_servers)) {
                 cleanup();
