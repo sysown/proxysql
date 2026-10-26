@@ -86,7 +86,7 @@ assert_absent() {
 
 run_pruner() {
   ( cd "$tmp_dir" && "$pruner" --binary src/proxysql \
-      --groups test/tap/groups/groups.json ) 2>&1
+      --groups test/tap/groups/groups.json "$@" ) 2>&1
 }
 
 # --- v4.0: nothing is gated out, so nothing is dropped ----------------------
@@ -107,6 +107,19 @@ assert_remaining 3 "v31"
 assert_contains needs_31-t "v31"
 assert_absent needs_40-t "v31"
 assert_absent needs_40_unit-t "v31"
+
+# --- caller-supplied version: do not execute the binary on this host --------
+# Standalone sanitizer jobs build on Ubuntu 24 but prune from a Jammy host, so
+# they pass the version obtained inside ubuntu24_dbg_build.
+make_tree
+printf '#!/bin/sh\necho "host GLIBC_2.38 not found" >&2\nexit 1\n' >"$tmp_dir/src/proxysql"
+chmod +x "$tmp_dir/src/proxysql"
+out="$(run_pruner --version 'ProxySQL version 3.1.11, codename TEST')"
+echo "$out" | grep -q 'dropped 2' || {
+  echo "FAIL [caller-supplied version]: $out" >&2; exit 1; }
+assert_remaining 3 "caller-supplied version"
+assert_absent needs_40-t "caller-supplied version"
+assert_contains needs_31-t "caller-supplied version"
 
 # --- v3.0: the 3.1-gated test goes too --------------------------------------
 make_tree; stub_binary 3.0.11
