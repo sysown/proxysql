@@ -5261,9 +5261,12 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		// transaction on its own and keeps the session, as it does for any error it raises, so the
 		// statement goes to the backend and nothing is dropped here.
 		if (explicit_txn) {
-			// On the libpq path the Describe folded into this Execute is not sent on, so the NoData
-			// it is owed is sent here, as when the refusal is local; a native batch carries it.
-			if (owes_no_data && !pgsql_thread___use_native_backend_protocol) {
+			// On a libpq connection the Describe folded into this Execute is not sent on, so the NoData
+			// it is owed is sent here, as when the refusal is local; a native batch carries it. Decided
+			// by the connection, not the global setting: a pooled connection keeps the protocol it was
+			// opened with.
+			PgSQL_Connection* held = (mybe && mybe->server_myds) ? mybe->server_myds->myconn : nullptr;
+			if (owes_no_data && (held == nullptr || held->native_mode == false)) {
 				client_myds->myprot.generate_no_data_packet(true);
 			}
 			return PgSQL_Local_Reply::NONE;

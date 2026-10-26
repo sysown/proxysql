@@ -829,6 +829,12 @@ static void checkBatchEndThenDiscard(PGconn* admin, const char* end_cmd, bool lo
 
 static const int BATCH_END_CHECKS = 4;
 
+// A pooled backend keeps the protocol it was opened with, but the NoData a libpq backend owes a
+// folded Describe is decided by the connection, not the global setting (the check below).
+static const int MIXED_POOL_CHECKS = 1;
+
+static void sc_warm_pool(PgConnection& c) { c.execute("SELECT 1"); }
+
 // ------------------------------------------------------------------ main
 
 static const char* MODE_NAME[2] = { "libpq backend protocol", "native backend protocol" };
@@ -836,7 +842,7 @@ static const char* MODE_NAME[2] = { "libpq backend protocol", "native backend pr
 int main(int, char**) {
     // Existing parity cases plus 5 assertions for each DISCARD/recovery shape.
     plan((int)((sizeof(PARITY_CASES) / sizeof(PARITY_CASES[0]) + 2 + 5 * 2 * 2 + STALE_CHECKS +
-                BATCH_END_CHECKS) * 2));
+                BATCH_END_CHECKS + MIXED_POOL_CHECKS) * 2));
 
     if (cl.getEnv()) return exit_status();
 
@@ -878,7 +884,7 @@ int main(int, char**) {
         const bool native = (mode == 1);
         if (native && !native_supported) {
             skip((int)(sizeof(PARITY_CASES) / sizeof(PARITY_CASES[0]) + 2 + 5 * 2 * 2 + STALE_CHECKS +
-                       BATCH_END_CHECKS),
+                       BATCH_END_CHECKS + MIXED_POOL_CHECKS),
                  "native backend protocol is unavailable in v3.0");
             continue;
         }
@@ -894,6 +900,36 @@ int main(int, char**) {
         for (bool extended : {false, true}) {
             for (const char* recovery : {"ROLLBACK", "COMMIT"})
                 checkAbortedRecovery(extended, recovery, MODE_NAME[mode]);
+        }
+
+        // ---- mixed pool: a connection opened under the other protocol, then the setting flipped ----
+        if (!native_supported) {
+            skip(MIXED_POOL_CHECKS, "mixed pool needs both backend protocols");
+        } else {
+            if (!setNativeMode(admin, !native) || !flushBackendPool(admin, BACKEND_HG, saved_servers)) {
+                cleanup();
+                BAIL_OUT("cannot set up the mixed pool");
+            }
+            std::string warm_err;
+            runLeg(true, sc_warm_pool, 1, warm_err);   // the pooled backend opens under !native
+            usleep(300000);
+            if (!setNativeMode(admin, native)) { cleanup(); BAIL_OUT("cannot flip the protocol"); }
+            std::string oerr, perr;
+            std::vector<Msg> oracle = runLeg(false, sc_txn_extended, 3, oerr);
+            std::vector<Msg> proxy  = runLeg(true,  sc_txn_extended, 3, perr);
+            std::string why;
+            const bool same = oerr.empty() && perr.empty() && sameStream(oracle, proxy, why);
+            if (!same && oerr.empty() && perr.empty()) {
+                diag("  oracle stream: %s", streamSummary(oracle).c_str());
+                diag("  proxy  stream: %s", streamSummary(proxy).c_str());
+            }
+            ok(same, "mixed pool: DISCARD ALL in a transaction, extended protocol, on a backend opened under the other protocol [%s]: identical to direct PostgreSQL%s%s",
+               MODE_NAME[mode], same ? "" : " -- ", same ? "" : why.c_str());
+            // Put the pool and the setting back for the parity cases.
+            if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved_servers)) {
+                cleanup();
+                BAIL_OUT("cannot reset the pool after the mixed case");
+            }
         }
 
         // ---- parity cases: the proxy's bytes must be PostgreSQL's bytes ------
