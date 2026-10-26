@@ -5266,7 +5266,8 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 			// by the connection, not the global setting: a pooled connection keeps the protocol it was
 			// opened with.
 			PgSQL_Connection* held = (mybe && mybe->server_myds) ? mybe->server_myds->myconn : nullptr;
-			if (owes_no_data && (held == nullptr || held->native_mode == false)) {
+			const bool attached_native = held ? held->native_mode : pgsql_thread___use_native_backend_protocol;
+			if (owes_no_data && !attached_native) {
 				client_myds->myprot.generate_no_data_packet(true);
 			}
 			return PgSQL_Local_Reply::NONE;
@@ -5286,9 +5287,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 				client_myds->myprot.generate_no_data_packet(true);
 			}
 			if (in_txn_block) {
-				const char* errmsg = explicit_txn
-					? "DISCARD ALL cannot run inside a transaction block"
-					: "DISCARD ALL cannot be executed within a pipeline";
+				const char* errmsg = "DISCARD ALL cannot be executed within a pipeline";
 				proxy_error("%s\n", errmsg);
 				client_myds->myprot.generate_error_packet(true, false, errmsg,
 					PGSQL_ERROR_CODES::ERRCODE_ACTIVE_SQL_TRANSACTION, false, true);
@@ -5301,7 +5300,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		}
 		if (in_txn_block || more_queued) {
 			// Asked before the frame reset below can drop a mid-batch backend. Only the
-			// pipelined refusal uses it: the in-transaction one settles the state itself.
+			// pipelined refusal uses it: an explicit transaction returned above.
 			const char queued_txn_state = in_txn_block ? 'I' : txn_state_for_local_error();
 			// Throws the frame away, and with it the backend connection when the backend
 			// is mid-batch: it never saw this error and concluding the batch would commit
@@ -5318,34 +5317,20 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 				// cannot still be committed by a later COMMIT: PostgreSQL turns COMMIT
 				// into a rollback once a transaction is aborted, and the only way to get
 				// that here is to have nothing left to commit.
-				// A backend holding session state is kept for explicit_txn: the poison below stops a
-				// COMMIT from reaching it, and ending the poison rolls it back.
-				if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
-					!(explicit_txn && mybe->server_myds->myconn->holds_session_state() &&
-					  mybe->server_myds->myconn->is_pipeline_active() == false)) {
+				if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
 					mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
-				}
-				if (explicit_txn) {
-					// The error below reports an aborted explicit transaction. Keep
-					// rejecting work until the client ends it; acquiring a fresh backend
-					// here would execute that work in autocommit despite ReadyForQuery(E).
-					tx_poisoned = true;
-					thread->status_variables.tx_poisoned_total++;
 				}
 				// The discarded backend's transaction is gone. Poisoned-session
 				// recovery uses tx_poisoned, not the old BEGIN/savepoint snapshots.
 				if (transaction_state_manager) transaction_state_manager->reset_state();
-				// PostgreSQL words these two differently at the same SQLSTATE.
-				const char* errmsg = explicit_txn
-					? "DISCARD ALL cannot run inside a transaction block"
-					: "DISCARD ALL cannot be executed within a pipeline";
+				const char* errmsg = "DISCARD ALL cannot be executed within a pipeline";
 				proxy_error("%s\n", errmsg);
 				// An explicit transaction is left aborted, so the client knows it still
 				// owes a ROLLBACK; the block a pipelined batch opens ends with the batch,
 				// leaving the client idle.
 				client_myds->myprot.generate_error_packet(true, true, errmsg,
 					PGSQL_ERROR_CODES::ERRCODE_ACTIVE_SQL_TRANSACTION, false, true, NULL,
-					explicit_txn ? 'E' : 'I');
+					'I');
 			} else {
 				proxy_error("DISCARD ALL is not supported when pipelined with further statements before Sync. Send it as the only statement before Sync, or use Simple Query mode\n");
 				client_myds->myprot.generate_error_packet(true, is_extended_query_ready_for_query(),
