@@ -773,9 +773,10 @@ static std::string answer_sqlstate(PGresult* r) {
 
 // The backend server rows as INSERTs recreating every column, so re-inserting them drops every
 // pooled backend connection: a pooled one keeps the protocol it was opened with.
-static std::vector<std::string> read_servers(PGconn* admin, int hg = BACKEND_HG) {
+static std::vector<std::string> read_servers(PGconn* admin, int hg = BACKEND_HG, bool* failed = nullptr) {
 	std::vector<std::string> rows;
 	PGresult* res = PQexec(admin, ("SELECT * FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg)).c_str());
+	if (failed) *failed = PQresultStatus(res) != PGRES_TUPLES_OK;
 	if (PQresultStatus(res) == PGRES_TUPLES_OK) {
 		std::string cols;
 		for (int c = 0; c < PQnfields(res); c++) cols += std::string(c ? "," : "") + PQfname(res, c);
@@ -1355,8 +1356,10 @@ static void case_G_local_error_keeps_session_state(const char* mode, PGconn* adm
 	// The next statement goes to another hostgroup: the rollback must not wait for it, or a COMMIT would
 	// find the abandoned transaction still open on the first hostgroup and commit its work.
 	// The TAP seed config has servers in this hostgroup: they are put back afterwards.
-	const std::vector<std::string> hg_saved = read_servers(admin, HG_G);
-	const bool hg_ok =
+	bool snap_failed = false;
+	const std::vector<std::string> hg_saved = read_servers(admin, HG_G, &snap_failed);
+	if (snap_failed) diag("case G [%s]: cannot read hostgroup %d; it is left alone", mode, HG_G);
+	const bool hg_ok = !snap_failed &&
 		exec_ok(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id = " + std::to_string(HG_G)) &&
 		exec_ok(admin, "INSERT INTO pgsql_servers (hostgroup_id, hostname, port, use_ssl) SELECT " + std::to_string(HG_G) +
 			", hostname, port, use_ssl FROM pgsql_servers WHERE hostgroup_id = " + std::to_string(BACKEND_HG) + " LIMIT 1") &&
@@ -1374,9 +1377,11 @@ static void case_G_local_error_keeps_session_state(const char* mode, PGconn* adm
 	}
 	exec_ok(admin, "DELETE FROM pgsql_query_rules WHERE rule_id = " + std::to_string(RULE_G_HG_ID));
 	exec_ok(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
-	exec_ok(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id = " + std::to_string(HG_G));
-	for (const auto& ins : hg_saved) exec_ok(admin, ins);
-	exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	if (!snap_failed) {
+		exec_ok(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id = " + std::to_string(HG_G));
+		for (const auto& ins : hg_saved) exec_ok(admin, ins);
+		exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	}
 }
 
 // --------------------------------------------------------------------------
