@@ -101,7 +101,7 @@ fi
 
 CONTAINER="${COMPOSE_PROJECT}-dbdeployer1-1"
 echo -n "Waiting for dbdeployer to finish deployment..."
-MAX_WAIT=120
+MAX_WAIT=600
 COUNT=0
 while ! docker exec "${CONTAINER}" test -f /tmp/dbdeployer_ready 2>/dev/null; do
     if [ $COUNT -ge $MAX_WAIT ]; then

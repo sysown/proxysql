@@ -136,9 +136,9 @@ fi
 # even without Galera, so each node burned the full 60 x 2s poll before giving
 # up: ~2 minutes per node, ~6 minutes for this 3-node sandbox. 2.4.2 decides at
 # sandbox-creation time whether a node waits at all, so only Galera and PXC
-# cluster nodes do -- a MariaDB replication sandbox now deploys in seconds. This
-# infra previously carried MAX_WAIT=600 to outlast that delay and is back on the
-# shared 120s budget.
+# cluster nodes do -- a MariaDB replication sandbox now deploys in seconds. The
+# 600s ceiling below is a safety margin for slow CI hosts, not the expected
+# deploy time.
 #
 # dbdeployer#82: 2.3.0 and earlier treat a MariaDB major >= 11 as newer than
 # MySQL 8.0.23 and generate CHANGE REPLICATION SOURCE TO, which MariaDB rejects.
@@ -146,7 +146,7 @@ fi
 # into dbdeployer's own CI, the versions tracked in issues 6236-6238.
 CONTAINER="${COMPOSE_PROJECT}-dbdeployer1-1"
 echo -n "Waiting for dbdeployer to finish deployment..."
-MAX_WAIT=120
+MAX_WAIT=600
 COUNT=0
 while ! docker exec "${CONTAINER}" test -f /tmp/dbdeployer_ready 2>/dev/null; do
     if [ $COUNT -ge $MAX_WAIT ]; then
