@@ -60,16 +60,16 @@ if [ ! -f "${GROUPS_JSON}" ]; then
   exit 1
 fi
 
-# Use the shared host/build-container probe: the host may lack the ABI used
-# to build src/proxysql. Refuse to delete anything if neither probe succeeds.
+# Probe on the build runner, which has the build ABI. Test hosts never run
+# this script or the artifact; they validate the stamped build metadata.
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 if ! version_output="$(python3 - "$script_dir" "$BINARY" <<'PY_VERSION'
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from ci_tier_artifacts import binary_version
+from ci_tier_artifacts import build_binary_version
 try:
-    print(binary_version(Path.cwd(), sys.argv[2]), end='')
+    print(build_binary_version(Path.cwd(), sys.argv[2]), end='')
 except (OSError, ValueError, RuntimeError) as error:
     print(error, file=sys.stderr)
     sys.exit(1)
