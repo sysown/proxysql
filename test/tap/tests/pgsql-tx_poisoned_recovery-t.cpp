@@ -54,6 +54,9 @@
  *     The next statement may go to another hostgroup or be pipelined right behind
  *     the ROLLBACK (over either protocol), and SET values changed in the transaction are
  *     back afterwards. Run with both protocols.
+ *   * A COMMIT in flight is still found without a usable digest: with query_digests
+ *     and commands_stats off, and in a query longer than query_digests_max_query_length.
+ *     A long query without a COMMIT is not a reason to disconnect.
  *   * Cases F and G run in four TLS variants per backend protocol: the client talks TLS
  *     to the proxy or not, the proxy talks TLS to the backend or not. Each variant checks,
  *     from PostgreSQL's side, that the backend leg is what it was set to.
@@ -118,7 +121,26 @@ static PGconn* open_conn(const char* host, int port,
 
 // Drive the admin interface (PgSQL-protocol admin port, 6132 by default) to
 // toggle the preserve_client_on_broken_backend_in_tx boolean.
+static bool set_admin_var(const char* var, const char* value);
+
 static bool set_admin_bool(const char* var, bool value) {
+	return set_admin_var(var, value ? "true" : "false");
+}
+
+// The value of a PgSQL admin variable ("" if it cannot be read).
+static std::string get_admin_var(const char* var) {
+	PGconn* admin = open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port,
+	                          cl.admin_username, cl.admin_password, "ProxySQL admin (PgSQL protocol)");
+	if (!admin) return "";
+	const std::string q = std::string("SELECT variable_value FROM global_variables WHERE variable_name='pgsql-") + var + "'";
+	PGresult* r = PQexec(admin, q.c_str());
+	std::string out = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : "";
+	PQclear(r);
+	PQfinish(admin);
+	return out;
+}
+
+static bool set_admin_var(const char* var, const char* value) {
 	PGconn* admin = open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port,
 	                          cl.admin_username, cl.admin_password,
 	                          "ProxySQL admin (PgSQL protocol)");
@@ -129,7 +151,7 @@ static bool set_admin_bool(const char* var, bool value) {
 	char q[256];
 	snprintf(q, sizeof(q),
 	         "UPDATE global_variables SET variable_value='%s' WHERE variable_name='pgsql-%s'",
-	         value ? "true" : "false", var);
+	         value, var);
 	PGresult* r = PQexec(admin, q);
 	bool ok1 = (PQresultStatus(r) == PGRES_COMMAND_OK);
 	PQclear(r);
@@ -1175,13 +1197,21 @@ static void check_pipelined_behind_rollback(const char* mode) {
 		std::string unlocked;
 		for (int syncs = 0; sent && syncs < 4;) {
 			PGresult* r = PQgetResult(cli);
-			if (r == nullptr) continue;
+			if (r == nullptr) {
+				// The proxy ended the session: PQgetResult then returns NULL for ever.
+				if (PQstatus(cli) != CONNECTION_OK) sent = false;
+				continue;
+			}
 			if (PQresultStatus(r) == PGRES_PIPELINE_SYNC) syncs++;
 			else if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) unlocked = PQgetvalue(r, 0, 0);
 			PQclear(r);
 		}
-		while (sent && PQgetResult(cli) != nullptr) {}
-		PQexitPipelineMode(cli);
+		while (sent) {
+			PGresult* r = PQgetResult(cli);
+			if (r == nullptr) break;
+			PQclear(r);
+		}
+		if (PQstatus(cli) == CONNECTION_OK) PQexitPipelineMode(cli);
 		// Only the INSERT after the ROLLBACK is committed; the one inside the old transaction is not.
 		if (sent && unlocked == "t" && scalar(cli, "SELECT coalesce(string_agg(x::text, ',' ORDER BY x), 'none') FROM txp_g_rows") == "2") good++;
 	}
@@ -1343,6 +1373,62 @@ static void case_G_local_error_keeps_session_state(const char* mode, PGconn* adm
 	exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 }
 
+// --------------------------------------------------------------------------
+// Case H: a COMMIT that may have taken effect is still found when the digest cannot be used: there is
+// none with query_digests and commands_stats off, and the one of a query longer than
+// query_digests_max_query_length is cut. Run once per backend protocol.
+// --------------------------------------------------------------------------
+
+static const int CASE_H_CHECKS = 5;
+
+static void case_H_digest_unusable(const char* mode) {
+	const std::string digests0 = get_admin_var("query_digests");
+	const std::string stats0 = get_admin_var("commands_stats");
+	const std::string cap0 = get_admin_var("query_digests_max_query_length");
+
+	const std::string off = std::string(mode) + ", no digest";
+	if (set_admin_var("query_digests", "false") && set_admin_var("commands_stats", "false")) {
+		check_commit_disconnects(off.c_str(), "COMMIT", [](PGconn* c, const std::string& m) {
+			return answer_sqlstate(PQexec(c, ("COMMIT /* " + m + " */").c_str()));
+		});
+		check_commit_disconnects(off.c_str(), "extended COMMIT", [](PGconn* c, const std::string& m) {
+			return answer_sqlstate(PQexecParams(c, ("COMMIT /* " + m + " */").c_str(), 0, nullptr, nullptr, nullptr, nullptr, 0));
+		});
+		check_commit_disconnects(off.c_str(), "INSERT; COMMIT", [](PGconn* c, const std::string& m) {
+			return answer_sqlstate(PQexec(c, ("INSERT INTO txp_commit_plain VALUES ('nodigest'); COMMIT /* " + m + " */").c_str()));
+		});
+	} else {
+		emit_fail_fill(3, "case H: cannot turn the digests off");
+	}
+	if (!digests0.empty()) set_admin_var("query_digests", digests0.c_str());
+	if (!stats0.empty()) set_admin_var("commands_stats", stats0.c_str());
+
+	const std::string cut = std::string(mode) + ", digest cut";
+	if (set_admin_var("query_digests_max_query_length", "64")) {
+		const std::string pad(200, 'x');
+		// The COMMIT is past the end of the digest.
+		check_commit_disconnects(cut.c_str(), "COMMIT past the cut", [&pad](PGconn* c, const std::string& m) {
+			return answer_sqlstate(PQexec(c, ("INSERT INTO txp_commit_plain VALUES ('cut'); /* " + pad + " */ COMMIT /* " + m + " */").c_str()));
+		});
+		// Control: a long query that cannot commit is no reason to disconnect.
+		PGconn* cli = open_proxy();
+		bool poisoned = false;
+		bool killed = false;
+		if (cli && exec_ok(cli, "BEGIN")) {
+			KillResult kr = run_poisoning_query(cli, ("SELECT pg_sleep(5) /* " + pad + " */").c_str());
+			killed = kr.kill_delivered;
+			poisoned = is_sqlstate(kr.pgresult, "25P02") && PQstatus(cli) == CONNECTION_OK;
+			PQclear(kr.pgresult);
+			if (PQstatus(cli) == CONNECTION_OK) exec_ok(cli, "ROLLBACK");
+		}
+		ok(killed && poisoned, "case H [%s] long query without a COMMIT: still poisoned (25P02, connection kept)", cut.c_str());
+		if (cli) PQfinish(cli);
+	} else {
+		emit_fail_fill(2, "case H: cannot shorten the digest");
+	}
+	if (!cap0.empty()) set_admin_var("query_digests_max_query_length", cap0.c_str());
+}
+
 // Whether the backend leg of a proxy session is TLS, as PostgreSQL itself sees it: "true", "false", or ""
 // if it could not be told.
 static std::string backend_leg_tls() {
@@ -1376,7 +1462,7 @@ static std::string backend_leg_tls() {
 // the proxy talks TLS to the backend or not. Each variant also checks, from PostgreSQL's side, that the
 // backend leg is what it was set to.
 static const int VARIANT_CHECKS = 1 + CASE_F_CHECKS + CASE_G_CHECKS;
-static const int PER_MODE_CHECKS = CASE_E_CHECKS + 4 * VARIANT_CHECKS;
+static const int PER_MODE_CHECKS = CASE_E_CHECKS + CASE_H_CHECKS + 4 * VARIANT_CHECKS;
 
 // Re-creates the backend rows with use_ssl set as asked. The pool is emptied first: a pooled connection
 // keeps the TLS setting it was opened with.
@@ -1422,6 +1508,7 @@ static void cases_E_F_G_all_modes() {
 			continue;
 		}
 		case_E_unanswered_commit(mode);
+		case_H_digest_unusable(mode);
 		for (const bool client_tls : { false, true }) {
 			for (const bool backend_tls : { true, false }) {
 				const std::string variant = std::string(mode) + (client_tls ? ", client TLS" : ", client plain") +
@@ -1470,7 +1557,8 @@ int main(int /*argc*/, char** /*argv*/) {
 	// case E ok() count = CASE_E_CHECKS per backend protocol (libpq, native)
 	// case F and G run in 4 TLS variants per backend protocol (libpq, native), each with
 	//   1 check of the backend leg + CASE_F_CHECKS + CASE_G_CHECKS: VARIANT_CHECKS
-	// PER_MODE_CHECKS = CASE_E_CHECKS + 4 * VARIANT_CHECKS
+	// case H: CASE_H_CHECKS per backend protocol
+	// PER_MODE_CHECKS = CASE_E_CHECKS + CASE_H_CHECKS + 4 * VARIANT_CHECKS
 	// Total = 17 + 2 * PER_MODE_CHECKS
 	plan(17 + 2 * PER_MODE_CHECKS);
 
