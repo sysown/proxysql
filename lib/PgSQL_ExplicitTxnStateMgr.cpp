@@ -377,6 +377,22 @@ bool PgSQL_ExplicitTxnStateMgr::commit_in_digest(const char* digest) {
 	return lost != NULL;
 }
 
+bool PgSQL_ExplicitTxnStateMgr::commit_in_query(const char* digest, const char* query) {
+	// Same rule as pgsql_query_has_stmt_keyword(): the digest buffer is as long as the query up to
+	// query_digests_max_query_length, so only the digest of a longer query can have been cut short.
+	if (digest != NULL && *digest != '\0' &&
+		(query == NULL || strnlen(query, (size_t)pgsql_thread___query_digests_max_query_length + 1) <=
+			(size_t)pgsql_thread___query_digests_max_query_length)) {
+		return commit_in_digest(digest);
+	}
+	if (query == NULL) return true; // nothing to read: fail closed
+	char* full = pgsql_query_full_digest(query);
+	if (full == NULL) return true; // cannot be told apart: fail closed
+	const bool found = commit_in_digest(full);
+	free(full);
+	return found;
+}
+
 void PgSQL_ExplicitTxnStateMgr::sync_with_backend(bool backend_in_txn, char ended_by) {
 	if (backend_in_txn == false) {
 		if (transaction_state.empty()) return;

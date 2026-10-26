@@ -121,6 +121,18 @@ public:
     // a COMMIT (any form), END, or PREPARE TRANSACTION. A digest that cannot be followed to its
     // end counts as one, so a caller asking about a COMMIT that got no reply errs on the safe side.
     static bool commit_in_digest(const char* digest);
+    /**
+     * @brief Like commit_in_digest(), but safe when the digest is missing or cut short.
+     *
+     * The digest is whole only for a query up to query_digests_max_query_length, and absent when
+     * both query_digests and commands_stats are off. In either case the query text is digested in
+     * full here. If that cannot be done the answer is true: a COMMIT that may have taken effect
+     * must not be reported as an aborted transaction.
+     *
+     * @param digest The statement's digest text, or NULL.
+     * @param query The statement's own text (NUL-terminated), or NULL.
+     */
+    static bool commit_in_query(const char* digest, const char* query);
     void fill_internal_session(nlohmann::json& j);
 
 private:

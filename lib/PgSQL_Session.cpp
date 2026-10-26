@@ -2930,19 +2930,21 @@ bool PgSQL_Session::handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds) {
 bool PgSQL_Session::commit_unanswered() {
 	switch (status) {
 	case PROCESSING_QUERY:
-		// A digest stops at query_digests_max_query_length, so a longer query may hide one past it.
-		return CurrentQuery.QueryLength > pgsql_thread___query_digests_max_query_length ||
-			PgSQL_ExplicitTxnStateMgr::commit_in_digest(CurrentQuery.get_digest_text());
+		// The digest is cut at query_digests_max_query_length and absent with query_digests and
+		// commands_stats off: commit_in_query() reads the query itself then.
+		return PgSQL_ExplicitTxnStateMgr::commit_in_query(CurrentQuery.get_digest_text(),
+			(const char*)CurrentQuery.QueryPointer);
 	case PROCESSING_STMT_EXECUTE:
 		return CurrentQuery.extended_query_info.stmt_info &&
-			PgSQL_ExplicitTxnStateMgr::commit_in_digest(CurrentQuery.extended_query_info.stmt_info->digest_text);
+			PgSQL_ExplicitTxnStateMgr::commit_in_query(CurrentQuery.extended_query_info.stmt_info->digest_text,
+				CurrentQuery.extended_query_info.stmt_info->query);
 	case PROCESSING_EXTQ_BATCH:
 		// Every Execute of the batch, answered or not: the batch's replies are held here until it
 		// ends, so a COMMIT the backend confirmed has not reached the client, and the poison would
 		// drop that reply and answer the COMMIT with 25P02.
 		for (const PgSQL_Extq_Entry& e : extq_entries) {
 			if (e.type == 'E' && e.stmt &&
-				PgSQL_ExplicitTxnStateMgr::commit_in_digest(e.stmt->digest_text)) {
+				PgSQL_ExplicitTxnStateMgr::commit_in_query(e.stmt->digest_text, e.stmt->query)) {
 				return true;
 			}
 		}
