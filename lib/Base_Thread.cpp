@@ -588,9 +588,11 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
  */
 template<typename T, typename DS>
 bool Base_Thread::move_session_to_idle_mysql_sessions(DS * myds, unsigned int n) {
+	// The poll scan admits only frontend streams with an attached session.
+	assert(myds && myds->sess);
 #ifdef PROXYSQL31
 	if constexpr (std::is_same_v<T, PgSQL_Thread>) {
-		if (myds->sess && myds->sess->continuation_queued) return false;
+		if (myds->sess->continuation_queued) return false;
 	}
 #endif
 	T* thr = static_cast<T*>(this);
