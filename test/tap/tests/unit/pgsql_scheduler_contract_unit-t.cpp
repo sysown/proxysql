@@ -35,7 +35,10 @@ static void test_speculative_miss() {
 	sess->client_myds = new PgSQL_Data_Stream();
 	sess->client_myds->init(MYDS_FRONTEND, sess, fds[0]);
 	sess->client_myds->myconn = new PgSQL_Connection(true);
-	sess->client_myds->myconn->userinfo->set((char*)"scheduler", (char*)"", (char*)"unit", nullptr);
+	char username[] = "scheduler";
+	char password[] = "";
+	char database[] = "unit";
+	sess->client_myds->myconn->userinfo->set(username, password, database, nullptr);
 	sess->client_myds->DSS = STATE_SLEEP;
 	sess->mybe = sess->find_or_create_backend(810);
 	sess->mybe->server_myds->max_connect_time = worker.curtime + 1000000;
@@ -65,7 +68,8 @@ static void test_speculative_miss() {
 	auto* incompatible = new PgSQL_Connection(false);
 	incompatible->parent = server;
 	incompatible->async_state_machine = ASYNC_IDLE;
-	incompatible->userinfo->set((char*)"other_user", (char*)"", (char*)"unit", nullptr);
+	char other_username[] = "other_user";
+	incompatible->userinfo->set(other_username, password, database, nullptr);
 	server->ConnectionsFree->add(incompatible);
 	const auto incompatible_result = sess->run_step(PgSQL_Pool_Acquire_Mode::EstablishedOnly);
 	ok(incompatible_result == PgSQL_Session_Run_Result::EstablishedUnavailable &&

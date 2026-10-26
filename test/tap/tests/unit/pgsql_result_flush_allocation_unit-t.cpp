@@ -262,29 +262,53 @@ static void test_session_failure() {
 // Keep libpq internal header configuration local to this fixture; libusual
 // and ProxySQL have their own definitions of these configuration macros.
 #pragma push_macro("OPENSSL_API_COMPAT")
+#ifdef OPENSSL_API_COMPAT
 #undef OPENSSL_API_COMPAT
+#endif
 #pragma push_macro("PACKAGE_BUGREPORT")
+#ifdef PACKAGE_BUGREPORT
 #undef PACKAGE_BUGREPORT
+#endif
 #pragma push_macro("PACKAGE_NAME")
+#ifdef PACKAGE_NAME
 #undef PACKAGE_NAME
+#endif
 #pragma push_macro("PACKAGE_STRING")
+#ifdef PACKAGE_STRING
 #undef PACKAGE_STRING
+#endif
 #pragma push_macro("PACKAGE_TARNAME")
+#ifdef PACKAGE_TARNAME
 #undef PACKAGE_TARNAME
+#endif
 #pragma push_macro("PACKAGE_URL")
+#ifdef PACKAGE_URL
 #undef PACKAGE_URL
+#endif
 #pragma push_macro("PACKAGE_VERSION")
+#ifdef PACKAGE_VERSION
 #undef PACKAGE_VERSION
+#endif
 #pragma push_macro("restrict")
+#ifdef restrict
 #undef restrict
+#endif
 #pragma push_macro("likely")
+#ifdef likely
 #undef likely
+#endif
 #pragma push_macro("unlikely")
+#ifdef unlikely
 #undef unlikely
+#endif
 #pragma push_macro("Assert")
+#ifdef Assert
 #undef Assert
+#endif
 #pragma push_macro("PG_PROTOCOL_LATEST")
+#ifdef PG_PROTOCOL_LATEST
 #undef PG_PROTOCOL_LATEST
+#endif
 extern "C" {
 #include "postgres_fe.h"
 #include "libpq-int.h"
