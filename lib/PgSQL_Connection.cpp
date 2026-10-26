@@ -1097,7 +1097,7 @@ handler_again:
 			update_bytes_sent(5);
 		}
 		else {
-			update_bytes_sent(reset_session_in_txn == false ? (sizeof("DISCARD ALL") + 5) : (sizeof("ROLLBACK") + 5));
+			update_bytes_sent((reset_session_in_txn == false && reset_session_rollback_only == false) ? (sizeof("DISCARD ALL") + 5) : (sizeof("ROLLBACK") + 5));
 		}
 		if (async_exit_status) {
 			next_event(ASYNC_RESET_SESSION_CONT);
@@ -5145,8 +5145,9 @@ void PgSQL_Connection::reset_session_start() {
 		// a transaction is open, so an open one is rolled back first and DISCARD ALL
 		// goes out on the next pass.
 		reset_session_in_pipeline = false; // nothing here ever runs in pipeline mode
-		reset_session_in_txn = IsKnownActiveTransaction();
-		const char* cmd = (reset_session_in_txn == false ? "DISCARD ALL" : "ROLLBACK");
+		// Rollback only: the ROLLBACK is the whole reset, no DISCARD ALL follows it.
+		reset_session_in_txn = (reset_session_rollback_only == false) && IsKnownActiveTransaction();
+		const char* cmd = ((reset_session_in_txn || reset_session_rollback_only) ? "ROLLBACK" : "DISCARD ALL");
 		set_query(cmd, strlen(cmd));
 		query_start();
 		if (async_exit_status == PG_EVENT_NONE && is_error_present() == false) {
@@ -5173,8 +5174,8 @@ void PgSQL_Connection::reset_session_start() {
 			return;
 		}
 	} else {
-		reset_session_in_txn = IsKnownActiveTransaction();
-		if (PQsendQuery(pgsql_conn, (reset_session_in_txn == false ? "DISCARD ALL" : "ROLLBACK")) == 0) {
+		reset_session_in_txn = (reset_session_rollback_only == false) && IsKnownActiveTransaction();
+		if (PQsendQuery(pgsql_conn, ((reset_session_in_txn || reset_session_rollback_only) ? "ROLLBACK" : "DISCARD ALL")) == 0) {
 			set_error_from_PQerrorMessage();
 			proxy_error("Failed to send query. %s\n", get_error_code_with_message().c_str());
 			return;
@@ -5692,7 +5693,8 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 	// In ProxySQL, as we are not tracking individual Advisory Locks, we will reset the status only 
 	// when we see pg_advisory_unlock_all, which releases all session-level advisory locks.
 	if (get_status(STATUS_PGSQL_CONNECTION_ADVISORY_LOCK) == false) { // we search for pg_advisory_lock* if not already set
-		if (!strncasecmp(query_digest_text, "SELECT pg_advisory_lock", sizeof("SELECT pg_advisory_lock")-1)) {
+		if (!strncasecmp(query_digest_text, "SELECT pg_advisory_lock", sizeof("SELECT pg_advisory_lock")-1) ||
+			!strncasecmp(query_digest_text, "SELECT pg_try_advisory_lock", sizeof("SELECT pg_try_advisory_lock")-1)) {
 			set_status(true, STATUS_PGSQL_CONNECTION_ADVISORY_LOCK);
 		}
 	} else {

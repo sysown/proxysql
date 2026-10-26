@@ -163,11 +163,8 @@ static void write_tx_poisoned_error(PG_pkt& pgpkt, const char* msg_override = nu
 		0);
 }
 
-// Append a NoticeResponse('N') at severity=WARNING. Two concrete SQLSTATEs
-// are used by this feature: ERRCODE_WARNING (01000, generic warning, for the
-// relayed backend-error-context notice) and ERRCODE_NO_ACTIVE_SQL_TRANSACTION
-// (25P01, for the "there is no transaction in progress" notice emitted when
-// a client issues COMMIT against a poisoned session). SQLSTATE 00000 (which
+// Append a NoticeResponse('N') at severity=WARNING, for the relayed
+// backend-error-context notice (ERRCODE_WARNING, 01000). SQLSTATE 00000 (which
 // an earlier revision used) is semantically wrong for a WARNING-class notice.
 static void write_tx_poisoned_warning_notice(PG_pkt& pgpkt, PGSQL_ERROR_CODES code, const char* msg) {
 	pgpkt.write_generic('N', "cscscscsc",
@@ -277,16 +274,11 @@ static char classify_poisoned_txn_end(const char* sql, unsigned int sql_len) {
 }
 
 // The answer to the plain ROLLBACK ('R') or COMMIT ('C') that ends a poisoned
-// transaction, without the ReadyForQuery. Match Postgres native: COMMIT inside an
-// aborted tx emits a WARNING notice and rolls back. SQLSTATE 25P01 =
-// no_active_sql_transaction is the correct code (not 00000, which would be
-// successful_completion).
-static void write_poisoned_txn_end(PG_pkt& pgpkt, char kind) {
-	if (kind == 'C') {
-		write_tx_poisoned_warning_notice(pgpkt,
-			PGSQL_ERROR_CODES::ERRCODE_NO_ACTIVE_SQL_TRANSACTION,
-			"there is no transaction in progress");
-	}
+// transaction, without the ReadyForQuery. PostgreSQL answers both the same way:
+// COMMIT inside an aborted transaction is a silent rollback with the command tag
+// ROLLBACK. (The "there is no transaction in progress" warning is only for a COMMIT
+// outside any transaction.)
+static void write_poisoned_txn_end(PG_pkt& pgpkt, char /*kind*/) {
 	pgpkt.write_CommandComplete("ROLLBACK");
 }
 
@@ -657,9 +649,8 @@ PgSQL_Session::~PgSQL_Session() {
 //
 // Response shape:
 //   * Recovery (plain ROLLBACK / ABORT / COMMIT / END):
-//       CommandComplete('ROLLBACK') + ReadyForQuery('I'). For COMMIT also a
-//       preceding NoticeResponse with "there is no transaction in progress"
-//       — matches Postgres native behavior for COMMIT inside an aborted tx.
+//       CommandComplete('ROLLBACK') + ReadyForQuery('I'), for COMMIT too, with no
+//       notice -- matches Postgres native behavior for COMMIT inside an aborted tx.
 //   * Rejection (anything else, incl. ROLLBACK TO SAVEPOINT / RELEASE SAVEPOINT):
 //       ErrorResponse(25P02) + ReadyForQuery('E'), tx_poisoned stays true.
 bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
@@ -1817,13 +1808,29 @@ bool PgSQL_Session::handler_again___status_RESETTING_CONNECTION(int* _rc) {
 	}
 	int rc = myconn->async_reset_session(myds->revents);
 	if (rc == 0) {
-		__sync_fetch_and_add(&PgHGM->status.backend_reset_connection, 1);
-		//myds->myconn->userinfo->set(client_myds->myconn->userinfo);
-		myds->myconn->reset();
+		if (myconn->reset_session_rollback_only) {
+			// The transaction is over and the connection is otherwise as the client left it:
+			// keep its flags, variables and statements.
+			myconn->reset_session_rollback_only = false;
+		} else {
+			__sync_fetch_and_add(&PgHGM->status.backend_reset_connection, 1);
+			//myds->myconn->userinfo->set(client_myds->myconn->userinfo);
+			myds->myconn->reset();
+		}
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st = previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
+	} else if (myconn->reset_session_rollback_only && (rc == -1 || rc == -2)) {
+		// No client is waiting for this rollback, so there is nobody to send an error to. The backend
+		// and the session state it held are gone: end the session, as for a backend that died.
+		proxy_error("Rollback of a poisoned transaction failed on %s:%d: %s\n", myconn->parent->address,
+			myconn->parent->port, rc == -2 ? "timeout" :
+			(myconn->is_error_present() ? myconn->get_error_code_with_message().c_str() : "server offline"));
+		myds->destroy_MySQL_Connection_From_Pool(false);
+		myds->fd = 0;
+		*_rc = -1;
+		return false;
 	} else {
 		if (rc == -1) {
 			// the command failed
@@ -2044,7 +2051,15 @@ int PgSQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 	// if client_myds == NULL , it is a mirror
 	//     process mirror only status==WAITING_CLIENT_DATA
 	for (unsigned int j = 0; j < (client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0) || (mirror == true && status == WAITING_CLIENT_DATA);) {
-		
+
+		// A poisoned transaction just ended on a backend that is still to be rolled back: the packets
+		// behind it (a client may pipeline them) wait in PSarrayIN until handler() has done that, or
+		// they would run inside the transaction the client was told is over, and the rollback would
+		// then discard their work.
+		if (poison_rollback_pending && status == WAITING_CLIENT_DATA) {
+			break;
+		}
+
 		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 			// If the client sends a new packet while a query is still executing,
 			// we no longer treat this as an error. Previously, such packets were
@@ -2827,8 +2842,9 @@ void PgSQL_Session::SetQueryTimeout() {
 // when we are certain: (a) admin variable is on, (b) the session was in an
 // explicit transaction, (c) the result-set transfer has not already started to
 // the client (synthesizing 25P02 mid-stream would corrupt the protocol),
-// (d) the client data stream is valid, and (e) nothing the backend left
-// unanswered could have committed the transaction.
+// (d) the client data stream is valid, (e) nothing the backend left
+// unanswered could have committed the transaction, and (f) the connection held
+// no session-level state that dies with it.
 //
 // On success: the three messages are queued on client_myds->PSarrayOUT,
 // tx_poisoned is set to true, and the pgsql_tx_poisoned_total counter is
@@ -2859,6 +2875,10 @@ bool PgSQL_Session::handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds) {
 	// is durable (pg_terminate_backend while it waits for a synchronous standby). 25P02 would say
 	// the work was lost and the client may run it again. Unpoisoned, the client is disconnected.
 	if (commit_unanswered()) return false;
+	// A session advisory lock, a temp table, a SQL PREPARE and the like die with the backend.
+	// Poisoned, the client would go on as if they still existed, and another session can take
+	// its lock. Unpoisoned, it is disconnected and knows its session is gone.
+	if (myconn->holds_session_state()) return false;
 
 	// Sanitize + cap the backend message before embedding into a NoticeResponse.
 	// See sanitize_backend_err_msg() comment for NUL / length rationale.
@@ -3312,6 +3332,12 @@ int PgSQL_Session::handler() {
 	}
 	if (!hgs_expired_conns.empty())
 		housekeeping_before_pkts();
+
+	// Also before the next packet is read: it must not reach a backend that is still in the
+	// transaction a poisoned session ended.
+	if (status == WAITING_CLIENT_DATA && poison_rollback_pending && start_poison_rollback()) {
+		goto handler_again;
+	}
 
 __handler_again_get_pkts_from_client:
 	handler_ret = get_pkts_from_client(wrong_pass, pkt);
@@ -4188,6 +4214,12 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		client_myds->write_to_net();
 		handler_ret = -1;
 		return handler_ret;
+	}
+
+	// A poisoned transaction ended on a backend that holds session state: roll it back now, before
+	// the client's next packet. Packets that arrive meanwhile wait in PSarrayIN.
+	if (status == WAITING_CLIENT_DATA && poison_rollback_pending && start_poison_rollback()) {
+		goto handler_again;
 	}
 
 	// previously active query has been fully processed and its response has been sent to the client.
@@ -5246,7 +5278,11 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 				// cannot still be committed by a later COMMIT: PostgreSQL turns COMMIT
 				// into a rollback once a transaction is aborted, and the only way to get
 				// that here is to have nothing left to commit.
-				if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
+				// A backend holding session state is kept for explicit_txn: the poison below stops a
+				// COMMIT from reaching it, and ending the poison rolls it back.
+				if (mybe && mybe->server_myds && mybe->server_myds->myconn &&
+					!(explicit_txn && mybe->server_myds->myconn->holds_session_state() &&
+					  mybe->server_myds->myconn->is_pipeline_active() == false)) {
 					mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
 				}
 				if (explicit_txn) {
@@ -7009,6 +7045,10 @@ void PgSQL_Session::sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool
 // back, so neither COMMIT nor the next statement can carry its work forward. The
 // tracked SET variables go back to their BEGIN values first, while that backend is
 // still attached.
+//
+// A backend that holds session state (a session advisory lock, a temp table, ...) is not
+// dropped: that state dies with it, and PostgreSQL would have kept it. It is sent a ROLLBACK
+// instead, as soon as the session is idle (start_poison_rollback()).
 void PgSQL_Session::end_poisoned_transaction() {
 	thread->status_variables.tx_poisoned_recovered_total++;
 	rollback_tracked_txn_state();
@@ -7016,11 +7056,39 @@ void PgSQL_Session::end_poisoned_transaction() {
 		PgSQL_Backend* _mybe = (PgSQL_Backend*)mybes->index(i);
 		if (_mybe && _mybe->server_myds && _mybe->server_myds->myconn &&
 			_mybe->server_myds->myconn->IsActiveTransaction()) {
-			_mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+			PgSQL_Connection* c = _mybe->server_myds->myconn;
+			if (c->holds_session_state() && c->is_pipeline_active() == false) {
+				c->rollback_pending = true;
+				poison_rollback_pending = true;
+			} else {
+				_mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+			}
 		}
 	}
 	tx_poisoned = false;
 	poisoned_extq.reset();
+}
+
+bool PgSQL_Session::start_poison_rollback() {
+	PgSQL_Backend* owed = nullptr;
+	bool more = false;
+	for (unsigned int i = 0; mybes && i < mybes->len; i++) {
+		PgSQL_Backend* _mybe = (PgSQL_Backend*)mybes->index(i);
+		if (_mybe && _mybe->server_myds && _mybe->server_myds->myconn && _mybe->server_myds->myconn->rollback_pending) {
+			if (owed == nullptr) owed = _mybe; else more = true;
+		}
+	}
+	// Another one is still owed: the session comes back here once this rollback is done.
+	poison_rollback_pending = more;
+	if (owed == nullptr) return false;
+	PgSQL_Connection* c = owed->server_myds->myconn;
+	c->rollback_pending = false;
+	c->reset_session_rollback_only = true;
+	mybe = owed;
+	previous_status.push(status);
+	owed->server_myds->wait_until = thread->curtime + pgsql_thread___connect_timeout_server * 1000;
+	set_status(RESETTING_CONNECTION_V2);
+	return true;
 }
 
 // Classify the extended-query message just queued while the session is poisoned (the

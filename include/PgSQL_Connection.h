@@ -35,6 +35,15 @@ class PgSQL_Backend_Protocol;
 // This bit belonged to STATUS_PGSQL_CONNECTION_HAS_WARNINGS, which was never implemented.
 #define STATUS_PGSQL_CONNECTION_LISTEN               0x00001000
 #define STATUS_PGSQL_CONNECTION_HOLD_CURSOR          0x00002000
+// State that outlives a transaction and lives only in the backend session, so it dies with
+// the connection: session advisory locks, LISTEN, temp tables and sequences, SQL PREPAREs,
+// WITH HOLD cursors and untracked SETs. Left out: the transaction-scoped flags (LOCK_TABLES,
+// ADVISORY_XACT_LOCK, HAS_SAVEPOINT), which a rollback ends anyway, and NO_MULTIPLEX, which a
+// multiplex=0 rule sets as a "do not share this connection" hint and says nothing about state.
+#define STATUS_PGSQL_CONNECTION_SESSION_STATE (STATUS_PGSQL_CONNECTION_USER_VARIABLE | \
+	STATUS_PGSQL_CONNECTION_PREPARED_STATEMENT | STATUS_PGSQL_CONNECTION_TEMPORARY_TABLE | \
+	STATUS_PGSQL_CONNECTION_ADVISORY_LOCK | STATUS_PGSQL_CONNECTION_HAS_SEQUENCES | \
+	STATUS_PGSQL_CONNECTION_LISTEN | STATUS_PGSQL_CONNECTION_HOLD_CURSOR)
 
 
 enum PgSQL_Param_Name {
@@ -516,6 +525,11 @@ public:
 
 	bool reset_session_in_txn = false;
 	bool reset_session_in_pipeline = false;
+	// The reset sends ROLLBACK only and never DISCARD ALL: it ends the transaction of a poisoned
+	// session on a backend that must keep its session state (see end_poisoned_transaction()).
+	bool reset_session_rollback_only = false;
+	// That rollback is still owed: the session starts it as soon as it is idle.
+	bool rollback_pending = false;
 
 	PGresult* get_result();
 	void next_multi_statement_result(PGresult* result);
@@ -673,6 +687,8 @@ public:
 	void set_status(bool set, uint32_t status_flag);
 	bool get_status(uint32_t status_flag);
 	bool MultiplexDisabled(bool check_delay_token = true);
+	// Whether the connection holds state that only lives in the backend session and so dies with it.
+	bool holds_session_state() const { return (status_flags & STATUS_PGSQL_CONNECTION_SESSION_STATE) != 0; }
 
 	unsigned int reorder_dynamic_variables_idx();
 	unsigned int number_of_matching_session_variables(const PgSQL_Connection* client_conn, unsigned int& not_matching);
