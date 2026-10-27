@@ -203,6 +203,37 @@ else:
             self.assertIn("github.event_name != 'workflow_run'",step['if'])
             self.assertIn('ready',step['if'])
 
+    def test_cache_write_opt_out_preserves_restores_and_preparation(self):
+        import re
+        action = yaml.safe_load((ROOT/'.github/actions/dependency-cache/action.yml').read_text())
+        steps = action['runs']['steps']
+        restores = [step for step in steps if 'actions/cache/restore@' in step.get('uses', '')]
+        saves = [step for step in steps if 'actions/cache/save@' in step.get('uses', '')]
+        prepares = [step for step in steps if step.get('id', '').startswith('prepare-')]
+        self.assertEqual(len(restores), 2)
+        self.assertEqual(len(saves), 2)
+        self.assertEqual(len(prepares), 2)
+        facts = {'github.event_name': 'workflow_dispatch'}
+        for dependency in ['openssl', 'duckdb']:
+            facts.update({'steps.keys.outputs.'+dependency+'-key': 'requested-'+dependency,
+                          'steps.keys.outputs.selected-'+dependency: 'true',
+                          'steps.prepare-'+dependency+'.outputs.ready': 'true',
+                          'steps.'+dependency+'.outputs.cache-hit': 'false',
+                          'steps.'+dependency+'.outputs.cache-matched-key': ''})
+        def enabled(step, value):
+            values = dict(facts, **{'inputs.cache-write': value})
+            expression = re.sub(r'\b(?:steps|github|inputs)(?:\.[a-z_-]+)+',
+                                lambda match: repr(values[match[0]]), step['if'][3:-2])
+            expression = expression.replace('success()', 'True').replace('&&', ' and ').replace('||', ' or ')
+            return eval(expression, {'__builtins__': {}}, {})
+        for value, want_save in [('true', True), ('false', False), ('', False), ('1', False), ('invalid', False)]:
+            with self.subTest(cache_write=value):
+                self.assertTrue(all(enabled(step, value) for step in restores+prepares))
+                self.assertEqual([enabled(step, value) for step in saves], [want_save, want_save])
+        facts['github.event_name'] = 'workflow_run'
+        self.assertFalse(any(enabled(step, 'true') for step in saves))
+        self.assertEqual(action['inputs'].get('cache-write', {}).get('default'), 'true')
+
     def test_publication_jobs_isolate_credentials_and_keep_candidate_artifacts_separate(self):
         workflow = yaml.safe_load((ROOT/'.github/workflows/ci-builds.yml').read_text())
         builds = workflow['jobs']['builds']

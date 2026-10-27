@@ -19,6 +19,9 @@ inputs:
   dependencies:
     description: Optional explicit space-separated dependency selection
     default: ''
+  cache-write:
+    description: Allow cache saves; callers using unreviewed source in a shared branch scope must disable this
+    default: 'true'
   candidate-path:
     description: Optional workspace-relative accepted producer artifacts to verify and reuse
     default: ''
@@ -88,7 +91,7 @@ runs:
         python3 "$ACTION_PATH/cache.py" prepare --source-path "$SOURCE_PATH" --service "$BUILD_SERVICE" \
           --tier "$BUILD_TIER" --sanitizer "$BUILD_SANITIZER" --coverage "$BUILD_COVERAGE" --dependencies "$DEPENDENCIES" --candidate-path "$CANDIDATE_PATH"
     - name: Save exact OpenSSL bundle
-      if: ${{ success() && github.event_name != 'workflow_run' && steps.prepare-openssl.outputs.ready == 'true' && (steps.openssl.outputs.cache-hit != 'true' || steps.openssl.outputs.cache-matched-key != steps.keys.outputs.openssl-key) }}
+      if: ${{ success() && inputs.cache-write == 'true' && github.event_name != 'workflow_run' && steps.prepare-openssl.outputs.ready == 'true' && (steps.openssl.outputs.cache-hit != 'true' || steps.openssl.outputs.cache-matched-key != steps.keys.outputs.openssl-key) }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         key: ${{ steps.keys.outputs.openssl-key }}
@@ -114,7 +117,7 @@ runs:
         python3 "$ACTION_PATH/cache.py" prepare --source-path "$SOURCE_PATH" --service "$BUILD_SERVICE" \
           --tier "$BUILD_TIER" --sanitizer "$BUILD_SANITIZER" --coverage "$BUILD_COVERAGE" --dependencies "$DEPENDENCIES" --candidate-path "$CANDIDATE_PATH"
     - name: Save exact DuckDB bundle
-      if: ${{ success() && github.event_name != 'workflow_run' && steps.prepare-duckdb.outputs.ready == 'true' && (steps.duckdb.outputs.cache-hit != 'true' || steps.duckdb.outputs.cache-matched-key != steps.keys.outputs.duckdb-key) }}
+      if: ${{ success() && inputs.cache-write == 'true' && github.event_name != 'workflow_run' && steps.prepare-duckdb.outputs.ready == 'true' && (steps.duckdb.outputs.cache-hit != 'true' || steps.duckdb.outputs.cache-matched-key != steps.keys.outputs.duckdb-key) }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         key: ${{ steps.keys.outputs.duckdb-key }}
