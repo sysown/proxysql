@@ -64,6 +64,10 @@ jobs:
         path: plan.json
         retention-days: 3
   builds:
+    permissions:
+      contents: read
+      actions: read
+      checks: write
     needs:
     - plan
     # Route to the self-hosted proxysql-ci pool only when: the actor is renecannao or rahim-kanji
@@ -163,9 +167,10 @@ jobs:
         ref: ${{ env.SHA }}
         fetch-depth: 0
         path: 'proxysql'
+        persist-credentials: false
 
     - name: Verify vendored source archives
-      if: ${{ inputs.trusted && success() }}
+      if: ${{ success() }}
       working-directory: proxysql
       run: |
         set -euo pipefail
@@ -176,10 +181,8 @@ jobs:
 
 #        ls -l proxysql/test/tap
 
-    - name: Build
-      timeout-minutes: 90
-      id: build
-      if: ${{ inputs.trusted && success() }}
+    - name: Configure product build
+      if: ${{ success() }}
       run: |
         set -euo pipefail
         cd proxysql/
@@ -235,6 +238,25 @@ jobs:
             exit 1
             ;;
         esac
+
+    - name: Restore or build exact dependency bundles
+      id: dependencies
+      if: ${{ success() }}
+      uses: ./ci-control/.github/actions/dependency-cache
+      with:
+        source-path: proxysql
+        service: ubuntu24_dbg_build
+        tier: ${{ matrix.tier }}
+        sanitizer: ${{ matrix.mode == 'asan' && 'asan' || 'none' }}
+        coverage: 'true'
+
+    - name: Build
+      timeout-minutes: 90
+      id: build
+      if: ${{ success() }}
+      run: |
+        set -euo pipefail
+        cd proxysql/
         if [[ "${{ matrix.type }}" =~ "-tap" ]]; then
           # prebuild dependencies without debug
           #sed -i "/command/c \    command: bash -l -c '${ASAN} cd /opt/proxysql && make -j$(nproc) build_deps_clickhouse'" docker-compose.yml
@@ -396,6 +418,30 @@ jobs:
           make ${{ matrix.dist }}${{ matrix.type }} | tee ci_build_log/build.log
           grep -q 'exited with code 0' ci_build_log/build.log
         fi
+
+    - name: Retain openssl dependency publication candidate
+      if: ${{ inputs.trusted && success() && steps.dependencies.outputs.openssl-key != '' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.tier }}-${{ matrix.mode }}-openssl
+        path: |
+          ${{ steps.dependencies.outputs.openssl-path }}/entry.json
+          ${{ steps.dependencies.outputs.openssl-path }}/bundle.tar.gz
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 3
+
+    - name: Retain duckdb dependency publication candidate
+      if: ${{ inputs.trusted && success() && steps.dependencies.outputs.duckdb-key != '' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.tier }}-${{ matrix.mode }}-duckdb
+        path: |
+          ${{ steps.dependencies.outputs.duckdb-path }}/entry.json
+          ${{ steps.dependencies.outputs.duckdb-path }}/bundle.tar.gz
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 3
 
     - name: Stage compiled runtime libraries in test handoff
       if: ${{ inputs.trusted && success() }}
@@ -611,3 +657,90 @@ jobs:
         path: producer.json
         retention-days: 3
         if-no-files-found: error
+
+  dependency-publication-plan:
+    needs: [plan, builds]
+    # PR misses stay in their merge-ref cache. Global bundles come only from
+    # successful protected-history builds, verified again by trusted ci.py.
+    if: ${{ inputs.trusted && needs.builds.result == 'success' && github.repository == 'sysown/proxysql' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      count: ${{ steps.matrix.outputs.count }}
+      control_sha: ${{ steps.matrix.outputs.control_sha }}
+    steps:
+    - name: Checkout reviewed dependency publication helper
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: v3.0
+        path: publication-control
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Download only this attempt's dependency candidates
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        pattern: dependency-candidate-a${{ github.run_attempt }}-*
+        merge-multiple: false
+        path: dependency-candidates
+    - name: Validate candidates and select one artifact per fingerprint
+      id: matrix
+      env:
+        BUILD_SHA: ${{ env.SHA }}
+      run: |
+        set -euo pipefail
+        echo "control_sha=$(git -C publication-control rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        helper=publication-control/deps/artifacts/ci.py
+        mkdir -p dependency-candidates
+        if [ ! -f "$helper" ]; then
+          echo '::notice::Reviewed branch predates automatic dependency publication; skipping'
+          echo 'count=0' >> "$GITHUB_OUTPUT"
+          echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        python3 -E "$helper" publication-matrix --input dependency-candidates \
+          --source-sha "$BUILD_SHA" --github-output "$GITHUB_OUTPUT"
+
+  dependency-publication:
+    needs: [plan, dependency-publication-plan]
+    if: ${{ needs.dependency-publication-plan.outputs.count != '0' && needs.dependency-publication-plan.outputs.count != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.dependency-publication-plan.outputs.matrix) }}
+    concurrency:
+      group: dependency-artifact-v1-${{ matrix.dependency }}-${{ matrix.fingerprint }}
+      cancel-in-progress: false
+    steps:
+    - name: Checkout reviewed dependency publication helper
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.dependency-publication-plan.outputs.control_sha }}
+        path: publication-control
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Download selected dependency candidate
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: ${{ matrix.artifact }}
+        path: dependency-candidate
+    - name: Publish immutable dependency fingerprint
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        BUILD_SHA: ${{ env.SHA }}
+        DEPENDENCY: ${{ matrix.dependency }}
+        FINGERPRINT: ${{ matrix.fingerprint }}
+      run: |
+        set -euo pipefail
+        python3 -E publication-control/deps/artifacts/ci.py publish --input dependency-candidate \
+          --dependency "$DEPENDENCY" --fingerprint "$FINGERPRINT" --source-sha "$BUILD_SHA" \
+          --repository sysown/proxysql

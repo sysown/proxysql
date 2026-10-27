@@ -7,7 +7,8 @@ class WorkflowTests(unittest.TestCase):
  def run_build_prefix(self,make_body):
   step=next(s for s in workflow('ci-builds.yml')['jobs']['builds']['steps'] if s.get('name')=='Build')
   # Execute the actual setup and build pipeline, stopping before packaging.
-  script=step['run'].split('# create matrix of all test folders',1)[0]+'\nfi\n'
+  setup=next(s for s in workflow('ci-builds.yml')['jobs']['builds']['steps'] if s.get('name')=='Configure product build')
+  script='(\n'+setup['run']+'\n)\n'+step['run'].split('# create matrix of all test folders',1)[0]+'\nfi\n'
   for expression,value in [('matrix.dist','ubuntu24'),('matrix.type','-tap'),('runner.environment','github-hosted')]:
    script=script.replace('${{ '+expression+' }}',value)
   with tempfile.TemporaryDirectory() as folder:
