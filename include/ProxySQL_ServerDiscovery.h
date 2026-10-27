@@ -163,6 +163,8 @@ std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgr
  ProxySQL_ServerProtocol protocol);
 bool proxysql_activate_managed_blue_green(
 	const ProxySQL_ManagedBlueGreenHandoff& handoff, std::string& error);
+bool proxysql_complete_managed_blue_green(uint32_t writer_hostgroup,
+	const std::string& deployment_id, std::string& error);
 std::optional<ProxySQL_ManagedBlueGreenHandoff>
 proxysql_active_managed_blue_green(uint32_t writer_hostgroup);
 // Returns true for an active exact-pair claim. The optional output is reset to

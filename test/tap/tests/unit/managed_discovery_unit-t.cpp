@@ -135,7 +135,7 @@ void create_server_load_schema(SQLite3DB& db) {
 
 } // namespace
 int main() {
-    plan(67);
+    plan(83);
     test_init_minimal();
     test_init_query_processor();
     test_init_hostgroups();
@@ -417,8 +417,10 @@ int main() {
 		ProxySQL_ServerProtocol::mysql, bgd_generation, {901, 902, 903, 904},
 		{{901, "blue-writer.example", 3306},
 		 {902, "blue-reader.example", 3306},
+		 {902, "blue-reader-two.example", 3306},
 		 {903, "green-writer.example", 3306},
-		 {904, "green-reader.example", 3306}},
+		 {904, "green-reader.example", 3306},
+		 {904, "green-other.example", 3306}},
 		ProxySQL_ServerPersistence::runtime_only
 	};
 	ok(manager->post_server_desired_set(bgd_four) &&
@@ -429,8 +431,10 @@ int main() {
 	ok(bgd_runtime &&
 		find_row(*bgd_runtime, 901, "blue-writer.example", 3306) &&
 		find_row(*bgd_runtime, 902, "blue-reader.example", 3306) &&
+		find_row(*bgd_runtime, 902, "blue-reader-two.example", 3306) &&
 		find_row(*bgd_runtime, 903, "green-writer.example", 3306) &&
-		find_row(*bgd_runtime, 904, "green-reader.example", 3306),
+		find_row(*bgd_runtime, 904, "green-reader.example", 3306) &&
+		find_row(*bgd_runtime, 904, "green-other.example", 3306),
 		"all four hostgroups contain their discovered server rows");
 	ProxySQL_ManagedBlueGreenHandoff handoff;
 	handoff.generation = bgd_generation;
@@ -447,7 +451,11 @@ int main() {
 		{"arn:aws:rds:us-east-1:1:db:blue-reader",
 		 "arn:aws:rds:us-east-1:1:db:green-reader",
 		 "db-BLUER", "db-GREENR", "blue-reader.example",
-		 "green-reader.example", 3306, false}
+		 "green-reader.example", 3306, false},
+		{"arn:aws:rds:us-east-1:1:db:blue-reader-two",
+		 "arn:aws:rds:us-east-1:1:db:green-other",
+		 "db-BLUER2", "db-GREENR2", "blue-reader-two.example",
+		 "green-other.example", 3306, false}
 	};
 	auto invalid_handoff = handoff;
 	invalid_handoff.pairs[1].green_resource_id = "db-GREENW";
@@ -474,7 +482,7 @@ int main() {
 		"managed BGD row carries the writer-is-also-reader policy");
 	const auto accepted_handoff = proxysql_active_managed_blue_green(901);
 	ok(accepted_handoff && accepted_handoff->deployment_id == "bgd-test" &&
-		accepted_handoff->pairs.size() == 2 &&
+		accepted_handoff->pairs.size() == 3 &&
 		accepted_handoff->pairs[1].green_hostname == "green-reader.example",
 		"core retains exact writer and replica pairs for its native worker");
 	AWS_RDS_BGD_State managed_state;
@@ -487,11 +495,13 @@ int main() {
 	managed_topology.nodes.push_back({"green-writer", "green-writer.example", 3306,
 		"BLUE_GREEN_DEPLOYMENT_TARGET", "AVAILABLE"});
 	GloMyMon->aws_rds_bgd_build_map_for_test(managed_state, managed_topology);
-	ok(managed_state.bg_map.size() == 2 && managed_state.bg_map[0].is_writer &&
+	ok(managed_state.bg_map.size() == 3 && managed_state.bg_map[0].is_writer &&
 		managed_state.bg_map[0].blue_host == "blue-writer.example" &&
 		managed_state.bg_map[1].blue_host == "blue-reader.example" &&
-		managed_state.bg_map[1].green_host == "green-reader.example",
-		"native BGD worker uses exact writer and replica pairs without a name suffix");
+		managed_state.bg_map[1].green_host == "green-reader.example" &&
+		managed_state.bg_map[2].blue_host == "blue-reader-two.example" &&
+		managed_state.bg_map[2].green_host == "green-other.example",
+		"native BGD worker uses two exact replica pairs without a name suffix");
 	managed_state.bg_map.clear();
 	managed_topology.nodes[0].endpoint = "other-green.example";
 	GloMyMon->aws_rds_bgd_build_map_for_test(managed_state, managed_topology);
@@ -503,7 +513,125 @@ int main() {
 		GloAdmin->drain_server_discovery_updates() == 1 &&
 		!bgd_observed.acks.back().second,
 		"blue-only publication cannot replace a four-group claim");
+	const size_t bgd_ack_count = bgd_observed.acks.size();
+	ok(manager->post_server_desired_set(bgd_four) &&
+		GloAdmin->drain_server_discovery_updates() == 1 &&
+		bgd_observed.acks.size() == bgd_ack_count + 1 &&
+		!bgd_observed.acks.back().second,
+		"active native BGD ownership blocks plugin replacement of all four groups");
+	MyHGM->wrlock();
+	const bool reader_shunned = MyHGM->aws_rds_bgd_set_shun_server(
+		902, "blue-reader.example", 3306, true);
+	MyHGM->wrunlock();
+	ok(reader_shunned, "native BGD can shun a blue reader before reload");
+	uint64_t reloaded_generation = 0;
+	proxysql_lock_configuration();
+	const bool safe_reload = proxysql_install_managed_discovery_locked(
+		ProxySQL_ServerProtocol::mysql, 2, {bgd_claim}, reloaded_generation, error);
+	proxysql_unlock_configuration();
+	bgd_replication.reset(MyHGM->dump_table_mysql("mysql_replication_hostgroups"));
+	bgd_topology.reset(MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups"));
+	ok(safe_reload && reloaded_generation > bgd_generation &&
+		bgd_replication && has_topology_pair(*bgd_replication, 901, 902) &&
+		bgd_topology && has_topology_pair(*bgd_topology, 901, 902) &&
+		proxysql_active_managed_blue_green(901).has_value(),
+		"safe claim reload retains the BGD row and exact pairs");
+	bgd_runtime.reset(MyHGM->dump_table_mysql("mysql_servers"));
+	ok(bgd_runtime &&
+		find_row(*bgd_runtime, 901, "blue-writer.example", 3306) &&
+		find_row(*bgd_runtime, 902, "blue-reader.example", 3306) &&
+		find_row(*bgd_runtime, 902, "blue-reader-two.example", 3306) &&
+		find_row(*bgd_runtime, 903, "green-writer.example", 3306) &&
+		find_row(*bgd_runtime, 904, "green-reader.example", 3306) &&
+		find_row(*bgd_runtime, 904, "green-other.example", 3306),
+		"safe claim reload retains live runtime-only blue and green members");
+	const auto* shunned_after_reload = bgd_runtime ?
+		find_row(*bgd_runtime, 902, "blue-reader.example", 3306) : nullptr;
+	ok(shunned_after_reload && shunned_after_reload->fields[4] &&
+		std::string(shunned_after_reload->fields[4]) == "SHUNNED_AWS_BGD",
+		"safe claim reload keeps native BGD reader shun state");
+	auto changed_bgd_claim = bgd_claim;
+	changed_bgd_claim.role_monitor.green_reader_hostgroup = 905;
+	uint64_t rejected_generation = 0;
+	proxysql_lock_configuration();
+	const bool changed_reload = proxysql_install_managed_discovery_locked(
+		ProxySQL_ServerProtocol::mysql, 3, {changed_bgd_claim},
+		rejected_generation, error);
+	proxysql_unlock_configuration();
+	ok(!changed_reload && rejected_generation == 0 &&
+		proxysql_active_managed_blue_green(901).has_value(),
+		"active BGD rejects a claim that changes reserved green hostgroups");
+	ok(!proxysql_complete_managed_blue_green(901, "other-deployment", error) &&
+		proxysql_active_managed_blue_green(901).has_value(),
+		"an unrelated completion cannot release the active deployment");
+	const bool completed = proxysql_complete_managed_blue_green(901, "bgd-test", error);
+	bgd_replication.reset(MyHGM->dump_table_mysql("mysql_replication_hostgroups"));
+	bgd_topology.reset(MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups"));
+	ok(completed && bgd_replication && has_topology_pair(*bgd_replication, 901, 902) &&
+		bgd_topology && !has_topology_pair(*bgd_topology, 901, 902),
+		"native completion removes only the managed BGD monitor row");
+	ok(!proxysql_active_managed_blue_green(901),
+		"native completion releases the exact pair map");
+	auto second_handoff = handoff;
+	second_handoff.generation = reloaded_generation;
+	second_handoff.deployment_id = "bgd-second";
+	second_handoff.pairs[0].green_resource_id = "db-GREENW2";
+	second_handoff.pairs[1].green_resource_id = "db-GREENR2";
+	second_handoff.pairs[2].green_resource_id = "db-GREENR3";
+	const bool second_activated = proxysql_activate_managed_blue_green(second_handoff, error);
+	bgd_topology.reset(MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups"));
+	const auto second_active = proxysql_active_managed_blue_green(901);
+	ok(second_activated && bgd_topology && has_topology_pair(*bgd_topology, 901, 902) &&
+		second_active && second_active->deployment_id == "bgd-second",
+		"another complete deployment can activate after cleanup");
+	AWS_RDS_BGD_State native_cleanup;
+	native_cleanup.writer_hg = 901;
+	native_cleanup.reader_hg = 902;
+	native_cleanup.green_writer_hg = 903;
+	native_cleanup.green_reader_hg = 904;
+	native_cleanup.writer_is_also_reader = 1;
+	native_cleanup.bgd_status = AWS_RDS_BGD_Status::AVAILABLE;
+	native_cleanup.shunned_readers.push_back({"blue-reader.example", 3306});
+	managed_topology.nodes[0].endpoint = "green-writer.example";
+	GloMyMon->aws_rds_bgd_build_map_for_test(native_cleanup, managed_topology);
+	GloMyMon->aws_rds_bgd_handle_topology_absent_for_test(native_cleanup);
+	bgd_topology.reset(MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups"));
+	ok(native_cleanup.bgd_status == AWS_RDS_BGD_Status::NONE &&
+		bgd_topology && !has_topology_pair(*bgd_topology, 901, 902) &&
+		!proxysql_active_managed_blue_green(901),
+		"native topology-absent cleanup removes the managed BGD row and pairs");
+	bgd_runtime.reset(MyHGM->dump_table_mysql("mysql_servers"));
+	const auto* reader_after_cleanup = bgd_runtime ?
+		find_row(*bgd_runtime, 902, "blue-reader.example", 3306) : nullptr;
+	ok(reader_after_cleanup && reader_after_cleanup->fields[4] &&
+		std::string(reader_after_cleanup->fields[4]) == "ONLINE",
+		"native cleanup restores the shunned blue reader");
+	auto third_handoff = second_handoff;
+	third_handoff.deployment_id = "bgd-third";
+	third_handoff.pairs[0].green_resource_id = "db-GREENW3";
+	third_handoff.pairs[1].green_resource_id = "db-GREENR3";
+	third_handoff.pairs[2].green_resource_id = "db-GREENR4";
+	ok(proxysql_activate_managed_blue_green(third_handoff, error) &&
+		proxysql_active_managed_blue_green(901)->deployment_id == "bgd-third",
+		"a third deployment can start after native cleanup");
+	AWS_RDS_BGD_State no_first_topology;
+	no_first_topology.writer_hg = 901;
+	GloMyMon->aws_rds_bgd_handle_topology_absent_for_test(no_first_topology);
+	bgd_topology.reset(MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups"));
+	ok(bgd_topology && !has_topology_pair(*bgd_topology, 901, 902) &&
+		!proxysql_active_managed_blue_green(901),
+		"an absent first topology probe releases a managed BGD handoff");
+	auto fourth_handoff = third_handoff;
+	fourth_handoff.deployment_id = "bgd-fourth";
+	fourth_handoff.pairs[0].green_resource_id = "db-GREENW4";
+	fourth_handoff.pairs[1].green_resource_id = "db-GREENR5";
+	fourth_handoff.pairs[2].green_resource_id = "db-GREENR6";
+	ok(proxysql_activate_managed_blue_green(fourth_handoff, error) &&
+		proxysql_active_managed_blue_green(901)->deployment_id == "bgd-fourth",
+		"a fresh deployment can activate after an absent first probe");
 	ok(manager->uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql),
 		"Blue/Green discovery controller retires cleanly");
+	ok(!proxysql_active_managed_blue_green(901),
+		"controller retirement releases the fourth deployment pair map");
     return exit_status();
 }

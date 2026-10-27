@@ -580,6 +580,7 @@ struct AWS_RDS_BGD_State {
 
 	bool bgd_in_progress_set = false;             ///< deployment's servers flagged in aws_rds_bgd_server_status
 	bool config_refresh_pending = false;          ///< bg_map must be rebuilt from the next topology result
+	bool managed_cleanup_pending = false;         ///< retry managed row removal after native cleanup
 
 	unsigned int next_check_interval_ms = 0;    ///< FSM-controlled interval; 0 => baseline
 	std::string next_check_host;                ///< FSM-pinned probe host; when set (the green IP), the worker
@@ -873,6 +874,9 @@ class MySQL_Monitor {
 	void aws_rds_bgd_build_map_for_test(AWS_RDS_BGD_State& state,
 		AWS_RDS_Topology_Result& topology) {
 		aws_rds_bgd_build_map(state, topology);
+	}
+	void aws_rds_bgd_handle_topology_absent_for_test(AWS_RDS_BGD_State& state) {
+		aws_rds_bgd_handle_topology_absent(state);
 	}
 #endif
 

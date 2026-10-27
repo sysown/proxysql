@@ -138,6 +138,8 @@ public:
 		uint64_t& runtime_generation_out, std::string& error);
 	bool activate_managed_blue_green(
 		const ProxySQL_ManagedBlueGreenHandoff& handoff, std::string& error);
+	bool complete_managed_blue_green(uint32_t writer_hostgroup,
+		const std::string& deployment_id, std::string& error);
 	std::optional<ProxySQL_ManagedBlueGreenHandoff> active_managed_blue_green(
 		uint32_t writer_hostgroup) const;
 	bool install_server_discovery_controller(ProxySQL_ServerProtocol protocol,

@@ -7674,6 +7674,7 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, AWS_RDS_Topology_R
 	}
 
 	AWS_RDS_BGD_Status topology_status = aws_rds_bgd_status_from_topology(target->status);
+	st.managed_cleanup_pending = false;
 
 	// Once we advance to READER_SWITCHOVER_IN_PROGRESS phase, AWS keeps reporting
 	// WRITER_SWITCHOVER_COMPLETED (a single green row) until mysql.rds_topology drains. Ignore
@@ -7708,6 +7709,13 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, AWS_RDS_Topology_R
 	}
 
 	if (topology_status == st.bgd_status) {
+		// A newly published worker can receive its first probe just before
+		// the managed pair map is visible. Retry if that first map was empty.
+		if (st.bg_map.empty() && topology_status >= AWS_RDS_BGD_Status::AVAILABLE &&
+			topology_status <= AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
+			aws_rds_bgd_build_map(st, topology);
+			if (!st.bg_map.empty()) aws_rds_bgd_add_green_writer_in_hg(st);
+		}
 		// Refresh or retry green IP resolution on every eligible same-phase observation.
 		if (topology_status >= AWS_RDS_BGD_Status::AVAILABLE
 			&& topology_status <= AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
@@ -8085,6 +8093,25 @@ void MySQL_Monitor::aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st) {
 	} else if (st.bgd_status != AWS_RDS_BGD_Status::NONE) {
 		handle_aws_rds_bgd_post_switchover(st, true);
 	}
+#ifdef PROXYSQL40
+	if (proxysql_active_managed_blue_green(st.writer_hg))
+		st.managed_cleanup_pending = true;
+	if (st.managed_cleanup_pending) {
+		const auto active = proxysql_active_managed_blue_green(st.writer_hg);
+		if (!active) {
+			st.managed_cleanup_pending = false;
+		} else {
+			std::string error;
+			if (proxysql_complete_managed_blue_green(
+				st.writer_hg, active->deployment_id, error)) {
+				st.managed_cleanup_pending = false;
+			} else {
+				proxy_warning("AWS RDS BGD [wHG=%u]: native cleanup could not remove managed row: %s\n",
+					st.writer_hg, error.c_str());
+			}
+		}
+	}
+#endif
 }
 
 
