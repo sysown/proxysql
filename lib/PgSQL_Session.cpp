@@ -7699,6 +7699,11 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 	extended_query_info.stmt_global_id = stmt_info->statement_id;
 	extended_query_info.stmt_info = stmt_info;
 	extended_query_info.stmt_type = stmt_type;
+	// The unnamed portal's Bind is still held here: it goes to the backend with its Execute. A
+	// Describe of that portal without the Execute right after it needs the Bind sent first, or the
+	// backend describes a portal that does not exist. The native one-at-a-time step sends it.
+	extended_query_info.bind_msg = (stmt_type == 'P' && named_portal_stmt_info == nullptr) ?
+		bind_waiting_for_execute.get() : nullptr;
 	CurrentQuery.start_time = thread->curtime;
 
 	timespec begint;

@@ -4587,6 +4587,17 @@ void PgSQL_Connection::stmt_describe_start() {
 		const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
 		switch (extended_query_info->stmt_type) {
 		case 'P': // Portal
+			// The unnamed portal is bound only when its Execute is sent. Described on its own, its
+			// Bind goes first; the backend's BindComplete is not passed on (the client already got
+			// one).
+			if (extended_query_info->bind_msg && extended_query_info->stmt_client_portal_name &&
+				extended_query_info->stmt_client_portal_name[0] == '\0') {
+				const PtrSize_t& raw = extended_query_info->bind_msg->get_raw_pkt();
+				if (!pg_build_bind_rename(native_outbuf, (const unsigned char*)raw.ptr, raw.size, query.backend_stmt_name)) {
+					set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, "invalid Bind message", false);
+					return;
+				}
+			}
 			pg_build_describe(native_outbuf, 'P', extended_query_info->stmt_client_portal_name);
 			native_stmt_step = PG_Native_Stmt_Step::DESCRIBE_P;
 			break;
