@@ -43,7 +43,7 @@ def artifact_server(mode, on_api_request=None, extra_payload=b''):
                 offset = 0
                 limit = len(payload)
             # Synchronize the first wave only; resumed parts arrive independently.
-            if mode in ('parallel', 'parallel-resume') and not parallel_ready.is_set():
+            if mode in ('parallel', 'parallel-resume', 'parallel-resume-nonzero') and not parallel_ready.is_set():
                 barrier.wait(timeout=5)
             self.send_response(200 if mode == 'ignore-range' else 206)
             self.send_header('Content-Length', str(limit - offset))
@@ -57,6 +57,8 @@ def artifact_server(mode, on_api_request=None, extra_payload=b''):
                 end = min(offset+1048576, limit)
             if mode == 'parallel-resume' and offset == 0:
                 end = 131072
+            if mode == 'parallel-resume-nonzero' and offset == 786432:
+                end = 917504
             try:
                 self.wfile.write(payload[offset:end])
                 self.wfile.flush()
@@ -170,6 +172,19 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), payload)
             self.assertEqual(list(Path(folder).iterdir()), [target])
 
+    def test_interrupted_nonzero_range_resumes_at_its_absolute_offset(self):
+        with artifact_server('parallel-resume-nonzero') as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
+            target = Path(folder)/'handoff.zip'
+            with patch('ci_tier_artifacts.MIN_DOWNLOAD_PART_BYTES', 65536), \
+                 patch('ci_tier_artifacts.Event', side_effect=no_retry_delay_event):
+                GitHubAPI('repo', token='token').download(url, target, len(payload),
+                    digest='sha256:'+hashlib.sha256(payload).hexdigest())
+            self.assertEqual(target.read_bytes(), payload)
+            ranges = [r for path, r, _ in requests if path.startswith('/blob')]
+            self.assertEqual(len(ranges), 9)
+            self.assertEqual(ranges.count('bytes=917504-1048575'), 1)
+            self.assertEqual(ranges.count('bytes=786432-1048575'), 1)
+
     def test_wrong_checksum_preserves_existing_destination_and_removes_parts(self):
         with artifact_server('parallel-resume') as (url, payload, _), tempfile.TemporaryDirectory() as folder:
             target = Path(folder)/'handoff.zip'
@@ -216,22 +231,31 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(list(Path(folder).iterdir()), [])
 
 
-    def test_assembly_reclaims_each_copied_part_before_reading_the_next(self):
-        scratch_sizes = []
+    def test_parallel_download_writes_only_one_archive_copy(self):
+        written = []
         original_open = Path.open
-        def measure_scratch(path, mode='r', *args, **kwargs):
-            if path.name.startswith('part-') and mode == 'rb':
-                scratch_sizes.append(sum(p.stat().st_size for p in path.parent.iterdir()))
-            return original_open(path, mode, *args, **kwargs)
+        @contextlib.contextmanager
+        def count_writes(path, mode='r', *args, **kwargs):
+            with original_open(path, mode, *args, **kwargs) as stream:
+                if any(flag in mode for flag in ('w', 'a', '+')):
+                    class Writer:
+                        def __getattr__(self, name):
+                            return getattr(stream, name)
+                        def write(self, data):
+                            size = stream.write(data)
+                            written.append(size)
+                            return size
+                    yield Writer()
+                else:
+                    yield stream
         with artifact_server('parallel') as (url, payload, _), tempfile.TemporaryDirectory() as folder:
             target = Path(folder)/'handoff.zip'
             with patch('ci_tier_artifacts.MIN_DOWNLOAD_PART_BYTES', 65536), \
-                 patch('ci_tier_artifacts.Path.open', new=measure_scratch):
+                 patch('ci_tier_artifacts.Path.open', new=count_writes):
                 GitHubAPI('repo', token='token').download(url, target, len(payload),
                     digest='sha256:'+hashlib.sha256(payload).hexdigest())
             self.assertEqual(target.read_bytes(), payload)
-            self.assertEqual(len(scratch_sizes), 8)
-            self.assertLessEqual(max(scratch_sizes), len(payload))
+            self.assertEqual(sum(written), len(payload), 'download must not copy ranges into a second archive')
 
 
 if __name__ == '__main__':

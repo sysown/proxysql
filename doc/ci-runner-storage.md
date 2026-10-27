@@ -1,20 +1,29 @@
 # CI runner storage
 
 The shared handoff restore in `.github/scripts/ci_tier_artifacts.py` uses
-`RUNNER_TEMP` for its download and decompression scratch files. GitHub Actions
+`RUNNER_TEMP` for its downloaded archive. GitHub Actions
 [clears this directory at job boundaries](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#runner-context),
 provided the runner user can delete the files. This also covers a cancelled
 restore whose Python process was killed before its normal cleanup could run.
 Outside Actions, the restore falls back to Python's default temporary directory.
 
-Restore validates the complete tar member list and the zstd stream before
-extracting. It then decompresses a second time directly into extraction, keeping
-the path and link filters. The extra decompression pass avoids writing an
-uncompressed tar beside the extracted build. For the #6048 artifact from
-2026-10-01, this reduces approximate restore peak storage from 30.1 GiB to
-17.6 GiB (5.2 GiB compressed plus 12.5 GiB extracted). Download/ZIP staging can
-also temporarily need two compressed copies; the peak is the larger of these
-two stages, plus any existing workspace files and filesystem overhead.
+Parallel HTTP ranges write directly at their offsets in one temporary ZIP.
+Interrupted ranges resume independently; no part-file assembly copy is needed.
+When supplied, the artifact SHA-256 is checked before publishing that ZIP.
+
+Restore pipes the ZIP's `cache_full.tar.zst` member into zstd and extracts its
+output directly into the checkout in one pass. It writes neither a separate
+`.tar.zst` nor an uncompressed tar, and performs no preliminary decompression
+scan. Path and link checks run as each tar entry is extracted. ZIP/decompression
+failures still fail the restore, but may leave files already extracted into the
+checkout; the next job's checkout cleans these like other incomplete build files.
+
+Scratch storage is one compressed ZIP; peak restore storage is that ZIP plus
+the extracted build, existing workspace files, and filesystem overhead. For
+PR #6532's artifact, the successful path writes about 22.7 GB (6.8 GB downloaded
+plus 15.9 GB extracted), rather than about 36.3 GB with the assembly and compressed
+payload copies. These are logical file-write volumes, not physical-device
+measurements; retries and filesystems can change actual I/O.
 
 ## Existing self-hosted runner leftovers
 
@@ -77,8 +86,10 @@ Cached images are reused by other jobs on these persistent VMs.
 python3 -m unittest discover -s .github/scripts/tests -p 'test_ci_tier*.py'
 ```
 
-The restore tests use real zip/zstd/tar payloads, force-kill a child restore to
-check scratch placement, and impose a file-size limit that permits every output
-file but rejects an intermediate uncompressed archive. They also check cleanup,
-corrupt streams and unsafe paths before extraction, and local use without
-`RUNNER_TEMP`.
+The download tests exercise real HTTP ranges, interrupted transfers, and a
+one-archive write budget. The restore tests use real zip/zstd/tar payloads,
+check that extraction uses one decompression and no intermediate payload copy,
+force-kill a child restore to check scratch placement, and impose a file-size
+limit that permits every output file but rejects an intermediate uncompressed
+archive. They also check cleanup under pipe backpressure, corrupt streams,
+unsafe paths during extraction, and local use without `RUNNER_TEMP`.
