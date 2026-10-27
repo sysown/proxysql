@@ -495,7 +495,7 @@ jobs:
       with:
         # Execution, product tier and mode identify this immutable handoff.
         name: ${{ matrix.artifact_name }}
-        retention-days: 1
+        retention-days: 3
         # 0 is deliberate: the payload is already zstd-15 compressed by the pack
         # step, and re-compressing it measures at <=0.23% size for minutes of
         # CPU. See issue #6232.
