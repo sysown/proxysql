@@ -1383,6 +1383,10 @@ $(AI_GENAI_UNIT_TESTS): %: %.cpp $(GENAI_TEST_ARCHIVE) $(TEST_HELPERS_OBJ) $(LIB
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 ifeq ($(UNAME_S),Linux)
+# Reproduce the worker check-to-wait window without production test hooks.
+genai_thread_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZNSt18condition_variable4waitERSt11unique_lockISt5mutexE \
+	-Wl,--wrap=_ZNSt18condition_variable10notify_allEv -Wl,--wrap=pthread_mutex_lock
+
 # Let the RSA unit test observe the exact flock attempt without a production hook.
 caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
 
@@ -1458,7 +1462,7 @@ worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv
 
 pgsql_result_flush_allocation_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=free -Wl,--wrap=PQgetCopyData
 
-STATIC_LIBPROXYSQL_TESTS := pgsql_result_flush_allocation_unit-t caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
+STATIC_LIBPROXYSQL_TESTS := genai_thread_unit-t pgsql_result_flush_allocation_unit-t caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
 	gtid_local_cache_unit-t parsersql_v30_flow_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
