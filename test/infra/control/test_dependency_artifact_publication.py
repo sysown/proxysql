@@ -196,7 +196,12 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(checkout['persist-credentials'])
         build = workflow['jobs']['build']
         action = next(step for step in build['steps'] if step.get('id') == 'dependencies')
-        self.assertIn('/dependency-cache@', action['uses'])
+        self.assertEqual('./ci-control/.github/actions/dependency-cache', action['uses'])
+        control = next(step['with'] for step in build['steps']
+                       if step.get('with', {}).get('path') == 'ci-control')
+        self.assertRegex(control['ref'], r'^[0-9a-f]{40}$')
+        self.assertEqual('.github/actions/dependency-cache', control['sparse-checkout'])
+        self.assertFalse(control['persist-credentials'])
         self.assertEqual('${{ matrix.dependency }}', action['with']['dependencies'])
         self.assertEqual('${{ matrix.service || \'native\' }}', action['with']['service'])
 

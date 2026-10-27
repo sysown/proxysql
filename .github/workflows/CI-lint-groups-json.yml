@@ -39,5 +39,12 @@ jobs:
             git fetch --no-tags --depth=1 origin "${engine_ref}" \
               || echo "::warning::could not fetch paired engine; paired checks will skip if unavailable"
           fi
+      - name: Fetch the immutable fork build contract
+        # Validate the exact callee the fork workflow will execute, even before
+        # its companion change is merged into the moving GH-Actions branch.
+        run: |
+          fork_control_sha=$(sed -nE 's|^[[:space:]]+uses: sysown/proxysql/\.github/workflows/ci-builds(-untrusted)?\.yml@([0-9a-f]{40})[[:space:]]*$|\2|p' .github/workflows/CI-builds-fork.yml)
+          [[ "$fork_control_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid immutable fork callee' >&2; exit 1; }
+          git fetch --no-tags --depth=1 origin "$fork_control_sha"
       - name: Run repository CI lint suite
         run: test/infra/control/run-ci-lint.bash

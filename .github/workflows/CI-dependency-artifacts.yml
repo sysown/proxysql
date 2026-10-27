@@ -89,9 +89,17 @@ jobs:
       - name: Install native build tools
         if: runner.os == 'macOS'
         run: brew install cmake
+      - name: Checkout immutable dependency cache control
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: sysown/proxysql
+          ref: c52411e76b19de90f00318295ebf2567ac88e9eb
+          path: ci-control
+          sparse-checkout: .github/actions/dependency-cache
+          persist-credentials: false
       - name: Restore or automatically create the matching dependency
         id: dependencies
-        uses: sysown/proxysql/.github/actions/dependency-cache@c52411e76b19de90f00318295ebf2567ac88e9eb
+        uses: ./ci-control/.github/actions/dependency-cache
         with:
           source-path: .
           service: ${{ matrix.service || 'native' }}
