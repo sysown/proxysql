@@ -732,6 +732,14 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 	if (ret == false) {
 		return false;	// quick exit
 	}
+	// The group's extended messages hold a transaction no Sync concluded. Answered here, the Sync that
+	// follows would commit it even for a ROLLBACK: the backend ends it, as PostgreSQL does.
+	if (extq_group_holds_work) {
+		if (PgSQL_Backend* held = extq_held_backend()) {
+			current_hostgroup = held->hostgroup_id;
+			return false;
+		}
+	}
 	// in this part of the code (as at release 2.4.3) where we call
 	// NumActiveTransactions() with the check_savepoint flag .
 	// This to try to handle MySQL bug https://bugs.pgsql.com/bug.php?id=107875
@@ -3527,6 +3535,7 @@ handler_again:
 
 		constexpr unsigned char ready_packet[] = { 0x5A, 0x00, 0x00, 0x00, 0x05 };
 		bool is_copy_ready_packet = false;
+		char copy_ready_status = 'I';
 		while (mybe->server_myds->PSarrayIN->len) {
 
 			// if session_fast_forward type is COPY STDIN, we need to check if it is ready packet
@@ -3536,6 +3545,7 @@ handler_again:
 					//const unsigned char* ptr = (static_cast<unsigned char*>(data.ptr) /*+ (data.size - 6)*/);
 					if (memcmp(data.ptr, ready_packet, sizeof(ready_packet)) == 0) {
 						is_copy_ready_packet = true;
+						copy_ready_status = static_cast<const char*>(data.ptr)[5];
 					}
 				}
 			}
@@ -3544,6 +3554,12 @@ handler_again:
 
 		// if ready packet is found, we need to switch back to normal mode
 		if (is_copy_ready_packet) {
+			// Relayed as is, the ReadyForQuery never reached the native connection's own state: it must
+			// still learn the backend concluded, or work held before the COPY reads as unsynced for good.
+			PgSQL_Connection* c = mybe->server_myds->myconn;
+			if (c && c->native_mode) {
+				c->set_ready_for_query_status(copy_ready_status);
+			}
 			switch_fast_forward_to_normal_mode();
 		}
 	}
@@ -3665,7 +3681,10 @@ handler_again:
 						if (handler_again___verify_init_connect()) {
 							goto handler_again;
 						}
-						if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false) {
+						// The batch that only carries a Sync to a held connection sends no statement: a SET
+						// there would run inside the group's transaction and end it. The next statement syncs.
+						const bool sync_only_batch = status == PROCESSING_EXTQ_BATCH && extq_entries.empty();
+						if ((locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false) && sync_only_batch == false) {
 							// In pipeline mode, track if we already have a variable pending sync
 							bool pipeline_var_sync_pending = false;
 
@@ -5394,7 +5413,8 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		// not opened from a 'T' either, so there a mid-batch DISCARD ALL always gets the
 		// pipelined refusal with 'I', as it did before #6417.
 		const bool explicit_txn = extq_backend_used ? is_in_transaction() : (NumActiveTransactions() > 0);
-		const bool in_txn_block = explicit_txn || extq_backend_used;
+		// A group holding work is inside the transaction its extended messages opened.
+		const bool in_txn_block = explicit_txn || extq_backend_used || extq_group_holds_work;
 		// Anything still queued behind this command in the same unsynced batch would be
 		// processed against the session state reset()/init() below is about to replace.
 		const bool more_queued = (extended_query_phase != EXTQ_PHASE_IDLE) &&
@@ -8637,10 +8657,11 @@ void PgSQL_Session::reset_extended_query_frame(bool backend_saw_error) {
 	extended_cache_frame_stage = 0;
 	extended_cache_frame_eligible = false;
 #endif
-	// An error in a part the client ended with Flush, or between parts of an open group: the client's
-	// Sync is still to come, and PostgreSQL ignores everything until it. Its ReadyForQuery carries the
-	// state the error left, read here before the connection can be released or dropped below.
-	if (extq_flush_segment || (extq_group_open && extended_query_phase == EXTQ_PHASE_IDLE)) {
+	// An error in a part the client ended with Flush: its Sync is still to come, and PostgreSQL ignores
+	// everything until it. Its ReadyForQuery carries the state the error left, read here before the
+	// connection can be released or dropped below. Between parts the error went out with its own
+	// ReadyForQuery, and the group ends with it.
+	if (extq_flush_segment) {
 		PgSQL_Connection* c = (mybe && mybe->server_myds) ? mybe->server_myds->myconn : nullptr;
 		if (backend_saw_error && c) {
 			extq_enter_discard(c->native_mode ? c->last_ready_for_query_status() : c->get_transaction_status_char());

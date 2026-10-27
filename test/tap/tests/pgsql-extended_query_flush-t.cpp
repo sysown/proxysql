@@ -1135,6 +1135,69 @@ static void case_row9_named_kept(Mode m, bool) {
 		"2 C(ROLLBACK) Z(I)", "row 9 named: B(r1) E S", m, false);
 }
 
+// ===== Simple Queries in a held group that ProxySQL used to answer itself (final review). =====
+
+// COMMIT, ROLLBACK and ABORT end the group's transaction on the backend: PostgreSQL commits the held
+// INSERT at COMMIT and rolls it back at ROLLBACK or ABORT (with a 25P01 notice, not shown here).
+static void case_group_txn_end(Mode m, bool) {
+	struct Sub { const char* q; const char* reply; long rows; };
+	const Sub subs[] = { { "ROLLBACK", "C(ROLLBACK) Z(I)", 0 }, { "ABORT", "C(ROLLBACK) Z(I)", 0 }, { "COMMIT", "C(COMMIT) Z(I)", 1 } };
+	for (const Sub& sub : subs) {
+		auto c = client(m);
+		const std::string tag = tag_for("txnend", m, false) + sub.q;
+		check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group txn end: P B E(INSERT) H", m, false);
+		check(run(*c, [&] { c->sendQuery(sub.q); }), sub.reply, (std::string("group txn end: Q ") + sub.q).c_str(), m, false);
+		ok(rows(tag) == sub.rows, "group txn end [%s]: after %s the INSERT is %s (rows=%ld)", mode_name(m), sub.q,
+			sub.rows ? "committed" : "rolled back", rows(tag));
+	}
+}
+
+// DISCARD ALL cannot run in the transaction the group opened: refused, the group rolled back.
+static void case_group_discard_all(Mode m, bool) {
+	auto c = client(m);
+	const std::string tag = tag_for("discard", m, false);
+	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group DISCARD ALL: P B E(INSERT) H", m, false);
+	check(run(*c, [&] { c->sendQuery("DISCARD ALL"); }), "E(25001) Z(I)", "group DISCARD ALL: Q DISCARD ALL", m, false);
+	ok(rows(tag) == 0, "group DISCARD ALL [%s]: the INSERT is rolled back (rows=%ld)", mode_name(m), rows(tag));
+	check(run(*c, [&] { c->sendQuery("SELECT 1"); }), "T D C(SELECT 1) Z(I)", "group DISCARD ALL: the next Query", m, false);
+}
+
+// A tracked SET whose value differs from the backend's: answered by ProxySQL, the group committed, and
+// the value reaches the backend before the next statement.
+static void case_group_tracked_set(Mode m, bool) {
+	auto c = client(m);
+	const std::string tag = tag_for("tzset", m, false);
+	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group SET: P B E(INSERT) H", m, false);
+	check(run(*c, [&] { c->sendQuery("SET TimeZone = 'Asia/Tokyo'"); }), "C(SET) Z(I)", "group SET: Q SET TimeZone", m, false);
+	ok(rows(tag) == 1, "group SET [%s]: the INSERT is committed (rows=%ld)", mode_name(m), rows(tag));
+	std::string tz;
+	try { c->sendQuery("SELECT current_setting('TimeZone')"); tz = first_value(c->readUntilQuiet(QUIET_MS)); }
+	catch (const PgException& e) { tz = std::string("CLOSED:") + e.what(); }
+	ok(tz == "Asia/Tokyo", "group SET [%s]: the backend runs the next statement with it (TimeZone '%s')", mode_name(m), tz.c_str());
+}
+
+// COPY FROM STDIN as the Query. Then, inside BEGIN, a statement ProxySQL answers itself must still
+// get its ReadyForQuery: the connection must know the COPY's ReadyForQuery ended the held work.
+static void case_group_copy_in(Mode m, bool) {
+	for (int txn = 0; txn < 2; txn++) {
+		auto c = client(m);
+		maybe_begin(*c, txn);
+		const std::string tag = tag_for("copyin", m, txn), tag2 = tag + "_copied";
+		const std::string z = std::string("Z(") + txn_z(txn) + ")";
+		check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group COPY: P B E(INSERT) H", m, txn);
+		check(run(*c, [&] { c->sendQuery("COPY flush_t FROM STDIN"); }), "G", "group COPY: Q COPY FROM STDIN", m, txn);
+		const std::string line = tag2 + "\t1\n";
+		check(run(*c, [&] { c->sendMessage('d', std::vector<uint8_t>(line.begin(), line.end())); c->sendMessage('c', {}); }),
+			"C(COPY 1) " + z, "group COPY: CopyData CopyDone", m, txn);
+		if (txn) {
+			check(run(*c, [&] { c->sendQuery("SET DateStyle = 'SQL, DMY'"); }), "C(SET) Z(T)", "group COPY: a SET answered by ProxySQL", m, txn);
+			check(run(*c, [&] { c->sendQuery("COMMIT"); }), "C(COMMIT) Z(I)", "group COPY: COMMIT", m, txn);
+		}
+		ok(rows(tag) == 1 && rows(tag2) == 1, "group COPY [%s%s]: the INSERT and the copied row are committed (rows %ld, %ld)",
+			mode_name(m), txn ? ", in txn" : "", rows(tag), rows(tag2));
+	}
+}
+
 struct Case {
 	const char* name;
 	int checks;        // ok() calls per (mode, txn) run
@@ -1189,6 +1252,10 @@ static const std::vector<Case> CASES = {
 	{ "row 9 rollback exec",         4,  4, false, case_row9_rollback_exec },
 	{ "row 9 rollback describe",     3,  3, false, case_row9_rollback_describe },
 	{ "row 9 named kept",            4,  4, false, case_row9_named_kept },
+	{ "group txn end",               9,  9, false, case_group_txn_end },
+	{ "group DISCARD ALL",           4,  4, false, case_group_discard_all },
+	{ "group tracked SET",           4,  4, false, case_group_tracked_set },
+	{ "group COPY FROM STDIN",       10, 10, false, case_group_copy_in },
 };
 
 static const Mode MODES[] = { Mode::LIBPQ, Mode::NATIVE, Mode::NATIVE_UNBATCHED };
@@ -1196,10 +1263,15 @@ static const Mode MODES[] = { Mode::LIBPQ, Mode::NATIVE, Mode::NATIVE_UNBATCHED 
 int main(int, char**) {
 	if (cl.getEnv()) return exit_status();
 
+	// FLUSH_ONLY=<text> runs only the cases whose name contains it.
+	const char* only = getenv("FLUSH_ONLY");
+	auto selected = [only](const Case& k) { return only == nullptr || strstr(k.name, only) != nullptr; };
 	int total = 0;
 	for (const Mode m : MODES) {
 		total += 1;  // the mode-switch check
-		for (const Case& k : CASES) total += (m == Mode::LIBPQ ? k.checks_libpq : k.checks) * (k.both_txn ? 2 : 1);
+		for (const Case& k : CASES) {
+			if (selected(k)) total += (m == Mode::LIBPQ ? k.checks_libpq : k.checks) * (k.both_txn ? 2 : 1);
+		}
 	}
 	plan(total);
 
@@ -1229,6 +1301,7 @@ int main(int, char**) {
 			mode_name(m), pid.c_str(), prev_pid.empty() ? "-" : prev_pid.c_str());
 		prev_pid = pid;
 		for (const Case& k : CASES) {
+			if (selected(k) == false) continue;
 			for (int t = 0; t < (k.both_txn ? 2 : 1); t++) {
 				try {
 					k.fn(m, t == 1);
