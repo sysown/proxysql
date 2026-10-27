@@ -1,8 +1,8 @@
-import copy,unittest
+import copy,unittest,re
 from pathlib import Path
 import yaml
 from check_ci_tier_fanout import validate_routes, version
-from ci_tier_conditions import condition_allows
+from ci_tier_conditions import condition_allows, condition_value
 class RouteTests(unittest.TestCase):
  def test_native_completion_route_preserves_automatic_coverage(self):
   rows,callers,engines=self.fixture()
@@ -34,6 +34,43 @@ class RouteTests(unittest.TestCase):
    'github.event.workflow_run.event':'workflow_run'}))
   self.assertTrue(condition_allows(gate,'v31','normal',event_context={
    'github.event.workflow_run':None}))
+ def concurrency_group(self, caller, **overrides):
+  context={
+   'github.workflow':caller['name'], 'github.repository':'sysown/proxysql',
+   'github.event_name':'workflow_run',
+   'github.event.workflow_run':True,
+   'github.event.workflow_run.head_branch':'feature/same-name',
+   'github.event.workflow_run.head_repository.full_name':'sysown/proxysql',
+   'github.event.pull_request.head.repo.full_name':'',
+   'github.head_ref':'', 'github.ref_name':'feature/same-name',
+  }
+  context.update(overrides)
+  return re.sub(r'\$\{\{(.*?)\}\}',lambda match:str(condition_value(
+   match[1],'v31','normal',event_context=context)),caller['concurrency']['group'])
+ def test_foreign_completions_cannot_cancel_trusted_concurrency_groups(self):
+  root=Path(__file__).resolve().parents[3]
+  for path in (root/'.github/workflows').glob('CI-*.yml'):
+   caller=yaml.safe_load(path.read_text());events=caller.get('on',caller.get(True,{})) or {}
+   if 'CI-builds' not in (events.get('workflow_run') or {}).get('workflows',[]):continue
+   with self.subTest(workflow=path.name):
+    trusted=self.concurrency_group(caller)
+    foreign=self.concurrency_group(caller,**{
+     'github.event.workflow_run.head_repository.full_name':'outside/fork'})
+    self.assertNotEqual(trusted,foreign)
+    # Native and legacy completion for the same repository still supersede.
+    self.assertEqual(trusted,self.concurrency_group(caller,**{
+     'github.event.workflow_run.event':'workflow_run'}))
+ def test_fork_native_builds_cannot_cancel_trusted_build_groups(self):
+  root=Path(__file__).resolve().parents[3]
+  caller=yaml.safe_load((root/'.github/workflows/CI-builds.yml').read_text())
+  native={'github.event.workflow_run':None,
+   'github.event.workflow_run.head_repository.full_name':'',
+   'github.event.workflow_run.head_branch':'',
+   'github.head_ref':'feature/same-name',
+   'github.event.pull_request.head.repo.full_name':'sysown/proxysql'}
+  trusted=self.concurrency_group(caller,**native)
+  native['github.event.pull_request.head.repo.full_name']='outside/fork'
+  self.assertNotEqual(trusted,self.concurrency_group(caller,**native))
  def fixture(self):
   rows=[dict(workflow='CI-g1',file='ci-g1.yml',job='tests',instance='run',automatic=True,tiers=['v40','v30','v31'],groups=['g1'],cells=[{}])]
   callers={'CI-g1':{'on':{'workflow_run':{'workflows':['CI-trigger']}},'jobs':{'run':{'uses':'sysown/proxysql/.github/workflows/ci-g1.yml@GH-Actions'}}}}
