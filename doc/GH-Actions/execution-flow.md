@@ -22,7 +22,7 @@ The producer publishes acceptance only after required builds and manifest public
 
 The trusted build entry rejects fork pull requests. Completion callers require the producer repository to match before starting a privileged reusable workflow; consumers still require the matching acceptance artifact. The caller validator evaluates foreign and fork event paths, so a disjunction cannot bypass the guards.
 
-The shared consumer-binding code identifies native completion by the workflow file path, not the dynamic run title. Caller YAML separately suppresses duplicate legacy build completion with `github.event.workflow_run.event != 'workflow_run'`. Workflow concurrency groups include the producer repository, so rejected foreign events cannot cancel trusted runs with matching branch names. Superseded and closed-PR cancellation recognizes both entry workflows.
+The shared consumer-binding code identifies native completion by the workflow file path, not the dynamic run title. Caller YAML separately suppresses duplicate legacy build completion with `github.event.workflow_run.event != 'workflow_run'`. Workflow concurrency groups include the producer repository and distinguish rejected nested build completions from accepted completion events. Components are separated with `:`, which cannot occur in repository names or Git branch refs. A workflow-run or pull-request event with missing source repository identity uses its own run ID; only ordinary manual/push entries fall back to the current repository. These choices prevent rejected events from cancelling trusted work before job guards execute. Superseded and closed-PR cancellation recognizes both entry workflows.
 
 ## Legacy callers
 
