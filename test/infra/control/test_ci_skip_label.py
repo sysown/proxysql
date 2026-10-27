@@ -19,6 +19,10 @@ class SkipLabelTests(unittest.TestCase):
             'github.event.pull_request.head.repo.fork': False,
             'github.event.pull_request.head.repo.full_name': 'sysown/proxysql',
             'github.repository': 'sysown/proxysql',
+            'github.ref': 'refs/pull/1/merge',
+            'needs.build.result': 'success',
+            'needs.publication-plan.result': 'success',
+            'needs.publication-plan.outputs.count': '1',
             'github.event.pull_request.labels.*.name': [],
             'github.event.action': 'synchronize',
             'github.event.label.name': '',
@@ -65,7 +69,8 @@ class SkipLabelTests(unittest.TestCase):
                 if jid == 'push-label':
                     continue
                 with self.subTest(workflow=name, job=jid):
-                    self.assertTrue(self.allowed(job, **{
+                    publishes = name == 'CI-dependency-artifacts.yml' and jid in ('publication-plan', 'publish')
+                    self.assertEqual(not publishes, self.allowed(job, **{
                         'github.event.pull_request.labels.*.name': ['pg-compat'],
                         'github.event.pull_request.head.repo.fork': name == 'CI-builds-fork.yml',
                     }))
