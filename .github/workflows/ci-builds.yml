@@ -181,6 +181,7 @@ jobs:
       id: build
       if: ${{ inputs.trusted && success() }}
       run: |
+        set -euo pipefail
         cd proxysql/
         echo "TAP build mode: ${TAP_BUILD_MODE}"
         echo "Build matrix variant: ${{ matrix.dist }}${{ matrix.type }} (tier=${TIER}, variant=${VARIANT})"
@@ -391,14 +392,6 @@ jobs:
           make ${{ matrix.dist }}${{ matrix.type }} | tee ci_build_log/build.log
         fi
 
-    - name: Check build
-      id: check_build
-      if: ${{ inputs.trusted && success() }}
-      run: |
-        for LOG in proxysql/ci_build_log/build*.log ; do
-          grep 'exited with code 0' ${LOG} || exit 1
-        done
-
     - name: Stage compiled runtime libraries in test handoff
       if: ${{ inputs.trusted && success() }}
       run: |
@@ -553,14 +546,14 @@ jobs:
         fi
 
     - name: Archive artifacts
-      if: ${{ inputs.trusted && failure() && !cancelled() && (steps.build.outcome == 'failure' || steps.check_build.outcome == 'failure') }}
+      if: ${{ inputs.trusted && failure() && !cancelled() && steps.build.outcome == 'failure' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-${{ needs.plan.outputs.execution_id }}-${{ matrix.tier }}-${{ matrix.mode }}-logs-attempt${{ github.run_attempt }}
         # The checkout is a live bind mount on self-hosted runners. Uploading
         # it after an unrelated preflight failure can race a stale container
         # and turn a diagnostic upload into a second failure. Build logs are
-        # the relevant evidence when Build or its log validation fails.
+        # the relevant evidence when Build fails.
         path: proxysql/ci_build_log/
         if-no-files-found: warn
 
