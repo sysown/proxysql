@@ -113,7 +113,7 @@ class ArtifactTests(unittest.TestCase):
    wrong=dict(leg,artifact_name='wrong')
    with self.assertRaisesRegex(ValueError,'identity'):restore_handoff(plan,wrong,root/'wrong',api)
 
- def test_restore_rejects_metadata_without_version(self):
+ def test_restore_accepts_legacy_metadata_without_version(self):
   import io,json,subprocess,tarfile,tempfile,zipfile
   from ci_tier_artifacts import restore_handoff
   from ci_tier_plan import make_plan
@@ -130,7 +130,28 @@ class ArtifactTests(unittest.TestCase):
    with zipfile.ZipFile(data,'w') as archive:archive.writestr('cache_full.tar.zst',payload)
    api=Mock(repository='sysown/proxysql');api.artifacts.return_value=[dict(id=9,name=leg['artifact_name'],expired=False,size_in_bytes=len(data.getvalue()))]
    api.download.side_effect=lambda path,target,size,**kwargs:Path(target).write_bytes(data.getvalue())
-   with self.assertRaisesRegex(ValueError,'missing product version'):restore_handoff(plan,leg,root/'restored',api)
+   restore_handoff(plan,leg,root/'restored',api)
+   self.assertEqual(json.loads((root/'restored/src/ci-tier.json').read_text()),meta)
+
+ def test_restore_rejects_invalid_version_when_present(self):
+  import io,json,subprocess,tarfile,tempfile,zipfile
+  from ci_tier_artifacts import restore_handoff
+  from ci_tier_plan import make_plan
+  from unittest.mock import Mock
+  ctx=dict(repository='sysown/proxysql',sha='a'*40,control_sha='b'*40,trigger_id=1,trigger_attempt=1,build_id=2,build_attempt=1)
+  plan=make_plan(ctx,dict(tiers=['v30'],mode='asan'),{'consumers':[]});leg=plan['legs'][0]
+  for version in ('',3):
+   with self.subTest(version=version),tempfile.TemporaryDirectory() as folder:
+    root=Path(folder);source=root/'source';(source/'src').mkdir(parents=True)
+    meta=dict(execution_id=plan['execution_id'],sha=plan['sha'],tier='v30',mode='asan',version=version)
+    (source/'src/ci-tier.json').write_text(json.dumps(meta))
+    with tarfile.open(root/'full.tar','w') as tar:tar.add(source/'src',arcname='src')
+    payload=subprocess.check_output(['zstd','-q','-c',str(root/'full.tar')])
+    data=io.BytesIO()
+    with zipfile.ZipFile(data,'w') as archive:archive.writestr('cache_full.tar.zst',payload)
+    api=Mock(repository='sysown/proxysql');api.artifacts.return_value=[dict(id=9,name=leg['artifact_name'],expired=False,size_in_bytes=len(data.getvalue()))]
+    api.download.side_effect=lambda path,target,size,**kwargs:Path(target).write_bytes(data.getvalue())
+    with self.assertRaisesRegex(ValueError,'invalid product version'):restore_handoff(plan,leg,root/'restored',api)
 
  def test_build_binary_version_probes_once_on_the_build_runner(self):
   import subprocess

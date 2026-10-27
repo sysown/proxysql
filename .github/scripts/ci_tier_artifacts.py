@@ -355,7 +355,10 @@ def restore_handoff(manifest,leg,destination,api):
         if metadata.get(key)!=value:raise ValueError('restored metadata mismatch: '+key)
     # The build stamped the version while running in the build ABI. Never
     # execute the artifact on the test host: that host may be an older distro.
-    version=metadata.get('version')
-    if not isinstance(version,str) or not version.strip():
-        raise ValueError('restored metadata missing product version')
-    validate_binary(leg['tier'],version)
+    # Handoffs produced before version stamping have no field; accept those
+    # legacy artifacts, but still reject a present, malformed value.
+    if 'version' in metadata:
+        version=metadata['version']
+        if not isinstance(version,str) or not version.strip():
+            raise ValueError('restored metadata invalid product version')
+        validate_binary(leg['tier'],version)
