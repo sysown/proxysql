@@ -63,11 +63,16 @@ jobs:
       run: |
         python3 - <<'PY_TIER'
         import os
+        import subprocess
         import sys
         from pathlib import Path
         sys.path.insert(0, str(Path('ci-control/.github/scripts').resolve()))
-        from ci_tier_artifacts import binary_version, validate_binary
-        version = binary_version(Path.cwd())
+        from ci_tier_artifacts import validate_binary
+        # The cached executable uses the Ubuntu build image's loader.
+        version = subprocess.check_output(
+            ['docker', 'compose', 'run', '--rm', '--no-deps',
+             '--entrypoint', '/opt/proxysql/src/proxysql', 'ubuntu24_build', '--version'],
+            text=True, timeout=300)
         validate_binary(os.environ['EXPECTED_TIER'], version)
         print(version)
         PY_TIER
@@ -138,11 +143,16 @@ jobs:
       run: |
         python3 - <<'PY_TIER'
         import os
+        import subprocess
         import sys
         from pathlib import Path
         sys.path.insert(0, str(Path('ci-control/.github/scripts').resolve()))
-        from ci_tier_artifacts import binary_version, validate_binary
-        version = binary_version(Path.cwd())
+        from ci_tier_artifacts import validate_binary
+        # The cached executable uses the Ubuntu build image's loader.
+        version = subprocess.check_output(
+            ['docker', 'compose', 'run', '--rm', '--no-deps',
+             '--entrypoint', '/opt/proxysql/src/proxysql', 'ubuntu24_build', '--version'],
+            text=True, timeout=300)
         validate_binary(os.environ['EXPECTED_TIER'], version)
         print(version)
         PY_TIER
