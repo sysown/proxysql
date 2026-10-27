@@ -4,7 +4,7 @@ import yaml
 ROOT=Path(__file__).resolve().parents[3]
 def workflow(name):return yaml.safe_load((ROOT/'.github/workflows'/name).read_text())
 class WorkflowTests(unittest.TestCase):
- def test_failed_build_survives_tee_even_after_a_successful_container_exit(self):
+ def run_build_prefix(self,make_body):
   step=next(s for s in workflow('ci-builds.yml')['jobs']['builds']['steps'] if s.get('name')=='Build')
   # Execute the actual setup and build pipeline, stopping before packaging.
   script=step['run'].split('# create matrix of all test folders',1)[0]+'\nfi\n'
@@ -13,12 +13,20 @@ class WorkflowTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as folder:
    root=Path(folder);(root/'proxysql').mkdir();(root/'tools').mkdir()
    (root/'proxysql/docker-compose.yml').write_text('services: {}\n')
-   for name,body in [('git','exit 0'),('make','echo "builder exited with code 0"; exit 23')]:
+   for name,body in [('git','exit 0'),('make',make_body)]:
     p=root/'tools'/name;p.write_text('#!/bin/sh\n'+body+'\n');p.chmod(0o755)
    env=dict(os.environ,PATH=str(root/'tools')+os.pathsep+os.environ['PATH'],TIER='v31',VARIANT='fixture',TAP_BUILD_MODE='normal')
    result=subprocess.run(['bash','-e','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=10)
-   self.assertEqual(result.returncode,23,result.stdout+result.stderr)
-   self.assertIn('builder exited with code 0',(root/'proxysql/ci_build_log/build-tap.log').read_text())
+   return result
+ def test_failed_build_survives_tee_even_after_a_successful_container_exit(self):
+  result=self.run_build_prefix('echo "builder exited with code 0"; exit 23')
+  self.assertEqual(result.returncode,23,result.stdout+result.stderr)
+ def test_legacy_make_cannot_hide_a_failed_container(self):
+  result=self.run_build_prefix('echo "builder exited with code 2"; exit 0')
+  self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
+ def test_successful_container_and_make_pass(self):
+  result=self.run_build_prefix('echo "builder exited with code 0"; exit 0')
+  self.assertEqual(result.returncode,0,result.stdout+result.stderr)
  def test_explicit_context_permissions_allow_stale_run_cancellation(self):
   docs={file.name:workflow(file.name) for file in (ROOT/'.github/workflows').glob('*.yml')}
   # Include wrappers (for example ci-ai-g1 -> ci-ai-gcov -> ci-tier-context):

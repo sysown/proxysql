@@ -16,7 +16,7 @@ flowchart TD
     T --> R[Publish results]
 ```
 
-The build command's exit status determines success; `tee` retains logs without hiding a failed producer. Source checkout uses the pull request head SHA, not the merge SHA. Planning, finalization and binding do not queue on the self-hosted test pool.
+The build command must succeed; `pipefail` prevents `tee` from hiding a failed producer. The existing container-success log check is also retained because older product Makefiles do not propagate the container exit status. Source checkout uses the pull request head SHA, not the merge SHA. Planning, finalization and binding do not queue on the self-hosted test pool.
 
 The producer publishes acceptance only after required builds and manifest publication succeed. Consumers validate the source repository, source revision and producer run. A failed-job rerun may accept the original immutable execution; the acceptance artifact is associated with the new completion attempt while its producer binding still names the retained build. Explicit manual consumer dispatch continues to require an exact producer run and attempt.
 

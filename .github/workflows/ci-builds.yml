@@ -251,6 +251,9 @@ jobs:
           # propagates into the build container via docker-compose + entrypoint.bash).
           if [ "${{ runner.environment }}" = "self-hosted" ]; then export MAKEOPT="-j8"; fi
           make ${{ matrix.dist }}-tap | tee ci_build_log/build-tap.log
+          # Older product Makefiles do not propagate the container exit code.
+          # Keep their success check in addition to pipefail for make failures.
+          grep -q 'exited with code 0' ci_build_log/build-tap.log
 
           # create matrix of all test folders containing *-t
           echo "[ "$(find test/tap/ -name '*-t' | xargs -n1 dirname | uniq | sed 's|test/tap/||' | xargs -I{} -n1 echo -n "'{}', ")"]" > tap-matrix.json
@@ -388,8 +391,10 @@ jobs:
           # build TYPE
           #sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) ${TYPE#-}'" docker-compose.yml
           make ${{ matrix.dist }}-test | tee ci_build_log/build.log
+          grep -q 'exited with code 0' ci_build_log/build.log
         else
           make ${{ matrix.dist }}${{ matrix.type }} | tee ci_build_log/build.log
+          grep -q 'exited with code 0' ci_build_log/build.log
         fi
 
     - name: Stage compiled runtime libraries in test handoff

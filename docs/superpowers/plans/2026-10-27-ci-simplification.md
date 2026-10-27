@@ -8,7 +8,7 @@
 
 ## Tasks
 
-- [x] Build status: add a regression executing the actual build pipeline with a failing producer and successful container log; enable pipefail and delete log-text success inference. Files: ci-builds.yml; test_ci_tier_workflows.py.
+- [x] Build status: add a regression executing the actual build pipeline with a failing producer and successful container log; enable pipefail while retaining the legacy container-success log check. Files: ci-builds.yml; test_ci_tier_workflows.py.
 - [x] Coordination: move plan, finalization and consumer-context metadata jobs to hosted runners. Files: ci-builds.yml; ci-tier-context.yml. Verify existing workflow contracts and YAML.
 - [x] Retention: retain the handoff for the same period as its manifests/bindings. File: ci-builds.yml. Verify artifact declarations.
 - [x] Lint: run on PR changes, manual dispatch and maintained-branch pushes; remove the feature-branch push label lookup and obsolete lookup tests. Files: CI-lint-groups-json.yml; test_ci_skip_label.py. Keep PR skip-label behavior.
@@ -19,3 +19,5 @@
 ## Audit correction: archive restoration
 
 The first decompression pass checks the complete archive before any files are extracted. Existing tests require both unsafe members and corrupt trailing zstd data to leave the checkout untouched. A single streaming extraction would violate that guarantee. Preserving it would require staging and safe publication, increasing code and filesystem complexity. Retain the current two-pass implementation; it has a demonstrated correctness purpose rather than being redundant validation.
+
+Review confirmed that older maintained product Makefiles do not propagate the container exit code. Keep the existing success marker as an additional check; pipefail independently catches make and packaging failures. Removing that marker must wait until all supported product Makefiles propagate container status.
