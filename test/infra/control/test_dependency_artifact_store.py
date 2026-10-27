@@ -1,9 +1,11 @@
 """Automatic exact-identity storage, independent versions and remote lookup."""
 import importlib
+from http.client import HTTPException, IncompleteRead
 import io
 import json
 from pathlib import Path
 import shutil
+import ssl
 import subprocess
 import tarfile
 import unittest
@@ -138,7 +140,7 @@ class AutomaticStoreTests(unittest.TestCase):
         entry['identity']['version'] = '9.9.9'
         (directory / 'entry.json').write_text(json.dumps(entry))
         shutil.rmtree(str(self.tree))
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, 'fingerprint does not match identity'):
             self.prepare()
         self.assertEqual(1, self.count())
 
@@ -164,6 +166,115 @@ class AutomaticStoreTests(unittest.TestCase):
         self.assertEqual('prebuilt', self.prepare()['origin'])
         self.assertEqual(1, self.count())
 
+    def test_regular_file_at_bundle_key_is_rejected_until_explicit_source_repair(self):
+        first = self.prepare()
+        directory = self.root / '.cache/dependency-artifacts/bundles/openssl' / first['fingerprint']
+        shutil.rmtree(str(directory))
+        directory.write_bytes(b'corrupt cache key')
+        for mode in ('auto', 'prebuilt'):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, 'regular files and directories'):
+                self.prepare(mode)
+            self.assertEqual(b'corrupt cache key', directory.read_bytes())
+        self.assertFalse(self.prepare('source')['changed'])
+        self.assertEqual(1, self.count())
+        shutil.rmtree(str(self.tree))
+        self.assertEqual('prebuilt', self.prepare()['origin'])
+        self.assertEqual(1, self.count())
+
+    def test_symlinked_bundle_parents_are_rejected_for_reads_and_source_repairs(self):
+        first = self.prepare()
+        cache = self.root / '.cache/dependency-artifacts'
+        for relative in ('bundles/openssl', 'bundles'):
+            directory = cache / relative
+            outside = self.root / ('outside-' + relative.replace('/', '-'))
+            directory.rename(outside)
+            directory.symlink_to(outside, target_is_directory=True)
+            try:
+                for mode in ('auto', 'prebuilt', 'source'):
+                    with self.subTest(relative=relative, mode=mode):
+                        with self.assertRaisesRegex(ValueError, 'regular files and directories'):
+                            self.prepare(mode)
+                self.assertEqual(1, self.count())
+                self.assertTrue((cache / 'bundles/openssl' / first['fingerprint'] / 'entry.json').exists())
+            finally:
+                directory.unlink()
+                outside.rename(directory)
+
+    def test_symlinked_bundle_parents_cannot_receive_new_source_bundles(self):
+        self.prepare()
+        cache = self.root / '.cache/dependency-artifacts'
+        shutil.rmtree(str(cache / 'bundles'))
+        for relative in ('bundles/openssl', 'bundles'):
+            directory = cache / relative
+            directory.parent.mkdir(parents=True, exist_ok=True)
+            outside = self.root / ('empty-outside-' + relative.replace('/', '-'))
+            outside.mkdir()
+            directory.symlink_to(outside, target_is_directory=True)
+            try:
+                with self.subTest(relative=relative):
+                    with self.assertRaisesRegex(ValueError, 'regular files and directories'):
+                        self.prepare('source')
+                    self.assertEqual([], list(outside.iterdir()))
+            finally:
+                directory.unlink()
+                if relative == 'bundles/openssl':
+                    directory.parent.rmdir()
+
+    def test_symlinked_key_lock_directory_or_file_is_rejected(self):
+        store = importlib.import_module('store')
+        identity = self.identity.build_identity('openssl', self.root, self.env)
+        key = self.identity.fingerprint(identity)
+        for component in ('locks', 'lock-file'):
+            cache = self.root / ('lock-cache-' + component)
+            cache.mkdir()
+            outside = self.root / ('lock-outside-' + component)
+            if component == 'locks':
+                outside.mkdir()
+                (cache / 'locks').symlink_to(outside, target_is_directory=True)
+            else:
+                (cache / 'locks').mkdir()
+                outside.write_bytes(b'untouched')
+                (cache / 'locks' / ('openssl-' + key + '.lock')).symlink_to(outside)
+            with self.subTest(component=component):
+                with self.assertRaisesRegex(ValueError, 'regular files and directories'):
+                    with store.key_lock(cache, 'openssl', key):
+                        pass
+                if component == 'locks':
+                    self.assertEqual([], list(outside.iterdir()))
+                else:
+                    self.assertEqual(b'untouched', outside.read_bytes())
+
+    def test_explicit_external_cache_root_can_resolve_a_symlink(self):
+        external = self.root / 'external-cache'
+        external.mkdir()
+        selected = self.root / 'selected-cache'
+        selected.symlink_to(external, target_is_directory=True)
+        self.env['DEPS_ARTIFACT_CACHE_DIR'] = str(selected)
+        first = self.prepare()
+        self.assertTrue((external / 'bundles/openssl' / first['fingerprint'] / 'entry.json').is_file())
+        shutil.rmtree(str(self.tree))
+        self.assertEqual('prebuilt', self.prepare()['origin'])
+        self.assertEqual(1, self.count())
+
+    def test_remote_transport_read_errors_fall_back_only_in_auto(self):
+        store = importlib.import_module('store')
+        identity = self.identity.build_identity('openssl', self.root, self.env)
+        key = self.identity.fingerprint(identity)
+        self.env['DEPS_ARTIFACT_REMOTE'] = '1'
+        for error in (ssl.SSLError('TLS read failed'), HTTPException('protocol failed'),
+                      IncompleteRead(b'{"partial":', 100)):
+            class Interrupted(io.BytesIO):
+                def geturl(self): return store.entry_url('openssl', key)
+                def read(self, size): raise error
+            with self.subTest(error=type(error).__name__):
+                with patch.object(store, 'urlopen', side_effect=lambda *a, **kw: Interrupted()):
+                    with self.assertRaisesRegex(store.Unavailable, 'metadata unavailable'):
+                        self.prepare('prebuilt')
+                    self.assertEqual('source', self.prepare()['origin'])
+                shutil.rmtree(str(self.root / '.cache/dependency-artifacts/bundles'))
+                shutil.rmtree(str(self.tree))
+        self.assertEqual(3, self.count())
+
     def test_remote_lookup_uses_computed_signature_and_validates_identity(self):
         store = importlib.import_module('store')
         self.env['DEPS_ARTIFACT_REMOTE'] = '0'
@@ -181,7 +292,7 @@ class AutomaticStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'URL|url'):
                 store.remote_entry('openssl', entry['identity'], self.env)
 
-    def test_remote_404_is_miss_but_invalid_json_is_integrity_failure(self):
+    def test_remote_404_is_miss_but_invalid_metadata_is_integrity_failure(self):
         store = importlib.import_module('store')
         identity = self.identity.build_identity('openssl', self.root, self.env)
         with patch.object(store, 'urlopen', side_effect=HTTPError('https://github.com/x', 404, '', {}, None)):
@@ -189,9 +300,14 @@ class AutomaticStoreTests(unittest.TestCase):
         key = self.identity.fingerprint(identity)
         class Response(io.BytesIO):
             def geturl(self): return store.entry_url('openssl', key)
-        with patch.object(store, 'urlopen', return_value=Response(b'{"format":1,"format":2}')):
-            with self.assertRaises(ValueError):
-                store.remote_entry('openssl', identity, self.env)
+        for data, message in ((b'{"format":1,"format":2}', 'duplicate JSON key: format'),
+                              (b'{', 'Expecting property name'),
+                              (b'{}', 'missing artifact field: dependency')):
+            with self.subTest(data=data):
+                with patch.object(store, 'urlopen', return_value=Response(data)):
+                    with self.assertRaisesRegex(ValueError, message) as caught:
+                        store.remote_entry('openssl', identity, self.env)
+                self.assertNotIsInstance(caught.exception, store.Unavailable)
 
 
 if __name__ == '__main__':

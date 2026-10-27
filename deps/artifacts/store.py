@@ -1,12 +1,14 @@
 """Exact-identity bundle storage; release URLs never depend on a core branch."""
 from contextlib import contextmanager
 import fcntl
+from http.client import HTTPException
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import tempfile
 from urllib.error import HTTPError, URLError
@@ -46,17 +48,34 @@ def entry_url(dependency, key):
     return asset_url(dependency, key, 'entry.json')
 
 
+def cache_directory(cache, *parts, create=False):
+    # The selected root may intentionally resolve outside the checkout. All
+    # components below that root must be directories, never cached symlinks.
+    directory = Path(cache).resolve()
+    if create:
+        directory.mkdir(parents=True, exist_ok=True)
+    for part in parts:
+        directory = directory / part
+        if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+            raise ValueError('dependency cache must contain regular files and directories')
+        if create:
+            directory.mkdir(exist_ok=True)
+    return directory
+
+
 def bundle_directory(cache, dependency, key):
     release_tag(dependency, key)
-    return Path(cache) / 'bundles' / dependency / key
+    return cache_directory(cache, 'bundles', dependency) / key
 
 
 @contextmanager
 def key_lock(cache, dependency, key):
     release_tag(dependency, key)
-    directory = Path(cache) / 'locks'
-    directory.mkdir(parents=True, exist_ok=True)
-    with (directory / (dependency + '-' + key + '.lock')).open('a') as lock:
+    directory = cache_directory(cache, 'locks', create=True)
+    path = directory / (dependency + '-' + key + '.lock')
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError('dependency cache must contain regular files and directories')
+    with path.open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         os.set_inheritable(lock.fileno(), True)
         yield
@@ -75,8 +94,9 @@ def checked_entry(entry, dependency, identity, remote=False):
 
 def local_entry(cache, dependency, identity):
     directory = bundle_directory(cache, dependency, fingerprint(identity))
-    if directory.is_symlink() or any((directory / name).is_symlink()
-                                     for name in ('entry.json', 'bundle.tar.gz')):
+    if (directory.is_symlink() or (directory.exists() and not directory.is_dir()) or
+            any((directory / name).is_symlink()
+                for name in ('entry.json', 'bundle.tar.gz'))):
         raise ValueError('dependency cache must contain regular files and directories')
     if not (directory / 'entry.json').is_file() or not (directory / 'bundle.tar.gz').is_file():
         return None
@@ -96,7 +116,8 @@ def remote_entry(dependency, identity, environ=None):
         if exc.code == 404:
             return None
         raise Unavailable('dependency metadata unavailable: ' + str(exc)) from exc
-    except (URLError, TimeoutError, socket.timeout, ConnectionError) as exc:
+    except (URLError, TimeoutError, socket.timeout, ConnectionError,
+            ssl.SSLError, HTTPException) as exc:
         raise Unavailable('dependency metadata unavailable: ' + str(exc)) from exc
     if len(data) > MAX_ENTRY:
         raise ValueError('dependency metadata exceeds size limit')
@@ -128,6 +149,7 @@ def save_local(cache, dependency, identity, tree=None, root=None, environ=None,
         # fail integrity checks; neither path follows cached symlinks.
         directory = bundle_directory(cache, dependency, fingerprint(identity))
         if (not repair or directory.is_symlink() or
+                (directory.exists() and not directory.is_dir() and not directory.is_file()) or
                 any((directory / name).is_symlink() for name in ('entry.json', 'bundle.tar.gz'))):
             raise
         existing = None
@@ -135,7 +157,7 @@ def save_local(cache, dependency, identity, tree=None, root=None, environ=None,
         return existing
     key = fingerprint(identity)
     destination = bundle_directory(cache, dependency, key)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    cache_directory(cache, 'bundles', dependency, create=True)
     destination.parent.chmod(0o755)
     destination.parent.parent.chmod(0o755)
     stage = Path(tempfile.mkdtemp(prefix='.bundle-stage-', dir=str(destination.parent)))
@@ -156,7 +178,14 @@ def save_local(cache, dependency, identity, tree=None, root=None, environ=None,
         stage.chmod(0o755)
         if destination.exists():
             # Incomplete entries are never hits; discard only this exact key.
-            shutil.rmtree(str(destination))
+            if destination.is_symlink():
+                raise ValueError('dependency cache must contain regular files and directories')
+            if destination.is_dir():
+                shutil.rmtree(str(destination))
+            elif repair and destination.is_file():
+                destination.unlink()
+            else:
+                raise ValueError('dependency cache must contain regular files and directories')
         os.replace(str(stage), str(destination))
         return entry, destination / 'bundle.tar.gz'
     finally:
