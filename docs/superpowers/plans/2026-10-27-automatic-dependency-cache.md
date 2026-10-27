@@ -17,6 +17,10 @@ Keep different dependency versions and simultaneous publisher keys independent.
 Read actual Make/container settings. Never promote arbitrary PR cache payloads
 into the shared store. Preserve ABI 16 checks and exact package provenance.
 
+Rollout prerequisite: merge CI control PR #6543 before deploying the product
+helper and AWS plugin changes. Implementation and validation can reference its
+immutable public commit before merge.
+
 ## Tasks
 
 - [ ] Core helpers: add failing cold-miss/hit/version/isolation/remote-publication

@@ -57,6 +57,7 @@ class DependencyCIAPITests(unittest.TestCase):
         smoke.write_text('exit 47\n')
         with self.assertRaises(subprocess.CalledProcessError):
             ci.prepare_dependencies(self.root, self.env)
+        self.assertFalse(cache.exists(), 'failed smoke must discard the local bundle')
 
     def test_make_dry_run_never_prepares_or_writes_cache(self):
         environment = dict(self.env, MAKEFLAGS='n -j4 --jobserver-auth=3,4')

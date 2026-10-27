@@ -10,6 +10,12 @@ signature. No publication dispatch or registry-edit commit is required. OpenSSL
 and DuckDB have separate keys, and bundles for different versions and settings
 coexist.
 
+Deploy the companion CI control changes
+([PR #6543](https://github.com/sysown/proxysql/pull/6543)) before merging the
+product helper, then the AWS plugin integration. Validation can use the immutable
+control commit before merge; ordinary core workflows adopt it when the control
+branch is updated.
+
 ## Build modes
 
 ```bash
@@ -123,7 +129,8 @@ dependency maintenance.
 CI computes independent OpenSSL and DuckDB keys through dependency Make in the
 actual build environment. It restores only exact Actions cache matches, verifies
 the stored pair, prepares the dependencies, and runs compile/link/runtime probes
-before saving bundles immediately. Extracted dependency trees and general build
+before saving bundles to Actions immediately. A failed CI smoke test also
+discards the local bundle; it cannot become a publication candidate. Extracted dependency trees and general build
 outputs are not part of this cache. Keys contain the full dependency fingerprint;
 they do not include the core commit, branch, or workflow run.
 

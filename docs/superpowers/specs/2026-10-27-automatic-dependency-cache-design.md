@@ -43,7 +43,17 @@ publication remains an optional backfill only. No lock registration is needed.
 AWS plugin CI resolves `v3.0` once per run, passes that SHA to every build job,
 updates only the workspace manifest's commit, preserves the declared ABI check,
 and records the exact tested SHA in package metadata. A source-ref override
-allows real PR testing before the core helper is merged.
+allows real PR testing before the core helper is merged. Override builds have
+read-only repository credentials. Shared publication accepts only source SHAs
+reachable from protected `v3.0`; a protected-branch prewarm dispatch rejects an
+unreviewed override before running its build code or writing default-branch
+caches. PR merge refs retain their own exact caches.
+
+Planning selects hosted build profiles from a reviewed `v3.0` checkout.
+Publication separately resolves fresh reviewed helper code and binds candidate
+inputs to the exact source SHA through Git objects; it does not trust or execute
+candidate planning or build code. The two reviewed control snapshots need not
+share a commit because the full dependency identity determines compatibility.
 
 ## Approaches
 

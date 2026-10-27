@@ -203,6 +203,32 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(self.tree.exists())
         self.assertFalse(list(cache.glob('.download-*')))
 
+    def test_archive_transport_errors_are_unavailable_and_partial_downloads_removed(self):
+        from http.client import HTTPException
+        import ssl
+        entry = dict(url='https://example.com/dependency.tar.gz', sha256='a' * 64, size=10)
+        for error in (ssl.SSLError('TLS read interrupted'), HTTPException('response interrupted')):
+            class Interrupted:
+                def __enter__(self): return self
+                def __exit__(self, *args): pass
+                def geturl(self): return entry['url']
+                def read(self, size): raise error
+            with self.subTest(error=error), patch.object(self.api, 'urlopen', return_value=Interrupted()):
+                with self.assertRaisesRegex(self.api.Unavailable, 'artifact download unavailable'):
+                    self.api.download_artifact(entry, self.root / 'transport-cache')
+                self.assertFalse(list((self.root / 'transport-cache').iterdir()))
+
+    def test_accepted_source_recreates_missing_bundle_without_remote_lookup(self):
+        result = self.prepare('source')
+        cache = self.root / '.cache/dependency-artifacts/bundles/openssl' / result['fingerprint']
+        shutil.rmtree(str(cache))
+        self.env['DEPS_ARTIFACT_REMOTE'] = '1'
+        import store
+        with patch.object(store, 'remote_entry', side_effect=AssertionError('unnecessary network lookup')):
+            self.assertFalse(self.prepare()['changed'])
+        self.assertTrue((cache / 'entry.json').is_file())
+        self.assertEqual(1, self.count())
+
     def test_python36_response_read_timeout_is_unavailable(self):
         # Before Python 3.10 socket.timeout was not a TimeoutError subclass.
         class LegacySocketTimeout(OSError): pass

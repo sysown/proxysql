@@ -3,10 +3,12 @@
 import argparse
 import fcntl
 import json
+from http.client import HTTPException
 import os
 from pathlib import Path
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -54,7 +56,8 @@ def download_artifact(entry, cache):
                         output.write(data)
                     if received < entry['size']:
                         raise Unavailable('artifact download ended before registered size')
-            except (HTTPError, URLError, TimeoutError, socket.timeout, ConnectionError) as exc:
+            except (HTTPError, URLError, TimeoutError, socket.timeout, ConnectionError,
+                    ssl.SSLError, HTTPException) as exc:
                 raise Unavailable('artifact download unavailable: ' + str(exc)) from exc
         verify_archive(temporary, entry)
         os.replace(temporary, target)
@@ -120,13 +123,6 @@ def prepare_locked(dependency, root, mode, environ, identity, conf, cache):
                 registry = load_registry(registry_path)
                 entry = next((item for item in registry['artifacts']
                               if item['dependency'] == dependency and item['fingerprint'] == key), None)
-            if entry is None and environ.get('DEPS_ARTIFACT_REMOTE', '1') != '0':
-                try:
-                    entry = store.remote_entry(dependency, identity, environ)
-                except Unavailable as exc:
-                    if mode == 'prebuilt':
-                        raise
-                    report(dependency, 'auto: ' + str(exc) + '; building source')
     tree = conf['tree']
     old = None
     if (tree / '.proxysql-dependency.json').is_file():
@@ -141,6 +137,17 @@ def prepare_locked(dependency, root, mode, environ, identity, conf, cache):
                     raise ValueError('missing prepared dependency output: ' + relative)
         except (ValueError, OSError):
             old = None
+    accepted_source = (isinstance(old, dict) and old.get('fingerprint') == key and
+                       old.get('origin') == 'source' and mode != 'prebuilt' and
+                       (tree / '.proxysql-build-complete').is_file())
+    if (mode != 'source' and identity['eligible'] and entry is None and
+            not accepted_source and environ.get('DEPS_ARTIFACT_REMOTE', '1') != '0'):
+        try:
+            entry = store.remote_entry(dependency, identity, environ)
+        except Unavailable as exc:
+            if mode == 'prebuilt':
+                raise
+            report(dependency, 'auto: ' + str(exc) + '; building source')
     if (isinstance(old, dict) and old.get('fingerprint') == key and
             old.get('origin') in ('source', 'prebuilt') and
             (tree / '.proxysql-build-complete').is_file()):

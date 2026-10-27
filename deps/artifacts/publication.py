@@ -4,6 +4,7 @@ The caller supplies a fresh trusted checkout and serializes publication jobs by
 the complete dependency fingerprint. Candidate payloads are data, never code.
 """
 import hashlib
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -77,6 +78,13 @@ def _assignment(text, name):
     return match.group(1)
 
 
+@lru_cache(maxsize=128)
+def _source_digest(repo_root, source_sha, archive_path):
+    # Git objects are immutable. Reuse digests across profile candidates rather
+    # than buffering the same vendored archive once for every configuration.
+    return hashlib.sha256(_git(repo_root, 'show', source_sha + ':' + archive_path)).hexdigest()
+
+
 def _focused_identity(identity, source_sha, repo_root):
     """Bind candidate source facts to Git objects, never the working directory."""
     dependency = identity['dependency']
@@ -94,7 +102,7 @@ def _focused_identity(identity, source_sha, repo_root):
     if (len(checksum) != 2 or checksum[1].lstrip('*') != archive_name or
             not re.fullmatch(r'[0-9a-fA-F]{64}', checksum[0])):
         raise ValueError('reviewed source checksum metadata is invalid')
-    actual = hashlib.sha256(_git(repo_root, 'show', source_sha + ':' + archive_path)).hexdigest()
+    actual = _source_digest(repo_root, source_sha, archive_path)
     if actual != checksum[0].lower() or actual != identity['source_sha256']:
         raise ValueError('candidate source checksum does not match reviewed source')
     expected = {
@@ -222,18 +230,21 @@ def _gh(arguments, environ, check=True):
 
 
 def _release(tag, repository, environ):
-    result = _gh(['api', 'repos/' + repository + '/releases/tags/' + tag], environ, check=False)
+    # REST releases/tags only sees published releases. The CLI uses GraphQL
+    # here so a newly created draft, or an interrupted draft, is also visible.
+    result = _gh(['release', 'view', tag, '--repo', repository,
+                  '--json', 'isDraft,tagName'], environ, check=False)
     if result.returncode:
-        if re.search(r'HTTP 404\b', result.stderr):
+        if result.stderr.strip() == 'release not found':
             return None
         raise ValueError('cannot inspect dependency release: ' + result.stderr.strip())
     if len(result.stdout.encode()) > store.MAX_ENTRY:
         raise ValueError('dependency release API metadata exceeds size limit')
     release = json.loads(result.stdout, object_pairs_hook=unique_object)
-    if (not isinstance(release, dict) or type(release.get('draft')) is not bool or
-            release.get('tag_name', tag) != tag):
+    if (not isinstance(release, dict) or type(release.get('isDraft')) is not bool or
+            release.get('tagName') != tag):
         raise ValueError('invalid dependency release API metadata')
-    return release
+    return {'draft': release['isDraft'], 'tag_name': release['tagName']}
 
 
 def _published_winner(entry, source_sha, repo_root, environ):

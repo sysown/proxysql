@@ -234,7 +234,8 @@ class PublicationTests(unittest.TestCase):
         shutil.copytree(str(ROOT / 'deps/artifacts'), str(control / 'deps/artifacts'))
         output = self.root / 'output'
         environment = dict(os.environ, PROFILE_GROUP='ubuntu24', DEPENDENCY='both',
-                           RUNNER_TEMP=str(self.root), GITHUB_OUTPUT=str(output), PYTHONPATH=str(source))
+                           RUNNER_TEMP=str(self.root), GITHUB_OUTPUT=str(output), PYTHONPATH=str(source),
+                           DISPATCH_EVENT='pull_request', DISPATCH_REF='refs/pull/1/merge')
         subprocess.run(['bash', '-e', '-c', planner['run']], cwd=str(control),
                        env=environment, check=True)
         values = dict(line.split('=', 1) for line in output.read_text().splitlines())
@@ -243,6 +244,49 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue(all(item['runner'] in ('ubuntu-24.04', 'ubuntu-24.04-arm') for item in matrix))
         self.assertEqual(subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'],
                                                 universal_newlines=True).strip(), values['source_sha'])
+
+    def test_protected_dispatch_rejects_unreviewed_source_before_planning_or_building(self):
+        import yaml
+        workflow = yaml.safe_load((ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text())
+        plan = workflow['jobs']['plan']
+        planner = next(step for step in plan['steps'] if step.get('id') == 'matrix')
+        trusted = next(step['with'] for step in plan['steps']
+                       if step.get('with', {}).get('path') == 'profile-control')
+        self.assertEqual(0, trusted['fetch-depth'])
+        source = self.root / 'source'
+        source.mkdir()
+        def git(root, *args):
+            return subprocess.check_output(['git', '-C', str(root)] + list(args),
+                                           stderr=subprocess.PIPE, universal_newlines=True).strip()
+        def commit(root, message):
+            git(root, 'add', '.')
+            git(root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                'commit', '-qm', message)
+        git(source, 'init', '-q')
+        (source / 'readme').write_text('reviewed source')
+        commit(source, 'reviewed source')
+        control = self.root / 'profile-control'
+        subprocess.run(['git', 'clone', '-q', str(source), str(control)], check=True)
+        shutil.copytree(str(ROOT / 'deps/artifacts'), str(control / 'deps/artifacts'))
+        commit(control, 'reviewed planner')
+        output = self.root / 'output'
+        environment = dict(os.environ, PROFILE_GROUP='ubuntu24', DEPENDENCY='both',
+                           RUNNER_TEMP=str(self.root), GITHUB_OUTPUT=str(output),
+                           DISPATCH_EVENT='workflow_dispatch', DISPATCH_REF='refs/heads/v3.0')
+        subprocess.run(['bash', '-e', '-c', planner['run']], cwd=str(control),
+                       env=environment, check=True)
+        self.assertTrue(output.exists())
+        output.unlink()
+        (self.root / 'dependency-matrix.json').unlink()
+        (source / 'unreviewed').write_text('topic change')
+        commit(source, 'unreviewed topic')
+        result = subprocess.run(['bash', '-e', '-c', planner['run']], cwd=str(control),
+                                env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                universal_newlines=True)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('requires source from reviewed history', result.stderr)
+        self.assertFalse(output.exists())
+        self.assertFalse((self.root / 'dependency-matrix.json').exists())
 
     def test_automatic_workflow_isolates_publisher_and_current_attempt_candidates(self):
         import yaml

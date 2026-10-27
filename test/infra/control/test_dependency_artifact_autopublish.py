@@ -43,10 +43,18 @@ class GitHub:
         output, error, status = '', '', 0
         if args[1] == 'api':
             tag = args[2].split('/releases/tags/', 1)[1]
-            if tag in self.releases:
+            if tag in self.releases and not self.releases[tag]['release']['draft']:
                 output = json.dumps(self.releases[tag]['release'])
             else:
                 error, status = 'gh: Not Found (HTTP 404)', 1
+        elif args[1:3] == ['release', 'view']:
+            tag = args[3]
+            state = self.releases.get(tag)
+            if state is None:
+                error, status = 'release not found', 1
+            else:
+                output = json.dumps({'isDraft': state['release']['draft'],
+                                     'tagName': state['release'].get('tag_name', tag)})
         else:
             operation, tag = args[2:4]
             self.writes.append((operation, tag))
@@ -198,6 +206,16 @@ class AutomaticPublicationTests(unittest.TestCase):
         self.assertEqual({'include': [{'dependency': 'openssl', 'fingerprint': entry['fingerprint'],
                                        'artifact': 'dependency-candidate-a1-other-build-openssl'}]}, self.matrix())
 
+    def test_repeated_profile_candidates_hash_vendored_source_only_once(self):
+        self.candidate()
+        self.candidate('dependency-candidate-a1-other-build-openssl')
+        api = self.api()
+        with patch.object(api, '_git', wraps=api._git) as git:
+            self.assertEqual(1, len(self.matrix()['include']))
+        archive_reads = [call for call in git.call_args_list
+                         if call.args[1:] == ('show', self.source + ':deps/libssl/openssl-3.5.7.tar.gz')]
+        self.assertEqual(1, len(archive_reads))
+
     def test_old_attempt_artifacts_are_ignored(self):
         directory = self.candidates / 'dependency-candidate-a2-other-build-openssl'
         directory.mkdir()
@@ -230,7 +248,7 @@ class AutomaticPublicationTests(unittest.TestCase):
         entry['fingerprint'] = self.identity.fingerprint(entry['identity'])
         entry['url'] = self.store.asset_url('openssl', entry['fingerprint'], 'bundle.tar.gz')
         (directory / 'entry.json').write_text(json.dumps(entry))
-        with self.assertRaisesRegex(ValueError, 'version|reviewed|source'):
+        with self.assertRaisesRegex(ValueError, 'candidate version does not match reviewed source'):
             self.matrix()
 
     def test_incomplete_toolchain_cannot_be_promoted_even_when_payload_matches(self):

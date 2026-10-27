@@ -67,6 +67,7 @@ jobs:
           repository: sysown/proxysql
           ref: refs/heads/v3.0
           path: profile-control
+          fetch-depth: 0
           sparse-checkout: deps/artifacts
           persist-credentials: false
       - name: Select exact build profiles
@@ -75,11 +76,22 @@ jobs:
         env:
           PROFILE_GROUP: ${{ inputs.group || 'ubuntu24' }}
           DEPENDENCY: ${{ inputs.dependency || 'both' }}
+          DISPATCH_EVENT: ${{ github.event_name }}
+          DISPATCH_REF: ${{ github.ref }}
         run: |
+          source_sha=$(git -C ../source rev-parse HEAD)
+          # A protected-branch dispatch must not let an unreviewed checkout
+          # populate default-branch caches before publication rejects it.
+          if [[ "$DISPATCH_EVENT" == workflow_dispatch && "$DISPATCH_REF" == refs/heads/v3.0 ]]; then
+            if ! git merge-base --is-ancestor "$source_sha" HEAD; then
+              echo 'Protected v3.0 dispatch requires source from reviewed history' >&2
+              exit 1
+            fi
+          fi
           python3 -E deps/artifacts/publish.py matrix --group "$PROFILE_GROUP" --dependency "$DEPENDENCY" > "$RUNNER_TEMP/dependency-matrix.json"
           {
             echo "matrix=$(cat "$RUNNER_TEMP/dependency-matrix.json")"
-            echo "source_sha=$(git -C ../source rev-parse HEAD)"
+            echo "source_sha=$source_sha"
           } >> "$GITHUB_OUTPUT"
 
   build:
@@ -103,7 +115,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: sysown/proxysql
-          ref: a801e9a86f0674c99216e77dcd80fa38c69bbf0a
+          ref: cf260c2dbac3a54f9be553f34cff85bd9e06fa99
           path: ci-control
           sparse-checkout: .github/actions/dependency-cache
           persist-credentials: false
@@ -142,10 +154,10 @@ jobs:
     needs: [plan, build]
     # PRs keep their own exact caches; only reviewed history enters the public
     # store. The fresh publisher validates ancestry and source hashes again.
-    if: ${{ github.repository == 'sysown/proxysql' && github.ref == 'refs/heads/v3.0' && github.event_name != 'pull_request' }}
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.build.result == 'failure') && github.repository == 'sysown/proxysql' && github.ref == 'refs/heads/v3.0' && github.event_name != 'pull_request' }}
     permissions:
       contents: write
       actions: read
-    uses: sysown/proxysql/.github/workflows/ci-publish-dependency-cache.yml@a801e9a86f0674c99216e77dcd80fa38c69bbf0a
+    uses: sysown/proxysql/.github/workflows/ci-publish-dependency-cache.yml@cf260c2dbac3a54f9be553f34cff85bd9e06fa99
     with:
       source_sha: ${{ needs.plan.outputs.source_sha }}

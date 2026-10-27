@@ -26,6 +26,7 @@ class SkipLabelTests(unittest.TestCase):
             'github.event.workflow_run.display_title': 'feature CI-builds abc123',
             'github.event.workflow_run.event': 'pull_request',
             'github.event.workflow_run.head_repository.full_name': 'sysown/proxysql',
+            'needs.build.result': 'success',
             'needs.push-label.result': 'skipped',
             'needs.push-label.outputs.skip': '',
         }

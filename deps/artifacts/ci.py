@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -55,9 +56,18 @@ def prepare_dependencies(root, environ):
                 tree = configuration(dependency, root)['tree']
                 # Execute only in the read-only build job; publication never
                 # executes a candidate library or scripts from its archive.
-                subprocess.check_call(['bash', str(Path(root) / 'test/infra/control/dependency-artifacts-smoke.bash'),
-                                       dependency, str(tree)], env=dict(environ))
-                cached = store.local_entry(store.cache_root(root, environ), dependency, identity)
+                cache = store.cache_root(root, environ)
+                try:
+                    subprocess.check_call(['bash', str(Path(root) / 'test/infra/control/dependency-artifacts-smoke.bash'),
+                                           dependency, str(tree)], env=dict(environ))
+                except (OSError, subprocess.SubprocessError):
+                    # Failed runtime validation must not leave a local bundle
+                    # available for later reuse, caching or publication.
+                    with store.key_lock(cache, dependency, fingerprint(identity)):
+                        if store.local_entry(cache, dependency, identity) is not None:
+                            shutil.rmtree(str(store.bundle_directory(cache, dependency, fingerprint(identity))))
+                    raise
+                cached = store.local_entry(cache, dependency, identity)
                 if cached is None:
                     raise ValueError('successful dependency preparation did not persist a bundle')
         results[dependency] = result
