@@ -8,6 +8,11 @@ shape that must be accepted. validate() takes parsed documents, so no git
 ref or fixture on disk is needed.
 """
 import copy
+from pathlib import Path
+import subprocess
+import tempfile
+
+import yaml
 import sys
 import unittest
 
@@ -119,6 +124,55 @@ class SnapshotPlanner(unittest.TestCase):
     def test_planner_cannot_force_trust(self):
         docs=self.documents();docs[2]['jobs']['plan']['steps'][0]['env']['TRUSTED']='true'
         self.assertTrue(subject.validate(*docs))
+
+class DedicatedUntrustedCallee(unittest.TestCase):
+    def documents(self):
+        base,fork,reusable=SnapshotPlanner().documents()
+        fork['jobs']['run']['uses']='sysown/proxysql/.github/workflows/ci-builds-untrusted.yml@'+'a'*40
+        fork['jobs']['run']['with']['control_ref']='a'*40
+        reusable['on']['workflow_call']['inputs']['trusted']['default']=False
+        reusable['jobs']['plan']['steps'][0]['env']['TRUSTED']='${{ false }}'
+        reusable['jobs']['plan']['runs-on']='ubuntu-24.04'
+        reusable['jobs']['builds']['runs-on']='ubuntu-24.04'
+        for step in reusable['jobs']['builds']['steps']:
+            step['if']=step['if'].replace('inputs.trusted','false')
+        return base,fork,reusable
+
+    def test_dedicated_snapshot_supports_forced_false_and_hosted_runner(self):
+        self.assertEqual(subject.validate(*self.documents()),[])
+
+    def test_dedicated_snapshot_rejects_privilege_and_control_ref_mutations(self):
+        for change in ['planner','runner','gate','permissions','control']:
+            with self.subTest(change=change):
+                base,fork,reusable=self.documents()
+                if change=='planner':
+                    reusable['jobs']['plan']['steps'][0]['env']['TRUSTED']='${{ inputs.trusted }}'
+                elif change=='runner':
+                    reusable['jobs']['builds']['runs-on']=['self-hosted']
+                elif change=='gate':
+                    reusable['jobs']['builds']['steps'][0]['if']='${{ false && failure() || true }}'
+                elif change=='permissions':
+                    reusable['jobs']['unused-publisher']={'if':'${{ false }}','permissions':{'contents':'write'}}
+                else:
+                    fork['jobs']['run']['with']['control_ref']='GH-Actions'
+                self.assertTrue(subject.validate(base,fork,reusable))
+
+    def test_cli_loads_the_actual_pinned_callee_filename(self):
+        documents=self.documents()
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            subprocess.run(['git','init','-q',str(root)],check=True)
+            for name,document in zip(['CI-builds.yml','CI-builds-fork.yml','ci-builds-untrusted.yml'],documents):
+                path=root/'.github/workflows'/name
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text(yaml.safe_dump(document))
+            subprocess.run(['git','-C',str(root),'add','.'],check=True)
+            subprocess.run(['git','-C',str(root),'-c','user.name=Fixture','-c','user.email=fixture@example.com',
+                            'commit','-qm','fixture'],check=True)
+            result=subprocess.run([sys.executable,subject.__file__,'HEAD','HEAD'],cwd=root,
+                                  capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
 
 class TopLevelDisjunction(unittest.TestCase):
     def test_rejects(self):

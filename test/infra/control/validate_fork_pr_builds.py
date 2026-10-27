@@ -6,13 +6,14 @@ the contract spans three documents:
 
   <base-ref>:.github/workflows/CI-builds.yml        trusted caller
   <base-ref>:.github/workflows/CI-builds-fork.yml  fork caller
-  <actions-ref>:.github/workflows/ci-builds.yml    reusable callee
+  <actions-ref>:.github/workflows/<pinned-name>    reusable callee
 
 A fork pull request runs untrusted code, so the fork caller must hold no
 write-capable token, must not receive secrets, must only be reachable for
 fork heads, and must pin the callee to an immutable commit. The callee in
-turn must default to trusted, must force untrusted runs onto GitHub-hosted
-runners, and must gate every privileged step behind ``inputs.trusted``.
+turn must force untrusted runs onto GitHub-hosted runners and disable every
+privileged step. The legacy shared callee defaults to trusted and gates on
+``inputs.trusted``; the dedicated untrusted snapshot forces literal false.
 
 This used to be an embedded Ruby heredoc. It is Python because the repo
 already depends on PyYAML (scripts/lint/, test/scripts/lib/utils.py) and
@@ -35,6 +36,11 @@ RUNS_ON_UNTRUSTED = re.compile(
     r".*\)\s*\|\|\s*'ubuntu-24\.04'\s*\}\}\Z",
     re.DOTALL,
 )
+CALLEE_REFERENCE = re.compile(
+    r"sysown/proxysql/\.github/workflows/(?P<filename>ci-builds(?:-untrusted)?\.yml)@(?P<sha>[0-9a-f]{40})"
+)
+RUNS_ON_FORCED_FALSE = re.compile(RUNS_ON_UNTRUSTED.pattern.replace(r'inputs\.trusted', 'false'), re.DOTALL)
+DISABLED_PREFIX = re.compile(r"\A\$\{\{\s*false\s*(?:&&|\}\}\Z)")
 TRUSTED_PREFIX = re.compile(r"\A\$\{\{\s*inputs\.trusted\s*&&")
 
 # Snapshot of the build matrix as of the callee SHA pinned by
@@ -249,23 +255,25 @@ def validate(base, fork, reusable):
     )
     fork_jobs = fork.get("jobs", {})
     fork_run = fetch(fork_jobs, "run", "fork workflow has no run job")
+    dedicated = False
     if fork_run is not None:
+        reference = CALLEE_REFERENCE.fullmatch(str(fork_run.get("uses", "")))
+        dedicated = reference is not None and reference["filename"] == "ci-builds-untrusted.yml"
         require(
             "head.repo.fork" in str(fork_run.get("if", "")),
             "fork workflow is not restricted to fork heads",
         )
         require(
-            re.fullmatch(
-                r"sysown/proxysql/\.github/workflows/ci-builds\.yml@[0-9a-f]{40}",
-                str(fork_run.get("uses", "")),
-            )
-            is not None,
+            reference is not None,
             "fork workflow does not pin the reusable workflow to a full commit SHA",
         )
         require(
             fork_run.get("with", {}).get("trusted") is False,
             "fork workflow does not select untrusted mode",
         )
+        if dedicated:
+            require(fork_run.get('with', {}).get('control_ref') == reference['sha'],
+                    'dedicated fork control_ref must match its immutable callee SHA')
     for name, job in fork_jobs.items():
         require("secrets" not in job, f"fork job {name!r} inherits or passes secrets")
         require("permissions" not in job, f"fork job {name!r} overrides read-only workflow permissions")
@@ -273,7 +281,12 @@ def validate(base, fork, reusable):
     # --- reusable callee ------------------------------------------------
     inputs = on_key(reusable).get("workflow_call", {}).get("inputs", {})
     trusted_input = inputs.get("trusted", {})
-    require(trusted_input.get("default") is True, "reusable workflow lacks trusted=true default")
+    if dedicated:
+        require(trusted_input.get('default') is False, 'dedicated reusable workflow lacks trusted=false default')
+        for name, job in reusable.get('jobs', {}).items():
+            require('uses' not in job, f'dedicated untrusted job {name!r} delegates to another workflow')
+    else:
+        require(trusted_input.get("default") is True, "reusable workflow lacks trusted=true default")
 
     # The `tier` input selects the feature tier. A fork PR reaches the callee
     # only via CI-builds-fork.yml, which pins a commit SHA and passes just
@@ -315,7 +328,7 @@ def validate(base, fork, reusable):
         require(planner.get('runs-on') == 'ubuntu-24.04' or RUNS_ON_UNTRUSTED.match(str(planner.get('runs-on', ''))) is not None,
                 'untrusted planner does not force ubuntu-24.04')
         selections = [step for step in planner.get('steps', []) if 'ci_tier_runtime.py plan' in str(step.get('run', ''))]
-        require(len(selections) == 1 and selections[0].get('env', {}).get('TRUSTED') == '${{ inputs.trusted }}',
+        require(len(selections) == 1 and selections[0].get('env', {}).get('TRUSTED') == ('${{ false }}' if dedicated else '${{ inputs.trusted }}'),
                 'planner must preserve caller trust when resolving labels')
 
     builds = reusable.get("jobs", {}).get("builds")
@@ -349,6 +362,8 @@ def validate(base, fork, reusable):
             )
 
     require(
+        (builds.get('runs-on') == 'ubuntu-24.04' or
+         RUNS_ON_FORCED_FALSE.match(str(builds.get('runs-on', ''))) is not None) if dedicated else
         RUNS_ON_UNTRUSTED.match(str(builds.get("runs-on", ""))) is not None,
         "untrusted mode does not force ubuntu-24.04",
     )
@@ -387,7 +402,8 @@ def validate(base, fork, reusable):
         label = step.get("name") or step.get("uses")
         conditions = [str(step.get("if") or ""), str(job_condition or "")]
         require(
-            any(TRUSTED_PREFIX.match(condition) is not None and not top_level_disjunction(condition) for condition in conditions),
+            any((DISABLED_PREFIX if dedicated else TRUSTED_PREFIX).match(condition) is not None
+                and not top_level_disjunction(condition) for condition in conditions),
             f"privileged step is not trusted-gated: {label}",
         )
 
@@ -414,7 +430,11 @@ def main(argv):
     base_ref, actions_ref = argv[1], argv[2]
     base = load_workflow(f"{base_ref}:.github/workflows/CI-builds.yml")
     fork = load_workflow(f"{base_ref}:.github/workflows/CI-builds-fork.yml")
-    reusable = load_workflow(f"{actions_ref}:.github/workflows/ci-builds.yml")
+    reference = CALLEE_REFERENCE.fullmatch(str(fork.get('jobs', {}).get('run', {}).get('uses', '')))
+    if reference is None:
+        print('FAIL: fork workflow does not pin an allowed reusable workflow to a full commit SHA', file=sys.stderr)
+        return 1
+    reusable = load_workflow(f"{actions_ref}:.github/workflows/{reference['filename']}")
 
     problems = validate(base, fork, reusable)
     if problems:
