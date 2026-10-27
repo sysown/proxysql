@@ -103,7 +103,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: sysown/proxysql
-          ref: c52411e76b19de90f00318295ebf2567ac88e9eb
+          ref: a801e9a86f0674c99216e77dcd80fa38c69bbf0a
           path: ci-control
           sparse-checkout: .github/actions/dependency-cache
           persist-credentials: false
@@ -146,6 +146,6 @@ jobs:
     permissions:
       contents: write
       actions: read
-    uses: sysown/proxysql/.github/workflows/ci-publish-dependency-cache.yml@c52411e76b19de90f00318295ebf2567ac88e9eb
+    uses: sysown/proxysql/.github/workflows/ci-publish-dependency-cache.yml@a801e9a86f0674c99216e77dcd80fa38c69bbf0a
     with:
       source_sha: ${{ needs.plan.outputs.source_sha }}
