@@ -77,9 +77,8 @@ jobs:
         path: ${{ github.workspace }}/pg-compat-reports/pg-compat.xml
         if-no-files-found: warn
     - name: Save infrastructure diagnostics
-      if: always()
+      if: ${{ !cancelled() }}
       continue-on-error: true
-      timeout-minutes: 5
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
         artifact-key: ${{ matrix.tier }}

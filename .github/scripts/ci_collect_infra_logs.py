@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Preserve job infrastructure evidence before teardown, regardless of service type."""
 import argparse
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import json
 import os
@@ -17,9 +18,11 @@ import time
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_FILES = 512
+MAX_CAPTURE_BYTES = 1024 * 1024
 LOG_ROOTS = ('/var/log', '/var/logs', '/root/sandboxes/logs', '/home/pguser/sandboxes/logs')
 FIND_ROOTS = ('/root/sandboxes', '/home/pguser/sandboxes', '/var/lib/mysql',
-              '/var/lib/postgresql/data/log', '/var/lib/proxysql', '/tmp')
+              '/var/lib/postgresql/data/log', '/var/lib/proxysql',
+              '/tmp')  # NOSONAR S5443: read-only container log discovery; no host files created here.
 CONFIG_NAMES = ('init_db', 'my.sandbox.cnf', 'postgresql.conf', 'pg_hba.conf', 'logfile')
 INSPECT = ('{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},'
            '"state":{{json .State}},"mounts":{{json .Mounts}},'
@@ -38,6 +41,88 @@ for dir in /proc/[0-9]*; do
   done
 done
 '''
+
+
+def diagnostic_root(output):
+    root = Path(os.environ.get('RUNNER_TEMP') or tempfile.gettempdir()).resolve()
+    output = Path(output).resolve()
+    if output == root or not output.is_relative_to(root):
+        raise ValueError('diagnostics output must be a directory under runner temp')
+    output.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return output
+
+
+class FileBudget:
+    """Account for every payload write, including partial subprocess output."""
+    def __init__(self, root):
+        self.root = root
+        self.history = root / 'collection.json'
+        if self.history.is_symlink():
+            raise ValueError('diagnostic manifest must not be a symbolic link')
+        existing = [p for p in root.rglob('*') if p.is_file() and not p.is_symlink()]
+        if not self.history.exists():
+            if len(existing) >= MAX_FILES:
+                raise ValueError('no file slot available for diagnostic manifest')
+            self.history.touch()
+            existing.append(self.history)
+        self.files = len(existing)
+        # The manifest has its own per-file bound and reserved file slot so
+        # exhausted payload budgets can still explain omitted diagnostics.
+        self.bytes = sum(p.stat().st_size for p in existing if p != self.history)
+
+    def capacity(self, destination):
+        if destination.is_symlink() or not destination.resolve().is_relative_to(self.root):
+            raise ValueError('diagnostic destination escapes its output directory')
+        exists = destination.exists()
+        old = destination.stat().st_size if exists else 0
+        capacity = min(MAX_FILE_BYTES, MAX_TOTAL_BYTES-self.bytes+old)
+        if capacity <= 0 or (not exists and self.files >= MAX_FILES):
+            return 0
+        return capacity
+
+    def claim(self, destination):
+        capacity = self.capacity(destination)
+        if not capacity:
+            return 0
+        exists = destination.exists()
+        old = destination.stat().st_size if exists else 0
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b'')
+        self.bytes -= old
+        self.files += int(not exists)
+        return capacity
+
+    def account(self, destination, capacity):
+        size = min(destination.stat().st_size, capacity)
+        with destination.open('r+b') as stream:
+            stream.truncate(size)
+        self.bytes += size
+
+    def save(self, destination, payload):
+        capacity = self.claim(destination)
+        if not capacity:
+            return False
+        destination.write_bytes(payload[:capacity])
+        self.account(destination, capacity)
+        return True
+
+    def manifest(self, records):
+        try:
+            previous = json.loads(self.history.read_text())
+        except (ValueError, OSError):
+            previous = []
+        if not isinstance(previous, list):
+            previous = []
+        records = (previous + records)[-5000:]
+        payload = json.dumps(records, indent=2).encode()
+        while len(payload) > MAX_FILE_BYTES and len(records) > 1:
+            records = records[len(records)//2:]
+            records[-1]['manifest_truncated'] = True
+            records[-1]['truncated'] = True
+            payload = json.dumps(records, indent=2).encode()
+        if len(payload) > MAX_FILE_BYTES:
+            payload = b'[{"error":"diagnostic manifest exceeded its size limit"}]'
+        self.history.write_bytes(payload)
 
 
 def selected_containers(states, infra_id, workspace, all_containers=False):
@@ -98,59 +183,58 @@ def stopped_sandbox_paths(deployment, project):
 
 def collect(infra_id, output, workspace=None, all_containers=False, host_log_root=None,
             container_ids=None, docker_command=None, timeout=120):
-    output.mkdir(parents=True, exist_ok=True)
+    output = diagnostic_root(output)
     workspace = Path(workspace or os.environ.get('GITHUB_WORKSPACE', os.getcwd())).resolve()
     records = []
     deadline = time.monotonic() + timeout
-    existing = [p for p in output.rglob('*') if p.is_file() and not p.is_symlink()]
-    copied = sum(p.stat().st_size for p in existing)
-    files = len(existing)
+    budget = FileBudget(output)
     docker_command = docker_command or [os.environ.get('CI_INFRA_REAL_DOCKER', 'docker')]
 
     def command(args, destination=None, merge_stderr=False, max_time=10):
-        nonlocal copied, files
-        record = dict(command=args, time=datetime.now(timezone.utc).isoformat())
+        record = {'command': args, 'time': datetime.now(timezone.utc).isoformat()}
         records.append(record)
-        if destination is not None:
-            if copied >= MAX_TOTAL_BYTES:
-                record['error'] = 'diagnostic byte budget reached'
-                return ''
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists(): copied -= destination.stat().st_size
-            destination.write_bytes(b'')
+        capacity = budget.claim(destination) if destination is not None else MAX_CAPTURE_BYTES
+        if not capacity:
+            record['error'] = 'diagnostic byte or file budget reached'
+            return ''
+        data = b''
         try:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError('collection deadline reached')
-            if destination is not None:
-                # Stream directly to disk. The child cannot grow a diagnostic
-                # file beyond the cap, even for a single enormous log line.
-                def limit_output():
-                    cap = min(MAX_FILE_BYTES, max(0, MAX_TOTAL_BYTES-copied))
-                    resource.setrlimit(resource.RLIMIT_FSIZE, (cap, cap))
-                with destination.open('wb') as target:
+            def limit_output():
+                resource.setrlimit(resource.RLIMIT_FSIZE, (capacity, capacity))
+            with ExitStack() as stack:
+                target = stack.enter_context(destination.open('w+b') if destination is not None else tempfile.TemporaryFile())
+                errors = None if merge_stderr else stack.enter_context(tempfile.TemporaryFile())
+                try:
                     result = subprocess.run([*docker_command, *args], stdout=target,
-                        stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+                        stderr=subprocess.STDOUT if merge_stderr else errors,
                         timeout=min(max_time, remaining), preexec_fn=limit_output)
-                data = destination.read_text(errors='replace')
-                copied += destination.stat().st_size; files += 1
-            else:
-                result = subprocess.run([*docker_command, *args], stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE, timeout=min(max_time, remaining))
-                data = result.stdout.decode(errors='replace')
-            record.update(returncode=result.returncode, stderr=(result.stderr or b'').decode(errors='replace'))
-            # find may report absent optional roots while returning useful paths.
-            return data
-        except (OSError, subprocess.TimeoutExpired, TimeoutError) as error:
+                    record['returncode'] = result.returncode
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    record['error'] = str(error)
+                    if isinstance(error, subprocess.TimeoutExpired) and error.output and target.tell() == 0:
+                        target.write(error.output[:capacity])
+                finally:
+                    target.flush(); target.seek(0)
+                    data = target.read(capacity)
+                    if errors:
+                        errors.seek(0)
+                        record['stderr'] = errors.read(4096).decode(errors='replace')
+                    if len(data) == capacity:
+                        record['truncated'] = True
+        except OSError as error:
             record['error'] = str(error)
-            if isinstance(error, subprocess.TimeoutExpired) and destination is not None and error.output:
-                destination.write_bytes(error.output[:MAX_FILE_BYTES])
-            return ''
+        finally:
+            if destination is not None:
+                budget.account(destination, capacity)
+        # Even a failed find can return useful paths from existing roots.
+        return data.decode(errors='replace')
 
     def copy_log_path(container, name, folder):
         """Stream selected log paths from running or exited containers; no tar on disk."""
-        nonlocal copied, files
-        if time.monotonic() >= deadline or copied >= MAX_TOTAL_BYTES or files >= MAX_FILES:
+        if time.monotonic() >= deadline:
             return
         args = ['cp', container + ':' + name, '-']
         record = dict(command=args, time=datetime.now(timezone.utc).isoformat())
@@ -169,14 +253,16 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
                             continue
                         if not path.parts or path.parts[0] != PurePosixPath(name).name:
                             continue
-                        size = min(member.size, MAX_FILE_BYTES, MAX_TOTAL_BYTES-copied)
+                        target = folder / PurePosixPath(name).parent.relative_to('/') / path
+                        capacity = budget.capacity(target)
+                        if not capacity:
+                            record['truncated'] = True
+                            continue
+                        size = min(member.size, capacity)
                         stream = archive.extractfile(member)
                         payload = stream.read(size)
-                        target = folder / PurePosixPath(name).parent.relative_to('/') / path
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(payload)
-                        copied += len(payload); files += 1
-                        if size < member.size or copied >= MAX_TOTAL_BYTES or files >= MAX_FILES:
+                        budget.save(target, payload)
+                        if size < member.size:
                             record['truncated'] = True
                             break
                 if record.get('truncated') and process.poll() is None:
@@ -201,7 +287,7 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
     for name in ('loadavg', 'meminfo', 'stat', 'diskstats', 'pressure/cpu', 'pressure/io', 'pressure/memory'):
         try: host += ['\n=== /proc/' + name + ' ===', (Path('/proc') / name).read_text()]
         except OSError as error: host.append(str(error))
-    (output / 'host.txt').write_text('\n'.join(host))
+    budget.save(output / 'host.txt', '\n'.join(host).encode())
     ids = container_ids if container_ids is not None else command(['ps', '-aq']).split()
     ids = [value for value in ids if re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9_.-]*', value)]
     states = []
@@ -219,8 +305,8 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
     log_budget = min(3, max(.05, (deadline-time.monotonic())*.4/max(1,len(owned))))
     for state in owned:
         container = state['id']; folder = output / container; folder.mkdir(exist_ok=True)
-        (folder / 'state.json').write_text(json.dumps(state, indent=2) + '\n')
-        (folder / 'project.txt').write_text((state.get('project') or '') + '\n')
+        budget.save(folder / 'state.json', (json.dumps(state, indent=2) + '\n').encode())
+        budget.save(folder / 'project.txt', ((state.get('project') or '') + '\n').encode())
         command(['logs', '--timestamps', '--tail', '20000', container], folder / 'deployment.log',
                 merge_stderr=True, max_time=log_budget)
     for state in owned:
@@ -235,9 +321,9 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
         for name in LOG_ROOTS:
             copy_log_path(container, name, folder)
         listing = command(['exec', container, 'find', *FIND_ROOTS, '-maxdepth', '6', '-type', 'f',
-                           '(', '-name', '*.err', '-o', '-name', '*.log', '-o', '-name', '*.out',
+                           '(', '-name', '*.err', '-o', '-name', '*.log', '-o', '-name', '*.out', '-o', '-name', '*.conf',
                            '-o', '-name', 'my.sandbox.cnf', '-o', '-name', 'init_db', '-o', '-name', 'logfile', ')', '-print'])
-        paths = set(listing.splitlines())
+        paths = set(listing.splitlines()[:MAX_FILES])
         if not paths:
             log = folder/'deployment.log'
             paths = stopped_sandbox_paths(log.read_text(errors='replace') if log.exists() else '', state.get('project') or '')
@@ -256,22 +342,20 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
             for name in names:
                 seen += 1
                 source = Path(parent)/name
-                if seen > 5000 or copied >= MAX_TOTAL_BYTES or files >= MAX_FILES: break
+                if seen > 5000 or time.monotonic() >= deadline: break
                 if not source.is_symlink() and wanted_file(source):
                     try:
-                        with source.open('rb') as stream: payload = stream.read(min(MAX_FILE_BYTES, MAX_TOTAL_BYTES-copied))
                         target = output/'host-sandboxes'/source.relative_to(root)
-                        target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(payload)
-                        copied += len(payload); files += 1
+                        capacity = budget.capacity(target)
+                        if not capacity: continue
+                        with source.open('rb') as stream: payload = stream.read(capacity)
+                        budget.save(target, payload)
                     except OSError as error: records.append(dict(path=str(source), error=str(error)))
-            if seen > 5000 or copied >= MAX_TOTAL_BYTES or files >= MAX_FILES: break
-    history = output / 'collection.json'
-    if history.is_file():
-        try: records = json.loads(history.read_text()) + records
-        except (ValueError, TypeError): pass
-    history.write_text(json.dumps(records[-5000:], indent=2) + '\n')
+            if seen > 5000 or time.monotonic() >= deadline: break
+    records.append({'kind': 'limits', 'payload_bytes': budget.bytes, 'files': budget.files})
+    budget.manifest(records)
     failures = sum(record.get('returncode', 1) != 0 for record in records)
-    print(f'Infrastructure diagnostics saved to {output}: {len(owned)} containers, {files} log files, {copied} bytes; {failures} unavailable probes (see collection.json)')
+    print(f'Infrastructure diagnostics saved to {output}: {len(owned)} containers, {budget.files} diagnostic files, {budget.bytes} payload bytes; {failures} unavailable probes (see collection.json)')
 
 
 def main():

@@ -51,8 +51,10 @@ elif a[0]=='cp':
 elif a[0]=='exec':
     if os.environ.get('STOPPED'):sys.exit(1)
     if 'find' in a:
+        if os.environ.get('BIG_FIND'):
+            sys.stdout.write('x'*(2*1024*1024));sys.exit(0)
         for p in root.rglob('*'):
-            if p.is_file():print('/'+str(p.relative_to(root)))
+            if p.is_file() and (p.suffix!='.conf' or '*.conf' in a):print('/'+str(p.relative_to(root)))
         if os.environ.get('PARTIAL_FIND'):sys.exit(1)
     else:print('mysqld process I/O and wait channel')
 elif a[0] in ('top','stats'):print('container process/resource snapshot')
@@ -133,6 +135,7 @@ else:sys.exit(2)
         for args,status in [(['rm','-f','abc'],23),(['compose','-p','suite','down','-v'],0)]:
             with self.subTest(args=args):
                 # Each operation gets an independent fixture filesystem.
+                self.output = self.root / ('capture-'+args[0])
                 self.container.mkdir(exist_ok=True)
                 log = self.container/'var/log/service/engine.log'
                 log.parent.mkdir(parents=True,exist_ok=True);log.write_text('before harness removal\n')
@@ -144,6 +147,103 @@ else:sys.exit(2)
                 self.assertEqual(result.stdout,'original docker stdout\n')
                 self.assertFalse(self.container.exists())
                 self.assertIn('before harness removal',(self.output/'abc/var/log/service/engine.log').read_text())
+
+    def test_docker_global_value_options_do_not_bypass_teardown_capture(self):
+        from ci_docker_diagnostics import removal_targets
+        for option in ('-l','--log-level','--tlscacert','--tlscert','--tlskey'):
+            with self.subTest(option=option):
+                targets,prefix=removal_targets('/usr/bin/docker',[option,'value','rm','-f','abc'])
+                self.assertEqual(targets,['abc'])
+                self.assertEqual(prefix,['/usr/bin/docker',option,'value'])
+
+    def test_collection_lock_wait_is_bounded(self):
+        import ci_docker_diagnostics as hook
+        with patch.object(hook.fcntl,'flock',side_effect=BlockingIOError),patch.object(hook.time,'monotonic',side_effect=[0,1,2]),patch.object(hook.time,'sleep'):
+            self.assertFalse(hook.acquire_collection_lock(object()))
+
+    def test_overwrites_do_not_consume_additional_file_or_byte_budget(self):
+        from ci_collect_infra_logs import FileBudget
+        self.output.mkdir()
+        budget=FileBudget(self.output)
+        target=self.output/'service.log'
+        self.assertTrue(budget.save(target,b'first snapshot'))
+        count=budget.files
+        self.assertTrue(budget.save(target,b'new'))
+        self.assertEqual(budget.files,count)
+        self.assertEqual(budget.bytes,3)
+
+    def test_existing_service_files_refresh_at_file_and_byte_caps(self):
+        self.collect()
+        spec=importlib.util.spec_from_file_location('infra_logs',SCRIPT)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        source=self.container/'var/log/service/engine.log'
+        target=self.output/'abc/var/log/service/engine.log'
+        count=len([p for p in self.output.rglob('*') if p.is_file()])
+        source.write_text('new\n')
+        with patch.dict(os.environ,self.env),patch.object(module,'MAX_FILES',count):
+            module.collect('ci-gr-v31-123',self.output)
+        self.assertEqual(target.read_text(),'new\n')
+        source.write_text('ok\n')
+        total=sum(p.stat().st_size for p in self.output.rglob('*') if p.is_file() and p.name!='collection.json')
+        with patch.dict(os.environ,self.env),patch.object(module,'MAX_TOTAL_BYTES',total):
+            module.collect('ci-gr-v31-123',self.output)
+        self.assertEqual(target.read_text(),'ok\n')
+
+    def test_live_postgresql_configuration_is_collected_alongside_logs(self):
+        for name in ('postgresql.conf','pg_hba.conf'):
+            source=self.container/'home/pguser/sandboxes/primary/data'/name
+            source.parent.mkdir(parents=True,exist_ok=True);source.write_text('postgres configuration\n')
+        self.collect()
+        for name in ('postgresql.conf','pg_hba.conf'):
+            self.assertIn('postgres configuration',(self.output/'abc/home/pguser/sandboxes/primary/data'/name).read_text())
+
+    def test_probe_listing_is_bounded(self):
+        self.collect(BIG_FIND='1')
+        records=json.loads((self.output/'collection.json').read_text())
+        listing=next(r for r in records if 'find' in r.get('command',[]))
+        self.assertTrue(listing.get('truncated'))
+
+    def test_file_budget_applies_to_metadata_and_command_outputs(self):
+        spec=importlib.util.spec_from_file_location('infra_logs',SCRIPT)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        with patch.dict(os.environ,self.env),patch.object(module,'MAX_FILES',3):
+            module.collect('ci-gr-v31-123',self.output)
+        self.assertLessEqual(len([p for p in self.output.rglob('*') if p.is_file()]),3)
+
+    def test_output_cannot_escape_runner_temp_or_follow_an_output_symlink(self):
+        spec=importlib.util.spec_from_file_location('infra_logs',SCRIPT)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        runner_temp=self.root/'runner-temp';runner_temp.mkdir()
+        outside=self.root/'outside'
+        with patch.dict(os.environ,RUNNER_TEMP=str(runner_temp)):
+            with self.assertRaises(ValueError):module.collect('',outside)
+            (runner_temp/'linked').symlink_to(outside)
+            with self.assertRaises(ValueError):module.collect('',runner_temp/'linked')
+            safe=runner_temp/'safe';safe.mkdir()
+            target=self.root/'keep.txt';target.write_text('preserve')
+            (safe/'collection.json').symlink_to(target)
+            with self.assertRaises(ValueError):module.collect('',safe)
+            self.assertEqual(target.read_text(),'preserve')
+        self.assertFalse(outside.exists())
+
+    def test_timeout_partial_file_is_counted_in_payload_budget(self):
+        spec=importlib.util.spec_from_file_location('infra_logs',SCRIPT)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        large=self.container/'var/log/service/large.log';large.write_bytes(b'x'*2048)
+        real_run=subprocess.run
+        real_read=Path.read_text
+        def read(path,*args,**kwargs):
+            return '' if str(path).startswith('/proc/') else real_read(path,*args,**kwargs)
+        def transport(command,**kwargs):
+            if command[:2]==['docker','logs']:
+                kwargs['stdout'].write(b'p'*512)
+                raise subprocess.TimeoutExpired(command,1)
+            return real_run(command,**kwargs)
+        with patch.dict(os.environ,self.env),patch.object(module,'MAX_TOTAL_BYTES',1536),patch.object(module.subprocess,'run',side_effect=transport),patch.object(Path,'read_text',read):
+            module.collect('ci-gr-v31-123',self.output)
+        self.assertEqual((self.output/'abc/deployment.log').stat().st_size,512)
+        payload=[p for p in self.output.rglob('*') if p.is_file() and p.name!='collection.json']
+        self.assertLessEqual(sum(p.stat().st_size for p in payload),1536)
 
     def test_exited_mariadb_replication_galera_and_postgresql_layouts(self):
         for flavor,version,project,relative in [
@@ -228,7 +328,7 @@ else:sys.exit(2)
             for job_name, job in workflow.get('jobs', {}).items():
                 steps = job.get('steps', [])
                 runs = '\n'.join(s.get('run', '') for s in steps)
-                if not ('ensure-infras.bash' in runs or path.name.startswith('ci-3p-')
+                if not (any(marker in runs for marker in ('ensure-infras.bash','destroy-infras.bash','stop-proxysql-isolated.bash')) or path.name.startswith('ci-3p-')
                         or any(s.get('name') == 'Cleanup sandbox' for s in steps)):
                     continue
                 if not steps:
@@ -237,7 +337,8 @@ else:sys.exit(2)
                     captures = [i for i,s in enumerate(steps) if s.get('uses') == './ci-control/.github/actions/infrastructure-diagnostics' and s.get('with',{}).get('phase') != 'setup']
                     self.assertEqual(len(captures), 1)
                     index = captures[0]
-                    self.assertEqual(steps[index]['if'], 'always()')
+                    self.assertEqual(steps[index]['if'], '${{ !cancelled() }}')
+                    self.assertNotIn('timeout-minutes',steps[index])
                     self.assertTrue(steps[index]['continue-on-error'])
                     cleanups = [i for i,s in enumerate(steps) if 'stop-proxysql-isolated.bash' in s.get('run', '')
                                 or 'destroy-infras.bash' in s.get('run', '') or s.get('name') == 'Cleanup sandbox']
@@ -249,7 +350,7 @@ else:sys.exit(2)
                     checkout = next(i for i,s in enumerate(steps) if s.get('with',{}).get('path') == 'ci-control')
                     self.assertLess(checkout,setups[0])
                     checked.append((path.name,job_name))
-        self.assertGreater(len(checked), 70)
+        self.assertEqual(len(checked), 74)
         action = yaml.safe_load((ROOT / '.github/actions/infrastructure-diagnostics/action.yml').read_text())
         upload = next(s for s in action['runs']['steps'] if 'upload-artifact@' in s.get('uses', ''))
         self.assertEqual(upload['if'], "${{ inputs.phase == 'collect' && !cancelled() }}")

@@ -9,9 +9,10 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from ci_collect_infra_logs import collect
 
-VALUE_OPTIONS = {'-H', '--host', '-c', '--context', '--config', '--log-level',
+VALUE_OPTIONS = {'-H', '--host', '-c', '--context', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey',
                  '-p', '--project-name', '-f', '--file', '--env-file', '--profile',
                  '--project-directory', '--ansi', '--progress', '--parallel'}
 
@@ -41,6 +42,18 @@ def removal_targets(real, args):
     return [], prefix
 
 
+def acquire_collection_lock(lock, wait_seconds=2):
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(.05)
+
+
 def wrapper_main(real, args):
     # No shell evaluation, Docker output redirection or exit-code translation.
     # The final exec preserves the caller's normal Docker CLI semantics.
@@ -52,12 +65,14 @@ def wrapper_main(real, args):
                 output = Path(os.environ['CI_INFRA_DIAGNOSTICS_ROOT'])
                 output.mkdir(parents=True, exist_ok=True)
                 with (output/'collection.lock').open('w') as lock:
-                    fcntl.flock(lock, fcntl.LOCK_EX)
                     # Collector messages go to stderr; command-substitution
                     # users must receive only the original Docker stdout.
-                    with redirect_stdout(sys.stderr):
-                        collect('', output, all_containers=True, container_ids=targets,
-                                docker_command=prefix, timeout=20)
+                    if acquire_collection_lock(lock):
+                        with redirect_stdout(sys.stderr):
+                            collect('', output, all_containers=True, container_ids=targets,
+                                    docker_command=prefix, timeout=20)
+                    else:
+                        print('Infrastructure diagnostics busy; continuing Docker teardown.', file=sys.stderr)
         except Exception as error:
             print('Infrastructure diagnostic hook: '+str(error), file=sys.stderr)
         finally:

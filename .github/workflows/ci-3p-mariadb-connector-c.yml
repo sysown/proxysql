@@ -294,9 +294,8 @@ jobs:
           proxysql_3p_testing/test_${{ env.TESTNAME }}/logs
 
     - name: Save infrastructure diagnostics
-      if: always()
+      if: ${{ !cancelled() }}
       continue-on-error: true
-      timeout-minutes: 5
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
