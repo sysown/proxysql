@@ -164,19 +164,6 @@ jobs:
         fetch-depth: 0
         path: 'proxysql'
 
-    # Stage the shared version filter for every build leg.
-    #
-    # It lives under .github/scripts/, which exists ONLY on the GH-Actions
-    # branch -- the main `Checkout repository` step above checks out the
-    # *commit under test* (env.SHA, i.e. a v3.0 commit) into proxysql/, and
-    # v3.0 has no .github/scripts/ at all. This is precisely why
-    # resolve-tap-mode does its own sparse checkout with `ref: GH-Actions`;
-    # mirror that pattern rather than assuming proxysql/.github/scripts/ exists.
-    #
-    # Staged into ci-control/ (a sibling of proxysql/) so that the Build step,
-    # which does `cd proxysql/`, can invoke it by a short path while the
-    # script's own relative test/tap/... lookups still resolve against the
-    # commit under test.
     - name: Verify vendored source archives
       if: ${{ inputs.trusted && success() }}
       working-directory: proxysql
@@ -263,11 +250,6 @@ jobs:
           # propagates into the build container via docker-compose + entrypoint.bash).
           if [ "${{ runner.environment }}" = "self-hosted" ]; then export MAKEOPT="-j8"; fi
           make ${{ matrix.dist }}-tap | tee ci_build_log/build-tap.log
-
-          # Filter by the built product version in every tier. The same
-          # selection applies to the handoff and standalone sanitizer builds.
-          sudo "${GITHUB_WORKSPACE}/ci-control/.github/scripts/prune-tier-handoff.bash" \
-            --binary src/proxysql --groups test/tap/groups/groups.json
 
           # create matrix of all test folders containing *-t
           echo "[ "$(find test/tap/ -name '*-t' | xargs -n1 dirname | uniq | sed 's|test/tap/||' | xargs -I{} -n1 echo -n "'{}', ")"]" > tap-matrix.json
