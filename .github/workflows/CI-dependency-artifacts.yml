@@ -117,7 +117,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: sysown/proxysql
-          ref: 40dcd00772a2b863e050611aae3c151da87a2d21
+          ref: 17406cda439af9be04d1e29075b1073a1c205b33
           path: ci-control
           sparse-checkout: .github/actions/dependency-cache
           persist-credentials: false

@@ -39,25 +39,5 @@ jobs:
             git fetch --no-tags --depth=1 origin "${engine_ref}" \
               || echo "::warning::could not fetch paired engine; paired checks will skip if unavailable"
           fi
-      - name: Fetch the immutable fork build contract
-        # Validate the exact callee the fork workflow will execute, even before
-        # its companion change is merged into the moving GH-Actions branch.
-        run: |
-          # Read workflow data with the validator's YAML and pin semantics.
-          # No code from the selected callee revision is loaded or executed.
-          fork_control_sha=$(python3 - <<'PY'
-          import re
-          import yaml
-          with open('.github/workflows/CI-builds-fork.yml') as source:
-              workflow = yaml.safe_load(source)
-          reference = re.fullmatch(
-              r'sysown/proxysql/\.github/workflows/ci-builds(?:-untrusted)?\.yml@([0-9a-f]{40})',
-              str(workflow.get('jobs', {}).get('run', {}).get('uses', '')))
-          if reference is None:
-              raise SystemExit('Invalid immutable fork callee')
-          print(reference[1])
-          PY
-          )
-          git fetch --no-tags --depth=1 origin "$fork_control_sha"
       - name: Run repository CI lint suite
         run: test/infra/control/run-ci-lint.bash

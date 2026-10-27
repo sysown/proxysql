@@ -20,13 +20,15 @@ class SkipLabelTests(unittest.TestCase):
             'github.event.pull_request.head.repo.full_name': 'sysown/proxysql',
             'github.repository': 'sysown/proxysql',
             'github.ref': 'refs/pull/1/merge',
+            'needs.build.result': 'success',
+            'needs.publication-plan.result': 'success',
+            'needs.publication-plan.outputs.count': '1',
             'github.event.pull_request.labels.*.name': [],
             'github.event.action': 'synchronize',
             'github.event.label.name': '',
             'github.event.workflow_run.display_title': 'feature CI-builds abc123',
             'github.event.workflow_run.event': 'pull_request',
             'github.event.workflow_run.head_repository.full_name': 'sysown/proxysql',
-            'needs.build.result': 'success',
             'needs.push-label.result': 'skipped',
             'needs.push-label.outputs.skip': '',
         }
@@ -67,10 +69,8 @@ class SkipLabelTests(unittest.TestCase):
                 if jid == 'push-label':
                     continue
                 with self.subTest(workflow=name, job=jid):
-                    # Global dependency promotion intentionally excludes PRs;
-                    # their build jobs still populate their own exact caches.
-                    expected = (name, jid) != ('CI-dependency-artifacts.yml', 'publish')
-                    self.assertEqual(expected, self.allowed(job, **{
+                    publishes = name == 'CI-dependency-artifacts.yml' and jid in ('publication-plan', 'publish')
+                    self.assertEqual(not publishes, self.allowed(job, **{
                         'github.event.pull_request.labels.*.name': ['pg-compat'],
                         'github.event.pull_request.head.repo.fork': name == 'CI-builds-fork.yml',
                     }))

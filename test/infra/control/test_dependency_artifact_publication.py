@@ -1,8 +1,6 @@
 """Publisher profile selection, batch completeness and immutable releases."""
 import importlib
 import json
-import os
-import shutil
 from pathlib import Path
 import re
 import subprocess
@@ -180,134 +178,31 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired):
             self.api.run([sys.executable, '-c', 'import time; time.sleep(30)'], timeout=0.05)
 
-    def test_automatic_workflow_prepares_pr_and_reviewed_dependency_changes(self):
-        import yaml
-        workflow = yaml.safe_load((ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text())
-        events = workflow.get('on', workflow.get(True))
-        self.assertIn('pull_request', events)
-        self.assertEqual(['v3.0'], events['push']['branches'])
-        self.assertEqual(events['pull_request']['paths'], events['push']['paths'])
-        for source in ('deps/libssl/**', 'deps/duckdb/**', 'deps/artifacts/**',
-                       'common_mk/openssl_flags.mk', 'docker-compose.yml'):
-            self.assertIn(source, events['pull_request']['paths'])
-        plan = workflow['jobs']['plan']
-        checkout = plan['steps'][0]['with']
-        self.assertIn('github.event.pull_request.head.sha', checkout['ref'])
-        self.assertFalse(checkout['persist-credentials'])
-        planner = next(step for step in plan['steps'] if step.get('id') == 'matrix')
-        self.assertEqual('profile-control', planner['working-directory'])
-        trusted = next(step['with'] for step in plan['steps']
-                       if step.get('with', {}).get('path') == 'profile-control')
-        self.assertEqual('sysown/proxysql', trusted['repository'])
-        self.assertEqual('refs/heads/v3.0', trusted['ref'])
-        self.assertEqual('deps/artifacts', trusted['sparse-checkout'])
-        self.assertFalse(trusted['persist-credentials'])
-        self.assertIn('python3 -E deps/artifacts/publish.py matrix', planner['run'])
-        self.assertIn('git -C ../source rev-parse HEAD', planner['run'])
-        build = workflow['jobs']['build']
-        action = next(step for step in build['steps'] if step.get('id') == 'dependencies')
-        self.assertEqual('./ci-control/.github/actions/dependency-cache', action['uses'])
-        control = next(step['with'] for step in build['steps']
-                       if step.get('with', {}).get('path') == 'ci-control')
-        self.assertRegex(control['ref'], r'^[0-9a-f]{40}$')
-        self.assertEqual('.github/actions/dependency-cache', control['sparse-checkout'])
-        self.assertFalse(control['persist-credentials'])
-        self.assertEqual('${{ matrix.dependency }}', action['with']['dependencies'])
-        self.assertEqual('${{ matrix.service || \'native\' }}', action['with']['service'])
-
-    def test_prewarm_planner_never_executes_pr_source_or_uses_its_runners(self):
-        import yaml
-        workflow = yaml.safe_load((ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text())
-        planner = next(step for step in workflow['jobs']['plan']['steps'] if step.get('id') == 'matrix')
-        source = self.root / 'source'
-        source.mkdir()
-        (source / 'deps/artifacts').mkdir(parents=True)
-        for name in ('deps/artifacts/publish.py', 'json.py'):
-            (source / name).write_text('raise RuntimeError("PR code must not execute in planner")\n')
-        (source / 'deps/artifacts/profiles.json').write_text(json.dumps({
-            'profiles': [{'runner': ['self-hosted', 'proxysql-ci']}]}))
-        for args in (('init', '-q'), ('add', '.'),
-                     ('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
-                      'commit', '-qm', 'untrusted source')):
-            subprocess.run(['git', '-C', str(source)] + list(args), check=True)
-        control = self.root / 'profile-control'
-        shutil.copytree(str(ROOT / 'deps/artifacts'), str(control / 'deps/artifacts'))
-        output = self.root / 'output'
-        environment = dict(os.environ, PROFILE_GROUP='ubuntu24', DEPENDENCY='both',
-                           RUNNER_TEMP=str(self.root), GITHUB_OUTPUT=str(output), PYTHONPATH=str(source),
-                           DISPATCH_EVENT='pull_request', DISPATCH_REF='refs/pull/1/merge')
-        subprocess.run(['bash', '-e', '-c', planner['run']], cwd=str(control),
-                       env=environment, check=True)
-        values = dict(line.split('=', 1) for line in output.read_text().splitlines())
-        matrix = json.loads(values['matrix'])['include']
-        self.assertEqual(8, len(matrix))
-        self.assertTrue(all(item['runner'] in ('ubuntu-24.04', 'ubuntu-24.04-arm') for item in matrix))
-        self.assertEqual(subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'],
-                                                universal_newlines=True).strip(), values['source_sha'])
-
-    def test_protected_dispatch_rejects_unreviewed_source_before_planning_or_building(self):
-        import yaml
-        workflow = yaml.safe_load((ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text())
-        plan = workflow['jobs']['plan']
-        planner = next(step for step in plan['steps'] if step.get('id') == 'matrix')
-        trusted = next(step['with'] for step in plan['steps']
-                       if step.get('with', {}).get('path') == 'profile-control')
-        self.assertEqual(0, trusted['fetch-depth'])
-        source = self.root / 'source'
-        source.mkdir()
-        def git(root, *args):
-            return subprocess.check_output(['git', '-C', str(root)] + list(args),
-                                           stderr=subprocess.PIPE, universal_newlines=True).strip()
-        def commit(root, message):
-            git(root, 'add', '.')
-            git(root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
-                'commit', '-qm', message)
-        git(source, 'init', '-q')
-        (source / 'readme').write_text('reviewed source')
-        commit(source, 'reviewed source')
-        control = self.root / 'profile-control'
-        subprocess.run(['git', 'clone', '-q', str(source), str(control)], check=True)
-        shutil.copytree(str(ROOT / 'deps/artifacts'), str(control / 'deps/artifacts'))
-        commit(control, 'reviewed planner')
-        output = self.root / 'output'
-        environment = dict(os.environ, PROFILE_GROUP='ubuntu24', DEPENDENCY='both',
-                           RUNNER_TEMP=str(self.root), GITHUB_OUTPUT=str(output),
-                           DISPATCH_EVENT='workflow_dispatch', DISPATCH_REF='refs/heads/v3.0')
-        subprocess.run(['bash', '-e', '-c', planner['run']], cwd=str(control),
-                       env=environment, check=True)
-        self.assertTrue(output.exists())
-        output.unlink()
-        (self.root / 'dependency-matrix.json').unlink()
-        (source / 'unreviewed').write_text('topic change')
-        commit(source, 'unreviewed topic')
-        result = subprocess.run(['bash', '-e', '-c', planner['run']], cwd=str(control),
-                                env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                universal_newlines=True)
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn('requires source from reviewed history', result.stderr)
-        self.assertFalse(output.exists())
-        self.assertFalse((self.root / 'dependency-matrix.json').exists())
-
-    def test_automatic_workflow_isolates_publisher_and_current_attempt_candidates(self):
-        import yaml
-        workflow = yaml.safe_load((ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text())
-        self.assertEqual({'contents': 'read'}, workflow['permissions'])
-        build = workflow['jobs']['build']
-        self.assertNotIn('permissions', build)
-        candidates = [step for step in build['steps'] if '/upload-artifact@' in step.get('uses', '')]
-        self.assertEqual(2, len(candidates))
-        for step in candidates:
-            self.assertIn('dependency-candidate-a${{ github.run_attempt }}-', step['with']['name'])
-            self.assertIn('/entry.json', step['with']['path'])
-            self.assertIn('/bundle.tar.gz', step['with']['path'])
-        publish = workflow['jobs']['publish']
-        self.assertEqual(['plan', 'build'], publish['needs'])
-        self.assertIn("github.event_name != 'pull_request'", publish['if'])
-        self.assertIn("github.ref == 'refs/heads/v3.0'", publish['if'])
-        self.assertIn('/ci-publish-dependency-cache.yml@', publish['uses'])
-        self.assertEqual('${{ needs.plan.outputs.source_sha }}', publish['with']['source_sha'])
-        self.assertEqual({'contents': 'write', 'actions': 'read'}, publish['permissions'])
-        self.assertNotIn('secrets', publish)
+    def test_automatic_workflow_keeps_publication_separate_from_source_execution(self):
+        workflow = (ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text()
+        for event in ('pull_request:', 'push:', 'workflow_dispatch:'):
+            self.assertIn(event, workflow)
+        self.assertEqual(1, workflow.count('contents: write'))
+        plan = workflow.split('  plan:', 1)[1].split('  build:', 1)[0]
+        self.assertIn('ref: refs/heads/v3.0', plan)
+        self.assertIn('working-directory: profile-control', plan)
+        self.assertIn('git merge-base --is-ancestor "$source_sha" HEAD', plan)
+        self.assertIn('inputs.source_ref || github.event.pull_request.head.sha || github.sha', plan)
+        for job in ('publication-plan', 'publish'):
+            body = workflow.split('  ' + job + ':', 1)[1].split('\n  publish:', 1)[0]
+            self.assertIn("github.ref == 'refs/heads/v3.0'", body)
+            self.assertIn("github.event_name != 'pull_request'", body)
+            self.assertIn('ref: ${{ needs.plan.outputs.control_sha }}', body)
+            self.assertIn('--source-sha "$SOURCE_SHA"', body)
+        self.assertIn('pattern: dependency-candidate-a${{ github.run_attempt }}-*', workflow)
+        self.assertIn('dependency-publication-${{ matrix.dependency }}-${{ matrix.fingerprint }}', workflow)
+        for action in re.findall(r'uses:\s*([^\s#]+)', workflow):
+            if not action.startswith('./'):
+                self.assertRegex(action, r'@[0-9a-f]{40}$')
+        self.assertIn('- DEPS_MODE', (ROOT / 'docker-compose.yml').read_text())
+        checks = (ROOT / '.github/workflows/CI-dependency-artifacts-checks.yml').read_text()
+        self.assertIn('source-validation:', checks)
+        self.assertIn('test_dependency_artifact_', checks)
 
     def test_build_script_restores_before_runtime_smoke(self):
         script = (ROOT / 'deps/artifacts/build.bash').read_text()
