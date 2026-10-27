@@ -163,9 +163,10 @@ jobs:
         ref: ${{ env.SHA }}
         fetch-depth: 0
         path: 'proxysql'
+        persist-credentials: false
 
     - name: Verify vendored source archives
-      if: ${{ inputs.trusted && success() }}
+      if: ${{ success() }}
       working-directory: proxysql
       run: |
         set -euo pipefail
@@ -176,10 +177,20 @@ jobs:
 
 #        ls -l proxysql/test/tap
 
+    - name: Restore or build exact dependency bundles
+      uses: ./ci-control/.github/actions/dependency-cache
+      with:
+        source-path: proxysql
+        service: ubuntu24_dbg_build
+        tier: ${{ matrix.tier }}
+        sanitizer: ${{ matrix.mode == 'asan' && 'asan' || 'none' }}
+        coverage: 'true'
+        cache-write: ${{ inputs.trusted || github.event_name == 'pull_request' }}
+
     - name: Build
       timeout-minutes: 90
       id: build
-      if: ${{ inputs.trusted && success() }}
+      if: ${{ success() }}
       run: |
         set -euo pipefail
         cd proxysql/
