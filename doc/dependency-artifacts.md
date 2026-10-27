@@ -4,6 +4,12 @@ ProxySQL can reuse its own compiled DuckDB and OpenSSL dependencies. The pinned
 vendored source archives remain the authority for versions and source builds.
 ProxySQL and its plugins still compile against the current checkout.
 
+Reuse is automatic. A matching dependency signature restores a verified bundle;
+a miss builds from source, validates the result, and saves a bundle for that
+signature. No publication dispatch or registry-edit commit is required. OpenSSL
+and DuckDB have separate keys, and bundles for different versions and settings
+coexist.
+
 ## Build modes
 
 ```bash
@@ -14,9 +20,9 @@ PROXYSQL40=1 make -j4 DEPS_MODE=prebuilt
 
 | Mode | DuckDB/OpenSSL behavior |
 |---|---|
-| `auto` (default) | Reuse an accepted output or restore an exact verified artifact; otherwise build the vendored source. |
-| `source` | Use source-origin outputs only. Switching from a prebuilt output rebuilds it from source, without requesting artifacts. |
-| `prebuilt` | Require a registered, compatible artifact. Missing entries/downloads fail instead of compiling. |
+| `auto` (default) | Reuse an accepted output or restore an exact verified bundle; otherwise build the vendored source and save an eligible bundle. |
+| `source` | Use source-origin outputs only. Switching from a prebuilt output rebuilds it from source, without requesting artifacts. Eligible source builds still save reusable bundles. |
+| `prebuilt` | Require a compatible verified bundle from the local store or public releases. Missing bundles/downloads fail instead of compiling. |
 
 The mode is exported through recursive Make and Docker Compose package builds.
 It also applies to direct dependency builds:
@@ -30,18 +36,19 @@ Only DuckDB and OpenSSL use this mechanism. A v3 build does not acquire DuckDB.
 `make -n` prints the preparation bridge without downloading, restoring, or
 compiling dependencies. Source-only OpenSSL can still build without Python;
 the fallback uses Bash, Perl (already required by OpenSSL), and the source tools.
-
-The checked-in registry initially contains no published artifacts. Until the
-first publication is registered, `auto` builds from source and `prebuilt` fails
-with a missing-compatible-artifact diagnostic.
+Python is required for bundle creation and restoration. Configurations whose
+compatibility cannot be identified continue to use the source escape hatch in
+`auto` or `source`.
 
 ## What makes an artifact compatible
 
-`deps/artifacts/lock.json` records exact build identities, HTTPS release URLs,
-sizes, SHA-256 digests, and producer provenance. The identity covers the verified
-source archive, focused dependency recipe, helper implementation/format, effective
-dependency flags, and actual compiler/runtime/target facts. Native macOS includes
-the SDK/deployment target; Linux includes the distribution and libc version.
+Each bundle has an exact build identity and a fingerprint computed from it. The
+identity covers the dependency version, verified source archive checksum, focused
+dependency recipe, verifier and helper implementation/format, effective settings
+and flags, and actual compiler/runtime/target facts. Native macOS includes the
+SDK/deployment target; Linux includes the distribution and libc version.
+`entry.json` records that full identity, the bundle size and SHA-256 digest, its
+canonical release URL, and producer provenance.
 
 ProxySQL branch, commit, version, and plugin DEBUG mode do not invalidate a
 dependency unless they change its actual compilation settings. DuckDB remains a
@@ -60,7 +67,7 @@ CC=clang CXX=clang++ make -j4 PROXYSQL40=1 DEPS_MODE=prebuilt
 
 The compiler commands, versions and runtime facts must match the artifact.
 Leaving consumer defaults as `cc`/`g++` selects that configuration instead;
-`auto` compiles source if no exact artifact exists.
+`auto` compiles source and saves an eligible bundle if no exact artifact exists.
 
 Linux libc is queried from the running system, including with Python 3.6.
 Restored dependency directories have mode `0755`, so a host build user can traverse
@@ -79,75 +86,73 @@ and public headers, static libraries, produced provider modules, configuration,
 and licenses. No ProxySQL binary, plugin binary, object tree, or CMake cache is
 restored.
 
-## Publish the initial artifacts
+## Automatic storage and publication
 
-Deploy `CI-dependency-artifacts.yml` to the repository's default branch before
-using manual dispatch. A maintainer can then select it in Actions or run:
+Every successful eligible source preparation creates a local pair:
 
-```bash
-gh workflow run CI-dependency-artifacts.yml --ref v3.0 \
-  -f group=ubuntu24 -f dependency=both
+```text
+.cache/dependency-artifacts/bundles/<dependency>/<fingerprint>/entry.json
+.cache/dependency-artifacts/bundles/<dependency>/<fingerprint>/bundle.tar.gz
 ```
 
-Omitting `source_ref` builds the immutable `v3.0` revision used for the dispatch.
-An explicit `source_ref` must resolve to a commit reachable from the trusted
-`v3.0` control revision. Merge dependency source changes through review before
-publishing their artifacts; unmerged topic commits are rejected before the
-matrix or build jobs are created. Dispatch this workflow from `v3.0`: profile selection and publication run control code from
-that branch, pinned to one SHA for the workflow. The selected `source_ref` is
-checked out separately and executes only in read-only build jobs. Publication
-checks the trusted plan's exact matrix and source SHA, and build artifacts cannot
-overwrite the trusted plan or control code. Only the final publication job has
-`contents: write`; its publisher command receives `GH_TOKEN`.
+Preparation validates the outputs and commits the pair together under a lock.
+A later build can restore it after prepared dependency trees are removed. Set
+`DEPS_ARTIFACT_CACHE_DIR` to share the bundle store between separate checkouts;
+their working trees and preparation locks remain isolated. Different signatures
+retain separate directories, so switching A to B and back to A can reuse the
+first bundle without recompiling it.
 
-The protected `v3.0` branch is the publication trust root. No environment with
-required reviewers is currently configured for this publication; the workflow
-does not silently create an unprotected environment or claim an approval gate.
-Repository administrators can add a protected publication environment as an
-additional approval policy.
+Public bundles use deterministic release tags:
 
-Supported groups are `ubuntu24`, `almalinux8`, `macos`, and `all`. Linux groups cover amd64/arm64
-and the existing GCC/Clang packaging images; macOS covers the native macos-14
-arm64 runner. Unsupported build configurations continue to build from source.
-
-Each selected configuration compiles fresh source in its actual build
-environment, packages outputs, restores them to a different path, and runs a
-real compile/link/runtime probe. The probes execute a DuckDB query and construct
-an OpenSSL TLS context while checking header/runtime versions.
-
-Only after the entire matrix succeeds does the final job publish a prerelease
-named `dependency-artifacts-v1-RUN_ID-ATTEMPT`. It does not become the latest
-ProxySQL release. Existing assets are never replaced. Failed publication may
-leave a draft; use a new complete workflow attempt rather than overwriting it.
-On retry, rerun **all jobs**, so every candidate belongs to the same attempt.
-
-The workflow publishes the archives and `lock-entries.json`, and uploads the
-metadata as the Actions artifact `dependency-lock-entries-ATTEMPT`. Publication
-does not modify the source branch.
-
-## Register a publication
-
-Set `dependency_run_id` and `dependency_attempt` to the successful workflow run
-and attempt shown in Actions, then download its generated metadata:
-
-```bash
-dependency_entries_dir=$(mktemp -d)
-gh run download "$dependency_run_id" \
-  -n "dependency-lock-entries-$dependency_attempt" -D "$dependency_entries_dir"
-python3 deps/artifacts/publish.py register \
-  --entries "$dependency_entries_dir/lock-entries.json" \
-  --registry deps/artifacts/lock.json
-git diff -- deps/artifacts/lock.json
+```text
+dependency-artifact-v1-<dependency>-<fingerprint>
 ```
 
-Review and commit the registry update. The registration command validates both
-registries and preserves previously registered configurations. Duplicate
-identities fail instead of silently replacing their URL/digest; retain the
-existing entry, or explicitly remove a retired entry during review.
+Each release in `sysown/proxysql` contains `entry.json` and `bundle.tar.gz`.
+Consumers derive those URLs from the dependency and their computed fingerprint,
+compare the complete identity, verify the declared size and SHA-256 digest, and
+validate the extracted manifest and outputs before installation. Public reads
+need no GitHub token. Source archives remain vendored in Git; a missing bundle
+does not introduce another source download.
 
-Ordinary builds now download only an exact match and verify it against this
-committed digest. No GitHub token is required to consume public release assets.
-There is no new source download: the source archives remain vendored in Git.
+`deps/artifacts/lock.json` remains a migration fallback for previously registered
+bundles. New signatures are found and persisted without adding registry entries.
+The old batch publication and registration procedure is not part of normal
+dependency maintenance.
+
+CI computes independent OpenSSL and DuckDB keys through dependency Make in the
+actual build environment. It restores only exact Actions cache matches, verifies
+the stored pair, prepares the dependencies, and runs compile/link/runtime probes
+before saving bundles immediately. Extracted dependency trees and general build
+outputs are not part of this cache. Keys contain the full dependency fingerprint;
+they do not include the core commit, branch, or workflow run.
+
+PR upgrades therefore build and save their own missing signatures automatically.
+Their Actions caches stay scoped to the PR merge ref and are not promoted into
+the global public store. A fresh publisher job accepts candidates only from
+reviewed protected `v3.0` history. It verifies the actual triggering repository,
+event and source SHA, checks source, recipe, verifier and helper hashes against
+Git objects, and validates each complete candidate. An older producer commit is
+acceptable only when it is also reviewed history with matching dependency inputs.
+
+Source-build jobs have read-only repository credentials. Only the fresh
+publisher receives publication credentials; it treats candidate archives as data
+and never executes their libraries or scripts. It selects candidates from the
+current workflow attempt, deduplicates equal dependency signatures, and serializes
+publication by the full dependency fingerprint. Different versions and
+dependencies can publish independently.
+
+A completed valid release wins even if another build of the same identity has
+different archive bytes. Published assets are never replaced. An interrupted
+draft can be repaired by retrying publication of a validated pair. These releases
+are prereleases and do not become the latest ProxySQL release. Publication does
+not edit the source branch.
+
+Ordinary core CI produces missing bundles, while `CI-dependency-artifacts.yml`
+automatically prewarms selected profiles when dependency or build inputs change.
+Manual dispatch is optional backfill. Linux profiles cover the existing
+GCC/Clang packaging environments on amd64 and arm64; native macOS uses its own
+SDK/compiler identity. Unsupported configurations continue to build from source.
 
 ## Updating a dependency or toolchain
 
@@ -156,18 +161,21 @@ and configure flags now live in `deps/duckdb/build.mk`; OpenSSL's source recipe
 and configure flags live in `deps/libssl/build.mk`, with its version still in
 `common_mk/openssl_flags.mk`.
 
-Publish the changed dependency/configurations and register the generated entries.
-An OpenSSL update does not require rebuilding DuckDB. Source-only validation in
-`CI-dependency-artifacts-checks.yml` continues to exercise compilation from the
-vendored archives, independently of registered artifacts.
+Build or run CI normally after changing the vendored version, checksum, recipe,
+settings, or toolchain. A changed signature creates a new bundle automatically;
+existing versions remain reusable under their own keys. An OpenSSL-only update
+does not invalidate DuckDB's key. Unrelated core commits do not rebuild either
+dependency. Source-only validation in `CI-dependency-artifacts-checks.yml`
+continues to exercise compilation from the vendored archives independently of
+bundle availability.
 
 ## Cache and diagnostics
 
-Verified archives and preparation locks live under
-`.cache/dependency-artifacts/` in the checkout, which is also visible inside the
-package workspace mount. `cleanbuild` and `cleanall` remove prepared dependency
-trees but preserve these downloads. Preparation happens after that cleanup,
-inside the dependency targets, with the container's actual toolchain.
+Verified bundles, downloaded archives and preparation locks live under
+`.cache/dependency-artifacts/` by default, visible inside the package workspace
+mount. `cleanbuild` and `cleanall` remove prepared dependency trees but preserve
+the bundle store. Preparation happens after that cleanup, inside dependency
+targets, with the container's actual toolchain.
 
 Each dependency logs its mode, fingerprint prefix, and origin. Examples:
 
@@ -175,12 +183,16 @@ Each dependency logs its mode, fingerprint prefix, and origin. Examples:
 [deps/duckdb] auto: restored verified artifact ...
 [deps/openssl] prebuilt: already prepared from prebuilt (...)
 [deps/duckdb] auto: no compatible artifact; building vendored source ...
+[deps/duckdb] saved reusable bundle ...
 ```
 
-An unavailable download falls back only in `auto`. An unavailable optional
-compatibility probe also permits the source escape hatch in `auto`/`source`. A checksum mismatch, unsafe
-archive, invalid registry, or invalid payload is an error, including in `auto`.
-Investigate integrity errors rather than registering the unexpected bytes.
+An absent or unavailable remote bundle permits a source build in `auto`;
+`prebuilt` fails instead. An unavailable optional compatibility probe also
+permits the source escape hatch in `auto`/`source`. Corrupt local bundles,
+mismatched metadata or identities, checksum mismatches, unsafe archives, invalid
+legacy registries, and invalid payloads are errors, including in `auto`. They
+are not silently treated as ordinary cache misses. Investigate integrity errors
+rather than accepting unexpected bytes.
 
 The helper stages and verifies the entire payload before replacing a dependency
 tree. Missing DuckDB secondary archives or generated OpenSSL headers invalidate
@@ -188,24 +200,27 @@ the output. Concurrent preparation is serialized; completion metadata prevents
 restored timestamps from causing repeated rebuilds. The tracked OpenSSL symlink
 continues to point at its versioned directory.
 
-To remove downloaded archives, first stop builds using this checkout, then remove
-the digest-named `.tar.gz` files under the cache. Keep the lock files while
-preparation processes may still be running.
+To remove a cached signature, first stop builds using that store, then remove its
+`bundles/<dependency>/<fingerprint>/` directory. Legacy digest-named `.tar.gz`
+downloads can also be removed. Keep lock files while preparation processes may
+still be running, including processes in other checkouts sharing the store.
 
 ## Validation recorded during implementation
 
-All 83 artifact and workflow fixtures pass on the development host. The
-AlmaLinux 8 packaging image with Python 3.6.8 passes all 73 runtime/helper
-fixtures; the workflow test module explicitly skips when optional PyYAML is
-absent. Regression coverage includes Python-free
-concurrent preparation and complete output inventories, dependency-to-plugin
-flag preservation, unprobed compiler/CPU settings, the running libc version,
-and download response-read timeouts on older Python versions. PR #6520 review
-coverage additionally verifies native CMake CPU options, truncated response
-fallback, Python-free checksum sidecars and relocation, aliased checkout paths,
-and shared-checkout permissions,
-C/C++ compiler family consistency, publication ordering/completeness/timeouts,
-trusted control/source separation, and CI event gates.
+Regression coverage includes cold-miss bundle creation, clean-tree restoration,
+version A/B/A reuse, configuration isolation, unchanged keys across unrelated
+commits, same-key publication races, draft recovery, and refusal to promote PR
+candidates. Git fixtures bind candidate versions and focused source hashes to
+reviewed history. Publisher tests use fake release and download boundaries and
+perform no live publication.
+
+Existing validation covers Python-free concurrent preparation and complete output
+inventories, dependency-to-plugin flag preservation, compiler/CPU settings, the
+running libc version, older-Python download timeouts, truncated responses,
+checksum sidecars, relocation, aliased checkout paths, shared-checkout permissions,
+C/C++ compiler family consistency, and trusted control/source separation. Runtime
+and helper fixtures have also been exercised in the AlmaLinux 8 packaging image
+with Python 3.6.8. The workflow test module skips when optional PyYAML is absent.
 
 On the development Linux host, a fresh combined source build using
 `make -j4 ... NPROCS=4 DEPS_MODE=source libssl duckdb` took 612.71 seconds.
@@ -219,12 +234,11 @@ other CI runner classes.
 
 The full `PROXYSQL40=1` release build passed against restored dependencies, and
 the executable/plugins passed the static OpenSSL linkage check. In the isolated
-TAP infrastructure, all 22 admin and 17 MySQL assertions passed; the PostgreSQL
-test passed 18 assertions and failed six extended-query assertions. Linking a
-second plugin directly to the source-built libraries reproduced the same six
-failures. The default Python wrapper requires DEBUG admin commands, so these
+TAP infrastructure, admin and MySQL tests passed. PostgreSQL extended-query
+failures reproduced when a second plugin linked directly to source-built
+libraries. The default Python wrapper requires DEBUG admin commands, so these
 release tests used the repository direct TAP runner on the isolated network.
 
-The broader system-OpenSSL selector audit also reports six existing selectors
-in unrelated test/plugin Makefiles, present before this change. Neither these
+The broader system-OpenSSL selector audit also reports existing selectors in
+unrelated test/plugin Makefiles, present before this change. Neither these
 selectors nor PostgreSQL protocol behavior is changed by dependency reuse.
