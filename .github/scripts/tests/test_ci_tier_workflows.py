@@ -4,7 +4,7 @@ import yaml
 ROOT=Path(__file__).resolve().parents[3]
 def workflow(name):return yaml.safe_load((ROOT/'.github/workflows'/name).read_text())
 class WorkflowTests(unittest.TestCase):
- def run_build_prefix(self,make_body):
+ def run_build_prefix(self,make_body,mode='normal',tier='v31'):
   step=next(s for s in workflow('ci-builds.yml')['jobs']['builds']['steps'] if s.get('name')=='Build')
   # Execute the actual setup and build pipeline, stopping before packaging.
   script=step['run'].split('# create matrix of all test folders',1)[0]+'\nfi\n'
@@ -12,10 +12,11 @@ class WorkflowTests(unittest.TestCase):
    script=script.replace('${{ '+expression+' }}',value)
   with tempfile.TemporaryDirectory() as folder:
    root=Path(folder);(root/'proxysql').mkdir();(root/'tools').mkdir()
-   (root/'proxysql/docker-compose.yml').write_text('services: {}\n')
+   (root/'proxysql/docker-compose.yml').write_text('services:\n  build:\n    environment:\n      - FIXTURE=1\n    command: true\n')
    for name,body in [('git','exit 0'),('make',make_body)]:
     p=root/'tools'/name;p.write_text('#!/bin/sh\n'+body+'\n');p.chmod(0o755)
-   env=dict(os.environ,PATH=str(root/'tools')+os.pathsep+os.environ['PATH'],TIER='v31',VARIANT='fixture',TAP_BUILD_MODE='normal')
+   env=dict(os.environ,PATH=str(root/'tools')+os.pathsep+os.environ['PATH'],TIER=tier,VARIANT='fixture',TAP_BUILD_MODE=mode)
+   for name in ('WITHASAN','TEST_WITHASAN'):env.pop(name,None)
    result=subprocess.run(['bash','-e','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=10)
    return result
  def test_failed_build_survives_tee_even_after_a_successful_container_exit(self):
@@ -27,6 +28,18 @@ class WorkflowTests(unittest.TestCase):
  def test_successful_container_and_make_pass(self):
   result=self.run_build_prefix('echo "builder exited with code 0"; exit 0')
   self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+ def test_host_make_and_container_receive_the_same_sanitizer_mode(self):
+  for tier in ('v30','v31','v40'):
+   for mode in ('normal','asan'):
+    with self.subTest(tier=tier,mode=mode):
+     body='printf "host sanitizer: %s/%s\\n" "${WITHASAN:-0}" "${TEST_WITHASAN:-0}"\n'
+     body+='grep -- "- WITHASAN=1\\|- TEST_WITHASAN=1" docker-compose.yml || true\n'
+     result=self.run_build_prefix(body+'echo "builder exited with code 0"',mode=mode,tier=tier)
+     self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+     flag='1' if mode=='asan' else '0'
+     self.assertIn('host sanitizer: '+flag+'/'+flag,result.stdout)
+     for name in ('WITHASAN','TEST_WITHASAN'):
+      self.assertEqual('- '+name+'=1' in result.stdout,mode=='asan')
  def test_explicit_context_permissions_allow_stale_run_cancellation(self):
   docs={file.name:workflow(file.name) for file in (ROOT/'.github/workflows').glob('*.yml')}
   # Include wrappers (for example ci-ai-g1 -> ci-ai-gcov -> ci-tier-context):

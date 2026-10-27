@@ -203,6 +203,9 @@ jobs:
         # It used to compare against 'ubuntu24-tap-genai-gcov' because the tier
         # was encoded in `type`; keep this string in sync with the matrix leg.
         if [[ "${TAP_BUILD_MODE}" = 'asan' && "${{ matrix.dist }}${{ matrix.type }}" = 'ubuntu24-tap' ]]; then
+          # Host make uses WITHASAN to skip clean-install verification for
+          # sanitizer packages, whose runtime libraries live in the builder.
+          export WITHASAN=1 TEST_WITHASAN=1
           sed -i "/command/i \      - WITHASAN=1" docker-compose.yml
           sed -i "/command/i \      - TEST_WITHASAN=1" docker-compose.yml
         fi
