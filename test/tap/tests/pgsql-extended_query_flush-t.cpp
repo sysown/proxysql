@@ -1017,6 +1017,43 @@ static void case_row11_copy(Mode m, bool) {
 	ok(rows(tag) == 1, "row 11 copy [%s]: the INSERT is committed (rows=%ld)", mode_name(m), rows(tag));
 }
 
+// Rows 11d, 11e: the Query right behind the extended messages, in the same write, with no Flush. It
+// runs in their transaction; after an error it is ignored until the Sync.
+static void case_row11de(Mode m, bool) {
+	auto c = client(m);
+	const std::string tag = tag_for("row11d", m, false), tag2 = tag_for("row11ok", m, false);
+	check(run(*c, [&] { c->beginBuffering(); c->prepareStatement("", uniq() + "INSERT INTO flush_t VALUES ('" + tag + "', 1)", false);
+			c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendQuery("SELECT 1/0"); c->endBuffering(); }),
+		"1 2 C(INSERT 0 1) E(22012) Z(I)", "row 11d: P B E(INSERT) Q(SELECT 1/0)", m, false);
+	ok(rows(tag) == 0, "row 11d [%s]: the INSERT is rolled back with the failed Query (rows=%ld)", mode_name(m), rows(tag));
+	check(run(*c, [&] { c->beginBuffering(); c->prepareStatement("", uniq() + EXEC_ERR, false); c->bindStatement("", "", {}, {}, false);
+			c->executePortal("", 0, false); c->sendQuery("SELECT 42"); c->endBuffering(); }),
+		"1 2 E(22012)", "row 11e: P B E(error) Q: the Query is ignored", m, false);
+	check(run(*c, [&] { c->sendSync(); }), "Z(I)", "row 11e: S", m, false);
+	check(run(*c, [&] { c->beginBuffering(); c->prepareStatement("", uniq() + "INSERT INTO flush_t VALUES ('" + tag2 + "', 1)", false);
+			c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendQuery("SELECT 42"); c->endBuffering(); }),
+		"1 2 C(INSERT 0 1) T D C(SELECT 1) Z(I)", "row 11: P B E(INSERT) Q(SELECT 42)", m, false);
+	ok(rows(tag2) == 1, "row 11 [%s]: the INSERT is committed with the Query (rows=%ld)", mode_name(m), rows(tag2));
+}
+
+// A tracked SET as an extended statement inside the group, then a simple Query. The SET must not end
+// the group's transaction on its way to the backend: the Query decides, committing everything or, when
+// it fails, nothing.
+static void case_row11_var(Mode m, bool) {
+	auto c = client(m);
+	for (int good = 0; good < 2; good++) {
+		const std::string tag = tag_for(good ? "row11vok" : "row11v", m, false);
+		check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "row 11 var: P B E(INSERT) H", m, false);
+		const std::string set = run(*c, [&] { c->prepareStatement("", good ? "SET DateStyle = 'ISO, MDY'" : "SET DateStyle = 'SQL, DMY'", false);
+			c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendFlush(); });
+		ok(set.size() >= 6 && set.compare(set.size() - 6, 6, "C(SET)") == 0, "row 11 var [%s]: P B E(SET DateStyle) H (got '%s')",
+			mode_name(m), set.c_str());
+		check(run(*c, [&] { c->sendQuery(good ? "SELECT 1" : "SELECT 1/0"); }), good ? "T D C(SELECT 1) Z(I)" : "E(22012) Z(I)",
+			good ? "row 11 var: Q SELECT 1" : "row 11 var: Q SELECT 1/0", m, false);
+		ok(rows(tag) == good, "row 11 var [%s]: the INSERT is %s (rows=%ld)", mode_name(m), good ? "committed" : "rolled back", rows(tag));
+	}
+}
+
 // The held backend dies before the Query: the Query must not be run alone on another connection,
 // which would report success while the INSERT is gone.
 static void case_retry_refused(Mode m, bool) {
@@ -1030,6 +1067,72 @@ static void case_retry_refused(Mode m, bool) {
 	ok(got != "T D C(SELECT 1) Z(I)", "retry refused [%s]: the Query is not run alone after the backend died (got '%s')",
 		mode_name(m), got.c_str());
 	ok(rows(tag) == 0, "retry refused [%s]: the INSERT is gone (rows=%ld)", mode_name(m), rows(tag));
+}
+
+// ===== A Flush in a poisoned session (spec 4.8, row 9). =====
+
+// Poisons the session as pgsql-tx_poisoned_extended_query-t does: with
+// pgsql-preserve_client_on_broken_backend_in_tx on, the backend of an open transaction is killed, and
+// the client stays connected in a failed transaction that ProxySQL itself answers.
+// A session locked to its hostgroup does not track BEGIN, so it is closed instead of poisoned: the
+// unbatched mode's startup option locks it, so the row 9 cases use a plain native client there.
+static std::unique_ptr<PgConnection> poison_client(Mode m) {
+	return client(m == Mode::NATIVE_UNBATCHED ? Mode::NATIVE : m);
+}
+static void poison(PgConnection& c, Mode m) {
+	const std::string before = scalar(g_admin, "SELECT variable_value FROM runtime_global_variables "
+		"WHERE variable_name='pgsql-preserve_client_on_broken_backend_in_tx'");
+	admin_set("pgsql-preserve_client_on_broken_backend_in_tx", "true");
+	const std::string mk = uniq();
+	run(c, [&] { c.sendQuery("BEGIN"); });
+	c.sendQuery(mk + "SELECT pg_sleep(3)");
+	usleep(500000);
+	exec(g_be, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND query LIKE '%" + mk + "%'");
+	const std::string r = run(c, [] {}, 1000);
+	ok(r == "E(25P02) Z(E)", "row 9 [%s]: the session is poisoned (got '%s')", mode_name(m), r.c_str());
+	admin_set("pgsql-preserve_client_on_broken_backend_in_tx", before.empty() ? "false" : before);
+}
+
+// A frame that is not a transaction end: 25P02 at the Flush, no ReadyForQuery, discard until the Sync.
+static void case_row9_refused(Mode m, bool) {
+	auto c = poison_client(m);
+	poison(*c, m);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + "SELECT 1", false); c->describeStatement("", false); c->sendFlush(); }),
+		"E(25P02)", "row 9 refused: P D(S) H", m, false);
+	check(run(*c, [&] { c->sendSync(); }), "Z(E)", "row 9 refused: S", m, false);
+	check(run(*c, [&] { c->sendQuery("ROLLBACK"); }), "C(ROLLBACK) Z(I)", "row 9 refused: ROLLBACK recovers", m, false);
+}
+
+// A ROLLBACK executed before the Flush ends the transaction there; the group goes on.
+static void case_row9_rollback_exec(Mode m, bool) {
+	auto c = poison_client(m);
+	poison(*c, m);
+	check(run(*c, [&] { c->prepareStatement("", "ROLLBACK", false); c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false);
+			c->sendFlush(); }), "1 2 C(ROLLBACK)", "row 9 rollback: P(ROLLBACK) B E H", m, false);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + "SELECT 1", false); c->bindStatement("", "", {}, {}, false);
+			c->executePortal("", 0, false); c->sendFlush(); }), "1 2 D C(SELECT 1)", "row 9 rollback: P B E H after it", m, false);
+	check(run(*c, [&] { c->sendSync(); }), "Z(I)", "row 9 rollback: S", m, false);
+}
+
+// A ROLLBACK parsed and described before the Flush, executed after it.
+static void case_row9_rollback_describe(Mode m, bool) {
+	auto c = poison_client(m);
+	poison(*c, m);
+	check(run(*c, [&] { c->prepareStatement("", "ROLLBACK", false); c->describeStatement("", false); c->sendFlush(); }), "1 t n",
+		"row 9 describe: P(ROLLBACK) D(S) H", m, false);
+	check(run(*c, [&] { c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendSync(); }),
+		"2 C(ROLLBACK) Z(I)", "row 9 describe: B E S", m, false);
+}
+
+// A named ROLLBACK parsed at a Flush stays defined after a Sync with no Execute, as in PostgreSQL.
+static void case_row9_named_kept(Mode m, bool) {
+	auto c = poison_client(m);
+	poison(*c, m);
+	const std::string name = "flush_r1_" + std::to_string((long)time(nullptr));
+	check(run(*c, [&] { c->prepareStatement(name, "ROLLBACK", false); c->sendFlush(); }), "1", "row 9 named: P(r1, ROLLBACK) H", m, false);
+	check(run(*c, [&] { c->sendSync(); }), "Z(E)", "row 9 named: S", m, false);
+	check(run(*c, [&] { c->bindStatement(name, "", {}, {}, false); c->executePortal("", 0, false); c->sendSync(); }),
+		"2 C(ROLLBACK) Z(I)", "row 9 named: B(r1) E S", m, false);
 }
 
 struct Case {
@@ -1080,6 +1183,12 @@ static const std::vector<Case> CASES = {
 	{ "row 11 refused",              3,  3, false, case_row11_refused },
 	{ "row 11 copy",                 3,  3, false, case_row11_copy },
 	{ "retry refused",               3,  3, false, case_retry_refused },
+	{ "row 11d/11e",                 6,  6, false, case_row11de },
+	{ "row 11 var",                  8,  8, false, case_row11_var },
+	{ "row 9 refused",               4,  4, false, case_row9_refused },
+	{ "row 9 rollback exec",         4,  4, false, case_row9_rollback_exec },
+	{ "row 9 rollback describe",     3,  3, false, case_row9_rollback_describe },
+	{ "row 9 named kept",            4,  4, false, case_row9_named_kept },
 };
 
 static const Mode MODES[] = { Mode::LIBPQ, Mode::NATIVE, Mode::NATIVE_UNBATCHED };

@@ -147,7 +147,6 @@ enum ExtendedQueryPhase : uint8_t {
 	EXTQ_PHASE_IDLE						= 0x00,	// No extended query activity
 	EXTQ_PHASE_BUILDING					= 0x01,	// Collecting extended query messages (Parse/Bind/etc.)
 	EXTQ_PHASE_EXECUTING_SYNC_CLIENT	= 0x02,	// Executing after client-initiated Sync
-	EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT	= 0x04,	// Executing after implicit Sync (injected)
 	EXTQ_PHASE_PROCESSING_PARSE			= 0x08,	// Processing Parse message after Sync
 	EXTQ_PHASE_PROCESSING_DESCRIBE		= 0x10,	// Processing Describe message after Sync
 	EXTQ_PHASE_PROCESSING_CLOSE			= 0x20,	// Processing Close message after Sync
@@ -303,6 +302,9 @@ private:
 	bool extq_group_holds_work { false };
 	// Something beyond a Parse or a statement's Describe went to a backend in this segment.
 	bool extq_segment_effects { false };
+	// A simple Query went to the connection holding the group's work: it runs in the group's
+	// transaction and ends it, and the group with it once the Query is over (RequestEnd).
+	bool extq_query_ends_group { false };
 	// An error ended the group before the client's Sync. PostgreSQL ignores everything up to that
 	// Sync, then answers it with one ReadyForQuery; extq_discard_status is its transaction state.
 	bool extq_discard_until_sync { false };
@@ -467,6 +469,12 @@ private:
 	void extq_group_end();
 	// From now until the client's Sync every message is dropped; the Sync gets ReadyForQuery(status).
 	void extq_enter_discard(char status);
+	// The backend whose connection holds extended-query work no Sync concluded, or nullptr.
+	PgSQL_Backend* extq_held_backend();
+	// A simple Query ProxySQL answered or refused itself while a connection holds the group's work.
+	void extq_end_group_after_local_query(unsigned int out_before);
+	// A simple Query that joined a group needs a tracked variable set first: refused instead.
+	void extq_refuse_query_variable_sync(PgSQL_Data_Stream* myds);
 	int handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg);
 	int handle_post_sync_describe_message(PgSQL_Describe_Message* describe_msg);
 	int handle_post_sync_close_message(PgSQL_Close_Message* close_msg);
@@ -565,6 +573,9 @@ private:
 	// The extended-query counterpart, called for each Parse/Bind/Describe/Close/Execute
 	// queued while tx_poisoned: may the frame end the transaction? (see poisoned_extq)
 	void classify_poisoned_extq_message();
+	// A client Flush while tx_poisoned. True when the Flush was answered; false when the segment
+	// runs as for any Flush.
+	bool poisoned_flush();
 	// The client ended a poisoned transaction (ROLLBACK/COMMIT, either protocol): roll it
 	// back -- tracked SET variables, then any backend still holding it -- and clear the poison.
 	void end_poisoned_transaction();
@@ -633,8 +644,7 @@ public:
 	}
 
 	inline bool is_extended_query_ready_for_query() const {
-		return extended_query_frame.empty() &&
-			((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0) && extq_flush_segment == false;
+		return extended_query_frame.empty() && extq_flush_segment == false;
 	}
 
 	inline bool is_extq_flush_segment() const {

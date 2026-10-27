@@ -868,11 +868,9 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_RESYNC_START);
 			}
 
-			// The backend is in sync again. After an implicit Sync the client's ReadyForQuery comes
-			// once the simple Query that closed the unit has run, after an error too. In a part the
-			// client ended with Flush it comes with the client's own Sync.
-			if ((myds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) ||
-				myds->sess->is_extq_flush_segment()) {
+			// The backend is in sync again. In a part ended with Flush the client's ReadyForQuery comes
+			// with its own Sync.
+			if (myds->sess->is_extq_flush_segment()) {
 				NEXT_IMMEDIATE(fetch_result_end_st);
 			}
 		}
@@ -3846,9 +3844,8 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				// Sync error recovery above).
 				if (t == 'Z') {
 					const bool has_error = (query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_ERROR) != 0;
-					// Not the client's either after an error in a part it ended with Flush: its Sync comes later.
-					const bool implicit = (myds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) != 0 ||
-						myds->sess->is_extq_flush_segment();
+					// Not the client's after an error in a part ended with Flush: its Sync comes later.
+					const bool implicit = myds->sess->is_extq_flush_segment();
 					if (implicit || (!myds->sess->is_extended_query_frame_empty() && !has_error)) {
 						// An implicit Sync before a simple query ends the backend
 						// extended cycle, but the client awaits the simple query's
@@ -5346,6 +5343,15 @@ unsigned int PgSQL_Connection::get_memory_usage() const {
 	// TODO: need to create new function in libpq
 	unsigned int memory_bytes = (16 * 1024) * 2; //PSgetMemoryUsage(pgsql_conn);
 	return /*sizeof(PGconn) +*/ memory_bytes;
+}
+
+bool PgSQL_Connection::leave_pipeline_mode() {
+	if (native_mode || PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) return true;
+	if (PQexitPipelineMode(pgsql_conn) == 0) {
+		set_error_from_PQerrorMessage();
+		return false;
+	}
+	return true;
 }
 
 char PgSQL_Connection::get_transaction_status_char() {

@@ -14,9 +14,9 @@
  *
  * The refusals ProxySQL answers itself (an invalid SET value, RESET ALL, COPY, DISCARD ALL, a bad
  * pg_terminate_backend() parameter, RESET on a locked session, a query rule's error_msg) and a backend's
- * own error are also sent with no Sync and closed by a simple Query, an implicit Sync: the client must get
- * one ReadyForQuery, after the Query. With another statement and a Sync behind them, the error carries the
- * one ReadyForQuery. A FunctionCall in the middle of a unit is refused too, and only the Sync after it may
+ * own error are also sent with no Sync and followed by a simple Query: as in PostgreSQL the Query is ignored
+ * until the client's Sync, which gets the one ReadyForQuery. With another statement and a Sync behind them,
+ * the error carries the one ReadyForQuery. A FunctionCall in the middle of a unit is refused too, and only the Sync after it may
  * be answered with a ReadyForQuery. A Flush there is served: it sends what is queued, with no ReadyForQuery.
  *
  * A matrix then varies the rest: where in the unit the error comes (Parse, Bind, Describe, Execute, after a
@@ -197,11 +197,11 @@ static std::string raw_batch(PgConnection& c, std::string* err = nullptr) {
 }
 
 // Parse/Bind/Execute of a statement that fails, on a new connection ('lock' first locks it to its
-// hostgroup), and of 'behind' when given, then either a simple Query, which closes the unit with an
-// implicit Sync, or ('pipelined') another statement and a Sync. The client must get one ReadyForQuery:
-// after the Query, "...ETDCZ(I)", or with the error, "...EZ(I)", the statements queued behind it discarded.
-// Nothing may follow it. An extra one leaves the client a reply out of step for the rest of the session, a
-// missing one leaves it waiting.
+// hostgroup), and of 'behind' when given, then either a simple Query and a Sync, or ('pipelined') another
+// statement and a Sync. As in PostgreSQL, everything after the error is ignored until the Sync, the
+// simple Query too: the client must get one ReadyForQuery, the Sync's, "...EZ(I)". Nothing may follow it.
+// An extra one leaves the client a reply out of step for the rest of the session, a missing one leaves it
+// waiting.
 static void check_refusal(const std::string& q, const std::string& expected_err, bool pipelined,
 	const std::vector<PgConnection::Param>& params = {}, bool lock = false, const std::string& behind = "") {
 	PgConnection c(1000);
@@ -227,17 +227,18 @@ static void check_refusal(const std::string& q, const std::string& expected_err,
 			c.sendSync();
 		} else {
 			c.sendQuery("SELECT 13");
+			c.sendSync();
 		}
 		r = raw_batch(c, &err);
 	} catch (const std::exception& e) {
 		r += std::string("<") + e.what() + ">";
 	}
-	const std::string end = pipelined ? "EZ(I)" : "TDCZ(I)";
+	const std::string end = "EZ(I)";
 	const bool one_ready = r.size() >= end.size() && r.compare(r.size() - end.size(), end.size(), end) == 0;
 	ok(err.find(expected_err) != std::string::npos && one_ready, "'%s' fails%s%s, then %s: one ReadyForQuery: "
-		"replies '%s' (expected ...%s, nothing after), error '%s'", q.c_str(), behind.empty() ? "" : " before ",
-		behind.c_str(), pipelined ? "another statement and Sync" : "a simple Query (implicit Sync)", r.c_str(),
-		pipelined ? "EZ(I)" : "ETDCZ(I)", err.c_str());
+		"replies '%s' (expected ...EZ(I), nothing after), error '%s'", q.c_str(), behind.empty() ? "" : " before ",
+		behind.c_str(), pipelined ? "another statement and Sync" : "a simple Query, ignored, and Sync", r.c_str(),
+		err.c_str());
 }
 
 static void pbe(PgConnection& c, const std::string& q) {
@@ -447,8 +448,8 @@ int main(int argc, char** argv) {
 		}
 
 		// Native mode sends the unit as one batch, and the rule's error on its second Parse fails the batch
-		// on the backend. After an implicit Sync the backend's ReadyForQuery for it is not the client's: the
-		// client's comes after its simple Query.
+		// on the backend. The simple Query after it is ignored, as in PostgreSQL: the client's ReadyForQuery
+		// is its Sync's.
 		{
 			PgConnection c(1000);
 			std::string r2, err;
@@ -460,20 +461,21 @@ int main(int argc, char** argv) {
 					c.executePortal("", 0, false);
 				}
 				c.sendQuery("SELECT 13");
+				c.sendSync();
 				r2 = raw_batch(c, &err);
 			} catch (const std::exception& e) {
 				r2 += std::string("<") + e.what() + ">";
 			}
-			const bool one_ready = r2.size() >= 7 && r2.compare(r2.size() - 7, 7, "TDCZ(I)") == 0;
-			ok(err == "blocked by rule" && one_ready, "Batched unit, blocked second Parse, then a simple Query (implicit "
-				"Sync): one ReadyForQuery, after the Query: replies '%s' (expected ...ETDCZ(I), nothing after), error '%s'",
+			const bool one_ready = r2.size() >= 5 && r2.compare(r2.size() - 5, 5, "EZ(I)") == 0;
+			ok(err == "blocked by rule" && one_ready, "Batched unit, blocked second Parse, then a simple Query and Sync: "
+				"the Query ignored, one ReadyForQuery, the Sync's: replies '%s' (expected ...EZ(I), nothing after), error '%s'",
 				r2.c_str(), err.c_str());
 		}
 
-		// The simple Query that closes a failed unit is refused by the rule: its own error ends with the
-		// one ReadyForQuery.
-		r = run_unit([&](PgConnection& c) { pbe(c, "SELECT 1/(random()*0)::int"); c.sendQuery(blocked); });
-		ok(r == "12EEZ(I)", "Failed unit, then a simple Query the rule refuses: replies '%s' (expected 12EEZ(I), "
+		// A simple Query the rule would refuse, after a failed unit: ignored like any Query there, so the
+		// rule never sees it.
+		r = run_unit([&](PgConnection& c) { pbe(c, "SELECT 1/(random()*0)::int"); c.sendQuery(blocked); c.sendSync(); });
+		ok(r == "12EZ(I)", "Failed unit, then a simple Query the rule refuses, and Sync: replies '%s' (expected 12EZ(I), "
 			"nothing after)", r.c_str());
 
 		exec_ok(admin.get(), "DELETE FROM pgsql_query_rules WHERE rule_id=" + std::to_string(rule_id));
@@ -576,7 +578,9 @@ int main(int argc, char** argv) {
 	{
 		// The matrix. Replies as raw_batch() reads them: 1 ParseComplete, 2 BindComplete, T RowDescription,
 		// D DataRow, C CommandComplete, I EmptyQueryResponse, E ErrorResponse, Z(s) ReadyForQuery, "+x" what
-		// came after it. The closing Query gets the one ReadyForQuery, a Sync after it gets its own.
+		// came after it. Each case ends with a Sync. After an error everything up to it is ignored, the
+		// simple Query too, and the Sync gets the one ReadyForQuery; with no error the Query runs in the
+		// unit's transaction and ends it, and the Sync gets its own.
 		// The constant in "SELECT 1/0" is folded at Bind, so that one is a Bind error; this one fails at Execute.
 		// An expected value starting with "..." is checked as the end of the replies: before a Bind error
 		// ProxySQL sends its own BindComplete, which PostgreSQL does not (a separate issue).
@@ -590,30 +594,30 @@ int main(int argc, char** argv) {
 		const std::vector<Case> cases = {
 			// Where the error comes.
 			{ "backend Parse error", "", "", [](PgConnection& c) {
-				pbe(c, "SELEC 1"); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+				pbe(c, "SELEC 1"); c.sendQuery("SELECT 13"); }, "EZ(I)" },
 			{ "backend Bind error (a parameter missing)", "", "", [](PgConnection& c) {
 				c.prepareStatement("", "SELECT $1::int", false);
 				c.bindStatement("", "", {}, {}, false);
 				c.executePortal("", 0, false);
-				c.sendQuery("SELECT 13"); }, "...ETDCZ(I)" },
+				c.sendQuery("SELECT 13"); }, "...EZ(I)" },
 			{ "backend Bind error (a folded constant)", "", "", [](PgConnection& c) {
-				pbe(c, "SELECT 1/0"); c.sendQuery("SELECT 13"); }, "...ETDCZ(I)" },
+				pbe(c, "SELECT 1/0"); c.sendQuery("SELECT 13"); }, "...EZ(I)" },
 			{ "backend Execute error", "", "", [](PgConnection& c) {
-				pbe(c, exec_err); c.sendQuery("SELECT 13"); }, "12ETDCZ(I)" },
+				pbe(c, exec_err); c.sendQuery("SELECT 13"); }, "12EZ(I)" },
 			{ "backend Execute error after a statement that ran", "", "", [](PgConnection& c) {
-				pbe(c, "SELECT 1"); pbe(c, exec_err); c.sendQuery("SELECT 13"); }, "12DC12ETDCZ(I)" },
+				pbe(c, "SELECT 1"); pbe(c, exec_err); c.sendQuery("SELECT 13"); }, "12DC12EZ(I)" },
 			{ "backend Execute error, a statement queued behind it", "", "", [](PgConnection& c) {
-				pbe(c, exec_err); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); }, "12ETDCZ(I)" },
+				pbe(c, exec_err); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); }, "12EZ(I)" },
 			{ "failing Parse alone", "", "", [](PgConnection& c) {
-				c.prepareStatement("", "SELEC 1", false); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+				c.prepareStatement("", "SELEC 1", false); c.sendQuery("SELECT 13"); }, "EZ(I)" },
 			{ "Describe of a statement that does not exist", "", "", [](PgConnection& c) {
-				c.describeStatement("extq_no_stmt", false); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+				c.describeStatement("extq_no_stmt", false); c.sendQuery("SELECT 13"); }, "EZ(I)" },
 			{ "Bind of a statement that does not exist", "", "", [](PgConnection& c) {
 				c.bindStatement("extq_no_stmt", "", {}, {}, false);
 				c.executePortal("", 0, false);
-				c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+				c.sendQuery("SELECT 13"); }, "EZ(I)" },
 			{ "Execute of a portal that does not exist", "", "", [](PgConnection& c) {
-				c.executePortal("extq_no_portal", 0, false); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+				c.executePortal("extq_no_portal", 0, false); c.sendQuery("SELECT 13"); }, "EZ(I)" },
 			{ "Describe of the portal, then its Execute fails", "", "", [](PgConnection& c) {
 				c.prepareStatement("", exec_err, false);
 				c.bindStatement("", "", {}, {}, false);
@@ -621,53 +625,53 @@ int main(int argc, char** argv) {
 				c.executePortal("", 0, false);
 				c.sendQuery("SELECT 13"); },
 				// libpq gives ProxySQL the columns only with rows, so its RowDescription is lost (a separate issue).
-				native ? "12TETDCZ(I)" : "...ETDCZ(I)" },
+				native ? "12TEZ(I)" : "...EZ(I)" },
 			// After the error PostgreSQL ignores everything up to the Sync, the simple Query too.
 			{ "Flush after the error, then the simple Query and Sync", "", "", [](PgConnection& c) {
-				pbe(c, exec_err); c.sendMessage('H', {}); c.sendQuery("SELECT 13"); c.sendSync(); }, "12EZ(I)" },
+				pbe(c, exec_err); c.sendMessage('H', {}); c.sendQuery("SELECT 13"); }, "12EZ(I)" },
 			// What closes the unit.
 			{ "closing Query fails itself", "", "", [](PgConnection& c) {
-				pbe(c, exec_err); c.sendQuery("SELECT 1/0"); }, "12EEZ(I)" },
+				pbe(c, exec_err); c.sendQuery("SELECT 1/0"); }, "12EZ(I)" },
 			{ "closing Query is empty", "", "", [](PgConnection& c) {
-				pbe(c, exec_err); c.sendQuery(""); }, "12EIZ(I)" },
+				pbe(c, exec_err); c.sendQuery(""); }, "12EZ(I)" },
 			{ "closing Query has two statements", "", "", [](PgConnection& c) {
-				pbe(c, exec_err); c.sendQuery("SELECT 1; SELECT 2"); }, "12ETDCTDCZ(I)" },
+				pbe(c, exec_err); c.sendQuery("SELECT 1; SELECT 2"); }, "12EZ(I)" },
 			{ "closing Query is a SET", "", "", [](PgConnection& c) {
-				pbe(c, exec_err); c.sendQuery("SET DateStyle = 'ISO'"); }, "12ECZ(I)" },
+				pbe(c, exec_err); c.sendQuery("SET DateStyle = 'ISO'"); }, "12EZ(I)" },
 			{ "closing Query is BEGIN", "", "", [](PgConnection& c) {
-				pbe(c, exec_err); c.sendQuery("BEGIN"); }, "12ECZ(T)" },
+				pbe(c, exec_err); c.sendQuery("BEGIN"); }, "12EZ(I)" },
 			{ "a Sync after the closing Query", "", "", [](PgConnection& c) {
-				pbe(c, exec_err); c.sendQuery("SELECT 13"); c.sendSync(); }, "12ETDCZ(I)+Z" },
+				pbe(c, exec_err); c.sendQuery("SELECT 13"); c.sendSync(); }, "12EZ(I)+Z" },
 			// Inside a transaction.
 			{ "in a transaction, backend error", "", "BEGIN", [](PgConnection& c) {
-				pbe(c, exec_err); c.sendQuery("SELECT 13"); }, "12EEZ(E)" },
+				pbe(c, exec_err); c.sendQuery("SELECT 13"); }, "12EZ(E)" },
 			{ "in a transaction, ProxySQL's own error", "", "BEGIN", [](PgConnection& c) {
 				c.bindStatement("extq_no_stmt", "", {}, {}, false);
 				c.executePortal("", 0, false);
-				c.sendQuery("SELECT 13"); }, "EEZ(E)" },
+				c.sendQuery("SELECT 13"); }, "EZ(E)" },
 			{ "in a transaction, no error", "", "BEGIN", [](PgConnection& c) {
-				pbe(c, "SELECT 1"); c.sendQuery("SELECT 13"); }, "12DCTDCZ(T)" },
+				pbe(c, "SELECT 1"); c.sendQuery("SELECT 13"); }, "12DCTDCZ(T)+Z" },
 			// Native mode, one message at a time.
 			{ "one at a time, Parse error", unbatched, "", [&](PgConnection& c) {
-				pbe(c, "SELEC 1" + fresh + "1 */"); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+				pbe(c, "SELEC 1" + fresh + "1 */"); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); }, "EZ(I)" },
 			{ "one at a time, Execute error", unbatched, "", [&](PgConnection& c) {
-				pbe(c, exec_err + fresh + "2 */"); c.sendQuery("SELECT 13"); }, "12ETDCZ(I)" },
+				pbe(c, exec_err + fresh + "2 */"); c.sendQuery("SELECT 13"); }, "12EZ(I)" },
 			{ "one at a time, Execute error after a statement that ran", unbatched, "", [&](PgConnection& c) {
 				pbe(c, "SELECT 1" + fresh + "3 */"); pbe(c, exec_err + fresh + "3b */"); c.sendQuery("SELECT 13"); },
-				"12DC12ETDCZ(I)" },
+				"12DC12EZ(I)" },
 			{ "one at a time, Execute error, a statement queued behind it", unbatched, "", [&](PgConnection& c) {
-				pbe(c, exec_err + fresh + "4 */"); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); }, "12ETDCZ(I)" },
+				pbe(c, exec_err + fresh + "4 */"); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); }, "12EZ(I)" },
 			{ "one at a time, Execute error, a statement queued behind it, then Sync", unbatched, "", [&](PgConnection& c) {
-				pbe(c, exec_err + fresh + "5 */"); pbe(c, "SELECT 2"); c.sendSync(); }, "12EZ(I)" },
+				pbe(c, exec_err + fresh + "5 */"); pbe(c, "SELECT 2"); c.sendSync(); }, "12EZ(I)+Z" },
 			{ "one at a time, no error", unbatched, "", [&](PgConnection& c) {
-				pbe(c, "SELECT 1" + fresh + "6 */"); c.sendQuery("SELECT 13"); }, "12DCTDCZ(I)" },
+				pbe(c, "SELECT 1" + fresh + "6 */"); c.sendQuery("SELECT 13"); }, "12DCTDCZ(I)+Z" },
 			// Native mode, the batch cut short before a statement ProxySQL handles, the error after it.
 			{ "error after a SET that cuts the batch", "", "", [](PgConnection& c) {
 				pbe(c, "SELECT 1"); pbe(c, "SET DateStyle = 'ISO'"); pbe(c, exec_err); c.sendQuery("SELECT 13"); },
-				"12DC12C12ETDCZ(I)" },
+				"12DC12C12EZ(I)" },
 		};
 		for (const Case& k : cases) {
-			const std::string got = run_unit(k.send, k.options, k.before);
+			const std::string got = run_unit([&](PgConnection& c) { k.send(c); c.sendSync(); }, k.options, k.before);
 			const bool tail = k.expected.rfind("...", 0) == 0;
 			const std::string want = tail ? k.expected.substr(3) : k.expected;
 			const bool good = tail ? got.size() >= want.size() && got.compare(got.size() - want.size(), want.size(), want) == 0 :
@@ -681,11 +685,11 @@ int main(int argc, char** argv) {
 		if (native) {
 			reload_servers(admin.get(), hg, servers);
 			get_matching_lines(proxysql_log, "__skip_to_end__");
-			r = run_unit([&](PgConnection& c) { pbe(c, exec_err + fresh + "7 */"); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); },
-				unbatched);
+			r = run_unit([&](PgConnection& c) { pbe(c, exec_err + fresh + "7 */"); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13");
+				c.sendSync(); }, unbatched);
 			const bool logged = wait_for_log_match(proxysql_log, ".*native extq: mid-frame stmt-step error.*");
-			ok(r == "12ETDCZ(I)" && logged, "Matrix, one at a time: the path ran (Sync added after the error: %s), "
-				"replies '%s' (expected 12ETDCZ(I))", logged ? "logged" : "NOT logged", r.c_str());
+			ok(r == "12EZ(I)" && logged, "Matrix, one at a time: the path ran (Sync added after the error: %s), "
+				"replies '%s' (expected 12EZ(I))", logged ? "logged" : "NOT logged", r.c_str());
 		} else {
 			skip(1, "the one-at-a-time path is native mode only");
 		}
@@ -697,6 +701,7 @@ int main(int argc, char** argv) {
 			c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
 			pbe(c, exec_err);
 			c.sendQuery("SELECT 13");
+			c.sendSync();
 			r1 = raw_batch(c);
 			pbe(c, "SELECT 5");
 			c.sendSync();
@@ -707,8 +712,8 @@ int main(int argc, char** argv) {
 		} catch (const std::exception& e) {
 			r3 += std::string("<") + e.what() + ">";
 		}
-		ok(r1 == "12ETDCZ(I)" && r2 == "12DCZ(I)" && r3 == "12DCTDCZ(I)", "Matrix, units back to back: failed unit "
-			"then Query '%s', unit then Sync '%s', unit then Query '%s' (expected 12ETDCZ(I), 12DCZ(I), 12DCTDCZ(I))",
+		ok(r1 == "12EZ(I)" && r2 == "12DCZ(I)" && r3 == "12DCTDCZ(I)", "Matrix, units back to back: failed unit "
+			"then Query and Sync '%s', unit then Sync '%s', unit then Query '%s' (expected 12EZ(I), 12DCZ(I), 12DCTDCZ(I))",
 			r1.c_str(), r2.c_str(), r3.c_str());
 	}
 
