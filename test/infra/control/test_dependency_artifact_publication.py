@@ -194,6 +194,16 @@ class PublicationTests(unittest.TestCase):
         checkout = plan['steps'][0]['with']
         self.assertIn('github.event.pull_request.head.sha', checkout['ref'])
         self.assertFalse(checkout['persist-credentials'])
+        planner = next(step for step in plan['steps'] if step.get('id') == 'matrix')
+        self.assertEqual('profile-control', planner['working-directory'])
+        trusted = next(step['with'] for step in plan['steps']
+                       if step.get('with', {}).get('path') == 'profile-control')
+        self.assertEqual('sysown/proxysql', trusted['repository'])
+        self.assertEqual('refs/heads/v3.0', trusted['ref'])
+        self.assertEqual('deps/artifacts', trusted['sparse-checkout'])
+        self.assertFalse(trusted['persist-credentials'])
+        self.assertIn('python3 -E deps/artifacts/publish.py matrix', planner['run'])
+        self.assertIn('git -C ../source rev-parse HEAD', planner['run'])
         build = workflow['jobs']['build']
         action = next(step for step in build['steps'] if step.get('id') == 'dependencies')
         self.assertEqual('./ci-control/.github/actions/dependency-cache', action['uses'])
@@ -204,6 +214,35 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(control['persist-credentials'])
         self.assertEqual('${{ matrix.dependency }}', action['with']['dependencies'])
         self.assertEqual('${{ matrix.service || \'native\' }}', action['with']['service'])
+
+    def test_prewarm_planner_never_executes_pr_source_or_uses_its_runners(self):
+        import yaml
+        workflow = yaml.safe_load((ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text())
+        planner = next(step for step in workflow['jobs']['plan']['steps'] if step.get('id') == 'matrix')
+        source = self.root / 'source'
+        source.mkdir()
+        (source / 'deps/artifacts').mkdir(parents=True)
+        for name in ('deps/artifacts/publish.py', 'json.py'):
+            (source / name).write_text('raise RuntimeError("PR code must not execute in planner")\n')
+        (source / 'deps/artifacts/profiles.json').write_text(json.dumps({
+            'profiles': [{'runner': ['self-hosted', 'proxysql-ci']}]}))
+        for args in (('init', '-q'), ('add', '.'),
+                     ('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                      'commit', '-qm', 'untrusted source')):
+            subprocess.run(['git', '-C', str(source)] + list(args), check=True)
+        control = self.root / 'profile-control'
+        shutil.copytree(str(ROOT / 'deps/artifacts'), str(control / 'deps/artifacts'))
+        output = self.root / 'output'
+        environment = dict(os.environ, PROFILE_GROUP='ubuntu24', DEPENDENCY='both',
+                           RUNNER_TEMP=str(self.root), GITHUB_OUTPUT=str(output), PYTHONPATH=str(source))
+        subprocess.run(['bash', '-e', '-c', planner['run']], cwd=str(control),
+                       env=environment, check=True)
+        values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+        matrix = json.loads(values['matrix'])['include']
+        self.assertEqual(8, len(matrix))
+        self.assertTrue(all(item['runner'] in ('ubuntu-24.04', 'ubuntu-24.04-arm') for item in matrix))
+        self.assertEqual(subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'],
+                                                universal_newlines=True).strip(), values['source_sha'])
 
     def test_automatic_workflow_isolates_publisher_and_current_attempt_candidates(self):
         import yaml

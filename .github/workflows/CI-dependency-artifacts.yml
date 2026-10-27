@@ -58,10 +58,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+          path: source
           fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout reviewed build profile planner
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: sysown/proxysql
+          ref: refs/heads/v3.0
+          path: profile-control
+          sparse-checkout: deps/artifacts
           persist-credentials: false
       - name: Select exact build profiles
         id: matrix
+        working-directory: profile-control
         env:
           PROFILE_GROUP: ${{ inputs.group || 'ubuntu24' }}
           DEPENDENCY: ${{ inputs.dependency || 'both' }}
@@ -69,7 +79,7 @@ jobs:
           python3 -E deps/artifacts/publish.py matrix --group "$PROFILE_GROUP" --dependency "$DEPENDENCY" > "$RUNNER_TEMP/dependency-matrix.json"
           {
             echo "matrix=$(cat "$RUNNER_TEMP/dependency-matrix.json")"
-            echo "source_sha=$(git rev-parse HEAD)"
+            echo "source_sha=$(git -C ../source rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
 
   build:
