@@ -64,7 +64,9 @@ def main():
     if args.command == 'keys' and environ.get('DEPS_ARTIFACT_KEYS_FILE'):
         path = Path(environ['DEPS_ARTIFACT_KEYS_FILE'])
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(result, sort_keys=True) + '\n')
+        temporary = path.with_suffix('.tmp')
+        temporary.write_text(json.dumps(result, sort_keys=True) + '\n')
+        os.replace(str(temporary), str(path))
     print(json.dumps(result, sort_keys=True))
 
 

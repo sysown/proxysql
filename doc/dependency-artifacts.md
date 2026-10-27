@@ -14,7 +14,7 @@ PROXYSQL40=1 make -j4 DEPS_MODE=prebuilt
 
 | Mode | DuckDB/OpenSSL behavior |
 |---|---|
-| `auto` (default) | Reuse an accepted output or restore an exact verified artifact; otherwise build the vendored source and save a reusable bundle. |
+| `auto` (default) | Reuse an accepted output or restore an exact verified artifact; otherwise build the vendored source and save a bundle when the configuration is eligible. |
 | `source` | Use source-origin outputs only. Switching from a prebuilt output rebuilds it from source, without requesting artifacts. |
 | `prebuilt` | Require an exact, compatible artifact. Missing entries/downloads fail instead of compiling. |
 
@@ -116,7 +116,8 @@ and configure flags now live in `deps/duckdb/build.mk`; OpenSSL's source recipe
 and configure flags live in `deps/libssl/build.mk`, with its version still in
 `common_mk/openssl_flags.mk`.
 
-Run CI with the updated inputs; a missing signature builds and saves a new bundle.
+Run CI with the updated inputs; a missing signature builds from source and saves
+a new bundle for eligible configurations.
 An OpenSSL update does not require rebuilding DuckDB. Source-only validation in
 `CI-dependency-artifacts-checks.yml` continues to exercise compilation from the
 vendored archives, independently of reusable artifacts.

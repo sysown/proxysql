@@ -108,6 +108,20 @@ class AutomaticStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'URL|url'):
                 store.remote_entry('openssl', entry['identity'], self.env)
 
+    def test_invalid_remote_metadata_is_integrity_failure_without_source_fallback(self):
+        store = importlib.import_module('store')
+        identity = self.identity.build_identity('openssl', self.root, self.env)
+        self.env['DEPS_ARTIFACT_REMOTE'] = '1'
+        for payload in (b'{', b'{}', b'{"dependency":"openssl","dependency":"duckdb"}'):
+            with self.subTest(payload=payload), patch.object(store, 'urlopen') as fetch:
+                response = fetch.return_value.__enter__.return_value
+                response.geturl.return_value = store.entry_url('openssl', self.identity.fingerprint(identity))
+                response.read.return_value = payload
+                with self.assertRaises(ValueError) as error:
+                    self.prepare()
+                self.assertNotIsInstance(error.exception, store.Unavailable)
+                self.assertEqual(0, self.count())
+
     def test_missing_or_unavailable_remote_falls_back_only_in_auto(self):
         store = importlib.import_module('store')
         self.env['DEPS_ARTIFACT_REMOTE'] = '1'

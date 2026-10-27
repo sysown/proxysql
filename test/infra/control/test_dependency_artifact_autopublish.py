@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import unittest
 
 import test_dependency_artifact_make as fixture
+import test_dependency_artifact_store as store_fixture
 
 
 class GitHub:
@@ -90,7 +91,8 @@ class AutomaticPublicationTests(unittest.TestCase):
         directory = self.candidates / ('dependency-candidate-a1-' + suffix + '-openssl')
         directory.mkdir()
         identity = self.identity.build_identity('openssl', self.root, self.env)
-        tree = self.root / 'template/openssl-3.5.7'
+        version = self.identity.configuration('openssl', self.root)['version']
+        tree = self.root / 'template' / ('openssl-' + version)
         (tree / 'LICENSE').write_text(license_text)
         entry = self.bundles.create_bundle('openssl', tree, identity, directory / 'bundle.tar.gz')
         entry.update(url=self.store.asset_url('openssl', entry['fingerprint'], 'bundle.tar.gz'),
@@ -154,6 +156,37 @@ class AutomaticPublicationTests(unittest.TestCase):
         self.assertNotEqual(entry['sha256'], replacement['sha256'])
         self.github.writes.clear()
         self.assertEqual('existing', self.publish(other, replacement)['status'])
+        self.assertEqual([], self.github.writes)
+
+    def test_two_versions_publish_under_independent_release_keys(self):
+        first, entry = self.candidate()
+        self.publish(first, entry)
+        store_fixture.AutomaticStoreTests.install_version(self, '3.5.8')
+        self.source = self.commit()
+        self.env['GITHUB_SHA'] = self.source
+        second, upgraded = self.candidate('upgraded')
+        self.assertEqual('published', self.publish(second, upgraded)['status'])
+        self.assertNotEqual(entry['fingerprint'], upgraded['fingerprint'])
+        self.assertEqual(2, len(self.github.releases))
+        for candidate in (entry, upgraded):
+            tag = self.store.release_tag('openssl', candidate['fingerprint'])
+            self.assertEqual(candidate, json.loads(self.github.releases[tag]['entry.json']))
+
+    def test_tag_creation_race_reuses_published_winner(self):
+        directory, entry = self.candidate()
+        self.publish(directory, entry)
+        tag = self.store.release_tag('openssl', entry['fingerprint'])
+        original = self.github.run
+        def race(args, **kwargs):
+            if args[:3] == ['gh', 'release', 'create']:
+                return subprocess.CompletedProcess(args, 1, '', 'already_exists')
+            return original(args, **kwargs)
+        state = dict(isDraft=False, tagName=tag)
+        self.github.writes.clear()
+        with patch.object(self.publisher, 'release_state', side_effect=[None, state, state]), \
+                patch.object(self.github, 'run', side_effect=race) as run:
+            self.assertEqual('existing', self.publish(directory, entry)['status'])
+        self.assertTrue(any(call[0][0][:3] == ['gh', 'release', 'create'] for call in run.call_args_list))
         self.assertEqual([], self.github.writes)
 
     def test_published_metadata_retries_availability_but_not_integrity_errors(self):

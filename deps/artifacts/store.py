@@ -97,7 +97,7 @@ def remote_entry(dependency, identity, environ=None):
 def source_provenance(root, environ):
     try:
         commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'],
-                                         stderr=subprocess.DEVNULL, universal_newlines=True).strip()
+                                         stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30).strip()
     except (OSError, subprocess.SubprocessError):
         commit = ''
     return dict(commit=commit, run=environ.get('DEPS_ARTIFACT_RUN_ID', environ.get('GITHUB_RUN_ID', '')),
