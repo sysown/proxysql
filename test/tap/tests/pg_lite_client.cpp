@@ -170,7 +170,17 @@ void PgConnection::sendMessage(char type, const std::vector<uint8_t>& data) {
     // Message body
     buffer.insert(buffer.end(), data.begin(), data.end());
     
+    if (buffering_) {
+        outbuf_.insert(outbuf_.end(), buffer.begin(), buffer.end());
+        return;
+    }
     writeBytes(buffer.data(), buffer.size());
+}
+
+void PgConnection::endBuffering() {
+    buffering_ = false;
+    if (!outbuf_.empty()) writeBytes(outbuf_.data(), outbuf_.size());
+    outbuf_.clear();
 }
 
 void PgConnection::readMessage(char& type, std::vector<uint8_t>& buffer) {

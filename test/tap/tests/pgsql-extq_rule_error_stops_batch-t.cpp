@@ -16,8 +16,8 @@
  * pg_terminate_backend() parameter, RESET on a locked session, a query rule's error_msg) and a backend's
  * own error are also sent with no Sync and closed by a simple Query, an implicit Sync: the client must get
  * one ReadyForQuery, after the Query. With another statement and a Sync behind them, the error carries the
- * one ReadyForQuery. A Flush or a FunctionCall in the middle of a unit is refused too, and only the Sync
- * after it may be answered with a ReadyForQuery.
+ * one ReadyForQuery. A FunctionCall in the middle of a unit is refused too, and only the Sync after it may
+ * be answered with a ReadyForQuery. A Flush there is served: it sends what is queued, with no ReadyForQuery.
  *
  * A matrix then varies the rest: where in the unit the error comes (Parse, Bind, Describe, Execute, after a
  * statement that ran, before one queued behind it), what the closing simple Query is (one that fails itself,
@@ -549,8 +549,9 @@ int main(int argc, char** argv) {
 			check_refusal("SELECT 1/0", "division by zero", pipelined, {}, false, "SET DateStyle = 'ISO'");
 		}
 
-		// A message ProxySQL does not support (a Flush, a FunctionCall) in the middle of a unit: its error
-		// must not carry a ReadyForQuery of its own. The client's Sync gets the only one.
+		// A FunctionCall, which ProxySQL does not support, in the middle of a unit: its error must not carry
+		// a ReadyForQuery of its own. The client's Sync gets the only one. A Flush there gets no error and no
+		// ReadyForQuery: the statement's replies, then the Sync's ReadyForQuery.
 		for (const char type : { 'H', 'F' }) {
 			PgConnection c(1000);
 			std::string r, err;
@@ -565,9 +566,10 @@ int main(int argc, char** argv) {
 			} catch (const std::exception& e) {
 				r += std::string("<") + e.what() + ">";
 			}
-			ok(r == "EZ(I)" && err.find("Feature not supported") != std::string::npos,
-				"'%c' refused in the middle of a unit, then Sync: one ReadyForQuery, the Sync's: replies '%s' "
-				"(expected EZ(I), nothing after), error '%s'", type, r.c_str(), err.c_str());
+			const std::string want = (type == 'H') ? "12DCZ(I)" : "EZ(I)";
+			ok(r == want && (type == 'H' ? err.empty() : err.find("Feature not supported") != std::string::npos),
+				"'%c' in the middle of a unit, then Sync: one ReadyForQuery, the Sync's: replies '%s' "
+				"(expected %s, nothing after), error '%s'", type, r.c_str(), want.c_str(), err.c_str());
 		}
 	}
 

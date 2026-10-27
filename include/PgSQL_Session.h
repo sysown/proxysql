@@ -292,6 +292,15 @@ private:
 	bool extq_backend_used { false };
 	// The batch built by extq_sync_step(false): its ReadyForQuery is not the client's.
 	bool extq_sync_drop_ready { false };
+	// A client Flush splits the messages between two Syncs (a "group") into segments. The segment
+	// being run ends with a Flush: the backend gets a Flush, the client no ReadyForQuery.
+	bool extq_flush_segment { false };
+	// A Flush was served since the group started: its Bind, routing and portals carry over to the
+	// next segment, and the connection stays with the session until the group ends.
+	bool extq_group_open { false };
+	// The held connection carries this group's work that no Sync concluded. Kept by the session
+	// because the connection's own flag does not survive everything (leaving libpq pipeline mode).
+	bool extq_group_holds_work { false };
 #ifdef PROXYSQL31
 	// Candidate frame: Bind, optional Describe(portal), Execute, client Sync.
 	uint8_t extended_cache_frame_stage { 0 };
@@ -440,6 +449,13 @@ private:
 	// relay: the client's own Sync, whose reply (a ReadyForQuery, or the error of a failed commit)
 	// goes to the client; otherwise ProxySQL's, whose ReadyForQuery is dropped.
 	enum session_status extq_sync_step(bool relay);
+	// Whether the message being handled, the last one queued, ends the group with a Sync.
+	bool extq_last_message_gets_sync(bool has_effects) const;
+	// A segment ended by the client's Flush is done: the group stays open, the session waits for
+	// the client.
+	void extq_segment_done();
+	// The group is over (its Sync answered): what carried over between segments is reset.
+	void extq_group_end();
 	int handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg);
 	int handle_post_sync_describe_message(PgSQL_Describe_Message* describe_msg);
 	int handle_post_sync_close_message(PgSQL_Close_Message* close_msg);
@@ -607,7 +623,11 @@ public:
 
 	inline bool is_extended_query_ready_for_query() const {
 		return extended_query_frame.empty() &&
-			((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0);
+			((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0) && extq_flush_segment == false;
+	}
+
+	inline bool is_extq_flush_segment() const {
+		return extq_flush_segment;
 	}
 
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);

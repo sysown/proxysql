@@ -225,6 +225,36 @@ static void case_row1(Mode m, bool txn) {
 }
 
 static const char* SER = "SELECT g FROM generate_series(1,5) g";
+static const std::string ALL5 = "D D D D D C(SELECT 5)";
+
+// Admin and a direct backend connection, for cases that change runtime settings or count rows.
+static PGconn* g_admin = nullptr;
+static PGconn* g_be = nullptr;
+
+static long rows(const std::string& tag) {
+	const std::string n = scalar(g_be, "SELECT count(*) FROM flush_t WHERE tag = '" + tag + "'");
+	return n.empty() ? -1 : atol(n.c_str());
+}
+
+static std::string tag_for(const char* what, Mode m, bool txn) {
+	return std::string(what) + "_" + std::to_string((int)m) + (txn ? "t" : "a") + "_" + std::to_string((long)time(nullptr));
+}
+
+// The first column of the first DataRow, as text.
+static std::string first_value(const Msgs& msgs) {
+	for (const auto& m : msgs) {
+		if (m.first == 'D' && m.second.size() >= 6) {
+			const auto& b = m.second;
+			const int32_t len = (b[2] << 24) | (b[3] << 16) | (b[4] << 8) | b[5];
+			if (len > 0 && (size_t)(6 + len) <= b.size()) return std::string(b.begin() + 6, b.begin() + 6 + len);
+		}
+	}
+	return "";
+}
+
+static bool admin_set(const std::string& var, const std::string& value) {
+	return exec(g_admin, "SET " + var + "='" + value + "'") && exec(g_admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+}
 
 // Task 3: Bind and Describe(portal) with no Execute after it. The Bind must reach the backend
 // before the Describe; in libpq mode it does not (no bind-only call), a known gap.
@@ -298,6 +328,183 @@ static void case_unnamed_row_limit(Mode m, bool) {
 	}
 }
 
+// Row 2: a whole statement before the Flush, then the Sync alone.
+static void case_row2(Mode m, bool txn) {
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "", {}, {}, false);
+			c->describePortal("", false); c->executePortal("", 0, false); c->sendFlush(); }),
+		"1 2 T " + ALL5, "row 2: P B D(P) E H", m, txn);
+	check(run(*c, [&] { c->sendSync(); }), std::string("Z(") + txn_z(txn) + ")", "row 2: S", m, txn);
+}
+
+// Row 3, unnamed portal: a cursor paged across Flushes. libpq returns every row (by design).
+static void case_row3a(Mode m, bool txn) {
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	const std::string first = run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "", {}, {}, false);
+		c->describePortal("", false); c->executePortal("", 2, false); c->sendFlush(); });
+	if (m == Mode::LIBPQ) {
+		check(first, "1 2 T " + ALL5, "row 3a: P B D(P) E(2) H (libpq: every row)", m, txn);
+		return;
+	}
+	check(first, "1 2 T D D s", "row 3a: P B D(P) E(2) H", m, txn);
+	check(run(*c, [&] { c->executePortal("", 2, false); c->sendFlush(); }), "D D s", "row 3a: E(2) H", m, txn);
+	check(run(*c, [&] { c->executePortal("", 0, false); c->sendFlush(); }), "D C(SELECT 1)", "row 3a: E(0) H", m, txn);
+	check(run(*c, [&] { c->closePortal("", false); c->sendSync(); }), std::string("3 Z(") + txn_z(txn) + ")", "row 3a: C(P) S", m, txn);
+}
+
+// Row 3, named portal (native only: libpq mode refuses named portals, see the error cases).
+static void case_row3b(Mode m, bool txn) {
+	if (m == Mode::LIBPQ) return;
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "p1", {}, {}, false);
+			c->describePortal("p1", false); c->executePortal("p1", 2, false); c->sendFlush(); }),
+		"1 2 T D D s", "row 3b: P B(p1) D(P p1) E(p1,2) H", m, txn);
+	check(run(*c, [&] { c->executePortal("p1", 2, false); c->sendFlush(); }), "D D s", "row 3b: E(p1,2) H", m, txn);
+	check(run(*c, [&] { c->executePortal("p1", 0, false); c->sendFlush(); }), "D C(SELECT 1)", "row 3b: E(p1,0) H", m, txn);
+	check(run(*c, [&] { c->closePortal("p1", false); c->sendSync(); }), std::string("3 Z(") + txn_z(txn) + ")", "row 3b: C(P p1) S", m, txn);
+}
+
+// Row 4: a named portal bound before a Flush and executed after it (native only).
+static void case_row4(Mode m, bool txn) {
+	if (m == Mode::LIBPQ) return;
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "p1", {}, {}, false); c->sendFlush(); }),
+		"1 2", "row 4: P B(p1) H", m, txn);
+	check(run(*c, [&] { c->executePortal("p1", 0, true); }), ALL5 + " Z(" + txn_z(txn) + ")", "row 4: E(p1) S", m, txn);
+}
+
+// Row 10: Flush with nothing queued, several Flushes, and a Flush between two messages.
+static void case_row10(Mode m, bool txn) {
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	check(run(*c, [&] { c->sendFlush(); }), "", "row 10: H alone", m, txn);
+	check(run(*c, [&] { c->sendFlush(); c->sendFlush(); }), "", "row 10: H H", m, txn);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + "SELECT 1", false); c->sendFlush(); c->sendFlush();
+			c->describeStatement("", false); c->sendFlush(); }), "1 t T", "row 10: P H H D(S) H", m, txn);
+	check(run(*c, [&] { c->sendSync(); }), std::string("Z(") + txn_z(txn) + ")", "row 10: S", m, txn);
+}
+
+// Row 12: an explicit transaction opened and written through the extended protocol across Flushes.
+static void case_row12(Mode m, bool) {
+	auto c = client(m);
+	const std::string tag = tag_for("row12", m, false);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + "BEGIN", false); c->bindStatement("", "", {}, {}, false);
+			c->executePortal("", 0, false); c->sendFlush(); }), "1 2 C(BEGIN)", "row 12: P(BEGIN) B E H", m, false);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + "INSERT INTO flush_t VALUES ('" + tag + "', 1)", false);
+			c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendFlush(); }),
+		"1 2 C(INSERT 0 1)", "row 12: P(INSERT) B E H", m, false);
+	check(run(*c, [&] { c->sendSync(); }), "Z(T)", "row 12: S keeps the transaction", m, false);
+	ok(rows(tag) == 0, "row 12 [%s]: not committed before COMMIT (rows=%ld)", mode_name(m), rows(tag));
+	check(run(*c, [&] { c->sendQuery("COMMIT"); }), "C(COMMIT) Z(I)", "row 12: COMMIT", m, false);
+	ok(rows(tag) == 1, "row 12 [%s]: committed by COMMIT (rows=%ld)", mode_name(m), rows(tag));
+}
+
+// The connection holding a Flush-ended group stays with it, also when connection_delay_multiplex_ms
+// would otherwise hand an idle connection back to the pool after the delay.
+static void case_pin_delay_multiplex(Mode m, bool) {
+	admin_set("pgsql-connection_delay_multiplex_ms", "100");
+	auto c = client(m);
+	const std::string tag = tag_for("pin", m, false);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + "INSERT INTO flush_t VALUES ('" + tag + "', pg_backend_pid())", false);
+			c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendFlush(); }),
+		"1 2 C(INSERT 0 1)", "pin: P B E(INSERT) H", m, false);
+	usleep(6500000);  // past the delay and past a maintenance pass (pgsql-poll_timeout)
+	std::string pid2;
+	try {
+		c->prepareStatement("", uniq() + "SELECT pid FROM pg_stat_activity WHERE pid = pg_backend_pid()", false);
+		c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendFlush();
+		pid2 = first_value(c->readUntilQuiet(QUIET_MS));
+	} catch (const PgException& e) { pid2 = std::string("CLOSED:") + e.what(); }
+	check(run(*c, [&] { c->sendSync(); }), "Z(I)", "pin: S", m, false);
+	const std::string pid1 = scalar(g_be, "SELECT v::text FROM flush_t WHERE tag = '" + tag + "'");
+	ok(!pid1.empty() && pid1 == pid2, "pin [%s]: the group stayed on one backend across the delay (insert pid %s, later pid %s)",
+		mode_name(m), pid1.c_str(), pid2.c_str());
+	ok(rows(tag) == 1, "pin [%s]: the row is committed by the client's Sync (rows=%ld)", mode_name(m), rows(tag));
+	admin_set("pgsql-connection_delay_multiplex_ms", "0");
+}
+
+// Row 16: a Flush changes nothing in the digest statistics. The same two Executes with a Sync
+// in place of the Flush give the control count (ProxySQL counts the Parse too).
+static void case_row16_stats(Mode m, bool) {
+	auto count = [&](bool flush) {
+		const std::string alias = std::string(flush ? "flush16h_" : "flush16s_") + std::to_string((int)m) + "_" + std::to_string((long)time(nullptr));
+		auto c = client(m);
+		run(*c, [&] { c->prepareStatement("", "SELECT 1 AS " + alias, false); c->bindStatement("", "", {}, {}, false);
+			c->executePortal("", 0, false); if (flush) c->sendFlush(); else c->sendSync(); });
+		run(*c, [&] { c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, true); });
+		return scalar(g_admin, "SELECT COALESCE(SUM(count_star),0) FROM stats_pgsql_query_digest WHERE digest_text LIKE '%" + alias + "%'");
+	};
+	const std::string with_sync = count(false), with_flush = count(true);
+	ok(with_sync != "0" && with_flush == with_sync, "row 16 [%s]: P B E H + B E S counted as P B E S + B E S (Flush %s, Sync %s)",
+		mode_name(m), with_flush.c_str(), with_sync.c_str());
+}
+
+// Review focus: every message in one TCP write.
+static void case_one_write(Mode m, bool txn) {
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	check(run(*c, [&] { c->beginBuffering(); c->prepareStatement("", uniq() + "SELECT $1::text AS x", false);
+			c->describeStatement("", false); c->sendFlush(); c->bindStatement("", "", { { std::string("a"), 0 } }, {}, false);
+			c->executePortal("", 0, true); c->endBuffering(); }),
+		std::string("1 t T 2 D C(SELECT 1) Z(") + txn_z(txn) + ")", "one write: P D(S) H B E S", m, txn);
+}
+
+// Review focus: a result larger than threshold_resultset_size inside a Flush-ended segment.
+static void case_large_result(Mode m, bool) {
+	auto c = client(m);
+	int d = 0; std::string last; bool z = false;
+	try {
+		c->prepareStatement("", uniq() + "SELECT g FROM generate_series(1,100000) g", false);
+		c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendFlush();
+		for (const auto& msg : c->readUntilQuiet(1000)) {
+			if (msg.first == 'D') d++;
+			else if (msg.first == 'Z') z = true;
+			else last = tokens(Msgs{ msg });
+		}
+	} catch (const PgException& e) { last = std::string("CLOSED:") + e.what(); }
+	ok(d == 100000 && last == "C(SELECT 100000)" && !z, "large result [%s]: 100000 rows, CommandComplete, no ReadyForQuery (rows=%d, last='%s', Z=%d)",
+		mode_name(m), d, last.c_str(), (int)z);
+	check(run(*c, [&] { c->sendSync(); }), "Z(I)", "large result: S", m, false);
+}
+
+// Review focus: native mode switched on while a libpq connection holds a group.
+static void case_mode_flip_mid_group(Mode m, bool) {
+	if (m != Mode::LIBPQ) return;
+	auto c = client(m);
+	const std::string tag = tag_for("flip", m, false);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + "INSERT INTO flush_t VALUES ('" + tag + "', 1)", false);
+			c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendFlush(); }),
+		"1 2 C(INSERT 0 1)", "mode flip: P B E(INSERT) H on libpq", m, false);
+	admin_set("pgsql-use_native_backend_protocol", "true");
+	check(run(*c, [&] { c->sendSync(); }), "Z(I)", "mode flip: S after native mode was switched on", m, false);
+	ok(rows(tag) == 1, "mode flip [libpq]: the group finished on its own connection (rows=%ld)", rows(tag));
+	admin_set("pgsql-use_native_backend_protocol", "false");
+}
+
+// Review focus: a long cursor, one row per Execute + Flush (native only).
+static void case_long_cursor(Mode m, bool) {
+	if (m == Mode::LIBPQ) return;
+	auto c = client(m);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + "SELECT g FROM generate_series(1,1000) g", false);
+			c->bindStatement("", "p1", {}, {}, false); c->describePortal("p1", false); c->sendFlush(); }),
+		"1 2 T", "long cursor: P B(p1) D(P p1) H", m, false);
+	int good = 0;
+	try {
+		for (int i = 0; i < 1000; i++) {
+			c->executePortal("p1", 1, false); c->sendFlush();
+			char t1 = 0, t2 = 0; std::vector<uint8_t> b;
+			c->readMessage(t1, b); c->readMessage(t2, b);
+			if (t1 == 'D' && t2 == 's') good++;
+		}
+	} catch (const PgException& e) { diag("long cursor [%s]: %s", mode_name(m), e.what()); }
+	ok(good == 1000, "long cursor [%s]: 1000 x E(p1,1) H each gave D s (%d did)", mode_name(m), good);
+	check(run(*c, [&] { c->closePortal("p1", false); c->sendSync(); }), "3 Z(I)", "long cursor: C(P p1) S", m, false);
+}
+
 struct Case {
 	const char* name;
 	int checks;        // ok() calls per (mode, txn) run
@@ -311,6 +518,18 @@ static const std::vector<Case> CASES = {
 	{ "row 1",                       2,  2, true,  case_row1 },
 	{ "describe portal, no execute", 2,  1, true,  case_describe_portal_no_execute },
 	{ "unnamed row limit",           10, 2, false, case_unnamed_row_limit },
+	{ "row 2",                       2,  2, true,  case_row2 },
+	{ "row 3a",                      4,  1, true,  case_row3a },
+	{ "row 3b",                      4,  0, true,  case_row3b },
+	{ "row 4",                       2,  0, true,  case_row4 },
+	{ "row 10",                      4,  4, true,  case_row10 },
+	{ "row 12",                      6,  6, false, case_row12 },
+	{ "pin across delay multiplex",  4,  4, false, case_pin_delay_multiplex },
+	{ "row 16 stats",                1,  1, false, case_row16_stats },
+	{ "one write",                   1,  1, true,  case_one_write },
+	{ "large result",                2,  2, false, case_large_result },
+	{ "mode flip mid group",         0,  3, false, case_mode_flip_mid_group },
+	{ "long cursor",                 3,  0, false, case_long_cursor },
 };
 
 static const Mode MODES[] = { Mode::LIBPQ, Mode::NATIVE, Mode::NATIVE_UNBATCHED };
@@ -329,6 +548,15 @@ int main(int, char**) {
 	if (!admin || PQstatus(admin.get()) != CONNECTION_OK) BAIL_OUT("no admin connection");
 	const std::string native_before = scalar(admin.get(), "SELECT variable_value FROM runtime_global_variables "
 		"WHERE variable_name='pgsql-use_native_backend_protocol'");
+
+	auto be = backend();
+	if (!be || PQstatus(be.get()) != CONNECTION_OK) BAIL_OUT("no direct backend connection");
+	g_admin = admin.get();
+	g_be = be.get();
+	exec(g_be, "DROP TABLE IF EXISTS flush_t");
+	if (!exec(g_be, "CREATE TABLE flush_t (tag text, v int)"))
+		BAIL_OUT("could not create flush_t");
+	exec(g_be, std::string("GRANT ALL ON flush_t TO ") + cl.pgsql_username);
 
 	std::string prev_pid;
 	for (const Mode m : MODES) {
@@ -352,6 +580,7 @@ int main(int, char**) {
 		}
 	}
 
+	exec(g_be, "DROP TABLE IF EXISTS flush_t");
 	exec(admin.get(), "SET pgsql-use_native_backend_protocol='" + (native_before.empty() ? std::string("false") : native_before) + "'");
 	exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
 	return exit_status();
