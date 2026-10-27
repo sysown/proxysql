@@ -74,6 +74,24 @@ jobs:
       working-directory: ${{ github.workspace }}
     - name: Relax ASLR for AddressSanitizer
       run: sudo sysctl -w vm.mmap_rnd_bits=28
+    - name: Reuse the exact accepted producer's dependency bundles
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        github-token: ${{ github.token }}
+        run-id: ${{ fromJson(needs.tier-context.outputs.binding).build_id }}
+        pattern: dependency-candidate-a${{ fromJson(needs.tier-context.outputs.binding).build_attempt }}-*
+        merge-multiple: false
+        path: accepted-dependency-candidates
+    - name: Restore or build exact dependency bundles
+      id: dependencies
+      uses: ./ci-control/.github/actions/dependency-cache
+      with:
+        source-path: proxysql
+        service: ubuntu24_dbg_build
+        tier: ${{ matrix.tier }}
+        sanitizer: asan
+        coverage: 'true'
+        candidate-path: accepted-dependency-candidates
     - name: Build selected product inside Docker
       env:
         WITHASAN: '1'
@@ -83,6 +101,30 @@ jobs:
         PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
       run: |
         make ubuntu24-tap
+    - name: Retain openssl dependency publication candidate
+      if: ${{ success() && steps.dependencies.outputs.openssl-key != '' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.tier }}-asan-openssl
+        path: |
+          ${{ steps.dependencies.outputs.openssl-path }}/entry.json
+          ${{ steps.dependencies.outputs.openssl-path }}/bundle.tar.gz
+        include-hidden-files: true
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 3
+    - name: Retain duckdb dependency publication candidate
+      if: ${{ success() && steps.dependencies.outputs.duckdb-key != '' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.tier }}-asan-duckdb
+        path: |
+          ${{ steps.dependencies.outputs.duckdb-path }}/entry.json
+          ${{ steps.dependencies.outputs.duckdb-path }}/bundle.tar.gz
+        include-hidden-files: true
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 3
     - name: Run unit tests + capture coverage inside Docker
       run: |
         docker compose run --rm \
@@ -220,3 +262,13 @@ jobs:
       binding: ${{ needs.tier-context.outputs.binding }}
       control_ref: ${{ needs.tier-context.outputs.control_sha }}
     secrets: inherit
+
+  dependency-publication:
+    needs: [tier-context, unit-tests]
+    if: ${{ needs.unit-tests.result == 'success' }}
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/ci-publish-dependency-cache.yml
+    with:
+      source_sha: ${{ needs.tier-context.outputs.sha }}

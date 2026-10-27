@@ -1,0 +1,96 @@
+name: Publish reviewed dependency cache
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      enabled:
+        type: boolean
+        default: true
+jobs:
+  dependency-publication-plan:
+    # PR misses stay in their merge-ref cache. Global bundles come only from
+    # successful protected-history builds, verified again by trusted ci.py.
+    if: ${{ inputs.enabled && github.repository == 'sysown/proxysql' && (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/v3.0') || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'v3.0' && github.event.workflow_run.head_repository.full_name == 'sysown/proxysql')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      count: ${{ steps.matrix.outputs.count }}
+      control_sha: ${{ steps.matrix.outputs.control_sha }}
+    steps:
+    - name: Checkout reviewed dependency publication helper
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: v3.0
+        path: publication-control
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Download only this attempt's dependency candidates
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        pattern: dependency-candidate-a${{ github.run_attempt }}-*
+        merge-multiple: false
+        path: dependency-candidates
+    - name: Validate candidates and select one artifact per fingerprint
+      id: matrix
+      env:
+        BUILD_SHA: ${{ inputs.source_sha }}
+      run: |
+        set -euo pipefail
+        echo "control_sha=$(git -C publication-control rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        helper=publication-control/deps/artifacts/ci.py
+        mkdir -p dependency-candidates
+        if [ ! -f "$helper" ]; then
+          echo '::notice::Reviewed branch predates automatic dependency publication; skipping'
+          echo 'count=0' >> "$GITHUB_OUTPUT"
+          echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        python3 -E "$helper" publication-matrix --input dependency-candidates \
+          --source-sha "$BUILD_SHA" --github-output "$GITHUB_OUTPUT"
+
+  dependency-publication:
+    needs: [dependency-publication-plan]
+    if: ${{ needs.dependency-publication-plan.outputs.count != '0' && needs.dependency-publication-plan.outputs.count != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.dependency-publication-plan.outputs.matrix) }}
+    concurrency:
+      group: dependency-artifact-v1-${{ matrix.dependency }}-${{ matrix.fingerprint }}
+      cancel-in-progress: false
+    steps:
+    - name: Checkout reviewed dependency publication helper
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.dependency-publication-plan.outputs.control_sha }}
+        path: publication-control
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Download selected dependency candidate
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: ${{ matrix.artifact }}
+        path: dependency-candidate
+    - name: Publish immutable dependency fingerprint
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        BUILD_SHA: ${{ inputs.source_sha }}
+        DEPENDENCY: ${{ matrix.dependency }}
+        FINGERPRINT: ${{ matrix.fingerprint }}
+      run: |
+        set -euo pipefail
+        python3 -E publication-control/deps/artifacts/ci.py publish --input dependency-candidate \
+          --dependency "$DEPENDENCY" --fingerprint "$FINGERPRINT" --source-sha "$BUILD_SHA" \
+          --repository sysown/proxysql

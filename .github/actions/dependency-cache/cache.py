@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 DEPENDENCIES = ('openssl', 'duckdb')
 
@@ -79,7 +80,11 @@ def docker_environment():
 def run_container(args, source, target, dependencies):
     if not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]*', args.service):
         raise ValueError('invalid compose service')
+    jobs = os.environ.get('DEPS_BUILD_JOBS', '2')
+    if not re.fullmatch('[1-9][0-9]*', jobs):
+        raise ValueError('DEPS_BUILD_JOBS must be a positive integer')
     environment = {
+        'DEPS_BUILD_JOBS': jobs,
         'PROXYSQL40': '1' if args.tier == 'v40' else '0',
         'PROXYSQL31': '1' if args.tier == 'v31' else '0',
         'WITHASAN': '1' if args.sanitizer == 'asan' else '0',
@@ -93,16 +98,53 @@ def run_container(args, source, target, dependencies):
         'DEPS_ARTIFACT_KEYS_FILE': '/opt/proxysql/.cache/dependency-artifacts/ci-keys.json',
         'DEPS_ARTIFACT_UID': str(os.getuid()), 'DEPS_ARTIFACT_GID': str(os.getgid()),
     }
+    if args.service == 'native':
+        environment['DEPS_ARTIFACT_KEYS_FILE'] = str(source / '.cache/dependency-artifacts/ci-keys.json')
+        native_env = docker_environment()
+        native_env.update(environment)
+        subprocess.run(['make', '--no-print-directory', '--jobs=' + jobs, '-C', str(source / 'deps'), 'NPROCS=' + jobs, target],
+                       cwd=source, env=native_env, check=True)
+        return
     command = ['docker', 'compose', 'run', '--rm', '--no-deps', '-T', '--entrypoint', '/bin/bash']
     for name, value in environment.items():
         command += ['-e', name + '=' + value]
     script = ('set -euo pipefail; cd /opt/proxysql; '
               'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=/opt/proxysql; '
-              'status=0; make --no-print-directory -C deps ' + target + ' || status=$?; '
+              'status=0; make --no-print-directory --jobs=' + jobs + ' -C deps NPROCS=' + jobs + ' ' + target + ' || status=$?; '
               'chown -R "$DEPS_ARTIFACT_UID:$DEPS_ARTIFACT_GID" .cache/dependency-artifacts; '
               'exit "$status"')
     command += [args.service, '-lc', script]
     subprocess.run(command, cwd=source, env=docker_environment(), check=True)
+
+
+
+def seed_candidate(candidate_path, dependency, fingerprint, destination):
+    if not candidate_path:
+        return
+    workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+    candidates = (workspace / candidate_path).resolve()
+    candidates.relative_to(workspace)
+    if not candidates.is_dir():
+        return  # Older accepted producers did not upload dependency bundles.
+    for directory in sorted(candidates.iterdir()):
+        entry_path, archive = directory / 'entry.json', directory / 'bundle.tar.gz'
+        if (directory.is_symlink() or not directory.is_dir() or entry_path.is_symlink() or
+                not entry_path.is_file() or entry_path.stat().st_size > 4 * 1024 * 1024 or
+                archive.is_symlink() or not archive.is_file()):
+            continue
+        entry = json.loads(entry_path.read_text())
+        if entry.get('dependency') != dependency or entry.get('fingerprint') != fingerprint:
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=destination.parent, prefix='.producer-') as temporary:
+            stage = Path(temporary)
+            shutil.copyfile(entry_path, stage / 'entry.json')
+            shutil.copyfile(archive, stage / 'bundle.tar.gz')
+            os.replace(stage, destination)
+        # Preparation below verifies identity, archive digest and safe contents,
+        # then performs the ordinary dependency smoke check before saving.
+        print('[deps/' + dependency + '] reusing accepted producer bundle')
+        return
 
 
 def main():
@@ -114,6 +156,7 @@ def main():
     parser.add_argument('--sanitizer', choices=('none', 'asan', 'tsan'), default='none')
     parser.add_argument('--coverage', choices=('false', 'true'), default='false')
     parser.add_argument('--dependencies', default='')
+    parser.add_argument('--candidate-path', default='')
     args = parser.parse_args()
     source = source_directory(args.source_path)
     selected = selected_dependencies(args)
@@ -144,8 +187,10 @@ def main():
         exact = (os.environ.get('CACHE_HIT') == 'true' and
                  os.environ.get('CACHE_MATCHED_KEY') == key and
                  os.environ.get('CACHE_REQUESTED_KEY') == key)
-        if not exact and path.exists():
-            shutil.rmtree(path)
+        if not exact:
+            if path.exists():
+                shutil.rmtree(path)
+            seed_candidate(args.candidate_path, dependency, fingerprint, path)
     run_container(args, source, 'dependency-artifact-prepare', [dependency])
     if dependency in keys:
         for name in ('entry.json', 'bundle.tar.gz'):

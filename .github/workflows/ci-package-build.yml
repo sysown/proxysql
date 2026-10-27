@@ -2,8 +2,15 @@ name: CI-package-build
 
 on:
   workflow_dispatch:
+    inputs:
+      control_ref:
+        type: string
+        default: GH-Actions
   workflow_call:
     inputs:
+      control_ref:
+        type: string
+        default: GH-Actions
       trigger:
         type: string
 
@@ -14,6 +21,8 @@ env:
 
 jobs:
   clean:
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
@@ -82,6 +91,10 @@ jobs:
         #echo "dists=$(make pkglist | sed 's/proxysql[_0-9.-]*//g; s/[._].*//; s/dbg-//; s/-clang//' | sort | uniq | jq -Rcs 'split("\n") | .[:-1]')" >> $GITHUB_OUTPUT
 
   build:
+    permissions:
+      contents: read
+      checks: write
+      actions: read
     needs: [ clean, select ]
     strategy:
       fail-fast: false
@@ -145,6 +158,25 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         fetch-depth: 0
+        persist-credentials: false
+
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ inputs.control_ref || 'GH-Actions' }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Restore or build exact dependency bundles
+      id: dependencies
+      uses: ./ci-control/.github/actions/dependency-cache
+      with:
+        source-path: .
+        service: ${{ startsWith(matrix.dist, 'tarball') && 'tarball_build' || format('{0}{1}_build', matrix.dist, matrix.type == '-dbg' && '_dbg' || matrix.type == '-clang' && '_clang' || '') }}
+        tier: v30
+        sanitizer: none
+        coverage: 'false'
 
     - name: Build package
       run: |
@@ -165,14 +197,41 @@ jobs:
         TARBALL_TEST_IMAGES: almalinux:9 debian:12 ubuntu:22.04
       run: tools/test-tarball-runtime.sh
 
-    - name: Push packages
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        GIT_VERSION=$(gh release --repo ${{ github.repository }} view ${{ env.BRANCH }}-head | tr -d '*' | grep -Po "(?<=Version : ).*")
-        [[ ${GIT_VERSION} == ${{ needs.clean.outputs.gitdescribe }} ]] || exit 1
-        gh release upload ${{ env.BRANCH }}-head --repo ${{ github.repository }} --clobber "$BIN_PKG"
- 
+    - name: Retain package for isolated upload
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: package-a${{ github.run_attempt }}-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}
+        path: ${{ env.BIN_PKG }}
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: 3
+
+    - name: Retain openssl dependency publication candidate
+      if: ${{ success() && steps.dependencies.outputs.openssl-key != '' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}-openssl
+        path: |
+          ${{ steps.dependencies.outputs.openssl-path }}/entry.json
+          ${{ steps.dependencies.outputs.openssl-path }}/bundle.tar.gz
+        include-hidden-files: true
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: 3
+
+    - name: Retain duckdb dependency publication candidate
+      if: ${{ success() && steps.dependencies.outputs.duckdb-key != '' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}-duckdb
+        path: |
+          ${{ steps.dependencies.outputs.duckdb-path }}/entry.json
+          ${{ steps.dependencies.outputs.duckdb-path }}/bundle.tar.gz
+        include-hidden-files: true
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: 3
+
     - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       if: always()
       with:
@@ -184,10 +243,69 @@ jobs:
 #        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
         details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
 
+  upload:
+    needs: [clean, select, build]
+    permissions:
+      contents: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+#       # v2.7
+#        dist: [ 'almalinux8','almalinux9','centos7','centos8','centos9','debian10','debian11','debian12','fedora38','fedora39','fedora40','fedora41','opensuse15','ubuntu16','ubuntu18','ubuntu20','ubuntu22','ubuntu24' ]
+#       # v3.0
+#        dist: [ 'almalinux8','almalinux9','centos9','debian12','fedora40','fedora41','opensuse15','ubuntu22','ubuntu24' ]
+        arch: [ 'amd64','arm64' ]
+        dist: ${{ fromJson(needs.select.outputs.dists) }}
+        type: [ '','-dbg','-clang' ]
+        exclude:
+#         broken - clang too old
+          - dist: 'centos7'
+            type: '-clang'
+          - dist: 'debian10'
+            type: '-clang'
+          - dist: 'ubuntu16'
+            type: '-clang'
+          - dist: 'ubuntu18'
+            type: '-clang'
+#         unneded - not build before v3.0.0
+          - arch: 'arm64'
+            type: '-clang'
+          - arch: 'arm64'
+            type: '-dbg'
+#         tarball Compose only provides tarball_build
+          - dist: 'tarball-almalinux9'
+            type: '-clang'
+          - dist: 'tarball-almalinux9'
+            type: '-dbg'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - name: Download this matrix leg's package
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: package-a${{ github.run_attempt }}-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}
+        path: package
+    - name: Push package without executing source code
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        EXPECTED_VERSION: ${{ needs.clean.outputs.gitdescribe }}
+      run: |
+        set -euo pipefail
+        version=$(gh release --repo "$GITHUB_REPOSITORY" view "${BRANCH}-head" | tr -d '*' | grep -Po "(?<=Version : ).*")
+        test "$version" = "$EXPECTED_VERSION"
+        shopt -s nullglob
+        packages=(package/*.deb package/*.rpm package/*.tar.gz)
+        test "${#packages[@]}" -eq 1
+        gh release upload "${BRANCH}-head" --repo "$GITHUB_REPOSITORY" --clobber "${packages[0]}"
+
   finalize:
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    needs: [ clean, select, build ]
+    needs: [ clean, select, build, upload ]
     steps:
     - name: Update release
       env:
@@ -211,3 +329,13 @@ jobs:
         EOF
         
         
+
+  dependency-publication:
+    needs: [build]
+    if: ${{ needs.build.result == 'success' }}
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/ci-publish-dependency-cache.yml
+    with:
+      source_sha: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}

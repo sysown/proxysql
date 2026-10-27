@@ -5,7 +5,7 @@ inputs:
     description: Product checkout relative to the workspace
     required: true
   service:
-    description: Compose build service matching the product build
+    description: Compose build service matching the product build, or native for host Make
     default: ubuntu24_dbg_build
   tier:
     description: Product tier (v30, v31, v40)
@@ -18,6 +18,9 @@ inputs:
     default: 'false'
   dependencies:
     description: Optional explicit space-separated dependency selection
+    default: ''
+  candidate-path:
+    description: Optional workspace-relative accepted producer artifacts to verify and reuse
     default: ''
 outputs:
   openssl-key:
@@ -46,9 +49,10 @@ runs:
         BUILD_SANITIZER: ${{ inputs.sanitizer }}
         BUILD_COVERAGE: ${{ inputs.coverage }}
         DEPENDENCIES: ${{ inputs.dependencies }}
+        CANDIDATE_PATH: ${{ inputs.candidate-path }}
       run: |
         python3 "$ACTION_PATH/cache.py" keys --source-path "$SOURCE_PATH" --service "$BUILD_SERVICE" \
-          --tier "$BUILD_TIER" --sanitizer "$BUILD_SANITIZER" --coverage "$BUILD_COVERAGE" --dependencies "$DEPENDENCIES"
+          --tier "$BUILD_TIER" --sanitizer "$BUILD_SANITIZER" --coverage "$BUILD_COVERAGE" --dependencies "$DEPENDENCIES" --candidate-path "$CANDIDATE_PATH"
     - name: Restore exact OpenSSL bundle
       id: openssl
       if: ${{ steps.keys.outputs.openssl-key != '' }}
@@ -75,13 +79,14 @@ runs:
         BUILD_SANITIZER: ${{ inputs.sanitizer }}
         BUILD_COVERAGE: ${{ inputs.coverage }}
         DEPENDENCIES: ${{ inputs.dependencies }}
+        CANDIDATE_PATH: ${{ inputs.candidate-path }}
         CACHE_DEPENDENCY: openssl
         CACHE_HIT: ${{ steps.openssl.outputs.cache-hit }}
         CACHE_MATCHED_KEY: ${{ steps.openssl.outputs.cache-matched-key }}
         CACHE_REQUESTED_KEY: ${{ steps.keys.outputs.openssl-key }}
       run: |
         python3 "$ACTION_PATH/cache.py" prepare --source-path "$SOURCE_PATH" --service "$BUILD_SERVICE" \
-          --tier "$BUILD_TIER" --sanitizer "$BUILD_SANITIZER" --coverage "$BUILD_COVERAGE" --dependencies "$DEPENDENCIES"
+          --tier "$BUILD_TIER" --sanitizer "$BUILD_SANITIZER" --coverage "$BUILD_COVERAGE" --dependencies "$DEPENDENCIES" --candidate-path "$CANDIDATE_PATH"
     - name: Save exact OpenSSL bundle
       if: ${{ success() && github.event_name != 'workflow_run' && steps.prepare-openssl.outputs.ready == 'true' && (steps.openssl.outputs.cache-hit != 'true' || steps.openssl.outputs.cache-matched-key != steps.keys.outputs.openssl-key) }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -100,13 +105,14 @@ runs:
         BUILD_SANITIZER: ${{ inputs.sanitizer }}
         BUILD_COVERAGE: ${{ inputs.coverage }}
         DEPENDENCIES: ${{ inputs.dependencies }}
+        CANDIDATE_PATH: ${{ inputs.candidate-path }}
         CACHE_DEPENDENCY: duckdb
         CACHE_HIT: ${{ steps.duckdb.outputs.cache-hit }}
         CACHE_MATCHED_KEY: ${{ steps.duckdb.outputs.cache-matched-key }}
         CACHE_REQUESTED_KEY: ${{ steps.keys.outputs.duckdb-key }}
       run: |
         python3 "$ACTION_PATH/cache.py" prepare --source-path "$SOURCE_PATH" --service "$BUILD_SERVICE" \
-          --tier "$BUILD_TIER" --sanitizer "$BUILD_SANITIZER" --coverage "$BUILD_COVERAGE" --dependencies "$DEPENDENCIES"
+          --tier "$BUILD_TIER" --sanitizer "$BUILD_SANITIZER" --coverage "$BUILD_COVERAGE" --dependencies "$DEPENDENCIES" --candidate-path "$CANDIDATE_PATH"
     - name: Save exact DuckDB bundle
       if: ${{ success() && github.event_name != 'workflow_run' && steps.prepare-duckdb.outputs.ready == 'true' && (steps.duckdb.outputs.cache-hit != 'true' || steps.duckdb.outputs.cache-matched-key != steps.keys.outputs.duckdb-key) }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
