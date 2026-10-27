@@ -18,6 +18,6 @@
 
 ## Audit correction: archive restoration
 
-The first decompression pass checks the complete archive before any files are extracted. Existing tests require both unsafe members and corrupt trailing zstd data to leave the checkout untouched. A single streaming extraction would violate that guarantee. Preserving it would require staging and safe publication, increasing code and filesystem complexity. Retain the current two-pass implementation; it has a demonstrated correctness purpose rather than being redundant validation.
+In the shared control implementation, [`restore_handoff()` on `GH-Actions`](https://github.com/sysown/proxysql/blob/GH-Actions/.github/scripts/ci_tier_artifacts.py#L328) checks the complete archive in the first decompression pass before any files are extracted. Existing tests require both unsafe members and corrupt trailing zstd data to leave the checkout untouched. A single streaming extraction would violate that guarantee. Preserving it would require staging and safe publication, increasing code and filesystem complexity. Retain the current two-pass implementation; it has a demonstrated correctness purpose rather than being redundant validation.
 
 Review confirmed that older maintained product Makefiles do not propagate the container exit code. Keep the existing success marker as an additional check; pipefail independently catches make and packaging failures. Removing that marker must wait until all supported product Makefiles propagate container status.

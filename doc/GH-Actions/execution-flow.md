@@ -22,7 +22,7 @@ The producer publishes acceptance only after required builds and manifest public
 
 The trusted build entry rejects fork pull requests. Completion callers require the producer repository to match before starting a privileged reusable workflow; consumers still require the matching acceptance artifact. The caller validator evaluates foreign and fork event paths, so a disjunction cannot bypass the guards.
 
-Consumers identify native completion by the workflow file path, not the dynamic run title. Superseded and closed-PR cancellation recognizes both entry workflows.
+The shared consumer-binding code identifies native completion by the workflow file path, not the dynamic run title. Caller YAML separately suppresses duplicate legacy build completion with `github.event.workflow_run.event != 'workflow_run'`. Workflow concurrency groups include the producer repository, so rejected foreign events cannot cancel trusted runs with matching branch names. Superseded and closed-PR cancellation recognizes both entry workflows.
 
 ## Legacy callers
 
@@ -49,4 +49,4 @@ Current exceptions remain explicit: MySQLX end-to-end testing starts dbdeployer 
 
 Handoffs, manifests and consumer bindings have matching retention. Compiled test executables are retained; applicability is handled by the runner.
 
-Restoration deliberately retains its two streaming passes. The first rejects unsafe members and corrupt trailing compressed data before anything is installed in the checkout; the second extracts with path and link filtering. Removing the first pass would weaken the existing reject-before-write guarantee, while staging a complete build for later publication would introduce additional filesystem and disk-budget complexity. Checksums and execution/source/tier binding remain enforced.
+The shared control branch implements restoration in [`restore_handoff()`](https://github.com/sysown/proxysql/blob/GH-Actions/.github/scripts/ci_tier_artifacts.py#L328); this is separate from source-branch artifact helpers. That implementation deliberately retains its two streaming passes. The first rejects unsafe members and corrupt trailing compressed data before anything is installed in the checkout; the second extracts with path and link filtering. Removing the first pass would weaken the existing reject-before-write guarantee, while staging a complete build for later publication would introduce additional filesystem and disk-budget complexity. Checksums and execution/source/tier binding remain enforced.
