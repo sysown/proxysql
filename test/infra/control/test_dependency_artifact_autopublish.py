@@ -3,7 +3,7 @@ import importlib
 import json
 from pathlib import Path
 import subprocess
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import unittest
 
 import test_dependency_artifact_make as fixture
@@ -101,9 +101,9 @@ class AutomaticPublicationTests(unittest.TestCase):
     def matrix(self):
         return self.publisher.publication_matrix(self.candidates, self.source, self.root, self.env)
 
-    def publish(self, directory, entry):
+    def publish(self, directory, entry, remote=None):
         with patch.object(self.publisher.subprocess, 'run', side_effect=self.github.run), \
-                patch.object(self.store, 'remote_entry', side_effect=self.github.remote_entry):
+                patch.object(self.store, 'remote_entry', side_effect=remote or self.github.remote_entry):
             return self.publisher.publish_candidate(directory, 'openssl', entry['fingerprint'],
                                                      self.source, self.root, self.store.REPOSITORY, self.env)
 
@@ -155,6 +155,25 @@ class AutomaticPublicationTests(unittest.TestCase):
         self.github.writes.clear()
         self.assertEqual('existing', self.publish(other, replacement)['status'])
         self.assertEqual([], self.github.writes)
+
+    def test_published_metadata_retries_availability_but_not_integrity_errors(self):
+        directory, entry = self.candidate()
+        for unavailable in (None, self.store.Unavailable('not visible yet')):
+            fetch = Mock(side_effect=[unavailable, entry])
+            with self.subTest(unavailable=unavailable), patch('time.sleep') as sleep:
+                self.publish(directory, entry, remote=fetch)
+                self.assertEqual(2, fetch.call_count)
+                sleep.assert_called_once_with(2)
+        fetch = Mock(return_value=None)
+        with patch('time.sleep') as sleep, self.assertRaisesRegex(ValueError, 'metadata is unavailable'):
+            self.publish(directory, entry, remote=fetch)
+        self.assertEqual(3, fetch.call_count)
+        self.assertEqual(2, sleep.call_count)
+        fetch = Mock(side_effect=ValueError('invalid metadata'))
+        with patch('time.sleep') as sleep, self.assertRaisesRegex(ValueError, 'invalid metadata'):
+            self.publish(directory, entry, remote=fetch)
+        self.assertEqual(1, fetch.call_count)
+        sleep.assert_not_called()
 
     def test_interrupted_draft_is_discovered_and_completed_without_recreating_release(self):
         directory, entry = self.candidate()

@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
 
 from bundles import extract_verified, verify_archive
@@ -243,7 +244,17 @@ def publish_candidate(inputdir, dependency, fingerprint, source_sha, source_root
         run(['gh', 'release', 'edit', tag, '--repo', repository,
              '--draft=false', '--prerelease', '--latest=false'])
         status = 'published'
-    winner = store.remote_entry(dependency, entry['identity'], environ)
+    winner = None
+    for attempt in range(3):
+        try:
+            winner = store.remote_entry(dependency, entry['identity'], environ)
+        except store.Unavailable:
+            if attempt == 2:
+                raise
+        if winner is not None:
+            break
+        if attempt < 2:
+            time.sleep(2)
     if winner is None:
         raise ValueError('published dependency metadata is unavailable')
     with tempfile.TemporaryDirectory(prefix='dependency-winner-') as temporary:
