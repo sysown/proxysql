@@ -4968,7 +4968,8 @@ void PgSQL_Connection::stmt_execute_start() {
 		// did not ask for Describe, preserving its original response shape.
 		pg_build_describe(native_outbuf, 'P', "");
 
-		pg_build_execute(native_outbuf, "", 0); // unnamed portal, max_rows 0 (parity phase)
+		// The unnamed portal with the client's row limit: PostgreSQL suspends it there (PortalSuspended).
+		pg_build_execute(native_outbuf, "", extended_query_info->max_rows);
 
 		const bool use_flush =
 			(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;

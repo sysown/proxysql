@@ -1,5 +1,6 @@
 #include <string>
 #include <sstream>
+#include <unistd.h>
 #include "pg_lite_client.h"
 #include "libpq-fe.h"
 #include "command_line.h"
@@ -24,6 +25,35 @@ static bool exec_expect(PGconn* c, const char* sql, ExecStatusType expected) {
     }
     PQclear(r);
     return good;
+}
+
+static PGConnPtr admin_conn() {
+    std::stringstream ss;
+    ss << "host=" << cl.pgsql_admin_host << " port=" << cl.pgsql_admin_port
+       << " user=" << cl.admin_username << " password=" << cl.admin_password << " sslmode=disable";
+    return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
+}
+
+// Switches the backend protocol and empties the hostgroup's pool: a pooled connection keeps the
+// protocol it was opened with, so without this the next run would reuse it.
+static bool set_native(PGconn* admin, bool on) {
+    const std::string v = on ? "true" : "false";
+    if (!exec_expect(admin, ("SET pgsql-use_native_backend_protocol='" + v + "'").c_str(), PGRES_COMMAND_OK) ||
+        !exec_expect(admin, "LOAD PGSQL VARIABLES TO RUNTIME", PGRES_COMMAND_OK) ||
+        !exec_expect(admin, "UPDATE pgsql_servers SET status='OFFLINE_HARD' WHERE hostgroup_id=0", PGRES_COMMAND_OK) ||
+        !exec_expect(admin, "LOAD PGSQL SERVERS TO RUNTIME", PGRES_COMMAND_OK))
+        return false;
+    for (int i = 0; i < 100; i++) {
+        PGresult* r = PQexec(admin, "SELECT COALESCE(SUM(ConnUsed+ConnFree),0) FROM stats_pgsql_connection_pool WHERE hostgroup=0");
+        const bool empty = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && atoi(PQgetvalue(r, 0, 0)) == 0;
+        PQclear(r);
+        if (empty) break;
+        usleep(100000);
+    }
+    const bool back = exec_expect(admin, "UPDATE pgsql_servers SET status='ONLINE' WHERE hostgroup_id=0", PGRES_COMMAND_OK) &&
+        exec_expect(admin, "LOAD PGSQL SERVERS TO RUNTIME", PGRES_COMMAND_OK);
+    usleep(200000);
+    return back;
 }
 
 static PGConnPtr backend_conn() {
@@ -77,7 +107,7 @@ static bool portal_suspends_at_2() {
 
 int main(int argc, char** argv) {
     if (cl.getEnv()) return exit_status();
-    plan(4);
+    plan(5);
 
     PGConnPtr c = backend_conn();
     ok(c && PQstatus(c.get()) == CONNECTION_OK, "connected for cursor test");
@@ -117,11 +147,23 @@ int main(int argc, char** argv) {
     // increment `failed` (test/tap/tap/tap.cpp:286), so exit_status() stays 0 while
     // the TAP output still records `not ok N # todo <reason>`. When portal suspension
     // is implemented the assertion passes inside the todo (still RC:0) -> remove wrapper.
-    todo_start("issue #5900: ProxySQL extended-protocol portal suspension unimplemented: Execute max_rows "
-               "ignored, no PortalSuspended emitted (lib/PgSQL_Extended_Query_Message.cpp:490). Remove this todo "
-               "wrapper when portal suspension is implemented.");
-    ok(portal_suspends_at_2(), "extended-protocol portal suspends at maxRows=2");
+    // The native backend protocol sends the row limit and returns PortalSuspended, as PostgreSQL
+    // does (issue #5900). The libpq protocol cannot pass a row limit at all: there every row comes
+    // back, by design, so that run stays a todo.
+    PGConnPtr admin = admin_conn();
+    PGresult* nr = PQexec(admin.get(), "SELECT variable_value FROM runtime_global_variables "
+                                       "WHERE variable_name='pgsql-use_native_backend_protocol'");
+    const std::string native_before = (PQresultStatus(nr) == PGRES_TUPLES_OK && PQntuples(nr) == 1) ? PQgetvalue(nr, 0, 0) : "false";
+    PQclear(nr);
+
+    ok(set_native(admin.get(), true) && portal_suspends_at_2(), "native: extended-protocol portal suspends at maxRows=2");
+
+    set_native(admin.get(), false);
+    todo_start("libpq backend protocol: a row limit cannot be passed through libpq, every row is returned (by design)");
+    ok(portal_suspends_at_2(), "libpq: extended-protocol portal suspends at maxRows=2");
     todo_end();
+
+    set_native(admin.get(), native_before == "true");
 
     return exit_status();
 }

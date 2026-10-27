@@ -321,7 +321,8 @@ private:
 		bool error = false;               // made the backend's error too, by a Parse that fails there
 		std::string name;                 // the client's statement name
 		std::string portal;               // a named portal: its Bind, Close, Execute or Describe
-		uint32_t max_rows = 0;            // a named Execute: its row limit
+		bool portal_bound = false;        // the unnamed portal, left suspended and still bound: used by name
+		uint32_t max_rows = 0;            // an Execute: its row limit
 		std::shared_ptr<const PgSQL_STMT_Global_info> stmt;
 		std::unique_ptr<const PgSQL_Bind_Message> bind;  // Execute: the client's Bind, which it carries
 		std::string bind_bytes;           // Describe('P'): the Bind of the portal, sent before it
