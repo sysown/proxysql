@@ -54,6 +54,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       source_sha: ${{ steps.matrix.outputs.source_sha }}
+      control_sha: ${{ steps.matrix.outputs.control_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -92,6 +93,7 @@ jobs:
           {
             echo "matrix=$(cat "$RUNNER_TEMP/dependency-matrix.json")"
             echo "source_sha=$source_sha"
+            echo "control_sha=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
 
   build:
@@ -150,14 +152,69 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  publish:
+  publication-plan:
     needs: [plan, build]
-    # PRs keep their own exact caches; only reviewed history enters the public
-    # store. The fresh publisher validates ancestry and source hashes again.
+    # Successful profiles remain useful when another independent profile fails.
     if: ${{ !cancelled() && (needs.build.result == 'success' || needs.build.result == 'failure') && github.repository == 'sysown/proxysql' && github.ref == 'refs/heads/v3.0' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.candidates.outputs.matrix }}
+      count: ${{ steps.candidates.outputs.count }}
+    steps:
+      - name: Checkout exact reviewed publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: sysown/proxysql
+          ref: ${{ needs.plan.outputs.control_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: dependency-candidate-a${{ github.run_attempt }}-*
+          path: candidates
+      - name: Validate candidates against reviewed source
+        id: candidates
+        env:
+          SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/dependency-source" "$SOURCE_SHA"
+          python3 -E deps/artifacts/publish.py plan-candidates --input candidates \
+            --source-root "$RUNNER_TEMP/dependency-source" --source-sha "$SOURCE_SHA" --github-output "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [plan, publication-plan]
+    if: ${{ !cancelled() && needs.publication-plan.result == 'success' && needs.publication-plan.outputs.count != '0' && github.repository == 'sysown/proxysql' && github.ref == 'refs/heads/v3.0' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write
-      actions: read
-    uses: sysown/proxysql/.github/workflows/ci-publish-dependency-cache.yml@40dcd00772a2b863e050611aae3c151da87a2d21
-    with:
-      source_sha: ${{ needs.plan.outputs.source_sha }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.publication-plan.outputs.matrix) }}
+    concurrency:
+      group: dependency-publication-${{ matrix.dependency }}-${{ matrix.fingerprint }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout exact reviewed publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: sysown/proxysql
+          ref: ${{ needs.plan.outputs.control_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: candidate
+      - name: Publish immutable dependency key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
+          DEPENDENCY: ${{ matrix.dependency }}
+          FINGERPRINT: ${{ matrix.fingerprint }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/dependency-source" "$SOURCE_SHA"
+          python3 -E deps/artifacts/publish.py publish-candidate --input candidate \
+            --source-root "$RUNNER_TEMP/dependency-source" --source-sha "$SOURCE_SHA" \
+            --dependency "$DEPENDENCY" --fingerprint "$FINGERPRINT" --repository "$GITHUB_REPOSITORY"
