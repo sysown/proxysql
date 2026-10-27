@@ -8,6 +8,7 @@ shape that must be accepted. validate() takes parsed documents, so no git
 ref or fixture on disk is needed.
 """
 import copy
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -123,7 +124,7 @@ class SnapshotPlanner(unittest.TestCase):
         self.assertEqual(subject.validate(*self.documents()),[])
     def test_planner_cannot_force_trust(self):
         docs=self.documents();docs[2]['jobs']['plan']['steps'][0]['env']['TRUSTED']='true'
-        self.assertTrue(subject.validate(*docs))
+        self.assertIn('planner must preserve caller trust when resolving labels', subject.validate(*docs))
 
 class DedicatedUntrustedCallee(unittest.TestCase):
     def documents(self):
@@ -134,6 +135,7 @@ class DedicatedUntrustedCallee(unittest.TestCase):
         reusable['jobs']['plan']['steps'][0]['env']['TRUSTED']='${{ false }}'
         reusable['jobs']['plan']['runs-on']='ubuntu-24.04'
         reusable['jobs']['builds']['runs-on']='ubuntu-24.04'
+        reusable['jobs']['resolve-tap-mode']['runs-on']='ubuntu-24.04'
         for step in reusable['jobs']['builds']['steps']:
             step['if']=step['if'].replace('inputs.trusted','false')
         return base,fork,reusable
@@ -141,8 +143,42 @@ class DedicatedUntrustedCallee(unittest.TestCase):
     def test_dedicated_snapshot_supports_forced_false_and_hosted_runner(self):
         self.assertEqual(subject.validate(*self.documents()),[])
 
+    def test_every_dedicated_job_must_force_hosted_runners(self):
+        for runner in (['self-hosted'], {'group': 'private'}, '${{ inputs.runner }}', None):
+            with self.subTest(runner=runner):
+                base, fork, reusable = self.documents()
+                reusable['jobs']['extra'] = {'runs-on': runner, 'steps': [{'run': 'echo extra'}]}
+                self.assertIn("dedicated untrusted job 'extra' does not force ubuntu-24.04",
+                              subject.validate(base, fork, reusable))
+
+    def test_every_dedicated_job_accepts_the_forced_false_runner_expression(self):
+        base, fork, reusable = self.documents()
+        for job in reusable['jobs'].values():
+            job['runs-on'] = "${{ false && (fromJson('[\"self-hosted\"]')) || 'ubuntu-24.04' }}"
+        self.assertEqual(subject.validate(base, fork, reusable), [])
+
+    def test_dedicated_runner_expression_cannot_escape_the_false_guard(self):
+        for expression in (
+            "${{ false || 'self-hosted' }}",
+            "${{ false && (true) || 'self-hosted' || (false) || 'ubuntu-24.04' }}",
+            "${{ inputs.trusted && ('self-hosted') || 'ubuntu-24.04' }}",
+        ):
+            for job in ('plan', 'builds', 'extra'):
+                with self.subTest(expression=expression, job=job):
+                    base, fork, reusable = self.documents()
+                    reusable['jobs'].setdefault(job, {'steps': [{'run': 'echo extra'}]})
+                    reusable['jobs'][job]['runs-on'] = expression
+                    self.assertIn(f"dedicated untrusted job {job!r} does not force ubuntu-24.04",
+                                  subject.validate(base, fork, reusable))
+
     def test_dedicated_snapshot_rejects_privilege_and_control_ref_mutations(self):
-        for change in ['planner','runner','gate','permissions','control']:
+        for change, diagnostic in [
+            ('planner', 'planner must preserve caller trust when resolving labels'),
+            ('runner', "dedicated untrusted job 'builds' does not force ubuntu-24.04"),
+            ('gate', 'privileged step is not trusted-gated: Archive artifacts'),
+            ('permissions', "callee job 'unused-publisher' requests contents: write"),
+            ('control', 'dedicated fork control_ref must match its immutable callee SHA'),
+        ]:
             with self.subTest(change=change):
                 base,fork,reusable=self.documents()
                 if change=='planner':
@@ -152,10 +188,11 @@ class DedicatedUntrustedCallee(unittest.TestCase):
                 elif change=='gate':
                     reusable['jobs']['builds']['steps'][0]['if']='${{ false && failure() || true }}'
                 elif change=='permissions':
-                    reusable['jobs']['unused-publisher']={'if':'${{ false }}','permissions':{'contents':'write'}}
+                    reusable['jobs']['unused-publisher']={'runs-on':'ubuntu-24.04','if':'${{ false }}','permissions':{'contents':'write'}}
                 else:
                     fork['jobs']['run']['with']['control_ref']='GH-Actions'
-                self.assertTrue(subject.validate(base,fork,reusable))
+                self.assertTrue(any(diagnostic in problem for problem in subject.validate(base,fork,reusable)),
+                                diagnostic)
 
     def test_cli_loads_the_actual_pin_when_engine_ref_predates_dedicated_callee(self):
         base,fork,reusable=self.documents()
@@ -200,6 +237,96 @@ class DedicatedUntrustedCallee(unittest.TestCase):
             self.assertNotEqual(result.returncode,0)
             self.assertIn('pinned fork callee',result.stderr)
             self.assertIn('git fetch origin '+'a'*40,result.stderr)
+
+
+class LegacyPinnedCallee(unittest.TestCase):
+    def run_cli(self, pinned_reusable, engine_reusable=None):
+        base, fork, _ = minimal_documents()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            directory = root / '.github/workflows'
+            directory.mkdir(parents=True)
+            def commit():
+                subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)
+                subprocess.run(['git', '-C', str(root), '-c', 'user.name=Fixture',
+                                '-c', 'user.email=fixture@example.com', 'commit',
+                                '--allow-empty', '-qm', 'fixture'], check=True)
+                return subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'],
+                                               text=True).strip()
+            (root / 'README').write_text('Independent CI engine revision')
+            if engine_reusable is not None:
+                (directory / 'ci-builds.yml').write_text(yaml.safe_dump(engine_reusable))
+            engine_ref = commit()
+            (directory / 'ci-builds.yml').write_text(yaml.safe_dump(pinned_reusable))
+            pinned_ref = commit()
+            fork['jobs']['run']['uses'] = 'sysown/proxysql/.github/workflows/ci-builds.yml@' + pinned_ref
+            for name, document in [('CI-builds.yml', base), ('CI-builds-fork.yml', fork)]:
+                (directory / name).write_text(yaml.safe_dump(document))
+            commit()
+            result = subprocess.run([sys.executable, subject.__file__, 'HEAD', engine_ref],
+                                    cwd=root, capture_output=True, text=True)
+            return result, pinned_ref
+
+    def test_legacy_cli_reads_the_actual_pin_when_the_engine_has_no_callee(self):
+        _, _, reusable = minimal_documents()
+        result, pinned_ref = self.run_cli(reusable)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('callee=' + pinned_ref, result.stdout)
+
+    def test_safe_engine_cannot_certify_an_unsafe_legacy_pin(self):
+        _, _, safe = minimal_documents()
+        unsafe = copy.deepcopy(safe)
+        unsafe['jobs']['builds']['runs-on'] = ['self-hosted']
+        result, _ = self.run_cli(unsafe, safe)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('untrusted mode does not force ubuntu-24.04', result.stderr)
+
+
+class LintForkCalleeFetch(unittest.TestCase):
+    def fetch(self, uses):
+        workflow_path = Path(__file__).resolve().parents[3] / '.github/workflows/CI-lint-groups-json.yml'
+        workflow = yaml.safe_load(workflow_path.read_text())
+        command = next(step['run'] for step in workflow['jobs']['lint']['steps']
+                       if step.get('name') == 'Fetch the immutable fork build contract')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            wrapper = root / '.github/workflows/CI-builds-fork.yml'
+            wrapper.parent.mkdir(parents=True)
+            wrapper.write_text('jobs:\n  run:\n    uses: ' + uses + '\n')
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            git = bin_dir / 'git'
+            git.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$FETCH_ARGS"\n')
+            git.chmod(0o755)
+            args_path = root / 'fetch-args'
+            result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', command], cwd=root,
+                                    env={**os.environ, 'PATH': str(bin_dir) + os.pathsep + os.environ['PATH'],
+                                         'FETCH_ARGS': str(args_path)}, capture_output=True, text=True)
+            args = args_path.read_text().splitlines() if args_path.exists() else []
+            self.assertFalse((root / 'injected').exists(), 'workflow data executed as shell code')
+            return result, args
+
+    def test_fetch_accepts_yaml_quoting_and_trailing_comments_for_both_callees(self):
+        for filename in ('ci-builds.yml', 'ci-builds-untrusted.yml'):
+            reference = 'sysown/proxysql/.github/workflows/' + filename + '@' + 'a' * 40
+            for uses in (reference, "'" + reference + "' # reviewed pin", '"' + reference + '"'):
+                with self.subTest(uses=uses):
+                    result, args = self.fetch(uses)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(args, ['fetch', '--no-tags', '--depth=1', 'origin', 'a' * 40])
+
+    def test_invalid_or_executable_yaml_values_never_reach_git_fetch(self):
+        for uses in (
+            'sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions',
+            'evil/repo/.github/workflows/ci-builds.yml@' + 'a' * 40,
+            'sysown/proxysql/.github/workflows/ci-builds.yml@$(touch injected)',
+            '!!python/object/apply:os.system ["touch injected"]',
+        ):
+            with self.subTest(uses=uses):
+                result, args = self.fetch(uses)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(args, [])
 
 
 class TopLevelDisjunction(unittest.TestCase):

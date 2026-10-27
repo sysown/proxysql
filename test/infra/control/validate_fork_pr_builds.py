@@ -6,7 +6,7 @@ the contract spans three documents:
 
   <base-ref>:.github/workflows/CI-builds.yml        trusted caller
   <base-ref>:.github/workflows/CI-builds-fork.yml  fork caller
-  <actions-ref>:.github/workflows/<pinned-name>    reusable callee
+  <pinned-sha>:.github/workflows/<pinned-name>     reusable callee
 
 A fork pull request runs untrusted code, so the fork caller must hold no
 write-capable token, must not receive secrets, must only be reachable for
@@ -23,9 +23,10 @@ dev box, and nothing in CI ever ran it.
 
 Usage: validate_fork_pr_builds.py <base-ref> <gh-actions-ref>
 
-The second ref selects the legacy shared callee. Dedicated untrusted workflows
-are always inspected at their caller-pinned commit, independently of the CI tier
-engine ref. The validator reads Git objects and never fetches or executes them.
+The second ref is retained for compatibility with existing lint invocations.
+Both allowed callees are inspected at their caller-pinned commit, independently
+of the CI tier engine ref. The validator reads Git objects and never fetches or
+executes them.
 """
 import re
 import subprocess
@@ -37,7 +38,7 @@ import yaml
 # call must not resolve to one. Mirrors the expression in ci-builds.yml.
 RUNS_ON_UNTRUSTED = re.compile(
     r"\A\$\{\{\s*inputs\.trusted\s*&&\s*\("
-    r".*\)\s*\|\|\s*'ubuntu-24\.04'\s*\}\}\Z",
+    r"(?P<guarded>.*)\)\s*\|\|\s*'ubuntu-24\.04'\s*\}\}\Z",
     re.DOTALL,
 )
 CALLEE_REFERENCE = re.compile(
@@ -79,6 +80,30 @@ PRIVILEGED_USES = ("LouisBrunner/checks-action", "actions/cache/", "actions/uplo
 PRIVILEGED_NAME = re.compile(
     r"Pack (bin|test) cache|Pack src \+ matrix for handoff|Upload handoff|Archive artifacts"
 )
+
+
+def guarded_ubuntu_runner(value, pattern):
+    """Accept a guarded branch with exactly one hosted fallback.
+
+    The regex locates the outer parentheses. Check their contents too: a
+    greedy match alone also accepts ``false && (a) || 'self-hosted' || (b)``
+    before the final hosted fallback. Ignore parentheses in quoted strings.
+    """
+    match = pattern.fullmatch(str(value))
+    if match is None:
+        return False
+    guarded = re.sub(r"'(?:''|[^'])*'", '', match['guarded'])
+    if "'" in guarded:
+        return False
+    depth = 0
+    for char in guarded:
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
 
 
 def top_level_disjunction(condition):
@@ -289,6 +314,9 @@ def validate(base, fork, reusable):
         require(trusted_input.get('default') is False, 'dedicated reusable workflow lacks trusted=false default')
         for name, job in reusable.get('jobs', {}).items():
             require('uses' not in job, f'dedicated untrusted job {name!r} delegates to another workflow')
+            require(job.get('runs-on') == 'ubuntu-24.04'
+                    or guarded_ubuntu_runner(job.get('runs-on'), RUNS_ON_FORCED_FALSE),
+                    f'dedicated untrusted job {name!r} does not force ubuntu-24.04')
     else:
         require(trusted_input.get("default") is True, "reusable workflow lacks trusted=true default")
 
@@ -329,8 +357,10 @@ def validate(base, fork, reusable):
     else:
         planner = reusable['jobs']['plan']
         require('permissions' not in planner, 'planner widens fork token permissions')
-        require(planner.get('runs-on') == 'ubuntu-24.04' or RUNS_ON_UNTRUSTED.match(str(planner.get('runs-on', ''))) is not None,
-                'untrusted planner does not force ubuntu-24.04')
+        if not dedicated:
+            require(planner.get('runs-on') == 'ubuntu-24.04'
+                    or guarded_ubuntu_runner(planner.get('runs-on'), RUNS_ON_UNTRUSTED),
+                    'untrusted planner does not force ubuntu-24.04')
         selections = [step for step in planner.get('steps', []) if 'ci_tier_runtime.py plan' in str(step.get('run', ''))]
         require(len(selections) == 1 and selections[0].get('env', {}).get('TRUSTED') == ('${{ false }}' if dedicated else '${{ inputs.trusted }}'),
                 'planner must preserve caller trust when resolving labels')
@@ -365,12 +395,9 @@ def validate(base, fork, reusable):
                 f"caller does not grant; this fails the whole call at startup"
             )
 
-    require(
-        (builds.get('runs-on') == 'ubuntu-24.04' or
-         RUNS_ON_FORCED_FALSE.match(str(builds.get('runs-on', ''))) is not None) if dedicated else
-        RUNS_ON_UNTRUSTED.match(str(builds.get("runs-on", ""))) is not None,
-        "untrusted mode does not force ubuntu-24.04",
-    )
+    if not dedicated:
+        require(guarded_ubuntu_runner(builds.get('runs-on'), RUNS_ON_UNTRUSTED),
+                'untrusted mode does not force ubuntu-24.04')
 
     if 'plan' in reusable.get('jobs', {}):
         needs=builds.get('needs') or []
@@ -435,16 +462,15 @@ def main(argv):
     if len(argv) != 3:
         print(f"usage: {argv[0]} <base-ref> <gh-actions-ref>", file=sys.stderr)
         return 2
-    base_ref, actions_ref = argv[1], argv[2]
+    base_ref = argv[1]
     base = load_workflow(f"{base_ref}:.github/workflows/CI-builds.yml")
     fork = load_workflow(f"{base_ref}:.github/workflows/CI-builds-fork.yml")
     reference = CALLEE_REFERENCE.fullmatch(str(fork.get('jobs', {}).get('run', {}).get('uses', '')))
     if reference is None:
         print('FAIL: fork workflow does not pin an allowed reusable workflow to a full commit SHA', file=sys.stderr)
         return 1
-    dedicated = reference['filename'] == 'ci-builds-untrusted.yml'
-    callee_ref = reference['sha'] if dedicated else actions_ref
-    reusable = load_workflow(f"{callee_ref}:.github/workflows/{reference['filename']}", pinned=dedicated)
+    callee_ref = reference['sha']
+    reusable = load_workflow(f"{callee_ref}:.github/workflows/{reference['filename']}", pinned=True)
 
     problems = validate(base, fork, reusable)
     if problems:
