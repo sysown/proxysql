@@ -214,6 +214,11 @@ public:
     void closePortal(const std::string& portalName, bool send_sync);
     void closeStatement(const std::string& stmtName, bool send_sync);
     void sendSync();
+    // Flush ('H'): asks for the replies so far without ending the extended-query group.
+    void sendFlush();
+    // Reads whole messages until nothing arrives for quiet_ms. A closed or broken socket throws
+    // instead of counting as quiet, so a dropped connection can never pass for "no reply".
+    std::vector<std::pair<char, std::vector<uint8_t>>> readUntilQuiet(int quiet_ms);
     void waitForMessage(char expectedType, const std::string& errorContext, bool wait_for_ready);
     void consumeInputUntilReady();
     void readMessage(char& type, std::vector<uint8_t>& buffer);

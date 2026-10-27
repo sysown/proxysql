@@ -4,6 +4,7 @@
  * This library provides basic functionality to connect to a PostgreSQL database and execute simple queries.
 */
 #include "pg_lite_client.h"
+#include <poll.h>
 #include <netdb.h>
 #include <fcntl.h>
 #include <sstream>
@@ -843,6 +844,26 @@ void PgConnection::sendExecute(const std::string& portalName, int maxRows) {
 
 void PgConnection::sendSync() {
     sendMessage('S', std::vector<uint8_t>());
+}
+
+void PgConnection::sendFlush() {
+    sendMessage('H', std::vector<uint8_t>());
+}
+
+std::vector<std::pair<char, std::vector<uint8_t>>> PgConnection::readUntilQuiet(int quiet_ms) {
+    std::vector<std::pair<char, std::vector<uint8_t>>> msgs;
+    if (sock_ < 0) throw PgException("Not connected");
+    for (;;) {
+        struct pollfd p = { sock_, POLLIN, 0 };
+        const int r = poll(&p, 1, quiet_ms);
+        if (r == 0) return msgs;
+        if (r < 0) throw PgException("poll() failed while reading");
+        // Readable, hung up or failed: readMessage() throws on a closed socket.
+        char type = 0;
+        std::vector<uint8_t> buf;
+        readMessage(type, buf);
+        msgs.emplace_back(type, std::move(buf));
+    }
 }
 
 void PgConnection::waitForMessage(char expectedType, const std::string& errorContext, bool wait_for_ready) {
