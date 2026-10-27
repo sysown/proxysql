@@ -25,7 +25,7 @@ on:
         default: GH-Actions
 env:
   LOCK: CI_BUILDS_${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.event.pull_request.head.sha || github.sha }}
 
 jobs:
 
@@ -598,3 +598,11 @@ jobs:
         name: ci-manifest-${{ needs.plan.outputs.execution_id }}
         path: manifest.json
         retention-days: 3
+    - name: Publish accepted producer for native completion fanout
+      if: ${{ inputs.trusted && success() && github.event_name != 'workflow_run' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-accepted-producer-a${{ github.run_attempt }}
+        path: producer.json
+        retention-days: 3
+        if-no-files-found: error
