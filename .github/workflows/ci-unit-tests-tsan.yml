@@ -142,16 +142,6 @@ jobs:
         PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
       run: |
         make ubuntu24-tap
-    - name: Filter tests by compiled product version
-      run: |
-        # The Jammy host cannot execute this Ubuntu 24 binary. Probe inside
-        # the build container, then pass that output to the host-side prune.
-        version_output="$(docker compose run --rm \
-          --entrypoint /opt/proxysql/src/proxysql \
-          ubuntu24_dbg_build --version 2>&1)"
-        sudo "${GITHUB_WORKSPACE}/ci-control/.github/scripts/prune-tier-handoff.bash" \
-          --version "${version_output}" \
-          --binary src/proxysql --groups test/tap/groups/groups.json
     - name: Run mysqlx-tsan-g1 + unit-tests-g1 TAP groups inside Docker
       env:
         TAP_GROUP: mysqlx-tsan-g1
