@@ -6,7 +6,7 @@ Spec: ../specs/2026-10-25-pgsql-scheduler-contract.md
 
 ## Task 1: Implement and verify the boundary
 
-Add failing coverage for output attempted before returning, no completion-only continuation, durable buffered work and paused queued work. Keep actual native/libpq waiter ordering and partial-write coverage. Remove the special epilogue resume state; return Runnable only for buffered next-command work after writeout. Preserve established-only checkout and allocation ownership. Respect response-throttle pauses when draining queued work and computing the next poll deadline. Build with the existing feature/compiler flags, run the focused scheduler/waiter/timeout/allocation tests and the wire-order check, then commit.
+Add failing coverage for output attempted before returning, no completion-only continuation, durable buffered work and paused queued work. Keep actual native/libpq waiter ordering and partial-write coverage. Remove the special epilogue resume state; in the completed-request tail, return Runnable only for buffered next-command work after writeout. Other existing Runnable outcomes for backend dispatch and retry remain valid. Preserve established-only checkout and allocation ownership. Respect response-throttle pauses when draining queued work and computing the next poll deadline. Build with the existing feature/compiler flags, run the focused scheduler/waiter/timeout/allocation tests and the wire-order check, then commit.
 
 Expected: current code fails the new boundary and pause assertions; implementation passes them and all focused checks.
 

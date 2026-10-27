@@ -217,9 +217,10 @@ Allocation ownership is a separate change. Native result-buffer failure remains 
 
 | Behavior | Source |
 |---|---|
-| Upstream reads and waiter-after-backend scan | [`PgSQL_Thread.cpp` at `f02fbf1bb`](https://github.com/sysown/proxysql/blob/f02fbf1bb/lib/PgSQL_Thread.cpp#L3805) |
+| Upstream socket reads | [`PgSQL_Thread.cpp` at `f02fbf1bb`](https://github.com/sysown/proxysql/blob/f02fbf1bb/lib/PgSQL_Thread.cpp#L3805) |
+| Upstream waiter-after-backend scan | [`PgSQL_Thread.cpp` at `f02fbf1bb`](https://github.com/sysown/proxysql/blob/f02fbf1bb/lib/PgSQL_Thread.cpp#L4276) |
 | Previous handler writeout then buffered-command loop | [`PgSQL_Session.cpp` at `9dfe548bc`](https://github.com/sysown/proxysql/blob/9dfe548bc/lib/PgSQL_Session.cpp#L4160) |
-| Previous release dispatch after handler return | [`PgSQL_Thread.cpp` at `9dfe548bc`](https://github.com/sysown/proxysql/blob/9dfe548bc/lib/PgSQL_Thread.cpp#L4450) |
+| Previous release dispatch after handler return | [`PgSQL_Thread.cpp` at `9dfe548bc`](https://github.com/sysown/proxysql/blob/9dfe548bc/lib/PgSQL_Thread.cpp#L4503) |
 | Current step outcome and waiter-based release guard | [`PgSQL_Session.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/PgSQL_Session.cpp#L3251) |
 | Superseded resume before completion epilogue | [`PgSQL_Session.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/PgSQL_Session.cpp#L3315) |
 | Superseded yield before writeout, then buffered-input loop | [`PgSQL_Session.cpp` at `c94fbe056`](https://github.com/sysown/proxysql/blob/c94fbe056/lib/PgSQL_Session.cpp#L4207) |
