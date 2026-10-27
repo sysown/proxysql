@@ -25,6 +25,8 @@ if [ "${ELIGIBLE:-}" = "true" ]; then
     fi
   else
     echo ">>> WARNING: could not read runs:"; sed 's/^/    /' "$diagnostic"
+    # This knob applies to runs-listing failures. Failed jobs lookups above
+    # conservatively assume the pool is full and always spill to hosted.
     if [[ "${HOSTED_ON_LOOKUP_FAILURE:-false}" == true ]]; then
       printf -v choice '"%s"' "$hosted"
     else

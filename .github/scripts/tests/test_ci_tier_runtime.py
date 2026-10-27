@@ -339,10 +339,14 @@ class ConsumerRerunTests(unittest.TestCase):
    self.assertEqual(json.loads(Path('binding.json').read_text())['build_id'],2)
 
  def test_native_completion_rejects_foreign_build_and_source(self):
-  for key,value in [('build_id',99),('sha','c'*40),('repository','other/repo'),('trigger_attempt',3)]:
+  for key,value,message in [
+   ('build_id',99,'accepted producer does not belong to this completed build'),
+   ('sha','c'*40,'producer binding mismatch: sha'),
+   ('repository','other/repo','producer binding mismatch: repository'),
+   ('trigger_attempt',3,'invalid accepted producer attempt')]:
    with self.subTest(key=key),self.fixture(native=True) as state:
     state['accepted'][key]=value
-    with self.assertRaises(ValueError):runtime.consumer()
+    with self.assertRaisesRegex(ValueError,message):runtime.consumer()
     self.assertFalse(Path('binding.json').exists())
 
  def test_native_completion_requires_its_acceptance_artifact(self):

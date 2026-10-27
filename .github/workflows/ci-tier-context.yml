@@ -41,6 +41,7 @@ on:
         type: string
         default: ubuntu-22.04
       hosted_on_lookup_failure:
+        description: Use the hosted runner if the runs listing fails; jobs-listing failures always use hosted
         type: boolean
         default: false
     outputs:
