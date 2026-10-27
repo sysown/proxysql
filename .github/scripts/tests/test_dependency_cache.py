@@ -46,7 +46,7 @@ else:
 ''')
         fake.chmod(0o755)
         self.env = dict(os.environ, PATH=str(self.root/'bin')+os.pathsep+os.environ['PATH'],
-                        FIXTURE_ROOT=str(self.root), GITHUB_WORKSPACE=str(self.root),
+                        FIXTURE_ROOT=str(self.root), GITHUB_WORKSPACE=str(self.root), GITHUB_RUN_ID='424242',
                         GITHUB_OUTPUT=str(self.root/'outputs'), GH_TOKEN='must-not-reach-docker',
                         ACTIONS_RUNTIME_TOKEN='must-not-reach-docker',
                         AWS_SECRET_ACCESS_KEY='must-not-reach-docker',
@@ -74,9 +74,10 @@ else:
         self.assertEqual(outputs['openssl-path'], 'source/'+RELATIVE)
         call = json.loads((self.root/'calls.jsonl').read_text().splitlines()[0])
         self.assertIn('ubuntu24_dbg_build', call['args'])
-        for setting in ['PROXYSQL40=1', 'WITHASAN=1', 'WITHGCOV=1']:
+        for setting in ['PROXYSQL40=1', 'WITHASAN=1', 'WITHGCOV=1',
+                        'DEPS_ARTIFACT_RUN_ID=424242', 'DEPS_ARTIFACT_PROFILE=ubuntu24_dbg_build']:
             self.assertIn(setting, call['args'])
-        for secret in ['GH_TOKEN','ACTIONS_RUNTIME_TOKEN','AWS_SECRET_ACCESS_KEY','OPENAI_API_KEY','SSH_AUTH_SOCK']:
+        for secret in ['GH_TOKEN','GITHUB_RUN_ID','ACTIONS_RUNTIME_TOKEN','AWS_SECRET_ACCESS_KEY','OPENAI_API_KEY','SSH_AUTH_SOCK']:
             self.assertTrue(secret not in call['env'], secret+' leaked into Docker environment')
 
     def test_untrusted_metadata_cannot_choose_cache_path_or_key(self):

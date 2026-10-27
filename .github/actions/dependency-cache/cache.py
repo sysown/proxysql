@@ -87,6 +87,8 @@ def run_container(args, source, target, dependencies):
         'WITHTSAN': '1' if args.sanitizer == 'tsan' else '0',
         'WITHGCOV': '1' if args.coverage == 'true' else '0',
         'DEPS_MODE': 'auto',
+        'DEPS_ARTIFACT_RUN_ID': os.environ.get('GITHUB_RUN_ID', ''),
+        'DEPS_ARTIFACT_PROFILE': args.service,
         'DEPS_ARTIFACT_DEPENDENCIES': ' '.join(dependencies),
         'DEPS_ARTIFACT_KEYS_FILE': '/opt/proxysql/.cache/dependency-artifacts/ci-keys.json',
         'DEPS_ARTIFACT_UID': str(os.getuid()), 'DEPS_ARTIFACT_GID': str(os.getgid()),
@@ -135,7 +137,8 @@ def main():
     if dependency not in selected:
         raise ValueError('dependency was not selected')
     keys = load_keys(source, selected)
-    # Ineligible dependencies still prepare from source and run their smoke check.
+    # Ineligible dependencies retain source fallback without packaging or saving.
+    # The product helper skips runtime smoke when the target cannot run here.
     if dependency in keys:
         key, path, fingerprint = keys[dependency]
         exact = (os.environ.get('CACHE_HIT') == 'true' and
