@@ -55,6 +55,7 @@ jobs:
         exit 1
 
     - name: Stand up infra (backends + Toxiproxy + ProxySQL)
+      timeout-minutes: 20
       env:
         INFRA_ID: ci-${{ matrix.tier }}-${{ github.run_id }}-${{ github.run_attempt }}
         WORKSPACE: ${{ github.workspace }}
@@ -79,8 +80,10 @@ jobs:
     - name: Save infrastructure diagnostics
       if: ${{ !cancelled() }}
       continue-on-error: true
+      timeout-minutes: 3
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
+        phase: capture
         artifact-key: ${{ matrix.tier }}
         infra-id: ci-${{ matrix.tier }}-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -95,6 +98,15 @@ jobs:
         docker logs "proxysql.${INFRA_ID}" 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash
         test/infra/control/destroy-infras.bash
+    - name: Upload infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: upload
+        artifact-key: ${{ matrix.tier }}
+
     needs: tier-selection
     strategy:
       fail-fast: false

@@ -203,6 +203,7 @@ jobs:
         dbdeployer unpack "$TARBALL"
 
     - name: Deploy MySQL 8.4 sandbox
+      timeout-minutes: 20
         # The three behaviours preserved from the old workflow:
         # (1) MySQL 8.4 needs --my-cnf-options "mysql_native_password=ON"
         #     because the auth plugin is no longer loaded by default;
@@ -312,8 +313,10 @@ jobs:
     - name: Save infrastructure diagnostics
       if: ${{ !cancelled() }}
       continue-on-error: true
+      timeout-minutes: 3
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
+        phase: capture
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
         host-log-root: ~/sandboxes
 
@@ -322,6 +325,15 @@ jobs:
       run: |
         VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1 || echo "")
         [ -n "$VERSION" ] && dbdeployer delete single "$VERSION" 2>/dev/null || true
+
+    - name: Upload infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: upload
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
 
     - name: Complete selected product test check
       env:
@@ -451,6 +463,7 @@ jobs:
         PY
 
     - name: Start infrastructure
+      timeout-minutes: 20
       run: |
         cd proxysql
         export INFRA_ID="ci-mysqlx-soak-${GITHUB_RUN_ID}-${{ matrix.tier }}-${{ github.run_id }}"
@@ -475,8 +488,10 @@ jobs:
     - name: Save infrastructure diagnostics
       if: ${{ !cancelled() }}
       continue-on-error: true
+      timeout-minutes: 3
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
+        phase: capture
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
         infra-id: ci-mysqlx-soak-${{ github.run_id }}-${{ matrix.tier }}-${{ github.run_id }}
 
@@ -490,6 +505,15 @@ jobs:
         docker logs proxysql.ci-mysqlx-soak-${GITHUB_RUN_ID}-${{ matrix.tier }}-${{ github.run_id }} 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash || true
         test/infra/control/destroy-infras.bash || true
+
+    - name: Upload infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: upload
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
 
     - name: Fix artifact permissions
       if: ${{ failure() && !cancelled() }}

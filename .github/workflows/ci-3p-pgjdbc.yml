@@ -308,8 +308,19 @@ jobs:
     - name: Save infrastructure diagnostics
       if: ${{ !cancelled() }}
       continue-on-error: true
+      timeout-minutes: 3
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
+        phase: capture
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
+
+    - name: Upload infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: upload
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
 
     - name: Complete selected product test check

@@ -2,8 +2,8 @@ name: Save infrastructure diagnostics
 description: Capture job infrastructure before teardown and publish the evidence.
 inputs:
   phase:
-    description: Install teardown capture before tests, or collect and upload final diagnostics.
-    default: collect
+    description: Install teardown capture, capture before cleanup, or upload after cleanup.
+    default: capture
   infra-id:
     description: Job infrastructure identity when provided by the test harness.
     default: ''
@@ -23,7 +23,7 @@ runs:
         python3 "$GITHUB_ACTION_PATH/../../scripts/ci_docker_diagnostics.py" --install
         echo "CI_INFRA_DIAGNOSTICS_ROOT=${RUNNER_TEMP}/infrastructure-diagnostics" >> "$GITHUB_ENV"
     - name: Capture container and host diagnostics
-      if: ${{ inputs.phase == 'collect' }}
+      if: ${{ inputs.phase == 'capture' }}
       shell: bash
       env:
         DIAG_INFRA_ID: ${{ inputs.infra-id }}
@@ -38,7 +38,7 @@ runs:
         [ "$DIAG_ISOLATED_RUNNER" != 1 ] || args+=(--all-containers)
         python3 "$GITHUB_ACTION_PATH/../../scripts/ci_collect_infra_logs.py" "${args[@]}"
     - name: Upload infrastructure diagnostics
-      if: ${{ inputs.phase == 'collect' && !cancelled() }}
+      if: ${{ inputs.phase == 'upload' && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ github.workflow }}-${{ github.job }}-infrastructure-${{ github.run_id }}-${{ inputs.artifact-key }}-attempt${{ github.run_attempt }}

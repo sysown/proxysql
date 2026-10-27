@@ -144,6 +144,7 @@ jobs:
         exit 1
 
     - name: Start infrastructure
+      timeout-minutes: 20
       run: |
         cd proxysql
         export INFRA_ID="ci-mariadb10-galera-g4-${{ matrix.tier }}-${{ github.run_id }}"
@@ -164,8 +165,10 @@ jobs:
     - name: Save infrastructure diagnostics
       if: ${{ !cancelled() }}
       continue-on-error: true
+      timeout-minutes: 3
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
+        phase: capture
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
         infra-id: ci-mariadb10-galera-g4-${{ matrix.tier }}-${{ github.run_id }}
 
@@ -183,6 +186,15 @@ jobs:
         docker logs proxysql.ci-mariadb10-galera-g4-${{ matrix.tier }}-${{ github.run_id }} 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash || true
         test/infra/control/destroy-infras.bash || true
+
+    - name: Upload infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: upload
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
 
     - name: Fix artifact permissions
       if: ${{ failure() && !cancelled() }}

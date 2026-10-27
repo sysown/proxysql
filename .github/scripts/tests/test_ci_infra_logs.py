@@ -28,6 +28,7 @@ class MySQLLogTests(unittest.TestCase):
         self.output = self.root / 'mysql-deployment'
         self.requests = self.root / 'requests'
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
+                        RUNNER_TEMP=str(self.root),
                         FIXTURE_ROOT=str(self.container), REQUESTS=str(self.requests))
         docker = self.bin / 'docker'
         docker.write_text('''#!/usr/bin/env python3
@@ -271,6 +272,51 @@ else:sys.exit(2)
         self.assertIn('native service detail',(self.output/'host-sandboxes/single/data/msandbox.err').read_text())
         self.assertTrue(any(record.get('truncated') for record in json.loads((self.output/'collection.json').read_text())))
 
+    def test_large_member_does_not_hide_later_files_in_the_log_directory(self):
+        spec=importlib.util.spec_from_file_location('infra_logs',SCRIPT)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        first=self.container/'var/log/service/a-large.log';first.write_bytes(b'x'*10000)
+        later=self.container/'var/log/service/z-important.log';later.write_text('later deployment failure\n')
+        with patch.dict(os.environ,self.env),patch.object(module,'MAX_FILE_BYTES',1024):
+            module.collect('ci-gr-v31-123',self.output)
+        self.assertEqual((self.output/'abc/var/log/service/a-large.log').stat().st_size,1024)
+        self.assertIn('later deployment failure',(self.output/'abc/var/log/service/z-important.log').read_text())
+
+    def test_archive_input_remains_bounded_when_skipping_oversized_logs(self):
+        spec=importlib.util.spec_from_file_location('infra_logs',SCRIPT)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        (self.container/'var/log/service/a-large.log').write_bytes(b'x'*10000)
+        with patch.dict(os.environ,self.env),patch.object(module,'MAX_ARCHIVE_BYTES',4096):
+            module.collect('ci-gr-v31-123',self.output)
+        records=json.loads((self.output/'collection.json').read_text())
+        limits=next(r for r in records if r.get('kind')=='limits')
+        self.assertLessEqual(limits['archive_bytes'],4096)
+        self.assertTrue(any(r.get('truncated') and 'input limit' in r.get('error','') for r in records))
+
+    def test_inspect_batches_preserve_all_containers_despite_truncated_output(self):
+        from ci_collect_infra_logs import inspect_states
+        ids=[format(i,'x') for i in range(1,41)]
+        requests=[]
+        def command(args):
+            batch=args[3:];requests.append(batch)
+            # Simulate the output cap cutting off batches larger than two.
+            return '\n'.join(json.dumps({'id':identifier}) for identifier in batch[:2])
+        result=inspect_states(ids,command,lambda:True)
+        self.assertEqual({s['id'] for s in result},set(ids))
+        self.assertTrue(all(len(batch)<=16 for batch in requests))
+
+    def test_native_log_truncation_and_probe_metadata_are_reported_correctly(self):
+        spec=importlib.util.spec_from_file_location('infra_logs',SCRIPT)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        native=self.root/'native';native.mkdir()
+        (native/'native.log').write_bytes(b'x'*10000)
+        with patch.dict(os.environ,self.env),patch.object(module,'MAX_FILE_BYTES',4096):
+            module.collect('unmatched-job',self.output,host_log_root=native)
+        records=json.loads((self.output/'collection.json').read_text())
+        self.assertTrue(any(r.get('path')==str(native/'native.log') and r.get('truncated') for r in records))
+        limits=next(r for r in records if r.get('kind')=='limits')
+        self.assertEqual(limits.get('returncode'),0)
+
     def test_exited_container_still_yields_mysql_error_and_deployer_logs(self):
         self.collect(STOPPED='1')
         self.assertIn('node2 initializing', (self.output / 'abc/root/sandboxes/group_sp_msb_8_4_8/node2/data/msandbox.err').read_text())
@@ -334,26 +380,37 @@ else:sys.exit(2)
                 if not steps:
                     continue
                 with self.subTest(workflow=path.name, job=job_name):
-                    captures = [i for i,s in enumerate(steps) if s.get('uses') == './ci-control/.github/actions/infrastructure-diagnostics' and s.get('with',{}).get('phase') != 'setup']
+                    captures = [i for i,s in enumerate(steps) if s.get('uses') == './ci-control/.github/actions/infrastructure-diagnostics' and s.get('with',{}).get('phase') == 'capture']
                     self.assertEqual(len(captures), 1)
                     index = captures[0]
                     self.assertEqual(steps[index]['if'], '${{ !cancelled() }}')
-                    self.assertNotIn('timeout-minutes',steps[index])
+                    self.assertEqual(steps[index]['timeout-minutes'],3)
                     self.assertTrue(steps[index]['continue-on-error'])
                     cleanups = [i for i,s in enumerate(steps) if 'stop-proxysql-isolated.bash' in s.get('run', '')
                                 or 'destroy-infras.bash' in s.get('run', '') or s.get('name') == 'Cleanup sandbox']
                     self.assertTrue(all(index < i for i in cleanups))
+                    uploads=[i for i,s in enumerate(steps) if s.get('uses')=='./ci-control/.github/actions/infrastructure-diagnostics' and s.get('with',{}).get('phase')=='upload']
+                    self.assertEqual(len(uploads),1)
+                    upload=uploads[0]
+                    self.assertGreater(upload,index)
+                    self.assertTrue(all(i < upload for i in cleanups))
+                    self.assertEqual(steps[upload]['timeout-minutes'],5)
+                    self.assertEqual(steps[upload]['if'],'${{ !cancelled() }}')
                     setups = [i for i,s in enumerate(steps) if s.get('with',{}).get('phase') == 'setup'
                               and s.get('uses') == './ci-control/.github/actions/infrastructure-diagnostics']
                     self.assertEqual(len(setups),1)
                     self.assertLess(setups[0],index)
                     checkout = next(i for i,s in enumerate(steps) if s.get('with',{}).get('path') == 'ci-control')
                     self.assertLess(checkout,setups[0])
+                    for i,step in enumerate(steps):
+                        if 'ensure-infras.bash' in step.get('run','') or 'dbdeployer deploy' in step.get('run',''):
+                            self.assertEqual(step['timeout-minutes'],20)
+                            self.assertLess(setups[0],i)
                     checked.append((path.name,job_name))
         self.assertEqual(len(checked), 74)
         action = yaml.safe_load((ROOT / '.github/actions/infrastructure-diagnostics/action.yml').read_text())
         upload = next(s for s in action['runs']['steps'] if 'upload-artifact@' in s.get('uses', ''))
-        self.assertEqual(upload['if'], "${{ inputs.phase == 'collect' && !cancelled() }}")
+        self.assertEqual(upload['if'], "${{ inputs.phase == 'upload' && !cancelled() }}")
         self.assertEqual(upload['with']['retention-days'], 3)
         self.assertIn('runner.temp', str(upload['with']['path']))
 

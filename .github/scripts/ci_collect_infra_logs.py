@@ -19,6 +19,7 @@ MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_FILES = 512
 MAX_CAPTURE_BYTES = 1024 * 1024
+MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 LOG_ROOTS = ('/var/log', '/var/logs', '/root/sandboxes/logs', '/home/pguser/sandboxes/logs')
 FIND_ROOTS = ('/root/sandboxes', '/home/pguser/sandboxes', '/var/lib/mysql',
               '/var/lib/postgresql/data/log', '/var/lib/proxysql',
@@ -125,6 +126,53 @@ class FileBudget:
         self.history.write_bytes(payload)
 
 
+class ArchiveInputLimit(OSError):
+    pass
+
+
+class ArchiveReader:
+    """Bound archive input as well as saved output when skipping large logs."""
+    def __init__(self, stream, remaining):
+        self.stream = stream
+        self.remaining = remaining
+
+    def read(self, size=-1):
+        if self.remaining[0] <= 0:
+            raise ArchiveInputLimit('diagnostic archive input limit reached')
+        size = self.remaining[0] if size < 0 else min(size, self.remaining[0])
+        data = self.stream.read(size)
+        self.remaining[0] -= len(data)
+        return data
+
+
+def inspect_states(ids, command, keep_going):
+    """Inspect bounded batches and retry truncated or partly unavailable batches."""
+    states = {}
+
+    def batch(values):
+        if not values or not keep_going():
+            return
+        parsed = 0
+        for row in command(['inspect', '--format', INSPECT, *values]).splitlines():
+            try:
+                state = json.loads(row)
+                if isinstance(state, dict) and re.fullmatch('[0-9a-f]+', state.get('id', '')):
+                    states[state['id']] = state
+                    parsed += 1
+            except (ValueError, TypeError):
+                continue
+        if parsed < len(values) and len(values) > 1:
+            half = len(values)//2
+            batch(values[:half])
+            batch(values[half:])
+
+    for start in range(0, len(ids), 16):
+        if not keep_going():
+            break
+        batch(ids[start:start+16])
+    return list(states.values())
+
+
 def selected_containers(states, infra_id, workspace, all_containers=False):
     """Select job ownership first, then include its project/network peers."""
     owned, projects, networks = set(), set(), set()
@@ -188,6 +236,7 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
     records = []
     deadline = time.monotonic() + timeout
     budget = FileBudget(output)
+    archive_remaining = [MAX_ARCHIVE_BYTES]
     docker_command = docker_command or [os.environ.get('CI_INFRA_REAL_DOCKER', 'docker')]
 
     def command(args, destination=None, merge_stderr=False, max_time=10):
@@ -234,7 +283,7 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
 
     def copy_log_path(container, name, folder):
         """Stream selected log paths from running or exited containers; no tar on disk."""
-        if time.monotonic() >= deadline:
+        if time.monotonic() >= deadline or archive_remaining[0] <= 0:
             return
         args = ['cp', container + ':' + name, '-']
         record = dict(command=args, time=datetime.now(timezone.utc).isoformat())
@@ -246,7 +295,7 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
                 process = subprocess.Popen([*docker_command, *args], stdout=subprocess.PIPE, stderr=errors)
                 timer = threading.Timer(min(10, max(.01, deadline-time.monotonic())), process.kill)
                 timer.start()
-                with tarfile.open(fileobj=process.stdout, mode='r|') as archive:
+                with tarfile.open(fileobj=ArchiveReader(process.stdout, archive_remaining), mode='r|') as archive:
                     for member in archive:
                         path = PurePosixPath(member.name)
                         if not member.isfile() or path.is_absolute() or '..' in path.parts:
@@ -264,9 +313,6 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
                         budget.save(target, payload)
                         if size < member.size:
                             record['truncated'] = True
-                            break
-                if record.get('truncated') and process.poll() is None:
-                    process.kill()
                 try:
                     process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
@@ -275,6 +321,8 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
                 record.update(returncode=process.returncode, stderr=errors.read(4096).decode(errors='replace'))
         except (OSError, tarfile.TarError, EOFError) as error:
             record['error'] = str(error)
+            if isinstance(error, ArchiveInputLimit):
+                record['truncated'] = True
         finally:
             if timer:
                 timer.cancel()
@@ -290,15 +338,7 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
     budget.save(output / 'host.txt', '\n'.join(host).encode())
     ids = container_ids if container_ids is not None else command(['ps', '-aq']).split()
     ids = [value for value in ids if re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9_.-]*', value)]
-    states = []
-    if ids:
-        for row in command(['inspect', '--format', INSPECT, *ids]).splitlines():
-            try:
-                state = json.loads(row)
-                if isinstance(state, dict) and re.fullmatch('[0-9a-f]+', state.get('id', '')):
-                    states.append(state)
-            except (ValueError, TypeError):
-                continue
+    states = inspect_states(ids, command, lambda: time.monotonic() < deadline)
     owned = selected_containers(states, infra_id, workspace, all_containers)
     # Save every service's stdout/state first; one slow file probe must not
     # consume the time budget before other containers' primary evidence exists.
@@ -348,11 +388,16 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
                         target = output/'host-sandboxes'/source.relative_to(root)
                         capacity = budget.capacity(target)
                         if not capacity: continue
+                        source_size = source.stat().st_size
                         with source.open('rb') as stream: payload = stream.read(capacity)
                         budget.save(target, payload)
+                        if len(payload) < source_size:
+                            records.append({'path':str(source),'returncode':0,'truncated':True,
+                                            'saved_bytes':len(payload),'source_bytes':source_size})
                     except OSError as error: records.append(dict(path=str(source), error=str(error)))
             if seen > 5000 or time.monotonic() >= deadline: break
-    records.append({'kind': 'limits', 'payload_bytes': budget.bytes, 'files': budget.files})
+    records.append({'kind': 'limits', 'returncode': 0, 'payload_bytes': budget.bytes,
+                    'files': budget.files, 'archive_bytes': MAX_ARCHIVE_BYTES-archive_remaining[0]})
     budget.manifest(records)
     failures = sum(record.get('returncode', 1) != 0 for record in records)
     print(f'Infrastructure diagnostics saved to {output}: {len(owned)} containers, {budget.files} diagnostic files, {budget.bytes} payload bytes; {failures} unavailable probes (see collection.json)')
