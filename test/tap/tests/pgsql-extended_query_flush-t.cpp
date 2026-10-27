@@ -855,6 +855,183 @@ static void case_release_trailing_local(Mode m, bool) {
 	check_held(mk, false, "release trailing local", m);
 }
 
+// ===== Teardown, idle limit, cache (spec 4.12). =====
+
+// Row 5a: the client goes away with an INSERT held by a Flush. PostgreSQL rolls it back, so ProxySQL
+// must drop that connection, not reset it for reuse (which would end the batch, committing it).
+static void case_row5a_disconnect(Mode m, bool) {
+	const std::string tag = tag_for("row5a", m, false);
+	{
+		auto c = client(m);
+		check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "row 5a: P B E(INSERT) H, then disconnect", m, false);
+	}
+	ok(backend_txn_open_within(tag, false, 2000) == false, "row 5a [%s]: the held transaction is gone after the disconnect", mode_name(m));
+	ok(rows(tag) == 0, "row 5a [%s]: the INSERT is rolled back (rows=%ld)", mode_name(m), rows(tag));
+	ok(scalar(g_admin, "SELECT 1") == "1", "row 5a [%s]: ProxySQL still answers", mode_name(m));
+}
+
+// The client goes away while the segment is still running on the backend.
+static void case_disconnect_mid_segment(Mode m, bool) {
+	const std::string tag = tag_for("midseg", m, false);
+	{
+		auto c = client(m);
+		c->prepareStatement("", uniq() + "INSERT INTO flush_t SELECT '" + tag + "', 1 FROM pg_sleep(1)", false);
+		c->bindStatement("", "", {}, {}, false);
+		c->executePortal("", 0, false);
+		c->sendFlush();
+	}
+	ok(backend_txn_open_within(tag, false, 3000) == false, "disconnect mid segment [%s]: the transaction is gone", mode_name(m));
+	ok(rows(tag) == 0, "disconnect mid segment [%s]: the INSERT is rolled back (rows=%ld)", mode_name(m), rows(tag));
+	ok(scalar(g_admin, "SELECT 1") == "1", "disconnect mid segment [%s]: ProxySQL still answers", mode_name(m));
+}
+
+// Row 14: a group held open by a Flush counts as a transaction for pgsql-max_transaction_idle_time.
+// A group that holds nothing on a backend does not. The limit is checked once per pgsql-poll_timeout
+// (5 s by default), so the client is gone at most that long after the 2 s limit.
+static void case_row14_idle(Mode m, bool) {
+	const std::string before = scalar(g_admin, "SELECT variable_value FROM runtime_global_variables "
+		"WHERE variable_name='pgsql-max_transaction_idle_time'");
+	admin_set("pgsql-max_transaction_idle_time", "2000");
+	const std::string tag = tag_for("idle", m, false);
+	{
+		auto c = client(m);
+		check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "row 14: P B E(INSERT) H", m, false);
+		std::string after;
+		for (int waited = 0; waited < 9000 && after.rfind("CLOSED", 0) != 0; waited += 500) {
+			after = run(*c, [] {}, 500);
+		}
+		ok(after.rfind("CLOSED", 0) == 0, "row 14 [%s]: the idle client was disconnected (got '%s')", mode_name(m), after.c_str());
+	}
+	ok(rows(tag) == 0, "row 14 [%s]: the INSERT is rolled back (rows=%ld)", mode_name(m), rows(tag));
+	{
+		auto c = client(m);
+		const std::string q = uniq() + "SELECT 1";
+		run(*c, [&] { c->prepareStatement("", q, false); c->sendSync(); });
+		check(run(*c, [&] { c->prepareStatement("", q, false); c->sendFlush(); }), "1", "row 14: P(known) H", m, false);
+		usleep(8000000);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "row 14: still connected after the idle limit, S", m, false);
+	}
+	admin_set("pgsql-max_transaction_idle_time", before.empty() ? "14400000" : before);
+}
+
+static long long global_stat(const char* name) {
+	return atoll(scalar(g_admin, std::string("SELECT Variable_Value FROM stats_pgsql_global WHERE Variable_Name='") + name + "'").c_str());
+}
+
+// Row 15: a group with a Flush in it is neither answered from nor stored in the extended query cache
+// (a v3.1 feature). A session with an untracked startup option is never cached, so the unbatched mode
+// uses a plain native client here.
+static void case_row15_cache(Mode mode, bool) {
+	const Mode m = (mode == Mode::NATIVE_UNBATCHED) ? Mode::NATIVE : mode;
+	int major = 0, minor = 0;
+	sscanf(scalar(g_admin, "SELECT variable_value FROM global_variables WHERE variable_name='admin-version'").c_str(), "%d.%d", &major, &minor);
+	if (major < 3 || (major == 3 && minor < 1)) {
+		skip(2, "row 15: no extended query cache before v3.1");
+		return;
+	}
+	const std::string sql = "SELECT /*flush_cache_" + std::to_string((int)m) + "_" + std::to_string((long)time(nullptr)) + "*/ $1::text";
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9115");
+	exec(g_admin, "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, cache_ttl, apply) VALUES (9115, 1, 'flush_cache_', 60000, 1)");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	auto c = client(m);
+	run(*c, [&] { c->prepareStatement("flush_cs", sql, false); c->sendSync(); });
+	const long long get0 = global_stat("Query_Cache_count_GET"), set0 = global_stat("Query_Cache_count_SET");
+	for (int i = 0; i < 2; i++) {
+		run(*c, [&] { c->bindStatement("flush_cs", "", { { std::string("v"), 0 } }, {}, false); c->executePortal("", 0, false); c->sendFlush(); });
+		run(*c, [&] { c->sendSync(); });
+	}
+	const long long get1 = global_stat("Query_Cache_count_GET"), set1 = global_stat("Query_Cache_count_SET");
+	ok(get1 == get0 && set1 == set0, "row 15 [%s]: B E H, then S, twice: cache not read or written (GET %lld->%lld, SET %lld->%lld)",
+		mode_name(m), get0, get1, set0, set1);
+	run(*c, [&] { c->bindStatement("flush_cs", "", { { std::string("v"), 0 } }, {}, false); c->executePortal("", 0, false); c->sendSync(); });
+	const long long set2 = global_stat("Query_Cache_count_SET");
+	ok(set2 > set1, "row 15 [%s]: control, B E S stores the result (SET %lld->%lld)", mode_name(m), set1, set2);
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9115");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	exec(g_admin, "PROXYSQL FLUSH PGSQL QUERY CACHE");
+}
+
+// ===== A simple Query inside the group's transaction (spec 4.7). =====
+
+// Rows 11, 11-in-txn: the Query runs in the transaction the group opened and ends it, as in
+// PostgreSQL. The named portal is native only (libpq mode refuses named portals).
+static void case_row11(Mode m, bool txn) {
+	const bool native = (m != Mode::LIBPQ);
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	const std::string tag = tag_for("row11", m, txn);
+	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "row 11: P B E(INSERT) H", m, txn);
+	if (native) {
+		check(run(*c, [&] { c->prepareStatement("flush_s1", uniq() + "SELECT 42 AS v", false); c->bindStatement("flush_s1", "p1", {}, {}, false);
+				c->sendFlush(); }), "1 2", "row 11: P(s1) B(p1) H", m, txn);
+	}
+	check(run(*c, [&] { c->sendQuery("SELECT 42"); }), std::string("T D C(SELECT 1) Z(") + txn_z(txn) + ")", "row 11: Q SELECT 42", m, txn);
+	ok(rows(tag) == (txn ? 0 : 1), "row 11 [%s%s]: the INSERT is %s (rows=%ld)", mode_name(m), txn ? ", in txn" : "",
+		txn ? "still in the open transaction" : "committed by the Query", rows(tag));
+	if (native) {
+		check(run(*c, [&] { c->executePortal("p1", 0, false); c->sendSync(); }), txn ? "D C(SELECT 1) Z(T)" : "E(34000) Z(I)",
+			"row 11: E(p1) S", m, txn);
+	}
+	if (txn) run(*c, [&] { c->sendQuery("ROLLBACK"); });
+}
+
+// Row 11b: the Query fails: the whole transaction, the INSERT with it, is rolled back.
+static void case_row11b(Mode m, bool) {
+	auto c = client(m);
+	const std::string tag = tag_for("row11b", m, false);
+	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "row 11b: P B E(INSERT) H", m, false);
+	check(run(*c, [&] { c->sendQuery("SELECT 1/0"); }), "E(22012) Z(I)", "row 11b: Q SELECT 1/0", m, false);
+	ok(rows(tag) == 0, "row 11b [%s]: the INSERT is rolled back (rows=%ld)", mode_name(m), rows(tag));
+}
+
+// A Query ProxySQL answers itself (a tracked SET) ends the group as a successful Query would.
+static void case_row11_local(Mode m, bool) {
+	auto c = client(m);
+	const std::string tag = tag_for("row11l", m, false);
+	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "row 11 local: P B E(INSERT) H", m, false);
+	check(run(*c, [&] { c->sendQuery("SET DateStyle = 'ISO'"); }), "C(SET) Z(I)", "row 11 local: Q SET DateStyle", m, false);
+	ok(rows(tag) == 1, "row 11 local [%s]: the INSERT is committed (rows=%ld)", mode_name(m), rows(tag));
+}
+
+// A Query ProxySQL refuses (a rule's error_msg) ends the group as a failed Query would.
+static void case_row11_refused(Mode m, bool) {
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9111");
+	exec(g_admin, "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, error_msg, apply) VALUES "
+		"(9111, 1, 'flush_q_refused', 'refused by flush test rule', 1)");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	auto c = client(m);
+	const std::string tag = tag_for("row11r", m, false);
+	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "row 11 refused: P B E(INSERT) H", m, false);
+	check(run(*c, [&] { c->sendQuery("SELECT 'flush_q_refused'"); }), "E(42501) Z(I)", "row 11 refused: Q refused by a rule", m, false);
+	ok(rows(tag) == 0, "row 11 refused [%s]: the INSERT is rolled back (rows=%ld)", mode_name(m), rows(tag));
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9111");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+}
+
+// A COPY as the Query.
+static void case_row11_copy(Mode m, bool) {
+	auto c = client(m);
+	const std::string tag = tag_for("row11c", m, false);
+	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "row 11 copy: P B E(INSERT) H", m, false);
+	check(run(*c, [&] { c->sendQuery("COPY (SELECT 7) TO STDOUT"); }), "H d c C(COPY 1) Z(I)", "row 11 copy: Q COPY TO STDOUT", m, false);
+	ok(rows(tag) == 1, "row 11 copy [%s]: the INSERT is committed (rows=%ld)", mode_name(m), rows(tag));
+}
+
+// The held backend dies before the Query: the Query must not be run alone on another connection,
+// which would report success while the INSERT is gone.
+static void case_retry_refused(Mode m, bool) {
+	auto c = client(m);
+	const std::string tag = tag_for("retry", m, false);
+	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "retry refused: P B E(INSERT) H", m, false);
+	exec(g_be, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE xact_start IS NOT NULL "
+		"AND pid <> pg_backend_pid() AND query LIKE '%" + tag + "%'");
+	usleep(300000);
+	const std::string got = run(*c, [&] { c->sendQuery("SELECT 1"); }, 1000);
+	ok(got != "T D C(SELECT 1) Z(I)", "retry refused [%s]: the Query is not run alone after the backend died (got '%s')",
+		mode_name(m), got.c_str());
+	ok(rows(tag) == 0, "retry refused [%s]: the INSERT is gone (rows=%ld)", mode_name(m), rows(tag));
+}
+
 struct Case {
 	const char* name;
 	int checks;        // ok() calls per (mode, txn) run
@@ -893,6 +1070,16 @@ static const std::vector<Case> CASES = {
 	{ "release error",               2,  2, false, case_release_error },
 	{ "release after",               8,  8, false, case_release_after },
 	{ "release trailing local",      2,  2, false, case_release_trailing_local },
+	{ "row 5a disconnect",           4,  4, false, case_row5a_disconnect },
+	{ "disconnect mid segment",      3,  3, false, case_disconnect_mid_segment },
+	{ "row 14 idle",                 5,  5, false, case_row14_idle },
+	{ "row 15 cache",                2,  2, false, case_row15_cache },
+	{ "row 11",                      5,  3, true,  case_row11 },
+	{ "row 11b",                     3,  3, false, case_row11b },
+	{ "row 11 local",                3,  3, false, case_row11_local },
+	{ "row 11 refused",              3,  3, false, case_row11_refused },
+	{ "row 11 copy",                 3,  3, false, case_row11_copy },
+	{ "retry refused",               3,  3, false, case_retry_refused },
 };
 
 static const Mode MODES[] = { Mode::LIBPQ, Mode::NATIVE, Mode::NATIVE_UNBATCHED };

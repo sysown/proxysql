@@ -1224,9 +1224,12 @@ int PgSQL_Session::handler_again___status_RESYNCHRONIZING_CONNECTION() {
 				handler_minus1_LogErrorDuringQuery(myconn);
 				RequestEnd(myds, true);
 				handler_minus1_HandleBackendConnection(myds);
+				extq_group_end();
 				return 0;
 			}
 			sync_txn_tracker_with_backend(myconn, false);
+			// The client's Sync is answered: its group is over.
+			extq_group_end();
 		}
 		RequestEnd(myds, false); // we close the session gracefully
 		finishQuery(myds, myds->myconn, false);
@@ -3884,7 +3887,9 @@ handler_again:
 
 			if (rc == 0) {
 
-				if (active_transactions != 0) {  // run this only if currently we think there is a transaction
+				// A connection holding work no Sync concluded is inside a transaction, whatever its last
+				// ReadyForQuery said: the idle limit must still apply to it.
+				if (active_transactions != 0 && myconn->is_pipeline_active() == false) {  // run this only if currently we think there is a transaction
 					if (myconn->IsKnownActiveTransaction() == false) { // there is no transaction on the backend connection
 						active_transactions = NumActiveTransactions(); // we check all the hostgroups/backends
 						if (active_transactions == 0)
@@ -9370,7 +9375,7 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 			myconn->parent->address, myconn->parent->port, 9999);
 		myconn->reset_error();
 	}
-	if (active_transactions != 0 && myconn->IsKnownActiveTransaction() == false) {
+	if (active_transactions != 0 && myconn->IsKnownActiveTransaction() == false && myconn->is_pipeline_active() == false) {
 		active_transactions = NumActiveTransactions();
 		if (active_transactions == 0) {
 			transaction_started_at = 0;
