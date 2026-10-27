@@ -20,8 +20,10 @@ set -o pipefail
 SUDO=""
 if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
 
+# Allow setup and post-initialization time outside the readiness window.
+# Explicit TIMEOUT overrides remain authoritative.
 # relaunch self with timeout
-[[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-600} "${BASH_SOURCE}" "$@"
+[[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-900} "${BASH_SOURCE}" "$@"
 
 # make sure we have correct cwd
 pushd $(dirname $0) &>/dev/null

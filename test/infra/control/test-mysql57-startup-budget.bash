@@ -25,8 +25,8 @@ if [ "$1" = exec ]; then
             count=$((count + 1))
             echo "$count" >"${FIXTURE_STATE}/attempts"
             # Two authentication probes per unsuccessful polling pass.
-            # First readiness occurs after the original two-minute budget.
-            [ "$count" -ge 125 ]
+            # Readiness in the final polling interval must still be accepted.
+            [ "$count" -ge "${READY_AFTER_PROBES:-599}" ]
             exit $?
             ;;
         *) exit 0 ;;
@@ -57,12 +57,21 @@ export PATH="${TMP}/bin:${PATH}" FIXTURE_STATE="${TMP}/state"
 
 if ! (cd "${TMP}" && bash "${SCRIPT}") >"${TMP}/delayed.log" 2>&1; then
     cat "${TMP}/delayed.log" >&2
-    echo 'FAIL: a running database that becomes ready after two minutes must reach provisioning' >&2
+    echo 'FAIL: a running database ready in the final polling interval must reach provisioning' >&2
     exit 1
 fi
 grep -q 'Configuring users on fixture-mysql1-1' "${TMP}/delayed.log"
 grep -q 'Configuring users on fixture-mysql3-1' "${TMP}/delayed.log"
-[ "$(cat "${TMP}/state/seconds")" -gt 120 ]
+[ "$(cat "${TMP}/state/seconds")" -eq 598 ]
+
+rm -f "${TMP}/state/attempts" "${TMP}/state/seconds"
+if (cd "${TMP}" && READY_AFTER_PROBES=601 bash "${SCRIPT}") >"${TMP}/timeout.log" 2>&1; then
+    echo 'FAIL: a database missing the readiness deadline must fail' >&2
+    exit 1
+fi
+grep -q 'TIMEOUT' "${TMP}/timeout.log"
+grep -q 'fixture container startup log' "${TMP}/timeout.log"
+[ "$(cat "${TMP}/state/seconds")" -eq 600 ]
 
 rm -f "${TMP}/state/attempts" "${TMP}/state/seconds"
 if (cd "${TMP}" && FAIL_CONTAINER=1 bash "${SCRIPT}") >"${TMP}/stopped.log" 2>&1; then
@@ -71,4 +80,4 @@ if (cd "${TMP}" && FAIL_CONTAINER=1 bash "${SCRIPT}") >"${TMP}/stopped.log" 2>&1
 fi
 grep -q 'is NOT running' "${TMP}/stopped.log"
 [ ! -f "${TMP}/state/seconds" ]
-echo 'PASS: delayed database readiness is accepted and stopped containers fail immediately'
+echo 'PASS: late readiness succeeds, missed deadlines report logs, and stopped containers fail immediately'

@@ -16,7 +16,7 @@ set -o pipefail
 SUDO=""
 if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
 
-[[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-600} "${BASH_SOURCE}" "$@"
+[[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-900} "${BASH_SOURCE}" "$@"
 
 pushd $(dirname $0) &>/dev/null
 trap 'popd &>/dev/null' EXIT
