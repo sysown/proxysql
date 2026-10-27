@@ -1176,6 +1176,32 @@ static void case_group_tracked_set(Mode m, bool) {
 	ok(tz == "Asia/Tokyo", "group SET [%s]: the backend runs the next statement with it (TimeZone '%s')", mode_name(m), tz.c_str());
 }
 
+// A Query that locks the session to a hostgroup (a multi-statement SET) and that a rule sends to
+// another hostgroup. It belongs to the group's transaction, so it runs on the held connection and the
+// rule's hostgroup does not apply. It used to be dropped, the INSERT committed by ProxySQL's own Sync;
+// in a session already locked (the unbatched client's startup option locks it) it was refused, the
+// INSERT rolled back.
+static void case_group_lock_route(Mode m, bool) {
+	exec(g_admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=9164");
+	exec(g_admin, "INSERT INTO pgsql_servers (hostgroup_id, hostname, port, use_ssl) SELECT 9164, hostname, port, use_ssl "
+		"FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(HG) + " LIMIT 1");
+	exec(g_admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9164");
+	exec(g_admin, "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply) VALUES "
+		"(9164, 1, 'flush_lock_route', 9164, 1)");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	auto c = client(m);
+	const std::string tag = tag_for("lockroute", m, false);
+	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group lock route: P B E(INSERT) H", m, false);
+	check(run(*c, [&] { c->sendQuery("SET application_name = 'flush_lock_route'; SELECT 64"); }),
+		"C(SET) T D C(SELECT 1) Z(I)", "group lock route: Q SET ...; SELECT 64", m, false);
+	ok(rows(tag) == 1, "group lock route [%s]: the INSERT is committed with the Query (rows=%ld)", mode_name(m), rows(tag));
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9164");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	exec(g_admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=9164");
+	exec(g_admin, "LOAD PGSQL SERVERS TO RUNTIME");
+}
+
 // COPY FROM STDIN as the Query. Then, inside BEGIN, a statement ProxySQL answers itself must still
 // get its ReadyForQuery: the connection must know the COPY's ReadyForQuery ended the held work.
 static void case_group_copy_in(Mode m, bool) {
@@ -1255,6 +1281,7 @@ static const std::vector<Case> CASES = {
 	{ "group txn end",               9,  9, false, case_group_txn_end },
 	{ "group DISCARD ALL",           4,  4, false, case_group_discard_all },
 	{ "group tracked SET",           4,  4, false, case_group_tracked_set },
+	{ "group lock route",            3,  3, false, case_group_lock_route },
 	{ "group COPY FROM STDIN",       10, 10, false, case_group_copy_in },
 };
 

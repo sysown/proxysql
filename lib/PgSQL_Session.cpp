@@ -2584,19 +2584,14 @@ __implicit_flush:
 									}
 								}
 
-								// The Query joins the transaction of the group's extended messages: it runs on the
-								// connection holding them, whatever the rules route it to, like a pinned transaction.
-								if (extq_group_holds_work) {
-									if (PgSQL_Backend* held = extq_held_backend()) {
-										current_hostgroup = held->hostgroup_id;
-									}
-								}
 								if (pgsql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
 									if (locked_on_hostgroup < 0) {
 										if (lock_hostgroup) {
 											// we are locking on hostgroup now
 											if (qpo->destination_hostgroup >= 0) {
-												if (transaction_persistent_hostgroup == -1) {
+												// A Query in a held group stays on the held connection (see the
+												// query rules step): the lock is taken there.
+												if (transaction_persistent_hostgroup == -1 && extq_group_holds_work == false) {
 													current_hostgroup = qpo->destination_hostgroup;
 												}
 											}
@@ -5904,7 +5899,14 @@ __exit_set_destination_hostgroup:
 		next_query_flagIN = qpo->next_query_flagIN;
 	}
 
-	if (qpo->destination_hostgroup >= 0 && transaction_persistent_hostgroup == -1) {
+	if (extq_group_holds_work) {
+		// A simple Query inside the group's transaction: the group's first message chose the
+		// hostgroup, and the Query runs on the connection holding that work, like a pinned
+		// transaction. A rule's destination would drop it or send it elsewhere.
+		if (PgSQL_Backend* held = extq_held_backend()) {
+			current_hostgroup = held->hostgroup_id;
+		}
+	} else if (qpo->destination_hostgroup >= 0 && transaction_persistent_hostgroup == -1) {
 		current_hostgroup = qpo->destination_hostgroup;
 	}
 
