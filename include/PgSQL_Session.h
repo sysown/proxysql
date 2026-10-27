@@ -290,6 +290,8 @@ private:
 	// everywhere extended_query_phase goes back to IDLE: miss one and the next batch's
 	// lone DISCARD ALL is refused for work an already-finished batch did.
 	bool extq_backend_used { false };
+	// The batch built by extq_sync_step(false): its ReadyForQuery is not the client's.
+	bool extq_sync_drop_ready { false };
 #ifdef PROXYSQL31
 	// Candidate frame: Bind, optional Describe(portal), Execute, client Sync.
 	uint8_t extended_cache_frame_stage { 0 };
@@ -427,6 +429,16 @@ private:
 	int extq_unit_done(PgSQL_Data_Stream* myds);
 	void extq_unit_failed(PgSQL_Data_Stream* myds);
 	void extq_clear();
+	// Whether a backend connection held by this session still owes a ReadyForQuery: it carries
+	// extended-query work that no Sync has concluded yet.
+	bool extq_held_unsynced() const;
+	// Whether a reply ProxySQL gives itself may end with a ReadyForQuery. Not while a held backend
+	// still has unsynced work: the client's ReadyForQuery must come from the Sync that concludes it.
+	bool local_reply_gets_ready() const;
+	// Sends a Sync to the held connection with unsynced work and returns the status that runs it.
+	// relay: the client's own Sync, whose reply (a ReadyForQuery, or the error of a failed commit)
+	// goes to the client; otherwise ProxySQL's, whose ReadyForQuery is dropped.
+	enum session_status extq_sync_step(bool relay);
 	int handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg);
 	int handle_post_sync_describe_message(PgSQL_Describe_Message* describe_msg);
 	int handle_post_sync_close_message(PgSQL_Close_Message* close_msg);

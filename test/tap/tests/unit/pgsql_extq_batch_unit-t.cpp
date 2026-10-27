@@ -281,8 +281,28 @@ static void test_substitute() {
 	ok(feed(reg2, '1', "", out) == Extq_Verdict::BAD, "substitute: a failing Parse that succeeds is a protocol violation");
 }
 
+// A batch holding only the client's Sync, sent to a connection that holds the group's unsynced work:
+// its ReadyForQuery is relayed, and a commit that fails at that Sync relays its error first.
+static void test_sync_only_batch() {
+	PgSQL_Extq_Registry reg;
+	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 0));
+	std::string out;
+	reg.start(out);
+	ok(out.empty() && reg.complete() == false, "sync only: nothing due before the backend answers");
+	ok(feed(reg, 'Z', "I", out) == Extq_Verdict::RELAY && reg.complete() && events(reg).empty(),
+		"sync only: ReadyForQuery relayed, complete, no statement event");
+	PgSQL_Extq_Registry fail;
+	fail.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 0));
+	out.clear();
+	fail.start(out);
+	ok(feed(fail, 'E', std::string("SERROR\0C23503\0\0", 15), out) == Extq_Verdict::RELAY && fail.complete() == false,
+		"sync only: a failed commit's error is relayed, ReadyForQuery still owed");
+	ok(feed(fail, 'Z', "I", out) == Extq_Verdict::RELAY && fail.complete(),
+		"sync only: then its ReadyForQuery is relayed");
+}
+
 int main() {
-	plan(47);
+	plan(51);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 	test_plain_unit();             // 8
@@ -296,6 +316,7 @@ int main() {
 	test_all_local();              // 1
 	test_suspended_execute();      // 4
 	test_substitute();             // 5
+	test_sync_only_batch();        // 4
 	test_cleanup_minimal();
 	return exit_status();
 }

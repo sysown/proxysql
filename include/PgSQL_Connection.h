@@ -1061,6 +1061,9 @@ public:
 	bool is_client_connection; // true if this is a client connection, false if it is a server connection
 	bool exit_pipeline_mode; // true if it is safe to exit pipeline mode
 	bool resync_failed; // true if the last resync attempt failed
+	// The resync carries the client's own Sync: its reply is kept for the client, and an error from
+	// the backend (a commit that fails) is reported like any query error, not as a broken connection.
+	bool resync_relay = false;
 
 	PgSQL_STMT_Local* local_stmts;
 	PgSQL_SrvC *parent;

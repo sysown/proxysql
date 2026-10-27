@@ -1205,8 +1205,25 @@ int PgSQL_Session::handler_again___status_RESYNCHRONIZING_CONNECTION() {
 	myds->DSS = STATE_MARIADB_QUERY;
 	int rc = myconn->async_perform_resync(myds->revents);
 	if (rc == 0) {
+		const bool relay = myconn->resync_relay;
+		myconn->resync_relay = false;
 		myconn->async_state_machine = ASYNC_IDLE;
 		myds->DSS = STATE_MARIADB_GENERIC;
+		if (relay) {
+			// The client's own Sync: its ReadyForQuery, or first the error of a commit that failed,
+			// is the client's reply. A failed commit is a query error, and the connection stays.
+			const bool failed = myconn->is_error_present();
+			PgSQL_Result_to_PgSQL_wire(myconn, myds);
+			if (failed) {
+				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid,
+					myconn->parent->address, myconn->parent->port, 9999);
+				handler_minus1_LogErrorDuringQuery(myconn);
+				RequestEnd(myds, true);
+				handler_minus1_HandleBackendConnection(myds);
+				return 0;
+			}
+			sync_txn_tracker_with_backend(myconn, false);
+		}
 		RequestEnd(myds, false); // we close the session gracefully
 		finishQuery(myds, myds->myconn, false);
 		return 0;
@@ -2677,6 +2694,11 @@ __implicit_sync:
 							if (rc == 0 && extended_query_frame.empty() == false) {
 								goto __run_sync_again;
 							}
+							// Every message was answered locally, without a ReadyForQuery, because a held
+							// backend has work no Sync concluded: the Sync goes there and its reply ends the frame.
+							if (rc == 0 && extq_held_unsynced()) {
+								set_status(extq_sync_step((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0));
+							}
 						}
 							break;
 						// Handle PostgreSQL COPY protocol frontend messages that may arrive
@@ -3340,6 +3362,8 @@ handler_again:
 			}
 
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Extended query sync completed for session %p\n", this);
+			// Read before the reset below: a Sync implied by a simple Query is not the client's.
+			const bool implicit = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) != 0;
 			// we are done with extended query sync
 			bind_waiting_for_execute.reset(nullptr);
 			extended_query_phase = EXTQ_PHASE_IDLE;
@@ -3351,8 +3375,11 @@ handler_again:
 #ifdef DEBUG
 						assert(dbg_extended_query_backend_conn == myds->myconn);
 #endif
+						// The frame ended in a message answered locally, with no ReadyForQuery because
+						// the backend has not concluded the work before it. The Sync goes there now and
+						// its reply goes to the client, so a commit that fails is reported, not hidden.
 						if (myds->myconn->is_pipeline_active() == true) {
-							NEXT_IMMEDIATE(RESYNCHRONIZING_CONNECTION);
+							NEXT_IMMEDIATE(extq_sync_step(implicit == false));
 						}
 
 						// Return to pool if connection is reusable
@@ -4703,7 +4730,7 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t* pkt) {
 	client_myds->DSS = STATE_QUERY_SENT_NET;
 	unsigned int nTrx = NumActiveTransactions();
 	const char txn_state = (nTrx ? 'T' : 'I');
-	client_myds->myprot.generate_ok_packet(true, true, qpo->OK_msg, 0, nullptr, txn_state);
+	client_myds->myprot.generate_ok_packet(true, local_reply_gets_ready(), qpo->OK_msg, 0, nullptr, txn_state);
 	RequestEnd(NULL, false);
 	l_free(pkt->size, pkt->ptr);
 }
@@ -5032,7 +5059,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 			return PgSQL_Local_Reply::NONE;
 		}
 
-		bool send_ready_packet = is_extended_query_ready_for_query();
+		bool send_ready_packet = local_reply_gets_ready();
 		unsigned int nTrx = NumActiveTransactions();
 		const char txn_state = (nTrx ? 'T' : 'I');
 		client_myds->myprot.generate_ok_packet(true, send_ready_packet, NULL, 0, dig, txn_state, NULL, param_status);
@@ -5168,7 +5195,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		}
 		return PgSQL_Local_Reply::NONE;
 	}
-	bool send_ready_packet = is_extended_query_ready_for_query();
+	bool send_ready_packet = local_reply_gets_ready();
 	unsigned int nTrx = NumActiveTransactions();
 	const char txn_state = (nTrx ? 'T' : 'I');
 	client_myds->myprot.generate_ok_packet(true, send_ready_packet, NULL, 0, dig, txn_state, NULL, param_status);
@@ -5320,7 +5347,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		if (owes_no_data) {
 			client_myds->myprot.generate_no_data_packet(true);
 		}
-		bool send_ready_packet = is_extended_query_ready_for_query();
+		bool send_ready_packet = local_reply_gets_ready();
 		unsigned int nTrx = NumActiveTransactions();
 		const char txn_state = (nTrx ? 'T' : 'I');
 		client_myds->myprot.generate_ok_packet(true, send_ready_packet, NULL, 0, dig, txn_state, NULL, param_status);
@@ -5409,7 +5436,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		(CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
 		client_myds->myprot.generate_no_data_packet(true);
 	}
-	bool send_ready_packet = is_extended_query_ready_for_query();
+	bool send_ready_packet = local_reply_gets_ready();
 	unsigned int nTrx = NumActiveTransactions();
 	const char txn_state = (nTrx ? 'T' : 'I');
 	client_myds->myprot.generate_ok_packet(true, send_ready_packet, NULL, 0, dig, txn_state, NULL, {});
@@ -5563,7 +5590,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		char* pta[1];
 		pta[0] = (char*)backend_pid.c_str();
 		resultset->add_row(pta);
-		bool send_ready_packet = is_extended_query_ready_for_query();
+		bool send_ready_packet = local_reply_gets_ready();
 		unsigned int nTxn = NumActiveTransactions();
 		char txn_state = (nTxn ? 'T' : 'I');
 		SQLite3_to_Postgres(client_myds->PSarrayOUT, resultset.get(), nullptr, 0, dig, send_ready_packet, txn_state);
@@ -6675,7 +6702,7 @@ bool PgSQL_Session::handle_kill_success(int32_t pid, int tki, const char* digest
 	char* pta[1];
 	pta[0] = (char*)"t";
 	resultset->add_row(pta);
-	bool send_ready_packet = is_extended_query_ready_for_query();
+	bool send_ready_packet = local_reply_gets_ready();
 	unsigned int nTxn = NumActiveTransactions();
 	char txn_state = (nTxn ? 'T' : 'I');
 	SQLite3_to_Postgres(client_myds->PSarrayOUT, resultset.get(), nullptr, 0, digest_text, send_ready_packet, txn_state);
@@ -7479,7 +7506,7 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 			extended_query_info.stmt_global_id = local_stmt_info->statement_id;
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			char txn_state = NumActiveTransactions() > 0 ? 'T' : 'I';
-			bool send_ready_packet = is_extended_query_ready_for_query();
+			bool send_ready_packet = local_reply_gets_ready();
 			client_myds->myprot.generate_parse_completion_packet(true, send_ready_packet, txn_state);
 			RequestEnd(NULL, false);
 			l_free(parse_pkt.size, parse_pkt.ptr);
@@ -7512,7 +7539,7 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 		extended_query_info.stmt_global_id = stmt_info->statement_id;
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		char txn_state = NumActiveTransactions() > 0 ? 'T' : 'I';
-		bool send_ready_packet = is_extended_query_ready_for_query();
+		bool send_ready_packet = local_reply_gets_ready();
 		client_myds->myprot.generate_parse_completion_packet(true, send_ready_packet, txn_state);
 		RequestEnd(NULL, false);
 		l_free(parse_pkt.size, parse_pkt.ptr);
@@ -7888,7 +7915,7 @@ int PgSQL_Session::handle_post_sync_close_message(PgSQL_Close_Message* close_msg
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	unsigned int nTxn = NumActiveTransactions();
 	char txn_state = (nTxn ? 'T' : 'I');
-	bool send_ready_packet = is_extended_query_ready_for_query();
+	bool send_ready_packet = local_reply_gets_ready();
 	client_myds->myprot.generate_close_completion_packet(true, send_ready_packet, txn_state);
 	client_myds->DSS = STATE_SLEEP;
 	status = WAITING_CLIENT_DATA;
@@ -8042,7 +8069,7 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	unsigned int nTxn = NumActiveTransactions();
 	char txn_state = (nTxn ? 'T' : 'I');
-	bool send_ready_packet = is_extended_query_ready_for_query();
+	bool send_ready_packet = local_reply_gets_ready();
 	client_myds->myprot.generate_bind_completion_packet(true, send_ready_packet, txn_state);
 	client_myds->DSS = STATE_SLEEP;
 	status = WAITING_CLIENT_DATA;
@@ -8211,7 +8238,7 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 			pgpkt.write_generic('n', ""); // NoData: a transaction end returns no rows
 		}
 		write_poisoned_txn_end(pgpkt, execute_msg->poisoned_txn_end);
-		if (is_extended_query_ready_for_query()) {
+		if (local_reply_gets_ready()) {
 			pgpkt.write_ReadyForQuery('I');
 		}
 		pgpkt.set_multi_pkt_mode(false);
@@ -8961,7 +8988,7 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 			pg_build_flush(extq_out);
 		}
 	}
-	if (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) {
+	if ((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) || extq_sync_drop_ready) {
 		// The Sync added before a simple Query, or the one sent after an error in a part of its unit:
 		// its ReadyForQuery is not the client's.
 		extq_registry.implicit_sync();
@@ -9241,8 +9268,49 @@ void PgSQL_Session::extq_unit_failed(PgSQL_Data_Stream* myds) {
 	qpo->log = 0;
 }
 
+bool PgSQL_Session::extq_held_unsynced() const {
+	for (unsigned int i = 0; mybes && i < mybes->len; i++) {
+		const PgSQL_Backend* be = (PgSQL_Backend*)mybes->index(i);
+		if (be && be->server_myds && be->server_myds->myconn && be->server_myds->myconn->is_pipeline_active()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool PgSQL_Session::local_reply_gets_ready() const {
+	return is_extended_query_ready_for_query() && extq_held_unsynced() == false;
+}
+
+// The held connection still has extended-query work that no Sync concluded. A Sync goes to it: the
+// client's own, whose reply (a ReadyForQuery, or a commit's error first) reaches the client, or one of
+// ProxySQL's, before a simple Query, whose ReadyForQuery is dropped. Native connections take it as a
+// batch with nothing but the Sync; libpq ones through the resync step.
+enum session_status PgSQL_Session::extq_sync_step(bool relay) {
+	PgSQL_Backend* held = nullptr;
+	for (unsigned int i = 0; i < mybes->len && held == nullptr; i++) {
+		PgSQL_Backend* be = (PgSQL_Backend*)mybes->index(i);
+		if (be && be->server_myds && be->server_myds->myconn && be->server_myds->myconn->is_pipeline_active()) {
+			held = be;
+		}
+	}
+	assert(held);
+	mybe = held;
+	current_hostgroup = held->hostgroup_id;
+	if (held->server_myds->myconn->native_mode) {
+		extq_clear();
+		extq_sync_drop_ready = (relay == false);
+		extq_finish(true);
+		return PROCESSING_EXTQ_BATCH;
+	}
+	held->server_myds->myconn->resync_relay = relay;
+	client_myds->setDSS_STATE_QUERY_SENT_NET();
+	return RESYNCHRONIZING_CONNECTION;
+}
+
 void PgSQL_Session::extq_clear() {
 	extq_allowed = false;
+	extq_sync_drop_ready = false;
 	extq_buffering = false;
 	extq_resume = false;
 	extq_entries.clear();
@@ -9271,6 +9339,11 @@ int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_S
 		this, client_myds, extended_query_frame.size());
 
 	if (extended_query_frame.empty() == true) {
+		if (extq_held_unsynced()) {
+			// The backend holds work no Sync concluded: the ReadyForQuery is its to give.
+			status = extq_sync_step((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0);
+			return 1;
+		}
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		unsigned int nTxn = NumActiveTransactions();
 		const char txn_state = (nTxn ? 'T' : 'I');

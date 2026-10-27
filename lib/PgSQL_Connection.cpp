@@ -5876,8 +5876,8 @@ int PgSQL_Connection::async_perform_resync(short event) {
 			}
 		}
 		// We just needed to know if the query was successful, not. 
-		// We discard the result.
-		if (query_result) {
+		// We discard the result, unless it answers the client's own Sync.
+		if (query_result && resync_relay == false) {
 			assert(!query_result_reuse);
 			query_result->clear();
 			query_result_reuse = query_result;
@@ -5890,7 +5890,10 @@ int PgSQL_Connection::async_perform_resync(short event) {
 		// (PQconsumeInput in fetch_result_cont()) that resync_failed has always missed too;
 		// fetch_result_start() resets error state before this drain runs for both modes,
 		// so it can't be a stale leftover here.
-		if (resync_failed || is_error_present()) {
+		// For the client's own Sync, an error the backend sent on a healthy connection (a commit
+		// that failed) is the client's answer, not a failed resync.
+		if (resync_failed || (is_error_present() &&
+			(resync_relay == false || is_connection_in_reusable_state() == false))) {
 			return -1;
 		} else {
 			async_state_machine = ASYNC_IDLE;
