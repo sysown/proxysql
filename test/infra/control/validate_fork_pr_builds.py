@@ -22,6 +22,10 @@ python3. The Ruby needed an interpreter that is not installed on a default
 dev box, and nothing in CI ever ran it.
 
 Usage: validate_fork_pr_builds.py <base-ref> <gh-actions-ref>
+
+The second ref selects the legacy shared callee. Dedicated untrusted workflows
+are always inspected at their caller-pinned commit, independently of the CI tier
+engine ref. The validator reads Git objects and never fetches or executes them.
 """
 import re
 import subprocess
@@ -414,11 +418,15 @@ def validate(base, fork, reusable):
     return problems
 
 
-def load_workflow(spec):
+def load_workflow(spec, *, pinned=False):
     result = subprocess.run(
         ["git", "show", spec], capture_output=True, text=True, check=False
     )
     if result.returncode != 0:
+        if pinned:
+            commit = spec.split(':', 1)[0]
+            raise SystemExit(f"cannot read pinned fork callee {spec}: {result.stderr.strip()}\n"
+                             f"Fetch its immutable Git object first: git fetch origin {commit}")
         raise SystemExit(f"cannot read {spec}: {result.stderr.strip()}")
     return yaml.safe_load(result.stdout)
 
@@ -434,7 +442,9 @@ def main(argv):
     if reference is None:
         print('FAIL: fork workflow does not pin an allowed reusable workflow to a full commit SHA', file=sys.stderr)
         return 1
-    reusable = load_workflow(f"{actions_ref}:.github/workflows/{reference['filename']}")
+    dedicated = reference['filename'] == 'ci-builds-untrusted.yml'
+    callee_ref = reference['sha'] if dedicated else actions_ref
+    reusable = load_workflow(f"{callee_ref}:.github/workflows/{reference['filename']}", pinned=dedicated)
 
     problems = validate(base, fork, reusable)
     if problems:
@@ -442,7 +452,7 @@ def main(argv):
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         return 1
-    print(f"Fork PR build isolation contract OK (base={base_ref}, callee={actions_ref})")
+    print(f"Fork PR build isolation contract OK (base={base_ref}, callee={callee_ref})")
     return 0
 
 

@@ -157,12 +157,38 @@ class DedicatedUntrustedCallee(unittest.TestCase):
                     fork['jobs']['run']['with']['control_ref']='GH-Actions'
                 self.assertTrue(subject.validate(base,fork,reusable))
 
-    def test_cli_loads_the_actual_pinned_callee_filename(self):
-        documents=self.documents()
+    def test_cli_loads_the_actual_pin_when_engine_ref_predates_dedicated_callee(self):
+        base,fork,reusable=self.documents()
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
             subprocess.run(['git','init','-q',str(root)],check=True)
-            for name,document in zip(['CI-builds.yml','CI-builds-fork.yml','ci-builds-untrusted.yml'],documents):
+            def commit():
+                subprocess.run(['git','-C',str(root),'add','.'],check=True)
+                subprocess.run(['git','-C',str(root),'-c','user.name=Fixture','-c','user.email=fixture@example.com',
+                                'commit','-qm','fixture'],check=True)
+                return subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+            (root/'README').write_text('Older tier fanout engine has no dedicated fork callee')
+            engine_ref=commit()
+            path=root/'.github/workflows/ci-builds-untrusted.yml'
+            path.parent.mkdir(parents=True)
+            path.write_text(yaml.safe_dump(reusable))
+            pinned_ref=commit()
+            fork['jobs']['run']['uses']='sysown/proxysql/.github/workflows/ci-builds-untrusted.yml@'+pinned_ref
+            fork['jobs']['run']['with']['control_ref']=pinned_ref
+            for name,document in [('CI-builds.yml',base),('CI-builds-fork.yml',fork)]:
+                (path.parent/name).write_text(yaml.safe_dump(document))
+            commit()
+            result=subprocess.run([sys.executable,subject.__file__,'HEAD',engine_ref],cwd=root,
+                                  capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertIn('callee='+pinned_ref,result.stdout)
+
+    def test_missing_dedicated_pin_has_an_explicit_read_only_fetch_diagnostic(self):
+        base,fork,_=self.documents()
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            subprocess.run(['git','init','-q',str(root)],check=True)
+            for name,document in [('CI-builds.yml',base),('CI-builds-fork.yml',fork)]:
                 path=root/'.github/workflows'/name
                 path.parent.mkdir(parents=True,exist_ok=True)
                 path.write_text(yaml.safe_dump(document))
@@ -171,7 +197,9 @@ class DedicatedUntrustedCallee(unittest.TestCase):
                             'commit','-qm','fixture'],check=True)
             result=subprocess.run([sys.executable,subject.__file__,'HEAD','HEAD'],cwd=root,
                                   capture_output=True,text=True)
-            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('pinned fork callee',result.stderr)
+            self.assertIn('git fetch origin '+'a'*40,result.stderr)
 
 
 class TopLevelDisjunction(unittest.TestCase):
