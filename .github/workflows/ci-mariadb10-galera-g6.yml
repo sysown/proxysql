@@ -34,7 +34,7 @@ jobs:
       consumer_file: ci-mariadb10-galera-g6.yml
       consumer_inputs: ${{ toJson(inputs) }}
       pick_runner: true
-      runner_eligible: ${{ (contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (inputs.trigger && contains(fromJson('["renecannao","rahim-kanji"]'), fromJson(inputs.trigger).event.workflow_run.actor.login))) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
+      runner_eligible: ${{ !!((contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (inputs.trigger && contains(fromJson('["renecannao","rahim-kanji"]'), fromJson(inputs.trigger).event.workflow_run.actor.login))) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow)) }}
     secrets: inherit
   tests:
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
