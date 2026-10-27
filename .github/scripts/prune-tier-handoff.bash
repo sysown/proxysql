@@ -23,12 +23,17 @@
 #
 # Usage:
 #   prune-tier-handoff.bash --binary <path/to/proxysql> --groups <path/to/groups.json>
+#                           [--version <output of proxysql --version>]
 #
-# Runs on the HOST (not inside the build container), so deletions need sudo:
-# the binaries are created by the container running as root, and unlink needs
-# write access to the parent directory, which the runner user does not have.
-# This is the same constraint that forces sudo for the test/deps prune in
-# ci-builds.yml.
+# Deletions happen on the HOST, so they need sudo: the binaries are created by
+# the container running as root, and unlink needs write access to the parent
+# directory, which the runner user does not have. That is the same constraint
+# that forces sudo for the test/deps prune in ci-builds.yml.
+#
+# The version probe must run in the build ABI. Callers that build inside Docker
+# but prune on a different host (the sanitizer workflows on the Jammy pool)
+# pass --version with output from `src/proxysql --version` inside
+# ubuntu24_dbg_build. Callers on a build-ABI host let the script probe here.
 set -euo pipefail
 
 # NOTE: do not name this variable GROUPS -- bash reserves that as a builtin
@@ -37,12 +42,17 @@ set -euo pipefail
 # "not found" check with a baffling message).
 BINARY=""
 GROUPS_JSON=""
+VERSION_OUTPUT=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --binary) BINARY="${2:-}"; shift 2 ;;
     --groups) GROUPS_JSON="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    --version)
+      VERSION_OUTPUT="${2:-}"
+      [[ -n "${VERSION_OUTPUT}" ]] || { echo "ERROR: --version requires a value" >&2; exit 2; }
+      shift 2 ;;
+    -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
@@ -60,26 +70,28 @@ if [ ! -f "${GROUPS_JSON}" ]; then
   exit 1
 fi
 
-# Use the shared host/build-container probe: the host may lack the ABI used
-# to build src/proxysql. Refuse to delete anything if neither probe succeeds.
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-if ! version_output="$(python3 - "$script_dir" "$BINARY" <<'PY_VERSION'
+if [[ -z "${VERSION_OUTPUT}" ]]; then
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  if ! VERSION_OUTPUT="$(python3 - "$script_dir" "$BINARY" <<'PY_VERSION'
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from ci_tier_artifacts import binary_version
+from ci_tier_artifacts import build_binary_version
 try:
-    print(binary_version(Path.cwd(), sys.argv[2]), end='')
+    print(build_binary_version(Path.cwd(), sys.argv[2]), end='')
 except (OSError, ValueError, RuntimeError) as error:
     print(error, file=sys.stderr)
     sys.exit(1)
 PY_VERSION
 )"; then
-  echo "ERROR: could not determine the ProxySQL version from ${BINARY}; refusing to prune" >&2
-  exit 1
+    echo "ERROR: could not determine the ProxySQL version from ${BINARY}; refusing to prune" >&2
+    exit 1
+  fi
 fi
-# Same extraction as the test selector; metadata never substitutes for a probe.
-version_line="$(printf '%s\n' "$version_output" | grep -oP 'ProxySQL version \K[0-9]+\.[0-9]+\.[0-9]+' || true)"
+# Same extraction as the test selector. The caller-supplied value is output
+# from the build container, not a metadata field, so it still represents the
+# binary that will run.
+version_line="$(printf '%s\n' "${VERSION_OUTPUT}" | grep -oP 'ProxySQL version \K[0-9]+\.[0-9]+\.[0-9]+' || true)"
 if [ -z "${version_line}" ]; then
   echo "ERROR: could not determine the ProxySQL version from ${BINARY}" >&2
   echo "       Refusing to prune: a wrong guess silently deletes the wrong binaries." >&2

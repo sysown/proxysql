@@ -81,6 +81,21 @@ class WorkflowTests(unittest.TestCase):
    self.assertIn('ubuntu24_dbg_build',run)
    self.assertNotIn('matrix.tier',run)
    self.assertNotIn('TIER',run)
+ def test_sanitizer_version_probe_uses_the_build_container(self):
+  for file in ['ci-unit-tests-tsan.yml','ci-unit-tests-asan-coverage.yml']:
+   d=workflow(file)
+   with self.subTest(file=file):
+    steps=[s for j in d['jobs'].values() for s in j.get('steps',[])
+           if s.get('name')=='Filter tests by compiled product version']
+    self.assertEqual(len(steps),1)
+    run=steps[0]['run']
+    self.assertIn('docker compose run --rm',run)
+    self.assertIn('--entrypoint /opt/proxysql/src/proxysql',run)
+    self.assertIn('ubuntu24_dbg_build --version',run)
+    self.assertIn('prune-tier-handoff.bash',run)
+    self.assertIn('--version "${version_output}"',run)
+    self.assertLess(run.index('docker compose run --rm'),run.index('sudo '))
+    self.assertLess(run.index('--version "${version_output}"'),run.index('--binary'))
  def test_other_compiled_workflows_use_the_same_selected_tiers(self):
   cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
   for name in ['CI-CodeQL']:

@@ -85,7 +85,7 @@ class ArtifactTests(unittest.TestCase):
    self.assertEqual(GitHubAPI('repo').request('check-runs','POST',{'name':'test'})['id'],7)
    sleep.assert_called_once_with(60)
 
- def test_restore_checks_real_archive_and_binary_version(self):
+ def test_restore_uses_stamped_version_without_executing_binary(self):
   import io,json,subprocess,tarfile,tempfile,zipfile
   from ci_tier_artifacts import restore_handoff
   from ci_tier_plan import make_plan
@@ -94,8 +94,8 @@ class ArtifactTests(unittest.TestCase):
   plan=make_plan(ctx,dict(tiers=['v30'],mode='asan'),{'consumers':[]});leg=plan['legs'][0]
   with tempfile.TemporaryDirectory() as folder:
    root=Path(folder);source=root/'source';(source/'src').mkdir(parents=True)
-   binary=source/'src/proxysql';binary.write_text('#!/bin/sh\necho "ProxySQL version 3.0.12"\n');binary.chmod(0o755)
-   meta=dict(execution_id=plan['execution_id'],sha=plan['sha'],tier='v30',mode='asan')
+   binary=source/'src/proxysql';binary.write_text('not executable on this host\n');binary.chmod(0o644)
+   meta=dict(execution_id=plan['execution_id'],sha=plan['sha'],tier='v30',mode='asan',version='ProxySQL version 3.0.12')
    (source/'src/ci-tier.json').write_text(json.dumps(meta))
    (source/'test/afl_digest_test').mkdir(parents=True)
    (source/'lib').mkdir();(source/'lib/c_tokenizer.cpp').write_text('fixture')
@@ -113,78 +113,71 @@ class ArtifactTests(unittest.TestCase):
    wrong=dict(leg,artifact_name='wrong')
    with self.assertRaisesRegex(ValueError,'identity'):restore_handoff(plan,wrong,root/'wrong',api)
 
- def test_binary_version_uses_build_abi_when_host_loader_fails(self):
-  import subprocess
-  from unittest.mock import patch
-  from ci_tier_artifacts import binary_version
-  replies=[subprocess.CompletedProcess([],1,'','GLIBC_2.38 not found'),subprocess.CompletedProcess([],0,'ProxySQL version 4.0.12','')]
-  with patch('ci_tier_artifacts.subprocess.run',side_effect=replies) as run:
-   self.assertEqual(binary_version('/tmp/fixture'),'ProxySQL version 4.0.12')
-   self.assertIn('proxysql/packaging:build-ubuntu24-v4.0.0',run.call_args.args[0])
-
- def test_host_probe_accepts_external_binary_and_external_symlink(self):
-  import tempfile
-  from ci_tier_artifacts import binary_version
+ def test_restore_accepts_legacy_metadata_without_version(self):
+  import io,json,subprocess,tarfile,tempfile,zipfile
+  from ci_tier_artifacts import restore_handoff
+  from ci_tier_plan import make_plan
+  from unittest.mock import Mock
+  ctx=dict(repository='sysown/proxysql',sha='a'*40,control_sha='b'*40,trigger_id=1,trigger_attempt=1,build_id=2,build_attempt=1)
+  plan=make_plan(ctx,dict(tiers=['v30'],mode='asan'),{'consumers':[]});leg=plan['legs'][0]
   with tempfile.TemporaryDirectory() as folder:
-   root=Path(folder)/'tree';root.mkdir()
-   binary=Path(folder)/'external';binary.write_text('#!/bin/sh\necho "ProxySQL version 3.1.12"\n');binary.chmod(0o755)
-   (root/'link').symlink_to(binary)
-   for path in [str(binary),'link']:
-    with self.subTest(path=path):
-     self.assertIn('ProxySQL version 3.1.12',binary_version(root,path))
+   root=Path(folder);source=root/'source';(source/'src').mkdir(parents=True)
+   meta=dict(execution_id=plan['execution_id'],sha=plan['sha'],tier='v30',mode='asan')
+   (source/'src/ci-tier.json').write_text(json.dumps(meta))
+   with tarfile.open(root/'full.tar','w') as tar:tar.add(source/'src',arcname='src')
+   payload=subprocess.check_output(['zstd','-q','-c',str(root/'full.tar')])
+   data=io.BytesIO()
+   with zipfile.ZipFile(data,'w') as archive:archive.writestr('cache_full.tar.zst',payload)
+   api=Mock(repository='sysown/proxysql');api.artifacts.return_value=[dict(id=9,name=leg['artifact_name'],expired=False,size_in_bytes=len(data.getvalue()))]
+   api.download.side_effect=lambda path,target,size,**kwargs:Path(target).write_bytes(data.getvalue())
+   restore_handoff(plan,leg,root/'restored',api)
+   self.assertEqual(json.loads((root/'restored/src/ci-tier.json').read_text()),meta)
 
- def test_external_binary_host_failure_does_not_mount_external_tree(self):
+ def test_restore_rejects_invalid_version_when_present(self):
+  import io,json,subprocess,tarfile,tempfile,zipfile
+  from ci_tier_artifacts import restore_handoff
+  from ci_tier_plan import make_plan
+  from unittest.mock import Mock
+  ctx=dict(repository='sysown/proxysql',sha='a'*40,control_sha='b'*40,trigger_id=1,trigger_attempt=1,build_id=2,build_attempt=1)
+  plan=make_plan(ctx,dict(tiers=['v30'],mode='asan'),{'consumers':[]});leg=plan['legs'][0]
+  for version in ('',3):
+   with self.subTest(version=version),tempfile.TemporaryDirectory() as folder:
+    root=Path(folder);source=root/'source';(source/'src').mkdir(parents=True)
+    meta=dict(execution_id=plan['execution_id'],sha=plan['sha'],tier='v30',mode='asan',version=version)
+    (source/'src/ci-tier.json').write_text(json.dumps(meta))
+    with tarfile.open(root/'full.tar','w') as tar:tar.add(source/'src',arcname='src')
+    payload=subprocess.check_output(['zstd','-q','-c',str(root/'full.tar')])
+    data=io.BytesIO()
+    with zipfile.ZipFile(data,'w') as archive:archive.writestr('cache_full.tar.zst',payload)
+    api=Mock(repository='sysown/proxysql');api.artifacts.return_value=[dict(id=9,name=leg['artifact_name'],expired=False,size_in_bytes=len(data.getvalue()))]
+    api.download.side_effect=lambda path,target,size,**kwargs:Path(target).write_bytes(data.getvalue())
+    with self.assertRaisesRegex(ValueError,'invalid product version'):restore_handoff(plan,leg,root/'restored',api)
+
+ def test_build_binary_version_probes_once_on_the_build_runner(self):
   import subprocess
   from unittest.mock import patch
-  from ci_tier_artifacts import binary_version
-  with patch('ci_tier_artifacts.subprocess.run',return_value=subprocess.CompletedProcess([],1,'','host loader failure')) as run:
-   with self.assertRaisesRegex(RuntimeError,'outside') as failure:
-    binary_version('/tmp/tree','/tmp/external')
-   self.assertIn('host loader failure',str(failure.exception))
+  from ci_tier_artifacts import build_binary_version
+  result=subprocess.CompletedProcess([],0,'ProxySQL version 4.0.12','')
+  with patch('ci_tier_artifacts.subprocess.run',return_value=result) as run:
+   self.assertEqual(build_binary_version('/tmp/fixture'),'ProxySQL version 4.0.12')
    self.assertEqual(run.call_count,1)
+   self.assertNotEqual(run.call_args.args[0][0],'docker')
+   self.assertEqual(run.call_args.args[0][-1],'--version')
 
- def test_host_probe_timeout_falls_back_with_bounded_probes(self):
+ def test_build_binary_version_reports_probe_failure(self):
   import subprocess
   from unittest.mock import patch
-  from ci_tier_artifacts import binary_version
-  replies=[subprocess.TimeoutExpired(['proxysql'],300),subprocess.CompletedProcess([],0,'ProxySQL version 3.1.12','')]
-  with patch('ci_tier_artifacts.subprocess.run',side_effect=replies) as run:
-   self.assertIn('3.1.12',binary_version('/tmp/tree'))
-   self.assertEqual(run.call_count,2)
-   for call in run.call_args_list:
-    self.assertGreater(call.kwargs['timeout'],0)
-    self.assertLessEqual(call.kwargs['timeout'],300)
+  from ci_tier_artifacts import build_binary_version
+  result=subprocess.CompletedProcess([],1,'','GLIBC_2.38 not found')
+  with patch('ci_tier_artifacts.subprocess.run',return_value=result):
+   with self.assertRaisesRegex(RuntimeError,'GLIBC_2.38'):build_binary_version('/tmp/fixture')
 
- def test_container_timeout_cleans_up_its_named_container_even_if_cleanup_fails(self):
+ def test_build_binary_version_bounds_the_probe(self):
   import subprocess
   from unittest.mock import patch
-  from ci_tier_artifacts import binary_version
-  for cleanup in [subprocess.CompletedProcess([],0,'',''),
-                  subprocess.CompletedProcess([],1,'','daemon unavailable'),
-                  subprocess.TimeoutExpired(['docker','rm'],30),OSError('docker unavailable')]:
-   replies=[subprocess.CompletedProcess([],1,'','host loader failure'),
-            subprocess.TimeoutExpired(['docker','run'],300),cleanup]
-   with self.subTest(cleanup=type(cleanup).__name__),patch('ci_tier_artifacts.subprocess.run',side_effect=replies) as run:
-    with self.assertRaisesRegex(RuntimeError,'timed out') as failure:
-     binary_version('/tmp/tree')
-    self.assertIn('host loader failure',str(failure.exception))
-    self.assertEqual(run.call_count,3)
-    command=run.call_args_list[1].args[0]
-    name=command[command.index('--name')+1]
-    self.assertTrue(name.startswith('ci-version-'))
-    self.assertEqual(run.call_args.args[0],['docker','rm','-f',name])
-    self.assertGreater(run.call_args.kwargs['timeout'],0)
-    self.assertLessEqual(run.call_args.kwargs['timeout'],30)
-
- def test_container_probes_use_distinct_names(self):
-  import subprocess
-  from unittest.mock import patch
-  from ci_tier_artifacts import binary_version
-  replies=[subprocess.CompletedProcess([],1,'','host failure'),subprocess.CompletedProcess([],0,'ProxySQL version 3.0.12','')]*2
-  with patch('ci_tier_artifacts.subprocess.run',side_effect=replies) as run:
-   binary_version('/tmp/tree');binary_version('/tmp/tree')
-   commands=[run.call_args_list[i].args[0] for i in [1,3]]
-   self.assertNotEqual(*[c[c.index('--name')+1] for c in commands])
+  from ci_tier_artifacts import build_binary_version
+  with patch('ci_tier_artifacts.subprocess.run',side_effect=subprocess.TimeoutExpired(['proxysql'],300)):
+   with self.assertRaisesRegex(RuntimeError,'timed out after 300 seconds'):build_binary_version('/tmp/fixture')
 
  def test_download_timeout_and_network_errors_retry_only_reads(self):
   import subprocess

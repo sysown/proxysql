@@ -133,7 +133,7 @@ class RuntimeTests(unittest.TestCase):
     root=Path('proxysql');(root/'src').mkdir(parents=True);(root/'test/tap/groups').mkdir(parents=True)
     (root/'test/tap/groups/groups.json').write_text(json.dumps({'core-t':['g1'],'plugin-t':['g1','@proxysql_min_version:4.0.0']}))
     plan=make_plan(self.ctx(),dict(tiers=['v40','v30'],mode='normal',pr_number=42),{'consumers':[dict(workflow='CI-g1',file='ci-g1.yml',job='tests',automatic=True,tiers=['v30','v40'],groups=['g1'],cells=[{}])]})
-    with patch.object(runtime,'read_plan',return_value=plan),patch.dict(os.environ,{'CI_LEG':json.dumps(plan['legs'][1])}),patch.object(runtime,'binary_version',return_value='ProxySQL version 3.0.12'):
+    with patch.object(runtime,'read_plan',return_value=plan),patch.dict(os.environ,{'CI_LEG':json.dumps(plan['legs'][1])}),patch.object(runtime,'build_binary_version',return_value='ProxySQL version 3.0.12'):
      runtime.stamp()
      meta=json.loads((root/'src/ci-tier.json').read_text());self.assertTrue(all(meta['applicable'].values()))
    finally:os.chdir(prior)

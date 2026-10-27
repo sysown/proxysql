@@ -54,7 +54,7 @@ class RestoreDiskTests(unittest.TestCase):
 
     def artifact(self, extra=(), corrupt=False):
         metadata = dict(execution_id=self.plan['execution_id'], sha=self.plan['sha'],
-                        tier='v30', mode='asan')
+                        tier='v30', mode='asan', version='ProxySQL version 3.0.12')
         entries = [('src/proxysql', b'#!/bin/sh\necho "ProxySQL version 3.0.12"\n'),
                    ('src/ci-tier.json', json.dumps(metadata).encode()), *extra]
         data = io.BytesIO()
