@@ -1,6 +1,8 @@
 name: CI-builds untrusted
 # Deliberate read-only snapshot: keep source build steps in parity with ci-builds.yml.
-# Caller contents:read remains the maximum; infrastructure privilege is forced off.
+# Direct dispatch and broad callers are capped at contents:read as well.
+permissions:
+  contents: read
 
 on:
   workflow_dispatch:
@@ -8,7 +10,7 @@ on:
       trusted:
         type: boolean
         default: false
-        description: Use trusted repository CI infrastructure
+        description: Reserved compatibility input; trusted infrastructure is always disabled
       control_ref:
         type: string
         default: GH-Actions

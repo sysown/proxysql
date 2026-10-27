@@ -200,8 +200,11 @@ jobs:
     - name: Retain package for isolated upload
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
-        name: package-a${{ github.run_attempt }}-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}
+        name: package-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}
         path: ${{ env.BIN_PKG }}
+        # Artifacts are scoped to this run. A retried build replaces its own
+        # leg; retained successful legs remain available to upload retries.
+        overwrite: true
         compression-level: 0
         if-no-files-found: error
         retention-days: 3
@@ -245,6 +248,8 @@ jobs:
 
   upload:
     needs: [clean, select, build]
+    # Keep successful packages even when a sibling source build fails.
+    if: ${{ always() && !cancelled() && needs.clean.result == 'success' && needs.select.result == 'success' && needs.build.result != 'cancelled' }}
     permissions:
       contents: write
       actions: read
@@ -283,11 +288,19 @@ jobs:
     timeout-minutes: 20
     steps:
     - name: Download this matrix leg's package
+      id: package
+      continue-on-error: true
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
-        name: package-a${{ github.run_attempt }}-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}
+        name: package-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}
         path: package
+    - name: Require package artifact after successful builds
+      if: ${{ needs.build.result == 'success' }}
+      env:
+        DOWNLOAD_OUTCOME: ${{ steps.package.outcome }}
+      run: test "$DOWNLOAD_OUTCOME" = success
     - name: Push package without executing source code
+      if: ${{ steps.package.outcome == 'success' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         EXPECTED_VERSION: ${{ needs.clean.outputs.gitdescribe }}

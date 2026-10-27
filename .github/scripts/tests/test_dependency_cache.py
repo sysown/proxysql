@@ -238,6 +238,7 @@ else:
         fork=yaml.safe_load((ROOT/'.github/workflows/ci-builds-untrusted.yml').read_text())
         events=fork.get('on',fork.get(True))
         self.assertFalse(events['workflow_call']['inputs']['trusted']['default'])
+        self.assertEqual(fork['permissions'],{'contents':'read'})
         self.assertNotIn('dependency-publication',fork['jobs'])
         for job in fork['jobs'].values():
             self.assertNotIn('permissions',job)
@@ -260,8 +261,46 @@ else:
         self.assertEqual(upload['permissions']['contents'],'write')
         self.assertFalse(any('checkout@' in s.get('uses','') for s in upload['steps']))
         self.assertEqual(upload['steps'][0]['with']['name'],
-                         'package-a${{ github.run_attempt }}-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}')
+                         'package-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}')
         self.assertIn('upload',doc['jobs']['finalize']['needs'])
+        self.assertIn('build',doc['jobs']['finalize']['needs'])
+
+
+
+    def test_package_artifact_identity_survives_retained_build_attempts(self):
+        doc=yaml.safe_load((ROOT/'.github/workflows/ci-package-build.yml').read_text())
+        retain=next(s for s in doc['jobs']['build']['steps'] if s.get('name')=='Retain package for isolated upload')
+        download=next(s for s in doc['jobs']['upload']['steps'] if s.get('name')=="Download this matrix leg's package")
+        def resolve(template,attempt):
+            for context,value in [('matrix.arch','amd64'),('matrix.dist','ubuntu24'),
+                                  ('matrix.type','-dbg'),('github.run_attempt',str(attempt))]:
+                template=template.replace('${{ '+context+' }}',value)
+            return template
+        retained={resolve(retain['with']['name'],1):'successful first-attempt package'}
+        self.assertEqual(retained.get(resolve(download['with']['name'],2)),'successful first-attempt package')
+        self.assertTrue(retain['with']['overwrite'])
+        self.assertEqual(resolve(retain['with']['name'],1),resolve(retain['with']['name'],2))
+
+    def test_successful_packages_upload_after_other_leg_fails_but_missing_package_blocks_final_success(self):
+        doc=yaml.safe_load((ROOT/'.github/workflows/ci-package-build.yml').read_text())
+        upload=doc['jobs']['upload']
+        import re
+        for build_result,cancelled,want in [('failure',False,True),('success',False,True),
+                                            ('cancelled',False,False),('success',True,False)]:
+            facts={'needs.clean.result':'success','needs.select.result':'success','needs.build.result':build_result}
+            expression=re.sub(r'\bneeds(?:\.[a-z_]+)+',lambda m:repr(facts[m[0]]),upload['if'][3:-2])
+            expression=expression.replace('always()','True').replace('!cancelled()',str(not cancelled))
+            expression=expression.replace('&&',' and ').replace('||',' or ')
+            self.assertEqual(eval(expression,{'__builtins__':{}},{}),want)
+        download=next(s for s in upload['steps'] if s.get('id')=='package')
+        self.assertTrue(download['continue-on-error'])
+        push=next(s for s in upload['steps'] if s.get('name')=='Push package without executing source code')
+        self.assertEqual(push['if'],"${{ steps.package.outcome == 'success' }}")
+        require=next(s for s in upload['steps'] if s.get('name')=='Require package artifact after successful builds')
+        self.assertEqual(require['if'],"${{ needs.build.result == 'success' }}")
+        for outcome,want in [('success',0),('failure',1),('skipped',1)]:
+            result=subprocess.run(['bash','-e','-c',require['run']],env=dict(os.environ,DOWNLOAD_OUTCOME=outcome))
+            self.assertEqual(result.returncode,want)
 
 
 
