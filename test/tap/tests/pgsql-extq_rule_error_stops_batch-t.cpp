@@ -622,8 +622,9 @@ int main(int argc, char** argv) {
 				c.sendQuery("SELECT 13"); },
 				// libpq gives ProxySQL the columns only with rows, so its RowDescription is lost (a separate issue).
 				native ? "12TETDCZ(I)" : "...ETDCZ(I)" },
-			{ "Flush refused mid-unit, then the simple Query", "", "", [](PgConnection& c) {
-				pbe(c, exec_err); c.sendMessage('H', {}); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+			// After the error PostgreSQL ignores everything up to the Sync, the simple Query too.
+			{ "Flush after the error, then the simple Query and Sync", "", "", [](PgConnection& c) {
+				pbe(c, exec_err); c.sendMessage('H', {}); c.sendQuery("SELECT 13"); c.sendSync(); }, "12EZ(I)" },
 			// What closes the unit.
 			{ "closing Query fails itself", "", "", [](PgConnection& c) {
 				pbe(c, exec_err); c.sendQuery("SELECT 1/0"); }, "12EEZ(I)" },

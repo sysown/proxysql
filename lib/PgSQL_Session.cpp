@@ -566,6 +566,7 @@ void PgSQL_Session::reset() {
 	extq_flush_segment = false;
 	extq_group_open = false;
 	extq_group_holds_work = false;
+	extq_discard_until_sync = false;
 	extq_clear();
 	// Drop any named portals + in-flight named Bind (Task P1): a session reset is
 	// well past the scope of any open portal.
@@ -2326,6 +2327,19 @@ __implicit_sync:
 						}
 					} else {
 						char command = c = *((unsigned char*)pkt.ptr);
+						// After an error in a group the client has not ended, PostgreSQL ignores every
+						// message up to its Sync, a simple Query too, and answers that Sync with one
+						// ReadyForQuery. Ahead of the poisoned gate: that gate would answer them.
+						if (extq_discard_until_sync && command != 'X') {
+							l_free(pkt.size, pkt.ptr);
+							pkt = { 0, nullptr };
+							if (command == 'S') {
+								client_myds->myprot.generate_ready_for_query_packet(true, extq_discard_status);
+								extq_discard_until_sync = false;
+								extq_group_end();
+							}
+							continue;
+						}
 						// Poisoned-session gate for Extended Query messages.
 						// Simple Query ('Q') falls through to handler_special_queries,
 						// which dispatches to handler_poisoned_simple_query. QUIT ('X')
@@ -2946,7 +2960,12 @@ bool PgSQL_Session::handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds) {
 	// ReadyForQuery with txn_state='E' signals the client it is in an aborted
 	// transaction — libpq will report PQTRANS_INERROR and accept only
 	// ROLLBACK/COMMIT/ABORT.
-	pgpkt.write_ReadyForQuery('E');
+	// In a part the client ended with Flush the ReadyForQuery waits for its Sync.
+	if (extq_flush_segment) {
+		extq_enter_discard('E');
+	} else {
+		pgpkt.write_ReadyForQuery('E');
+	}
 	pgpkt.set_multi_pkt_mode(false);
 	auto buff = pgpkt.detach();
 	client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
@@ -8478,6 +8497,21 @@ void PgSQL_Session::reset_extended_query_frame(bool backend_saw_error) {
 	extended_cache_frame_stage = 0;
 	extended_cache_frame_eligible = false;
 #endif
+	// An error in a part the client ended with Flush, or between parts of an open group: the client's
+	// Sync is still to come, and PostgreSQL ignores everything until it. Its ReadyForQuery carries the
+	// state the error left, read here before the connection can be released or dropped below.
+	if (extq_flush_segment || (extq_group_open && extended_query_phase == EXTQ_PHASE_IDLE)) {
+		PgSQL_Connection* c = (mybe && mybe->server_myds) ? mybe->server_myds->myconn : nullptr;
+		if (backend_saw_error && c) {
+			extq_enter_discard(c->native_mode ? c->last_ready_for_query_status() : c->get_transaction_status_char());
+		} else {
+			extq_enter_discard(txn_state_for_local_error());
+		}
+	} else {
+		// The error came with the client's Sync: the group is over.
+		extq_group_open = false;
+		extq_group_holds_work = false;
+	}
 	// Throwing the frame away throws away the client's Sync with it, leaving the backend holding an
 	// unfinished batch. Unless the backend is the one that failed it, it never saw an error and still
 	// believes the batch succeeded -- and telling it the batch is over COMMITS work the client was
@@ -9096,10 +9130,11 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 			pg_build_flush(extq_out);
 		}
 	}
-	if ((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) || extq_sync_drop_ready) {
-		// The Sync added before a simple Query, or the one sent after an error in a part of its unit:
-		// its ReadyForQuery is not the client's.
-		extq_registry.implicit_sync();
+	if ((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) || extq_sync_drop_ready || extq_flush_segment) {
+		// The Sync added before a simple Query, the one sent after an error in a part of its unit, or
+		// the one that recovers an error in a part the client ended with Flush: its ReadyForQuery is
+		// not the client's.
+		extq_registry.drop_ready();
 	}
 	if (extq_sync) {
 		pg_build_sync(extq_out);
@@ -9312,6 +9347,11 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 		return -1;
 	}
 	const bool backend_error = myconn->is_error_present();
+	if (extq_discard_until_sync && extq_sync) {
+		// ProxySQL's own error, failed on the backend after the session started discarding: the
+		// backend's dropped ReadyForQuery is the state the client's Sync reports.
+		extq_discard_status = myconn->last_ready_for_query_status();
+	}
 	if (backend_error) {
 		// The error reached the client in its place in the batch, and the backend has concluded it.
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid,
@@ -9427,6 +9467,11 @@ void PgSQL_Session::extq_group_end() {
 	extq_flush_segment = false;
 	extq_group_open = false;
 	extq_group_holds_work = false;
+}
+
+void PgSQL_Session::extq_enter_discard(char status) {
+	extq_discard_until_sync = true;
+	extq_discard_status = status;
 }
 
 bool PgSQL_Session::local_reply_gets_ready() const {

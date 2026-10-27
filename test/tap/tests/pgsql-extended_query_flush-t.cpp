@@ -505,6 +505,159 @@ static void case_long_cursor(Mode m, bool) {
 	check(run(*c, [&] { c->closePortal("p1", false); c->sendSync(); }), "3 Z(I)", "long cursor: C(P p1) S", m, false);
 }
 
+// ===== Errors after a Flush: discard until the Sync (spec 4.6). =====
+
+// Fails at Execute (no constant to fold at Bind), as in pgsql-extq_rule_error_stops_batch-t.
+static const char* EXEC_ERR = "SELECT 1/(random()*0)::int";
+
+static char txn_e(bool txn) { return txn ? 'E' : 'I'; }
+
+static void insert_flush(PgConnection& c, const std::string& tag) {
+	c.prepareStatement("", uniq() + "INSERT INTO flush_t VALUES ('" + tag + "', 1)", false);
+	c.bindStatement("", "", {}, {}, false);
+	c.executePortal("", 0, false);
+	c.sendFlush();
+}
+
+// Rows 5c, 5d: an INSERT held by a Flush, then a part that fails. The group ends failed and the INSERT
+// is rolled back.
+static void case_row5cd(Mode m, bool txn) {
+	for (int d = 0; d < 2; d++) {
+		auto c = client(m);
+		maybe_begin(*c, txn);
+		const std::string tag = tag_for(d ? "row5d" : "row5c", m, txn);
+		check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", d ? "row 5d: P B E(INSERT) H" : "row 5c: P B E(INSERT) H", m, txn);
+		if (d == 0) {
+			check(run(*c, [&] { c->prepareStatement("", uniq() + EXEC_ERR, false); c->bindStatement("", "", {}, {}, false);
+					c->executePortal("", 0, false); c->sendSync(); }),
+				std::string("1 2 E(22012) Z(") + txn_e(txn) + ")", "row 5c: P B E(error) S", m, txn);
+		} else {
+			check(run(*c, [&] { c->prepareStatement("", uniq() + "SELEC 1", false); c->sendFlush(); }), "E(42601)", "row 5d: P(syntax error) H", m, txn);
+			check(run(*c, [&] { c->sendSync(); }), std::string("Z(") + txn_e(txn) + ")", "row 5d: S", m, txn);
+		}
+		if (txn) run(*c, [&] { c->sendQuery("ROLLBACK"); });
+		ok(rows(tag) == 0, "row 5%c [%s%s]: the INSERT is rolled back (rows=%ld)", d ? 'd' : 'c', mode_name(m), txn ? ", in txn" : "", rows(tag));
+	}
+}
+
+// Row 6: after an error everything up to the Sync is ignored, the simple Query too.
+static void case_row6(Mode m, bool txn) {
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + EXEC_ERR, false); c->bindStatement("", "", {}, {}, false);
+			c->executePortal("", 0, false); c->sendFlush(); }), "1 2 E(22012)", "row 6: P B E(error) H", m, txn);
+	check(run(*c, [&] { c->sendFlush(); }), "", "row 6: H ignored", m, txn);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + "SELECT 1", false); c->describeStatement("", false); c->sendFlush(); }),
+		"", "row 6: P D(S) H ignored", m, txn);
+	check(run(*c, [&] { c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->closeStatement("", false);
+			c->sendFlush(); }), "", "row 6: B E C(S) H ignored", m, txn);
+	check(run(*c, [&] { c->sendQuery("SELECT 1"); }), "", "row 6: Q ignored", m, txn);
+	check(run(*c, [&] { c->sendSync(); }), std::string("Z(") + txn_e(txn) + ")", "row 6: S", m, txn);
+	if (txn) {
+		check(run(*c, [&] { c->sendQuery("ROLLBACK"); }), "C(ROLLBACK) Z(I)", "row 6: ROLLBACK", m, txn);
+	} else {
+		check(run(*c, [&] { c->sendQuery("SELECT 1"); }), "T D C(SELECT 1) Z(I)", "row 6: the next query", m, txn);
+	}
+}
+
+// Row 6b: a portal bound before the failing part dies with the group (native only: libpq mode refuses
+// named portals).
+static void case_row6b(Mode m, bool txn) {
+	if (m == Mode::LIBPQ) return;
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "p1", {}, {}, false); c->sendFlush(); }),
+		"1 2", "row 6b: P B(p1) H", m, txn);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + EXEC_ERR, false); c->bindStatement("", "", {}, {}, false);
+			c->executePortal("", 0, false); c->sendFlush(); }), "1 2 E(22012)", "row 6b: P B E(error) H", m, txn);
+	check(run(*c, [&] { c->sendSync(); }), std::string("Z(") + txn_e(txn) + ")", "row 6b: S", m, txn);
+	check(run(*c, [&] { c->executePortal("p1", 0, false); c->sendSync(); }), txn ? "E(25P02) Z(E)" : "E(34000) Z(I)",
+		"row 6b: E(p1) S", m, txn);
+}
+
+// Row 7: ProxySQL's own errors for names it does not know, at once, with no ReadyForQuery.
+static void case_row7_local(Mode m, bool txn) {
+	struct Sub { const char* what; std::function<void(PgConnection&)> send; const char* err; };
+	const Sub subs[] = {
+		{ "B(missing statement) H", [](PgConnection& c) { c.bindStatement("flush_nope", "", {}, {}, false); }, "E(26000)" },
+		{ "D(S missing) H", [](PgConnection& c) { c.describeStatement("flush_nope", false); }, "E(26000)" },
+		{ "D(P unbound) H", [](PgConnection& c) { c.describePortal("", false); }, "E(34000)" },
+		{ "E(unbound) H", [](PgConnection& c) { c.executePortal("", 0, false); }, "E(34000)" },
+	};
+	for (const Sub& sub : subs) {
+		auto c = client(m);
+		maybe_begin(*c, txn);
+		const std::string what = std::string("row 7: ") + sub.what;
+		check(run(*c, [&] { sub.send(*c); c->sendFlush(); }), sub.err, what.c_str(), m, txn);
+		check(run(*c, [&] { c->sendSync(); }), std::string("Z(") + txn_e(txn) + ")", (what + ", then S").c_str(), m, txn);
+	}
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	check(run(*c, [&] { c->closeStatement("flush_nope", false); c->closePortal("", false); c->sendFlush(); }), "3 3",
+		"row 7: C(S missing) C(P) H", m, txn);
+	check(run(*c, [&] { c->sendSync(); }), std::string("Z(") + txn_z(txn) + ")", "row 7: C C H, then S", m, txn);
+}
+
+// Row 7, query rules: a rule's error_msg on a Parse, and on the Execute of a statement prepared before
+// the rule. Each comes after an INSERT held by a Flush: the error at once, no ReadyForQuery, and the
+// INSERT rolled back with the group. libpq mode checks error_msg on the Parse only, by design.
+static void case_row7_rules(Mode m, bool txn) {
+	const std::string blocked = "flush_rule_blocked_" + std::to_string((int)m) + (txn ? "t" : "a");
+	auto c = client(m);
+	maybe_begin(*c, txn);
+	check(run(*c, [&] { c->prepareStatement("flush_rb", "SELECT '" + blocked + "_exec'", false); c->sendSync(); }),
+		std::string("1 Z(") + txn_z(txn) + ")", "row 7 rules: P(flush_rb) S before the rule", m, txn);
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9107");
+	exec(g_admin, "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, error_msg, apply) VALUES (9107, 1, '" +
+		blocked + "', 'blocked by flush test rule', 1)");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	for (int e = 0; e < (m == Mode::LIBPQ ? 1 : 2); e++) {
+		const std::string tag = tag_for(e ? "rule_exec" : "rule_parse", m, txn);
+		const char* what = e ? "row 7 rules: B(flush_rb) E H refused" : "row 7 rules: P(rule) H refused";
+		check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "row 7 rules: P B E(INSERT) H", m, txn);
+		const std::string got = run(*c, [&] {
+			if (e) { c->bindStatement("flush_rb", "", {}, {}, false); c->executePortal("", 0, false); }
+			else c->prepareStatement("", uniq() + "SELECT '" + blocked + "_parse'", false);
+			c->sendFlush(); });
+		// ProxySQL answers the unnamed Bind itself, so a refused Execute may follow its BindComplete.
+		ok(got == "E(42501)" || (e && got == "2 E(42501)"), "%s [%s%s]: got '%s', expected 'E(42501)'", what, mode_name(m),
+			txn ? ", in txn" : "", got.c_str());
+		check(run(*c, [&] { c->sendSync(); }), std::string("Z(") + txn_e(txn) + ")", "row 7 rules: S", m, txn);
+		if (txn) run(*c, [&] { c->sendQuery("ROLLBACK"); c->sendQuery("BEGIN"); });
+		ok(rows(tag) == 0, "row 7 rules [%s%s]: the INSERT is rolled back (rows=%ld)", mode_name(m), txn ? ", in txn" : "", rows(tag));
+	}
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9107");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+}
+
+// Row 8: no connection for the group's first message. The error at once, one ReadyForQuery at the
+// Sync, and the next query is clean. The unbatched client's startup option would lock the session on
+// the dead hostgroup, so that mode uses a plain client: the path under test runs before any batching.
+static void case_row8_connect(Mode m, bool) {
+	const std::string timeout_before = scalar(g_admin, "SELECT variable_value FROM runtime_global_variables "
+		"WHERE variable_name='pgsql-connect_timeout_server_max'");
+	exec(g_admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=9108");
+	exec(g_admin, "INSERT INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (9108, '127.0.0.1', 1)");
+	exec(g_admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9108");
+	exec(g_admin, "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply) "
+		"VALUES (9108, 1, 'flush_dead_hg', 9108, 1)");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	admin_set("pgsql-connect_timeout_server_max", "1500");
+	auto c = client(m == Mode::NATIVE_UNBATCHED ? Mode::NATIVE : m);
+	const std::string got = run(*c, [&] { c->prepareStatement("", uniq() + "SELECT 'flush_dead_hg'", false);
+		c->describeStatement("", false); c->sendFlush(); }, 4000);
+	ok(got.compare(0, 2, "E(") == 0 && got.find(' ') == std::string::npos,
+		"row 8 [%s]: P D(S) H to a dead hostgroup: one error at once, no ReadyForQuery (got '%s')", mode_name(m), got.c_str());
+	check(run(*c, [&] { c->sendSync(); }), "Z(I)", "row 8: S", m, false);
+	check(run(*c, [&] { c->sendQuery("SELECT 1"); }), "T D C(SELECT 1) Z(I)", "row 8: the next query", m, false);
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9108");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	exec(g_admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=9108");
+	exec(g_admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	admin_set("pgsql-connect_timeout_server_max", timeout_before.empty() ? "10000" : timeout_before);
+}
+
 struct Case {
 	const char* name;
 	int checks;        // ok() calls per (mode, txn) run
@@ -530,6 +683,12 @@ static const std::vector<Case> CASES = {
 	{ "large result",                2,  2, false, case_large_result },
 	{ "mode flip mid group",         0,  3, false, case_mode_flip_mid_group },
 	{ "long cursor",                 3,  0, false, case_long_cursor },
+	{ "row 5c/5d",                   7,  7, true,  case_row5cd },
+	{ "row 6",                       7,  7, true,  case_row6 },
+	{ "row 6b",                      4,  0, true,  case_row6b },
+	{ "row 7 local",                 10, 10, true, case_row7_local },
+	{ "row 7 rules",                 9,  5, true,  case_row7_rules },
+	{ "row 8 connect",               3,  3, false, case_row8_connect },
 };
 
 static const Mode MODES[] = { Mode::LIBPQ, Mode::NATIVE, Mode::NATIVE_UNBATCHED };

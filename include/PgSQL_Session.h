@@ -301,6 +301,10 @@ private:
 	// The held connection carries this group's work that no Sync concluded. Kept by the session
 	// because the connection's own flag does not survive everything (leaving libpq pipeline mode).
 	bool extq_group_holds_work { false };
+	// An error ended the group before the client's Sync. PostgreSQL ignores everything up to that
+	// Sync, then answers it with one ReadyForQuery; extq_discard_status is its transaction state.
+	bool extq_discard_until_sync { false };
+	char extq_discard_status { 'I' };
 #ifdef PROXYSQL31
 	// Candidate frame: Bind, optional Describe(portal), Execute, client Sync.
 	uint8_t extended_cache_frame_stage { 0 };
@@ -456,6 +460,8 @@ private:
 	void extq_segment_done();
 	// The group is over (its Sync answered): what carried over between segments is reset.
 	void extq_group_end();
+	// From now until the client's Sync every message is dropped; the Sync gets ReadyForQuery(status).
+	void extq_enter_discard(char status);
 	int handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg);
 	int handle_post_sync_describe_message(PgSQL_Describe_Message* describe_msg);
 	int handle_post_sync_close_message(PgSQL_Close_Message* close_msg);

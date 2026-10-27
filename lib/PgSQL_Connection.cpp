@@ -869,8 +869,10 @@ handler_again:
 			}
 
 			// The backend is in sync again. After an implicit Sync the client's ReadyForQuery comes
-			// once the simple Query that closed the unit has run, after an error too.
-			if (myds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) {
+			// once the simple Query that closed the unit has run, after an error too. In a part the
+			// client ended with Flush it comes with the client's own Sync.
+			if ((myds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) ||
+				myds->sess->is_extq_flush_segment()) {
 				NEXT_IMMEDIATE(fetch_result_end_st);
 			}
 		}
@@ -3844,7 +3846,9 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				// Sync error recovery above).
 				if (t == 'Z') {
 					const bool has_error = (query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_ERROR) != 0;
-					const bool implicit = (myds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) != 0;
+					// Not the client's either after an error in a part it ended with Flush: its Sync comes later.
+					const bool implicit = (myds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) != 0 ||
+						myds->sess->is_extq_flush_segment();
 					if (implicit || (!myds->sess->is_extended_query_frame_empty() && !has_error)) {
 						// An implicit Sync before a simple query ends the backend
 						// extended cycle, but the client awaits the simple query's

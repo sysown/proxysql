@@ -1671,9 +1671,10 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 
 	// A FATAL error closes the connection, so it never gets a ReadyForQuery. Neither does an error in an
 	// extended-query unit closed by a simple Query (implicit Sync): the client gets one ReadyForQuery,
-	// once that Query has run, or it reads the next replies one request late.
+	// once that Query has run, or it reads the next replies one request late. Nor one in a part the
+	// client ended with Flush: its Sync, still to come, gets the ReadyForQuery.
 	if (fatal || (ds && ds->sess &&
-		(ds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT)))
+		((ds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) || ds->sess->is_extq_flush_segment())))
 		ready = false;
 
 	PG_pkt pgpkt{};
