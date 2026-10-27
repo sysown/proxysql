@@ -23,11 +23,29 @@ class SkipLabelTests(unittest.TestCase):
             'github.event.action': 'synchronize',
             'github.event.label.name': '',
             'github.event.workflow_run.display_title': 'feature CI-builds abc123',
+            'github.event.workflow_run.event': 'pull_request',
+            'github.event.workflow_run.head_repository.full_name': 'sysown/proxysql',
             'needs.push-label.result': 'skipped',
             'needs.push-label.outputs.skip': '',
         }
         defaults.update(context)
+        defaults.setdefault('github.event.workflow_run', defaults['github.event_name'] == 'workflow_run' or any(k.startswith('github.event.workflow_run.') for k in context))
         return condition_allows(job.get('if'), 'v30', 'release', event_context=defaults)
+
+    def test_legacy_build_completion_does_not_duplicate_legacy_trigger_fanout(self):
+        for name, doc in self.workflows('workflow_run'):
+            if name == 'CI-builds.yml':
+                continue
+            for jid, job in doc['jobs'].items():
+                with self.subTest(workflow=name, job=jid):
+                    self.assertFalse(self.allowed(job, **{
+                        'github.event_name': 'workflow_run',
+                        'github.event.workflow_run.event': 'workflow_run',
+                    }))
+                    self.assertTrue(self.allowed(job, **{
+                        'github.event_name': 'workflow_run',
+                        'github.event.workflow_run.event': 'push',
+                    }))
 
     def test_label_blocks_all_direct_pr_jobs(self):
         for name, doc in self.workflows('pull_request'):
@@ -56,7 +74,7 @@ class SkipLabelTests(unittest.TestCase):
         found = 0
         for name, doc in self.workflows('workflow_run'):
             events = doc.get('on', doc.get(True))
-            self.assertEqual(events['workflow_run']['workflows'], ['CI-builds'])
+            self.assertEqual(events['workflow_run']['workflows'], ['CI-trigger'] if name == 'CI-builds.yml' else ['CI-trigger', 'CI-builds'])
             for jid, job in doc['jobs'].items():
                 found += 1
                 with self.subTest(workflow=name, job=jid):

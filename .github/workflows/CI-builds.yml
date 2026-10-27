@@ -1,6 +1,9 @@
 name: CI-builds
-run-name: ${{ contains(github.event.pull_request.labels.*.name, 'ci:skip') && '[ci:skip] ' || '' }}${{ github.head_ref || github.ref_name }} ${{ github.workflow }} ${{ github.event.after || github.sha }}
+run-name: ${{ contains(github.event.pull_request.labels.*.name, 'ci:skip') && '[ci:skip] ' || '' }}${{ github.event.workflow_run.head_branch || github.head_ref || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || github.event.after || github.sha }} trigger=${{ github.event.workflow_run.id || github.run_id }}/${{ github.event.workflow_run.run_attempt || github.run_attempt }}
 on:
+  workflow_run:
+    workflows: [ CI-trigger ]
+    types: [ in_progress ]
   pull_request:
     paths-ignore:
     - '.github/**'
@@ -17,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   run:
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (!github.event.pull_request || (!github.event.pull_request.head.repo.fork && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (!github.event.pull_request || (!github.event.pull_request.head.repo.fork && github.event.pull_request.head.repo.full_name == github.repository)) && (!github.event.workflow_run || (!startsWith(github.event.workflow_run.display_title, '[ci:skip] ') && github.event.workflow_run.head_repository.full_name == github.repository)) }}
     permissions: write-all
     uses: sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions
     secrets: inherit

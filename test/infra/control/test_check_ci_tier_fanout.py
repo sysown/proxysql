@@ -2,6 +2,11 @@ import copy,unittest
 from check_ci_tier_fanout import validate_routes, version
 from ci_tier_conditions import condition_allows
 class RouteTests(unittest.TestCase):
+ def test_native_completion_route_preserves_automatic_coverage(self):
+  rows,callers,engines=self.fixture()
+  callers['CI-g1']['on']['workflow_run']['workflows']=['CI-trigger','CI-builds']
+  callers['CI-g1']['jobs']['run']['if']="${{ github.event.workflow_run.event != 'workflow_run' }}"
+  self.assertEqual(validate_routes(rows,callers,engines,{'g1'},{'g1'}),[])
  def fixture(self):
   rows=[dict(workflow='CI-g1',file='ci-g1.yml',job='tests',instance='run',automatic=True,tiers=['v40','v30','v31'],groups=['g1'],cells=[{}])]
   callers={'CI-g1':{'on':{'workflow_run':{'workflows':['CI-trigger']}},'jobs':{'run':{'uses':'sysown/proxysql/.github/workflows/ci-g1.yml@GH-Actions'}}}}

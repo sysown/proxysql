@@ -71,6 +71,7 @@ def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_resu
         'github.event.workflow_run': True,
         'github.event.workflow_run.conclusion': 'success',
         'github.event.workflow_run.display_title': 'feature/ci-validation CI-trigger abc123',
+        'github.event.workflow_run.event': 'pull_request',
         'github.event.workflow_run.head_branch': 'feature/ci-validation',
         'github.ref_name': 'feature/ci-validation',
         'github.event.workflow_run.head_repository.full_name': 'sysown/proxysql',

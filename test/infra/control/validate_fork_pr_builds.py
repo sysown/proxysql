@@ -201,10 +201,14 @@ def validate(base, fork, reusable):
     # --- trusted caller -------------------------------------------------
     base_run = fetch(base.get("jobs", {}), "run", "trusted CI-builds has no run job")
     if base_run is not None:
+        condition = str(base_run.get("if", ""))
+        caller_events = base.get("on", base.get(True, {})) or {}
+        legacy_guard = "head_repository.full_name == github.repository" in condition
+        native_guard = ("github.event.pull_request.head.repo.full_name == github.repository" in condition
+                        and "!github.event.pull_request.head.repo.fork" in condition)
         require(
-            ("head_repository.full_name == github.repository" in str(base_run.get("if", ""))
-             or ("github.event.pull_request.head.repo.full_name == github.repository" in str(base_run.get("if", ""))
-                 and "!github.event.pull_request.head.repo.fork" in str(base_run.get("if", "")))),
+            (native_guard if 'pull_request' in caller_events else legacy_guard)
+            and ('workflow_run' not in caller_events or legacy_guard),
             "trusted CI-builds lacks same-repository guard",
         )
         require(base_run.get("permissions") == "write-all", "trusted CI-builds permission changed")
@@ -281,7 +285,7 @@ def validate(base, fork, reusable):
     else:
         planner = reusable['jobs']['plan']
         require('permissions' not in planner, 'planner widens fork token permissions')
-        require(RUNS_ON_UNTRUSTED.match(str(planner.get('runs-on', ''))) is not None,
+        require(planner.get('runs-on') == 'ubuntu-24.04' or RUNS_ON_UNTRUSTED.match(str(planner.get('runs-on', ''))) is not None,
                 'untrusted planner does not force ubuntu-24.04')
         selections = [step for step in planner.get('steps', []) if 'ci_tier_runtime.py plan' in str(step.get('run', ''))]
         require(len(selections) == 1 and selections[0].get('env', {}).get('TRUSTED') == '${{ inputs.trusted }}',
