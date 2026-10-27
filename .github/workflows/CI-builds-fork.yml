@@ -14,7 +14,7 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (github.event.pull_request.head.repo.fork) }}
     # The dedicated immutable callee cannot request scopes beyond contents:read.
     # Its build steps match trusted CI, including exact dependency caches.
-    uses: sysown/proxysql/.github/workflows/ci-builds-untrusted.yml@cf260c2dbac3a54f9be553f34cff85bd9e06fa99
+    uses: sysown/proxysql/.github/workflows/ci-builds-untrusted.yml@40dcd00772a2b863e050611aae3c151da87a2d21
     with:
       trusted: false
-      control_ref: cf260c2dbac3a54f9be553f34cff85bd9e06fa99
+      control_ref: 40dcd00772a2b863e050611aae3c151da87a2d21

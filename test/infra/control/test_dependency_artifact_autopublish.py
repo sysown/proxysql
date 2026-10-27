@@ -213,7 +213,7 @@ class AutomaticPublicationTests(unittest.TestCase):
         with patch.object(api, '_git', wraps=api._git) as git:
             self.assertEqual(1, len(self.matrix()['include']))
         archive_reads = [call for call in git.call_args_list
-                         if call.args[1:] == ('show', self.source + ':deps/libssl/openssl-3.5.7.tar.gz')]
+                         if call[0][1:] == ('show', self.source + ':deps/libssl/openssl-3.5.7.tar.gz')]
         self.assertEqual(1, len(archive_reads))
 
     def test_old_attempt_artifacts_are_ignored(self):
