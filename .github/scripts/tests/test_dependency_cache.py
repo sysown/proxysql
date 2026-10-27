@@ -327,6 +327,14 @@ else:
                      'Restore or build exact dependency bundles','Build']:
             primary=next(s for s in normal['jobs']['builds']['steps'] if s.get('name')==name)
             isolated=next(s for s in fork['jobs']['builds']['steps'] if s.get('name')==name)
+            if name == 'Restore or build exact dependency bundles':
+                parameters = dict(isolated['with'])
+                policy = parameters.pop('cache-write', '')
+                for event, allowed in [('pull_request', True), ('workflow_dispatch', False), ('workflow_run', False)]:
+                    condition = policy[3:-2].replace('github.event_name', repr(event))
+                    self.assertTrue(condition, 'Untrusted cache writes need an explicit event policy')
+                    self.assertEqual(eval(condition, {'__builtins__': {}}, {}), allowed)
+                isolated = dict(isolated, **{'with': parameters})
             self.assertEqual(primary,isolated)
         planner=next(s for s in fork['jobs']['plan']['steps'] if s.get('id')=='plan')
         self.assertEqual(planner['env']['TRUSTED'],'${{ false }}')

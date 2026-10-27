@@ -249,6 +249,9 @@ jobs:
         tier: ${{ matrix.tier }}
         sanitizer: ${{ matrix.mode == 'asan' && 'asan' || 'none' }}
         coverage: 'true'
+        # PR writes stay in the merge-ref scope and can only be restored by that PR.
+        # Other untrusted contexts, including dispatch, must not save shared caches.
+        cache-write: ${{ github.event_name == 'pull_request' }}
 
     - name: Build
       timeout-minutes: 90
