@@ -33,6 +33,7 @@ jobs:
     # CI-builds-fork.yml's `contents: read` cannot widen, so GitHub rejected
     # the call and every fork PR landed on `startup_failure` with zero jobs.
     # 5e8468db4981 drops that job-level block; see that commit on GH-Actions.
-    uses: sysown/proxysql/.github/workflows/ci-builds.yml@5e8468db498107c083a11eec3fface6801089437
+    uses: sysown/proxysql/.github/workflows/ci-builds.yml@17406cda439af9be04d1e29075b1073a1c205b33
     with:
       trusted: false
+      control_ref: 17406cda439af9be04d1e29075b1073a1c205b33

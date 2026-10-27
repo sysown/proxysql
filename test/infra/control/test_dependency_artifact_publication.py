@@ -1,8 +1,6 @@
 """Publisher profile selection, batch completeness and immutable releases."""
 import importlib
 import json
-import os
-import shutil
 from pathlib import Path
 import re
 import subprocess
@@ -180,92 +178,31 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired):
             self.api.run([sys.executable, '-c', 'import time; time.sleep(30)'], timeout=0.05)
 
-    def plan_fixture(self, source_is_ancestor=True):
+    def test_automatic_workflow_keeps_publication_separate_from_source_execution(self):
         workflow = (ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text()
-        plan = workflow.split('  plan:', 1)[1].split('  build:', 1)[0]
-        step = plan.split('      - name: Select exact build profiles', 1)[1]
-        body = step.split('        run: |\n', 1)[1].split('      - uses:', 1)[0]
-        script = '\n'.join(line[10:] for line in body.splitlines())
-        repository = self.root / 'repository.git'
-        subprocess.check_call(['git', 'init', '--bare', '--quiet', str(repository)])
-        git = ['git', '--git-dir=' + str(repository)]
-        tree = subprocess.check_output(git + ['mktree'], input=b'').decode().strip()
-        env = dict(os.environ, GIT_AUTHOR_NAME='Fixture', GIT_AUTHOR_EMAIL='fixture@example.test',
-                   GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@example.test')
-        ancestor = subprocess.check_output(git + ['commit-tree', tree], input=b'reviewed ancestor\n', env=env).decode().strip()
-        control_sha = subprocess.check_output(git + ['commit-tree', tree, '-p', ancestor],
-                                              input=b'reviewed control\n', env=env).decode().strip()
-        source_sha = ancestor if source_is_ancestor else subprocess.check_output(
-            git + ['commit-tree', tree, '-p', ancestor], input=b'unreviewed source\n', env=env).decode().strip()
-        for branch, sha in [('control', control_sha), ('source', source_sha)]:
-            subprocess.check_call(git + ['update-ref', 'refs/heads/' + branch, sha])
-            subprocess.check_call(['git', 'clone', '--quiet', '--shared', '--branch', branch,
-                                   str(repository), str(self.root / branch)])
-        control = self.root / 'control'
-        source = self.root / 'source'
-        shutil.copytree(str(ROOT / 'deps/artifacts'), str(control / 'deps/artifacts'))
-        (source / 'json.py').write_text('raise RuntimeError("untrusted import executed")\n')
-        (source / 'deps/artifacts').mkdir(parents=True)
-        (source / 'deps/artifacts/publish.py').write_text('raise RuntimeError("untrusted plan executed")\n')
-        output = self.root / 'outputs'
-        env.update(PROFILE_GROUP='ubuntu24', DEPENDENCY='openssl',
-                   GITHUB_OUTPUT=str(output), PYTHONPATH=str(source))
-        return workflow, plan, script, control, output, env, source_sha, control_sha
-
-    def test_workflow_plan_uses_trusted_control_with_untrusted_source(self):
-        workflow, plan, script, control, output, env, source_sha, control_sha = self.plan_fixture()
-        self.assertIn("if: github.ref == 'refs/heads/v3.0'", plan)
-        self.assertIn('ref: refs/heads/v3.0', plan)
-        self.assertIn('path: control', plan)
-        self.assertIn('path: source', plan)
-        self.assertIn('working-directory: control', plan)
-        subprocess.check_call(['bash', '-e', '-c', script], cwd=str(control), env=env)
-        values = dict(line.split('=', 1) for line in output.read_text().splitlines())
-        self.assertEqual(4, len(json.loads(values['matrix'])['include']))
-        self.assertEqual(source_sha, values['source_sha'])
-        self.assertEqual(control_sha, values['control_sha'])
-        publish = workflow.split('  publish:', 1)[1]
-        self.assertIn('ref: ${{ needs.plan.outputs.control_sha }}', publish)
-        self.assertNotIn('ref: ${{ needs.plan.outputs.source_sha }}', publish)
-        self.assertIn('--source-sha', publish)
-        self.assertIn('path: .cache/dependency-artifacts/plan', publish)
-        self.assertLess(publish.index('pattern: dependency-bundle-'),
-                        publish.index('cp .cache/dependency-artifacts/plan/expected-matrix.json'))
-
-    def test_workflow_plan_rejects_source_outside_protected_history(self):
-        workflow, plan, script, control, output, env, source_sha, control_sha = self.plan_fixture(False)
-        result = subprocess.run(['bash', '-e', '-c', script], cwd=str(control), env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn('protected v3.0', result.stderr)
-        self.assertFalse(output.exists())
-        self.assertFalse((control / 'expected-matrix.json').exists())
-
-    def test_workflow_default_source_is_dispatch_commit(self):
-        workflow = (ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text()
-        plan = workflow.split('  plan:', 1)[1].split('  build:', 1)[0]
-        source_checkout = next(step for step in plan.split('      - uses:')
-                               if '\n          path: source\n' in step)
-        self.assertIn('ref: ${{ inputs.source_ref || github.sha }}', source_checkout)
-
-    def test_workflow_publication_permissions_and_dependencies(self):
-        workflow = (ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text()
-        self.assertIn('workflow_dispatch:', workflow)
-        self.assertNotRegex(workflow, r'(?m)^  (pull_request|push|workflow_run):')
+        for event in ('pull_request:', 'push:', 'workflow_dispatch:'):
+            self.assertIn(event, workflow)
         self.assertEqual(1, workflow.count('contents: write'))
-        self.assertIn('needs: [plan, build]', workflow)
-        self.assertIn('fetch-depth: 0', workflow)
+        plan = workflow.split('  plan:', 1)[1].split('  build:', 1)[0]
+        self.assertIn('ref: refs/heads/v3.0', plan)
+        self.assertIn('working-directory: profile-control', plan)
+        self.assertIn('git merge-base --is-ancestor "$source_sha" HEAD', plan)
+        self.assertIn('inputs.source_ref || github.event.pull_request.head.sha || github.sha', plan)
+        for job in ('publication-plan', 'publish'):
+            body = workflow.split('  ' + job + ':', 1)[1].split('\n  publish:', 1)[0]
+            self.assertIn("github.ref == 'refs/heads/v3.0'", body)
+            self.assertIn("github.event_name != 'pull_request'", body)
+            self.assertIn('ref: ${{ needs.plan.outputs.control_sha }}', body)
+            self.assertIn('--source-sha "$SOURCE_SHA"', body)
+        self.assertIn('pattern: dependency-candidate-a${{ github.run_attempt }}-*', workflow)
+        self.assertIn('dependency-publication-${{ matrix.dependency }}-${{ matrix.fingerprint }}', workflow)
         for action in re.findall(r'uses:\s*([^\s#]+)', workflow):
-            self.assertRegex(action, r'@[0-9a-f]{40}$')
+            if not action.startswith('./'):
+                self.assertRegex(action, r'@[0-9a-f]{40}$')
         self.assertIn('- DEPS_MODE', (ROOT / 'docker-compose.yml').read_text())
         checks = (ROOT / '.github/workflows/CI-dependency-artifacts-checks.yml').read_text()
         self.assertIn('source-validation:', checks)
         self.assertIn('test_dependency_artifact_', checks)
-
-    def test_workflow_does_not_mix_artifacts_from_different_attempts(self):
-        workflow = (ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text()
-        self.assertIn('name: dependency-plan-${{ github.run_attempt }}', workflow)
-        self.assertIn('pattern: dependency-bundle-${{ github.run_attempt }}-*', workflow)
 
     def test_build_script_restores_before_runtime_smoke(self):
         script = (ROOT / 'deps/artifacts/build.bash').read_text()

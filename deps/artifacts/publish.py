@@ -8,10 +8,14 @@ import platform
 import re
 import subprocess
 import sys
+import tempfile
+import time
 from urllib.parse import urlsplit
 
-from bundles import verify_archive
-from identity import DEPENDENCIES, FORMAT_VERSION, load_json, load_registry, validate_entry
+from bundles import extract_verified, verify_archive
+from identity import (DEPENDENCIES, FORMAT_VERSION, configuration, digest_file,
+                      load_json, load_registry, validate_entry)
+import store
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -136,6 +140,132 @@ def publish_batch(directory, repository, tag, expected_source_sha):
     run(['gh', 'release', 'edit', tag, '--repo', repository, '--draft=false', '--prerelease', '--latest=false'])
 
 
+def reviewed_source(root, source_sha, environ):
+    if (environ.get('GITHUB_REPOSITORY') != store.REPOSITORY or
+            environ.get('GITHUB_EVENT_NAME') not in ('push', 'workflow_dispatch') or
+            environ.get('GITHUB_REF') != 'refs/heads/v3.0' or
+            not re.fullmatch(r'[0-9a-f]{40}', source_sha) or
+            (environ.get('GITHUB_EVENT_NAME') == 'push' and environ.get('GITHUB_SHA') != source_sha)):
+        raise ValueError('global publication requires reviewed protected-branch source')
+    if run(['git', '-C', str(root), 'rev-parse', 'HEAD']) != source_sha:
+        raise ValueError('reviewed source checkout does not match planned source')
+    run(['git', '-C', str(root), 'merge-base', '--is-ancestor', source_sha,
+         'refs/remotes/origin/v3.0'])
+
+
+def candidate_entry(directory, source_root, dependency=None, key=None):
+    directory, source_root = Path(directory), Path(source_root)
+    if directory.is_symlink() or any((directory / name).is_symlink()
+                                    for name in ('entry.json', 'bundle.tar.gz')):
+        raise ValueError('candidate files must be regular files')
+    entry = validate_entry(load_json(directory / 'entry.json'))
+    identity = entry['identity']
+    dep, fingerprint = entry['dependency'], entry['fingerprint']
+    if ((dependency is not None and dep != dependency) or (key is not None and fingerprint != key) or
+            entry['url'] != store.asset_url(dep, fingerprint, 'bundle.tar.gz')):
+        raise ValueError('candidate does not match canonical publication key/URL')
+    conf = configuration(dep, source_root)
+    checksum = Path(str(conf['archive']) + '.sha256').read_text().split()
+    actual = digest_file(conf['archive'])
+    expected = dict(version=conf['version'], source_sha256=actual,
+                    recipe_sha256=digest_file(conf['recipe']),
+                    verifier_sha256=digest_file(conf['archive'].parent / 'verify-source.bash'),
+                    helper={name: digest_file(source_root / 'deps/artifacts' / name)
+                            for name in ('identity.py', 'bundles.py', 'manage.py', 'prepare.bash')})
+    if (checksum != [actual, conf['archive'].name] or
+            any(identity.get(name) != value for name, value in expected.items())):
+        raise ValueError('candidate inputs do not match reviewed source')
+    provenance = entry['provenance'].get('commit', '')
+    if not re.fullmatch(r'[0-9a-f]{40}', provenance):
+        raise ValueError('candidate requires reviewed producer provenance')
+    run(['git', '-C', str(source_root), 'merge-base', '--is-ancestor', provenance,
+         'refs/remotes/origin/v3.0'])
+    verify_archive(directory / 'bundle.tar.gz', entry)
+    with tempfile.TemporaryDirectory(prefix='dependency-check-') as temporary:
+        extract_verified(directory / 'bundle.tar.gz', entry, Path(temporary))
+    return entry
+
+
+def publication_matrix(inputdir, source_sha, source_root, environ):
+    reviewed_source(source_root, source_sha, environ)
+    attempt = environ.get('GITHUB_RUN_ATTEMPT', '')
+    if not re.fullmatch(r'[1-9][0-9]*', attempt):
+        raise ValueError('publication requires the current run attempt')
+    result, seen = [], set()
+    for directory in sorted(Path(inputdir).glob('dependency-candidate-a' + attempt + '-*')):
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+', directory.name):
+            raise ValueError('invalid candidate artifact name')
+        entry = candidate_entry(directory, source_root)
+        pair = entry['dependency'], entry['fingerprint']
+        if pair not in seen:
+            seen.add(pair)
+            result.append(dict(dependency=pair[0], fingerprint=pair[1], artifact=directory.name))
+    return {'include': result}
+
+
+def release_state(tag, repository):
+    # gh release view sees drafts; the REST releases/tags endpoint does not.
+    result = subprocess.run(['gh', 'release', 'view', tag, '--repo', repository,
+                             '--json', 'isDraft,tagName'], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+    if result.returncode:
+        if result.stderr.strip() == 'release not found':
+            return None
+        raise ValueError('cannot inspect dependency release: ' + result.stderr)
+    state = json.loads(result.stdout)
+    if type(state.get('isDraft')) is not bool or state.get('tagName') != tag:
+        raise ValueError('invalid dependency release metadata')
+    return state
+
+
+def publish_candidate(inputdir, dependency, fingerprint, source_sha, source_root, repository, environ):
+    reviewed_source(source_root, source_sha, environ)
+    if repository != store.REPOSITORY:
+        raise ValueError('global publication requires the canonical destination')
+    entry = candidate_entry(inputdir, source_root, dependency, fingerprint)
+    tag = store.release_tag(dependency, fingerprint)
+    state = release_state(tag, repository)
+    if state is None:
+        try:
+            run(['gh', 'release', 'create', tag, '--repo', repository, '--target', source_sha,
+                 '--draft', '--prerelease', '--latest=false', '--title', tag,
+                 '--notes', 'Verified dependency bundle for ' + fingerprint + '.'])
+        except ValueError:
+            if release_state(tag, repository) is None:
+                raise
+        state = release_state(tag, repository)
+    if state is None:
+        raise ValueError('dependency release creation was not visible')
+    status = 'existing'
+    if state['isDraft']:
+        # Workflow concurrency serializes this dependency + fingerprint only.
+        run(['gh', 'release', 'upload', tag, '--repo', repository,
+             str(Path(inputdir) / 'entry.json'), str(Path(inputdir) / 'bundle.tar.gz'), '--clobber'], timeout=600)
+        run(['gh', 'release', 'edit', tag, '--repo', repository,
+             '--draft=false', '--prerelease', '--latest=false'])
+        status = 'published'
+    winner = None
+    for attempt in range(3):
+        try:
+            winner = store.remote_entry(dependency, entry['identity'], environ)
+        except store.Unavailable:
+            if attempt == 2:
+                raise
+        if winner is not None:
+            break
+        if attempt < 2:
+            time.sleep(2)
+    if winner is None:
+        raise ValueError('published dependency metadata is unavailable')
+    with tempfile.TemporaryDirectory(prefix='dependency-winner-') as temporary:
+        directory = Path(temporary)
+        (directory / 'entry.json').write_text(json.dumps(winner))
+        run(['gh', 'release', 'download', tag, '--repo', repository,
+             '--pattern', 'bundle.tar.gz', '--dir', temporary], timeout=600)
+        candidate_entry(directory, source_root, dependency, fingerprint)
+    return dict(dependency=dependency, fingerprint=fingerprint, status=status)
+
+
 def build_profile(profile_name, dependency, output, repository, tag):
     matches = [item for item in profiles() if item['profile'] == profile_name]
     if len(matches) != 1 or dependency not in DEPENDENCIES:
@@ -188,6 +318,17 @@ def main():
     register = sub.add_parser('register')
     register.add_argument('--entries', type=Path, required=True)
     register.add_argument('--registry', type=Path, required=True)
+    for command in ('plan-candidates', 'publish-candidate'):
+        candidate = sub.add_parser(command)
+        candidate.add_argument('--input', type=Path, required=True)
+        candidate.add_argument('--source-root', type=Path, required=True)
+        candidate.add_argument('--source-sha', required=True)
+        if command == 'plan-candidates':
+            candidate.add_argument('--github-output', type=Path)
+        else:
+            candidate.add_argument('--dependency', choices=DEPENDENCIES, required=True)
+            candidate.add_argument('--fingerprint', required=True)
+            candidate.add_argument('--repository', default=store.REPOSITORY)
     args = parser.parse_args()
     if args.command == 'matrix':
         print(json.dumps(build_matrix(args.group, args.dependency), separators=(',', ':')))
@@ -195,6 +336,16 @@ def main():
         args.output.write_text(json.dumps(merge_entries(args.input, args.base), indent=2, sort_keys=True) + '\n')
     elif args.command == 'publish':
         publish_batch(args.input, args.repository, args.tag, args.source_sha)
+    elif args.command == 'plan-candidates':
+        result = publication_matrix(args.input, args.source_sha, args.source_root, os.environ)
+        encoded = json.dumps(result, separators=(',', ':'))
+        if args.github_output:
+            with args.github_output.open('a') as output:
+                output.write('matrix=' + encoded + '\ncount=' + str(len(result['include'])) + '\n')
+        print(encoded)
+    elif args.command == 'publish-candidate':
+        print(json.dumps(publish_candidate(args.input, args.dependency, args.fingerprint,
+                         args.source_sha, args.source_root, args.repository, os.environ)))
     elif args.command == 'build':
         build_profile(args.profile, args.dependency, args.output, args.repository, args.tag)
     elif args.command == 'register':
