@@ -19,6 +19,7 @@ class SkipLabelTests(unittest.TestCase):
             'github.event.pull_request.head.repo.fork': False,
             'github.event.pull_request.head.repo.full_name': 'sysown/proxysql',
             'github.repository': 'sysown/proxysql',
+            'github.ref': 'refs/pull/1/merge',
             'github.event.pull_request.labels.*.name': [],
             'github.event.action': 'synchronize',
             'github.event.label.name': '',
@@ -65,7 +66,10 @@ class SkipLabelTests(unittest.TestCase):
                 if jid == 'push-label':
                     continue
                 with self.subTest(workflow=name, job=jid):
-                    self.assertTrue(self.allowed(job, **{
+                    # Global dependency promotion intentionally excludes PRs;
+                    # their build jobs still populate their own exact caches.
+                    expected = (name, jid) != ('CI-dependency-artifacts.yml', 'publish')
+                    self.assertEqual(expected, self.allowed(job, **{
                         'github.event.pull_request.labels.*.name': ['pg-compat'],
                         'github.event.pull_request.head.repo.fork': name == 'CI-builds-fork.yml',
                     }))

@@ -192,7 +192,8 @@ permits the source escape hatch in `auto`/`source`. Corrupt local bundles,
 mismatched metadata or identities, checksum mismatches, unsafe archives, invalid
 legacy registries, and invalid payloads are errors, including in `auto`. They
 are not silently treated as ordinary cache misses. Investigate integrity errors
-rather than accepting unexpected bytes.
+rather than accepting unexpected bytes. Explicit `source` mode can repair a corrupt
+regular local bundle from validated source outputs; it never follows cached symlinks.
 
 The helper stages and verifies the entire payload before replacing a dependency
 tree. Missing DuckDB secondary archives or generated OpenSSL headers invalidate

@@ -66,9 +66,9 @@ def validate_tree(dependency, tree, version=None):
         raise ValueError('missing dependency license')
 
 
-def collect_payload(dependency, tree):
+def collect_payload(dependency, tree, version=None):
     tree = Path(tree).resolve()
-    validate_tree(dependency, tree)
+    validate_tree(dependency, tree, version)
     if dependency == 'duckdb':
         files = [p.relative_to(tree).as_posix() for p in (tree / 'src/include').rglob('*')
                  if p.is_file() or p.is_symlink()]
@@ -97,7 +97,7 @@ def create_bundle(dependency, tree, identity, output):
     tree, output = Path(tree).resolve(), Path(output)
     if identity.get('dependency') != dependency or identity.get('eligible') is not True:
         raise ValueError('dependency is ineligible for artifact packaging')
-    files = collect_payload(dependency, tree)
+    files = collect_payload(dependency, tree, identity.get('version'))
     manifest = {'format_version': FORMAT_VERSION, 'identity': identity,
                 'fingerprint': fingerprint(identity), 'files': {}}
     for name in files:
@@ -194,7 +194,7 @@ def extract_verified(archive, entry, stage):
         if seen != set(files):
             raise ValueError('incomplete dependency payload')
         validate_tree(entry['dependency'], stage, entry['identity']['version'])
-        if set(collect_payload(entry['dependency'], stage)) != set(files):
+        if set(collect_payload(entry['dependency'], stage, entry['identity']['version'])) != set(files):
             raise ValueError('dependency payload includes unsupported files')
 
 

@@ -1,19 +1,44 @@
 name: CI-dependency-artifacts
 
+# Normal builds also prepare exact dependencies on demand. This workflow warms
+# the common architectures/compilers when their actual inputs change.
 on:
+  pull_request:
+    paths:
+      - deps/artifacts/**
+      - deps/duckdb/**
+      - deps/libssl/**
+      - common_mk/openssl_flags.mk
+      - deps/Makefile
+      - Makefile
+      - docker-compose.yml
+      - test/infra/control/dependency-artifacts-smoke.bash
+      - .github/workflows/CI-dependency-artifacts.yml
+  push:
+    branches: [v3.0]
+    paths:
+      - deps/artifacts/**
+      - deps/duckdb/**
+      - deps/libssl/**
+      - common_mk/openssl_flags.mk
+      - deps/Makefile
+      - Makefile
+      - docker-compose.yml
+      - test/infra/control/dependency-artifacts-smoke.bash
+      - .github/workflows/CI-dependency-artifacts.yml
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Source branch, tag, or commit already merged into protected v3.0
+        description: Optional source branch, tag, or SHA to prepare
         type: string
         required: false
       group:
-        description: Native build profiles to publish
+        description: Native build profiles to warm (existing signatures are reused)
         type: choice
         options: [ubuntu24, almalinux8, macos, all]
         default: ubuntu24
       dependency:
-        description: Dependencies to compile
+        description: Dependencies to prepare
         type: choice
         options: [both, duckdb, openssl]
         default: both
@@ -21,58 +46,35 @@ on:
 permissions:
   contents: read
 
-env:
-  DEPS_TAG: dependency-artifacts-v1-${{ github.run_id }}-${{ github.run_attempt }}
-
 jobs:
   plan:
-    # Dispatch from protected v3.0 and publish only its reviewed history.
-    if: github.ref == 'refs/heads/v3.0'
-    timeout-minutes: 10
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       source_sha: ${{ steps.matrix.outputs.source_sha }}
-      control_sha: ${{ steps.matrix.outputs.control_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: refs/heads/v3.0
-          path: control
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ inputs.source_ref || github.sha }}
-          path: source
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Select exact build profiles
         id: matrix
-        working-directory: control
         env:
-          PROFILE_GROUP: ${{ inputs.group }}
-          DEPENDENCY: ${{ inputs.dependency }}
+          PROFILE_GROUP: ${{ inputs.group || 'ubuntu24' }}
+          DEPENDENCY: ${{ inputs.dependency || 'both' }}
         run: |
-          source_sha=$(git -C ../source rev-parse HEAD)
-          if ! git merge-base --is-ancestor "$source_sha" HEAD; then
-            echo "Source commit must be reachable from protected v3.0 control HEAD" >&2
-            exit 1
-          fi
-          python3 -E deps/artifacts/publish.py matrix --group "$PROFILE_GROUP" --dependency "$DEPENDENCY" > expected-matrix.json
+          python3 -E deps/artifacts/publish.py matrix --group "$PROFILE_GROUP" --dependency "$DEPENDENCY" > "$RUNNER_TEMP/dependency-matrix.json"
           {
-            echo "matrix=$(cat expected-matrix.json)"
-            echo "source_sha=$source_sha"
-            echo "control_sha=$(git rev-parse HEAD)"
+            echo "matrix=$(cat "$RUNNER_TEMP/dependency-matrix.json")"
+            echo "source_sha=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dependency-plan-${{ github.run_attempt }}
-          path: control/expected-matrix.json
-          if-no-files-found: error
 
   build:
     needs: plan
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -87,52 +89,45 @@ jobs:
       - name: Install native build tools
         if: runner.os == 'macOS'
         run: brew install cmake
-      - name: Compile, package, relocate and smoke-test
-        env:
-          PROFILE: ${{ matrix.profile }}
-          DEPENDENCY: ${{ matrix.dependency }}
-        run: |
-          python3 deps/artifacts/publish.py build --profile "$PROFILE" --dependency "$DEPENDENCY" \
-            --output .cache/dependency-artifacts/publication --repository "$GITHUB_REPOSITORY" --tag "$DEPS_TAG"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Restore or automatically create the matching dependency
+        id: dependencies
+        uses: sysown/proxysql/.github/actions/dependency-cache@c52411e76b19de90f00318295ebf2567ac88e9eb
         with:
-          name: dependency-bundle-${{ github.run_attempt }}-${{ matrix.profile }}-${{ matrix.dependency }}
-          path: .cache/dependency-artifacts/publication/*
+          source-path: .
+          service: ${{ matrix.service || 'native' }}
+          tier: v40
+          dependencies: ${{ matrix.dependency }}
+      - name: Keep verified OpenSSL publication candidate
+        if: steps.dependencies.outputs.openssl-key != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.profile }}-openssl
+          path: |
+            ${{ steps.dependencies.outputs.openssl-path }}/entry.json
+            ${{ steps.dependencies.outputs.openssl-path }}/bundle.tar.gz
           include-hidden-files: true
           if-no-files-found: error
+          retention-days: 3
+      - name: Keep verified DuckDB publication candidate
+        if: steps.dependencies.outputs.duckdb-key != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.profile }}-duckdb
+          path: |
+            ${{ steps.dependencies.outputs.duckdb-path }}/entry.json
+            ${{ steps.dependencies.outputs.duckdb-path }}/bundle.tar.gz
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
 
   publish:
-    timeout-minutes: 20
     needs: [plan, build]
-    runs-on: ubuntu-24.04
+    # PRs keep their own exact caches; only reviewed history enters the public
+    # store. The fresh publisher validates ancestry and source hashes again.
+    if: ${{ github.repository == 'sysown/proxysql' && github.ref == 'refs/heads/v3.0' && github.event_name != 'pull_request' }}
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ needs.plan.outputs.control_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: dependency-plan-${{ github.run_attempt }}
-          path: .cache/dependency-artifacts/plan
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: dependency-bundle-${{ github.run_attempt }}-*
-          merge-multiple: true
-          path: .cache/dependency-artifacts/batch
-      - name: Publish complete immutable batch
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
-        run: |
-          cp .cache/dependency-artifacts/plan/expected-matrix.json .cache/dependency-artifacts/batch/expected-matrix.json
-          python3 -E deps/artifacts/publish.py publish --input .cache/dependency-artifacts/batch \
-            --repository "$GITHUB_REPOSITORY" --tag "$DEPS_TAG" --source-sha "$SOURCE_SHA"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dependency-lock-entries-${{ github.run_attempt }}
-          path: .cache/dependency-artifacts/batch/lock-entries.json
-          include-hidden-files: true
-          if-no-files-found: error
+      actions: read
+    uses: sysown/proxysql/.github/workflows/ci-publish-dependency-cache.yml@c52411e76b19de90f00318295ebf2567ac88e9eb
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}

@@ -29,7 +29,7 @@ class PreparationTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.env = dict(os.environ, CC='cc', CXX='c++', GIT_VERSION='3.0.0-test')
+        self.env = dict(os.environ, CC='cc', CXX='c++', GIT_VERSION='3.0.0-test', DEPS_ARTIFACT_REMOTE='0')
         for key in ('CFLAGS', 'CPPFLAGS', 'CXXFLAGS', 'LDFLAGS', 'MAKEFLAGS',
                     'DUCKDB_CMAKE_FLAGS', 'OPENSSL_CONFIGURE_FLAGS', 'DEPS_MODE'):
             self.env.pop(key, None)
@@ -83,6 +83,8 @@ class PreparationTests(unittest.TestCase):
         cache = self.root / '.cache/dependency-artifacts'
         cache.mkdir(parents=True, exist_ok=True)
         shutil.copy(output, cache / (entry['sha256'] + '.tar.gz'))
+        # Isolate legacy registry/download cases from the new automatic store.
+        shutil.rmtree(str(cache / 'bundles'), ignore_errors=True)
         return entry
 
     def make(self, *args, env=None):
