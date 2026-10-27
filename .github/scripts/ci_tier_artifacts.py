@@ -56,11 +56,14 @@ def artifact_location(url,token,deadline,cancelled):
 
 
 def download_part(url,token,target,start,end,size,deadline,cancelled,parallel):
-    with target.open('w+b') as out:
+    # Each worker owns a disjoint range and an independent file position.
+    # Write into the final archive instead of assembling another copy later.
+    with target.open('r+b') as out:
+        out.seek(start)
         for attempt in range(6):
             try:
                 location=artifact_location(url,token,deadline,cancelled)
-                offset=start+out.tell()
+                offset=out.tell()
                 request=urllib.request.Request(location,headers={
                     'Range':f'bytes={offset}-{end if parallel else ""}'})
                 with urllib.request.urlopen(request,timeout=download_timeout(deadline,cancelled)) as response:
@@ -69,19 +72,19 @@ def download_part(url,token,target,start,end,size,deadline,cancelled,parallel):
                         out.seek(0);out.truncate();offset=0
                     elif response.status!=206 or response.headers.get('Content-Range')!=f'bytes {offset}-{end}/{size}':
                         raise ValueError('unexpected artifact byte range')
-                    print(f'Artifact range {start}-{end}, attempt {attempt+1}: {out.tell()}/{end-start+1} bytes',flush=True)
+                    print(f'Artifact range {start}-{end}, attempt {attempt+1}: {out.tell()-start}/{end-start+1} bytes',flush=True)
                     reported=out.tell()
                     while True:
                         download_timeout(deadline,cancelled)
                         chunk=response.read1(1024*1024)
                         if not chunk:break
-                        if out.tell()+len(chunk)>end-start+1:
+                        if out.tell()+len(chunk)>end+1:
                             raise ValueError('artifact exceeds expected range size')
                         out.write(chunk)
                         if out.tell()-reported>=256*1024*1024:
                             reported=out.tell()
-                            print(f'Artifact range {start}-{end}: {reported}/{end-start+1} bytes',flush=True)
-                if out.tell()!=end-start+1:raise OSError('incomplete artifact download')
+                            print(f'Artifact range {start}-{end}: {reported-start}/{end-start+1} bytes',flush=True)
+                if out.tell()!=end+1:raise OSError('incomplete artifact download')
                 return
             except (OSError,http.client.HTTPException) as error:
                 # Never log exceptions containing signed URLs or credentials.
@@ -89,24 +92,25 @@ def download_part(url,token,target,start,end,size,deadline,cancelled,parallel):
                 if isinstance(error,urllib.error.HTTPError):error.close()
                 remaining=deadline-time.monotonic()
                 if attempt==5 or remaining<=0:
-                    raise RuntimeError(f'Artifact download failed ({reason}); range {start}-{end} received {out.tell()} bytes') from None
-                print(f'Artifact range {start}-{end} interrupted ({reason}); resuming at {out.tell()} bytes',flush=True)
+                    raise RuntimeError(f'Artifact download failed ({reason}); range {start}-{end} received {out.tell()-start} bytes') from None
+                print(f'Artifact range {start}-{end} interrupted ({reason}); resuming at {out.tell()-start} bytes',flush=True)
                 if cancelled.wait(min(30,2**attempt,remaining)):
                     raise RuntimeError('artifact download cancelled') from None
 
 
-def download_parts(url,token,folder,size,workers,deadline):
+def download_parts(url,token,target,size,workers,deadline):
     cancelled=Event()
     chunk=(size+workers-1)//workers
-    parts=[folder/f'part-{i}' for i in range(workers)]
+    with target.open('wb'):
+        pass
     if workers==1:
-        download_part(url,token,parts[0],0,size-1,size,deadline,cancelled,False)
-        return parts
+        download_part(url,token,target,0,size-1,size,deadline,cancelled,False)
+        return
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futures=[pool.submit(download_part,url,token,part,i*chunk,
+            futures=[pool.submit(download_part,url,token,target,i*chunk,
                 min(size-1,(i+1)*chunk-1),size,deadline,cancelled,True)
-                for i,part in enumerate(parts)]
+                for i in range(workers)]
             try:
                 for future in concurrent.futures.as_completed(futures):future.result()
             finally:
@@ -115,9 +119,8 @@ def download_parts(url,token,folder,size,workers,deadline):
                 for future in futures:future.cancel()
     except RangeUnsupported:
         print('Artifact storage ignored ranges; falling back to one stream',flush=True)
-        for part in parts:part.unlink(missing_ok=True)
-        return download_parts(url,token,folder,size,1,deadline)
-    return parts
+        # All workers have stopped before the single-stream retry truncates.
+        download_parts(url,token,target,size,1,deadline)
 
 
 class GitHubAPI:
@@ -163,7 +166,7 @@ class GitHubAPI:
             time.sleep(60 if 'rate limit' in error or '429' in error else min(30,2**attempt))
 
     def download(self,path,destination,size,digest=None):
-        """Download large artifacts in up to eight resumable, disk-backed parts."""
+        """Download up to eight resumable ranges directly into one archive."""
         if size<=0:raise ValueError('invalid artifact size')
         if digest and not re.fullmatch(r'sha256:[0-9a-fA-F]{64}',digest):
             raise ValueError('unsupported artifact checksum')
@@ -178,19 +181,16 @@ class GitHubAPI:
         destination=Path(destination)
         # Scratch files live beside the target for atomic publication after verification.
         with tempfile.TemporaryDirectory(dir=destination.parent,prefix='.artifact-') as tmp:
-            parts=download_parts(url,token,Path(tmp),size,workers,deadline)
             assembled=Path(tmp)/'complete.zip'
-            checksum=hashlib.sha256()
-            with assembled.open('wb') as out:
-                for part in parts:
-                    with part.open('rb') as source:
-                        while chunk:=source.read(1024*1024):
-                            download_timeout(deadline)
-                            checksum.update(chunk)
-                            out.write(chunk)
-                    part.unlink()
-            if digest and 'sha256:'+checksum.hexdigest()!=digest.lower():
-                raise ValueError('artifact checksum mismatch')
+            download_parts(url,token,assembled,size,workers,deadline)
+            if digest:
+                checksum=hashlib.sha256()
+                with assembled.open('rb') as source:
+                    while chunk:=source.read(1024*1024):
+                        download_timeout(deadline)
+                        checksum.update(chunk)
+                if 'sha256:'+checksum.hexdigest()!=digest.lower():
+                    raise ValueError('artifact checksum mismatch')
             assembled.replace(destination)
 
     def pages(self,path,key):
@@ -296,24 +296,31 @@ def build_binary_version(root, binary='src/proxysql'):
 
 @contextmanager
 def handoff_archive(packed):
-    """Read tar through zstd without materializing another full build on disk."""
-    with subprocess.Popen(['zstd','-d','-c',str(packed)],stdout=subprocess.PIPE) as process:
-        try:
-            with tarfile.open(fileobj=process.stdout,mode='r|') as archive:
-                yield archive
-            # Tar stops at its end marker; drain padding/trailing frames and
-            # check zstd too, so corrupt input cannot look like a valid tar.
-            while process.stdout.read(1024*1024):pass
-            result=process.wait()
-            if result:raise subprocess.CalledProcessError(result,process.args)
-        finally:
-            process.stdout.close()
-            # Validation/extraction can fail before the pipe is consumed.
-            # Do not leave zstd blocked on a full pipe when Popen waits below.
-            if process.poll() is None:process.kill()
+    """Pipe a ZIP member through zstd into tar, without intermediate archives."""
+    with subprocess.Popen(['zstd','-d','-c'],stdin=subprocess.PIPE,stdout=subprocess.PIPE) as process:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            def feed():
+                with process.stdin:
+                    shutil.copyfileobj(packed,process.stdin,1024*1024)
+            feeding=pool.submit(feed)
+            try:
+                with tarfile.open(fileobj=process.stdout,mode='r|') as archive:
+                    yield archive
+                # Tar stops at its end marker; consume the remaining stream
+                # and propagate decompression and ZIP-read failures too.
+                while process.stdout.read(1024*1024):pass
+                result=process.wait()
+                if result:raise subprocess.CalledProcessError(result,process.args)
+                feeding.result()
+            finally:
+                # An extraction error must unblock both sides of the pipe
+                # before the executor joins the feeder thread.
+                if process.poll() is None:process.kill()
+                process.stdout.close()
 
 
 def handoff_stream_filter(member,dest_path):
+    safe_members([member])
     filtered=handoff_filter(member,dest_path)
     if filtered is not None and filtered.islnk():
         # os.link cannot replace a checkout file (or a previous restore).
@@ -338,18 +345,9 @@ def restore_handoff(manifest,leg,destination,api):
         downloaded=Path(tmp)/'handoff.zip'
         api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest'))
         with zipfile.ZipFile(downloaded) as archive:
-            packed=Path(tmp)/'cache_full.tar.zst'
-            with archive.open('cache_full.tar.zst') as source,packed.open('wb') as out:
-                shutil.copyfileobj(source,out,1024*1024)
-        downloaded.unlink()
-        # Validate every member before writing the destination, preserving
-        # the existing path/link checks. A second streaming pass costs CPU,
-        # but avoids keeping both full.tar and the extracted build on disk.
-        with handoff_archive(packed) as archive:
-            safe_members(archive.getmembers())
-        destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
-        with handoff_archive(packed) as archive:
-            archive.extractall(destination,filter=handoff_stream_filter)
+            with archive.open('cache_full.tar.zst') as packed, handoff_archive(packed) as tar:
+                destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
+                tar.extractall(destination,filter=handoff_stream_filter)
     metadata=json.loads((destination/'src/ci-tier.json').read_text())
     for key,value in [('execution_id',manifest['execution_id']),('sha',manifest['sha']),('tier',leg['tier']),('mode',leg['mode'])]:
         if metadata.get(key)!=value:raise ValueError('restored metadata mismatch: '+key)

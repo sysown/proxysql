@@ -96,6 +96,23 @@ restore_handoff(plan, leg, Path(sys.argv[4]), LocalArtifacts(sys.argv[3], leg['a
             self.assertEqual((self.destination / f'test/payload-{i}').read_bytes(), b'x' * (1024*1024))
         self.assertEqual(list(self.runner_temp.iterdir()), [])
 
+    def test_restore_decompresses_once_without_copying_the_zip_payload(self):
+        api = self.artifact([('test/payload', os.urandom(2*1024*1024))])
+        original_popen = subprocess.Popen
+        decompressions = []
+        scratch_files = []
+        def observe_decompression(args, *positional, **kwargs):
+            if args[0] == 'zstd':
+                decompressions.append(args)
+                scratch_files.extend(p.name for p in api.scratch.iterdir())
+            return original_popen(args, *positional, **kwargs)
+        with patch('ci_tier_artifacts.subprocess.Popen', new=observe_decompression):
+            restore_handoff(self.plan, self.leg, self.destination, api)
+        self.assertEqual((self.destination / 'test/payload').stat().st_size, 2*1024*1024)
+        self.assertEqual(len(decompressions), 1, 'restore must not decompress for a separate validation scan')
+        self.assertEqual(scratch_files, ['handoff.zip'], 'ZIP payload must be piped without a tar.zst copy')
+        self.assertEqual(list(self.runner_temp.iterdir()), [])
+
     def test_success_and_download_failure_clean_job_scoped_scratch(self):
         for fail in (False, True):
             with self.subTest(fail=fail):
@@ -140,11 +157,10 @@ restore_handoff(plan, leg, Path(sys.argv[4]), KilledDownload(sys.argv[3], leg['a
         self.assertTrue((scratch / 'handoff.zip').is_file())
         self.assertEqual(scratch.parent, self.runner_temp)
 
-    def test_unsafe_member_is_rejected_before_any_files_are_extracted(self):
+    def test_unsafe_member_is_rejected_during_streamed_extraction(self):
         api = self.artifact([('../escape', b'bad')])
         with self.assertRaisesRegex(ValueError, 'unsafe handoff'):
             restore_handoff(self.plan, self.leg, self.destination, api)
-        self.assertFalse((self.destination / 'src/proxysql').exists())
         self.assertFalse((self.root / 'escape').exists())
         self.assertEqual(list(self.runner_temp.iterdir()), [])
 
@@ -152,7 +168,6 @@ restore_handoff(plan, leg, Path(sys.argv[4]), KilledDownload(sys.argv[3], leg['a
         api = self.artifact(corrupt=True)
         with self.assertRaises(subprocess.CalledProcessError):
             restore_handoff(self.plan, self.leg, self.destination, api)
-        self.assertFalse((self.destination / 'src/proxysql').exists())
         self.assertEqual(list(self.runner_temp.iterdir()), [])
 
     def test_local_use_without_runner_temp_still_works(self):
@@ -181,7 +196,9 @@ restore_handoff(plan, leg, Path(sys.argv[4]), KilledDownload(sys.argv[3], leg['a
                 self.assertEqual((self.destination / 'test/hardlink').stat().st_ino, metadata.stat().st_ino)
 
     def test_extraction_failure_stops_decompressor_and_cleans_scratch(self):
-        api = self.artifact([('test/large', b'x' * (4*1024*1024))])
+        # Keep the feeder writing more compressed bytes than the pipes can
+        # buffer when extraction fails on the first archive member.
+        api = self.artifact([('test/large', os.urandom(2*1024*1024))])
         self.destination.mkdir()
         (self.destination / 'src').write_text('cannot extract src/proxysql here')
         script = '''
