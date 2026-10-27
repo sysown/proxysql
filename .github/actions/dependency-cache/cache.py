@@ -80,10 +80,13 @@ def run_build(args, source, target, dependencies):
     command = ['docker', 'compose', 'run', '--rm', '--no-deps', '-T', '--entrypoint', '/bin/bash']
     for name, value in environment.items():
         command += ['-e', name + '=' + value]
+    # Preparation writes dependency trees and Python bytecode under deps as
+    # root too. Return those to the runner before host Make cleans/touches them,
+    # including when preparation fails partway through.
     script = ('set -euo pipefail; cd /opt/proxysql; '
               'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=/opt/proxysql; '
               'status=0; make --no-print-directory --jobs=' + jobs + ' -C deps NPROCS=' + jobs + ' ' + target + ' || status=$?; '
-              'chown -R "$DEPS_ARTIFACT_UID:$DEPS_ARTIFACT_GID" .cache/dependency-artifacts; exit "$status"')
+              'chown -R "$DEPS_ARTIFACT_UID:$DEPS_ARTIFACT_GID" deps .cache/dependency-artifacts; exit "$status"')
     subprocess.run(command + [args.service, '-lc', script], cwd=source, env=build_environment(), check=True)
 
 
