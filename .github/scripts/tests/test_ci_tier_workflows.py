@@ -1,9 +1,32 @@
-import json,subprocess,sys,unittest
+import json,os,subprocess,sys,tempfile,unittest
 from pathlib import Path
 import yaml
 ROOT=Path(__file__).resolve().parents[3]
 def workflow(name):return yaml.safe_load((ROOT/'.github/workflows'/name).read_text())
 class WorkflowTests(unittest.TestCase):
+ def run_build_prefix(self,make_body):
+  step=next(s for s in workflow('ci-builds.yml')['jobs']['builds']['steps'] if s.get('name')=='Build')
+  # Execute the actual setup and build pipeline, stopping before packaging.
+  script=step['run'].split('# create matrix of all test folders',1)[0]+'\nfi\n'
+  for expression,value in [('matrix.dist','ubuntu24'),('matrix.type','-tap'),('runner.environment','github-hosted')]:
+   script=script.replace('${{ '+expression+' }}',value)
+  with tempfile.TemporaryDirectory() as folder:
+   root=Path(folder);(root/'proxysql').mkdir();(root/'tools').mkdir()
+   (root/'proxysql/docker-compose.yml').write_text('services: {}\n')
+   for name,body in [('git','exit 0'),('make',make_body)]:
+    p=root/'tools'/name;p.write_text('#!/bin/sh\n'+body+'\n');p.chmod(0o755)
+   env=dict(os.environ,PATH=str(root/'tools')+os.pathsep+os.environ['PATH'],TIER='v31',VARIANT='fixture',TAP_BUILD_MODE='normal')
+   result=subprocess.run(['bash','-e','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=10)
+   return result
+ def test_failed_build_survives_tee_even_after_a_successful_container_exit(self):
+  result=self.run_build_prefix('echo "builder exited with code 0"; exit 23')
+  self.assertEqual(result.returncode,23,result.stdout+result.stderr)
+ def test_legacy_make_cannot_hide_a_failed_container(self):
+  result=self.run_build_prefix('echo "builder exited with code 2"; exit 0')
+  self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
+ def test_successful_container_and_make_pass(self):
+  result=self.run_build_prefix('echo "builder exited with code 0"; exit 0')
+  self.assertEqual(result.returncode,0,result.stdout+result.stderr)
  def test_explicit_context_permissions_allow_stale_run_cancellation(self):
   docs={file.name:workflow(file.name) for file in (ROOT/'.github/workflows').glob('*.yml')}
   # Include wrappers (for example ci-ai-g1 -> ci-ai-gcov -> ci-tier-context):
@@ -109,9 +132,10 @@ class WorkflowTests(unittest.TestCase):
       with self.subTest(file=file.name):self.assertNotIn('matrix.coverage',str(step.get('if','')))
  def test_runner_picker_does_not_wait_on_its_target_pool(self):
   for file in (ROOT/'.github/workflows').glob('*.yml'):
-   picker=workflow(file.name).get('jobs',{}).get('pick-runner')
-   if picker:
-    with self.subTest(file=file.name):self.assertNotIn('self-hosted',str(picker['runs-on']))
+   with self.subTest(file=file.name):self.assertNotIn('pick-runner',workflow(file.name).get('jobs',{}))
+  context=workflow('ci-tier-context.yml')['jobs']['context']
+  self.assertNotIn('self-hosted',str(context['runs-on']))
+  self.assertTrue(any(s.get('name')=='Pick runner pool' for s in context['steps']))
  def test_coverage_uses_tested_sha_and_infrastructure_path(self):
   for file in (ROOT/'.github/workflows').glob('*.yml'):
    for job in workflow(file.name).get('jobs',{}).values():

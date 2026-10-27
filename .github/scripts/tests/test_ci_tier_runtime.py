@@ -7,6 +7,28 @@ from ci_tier_plan import make_plan
 
 class RuntimeTests(unittest.TestCase):
  def ctx(self):return dict(repository='sysown/proxysql',sha='a'*40,control_sha='b'*40,trigger_id=1,trigger_attempt=1,build_id=2,build_attempt=1,event='pull_request',pull_requests=[{'number':42}],variables={})
+ def test_direct_pr_build_uses_source_head_and_labels(self):
+  gh=dict(repository='sysown/proxysql',sha='b'*40,run_id='17',run_attempt='2',event_name='pull_request',
+          event={'pull_request':{'number':42,'head':{'sha':'a'*40}}})
+  with patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh),'TRIGGER_JSON':json.dumps(gh)}):ctx=runtime.context()
+  self.assertEqual(ctx['sha'],'a'*40)
+  self.assertEqual(ctx['pull_requests'],[{'number':42}])
+  self.assertEqual((ctx['trigger_id'],ctx['build_id'],ctx['trigger_attempt'],ctx['build_attempt']),(17,17,2,2))
+
+ def test_successful_finalization_writes_accepted_producer(self):
+  ctx=dict(self.ctx(),trigger_id=2)
+  plan=make_plan(ctx,dict(tiers=['v40'],mode='normal'),{'consumers':[]})
+  leg=plan['legs'][0];api=Mock()
+  api.artifacts.return_value=[dict(id=17,name=leg['artifact_name'],expired=False)]
+  api.json_artifact.return_value=dict(execution_id=plan['execution_id'],sha=plan['sha'],version='ProxySQL version 4.0.12',
+      applicable_groups=[],applicable={c['key']:True for c in plan['checks']})
+  with tempfile.TemporaryDirectory() as folder:
+   prior=os.getcwd();os.chdir(folder)
+   try:
+    with patch.object(runtime,'read_plan',return_value=plan),patch.object(runtime,'api_for',return_value=api),patch.dict(os.environ,{'BUILD_RESULT':'success','GITHUB_OUTPUT':str(Path(folder)/'out')}):runtime.finalize()
+    accepted=json.loads(Path('producer.json').read_text());manifest=json.loads(Path('manifest.json').read_text())
+    self.assertEqual(accepted,{k:manifest[k] for k in ('repository','sha','trigger_id','trigger_attempt','build_id','build_attempt','execution_id','control_sha')})
+   finally:os.chdir(prior)
  def test_failed_producer_marks_unrun_units_and_consumers_skipped(self):
   plan={'repository':'sysown/proxysql','checks':[
    dict(check_id=1,workflow='CI-builds',job='builds'),
@@ -262,13 +284,17 @@ class ConsumerRerunTests(unittest.TestCase):
   return output.getvalue()
 
  @contextlib.contextmanager
- def fixture(self,event='pull_request',foreign=False,workflow='CI-g1'):
+ def fixture(self,event='pull_request',foreign=False,workflow='CI-g1',native=False,consumer_attempt=3):
   ctx=dict(repository='source/tests' if foreign else 'sysown/proxysql',sha='a'*40,control_sha='b'*40,
            trigger_id=1,trigger_attempt=2,build_id=2,build_attempt=1,event=event,pull_requests=[{'number':42}],variables={})
+  if native:ctx.update(trigger_id=2,trigger_attempt=1)
   plan=make_plan(ctx,dict(tiers=['v40'],mode='normal'),{'consumers':[
    dict(workflow='CI-g1',file='ci-g1.yml',job='tests',automatic=True,tiers=['v40'],groups=[],cells=[{}])]})
   producer={k:plan[k] for k in ('repository','sha','trigger_id','trigger_attempt','build_id','build_attempt','execution_id','control_sha')}
-  gh=dict(repository='sysown/proxysql',sha='a'*40,workflow=workflow,run_id='8',run_attempt='3')
+  gh=dict(repository='sysown/proxysql',sha='a'*40,workflow=workflow,run_id='8',run_attempt=str(consumer_attempt))
+  if native:
+   gh['event_name']='workflow_run'
+   gh['event']={'workflow_run':{'name':'feature CI-builds '+ctx['sha'], 'path':'.github/workflows/CI-builds.yml','event':event}}
   state=dict(own=[],binding=dict(producer),accepted=dict(producer),manifest=plan,requests=[],deny_acceptance=False)
   api=runtime.GitHubAPI(gh['repository'])
   def request(path,**kwargs):
@@ -280,7 +306,10 @@ class ConsumerRerunTests(unittest.TestCase):
    if '/runs/1/artifacts?' in path:
     if state['deny_acceptance']:self.fail('existing/manual binding must not be replaced with acceptance')
     return {'artifacts':state.get('acceptance_records',[dict(id=32,name='ci-accepted-producer-a2',expired=False)])}
-   if '/runs/2/artifacts?' in path:return {'artifacts':[dict(id=33,name='ci-manifest-t1-a2-b2-a1',expired=False)]}
+   if '/runs/2/artifacts?' in path:
+    records=[dict(id=33,name='ci-manifest-'+plan['execution_id'],expired=False)]
+    if native:records+=state.get('acceptance_records',[dict(id=32,name='ci-accepted-producer-a2',expired=False)])
+    return {'artifacts':records}
    if path.endswith('/artifacts/31/zip'):return state.get('binding_bytes',self.archive('binding.json',state['binding']))
    if path.endswith('/artifacts/32/zip'):return state.get('accepted_bytes',self.archive('producer.json',state['accepted']))
    if path.endswith('/artifacts/33/zip'):return self.archive('manifest.json',state['manifest'])
@@ -288,11 +317,43 @@ class ConsumerRerunTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as folder:
    prior=os.getcwd();os.chdir(folder)
    try:
-    with patch.object(runtime,'context',return_value=ctx),patch.object(runtime,'GitHubAPI',return_value=api),patch.object(api,'request',side_effect=request),patch.dict(os.environ,{
+    consumer_ctx=dict(ctx,trigger_attempt=2) if native else ctx
+    with patch.object(runtime,'context',return_value=consumer_ctx),patch.object(runtime,'GitHubAPI',return_value=api),patch.object(api,'request',side_effect=request),patch.dict(os.environ,{
      'GITHUB_JSON':json.dumps(gh),'GITHUB_OUTPUT':str(Path(folder)/'out'),'CONSUMER_INPUTS':'{}','CONSUMER_INSTANCE':'run',
-     'CONSUMER_FILE':'not-in-current-catalogue.yml','PRODUCER_RUN_ID':'99','PRODUCER_ATTEMPT':'9'}):
+     'CONSUMER_FILE':'not-in-current-catalogue.yml','PRODUCER_RUN_ID':'' if native else '99','PRODUCER_ATTEMPT':'' if native else '9'}):
      yield state
    finally:os.chdir(prior)
+
+ def test_native_build_completion_preserves_retained_execution_on_consumer_retry(self):
+  for attempt in [1,3]:
+   with self.subTest(attempt=attempt),self.fixture(native=True,consumer_attempt=attempt):
+    runtime.consumer()
+    binding=json.loads(Path('binding.json').read_text())
+    self.assertEqual((binding['trigger_id'],binding['trigger_attempt'],binding['build_id'],binding['build_attempt']),(2,1,2,1))
+    outputs=dict(line.split('=',1) for line in Path(os.environ['GITHUB_OUTPUT']).read_text().splitlines())
+    self.assertEqual(json.loads(outputs['matrices'])['tests'][0]['execution_id'],'t2-a1-b2-a1')
+
+ def test_native_manual_producer_still_fans_out_automatically(self):
+  with self.fixture(event='workflow_dispatch',native=True,consumer_attempt=1):
+   runtime.consumer()
+   self.assertEqual(json.loads(Path('binding.json').read_text())['build_id'],2)
+
+ def test_native_completion_rejects_foreign_build_and_source(self):
+  for key,value,message in [
+   ('build_id',99,'accepted producer does not belong to this completed build'),
+   ('sha','c'*40,'producer binding mismatch: sha'),
+   ('repository','other/repo','producer binding mismatch: repository'),
+   ('trigger_attempt',3,'invalid accepted producer attempt')]:
+   with self.subTest(key=key),self.fixture(native=True) as state:
+    state['accepted'][key]=value
+    with self.assertRaisesRegex(ValueError,message):runtime.consumer()
+    self.assertFalse(Path('binding.json').exists())
+
+ def test_native_completion_requires_its_acceptance_artifact(self):
+  with self.fixture(native=True) as state:
+   state['acceptance_records']=[]
+   with self.assertRaises(ValueError):runtime.consumer()
+   self.assertFalse(Path('binding.json').exists())
 
  def test_automatic_rerun_recovers_original_accepted_producer(self):
   with self.fixture() as state:

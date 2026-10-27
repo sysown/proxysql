@@ -25,12 +25,12 @@ on:
         default: GH-Actions
 env:
   LOCK: CI_BUILDS_${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.event.pull_request.head.sha || github.sha }}
 
 jobs:
 
   plan:
-    runs-on: ${{ inputs.trusted && ((contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (inputs.trigger && contains(fromJson('["renecannao","rahim-kanji"]'), fromJson(inputs.trigger).event.workflow_run.actor.login))) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       plan: ${{ steps.plan.outputs.plan }}
@@ -181,6 +181,7 @@ jobs:
       id: build
       if: ${{ inputs.trusted && success() }}
       run: |
+        set -euo pipefail
         cd proxysql/
         echo "TAP build mode: ${TAP_BUILD_MODE}"
         echo "Build matrix variant: ${{ matrix.dist }}${{ matrix.type }} (tier=${TIER}, variant=${VARIANT})"
@@ -250,6 +251,9 @@ jobs:
           # propagates into the build container via docker-compose + entrypoint.bash).
           if [ "${{ runner.environment }}" = "self-hosted" ]; then export MAKEOPT="-j8"; fi
           make ${{ matrix.dist }}-tap | tee ci_build_log/build-tap.log
+          # Older product Makefiles do not propagate the container exit code.
+          # Keep their success check in addition to pipefail for make failures.
+          grep -q 'exited with code 0' ci_build_log/build-tap.log
 
           # create matrix of all test folders containing *-t
           echo "[ "$(find test/tap/ -name '*-t' | xargs -n1 dirname | uniq | sed 's|test/tap/||' | xargs -I{} -n1 echo -n "'{}', ")"]" > tap-matrix.json
@@ -387,17 +391,11 @@ jobs:
           # build TYPE
           #sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) ${TYPE#-}'" docker-compose.yml
           make ${{ matrix.dist }}-test | tee ci_build_log/build.log
+          grep -q 'exited with code 0' ci_build_log/build.log
         else
           make ${{ matrix.dist }}${{ matrix.type }} | tee ci_build_log/build.log
+          grep -q 'exited with code 0' ci_build_log/build.log
         fi
-
-    - name: Check build
-      id: check_build
-      if: ${{ inputs.trusted && success() }}
-      run: |
-        for LOG in proxysql/ci_build_log/build*.log ; do
-          grep 'exited with code 0' ${LOG} || exit 1
-        done
 
     - name: Stage compiled runtime libraries in test handoff
       if: ${{ inputs.trusted && success() }}
@@ -502,7 +500,7 @@ jobs:
       with:
         # Execution, product tier and mode identify this immutable handoff.
         name: ${{ matrix.artifact_name }}
-        retention-days: 1
+        retention-days: 3
         # 0 is deliberate: the payload is already zstd-15 compressed by the pack
         # step, and re-compressing it measures at <=0.23% size for minutes of
         # CPU. See issue #6232.
@@ -553,14 +551,14 @@ jobs:
         fi
 
     - name: Archive artifacts
-      if: ${{ inputs.trusted && failure() && !cancelled() && (steps.build.outcome == 'failure' || steps.check_build.outcome == 'failure') }}
+      if: ${{ inputs.trusted && failure() && !cancelled() && steps.build.outcome == 'failure' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-${{ needs.plan.outputs.execution_id }}-${{ matrix.tier }}-${{ matrix.mode }}-logs-attempt${{ github.run_attempt }}
         # The checkout is a live bind mount on self-hosted runners. Uploading
         # it after an unrelated preflight failure can race a stale container
         # and turn a diagnostic upload into a second failure. Build logs are
-        # the relevant evidence when Build or its log validation fails.
+        # the relevant evidence when Build fails.
         path: proxysql/ci_build_log/
         if-no-files-found: warn
 
@@ -579,7 +577,7 @@ jobs:
     - plan
     - builds
     if: ${{ inputs.trusted && always() && needs.plan.result == 'success' }}
-    runs-on: ${{ inputs.trusted && ((contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (inputs.trigger && contains(fromJson('["renecannao","rahim-kanji"]'), fromJson(inputs.trigger).event.workflow_run.actor.login))) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     steps:
     - name: Checkout CI control
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -605,3 +603,11 @@ jobs:
         name: ci-manifest-${{ needs.plan.outputs.execution_id }}
         path: manifest.json
         retention-days: 3
+    - name: Publish accepted producer for native completion fanout
+      if: ${{ inputs.trusted && success() && github.event_name != 'workflow_run' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-accepted-producer-a${{ github.run_attempt }}
+        path: producer.json
+        retention-days: 3
+        if-no-files-found: error

@@ -31,6 +31,19 @@ on:
       consumer_inputs:
         type: string
         default: '{}'
+      pick_runner:
+        type: boolean
+        default: false
+      runner_eligible:
+        type: boolean
+        default: false
+      hosted_runner:
+        type: string
+        default: ubuntu-22.04
+      hosted_on_lookup_failure:
+        description: Use the hosted runner if the runs listing fails; jobs-listing failures always use hosted
+        type: boolean
+        default: false
     outputs:
       matrices:
         value: ${{ jobs.context.outputs.matrices }}
@@ -42,9 +55,11 @@ on:
         value: ${{ jobs.context.outputs.control_sha }}
       sha:
         value: ${{ jobs.context.outputs.sha }}
+      runson:
+        value: ${{ jobs.context.outputs.runson }}
 jobs:
   context:
-    runs-on: ${{ (contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
       matrices: ${{ steps.context.outputs.matrices }}
@@ -52,6 +67,7 @@ jobs:
       execution_id: ${{ steps.context.outputs.execution_id }}
       control_sha: ${{ steps.context.outputs.control_sha }}
       sha: ${{ steps.context.outputs.sha }}
+      runson: ${{ steps.pick.outputs.runson }}
     steps:
     - name: Checkout CI control
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -79,6 +95,17 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py consumer
       id: context
+    - name: Pick runner pool
+      if: ${{ inputs.pick_runner }}
+      id: pick
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
+        ELIGIBLE: ${{ inputs.runner_eligible }}
+        HOSTED_RUNNER: ${{ inputs.hosted_runner }}
+        HOSTED_ON_LOOKUP_FAILURE: ${{ inputs.hosted_on_lookup_failure }}
+      run: bash ci-control/.github/scripts/pick-ci-runner.bash
     - name: Remember producer across reruns
       if: ${{ github.run_attempt == 1 }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

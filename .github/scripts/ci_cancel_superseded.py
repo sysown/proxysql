@@ -9,7 +9,7 @@ from ci_tier_artifacts import GitHubAPI
 
 ACTIVE = ('queued', 'in_progress', 'pending', 'waiting', 'requested')
 TRIGGER = re.compile(r' trigger=([1-9][0-9]*)/([1-9][0-9]*)$')
-TRIGGER_PATH = '.github/workflows/CI-trigger.yml'
+TRIGGER_PATHS = {'.github/workflows/CI-trigger.yml', '.github/workflows/CI-builds.yml'}
 # Events whose origin run may legitimately start a CI cascade. `workflow_dispatch`
 # is excluded on purpose: a manual dispatch is an explicit request for that commit
 # and must never be swept away by a later push.
@@ -50,11 +50,11 @@ def cancel_run(api, run_id, still_current=lambda: True):
 
 
 def resolve_origin(api, run, origins):
-    """Map a workflow_run back to the CI-trigger run that actually caused it.
+    """Map a workflow_run back to the source-event workflow that caused it.
 
     workflow_run rows carry the default branch's SHA, not the commit that was
     tested, so provenance has to come from the trigger id embedded in the
-    display title. Anything without a real CI-trigger origin is left alone.
+    display title. Only recognized source-event entry workflows are followed.
     """
     if run.get('event') != 'workflow_run':
         return run
@@ -66,7 +66,7 @@ def resolve_origin(api, run, origins):
         origins[trigger_id] = api.request(f'repos/{api.repository}/actions/runs/{trigger_id}')
     origin = origins[trigger_id]
     if (origin.get('event') not in CASCADE_EVENTS
-            or origin.get('path') != TRIGGER_PATH):
+            or origin.get('path') not in TRIGGER_PATHS):
         return None
     return origin
 
@@ -180,7 +180,7 @@ def cancel_superseded_push(api, branch, event_after, exclude_run_id):
     cascade on this exact branch. Direct `push` runs of unrelated workflows
     (CI-package-build, and any release or deploy workflow added later) are
     NOT superseded CI and must be left running, so a direct origin has to
-    name TRIGGER_PATH just as a workflow_run child does.
+    name a recognized entry workflow just as a workflow_run child does.
 
     Manual dispatches are excluded: workflow_dispatch is an explicit request
     for that commit.
@@ -193,7 +193,7 @@ def cancel_superseded_push(api, branch, event_after, exclude_run_id):
     def belongs(run):
         return (run.get('event') == 'push'
                 and run.get('head_branch') == branch
-                and run.get('path') == TRIGGER_PATH)
+                and run.get('path') in TRIGGER_PATHS)
 
     return sweep(api, lambda: head_sha_now() == event_after,
                  lambda run: belongs(run) and run.get('head_sha') != event_after,

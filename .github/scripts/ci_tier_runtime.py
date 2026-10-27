@@ -23,7 +23,10 @@ def emit(**values):
 def context():
     gh=json.loads(os.environ['GITHUB_JSON']);trigger=json.loads(os.environ.get('TRIGGER_JSON') or '{}')
     upstream=trigger.get('event',{}).get('workflow_run')
-    origin=upstream or dict(id=int(gh['run_id']),run_attempt=int(gh['run_attempt']),head_sha=gh['sha'],event=gh['event_name'],pull_requests=[])
+    pr=gh.get('event',{}).get('pull_request')
+    origin=upstream or dict(id=int(gh['run_id']),run_attempt=int(gh['run_attempt']),
+        head_sha=pr['head']['sha'] if pr else gh['sha'],event=gh['event_name'],
+        pull_requests=[{'number':pr['number']}] if pr else [])
     return dict(repository=os.environ.get('SOURCE_REPOSITORY') or gh['repository'],sha=os.environ.get('SOURCE_SHA') or origin['head_sha'],
         event=origin['event'],pull_requests=origin.get('pull_requests',[]),trigger_id=int(origin['id']),trigger_attempt=int(origin.get('run_attempt',1)),
         build_id=int(gh['run_id']),build_attempt=int(gh['run_attempt']),control_sha=subprocess.check_output(['git','-C',str(ROOT.parent),'rev-parse','HEAD'],text=True).strip(),
@@ -130,6 +133,10 @@ def finalize():
         validate_manifest(original);verify_binding(original,plan)
         plan=original
     Path('manifest.json').write_text(json.dumps(plan))
+    # Publish acceptance from the producer after all required builds succeed.
+    # A partial rerun may retain the original plan and immutable handoffs.
+    producer={k:plan[k] for k in ('repository','sha','trigger_id','trigger_attempt','build_id','build_attempt','execution_id','control_sha')}
+    Path('producer.json').write_text(json.dumps(producer))
     emit(publish_manifest=not bool(existing))
 
 def artifact_status():
@@ -176,6 +183,21 @@ def manual_consumer_rows(workflow,instance,supplied):
 
 def consumer():
     ctx=context();api=api_for(ctx);gh=json.loads(os.environ['GITHUB_JSON'])
+    upstream=gh.get('event',{}).get('workflow_run',{})
+    native=upstream.get('path')=='.github/workflows/CI-builds.yml' and upstream.get('event')!='workflow_run'
+    manual_dispatch=gh.get('event_name',ctx['event'])=='workflow_dispatch'
+    def verify_accepted(producer):
+        if not native:
+            verify_binding(producer,ctx)
+            return
+        if producer.get('build_id')!=ctx['trigger_id'] or producer.get('trigger_id')!=ctx['trigger_id']:
+            raise ValueError('accepted producer does not belong to this completed build')
+        original=producer.get('trigger_attempt')
+        if type(original) is not int or not 1<=original<=ctx['trigger_attempt']:
+            raise ValueError('invalid accepted producer attempt')
+        # The acceptance artifact belongs to this completion attempt; the
+        # accepted execution itself can be retained from an earlier attempt.
+        verify_binding(producer,dict(ctx,trigger_attempt=original))
     if ctx['repository']==gh['repository']:
         cancel_if_superseded(ctx,GitHubAPI(gh['repository']),int(gh['run_id']))
     supplied=json.loads(os.environ.get('CONSUMER_INPUTS','{}'))
@@ -190,11 +212,11 @@ def consumer():
         existing=[a for a in own.artifacts(int(gh['run_id'])) if a['name']==binding_name]
         # Only absence permits recovery. Existing expired, ambiguous or corrupt
         # snapshots must still fail through normal artifact validation.
-        if existing or ctx['event']=='workflow_dispatch' or ctx['repository']!=gh['repository']:
+        if existing or manual_dispatch or ctx['repository']!=gh['repository']:
             producer=own.json_artifact(int(gh['run_id']),binding_name,'binding.json')
         else:
             producer=api.json_artifact(ctx['trigger_id'],f"ci-accepted-producer-a{ctx['trigger_attempt']}",'producer.json')
-        if ctx['event']!='workflow_dispatch':verify_binding(producer,ctx)
+        if not manual_dispatch:verify_accepted(producer)
     elif os.environ.get('PRODUCER_RUN_ID'):
         run=int(os.environ['PRODUCER_RUN_ID'])
         if not os.environ.get('PRODUCER_ATTEMPT'):raise ValueError('explicit producer selection requires producer_attempt')
@@ -203,12 +225,12 @@ def consumer():
         if len(names)!=1:raise ValueError('manual dispatch requires an exact producer run and attempt with a manifest')
         producer=api.json_artifact(run,names[0],'manifest.json')
     else:
-        if ctx['event']=='workflow_dispatch':raise ValueError('manual consumer dispatch requires producer_run_id and producer_attempt')
+        if manual_dispatch:raise ValueError('manual consumer dispatch requires producer_run_id and producer_attempt')
         producer=api.json_artifact(ctx['trigger_id'],f"ci-accepted-producer-a{ctx['trigger_attempt']}",'producer.json')
-        verify_binding(producer,ctx)
+        verify_accepted(producer)
     manifest=load_bound(producer)
     workflow=gh['workflow']
-    manual=ctx['event']=='workflow_dispatch' or gh['repository']!=manifest['repository']
+    manual=manual_dispatch or gh['repository']!=manifest['repository']
     if not manual:instance=consumer_instance(manifest,workflow,instance,supplied)
     jobs=sorted({c['job'] for c in manifest['checks'] if c['workflow']==workflow and c['cell'].get('ci_instance','run')==instance})
     override=producer.get('consumer_manifest')

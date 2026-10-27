@@ -84,6 +84,24 @@ def closed_api(rows):
 
 
 class CancellationTests(unittest.TestCase):
+    def test_native_pr_cascade_is_cancelled_when_superseded_or_closed(self):
+        origin = run(10, status='completed', path='.github/workflows/CI-builds.yml')
+        child = run(11, sha='d'*40, event='workflow_run', head_branch='v3.0', pull_requests=[],
+                    display_title='feature/test CI-tests '+OLD+' trigger=10/1')
+        api = API([origin, child, run(12, CURRENT, path='.github/workflows/CI-builds.yml')])
+        self.assertEqual(set(cancel_superseded(api, 42, CURRENT, 99)), {11})
+        api = closed_api([origin, child])
+        self.assertEqual(set(cancel_closed_pr(api, 42, 99)), {11})
+
+    def test_native_push_cascade_is_cancelled_without_touching_unrelated_push_jobs(self):
+        origin = push_run(10, status='completed', path='.github/workflows/CI-builds.yml')
+        child = run(11, event='workflow_run', head_branch='v3.0', pull_requests=[],
+                    display_title='v3.0 CI-tests '+OLD+' trigger=10/1')
+        direct = push_run(12, path='.github/workflows/CI-builds.yml')
+        unrelated = push_run(13, path='.github/workflows/CI-package-build.yml')
+        api = API([origin, child, direct, unrelated])
+        self.assertEqual(set(cancel_superseded_push(api, 'v3.0', CURRENT, 99)), {11, 12})
+
     def test_old_direct_and_cascade_runs_cancel_but_new_head_is_preserved(self):
         origin = run(10, status='completed')
         child = run(11, sha='d'*40, event='workflow_run', head_branch='v3.0',

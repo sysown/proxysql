@@ -2,6 +2,7 @@
 import http.server
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,9 +15,6 @@ import urllib.parse
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
-WORKFLOW = ROOT / ".github/workflows/ci-no-infra-g1.yml"
-if not WORKFLOW.is_file():
-    WORKFLOW = ROOT / ".github/workflows/ci-no-infra-g1.yml"
 GH = shutil.which("gh")
 RUNS = "/repos/example/project/actions/runs"
 POOL_JOB = {"status": "in_progress", "labels": ["self-hosted", "proxysql-ci"]}
@@ -24,7 +22,7 @@ POOL_JOB = {"status": "in_progress", "labels": ["self-hosted", "proxysql-ci"]}
 
 @unittest.skipUnless(GH, "runner-selection tests require the GitHub CLI")
 class RunnerSelectionTests(unittest.TestCase):
-    def select(self, jobs, *, runs=None, eligible=True):
+    def select(self, jobs, *, runs=None, eligible=True, hosted='ubuntu-22.04', hosted_on_error=False):
         routes = {RUNS: runs if runs is not None else [{"workflow_runs": [{"id": n} for n in jobs]}]}
         routes.update({f"{RUNS}/{n}/jobs": pages for n, pages in jobs.items()})
         unexpected = []
@@ -67,14 +65,24 @@ class RunnerSelectionTests(unittest.TestCase):
                                "args = [base + a if a.startswith('repos/') else a for a in sys.argv[1:]]\n" +
                                f"os.execv({GH!r}, [{GH!r}] + args)\n")
             wrapper.chmod(0o755)
-            env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", GH_TOKEN="fixture-only",
+            step = next(item for item in yaml.safe_load(
+                (ROOT / '.github/workflows/ci-tier-context.yml').read_text()
+            )['jobs']['context']['steps'] if item.get('id') == 'pick')
+            bindings = {'github.token': 'fixture-only', 'github.repository': 'example/project',
+                        "vars.SELFHOSTED_POOL_SIZE || '6'": '6',
+                        'inputs.runner_eligible': str(eligible).lower(),
+                        'inputs.hosted_runner': hosted,
+                        'inputs.hosted_on_lookup_failure': str(hosted_on_error).lower()}
+            mapped = {key: bindings[re.fullmatch(r'\$\{\{\s*(.*?)\s*\}\}', value)[1]]
+                      for key, value in step['env'].items()}
+            env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}",
                        GH_ENTERPRISE_TOKEN="fixture-only", GH_NO_UPDATE_NOTIFIER="1",
                        GH_CONFIG_DIR=str(root / "gh-config"), GH_PROMPT_DISABLED="1",
-                       REPO="example/project", POOL_SIZE="6", ELIGIBLE=str(eligible).lower(),
                        GITHUB_OUTPUT=str(root / "output"))
+            env.update(mapped)
             env.pop("GH_HOST", None)
-            workflow = yaml.safe_load(WORKFLOW.read_text())
-            script = workflow["jobs"]["pick-runner"]["steps"][0]["run"]
+            (root / 'ci-control').symlink_to(ROOT, target_is_directory=True)
+            script = step['run']
             try:
                 result = subprocess.run(["bash", "-c", script], cwd=root, env=env,
                                         capture_output=True, text=True, timeout=15)
@@ -131,6 +139,14 @@ class RunnerSelectionTests(unittest.TestCase):
     def test_ineligible_actor_uses_hosted_without_api_calls(self):
         choice, _ = self.select({}, runs=[], eligible=False)
         self.assertEqual(choice, "ubuntu-22.04")
+
+    def test_sanitizer_lookup_failure_uses_its_hosted_policy(self):
+        choice, _ = self.select({}, runs=[500], hosted='ubuntu-24.04', hosted_on_error=True)
+        self.assertEqual(choice, 'ubuntu-24.04')
+
+    def test_hosted_distribution_is_preserved_for_ineligible_actor(self):
+        choice, _ = self.select({}, runs=[], eligible=False, hosted='ubuntu-24.04')
+        self.assertEqual(choice, 'ubuntu-24.04')
 
 
 if __name__ == "__main__":
