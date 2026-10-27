@@ -135,7 +135,7 @@ void create_server_load_schema(SQLite3DB& db) {
 
 } // namespace
 int main() {
-    plan(54);
+    plan(67);
     test_init_minimal();
     test_init_query_processor();
     test_init_hostgroups();
@@ -389,5 +389,121 @@ int main() {
 		"the refreshed Aurora monitor input removes stale endpoints");
 	ok(manager->uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql),
 		"Aurora discovery controller retires cleanly");
+
+	Observed bgd_observed;
+	auto* bgd_controller = new ManagedController(bgd_observed);
+	ok(manager->install_server_discovery_controller(
+		ProxySQL_ServerProtocol::mysql, bgd_controller, destroy_controller,
+		dlopen(PROXYSQL_FAKE_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL)),
+		"Blue/Green discovery controller installs");
+	auto bgd_claim = role_claim(ProxySQL_ServerProtocol::mysql, 901, 902);
+	bgd_claim.role_monitor.green_writer_hostgroup = 903;
+	bgd_claim.role_monitor.green_reader_hostgroup = 904;
+	bgd_claim.role_monitor.writer_is_also_reader = 1;
+	uint64_t bgd_generation = 0;
+	proxysql_lock_configuration();
+	const bool bgd_installed = proxysql_install_managed_discovery_locked(
+		ProxySQL_ServerProtocol::mysql, 1, {bgd_claim}, bgd_generation, error);
+	proxysql_unlock_configuration();
+	std::unique_ptr<SQLite3_result> bgd_replication(
+		MyHGM->dump_table_mysql("mysql_replication_hostgroups"));
+	std::unique_ptr<SQLite3_result> bgd_topology(
+		MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups"));
+	ok(bgd_installed && bgd_generation != 0 &&
+		bgd_replication && has_topology_pair(*bgd_replication, 901, 902) &&
+		bgd_topology && !has_topology_pair(*bgd_topology, 901, 902),
+		"four-group reservation keeps blue replication and waits to start BGD");
+	ProxySQL_ServerDesiredSet bgd_four {
+		ProxySQL_ServerProtocol::mysql, bgd_generation, {901, 902, 903, 904},
+		{{901, "blue-writer.example", 3306},
+		 {902, "blue-reader.example", 3306},
+		 {903, "green-writer.example", 3306},
+		 {904, "green-reader.example", 3306}},
+		ProxySQL_ServerPersistence::runtime_only
+	};
+	ok(manager->post_server_desired_set(bgd_four) &&
+		GloAdmin->drain_server_discovery_updates() == 1 &&
+		!bgd_observed.acks.empty() && bgd_observed.acks.back().second,
+		"one accepted publication installs blue and green members together");
+	std::unique_ptr<SQLite3_result> bgd_runtime(MyHGM->dump_table_mysql("mysql_servers"));
+	ok(bgd_runtime &&
+		find_row(*bgd_runtime, 901, "blue-writer.example", 3306) &&
+		find_row(*bgd_runtime, 902, "blue-reader.example", 3306) &&
+		find_row(*bgd_runtime, 903, "green-writer.example", 3306) &&
+		find_row(*bgd_runtime, 904, "green-reader.example", 3306),
+		"all four hostgroups contain their discovered server rows");
+	ProxySQL_ManagedBlueGreenHandoff handoff;
+	handoff.generation = bgd_generation;
+	handoff.writer_hostgroup = 901;
+	handoff.reader_hostgroup = 902;
+	handoff.green_writer_hostgroup = 903;
+	handoff.green_reader_hostgroup = 904;
+	handoff.deployment_id = "bgd-test";
+	handoff.pairs = {
+		{"arn:aws:rds:us-east-1:1:db:blue-writer",
+		 "arn:aws:rds:us-east-1:1:db:green-writer",
+		 "db-BLUEW", "db-GREENW", "blue-writer.example",
+		 "green-writer.example", 3306, true},
+		{"arn:aws:rds:us-east-1:1:db:blue-reader",
+		 "arn:aws:rds:us-east-1:1:db:green-reader",
+		 "db-BLUER", "db-GREENR", "blue-reader.example",
+		 "green-reader.example", 3306, false}
+	};
+	auto invalid_handoff = handoff;
+	invalid_handoff.pairs[1].green_resource_id = "db-GREENW";
+	ok(!proxysql_activate_managed_blue_green(invalid_handoff, error),
+		"duplicate physical green member cannot activate a BGD row");
+	invalid_handoff = handoff;
+	++invalid_handoff.generation;
+	ok(!proxysql_activate_managed_blue_green(invalid_handoff, error),
+		"stale or future inventory generation cannot activate a BGD row");
+	const bool activated = proxysql_activate_managed_blue_green(handoff, error);
+	bgd_replication.reset(MyHGM->dump_table_mysql("mysql_replication_hostgroups"));
+	bgd_topology.reset(MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups"));
+	ok(activated && bgd_replication &&
+		has_topology_pair(*bgd_replication, 901, 902) &&
+		bgd_topology && has_topology_pair(*bgd_topology, 901, 902),
+		"complete handoff starts BGD monitoring and retains blue replication");
+	bool writer_reader_policy_retained = false;
+	if (bgd_topology) for (const auto* row : bgd_topology->rows) {
+		if (row && row->fields && row->fields[0] && row->fields[5] &&
+			std::string(row->fields[0]) == "901" && std::string(row->fields[5]) == "1")
+			writer_reader_policy_retained = true;
+	}
+	ok(writer_reader_policy_retained,
+		"managed BGD row carries the writer-is-also-reader policy");
+	const auto accepted_handoff = proxysql_active_managed_blue_green(901);
+	ok(accepted_handoff && accepted_handoff->deployment_id == "bgd-test" &&
+		accepted_handoff->pairs.size() == 2 &&
+		accepted_handoff->pairs[1].green_hostname == "green-reader.example",
+		"core retains exact writer and replica pairs for its native worker");
+	AWS_RDS_BGD_State managed_state;
+	managed_state.writer_hg = 901;
+	managed_state.reader_hg = 902;
+	managed_state.green_writer_hg = 903;
+	managed_state.green_reader_hg = 904;
+	AWS_RDS_Topology_Result managed_topology;
+	managed_topology.blue_green = true;
+	managed_topology.nodes.push_back({"green-writer", "green-writer.example", 3306,
+		"BLUE_GREEN_DEPLOYMENT_TARGET", "AVAILABLE"});
+	GloMyMon->aws_rds_bgd_build_map_for_test(managed_state, managed_topology);
+	ok(managed_state.bg_map.size() == 2 && managed_state.bg_map[0].is_writer &&
+		managed_state.bg_map[0].blue_host == "blue-writer.example" &&
+		managed_state.bg_map[1].blue_host == "blue-reader.example" &&
+		managed_state.bg_map[1].green_host == "green-reader.example",
+		"native BGD worker uses exact writer and replica pairs without a name suffix");
+	managed_state.bg_map.clear();
+	managed_topology.nodes[0].endpoint = "other-green.example";
+	GloMyMon->aws_rds_bgd_build_map_for_test(managed_state, managed_topology);
+	ok(managed_state.bg_map.empty(),
+		"native BGD worker rejects an unrelated topology TARGET");
+	ProxySQL_ServerDesiredSet bgd_partial = bgd_four;
+	bgd_partial.delegated_hostgroups = {901, 902};
+	ok(manager->post_server_desired_set(bgd_partial) &&
+		GloAdmin->drain_server_discovery_updates() == 1 &&
+		!bgd_observed.acks.back().second,
+		"blue-only publication cannot replace a four-group claim");
+	ok(manager->uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql),
+		"Blue/Green discovery controller retires cleanly");
     return exit_status();
 }

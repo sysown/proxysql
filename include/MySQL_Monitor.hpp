@@ -869,6 +869,13 @@ class MySQL_Monitor {
 	 */
 	void monitor_gr_async_actions_handler(const vector<unique_ptr<MySQL_Monitor_State_Data>>& mmsds);
 
+#ifdef MYSQLX_TEST_BUILD
+	void aws_rds_bgd_build_map_for_test(AWS_RDS_BGD_State& state,
+		AWS_RDS_Topology_Result& topology) {
+		aws_rds_bgd_build_map(state, topology);
+	}
+#endif
+
 private:
 	/**
 	* @brief Load one BGD worker's configuration from the published host rows.

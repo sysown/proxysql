@@ -3695,6 +3695,13 @@ void MySQL_Monitor::process_aws_rds_topology(MySQL_Monitor_State_Data* mmsd) {
 
 	if (topology.blue_green) {
 		if (mysql_thread___aws_blue_green_deployment_auto_discovery) {
+			// The plugin installs its BGD row only after it has published all
+			// blue and green members. Do not start a second worker from the
+			// topology table's primary-only view while it owns this pair.
+#ifdef PROXYSQL40
+			if (proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql,
+				mmsd->writer_hostgroup, mmsd->reader_hostgroup)) return;
+#endif
 			MyHGM->add_aws_rds_bgd_hostgroup_entry(mmsd->hostname, mmsd->port);
 		}
 	} else {
@@ -7225,6 +7232,66 @@ void MySQL_Monitor::aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, AWS_RDS_Topolog
 	}
 
 	std::string green_writer_host = target->endpoint;
+
+#ifdef PROXYSQL40
+	const auto managed = proxysql_active_managed_blue_green(st.writer_hg);
+	if (managed) {
+		// AWS supplies physical pairs, including replicas whose names do not
+		// follow the suffix convention used by manual BGD configuration.
+		if (managed->reader_hostgroup != st.reader_hg ||
+			managed->green_writer_hostgroup != (uint32_t)st.green_writer_hg ||
+			managed->green_reader_hostgroup != (uint32_t)st.green_reader_hg) {
+			return;
+		}
+		const auto writer = std::find_if(managed->pairs.begin(), managed->pairs.end(),
+			[](const auto& pair) { return pair.writer; });
+		if (writer == managed->pairs.end() ||
+			strcasecmp(writer->green_hostname.c_str(), green_writer_host.c_str()) != 0) {
+			proxy_warning("AWS RDS BGD [wHG=%u]: topology TARGET does not match the managed green writer\n",
+				st.writer_hg);
+			return;
+		}
+		std::vector<AWS_RDS_BlueGreenPair> pairs;
+		MyHGM->wrlock();
+		auto find_server = [&](uint32_t hg, const std::string& host, uint16_t port) -> MySrvC* {
+			MyHGC* hgc = MyHGM->MyHGC_find(hg);
+			if (!hgc || !hgc->mysrvs) return nullptr;
+			for (unsigned int i = 0; i < hgc->mysrvs->cnt(); ++i) {
+				MySrvC* server = hgc->mysrvs->idx(i);
+				if (server->port == port && strcasecmp(server->address, host.c_str()) == 0)
+					return server;
+			}
+			return nullptr;
+		};
+		for (const auto& pair : managed->pairs) {
+			MySrvC* blue = find_server(pair.writer ? st.writer_hg : st.reader_hg,
+				pair.blue_hostname, pair.port);
+			MySrvC* green = find_server(pair.writer ? (uint32_t)st.green_writer_hg :
+				(uint32_t)st.green_reader_hg, pair.green_hostname, pair.port);
+			if (!blue || !green ||
+				blue->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD ||
+				blue->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT) {
+				pairs.clear();
+				break;
+			}
+			AWS_RDS_BlueGreenPair mapped;
+			mapped.blue_host = blue->address;
+			mapped.green_host = green->address;
+			mapped.port = pair.port;
+			mapped.blue_weight = blue->weight;
+			mapped.blue_max_conns = blue->max_connections;
+			mapped.blue_use_ssl = blue->use_ssl;
+			mapped.green_offline = green->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD ||
+				green->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT;
+			if (!mapped.green_offline) mapped.green_use_ssl = green->use_ssl;
+			mapped.is_writer = pair.writer;
+			pairs.push_back(std::move(mapped));
+		}
+		MyHGM->wrunlock();
+		if (pairs.size() == managed->pairs.size()) st.bg_map = std::move(pairs);
+		return;
+	}
+#endif
 
 	MyHGM->wrlock();
 
