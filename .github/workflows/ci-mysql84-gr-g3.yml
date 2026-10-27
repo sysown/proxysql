@@ -68,6 +68,11 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Install infrastructure diagnostic hook
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: setup
+
     - name: Start selected product test check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -156,16 +161,14 @@ jobs:
         export COVERAGE="${COVERAGE}"
         test/infra/control/run-tests-isolated.bash
 
-    - name: Save MySQL deployment diagnostics
+    - name: Save infrastructure diagnostics
       if: always()
       continue-on-error: true
-      timeout-minutes: 3
-      env:
-        INFRA_ID: ci-mysql84-gr-g3-${{ matrix.tier }}-${{ github.run_id }}
-      run: |
-        python3 ci-control/.github/scripts/ci_collect_mysql_logs.py \
-          --infra-id "$INFRA_ID" \
-          --output "proxysql/ci_infra_logs/$INFRA_ID/mysql-deployment/"
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
+        infra-id: ci-mysql84-gr-g3-${{ matrix.tier }}-${{ github.run_id }}
 
     - name: Cleanup
       if: always()
@@ -194,15 +197,6 @@ jobs:
         name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: |
           proxysql/ci_*_logs/
-
-    - name: Archive MySQL deployment diagnostics
-      if: ${{ !cancelled() }}
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: ${{ github.workflow }}-${{ env.SHA }}-mysql-deployment-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
-        path: proxysql/ci_infra_logs/ci-mysql84-gr-g3-${{ matrix.tier }}-${{ github.run_id }}/mysql-deployment/
-        retention-days: 3
-        if-no-files-found: warn
 
     - name: Archive coverage report
       if: ${{ matrix.coverage && (!cancelled()) }}

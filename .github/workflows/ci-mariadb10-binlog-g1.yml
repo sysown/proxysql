@@ -70,6 +70,11 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Install infrastructure diagnostic hook
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: setup
+
     - name: Start selected product test check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -140,6 +145,15 @@ jobs:
         test/infra/control/run-tests-isolated.bash
 
       if: ${{ success() }}
+    - name: Save infrastructure diagnostics
+      if: always()
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
+        infra-id: ci-mariadb10-binlog-g1
+
     - name: Cleanup
       if: always()
       run: |

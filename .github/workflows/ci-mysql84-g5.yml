@@ -66,6 +66,11 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Install infrastructure diagnostic hook
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: setup
+
     - name: Start selected product test check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -151,6 +156,15 @@ jobs:
         export TAP_GROUP="mysql84-g5"
         export COVERAGE="${COVERAGE}"
         test/infra/control/run-tests-isolated.bash
+
+    - name: Save infrastructure diagnostics
+      if: always()
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
+        infra-id: ci-mysql84-g5-${{ matrix.tier }}-${{ github.run_id }}
 
     - name: Cleanup
       if: always()

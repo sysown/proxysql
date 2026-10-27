@@ -71,6 +71,11 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Install infrastructure diagnostic hook
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: setup
+
     - name: Start selected product test check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -304,6 +309,15 @@ jobs:
             fi
           '
 
+    - name: Save infrastructure diagnostics
+      if: always()
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
+        host-log-root: ~/sandboxes
+
     - name: Cleanup sandbox
       if: always()
       run: |
@@ -355,6 +369,11 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Install infrastructure diagnostic hook
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: setup
+
     - name: Start selected product test check
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -453,6 +472,15 @@ jobs:
         export MYSQLX_SOAK_CONCURRENT="20"
         [ -f test/infra/common/env.sh ] && source test/infra/common/env.sh
         test/infra/control/run-tests-isolated.bash
+
+    - name: Save infrastructure diagnostics
+      if: always()
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
+        infra-id: ci-mysqlx-soak-${{ github.run_id }}-${{ matrix.tier }}-${{ github.run_id }}
 
     - name: Cleanup
       if: always()

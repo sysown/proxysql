@@ -19,6 +19,19 @@ jobs:
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
+    - name: Checkout CI control
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-selection.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Install infrastructure diagnostic hook
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: setup
+
     - name: Build selected ProxySQL product (debug)
       run: make -j"$(nproc)" debug
       env:
@@ -63,6 +76,15 @@ jobs:
         name: pg-compat-report-${{ matrix.tier }}-attempt${{ github.run_attempt }}
         path: ${{ github.workspace }}/pg-compat-reports/pg-compat.xml
         if-no-files-found: warn
+    - name: Save infrastructure diagnostics
+      if: always()
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        artifact-key: ${{ matrix.tier }}
+        infra-id: ci-${{ matrix.tier }}-${{ github.run_id }}-${{ github.run_attempt }}
+
     - name: Cleanup
       if: always()
       env:
