@@ -64,10 +64,6 @@ jobs:
         path: plan.json
         retention-days: 3
   builds:
-    permissions:
-      contents: read
-      actions: read
-      checks: write
     needs:
     - plan
     # Route to the self-hosted proxysql-ci pool only when: the actor is renecannao or rahim-kanji
@@ -181,7 +177,19 @@ jobs:
 
 #        ls -l proxysql/test/tap
 
-    - name: Configure product build
+    - name: Restore or build exact dependency bundles
+      uses: ./ci-control/.github/actions/dependency-cache
+      with:
+        source-path: proxysql
+        service: ubuntu24_dbg_build
+        tier: ${{ matrix.tier }}
+        sanitizer: ${{ matrix.mode == 'asan' && 'asan' || 'none' }}
+        coverage: 'true'
+        cache-write: ${{ inputs.trusted || github.event_name == 'pull_request' }}
+
+    - name: Build
+      timeout-minutes: 90
+      id: build
       if: ${{ success() }}
       run: |
         set -euo pipefail
@@ -238,25 +246,6 @@ jobs:
             exit 1
             ;;
         esac
-
-    - name: Restore or build exact dependency bundles
-      id: dependencies
-      if: ${{ success() }}
-      uses: ./ci-control/.github/actions/dependency-cache
-      with:
-        source-path: proxysql
-        service: ubuntu24_dbg_build
-        tier: ${{ matrix.tier }}
-        sanitizer: ${{ matrix.mode == 'asan' && 'asan' || 'none' }}
-        coverage: 'true'
-
-    - name: Build
-      timeout-minutes: 90
-      id: build
-      if: ${{ success() }}
-      run: |
-        set -euo pipefail
-        cd proxysql/
         if [[ "${{ matrix.type }}" =~ "-tap" ]]; then
           # prebuild dependencies without debug
           #sed -i "/command/c \    command: bash -l -c '${ASAN} cd /opt/proxysql && make -j$(nproc) build_deps_clickhouse'" docker-compose.yml
@@ -418,32 +407,6 @@ jobs:
           make ${{ matrix.dist }}${{ matrix.type }} | tee ci_build_log/build.log
           grep -q 'exited with code 0' ci_build_log/build.log
         fi
-
-    - name: Retain openssl dependency publication candidate
-      if: ${{ inputs.trusted && success() && steps.dependencies.outputs.openssl-key != '' }}
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.tier }}-${{ matrix.mode }}-openssl
-        path: |
-          ${{ steps.dependencies.outputs.openssl-path }}/entry.json
-          ${{ steps.dependencies.outputs.openssl-path }}/bundle.tar.gz
-        include-hidden-files: true
-        if-no-files-found: error
-        compression-level: 0
-        retention-days: 3
-
-    - name: Retain duckdb dependency publication candidate
-      if: ${{ inputs.trusted && success() && steps.dependencies.outputs.duckdb-key != '' }}
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.tier }}-${{ matrix.mode }}-duckdb
-        path: |
-          ${{ steps.dependencies.outputs.duckdb-path }}/entry.json
-          ${{ steps.dependencies.outputs.duckdb-path }}/bundle.tar.gz
-        include-hidden-files: true
-        if-no-files-found: error
-        compression-level: 0
-        retention-days: 3
 
     - name: Stage compiled runtime libraries in test handoff
       if: ${{ inputs.trusted && success() }}
@@ -659,14 +622,3 @@ jobs:
         path: producer.json
         retention-days: 3
         if-no-files-found: error
-
-  dependency-publication:
-    needs: [plan, builds]
-    if: ${{ needs.builds.result == 'success' }}
-    permissions:
-      contents: write
-      actions: read
-    uses: ./.github/workflows/ci-publish-dependency-cache.yml
-    with:
-      source_sha: ${{ fromJson(needs.plan.outputs.plan).sha }}
-      enabled: ${{ inputs.trusted }}

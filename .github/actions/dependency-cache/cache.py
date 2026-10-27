@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare exact dependency bundles in the product's actual build container."""
+"""Prepare exact dependency bundles in the product's build environment."""
 import argparse
 import json
 import os
@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 
 DEPENDENCIES = ('openssl', 'duckdb')
 
@@ -22,76 +21,51 @@ def emit(**values):
             output.write(name + '=' + value + '\n')
 
 
-def source_directory(value):
-    workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve()
-    source = (workspace / value).resolve()
-    source.relative_to(workspace)
-    if not source.is_dir():
-        raise ValueError('product source directory does not exist')
-    return source
-
-
-def selected_dependencies(args):
-    dependencies = args.dependencies.split() if args.dependencies else (
-        list(DEPENDENCIES) if args.tier == 'v40' else ['openssl'])
-    if len(set(dependencies)) != len(dependencies) or any(d not in DEPENDENCIES for d in dependencies):
-        raise ValueError('dependencies must be openssl and/or duckdb')
-    return dependencies
-
-
 def load_keys(source, selected):
-    path = source / '.cache/dependency-artifacts/ci-keys.json'
-    if path.stat().st_size > 1024 * 1024:
+    metadata = source / '.cache/dependency-artifacts/ci-keys.json'
+    if metadata.stat().st_size > 1024 * 1024:
         raise ValueError('oversized dependency keys')
-    data = json.loads(path.read_text())
+    data = json.loads(metadata.read_text())
     if not isinstance(data, dict) or any(d not in DEPENDENCIES for d in data):
         raise ValueError('invalid dependency keys')
     result = {}
     for dependency in selected:
         item = data.get(dependency)
-        if not isinstance(item, dict):
-            raise ValueError('missing dependency key: ' + dependency)
-        if item.get('eligible') is not True:
-            if item.get('key') or item.get('path'):
-                raise ValueError('ineligible dependency advertised a cache key')
+        if not isinstance(item, dict) or type(item.get('eligible')) is not bool:
+            raise ValueError('invalid dependency eligibility: ' + dependency)
+        if not item['eligible']:
             continue
-        fingerprint = item.get('fingerprint', '')
+        fingerprint = item.get('fingerprint')
         if not isinstance(fingerprint, str) or not re.fullmatch('[0-9a-f]{64}', fingerprint):
             raise ValueError('invalid dependency fingerprint')
+        # Only the fingerprint crosses the source boundary; control owns keys and paths.
         key = 'proxysql-deps-v1-' + dependency + '-' + fingerprint
-        relative = '.cache/dependency-artifacts/bundles/' + dependency + '/' + fingerprint
-        if item.get('key') != key or item.get('path') != relative:
-            raise ValueError('dependency key/path does not match fingerprint')
-        destination = source / relative
+        destination = source / '.cache/dependency-artifacts/bundles' / dependency / fingerprint
         if destination.resolve() != destination:
             raise ValueError('dependency cache path must not traverse symlinks')
         result[dependency] = (key, destination, fingerprint)
     return result
 
 
-def docker_environment():
-    # Compose files are product inputs. Never offer them host credentials or
-    # Actions service tokens through environment interpolation/passthrough.
+def build_environment():
+    # Compose interpolation and host Make must not inherit runner credentials.
     return {name: value for name, value in os.environ.items()
             if not name.startswith(('GITHUB_', 'ACTIONS_', 'AWS_', 'AZURE_', 'GOOGLE_', 'SSH_'))
             and not any(word in name.upper() for word in ('TOKEN', 'SECRET', 'PASSWORD', 'CREDENTIAL', '_KEY', 'AUTH', 'COOKIE', 'SESSION'))}
 
 
-def run_container(args, source, target, dependencies):
-    if not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]*', args.service):
-        raise ValueError('invalid compose service')
+def run_build(args, source, target, dependencies):
     jobs = os.environ.get('DEPS_BUILD_JOBS', '2')
-    if not re.fullmatch('[1-9][0-9]*', jobs):
-        raise ValueError('DEPS_BUILD_JOBS must be a positive integer')
+    if not re.fullmatch('[1-9][0-9]*', jobs) or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]*', args.service):
+        raise ValueError('invalid build service or job count')
     environment = {
-        'DEPS_BUILD_JOBS': jobs,
+        'DEPS_BUILD_JOBS': jobs, 'DEPS_MODE': 'auto',
         'PROXYSQL40': '1' if args.tier == 'v40' else '0',
         'PROXYSQL31': '1' if args.tier == 'v31' else '0',
         'WITHASAN': '1' if args.sanitizer == 'asan' else '0',
         'TEST_WITHASAN': '1' if args.sanitizer == 'asan' else '0',
         'WITHTSAN': '1' if args.sanitizer == 'tsan' else '0',
         'WITHGCOV': '1' if args.coverage == 'true' else '0',
-        'DEPS_MODE': 'auto',
         'DEPS_ARTIFACT_RUN_ID': os.environ.get('GITHUB_RUN_ID', ''),
         'DEPS_ARTIFACT_PROFILE': args.service,
         'DEPS_ARTIFACT_DEPENDENCIES': ' '.join(dependencies),
@@ -100,10 +74,8 @@ def run_container(args, source, target, dependencies):
     }
     if args.service == 'native':
         environment['DEPS_ARTIFACT_KEYS_FILE'] = str(source / '.cache/dependency-artifacts/ci-keys.json')
-        native_env = docker_environment()
-        native_env.update(environment)
         subprocess.run(['make', '--no-print-directory', '--jobs=' + jobs, '-C', str(source / 'deps'), 'NPROCS=' + jobs, target],
-                       cwd=source, env=native_env, check=True)
+                       cwd=source, env=dict(build_environment(), **environment), check=True)
         return
     command = ['docker', 'compose', 'run', '--rm', '--no-deps', '-T', '--entrypoint', '/bin/bash']
     for name, value in environment.items():
@@ -111,43 +83,8 @@ def run_container(args, source, target, dependencies):
     script = ('set -euo pipefail; cd /opt/proxysql; '
               'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=/opt/proxysql; '
               'status=0; make --no-print-directory --jobs=' + jobs + ' -C deps NPROCS=' + jobs + ' ' + target + ' || status=$?; '
-              'chown -R "$DEPS_ARTIFACT_UID:$DEPS_ARTIFACT_GID" .cache/dependency-artifacts; '
-              'exit "$status"')
-    command += [args.service, '-lc', script]
-    subprocess.run(command, cwd=source, env=docker_environment(), check=True)
-
-
-
-def seed_candidate(candidate_path, dependency, fingerprint, destination):
-    if not candidate_path:
-        return
-    workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve()
-    candidates = (workspace / candidate_path).resolve()
-    candidates.relative_to(workspace)
-    if not candidates.is_dir():
-        return  # Older accepted producers did not upload dependency bundles.
-    for directory in sorted(candidates.iterdir()):
-        entry_path, archive = directory / 'entry.json', directory / 'bundle.tar.gz'
-        if (directory.is_symlink() or not directory.is_dir() or entry_path.is_symlink() or
-                not entry_path.is_file() or entry_path.stat().st_size > 4 * 1024 * 1024 or
-                archive.is_symlink() or not archive.is_file()):
-            continue
-        entry = json.loads(entry_path.read_text())
-        # Supplied malformed metadata is an integrity failure, never a cache miss.
-        if not isinstance(entry, dict):
-            raise ValueError('producer candidate metadata must be a JSON object')
-        if entry.get('dependency') != dependency or entry.get('fingerprint') != fingerprint:
-            continue
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=destination.parent, prefix='.producer-') as temporary:
-            stage = Path(temporary)
-            shutil.copyfile(entry_path, stage / 'entry.json')
-            shutil.copyfile(archive, stage / 'bundle.tar.gz')
-            os.replace(stage, destination)
-        # Preparation below verifies identity, archive digest and safe contents,
-        # then performs the ordinary dependency smoke check before saving.
-        print('[deps/' + dependency + '] reusing accepted producer bundle')
-        return
+              'chown -R "$DEPS_ARTIFACT_UID:$DEPS_ARTIFACT_GID" .cache/dependency-artifacts; exit "$status"')
+    subprocess.run(command + [args.service, '-lc', script], cwd=source, env=build_environment(), check=True)
 
 
 def main():
@@ -159,49 +96,47 @@ def main():
     parser.add_argument('--sanitizer', choices=('none', 'asan', 'tsan'), default='none')
     parser.add_argument('--coverage', choices=('false', 'true'), default='false')
     parser.add_argument('--dependencies', default='')
-    parser.add_argument('--candidate-path', default='')
     args = parser.parse_args()
-    source = source_directory(args.source_path)
-    selected = selected_dependencies(args)
+    workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+    source = (workspace / args.source_path).resolve()
+    source.relative_to(workspace)
+    if not source.is_dir():
+        raise ValueError('product source directory does not exist')
+    selected = args.dependencies.split() if args.dependencies else list(DEPENDENCIES if args.tier == 'v40' else ('openssl',))
+    if len(set(selected)) != len(selected) or any(d not in DEPENDENCIES for d in selected):
+        raise ValueError('dependencies must be openssl and/or duckdb')
     if args.command == 'keys':
         if not (source / 'deps/artifacts/ci.py').is_file():
             print('::notice::Product predates dependency cache API; continuing the regular build')
             emit(enabled='false')
             return
-        cache = source / '.cache/dependency-artifacts'
-        cache.mkdir(parents=True, exist_ok=True)
-        (cache / 'ci-keys.json').unlink(missing_ok=True)
-        run_container(args, source, 'dependency-artifact-keys', selected)
+        metadata = source / '.cache/dependency-artifacts/ci-keys.json'
+        metadata.parent.mkdir(parents=True, exist_ok=True)
+        metadata.unlink(missing_ok=True)
+        run_build(args, source, 'dependency-artifact-keys', selected)
         keys = load_keys(source, selected)
         emit(enabled='true', **{'selected-' + d: 'true' for d in selected})
         for dependency, (key, path, _) in keys.items():
-            # Keep cache path strings stable across hosted/self-hosted workspace roots.
-            relative = path.relative_to(Path(os.environ['GITHUB_WORKSPACE']).resolve())
-            emit(**{dependency + '-key': key, dependency + '-path': relative.as_posix()})
+            emit(**{dependency + '-key': key, dependency + '-path': path.relative_to(workspace).as_posix()})
         return
     dependency = os.environ['CACHE_DEPENDENCY']
     if dependency not in selected:
         raise ValueError('dependency was not selected')
     keys = load_keys(source, selected)
-    # Ineligible dependencies retain source fallback without packaging or saving.
-    # The product helper skips runtime smoke when the target cannot run here.
     if dependency in keys:
         key, path, fingerprint = keys[dependency]
-        exact = (os.environ.get('CACHE_HIT') == 'true' and
-                 os.environ.get('CACHE_MATCHED_KEY') == key and
-                 os.environ.get('CACHE_REQUESTED_KEY') == key)
-        if not exact:
-            if path.exists():
-                shutil.rmtree(path)
-            seed_candidate(args.candidate_path, dependency, fingerprint, path)
-    run_container(args, source, 'dependency-artifact-prepare', [dependency])
+        exact = (os.environ.get('CACHE_HIT') == 'true' and os.environ.get('CACHE_MATCHED_KEY') == key
+                 and os.environ.get('CACHE_REQUESTED_KEY') == key)
+        if not exact and path.exists():
+            shutil.rmtree(path)
+    run_build(args, source, 'dependency-artifact-prepare', [dependency])
     if dependency in keys:
         for name in ('entry.json', 'bundle.tar.gz'):
             file = path / name
             if file.is_symlink() or not file.is_file() or not file.stat().st_size:
                 raise ValueError('missing prepared bundle output: ' + name)
         entry = json.loads((path / 'entry.json').read_text())
-        if entry.get('dependency') != dependency or entry.get('fingerprint') != fingerprint:
+        if not isinstance(entry, dict) or entry.get('dependency') != dependency or entry.get('fingerprint') != fingerprint:
             raise ValueError('prepared bundle identity does not match requested cache key')
         emit(ready='true')
 
