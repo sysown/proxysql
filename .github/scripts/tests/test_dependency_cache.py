@@ -3,8 +3,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
+import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -112,6 +116,56 @@ class DependencyCacheTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.run_cache(**options)
                 run.assert_not_called()
+
+    def test_container_outputs_are_runner_owned_even_when_preparation_fails(self):
+        real_run = subprocess.run
+        if not sys.platform.startswith('linux') or os.getuid() == 0 or not shutil.which('sudo') or real_run(
+                ['sudo', '-n', 'true'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+            self.skipTest('requires an unprivileged Linux runner with passwordless sudo')
+
+        # Replace only Docker transport: run its actual shell/Make recipe as
+        # root so the filesystem ownership handoff remains real.
+        def root_container(command, **kwargs):
+            environment = []
+            for index, value in enumerate(command):
+                if value == '-e':
+                    environment.append(command[index + 1])
+            script = command[-1].replace('cd /opt/proxysql;', 'cd ' + shlex.quote(str(self.source)) + ';')
+            return real_run(['sudo', '-n', 'env'] + environment + ['bash', '-c', script],
+                            cwd=self.source, check=kwargs['check'],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        # Also reclaim on a regression, before TemporaryDirectory cleanup.
+        self.addCleanup(lambda: real_run(['sudo', '-n', 'chown', '-R',
+                                         str(os.getuid()) + ':' + str(os.getgid()), str(self.root)], check=True))
+        args = SimpleNamespace(service='fixture_build', tier='v40', sanitizer='asan', coverage='true')
+        for fails in (False, True):
+            with self.subTest(preparation_fails=fails):
+                (self.source / 'deps/Makefile').write_text(
+                    '.PHONY: dependency-artifact-prepare\n'
+                    'dependency-artifact-prepare:\n'
+                    '\tmkdir -p libssl/openssl/include duckdb/build artifacts/__pycache__ ../.cache/dependency-artifacts\n'
+                    '\ttouch libssl/openssl/include/ssl.h duckdb/build/libduckdb.a artifacts/__pycache__/ci.pyc\n'
+                    '\tstat -c %u libssl/openssl/include/ssl.h > ../created-by-uid\n'
+                    + ('\texit 43\n' if fails else ''))
+                with patch.object(CACHE.subprocess, 'run', side_effect=root_container):
+                    if fails:
+                        with self.assertRaises(subprocess.CalledProcessError) as failure:
+                            CACHE.run_build(args, self.source, 'dependency-artifact-prepare', ['openssl', 'duckdb'])
+                        # GNU Make reports a failed recipe as status 2.
+                        self.assertEqual(failure.exception.returncode, 2)
+                    else:
+                        CACHE.run_build(args, self.source, 'dependency-artifact-prepare', ['openssl', 'duckdb'])
+                self.assertEqual((self.source / 'created-by-uid').read_text().strip(), '0')
+                for relative in ('deps/libssl/openssl/include/ssl.h', 'deps/duckdb/build/libduckdb.a',
+                                 'deps/artifacts/__pycache__/ci.pyc'):
+                    path = self.source / relative
+                    self.assertEqual(path.stat().st_uid, os.getuid(), relative)
+                    # Exercise the same host operations that failed in CI.
+                    path.touch()
+                shutil.rmtree(self.source / 'deps/libssl/openssl')
+                shutil.rmtree(self.source / 'deps/duckdb/build')
+                shutil.rmtree(self.source / 'deps/artifacts/__pycache__')
 
     def test_older_source_skips_only_cache_and_action_keeps_exact_restore_and_save(self):
         (self.source / 'deps/artifacts/ci.py').unlink()
