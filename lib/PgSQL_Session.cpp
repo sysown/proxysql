@@ -1230,6 +1230,10 @@ int PgSQL_Session::handler_again___status_RESYNCHRONIZING_CONNECTION() {
 		}
 		RequestEnd(myds, false); // we close the session gracefully
 		finishQuery(myds, myds->myconn, false);
+		if (extq_flush_segment) {
+			// The Sync ended a segment the client ended with Flush that only parsed or described.
+			extq_segment_done();
+		}
 		return 0;
 	} else {
 		if (rc == -1) {
@@ -2714,6 +2718,7 @@ __implicit_sync:
 							extended_cache_frame_stage = flush ? 255 : 0;
 #endif
 							extq_flush_segment = flush;
+							extq_segment_effects = false;
 
 						__run_sync_again:
 							int rc = handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_SYNC();
@@ -3407,10 +3412,15 @@ handler_again:
 
 			if (extq_flush_segment) {
 				// The segment the client ended with Flush is done; its last message was answered
-				// locally. The connection keeps the group's work until the client's Sync.
+				// locally. The connection keeps the group's work until the client's Sync, unless the
+				// segment only parsed or described: then that work ends with a Sync now.
 				if (PgSQL_Backend* _mybe = find_backend(current_hostgroup)) {
 					if (_mybe->server_myds && _mybe->server_myds->myconn) {
-						finishQuery(_mybe->server_myds, _mybe->server_myds->myconn, true);
+						PgSQL_Connection* c = _mybe->server_myds->myconn;
+						if (c->is_pipeline_active() && extq_segment_releasable()) {
+							NEXT_IMMEDIATE(extq_sync_step(false));
+						}
+						finishQuery(_mybe->server_myds, c, c->is_pipeline_active());
 					}
 				}
 				extq_segment_done();
@@ -3701,8 +3711,9 @@ handler_again:
 							extq_buffering = true;
 							extq_buffer_message();
 							if (extended_query_frame.empty()) {
-								// Its only message: the unit ends with the client's Sync, or with its Flush.
-								extq_finish(extq_flush_segment == false);
+								// Its only message: the unit ends with the client's Sync, or with its Flush,
+								// unless it only parsed or described.
+								extq_finish(extq_flush_segment == false || extq_segment_releasable());
 								NEXT_IMMEDIATE(PROCESSING_EXTQ_BATCH);
 							}
 							NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC);
@@ -4073,7 +4084,7 @@ handler_again:
 				// has_pending_messages: the latter still gates the frame-drain
 				// NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC) below, which must not fire
 				// on an empty frame just because a portal is open.
-				bool sticky_backend_connection = has_pending_messages || group_continues ||
+				bool sticky_backend_connection = has_pending_messages || (group_continues && myconn->is_pipeline_active()) ||
 					(!clear_portals_at_boundary && named_portals.size() > (drop_unnamed_portal ? 1u : 0u));
 
 				RequestEnd(myds, false);
@@ -8926,8 +8937,9 @@ int PgSQL_Session::extq_after_message(int rc, unsigned int out_before, enum sess
 		return extq_finish(true);
 	}
 	if (extended_query_frame.empty()) {
-		// The unit ends where the client ended it: with its Sync, or with its Flush.
-		return extq_finish(extq_flush_segment == false);
+		// The unit ends where the client ended it: with its Sync, or with its Flush, unless it only
+		// parsed or described.
+		return extq_finish(extq_flush_segment == false || extq_segment_releasable());
 	}
 	if (extq_entries.size() >= EXTQ_BATCH_MAX_ENTRIES) {
 		// This much goes now, ending in a Flush so its replies come back; the rest of the unit is
@@ -9387,7 +9399,7 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 		extq_allowed = resume;
 		return 1;
 	}
-	if (extq_sync == false) {
+	if (extq_sync == false || (backend_error && extq_flush_segment)) {
 		// The error ended the unit: PostgreSQL skips the rest of it, until the client's Sync.
 		reset_extended_query_frame(true);
 	}
@@ -9403,8 +9415,13 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 		clear_named_portals();
 	}
 	finishQuery(myds, myconn, sticky);
-	extq_group_end();
 	extq_clear();
+	if (extq_flush_segment && extq_discard_until_sync == false) {
+		// A segment the client ended with Flush, ended with a Sync because it only parsed or described.
+		extq_segment_done();
+		return 0;
+	}
+	extq_group_end();
 	return 0;
 }
 
@@ -9446,9 +9463,16 @@ bool PgSQL_Session::extq_held_unsynced() const {
 	return false;
 }
 
-bool PgSQL_Session::extq_last_message_gets_sync(bool has_effects) const {
-	(void)has_effects;
-	return extended_query_frame.empty() && extq_flush_segment == false;
+bool PgSQL_Session::extq_last_message_gets_sync(bool has_effects) {
+	return extended_query_frame.empty() && (extq_flush_segment == false || (has_effects == false && extq_segment_releasable()));
+}
+
+// Ends a segment that only parsed or described with a Sync, as PR #6526 did for such frames, so the
+// connection is shared again. The Sync changes nothing on the backend: no row was read or written, no
+// portal or transaction is left. Its ReadyForQuery is dropped; the client's Sync gets one later.
+bool PgSQL_Session::extq_segment_releasable() {
+	return extq_flush_segment && extq_segment_effects == false && extq_group_holds_work == false &&
+		named_portals.empty() && NumActiveTransactions() == 0 && is_in_transaction() == false;
 }
 
 void PgSQL_Session::extq_segment_done() {
@@ -9618,6 +9642,11 @@ int PgSQL_Session::handler___status_PROCESSING_EXTENDED_QUERY_SYNC() {
 		}
 		}, packet);
 	extq_in_handler = false;
+	// What went to the backend beyond a Parse or a statement's Describe: kept until the client's Sync.
+	if (rc == 1 && (status == PROCESSING_STMT_EXECUTE || status == PROCESSING_STMT_BIND || status == PROCESSING_STMT_CLOSE ||
+		(status == PROCESSING_STMT_DESCRIBE && CurrentQuery.extended_query_info.stmt_type == 'P'))) {
+		extq_segment_effects = true;
+	}
 
 	if (extq_buffering) {
 		rc = extq_after_message(rc, out_before, st_before);

@@ -658,6 +658,203 @@ static void case_row8_connect(Mode m, bool) {
 	admin_set("pgsql-connect_timeout_server_max", timeout_before.empty() ? "10000" : timeout_before);
 }
 
+// ===== Releasing a part with no effects (decision 15, after PR #6526). =====
+
+// Whether a backend is inside a transaction whose last statement carries marker, seen from a direct
+// connection. Waits up to ms for the answer to become want: a backend that has just ended its
+// transaction can linger in pg_stat_activity for a few ms.
+static bool backend_txn_open_within(const std::string& marker, bool want, int ms = 1000) {
+	for (int waited = 0; ; waited += 50) {
+		const std::string n = scalar(g_be, "SELECT count(*) FROM pg_stat_activity WHERE xact_start IS NOT NULL "
+			"AND pid <> pg_backend_pid() AND query LIKE '%" + marker + "%'");
+		const bool open = !n.empty() && n != "0";
+		if (open == want || waited >= ms) return open;
+		usleep(50000);
+	}
+}
+
+static void check_held(const std::string& marker, bool want, const char* what, Mode m) {
+	const bool open = backend_txn_open_within(marker, want);
+	ok(open == want, "%s [%s]: backend transaction %s (expected %s)", what, mode_name(m), open ? "held" : "not held",
+		want ? "held" : "not held");
+}
+
+// What postgres.js sends: Parse and Describe of the statement, Flush, then Bind, Execute, Sync.
+static void case_release_postgresjs(Mode m, bool) {
+	auto c = client(m);
+	const std::string mk = uniq();
+	check(run(*c, [&] { c->prepareStatement("", mk + "SELECT $1::text AS x", false); c->describeStatement("", false); c->sendFlush(); }),
+		"1 t T", "release postgres.js: P D(S) H", m, false);
+	check_held(mk, false, "release postgres.js: after P D(S) H", m);
+	check(run(*c, [&] { c->bindStatement("", "", { { std::string("a"), 0 } }, {}, false); c->executePortal("", 0, false); c->sendSync(); }),
+		"2 D C(SELECT 1) Z(I)", "release postgres.js: B E S", m, false);
+}
+
+static void case_release_shapes(Mode m, bool) {
+	auto c = client(m);
+	std::string mk = uniq();
+	check(run(*c, [&] { c->prepareStatement("", mk + "SELECT 1", false); c->sendFlush(); }), "1", "release shapes: P H", m, false);
+	check_held(mk, false, "release shapes: after P H", m);
+	run(*c, [&] { c->sendSync(); });
+	mk = uniq();
+	check(run(*c, [&] { c->prepareStatement("flush_rs", mk + "SELECT 2", false); c->sendSync(); }), "1 Z(I)", "release shapes: P(flush_rs) S", m, false);
+	check(run(*c, [&] { c->describeStatement("flush_rs", false); c->sendFlush(); }), "t T", "release shapes: D(S existing) H", m, false);
+	check_held(mk, false, "release shapes: after D(S existing) H", m);
+	run(*c, [&] { c->sendSync(); });
+	mk = uniq();
+	check(run(*c, [&] { c->prepareStatement("", mk + "SELECT 3", false); c->closeStatement("", false); c->sendFlush(); }), "1 3",
+		"release shapes: P C(S) H", m, false);
+	check_held(mk, false, "release shapes: after P C(S) H", m);
+	run(*c, [&] { c->sendSync(); });
+}
+
+// One backend connection for the hostgroup: a released part lets another client run, a held one
+// makes it wait for the Sync. The unbatched mode's startup option keeps the connection with its session
+// for good, so that mode uses plain native clients here.
+static void case_release_pool_pressure(Mode mode, bool) {
+	const Mode m = (mode == Mode::NATIVE_UNBATCHED) ? Mode::NATIVE : mode;
+	const std::string max_before = scalar(g_admin, "SELECT max_connections FROM pgsql_servers WHERE hostgroup_id=" +
+		std::to_string(HG) + " LIMIT 1");
+	exec(g_admin, "UPDATE pgsql_servers SET max_connections=1 WHERE hostgroup_id=" + std::to_string(HG));
+	exec(g_admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	reset_pool(g_admin);
+	{
+		auto a = client(m);
+		auto b = client(m);
+		check(run(*a, [&] { a->prepareStatement("", uniq() + "SELECT 1", false); a->describeStatement("", false); a->sendFlush(); }),
+			"1 t T", "pool pressure: A P D(S) H", m, false);
+		check(run(*b, [&] { b->sendQuery("SELECT 1"); }, 1500), "T D C(SELECT 1) Z(I)", "pool pressure: B runs while A's part is released", m, false);
+		check(run(*a, [&] { a->bindStatement("", "", {}, {}, false); a->executePortal("", 0, false); a->sendSync(); }),
+			"2 D C(SELECT 1) Z(I)", "pool pressure: A B E S", m, false);
+		const std::string tag = tag_for("pressure", m, false);
+		check(run(*a, [&] { insert_flush(*a, tag); }), "1 2 C(INSERT 0 1)", "pool pressure: A P B E(INSERT) H", m, false);
+		check(run(*b, [&] { b->sendQuery("SELECT 1"); }, 1000), "", "pool pressure: B waits while A holds the connection", m, false);
+		run(*a, [&] { a->sendSync(); });
+		check(tokens(b->readUntilQuiet(QUIET_MS)), "T D C(SELECT 1) Z(I)", "pool pressure: B runs after A's Sync", m, false);
+	}
+	exec(g_admin, "UPDATE pgsql_servers SET max_connections=" + (max_before.empty() ? std::string("1000") : max_before) +
+		" WHERE hostgroup_id=" + std::to_string(HG));
+	exec(g_admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	reset_pool(g_admin);
+}
+
+// A part that only parses or describes is still held when the group already holds something.
+static void case_release_not(Mode m, bool) {
+	const bool native = (m != Mode::LIBPQ);
+	{	// in BEGIN
+		auto c = client(m);
+		maybe_begin(*c, true);
+		const std::string mk = uniq();
+		check(run(*c, [&] { c->prepareStatement("", mk + "SELECT 1", false); c->describeStatement("", false); c->sendFlush(); }),
+			"1 t T", "release not, in BEGIN: P D(S) H", m, true);
+		check_held(mk, true, "release not, in BEGIN", m);
+		check(run(*c, [&] { c->sendSync(); }), "Z(T)", "release not, in BEGIN: S", m, true);
+	}
+	{	// after an INSERT held by a Flush
+		auto c = client(m);
+		const std::string tag = tag_for("notrel", m, false), mk = uniq();
+		check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "release not, after INSERT: P B E H", m, false);
+		check(run(*c, [&] { c->prepareStatement("", mk + "SELECT 1", false); c->describeStatement("", false); c->sendFlush(); }),
+			"1 t T", "release not, after INSERT: P D(S) H", m, false);
+		check_held(mk, true, "release not, after INSERT", m);
+		ok(rows(tag) == 0, "release not, after INSERT [%s]: the INSERT is not visible before the Sync (rows=%ld)", mode_name(m), rows(tag));
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "release not, after INSERT: S", m, false);
+		ok(rows(tag) == 1, "release not, after INSERT [%s]: committed by the Sync (rows=%ld)", mode_name(m), rows(tag));
+	}
+	if (native) {	// a named portal open
+		auto c = client(m);
+		const std::string mk = uniq();
+		check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "p1", {}, {}, false); c->sendFlush(); }),
+			"1 2", "release not, named portal: P B(p1) H", m, false);
+		check(run(*c, [&] { c->prepareStatement("flush_np", mk + "SELECT 1", false); c->describeStatement("flush_np", false); c->sendFlush(); }),
+			"1 t T", "release not, named portal: P D(S) H", m, false);
+		check_held(mk, true, "release not, named portal", m);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "release not, named portal: S", m, false);
+	}
+	if (native) {	// a suspended unnamed portal
+		auto c = client(m);
+		const std::string mk = uniq();
+		check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "", {}, {}, false);
+				c->executePortal("", 2, false); c->sendFlush(); }), "1 2 D D s", "release not, suspended portal: P B E(2) H", m, false);
+		check(run(*c, [&] { c->prepareStatement("flush_sp", mk + "SELECT 1", false); c->describeStatement("flush_sp", false); c->sendFlush(); }),
+			"1 t T", "release not, suspended portal: P D(S) H", m, false);
+		check_held(mk, true, "release not, suspended portal", m);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "release not, suspended portal: S", m, false);
+	}
+	if (native) {	// Describe of the portal
+		auto c = client(m);
+		const std::string mk = uniq();
+		check(run(*c, [&] { c->prepareStatement("", mk + SER, false); c->bindStatement("", "", {}, {}, false); c->describePortal("", false);
+				c->sendFlush(); }), "1 2 T", "release not, D(P): P B D(P) H", m, false);
+		check_held(mk, true, "release not, D(P)", m);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "release not, D(P): S", m, false);
+	}
+	if (native) {	// a named Bind
+		auto c = client(m);
+		const std::string mk = uniq();
+		check(run(*c, [&] { c->prepareStatement("", mk + SER, false); c->bindStatement("", "p2", {}, {}, false); c->sendFlush(); }),
+			"1 2", "release not, named B: P B(p2) H", m, false);
+		check_held(mk, true, "release not, named B", m);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "release not, named B: S", m, false);
+	}
+	if (native) {	// a named portal bound and closed in the same part: nothing left open, but the Bind ran
+		auto c = client(m);
+		const std::string mk = uniq();
+		check(run(*c, [&] { c->prepareStatement("", mk + SER, false); c->bindStatement("", "p3", {}, {}, false); c->closePortal("p3", false);
+				c->sendFlush(); }), "1 2 3", "release not, named C(P): P B(p3) C(P p3) H", m, false);
+		check_held(mk, true, "release not, named C(P)", m);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "release not, named C(P): S", m, false);
+	}
+	{	// an Execute
+		auto c = client(m);
+		const std::string mk = uniq();
+		check(run(*c, [&] { c->prepareStatement("", mk + "SELECT 1", false); c->bindStatement("", "", {}, {}, false);
+				c->executePortal("", 0, false); c->sendFlush(); }), "1 2 D C(SELECT 1)", "release not, E: P B E H", m, false);
+		check_held(mk, true, "release not, E", m);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "release not, E: S", m, false);
+	}
+}
+
+static void case_release_error(Mode m, bool) {
+	auto c = client(m);
+	check(run(*c, [&] { c->prepareStatement("", uniq() + "SELEC 1", false); c->describeStatement("", false); c->sendFlush(); }),
+		"E(42601)", "release error: P(syntax error) D(S) H", m, false);
+	check(run(*c, [&] { c->sendSync(); }), "Z(I)", "release error: S", m, false);
+}
+
+// The session after a released part: the Sync, a simple Query, a failing Bind, a disconnect.
+static void case_release_after(Mode m, bool) {
+	{
+		auto c = client(m);
+		const std::string mk = uniq();
+		check(run(*c, [&] { c->prepareStatement("", mk + "SELECT 1", false); c->describeStatement("", false); c->sendFlush(); }),
+			"1 t T", "release after: P D(S) H", m, false);
+		check_held(mk, false, "release after: P D(S) H", m);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "release after: S", m, false);
+		check(run(*c, [&] { c->sendQuery("SELECT 1"); }), "T D C(SELECT 1) Z(I)", "release after: Q", m, false);
+		check(run(*c, [&] { c->prepareStatement("", uniq() + "SELECT 1/0", false); c->describeStatement("", false); c->sendFlush(); }),
+			"1 t T", "release after: P(1/0) D(S) H", m, false);
+		check(run(*c, [&] { c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendSync(); }),
+			"2 E(22012) Z(I)", "release after: B E S", m, false);
+	}
+	const std::string mk = uniq();
+	{
+		auto c = client(m);
+		check(run(*c, [&] { c->prepareStatement("", mk + "SELECT 1", false); c->describeStatement("", false); c->sendFlush(); }),
+			"1 t T", "release after: P D(S) H, then disconnect", m, false);
+	}
+	check_held(mk, false, "release after: disconnect", m);
+}
+
+// The part's last message is answered by ProxySQL: the backend work before it is still ended with a Sync.
+static void case_release_trailing_local(Mode m, bool) {
+	auto c = client(m);
+	const std::string mk = uniq();
+	check(run(*c, [&] { c->prepareStatement("", mk + "SELECT 1", false); c->describeStatement("", false);
+			c->closeStatement("flush_x", false); c->sendFlush(); }), "1 t T 3", "release trailing local: P D(S) C(S x) H", m, false);
+	check_held(mk, false, "release trailing local", m);
+}
+
 struct Case {
 	const char* name;
 	int checks;        // ok() calls per (mode, txn) run
@@ -689,6 +886,13 @@ static const std::vector<Case> CASES = {
 	{ "row 7 local",                 10, 10, true, case_row7_local },
 	{ "row 7 rules",                 9,  5, true,  case_row7_rules },
 	{ "row 8 connect",               3,  3, false, case_row8_connect },
+	{ "release postgres.js",         3,  3, false, case_release_postgresjs },
+	{ "release shapes",              7,  7, false, case_release_shapes },
+	{ "release pool pressure",       6,  6, false, case_release_pool_pressure },
+	{ "release not",                 29, 12, false, case_release_not },
+	{ "release error",               2,  2, false, case_release_error },
+	{ "release after",               8,  8, false, case_release_after },
+	{ "release trailing local",      2,  2, false, case_release_trailing_local },
 };
 
 static const Mode MODES[] = { Mode::LIBPQ, Mode::NATIVE, Mode::NATIVE_UNBATCHED };

@@ -301,6 +301,8 @@ private:
 	// The held connection carries this group's work that no Sync concluded. Kept by the session
 	// because the connection's own flag does not survive everything (leaving libpq pipeline mode).
 	bool extq_group_holds_work { false };
+	// Something beyond a Parse or a statement's Describe went to a backend in this segment.
+	bool extq_segment_effects { false };
 	// An error ended the group before the client's Sync. PostgreSQL ignores everything up to that
 	// Sync, then answers it with one ReadyForQuery; extq_discard_status is its transaction state.
 	bool extq_discard_until_sync { false };
@@ -454,7 +456,10 @@ private:
 	// goes to the client; otherwise ProxySQL's, whose ReadyForQuery is dropped.
 	enum session_status extq_sync_step(bool relay);
 	// Whether the message being handled, the last one queued, ends the group with a Sync.
-	bool extq_last_message_gets_sync(bool has_effects) const;
+	bool extq_last_message_gets_sync(bool has_effects);
+	// A segment the client ended with Flush that leaves nothing on the backend worth keeping: it can
+	// end with a Sync instead, and its connection go back to the pool.
+	bool extq_segment_releasable();
 	// A segment ended by the client's Flush is done: the group stays open, the session waits for
 	// the client.
 	void extq_segment_done();
