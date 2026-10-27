@@ -10,6 +10,11 @@ ifneq (,$(findstring ERROR,$(PROXYSQL_PATH)))
 $(error $(PROXYSQL_PATH))
 endif
 
+# Capture caller flags before this Makefile assigns flags for plugin objects.
+# Environment exports survive assignments and otherwise leak plugin flags into
+# the dependency submake, invalidating an already prepared artifact identity.
+DUCKDB_DEP_CXXFLAGS := $(CXXFLAGS)
+
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
@@ -102,9 +107,19 @@ DEPFLAGS := -MMD -MP
 $(ODIR):
 	mkdir -p $(ODIR)
 
-$(DUCKDB_AR):
-	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
+# Reevaluate identity before compiling, including an already present archive.
+# Explicit external DUCKDB_PATH overrides remain validated by the archive checker.
+ifeq ($(abspath $(DUCKDB_PATH)),$(abspath $(PROXYSQL_PATH)/deps/duckdb/duckdb))
+.PHONY: prepare-duckdb
+prepare-duckdb:
+$(DUCKDB_AR): prepare-duckdb
+	CXXFLAGS='$(subst ','"'"',$(DUCKDB_DEP_CXXFLAGS))' $(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 DEPS_MODE=$(or $(DEPS_MODE),auto) duckdb
 	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
+else
+$(DUCKDB_AR):
+	CXXFLAGS='$(subst ','"'"',$(DUCKDB_DEP_CXXFLAGS))' $(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
+	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
+endif
 
 # Build-flag freshness stamp (root cause C1 fix, part 2). The .o rule below
 # previously depended only on sources, headers and $(DUCKDB_AR) -- NOT on

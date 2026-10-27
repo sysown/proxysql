@@ -9,6 +9,7 @@ services:
     environment:
       - MAKE
       - MAKEOPT
+      - DEPS_MODE
       - CURVER
       - PKG_RELEASE
       - PROXYSQL_BUILD_TYPE
