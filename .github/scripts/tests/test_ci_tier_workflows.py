@@ -123,10 +123,9 @@ class WorkflowTests(unittest.TestCase):
      if 'run-tests-isolated.bash' in step.get('run',''):
       with self.subTest(file=file.name):self.assertNotIn('matrix.coverage',str(step.get('if','')))
  def test_runner_picker_does_not_wait_on_its_target_pool(self):
-  for file in (ROOT/'.github/workflows').glob('*.yml'):
-   picker=workflow(file.name).get('jobs',{}).get('pick-runner')
-   if picker:
-    with self.subTest(file=file.name):self.assertNotIn('self-hosted',str(picker['runs-on']))
+  context=workflow('ci-tier-context.yml')['jobs']['context']
+  self.assertNotIn('self-hosted',str(context['runs-on']))
+  self.assertTrue(any(s.get('name')=='Pick runner pool' for s in context['steps']))
  def test_coverage_uses_tested_sha_and_infrastructure_path(self):
   for file in (ROOT/'.github/workflows').glob('*.yml'):
    for job in workflow(file.name).get('jobs',{}).values():

@@ -29,80 +29,16 @@ jobs:
       producer_attempt: ${{ inputs.producer_attempt }}
       consumer_file: ci-unit-tests-asan-coverage.yml
       consumer_inputs: ${{ toJson(inputs) }}
+      pick_runner: true
+      runner_eligible: ${{ (contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (github.event.workflow_run && contains(fromJson('["renecannao","rahim-kanji"]'), github.event.workflow_run.actor.login))) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
+      hosted_runner: ubuntu-24.04
+      hosted_on_lookup_failure: true
     secrets: inherit
-  pick-runner:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    permissions:
-      actions: read
-    outputs:
-      runson: ${{ steps.pick.outputs.runson }}
-    steps:
-    - name: Pick runner pool
-      id: pick
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        REPO: ${{ github.repository }}
-        POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
-        ELIGIBLE: ${{ (contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (github.event.workflow_run && contains(fromJson('["renecannao","rahim-kanji"]'), github.event.workflow_run.actor.login)))
-          && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
-      run: |
-        set -uo pipefail
-        choice='"ubuntu-24.04"'
-        if [ "${ELIGIBLE:-}" = "true" ]; then
-          POOL="${POOL_SIZE:-6}"
-          # Listing runners needs repo admin, which no available token has, so
-          # infer pool demand from job state the default token CAN read.
-          # demand = in-progress jobs carrying the 'proxysql-ci' label, i.e. the
-          # jobs actually occupying a pool VM right now.
-          #
-          # Two corrections vs the original heuristic:
-          #  - Match the 'proxysql-ci' label, not a 'ci-vm' runner_name prefix.
-          #    The prefix missed every dev128-ci-vm-* runner, so their occupancy
-          #    was invisible and the pool looked emptier than it was.
-          #  - Count in-progress jobs ONLY. Including queued jobs made the
-          #    decision self-defeating: any backlog kept demand >= POOL, which
-          #    pinned every later decider to spill regardless of real occupancy.
-          # free = POOL - demand; self-hosted iff free>=1.
-          # Early-exit once demand hits POOL.
-          demand=0; err=0
-          : > e1
-          in_progress_ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>e1) || err=1
-          if [ "$err" = "0" ]; then
-            ids="${in_progress_ids:-}"
-            for rid in ${ids}; do
-              [ -n "$rid" ] || continue
-              [ "$demand" -ge "$POOL" ] && break
-              if ! n=$(gh api --paginate --slurp "repos/${REPO}/actions/runs/${rid}/jobs?per_page=100" 2>>e1 | jq '[.[].jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length'); then
-                err=1
-                break
-              fi
-              demand=$(( demand + ${n:-0} ))
-            done
-          fi
-          if [ "$err" = "0" ]; then
-            free=$(( POOL - demand ))
-            echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (in-progress on pool)"
-            if [ "${free}" -ge 1 ]; then
-              choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
-            else
-              choice='"ubuntu-24.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
-            fi
-          else
-            echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1
-            choice='"ubuntu-24.04"'; echo ">>> demand query failed -> spill to GitHub-hosted"
-          fi
-        else
-          echo ">>> not eligible for self-hosted -> GitHub-hosted"
-        fi
-        echo "runson=${choice}" >> "$GITHUB_OUTPUT"
-        echo ">>> decision: runson=${choice}"
   unit-tests:
     needs:
     - tier-context
-    - pick-runner
     if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['unit-tests'][0] != null }}
-    runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
     timeout-minutes: 120
     permissions:
       actions: read

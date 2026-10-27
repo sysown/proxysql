@@ -24,7 +24,7 @@ POOL_JOB = {"status": "in_progress", "labels": ["self-hosted", "proxysql-ci"]}
 
 @unittest.skipUnless(GH, "runner-selection tests require the GitHub CLI")
 class RunnerSelectionTests(unittest.TestCase):
-    def select(self, jobs, *, runs=None, eligible=True):
+    def select(self, jobs, *, runs=None, eligible=True, hosted='ubuntu-22.04', hosted_on_error=False):
         routes = {RUNS: runs if runs is not None else [{"workflow_runs": [{"id": n} for n in jobs]}]}
         routes.update({f"{RUNS}/{n}/jobs": pages for n, pages in jobs.items()})
         unexpected = []
@@ -71,12 +71,12 @@ class RunnerSelectionTests(unittest.TestCase):
                        GH_ENTERPRISE_TOKEN="fixture-only", GH_NO_UPDATE_NOTIFIER="1",
                        GH_CONFIG_DIR=str(root / "gh-config"), GH_PROMPT_DISABLED="1",
                        REPO="example/project", POOL_SIZE="6", ELIGIBLE=str(eligible).lower(),
+                       HOSTED_RUNNER=hosted, HOSTED_ON_LOOKUP_FAILURE=str(hosted_on_error).lower(),
                        GITHUB_OUTPUT=str(root / "output"))
             env.pop("GH_HOST", None)
-            workflow = yaml.safe_load(WORKFLOW.read_text())
-            script = workflow["jobs"]["pick-runner"]["steps"][0]["run"]
+            script = str(ROOT / '.github/scripts/pick-ci-runner.bash')
             try:
-                result = subprocess.run(["bash", "-c", script], cwd=root, env=env,
+                result = subprocess.run(["bash", script], cwd=root, env=env,
                                         capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(unexpected, [], result.stdout + result.stderr)
@@ -131,6 +131,14 @@ class RunnerSelectionTests(unittest.TestCase):
     def test_ineligible_actor_uses_hosted_without_api_calls(self):
         choice, _ = self.select({}, runs=[], eligible=False)
         self.assertEqual(choice, "ubuntu-22.04")
+
+    def test_sanitizer_lookup_failure_uses_its_hosted_policy(self):
+        choice, _ = self.select({}, runs=[500], hosted='ubuntu-24.04', hosted_on_error=True)
+        self.assertEqual(choice, 'ubuntu-24.04')
+
+    def test_hosted_distribution_is_preserved_for_ineligible_actor(self):
+        choice, _ = self.select({}, runs=[], eligible=False, hosted='ubuntu-24.04')
+        self.assertEqual(choice, 'ubuntu-24.04')
 
 
 if __name__ == "__main__":
