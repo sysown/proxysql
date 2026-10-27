@@ -203,11 +203,11 @@ jobs:
         name: package-${{ matrix.arch }}-${{ matrix.dist }}${{ matrix.type }}
         path: ${{ env.BIN_PKG }}
         # Artifacts are scoped to this run. A retried build replaces its own
-        # leg; retained successful legs remain available to upload retries.
+        # leg; retain successful legs for the full 30-day job rerun window.
         overwrite: true
         compression-level: 0
         if-no-files-found: error
-        retention-days: 3
+        retention-days: 30
 
     - name: Retain openssl dependency publication candidate
       if: ${{ success() && steps.dependencies.outputs.openssl-key != '' }}

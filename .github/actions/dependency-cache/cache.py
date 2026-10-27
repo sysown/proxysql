@@ -133,6 +133,9 @@ def seed_candidate(candidate_path, dependency, fingerprint, destination):
                 archive.is_symlink() or not archive.is_file()):
             continue
         entry = json.loads(entry_path.read_text())
+        # Supplied malformed metadata is an integrity failure, never a cache miss.
+        if not isinstance(entry, dict):
+            raise ValueError('producer candidate metadata must be a JSON object')
         if entry.get('dependency') != dependency or entry.get('fingerprint') != fingerprint:
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)

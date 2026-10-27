@@ -89,13 +89,6 @@ jobs:
         sanitizer: tsan
         coverage: 'false'
         candidate-path: accepted-dependency-candidates
-    - name: Build selected product inside Docker
-      env:
-        WITHTSAN: '1'
-        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
-        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
-      run: |
-        make ubuntu24-tap
     - name: Retain openssl dependency publication candidate
       if: ${{ success() && steps.dependencies.outputs.openssl-key != '' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -120,6 +113,13 @@ jobs:
         if-no-files-found: error
         compression-level: 0
         retention-days: 3
+    - name: Build selected product inside Docker
+      env:
+        WITHTSAN: '1'
+        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
+        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
+      run: |
+        make ubuntu24-tap
     - name: Run mysqlx-tsan-g1 + unit-tests-g1 TAP groups inside Docker
       env:
         TAP_GROUP: mysqlx-tsan-g1
@@ -203,7 +203,9 @@ jobs:
 
   dependency-publication:
     needs: [tier-context, unit-tests-tsan]
-    if: ${{ needs.unit-tests-tsan.result == 'success' }}
+    # Dependency smoke checks completed before product builds/tests. The reviewed
+    # publisher validates only this attempt's candidates and protected-source proof.
+    if: ${{ always() && !cancelled() && needs.tier-context.result == 'success' && (needs.unit-tests-tsan.result == 'success' || needs.unit-tests-tsan.result == 'failure') }}
     permissions:
       contents: write
       actions: read

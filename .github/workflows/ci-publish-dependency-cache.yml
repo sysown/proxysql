@@ -11,7 +11,7 @@ on:
 jobs:
   dependency-publication-plan:
     # PR misses stay in their merge-ref cache. Global bundles come only from
-    # successful protected-history builds, verified again by trusted ci.py.
+    # validated bundles from protected-history builds, verified again by trusted ci.py.
     if: ${{ inputs.enabled && github.repository == 'sysown/proxysql' && (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/v3.0') || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'v3.0' && github.event.workflow_run.head_repository.full_name == 'sysown/proxysql')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15

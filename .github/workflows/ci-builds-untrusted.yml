@@ -20,7 +20,7 @@ on:
       trigger:
         type: string
       trusted:
-        description: Whether the caller may use privileged CI infrastructure.
+        description: Reserved compatibility input; trusted infrastructure is always disabled
         required: false
         type: boolean
         default: false

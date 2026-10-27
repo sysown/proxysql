@@ -92,15 +92,6 @@ jobs:
         sanitizer: asan
         coverage: 'true'
         candidate-path: accepted-dependency-candidates
-    - name: Build selected product inside Docker
-      env:
-        WITHASAN: '1'
-        WITHGCOV: '1'
-        NOJEMALLOC: '1'
-        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
-        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
-      run: |
-        make ubuntu24-tap
     - name: Retain openssl dependency publication candidate
       if: ${{ success() && steps.dependencies.outputs.openssl-key != '' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -125,6 +116,15 @@ jobs:
         if-no-files-found: error
         compression-level: 0
         retention-days: 3
+    - name: Build selected product inside Docker
+      env:
+        WITHASAN: '1'
+        WITHGCOV: '1'
+        NOJEMALLOC: '1'
+        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
+        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
+      run: |
+        make ubuntu24-tap
     - name: Run unit tests + capture coverage inside Docker
       run: |
         docker compose run --rm \
@@ -265,7 +265,9 @@ jobs:
 
   dependency-publication:
     needs: [tier-context, unit-tests]
-    if: ${{ needs.unit-tests.result == 'success' }}
+    # Dependency smoke checks completed before product builds/tests. The reviewed
+    # publisher validates only this attempt's candidates and protected-source proof.
+    if: ${{ always() && !cancelled() && needs.tier-context.result == 'success' && (needs.unit-tests.result == 'success' || needs.unit-tests.result == 'failure') }}
     permissions:
       contents: write
       actions: read

@@ -138,6 +138,9 @@ else:
                 self.write_keys()
                 result = self.run_cache('keys')
                 self.assertNotEqual(result.returncode, 0)
+                error = ('invalid dependency fingerprint' if field == 'fingerprint' else
+                         'dependency key/path does not match fingerprint')
+                self.assertEqual(result.stderr.strip(), 'Dependency cache failed: ' + error)
                 self.keys['openssl'][field] = original
 
     def test_partial_or_wrong_cache_restore_is_deleted_before_prepare(self):
@@ -163,6 +166,23 @@ else:
                               CACHE_HIT='false',CACHE_MATCHED_KEY='',CACHE_REQUESTED_KEY=KEY)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertEqual((self.root/'seed-observed').read_text(),'accepted producer bundle')
+
+    def test_nonobject_producer_metadata_fails_cleanly_without_rebuilding(self):
+        self.assertEqual(self.run_cache('keys').returncode, 0)
+        candidates = self.root/'producer/dependency-candidate-a1-v40-normal-openssl'
+        candidates.mkdir(parents=True)
+        (candidates/'bundle.tar.gz').write_text('accepted producer bundle')
+        for entry in [[], None, 'metadata', 42, True]:
+            with self.subTest(entry=entry):
+                (candidates/'entry.json').write_text(json.dumps(entry))
+                (self.root/'calls.jsonl').unlink(missing_ok=True)
+                result = self.run_cache('prepare', candidate_path='producer', CACHE_DEPENDENCY='openssl',
+                                        CACHE_HIT='false', CACHE_MATCHED_KEY='', CACHE_REQUESTED_KEY=KEY)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stderr.strip(),
+                                 'Dependency cache failed: producer candidate metadata must be a JSON object')
+                self.assertFalse((self.root/'calls.jsonl').exists())
+                self.assertFalse((self.source/RELATIVE).exists())
 
     def test_legacy_product_source_skips_only_dependency_cache(self):
         (self.source/'deps/artifacts/ci.py').unlink()
@@ -233,6 +253,35 @@ else:
 
 
 
+    def test_sanitizer_candidates_publish_independently_after_unrelated_failures(self):
+        import re
+        for name, job_name in [('ci-unit-tests-asan-coverage.yml', 'unit-tests'),
+                               ('ci-unit-tests-tsan.yml', 'unit-tests-tsan')]:
+            with self.subTest(workflow=name):
+                doc = yaml.safe_load((ROOT/'.github/workflows'/name).read_text())
+                job = doc['jobs'][job_name]
+                steps = job['steps']
+                build_index = next(i for i, step in enumerate(steps)
+                                   if step.get('name') == 'Build selected product inside Docker')
+                candidates = [step for step in steps if step.get('name', '').startswith('Retain ')
+                              and 'dependency publication candidate' in step['name']]
+                for step in candidates:
+                    self.assertLess(steps.index(step), build_index)
+                publisher = doc['jobs']['dependency-publication']
+                for context, result, cancelled, want in [
+                        ('success', 'success', False, True),
+                        ('success', 'failure', False, True),
+                        ('failure', 'failure', False, False),
+                        ('success', 'skipped', False, False),
+                        ('success', 'cancelled', False, False),
+                        ('success', 'success', True, False)]:
+                    facts = {'needs.tier-context.result': context, 'needs.'+job_name+'.result': result}
+                    expression = re.sub(r'needs\.[a-z-]+\.result', lambda m: repr(facts[m[0]]),
+                                        publisher['if'][3:-2])
+                    expression = expression.replace('always()', 'True').replace('!cancelled()', str(not cancelled))
+                    expression = expression.replace('&&', ' and ').replace('||', ' or ')
+                    self.assertEqual(eval(expression, {'__builtins__': {}}, {}), want)
+
     def test_fork_snapshot_cannot_widen_contents_read_or_skip_actual_build(self):
         normal=yaml.safe_load((ROOT/'.github/workflows/ci-builds.yml').read_text())
         fork=yaml.safe_load((ROOT/'.github/workflows/ci-builds-untrusted.yml').read_text())
@@ -280,6 +329,7 @@ else:
         self.assertEqual(retained.get(resolve(download['with']['name'],2)),'successful first-attempt package')
         self.assertTrue(retain['with']['overwrite'])
         self.assertEqual(resolve(retain['with']['name'],1),resolve(retain['with']['name'],2))
+        self.assertGreaterEqual(retain['with']['retention-days'],30)
 
     def test_successful_packages_upload_after_other_leg_fails_but_missing_package_blocks_final_success(self):
         doc=yaml.safe_load((ROOT/'.github/workflows/ci-package-build.yml').read_text())
