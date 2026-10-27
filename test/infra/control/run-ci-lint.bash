@@ -96,5 +96,7 @@ run_check "Check superseded PR cancellation trigger" \
 
 run_check "Test CI skip-label gates" \
     python3 -m unittest discover -s test/infra/control -p test_ci_skip_label.py
+run_check "Test unit binary timeout and sanitizer failures" \
+    python3 -m unittest discover -s test/infra/control -p test_unit_runner_timeout.py
 
 echo ">>> CI lint suite: OK"
