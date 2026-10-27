@@ -150,8 +150,10 @@ class DependencyCacheTests(unittest.TestCase):
                     + ('\texit 43\n' if fails else ''))
                 with patch.object(CACHE.subprocess, 'run', side_effect=root_container):
                     if fails:
-                        with self.assertRaises(subprocess.CalledProcessError):
+                        with self.assertRaises(subprocess.CalledProcessError) as failure:
                             CACHE.run_build(args, self.source, 'dependency-artifact-prepare', ['openssl', 'duckdb'])
+                        # GNU Make reports a failed recipe as status 2.
+                        self.assertEqual(failure.exception.returncode, 2)
                     else:
                         CACHE.run_build(args, self.source, 'dependency-artifact-prepare', ['openssl', 'duckdb'])
                 self.assertEqual((self.source / 'created-by-uid').read_text().strip(), '0')
