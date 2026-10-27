@@ -63,6 +63,8 @@ EXPECTED_TIER_VARIANTS = {"v30", "v31", "v40"}
 # a legal (narrowing) mapping, not a string.
 VALID_WHOLE_BLOCK_STRINGS = ("read-all", "write-all")
 
+from ci_tier_conditions import condition_allows
+
 PRIVILEGED_USES = ("LouisBrunner/checks-action", "actions/cache/", "actions/upload-artifact")
 PRIVILEGED_NAME = re.compile(
     r"Pack (bin|test) cache|Pack src \+ matrix for handoff|Upload handoff|Archive artifacts"
@@ -211,6 +213,31 @@ def validate(base, fork, reusable):
             and ('workflow_run' not in caller_events or legacy_guard),
             "trusted CI-builds lacks same-repository guard",
         )
+        # Check actual foreign/fork event paths as well as guard presence.
+        # A substring check alone accepts a guard followed by "|| true".
+        scenarios = []
+        if 'pull_request' in caller_events:
+            for source, is_fork in [('outside/fork', True), ('outside/repo', False), ('sysown/proxysql', True)]:
+                scenarios.append({
+                    'github.event.pull_request': True,
+                    'github.event.pull_request.head.repo.full_name': source,
+                    'github.event.pull_request.head.repo.fork': is_fork,
+                    'github.event.workflow_run': None,
+                })
+        if 'workflow_run' in caller_events or not caller_events:
+            scenarios.append({
+                'github.event.pull_request': None,
+                'github.event.pull_request.head.repo.full_name': '',
+                'github.event.pull_request.head.repo.fork': False,
+                'github.event.workflow_run.head_repository.full_name': 'outside/fork',
+            })
+        for scenario in scenarios:
+            try:
+                allowed = condition_allows(condition, 'v31', 'normal', event_context={
+                    'github.event.pull_request.labels.*.name': [], **scenario})
+                require(not allowed, 'trusted CI-builds allows a foreign or fork source')
+            except ValueError as error:
+                problems.append('trusted CI-builds condition cannot be verified: ' + str(error))
         require(base_run.get("permissions") == "write-all", "trusted CI-builds permission changed")
         require(base_run.get("secrets") == "inherit", "trusted CI-builds secret handoff changed")
 

@@ -1,4 +1,6 @@
 import copy,unittest
+from pathlib import Path
+import yaml
 from check_ci_tier_fanout import validate_routes, version
 from ci_tier_conditions import condition_allows
 class RouteTests(unittest.TestCase):
@@ -7,6 +9,31 @@ class RouteTests(unittest.TestCase):
   callers['CI-g1']['on']['workflow_run']['workflows']=['CI-trigger','CI-builds']
   callers['CI-g1']['jobs']['run']['if']="${{ github.event.workflow_run.event != 'workflow_run' }}"
   self.assertEqual(validate_routes(rows,callers,engines,{'g1'},{'g1'}),[])
+ def test_native_completion_callers_reject_foreign_producers(self):
+  root=Path(__file__).resolve().parents[3]
+  checked=0
+  for path in (root/'.github/workflows').glob('CI-*.yml'):
+   caller=yaml.safe_load(path.read_text())
+   events=caller.get('on',caller.get(True,{})) or {}
+   if 'CI-builds' not in (events.get('workflow_run') or {}).get('workflows',[]):continue
+   for job in caller.get('jobs',{}).values():
+    if not job.get('uses','').startswith('sysown/proxysql/.github/workflows/'):continue
+    checked+=1
+    with self.subTest(workflow=path.name):
+     self.assertFalse(condition_allows(job.get('if'),'v31','normal',event_context={
+      'github.event.workflow_run.head_repository.full_name':'outside/fork'}))
+  self.assertGreater(checked,0)
+ def test_guarded_completion_preserves_native_legacy_and_manual_routes(self):
+  root=Path(__file__).resolve().parents[3]
+  gate=yaml.safe_load((root/'.github/workflows/CI-legacy-g4.yml').read_text())['jobs']['run']['if']
+  for event in ['pull_request','push','workflow_dispatch']:
+   with self.subTest(event=event):
+    self.assertTrue(condition_allows(gate,'v31','normal',event_context={
+     'github.event.workflow_run.event':event}))
+  self.assertFalse(condition_allows(gate,'v31','normal',event_context={
+   'github.event.workflow_run.event':'workflow_run'}))
+  self.assertTrue(condition_allows(gate,'v31','normal',event_context={
+   'github.event.workflow_run':None}))
  def fixture(self):
   rows=[dict(workflow='CI-g1',file='ci-g1.yml',job='tests',instance='run',automatic=True,tiers=['v40','v30','v31'],groups=['g1'],cells=[{}])]
   callers={'CI-g1':{'on':{'workflow_run':{'workflows':['CI-trigger']}},'jobs':{'run':{'uses':'sysown/proxysql/.github/workflows/ci-g1.yml@GH-Actions'}}}}

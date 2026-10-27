@@ -152,6 +152,26 @@ class Baseline(unittest.TestCase):
         base['jobs']['run']['if'] = base['jobs']['run']['if'].replace('!github.event.pull_request.head.repo.fork && ', '')
         self.assertIn('trusted CI-builds lacks same-repository guard', subject.validate(base, fork, reusable))
 
+    def test_trusted_caller_guards_cannot_be_bypassed_by_disjunctions(self):
+        for suffix in (' || true', ' || github.event.pull_request.head.repo.fork'):
+            for wrapped in (False, True):
+                with self.subTest(suffix=suffix, wrapped=wrapped):
+                    base, fork, reusable = minimal_documents()
+                    base['on'] = {'pull_request': {}, 'workflow_run': {}}
+                    gate = ('(!github.event.pull_request || '
+                        '(!github.event.pull_request.head.repo.fork && '
+                        'github.event.pull_request.head.repo.full_name == github.repository)) && '
+                        '(!github.event.workflow_run || '
+                        'github.event.workflow_run.head_repository.full_name == github.repository)')
+                    self.assertEqual(subject.validate(base | {'jobs': {'run': dict(
+                        base['jobs']['run'], **{'if': '${{ ' + gate + ' }}'})}}, fork, reusable), [])
+                    expression = gate + suffix
+                    if wrapped:
+                        expression = '(' + expression + ')'
+                    base['jobs']['run']['if'] = '${{ ' + expression + ' }}'
+                    self.assertIn('trusted CI-builds allows a foreign or fork source',
+                                  subject.validate(base, fork, reusable))
+
     def test_hosted_only_planner_is_valid_without_allowing_self_hosted_forks(self):
         base, fork, reusable = minimal_documents()
         reusable['jobs']['plan'] = {
