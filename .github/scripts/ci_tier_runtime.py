@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from ci_tier_plan import resolve_selection, make_plan, consumer_matrix, applicable_tests, validate_manifest, check_key
-from ci_tier_artifacts import build_binary_version, GitHubAPI, resolve_producer, load_manifest, select_artifact, restore_handoff, verify_binding
+from ci_tier_artifacts import GitHubAPI, resolve_producer, load_manifest, select_artifact, restore_handoff, verify_binding
 from ci_tier_checks import register, publish_result, reconcile, reporting_repository
 from ci_cancel_superseded import cancel_if_superseded
 
@@ -83,7 +83,11 @@ def standalone_selection():
 
 def stamp():
     plan=read_plan();leg=json.loads(os.environ['CI_LEG']);root=Path('proxysql')
-    version=build_binary_version(root)
+    # The runner host can be older than the Ubuntu build image. Execute the
+    # compiled artifact in that image, not through the host's dynamic loader.
+    version=subprocess.check_output(['docker','compose','run','--rm','--no-deps',
+        '--entrypoint','/opt/proxysql/src/proxysql','ubuntu24_dbg_build','--version'],
+        cwd=root,text=True,timeout=300)
     from ci_tier_artifacts import validate_binary
     validate_binary(leg['tier'],version)
     groups=json.loads((root/'test/tap/groups/groups.json').read_text())

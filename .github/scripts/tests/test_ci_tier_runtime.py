@@ -126,17 +126,41 @@ class RuntimeTests(unittest.TestCase):
    with self.assertRaisesRegex(RuntimeError,'superseded'):runtime.consumer()
    api.artifacts.assert_not_called();api.json_artifact.assert_not_called()
    api.request.assert_called_with('repos/sysown/proxysql/actions/runs/8/cancel','POST')
- def test_binary_metadata_uses_actual_version(self):
-  with tempfile.TemporaryDirectory() as folder:
-   prior=os.getcwd();os.chdir(folder)
-   try:
-    root=Path('proxysql');(root/'src').mkdir(parents=True);(root/'test/tap/groups').mkdir(parents=True)
-    (root/'test/tap/groups/groups.json').write_text(json.dumps({'core-t':['g1'],'plugin-t':['g1','@proxysql_min_version:4.0.0']}))
-    plan=make_plan(self.ctx(),dict(tiers=['v40','v30'],mode='normal',pr_number=42),{'consumers':[dict(workflow='CI-g1',file='ci-g1.yml',job='tests',automatic=True,tiers=['v30','v40'],groups=['g1'],cells=[{}])]})
-    with patch.object(runtime,'read_plan',return_value=plan),patch.dict(os.environ,{'CI_LEG':json.dumps(plan['legs'][1])}),patch.object(runtime,'build_binary_version',return_value='ProxySQL version 3.0.12'):
-     runtime.stamp()
-     meta=json.loads((root/'src/ci-tier.json').read_text());self.assertTrue(all(meta['applicable'].values()))
-   finally:os.chdir(prior)
+ def test_binary_metadata_uses_the_build_container_version(self):
+  # The host executable deliberately fails like an artifact built for a newer
+  # libc. Exercise stamp and its real subprocess boundary, not a version mock.
+  for tier,version in [('v30','3.0.12'),('v31','3.1.12'),('v40','4.0.12'),('v30','4.0.12')]:
+   with self.subTest(tier=tier,version=version),tempfile.TemporaryDirectory() as folder:
+    prior=os.getcwd();os.chdir(folder)
+    try:
+     root=Path('proxysql');(root/'src').mkdir(parents=True);(root/'test/tap/groups').mkdir(parents=True)
+     binary=root/'src/proxysql'
+     binary.write_text('#!/bin/sh\necho host-called > "$HOST_PROBE"\necho "GLIBC_2.38 not found" >&2\nexit 97\n')
+     binary.chmod(0o755)
+     tools=Path(folder)/'tools';tools.mkdir();docker=tools/'docker'
+     docker.write_text('#!/bin/sh\nprintf "%s\\n" "$PWD" "$@" > "$CONTAINER_PROBE"\necho "daemon diagnostic 9.9.9" >&2\nprintf "ProxySQL version %s\\n" "$FIXTURE_VERSION"\n')
+     docker.chmod(0o755)
+     (root/'test/tap/groups/groups.json').write_text(json.dumps({'core-t':['g1'],'plugin-t':['g2','@proxysql_min_version:4.0.0']}))
+     consumers=[dict(workflow='CI-'+g,file='ci-'+g+'.yml',job='tests',automatic=True,tiers=[tier],groups=[g],cells=[{}]) for g in ['g1','g2']]
+     plan=make_plan(self.ctx(),dict(tiers=[tier],mode='normal',pr_number=42),{'consumers':consumers})
+     probe=Path(folder)/'container-probe';host=Path(folder)/'host-probe'
+     env={'CI_LEG':json.dumps(plan['legs'][0]),'PATH':str(tools)+os.pathsep+os.environ['PATH'],
+          'HOST_PROBE':str(host),'CONTAINER_PROBE':str(probe),'FIXTURE_VERSION':version}
+     with patch.object(runtime,'read_plan',return_value=plan),patch.dict(os.environ,env):
+      if tier=='v30' and version.startswith('4.'):
+       with self.assertRaisesRegex(ValueError,'requested product tier'):runtime.stamp()
+       self.assertFalse((root/'src/ci-tier.json').exists());self.assertFalse(Path('metadata.json').exists())
+      else:
+       runtime.stamp()
+       meta=json.loads((root/'src/ci-tier.json').read_text())
+       self.assertEqual(meta['version'],'ProxySQL version '+version+'\n')
+       self.assertEqual(meta['tier'],tier)
+       self.assertEqual(meta['applicable_groups'],['g1','g2'] if tier=='v40' else ['g1'])
+       self.assertEqual(json.loads(Path('metadata.json').read_text()),meta)
+     self.assertFalse(host.exists(),'the artifact must never execute on the host')
+     self.assertEqual(probe.read_text().splitlines(),[str(root.resolve()),'compose','run','--rm','--no-deps',
+                      '--entrypoint','/opt/proxysql/src/proxysql','ubuntu24_dbg_build','--version'])
+    finally:os.chdir(prior)
  def test_failed_setup_does_not_wait_for_registration_forever(self):
   gh=dict(repository='sysown/proxysql',sha='a'*40,run_id='1',run_attempt='1',event={})
   api=Mock();api.request.return_value={'workflow_runs':[dict(display_title='branch CI-builds sha trigger=1/1',status='completed',conclusion='failure')]}
