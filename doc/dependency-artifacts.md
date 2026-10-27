@@ -12,7 +12,7 @@ coexist.
 
 Deploy the companion CI control changes
 ([PR #6543](https://github.com/sysown/proxysql/pull/6543)) before merging the
-product helper, then the AWS plugin integration. Validation can use the immutable
+product helper and enabling downstream consumers. Validation can use the immutable
 control commit before merge; ordinary core workflows adopt it when the control
 branch is updated.
 
