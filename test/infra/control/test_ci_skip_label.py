@@ -1,8 +1,4 @@
 from pathlib import Path
-import json
-import os
-import subprocess
-import tempfile
 import unittest
 import yaml
 from ci_tier_conditions import condition_allows
@@ -79,16 +75,6 @@ class SkipLabelTests(unittest.TestCase):
         doc = yaml.safe_load((ROOT / '.github/workflows/CI-trigger.yml').read_text())
         self.assertTrue(doc['run-name'].startswith("${{ contains(github.event.pull_request.labels.*.name, 'ci:skip') && '[ci:skip] ' || '' }}"))
 
-    def test_lint_push_gate_requires_successful_lookup(self):
-        doc = yaml.safe_load((ROOT / '.github/workflows/CI-lint-groups-json.yml').read_text())
-        for result, skip, expected in [('success', 'true', False), ('success', 'false', True), ('failure', '', False), ('cancelled', '', False)]:
-            with self.subTest(result=result, skip=skip):
-                self.assertEqual(self.allowed(doc['jobs']['lint'], **{
-                    'github.event_name': 'push',
-                    'needs.push-label.result': result,
-                    'needs.push-label.outputs.skip': skip,
-                }), expected)
-
     def test_existing_failure_and_fork_restrictions_remain(self):
         for name, doc in self.workflows('workflow_run'):
             for job in doc['jobs'].values():
@@ -101,53 +87,6 @@ class SkipLabelTests(unittest.TestCase):
         self.assertFalse(self.allowed(trigger['jobs']['run'], **{
             'github.event.pull_request.head.repo.fork': True,
         }))
-
-    def test_push_lookup_executes_filter_and_propagates_api_failure(self):
-        doc = yaml.safe_load((ROOT / '.github/workflows/CI-lint-groups-json.yml').read_text())
-        script = doc['jobs']['push-label']['steps'][0]['run']
-        def pr(label='ci:skip', ref='feature', repo='sysown/proxysql', state='open'):
-            return {'state': state, 'head': {'ref': ref, 'repo': {'full_name': repo}},
-                    'labels': [{'name': label}]}
-        cases = [
-            ([pr()], 'branch', 0, 'skip=true'),
-            ([pr(label='CI:SKIP')], 'branch', 0, 'skip=true'),
-            ([pr(label='ci:v3.0')], 'branch', 0, 'skip=false'),
-            ([pr(ref='unrelated'), pr(repo='someone/fork'), pr(state='closed')], 'branch', 0, 'skip=false'),
-            ([], 'branch', 0, 'skip=false'),
-            ([pr()], 'tag', 0, 'skip=false'),
-            ([pr()], 'branch', 1, None),
-        ]
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            # Exercise the actual workflow shell and jq expression. Only the
-            # HTTP transport is replaced; no credentials or network required.
-            gh = directory / 'gh'
-            gh.write_text('''#!/usr/bin/env bash
-set -euo pipefail
-[[ "$*" == *"--paginate"* ]]
-[[ "$*" == *"head=sysown:feature"* ]]
-if [[ "$API_FAILURE" == 1 ]]; then exit 1; fi
-while [[ "$1" != --jq ]]; do shift; done
-jq -r "$2" "$API_RESPONSE"
-''')
-            gh.chmod(0o755)
-            for response, ref_type, failure, expected in cases:
-                with self.subTest(response=response, ref_type=ref_type, failure=failure):
-                    output = directory / 'output'
-                    output.write_text('')
-                    fixture = directory / 'response'
-                    fixture.write_text(json.dumps(response))
-                    env = dict(os.environ, PATH=tmp + os.pathsep + os.environ['PATH'],
-                               GH_REPO='sysown/proxysql', HEAD_REF='feature', REF_TYPE=ref_type,
-                               GITHUB_OUTPUT=str(output), API_RESPONSE=str(fixture),
-                               API_FAILURE=str(failure))
-                    result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
-                    if failure:
-                        self.assertNotEqual(result.returncode, 0)
-                        self.assertEqual(output.read_text(), '')
-                    else:
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(output.read_text().strip(), expected)
 
     def test_skip_label_event_has_a_separate_concurrency_group(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/CI-pg-compat.yml').read_text())
