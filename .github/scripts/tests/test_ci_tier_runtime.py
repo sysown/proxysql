@@ -292,7 +292,9 @@ class ConsumerRerunTests(unittest.TestCase):
    dict(workflow='CI-g1',file='ci-g1.yml',job='tests',automatic=True,tiers=['v40'],groups=[],cells=[{}])]})
   producer={k:plan[k] for k in ('repository','sha','trigger_id','trigger_attempt','build_id','build_attempt','execution_id','control_sha')}
   gh=dict(repository='sysown/proxysql',sha='a'*40,workflow=workflow,run_id='8',run_attempt=str(consumer_attempt))
-  if native:gh['event']={'workflow_run':{'name':'CI-builds'}}
+  if native:
+   gh['event_name']='workflow_run'
+   gh['event']={'workflow_run':{'name':'feature CI-builds '+ctx['sha'], 'path':'.github/workflows/CI-builds.yml','event':event}}
   state=dict(own=[],binding=dict(producer),accepted=dict(producer),manifest=plan,requests=[],deny_acceptance=False)
   api=runtime.GitHubAPI(gh['repository'])
   def request(path,**kwargs):
@@ -330,6 +332,11 @@ class ConsumerRerunTests(unittest.TestCase):
     self.assertEqual((binding['trigger_id'],binding['trigger_attempt'],binding['build_id'],binding['build_attempt']),(2,1,2,1))
     outputs=dict(line.split('=',1) for line in Path(os.environ['GITHUB_OUTPUT']).read_text().splitlines())
     self.assertEqual(json.loads(outputs['matrices'])['tests'][0]['execution_id'],'t2-a1-b2-a1')
+
+ def test_native_manual_producer_still_fans_out_automatically(self):
+  with self.fixture(event='workflow_dispatch',native=True,consumer_attempt=1):
+   runtime.consumer()
+   self.assertEqual(json.loads(Path('binding.json').read_text())['build_id'],2)
 
  def test_native_completion_rejects_foreign_build_and_source(self):
   for key,value in [('build_id',99),('sha','c'*40),('repository','other/repo'),('trigger_attempt',3)]:

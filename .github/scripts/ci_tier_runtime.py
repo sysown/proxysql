@@ -183,7 +183,9 @@ def manual_consumer_rows(workflow,instance,supplied):
 
 def consumer():
     ctx=context();api=api_for(ctx);gh=json.loads(os.environ['GITHUB_JSON'])
-    native=gh.get('event',{}).get('workflow_run',{}).get('name')=='CI-builds'
+    upstream=gh.get('event',{}).get('workflow_run',{})
+    native=upstream.get('path')=='.github/workflows/CI-builds.yml' and upstream.get('event')!='workflow_run'
+    manual_dispatch=gh.get('event_name',ctx['event'])=='workflow_dispatch'
     def verify_accepted(producer):
         if not native:
             verify_binding(producer,ctx)
@@ -210,11 +212,11 @@ def consumer():
         existing=[a for a in own.artifacts(int(gh['run_id'])) if a['name']==binding_name]
         # Only absence permits recovery. Existing expired, ambiguous or corrupt
         # snapshots must still fail through normal artifact validation.
-        if existing or ctx['event']=='workflow_dispatch' or ctx['repository']!=gh['repository']:
+        if existing or manual_dispatch or ctx['repository']!=gh['repository']:
             producer=own.json_artifact(int(gh['run_id']),binding_name,'binding.json')
         else:
             producer=api.json_artifact(ctx['trigger_id'],f"ci-accepted-producer-a{ctx['trigger_attempt']}",'producer.json')
-        if ctx['event']!='workflow_dispatch':verify_accepted(producer)
+        if not manual_dispatch:verify_accepted(producer)
     elif os.environ.get('PRODUCER_RUN_ID'):
         run=int(os.environ['PRODUCER_RUN_ID'])
         if not os.environ.get('PRODUCER_ATTEMPT'):raise ValueError('explicit producer selection requires producer_attempt')
@@ -223,12 +225,12 @@ def consumer():
         if len(names)!=1:raise ValueError('manual dispatch requires an exact producer run and attempt with a manifest')
         producer=api.json_artifact(run,names[0],'manifest.json')
     else:
-        if ctx['event']=='workflow_dispatch':raise ValueError('manual consumer dispatch requires producer_run_id and producer_attempt')
+        if manual_dispatch:raise ValueError('manual consumer dispatch requires producer_run_id and producer_attempt')
         producer=api.json_artifact(ctx['trigger_id'],f"ci-accepted-producer-a{ctx['trigger_attempt']}",'producer.json')
         verify_accepted(producer)
     manifest=load_bound(producer)
     workflow=gh['workflow']
-    manual=ctx['event']=='workflow_dispatch' or gh['repository']!=manifest['repository']
+    manual=manual_dispatch or gh['repository']!=manifest['repository']
     if not manual:instance=consumer_instance(manifest,workflow,instance,supplied)
     jobs=sorted({c['job'] for c in manifest['checks'] if c['workflow']==workflow and c['cell'].get('ci_instance','run')==instance})
     override=producer.get('consumer_manifest')
