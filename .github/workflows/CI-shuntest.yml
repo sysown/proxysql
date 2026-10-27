@@ -17,7 +17,7 @@ on:
         required: true
         description: Exact producer attempt (manual tests)
   workflow_run:
-    workflows: [CI-trigger]
+    workflows: [CI-builds]
     types: [completed]
 
 concurrency:

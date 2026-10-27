@@ -202,7 +202,9 @@ def validate(base, fork, reusable):
     base_run = fetch(base.get("jobs", {}), "run", "trusted CI-builds has no run job")
     if base_run is not None:
         require(
-            "head_repository.full_name == github.repository" in str(base_run.get("if", "")),
+            ("head_repository.full_name == github.repository" in str(base_run.get("if", ""))
+             or ("github.event.pull_request.head.repo.full_name == github.repository" in str(base_run.get("if", ""))
+                 and "!github.event.pull_request.head.repo.fork" in str(base_run.get("if", "")))),
             "trusted CI-builds lacks same-repository guard",
         )
         require(base_run.get("permissions") == "write-all", "trusted CI-builds permission changed")

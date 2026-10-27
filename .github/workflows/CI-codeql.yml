@@ -19,7 +19,7 @@ run-name: ${{ github.event.workflow_run && github.event.workflow_run.head_branch
         description: Exact producer attempt (manual tests)
   workflow_run:
     workflows:
-    - CI-trigger
+    - CI-builds
     types:
     - completed
 concurrency:

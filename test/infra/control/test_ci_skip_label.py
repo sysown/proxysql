@@ -17,10 +17,12 @@ class SkipLabelTests(unittest.TestCase):
             'github.event_name': 'pull_request',
             'github.event.pull_request': True,
             'github.event.pull_request.head.repo.fork': False,
+            'github.event.pull_request.head.repo.full_name': 'sysown/proxysql',
+            'github.repository': 'sysown/proxysql',
             'github.event.pull_request.labels.*.name': [],
             'github.event.action': 'synchronize',
             'github.event.label.name': '',
-            'github.event.workflow_run.display_title': 'feature CI-trigger abc123',
+            'github.event.workflow_run.display_title': 'feature CI-builds abc123',
             'needs.push-label.result': 'skipped',
             'needs.push-label.outputs.skip': '',
         }
@@ -54,13 +56,13 @@ class SkipLabelTests(unittest.TestCase):
         found = 0
         for name, doc in self.workflows('workflow_run'):
             events = doc.get('on', doc.get(True))
-            self.assertEqual(events['workflow_run']['workflows'], ['CI-trigger'])
+            self.assertEqual(events['workflow_run']['workflows'], ['CI-builds'])
             for jid, job in doc['jobs'].items():
                 found += 1
                 with self.subTest(workflow=name, job=jid):
                     self.assertFalse(self.allowed(job, **{
                         'github.event_name': 'workflow_run',
-                        'github.event.workflow_run.display_title': '[ci:skip] feature CI-trigger abc123',
+                        'github.event.workflow_run.display_title': '[ci:skip] feature CI-builds abc123',
                     }))
                     self.assertTrue(self.allowed(job, **{'github.event_name': 'workflow_run'}))
                     if 'workflow_dispatch' in events:
@@ -72,7 +74,7 @@ class SkipLabelTests(unittest.TestCase):
         self.assertGreater(found, 60)
 
     def test_trigger_title_carries_label_decision(self):
-        doc = yaml.safe_load((ROOT / '.github/workflows/CI-trigger.yml').read_text())
+        doc = yaml.safe_load((ROOT / '.github/workflows/CI-builds.yml').read_text())
         self.assertTrue(doc['run-name'].startswith("${{ contains(github.event.pull_request.labels.*.name, 'ci:skip') && '[ci:skip] ' || '' }}"))
 
     def test_existing_failure_and_fork_restrictions_remain(self):
@@ -83,7 +85,7 @@ class SkipLabelTests(unittest.TestCase):
                     context = {'github.event.workflow_run.head_repository.full_name': 'someone/fork'}
                 with self.subTest(workflow=name):
                     self.assertFalse(self.allowed(job, **context))
-        trigger = yaml.safe_load((ROOT / '.github/workflows/CI-trigger.yml').read_text())
+        trigger = yaml.safe_load((ROOT / '.github/workflows/CI-builds.yml').read_text())
         self.assertFalse(self.allowed(trigger['jobs']['run'], **{
             'github.event.pull_request.head.repo.fork': True,
         }))
