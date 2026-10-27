@@ -138,16 +138,17 @@ ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
 endif
 endif
 
-# Keep public class layouts identical to libproxysql.a. In particular,
-# PROXYSQL40 adds members to ProxySQL_GlobalVariables; omitting the define in
-# TAP translation units makes their GloVars allocation smaller than the
-# constructor linked from the archive.
+# Keep public class layouts identical to libproxysql.a. PROXYSQL40 and
+# PROXYSQLCLICKHOUSE both change ProxySQL_GlobalVariables. PSQLCH comes from
+# makefiles_vars.mk and follows the core's default and explicit opt-out.
+# Omitting either define can make TAP-owned GloVars smaller than the
+# constructor linked from the archive expects.
 PSQL40 :=
 ifeq ($(PROXYSQL40),1)
 	PSQL40 := -DPROXYSQL40
 endif
 
-OPT := $(STDCPP) -O2 -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+OPT := $(STDCPP) -O2 -ggdb $(PSQLCH) $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 # Compress ELF debug sections in test binaries. Apple clang accepts -gz but
 # does not compress DWARF stored in Mach-O objects, so Darwin omits it.
 ifneq ($(UNAME_S),Darwin)
@@ -180,7 +181,7 @@ tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
 	./admin_set_credentials_logging-t
 	./listener_conflicts_validation-t
 
-DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQLCH) $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
 DEBUG_OPT += -Wl,--no-as-needed -gz
 endif
