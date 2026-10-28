@@ -60,6 +60,8 @@ class UnitRunnerTimeoutTests(unittest.TestCase):
             except ProcessLookupError:
                 pass
             process.wait()
+            process.stdout.close()
+            process.stderr.close()
 
     def test_timeout_kills_term_resistant_process_group_and_continues(self):
         pidfile = self.root / 'child.pid'
@@ -78,6 +80,37 @@ class UnitRunnerTimeoutTests(unittest.TestCase):
         # reaps it; only a running process would indicate failed group cleanup.
         stat = Path(f'/proc/{child_pid}/stat')
         self.assertTrue(not stat.exists() or stat.read_text().split()[2] == 'Z')
+
+    def test_timeout_kills_descendant_after_parent_accepts_term_and_continues(self):
+        pidfile = self.root / 'child.pid'
+        termfile = self.root / 'parent-accepted-term'
+        self.executable(self.units / 'a-hang-t',
+                        f"trap 'touch \"{termfile}\"; exit 0' TERM\n"
+                        "bash -c 'trap \"\" TERM; while :; do sleep 1; done' &\n"
+                        f'echo $! > "{pidfile}"\nwait')
+        self.executable(self.units / 'b-pass-t', 'exit 0')
+        try:
+            try:
+                result = self.run_suite()
+            except subprocess.TimeoutExpired:
+                self.fail('runner exceeded its deadline after the test parent accepted TERM')
+            self.assertTrue(termfile.exists(), 'the test parent must accept TERM')
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn('TIMEOUT: a-hang-t', result.stdout)
+            self.assertIn('PASS: b-pass-t', result.stdout)
+            self.assertIn(self.expected_summary, result.stdout)
+            child_pid = int(pidfile.read_text())
+            stat = Path(f'/proc/{child_pid}/stat')
+            self.assertTrue(not stat.exists() or stat.read_text().split()[2] == 'Z',
+                            'the TERM-resistant descendant must be killed')
+        finally:
+            # The regressed timeout exits when the parent dies, leaving this
+            # descendant in its own process group outside run_suite's cleanup.
+            if pidfile.exists():
+                try:
+                    os.killpg(os.getpgid(int(pidfile.read_text())), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def test_zero_exit_sanitizer_report_is_failure(self):
         self.executable(self.units / 'sanitizer-t',

@@ -19,16 +19,22 @@ proxysql_run_unit_test() {
     local log="$1"
     local binary="$2"
     local rc=0
-    local -a execution_status
-    # Retain live CI output and a complete per-binary diagnostic log. A second
-    # deadline kills the process group if a test or its children ignore TERM.
+    # Supervise the logger as well as the test: a descendant can keep its
+    # inherited output pipe open after the test parent accepts TERM. Catch
+    # TERM in the supervisor (so tests retain their normal signal disposition)
+    # and ignore it only in tee, keeping the KILL deadline active until EOF.
     "${UNIT_TEST_TIMEOUT_COMMAND}" --signal=TERM --kill-after=10s "${UNIT_TEST_TIMEOUT_SECONDS}s" \
-        "${binary}" 2>&1 | tee "${log}"
-    execution_status=("${PIPESTATUS[@]}")
-    rc=${execution_status[0]}
-    if [ "${rc}" -eq 0 ] && [ "${execution_status[1]}" -ne 0 ]; then
-        rc=${execution_status[1]}
-    fi
+        bash -c '
+            trap : TERM
+            "$1" 2>&1 | (trap "" TERM; exec tee "$2")
+            execution_status=("${PIPESTATUS[@]}")
+            rc=${execution_status[0]}
+            if [ "$rc" -eq 0 ] && [ "${execution_status[1]}" -ne 0 ]; then
+                rc=${execution_status[1]}
+            fi
+            exit "$rc"
+        ' unit-test "${binary}" "${log}"
+    rc=$?
     # TAP can return success despite diagnostics, and callers can configure a
     # sanitizer's exit code as zero. Such reports must still fail the suite.
     if [ "${rc}" -eq 0 ] && grep -Eq \
