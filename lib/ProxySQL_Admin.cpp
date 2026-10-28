@@ -2856,7 +2856,7 @@ __end_while_pool:
 			nfds++;
 			unsigned int j;
 			i=0; j=0;
-			for (j=0; j < S_amll.ifaces_mysql->ifaces->len && GloVars.global.mysql_admin; j++) {
+			for (j=0; j < S_amll.ifaces_mysql->ifaces->len && GloVars.mysql_admin; j++) {
 				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_mysql->ifaces->index(j);
 				bool is_ipv6 = false;
 				char *h = NULL;
@@ -2896,7 +2896,7 @@ __end_while_pool:
 			}
 
 			i = 0; j = 0;
-			for (; j < S_amll.ifaces_pgsql->ifaces->len && GloVars.global.pgsql_admin; j++) {
+			for (; j < S_amll.ifaces_pgsql->ifaces->len && GloVars.pgsql_admin; j++) {
 				char* add = NULL; char* port = NULL; char* sn = (char*)S_amll.ifaces_pgsql->ifaces->index(j);
 				bool is_ipv6 = false;
 				char* h = NULL;

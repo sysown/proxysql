@@ -27,7 +27,8 @@ pgsql-monitor=false
 ```
 
 Explicit CLI component values override the configuration file and the broader
-`--no-monitor` (`-M`) switch. For example, `-M --pgsql-monitor true` permits only
+`--no-monitor` (`-M`) switch. Repeated component options use the last value, and every occurrence
+must supply a valid value. For example, `-M --pgsql-monitor true` permits only
 the PostgreSQL monitor. Invalid values are startup errors.
 
 These permissions are fixed for the process lifetime. `PROXYSQL START`,

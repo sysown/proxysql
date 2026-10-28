@@ -1639,7 +1639,7 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		// if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strcasecmp(name, "threads")) {
-		snprintf(intbuf, sizeof(intbuf), "%d", (GloVars.global.pgsql_workers ? (num_threads ? num_threads : DEFAULT_NUM_THREADS) : 0));
+		snprintf(intbuf, sizeof(intbuf), "%d", (GloVars.pgsql_workers ? (num_threads ? num_threads : DEFAULT_NUM_THREADS) : 0));
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name, "stacksize")) {
@@ -2202,8 +2202,8 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 	}
 	if (!strcasecmp(name, "threads")) {
 		unsigned int intv = atoi(value);
-		if ((num_threads == 0 || num_threads == intv || pgsql_threads == NULL) && ((intv > 0 && intv < 256) || (!GloVars.global.pgsql_workers && strcmp(value, "0") == 0))) {
-			num_threads = GloVars.global.pgsql_workers ? intv : 0;
+		if ((num_threads == 0 || num_threads == intv || pgsql_threads == NULL) && ((intv > 0 && intv < 256) || (!GloVars.pgsql_workers && strcmp(value, "0") == 0))) {
+			num_threads = GloVars.pgsql_workers ? intv : 0;
 			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(intv);
 			return true;
 		}
@@ -2527,7 +2527,7 @@ void PgSQL_Threads_Handler::print_version() {
 }
 
 void PgSQL_Threads_Handler::init(unsigned int num, size_t stack) {
-	if (!GloVars.global.pgsql_workers) {
+	if (!GloVars.pgsql_workers) {
 		num_threads = 0;
 		return;
 	}
@@ -2663,7 +2663,7 @@ void PgSQL_Threads_Handler::wait_for_all_threads_to_exit_run_loop() {
 }
 
 void PgSQL_Threads_Handler::start_listeners() {
-	if (!GloVars.global.pgsql_workers) {
+	if (!GloVars.pgsql_workers) {
 		bootstrapping_listeners = false;
 		return;
 	}

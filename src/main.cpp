@@ -832,10 +832,10 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 		}
 		// Per-component startup permissions; CLI overrides are applied below.
 		const std::pair<const char*, bool*> startup_permissions[] = {
-			{ "mysql-workers", &GloVars.global.mysql_workers },
-			{ "pgsql-workers", &GloVars.global.pgsql_workers },
-			{ "mysql-admin", &GloVars.global.mysql_admin },
-			{ "pgsql-admin", &GloVars.global.pgsql_admin },
+			{ "mysql-workers", &GloVars.mysql_workers },
+			{ "pgsql-workers", &GloVars.pgsql_workers },
+			{ "mysql-admin", &GloVars.mysql_admin },
+			{ "pgsql-admin", &GloVars.pgsql_admin },
 			{ "mysql-monitor", &GloVars.global.my_monitor },
 			{ "pgsql-monitor", &GloVars.global.pg_monitor },
 		};
@@ -1790,12 +1790,12 @@ static void ProxySQL_Main_exit_on_listener_conflicts() {
 	char* pgsql_ifaces = GloPTH->get_variable((char*)"interfaces");
 
 	std::vector<proxysql_listen_validator::module_listener_config> modules {
-		{ "Admin", GloVars.global.mysql_admin ? admin_mysql_ifaces : "" },
-		{ "Admin PostgreSQL", GloVars.global.pgsql_admin ? admin_pgsql_ifaces : "" },
+		{ "Admin", GloVars.mysql_admin ? admin_mysql_ifaces : "" },
+		{ "Admin PostgreSQL", GloVars.pgsql_admin ? admin_pgsql_ifaces : "" },
 		{ "Admin Telnet", admin_telnet_ifaces },
 		{ "Admin Stats Telnet", admin_stats_ifaces },
-		{ "MySQL", GloVars.global.mysql_workers ? mysql_ifaces : "" },
-		{ "PostgreSQL", GloVars.global.pgsql_workers ? pgsql_ifaces : "" },
+		{ "MySQL", GloVars.mysql_workers ? mysql_ifaces : "" },
+		{ "PostgreSQL", GloVars.pgsql_workers ? pgsql_ifaces : "" },
 	};
 	std::string error {};
 	const bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);

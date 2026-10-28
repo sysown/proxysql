@@ -237,10 +237,10 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	global.foreground=false;
 	global.my_monitor=true;
 	global.pg_monitor=true;
-	global.mysql_workers=true;
-	global.pgsql_workers=true;
-	global.mysql_admin=true;
-	global.pgsql_admin=true;
+	mysql_workers=true;
+	pgsql_workers=true;
+	mysql_admin=true;
+	pgsql_admin=true;
 #ifdef IDLE_THREADS
 	global.idle_threads=false;
 #endif /* IDLE_THREADS */
@@ -603,21 +603,32 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 	// Config was read first. Explicit component switches override it and -M.
 	auto startup_permission = [this](const char* option, bool& enabled) {
 		if (!opt->isSet(option)) return;
-		std::string value;
-		opt->get(option)->getString(value);
-		if (value == "true" || value == "1") {
-			enabled = true;
-		} else if (value == "false" || value == "0") {
-			enabled = false;
-		} else {
+		auto invalid_value = [option]() {
 			proxy_error("Invalid value for %s: expected true, false, 1 or 0\n", option);
 			exit(EXIT_FAILURE);
+		};
+		auto* group = opt->get(option);
+		std::vector<std::vector<std::string>> occurrences;
+		group->getMultiStrings(occurrences);
+		// parseIndex also records a final switch with no argument, which
+		// ezOptionParser otherwise omits from its parsed value collection.
+		if (occurrences.size() != group->parseIndex.size()) invalid_value();
+		for (const auto& values : occurrences) {
+			if (values.size() != 1) invalid_value();
+			const std::string& value = values.front();
+			if (value == "true" || value == "1") {
+				enabled = true;
+			} else if (value == "false" || value == "0") {
+				enabled = false;
+			} else {
+				invalid_value();
+			}
 		}
 	};
-	startup_permission("--mysql-workers", global.mysql_workers);
-	startup_permission("--pgsql-workers", global.pgsql_workers);
-	startup_permission("--mysql-admin", global.mysql_admin);
-	startup_permission("--pgsql-admin", global.pgsql_admin);
+	startup_permission("--mysql-workers", mysql_workers);
+	startup_permission("--pgsql-workers", pgsql_workers);
+	startup_permission("--mysql-admin", mysql_admin);
+	startup_permission("--pgsql-admin", pgsql_admin);
 	startup_permission("--mysql-monitor", global.my_monitor);
 	startup_permission("--pgsql-monitor", global.pg_monitor);
 

@@ -2257,7 +2257,7 @@ char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the pu
 		if (!strcasecmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strcasecmp(name,"threads")) {
-		snprintf(intbuf, sizeof(intbuf), "%d", (GloVars.global.mysql_workers ? (num_threads ? num_threads : DEFAULT_NUM_THREADS) : 0));
+		snprintf(intbuf, sizeof(intbuf), "%d", (GloVars.mysql_workers ? (num_threads ? num_threads : DEFAULT_NUM_THREADS) : 0));
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"stacksize")) {
@@ -2897,8 +2897,8 @@ bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	
 	}
 	if (!strcasecmp(name,"threads")) {
 		unsigned int intv=atoi(value);
-		if ((num_threads==0 || num_threads==intv || mysql_threads==NULL) && ((intv > 0 && intv < 256) || (!GloVars.global.mysql_workers && strcmp(value, "0") == 0))) {
-			num_threads=GloVars.global.mysql_workers ? intv : 0;
+		if ((num_threads==0 || num_threads==intv || mysql_threads==NULL) && ((intv > 0 && intv < 256) || (!GloVars.mysql_workers && strcmp(value, "0") == 0))) {
+			num_threads=GloVars.mysql_workers ? intv : 0;
 			this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(num_threads);
 			return true;
 		} else {
@@ -3290,7 +3290,7 @@ void MySQL_Threads_Handler::print_version() {
  * @param stack The size of the stack for each thread. If 0, defaults to DEFAULT_STACK_SIZE.
  */
 void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
-	if (!GloVars.global.mysql_workers) {
+	if (!GloVars.mysql_workers) {
 		num_threads = 0;
 		this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(0);
 		return;
@@ -3437,7 +3437,7 @@ void MySQL_Threads_Handler::wait_for_all_threads_to_exit_run_loop() {
 }
 
 void MySQL_Threads_Handler::start_listeners() {
-	if (!GloVars.global.mysql_workers) {
+	if (!GloVars.mysql_workers) {
 		bootstrapping_listeners = false;
 		return;
 	}
