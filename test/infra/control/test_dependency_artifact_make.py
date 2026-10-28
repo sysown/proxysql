@@ -113,6 +113,66 @@ class PreparationTests(unittest.TestCase):
             self.assertEqual(2, self.count())
             self.assertFalse(self.prepare()['changed'], 'one source tree can serve subsequent phases of the same build')
 
+    def assert_tsan_openssl_compilation(self, python_free=False, custom_flags=False):
+        # Model configure's generated flags, then really compile and archive an
+        # object. Replacing those flags at recursive make time must fail here.
+        template = self.root / 'template/openssl-3.5.7'
+        (template / 'fixture.c').write_text(
+            '#ifndef PACKAGE_REQUIRED\n#error missing configured flag\n#endif\n'
+            '#ifndef OBJECT_REQUIRED\n#error missing per-object flag\n#endif\n'
+            'int shared_value;\nint fixture_value(void) { return ++shared_value; }\n')
+        (template / 'config').write_text(
+            '#!/bin/sh\nset -eu\n'
+            'printf "%s\\n" "${CFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}" > configured-flags\n'
+            'printf "CFLAGS := %s -DPACKAGE_REQUIRED\\n" "${CFLAGS:-}" > Makefile\n'
+            "cat >> Makefile <<'MAKEFILE'\n"
+            'all: libssl.a libcrypto.a\n'
+            'fixture.o: CFLAGS += -DOBJECT_REQUIRED\n'
+            'fixture.o: fixture.c\n\t$(CC) $(CFLAGS) -c fixture.c -o fixture.o\n'
+            'libssl.a libcrypto.a: fixture.o\n\tar rcs $@ fixture.o\n'
+            'MAKEFILE\n')
+        source = self.root / 'deps/libssl/openssl-3.5.7.tar.gz'
+        with tarfile.open(str(source), 'w:gz') as archive:
+            archive.add(str(template), arcname=template.name)
+        Path(str(source) + '.sha256').write_text(
+            self.identity.digest_file(source) + '  ' + source.name + '\n')
+        env = self.python_free_environment() if python_free else dict(self.env)
+        env['WITHTSAN'] = '1'
+        args = ['-j2', 'libssl', 'DEPS_MODE=prebuilt']
+        if custom_flags:
+            args += ['CFLAGS=-DKEEP_C', 'CXXFLAGS=-DKEEP_CXX', 'LDFLAGS=-Wl,--as-needed']
+        result = self.make(*args, env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn('jobserver unavailable', result.stderr)
+        configured = (self.tree / 'configured-flags').read_text().splitlines()
+        for flags in configured:
+            self.assertIn('-fsanitize=thread', flags)
+        if custom_flags:
+            self.assertIn('-DKEEP_C', configured[0])
+            self.assertIn('-DKEEP_CXX', configured[1])
+            self.assertIn('-Wl,--as-needed', configured[2])
+        for name in ('libssl.a', 'libcrypto.a'):
+            symbols = subprocess.check_output(['nm', '-u', str(self.tree / name)], text=True)
+            self.assertIn('__tsan_read', symbols)
+            self.assertIn('__tsan_write', symbols)
+        consumer = self.root / 'consumer.c'
+        consumer.write_text('int fixture_value(void);\nint main(void) { return fixture_value() != 1; }\n')
+        subprocess.run(['cc', '-fsanitize=thread', str(consumer), str(self.tree / 'libcrypto.a'),
+                        '-o', str(self.root / 'consumer')], check=True, capture_output=True, text=True)
+        self.assertEqual('source\n', (self.tree / '.proxysql-origin').read_text())
+
+    def test_tsan_openssl_compiles_instrumented_configured_objects(self):
+        self.assert_tsan_openssl_compilation()
+
+    def test_tsan_openssl_preserves_custom_flags_and_instrumentation(self):
+        self.assert_tsan_openssl_compilation(custom_flags=True)
+
+    def test_python_free_tsan_openssl_compiles_instrumented_configured_objects(self):
+        self.assert_tsan_openssl_compilation(python_free=True)
+
+    def test_python_free_tsan_openssl_preserves_custom_flags_and_instrumentation(self):
+        self.assert_tsan_openssl_compilation(python_free=True, custom_flags=True)
+
     def test_prebuilt_missing_and_invalid_mode_do_not_compile(self):
         for mode in ('prebuilt', 'typo'):
             with self.subTest(mode=mode), self.assertRaises(ValueError):
@@ -352,7 +412,7 @@ class PreparationTests(unittest.TestCase):
         for name in ('bash', 'perl', 'make', 'dirname', 'sed', 'cksum', 'cat', 'rm', 'cp',
                      'mkdir', 'tar', 'gzip', 'uname', 'cc', 'c++', 'touch', 'sleep', 'sh',
                      'awk', 'nproc', 'test', 'find', 'sort', 'grep', 'basename', 'tr',
-                     'sha256sum', 'shasum', 'sha256'):
+                     'sha256sum', 'shasum', 'sha256', 'as', 'ar', 'ld'):
             path = shutil.which(name)
             if path and not (tools / name).exists():
                 (tools / name).symlink_to(path)
