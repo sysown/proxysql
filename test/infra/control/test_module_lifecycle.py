@@ -37,7 +37,7 @@ class Daemon:
             self.admin, self.pgadmin, self.mysql, self.pgsql = [s.getsockname()[1] for s in reservations]
             config = self.directory / "proxysql.cfg"
             config.write_text(
-                config_prefix + '\nplugins=();\n'
+                config_prefix + '\nplugins=();set_thread_name=true;\n'
                 'admin_variables={admin_credentials="admin:admin";'
                 f'mysql_ifaces="127.0.0.1:{self.admin}";pgsql_ifaces="127.0.0.1:{self.pgadmin}";'
                 'refresh_interval=100;web_enabled=false;}\n'
@@ -103,6 +103,15 @@ class Daemon:
                 raise AssertionError(f"STOP did not finish\n{self.output()[-6000:]}")
             time.sleep(0.05)
         self.ready(protocol)
+
+    def shutdown(self):
+        self.process.send_signal(signal.SIGTERM)
+        try:
+            code = self.process.wait(timeout=15)
+        except subprocess.TimeoutExpired as error:
+            raise AssertionError(f"graceful shutdown timed out\n{self.output()[-6000:]}") from error
+        if code != 0:
+            raise AssertionError(f"daemon exited {code}\n{self.output()[-6000:]}")
 
     def close(self):
         if self.closed:
