@@ -6455,7 +6455,7 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 		// Retry the query if retries are allowed and conditions permit
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
-			if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+			if (CurrentQuery.multi_result==false && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 				if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
 				// transfer to frontend has started, we cannot retry
 				} else {
