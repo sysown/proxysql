@@ -1,6 +1,6 @@
 # Module Lifecycle Refresh Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Track pending steps with `- [ ]` and completed steps with `- [x]`.
 
 **Goal:** Replace the still-useful ideas of #5217 and #4960 with focused, tested changes on current v3.0.
 
@@ -68,7 +68,7 @@
 - [x] Check `git diff --check`; review invariants and both protocol paths.
 - [x] Run focused tests and compile other tier paths affected by the changes; record concrete limits if full integration infrastructure is unavailable.
 - [x] Perform an independent whole-change code review, address material findings with failing-then-passing regressions.
-- [ ] Report branch/commit boundaries, test evidence, and replacement PR descriptions. Publish new branches/PRs only when authorized; retain links and attribution to previous work.
+- [x] Report branch/commit boundaries, test evidence, and replacement PR descriptions. Publish new branches/PRs only when authorized; retain links and attribution to previous work.
 
 ## Progress and evidence
 
@@ -76,17 +76,17 @@
 - Baseline DEBUG v3.1 build started from a fresh worktree with independent dependencies and objects.
 
 
-## Validation and implementation decisions
+## Initial validation and implementation decisions
 
 Baseline on b16ff6025 reproduced eight absent-query-processor crashes across the
 two Admin protocols, STOP timeouts on both protocols, and NULL stopped-state
-Prometheus output. The six lifecycle tests passed after the fixes. The module
-suite now contains eleven tests, including all sixteen worker/Admin combinations
+Prometheus output. In this initial snapshot, six lifecycle tests passed and the
+module suite contained eleven tests, including all sixteen worker/Admin combinations
 (with idle threads), all four monitor permissions through STOP/START, initial
 no-start with mixed permissions, graceful shutdown, CLI/config precedence,
 invalid input, and repeated option handling.
 
-Two local branch boundaries preserve separate review:
+The initial review used two local branch boundaries:
 
 - `v3.0-5186-refresh`: lifecycle fix and its regression probe.
 - `v3.0-4951-refresh`: selective startup, documentation, expanded process probes,
@@ -251,3 +251,29 @@ Verification after this test-only change:
   and omit it on Darwin/FreeBSD. Both wrappers passed v4.0 syntax compilation.
 - An invalid daemon path still produced a failing TAP assertion, as required.
 - Independent review found no actionable issue.
+
+### Maintainer-directed consolidation and final review
+
+The maintainer approved one combined replacement to reduce duplicate CI work:
+#6559 now targets v3.0 and remains ready for review; #6558 is closed as superseded.
+Its two active/queued workflows were cancelled; the existing combined build was
+preserved. Original PRs #5217/#4960 remain open. Earlier two-branch notes above
+record the implementation history.
+
+- [x] Consolidate the two replacement PRs without changing their code or merging.
+- [ ] Finish combined #6559 CI, Sonar and aggregate coverage; diagnose/fix failures.
+
+A subsequent review identified missing post-START Admin permission assertions.
+The startup probe now waits for completion of the new phase 3 and checks all four
+worker/Admin listeners after every START, including mixed-permission initial
+no-start cycles and the zero-worker case. Initial snapshot counts above are
+historical; current suites contain seven lifecycle and twelve startup cases.
+
+Verification of this review update: the full twelve-case startup suite passed
+on Stable. A controlled forbidden MySQL Admin listener after START caused the
+mixed-permission case to fail as expected. Ordinary-start scenarios now prove
+completion of initial phase 3 before STOP, avoiding an early-STOP scheduling
+assumption; initial no-start remains unchanged. Independent review found no
+remaining issue. Production code was not modified. The preceding combined
+CI build at c6f5e7e5a completed successfully; updated-head remote checks remain
+pending.

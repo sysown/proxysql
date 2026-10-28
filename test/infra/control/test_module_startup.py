@@ -14,7 +14,7 @@ class ModuleStartup(IsolatedDaemonTest):
     def test_disabled_workers_preserve_saved_thread_counts(self):
         daemon = self.daemon(threads=(3, 5), extra_args=(
             "--mysql-workers=false", "--pgsql-workers=false"))
-        self.expect_workers(daemon, False, False)
+        self.expect_started(daemon, False, False)
         # Saving a disabled component must retain its configured positive count.
         # Test both flushers: PostgreSQL replaces the entire variable set.
         for dialect, label, count in (("mysql", "MySQL", "3"), ("pgsql", "PgSQL", "5")):
@@ -28,11 +28,11 @@ class ModuleStartup(IsolatedDaemonTest):
                     f"WHERE Variable_Name='{label}_Thread_Workers'").stdout.strip(), "0")
         daemon.stop()
         daemon.query("PROXYSQL START")
-        self.expect_workers(daemon, False, False)
+        self.expect_started(daemon, False, False)
         # No --initial: the saved database is authoritative on this relaunch.
         daemon.restart()
         daemon.ready()
-        self.expect_workers(daemon, True, True)
+        self.expect_started(daemon, True, True)
         for dialect, label, count in (("mysql", "MySQL", "3"), ("pgsql", "PgSQL", "5")):
             with self.subTest(restarted=dialect):
                 self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
@@ -58,6 +58,22 @@ class ModuleStartup(IsolatedDaemonTest):
             time.sleep(0.05)
         self.fail(f"worker listeners did not reach expected state\n{daemon.output()[-6000:]}")
 
+    def expect_started(self, daemon, mysql_workers=True, pgsql_workers=True,
+                       mysql_admin=True, pgsql_admin=True):
+        # Wait for the new phase 3 even when both worker stacks are disabled.
+        # Otherwise an old Admin listener could satisfy the assertion during reload.
+        expected_starts = daemon.stops + 1
+        deadline = time.monotonic() + 10
+        expected = ((daemon.mysql, mysql_workers), (daemon.pgsql, pgsql_workers),
+                    (daemon.admin, mysql_admin), (daemon.pgadmin, pgsql_admin))
+        while time.monotonic() < deadline:
+            if (daemon.output().count("For online documentation") >= expected_starts and
+                    all(self.listening(port) == enabled for port, enabled in expected)):
+                return
+            self.assertIsNone(daemon.process.poll(), daemon.output()[-3000:])
+            time.sleep(0.05)
+        self.fail(f"START did not preserve worker/Admin listener permissions\n{daemon.output()[-6000:]}")
+
     def test_worker_admin_combinations(self):
         import itertools
         for mysql_workers, pgsql_workers, mysql_admin, pgsql_admin in itertools.product((False, True), repeat=4):
@@ -81,14 +97,7 @@ class ModuleStartup(IsolatedDaemonTest):
                             self.assertIsNone(daemon.process.poll(), daemon.output()[-2000:])
                             time.sleep(0.05)
                         self.assertIn("For online documentation", daemon.output())
-                    # Admin is ready slightly before phase 3 binds worker ports.
-                    deadline = time.monotonic() + 5
-                    while (self.listening(daemon.mysql) != mysql_workers or
-                           self.listening(daemon.pgsql) != pgsql_workers) and time.monotonic() < deadline:
-                        time.sleep(0.05)
-                    for port, enabled in ((daemon.admin, mysql_admin), (daemon.pgadmin, pgsql_admin),
-                                          (daemon.mysql, mysql_workers), (daemon.pgsql, pgsql_workers)):
-                        self.assertEqual(self.listening(port), enabled)
+                    self.expect_started(daemon, mysql_workers, pgsql_workers, mysql_admin, pgsql_admin)
                     tasks = Path(f"/proc/{daemon.process.pid}/task")
                     if tasks.is_dir():
                         names = [p.read_text().strip() for p in tasks.glob("*/comm") if p.exists()]
@@ -101,7 +110,7 @@ class ModuleStartup(IsolatedDaemonTest):
                         daemon.query("LOAD PGSQL SERVERS TO RUNTIME", protocol)
                         daemon.query("PROXYSQL START", protocol)
                         daemon.ready(protocol)
-                        self.expect_workers(daemon, mysql_workers, pgsql_workers)
+                        self.expect_started(daemon, mysql_workers, pgsql_workers, mysql_admin, pgsql_admin)
                     daemon.shutdown()
                 finally:
                     daemon.close()
@@ -113,12 +122,12 @@ class ModuleStartup(IsolatedDaemonTest):
                                      extra_args=(f'--mysql-workers={str(value).lower()}',))
                 self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
                                  "WHERE variable_name='mysql-threads'").stdout.strip(), "1")
-                self.expect_workers(daemon, value, True)
+                self.expect_started(daemon, value, True)
                 daemon.close()
 
     def test_separate_and_numeric_cli_values(self):
         daemon = self.daemon(extra_args=("--mysql-workers", "0", "--pgsql-workers", "0", "--pgsql-admin", "1"))
-        self.expect_workers(daemon, False, False)
+        self.expect_started(daemon, False, False)
         for dialect in ("mysql", "pgsql"):
             self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
                 f"WHERE variable_name='{dialect}-threads'").stdout.strip(), "1")
@@ -143,7 +152,8 @@ class ModuleStartup(IsolatedDaemonTest):
                 daemon.query("LOAD PGSQL SERVERS TO RUNTIME", protocol)
                 for _ in range(2):
                     daemon.query("PROXYSQL START", protocol)
-                    self.expect_workers(daemon, disabled != "mysql", disabled != "pgsql")
+                    self.expect_started(daemon, disabled != "mysql", disabled != "pgsql",
+                                        disabled != "mysql", disabled != "pgsql")
                     daemon.stop(protocol)
                     self.expect_workers(daemon, False, False)
                 daemon.shutdown()
@@ -152,6 +162,7 @@ class ModuleStartup(IsolatedDaemonTest):
     def test_monitor_runtime_true_cannot_override_denied_permission(self):
         daemon = self.daemon(no_monitor=False, monitor_enabled=True, extra_args=(
             "--mysql-monitor=false", "--pgsql-monitor=false"))
+        self.expect_started(daemon)
         for dialect in ("mysql", "pgsql"):
             self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
                 f"WHERE variable_name='{dialect}-monitor_enabled'").stdout.strip(), "true")
@@ -164,7 +175,7 @@ class ModuleStartup(IsolatedDaemonTest):
         for dialect in ("mysql", "pgsql"):
             self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
                              f"WHERE variable_name='{dialect}-threads'").stdout.strip(), "1")
-        self.expect_workers(daemon, False, False)
+        self.expect_started(daemon, False, False, True, False)
         self.assertFalse(self.listening(daemon.pgadmin))
 
     def test_repeated_cli_values_use_last_value(self):
@@ -174,7 +185,7 @@ class ModuleStartup(IsolatedDaemonTest):
                     f"--mysql-workers={str(not value).lower()}", f"--mysql-workers={str(value).lower()}"))
                 self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
                     "WHERE variable_name='mysql-threads'").stdout.strip(), "1")
-                self.expect_workers(daemon, value, True)
+                self.expect_started(daemon, value, True)
                 daemon.close()
 
     def test_invalid_repeated_cli_values(self):
@@ -201,9 +212,7 @@ class ModuleStartup(IsolatedDaemonTest):
                 daemon = self.daemon(no_monitor=False, extra_args=(
                     f"--mysql-monitor={str(mysql_monitor).lower()}",
                     f"--pgsql-monitor={str(pgsql_monitor).lower()}"))
-                deadline = time.monotonic() + 5
-                while "For online documentation" not in daemon.output() and time.monotonic() < deadline:
-                    time.sleep(0.05)
+                self.expect_started(daemon)
                 output = daemon.output()
                 self.assertEqual("Main phase3 : MySQL Monitor initialized in" in output, mysql_monitor)
                 self.assertEqual("Main phase3 : PgSQL Monitor initialized in" in output, pgsql_monitor)
@@ -213,9 +222,7 @@ class ModuleStartup(IsolatedDaemonTest):
                         f"WHERE variable_name='{dialect}-monitor_enabled'").stdout.strip(), "false")
                 daemon.stop()
                 daemon.query("PROXYSQL START")
-                deadline = time.monotonic() + 10
-                while daemon.output().count("For online documentation") < 2 and time.monotonic() < deadline:
-                    time.sleep(0.05)
+                self.expect_started(daemon)
                 output = daemon.output()
                 self.assertEqual(output.count("For online documentation"), 2)
                 self.assertEqual(output.count("Main phase3 : MySQL Monitor initialized in"), 2 * mysql_monitor)
