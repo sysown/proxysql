@@ -74,3 +74,25 @@
 
 - Worktree: `/data/rene/proxysql7/.worktrees/stop-start-refresh`; branch `v3.0-5186-refresh`; base `b16ff6025`.
 - Baseline DEBUG v3.1 build started from a fresh worktree with independent dependencies and objects.
+
+## Review follow-up (2026-10-28)
+
+- Reproduced explicit stopped runtime SAVE reporting success: 64 failing cases
+  across both Admin protocols, both dialects, all four aliases, initial no-start
+  and post-STOP. Dispatch now reports unavailable runtime state; LOAD is unchanged.
+- STOP now drains protocol/TLS output before initiating shutdown, with a one-second
+  limit for stalled peers. Real MySQL/PgSQL stream socketpair tests exercise partial
+  writes, full sockets, stalled readers, staged packets, real TLS ciphertext
+  retries and pending BIO bytes (20/20). The real TLS test reproduced duplicate
+  PgSQL plaintext after ciphertext EAGAIN (2 failing assertions); PgSQL now
+  accounts for consumed plaintext on retry, matching the existing MySQL fix.
+- DEBUG v3.1 ASAN build succeeded; lifecycle probe passed 7/7 with
+  `ASAN_OPTIONS=detect_leaks=0:abort_on_error=1`. The lifecycle probe and drain
+  tests are registered in unit-tests-g1 so CI coverage executes these paths.
+- The failed legacy-g3 v4/MySQL57 coverage attempt timed out deploying backend
+  replicas before TAP. Host diagnostics showed I/O full pressure averaging 70.83%
+  over 60 seconds. The single retry passed infrastructure startup; tests pending.
+
+- DEBUG Stable build succeeded; the expanded drain unit passed 20/20. V4.0
+  syntax checks passed for all previously modified production units and the layout
+  probe. Independent review found no remaining material issue after TLS expansion.
