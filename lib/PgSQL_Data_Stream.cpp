@@ -1431,7 +1431,9 @@ void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	// This arm ends in PgSQL_Connection::reset(), which clears 'reusable' and pools the
 	// connection. An unhealthy one must not take it: the transport is fine and
 	// PQtransactionStatus() reports idle, so no other condition here can reject it.
-	if (sq && mysrvc->status == MYSQL_SERVER_STATUS_ONLINE &&
+	// Nor may a connection still holding a group's unsynced work (a client gone after a Flush): the
+	// reset would end that work with a Sync, committing it. It is closed, which rolls it back.
+	if (sq && mysrvc->status == MYSQL_SERVER_STATUS_ONLINE && mc->is_pipeline_active() == false &&
 		mc->healthy == true &&
 		mc->is_expired(sess->thread->curtime) == false &&
 		mc->async_state_machine == ASYNC_IDLE &&

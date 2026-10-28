@@ -858,8 +858,11 @@ static void case_release_trailing_local(Mode m, bool) {
 // ===== Teardown, idle limit, cache (spec 4.12). =====
 
 // Row 5a: the client goes away with an INSERT held by a Flush. PostgreSQL rolls it back, so ProxySQL
-// must drop that connection, not reset it for reuse (which would end the batch, committing it).
+// must drop that connection, not reset it for reuse (which would end the batch, committing it). The
+// drop is the expected way out: no "refusing to reset" warning, which is kept for routes nobody expects.
 static void case_row5a_disconnect(Mode m, bool) {
+	std::fstream log;
+	const bool have_log = open_file_and_seek_end(get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log", log) == EXIT_SUCCESS;
 	const std::string tag = tag_for("row5a", m, false);
 	{
 		auto c = client(m);
@@ -868,19 +871,29 @@ static void case_row5a_disconnect(Mode m, bool) {
 	ok(backend_txn_open_within(tag, false, 2000) == false, "row 5a [%s]: the held transaction is gone after the disconnect", mode_name(m));
 	ok(rows(tag) == 0, "row 5a [%s]: the INSERT is rolled back (rows=%ld)", mode_name(m), rows(tag));
 	ok(scalar(g_admin, "SELECT 1") == "1", "row 5a [%s]: ProxySQL still answers", mode_name(m));
+	ok(have_log && wait_for_log_match(log, "refusing to reset a backend left mid-batch", 500) == false,
+		"row 5a [%s]: the drop logs no 'refusing to reset' warning (log %s)", mode_name(m), have_log ? "read" : "not found");
 }
 
-// The client goes away while the segment is still running on the backend.
-static void case_disconnect_mid_segment(Mode m, bool) {
+// The client goes away while the segment is still running on the backend. The statement runs for 10 s:
+// the transaction must be gone well before that, so ProxySQL must kill it rather than leave it running.
+// The client waits until the statement runs: gone before ProxySQL sent it, it proves nothing.
+// A session with an untracked startup option never kills its running query on disconnect, a separate
+// bug, so the unbatched mode uses a plain native client here.
+static void case_disconnect_mid_segment(Mode mode, bool) {
+	const Mode m = (mode == Mode::NATIVE_UNBATCHED) ? Mode::NATIVE : mode;
 	const std::string tag = tag_for("midseg", m, false);
+	bool started = false;
 	{
 		auto c = client(m);
-		c->prepareStatement("", uniq() + "INSERT INTO flush_t SELECT '" + tag + "', 1 FROM pg_sleep(1)", false);
+		c->prepareStatement("", uniq() + "INSERT INTO flush_t SELECT '" + tag + "', 1 FROM pg_sleep(10)", false);
 		c->bindStatement("", "", {}, {}, false);
 		c->executePortal("", 0, false);
 		c->sendFlush();
+		started = backend_txn_open_within(tag, true, 3000);
 	}
-	ok(backend_txn_open_within(tag, false, 3000) == false, "disconnect mid segment [%s]: the transaction is gone", mode_name(m));
+	ok(started && backend_txn_open_within(tag, false, 3000) == false, "disconnect mid segment [%s]: the running transaction is "
+		"killed (started %d)", mode_name(m), (int)started);
 	ok(rows(tag) == 0, "disconnect mid segment [%s]: the INSERT is rolled back (rows=%ld)", mode_name(m), rows(tag));
 	ok(scalar(g_admin, "SELECT 1") == "1", "disconnect mid segment [%s]: ProxySQL still answers", mode_name(m));
 }
@@ -1299,7 +1312,7 @@ static const std::vector<Case> CASES = {
 	{ "release error",               2,  2, false, case_release_error },
 	{ "release after",               8,  8, false, case_release_after },
 	{ "release trailing local",      2,  2, false, case_release_trailing_local },
-	{ "row 5a disconnect",           4,  4, false, case_row5a_disconnect },
+	{ "row 5a disconnect",           5,  5, false, case_row5a_disconnect },
 	{ "disconnect mid segment",      3,  3, false, case_disconnect_mid_segment },
 	{ "row 14 idle",                 5,  5, false, case_row14_idle },
 	{ "row 15 cache",                2,  2, false, case_row15_cache },
