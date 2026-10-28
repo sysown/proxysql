@@ -1,6 +1,6 @@
 # Module Lifecycle Refresh Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Replace the still-useful ideas of #5217 and #4960 with focused, tested changes on current v3.0.
 
@@ -32,9 +32,9 @@
 
 **Interfaces:** Consumes an explicit ProxySQL binary path; produces bounded subprocess tests using mysql and psql clients against private daemons, with captured startup/shutdown logs on failure.
 
-- [ ] Build baseline: `PROXYSQL31=1 make debug -j4` in the isolated worktree. Expected: DEBUG daemon built from b16ff6025, or record and resolve exact build failures.
-- [ ] Add independent tests for initial --no-start runtime-query access, STOP acknowledgement/reconnect, repeated STOP/START, both Admin protocols, and concurrent runtime readers.
-- [ ] Run `python3 test/infra/control/test_module_lifecycle.py src/proxysql`; record exact failing operations and daemon logs. Expected: demonstrate failures before production changes.
+- [x] Build baseline: `PROXYSQL31=1 make debug -j4` in the isolated worktree. Expected: DEBUG daemon built from b16ff6025, or record and resolve exact build failures.
+- [x] Add independent tests for initial --no-start runtime-query access, STOP acknowledgement/reconnect, repeated STOP/START, both Admin protocols, and concurrent runtime readers.
+- [x] Run `python3 test/infra/control/test_module_lifecycle.py src/proxysql`; record exact failing operations and daemon logs. Expected: demonstrate failures before production changes.
 
 ### Task 2: Fix reproduced lifecycle defects
 
@@ -42,22 +42,22 @@
 
 **Interfaces:** Consumes existing `ProxySQL_Admin::shutdown_threads()` and the Admin SQL lock helpers. Produces safe STOP response/session lifetime and stopped-state query handling for both Admin protocols.
 
-- [ ] Resolve each reproduced failure through a targeted test: first the STOP circular wait, then processor access in --no-start/stopped state, then concurrent START/STOP behavior.
-- [ ] Preserve core LOAD SERVERS behavior; test both commands while stopped. Check normal runtime statistics still refresh after START with an actual configured rule.
-- [ ] Rebuild DEBUG daemon and run the full lifecycle probe. Expected: all lifecycle cases pass, no process crashes, bounded cleanup.
-- [ ] Commit production fix and regression coverage separately, referencing #5186 and the prior work in #5217/#5222.
+- [x] Resolve each reproduced failure through a targeted test: first the STOP circular wait, then processor access in --no-start/stopped state, then concurrent START/STOP behavior.
+- [x] Preserve core LOAD SERVERS behavior; test both commands while stopped. Check normal runtime statistics still refresh after START with an actual configured rule.
+- [x] Rebuild DEBUG daemon and run the full lifecycle probe. Expected: all lifecycle cases pass, no process crashes, bounded cleanup.
+- [x] Commit production fix and regression coverage separately, referencing #5186 and the prior work in #5217/#5222.
 
 ### Task 3: Implement selective module startup
 
 **Files:** Modify `include/proxysql_glovars.hpp`, `lib/ProxySQL_GloVars.cpp`, `lib/MySQL_Thread.cpp`, `lib/PgSQL_Thread.cpp`, `lib/ProxySQL_Admin.cpp`, `src/main.cpp`; extend the lifecycle probe and add operator documentation in `doc/`.
 
-**Interfaces:** Adds startup-only `mysql_workers`, `pgsql_workers`, `mysql_admin`, `pgsql_admin` booleans alongside existing monitor permissions. Six CLI options accept true/false or 1/0; corresponding top-level config booleans are read before CLI overrides. Disabled workers expose zero effective threads without weakening normal positive thread validation.
+**Interfaces:** Adds startup-only `mysql_workers`, `pgsql_workers`, `mysql_admin`, `pgsql_admin` booleans at the `ProxySQL_GlobalVariables` class tail to preserve existing field offsets; existing monitor permissions stay in `global`. Six CLI options accept true/false or 1/0; corresponding top-level config booleans are read before CLI overrides. Disabled workers expose zero effective threads without weakening normal positive thread validation.
 
-- [ ] Add failing coverage for each missing switch, invalid values, defaults, and CLI overriding configuration in both directions.
-- [ ] Implement parsing and effective permissions, preserving `--no-monitor` compatibility and persisted monitor settings.
-- [ ] Add failing mixed-mode lifecycle coverage; implement zero-worker startup/listener/watchdog/shutdown handling and selective Admin listeners.
-- [ ] Run worker/Admin combinations and monitor combinations, including --no-start plus STOP/START where at least one Admin interface is available. Verify shared authentication/HGM operations still work and disabled workers remain disabled after START.
-- [ ] Rebuild and run all lifecycle/module probes; document startup semantics and commit this feature separately, crediting #4960.
+- [x] Add failing coverage for each missing switch, invalid values, defaults, and CLI overriding configuration in both directions.
+- [x] Implement parsing and effective permissions, preserving `--no-monitor` compatibility and persisted monitor settings.
+- [x] Add failing mixed-mode lifecycle coverage; implement zero-worker startup/listener/watchdog/shutdown handling and selective Admin listeners.
+- [x] Run worker/Admin combinations and monitor combinations, including --no-start plus STOP/START where at least one Admin interface is available. Verify shared authentication/HGM operations still work and disabled workers remain disabled after START.
+- [x] Rebuild and run all lifecycle/module probes; document startup semantics and commit this feature separately, crediting #4960.
 
 ### Task 4: Review and prepare replacements
 
@@ -65,12 +65,86 @@
 
 **Interfaces:** Produces clean local commit ranges suitable for two replacement PRs; no merge or old-PR closure.
 
-- [ ] Check `git diff --check`; review invariants and both protocol paths.
-- [ ] Run focused tests and compile other tier paths affected by the changes; record concrete limits if full integration infrastructure is unavailable.
-- [ ] Perform an independent whole-change code review, address material findings with failing-then-passing regressions.
+- [x] Check `git diff --check`; review invariants and both protocol paths.
+- [x] Run focused tests and compile other tier paths affected by the changes; record concrete limits if full integration infrastructure is unavailable.
+- [x] Perform an independent whole-change code review, address material findings with failing-then-passing regressions.
 - [ ] Report branch/commit boundaries, test evidence, and replacement PR descriptions. Publish new branches/PRs only when authorized; retain links and attribution to previous work.
 
 ## Progress and evidence
 
 - Worktree: `/data/rene/proxysql7/.worktrees/stop-start-refresh`; branch `v3.0-5186-refresh`; base `b16ff6025`.
 - Baseline DEBUG v3.1 build started from a fresh worktree with independent dependencies and objects.
+
+
+## Validation and implementation decisions
+
+Baseline on b16ff6025 reproduced eight absent-query-processor crashes across the
+two Admin protocols, STOP timeouts on both protocols, and NULL stopped-state
+Prometheus output. The six lifecycle tests passed after the fixes. The module
+suite now contains eleven tests, including all sixteen worker/Admin combinations
+(with idle threads), all four monitor permissions through STOP/START, initial
+no-start with mixed permissions, graceful shutdown, CLI/config precedence,
+invalid input, and repeated option handling.
+
+Two local branch boundaries preserve separate review:
+
+- `v3.0-5186-refresh`: lifecycle fix and its regression probe.
+- `v3.0-4951-refresh`: selective startup, documentation, expanded process probes,
+  and the registered legacy-layout unit test; stacked on the lifecycle branch.
+
+Material decisions:
+
+- STOP acknowledges the request asynchronously and disconnects existing Admin
+  clients during reload. Waiting synchronously deadlocks against client draining;
+  callers reconnect to the rebuilt Admin interface before continuing.
+- Monitor objects are constructed before Admin accepts connections so stopped
+  LOAD SERVERS keeps succeeding. This moves data allocation earlier, but does
+  not start monitor threads before START.
+- Startup monitor permissions do not overwrite persisted `monitor_enabled`.
+  Shared Auth/HGM objects remain available when workers are disabled.
+- All occurrences of a component CLI option are validated; the last valid value
+  wins. The bundled parser's first-occurrence accessor silently ignored later
+  invalid or conflicting values, as reproduced by new failing tests.
+- New permission fields are appended to the class tail. A compiler probe and
+  registered unit test caught the legacy `global.start_mutex` offset changing
+  from 16 to 24 before this correction; both checks passed after it.
+
+Independent review of b16ff6025..a64cecc15 found no lifecycle blocker and identified
+repeated-option validation, now corrected with RED/GREEN tests. Its other reviewed
+conditions were left unchanged: v4's sole managed validator caller excludes
+`threads`; processor TLS init/end calls already use thread-local state; STOP uses
+normal session response flushing rather than a new socket-backpressure protocol.
+The last point means a client unable to receive a reply can observe a disconnect.
+
+Commands and final outcomes are recorded below as verification completes. The
+v4 checks are compilation-only; no installed-plugin integration run is claimed.
+
+- `test/infra/control/run-ci-lint.bash`: passed before the final layout unit was
+  added; the final pre-push run will also validate its registration.
+- Stable DEBUG build: passed.
+- `startup_permissions_layout_unit-t`: failed before the layout correction;
+  passed after it, and registered in `unit-tests-g1`.
+- v4 compilation checks: all seven changed production translation units and the
+  legacy-layout probe passed with PROXYSQL40/31/FFTO/TSDB/ED25519/DEBUG enabled.
+- DEBUG v3.1 AddressSanitizer run before the layout-only correction: lifecycle
+  6/6 and module 11/11 passed with `detect_leaks=0`; a final run follows.
+
+
+Final local verification (2026-10-28):
+
+| Check | Outcome |
+| --- | --- |
+| Stable DEBUG build, final field placement | Passed |
+| Stable lifecycle process suite | 6/6 passed |
+| Stable module process suite | 11/11 passed |
+| DEBUG v3.1 ASAN build, final field placement | Passed |
+| ASAN lifecycle process suite | 6/6 passed |
+| ASAN module process suite | 11/11 passed |
+| Registered legacy-layout unit | RED before field move, GREEN afterward |
+| V4 changed production files and layout probe | 8 compile checks passed |
+| Repository CI lint before final registration | Passed; final push runs hook again |
+| `git diff --check`, group format and source registration | Passed |
+
+ASAN command prefix: `ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:halt_on_error=1`.
+Full backend TAP and installed-plugin integration are not claimed. Draft PRs
+allow those CI/reviewer checks to proceed without merging the old branches.
