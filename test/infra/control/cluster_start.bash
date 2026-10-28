@@ -20,7 +20,7 @@ if [ -z "${INFRA_ID}" ]; then echo "Error: INFRA_ID is not set."; exit 1; fi
 
 NETWORK_NAME="${INFRA_ID}_backend"
 CLUSTER_CONFIG="${SCRIPT_DIR}/proxysql-cluster-node.cnf"
-NUM_NODES=${PROXYSQL_CLUSTER_NODES:-9}
+NUM_NODES=${PROXYSQL_CLUSTER_NODES:-6}
 
 if [[ "${SKIP_CLUSTER_START}" == "1" ]] || [[ "${SKIP_CLUSTER_START}" == "true" ]] || [[ "${NUM_NODES}" == "0" ]]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] >>> Cluster start SKIPPED (SKIP_CLUSTER_START=${SKIP_CLUSTER_START}, Nodes=${NUM_NODES})"
