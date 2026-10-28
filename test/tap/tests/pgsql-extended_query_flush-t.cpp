@@ -1067,19 +1067,37 @@ static void case_row11_var(Mode m, bool) {
 	}
 }
 
-// The held backend dies before the Query: the Query must not be run alone on another connection,
-// which would report success while the INSERT is gone.
+// The held backend dies while the Query runs on it: the Query must not be run again alone on another
+// connection, which would report success while the INSERT is gone. The backend is killed only once
+// the Query runs there: killed while the client is idle, ProxySQL closes the client and no retry is
+// ever considered. Retries are switched on, or none would happen either way. The reply is read until
+// 8 s of quiet, longer than a retried 5 s sleep, so a retry's success cannot be missed.
 static void case_retry_refused(Mode m, bool) {
+	const std::string retries_before = scalar(g_admin, "SELECT variable_value FROM runtime_global_variables "
+		"WHERE variable_name='pgsql-query_retries_on_failure'");
+	admin_set("pgsql-query_retries_on_failure", "1");
 	auto c = client(m);
 	const std::string tag = tag_for("retry", m, false);
 	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "retry refused: P B E(INSERT) H", m, false);
-	exec(g_be, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE xact_start IS NOT NULL "
-		"AND pid <> pg_backend_pid() AND query LIKE '%" + tag + "%'");
-	usleep(300000);
-	const std::string got = run(*c, [&] { c->sendQuery("SELECT 1"); }, 1000);
-	ok(got != "T D C(SELECT 1) Z(I)", "retry refused [%s]: the Query is not run alone after the backend died (got '%s')",
-		mode_name(m), got.c_str());
+	const std::string mk = uniq();
+	std::string got;
+	bool running = false;
+	try {
+		c->sendQuery(mk + "SELECT pg_sleep(5)");
+		for (int waited = 0; waited < 4000 && running == false; waited += 50) {
+			running = scalar(g_be, "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND pid <> pg_backend_pid() "
+				"AND query LIKE '%" + mk + "%'") == "1";
+			if (running == false) usleep(50000);
+		}
+		exec(g_be, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND query LIKE '%" + mk + "%'");
+		got = tokens(c->readUntilQuiet(8000));
+	} catch (const PgException& e) {
+		got = std::string("CLOSED:") + e.what();
+	}
+	ok(running && got != "T D C(SELECT 1) Z(I)", "retry refused [%s]: the Query is not run again alone after its backend "
+		"died under it (running %d, got '%s')", mode_name(m), (int)running, got.c_str());
 	ok(rows(tag) == 0, "retry refused [%s]: the INSERT is gone (rows=%ld)", mode_name(m), rows(tag));
+	admin_set("pgsql-query_retries_on_failure", retries_before.empty() ? "1" : retries_before);
 }
 
 // ===== A Flush in a poisoned session (spec 4.8, row 9). =====
