@@ -10,21 +10,40 @@ jobs:
       pull-requests: read
   pg-compat:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
+    timeout-minutes: 240
     permissions:
       contents: read
       packages: read
     steps:
     - name: Checkout
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
+    - name: Checkout CI control
+      timeout-minutes: 5
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: sysown/proxysql
+        ref: ${{ needs.tier-selection.outputs.control_sha }}
+        path: ci-control
+        persist-credentials: false
+        sparse-checkout: .github
+    - name: Install infrastructure diagnostic hook
+      timeout-minutes: 1
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: setup
+
     - name: Build selected ProxySQL product (debug)
+      timeout-minutes: 60
       run: make -j"$(nproc)" debug
       env:
         PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
         PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
     - name: Log in to GHCR and pull CI base image
+      timeout-minutes: 15
       env:
         GHCR_USER: ${{ github.actor }}
         GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -42,6 +61,7 @@ jobs:
         exit 1
 
     - name: Stand up infra (backends + Toxiproxy + ProxySQL)
+      timeout-minutes: 20
       env:
         INFRA_ID: ci-${{ matrix.tier }}-${{ github.run_id }}-${{ github.run_attempt }}
         WORKSPACE: ${{ github.workspace }}
@@ -54,16 +74,29 @@ jobs:
         WORKSPACE: ${{ github.workspace }}
       run: test/pg-compat/run-pg-compat.bash --junitxml=/pg-compat-reports/pg-compat.xml -rxX || true
     - name: Fix report ownership
+      timeout-minutes: 2
       if: always()
       run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/pg-compat-reports" || true
     - name: Publish report
+      timeout-minutes: 5
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: pg-compat-report-${{ matrix.tier }}-attempt${{ github.run_attempt }}
         path: ${{ github.workspace }}/pg-compat-reports/pg-compat.xml
         if-no-files-found: warn
+    - name: Save infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 3
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: capture
+        artifact-key: ${{ matrix.tier }}
+        infra-id: ci-${{ matrix.tier }}-${{ github.run_id }}-${{ github.run_attempt }}
+
     - name: Cleanup
+      timeout-minutes: 2
       if: always()
       env:
         INFRA_ID: ci-${{ matrix.tier }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -74,6 +107,15 @@ jobs:
         docker logs "proxysql.${INFRA_ID}" 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash
         test/infra/control/destroy-infras.bash
+    - name: Upload infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: upload
+        artifact-key: ${{ matrix.tier }}
+
     needs: tier-selection
     strategy:
       fail-fast: false

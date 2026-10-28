@@ -36,7 +36,8 @@ jobs:
     secrets: inherit
   tests:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
+    timeout-minutes: 200
     # Writes a check run and mints an OIDC token for Codecov, so keep the token
     # bounded to exactly those operations rather than write-all.
     #
@@ -63,6 +64,7 @@ jobs:
       COVERAGE: ${{ matrix.coverage && '1' || '0' }}
     steps:
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -70,7 +72,14 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Install infrastructure diagnostic hook
+      timeout-minutes: 1
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: setup
+
     - name: Start selected product test check
+      timeout-minutes: 2
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -79,6 +88,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout repository
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
@@ -96,17 +106,20 @@ jobs:
           test/scripts
 
     - name: Restore selected product handoff
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Verify GCOV daemon binary
+      timeout-minutes: 1
       run: |
         chmod +x proxysql/src/proxysql
         file proxysql/src/proxysql
 
     - name: Log in to GHCR and pull CI base image
+      timeout-minutes: 15
       env:
         GHCR_USER: ${{ github.actor }}
         GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -124,6 +137,7 @@ jobs:
         exit 1
 
     - name: Start MariaDB 10.11 binlog infrastructure
+      timeout-minutes: 20
       run: |
         cd proxysql
         export INFRA_ID=ci-mariadb10-binlog-g1
@@ -140,7 +154,18 @@ jobs:
         test/infra/control/run-tests-isolated.bash
 
       if: ${{ success() }}
+    - name: Save infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 3
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: capture
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
+        infra-id: ci-mariadb10-binlog-g1
+
     - name: Cleanup
+      timeout-minutes: 2
       if: always()
       run: |
         set +e
@@ -151,6 +176,15 @@ jobs:
         docker logs proxysql.ci-mariadb10-binlog-g1 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash || true
         test/infra/control/destroy-infras.bash || true
+
+    - name: Upload infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: upload
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
 
     - name: Fix artifact permissions
       if: ${{ failure() && !cancelled() }}

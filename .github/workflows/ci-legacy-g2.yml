@@ -40,7 +40,8 @@ jobs:
     needs:
     - tier-context
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
-    timeout-minutes: 120
+    # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
+    timeout-minutes: 200
     permissions: write-all
     strategy:
       fail-fast: false
@@ -58,6 +59,7 @@ jobs:
     steps:
 
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -65,7 +67,14 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Install infrastructure diagnostic hook
+      timeout-minutes: 1
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: setup
+
     - name: Start selected product test check
+      timeout-minutes: 2
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -74,6 +83,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout repository
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
@@ -89,17 +99,20 @@ jobs:
           test/scripts
 
     - name: Restore selected product handoff
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Verify binary
+      timeout-minutes: 1
       run: |
         chmod +x proxysql/src/proxysql
         file proxysql/src/proxysql
 
     - name: Log in to GHCR and pull CI base image
+      timeout-minutes: 15
       # Both `docker login` and `docker pull` against ghcr.io have been
       # observed to fail transiently with `net/http: request canceled
       # (Client.Timeout exceeded while awaiting headers)`. Wrap both in
@@ -133,6 +146,7 @@ jobs:
         exit 1
 
     - name: Start infrastructure
+      timeout-minutes: 20
       run: |
         cd proxysql
         export INFRA_ID="ci-legacy-g2-${{ matrix.tier }}-${{ github.run_id }}"
@@ -151,7 +165,18 @@ jobs:
         export COVERAGE="${COVERAGE}"
         test/infra/control/run-tests-isolated.bash
 
+    - name: Save infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 3
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: capture
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
+        infra-id: ci-legacy-g2-${{ matrix.tier }}-${{ github.run_id }}
+
     - name: Cleanup
+      timeout-minutes: 2
       if: always()
       run: |
         set +e
@@ -161,6 +186,15 @@ jobs:
         docker logs proxysql.ci-legacy-g2-${{ matrix.tier }}-${{ github.run_id }} 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash
         test/infra/control/destroy-infras.bash
+
+    - name: Upload infrastructure diagnostics
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./ci-control/.github/actions/infrastructure-diagnostics
+      with:
+        phase: upload
+        artifact-key: ${{ matrix.check_key || strategy.job-index }}
 
     - name: Fix artifact permissions
       if: ${{ !cancelled() }}

@@ -1,0 +1,47 @@
+name: Save infrastructure diagnostics
+description: Capture job infrastructure before teardown and publish the evidence.
+inputs:
+  phase:
+    description: Install teardown capture, capture before cleanup, or upload after cleanup.
+    default: capture
+  infra-id:
+    description: Job infrastructure identity when provided by the test harness.
+    default: ''
+  artifact-key:
+    description: Matrix identity for an immutable artifact name.
+    default: ''
+  host-log-root:
+    description: Optional native sandbox directory for jobs that run services on the host.
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Install capture before Docker teardown
+      if: ${{ inputs.phase == 'setup' }}
+      shell: bash
+      run: |
+        python3 "$GITHUB_ACTION_PATH/../../scripts/ci_docker_diagnostics.py" --install
+        echo "CI_INFRA_DIAGNOSTICS_ROOT=${RUNNER_TEMP}/infrastructure-diagnostics" >> "$GITHUB_ENV"
+    - name: Capture container and host diagnostics
+      if: ${{ inputs.phase == 'capture' }}
+      shell: bash
+      env:
+        DIAG_INFRA_ID: ${{ inputs.infra-id }}
+        DIAG_HOST_LOG_ROOT: ${{ inputs.host-log-root }}
+        DIAG_OUTPUT: ${{ runner.temp }}/infrastructure-diagnostics
+        DIAG_WORKSPACE: ${{ github.workspace }}
+        DIAG_ISOLATED_RUNNER: ${{ runner.environment == 'github-hosted' && '1' || '0' }}
+      run: |
+        args=(--workspace "$DIAG_WORKSPACE" --output "$DIAG_OUTPUT")
+        [ -z "$DIAG_INFRA_ID" ] || args+=(--infra-id "$DIAG_INFRA_ID")
+        [ -z "$DIAG_HOST_LOG_ROOT" ] || args+=(--host-log-root "$DIAG_HOST_LOG_ROOT")
+        [ "$DIAG_ISOLATED_RUNNER" != 1 ] || args+=(--all-containers)
+        python3 "$GITHUB_ACTION_PATH/../../scripts/ci_collect_infra_logs.py" "${args[@]}"
+    - name: Upload infrastructure diagnostics
+      if: ${{ inputs.phase == 'upload' && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ github.workflow }}-${{ github.job }}-infrastructure-${{ github.run_id }}-${{ inputs.artifact-key }}-attempt${{ github.run_attempt }}
+        path: ${{ runner.temp }}/infrastructure-diagnostics/
+        retention-days: 3
+        if-no-files-found: warn
