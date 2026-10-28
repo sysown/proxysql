@@ -85,6 +85,25 @@ class IdentityTests(unittest.TestCase):
         recipe.write_text(recipe.read_text() + '# changed recipe\n')
         self.assertNotEqual(first, self.api.fingerprint(self.identity()))
 
+    def test_tsan_is_source_only_and_has_a_distinct_instrumented_identity(self):
+        normal = self.identity()
+        self.env['WITHTSAN'] = '1'
+        tsan = self.identity()
+        self.assertFalse(tsan['eligible'])
+        self.assertNotEqual(self.api.fingerprint(normal), self.api.fingerprint(tsan))
+        for key in ('CFLAGS', 'CXXFLAGS', 'LDFLAGS'):
+            self.assertIn('-fsanitize=thread', tsan['flags'][key])
+        self.assertIn('-DENABLE_THREAD_SANITIZER=ON', tsan['settings'])
+        self.assertIn('-DSKIP_EXTENSIONS=jemalloc', tsan['settings'])
+
+    def test_tsan_shared_build_policy_participates_in_source_identity(self):
+        self.env['WITHTSAN'] = '1'
+        policy = self.root/'common_mk/tsan_dependencies.mk'
+        policy.write_text('# original TSAN flags\n')
+        before = self.api.fingerprint(self.identity())
+        policy.write_text('# changed TSAN flags\n')
+        self.assertNotEqual(before, self.api.fingerprint(self.identity()))
+
     def test_actual_source_digest_is_checked(self):
         (self.root / 'deps/duckdb/duckdb-1.4.5.tar.gz').write_bytes(b'corrupted')
         with self.assertRaisesRegex(ValueError, 'SHA-256'):

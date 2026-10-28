@@ -26,7 +26,7 @@ $(OPENSSL_SOURCE_STAMP): libssl/openssl-$(OPENSSL_VERSION).tar.gz \
 	rm -rf libssl/openssl-$(OPENSSL_VERSION)
 	cd libssl && tar --no-same-owner -zxf openssl-$(OPENSSL_VERSION).tar.gz
 	cd libssl/openssl && CC=$(CC) CXX=$(CXX) ./config $(OPENSSL_CONFIGURE_FLAGS)
-	cd libssl/openssl && CC=$(CC) CXX=$(CXX) $(MAKE)
+	cd libssl/openssl && CC=$(CC) CXX=$(CXX) $(MAKE) $(TSAN_MAKE_FLAGS)
 	test -f $(LIB_SSL_PATH)
 	test -f $(LIB_CRYPTO_PATH)
 	touch libssl/openssl/.proxysql-build-complete

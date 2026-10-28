@@ -103,4 +103,7 @@ run_check "Test CI skip-label gates" \
 run_check "Test unit binary timeout and sanitizer failures" \
     python3 -m unittest discover -s test/infra/control -p test_unit_runner_timeout.py
 
+run_check "Test dependency artifact and TSAN source build policies" \
+    python3 -m unittest discover -s test/infra/control -p 'test_dependency_artifact_*.py'
+
 echo ">>> CI lint suite: OK"

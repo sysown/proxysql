@@ -4,6 +4,8 @@ set -euo pipefail
 dependency=${1:?dependency required}
 repo_root=${2:?repository root required}
 mode=${3:-auto}
+# TSAN never restores dependency archives, including the no-Python fallback.
+if [[ "${WITHTSAN:-0}" == 1 ]]; then mode=source; fi
 case "$mode" in auto|source|prebuilt) ;; *) echo 'ERROR: DEPS_MODE must be auto, source, or prebuilt' >&2; exit 1;; esac
 make_flags=${MAKEFLAGS:-}
 make_short_flags=${make_flags%% *}
@@ -46,7 +48,7 @@ archive="$repo_root/deps/$directory/$dependency-$version.tar.gz"
 bash "$repo_root/deps/$directory/verify-source.bash" "$archive"
 signature=$({
     printf '%s\n' "${CC:-cc}" "${CXX:-g++}" "${CFLAGS:-}" "${CPPFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}" \
-        "${OPENSSL_CONFIGURE_FLAGS:-}" "${DUCKDB_CMAKE_FLAGS:-}" "${SDKROOT:-}" "${MACOSX_DEPLOYMENT_TARGET:-}"
+        "${OPENSSL_CONFIGURE_FLAGS:-}" "${DUCKDB_CMAKE_FLAGS:-}" "${WITHTSAN:-0}" "${SDKROOT:-}" "${MACOSX_DEPLOYMENT_TARGET:-}"
     cat "$repo_root/deps/artifacts/prepare.bash" "$repo_root/deps/$directory/build.mk" \
         "$repo_root/deps/$directory/verify-source.bash" "$archive.sha256"
     read -r -a compiler_command <<< "${CC:-cc}"

@@ -101,6 +101,18 @@ class PreparationTests(unittest.TestCase):
             self.assertEqual(before, stamp.stat().st_mtime_ns)
         self.assertEqual(1, self.count())
 
+    def test_tsan_rebuilds_normal_source_and_bypasses_all_bundle_lookups(self):
+        self.prepare('source')
+        self.env['WITHTSAN'] = '1'
+        with patch.object(self.api.store, 'local_entry', side_effect=AssertionError('TSAN must not restore bundles')), \
+             patch.object(self.api.store, 'remote_entry', side_effect=AssertionError('TSAN must not download bundles')), \
+             patch.object(self.api.store, 'save_local', side_effect=AssertionError('TSAN must not cache bundles')):
+            result = self.prepare('prebuilt')
+            self.assertEqual('source', result['origin'])
+            self.assertTrue(result['changed'])
+            self.assertEqual(2, self.count())
+            self.assertFalse(self.prepare()['changed'], 'one source tree can serve subsequent phases of the same build')
+
     def test_prebuilt_missing_and_invalid_mode_do_not_compile(self):
         for mode in ('prebuilt', 'typo'):
             with self.subTest(mode=mode), self.assertRaises(ValueError):

@@ -1,6 +1,18 @@
 # These settings are shared by source compilation and artifact identity.
 DUCKDB_VERSION := 1.4.5
 DUCKDB_CMAKE_FLAGS ?= -DCMAKE_BUILD_TYPE=Release -DBUILD_UNITTESTS=OFF -DBUILD_SHELL=OFF -DENABLE_SANITIZER=OFF -DBUILD_EXTENSIONS="" -DDUCKDB_EXPLICIT_VERSION=v1.4.5
+ifeq ($(WITHTSAN),1)
+override DEPS_MODE := source
+# This option also selects DuckDB's TSAN-aware code paths, rather than merely
+# linking its uninstrumented release archive into an instrumented executable.
+ifneq ($(findstring -DENABLE_THREAD_SANITIZER=ON,$(DUCKDB_CMAKE_FLAGS)),-DENABLE_THREAD_SANITIZER=ON)
+override DUCKDB_CMAKE_FLAGS += -DENABLE_THREAD_SANITIZER=ON
+endif
+# DuckDB's Linux default extension set independently enables bundled jemalloc.
+ifneq ($(findstring -DSKIP_EXTENSIONS=jemalloc,$(DUCKDB_CMAKE_FLAGS)),-DSKIP_EXTENSIONS=jemalloc)
+override DUCKDB_CMAKE_FLAGS += -DSKIP_EXTENSIONS=jemalloc
+endif
+endif
 export DUCKDB_CMAKE_FLAGS CC CXX
 DEPS_MODE ?= auto
 
