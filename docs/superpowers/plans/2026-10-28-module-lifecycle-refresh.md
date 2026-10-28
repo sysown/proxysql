@@ -212,3 +212,20 @@ These do not establish installed-plugin/backend integration. The lifecycle
 follow-up push passed the complete pre-push CI lint suite. Fresh remote matrix
 and coverage results remain pending; neither replacement is marked ready and
 the old PRs remain open.
+
+### Static-analysis follow-up
+
+SonarCloud flagged the new test fixture's forced TLS 1.2 maximum. The fixture now
+requires TLS 1.3 without capping future versions, uses explicit lambda captures,
+and documents frontend stream ownership. The touched PURGE timestamp validation
+uses an early error exit to keep nesting within the quality rule; a new TO 0
+regression preserves invalid-timestamp errors.
+
+After these changes, fresh DEBUG Stable and v3.1 ASAN builds succeeded. The drain
+test passed 20/20 with real TLS 1.3 in both builds, and the stopped configuration/
+statistics case (including valid/invalid PURGE, both Admin protocols/dialects)
+passed in both. The changed production and unit-test translation units also
+passed v4.0 compilation checks. Independent review found no actionable issue.
+The tested contents were preserved when committing the shared fix on the
+lifecycle branch and merging it into startup. Fresh Sonar/matrix/coverage results
+are still pending, so both replacements remain drafts.
