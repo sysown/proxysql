@@ -120,6 +120,9 @@ TSAN_RE2_MAKE_FLAGS := CXXFLAGS="-O3 -g $(STDCPP) -fPIC $(CXXFLAGS) $(RE2_VALGRI
 TSAN_SSL_MAKE_FLAGS := LDFLAGS="$(LDFLAGS) -L$(SSL_LDIR)"
 TSAN_HTTP_MAKE_FLAGS := LDFLAGS="$(LDFLAGS) -L$(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs"
 TSAN_PG_MAKE_FLAGS := LDFLAGS="$(LDFLAGS) $(if $(filter Darwin,$(UNAME_S)),-L$(shell brew --prefix icu4c)/lib) -L$(SSL_LDIR)"
+# These old libtool versions discard sanitizer flags on shared links. ProxySQL
+# consumes their static archives, so avoid building the unused shared libraries.
+TSAN_LIBTOOL_CONFIGURE_FLAGS := --disable-shared
 endif
 
 libinjection/libinjection/src/libinjection.a:
@@ -214,7 +217,7 @@ cityhash/cityhash/src/.libs/libcityhash.a:
 	cd cityhash && rm -rf cityhash-*/ || true
 	cd cityhash && tar -zxf cityhash-*.tar.gz
 	cd cityhash/cityhash && cp ../config.guess . && chmod +x config.guess && cp ../config.sub . && chmod +x config.sub
-	cd cityhash/cityhash && ./configure && CC=${CC} CXX=${CXX} ${MAKE} $(TSAN_MAKE_FLAGS)
+	cd cityhash/cityhash && ./configure $(TSAN_LIBTOOL_CONFIGURE_FLAGS) && CC=${CC} CXX=${CXX} ${MAKE} $(TSAN_MAKE_FLAGS)
 
 cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
@@ -281,7 +284,7 @@ libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 	cd libdaemon && rm -rf libdaemon-*/ || true
 	cd libdaemon && tar -zxf libdaemon-0.14.tar.gz
 	cd libdaemon/libdaemon && patch -p0 < ../daemon_fork_umask.patch
-	cd libdaemon/libdaemon && cp ../config.guess . && chmod +x config.guess && cp ../config.sub . && chmod +x config.sub && ./configure --disable-examples
+	cd libdaemon/libdaemon && cp ../config.guess . && chmod +x config.guess && cp ../config.sub . && chmod +x config.sub && ./configure --disable-examples $(TSAN_LIBTOOL_CONFIGURE_FLAGS)
 	cd libdaemon/libdaemon && CC=${CC} CXX=${CXX} ${MAKE} $(TSAN_MAKE_FLAGS)
 
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
