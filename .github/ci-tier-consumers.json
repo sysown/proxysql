@@ -1589,9 +1589,14 @@
       "axes": {
         "infradb": [
           "mysql84"
+        ],
+        "tap_group": [
+          "mysql84-g1",
+          "mysql84-g10"
         ]
       },
-      "instance": "run"
+      "instance": "run",
+      "group_axis": "tap_group"
     },
     {
       "workflow": "CI-mysql84-g2",
@@ -1664,9 +1669,14 @@
       "axes": {
         "infradb": [
           "mysql84"
+        ],
+        "tap_group": [
+          "mysql84-g4",
+          "mysql84-g11"
         ]
       },
-      "instance": "run"
+      "instance": "run",
+      "group_axis": "tap_group"
     },
     {
       "workflow": "CI-mysql84-g5",
