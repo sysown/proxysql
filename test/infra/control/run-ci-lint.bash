@@ -27,6 +27,8 @@ run_check "Test staged CI workflow behavior" \
 	python3 -m unittest discover -s .github/scripts/tests
 run_check "Check AI TAP shard split" \
 	python3 test/tap/groups/test_ai_group_shards.py
+run_check "Check MySQL 8.4 TAP timeout partitions" \
+	python3 test/tap/groups/test_mysql84_group_shards.py
 run_check "Check MySQLX unit group registration" \
 	python3 test/tap/groups/test_mysqlx_group_registration.py
 run_check "Check TAP Makefile dependency graph" \
