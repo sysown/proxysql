@@ -486,14 +486,14 @@ $(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEA
 $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
 
-# The daemon probe skips before inspecting its binary outside Linux.
+# These daemon probes skip before inspecting their binaries outside Linux.
 # Keep that skip independent of the platform's daemon build requirements.
 STARTUP_TLS_BINARY :=
 ifeq ($(UNAME_S),Linux)
 STARTUP_TLS_BINARY := $(PROXYSQL_BINARY)
 endif
 
-module_lifecycle_unit-t: $(PROXYSQL_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
+module_lifecycle_unit-t: $(STARTUP_TLS_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
 module_startup_unit-t: $(PROXYSQL_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_startup.py $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
 
 startup_tls_ownership_unit-t: startup_tls_ownership_unit-t.cpp $(STARTUP_TLS_BINARY) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/test/infra/control/test_startup_tls_ownership.py
