@@ -474,7 +474,7 @@ static void test_mysql_paused_buffered_work() {
 int main() {
 #ifdef PROXYSQL31
 	plan(40);
-	if (test_init_minimal() || test_init_query_processor() || test_init_hostgroups())
+	if (test_init_minimal() || test_init_auth() || test_init_query_processor() || test_init_hostgroups())
 		BAIL_OUT("scheduler test initialization failed");
 	GloPgSQL_Logger = new PgSQL_Logger();
 	GloMyLogger = new MySQL_Logger();
@@ -492,6 +492,7 @@ int main() {
 	GloPgSQL_Logger = nullptr;
 	test_cleanup_hostgroups();
 	test_cleanup_query_processor();
+	test_cleanup_auth();
 	test_cleanup_minimal();
 #else
 	plan(1);
