@@ -229,3 +229,25 @@ passed v4.0 compilation checks. Independent review found no actionable issue.
 The tested contents were preserved when committing the shared fix on the
 lifecycle branch and merging it into startup. Fresh Sonar/matrix/coverage results
 are still pending, so both replacements remain drafts.
+
+### Standalone runner portability
+
+Two further review findings concerned optional host prerequisites and non-Linux
+builds. Both probes now emit TAP skips on non-Linux, or when Python/SQL clients
+are absent, before launching any daemon. The shared helper propagates child exit
+statuses, using 77 only for prerequisite skips. Missing daemon/script assets,
+launch failures, signals, and regression failures remain test failures. Coverage
+CI still installs all required tools before execution.
+
+Verification after this test-only change:
+
+- With prerequisites: Stable lifecycle 7/7 and startup 12/12, including both TAP
+  wrappers, passed again. Production code is unchanged from the earlier ASAN run.
+- Before the fix, missing Python made both wrappers fail; afterward, both missing
+  Python and missing SQL clients emitted successful TAP skips for both wrappers.
+- Compiling each wrapper's non-Linux conditional branch emitted a TAP skip. This
+  was a Linux-host simulation, not an actual macOS/FreeBSD runtime test.
+- Six build dependency probes confirmed both targets require the daemon on Linux
+  and omit it on Darwin/FreeBSD. Both wrappers passed v4.0 syntax compilation.
+- An invalid daemon path still produced a failing TAP assertion, as required.
+- Independent review found no actionable issue.

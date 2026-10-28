@@ -70,7 +70,7 @@ slow reader.
 ## Regression probes
 
 The following launch private daemons with temporary datadirs and loopback ports;
-they require a DEBUG daemon, Python 3, and the `mysql` and `psql` command-line
+they require Linux, a DEBUG daemon, Python 3, and the `mysql` and `psql` command-line
 clients, but no backend servers:
 
 ```bash
@@ -80,6 +80,9 @@ python3 test/infra/control/test_module_startup.py src/proxysql
 ```
 
 The probes are also registered as `module_lifecycle_unit-t` and
-`module_startup_unit-t` in the CI unit/coverage suite.
+`module_startup_unit-t` in the CI unit/coverage suite. Standalone wrappers emit
+TAP skips on non-Linux systems or when Python/SQL clients are unavailable. The
+coverage runner installs these prerequisites and executes both probes; genuine
+probe failures still fail the test.
 
 Prior work: PRs #4960, #5217, #5222; issues #4951, #5186, #5218.
