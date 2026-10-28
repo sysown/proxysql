@@ -2741,11 +2741,20 @@ __implicit_flush:
 								break;
 							}
 							extended_query_phase = EXTQ_PHASE_EXECUTING_SYNC_CLIENT;
+#ifdef DEBUG
+							// The check that one connection serves the group holds only while the session keeps that
+							// connection. A new group, or a part after one that gave it back, may run on any.
+							bool dbg_conn_kept = false;
+							for (unsigned int i = 0; dbg_extended_query_backend_conn && i < mybes->len; i++) {
+								const PgSQL_Backend* be = (PgSQL_Backend*)mybes->index(i);
+								dbg_conn_kept = dbg_conn_kept || (be->server_myds && be->server_myds->myconn == dbg_extended_query_backend_conn);
+							}
+							if (extq_group_open == false || dbg_conn_kept == false) {
+								dbg_extended_query_backend_conn = nullptr;
+							}
+#endif
 							if (extq_group_open == false) {
 								// A new group: what the previous one left goes, and its first message is routed.
-#ifdef DEBUG
-								dbg_extended_query_backend_conn = nullptr;
-#endif
 								bind_waiting_for_execute.reset(nullptr);
 								extended_query_exec_qp = true;
 							}

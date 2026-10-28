@@ -738,6 +738,78 @@ static void case_release_pool_pressure(Mode mode, bool) {
 	reset_pool(g_admin);
 }
 
+// A released part gives its connection back: another client can take it and keep it in a transaction,
+// and the group's next part then runs on a different connection. The pool starts empty, so the other
+// client takes exactly the released one. Plain native clients here, as for pool pressure.
+static void case_release_other_conn(Mode mode, bool) {
+	const Mode m = (mode == Mode::NATIVE_UNBATCHED) ? Mode::NATIVE : mode;
+	reset_pool(g_admin);
+	auto a = client(m);
+	auto b = client(m);
+	check(run(*a, [&] { a->prepareStatement("", uniq() + "SELECT 1", false); a->describeStatement("", false); a->sendFlush(); }),
+		"1 t T", "release other conn: A P D(S) H", m, false);
+	check(run(*b, [&] { b->sendQuery("BEGIN"); b->sendQuery("SELECT 1"); }), "C(BEGIN) Z(T) T D C(SELECT 1) Z(T)",
+		"release other conn: B takes the connection in a transaction", m, false);
+	check(run(*a, [&] { a->bindStatement("", "", {}, {}, false); a->executePortal("", 0, false); a->sendSync(); }),
+		"2 D C(SELECT 1) Z(I)", "release other conn: A B E S on another connection", m, false);
+	check(run(*b, [&] { b->sendQuery("ROLLBACK"); }), "C(ROLLBACK) Z(I)", "release other conn: B ROLLBACK", m, false);
+}
+
+// The same with pgsql-connection_delay_multiplex_ms: a released part keeps its connection until the delay
+// ends. Within it the next part runs there; once the connection is back in the pool, B can take it and
+// the next part runs on another one.
+static void case_release_delayed(Mode mode, bool) {
+	const Mode m = (mode == Mode::NATIVE_UNBATCHED) ? Mode::NATIVE : mode;
+	admin_set("pgsql-connection_delay_multiplex_ms", "3000");
+	reset_pool(g_admin);
+	{
+		auto a = client(m);
+		auto b = client(m);
+		const auto describe = [&] { a->prepareStatement("", uniq() + "SELECT 1", false); a->describeStatement("", false); a->sendFlush(); };
+		const auto execute = [&] { a->bindStatement("", "", {}, {}, false); a->executePortal("", 0, false); a->sendSync(); };
+		check(run(*a, describe), "1 t T", "release delayed: A P D(S) H", m, false);
+		check(run(*a, execute), "2 D C(SELECT 1) Z(I)", "release delayed: A B E S within the delay", m, false);
+		check(run(*a, describe), "1 t T", "release delayed: A P D(S) H again", m, false);
+		usleep(6500000);  // past the delay and past a maintenance pass (pgsql-poll_timeout)
+		check(run(*b, [&] { b->sendQuery("BEGIN"); b->sendQuery("SELECT 1"); }), "C(BEGIN) Z(T) T D C(SELECT 1) Z(T)",
+			"release delayed: B takes the connection in a transaction", m, false);
+		check(run(*a, execute), "2 D C(SELECT 1) Z(I)", "release delayed: A B E S on another connection", m, false);
+		run(*b, [&] { b->sendQuery("ROLLBACK"); });
+	}
+	admin_set("pgsql-connection_delay_multiplex_ms", "0");
+}
+
+// The same while A keeps a connection in another hostgroup: a temporary table disables multiplexing on
+// its hostgroup-0 connection, and a rule runs the group in hostgroup 9177.
+static void case_release_other_hostgroup(Mode mode, bool) {
+	const Mode m = (mode == Mode::NATIVE_UNBATCHED) ? Mode::NATIVE : mode;
+	exec(g_admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=9177");
+	exec(g_admin, "INSERT INTO pgsql_servers (hostgroup_id, hostname, port, use_ssl) SELECT 9177, hostname, port, use_ssl "
+		"FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(HG) + " LIMIT 1");
+	exec(g_admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9177");
+	exec(g_admin, "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply) VALUES "
+		"(9177, 1, 'flush_other_hg', 9177, 1)");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	{
+		auto a = client(m);
+		auto b = client(m);
+		check(run(*a, [&] { a->sendQuery("CREATE TEMP TABLE flush_tmp (x int)"); }), "C(CREATE TABLE) Z(I)",
+			"release other hostgroup: A CREATE TEMP TABLE", m, false);
+		check(run(*a, [&] { a->prepareStatement("", uniq() + "SELECT 'flush_other_hg'", false); a->describeStatement("", false);
+				a->sendFlush(); }), "1 t T", "release other hostgroup: A P D(S) H", m, false);
+		check(run(*b, [&] { b->sendQuery("BEGIN; SELECT 'flush_other_hg'"); }), "C(BEGIN) T D C(SELECT 1) Z(T)",
+			"release other hostgroup: B takes the connection in a transaction", m, false);
+		check(run(*a, [&] { a->bindStatement("", "", {}, {}, false); a->executePortal("", 0, false); a->sendSync(); }),
+			"2 D C(SELECT 1) Z(I)", "release other hostgroup: A B E S on another connection", m, false);
+		run(*b, [&] { b->sendQuery("ROLLBACK"); });
+	}
+	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9177");
+	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	exec(g_admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=9177");
+	exec(g_admin, "LOAD PGSQL SERVERS TO RUNTIME");
+}
+
 // A part that only parses or describes is still held when the group already holds something.
 static void case_release_not(Mode m, bool) {
 	const bool native = (m != Mode::LIBPQ);
@@ -1357,6 +1429,9 @@ static const std::vector<Case> CASES = {
 	{ "release postgres.js",         3,  3, false, case_release_postgresjs },
 	{ "release shapes",              7,  7, false, case_release_shapes },
 	{ "release pool pressure",       6,  6, false, case_release_pool_pressure },
+	{ "release other conn",          4,  4, false, case_release_other_conn },
+	{ "release delayed",             5,  5, false, case_release_delayed },
+	{ "release other hostgroup",     4,  4, false, case_release_other_hostgroup },
 	{ "release not",                 29, 12, false, case_release_not },
 	{ "release error",               2,  2, false, case_release_error },
 	{ "release after",               8,  8, false, case_release_after },
