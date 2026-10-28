@@ -3439,6 +3439,9 @@ bool MySQL_HostGroups_Manager::reconcile_server_desired_set(
 	}
 	const unsigned long long started_at = monotonic_time();
 	proxy_info("Generating runtime mysql servers records only.\n");
+	// The caller's protocol lock keeps claims stable. Read them before the HGM
+	// lock so the plugin-manager lifetime gate is never acquired beneath it.
+	const auto claims = proxysql_active_server_hostgroup_claims(desired_set.protocol);
 	wrlock();
 	bool result = false;
 	try {
@@ -3451,7 +3454,7 @@ bool MySQL_HostGroups_Manager::reconcile_server_desired_set(
 			ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
 				ProxySQL_ServerProtocol::mysql, desired_set.generation, *current_rows);
 			std::vector<ProxySQL_ServerRow> merged;
-			if (proxysql_merge_server_desired_set(current, desired_set, merged, error)) {
+			if (proxysql_merge_server_desired_set(current, desired_set, claims, merged, error)) {
 				std::unique_ptr<SQLite3_result> incoming = mysql_desired_rows(merged);
 				servers_add(incoming.get());
 				result = commit_locked({}, {}, true, false);
