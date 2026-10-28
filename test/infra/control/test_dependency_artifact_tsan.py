@@ -1,7 +1,10 @@
 """TSAN source builds must instrument dependencies and start with clean outputs."""
 import os
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -80,6 +83,55 @@ class TSANDependencyBuildTests(unittest.TestCase):
         values = result.stdout.splitlines()
         self.assertEqual(len(values), 4)
         self.assertTrue(all('-fsanitize=thread' in value for value in values), values)
+
+    @unittest.skipUnless(all(shutil.which(tool) for tool in ('gcc', 'g++', 'nm', 'readelf')),
+                         'real TSAN dependency link check needs the GNU toolchain')
+    def test_old_libtool_static_archives_link_instrumented_consumers(self):
+        probe = "probe-libtool-flags:\n\t@printf '%s\\n' '$(TSAN_LIBTOOL_CONFIGURE_FLAGS)' '$(TSAN_MAKE_FLAGS)'\n"
+        result = subprocess.run(['make', '-s', '-C', str(ROOT/'deps'), '-f', 'Makefile', '-f', '-',
+                                 'probe-libtool-flags', 'WITHTSAN=1', 'WITHASAN=0'], input=probe,
+                                text=True, capture_output=True, check=True)
+        configure_flags, make_flags = result.stdout.splitlines()
+        overrides = shlex.split(make_flags)
+        for dependency, archive_name, subdirectory, library in (
+                ('libdaemon', 'libdaemon-0.14.tar.gz', 'libdaemon', 'libdaemon'),
+                ('cityhash', 'cityhash-1.1.1-5-gf5dc541.tar.gz', 'src', 'libcityhash')):
+            with self.subTest(dependency=dependency), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with tarfile.open(ROOT/'deps'/dependency/archive_name) as archive:
+                    archive.extractall(root, filter='data')
+                source = next(root.iterdir())
+                for name in ('config.guess', 'config.sub'):
+                    shutil.copy(ROOT/'deps/libdaemon'/name, source/name)
+                    (source/name).chmod(0o755)
+                # Configure without instrumentation so this link-only regression
+                # also runs on hosts whose ASLR layout cannot execute TSAN.
+                env = dict(os.environ, CC='gcc', CXX='g++', CFLAGS='', CXXFLAGS='', LDFLAGS='', LIBS='')
+                options = ['--disable-examples'] if dependency == 'libdaemon' else []
+                configured = subprocess.run(['./configure', *options, *shlex.split(configure_flags)], cwd=source, env=env,
+                                            text=True, capture_output=True)
+                self.assertEqual(configured.returncode, 0, configured.stdout + configured.stderr)
+                built = subprocess.run(['make', '-C', subdirectory, library + '.la', *overrides],
+                                       cwd=source, env=env, text=True, capture_output=True)
+                self.assertEqual(built.returncode, 0, (built.stdout + built.stderr)[-6000:])
+                outputs = source/subdirectory/'.libs'
+                self.assertTrue((outputs/(library + '.a')).is_file())
+                symbols = subprocess.check_output(['nm', '-u', str(outputs/(library + '.a'))], text=True)
+                self.assertIn('__tsan_', symbols)
+                if dependency == 'libdaemon':
+                    consumer = source/'consumer.c'
+                    consumer.write_text('#include "libdaemon/dlog.h"\nint main(void) { daemon_set_verbosity(1); return 0; }\n')
+                    compiler, includes = 'gcc', source
+                else:
+                    consumer = source/'consumer.cc'
+                    consumer.write_text('#include "city.h"\nint main() { return CityHash64("tsan", 4) == 0; }\n')
+                    compiler, includes = 'g++', source/'src'
+                linked = subprocess.run([compiler, '-fsanitize=thread', '-I' + str(includes), str(consumer),
+                                         str(outputs/(library + '.a')), '-o', str(source/'consumer')],
+                                        text=True, capture_output=True)
+                self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
+                dynamic = subprocess.check_output(['readelf', '-d', str(source/'consumer')], text=True)
+                self.assertIn('libtsan.so', dynamic)
 
     def test_docker_entrypoint_cleans_before_tsan_source_dependencies(self):
         source = (ROOT / 'docker/images/proxysql/deb-compliant/entrypoint/entrypoint.bash').read_text()
