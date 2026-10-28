@@ -4147,9 +4147,11 @@ handler_again:
 				// named portal routes to the connection that holds it. Kept SEPARATE from
 				// has_pending_messages: the latter still gates the frame-drain
 				// NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC) below, which must not fire
-				// on an empty frame just because a portal is open.
+				// on an empty frame just because a portal is open. The unnamed portal about to be
+				// dropped is left out of the count only if it was recorded: one that ran to the end
+				// without pausing never was.
 				bool sticky_backend_connection = has_pending_messages || (group_continues && myconn->is_pipeline_active()) ||
-					(!clear_portals_at_boundary && named_portals.size() > (drop_unnamed_portal ? 1u : 0u));
+					(!clear_portals_at_boundary && named_portals.size() > (drop_unnamed_portal ? named_portals.count("") : 0u));
 
 				RequestEnd(myds, false);
 				if (clear_portals_at_boundary) {
