@@ -1,3 +1,4 @@
+#include "AdminResponseDrain.h"
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -871,6 +872,11 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		// waiting here for reload would deadlock against shutdown_threads().
 		// STOP rebuilds Admin in --no-start mode; clients reconnect afterward.
 		SPA->send_ok_msg_to_client(sess, "ProxySQL stop requested", 0, query_no_space);
+		// Admin exits its I/O loop once shutdown is set. Drain both protocol
+		// buffers, including TLS ciphertext, while this client is still live.
+		if (!proxysql_drain_admin_response(*sess->client_myds, 1000)) {
+			proxy_warning("STOP response did not fully drain before shutdown\n");
+		}
 		__sync_bool_compare_and_swap(&glovars.shutdown, 0, 1);
 		GloMTH->signal_all_threads(0);
 		GloPTH->signal_all_threads(0);
@@ -2742,6 +2748,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			const bool pgsql = query_no_space[5] == 'P' || query_no_space[5] == 'p';
+			if ((pgsql && !GloPgQPro) || (!pgsql && !GloMyQPro)) {
+				SPA->send_error_msg_to_client(sess, "Global Query Processor not started: cannot save unavailable runtime state");
+				return false;
+			}
 			if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 				SPA->save_pgsql_firewall_from_runtime(false);
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved pgsql firewall from RUNTIME\n");
@@ -2864,6 +2875,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+			const bool pgsql = query_no_space[5] == 'P' || query_no_space[5] == 'p';
+			if ((pgsql && !GloPgQPro) || (!pgsql && !GloMyQPro)) {
+				SPA->send_error_msg_to_client(sess, "Global Query Processor not started: cannot save unavailable runtime state");
+				return false;
+			}
 			if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 				SPA->save_pgsql_query_rules_from_runtime(false);
 				SPA->save_pgsql_query_rules_fast_routing_from_runtime(false);

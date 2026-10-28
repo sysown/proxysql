@@ -797,9 +797,9 @@ int PgSQL_Data_Stream::write_to_net() {
 					shut_soft();
 					return 0;
 				}
-				else {
-					return -1;
-				}
+				// SSL_write may already have consumed plaintext. EAGAIN/EINTR
+				// defer only the ciphertext flush; account for that plaintext
+				// below so a retry cannot encrypt and send it a second time.
 			}
 		}
 	}
