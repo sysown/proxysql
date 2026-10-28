@@ -85,9 +85,9 @@ void Base_Thread::register_session(T thr, S _sess, bool up_start) {
 	}
 #ifdef PROXYSQL31
 	if constexpr (std::is_same_v<T, MySQL_Thread*>) {
-		// handled_in_pass is compared with this thread's own pass counter: a
-		// value left by the thread the session comes from (idle threads) could
-		// match it and make process_all_sessions() skip the session.
+		// Clear the retained legacy marker when moving between workers.
+		// Phased dispatch now uses to_process and the continuation queue.
+		// Keep initialization consistent with newly constructed sessions.
 		_sess->handled_in_pass = 0;
 	}
 #endif // PROXYSQL31
@@ -591,9 +591,7 @@ bool Base_Thread::move_session_to_idle_mysql_sessions(DS * myds, unsigned int n)
 	// The poll scan admits only frontend streams with an attached session.
 	assert(myds && myds->sess);
 #ifdef PROXYSQL31
-	if constexpr (std::is_same_v<T, PgSQL_Thread>) {
-		if (myds->sess->continuation_queued) return false;
-	}
+	if (myds->sess->continuation_queued) return false;
 #endif
 	T* thr = static_cast<T*>(this);
 	unsigned long long _tmp_idle = thr->mypolls.last_recv[n] > thr->mypolls.last_sent[n] ? thr->mypolls.last_recv[n] : thr->mypolls.last_sent[n] ;

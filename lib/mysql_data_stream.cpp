@@ -1011,12 +1011,11 @@ int MySQL_Data_Stream::write_to_net() {
 	if (bytes_io < 0) {
 		if (encrypted==false)	{
 #ifdef PROXYSQL31
-			if (poll_fds_idx < 0 || !mypolls) {
-				if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-					shut_soft();
-			} else if (mypolls->fds[poll_fds_idx].revents & POLLOUT) {
-				shut_soft();
-			}
+            // POLLOUT is a readiness snapshot, not reserved send capacity.
+            // A preceding write can fill the socket; preserve the output and
+            // retry on the next writable event, as in the PostgreSQL path.
+            if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
+                shut_soft();
 #else
 			if (poll_fds_idx < 0 || !mypolls || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
 				shut_soft();
@@ -1924,7 +1923,11 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 #ifdef STRESSTEST_POOL
 		MyHGM->push_MyConn_to_pool(mc);  // #644
 #else
-		sess->thread->push_MyConn_local(mc);
+		sess->thread->push_MyConn_local(mc
+#ifdef PROXYSQL31
+            , sess
+#endif
+        );
 #endif
 	}
 }

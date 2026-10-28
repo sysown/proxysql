@@ -2969,7 +2969,11 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(
 	unsigned int _hid, MySQL_Session *sess, bool ff, char *gtid_uuid,
 	uint64_t gtid_trxid, int max_lag_ms,
-	MySQLBackendAuthType requested_type)
+	MySQLBackendAuthType requested_type
+#ifdef PROXYSQL31
+    , Pool_Acquire_Mode mode
+#endif
+)
 {
 	MySQL_Connection * conn = nullptr; // Pointer to hold the retrieved MySQL_Connection
 
@@ -2988,7 +2992,11 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(
 	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		// Attempt to get a random MySQL_Connection from the server's free connection pool
-		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff, requested_type);
+		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff, requested_type
+#ifdef PROXYSQL31
+            , mode
+#endif
+        );
 
 		// If a connection is obtained, mark it as used and update connection pool statistics
 		if (conn) {

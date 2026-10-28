@@ -1305,6 +1305,7 @@ void MySQL_Session::reset() {
 MySQL_Session::~MySQL_Session() {
 #ifdef PROXYSQL31
 	if (thread) {
+		thread->cancel_session_continuation(this);
 		thread->leave_waiter(this);
 	}
 #endif // PROXYSQL31
@@ -4245,6 +4246,12 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 	// 'mysql_thread___connect_retries_delay'. In case of 'async_connect' failing, 'pause_until' should also
 	// be set to 'mysql_thread___connect_retries_delay'. Complementary NOTE below.
 	if (mybe->server_myds->myconn==NULL) {
+#ifdef PROXYSQL31
+        if (established_checkout_unavailable) {
+            *_rc = 1;
+            return false;
+        }
+#endif
 		pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
 		*_rc=1;
 		return false;
@@ -7065,6 +7072,41 @@ bool MySQL_Session::client_may_pipeline() const {
 	return status == WAITING_CLIENT_DATA || client_pkts_must_be_deferred();
 }
 
+#ifdef PROXYSQL31
+Session_Run_Result MySQL_Session::run_step(Pool_Acquire_Mode mode, bool io_only) {
+    // Readiness has already been consumed by MySQL's poll scan.
+    if (io_only) return Session_Run_Result::WaitIO;
+    pool_acquire_mode = mode;
+    established_checkout_unavailable = false;
+    scheduler_managed = true;
+    yield_after_release = false;
+    to_process = 1;
+    const int rc = handler();
+    scheduler_managed = false;
+    pool_acquire_mode = Pool_Acquire_Mode::Normal;
+    if (rc == -1 || !healthy || killed) {
+        healthy = false;
+        to_process = 0;
+        return Session_Run_Result::Close;
+    }
+    if (rc == 1) {
+        to_process = 0;
+        return Session_Run_Result::Runnable;
+    }
+    if (established_checkout_unavailable) {
+        to_process = 1;
+        return Session_Run_Result::EstablishedUnavailable;
+    }
+    to_process = 0;
+    return waiter_node.session ? Session_Run_Result::WaitBackend : Session_Run_Result::WaitIO;
+}
+
+void MySQL_Session::note_backend_release(unsigned int hostgroup) {
+    if (scheduler_managed && thread && thread->waiter_lists.head(hostgroup))
+        yield_after_release = true;
+}
+#endif
+
 int MySQL_Session::handler() {
 	int rc = handler_pass();
 	// Execute the client packets deferred while a command was in flight (#5930).
@@ -7074,6 +7116,11 @@ int MySQL_Session::handler() {
 		rc == 0 && status == WAITING_CLIENT_DATA && mirror == false && killed == false && healthy
 		&& client_myds && client_myds->PSarrayIN && client_myds->PSarrayIN->len
 	) {
+#ifdef PROXYSQL31
+        // handler_pass() has completed cleanup and attempted the current reply.
+        // Let the scheduler serve an older waiter before another client command.
+        if (scheduler_managed && yield_after_release) return 1;
+#endif
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
 			"Session=%p , client_myds=%p . Processing %u deferred packet(s) from client\n",
 			this, client_myds, client_myds->PSarrayIN->len);
@@ -10206,6 +10253,20 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		constexpr bool force_fresh_iam_connection = false;
 #endif // PROXYSQL40
 
+#ifdef PROXYSQL31
+        const auto acquire_mode = pool_acquire_mode;
+        // Complex acquisition policies retain the ordinary recovery path.
+        // In particular, never reinterpret an IAM/fresh/causal-read request
+        // as an unconstrained established-connection checkout.
+        if (acquire_mode == Pool_Acquire_Mode::EstablishedOnly &&
+            (backend_auth_type != MySQLBackendAuthType::PASSWORD || force_fresh_iam_connection ||
+             session_fast_forward || qpo->create_new_conn || qpo->min_gtid ||
+             qpo->gtid_from_hostgroup >= 0 || qpo->max_lag_ms >= 0)) {
+            established_checkout_unavailable = true;
+            return;
+        }
+#endif
+
 		MySQL_Connection *mc=NULL;
 		MySQL_Backend * _gtid_from_backend = NULL;
 		char uuid[64];
@@ -10333,6 +10394,14 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // STRESSTEST_POOL
 
 		if (mc==NULL) {
+#ifdef PROXYSQL31
+            // Local-cache misses can still hide capacity from normal recovery:
+            // cached connections count as used until published. A fresh or
+            // incompatible request must see that capacity in the global pool.
+            // Speculation remains read-only with respect to cache publication.
+            if (acquire_mode == Pool_Acquire_Mode::Normal)
+                thread->return_local_connections();
+#endif
 			if (trxid) {
 #ifdef PROXYSQL31
 				// IAM checkouts may require asynchronous token acquisition or a fresh
@@ -10344,7 +10413,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // PROXYSQL31
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
 					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
-					uuid, trxid, -1, backend_auth_type);
+					uuid, trxid, -1, backend_auth_type
+#ifdef PROXYSQL31
+                    , acquire_mode
+#endif
+                );
 			} else {
 #ifdef PROXYSQL31
 				last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
@@ -10354,8 +10427,18 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // PROXYSQL31
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
 					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
-					NULL, 0, gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms, backend_auth_type);
+					NULL, 0, gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms, backend_auth_type
+#ifdef PROXYSQL31
+                    , acquire_mode
+#endif
+                );
 			}
+#ifdef PROXYSQL31
+            if (!mc && acquire_mode == Pool_Acquire_Mode::EstablishedOnly) {
+                established_checkout_unavailable = true;
+                return;
+            }
+#endif
 			thread->note_pool_attempt(mc == NULL);
 #ifdef STRESSTEST_POOL
 			if (mc && (loops < NUM_SLOW_LOOPS - 1)) {

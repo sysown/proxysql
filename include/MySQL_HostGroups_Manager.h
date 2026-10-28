@@ -2,6 +2,7 @@
 #define PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H
 #include "proxysql.h"
 #include "MySQL_Backend_Auth.h"
+#include "Session_Scheduler.h"
 #ifdef PROXYSQL40
 #include "Aws_Locality_Manager.h"
 #include "ProxySQL_Plugin.h"
@@ -191,7 +192,11 @@ class MySrvConnList {
 	}
 	MySQL_Connection *remove(int);
 	MySQL_Connection * get_random_MyConn(
-		MySQL_Session *sess, bool ff, MySQLBackendAuthType requested_type);
+		MySQL_Session *sess, bool ff, MySQLBackendAuthType requested_type
+#ifdef PROXYSQL31
+        , Pool_Acquire_Mode mode = Pool_Acquire_Mode::Normal
+#endif
+    );
 	void get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn, MySQLBackendAuthType requested_type);
 	unsigned int conns_length() { return conns->len; }
 	void drop_all_connections();
@@ -1079,7 +1084,11 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 */
 	int remove_server_in_hg(uint32_t hid, const string& addr, uint16_t port);
 
-	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQLBackendAuthType requested_type = MySQLBackendAuthType::PASSWORD);
+	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQLBackendAuthType requested_type = MySQLBackendAuthType::PASSWORD
+#ifdef PROXYSQL31
+        , Pool_Acquire_Mode mode = Pool_Acquire_Mode::Normal
+#endif
+    );
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);

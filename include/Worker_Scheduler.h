@@ -26,7 +26,7 @@ class Worker_Scheduler {
 public:
     Worker_Scheduler(Worker &w, Pool &p) : worker(w), pool(p) {
         worker.released_hostgroups.clear();
-        worker.collecting_releases = true;
+        worker.collecting_releases = std::is_same_v<Session, PgSQL_Session>;
     }
     ~Worker_Scheduler() {
         worker.collecting_releases = false;
@@ -62,10 +62,27 @@ public:
                 continue;
             }
             auto *bds = waiting->mybe ? waiting->mybe->server_myds : nullptr;
+            if constexpr (std::is_same_v<Session, MySQL_Session>) {
+                if (retry_unavailable && worker.refreshing_waiter_deadlines) {
+                    if (!bds) worker.waiter_deadline_hint = 0;
+                    else if (bds->max_connect_time && worker.waiter_deadline_hint)
+                        worker.waiter_deadline_hint = std::min(worker.waiter_deadline_hint, bds->max_connect_time);
+                }
+            }
             const bool deadline_due = bds && bds->max_connect_time && worker.curtime >= bds->max_connect_time;
             // A failed ordinary checkout can stop further speculative retries,
             // but every expired waiter still needs its timeout state machine.
-            if (retry_unavailable && !deadline_due && checkout_blocked) { node = next; continue; }
+            if (retry_unavailable && !deadline_due && checkout_blocked) {
+                if constexpr (std::is_same_v<Session, MySQL_Session>) {
+                    // Admission only lowers this bound. Removed waiters leave
+                    // it conservatively early; unknown/expired bounds force
+                    // a complete traversal, including every expired tail.
+                    if (!worker.refreshing_waiter_deadlines && worker.waiter_deadline_hint &&
+                        worker.curtime < worker.waiter_deadline_hint) break;
+                }
+                node = next;
+                continue;
+            }
             if (waiting->pause_until > worker.curtime && !deadline_due) { node = next; continue; }
             if (deadline_due) waiting->pause_until = 0;
             waiting->to_process = 1;
@@ -98,6 +115,9 @@ public:
     }
 
     void dispatch_released() {
+        // Immediate local reacquisition can strand another MySQL worker with
+        // no backend I/O to wake it. Preserve MySQL's batched waiter phase.
+        if constexpr (std::is_same_v<Session, MySQL_Session>) return;
         // A synchronous completion may release again. Bound the chain rather
         // than recurse; remaining availability is retried at the next pass.
         size_t i = 0;
@@ -160,9 +180,15 @@ public:
     __attribute__((always_inline)) inline void run_late() {
         dispatch_released();
         // Recovery and expired deadlines still use ordinary pool acquisition.
+        if constexpr (std::is_same_v<Session, MySQL_Session>) {
+            worker.refreshing_waiter_deadlines = !worker.waiter_lists.empty() &&
+                (!worker.waiter_deadline_hint || worker.curtime >= worker.waiter_deadline_hint);
+            if (worker.refreshing_waiter_deadlines) worker.waiter_deadline_hint = ~0ULL;
+        }
         worker.waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node*, size_t count) {
             serve_waiters(hid, count, true);
         });
+        if constexpr (std::is_same_v<Session, MySQL_Session>) worker.refreshing_waiter_deadlines = false;
         dispatch_released();
         for (unsigned n = 0; n < worker.mysql_sessions->len; ++n) {
             auto *sess = static_cast<Session*>(worker.mysql_sessions->index(n));
