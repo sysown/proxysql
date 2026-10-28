@@ -23,7 +23,8 @@ mkdir -p \
 	"${contract_fixture}/include" \
 	"${contract_fixture}/src" \
 	"${contract_fixture}/test/deps/mariadb-connector-c"
-cp "${repo_root}/common_mk/openssl_flags.mk" "${contract_fixture}/common_mk/"
+cp "${repo_root}/common_mk/openssl_flags.mk" \
+	"${repo_root}/common_mk/tsan_dependencies.mk" "${contract_fixture}/common_mk/"
 cp "${repo_root}/deps/Makefile" "${contract_fixture}/deps/"
 cp "${repo_root}/deps/libssl/build.mk" "${contract_fixture}/deps/libssl/"
 cp "${repo_root}/deps/duckdb/build.mk" "${contract_fixture}/deps/duckdb/"

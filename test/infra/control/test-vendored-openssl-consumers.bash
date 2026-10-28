@@ -54,7 +54,21 @@ dry_run() {
 		printf '%s\n' "${output}" >&2
 		fail "dry run failed for ${make_dir##*/}:${target} on ${platform}"
 	fi
-	output=${output//\"/}
+	# Empty optional compiler/linker flags add harmless leading whitespace to
+	# assignments. Compare their rendered flag values independently of it.
+	output=$(printf '%s\n' "${output}" | python3 -c '
+import shlex
+import sys
+for line in sys.stdin:
+    try:
+        tokens = shlex.split(line)
+    except ValueError:
+        print(line.rstrip("\n"))
+        continue
+    print(" ".join((token.split("=", 1)[0] + "=" + token.split("=", 1)[1].strip())
+                   if token.startswith(("CFLAGS=", "CXXFLAGS=", "CPPFLAGS=", "LDFLAGS=", "LIBS="))
+                   else token for token in tokens))
+')
 	printf '%s\n' "${output}"
 }
 

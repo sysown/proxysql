@@ -117,8 +117,9 @@ fixture_test_deps="${fixture_root}/test/deps"
 fixture_openssl="${fixture_root}/deps/libssl/openssl"
 fixture_stamp="${fixture_openssl}/.proxysql-build-complete"
 fixture_connector="${fixture_test_deps}/mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a"
-mkdir -p "${fixture_root}/src" "${fixture_root}/include" \
+mkdir -p "${fixture_root}/src" "${fixture_root}/include" "${fixture_root}/common_mk" \
 	"${fixture_openssl}" "$(dirname -- "${fixture_connector}")"
+cp "${repo_root}/common_mk/tsan_dependencies.mk" "${fixture_root}/common_mk/tsan_dependencies.mk"
 : > "${fixture_root}/src/proxysql_global.cpp"
 : > "${fixture_root}/include/makefiles_vars.mk"
 cat > "${fixture_root}/include/makefiles_paths.mk" <<EOF
@@ -151,17 +152,23 @@ os.utime(sys.argv[1], (1_700_000_000, 1_700_000_000))
 os.utime(sys.argv[2], (1_700_000_100, 1_700_000_100))
 PY
 
-no_op_bridge_commands=$(make -C "${fixture_test_deps}" --no-print-directory \
+if ! no_op_bridge_commands=$(make -C "${fixture_test_deps}" --no-print-directory \
 	-f "${repo_root}/test/deps/Makefile" -n mariadb_client \
-	MAKE="${noop_make}" 2>&1)
+	MAKE="${noop_make}" 2>&1); then
+	printf '%s\n' "${no_op_bridge_commands}" >&2
+	fail "unable to inspect the incremental OpenSSL connector fixture"
+fi
 [[ "${no_op_bridge_commands}" == *"-C ${fixture_root}/deps libssl"* ]] || \
 	fail "test/deps does not reevaluate the incremental OpenSSL target"
 [[ "${no_op_bridge_commands}" != *'cd mariadb-connector-c && rm -rf mariadb-connector-c-'* ]] || \
 	fail "a no-op OpenSSL delegation rebuilds an up-to-date connector"
 
-advanced_bridge_commands=$(make -C "${fixture_test_deps}" --no-print-directory \
+if ! advanced_bridge_commands=$(make -C "${fixture_test_deps}" --no-print-directory \
 	-f "${repo_root}/test/deps/Makefile" -n mariadb_client \
-	MAKE="${advanced_make}" 2>&1)
+	MAKE="${advanced_make}" 2>&1); then
+	printf '%s\n' "${advanced_bridge_commands}" >&2
+	fail "unable to inspect the advanced OpenSSL connector fixture"
+fi
 [[ "${advanced_bridge_commands}" == *'cd mariadb-connector-c && rm -rf mariadb-connector-c-'* ]] || \
 	fail "an advanced OpenSSL stamp does not rebuild the stale connector"
 
