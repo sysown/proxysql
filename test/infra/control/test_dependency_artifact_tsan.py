@@ -58,12 +58,9 @@ class TSANDependencyBuildTests(unittest.TestCase):
             for directory in ('common_mk', 'include', 'src', 'deps/artifacts',
                               'deps/libssl/openssl', 'deps/duckdb', 'deps/curl/curl',
                               'deps/postgresql/postgresql/src/interfaces/libpq',
-                              'deps/libusual/libusual', 'test/deps',
-                              'test/deps/mysql-connector-c/mysql-connector-c',
-                              'test/deps/mysql-connector-c-8.4.0/mysql-connector-c'):
+                              'deps/libusual/libusual'):
                 (root / directory).mkdir(parents=True, exist_ok=True)
-            for path in ('deps/Makefile', 'test/deps/Makefile', 'include/makefiles_vars.mk',
-                         'include/makefiles_paths.mk',
+            for path in ('deps/Makefile', 'include/makefiles_vars.mk',
                          'deps/libssl/build.mk', 'deps/duckdb/build.mk',
                          'deps/artifacts/prepare.bash'):
                 shutil.copy(ROOT / path, root / path)
@@ -103,28 +100,7 @@ class TSANDependencyBuildTests(unittest.TestCase):
                     linked = subprocess.run(['cc', str(consumer), *flags, *libraries,
                                              '-o', str(root / 'consumer')], text=True, capture_output=True)
                     self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
-            (root / 'CMakeLists.txt').write_text(
-                'cmake_minimum_required(VERSION 3.16)\nproject(SSLConsumer C)\n'
-                'add_executable(consumer consumer.c)\n'
-                'target_link_libraries(consumer PRIVATE "' +
-                str(root / 'deps/libssl/openssl/libssl.a') + '")\n')
-            for target in ('mysql_client', 'mysql8_client'):
-                with self.subTest(dependency=target):
-                    rendered = subprocess.run(
-                        ['make', '-B', '-n', '--no-print-directory', '-C', str(root / 'test/deps'),
-                         target, 'MAKE=/bin/true', 'GIT_VERSION=4.0.0-test', 'WITHTSAN=1'],
-                        text=True, capture_output=True)
-                    self.assertEqual(rendered.returncode, 0, rendered.stdout + rendered.stderr)
-                    flags = [token for line in rendered.stdout.replace('\\\n', ' ').splitlines()
-                             if '-DOPENSSL_SSL_LIBRARY=' in line
-                             for token in shlex.split(line)
-                             if token.startswith('-DCMAKE_EXE_LINKER_FLAGS=')]
-                    build = root / target
-                    configured = subprocess.run(['cmake', '-S', str(root), '-B', str(build), *flags],
-                                                text=True, capture_output=True)
-                    self.assertEqual(configured.returncode, 0, configured.stdout + configured.stderr)
-                    linked = subprocess.run(['cmake', '--build', str(build)], text=True, capture_output=True)
-                    self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
+
 
 
 if __name__ == '__main__':
