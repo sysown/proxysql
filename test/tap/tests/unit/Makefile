@@ -493,6 +493,8 @@ ifeq ($(UNAME_S),Linux)
 STARTUP_TLS_BINARY := $(PROXYSQL_BINARY)
 endif
 
+module_lifecycle_unit-t: $(PROXYSQL_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
+
 startup_tls_ownership_unit-t: startup_tls_ownership_unit-t.cpp $(STARTUP_TLS_BINARY) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/test/infra/control/test_startup_tls_ownership.py
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -o $@
@@ -701,7 +703,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_waiter_list_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
-UNIT_TESTS += startup_permissions_layout_unit-t worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
+UNIT_TESTS += startup_permissions_layout_unit-t admin_response_drain_unit-t module_lifecycle_unit-t worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t

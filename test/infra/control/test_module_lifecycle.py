@@ -180,8 +180,29 @@ class Lifecycle(IsolatedDaemonTest):
                 daemon.query(f"TRUNCATE stats_{dialect.lower()}_query_digest", protocol)
                 daemon.query(f"PURGE stats_{dialect.lower()}_query_digest TO 1", protocol)
         daemon.query("INSERT INTO mysql_query_rules (rule_id,active) VALUES (5186,1)")
-        daemon.query("SAVE MYSQL QUERY RULES FROM RUNTIME")
+        self.assertNotEqual(daemon.query("SAVE MYSQL QUERY RULES FROM RUNTIME", check=False).returncode, 0)
         self.assertEqual(daemon.query("SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id=5186").stdout.strip(), "1")
+
+    def test_stopped_runtime_saves_report_errors(self):
+        for after_stop in (False, True):
+            daemon = self.daemon(no_start=not after_stop)
+            if after_stop:
+                daemon.stop()
+            for protocol in ("mysql", "pgsql"):
+                for dialect in ("MYSQL", "PGSQL"):
+                    for module in ("QUERY RULES", "FIREWALL"):
+                        for operation in ("FROM RUNTIME", "FROM RUN", "TO MEMORY", "TO MEM"):
+                            query = f"SAVE {dialect} {module} {operation}"
+                            with self.subTest(stopped=after_stop, protocol=protocol, query=query):
+                                result = daemon.query(query, protocol, check=False)
+                                self.assertNotEqual(result.returncode, 0, query)
+                                self.assertIn("Query Processor not started", result.stderr)
+            daemon.query("PROXYSQL START")
+            for protocol in ("mysql", "pgsql"):
+                for dialect in ("MYSQL", "PGSQL"):
+                    for module in ("QUERY RULES", "FIREWALL"):
+                        daemon.query(f"SAVE {dialect} {module} FROM RUNTIME", protocol)
+            daemon.close()
 
     def test_start_preserves_statistics_refresh(self):
         daemon = self.daemon(no_start=True)

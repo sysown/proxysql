@@ -48,7 +48,15 @@ and must define response/session lifetime explicitly in the tests and change log
 
 Stopped-state queries must never access missing processors. Preserve usable Admin
 configuration operations; retain existing errors for operations that already
-require a running processor. Do not introduce a blanket LOAD rejection.
+require a running processor. Explicit SAVE QUERY RULES/FIREWALL FROM RUNTIME
+(and TO MEMORY aliases) must report unavailable runtime state instead of silently
+returning success; safe snapshot SELECTs still use the actual empty schemas.
+Do not introduce a blanket LOAD rejection.
+
+STOP drains its queued response, including partial packets and TLS ciphertext,
+before setting shutdown. The drain is bounded to one second for an unresponsive
+reader; teardown continues after a warning on timeout or disconnect. STOP remains
+an acknowledgement of the request, not a wait for the reload to finish.
 
 Selective controls are `--mysql-workers`, `--pgsql-workers`, `--mysql-admin`,
 `--pgsql-admin`, `--mysql-monitor`, `--pgsql-monitor`, with corresponding top-level
