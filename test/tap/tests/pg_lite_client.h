@@ -220,8 +220,9 @@ public:
     // instead of counting as quiet, so a dropped connection can never pass for "no reply".
     std::vector<std::pair<char, std::vector<uint8_t>>> readUntilQuiet(int quiet_ms);
     // Between these two calls every message is held and then sent in one write, as a client that
-    // pipelines several messages in one TCP segment would.
-    void beginBuffering() { buffering_ = true; }
+    // pipelines several messages in one TCP segment would. A batch whose write failed is dropped here,
+    // or it would go out again with the next one.
+    void beginBuffering() { outbuf_.clear(); buffering_ = true; }
     void endBuffering();
     void waitForMessage(char expectedType, const std::string& errorContext, bool wait_for_ready);
     void consumeInputUntilReady();

@@ -35,25 +35,28 @@ static PGConnPtr admin_conn() {
 }
 
 // Switches the backend protocol and empties the hostgroup's pool: a pooled connection keeps the
-// protocol it was opened with, so without this the next run would reuse it.
+// protocol it was opened with, so without this the next run would reuse it. Fails if the pool did not
+// empty, as the next run would then use the other protocol.
 static bool set_native(PGconn* admin, bool on) {
     const std::string v = on ? "true" : "false";
     if (!exec_expect(admin, ("SET pgsql-use_native_backend_protocol='" + v + "'").c_str(), PGRES_COMMAND_OK) ||
-        !exec_expect(admin, "LOAD PGSQL VARIABLES TO RUNTIME", PGRES_COMMAND_OK) ||
-        !exec_expect(admin, "UPDATE pgsql_servers SET status='OFFLINE_HARD' WHERE hostgroup_id=0", PGRES_COMMAND_OK) ||
-        !exec_expect(admin, "LOAD PGSQL SERVERS TO RUNTIME", PGRES_COMMAND_OK))
+        !exec_expect(admin, "LOAD PGSQL VARIABLES TO RUNTIME", PGRES_COMMAND_OK))
         return false;
-    for (int i = 0; i < 100; i++) {
+    const bool offline = exec_expect(admin, "UPDATE pgsql_servers SET status='OFFLINE_HARD' WHERE hostgroup_id=0", PGRES_COMMAND_OK) &&
+        exec_expect(admin, "LOAD PGSQL SERVERS TO RUNTIME", PGRES_COMMAND_OK);
+    bool empty = false;
+    for (int i = 0; offline && i < 100; i++) {
         PGresult* r = PQexec(admin, "SELECT COALESCE(SUM(ConnUsed+ConnFree),0) FROM stats_pgsql_connection_pool WHERE hostgroup=0");
-        const bool empty = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && atoi(PQgetvalue(r, 0, 0)) == 0;
+        empty = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && atoi(PQgetvalue(r, 0, 0)) == 0;
         PQclear(r);
         if (empty) break;
         usleep(100000);
     }
+    // Back online whatever happened above, or the hostgroup is left with no server.
     const bool back = exec_expect(admin, "UPDATE pgsql_servers SET status='ONLINE' WHERE hostgroup_id=0", PGRES_COMMAND_OK) &&
         exec_expect(admin, "LOAD PGSQL SERVERS TO RUNTIME", PGRES_COMMAND_OK);
     usleep(200000);
-    return back;
+    return empty && back;
 }
 
 static PGConnPtr backend_conn() {
@@ -158,12 +161,14 @@ int main(int argc, char** argv) {
 
     ok(set_native(admin.get(), true) && portal_suspends_at_2(), "native: extended-protocol portal suspends at maxRows=2");
 
-    set_native(admin.get(), false);
+    if (!set_native(admin.get(), false))
+        diag("could not switch to the libpq protocol with an empty pool: the libpq run below may use native");
     todo_start("libpq backend protocol: a row limit cannot be passed through libpq, every row is returned (by design)");
     ok(portal_suspends_at_2(), "libpq: extended-protocol portal suspends at maxRows=2");
     todo_end();
 
-    set_native(admin.get(), native_before == "true");
+    if (!set_native(admin.get(), native_before == "true"))
+        diag("could not restore pgsql-use_native_backend_protocol='%s'", native_before.c_str());
 
     return exit_status();
 }

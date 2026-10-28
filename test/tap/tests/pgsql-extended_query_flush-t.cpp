@@ -406,6 +406,8 @@ static void case_row12(Mode m, bool) {
 // The connection holding a Flush-ended group stays with it, also when connection_delay_multiplex_ms
 // would otherwise hand an idle connection back to the pool after the delay.
 static void case_pin_delay_multiplex(Mode m, bool) {
+	const std::string before = scalar(g_admin, "SELECT variable_value FROM runtime_global_variables "
+		"WHERE variable_name='pgsql-connection_delay_multiplex_ms'");
 	admin_set("pgsql-connection_delay_multiplex_ms", "100");
 	auto c = client(m);
 	const std::string tag = tag_for("pin", m, false);
@@ -424,7 +426,7 @@ static void case_pin_delay_multiplex(Mode m, bool) {
 	ok(!pid1.empty() && pid1 == pid2, "pin [%s]: the group stayed on one backend across the delay (insert pid %s, later pid %s)",
 		mode_name(m), pid1.c_str(), pid2.c_str());
 	ok(rows(tag) == 1, "pin [%s]: the row is committed by the client's Sync (rows=%ld)", mode_name(m), rows(tag));
-	admin_set("pgsql-connection_delay_multiplex_ms", "0");
+	admin_set("pgsql-connection_delay_multiplex_ms", before.empty() ? "0" : before);
 }
 
 // Row 16: a Flush changes nothing in the digest statistics. The same two Executes with a Sync
@@ -760,6 +762,8 @@ static void case_release_other_conn(Mode mode, bool) {
 // the next part runs on another one.
 static void case_release_delayed(Mode mode, bool) {
 	const Mode m = (mode == Mode::NATIVE_UNBATCHED) ? Mode::NATIVE : mode;
+	const std::string before = scalar(g_admin, "SELECT variable_value FROM runtime_global_variables "
+		"WHERE variable_name='pgsql-connection_delay_multiplex_ms'");
 	admin_set("pgsql-connection_delay_multiplex_ms", "3000");
 	reset_pool(g_admin);
 	{
@@ -776,7 +780,7 @@ static void case_release_delayed(Mode mode, bool) {
 		check(run(*a, execute), "2 D C(SELECT 1) Z(I)", "release delayed: A B E S on another connection", m, false);
 		run(*b, [&] { b->sendQuery("ROLLBACK"); });
 	}
-	admin_set("pgsql-connection_delay_multiplex_ms", "0");
+	admin_set("pgsql-connection_delay_multiplex_ms", before.empty() ? "0" : before);
 }
 
 // The same while A keeps a connection in another hostgroup: a temporary table disables multiplexing on
