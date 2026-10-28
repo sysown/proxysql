@@ -1,4 +1,5 @@
 import itertools
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -20,6 +21,20 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(got['tiers'],['v40']+(['v30'] if v30 else [])+(['v31'] if v31 else []))
             self.assertEqual(got['mode'],'asan' if asan else 'normal')
             fetch.assert_called_once_with(42)
+
+    def test_pr_plans_do_not_require_nightly_codeql_for_any_product_or_mode(self):
+        catalogue=json.loads((Path(__file__).resolve().parents[2]/'ci-tier-consumers.json').read_text())
+        context=self.context()
+        context['variables']={axis['var']:'["fixture"]'
+            for consumer in catalogue['consumers']
+            for axis in consumer.get('axes',{}).values() if isinstance(axis,dict)}
+        for mode in ('normal','asan'):
+            with self.subTest(mode=mode):
+                plan=make_plan(context,dict(tiers=['v40','v30','v31'],mode=mode,pr_number=42),catalogue)
+                self.assertEqual({check['tier'] for check in plan['checks'] if check['workflow']=='CI-builds'},
+                                 {'v40','v30','v31'})
+                self.assertTrue(any(check['workflow']=='CI-legacy-g1' for check in plan['checks']))
+                self.assertFalse(any(check['workflow']=='CI-CodeQL' for check in plan['checks']))
 
     def test_exact_and_deduplicated(self):
         fetch=Mock(return_value={'labels':[{'name':n} for n in ['ci:v3.0-extra','ci:asan-extra','ci:v3.1','ci:v3.1']]})
