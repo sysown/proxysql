@@ -9669,6 +9669,11 @@ void PgSQL_Session::extq_group_end() {
 	extq_flush_segment = false;
 	extq_group_open = false;
 	extq_group_holds_work = false;
+#ifdef PROXYSQL31
+	// A group a simple Query ends gets no Sync to reset this. Left past every eligible shape, the next
+	// group would skip the extended query cache.
+	extended_cache_frame_stage = 0;
+#endif
 }
 
 // The SET that syncs the variable would end the group's transaction before the Query, committing work

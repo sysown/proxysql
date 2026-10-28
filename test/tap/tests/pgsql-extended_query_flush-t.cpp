@@ -939,7 +939,7 @@ static void case_row15_cache(Mode mode, bool) {
 	int major = 0, minor = 0;
 	sscanf(scalar(g_admin, "SELECT variable_value FROM global_variables WHERE variable_name='admin-version'").c_str(), "%d.%d", &major, &minor);
 	if (major < 3 || (major == 3 && minor < 1)) {
-		skip(2, "row 15: no extended query cache before v3.1");
+		skip(6, "row 15: no extended query cache before v3.1");
 		return;
 	}
 	const std::string sql = "SELECT /*flush_cache_" + std::to_string((int)m) + "_" + std::to_string((long)time(nullptr)) + "*/ $1::text";
@@ -959,6 +959,37 @@ static void case_row15_cache(Mode mode, bool) {
 	run(*c, [&] { c->bindStatement("flush_cs", "", { { std::string("v"), 0 } }, {}, false); c->executePortal("", 0, false); c->sendSync(); });
 	const long long set2 = global_stat("Query_Cache_count_SET");
 	ok(set2 > set1, "row 15 [%s]: control, B E S stores the result (SET %lld->%lld)", mode_name(m), set1, set2);
+	// A group a simple Query ends instead of a Sync must not keep the next group out of the cache: after a
+	// client Flush with work held, then with nothing held, after a Query sent right behind the extended
+	// messages (ProxySQL adds the Flush), and after a Query ProxySQL answers itself. That last one is a SET,
+	// which changes the cache key, so it counts only the lookup.
+	static const char* SHAPES[] = { "P B E(INSERT) H, Q SELECT 1", "P D(S) H, Q SELECT 1",
+		"P B E(INSERT) Q(SELECT 1), no Flush", "P B E(INSERT) H, Q SET answered by ProxySQL" };
+	for (int s = 0; s < 4; s++) {
+		const std::string tag = tag_for("row15q", m, false);
+		std::string q, want = "T D C(SELECT 1) Z(I)";
+		if (s == 1) {
+			run(*c, [&] { c->prepareStatement("", uniq() + "SELECT 1", false); c->describeStatement("", false); c->sendFlush(); });
+		} else if (s != 2) {
+			run(*c, [&] { insert_flush(*c, tag); });
+		}
+		if (s == 2) {
+			q = run(*c, [&] { c->beginBuffering(); c->prepareStatement("", uniq() + "INSERT INTO flush_t VALUES ('" + tag + "', 1)", false);
+				c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendQuery("SELECT 1"); c->endBuffering(); });
+			want = "1 2 C(INSERT 0 1) " + want;
+		} else if (s == 3) {
+			q = run(*c, [&] { c->sendQuery("SET DateStyle = 'ISO'"); });
+			want = "C(SET) Z(I)";
+		} else {
+			q = run(*c, [&] { c->sendQuery("SELECT 1"); });
+		}
+		const long long get3 = global_stat("Query_Cache_count_GET"), hit3 = global_stat("Query_Cache_count_GET_OK");
+		run(*c, [&] { c->bindStatement("flush_cs", "", { { std::string("v"), 0 } }, {}, false); c->executePortal("", 0, false); c->sendSync(); });
+		const long long get4 = global_stat("Query_Cache_count_GET"), hit4 = global_stat("Query_Cache_count_GET_OK");
+		ok(q == want && get4 == get3 + 1 && (s == 3 || hit4 == hit3 + 1),
+			"row 15 [%s]: %s, then B E S %s (Q '%s', GET %lld->%lld, GET_OK %lld->%lld)", mode_name(m), SHAPES[s],
+			s == 3 ? "looks in the cache" : "is answered from the cache", q.c_str(), get3, get4, hit3, hit4);
+	}
 	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9115");
 	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	exec(g_admin, "PROXYSQL FLUSH PGSQL QUERY CACHE");
@@ -1333,7 +1364,7 @@ static const std::vector<Case> CASES = {
 	{ "row 5a disconnect",           5,  5, false, case_row5a_disconnect },
 	{ "disconnect mid segment",      3,  3, false, case_disconnect_mid_segment },
 	{ "row 14 idle",                 5,  5, false, case_row14_idle },
-	{ "row 15 cache",                2,  2, false, case_row15_cache },
+	{ "row 15 cache",                6,  6, false, case_row15_cache },
 	{ "row 11",                      5,  3, true,  case_row11 },
 	{ "row 11b",                     3,  3, false, case_row11b },
 	{ "row 11 local",                3,  3, false, case_row11_local },
