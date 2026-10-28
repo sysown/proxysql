@@ -1,26 +1,26 @@
 name: CI-builds
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} trigger=${{ github.event.workflow_run.id || github.run_id }}/${{ github.event.workflow_run.run_attempt || github.run_attempt }}'
-
+run-name: ${{ contains(github.event.pull_request.labels.*.name, 'ci:skip') && '[ci:skip] ' || '' }}${{ github.event.workflow_run.head_branch || github.head_ref || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || github.event.after || github.sha }} trigger=${{ github.event.workflow_run.id || github.run_id }}/${{ github.event.workflow_run.run_attempt || github.run_attempt }}
 on:
-  workflow_dispatch:
   workflow_run:
     workflows: [ CI-trigger ]
     types: [ in_progress ]
-
+  pull_request:
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+  push:
+    branches:
+    - 'v[0-9].[0-9x]+.?[0-9xy]?[0-9]?'
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+  workflow_dispatch:
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  group: ${{ github.workflow }}:${{ github.event.workflow_run.head_repository.full_name || github.event.pull_request.head.repo.full_name || ((github.event_name == 'workflow_run' || github.event_name == 'pull_request') && github.run_id) || github.repository }}:${{ github.event.workflow_run.head_branch || github.head_ref || github.ref_name }}
   cancel-in-progress: true
-
 jobs:
   run:
-    if: ${{ (!github.event.workflow_run || !startsWith(github.event.workflow_run.display_title, '[ci:skip] ')) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
-    # `write-all` is required because reusable-workflow permissions are the
-    # intersection of caller + callee. Without it the workflow_run event's
-    # GITHUB_TOKEN has no cache-writable scope, so the callee's
-    # actions/cache/save@v4 fails with 'cache write denied: token has no
-    # writable scopes' (GitHub started enforcing this for workflow_run in
-    # early July 2026 alongside the Node.js 20 -> 24 actions deprecation).
-    # The callee at ci-<group>.yml@GH-Actions also declares write-all.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (!github.event.pull_request || (!github.event.pull_request.head.repo.fork && github.event.pull_request.head.repo.full_name == github.repository)) && (!github.event.workflow_run || (!startsWith(github.event.workflow_run.display_title, '[ci:skip] ') && github.event.workflow_run.head_repository.full_name == github.repository)) }}
     permissions: write-all
     uses: sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions
     secrets: inherit

@@ -243,9 +243,8 @@ git push / open PR
            CI-repltests          CI-shuntest
            CI-taptests           CI-taptests-ssl     CI-taptests-asan
            CI-taptests-groups    CI-taptests-pgsql-cluster
-           CI-codeql
-
-           (The CI-3p-* callers are not part of this cascade: they are
+           (CI-codeql is outside this cascade: it scans v3.0 nightly
+           at 02:30 UTC or by manual dispatch. The CI-3p-* callers are
            manual-only, see "Third-party integration" below.)
 ```
 
@@ -715,7 +714,10 @@ not run unit tests. Every tier uses GCOV in the shared TAP build and the same
 coverage collection steps. Only compile-time product flags and version-based
 test filtering differ; sanitizer options and test commands are shared.
 
-CodeQL uses the same producer-bound selection. `CI-maketest` compiles the six
+`CI-CodeQL` scans only `v3.0` (C++ and Python) at 02:30 UTC nightly, or by
+manual dispatch on `v3.0`. Both language jobs check out the same triggering
+commit. It is independent of producer artifacts and PR tier selection, and
+PR plans do not require CodeQL checks. `CI-maketest` compiles the six
 simulator targets independently at 02:17 UTC nightly (v4.0), or by manual
 dispatch with v4.0, v3.1, or v3.0 selected. It no longer runs in the PR cascade
 or consumes producer artifacts; actual simulator test runs remain in PR CI. Standalone
@@ -933,7 +935,7 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 
 | Caller | Reusable | Trigger | Purpose | Status |
 |---|---|---|---|---|
-| `CI-codeql.yml` | `ci-codeql.yml` | `workflow_run[completed]` on `CI-trigger` | Security analysis | ✅ |
+| `CI-codeql.yml` | `ci-codeql.yml` | Nightly at 02:30 UTC (`30 2 * * *`) or `workflow_dispatch`, only on `v3.0` | C++ and Python security analysis; outside PR CI | ✅ |
 | `CI-package-build.yml` | `ci-package-build.yml` | `push` | Build `.deb` / `.rpm` / ARM64 packages | ✅ |
 | `CI-package-amd64-tarball.yml` | *(self-contained)* | `workflow_dispatch` | Build generic Linux `.tar.gz` (amd64, all tiers) | ✅ |
 | `CI-package-arm64-tarball.yml` | *(self-contained)* | `workflow_dispatch` | Build generic Linux `.tar.gz` (arm64, all tiers) | ✅ |

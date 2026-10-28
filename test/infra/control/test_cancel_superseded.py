@@ -45,14 +45,14 @@ class CancelSupersededTests(unittest.TestCase):
             'uses': 'sysown/proxysql/.github/workflows/ci-cancel-superseded.yml@GH-Actions'}})
 
     def test_push_sweep_mirrors_ci_trigger_filters(self):
-        """The push sweeper must fire exactly when CI-trigger starts a cascade.
+        """The push sweeper must fire exactly when CI-builds starts a cascade.
 
         Without the same branch pattern and paths-ignore, a docs-only or
         .github-only push would run the sweeper, which would then cancel the
         previous commit's still-relevant in-flight CI.
         """
         sweeper = yaml.safe_load((ROOT / '.github/workflows/CI-cancel-superseded.yml').read_text())
-        trigger = yaml.safe_load((ROOT / '.github/workflows/CI-trigger.yml').read_text())
+        trigger = yaml.safe_load((ROOT / '.github/workflows/CI-builds.yml').read_text())
         sweeper_events = sweeper.get('on', sweeper.get(True, {}))
         trigger_events = trigger.get('on', trigger.get(True, {}))
         self.assertIn('push', sweeper_events)
