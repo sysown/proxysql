@@ -494,7 +494,7 @@ STARTUP_TLS_BINARY := $(PROXYSQL_BINARY)
 endif
 
 module_lifecycle_unit-t: $(STARTUP_TLS_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
-module_startup_unit-t: $(PROXYSQL_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_startup.py $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
+module_startup_unit-t: $(STARTUP_TLS_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_startup.py $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
 
 startup_tls_ownership_unit-t: startup_tls_ownership_unit-t.cpp $(STARTUP_TLS_BINARY) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/test/infra/control/test_startup_tls_ownership.py
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \

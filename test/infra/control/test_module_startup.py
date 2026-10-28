@@ -6,9 +6,8 @@ Usage: python3 test/infra/control/test_module_startup.py [path/to/proxysql]
 from pathlib import Path
 import socket
 import time
-import unittest
 
-from test_module_lifecycle import Daemon, IsolatedDaemonTest
+from test_module_lifecycle import Daemon, IsolatedDaemonTest, run_probe_tests
 
 
 class ModuleStartup(IsolatedDaemonTest):
@@ -226,4 +225,4 @@ class ModuleStartup(IsolatedDaemonTest):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    run_probe_tests()
