@@ -4866,9 +4866,9 @@ void PgSQL_Connection::stmt_execute_start() {
 		// Execute(portal, max_rows) — NO Bind. A Describe('P', portal) is folded in
 		// first exactly when the client asked for the portal's RowDescription
 		// (PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL, set by the Describe->Execute peek).
-		// max_rows is honored on the wire for NAMED portals only (the unnamed path below
-		// always emits 0 — invariant 2). A resume Execute after PortalSuspended is just
-		// another Execute on the same portal and takes this same path.
+		// max_rows goes on the wire as the client sent it, here and on the unnamed path
+		// below. A resume Execute after PortalSuspended is just another Execute on the
+		// same portal and takes this same path.
 		native_stmt_reset_step();
 		const PgSQL_Extended_Query_Info* eqi = query.extended_query_info;
 		if ((eqi->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
