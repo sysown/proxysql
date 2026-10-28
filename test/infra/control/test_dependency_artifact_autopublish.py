@@ -193,20 +193,22 @@ class AutomaticPublicationTests(unittest.TestCase):
         directory, entry = self.candidate()
         for unavailable in (None, self.store.Unavailable('not visible yet')):
             fetch = Mock(side_effect=[unavailable, entry])
-            with self.subTest(unavailable=unavailable), patch('time.sleep') as sleep:
+            # Patching the shared time module also intercepts subprocess.wait's
+            # polling sleeps while publishing verifies the source with git.
+            with self.subTest(unavailable=unavailable), patch.object(self.publisher, 'time') as clock:
                 self.publish(directory, entry, remote=fetch)
                 self.assertEqual(2, fetch.call_count)
-                sleep.assert_called_once_with(2)
+                clock.sleep.assert_called_once_with(2)
         fetch = Mock(return_value=None)
-        with patch('time.sleep') as sleep, self.assertRaisesRegex(ValueError, 'metadata is unavailable'):
+        with patch.object(self.publisher, 'time') as clock, self.assertRaisesRegex(ValueError, 'metadata is unavailable'):
             self.publish(directory, entry, remote=fetch)
         self.assertEqual(3, fetch.call_count)
-        self.assertEqual(2, sleep.call_count)
+        self.assertEqual(2, clock.sleep.call_count)
         fetch = Mock(side_effect=ValueError('invalid metadata'))
-        with patch('time.sleep') as sleep, self.assertRaisesRegex(ValueError, 'invalid metadata'):
+        with patch.object(self.publisher, 'time') as clock, self.assertRaisesRegex(ValueError, 'invalid metadata'):
             self.publish(directory, entry, remote=fetch)
         self.assertEqual(1, fetch.call_count)
-        sleep.assert_not_called()
+        clock.sleep.assert_not_called()
 
     def test_interrupted_draft_is_discovered_and_completed_without_recreating_release(self):
         directory, entry = self.candidate()
