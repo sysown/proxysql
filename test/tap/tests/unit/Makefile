@@ -1483,8 +1483,22 @@ vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERS
 # This test includes the cache source to inject allocator failure locally.
 pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
 
-# This test includes the protocol source to inject result-buffer allocation failure.
-pgsql_result_flush_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Protocol.cpp
+# The allocation fixture includes the protocol source for failure injection.
+# Compile libpq's private-header access separately so its configuration macros
+# never cross into ProxySQL's headers. The other platforms skip these probes.
+PGSQL_RESULT_LIBPQ_FIXTURE_OBJ :=
+ifeq ($(UNAME_S),Linux)
+PGSQL_RESULT_LIBPQ_FIXTURE_OBJ := $(ODIR)/pgsql_result_libpq_fixture.o
+$(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ): pgsql_result_libpq_fixture.cpp pgsql_result_libpq_fixture.h | $(ODIR)
+	$(CXX) -c -o $@ $< $(OPT) $(IDIRS)
+endif
+
+pgsql_result_flush_allocation_unit-t: pgsql_result_flush_allocation_unit-t.cpp \
+	$(PROXYSQL_PATH)/lib/PgSQL_Protocol.cpp $(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ) \
+	$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ) $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

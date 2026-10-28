@@ -259,74 +259,11 @@ static void test_session_failure() {
 #ifdef __linux__
 // Observe frees from the real vendored libpq; do not replace its parser or
 // allocator. A notice's errMsg points at pqGetErrorNotice3's local work buffer.
-// Keep libpq internal header configuration local to this fixture; libusual
-// and ProxySQL have their own definitions of these configuration macros.
-#pragma push_macro("OPENSSL_API_COMPAT")
-#ifdef OPENSSL_API_COMPAT
-#undef OPENSSL_API_COMPAT
-#endif
-#pragma push_macro("PACKAGE_BUGREPORT")
-#ifdef PACKAGE_BUGREPORT
-#undef PACKAGE_BUGREPORT
-#endif
-#pragma push_macro("PACKAGE_NAME")
-#ifdef PACKAGE_NAME
-#undef PACKAGE_NAME
-#endif
-#pragma push_macro("PACKAGE_STRING")
-#ifdef PACKAGE_STRING
-#undef PACKAGE_STRING
-#endif
-#pragma push_macro("PACKAGE_TARNAME")
-#ifdef PACKAGE_TARNAME
-#undef PACKAGE_TARNAME
-#endif
-#pragma push_macro("PACKAGE_URL")
-#ifdef PACKAGE_URL
-#undef PACKAGE_URL
-#endif
-#pragma push_macro("PACKAGE_VERSION")
-#ifdef PACKAGE_VERSION
-#undef PACKAGE_VERSION
-#endif
-#pragma push_macro("restrict")
-#ifdef restrict
-#undef restrict
-#endif
-#pragma push_macro("likely")
-#ifdef likely
-#undef likely
-#endif
-#pragma push_macro("unlikely")
-#ifdef unlikely
-#undef unlikely
-#endif
-#pragma push_macro("Assert")
-#ifdef Assert
-#undef Assert
-#endif
-#pragma push_macro("PG_PROTOCOL_LATEST")
-#ifdef PG_PROTOCOL_LATEST
-#undef PG_PROTOCOL_LATEST
-#endif
+#include "pgsql_result_libpq_fixture.h"
 extern "C" {
-#include "postgres_fe.h"
-#include "libpq-int.h"
 void __real_free(void*);
 int __real_PQgetCopyData(PGconn*, char**, int);
 }
-#pragma pop_macro("PG_PROTOCOL_LATEST")
-#pragma pop_macro("Assert")
-#pragma pop_macro("unlikely")
-#pragma pop_macro("likely")
-#pragma pop_macro("restrict")
-#pragma pop_macro("PACKAGE_VERSION")
-#pragma pop_macro("PACKAGE_URL")
-#pragma pop_macro("PACKAGE_TARNAME")
-#pragma pop_macro("PACKAGE_STRING")
-#pragma pop_macro("PACKAGE_NAME")
-#pragma pop_macro("PACKAGE_BUGREPORT")
-#pragma pop_macro("OPENSSL_API_COMPAT")
 
 struct NoticeOwnership {
 	const PGresult* result = nullptr;
@@ -400,14 +337,6 @@ static std::string notice_wire() {
 	return frame('N', body, sizeof(body) - 1);
 }
 
-static void feed_libpq(PGconn* conn, const std::string& wire, PGAsyncStatusType state) {
-	assert(wire.size() <= static_cast<size_t>(conn->inBufSize));
-	memcpy(conn->inBuffer, wire.data(), wire.size());
-	conn->inStart = conn->inCursor = 0;
-	conn->inEnd = wire.size();
-	conn->asyncStatus = state;
-}
-
 enum class LibpqFailure { CALLBACK, FETCH, RESET, COPY_ROW, COPY_NOTICE, STICKY, SUCCESS };
 
 // Keep the worker globals/fixture isolated, while explicitly destroying the
@@ -432,14 +361,11 @@ static int libpq_allocation_failure(LibpqFailure kind) {
 	// Invalid conninfo allocates libpq's object without connecting anywhere.
 	conn->pgsql_conn = PQconnectStart("invalid_allocation_test_option=1");
 	PGconn* pq = conn->pgsql_conn;
-	if (!pq || !pq->inBuffer) return 2;
+	if (!pgsql_result_fixture::has_input_buffer(pq)) return 2;
 	int sockets[2];
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) return 3;
 	fcntl(sockets[0], F_SETFL, O_NONBLOCK);
-	pq->sock = sockets[0];
-	pq->status = CONNECTION_OK;
-	pq->pversion = 196608;
-	pq->nonblocking = true;
+	pgsql_result_fixture::set_transport(pq, sockets[0]);
 	PQsetNoticeReceiver(pq, observed_notice, conn.get());
 	conn->query_result = new PgSQL_Query_Result();
 	conn->query_result->init(&proto, ds, conn.get());
@@ -453,7 +379,7 @@ static int libpq_allocation_failure(LibpqFailure kind) {
 	if (kind != LibpqFailure::COPY_ROW) wire = notice_wire() + notice_wire();
 	if (copy) wire += frame('d', "copy row", 8);
 	else wire += frame('C', "SELECT 0", 9) + frame('Z', "I", 1);
-	feed_libpq(pq, wire, copy ? PGASYNC_COPY_OUT : PGASYNC_BUSY);
+	pgsql_result_fixture::feed(pq, wire.data(), wire.size(), copy);
 	conn->is_copy_out = copy;
 	conn->fetch_result_start();
 	fail_next_allocation = kind != LibpqFailure::SUCCESS;
@@ -509,7 +435,8 @@ static int libpq_allocation_failure(LibpqFailure kind) {
 			conn->query_result = new PgSQL_Query_Result();
 			conn->query_result->init(&proto, ds, conn.get());
 			static const char row[] = "\0\0";
-			feed_libpq(pq, frame('D', row, 2), PGASYNC_BUSY);
+			const std::string row_wire = frame('D', row, 2);
+			pgsql_result_fixture::feed(pq, row_wire.data(), row_wire.size(), false);
 		}
 		bool surfaced = false;
 		try { conn->fetch_result_cont(POLLIN); }
