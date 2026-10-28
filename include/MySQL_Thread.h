@@ -1102,6 +1102,10 @@ class MySQL_Threads_Handler
 	}
 	void Get_Memory_Stats();
 	void kill_connection_or_query(uint32_t _thread_session_id, bool query, char *username);
+private:
+	// Keep configured counts when startup permissions suppress actual workers.
+	// Append fields to preserve existing member offsets used by plugin readers.
+	unsigned int configured_num_threads = 0;
 };
 
 

@@ -1639,7 +1639,7 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		// if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strcasecmp(name, "threads")) {
-		snprintf(intbuf, sizeof(intbuf), "%d", (GloVars.pgsql_workers ? (num_threads ? num_threads : DEFAULT_NUM_THREADS) : 0));
+		snprintf(intbuf, sizeof(intbuf), "%d", (configured_num_threads ? configured_num_threads : (num_threads ? num_threads : DEFAULT_NUM_THREADS)));
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name, "stacksize")) {
@@ -2202,7 +2202,8 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 	}
 	if (!strcasecmp(name, "threads")) {
 		unsigned int intv = atoi(value);
-		if ((num_threads == 0 || num_threads == intv || pgsql_threads == NULL) && ((intv > 0 && intv < 256) || (!GloVars.pgsql_workers && strcmp(value, "0") == 0))) {
+		if ((num_threads == 0 || num_threads == intv || pgsql_threads == NULL) && intv > 0 && intv < 256) {
+			configured_num_threads = intv;
 			num_threads = GloVars.pgsql_workers ? intv : 0;
 			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(intv);
 			return true;
@@ -2527,6 +2528,8 @@ void PgSQL_Threads_Handler::print_version() {
 }
 
 void PgSQL_Threads_Handler::init(unsigned int num, size_t stack) {
+	if (num) configured_num_threads = num;
+	if (!configured_num_threads) configured_num_threads = num_threads ? num_threads : DEFAULT_NUM_THREADS;
 	if (!GloVars.pgsql_workers) {
 		num_threads = 0;
 		return;
@@ -2534,20 +2537,10 @@ void PgSQL_Threads_Handler::init(unsigned int num, size_t stack) {
 
 	if (stack) {
 		stacksize = stack;
+	} else if (stacksize == 0) {
+		stacksize = DEFAULT_STACK_SIZE;
 	}
-	else {
-		if (stacksize == 0) stacksize = DEFAULT_STACK_SIZE;
-	}
-	if (num) {
-		num_threads = num;
-		//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(num);
-	}
-	else {
-		if (num_threads == 0) {
-			num_threads = DEFAULT_NUM_THREADS; //default
-			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(DEFAULT_NUM_THREADS);
-		}
-	}
+	num_threads = configured_num_threads;
 	int rc = pthread_attr_setstacksize(&attr, stacksize);
 	assert(rc == 0);
 	pgsql_threads = (proxysql_pgsql_thread_t*)calloc(num_threads, sizeof(proxysql_pgsql_thread_t));
