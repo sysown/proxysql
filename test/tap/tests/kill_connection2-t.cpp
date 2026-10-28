@@ -2,6 +2,7 @@
 #include <string>
 #include <stdio.h>
 #include <cstring>
+#include <memory>
 #include <unistd.h>
 #include "mysql.h"
 
@@ -35,20 +36,75 @@ static void close_all_conns() {
 	}
 }
 
+// Keep both the configured and running values, which need not be identical.
+// MYSQL_QUERY returns from its caller on error, so restoration must also cover
+// those exits and partially created connection batches.
+class TimeoutFixture {
+	MYSQL* admin;
+	bool saved = false;
+
+	bool query(const char* sql) {
+		if (!mysql_query(admin, sql)) return true;
+		diag("Fixture query failed: %s: %s", sql, mysql_error(admin));
+		return false;
+	}
+
+public:
+	explicit TimeoutFixture(MYSQL* conn) : admin(conn) {}
+	bool save() {
+		// The admin SQLite handle is shared; temp tables outlive a disconnect.
+		if (!query("DROP TABLE IF EXISTS temp.kill_connection2_config") ||
+			!query("DROP TABLE IF EXISTS temp.kill_connection2_runtime")) return false;
+		if (!query("CREATE TEMPORARY TABLE kill_connection2_config AS SELECT * FROM global_variables "
+			"WHERE variable_name IN ('mysql-have_ssl','mysql-have_compress',"
+			"'mysql-auto_increment_delay_multiplex','mysql-wait_timeout','mysql-max_transaction_time')")) return false;
+		if (!query("CREATE TEMPORARY TABLE kill_connection2_runtime AS SELECT * FROM runtime_global_variables "
+			"WHERE variable_name IN ('mysql-have_ssl','mysql-have_compress',"
+			"'mysql-auto_increment_delay_multiplex','mysql-wait_timeout','mysql-max_transaction_time')")) return false;
+		saved = true;
+		return true;
+	}
+	bool restore() {
+		if (!saved) return true;
+		bool good = true;
+		for (const char* sql : {
+			"UPDATE global_variables SET variable_value=(SELECT variable_value FROM kill_connection2_runtime v "
+			"WHERE v.variable_name=global_variables.variable_name) WHERE variable_name IN "
+			"(SELECT variable_name FROM kill_connection2_runtime)",
+			"LOAD MYSQL VARIABLES TO RUNTIME",
+			"UPDATE global_variables SET variable_value=(SELECT variable_value FROM kill_connection2_config v "
+			"WHERE v.variable_name=global_variables.variable_name) WHERE variable_name IN "
+			"(SELECT variable_name FROM kill_connection2_config)"
+		}) {
+			if (!query(sql)) good = false;
+		}
+		if (good) {
+			saved = false;
+			if (!query("DROP TABLE temp.kill_connection2_config")) good = false;
+			if (!query("DROP TABLE temp.kill_connection2_runtime")) good = false;
+		}
+		return good;
+	}
+	~TimeoutFixture() {
+		close_all_conns();
+		restore();
+	}
+};
+
 int create_connections(CommandLine& cl) {
 	for (auto& conn : conns) {
 		MYSQL * mysql = mysql_init(nullptr);
 		if (!mysql) {
 			fprintf(stderr, "File %s, line %d, Error: mysql_init failed\n", __FILE__, __LINE__);
 			close_all_conns();
-			return exit_status();
+			return EXIT_FAILURE;
 		}
 
 		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, nullptr, cl.port, nullptr, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 			mysql_close(mysql);
 			close_all_conns();
-			return exit_status();
+			return EXIT_FAILURE;
 		}
 		conn = mysql;
 	}
@@ -97,7 +153,8 @@ int main(int argc, char** argv) {
 	}
 
 
-	MYSQL* proxysql_admin = mysql_init(nullptr);
+	std::unique_ptr<MYSQL, decltype(&mysql_close)> admin_owner(mysql_init(nullptr), mysql_close);
+	MYSQL* proxysql_admin = admin_owner.get();
 	// Initialize connections
 	if (!proxysql_admin) {
 		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for 'proxysql_admin'\n",
@@ -107,20 +164,23 @@ int main(int argc, char** argv) {
 
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, nullptr, cl.admin_port, nullptr, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		mysql_close(proxysql_admin);
 		return -1;
 	}
+
+	TimeoutFixture fixture(proxysql_admin);
+	if (!fixture.save()) return EXIT_FAILURE;
 
 	MYSQL_QUERY(proxysql_admin, "SET mysql-have_ssl='true'");
 	MYSQL_QUERY(proxysql_admin, "SET mysql-have_compress='true'");
 	MYSQL_QUERY(proxysql_admin, "SET mysql-auto_increment_delay_multiplex=10"); // to ensure multiplexing stays disabled
-	MYSQL_QUERY(proxysql_admin, "SET mysql-wait_timeout=6000"); // to force a close
+	// Other connections are idle while Galera executes the fixture DDL/inserts.
+	// Start the short timeout only once setup has finished on every connection.
+	MYSQL_QUERY(proxysql_admin, "SET mysql-wait_timeout=3600000");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	int rc = 0;
 	rc = create_connections(cl);
 	if (rc != 0) {
-		mysql_close(proxysql_admin);
 		return exit_status();
 	}
 
@@ -130,14 +190,12 @@ int main(int argc, char** argv) {
 			if (create_table_test_sbtest1(10,mysql)) {
 				fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);
 				close_all_conns();
-				mysql_close(proxysql_admin);
 				return exit_status();
 			}
 		} else {
 			if (add_more_rows_test_sbtest1(10,mysql)) {
 				fprintf(stderr, "File %s, line %d, Error: add_more_rows_sbtest1() failed\n", __FILE__, __LINE__);
 				close_all_conns();
-				mysql_close(proxysql_admin);
 				return exit_status();
 			}
 		}
@@ -146,9 +204,11 @@ int main(int argc, char** argv) {
 	rc = find_tids();
 	if (rc != 0) {
 		close_all_conns();
-		mysql_close(proxysql_admin);
 		return exit_status();
 	}
+
+	MYSQL_QUERY(proxysql_admin, "SET mysql-wait_timeout=6000");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	diag("Sleeping for 10 seconds");
 	for (int i = 0; i < 10 ; i++) {
@@ -174,14 +234,12 @@ int main(int argc, char** argv) {
 
 	rc = create_connections(cl);
 	if (rc != 0) {
-		mysql_close(proxysql_admin);
 		return exit_status();
 	}
 
 	rc = find_tids();
 	if (rc != 0) {
 		close_all_conns();
-		mysql_close(proxysql_admin);
 		return exit_status();
 	}
 
@@ -218,6 +276,5 @@ for (auto& conn : conns) {
 	}
 
 	close_all_conns();
-	mysql_close(proxysql_admin);
-	return exit_status();
+	return fixture.restore() ? exit_status() : EXIT_FAILURE;
 }
