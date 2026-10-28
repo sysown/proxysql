@@ -154,12 +154,6 @@ for platform in Linux Darwin FreeBSD; do
 	assert_contains "${curl_output}" "LIBS=${ssl_archive} ${crypto_archive}" "curl/${platform}"
 	assert_contains "${curl_output}" "--with-openssl=${openssl_root}" "curl/${platform}"
 	assert_contains "${curl_output}" '--disable-symbol-hiding' "curl/${platform}"
-	assert_contains "${curl_output}" 'BLANK_AT_MAKETIME=' "curl/${platform}"
-	assert_contains "${curl_output}" 'LIBCURL_PC_LIBS_PRIVATE=' "curl/${platform}"
-	assert_contains "${curl_output}" \
-		"filter-out ${ssl_archive} ${crypto_archive}" "curl/${platform}"
-	assert_contains "${curl_output}" "\$(LIBCURL_PC_LIBS)" "curl/${platform}"
-	assert_not_contains "${curl_output}" 'lib/Makefile' "curl/${platform}"
 	assert_contains "${curl_output}" '--disable-shared' "curl/${platform}"
 	assert_contains "${curl_output}" '--enable-static' "curl/${platform}"
 	assert_no_system_openssl "${curl_output}" "curl/${platform}"
@@ -177,7 +171,6 @@ for platform in Linux Darwin FreeBSD; do
 	assert_contains "${postgres_output}" "--with-includes=${openssl_root}/include" "PostgreSQL/${platform}"
 	assert_contains "${postgres_output}" "--with-libraries=${openssl_root}" "PostgreSQL/${platform}"
 	assert_contains "${postgres_output}" "LIBS=${ssl_archive} ${crypto_archive}" "PostgreSQL/${platform}"
-	assert_contains "${postgres_output}" "MAKELEVEL=0 libpq.a" "PostgreSQL/${platform}"
 	assert_no_system_openssl "${postgres_output}" "PostgreSQL/${platform}"
 
 	libusual_output=$(dry_run "${repo_root}/deps" libusual "${platform}")

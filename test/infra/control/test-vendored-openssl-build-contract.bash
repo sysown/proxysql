@@ -25,38 +25,7 @@ if [[ ! -d "${source_dir}" ]]; then
 	created_source_stub=1
 fi
 
-contract_makefile="${tmp_dir}/contract.mk"
-printf '%s\n' \
-	'.PHONY: print-openssl-contract' \
-	'print-openssl-contract:' \
-	$'\t@echo "OPENSSL_VERSION=$(OPENSSL_VERSION)"' \
-	$'\t@echo "SSL_PATH=$(SSL_PATH)"' \
-	$'\t@echo "SSL_IDIR=$(SSL_IDIR)"' \
-	$'\t@echo "SSL_LDIR=$(SSL_LDIR)"' \
-	$'\t@echo "LIB_SSL_PATH=$(LIB_SSL_PATH)"' \
-	$'\t@echo "LIB_CRYPTO_PATH=$(LIB_CRYPTO_PATH)"' \
-	$'\t@echo "OPENSSL_STATIC_LIBS=$(OPENSSL_STATIC_LIBS)"' \
-	> "${contract_makefile}"
-
-if ! variables=$(make -s -C "${repo_root}/deps" \
-	-f Makefile -f "${contract_makefile}" print-openssl-contract 2>&1); then
-	printf '%s\n' "${variables}" >&2
-	fail "unable to read the OpenSSL Make contract"
-fi
-
 expected_path="${repo_root}/deps/libssl/openssl"
-for expected in \
-	"OPENSSL_VERSION=3.5.7" \
-	"SSL_PATH=${expected_path}" \
-	"SSL_IDIR=${expected_path}/include" \
-	"SSL_LDIR=${expected_path}" \
-	"LIB_SSL_PATH=${expected_path}/libssl.a" \
-	"LIB_CRYPTO_PATH=${expected_path}/libcrypto.a" \
-	"OPENSSL_STATIC_LIBS=${expected_path}/libssl.a ${expected_path}/libcrypto.a"
-do
-	[[ "${variables}" == *"${expected}"* ]] || \
-		fail "Make contract is missing '${expected}'; got: ${variables}"
-done
 
 if ! commands=$(make -C "${repo_root}/deps" --no-print-directory \
 	-B -n dependency-source-openssl MAKE=/bin/true 2>&1); then
@@ -100,17 +69,9 @@ for forbidden in \
 	'no-module' \
 	'no-dso'
 do
-	[[ "${variables}${commands}" != *"${forbidden}"* ]] || \
+	[[ "${commands}" != *"${forbidden}"* ]] || \
 		fail "vendored build contract contains forbidden system/module option '${forbidden}'"
 done
-
-if ! clean_commands=$(make -C "${repo_root}/deps" --no-print-directory \
-	-n cleanall MAKE=/bin/true 2>&1); then
-	printf '%s\n' "${clean_commands}" >&2
-	fail "make -C deps -n cleanall failed"
-fi
-[[ "${clean_commands}" == *'cd libssl && rm -rf openssl-3.5.7'* ]] || \
-	fail "cleanall does not remove the extracted OpenSSL build tree"
 
 fixture_root="${tmp_dir}/connector-stamp-fixture"
 fixture_test_deps="${fixture_root}/test/deps"

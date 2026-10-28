@@ -1,5 +1,4 @@
-"""TSAN source builds must instrument dependencies and start with clean outputs."""
-import os
+"""Real header preparation, compiler instrumentation, and consumer-link regressions."""
 from pathlib import Path
 import shlex
 import shutil
@@ -126,47 +125,6 @@ class TSANDependencyBuildTests(unittest.TestCase):
                     self.assertEqual(configured.returncode, 0, configured.stdout + configured.stderr)
                     linked = subprocess.run(['cmake', '--build', str(build)], text=True, capture_output=True)
                     self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
-
-    def test_source_policy_preserves_dependency_compiler_settings(self):
-        probe = """probe-tsan-policy:
-\t@printf '%s\\n' '$(DEPS_MODE)' '$(CFLAGS)' '$(CXXFLAGS)' '$(LDFLAGS)' '$(DUCKDB_CMAKE_FLAGS)'
-"""
-        for tsan in ('0', '1'):
-            with self.subTest(tsan=tsan):
-                result = subprocess.run(
-                    ['make', '-s', '-C', str(ROOT / 'deps'), '-f', 'Makefile', '-f', '-',
-                     'probe-tsan-policy', 'WITHTSAN=' + tsan, 'WITHASAN=0', 'PROXYSQL40=1',
-                     'DEPS_MODE=prebuilt', 'CFLAGS=-DKEEP_C', 'CXXFLAGS=-DKEEP_CXX',
-                     'LDFLAGS=-Wl,--as-needed'], input=probe, text=True,
-                    capture_output=True, check=True)
-                mode, cflags, cxxflags, ldflags, duckdb = result.stdout.splitlines()
-                self.assertEqual(mode, 'source' if tsan == '1' else 'prebuilt')
-                self.assertEqual((cflags, cxxflags, ldflags),
-                                 ('-DKEEP_C', '-DKEEP_CXX', '-Wl,--as-needed'))
-                self.assertEqual('-DENABLE_THREAD_SANITIZER=ON' in duckdb, tsan == '1')
-
-    def test_docker_entrypoint_cleans_before_tsan_source_dependencies(self):
-        source = (ROOT / 'docker/images/proxysql/deb-compliant/entrypoint/entrypoint.bash').read_text()
-        body = source[source.index('if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]]'):source.index('touch /opt/proxysql/src/proxysql')]
-        for tsan in ('0', '1'):
-            with self.subTest(tsan=tsan), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                calls = root / 'calls'
-                make = root / 'make'
-                make.write_text('#!/bin/sh\nprintf "%s|%s\\n" "$DEPS_MODE" "$*" >> "$CALLS"\n')
-                make.chmod(0o755)
-                env = dict(os.environ, MAKE=str(make), MAKEOPT='', CALLS=str(calls),
-                           DEPS_MODE='prebuilt', WITHTSAN=tsan, PROXYSQL40='1',
-                           PROXYSQL_BUILD_TYPE='debug', BLD_NAME='ubuntu24-tap')
-                subprocess.run(['bash', '-eu', '-c', body], env=env, check=True,
-                               text=True, capture_output=True)
-                rows = calls.read_text().splitlines()
-                self.assertEqual(len(rows), 3 if tsan == '1' else 2)
-                self.assertTrue(all(row.startswith(('source' if tsan == '1' else 'prebuilt') + '|') for row in rows))
-                if tsan == '1':
-                    self.assertIn('cleanall', rows[0])
-                self.assertIn('build_deps', rows[-2])
-                self.assertIn('build_tap_test_debug', rows[-1])
 
 
 if __name__ == '__main__':

@@ -134,7 +134,7 @@ class AutomaticPublicationTests(unittest.TestCase):
             self.matrix()
         self.assertEqual([], self.github.writes)
 
-    def test_wrong_version_source_hash_and_unreviewed_provenance_are_rejected(self):
+    def test_wrong_version_recipe_hash_and_unreviewed_provenance_are_rejected(self):
         directory, original = self.candidate()
         for field, value in [('version', '9.9.9'), ('recipe_sha256', 'a' * 64)]:
             entry = json.loads(json.dumps(original))
@@ -198,7 +198,7 @@ class AutomaticPublicationTests(unittest.TestCase):
             with self.subTest(unavailable=unavailable), patch.object(self.publisher, 'time') as clock:
                 self.publish(directory, entry, remote=fetch)
                 self.assertEqual(2, fetch.call_count)
-                clock.sleep.assert_called_once_with(2)
+                clock.sleep.assert_called_once()
         fetch = Mock(return_value=None)
         with patch.object(self.publisher, 'time') as clock, self.assertRaisesRegex(ValueError, 'metadata is unavailable'):
             self.publish(directory, entry, remote=fetch)

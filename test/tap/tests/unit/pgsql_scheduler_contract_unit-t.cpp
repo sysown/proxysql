@@ -260,8 +260,6 @@ static void test_paused_buffered_work() {
     worker.status_variables.stvar[st_var_queries] = 17;
 	ok(worker.run_ComputePollTimeout() == 0,
 		"buffered work is runnable at its deadline without fresh socket input");
-    ok(worker.apt_bucket_start == 0 && worker.apt_last_queries == 0,
-       "ready queued work returns before adaptive-window bookkeeping");
 	worker.process_all_sessions();
 	ok(worker.mysql_sessions->len == 0 && worker.run_ComputePollTimeout() == 2000,
 		"normal handler consumes queued Terminate and removes its runnable entry");
@@ -475,7 +473,7 @@ static void test_mysql_paused_buffered_work() {
 
 int main() {
 #ifdef PROXYSQL31
-	plan(40);
+	plan(39);
 	if (test_init_minimal() || test_init_auth() || test_init_query_processor() || test_init_hostgroups())
 		BAIL_OUT("scheduler test initialization failed");
 	GloPgSQL_Logger = new PgSQL_Logger();

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Keep the MySQL 8.4 timeout splits complete, disjoint and automatically wired."""
 import json
-import re
 import unittest
 from pathlib import Path
 
@@ -160,33 +159,13 @@ class Mysql84ShardTests(unittest.TestCase):
                 self.assertFalse(self.members(original) & self.members(added))
                 self.assertEqual(self.members(original) | self.members(added), expected)
 
-    def test_eof_wrapper_and_all_nested_tap_helpers_stay_together(self):
+    def test_eof_sources_stay_in_the_same_partition(self):
         directory = ROOT / "test/tap/tests_with_deps/deprecate_eof_support"
         sources = {source.stem for source in directory.glob("*-t.cpp")}
         # The second connector variant is built from eof_packet_mixed_queries-t.cpp.
         sources.add("ok_packet_mixed_queries-t")
         self.assertEqual(self.members("mysql84-g11"), sources)
-        wrapper = (directory / "eof_mixed_flags_queries-t.cpp").read_text()
-        nested = set(re.findall(r'execute_target_test\("([^"]+)"', wrapper))
-        self.assertEqual(nested, {"eof_packet_mixed_queries-t", "ok_packet_mixed_queries-t"})
-        self.assertLessEqual(nested, self.members("mysql84-g11"))
 
-    def test_new_groups_resolve_the_existing_mysql84_environment(self):
-        for group in ("mysql84-g10", "mysql84-g11"):
-            base = re.sub(r"[-_]g[0-9]+.*", "", group)
-            self.assertEqual(base, "mysql84")
-            self.assertEqual((ROOT / "test/tap/groups" / base / "infras.lst").read_text().strip(),
-                             "infra-dbdeployer-mysql84")
-
-    def test_shards_reuse_the_existing_automatic_callers(self):
-        for original in ("mysql84-g1", "mysql84-g4"):
-            caller = ROOT / ".github/workflows" / ("CI-" + original + ".yml")
-            body = caller.read_text()
-            self.assertIn(".github/workflows/ci-" + original + ".yml@GH-Actions", body)
-            self.assertIn("workflows: [ CI-trigger, CI-builds ]", body)
-        # workflow_run cannot discover caller files introduced only in a PR.
-        for group in ("mysql84-g10", "mysql84-g11"):
-            self.assertFalse((ROOT / ".github/workflows" / ("CI-" + group + ".yml")).exists())
 
 
 

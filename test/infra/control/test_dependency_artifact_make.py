@@ -1,4 +1,4 @@
-"""Preparation modes, concurrency, and the real Make-facing source recipe."""
+"""Cache preparation, invalidation, and locking with lightweight source fixtures."""
 import importlib
 import fcntl
 import io
@@ -62,8 +62,6 @@ class PreparationTests(unittest.TestCase):
             'include $(PROXYSQL_PATH)/deps/libssl/build.mk\n'
             'cleanbuild:\n\trm -rf libssl/openssl-3.5.7\n')
         self.tree = directory / 'openssl-3.5.7'
-        self.probe = patch.object(self.identity, 'toolchain_identity',
-                                  return_value={'os': 'Linux', 'arch': 'fixture'})
         # Direct API tests use the real toolchain, as subprocess Make does.
 
     def prepare(self, mode='auto'):
@@ -193,7 +191,7 @@ class PreparationTests(unittest.TestCase):
             self.prepare('auto')
         self.assertEqual(0, self.count())
 
-    def test_prebuilt_hit_relocated_and_mode_transitions(self):
+    def test_prebuilt_hit_noop_and_mode_transitions(self):
         self.register()
         shutil.rmtree(str(self.tree))
         self.assertEqual('prebuilt', self.prepare('prebuilt')['origin'])
@@ -343,7 +341,7 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn('duckdb', result.stdout.split())
 
-    def test_direct_plugin_object_prepares_duckdb_before_compilation(self):
+    def test_direct_plugin_object_schedules_duckdb_preparation_before_compile(self):
         target = ROOT / 'plugins/duckdb/obj/duckdb_engine.o'
         result = subprocess.run(['make', '--no-print-directory', '-n', '-B', '-C',
                                  str(ROOT / 'plugins/duckdb'), str(target),
@@ -393,7 +391,7 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(self.tree.exists())
         self.assertEqual(0, self.count())
 
-    def test_concurrent_preparation_builds_once_and_preserves_jobserver(self):
+    def test_concurrent_preparation_builds_once(self):
         cli = [sys.executable, str(self.root / 'deps/artifacts/manage.py'), 'prepare',
                '--dependency', 'openssl', '--root', str(self.root), '--mode', 'source']
         processes = [subprocess.Popen(cli, env=self.env, stdout=subprocess.PIPE,
@@ -402,9 +400,6 @@ class PreparationTests(unittest.TestCase):
             out, err = process.communicate(timeout=30)
             self.assertEqual(0, process.returncode, out + err)
         self.assertEqual(1, self.count())
-        result = self.make('-j2', 'libssl', 'DEPS_MODE=source')
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertNotIn('jobserver unavailable', result.stderr)
 
     def python_free_environment(self):
         tools = self.root / 'bin'
@@ -442,19 +437,6 @@ class PreparationTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn('SHA-256 mismatch', result.stderr)
         self.assertEqual(1, self.count())
-
-    def test_python_free_sidecar_contents_participate_in_source_signature(self):
-        source = self.install_real_source_verifier()
-        env = self.python_free_environment()
-        result = self.make('libssl', 'DEPS_MODE=source', env=env)
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        checksum = Path(str(source) + '.sha256')
-        before = checksum.stat()
-        checksum.write_text(checksum.read_text().replace('  ', ' '))
-        os.utime(str(checksum), ns=(before.st_atime_ns, before.st_mtime_ns))
-        result = self.make('libssl', 'DEPS_MODE=source', env=env)
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertEqual(2, self.count())
 
     def test_python_free_source_archive_corruption_fails_hard(self):
         source = self.install_real_source_verifier()

@@ -476,8 +476,9 @@ void test_fresh_retry_bypasses_local_and_global_idle_iam(MySQL_Thread& worker) {
 			MySQLBackendAuthType::AWS_IAM);
 		destroy_used(idle);
 	}
-	ok(failure_server->ConnectionsFree->conns_length() == 0,
-		"the fresh-token retry fixture leaves no idle connections for later scenarios");
+	if (failure_server->ConnectionsFree->conns_length() != 0) {
+		BAIL_OUT("fresh-token retry fixture left idle connections for later scenarios");
+	}
 }
 
 void test_pooled_success_clears_latch_for_later_1045(MySQL_Thread& worker) {
@@ -595,7 +596,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-	plan(16);
+	plan(15);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
