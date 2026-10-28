@@ -453,26 +453,31 @@ void test_fresh_retry_bypasses_local_and_global_idle_iam(MySQL_Thread& worker) {
 	fixture.run();
 	fixture.frontend_stream->active = 1;
 	fixture.backend()->active = 1;
+	// Ordinary acquisition can publish the local cache before reserving the
+	// fresh IAM connection. Verify both idle fixtures survive, regardless of
+	// whether this worker already published them during the acquisition.
+	worker.return_local_connections();
 	// While the token is pending the new connection is a detached reservation:
 	// nothing socket-less is attached to the backend stream.
 	MySQL_Connection *selected = fixture.session->aws_iam_connection;
-	ok(selected != nullptr && selected->fd == -1 && fixture.backend()->myconn == nullptr &&
-		local->myds == nullptr &&
-		failure_server->ConnectionsFree->conns_length() == 1 &&
+	ok(selected != nullptr && selected != local && selected != global &&
+		selected->fd == -1 && fixture.backend()->myconn == nullptr &&
+		local->myds == nullptr && global->myds == nullptr &&
+		failure_server->ConnectionsFree->conns_length() == 2 &&
 		source.keys.size() == 1 && fixture.session->status == WAITING_AWS_IAM_TOKEN,
 		"an IAM fresh-token retry bypasses compatible local and global idle connections and starts a new handshake");
 
 	if (fixture.backend()->myconn != nullptr) {
 		fixture.backend()->destroy_MySQL_Connection_From_Pool(false);
 	}
-	local = worker.get_MyConn_local(
-		kHostgroup, fixture.session, nullptr, 0, -1,
-		MySQLBackendAuthType::AWS_IAM);
-	destroy_used(local);
-	global = MyHGM->get_MyConn_from_pool(
-		kHostgroup, fixture.session, false, nullptr, 0, -1,
-		MySQLBackendAuthType::AWS_IAM);
-	destroy_used(global);
+	for (int i = 0; i < 2; ++i) {
+		MySQL_Connection *idle = MyHGM->get_MyConn_from_pool(
+			kHostgroup, fixture.session, false, nullptr, 0, -1,
+			MySQLBackendAuthType::AWS_IAM);
+		destroy_used(idle);
+	}
+	ok(failure_server->ConnectionsFree->conns_length() == 0,
+		"the fresh-token retry fixture leaves no idle connections for later scenarios");
 }
 
 void test_pooled_success_clears_latch_for_later_1045(MySQL_Thread& worker) {
@@ -590,7 +595,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-	plan(15);
+	plan(16);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
