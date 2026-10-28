@@ -12,6 +12,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <sys/socket.h>
 #include <thread>
@@ -19,8 +20,13 @@
 
 using namespace std::chrono_literals;
 
-static void attach_connection(MySQL_Data_Stream& stream) { stream.myconn = new MySQL_Connection(); }
-static void attach_connection(PgSQL_Data_Stream&) {}
+static void attach_connection(MySQL_Data_Stream& stream) {
+	// Frontend stream destruction owns the connection from this handoff onward.
+	stream.myconn = std::make_unique<MySQL_Connection>().release();
+}
+static void attach_connection(PgSQL_Data_Stream&) {
+	// PostgreSQL packet staging does not inspect connection compression state.
+}
 
 static void require(bool condition) {
 	if (!condition) BAIL_OUT("socket fixture failed: errno=%d", errno);
@@ -54,7 +60,7 @@ static void check_stream(const char* name) {
 	ok(stream.queueOUT.partial > 0, "%s: oversized packets require staged refills", name);
 	std::atomic<bool> finished{false};
 	std::string received;
-	std::thread reader([&] {
+	std::thread reader([&received, filler, &payload, &fds, &finished] {
 		std::this_thread::sleep_for(20ms);
 		const auto deadline = std::chrono::steady_clock::now() + 2s;
 		char buffer[4096];
@@ -107,8 +113,8 @@ static void check_tls(const char* name, const std::filesystem::path& fixtures) {
 	require(server && client);
 	require(SSL_CTX_use_certificate_file(server, (fixtures / "proxysql-cert.pem").c_str(), SSL_FILETYPE_PEM) == 1);
 	require(SSL_CTX_use_PrivateKey_file(server, (fixtures / "proxysql-key.pem").c_str(), SSL_FILETYPE_PEM) == 1);
-	SSL_CTX_set_max_proto_version(server, TLS1_2_VERSION);
-	SSL_CTX_set_max_proto_version(client, TLS1_2_VERSION);
+	require(SSL_CTX_set_min_proto_version(server, TLS1_3_VERSION) == 1);
+	require(SSL_CTX_set_min_proto_version(client, TLS1_3_VERSION) == 1);
 	int fds[2];
 	require(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
 	for (int fd : fds) require(fcntl(fd, F_SETFL, O_NONBLOCK) == 0);
@@ -144,7 +150,7 @@ static void check_tls(const char* name, const std::filesystem::path& fixtures) {
 		"%s: TLS backpressure consumes plaintext once and retains ciphertext", name);
 	std::atomic<bool> finished{false};
 	std::string received;
-	std::thread reader([&] {
+	std::thread reader([&fds, filler, input, peer, &received, &finished] {
 		std::this_thread::sleep_for(20ms);
 		size_t discarded = 0;
 		char buffer[4096], plaintext[4096];
@@ -172,7 +178,7 @@ static void check_tls(const char* name, const std::filesystem::path& fixtures) {
 	close(fds[1]);
 }
 
-int main(int argc, char** argv) {
+int main(int, char** argv) {
 	plan(20);
 	test_init_minimal();
 	check_stream<MySQL_Data_Stream>("MySQL");

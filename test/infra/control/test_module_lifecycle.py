@@ -189,6 +189,8 @@ class Lifecycle(IsolatedDaemonTest):
             for dialect in ("MYSQL", "PGSQL"):
                 daemon.query(f"TRUNCATE stats_{dialect.lower()}_query_digest", protocol)
                 daemon.query(f"PURGE stats_{dialect.lower()}_query_digest TO 1", protocol)
+                self.assertNotEqual(daemon.query(f"PURGE stats_{dialect.lower()}_query_digest TO 0",
+                                                protocol, check=False).returncode, 0)
         daemon.query("INSERT INTO mysql_query_rules (rule_id,active) VALUES (5186,1)")
         self.assertNotEqual(daemon.query("SAVE MYSQL QUERY RULES FROM RUNTIME", check=False).returncode, 0)
         self.assertEqual(daemon.query("SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id=5186").stdout.strip(), "1")

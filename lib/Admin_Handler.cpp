@@ -3752,17 +3752,17 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			enum SERVER_TYPE type = std::get<1>(result);
 			time_t last_seen = std::get<2>(result);
 
-			if (last_seen > 0) {
-				if (type == SERVER_TYPE_MYSQL && GloMyQPro) {
-					ret = GloMyQPro->purge_query_digests(true, false, last_seen);
-				} else if (type == SERVER_TYPE_PGSQL && GloPgQPro) {
-					ret = GloPgQPro->purge_query_digests(true, false, last_seen);
-				}
-
-				pa->send_ok_msg_to_client(sess, NULL, ret, query_no_space);
-			} else {
+			if (last_seen <= 0) {
 				pa->send_error_msg_to_client(sess, "Invalid timestamp");
+				run_query = false;
+				goto __run_query;
 			}
+			if (type == SERVER_TYPE_MYSQL && GloMyQPro) {
+				ret = GloMyQPro->purge_query_digests(true, false, last_seen);
+			} else if (type == SERVER_TYPE_PGSQL && GloPgQPro) {
+				ret = GloPgQPro->purge_query_digests(true, false, last_seen);
+			}
+			pa->send_ok_msg_to_client(sess, NULL, ret, query_no_space);
 
 			run_query = false;
 			goto __run_query;
