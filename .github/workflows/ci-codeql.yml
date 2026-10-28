@@ -1,6 +1,8 @@
 name: CI-CodeQL
-'on':
+on:
   workflow_call:
+    # Keep the old producer inputs while the default-branch caller is updated.
+    # Producer/PR events are rejected by the job guard below.
     inputs:
       trigger:
         type: string
@@ -17,63 +19,33 @@ name: CI-CodeQL
         type: string
         default: ''
 jobs:
-  tier-context:
-    uses: ./.github/workflows/ci-tier-context.yml
-    with:
-      trigger: ${{ inputs.trigger }}
-      consumer_id: ${{ inputs.consumer_id }}
-      control_ref: ${{ inputs.control_ref }}
-      producer_run_id: ${{ inputs.producer_run_id }}
-      producer_attempt: ${{ inputs.producer_attempt }}
-      consumer_file: ci-codeql.yml
-      consumer_inputs: ${{ toJson(inputs) }}
-    secrets: inherit
   analyze:
-    name: ${{ matrix.check_name }}
+    name: v3.0 / ${{ matrix.language }}
+    if: ${{ github.repository == 'sysown/proxysql' && github.ref == 'refs/heads/v3.0' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
-    # Native C++ extraction and analysis can consume two hours; leave time
-    # for result processing and job finalization to complete successfully.
     timeout-minutes: 180
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.tier-context.outputs.matrices)['analyze'] || fromJson('[{}]') }}
-    env:
-      TESTDIST: ${{ matrix.testdist }}
-      MATRIX: (${{ matrix.language }})
-      SHA: ${{ needs.tier-context.outputs.sha }}
-      CI_BINDING: ${{ needs.tier-context.outputs.binding }}
-      CI_LEG: ${{ toJson(matrix) }}
-      TIER: ${{ matrix.tier }}
-      COVERAGE: ${{ matrix.coverage && '1' || '0' }}
+        language: [cpp, python]
     steps:
-    - name: Checkout CI control
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      with:
-        repository: sysown/proxysql
-        ref: ${{ needs.tier-context.outputs.control_sha }}
-        path: ci-control
-        persist-credentials: false
-        sparse-checkout: .github
-    - name: Start selected product test check
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GITHUB_JSON: ${{ toJson(github) }}
-        CHECK_KEY: ${{ matrix.check_key }}
-        CHECK_STATUS: in_progress
-      run: |
-        python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Update
       run: sudo apt-get update
     - name: Install build tools
       run: sudo apt-get -y install make automake git wget gcc g++ libtool equivs python3
     - name: Install build dependencies
       run: sudo apt-get -y install libssl-dev gnutls-dev libgnutls28-dev libmysqlclient-dev libboost-all-dev libunwind8 libunwind-dev uuid-dev ca-certificates
-    - name: Checkout repository
+    - name: Checkout v3.0
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
-        repository: ${{ github.repository }}
-        ref: ${{ env.SHA }}
+        repository: sysown/proxysql
+        # The caller is restricted to v3.0; pin both languages to its same
+        # triggering commit even when a hosted runner queues for a while.
+        ref: ${{ github.sha }}
         fetch-depth: 0
         path: proxysql
         persist-credentials: false
@@ -87,41 +59,10 @@ jobs:
         cd proxysql
         make -j"$(nproc)" clickhouse
       env:
-        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
-        PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
+        PROXYSQL40: ''
+        PROXYSQL31: ''
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@c4dd10e44af883a891fe31ced449bcb4a6728b9b
       with:
         checkout_path: proxysql/
-        category: ${{ matrix.tier }}-${{ matrix.language }}
-    - name: Complete selected product test check
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GITHUB_JSON: ${{ toJson(github) }}
-        CHECK_KEY: ${{ matrix.check_key }}
-        CHECK_STATUS: ${{ job.status }}
-      run: |
-        python3 ci-control/.github/scripts/ci_tier_runtime.py result
-      if: ${{ always() }}
-    needs:
-    - tier-context
-    if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['analyze'][0] != null }}
-    permissions:
-      actions: read
-      checks: write
-      contents: read
-      security-events: write
-  tier-summary:
-    permissions:
-      actions: read
-      checks: write
-      contents: read
-    needs:
-    - tier-context
-    - analyze
-    if: ${{ always() && needs.tier-context.result == 'success' }}
-    uses: ./.github/workflows/ci-tier-summary.yml
-    with:
-      binding: ${{ needs.tier-context.outputs.binding }}
-      control_ref: ${{ needs.tier-context.outputs.control_sha }}
-    secrets: inherit
+        category: v30-${{ matrix.language }}

@@ -117,13 +117,6 @@ class WorkflowTests(unittest.TestCase):
    self.assertIn('ubuntu24_dbg_build',run)
    self.assertNotIn('matrix.tier',run)
    self.assertNotIn('TIER',run)
- def test_other_compiled_workflows_use_the_same_selected_tiers(self):
-  cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
-  for name in ['CI-CodeQL']:
-   rows=[r for r in cat['consumers'] if r['workflow']==name]
-   self.assertEqual(len(rows),1)
-   self.assertEqual(set(rows[0]['tiers']),{'v30','v31','v40'})
-   self.assertTrue(rows[0]['automatic'])
  def test_maketest_is_not_planned_for_pull_requests(self):
   cat=json.loads((ROOT/'.github/ci-tier-consumers.json').read_text())
   self.assertFalse(any(row['workflow']=='CI-maketest' for row in cat['consumers']))

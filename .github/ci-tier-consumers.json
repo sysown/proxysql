@@ -2463,31 +2463,6 @@
       "axes": {},
       "instance": "run",
       "build_from_source": true
-    },
-    {
-      "workflow": "CI-CodeQL",
-      "file": "ci-codeql.yml",
-      "job": "analyze",
-      "automatic": true,
-      "tiers": [
-        "v40",
-        "v30",
-        "v31"
-      ],
-      "groups": [],
-      "cells": [],
-      "axes": {
-        "testdist": [
-          "ubuntu24-tap-genai-gcov"
-        ],
-        "language": [
-          "cpp",
-          "python"
-        ]
-      },
-      "instance": "run",
-      "build_from_source": true,
-      "execution_step": "Perform CodeQL Analysis"
     }
   ]
 }
