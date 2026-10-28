@@ -1043,6 +1043,12 @@ void ProxySQL_Main_init_main_modules() {
 	PgSQL_Threads_Handler* _tmp_GloPTH = NULL;
 	_tmp_GloPTH = new PgSQL_Threads_Handler();
 	GloPTH = _tmp_GloPTH;
+
+	// LOAD ... SERVERS and monitor statistics use these objects even in
+	// --no-start mode. Construct them before accepting Admin connections;
+	// scheduler/worker threads still start only in phase 3 when permitted.
+	GloMyMon = new MySQL_Monitor();
+	GloPgMon = new PgSQL_Monitor();
 }
 
 void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
@@ -1823,9 +1829,6 @@ bool ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : GloPgSQL_Logger initialized in ";
 #endif
 	}
-	// Initialized monitor, no matter if it will be started or not
-	GloMyMon = new MySQL_Monitor();
-	GloPgMon = new PgSQL_Monitor();
 	// load all mysql servers to GloHGH
 	{
 		cpu_timer t;
