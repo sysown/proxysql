@@ -120,6 +120,11 @@ class ProxySQL_GlobalVariables {
 		bool nostart;
 		bool my_monitor;
 		bool pg_monitor;
+		// Startup permissions: shared Auth/HGM objects remain available.
+		bool mysql_workers;
+		bool pgsql_workers;
+		bool mysql_admin;
+		bool pgsql_admin;
 		bool version_check;
 #ifdef SO_REUSEPORT
 		bool reuseport;
