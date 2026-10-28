@@ -153,9 +153,12 @@ struct CopyCmdMatcher {
 	}
 };
 
+template<class Worker, class Session, class Connection, class Pool> class Worker_Scheduler;
+
 class __attribute__((aligned(64))) PgSQL_Thread : public Base_Thread
 {
 private:
+	template<class, class, class, class> friend class Worker_Scheduler;
 	unsigned int servers_table_version_previous;
 	unsigned int servers_table_version_current;
 	unsigned long long last_processing_idles;
@@ -485,6 +488,7 @@ public:
 	void drop_from_poll(PgSQL_Data_Stream *ds);
 	void queue_session_continuation(PgSQL_Session *sess);
 	void cancel_session_continuation(PgSQL_Session *sess);
+	void close_scheduled_session(unsigned index);
 #endif // PROXYSQL31
 
 	/**

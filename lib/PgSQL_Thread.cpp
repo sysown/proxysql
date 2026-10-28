@@ -55,6 +55,8 @@ extern PgSQL_Monitor* GloPgMon;
 extern PgSQL_Logger* GloPgSQL_Logger;
 
 
+#include "Worker_Scheduler.h"
+
 typedef struct mythr_st_vars {
 	enum PgSQL_Thread_status_variable v_idx;
 	p_th_counter::metric m_idx;
@@ -3207,16 +3209,22 @@ void PgSQL_Thread::unregister_session(int idx) {
 #ifdef PROXYSQL31
 
 void PgSQL_Thread::queue_session_continuation(PgSQL_Session *sess) {
-	if (sess->continuation_queued) return;
-	sess->continuation_queued = true;
-	session_continuations.push_back(sess);
+    queue_session_work(session_continuations, sess);
 }
 
 void PgSQL_Thread::cancel_session_continuation(PgSQL_Session *sess) {
-	if (!sess->continuation_queued) return;
-	session_continuations.erase(std::remove(session_continuations.begin(), session_continuations.end(), sess),
-		session_continuations.end());
-	sess->continuation_queued = false;
+    cancel_session_work(session_continuations, sess);
+}
+
+void PgSQL_Thread::close_scheduled_session(unsigned index) {
+    auto *sess = static_cast<PgSQL_Session*>(mysql_sessions->index(index));
+    char location[1024];
+    if (sess->client_myds && sess->killed)
+        proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
+    snprintf(location, sizeof(location), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+    GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, location);
+    unregister_session(index);
+    delete sess;
 }
 
 void PgSQL_Thread::enter_waiter(PgSQL_Session *sess, unsigned hid) {
@@ -3292,12 +3300,7 @@ int PgSQL_Thread::run_ComputePollTimeout() {
 	// Buffered next-command work survives run_SetAllSession_ToProcess0().
 	// A reply throttle may have paused it during the preceding writeout;
 	// sleep until its deadline, but never block with eligible work queued.
-	for (const auto *sess : session_continuations) {
-		if (!sess->healthy || sess->killed || sess->pause_until <= curtime) return 0;
-		const auto remaining = sess->pause_until - curtime;
-		const auto delay_ms = remaining / 1000 + (remaining % 1000 != 0);
-		if (delay_ms < static_cast<unsigned long long>(ttw)) ttw = static_cast<int>(delay_ms);
-	}
+	if (tune_queued_work_poll_timeout(session_continuations, curtime, ttw)) return 0;
 
 	// Adaptive poll timeout. partition_pool_nulls holds the count from the
 	// process_all_sessions() pass that just ran: update_partition_gate()
@@ -4234,122 +4237,8 @@ void PgSQL_Thread::process_all_sessions() {
 		ProcessAllSessions_Partition<PgSQL_Session>();
 	}
 #ifdef PROXYSQL31
-    released_hostgroups.clear();
-    collecting_releases = true;
-    struct CollectScope {
-        bool &collecting;
-        std::vector<unsigned> &released;
-        ~CollectScope() { collecting = false; released.clear(); }
-    } collect_scope{collecting_releases, released_hostgroups};
-    auto run_session = [&](PgSQL_Session *sess, PgSQL_Pool_Acquire_Mode mode = PgSQL_Pool_Acquire_Mode::Normal,
-                           bool io_only = false) {
-        const auto result = sess->run_step(mode, io_only);
-        if (result == PgSQL_Session_Run_Result::Runnable) queue_session_continuation(sess);
-        return result;
-    };
-
-    auto serve_waiters = [&](unsigned hid, size_t budget, bool retry_unavailable = false) {
-        size_t served = 0;
-        bool checkout_blocked = false;
-        for (auto *node = waiter_lists.head(hid); node && (retry_unavailable || served < budget);) {
-            auto *next = node->next;
-            auto *waiting = static_cast<PgSQL_Session*>(node->session);
-            if (waiting->killed || waiting->healthy == 0) {
-                // Defer deletion to the main scan, whose array indices must
-                // remain stable while it is interleaving a different session.
-                waiting->healthy = 0;
-                leave_waiter(waiting, false);
-                node = next;
-                continue;
-            }
-            auto *bds = waiting->mybe ? waiting->mybe->server_myds : nullptr;
-            const bool deadline_due = bds && bds->max_connect_time && curtime >= bds->max_connect_time;
-            // A failed ordinary checkout can stop further speculative retries,
-            // but every expired waiter still needs its timeout state machine.
-            if (retry_unavailable && !deadline_due && checkout_blocked) { node = next; continue; }
-            if (waiting->pause_until > curtime && !deadline_due) { node = next; continue; }
-            if (deadline_due) waiting->pause_until = 0;
-            waiting->to_process = 1;
-            const auto waiting_result = run_session(waiting, retry_unavailable
-                ? PgSQL_Pool_Acquire_Mode::Normal : PgSQL_Pool_Acquire_Mode::EstablishedOnly);
-            if (waiting_result == PgSQL_Session_Run_Result::Close) {
-                waiting->healthy = 0;
-                leave_waiter(waiting, false);
-                node = next;
-                continue;
-            }
-            if (waiting_result == PgSQL_Session_Run_Result::EstablishedUnavailable) break;
-            const bool got = waiting->mybe && waiting->mybe->server_myds && waiting->mybe->server_myds->myconn;
-            if (got) {
-                leave_waiter(waiting);
-                auto *bds = waiting->mybe->server_myds;
-                if (bds->fd >= 0 && bds->poll_fds_idx < 0)
-                    mypolls.add(POLLIN | POLLOUT, bds->fd, bds, curtime);
-                ++served;
-            } else if (waiting->status != CONNECTING_SERVER) {
-                leave_waiter(waiting);
-            } else if (vanilla_pool_checkout(waiting->last_pool_ff,
-                       waiting->last_pool_gtid ? "" : nullptr, waiting->last_pool_max_lag_ms)) {
-                if (!retry_unavailable) break;
-                checkout_blocked = true;
-            }
-            node = next;
-        }
-        return served;
-    };
-    auto dispatch_released = [&]() {
-        // A synchronous completion may release again. Bound the chain rather
-        // than recurse; remaining availability is retried at the next pass.
-        size_t i = 0;
-        while (i < released_hostgroups.size() && i < 64) {
-            const unsigned hid = released_hostgroups[i++];
-            serve_waiters(hid, 1);
-        }
-        released_hostgroups.clear();
-    };
-    // Reuse connections already available before doing more response work,
-    // including connections published by another worker.
-    // If waiters consume all known capacity, avoid another frontend scan.
-    // This is deliberately a global gate; hostgroup scheduling comes later.
-    bool early_capacity_available = waiter_lists.empty();
-    waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node*, size_t count) {
-        size_t available = 0;
-        for (unsigned i = 0; i < cached_connections->len; ++i) {
-            auto *conn = static_cast<PgSQL_Connection*>(cached_connections->index(i));
-            if (conn->parent->myhgc->hid == hid) ++available;
-        }
-        PgHGM->wrlock();
-        auto *hg = PgHGM->MyHGC_find(hid);
-        if (hg) for (unsigned i = 0; i < hg->mysrvs->cnt(); ++i) {
-            auto *server = hg->mysrvs->idx(i);
-            if (server->status == MYSQL_SERVER_STATUS_ONLINE)
-                available += server->ConnectionsFree->conns_length();
-        }
-        PgHGM->wrunlock();
-        // An empty-pool retry would pause the oldest waiter just before the
-        // response scan releases a connection. Only attempt real availability.
-        if (available) {
-            const size_t served = serve_waiters(hid, std::min(count, available));
-            if (available > served) early_capacity_available = true;
-        }
-    });
-    dispatch_released();
-    // Try new frontend work before response processing, stopping globally on
-    // the first established-connection miss. Hostgroup scheduling is deferred.
-    for (unsigned i = 0; early_capacity_available && i < mysql_sessions->len; ++i) {
-        auto *sess = static_cast<PgSQL_Session*>(mysql_sessions->index(i));
-        if (sess->healthy == 0 || sess->killed || sess->mirror || sess->waiter_node.session || sess->continuation_queued)
-            continue;
-        if (sess->to_process != 1 || sess->pause_until > curtime) continue;
-        if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
-        // Authentication and connection maintenance retain their normal order.
-        if (sess->status != WAITING_CLIENT_DATA && sess->status != CONNECTING_SERVER) continue;
-        const auto early_result = run_session(sess, PgSQL_Pool_Acquire_Mode::EstablishedOnly);
-        if (early_result == PgSQL_Session_Run_Result::Close)
-            leave_waiter(sess, false);
-        dispatch_released();
-        if (early_result == PgSQL_Session_Run_Result::EstablishedUnavailable) break;
-    }
+    Worker_Scheduler<PgSQL_Thread, PgSQL_Session, PgSQL_Connection, PgSQL_HostGroups_Manager> scheduler(*this, *PgHGM);
+    scheduler.run_early();
 #endif
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4409,7 +4298,7 @@ void PgSQL_Thread::process_all_sessions() {
 #endif
 			)) {
 			#ifdef PROXYSQL31
-			if (run_session(sess, PgSQL_Pool_Acquire_Mode::Normal, true) == PgSQL_Session_Run_Result::Close) sess->healthy = 0;
+			if (scheduler.run_session(sess, PgSQL_Pool_Acquire_Mode::Normal, true) == PgSQL_Session_Run_Result::Close) sess->healthy = 0;
 #else
 			if (sess->handler(true) == -1) sess->healthy = 0;
 #endif
@@ -4461,7 +4350,7 @@ void PgSQL_Thread::process_all_sessions() {
 					}
 #endif // PROXYSQL31
 #ifdef PROXYSQL31
-					rc = run_session(sess) == PgSQL_Session_Run_Result::Close ? -1 : 0;
+					rc = scheduler.run_session(sess) == PgSQL_Session_Run_Result::Close ? -1 : 0;
 #else
 					rc = sess->handler();
 #endif
@@ -4495,72 +4384,11 @@ void PgSQL_Thread::process_all_sessions() {
 			}
 		}
 #ifdef PROXYSQL31
-		dispatch_released();
+		scheduler.dispatch_released();
 #endif
 	}
 #ifdef PROXYSQL31
-	dispatch_released();
-    // Releases remain the fast path. Once response work is finished, also
-    // service deadlines and retry creation/recovery without requiring a free
-    // connection. Do not pause the oldest waiter before processing responses.
-    waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node*, size_t count) {
-        serve_waiters(hid, count, true);
-    });
-    dispatch_released();
-
-	for (n = 0; n < mysql_sessions->len; n++) {
-		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
-		if (!sess->healthy || sess->killed) {
-			char location[1024];
-			snprintf(location, sizeof(location), "%s:%d:%s()", __FILE__, __LINE__, __func__);
-			GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, location);
-			unregister_session(n--);
-			delete sess;
-			continue;
-		}
-		if (sess->waiter_node.session || sess->continuation_queued) continue;
-		if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
-
-		if (sess->to_process == 1 && sess->pause_until <= curtime) {
-			rc = run_session(sess) == PgSQL_Session_Run_Result::Close ? -1 : 0;
-			if (rc == -1 || sess->killed == true) {
-				char _buf[1024];
-				if (sess->client_myds && sess->killed)
-					proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
-				snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
-				GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
-				unregister_session(n);
-				n--;
-				delete sess;
-			}
-            dispatch_released();
-		}
-	}
-
-	// Drain only the current snapshot of buffered next-command work. Newly
-	// queued or paused sessions remain durable without extending this pass.
-	// The releasing request's writeout already ran before inline waiter service.
-	size_t continuations = session_continuations.size();
-	while (continuations-- && !session_continuations.empty()) {
-		auto *sess = session_continuations.front();
-		session_continuations.pop_front();
-		sess->continuation_queued = false;
-		if (sess->healthy && !sess->killed && sess->pause_until > curtime) {
-			queue_session_continuation(sess);
-			continue;
-		}
-		const auto result = (!sess->healthy || sess->killed) ? PgSQL_Session_Run_Result::Close : run_session(sess);
-		if (result == PgSQL_Session_Run_Result::Close) {
-			char location[1024];
-			snprintf(location, sizeof(location), "%s:%d:%s()", __FILE__, __LINE__, __func__);
-			GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, location);
-			for (unsigned i = 0; i < mysql_sessions->len; ++i) {
-				if (mysql_sessions->index(i) == sess) { unregister_session(i); break; }
-			}
-			delete sess;
-		}
-		dispatch_released();
-	}
+	scheduler.run_late();
 
 #endif // PROXYSQL31
 	if (maintenance_loop) {
