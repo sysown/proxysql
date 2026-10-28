@@ -97,11 +97,6 @@ ifeq ($(PROXYSQL40),1)
 	targets += sqlite-vec
 endif
 
-ifeq ($(WITHTSAN),1)
-# ThreadSanitizer replaces the allocator; this archive is not linked.
-targets := $(filter-out jemalloc,$(targets))
-endif
-
 default: $(targets)
 .PHONY: default
 

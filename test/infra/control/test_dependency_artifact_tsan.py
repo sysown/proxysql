@@ -11,6 +11,48 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class TSANDependencyBuildTests(unittest.TestCase):
+    def test_tsan_default_prepares_jemalloc_headers_without_linking_the_allocator(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for directory in ('common_mk', 'include', 'src', 'deps/libssl', 'deps/duckdb'):
+                (root / directory).mkdir(parents=True, exist_ok=True)
+            for path in ('deps/Makefile', 'deps/libssl/build.mk', 'deps/duckdb/build.mk',
+                         'include/makefiles_vars.mk'):
+                shutil.copy(ROOT / path, root / path)
+            for path in (ROOT / 'common_mk').glob('*.mk'):
+                shutil.copy(path, root / 'common_mk' / path.name)
+            shutil.copytree(ROOT / 'deps/jemalloc', root / 'deps/jemalloc',
+                            ignore=shutil.ignore_patterns('jemalloc', 'jemalloc-5.2.0'))
+            (root / 'deps/jemalloc/jemalloc').symlink_to('jemalloc-5.2.0')
+            (root / 'src/proxysql_global.cpp').touch()
+            probe = "probe-targets:\n\t@printf '%s\\n' '$(targets)'\n"
+            command = ['make', '--no-print-directory', '-C', str(root / 'deps'),
+                       'WITHTSAN=1', 'GIT_VERSION=4.0.0-test', 'NPROCS=2']
+            targets = subprocess.run(command + ['-s', '-f', 'Makefile', '-f', '-', 'probe-targets'],
+                                     input=probe, text=True, capture_output=True, check=True).stdout.split()
+            # Exercise the actual default graph, omitting the expensive unrelated
+            # dependencies. A TSAN exclusion leaves the generated header absent.
+            omit = ['--assume-old=' + target for target in targets if target != 'jemalloc']
+            built = subprocess.run(command + ['-j2', 'default', *omit], text=True, capture_output=True)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            headers = root / 'deps/jemalloc/jemalloc/include/jemalloc'
+            self.assertTrue((headers / 'jemalloc.h').is_file(),
+                            'NOJEM disables allocator linkage, but proxysql.h still needs jemalloc.h')
+            consumer = root / 'consumer.cpp'
+            consumer.write_text('#include <jemalloc.h>\n#include <stdlib.h>\n'
+                                'int main() { void *p = malloc(16); free(p); return 0; }\n')
+            linked = subprocess.run(['c++', '-DNOJEM', '-fsanitize=thread', '-I' + str(headers),
+                                     str(consumer), '-o', str(root / 'consumer')],
+                                    text=True, capture_output=True)
+            self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
+            # Read the production executable's expanded link inputs as well.
+            link_probe = "probe-link:\n\t@printf '%s\\n' '$(MYLIBS)'\n"
+            rendered = subprocess.run(
+                ['make', '-s', '-C', str(ROOT / 'src'), '-f', 'Makefile', '-f', '-',
+                 'probe-link', 'WITHTSAN=1', 'WITHASAN=0'],
+                input=link_probe, text=True, capture_output=True, check=True)
+            self.assertNotIn('-ljemalloc', rendered.stdout)
+
     def test_openssl_consumers_can_link_instrumented_archives(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -87,7 +129,7 @@ class TSANDependencyBuildTests(unittest.TestCase):
 
     def test_source_policy_preserves_dependency_compiler_settings(self):
         probe = """probe-tsan-policy:
-\t@printf '%s\\n' '$(DEPS_MODE)' '$(CFLAGS)' '$(CXXFLAGS)' '$(LDFLAGS)' '$(DUCKDB_CMAKE_FLAGS)' '$(targets)'
+\t@printf '%s\\n' '$(DEPS_MODE)' '$(CFLAGS)' '$(CXXFLAGS)' '$(LDFLAGS)' '$(DUCKDB_CMAKE_FLAGS)'
 """
         for tsan in ('0', '1'):
             with self.subTest(tsan=tsan):
@@ -97,12 +139,11 @@ class TSANDependencyBuildTests(unittest.TestCase):
                      'DEPS_MODE=prebuilt', 'CFLAGS=-DKEEP_C', 'CXXFLAGS=-DKEEP_CXX',
                      'LDFLAGS=-Wl,--as-needed'], input=probe, text=True,
                     capture_output=True, check=True)
-                mode, cflags, cxxflags, ldflags, duckdb, targets = result.stdout.splitlines()
+                mode, cflags, cxxflags, ldflags, duckdb = result.stdout.splitlines()
                 self.assertEqual(mode, 'source' if tsan == '1' else 'prebuilt')
                 self.assertEqual((cflags, cxxflags, ldflags),
                                  ('-DKEEP_C', '-DKEEP_CXX', '-Wl,--as-needed'))
                 self.assertEqual('-DENABLE_THREAD_SANITIZER=ON' in duckdb, tsan == '1')
-                self.assertEqual('jemalloc' in targets.split(), tsan == '0')
 
     def test_docker_entrypoint_cleans_before_tsan_source_dependencies(self):
         source = (ROOT / 'docker/images/proxysql/deb-compliant/entrypoint/entrypoint.bash').read_text()
