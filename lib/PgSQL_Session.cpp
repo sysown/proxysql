@@ -7283,7 +7283,10 @@ bool PgSQL_Session::poisoned_flush() {
 						Parse_Param_Types(), CurrentQuery.QueryParserArgs.first_comment, CurrentQuery.QueryParserArgs.digest_text,
 						CurrentQuery.QueryParserArgs.digest, CurrentQuery.PgQueryCmd);
 				}
-				local_stmts->client_insert(stmt_info, std::string(d.stmt_name), nullptr);
+				// The unnamed statement may already exist: it is replaced, its count moved to the new one.
+				auto it = local_stmts->stmt_name_to_global_info.find(d.stmt_name);
+				local_stmts->client_insert(stmt_info, std::string(d.stmt_name),
+					it != local_stmts->stmt_name_to_global_info.end() ? &it->second : nullptr);
 				client_myds->myprot.generate_parse_completion_packet(true, false, 'E');
 				RequestEnd(NULL, false);
 			} else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Describe_Message>>) {

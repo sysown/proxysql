@@ -1135,6 +1135,43 @@ static void case_row9_named_kept(Mode m, bool) {
 		"2 C(ROLLBACK) Z(I)", "row 9 named: B(r1) E S", m, false);
 }
 
+// Every client reference to a prepared statement, summed over all statements.
+static long stmt_client_refs() {
+	return atol(scalar(g_admin, "SELECT IFNULL(SUM(ref_count_client),0) FROM stats_pgsql_prepared_statements_info").c_str());
+}
+
+// The unnamed statement, used before the backend died, Parsed again as ROLLBACK at a Flush: the ROLLBACK
+// replaces it, as in PostgreSQL. It used to be counted but not stored, so the Execute ran the old
+// statement and was refused, and the count was never given back.
+static void case_row9_unnamed_reused(Mode m, bool) {
+	// Sessions of earlier cases may still be closing: wait for the count to settle.
+	long before = stmt_client_refs();
+	for (int i = 0; i < 20; i++) {
+		usleep(100000);
+		const long now = stmt_client_refs();
+		if (now == before) break;
+		before = now;
+	}
+	{
+		auto c = poison_client(m);
+		check(run(*c, [&] { c->prepareStatement("", uniq() + "SELECT 65", false); c->bindStatement("", "", {}, {}, false);
+				c->executePortal("", 0, false); c->sendSync(); }), "1 2 D C(SELECT 1) Z(I)", "row 9 unnamed reused: P(\"\") B E S", m, false);
+		poison(*c, m);
+		check(run(*c, [&] { c->prepareStatement("", "ROLLBACK", false); c->sendFlush(); }), "1",
+			"row 9 unnamed reused: P(\"\", ROLLBACK) H", m, false);
+		check(run(*c, [&] { c->sendSync(); }), "Z(E)", "row 9 unnamed reused: S", m, false);
+		check(run(*c, [&] { c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendSync(); }),
+			"2 C(ROLLBACK) Z(I)", "row 9 unnamed reused: B E S", m, false);
+	}
+	long after = stmt_client_refs();
+	for (int i = 0; i < 30 && after != before; i++) {
+		usleep(100000);
+		after = stmt_client_refs();
+	}
+	ok(after == before, "row 9 unnamed reused [%s]: the client's statement references are given back (before %ld, after %ld)",
+		mode_name(m), before, after);
+}
+
 // ===== Simple Queries in a held group that ProxySQL used to answer itself (final review). =====
 
 // COMMIT, ROLLBACK and ABORT end the group's transaction on the backend: PostgreSQL commits the held
@@ -1278,6 +1315,7 @@ static const std::vector<Case> CASES = {
 	{ "row 9 rollback exec",         4,  4, false, case_row9_rollback_exec },
 	{ "row 9 rollback describe",     3,  3, false, case_row9_rollback_describe },
 	{ "row 9 named kept",            4,  4, false, case_row9_named_kept },
+	{ "row 9 unnamed reused",        6,  6, false, case_row9_unnamed_reused },
 	{ "group txn end",               9,  9, false, case_group_txn_end },
 	{ "group DISCARD ALL",           4,  4, false, case_group_discard_all },
 	{ "group tracked SET",           4,  4, false, case_group_tracked_set },
