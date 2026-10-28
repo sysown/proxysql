@@ -494,7 +494,12 @@ int main() {
 	managed_topology.blue_green = true;
 	managed_topology.nodes.push_back({"green-writer", "green-writer.example", 3306,
 		"BLUE_GREEN_DEPLOYMENT_TARGET", "AVAILABLE"});
-	GloMyMon->aws_rds_bgd_build_map_for_test(managed_state, managed_topology);
+	// The public state-machine entry point resolves green hosts after building the map.
+	// Keep these fake names local so this unit test does not depend on external DNS.
+	GloMyMon->dns_cache->add("green-writer.example", {"127.0.0.1"});
+	GloMyMon->dns_cache->add("green-reader.example", {"127.0.0.2"});
+	GloMyMon->dns_cache->add("green-other.example", {"127.0.0.3"});
+	GloMyMon->handle_aws_rds_bgd(managed_state, managed_topology);
 	ok(managed_state.bg_map.size() == 3 && managed_state.bg_map[0].is_writer &&
 		managed_state.bg_map[0].blue_host == "blue-writer.example" &&
 		managed_state.bg_map[1].blue_host == "blue-reader.example" &&
@@ -504,7 +509,7 @@ int main() {
 		"native BGD worker uses two exact replica pairs without a name suffix");
 	managed_state.bg_map.clear();
 	managed_topology.nodes[0].endpoint = "other-green.example";
-	GloMyMon->aws_rds_bgd_build_map_for_test(managed_state, managed_topology);
+	GloMyMon->handle_aws_rds_bgd(managed_state, managed_topology);
 	ok(managed_state.bg_map.empty(),
 		"native BGD worker rejects an unrelated topology TARGET");
 	ProxySQL_ServerDesiredSet bgd_partial = bgd_four;
@@ -593,8 +598,8 @@ int main() {
 	native_cleanup.bgd_status = AWS_RDS_BGD_Status::AVAILABLE;
 	native_cleanup.shunned_readers.push_back({"blue-reader.example", 3306});
 	managed_topology.nodes[0].endpoint = "green-writer.example";
-	GloMyMon->aws_rds_bgd_build_map_for_test(native_cleanup, managed_topology);
-	GloMyMon->aws_rds_bgd_handle_topology_absent_for_test(native_cleanup);
+	GloMyMon->handle_aws_rds_bgd(native_cleanup, managed_topology);
+	GloMyMon->aws_rds_bgd_handle_topology_absent(native_cleanup);
 	bgd_topology.reset(MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups"));
 	ok(native_cleanup.bgd_status == AWS_RDS_BGD_Status::NONE &&
 		bgd_topology && !has_topology_pair(*bgd_topology, 901, 902) &&
@@ -616,7 +621,7 @@ int main() {
 		"a third deployment can start after native cleanup");
 	AWS_RDS_BGD_State no_first_topology;
 	no_first_topology.writer_hg = 901;
-	GloMyMon->aws_rds_bgd_handle_topology_absent_for_test(no_first_topology);
+	GloMyMon->aws_rds_bgd_handle_topology_absent(no_first_topology);
 	bgd_topology.reset(MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups"));
 	ok(bgd_topology && !has_topology_pair(*bgd_topology, 901, 902) &&
 		!proxysql_active_managed_blue_green(901),
