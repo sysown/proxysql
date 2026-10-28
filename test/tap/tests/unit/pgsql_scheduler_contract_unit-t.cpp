@@ -273,6 +273,76 @@ static void test_paused_buffered_work() {
 
 // Warming is ordinary acquisition policy: speculation must leave it to the
 // normal phase rather than consume every request through existing capacity.
+static void test_pgsql_warming_policy() {
+    PgSQL_Thread worker;
+    if (!worker.init()) BAIL_OUT("worker initialization failed");
+    PgSQL_srv_info_t info {"warming-unit", 5432, "warming scheduler unit"};
+    PgSQL_srv_opts_t opts {1, 10, 0};
+    PgHGM->wrlock();
+    const int rc = PgHGM->create_new_server_in_hg(815, info, opts);
+    auto *hg = PgHGM->MyHGC_find(815);
+    PgHGM->wrunlock();
+    if (rc || !hg) BAIL_OUT("warming hostgroup initialization failed rc=%d hg=%p", rc, hg);
+    auto *server = hg->mysrvs->idx(0);
+    PgSQL_Session session;
+    PgSQL_Data_Stream frontend;
+    session.connections_handler = true;
+    session.client_myds = &frontend;
+    frontend.myconn = new PgSQL_Connection(true);
+    char user[] = "warming", password[] = "", database[] = "unit";
+    frontend.myconn->userinfo->set(user, password, database, nullptr);
+    auto *connection = new PgSQL_Connection(false);
+    connection->parent = server;
+    connection->userinfo->set(user, password, database, nullptr);
+    connection->fd = open("/dev/null", O_RDONLY);
+    if (connection->fd < 0) BAIL_OUT("opening dummy backend descriptor failed");
+    connection->native_mode = true;
+    connection->native_connected = true;
+    connection->set_ready_for_query_status('I');
+    connection->async_state_machine = ASYNC_IDLE;
+    connection->healthy = connection->reusable = true;
+    server->ConnectionsFree->add(connection);
+    const auto warming = pgsql_thread___connection_warming;
+    const auto free_pct = pgsql_thread___free_connections_pct;
+    pgsql_thread___connection_warming = false;
+    auto *acquired = server->ConnectionsFree->get_random_MyConn(&session, false, PgSQL_Pool_Acquire_Mode::EstablishedOnly);
+    ok(acquired == connection, "PostgreSQL speculation reuses established capacity with warming disabled");
+    if (acquired) server->ConnectionsFree->add(acquired);
+
+    pgsql_thread___connection_warming = true;
+    pgsql_thread___free_connections_pct = 100;
+    const auto created = PgHGM->status.server_connections_created;
+    acquired = server->ConnectionsFree->get_random_MyConn(&session, false, PgSQL_Pool_Acquire_Mode::EstablishedOnly);
+    ok(!acquired && server->ConnectionsFree->conns_length() == 1 &&
+       PgHGM->status.server_connections_created == created,
+       "PostgreSQL speculation leaves pool growth to ordinary acquisition without consuming capacity");
+    if (acquired) server->ConnectionsFree->add(acquired);
+    auto *normal = server->ConnectionsFree->get_random_MyConn(&session, false, PgSQL_Pool_Acquire_Mode::Normal);
+    ok(normal && normal != connection && PgHGM->status.server_connections_created == created + 1,
+       "ordinary PostgreSQL acquisition creates a connection below the warming target");
+    delete normal;
+
+    hg->attributes.configured = true;
+    hg->attributes.connection_warming = false;
+    acquired = server->ConnectionsFree->get_random_MyConn(&session, false, PgSQL_Pool_Acquire_Mode::EstablishedOnly);
+    ok(acquired == connection, "hostgroup disabling warming overrides the PostgreSQL thread setting");
+    if (acquired) server->ConnectionsFree->add(acquired);
+    pgsql_thread___connection_warming = false;
+    hg->attributes.connection_warming = true;
+    hg->attributes.free_connections_pct = 100;
+    acquired = server->ConnectionsFree->get_random_MyConn(&session, false, PgSQL_Pool_Acquire_Mode::EstablishedOnly);
+    ok(!acquired && server->ConnectionsFree->conns_length() == 1,
+       "hostgroup enabling warming defers PostgreSQL speculation below its target");
+    if (acquired) server->ConnectionsFree->add(acquired);
+    hg->attributes.free_connections_pct = 10;
+    acquired = server->ConnectionsFree->get_random_MyConn(&session, false, PgSQL_Pool_Acquire_Mode::EstablishedOnly);
+    ok(acquired == connection, "PostgreSQL speculation resumes reuse once the warming target is met");
+    if (acquired) server->ConnectionsFree->add(acquired);
+    pgsql_thread___connection_warming = warming;
+    pgsql_thread___free_connections_pct = free_pct;
+    session.client_myds = nullptr;
+}
+
 static void test_mysql_warming_policy() {
     MySQL_Thread worker;
     if (!worker.init()) BAIL_OUT("worker initialization failed");
@@ -473,7 +543,7 @@ static void test_mysql_paused_buffered_work() {
 
 int main() {
 #ifdef PROXYSQL31
-	plan(39);
+	plan(45);
 	if (test_init_minimal() || test_init_auth() || test_init_query_processor() || test_init_hostgroups())
 		BAIL_OUT("scheduler test initialization failed");
 	GloPgSQL_Logger = new PgSQL_Logger();
@@ -482,6 +552,7 @@ int main() {
 	test_speculative_miss();
 	test_mysql_speculative_miss();
 	test_mysql_warming_policy();
+	test_pgsql_warming_policy();
 	test_mysql_normal_cached_recovery();
 	test_completion_output();
 	test_mysql_completion_output();

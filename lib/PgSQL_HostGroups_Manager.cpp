@@ -2680,7 +2680,16 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 	}
 	unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
 	unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
+	if (connection_warming == true) {
+		unsigned int total_connections = conns_free + conns_used;
+		unsigned int expected_warm_connections = (unsigned int)free_connections_pct * mysrvc->max_connections / 100;
+		if (total_connections < expected_warm_connections) {
+			needs_warming = true;
+		}
+	}
     if (mode == PgSQL_Pool_Acquire_Mode::EstablishedOnly) {
+        // Ordinary acquisition must grow the pool before speculation reuses it.
+        if (needs_warming) return nullptr;
         if (l && !ff && sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
             auto *client_conn = sess->client_myds->myconn;
             get_random_MyConn_inner_search(0, l, conn_found_idx, connection_quality_level,
@@ -2693,13 +2702,6 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
         }
         return nullptr;
     }
-	if (connection_warming == true) {
-		unsigned int total_connections = conns_free + conns_used;
-		unsigned int expected_warm_connections = (unsigned int)free_connections_pct * mysrvc->max_connections / 100;
-		if (total_connections < expected_warm_connections) {
-			needs_warming = true;
-		}
-	}
 	if (l && ff==false && needs_warming==false) {
 		i = rand_fast() % l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
