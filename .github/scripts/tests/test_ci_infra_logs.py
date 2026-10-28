@@ -32,9 +32,15 @@ class MySQLLogTests(unittest.TestCase):
                         FIXTURE_ROOT=str(self.container), REQUESTS=str(self.requests))
         docker = self.bin / 'docker'
         docker.write_text('''#!/usr/bin/env python3
-import json, os, pathlib, shutil, sys, tarfile
+import json, os, pathlib, resource, shutil, sys, tarfile
 a=sys.argv[1:]
-with open(os.environ['REQUESTS'],'a') as f:f.write(json.dumps(a)+'\\n')
+request=json.dumps(a)+'\\n'
+requests=pathlib.Path(os.environ['REQUESTS'])
+limit=resource.getrlimit(resource.RLIMIT_FSIZE)[0]
+# The fake Docker shares the collector's output rlimit. Its auxiliary request
+# recorder must not fail a valid probe once previous requests fill that file.
+if limit==resource.RLIM_INFINITY or (requests.stat().st_size if requests.exists() else 0)+len(request)<=limit:
+    with requests.open('a') as f:f.write(request)
 root=pathlib.Path(os.environ['FIXTURE_ROOT'])
 if a[0]=='ps':
     print('abc\\ndef')
@@ -44,14 +50,18 @@ elif a[0]=='logs':
     print('MySQL initialization stderr',file=sys.stderr)
 elif a[0]=='inspect':
     for identifier, project in [('abc',os.environ.get('PROJECT','infra-dbdeployer-mysql84-gr-ci-gr-v31-123')),('def','unrelated-ci-gr-v31-1234')]:
-        if identifier in a[3:]:print(json.dumps(dict(id=identifier,project=project,name='/'+identifier,mounts=[],networks={},state={'Status':'running' if os.environ.get('RUNNING') else 'exited','ExitCode':1})))
+        if identifier in a[3:]:print(json.dumps(dict(id=identifier,project=project,name='/'+identifier,mounts=[],networks={},state={'Status':'exited' if os.environ.get('STOPPED') else 'running','ExitCode':1})))
 elif a[0]=='cp':
     source=root/a[1].split(':',1)[1].lstrip('/')
     if not source.exists():sys.exit(1)
     with tarfile.open(fileobj=sys.stdout.buffer,mode='w|') as archive:archive.add(source,arcname=source.name)
 elif a[0]=='exec':
     if os.environ.get('STOPPED'):sys.exit(1)
-    if 'find' in a:
+    if 'tail' in a:
+        source=root/a[-1].lstrip('/')
+        if not source.is_file():sys.exit(1)
+        sys.stdout.buffer.write(source.read_bytes()[-int(a[a.index('-c')+1]):])
+    elif 'find' in a:
         if os.environ.get('BIG_FIND'):
             sys.stdout.write('x'*(2*1024*1024));sys.exit(0)
         for p in root.rglob('*'):
@@ -290,8 +300,10 @@ else:sys.exit(2)
             module.collect('ci-gr-v31-123',self.output)
         records=json.loads((self.output/'collection.json').read_text())
         limits=next(r for r in records if r.get('kind')=='limits')
-        self.assertLessEqual(limits['archive_bytes'],4096)
-        self.assertTrue(any(r.get('truncated') and 'input limit' in r.get('error','') for r in records))
+        self.assertLessEqual(limits['directory_archive_bytes'],4096)
+        self.assertLessEqual(limits['archive_bytes'],limits['archive_input_limit'])
+        self.assertEqual(limits['archive_bytes'],limits['directory_archive_bytes']+limits['exact_file_archive_bytes'])
+        self.assertTrue(any(r.get('truncated') and r.get('omitted') for r in records))
 
     def test_inspect_batches_preserve_all_containers_despite_truncated_output(self):
         from ci_collect_infra_logs import inspect_states
@@ -304,6 +316,73 @@ else:sys.exit(2)
         result=inspect_states(ids,command,lambda:True)
         self.assertEqual({s['id'] for s in result},set(ids))
         self.assertTrue(all(len(batch)<=16 for batch in requests))
+
+    def test_inspect_retries_only_ids_missing_from_partial_results(self):
+        from ci_collect_infra_logs import inspect_states
+        recovered=set()
+        def command(args):
+            values=args[3:]
+            self.assertFalse(recovered.intersection(values), 're-inspecting recovered IDs wastes the deadline')
+            recovered.add(values[0])
+            return json.dumps({'id':values[0]})
+        result=inspect_states(['a','b','c','d'],command,lambda:True)
+        self.assertEqual({s['id'] for s in result},{'a','b','c','d'})
+
+    def test_slow_partial_inspection_reserves_primary_log_collection_time(self):
+        import ci_collect_infra_logs as module
+        real_run=subprocess.run
+        clock=[0]
+        log_times=[]
+        def transport(command,**kwargs):
+            if command[1]=='inspect':
+                clock[0]+=kwargs['timeout']
+                identifier=command[4]
+                kwargs['stdout'].write(json.dumps(dict(id=identifier, project='suite',
+                    state={'Status':'exited'}, mounts=[], networks={})).encode())
+                return subprocess.CompletedProcess(command,0)
+            if command[1]=='logs':log_times.append(clock[0])
+            return real_run(command,**kwargs)
+        with patch.dict(os.environ,self.env),patch.object(module.subprocess,'run',side_effect=transport),patch.object(module.time,'monotonic',side_effect=lambda:clock[0]):
+            module.collect('',self.output,all_containers=True,timeout=20)
+        self.assertTrue(log_times, 'inspection must leave time for primary evidence')
+        self.assertLessEqual(max(log_times),4)
+        self.assertTrue((self.output/'abc/deployment.log').is_file())
+
+    def test_tiny_directory_input_budget_does_not_hide_individual_running_logs(self):
+        import ci_collect_infra_logs as module
+        first=self.container/'var/log/service/a-large.log';first.write_bytes(b'x'*10000+b'LATEST FAILURE MARKER\n')
+        later=self.container/'var/log/service/z-important.log';later.write_text('recent service failure\n')
+        with patch.dict(os.environ,dict(self.env,RUNNING='1')),patch.object(module,'MAX_ARCHIVE_BYTES',4096),patch.object(module,'MAX_FILE_BYTES',1024):
+            module.collect('',self.output,all_containers=True)
+        for identifier in ('abc','def'):
+            self.assertTrue((self.output/identifier/'var/log/service/a-large.log').read_bytes().endswith(b'LATEST FAILURE MARKER\n'))
+            self.assertIn('recent service failure',(self.output/identifier/'var/log/service/z-important.log').read_text())
+            self.assertIn('node2 initializing',(self.output/identifier/'root/sandboxes/group_sp_msb_8_4_8/node2/data/msandbox.err').read_text())
+
+    def test_slow_missing_stopped_paths_do_not_hide_later_node_errors(self):
+        import ci_collect_infra_logs as module
+        third=self.container/'root/sandboxes/group_sp_msb_8_4_8/node3/data/msandbox.err'
+        third.parent.mkdir(parents=True);third.write_text('node3 failed initialization\n')
+        real_popen=subprocess.Popen
+        clock=[0]
+        def transport(command,**kwargs):
+            if command[1]=='cp':
+                source=self.container/command[2].split(':',1)[1].lstrip('/')
+                if not source.exists():clock[0]+=3
+            return real_popen(command,**kwargs)
+        with patch.dict(os.environ,dict(self.env,STOPPED='1')),patch.object(module.subprocess,'Popen',side_effect=transport),patch.object(module.time,'monotonic',side_effect=lambda:clock[0]):
+            module.collect('ci-gr-v31-123',self.output,timeout=20)
+        self.assertIn('node2 initializing',(self.output/'abc/root/sandboxes/group_sp_msb_8_4_8/node2/data/msandbox.err').read_text())
+        self.assertIn('node3 failed initialization',(self.output/'abc/root/sandboxes/group_sp_msb_8_4_8/node3/data/msandbox.err').read_text())
+
+    def test_tiny_directory_budget_preserves_known_stopped_node_errors(self):
+        import ci_collect_infra_logs as module
+        (self.container/'var/log/service/a-large.log').write_bytes(b'x'*10000)
+        with patch.dict(os.environ,dict(self.env,STOPPED='1')),patch.object(module,'MAX_ARCHIVE_BYTES',4096):
+            module.collect('ci-gr-v31-123',self.output)
+        self.assertIn('node2 initializing',(self.output/'abc/root/sandboxes/group_sp_msb_8_4_8/node2/data/msandbox.err').read_text())
+        records=json.loads((self.output/'collection.json').read_text())
+        self.assertTrue(any('unknown siblings' in r.get('omitted','') for r in records))
 
     def test_native_log_truncation_and_probe_metadata_are_reported_correctly(self):
         spec=importlib.util.spec_from_file_location('infra_logs',SCRIPT)

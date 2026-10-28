@@ -20,6 +20,7 @@ MAX_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_FILES = 512
 MAX_CAPTURE_BYTES = 1024 * 1024
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+MAX_ARCHIVE_HEADER_BYTES = 64 * 1024
 LOG_ROOTS = ('/var/log', '/var/logs', '/root/sandboxes/logs', '/home/pguser/sandboxes/logs')
 FIND_ROOTS = ('/root/sandboxes', '/home/pguser/sandboxes', '/var/lib/mysql',
               '/var/lib/postgresql/data/log', '/var/lib/proxysql',
@@ -152,19 +153,23 @@ def inspect_states(ids, command, keep_going):
     def batch(values):
         if not values or not keep_going():
             return
-        parsed = 0
         for row in command(['inspect', '--format', INSPECT, *values]).splitlines():
             try:
                 state = json.loads(row)
                 if isinstance(state, dict) and re.fullmatch('[0-9a-f]+', state.get('id', '')):
                     states[state['id']] = state
-                    parsed += 1
             except (ValueError, TypeError):
                 continue
-        if parsed < len(values) and len(values) > 1:
-            half = len(values)//2
-            batch(values[:half])
-            batch(values[half:])
+        missing = [value for value in values if not any(
+            state['id'].startswith(value) or state.get('name', '').lstrip('/') == value
+            for state in states.values())]
+        if missing and len(values) > 1:
+            if len(missing) < len(values):
+                batch(missing)
+            else:
+                half = len(missing)//2
+                batch(missing[:half])
+                batch(missing[half:])
 
     for start in range(0, len(ids), 16):
         if not keep_going():
@@ -215,6 +220,7 @@ def stopped_sandbox_paths(deployment, project):
             major, minor = map(int, version.split('.')[:2])
             bases = ['/home/pguser/sandboxes/postgresql_repl_' + str(15000 + major*100 + minor)]
             nodes = ('primary', 'replica1', 'replica2')
+            names = ('postgresql.log', 'logfile', 'data/postgresql.conf', 'data/pg_hba.conf', 'init_db')
         else:
             version = version.replace('.', '_')
             topology = ('group_sp_msb' if re.match(r'^infra-dbdeployer-mysql\d+-gr(?:-|$)', project)
@@ -222,11 +228,22 @@ def stopped_sandbox_paths(deployment, project):
                         else 'msb' if re.match(r'^infra-dbdeployer-mysql\d+-single(?:-|$)', project) else 'rsandbox')
             bases = ['/root/sandboxes/' + topology + '_' + version]
             nodes = ('',) if topology == 'msb' else ('node1', 'node2', 'node3') if topology != 'rsandbox' else ('master', 'node1', 'node2')
+            names = ('data/msandbox.err', 'logfile', 'my.sandbox.cnf', 'init_db')
         for base in bases:
             for node in nodes:
-                for name in ('data/msandbox.err', 'my.sandbox.cnf', 'init_db', 'postgresql.log', 'logfile', 'data/postgresql.conf', 'data/pg_hba.conf'):
+                for name in names:
                     paths.add(str(PurePosixPath(base) / node / name))
     return paths
+
+
+def log_path_priority(name):
+    path = PurePosixPath(name)
+    # Every node's primary error log precedes optional deployment/config files.
+    if path.suffix == '.err' or path.name == 'postgresql.log':
+        return (0, name)
+    if path.suffix in ('.log', '.out') or path.name == 'logfile':
+        return (1, name)
+    return (2, name)
 
 
 def collect(infra_id, output, workspace=None, all_containers=False, host_log_root=None,
@@ -237,6 +254,9 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
     deadline = time.monotonic() + timeout
     budget = FileBudget(output)
     archive_remaining = [MAX_ARCHIVE_BYTES]
+    exact_archive_limit = MAX_TOTAL_BYTES + MAX_FILES * MAX_ARCHIVE_HEADER_BYTES
+    exact_archive_remaining = [exact_archive_limit]
+    independent_paths = set()
     docker_command = docker_command or [os.environ.get('CI_INFRA_REAL_DOCKER', 'docker')]
 
     def command(args, destination=None, merge_stderr=False, max_time=10):
@@ -281,49 +301,84 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
         # Even a failed find can return useful paths from existing roots.
         return data.decode(errors='replace')
 
-    def copy_log_path(container, name, folder):
-        """Stream selected log paths from running or exited containers; no tar on disk."""
-        if time.monotonic() >= deadline or archive_remaining[0] <= 0:
+    def copy_log_path(container, name, folder, directory=False, input_limit=None):
+        """Capture independent files without draining oversized tar members."""
+        target_path = folder / PurePosixPath(name).relative_to('/')
+        capacity = budget.capacity(target_path) if not directory else MAX_FILE_BYTES
+        remaining = archive_remaining if directory else exact_archive_remaining
+        if time.monotonic() >= deadline or remaining[0] <= 0 or not capacity:
             return
+        allowance = min(remaining[0], input_limit if directory else capacity + MAX_ARCHIVE_HEADER_BYTES)
+        local_remaining = [allowance]
         args = ['cp', container + ':' + name, '-']
-        record = dict(command=args, time=datetime.now(timezone.utc).isoformat())
+        record = dict(command=args, time=datetime.now(timezone.utc).isoformat(),
+                      archive_kind='directory' if directory else 'file')
         records.append(record)
         process = None
         timer = None
+        captured = False
         try:
             with tempfile.TemporaryFile() as errors:
-                process = subprocess.Popen([*docker_command, *args], stdout=subprocess.PIPE, stderr=errors)
-                timer = threading.Timer(min(10, max(.01, deadline-time.monotonic())), process.kill)
+                def limit_errors():
+                    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_CAPTURE_BYTES, MAX_CAPTURE_BYTES))
+                process = subprocess.Popen([*docker_command, *args], stdout=subprocess.PIPE,
+                                           stderr=errors, preexec_fn=limit_errors)
+                timer = threading.Timer(min(3, max(.01, deadline-time.monotonic())), process.kill)
                 timer.start()
-                with tarfile.open(fileobj=ArchiveReader(process.stdout, archive_remaining), mode='r|') as archive:
+                # Small read-ahead avoids consuming a whole archive input quota
+                # before even its first header has been processed.
+                with tarfile.open(fileobj=ArchiveReader(process.stdout, local_remaining),
+                                  mode='r|', bufsize=512) as archive:
                     for member in archive:
                         path = PurePosixPath(member.name)
-                        if not member.isfile() or path.is_absolute() or '..' in path.parts:
-                            continue
-                        if not path.parts or path.parts[0] != PurePosixPath(name).name:
+                        valid = (member.isfile() and not path.is_absolute() and '..' not in path.parts
+                                 and path.parts and path.parts[0] == PurePosixPath(name).name)
+                        if not valid:
+                            if member.size > local_remaining[0]:
+                                record.update(truncated=True, omitted='unknown siblings after oversized archive member')
+                                break
                             continue
                         target = folder / PurePosixPath(name).parent.relative_to('/') / path
-                        capacity = budget.capacity(target)
-                        if not capacity:
-                            record['truncated'] = True
+                        source_name = str(PurePosixPath(name).parent / path)
+                        if directory and (container, source_name) in independent_paths:
+                            if member.size > max(0, local_remaining[0]-512):
+                                record.update(truncated=True, omitted='unknown siblings after oversized archive member')
+                                break
                             continue
-                        size = min(member.size, capacity)
-                        stream = archive.extractfile(member)
-                        payload = stream.read(size)
-                        budget.save(target, payload)
+                        capacity = budget.capacity(target)
+                        size = min(member.size, capacity, max(0, local_remaining[0]-512))
+                        if size or member.size == 0:
+                            stream = archive.extractfile(member)
+                            budget.save(target, stream.read(size))
+                            captured = True
+                            if not directory:
+                                independent_paths.add((container, name))
                         if size < member.size:
                             record['truncated'] = True
-                try:
-                    process.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    process.kill(); process.wait()
+                            if directory:
+                                record['omitted'] = 'unknown siblings after oversized archive member'
+                            # Advancing a streaming tar drains the rest of this
+                            # member. Stop this request; independent paths and
+                            # other services retain their own capture budgets.
+                            break
+                        if not directory:
+                            break
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
                 errors.seek(0)
-                record.update(returncode=process.returncode, stderr=errors.read(4096).decode(errors='replace'))
+                record.update(returncode=0 if captured else process.returncode,
+                              stderr=errors.read(4096).decode(errors='replace'))
         except (OSError, tarfile.TarError, EOFError) as error:
             record['error'] = str(error)
             if isinstance(error, ArchiveInputLimit):
                 record['truncated'] = True
+            if directory and allowance != local_remaining[0]:
+                record.update(truncated=True, omitted='directory archive incomplete; unknown siblings not inspected')
         finally:
+            consumed = allowance-local_remaining[0]
+            remaining[0] -= consumed
+            record['archive_bytes'] = consumed
             if timer:
                 timer.cancel()
             if process:
@@ -338,7 +393,10 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
     budget.save(output / 'host.txt', '\n'.join(host).encode())
     ids = container_ids if container_ids is not None else command(['ps', '-aq']).split()
     ids = [value for value in ids if re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9_.-]*', value)]
-    states = inspect_states(ids, command, lambda: time.monotonic() < deadline)
+    inspect_deadline = min(deadline, time.monotonic() + min(20, timeout*.2))
+    def inspect_command(args):
+        return command(args, max_time=min(3, max(.01, inspect_deadline-time.monotonic())))
+    states = inspect_states(ids, inspect_command, lambda: time.monotonic() < inspect_deadline)
     owned = selected_containers(states, infra_id, workspace, all_containers)
     # Save every service's stdout/state first; one slow file probe must not
     # consume the time budget before other containers' primary evidence exists.
@@ -349,6 +407,50 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
         budget.save(folder / 'project.txt', ((state.get('project') or '') + '\n').encode())
         command(['logs', '--timestamps', '--tail', '20000', container], folder / 'deployment.log',
                 merge_stderr=True, max_time=log_budget)
+    # Discover independent files before optional recursive directory archives.
+    # Rotate across services so one large directory cannot monopolize captures.
+    pending = []
+    for state in owned:
+        container = state['id']; folder = output / container
+        running = state.get('state', {}).get('Status') in (None, 'running')
+        listing = command(['exec', container, 'find', *LOG_ROOTS, *FIND_ROOTS, '-maxdepth', '6', '-type', 'f',
+                           '(', '-name', '*.err', '-o', '-name', '*.log', '-o', '-name', '*.out', '-o', '-name', '*.conf',
+                           '-o', '-name', 'my.sandbox.cnf', '-o', '-name', 'init_db', '-o', '-name', 'logfile', ')', '-print'],
+                          max_time=min(2, max(.05, (deadline-time.monotonic())*.2/max(1,len(owned))))) if running else ''
+        paths = set(listing.splitlines()[:MAX_FILES])
+        if not paths:
+            log = folder/'deployment.log'
+            paths = stopped_sandbox_paths(log.read_text(errors='replace') if log.exists() else '', state.get('project') or '')
+        paths = [str(path) for name in sorted(paths, key=log_path_priority) if (path := PurePosixPath(name)).is_absolute()
+                 and '..' not in path.parts and wanted_file(path)
+                 and any(path.is_relative_to(root) for root in (*LOG_ROOTS, *FIND_ROOTS))]
+        pending.append((state, paths))
+    for index in range(max((len(paths) for _,paths in pending), default=0)):
+        for state, paths in pending:
+            if index >= len(paths) or time.monotonic() >= deadline:
+                continue
+            container = state['id']; folder = output / container; name = paths[index]
+            if state.get('state', {}).get('Status') in (None, 'running'):
+                target = folder / PurePosixPath(name).relative_to('/')
+                capacity = min(MAX_CAPTURE_BYTES, budget.capacity(target))
+                if not capacity:
+                    continue
+                command(['exec', container, 'tail', '-c', str(capacity), '--', name], target, max_time=2)
+                if records[-1].get('returncode') == 0:
+                    records[-1]['tail_bytes'] = capacity
+                    independent_paths.add((container, name))
+                    if target.stat().st_size == capacity:
+                        records[-1]['truncated'] = True
+                    continue
+            copy_log_path(container, name, folder)
+    roots_left = len(owned)*len(LOG_ROOTS)
+    # Each root gets its share; unused shares remain available to later roots.
+    for name in LOG_ROOTS:
+        for state in owned:
+            share = archive_remaining[0]//max(1, roots_left)
+            roots_left -= 1
+            if share:
+                copy_log_path(state['id'], name, output/state['id'], directory=True, input_limit=share)
     for state in owned:
         container = state['id']; folder = output / container
         if state.get('state',{}).get('Status') not in (None,'running'):
@@ -356,24 +458,6 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
         command(['top', container, '-eo', 'pid,ppid,stat,etime,time,pcpu,pmem,wchan:32,args'], folder / 'processes.txt')
         command(['stats', '--no-stream', '--format', '{{json .}}', container], folder / 'stats.json')
         command(['exec', container, 'sh', '-c', PROCESS_SNAPSHOT], folder / 'process-io.txt')
-    for state in owned:
-        container = state['id']; folder = output / container
-        for name in LOG_ROOTS:
-            copy_log_path(container, name, folder)
-        listing = command(['exec', container, 'find', *FIND_ROOTS, '-maxdepth', '6', '-type', 'f',
-                           '(', '-name', '*.err', '-o', '-name', '*.log', '-o', '-name', '*.out', '-o', '-name', '*.conf',
-                           '-o', '-name', 'my.sandbox.cnf', '-o', '-name', 'init_db', '-o', '-name', 'logfile', ')', '-print'])
-        paths = set(listing.splitlines()[:MAX_FILES])
-        if not paths:
-            log = folder/'deployment.log'
-            paths = stopped_sandbox_paths(log.read_text(errors='replace') if log.exists() else '', state.get('project') or '')
-        for name in sorted(paths):
-            path = PurePosixPath(name)
-            if '..' in path.parts or not wanted_file(path) or not any(path.is_relative_to(root) for root in FIND_ROOTS):
-                continue
-            if any(path.is_relative_to(root) for root in LOG_ROOTS):
-                continue
-            copy_log_path(container, str(path), folder)
     if host_log_root:
         root = Path(host_log_root).expanduser()
         seen = 0
@@ -397,7 +481,10 @@ def collect(infra_id, output, workspace=None, all_containers=False, host_log_roo
                     except OSError as error: records.append(dict(path=str(source), error=str(error)))
             if seen > 5000 or time.monotonic() >= deadline: break
     records.append({'kind': 'limits', 'returncode': 0, 'payload_bytes': budget.bytes,
-                    'files': budget.files, 'archive_bytes': MAX_ARCHIVE_BYTES-archive_remaining[0]})
+                    'files': budget.files, 'directory_archive_bytes': MAX_ARCHIVE_BYTES-archive_remaining[0],
+                    'exact_file_archive_bytes': exact_archive_limit-exact_archive_remaining[0],
+                    'archive_bytes': MAX_ARCHIVE_BYTES-archive_remaining[0]+exact_archive_limit-exact_archive_remaining[0],
+                    'archive_input_limit': MAX_ARCHIVE_BYTES+exact_archive_limit})
     budget.manifest(records)
     failures = sum(record.get('returncode', 1) != 0 for record in records)
     print(f'Infrastructure diagnostics saved to {output}: {len(owned)} containers, {budget.files} diagnostic files, {budget.bytes} payload bytes; {failures} unavailable probes (see collection.json)')
