@@ -25,7 +25,7 @@ if len(sys.argv) > 1 and not sys.argv[1].startswith("-") and not sys.argv[1].sta
 
 
 class Daemon:
-    def __init__(self, no_start=False, extra_args=(), config_prefix="", no_monitor=True):
+    def __init__(self, no_start=False, extra_args=(), config_prefix="", no_monitor=True, monitor_enabled=False):
         self.closed = False
         self.temporary = tempfile.TemporaryDirectory(prefix="proxysql-lifecycle-")
         self.directory = Path(self.temporary.name)
@@ -41,8 +41,8 @@ class Daemon:
                 'admin_variables={admin_credentials="admin:admin";'
                 f'mysql_ifaces="127.0.0.1:{self.admin}";pgsql_ifaces="127.0.0.1:{self.pgadmin}";'
                 'refresh_interval=100;web_enabled=false;}\n'
-                f'mysql_variables={{threads=1;interfaces="127.0.0.1:{self.mysql}";monitor_enabled=false;}}\n'
-                f'pgsql_variables={{threads=1;interfaces="127.0.0.1:{self.pgsql}";monitor_enabled=false;}}\n'
+                f'mysql_variables={{threads=1;interfaces="127.0.0.1:{self.mysql}";monitor_enabled={str(monitor_enabled).lower()};}}\n'
+                f'pgsql_variables={{threads=1;interfaces="127.0.0.1:{self.pgsql}";monitor_enabled={str(monitor_enabled).lower()};}}\n'
             )
             fixtures = REPO / "test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor"
             for name in ("proxysql-ca.pem", "proxysql-cert.pem", "proxysql-key.pem"):

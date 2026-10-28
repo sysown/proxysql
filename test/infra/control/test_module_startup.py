@@ -100,12 +100,59 @@ class ModuleStartup(IsolatedDaemonTest):
         self.assertNotEqual(daemon.process.wait(timeout=8), 0)
         self.assertIn("mysql-workers", daemon.output())
 
+    def test_initial_no_start_with_mixed_permissions(self):
+        for disabled in ("mysql", "pgsql"):
+            protocol = "pgsql" if disabled == "mysql" else "mysql"
+            with self.subTest(disabled=disabled):
+                daemon = Daemon(no_start=True, extra_args=(
+                    f"--{disabled}-workers=false", f"--{disabled}-admin=false"))
+                self.addCleanup(daemon.close)
+                daemon.ready(protocol)
+                self.expect_workers(daemon, False, False)
+                daemon.query("LOAD MYSQL SERVERS TO RUNTIME", protocol)
+                daemon.query("LOAD PGSQL SERVERS TO RUNTIME", protocol)
+                for _ in range(2):
+                    daemon.query("PROXYSQL START", protocol)
+                    self.expect_workers(daemon, disabled != "mysql", disabled != "pgsql")
+                    daemon.stop(protocol)
+                    self.expect_workers(daemon, False, False)
+                daemon.shutdown()
+                daemon.close()
+
+    def test_monitor_runtime_true_cannot_override_denied_permission(self):
+        daemon = self.daemon(no_monitor=False, monitor_enabled=True, extra_args=(
+            "--mysql-monitor=false", "--pgsql-monitor=false"))
+        for dialect in ("mysql", "pgsql"):
+            self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
+                f"WHERE variable_name='{dialect}-monitor_enabled'").stdout.strip(), "true")
+        self.assertNotIn("Main phase3 : MySQL Monitor initialized in", daemon.output())
+        self.assertNotIn("Main phase3 : PgSQL Monitor initialized in", daemon.output())
+        daemon.shutdown()
+
     def test_config_only(self):
         daemon = self.daemon(config_prefix='mysql-workers=false;pgsql-workers=false;pgsql-admin=false;\n')
         for dialect in ("mysql", "pgsql"):
             self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
                              f"WHERE variable_name='{dialect}-threads'").stdout.strip(), "0")
         self.assertFalse(self.listening(daemon.pgadmin))
+
+    def test_repeated_cli_values_use_last_value(self):
+        for value in (False, True):
+            with self.subTest(last=value):
+                daemon = self.daemon(extra_args=(
+                    f"--mysql-workers={str(not value).lower()}", f"--mysql-workers={str(value).lower()}"))
+                self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
+                    "WHERE variable_name='mysql-threads'").stdout.strip(), "1" if value else "0")
+                daemon.close()
+
+    def test_invalid_repeated_cli_values(self):
+        for last in ("--mysql-workers=tru", "--mysql-workers"):
+            with self.subTest(last=last):
+                daemon = Daemon(extra_args=("--mysql-workers=true", last))
+                self.addCleanup(daemon.close)
+                self.assertNotEqual(daemon.process.wait(timeout=5), 0)
+                self.assertIn("mysql-workers", daemon.output())
+                daemon.close()
 
     def test_invalid_cli_boolean(self):
         for name in ("mysql-workers", "pgsql-workers", "mysql-admin", "pgsql-admin", "mysql-monitor", "pgsql-monitor"):
@@ -132,6 +179,16 @@ class ModuleStartup(IsolatedDaemonTest):
                     # Startup permission must not overwrite the configured runtime false.
                     self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
                         f"WHERE variable_name='{dialect}-monitor_enabled'").stdout.strip(), "false")
+                daemon.stop()
+                daemon.query("PROXYSQL START")
+                deadline = time.monotonic() + 10
+                while daemon.output().count("For online documentation") < 2 and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                output = daemon.output()
+                self.assertEqual(output.count("For online documentation"), 2)
+                self.assertEqual(output.count("Main phase3 : MySQL Monitor initialized in"), 2 * mysql_monitor)
+                self.assertEqual(output.count("Main phase3 : PgSQL Monitor initialized in"), 2 * pgsql_monitor)
+                daemon.shutdown()
                 daemon.close()
 
 
