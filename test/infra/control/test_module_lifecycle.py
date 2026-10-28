@@ -25,7 +25,8 @@ if len(sys.argv) > 1 and not sys.argv[1].startswith("-") and not sys.argv[1].sta
 
 
 class Daemon:
-    def __init__(self, no_start=False, extra_args=(), config_prefix="", no_monitor=True, monitor_enabled=False):
+    def __init__(self, no_start=False, extra_args=(), config_prefix="", no_monitor=True, monitor_enabled=False,
+                 threads=(1, 1)):
         self.closed = False
         self.temporary = tempfile.TemporaryDirectory(prefix="proxysql-lifecycle-")
         self.directory = Path(self.temporary.name)
@@ -41,8 +42,8 @@ class Daemon:
                 'admin_variables={admin_credentials="admin:admin";'
                 f'mysql_ifaces="127.0.0.1:{self.admin}";pgsql_ifaces="127.0.0.1:{self.pgadmin}";'
                 'refresh_interval=100;web_enabled=false;}\n'
-                f'mysql_variables={{threads=1;interfaces="127.0.0.1:{self.mysql}";monitor_enabled={str(monitor_enabled).lower()};}}\n'
-                f'pgsql_variables={{threads=1;interfaces="127.0.0.1:{self.pgsql}";monitor_enabled={str(monitor_enabled).lower()};}}\n'
+                f'mysql_variables={{threads={threads[0]};interfaces="127.0.0.1:{self.mysql}";monitor_enabled={str(monitor_enabled).lower()};}}\n'
+                f'pgsql_variables={{threads={threads[1]};interfaces="127.0.0.1:{self.pgsql}";monitor_enabled={str(monitor_enabled).lower()};}}\n'
             )
             fixtures = REPO / "test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor"
             for name in ("proxysql-ca.pem", "proxysql-cert.pem", "proxysql-key.pem"):
@@ -57,7 +58,16 @@ class Daemon:
             args.append("-M")
         if no_start:
             args.append("--no-start")
-        self.process = subprocess.Popen(args + list(extra_args), stdout=self.log, stderr=self.log)
+        self.args = args
+        self.process = subprocess.Popen(self.args + list(extra_args), stdout=self.log, stderr=self.log)
+
+    def restart(self, extra_args=()):
+        """Relaunch the same datadir, retaining saved configuration and ports."""
+        self.shutdown()
+        self.stops = 0
+        self.log.seek(0)
+        self.log.truncate()
+        self.process = subprocess.Popen(self.args + list(extra_args), stdout=self.log, stderr=self.log)
 
     def output(self):
         self.log.flush()

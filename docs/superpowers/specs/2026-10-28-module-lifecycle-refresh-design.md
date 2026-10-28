@@ -63,7 +63,9 @@ Selective controls are `--mysql-workers`, `--pgsql-workers`, `--mysql-admin`,
 boolean configuration entries. Reject invalid explicit values rather than silently
 accepting misspellings. Monitor startup permission remains distinct from the
 persisted runtime `monitor_enabled` setting; do not overwrite a saved false with
-true during startup.
+true during startup. Worker permission likewise must not replace configured
+positive thread counts with zero during runtime serialization or SAVE; actual
+worker status counts remain zero when permission is denied.
 
 ## Verification
 

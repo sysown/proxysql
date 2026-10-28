@@ -12,6 +12,36 @@ from test_module_lifecycle import Daemon, IsolatedDaemonTest
 
 
 class ModuleStartup(IsolatedDaemonTest):
+    def test_disabled_workers_preserve_saved_thread_counts(self):
+        daemon = self.daemon(threads=(3, 5), extra_args=(
+            "--mysql-workers=false", "--pgsql-workers=false"))
+        self.expect_workers(daemon, False, False)
+        # Saving a disabled component must retain its configured positive count.
+        # Test both flushers: PostgreSQL replaces the entire variable set.
+        for dialect, label, count in (("mysql", "MySQL", "3"), ("pgsql", "PgSQL", "5")):
+            with self.subTest(dialect=dialect):
+                daemon.query(f"SAVE {dialect.upper()} VARIABLES FROM RUNTIME")
+                daemon.query(f"SAVE {dialect.upper()} VARIABLES TO DISK")
+                for table in ("global_variables", "runtime_global_variables", "disk.global_variables"):
+                    self.assertEqual(daemon.query(f"SELECT variable_value FROM {table} "
+                        f"WHERE variable_name='{dialect}-threads'").stdout.strip(), count)
+                self.assertEqual(daemon.query(f"SELECT Variable_Value FROM stats_{dialect}_global "
+                    f"WHERE Variable_Name='{label}_Thread_Workers'").stdout.strip(), "0")
+        daemon.stop()
+        daemon.query("PROXYSQL START")
+        self.expect_workers(daemon, False, False)
+        # No --initial: the saved database is authoritative on this relaunch.
+        daemon.restart()
+        daemon.ready()
+        self.expect_workers(daemon, True, True)
+        for dialect, label, count in (("mysql", "MySQL", "3"), ("pgsql", "PgSQL", "5")):
+            with self.subTest(restarted=dialect):
+                self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
+                    f"WHERE variable_name='{dialect}-threads'").stdout.strip(), count)
+                self.assertEqual(daemon.query(f"SELECT Variable_Value FROM stats_{dialect}_global "
+                    f"WHERE Variable_Name='{label}_Thread_Workers'").stdout.strip(), count)
+        daemon.shutdown()
+
     def listening(self, port):
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.3):
@@ -42,10 +72,10 @@ class ModuleStartup(IsolatedDaemonTest):
                 try:
                     if mysql_admin or pgsql_admin:
                         daemon.ready(protocol)
-                        for dialect, enabled in (("mysql", mysql_workers), ("pgsql", pgsql_workers)):
+                        for dialect in ("mysql", "pgsql"):
                             value = daemon.query("SELECT variable_value FROM runtime_global_variables "
                                 f"WHERE variable_name='{dialect}-threads'", protocol).stdout.strip()
-                            self.assertEqual(value, "1" if enabled else "0")
+                            self.assertEqual(value, "1")
                     else:
                         deadline = time.monotonic() + 15
                         while "For online documentation" not in daemon.output() and time.monotonic() < deadline:
@@ -83,7 +113,8 @@ class ModuleStartup(IsolatedDaemonTest):
                 daemon = self.daemon(config_prefix=f'mysql-workers={str(not value).lower()};\n',
                                      extra_args=(f'--mysql-workers={str(value).lower()}',))
                 self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
-                                 "WHERE variable_name='mysql-threads'").stdout.strip(), "1" if value else "0")
+                                 "WHERE variable_name='mysql-threads'").stdout.strip(), "1")
+                self.expect_workers(daemon, value, True)
                 daemon.close()
 
     def test_separate_and_numeric_cli_values(self):
@@ -91,7 +122,7 @@ class ModuleStartup(IsolatedDaemonTest):
         self.expect_workers(daemon, False, False)
         for dialect in ("mysql", "pgsql"):
             self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
-                f"WHERE variable_name='{dialect}-threads'").stdout.strip(), "0")
+                f"WHERE variable_name='{dialect}-threads'").stdout.strip(), "1")
         daemon.shutdown()
 
     def test_invalid_configuration_boolean(self):
@@ -133,7 +164,8 @@ class ModuleStartup(IsolatedDaemonTest):
         daemon = self.daemon(config_prefix='mysql-workers=false;pgsql-workers=false;pgsql-admin=false;\n')
         for dialect in ("mysql", "pgsql"):
             self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
-                             f"WHERE variable_name='{dialect}-threads'").stdout.strip(), "0")
+                             f"WHERE variable_name='{dialect}-threads'").stdout.strip(), "1")
+        self.expect_workers(daemon, False, False)
         self.assertFalse(self.listening(daemon.pgadmin))
 
     def test_repeated_cli_values_use_last_value(self):
@@ -142,7 +174,8 @@ class ModuleStartup(IsolatedDaemonTest):
                 daemon = self.daemon(extra_args=(
                     f"--mysql-workers={str(not value).lower()}", f"--mysql-workers={str(value).lower()}"))
                 self.assertEqual(daemon.query("SELECT variable_value FROM runtime_global_variables "
-                    "WHERE variable_name='mysql-threads'").stdout.strip(), "1" if value else "0")
+                    "WHERE variable_name='mysql-threads'").stdout.strip(), "1")
+                self.expect_workers(daemon, value, True)
                 daemon.close()
 
     def test_invalid_repeated_cli_values(self):

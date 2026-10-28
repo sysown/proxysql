@@ -38,10 +38,12 @@ permission by launching the process again with the desired arguments/config.
 Authentication, hostgroup managers, monitor data objects, and query-processor
 configuration remain shared infrastructure; disabling worker/monitor threads
 is not unloading every object related to that protocol. Workers disabled at
-startup have an effective `mysql-threads` or `pgsql-threads` value of zero in
-`runtime_global_variables`, and create no worker or idle threads. Setting the
-thread variable cannot enable a component prohibited at startup. Default,
-enabled components retain the existing positive thread-count validation.
+startup create no worker or idle threads. Their `MySQL_Thread_Workers` or
+`PgSQL_Thread_Workers` status count is zero. The `mysql-threads` and `pgsql-threads`
+configuration values remain positive in `runtime_global_variables`, so SAVE to
+memory/disk and later relaunch with workers enabled preserve the chosen counts.
+Setting a thread variable cannot enable a component prohibited at startup;
+positive thread-count validation applies regardless of startup permission.
 
 Disabling an Admin protocol omits its listeners; the other Admin protocol can
 still configure both backend protocols. Disabling both Admin protocols removes
@@ -60,7 +62,10 @@ clients while rebuilding Admin in `--no-start` mode. Reconnect after the reload
 before issuing further configuration commands or `PROXYSQL START`. Runtime
 query-rule tables are empty when their processors are absent; configuration
 can still be edited, and LOAD SERVERS remains available. Normal runtime
-statistics refresh resumes after START.
+statistics refresh resumes after START. Explicit SAVE QUERY RULES/FIREWALL from
+unavailable runtime state returns an error and preserves configuration. STOP
+drains its reply before initiating shutdown, allowing up to one second for a
+slow reader.
 
 ## Regression probes
 
@@ -73,5 +78,8 @@ PROXYSQL31=1 make debug -j4
 python3 test/infra/control/test_module_lifecycle.py src/proxysql
 python3 test/infra/control/test_module_startup.py src/proxysql
 ```
+
+The probes are also registered as `module_lifecycle_unit-t` and
+`module_startup_unit-t` in the CI unit/coverage suite.
 
 Prior work: PRs #4960, #5217, #5222; issues #4951, #5186, #5218.

@@ -113,7 +113,9 @@ Independent review of b16ff6025..a64cecc15 found no lifecycle blocker and identi
 repeated-option validation, now corrected with RED/GREEN tests. Its other reviewed
 conditions were left unchanged: v4's sole managed validator caller excludes
 `threads`; processor TLS init/end calls already use thread-local state; STOP uses
-normal session response flushing rather than a new socket-backpressure protocol.
+normal session response flushing in the initial implementation. The subsequent
+review follow-up below supersedes that last ruling with a bounded response drain
+and real TLS/backpressure regression evidence.
 The last point means a client unable to receive a reply can observe a disconnect.
 
 Commands and final outcomes are recorded below as verification completes. The
@@ -170,3 +172,18 @@ allow those CI/reviewer checks to proceed without merging the old branches.
 - DEBUG Stable build succeeded; the expanded drain unit passed 20/20. V4.0
   syntax checks passed for all previously modified production units and the layout
   probe. Independent review found no remaining material issue after TLS expansion.
+
+### Startup persistence follow-up
+
+- New private-daemon regression reproduced four failures: disabled runtime SAVE
+  wrote zero for both dialects and enabled relaunch fell back to four workers
+  instead of the configured MySQL=3/PgSQL=5.
+- Separate configured counts at each handler class tail retain positive runtime
+  serialization and saved values. Actual worker counts remain zero when denied.
+  Validation remains 1..255 with either permission.
+- The test checks memory, runtime, disk, STOP/START with workers denied, then a
+  physical relaunch using the saved database with workers enabled. Existing
+  combination/precedence tests check actual listeners alongside configured values.
+- `module_startup_unit-t` registers all startup probes in the CI coverage suite.
+- Independent review found no material production issue; operator documentation
+  now distinguishes configured values from effective Worker status counts.
