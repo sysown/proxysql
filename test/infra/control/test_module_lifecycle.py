@@ -2,7 +2,7 @@
 """Bounded STOP/START regressions against private daemons, without backends.
 
 Usage: python3 test/infra/control/test_module_lifecycle.py [path/to/proxysql]
-Requires the mysql and psql command-line clients. Each case owns its process,
+Requires Linux, Python 3, and the mysql and psql command-line clients. Each case owns its process,
 loopback ports and temporary datadir; no running ProxySQL service is touched.
 """
 
@@ -224,5 +224,14 @@ class Lifecycle(IsolatedDaemonTest):
         daemon.ready()
 
 
-if __name__ == "__main__":
+def run_probe_tests():
+    missing = [tool for tool in ("mysql", "psql") if shutil.which(tool) is None]
+    if sys.platform != "linux" or missing:
+        reason = "Linux is required" if sys.platform != "linux" else "missing " + ", ".join(missing)
+        print(f"SKIP: private daemon probes: {reason}", file=sys.stderr)
+        raise SystemExit(77)
     unittest.main(verbosity=2)
+
+
+if __name__ == "__main__":
+    run_probe_tests()
