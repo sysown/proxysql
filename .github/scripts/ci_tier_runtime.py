@@ -175,9 +175,12 @@ def manual_consumer_rows(workflow,instance,supplied):
         raise ValueError('ambiguous consumer instance '+instance+': pass consumer_id (one of '+', '.join(instances)+') or every axis')
     rows=[];seen=set()
     for item in candidates:
-        if item['job'] in seen or (supplied.get('tap_group') and supplied['tap_group'] not in item['groups']):continue
+        group_axis=item.get('group_axis')
+        groups=item.get('axes',{}).get(group_axis,item['groups']) if group_axis else item['groups']
+        if item['job'] in seen or (supplied.get('tap_group') and supplied['tap_group'] not in groups):continue
         row=copy.deepcopy(item);row.update(workflow=workflow,automatic=True,instance=instance)
-        row['axes']={axis:parse_axis(supplied[axis]) if supplied.get(axis) else value for axis,value in row.get('axes',{}).items()}
+        row['axes']={axis:([supplied[axis]] if axis==group_axis else parse_axis(supplied[axis])) if supplied.get(axis) else value
+                     for axis,value in row.get('axes',{}).items()}
         rows.append(row);seen.add(item['job'])
     return rows
 

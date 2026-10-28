@@ -157,17 +157,25 @@ jobs:
       timeout-minutes: 20
       run: |
         cd proxysql
-        export INFRA_ID="ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}"
+        # Old producer manifests have no group axis and retain their original group.
         export TAP_GROUP="mysql84-g4"
+        if [ -n "${{ matrix.tap_group }}" ]; then
+          export TAP_GROUP="${{ matrix.tap_group }}"
+        fi
+        export INFRA_ID="ci-${TAP_GROUP}-${{ matrix.tier }}-${{ github.run_id }}"
         export SKIP_CLUSTER_START=1
         test/infra/control/ensure-infras.bash
 
-    - name: Run mysql84-g4 tests
+    - name: Run mysql84-g4 / mysql84-g11 tests
       timeout-minutes: 90
       run: |
         cd proxysql
-        export INFRA_ID="ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}"
+        # Old producer manifests have no group axis and retain their original group.
         export TAP_GROUP="mysql84-g4"
+        if [ -n "${{ matrix.tap_group }}" ]; then
+          export TAP_GROUP="${{ matrix.tap_group }}"
+        fi
+        export INFRA_ID="ci-${TAP_GROUP}-${{ matrix.tier }}-${{ github.run_id }}"
         export SKIP_CLUSTER_START=1
         export COVERAGE="${COVERAGE}"
         test/infra/control/run-tests-isolated.bash
@@ -180,7 +188,7 @@ jobs:
       with:
         phase: capture
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
-        infra-id: ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}
+        infra-id: ci-${{ matrix.tap_group || 'mysql84-g4' }}-${{ matrix.tier }}-${{ github.run_id }}
 
     - name: Cleanup
       timeout-minutes: 2
@@ -192,9 +200,13 @@ jobs:
           exit 0
         fi
         cd proxysql
-        export INFRA_ID="ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}"
+        # Old producer manifests have no group axis and retain their original group.
         export TAP_GROUP="mysql84-g4"
-        docker logs proxysql.ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }} 2>&1 | tail -50 || true
+        if [ -n "${{ matrix.tap_group }}" ]; then
+          export TAP_GROUP="${{ matrix.tap_group }}"
+        fi
+        export INFRA_ID="ci-${TAP_GROUP}-${{ matrix.tier }}-${{ github.run_id }}"
+        docker logs "proxysql.${INFRA_ID}" 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash || true
         test/infra/control/destroy-infras.bash || true
 
@@ -233,7 +245,7 @@ jobs:
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: |
-          proxysql/ci_infra_logs/ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/
+          proxysql/ci_infra_logs/ci-${{ matrix.tap_group || 'mysql84-g4' }}-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/
         if-no-files-found: ignore
 
     - name: Report missing coverage file
@@ -266,7 +278,7 @@ jobs:
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ env.SHA }}
-        files: proxysql/ci_infra_logs/ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}.info
+        files: proxysql/ci_infra_logs/ci-${{ matrix.tap_group || 'mysql84-g4' }}-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-${{ matrix.tap_group || 'mysql84-g4' }}-${{ matrix.tier }}-${{ github.run_id }}.info
         flags: integration-tests
         name: tap-mysql84-g4-coverage
         use_oidc: true
@@ -305,7 +317,7 @@ jobs:
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ env.SHA }}
-        files: proxysql/ci_infra_logs/ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}.info
+        files: proxysql/ci_infra_logs/ci-${{ matrix.tap_group || 'mysql84-g4' }}-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-${{ matrix.tap_group || 'mysql84-g4' }}-${{ matrix.tier }}-${{ github.run_id }}.info
         flags: integration-tests
         name: tap-mysql84-g4-coverage
         use_oidc: true
@@ -330,7 +342,7 @@ jobs:
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ env.SHA }}
-        files: proxysql/ci_infra_logs/ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-mysql84-g4-${{ matrix.tier }}-${{ github.run_id }}.info
+        files: proxysql/ci_infra_logs/ci-${{ matrix.tap_group || 'mysql84-g4' }}-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-${{ matrix.tap_group || 'mysql84-g4' }}-${{ matrix.tier }}-${{ github.run_id }}.info
         flags: integration-tests
         name: tap-mysql84-g4-coverage
         use_oidc: true

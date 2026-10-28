@@ -71,11 +71,17 @@ def make_plan(context, selection, catalogue):
             for cell in cells:
                 cell = dict(cell)
                 if 'instance' in consumer: cell['ci_instance'] = consumer['instance']
+                groups = consumer.get('applicability_groups', consumer['groups'])
+                group_axis = consumer.get('group_axis')
+                if group_axis is not None:
+                    if not isinstance(group_axis, str) or not isinstance(cell.get(group_axis), str) or not cell[group_axis]:
+                        raise ValueError('consumer group_axis requires a nonempty group in every cell')
+                    groups = [cell[group_axis]]
                 info = ', '.join(str(v) for k,v in cell.items() if k not in ('testdist','ci_instance'))
                 middle = (info + ', ') if info else ''
                 plan['checks'].append(dict(key=check_key(consumer['workflow'],consumer['job'],tier,cell),
                     workflow=consumer['workflow'],job=consumer['job'],tier=tier,mode=mode,cell=cell,
-                    groups=consumer.get('applicability_groups',consumer['groups']),required=True,applicable=True,
+                    groups=groups,required=True,applicable=True,
                     name=f"{consumer['workflow']} / {consumer['job']} ({TIERS[tier]}, {middle}{mode_label(tier,mode)})"))
     return plan
 
