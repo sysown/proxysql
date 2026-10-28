@@ -187,3 +187,28 @@ allow those CI/reviewer checks to proceed without merging the old branches.
 - `module_startup_unit-t` registers all startup probes in the CI coverage suite.
 - Independent review found no material production issue; operator documentation
   now distinguishes configured values from effective Worker status counts.
+
+### Final follow-up verification
+
+Production/test source: `50ecfe4d9` (includes lifecycle fixes `530545b84` and
+startup persistence fix `b8bab7760`). No backend service was used by these probes.
+
+| Check | DEBUG Stable | DEBUG v3.1 ASAN |
+| --- | --- | --- |
+| Top-level `make debug -j4` | Passed | Passed |
+| `admin_response_drain_unit-t` | 20/20 | 20/20 |
+| `module_lifecycle_unit-t` | 7 Python cases + TAP wrapper passed | 7 Python cases + TAP wrapper passed |
+| `module_startup_unit-t` | 12 Python cases + TAP wrapper passed | 12 Python cases + TAP wrapper passed |
+| `startup_permissions_layout_unit-t` | 1/1 | 1/1 |
+
+Build prefixes were `NOJEMALLOC=1` for Stable and
+`NOJEMALLOC=1 WITHASAN=1 PROXYSQL31=1` for sanitizer builds. Sanitizer execution
+used `ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:halt_on_error=1`. Unit harness
+objects were rebuilt when changing build flags.
+
+V4.0 compile-only checks passed for all eight changed production translation
+units, a global-prefix layout probe, and the four relevant unit-test sources.
+These do not establish installed-plugin/backend integration. The lifecycle
+follow-up push passed the complete pre-push CI lint suite. Fresh remote matrix
+and coverage results remain pending; neither replacement is marked ready and
+the old PRs remain open.
