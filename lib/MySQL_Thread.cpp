@@ -7466,7 +7466,8 @@ void MySQL_Thread::push_MyConn_local(MySQL_Connection *c
 	// Bounded local cache: cache 1-in-N releases (N = mysql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
 #ifdef PROXYSQL31
-	// At N=1 cache unless local sessions are waiting for a connection.
+	// At N=1 retain for the same worker, whose scheduler can use the local cache.
+	// With multiple workers, publish while local or pool waiters need capacity.
 #else
 	// At N=1 always cache (no sibling to share with).
 #endif // PROXYSQL31

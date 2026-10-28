@@ -323,6 +323,7 @@ static void test_mysql_warming_policy() {
 static void test_mysql_normal_cached_recovery() {
     MySQL_Thread worker;
     if (!worker.init()) BAIL_OUT("worker initialization failed");
+    const auto saved_threads = GloMTH->num_threads;
     GloMTH->num_threads = 1;
     worker.curtime = 1000000;
     srv_info_t info {"127.0.0.1", 2, "cached recovery unit"};
@@ -369,6 +370,7 @@ static void test_mysql_normal_cached_recovery() {
     worker.unregister_session(0);
     delete session;
     close(fds[1]);
+    GloMTH->num_threads = saved_threads;
 }
 
 static void test_mysql_completion_output() {

@@ -2959,6 +2959,9 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
  * @param gtid_uuid The GTID UUID used for GTID-based routing.
  * @param gtid_trxid The GTID transaction ID used for GTID-based routing.
  * @param max_lag_ms The maximum allowed lag in milliseconds.
+ * @param requested_type The required backend authentication type.
+ * @param mode In v3.1+, EstablishedOnly permits compatible established idle reuse;
+ *             a miss returns nullptr without creating, evicting or warming connections.
  *
  * @return A pointer to the retrieved MySQL_Connection object if successful, or nullptr if no suitable connection
  *         is available in the pool.
