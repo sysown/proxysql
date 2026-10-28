@@ -169,7 +169,7 @@ class Mysql84ShardTests(unittest.TestCase):
         wrapper = (directory / "eof_mixed_flags_queries-t.cpp").read_text()
         nested = set(re.findall(r'execute_target_test\("([^"]+)"', wrapper))
         self.assertEqual(nested, {"eof_packet_mixed_queries-t", "ok_packet_mixed_queries-t"})
-        self.assertTrue(nested <= self.members("mysql84-g11"))
+        self.assertLessEqual(nested, self.members("mysql84-g11"))
 
     def test_new_groups_resolve_the_existing_mysql84_environment(self):
         for group in ("mysql84-g10", "mysql84-g11"):

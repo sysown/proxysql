@@ -51,6 +51,8 @@ class TimeoutFixture {
 
 public:
 	explicit TimeoutFixture(MYSQL* conn) : admin(conn) {}
+	TimeoutFixture(const TimeoutFixture&) = delete;
+	TimeoutFixture& operator=(const TimeoutFixture&) = delete;
 	bool save() {
 		// The admin SQLite handle is shared; temp tables outlive a disconnect.
 		if (!query("DROP TABLE IF EXISTS temp.kill_connection2_config") ||
@@ -153,7 +155,7 @@ int main(int argc, char** argv) {
 	}
 
 
-	std::unique_ptr<MYSQL, decltype(&mysql_close)> admin_owner(mysql_init(nullptr), mysql_close);
+	std::unique_ptr<MYSQL, decltype(&mysql_close)> admin_owner(mysql_init(nullptr), &mysql_close);
 	MYSQL* proxysql_admin = admin_owner.get();
 	// Initialize connections
 	if (!proxysql_admin) {
