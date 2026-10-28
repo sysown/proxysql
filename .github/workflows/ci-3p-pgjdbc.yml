@@ -119,7 +119,8 @@ jobs:
       checks: write
       contents: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
+    timeout-minutes: 200
     strategy:
       fail-fast: false
       matrix:
@@ -135,6 +136,7 @@ jobs:
       COVERAGE: ${{ matrix.coverage && '1' || '0' }}
     steps:
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -143,11 +145,13 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Install infrastructure diagnostic hook
+      timeout-minutes: 1
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
         phase: setup
 
     - name: Start selected product test check
+      timeout-minutes: 2
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
@@ -157,6 +161,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout proxysql_3p_testing
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: 'proxysql/proxysql_3p_testing'
@@ -176,6 +181,7 @@ jobs:
 #          proxysql
 
     - name: Checkout proxysql
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ env.PROXYSQL_REPO }}
@@ -193,6 +199,7 @@ jobs:
           src
 
     - name: Restore selected product handoff
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
@@ -200,6 +207,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Prepare
+      timeout-minutes: 20
       run: |
         set -eo pipefail
 
@@ -242,6 +250,7 @@ jobs:
         exit $RC
 
     - name: Check baseline
+      timeout-minutes: 2
       if: ${{ !cancelled() }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -297,6 +306,7 @@ jobs:
         echo "All tests passed"
 
     - name: Archive artifacts logs
+      timeout-minutes: 5
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:

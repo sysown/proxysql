@@ -55,7 +55,8 @@ jobs:
     # install fails ("Unable to locate package libaio1t64").
     # test-ci-mysqlx-dbdeployer-install.bash enforces this literal value.
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
+    timeout-minutes: 240
 
     permissions:
       actions: read
@@ -64,6 +65,7 @@ jobs:
       packages: read
     steps:
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -72,11 +74,13 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Install infrastructure diagnostic hook
+      timeout-minutes: 1
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
         phase: setup
 
     - name: Start selected product test check
+      timeout-minutes: 2
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -85,6 +89,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout repository
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
       with:
         repository: ${{ github.repository }}
@@ -92,12 +97,14 @@ jobs:
         path: 'proxysql'
 
     - name: Restore selected product handoff
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Restore plugin .so files from _runtime_libs
+      timeout-minutes: 1
         # CI-builds stages plugins/mysqlx + plugins/genai .so files
         # into test/tap/tap/_runtime_libs/. Shared RE2 builds also stage
         # libre2.so.10. The _src cache path list is shared
@@ -116,6 +123,7 @@ jobs:
         ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
 
     - name: Install MySQL 8.4 runtime libs
+      timeout-minutes: 10
         # The glibc 2.28 MySQL archive uses Noble's ncurses/tinfo 6 ABI.
         # Oracle's generic mysqld still requests libaio.so.1 while Noble's
         # time64 package exposes the same x86_64 ABI as libaio.so.1t64
@@ -139,6 +147,7 @@ jobs:
         echo "LD_LIBRARY_PATH=${MYSQLX_COMPAT_LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> "${GITHUB_ENV}"
 
     - name: Checkout GH-Actions dbdeployer guard
+      timeout-minutes: 5
         # The control test and ci-mysqlx.yml live on GH-Actions. The job
         # checks out the source SHA into proxysql/, which does not carry
         # either file (v3.0 only has the uppercase CI-mysqlx.yml caller).
@@ -154,11 +163,13 @@ jobs:
         sparse-checkout-cone-mode: false
 
     - name: Verify dbdeployer install guard
+      timeout-minutes: 1
       run: |-
         gh-actions/test/infra/control/test-ci-mysqlx-dbdeployer-install.bash
 
 
     - name: Install dbdeployer
+      timeout-minutes: 5
       # The upstream installer discovers releases through an unauthenticated
       # API request and exits silently when that response has no tag_name.
       # Download a pinned, verified release directly, with visible HTTP errors.
@@ -183,6 +194,7 @@ jobs:
         dbdeployer --version
 
     - name: Download and unpack MySQL 8.4
+      timeout-minutes: 20
         # dbdeployer 2.1's download catalog only records the glibc 2.17
         # x86_64 archive. Keep dbdeployer's catalog-driven 8.4 version
         # selection, but request the matching official glibc 2.28 minimal
@@ -238,6 +250,7 @@ jobs:
         SQL
 
     - name: Resolve mysqlx port
+      timeout-minutes: 3
         # dbdeployer's port scheme is <major><minor><patch> for classic
         # and that + 10000 for X (8408 -> 18408). Read it from the
         # sandbox's my.sandbox.cnf so we don't hard-code an off-by-one
@@ -257,6 +270,7 @@ jobs:
         exit 1
 
     - name: Log in to GHCR and pull build image
+      timeout-minutes: 15
       env:
         GHCR_USER: ${{ github.actor }}
         GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -276,6 +290,7 @@ jobs:
         exit 1
 
     - name: Run mysqlx e2e tests inside build image (--network host -> dbdeployer mysqlx)
+      timeout-minutes: 90
         # The three e2e binaries (test_mysqlx_admin_tables-t,
         # test_mysqlx_plugin_load-t, test_mysqlx_e2e_handshake-t) talk
         # directly to the dbdeployer MySQL 8.4 instance on 127.0.0.1:
@@ -321,6 +336,7 @@ jobs:
         host-log-root: ~/sandboxes
 
     - name: Cleanup sandbox
+      timeout-minutes: 2
       if: always()
       run: |
         VERSION=$(ls $HOME/opt/mysql/ | grep '^8\.4' | head -1 || echo "")
@@ -360,7 +376,8 @@ jobs:
       COVERAGE: ${{ matrix.coverage && '1' || '0' }}
   soak-tests:
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
-    timeout-minutes: 120
+    # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
+    timeout-minutes: 200
 
     strategy:
       fail-fast: false
@@ -373,6 +390,7 @@ jobs:
       packages: read
     steps:
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -381,11 +399,13 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Install infrastructure diagnostic hook
+      timeout-minutes: 1
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
         phase: setup
 
     - name: Start selected product test check
+      timeout-minutes: 2
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -394,6 +414,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout repository
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
       with:
         repository: ${{ github.repository }}
@@ -401,17 +422,20 @@ jobs:
         path: 'proxysql'
 
     - name: Verify Connector/Python Dockerfile pins
+      timeout-minutes: 1
       run: |-
         proxysql/test/infra/docker-base/test-connector-version-pins.bash
 
 
     - name: Restore selected product handoff
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Restore plugin .so files from _runtime_libs
+      timeout-minutes: 1
         # CI-builds stages plugins/mysqlx + plugins/genai .so files
         # into test/tap/tap/_runtime_libs/. Shared RE2 builds also stage
         # libre2.so.10. The _src cache path list is shared
@@ -430,6 +454,7 @@ jobs:
         ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
 
     - name: Verify binary + plugin .so
+      timeout-minutes: 1
       run: |
         chmod +x proxysql/src/proxysql
         file proxysql/src/proxysql
@@ -437,6 +462,7 @@ jobs:
           || { echo "ERROR: ProxySQL_MySQLX_Plugin.so missing from src cache"; exit 1; }
 
     - name: Build CI base image
+      timeout-minutes: 20
         # Same pattern ci-legacy-g4 uses: build the test-runner image
         # from test/infra/docker-base. Includes mysqlx-connector-python
         # so the soak harness scripts (behavioral_validation.py,
@@ -496,6 +522,7 @@ jobs:
         infra-id: ci-mysqlx-soak-${{ github.run_id }}-${{ matrix.tier }}-${{ github.run_id }}
 
     - name: Cleanup
+      timeout-minutes: 2
       if: always()
       run: |
         set +e

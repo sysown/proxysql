@@ -40,7 +40,8 @@ jobs:
     needs:
     - tier-context
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
-    timeout-minutes: 120
+    # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
+    timeout-minutes: 200
     permissions: write-all
     strategy:
       fail-fast: false
@@ -58,6 +59,7 @@ jobs:
     steps:
 
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -66,11 +68,13 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Install infrastructure diagnostic hook
+      timeout-minutes: 1
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
       with:
         phase: setup
 
     - name: Start selected product test check
+      timeout-minutes: 2
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -79,6 +83,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout repository
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
@@ -94,17 +99,20 @@ jobs:
           test/scripts
 
     - name: Restore selected product handoff
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Verify binary
+      timeout-minutes: 1
       run: |
         chmod +x proxysql/src/proxysql
         file proxysql/src/proxysql
 
     - name: Log in to GHCR and pull CI base image
+      timeout-minutes: 15
       env:
         GHCR_USER: ${{ github.actor }}
         GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -164,6 +172,7 @@ jobs:
         infra-id: ci-taptests-pgsql-cluster-${{ matrix.tier }}-${{ github.run_id }}
 
     - name: Cleanup
+      timeout-minutes: 2
       if: always()
       run: |
         set +e
