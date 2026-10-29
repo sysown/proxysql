@@ -114,7 +114,9 @@ static void leave_pooled_connection(const char* encoding) {
 	exec_ok(conn.get(), "SELECT 1");
 }
 
-static bool admin_exec(MYSQL* admin, const std::string& sql) {
+static MYSQL* admin = nullptr;
+
+static bool admin_exec(const std::string& sql) {
 	if (mysql_query(admin, sql.c_str())) {
 		diag("Admin query failed: %s; SQL: %s", mysql_error(admin), sql.c_str());
 		return false;
@@ -122,9 +124,9 @@ static bool admin_exec(MYSQL* admin, const std::string& sql) {
 	return true;
 }
 
-static std::string admin_value(MYSQL* admin, const std::string& sql) {
+static std::string admin_value(const std::string& sql) {
 	std::string ret;
-	if (!admin_exec(admin, sql)) return ret;
+	if (!admin_exec(sql)) return ret;
 	MYSQL_RES* res = mysql_store_result(admin);
 	MYSQL_ROW row = res ? mysql_fetch_row(res) : nullptr;
 	if (row && row[0]) ret = row[0];
@@ -132,10 +134,24 @@ static std::string admin_value(MYSQL* admin, const std::string& sql) {
 	return ret;
 }
 
+// A query that opens a new backend connection does not reuse the one the case left in the
+// pool: the quoted value then goes into that connection's login, which PostgreSQL accepts,
+// and the check would pass even without the fix. So it must open none.
+static bool query_on_pooled_connection(PGconn* conn, bool extended = false) {
+	const char* opened_sql = "SELECT COALESCE(SUM(ConnOK), 0) FROM stats_pgsql_connection_pool";
+	const long long before = atoll(admin_value(opened_sql).c_str());
+	const bool query_ok = extended ? exec_params_ok(conn) : exec_ok(conn, "SELECT 1");
+	const long long opened = atoll(admin_value(opened_sql).c_str()) - before;
+	if (opened != 0) {
+		diag("The query opened %lld new backend connection(s) instead of reusing a pooled one", opened);
+	}
+	return query_ok && opened == 0;
+}
+
 static void check_login_quoted() {
 	leave_pooled_connection("LATIN1");
 	PGConn conn = connect_proxy("client_encoding='\\'utf-8\\''");
-	ok(exec_ok(conn.get(), "SELECT 1"),
+	ok(query_on_pooled_connection(conn.get()),
 		"Login with client_encoding='utf-8': a query on a pooled connection succeeds");
 	const std::string shown = shown_encoding(conn.get());
 	ok(shown == "UTF8", "Login with client_encoding='utf-8': SHOW client_encoding is UTF8 (got '%s')",
@@ -148,7 +164,7 @@ static void check_login_quoted() {
 static void check_login_quoted_extended() {
 	leave_pooled_connection("LATIN1");
 	PGConn conn = connect_proxy("client_encoding='\\'utf8\\''");
-	ok(exec_params_ok(conn.get()),
+	ok(query_on_pooled_connection(conn.get(), true),
 		"Login with client_encoding='utf8': an extended query on a pooled connection succeeds");
 }
 
@@ -156,7 +172,7 @@ static void check_login_quoted_extended() {
 static void check_options_quoted() {
 	leave_pooled_connection("LATIN1");
 	PGConn conn = connect_proxy("options='-c client_encoding=\\'unicode\\''");
-	ok(exec_ok(conn.get(), "SELECT 1"),
+	ok(query_on_pooled_connection(conn.get()),
 		"options -c client_encoding='unicode': a query on a pooled connection succeeds");
 	const std::string reported = reported_encoding(conn.get());
 	ok(reported == "UTF8", "options -c client_encoding='unicode': reported to the client as UTF8 (got '%s')",
@@ -178,7 +194,7 @@ static void check_default_after_quoted_login() {
 	PGConn conn = connect_proxy("client_encoding='\\'utf_8\\''");
 	const bool moved = exec_ok(conn.get(), "SET client_encoding = 'LATIN1'") && exec_ok(conn.get(), "SELECT 1")
 		&& exec_ok(conn.get(), "SET client_encoding TO DEFAULT");
-	ok(moved && exec_ok(conn.get(), "SELECT 1"),
+	ok(moved && query_on_pooled_connection(conn.get()),
 		"Login with client_encoding='utf_8', SET LATIN1, SET TO DEFAULT: the next query succeeds");
 	const std::string shown = shown_encoding(conn.get());
 	ok(shown == "UTF8", "Login with client_encoding='utf_8', SET TO DEFAULT: SHOW client_encoding is UTF8 (got '%s')",
@@ -218,7 +234,7 @@ static void check_every_encoding(const std::vector<std::string>& names) {
 
 		leave_pooled_connection(name == "LATIN1" ? "UTF8" : "LATIN1");
 		PGConn conn = connect_proxy(login);
-		const bool query_ok = exec_ok(conn.get(), "SELECT 1");
+		const bool query_ok = query_on_pooled_connection(conn.get());
 		const std::string reported = reported_encoding(conn.get());
 		ok(query_ok && reported == expected,
 			"%s: a query on a pooled connection succeeds, reported as '%s' like PostgreSQL (got '%s')",
@@ -227,17 +243,17 @@ static void check_every_encoding(const std::vector<std::string>& names) {
 }
 
 // A client that sends no client_encoding gets pgsql-default_client_encoding.
-static void check_quoted_default_variable(MYSQL* admin) {
-	const std::string original = admin_value(admin,
+static void check_quoted_default_variable() {
+	const std::string original = admin_value(
 		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-default_client_encoding'");
 	if (original.empty()) {
 		BAIL_OUT("Could not read pgsql-default_client_encoding");
 	}
 
-	admin_exec(admin, "UPDATE global_variables SET variable_value='''latin1''' "
+	admin_exec("UPDATE global_variables SET variable_value='''latin1''' "
 		"WHERE variable_name='pgsql-default_client_encoding'");
-	admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
-	const std::string runtime = admin_value(admin,
+	admin_exec("LOAD PGSQL VARIABLES TO RUNTIME");
+	const std::string runtime = admin_value(
 		"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-default_client_encoding'");
 	ok(runtime == "LATIN1", "pgsql-default_client_encoding='latin1': runtime value is LATIN1 (got '%s')",
 		runtime.c_str());
@@ -245,16 +261,18 @@ static void check_quoted_default_variable(MYSQL* admin) {
 	leave_pooled_connection("UTF8");
 	{
 		PGConn conn = connect_proxy("");
-		ok(exec_ok(conn.get(), "SELECT 1"),
-			"pgsql-default_client_encoding='latin1': a query from a client that sends no encoding succeeds");
+		ok(query_on_pooled_connection(conn.get()),
+			"pgsql-default_client_encoding='latin1': a query on a pooled connection from a client that sends no encoding succeeds");
 		const std::string reported = reported_encoding(conn.get());
 		ok(reported == "LATIN1",
 			"pgsql-default_client_encoding='latin1': reported to the client as LATIN1 (got '%s')", reported.c_str());
 	}
 
-	admin_exec(admin, "UPDATE global_variables SET variable_value='" + original +
-		"' WHERE variable_name='pgsql-default_client_encoding'");
-	admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	std::string escaped(original.size() * 2 + 1, '\0');
+	escaped.resize(mysql_real_escape_string(admin, &escaped[0], original.c_str(), original.size()));
+	const bool restored = admin_exec("UPDATE global_variables SET variable_value='" + escaped +
+		"' WHERE variable_name='pgsql-default_client_encoding'") && admin_exec("LOAD PGSQL VARIABLES TO RUNTIME");
+	ok(restored, "pgsql-default_client_encoding restored to '%s'", original.c_str());
 }
 
 int main() {
@@ -268,10 +286,10 @@ int main() {
 		BAIL_OUT("Could not read the encoding list from PostgreSQL");
 	}
 
-	plan(15 + static_cast<int>(encodings.size()));
+	plan(16 + static_cast<int>(encodings.size()));
 	alarm(180);
 
-	MYSQL* admin = mysql_init(nullptr);
+	admin = mysql_init(nullptr);
 	if (!admin || !mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password,
 		nullptr, cl.admin_port, nullptr, 0)) {
 		BAIL_OUT("Admin connection failed: %s", admin ? mysql_error(admin) : "mysql_init failed");
@@ -284,7 +302,7 @@ int main() {
 	check_default_after_quoted_login();
 	check_unicode_kept();
 	check_every_encoding(encodings);
-	check_quoted_default_variable(admin);
+	check_quoted_default_variable();
 
 	mysql_close(admin);
 	return exit_status();
