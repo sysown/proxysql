@@ -457,27 +457,35 @@ bool pgsql_variable_validate_client_encoding(const char* value, const params_t* 
 	return true;
 }
 
-// What follows "INTERVAL": spaces, then one quoted part of digits, "+-:." and spaces.
-// PostgreSQL reads the interval itself. The part is quoted with ' in
-// "SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE", where unit words may follow, and with
-// '' in a value sent as a string, SET TimeZone = 'INTERVAL ''+02:30''', where PostgreSQL
-// accepts nothing after it.
+// What follows "INTERVAL", read as PostgreSQL reads it: optional spaces, then one quoted part
+// of letters, digits, "+-:." and spaces ('+02:30', '2 hours'). The part is quoted with ' in
+// "SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE", where the grammar allows only HOUR, MINUTE
+// or HOUR TO MINUTE after it, and with '' in a value sent as a string,
+// SET TimeZone = 'INTERVAL ''+02:30''', where PostgreSQL accepts nothing after it.
 static bool is_interval_literal(const char* p) {
-	if (!fast_isspace((unsigned char)*p)) return false;
 	while (fast_isspace((unsigned char)*p)) p++;
 	const size_t quotes = (p[0] == '\'' && p[1] == '\'') ? 2 : (p[0] == '\'' ? 1 : 0);
 	if (quotes == 0) return false;
 	p += quotes;
 	for (; *p && *p != '\''; p++) {
-		if (!isdigit((unsigned char)*p) && strchr("+-:. ", *p) == nullptr) return false;
+		if (!isalnum((unsigned char)*p) && strchr("+-:. ", *p) == nullptr) return false;
 	}
 	if (strncmp(p, "''", quotes) != 0) return false;
 	p += quotes;
 	if (quotes == 2) return *p == '\0';
+
+	std::string unit;  // the words after the interval, upper-cased, one space between them
 	for (; *p; p++) {
-		if (!isalpha((unsigned char)*p) && *p != ' ') return false;
+		if (fast_isspace((unsigned char)*p)) {
+			if (!unit.empty() && unit.back() != ' ') unit += ' ';
+		} else if (isalpha((unsigned char)*p)) {
+			unit += toupper((unsigned char)*p);
+		} else {
+			return false;
+		}
 	}
-	return true;
+	if (!unit.empty() && unit.back() == ' ') unit.pop_back();
+	return unit.empty() || unit == "HOUR" || unit == "MINUTE" || unit == "HOUR TO MINUTE";
 }
 
 // A zone name, a POSIX rule or a number of hours. PostgreSQL decides whether the zone

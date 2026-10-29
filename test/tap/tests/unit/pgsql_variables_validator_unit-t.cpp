@@ -188,6 +188,8 @@ static void test_timezone_valid() {
         "-7", "5.5", "1e1",
         // intervals, as the SET parser passes them on; a quoted SET string keeps '' doubled
         "INTERVAL '+02:30'", "INTERVAL '-08:00' HOUR TO MINUTE", "interval '1' hour", "INTERVAL ''+02:30''",
+        "INTERVAL '+02:30' minute", "INTERVAL '2 hours'", "INTERVAL '1 hour 30 minutes'", "INTERVAL ''2 hours''",
+        "INTERVAL'1'",
         // well-formed but unknown to PostgreSQL: only the backend knows its zone list
         "Invalid/Zone", "PST",
     };
@@ -200,9 +202,13 @@ static void test_timezone_invalid() {
     const std::string too_long(256, 'A');
     const char* values[] = {
         "'UTC'", "America/New York", "UTC\t", "UTC;", "", too_long.c_str(),
-        "INTERVAL '1''2'", "INTERVAL '1'; x", "INTERVAL'1'", "INTERVAL '1",
+        "INTERVAL '1''2'", "INTERVAL '1'; x", "INTERVAL '1",
+        // the grammar allows only HOUR, MINUTE or HOUR TO MINUTE after the interval
+        "INTERVAL '+02:30' DAY", "INTERVAL '+02:30' FOO", "INTERVAL '1' HOUR TO SECOND",
         // as a string value, PostgreSQL accepts nothing after the interval
         "INTERVAL ''-08:00'' HOUR TO MINUTE", "INTERVAL ''1'",
+        // PostgreSQL reads any value that starts with "interval" as the interval form
+        "INTERVAL+3",
         // PostgreSQL accepts these two, but no real client sends them
         " 5", "5 ",
     };
@@ -212,7 +218,7 @@ static void test_timezone_invalid() {
 }
 
 int main() {
-    plan(110);
+    plan(118);
     test_init_minimal();
 
     test_bool_true_values();                // 12 (6 inputs x 2 assertions each)
@@ -233,8 +239,8 @@ int main() {
     test_search_path_invalid();             // 1
     test_client_encoding_valid();           // 6 (3 inputs x 2)
     test_client_encoding_invalid();         // 1
-    test_timezone_valid();                  // 21 (validate only)
-    test_timezone_invalid();                // 14
+    test_timezone_valid();                  // 26 (validate only)
+    test_timezone_invalid();                // 17
 
     // Note: assert_validates calls ok() once for validate result,
     // and once more for transform comparison when expected_transformed != nullptr.
