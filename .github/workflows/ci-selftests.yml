@@ -80,38 +80,63 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Run proxysql
+      timeout-minutes: 2
       run: |
-        #set -x
-        set +e
+        set -euo pipefail
         ulimit -c unlimited
 
         cd ${{ github.workspace }}/proxysql
         mkdir -p ci_infra_logs/regular_infra/proxysql
         cd src
-        mkdir coverage_reports
+        mkdir -p coverage_reports
 
-        #(./proxysql --clickhouse-server --sqlite3-server --idle-threads -f -c "$DOCKER_SCRIPT_PATH/conf/proxysql/proxysql.cnf" -D $REGULAR_INFRA_DATADIR &> $REGULAR_INFRA_DATADIR/proxysql.log) &
-        (./proxysql -f --initial --clickhouse --idle-threads -D . &>proxysql.log &)
+        # Keep the daemon's exit status, including a sanitizer failure at exit.
+        # A separate process group lets cleanup kill a stuck coredumper too.
+        setsid bash -c '
+          set +e
+          ./proxysql -f --initial --clickhouse --idle-threads -D .
+          rc=$?
+          printf "%s\n" "$rc" > proxysql.exit
+          exit "$rc"
+        ' >proxysql.log 2>&1 &
+        echo "$!" > proxysql.pgid
         sleep 10
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" 2>&1 | grep -v 'Using a password'
+        timeout --kill-after=5s 10s mysql --connect-timeout=5 -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" 2>&1 | grep -v 'Using a password'
+
+    - name: Explain ASAN coredump exclusion
+      if: ${{ matrix.mode == 'asan' }}
+      run: |
+        message='On-demand coredump selftests require WITHASAN=0 (see Makefile). ASAN digest selftests remain enabled; coredump cases run in normal mode.'
+        echo "::notice::$message"
+        echo "$message" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Coredump self-tests
+      if: ${{ matrix.mode == 'normal' }}
+      timeout-minutes: 2
+      run: |
+        set -euo pipefail
+        ulimit -c unlimited
+        cd ${{ github.workspace }}/proxysql/src
+
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL COREDUMP;" 2>&1 | grep -v 'Using a password'
+        ls -l ./core*
+        file ./core*
+        rm ./core*
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL COMPRESSEDCOREDUMP;" 2>&1 | grep -v 'Using a password'
+        ls -l ./core*
+        file ./core*
+        rm ./core*
 
     - name: Self-tests
       timeout-minutes: 90
       run: |
-        #set -x
-        set +e
-        set -o pipefail
+        set -euo pipefail
         ulimit -c unlimited
         cd ${{ github.workspace }}/proxysql/src
 
         mysql -V -vvv
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SELECT version();" 2>&1 | grep -v 'Using a password'
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SET mysql-verbose_query_error=true;" 2>&1 | grep -v 'Using a password'
-
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL COREDUMP;" 2>&1 | grep -v 'Using a password'
-        (ls -l ./core* && file ./core* && rm ./core*) || exit 1
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL COMPRESSEDCOREDUMP;" 2>&1 | grep -v 'Using a password'
-        (ls -l ./core* && file ./core* && rm ./core*) || exit 1
 
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv 2>&1 << EOF | grep -v 'Using a password'
         SELECT COUNT(*) FROM stats_mysql_query_digest;
@@ -127,24 +152,48 @@ jobs:
         PROXYSQLTEST 5 1000;
         PROXYSQLTEST 6 1000;
         EOF
-        RC=$?
-
         echo 'DONE'
-        exit $RC
+
+    - name: Capture process state before cleanup
+      if: ${{ always() }}
+      timeout-minutes: 1
+      run: |
+        mkdir -p proxysql/ci_infra_logs/regular_infra/proxysql
+        ps -e -o pid,ppid,pgid,stat,pcpu,wchan:32,comm > proxysql/ci_infra_logs/regular_infra/proxysql/processes.log
 
     - name: Cleanup
       if: ${{ always() }}
+      timeout-minutes: 2
       run: |
-        set +e
+        set -euo pipefail
+        cd ${{ github.workspace }}/proxysql/src
+        # Startup may have failed before launching a process.
+        if [[ ! -f proxysql.pgid ]]; then exit 0; fi
+        pgid=$(cat proxysql.pgid)
+        [[ "$pgid" =~ ^[1-9][0-9]*$ ]]
 
-        mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "PROXYSQL SHUTDOWN SLOW" &> /dev/null
-        sleep 10
-        killall proxysql
+        # SHUTDOWN SLOW closes its Admin connection without an OK response.
+        # Bound the client independently: a frozen daemon cannot answer it.
+        timeout --kill-after=5s 20s mysql --connect-timeout=5 -h127.0.0.1 -P6032 -uadmin -padmin -e "PROXYSQL SHUTDOWN SLOW" >cleanup.log 2>&1 || true
+        for attempt in {1..10}; do
+          if [[ -f proxysql.exit ]]; then break; fi
+          sleep 1
+        done
 
-        sudo chmod -R 777 ${{ github.workspace }}/*
+        if [[ ! -f proxysql.exit ]]; then
+          echo 'ProxySQL did not exit; terminating its process group.' | tee -a cleanup.log
+          kill -TERM -- "-$pgid" 2>/dev/null || true
+          sleep 5
+          kill -KILL -- "-$pgid" 2>/dev/null || true
+          exit 1
+        fi
+        rc=$(cat proxysql.exit)
+        echo "ProxySQL exited with status $rc" | tee -a cleanup.log
+        exit "$rc"
 
     - name: Fix artifact permissions
       if: ${{ failure() && !cancelled() }}
+      timeout-minutes: 1
       run: |
         # actions/upload-artifact dies with EACCES when it scandirs into
         # directories under ci_*_logs/ that were created inside docker
@@ -156,15 +205,22 @@ jobs:
         sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
 
     - name: Archive artifacts logs
-      if: ${{ failure() && !cancelled() }}
+      if: ${{ !cancelled() }}
+      timeout-minutes: 3
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: |
           proxysql/ci_*_logs/
+          proxysql/src/proxysql.log
+          proxysql/src/cleanup.log
+          proxysql/src/proxysql.pgid
+          proxysql/src/proxysql.exit
+          proxysql/src/ci-tier.json
 
     - name: Archive artifacts bin
       if: ${{ failure() && !cancelled() }}
+      timeout-minutes: 5
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-bin-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
@@ -174,6 +230,7 @@ jobs:
           proxysql/libs/
 #          proxysql/deps/
     - name: Complete selected product test check
+      timeout-minutes: 2
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
