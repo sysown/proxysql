@@ -405,6 +405,7 @@
   "pgsql_servers_ssl_params_unit-t" : [ "unit-tests-g1" ],
   "pgsql_set_tracked_vars_regexp_unit-t" : [ "unit-tests-g1" ],
   "pgsql_set_transaction_regexp_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_stable_io_unit-t" : [ "unit-tests-g1" ],
   "pgsql_tokenizer_unit-t" : [ "unit-tests-g1" ],
   "pgsql_txn_state_unit-t" : [ "unit-tests-g1" ],
   "pgsql_variables_validator_unit-t" : [ "unit-tests-g1" ],
@@ -775,6 +776,7 @@
   "vector_features-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "vendored_openssl_version_unit-t" : [ "unit-tests-g1" ],
   "worker_load_unit-t" : [ "unit-tests-g1" ],
+  "worker_scheduler_cost_unit-t" : [ "unit-tests-g1" ],
   "worker_timeout_unit-t" : [ "unit-tests-g1" ],
   "worker_waiter_unit-t" : [ "unit-tests-g1" ]
 }

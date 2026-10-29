@@ -53,9 +53,13 @@ template<class Session> int handle(Session *sess) {
 	return outcome == Outcome::error ? -1 : 0;
 }
 extern "C" int __wrap__ZN13MySQL_Session7handlerEv(MySQL_Session *s) { return handle(s); }
+#ifdef PROXYSQL31
 extern "C" int __wrap__ZN13PgSQL_Session7handlerEb(PgSQL_Session *s, bool io_only) {
 	return io_only ? 0 : handle(s);
 }
+#else
+extern "C" int __wrap__ZN13PgSQL_Session7handlerEv(PgSQL_Session *s) { return handle(s); }
+#endif
 extern "C" PgSQL_Session_Run_Result __wrap__ZN13PgSQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb(
 	PgSQL_Session *s, PgSQL_Pool_Acquire_Mode, bool io_only) {
 	if (io_only) return PgSQL_Session_Run_Result::WaitIO;
