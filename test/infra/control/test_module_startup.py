@@ -100,7 +100,13 @@ class ModuleStartup(IsolatedDaemonTest):
                     self.expect_started(daemon, mysql_workers, pgsql_workers, mysql_admin, pgsql_admin)
                     tasks = Path(f"/proc/{daemon.process.pid}/task")
                     if tasks.is_dir():
-                        names = [p.read_text().strip() for p in tasks.glob("*/comm") if p.exists()]
+                        names = []
+                        for path in tasks.glob("*/comm"):
+                            try:
+                                names.append(path.read_text().strip())
+                            except FileNotFoundError:
+                                # Transient tasks can exit between enumeration and open.
+                                continue
                         for dialect, enabled in (("MySQL", mysql_workers), ("PgSQL", pgsql_workers)):
                             workers = [n for n in names if n.startswith((dialect + "Worker", dialect + "Idle"))]
                             self.assertEqual(bool(workers), enabled, names)
