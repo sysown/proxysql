@@ -29,7 +29,7 @@
 # Outputs (under cwd, visible on the host via the bind mount):
 #   * coverage/lcov.info       — merged + filtered LCOV report
 #   * coverage/html/           — genhtml-rendered HTML report
-#   * unit-test-logs/<name>.log — stdout+stderr per failed test
+#   * unit-test-logs/<name>.log — stdout+stderr per test
 #
 # Exit status: 0 if all unit tests passed, 1 otherwise. Coverage
 # capture runs regardless.
@@ -97,7 +97,7 @@ for t in *-t; do
     log="${REPO_ROOT}/unit-test-logs/${t}.log"
     echo "::group::${t}"
     rc=0
-    proxysql_run_unit_test "${log}" "./${t}" > /dev/null || rc=$?
+    proxysql_run_unit_test "${log}" "./${t}" || rc=$?
     if [ "${rc}" -eq 0 ]; then
         PASSED=$((PASSED + 1))
         echo "PASS: ${t}"

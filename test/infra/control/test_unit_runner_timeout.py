@@ -1,4 +1,9 @@
-"""Exercise the unit runner with real child processes and stub coverage tools."""
+"""Exercise unit runners with real child processes and stub coverage tools.
+
+The isolated runner's real selector requires Python's packaging distribution
+(declared in test/scripts/bin/requirements.txt); its tests are explicitly
+skipped when the runner's python3 cannot find it.
+"""
 import os
 import json
 from pathlib import Path
@@ -120,6 +125,20 @@ class UnitRunnerTimeoutTests(unittest.TestCase):
         self.assertIn('FAIL: sanitizer-t', result.stdout)
         self.assertIn('WARNING: ThreadSanitizer:', result.stdout)
 
+    def test_passing_output_is_reported_and_captured(self):
+        self.executable(self.units / 'output-t',
+                        "echo 'stdout diagnostic'\necho 'stderr diagnostic' >&2")
+        result = self.run_suite()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('stdout diagnostic\nstderr diagnostic\n', result.stdout)
+        self.assertLess(result.stdout.index('stderr diagnostic'), result.stdout.index('PASS: output-t'))
+        if self.runner_name == 'run-tests-isolated.bash':
+            log_dir = self.root / 'ci_infra_logs/timeout-regression/unit-test-logs'
+        else:
+            log_dir = self.root / 'unit-test-logs'
+        self.assertEqual((log_dir / 'output-t.log').read_text(),
+                         'stdout diagnostic\nstderr diagnostic\n')
+
     def test_log_capture_failure_is_fatal(self):
         self.executable(self.units / 'log-failure-t', 'exit 0')
         if self.runner_name == 'run-tests-isolated.bash':
@@ -147,6 +166,18 @@ class UnitRunnerTimeoutTests(unittest.TestCase):
 class IsolatedUnitRunnerTimeoutTests(UnitRunnerTimeoutTests):
     runner_name = 'run-tests-isolated.bash'
     expected_summary = '1/2 passed, 1 failed'
+
+    @classmethod
+    def setUpClass(cls):
+        dependency = subprocess.run(
+            ['python3', '-c',
+             "import importlib.util, sys\n"
+             "if importlib.util.find_spec('packaging') is None: sys.exit(77)\n"
+             "from packaging import version\n"],
+            capture_output=True, text=True)
+        if dependency.returncode == 77:
+            raise unittest.SkipTest('isolated runner selector requires Python packaging')
+        dependency.check_returncode()
 
 
 if __name__ == '__main__':

@@ -1,4 +1,7 @@
-"""Exercise cluster launch, advertised endpoints and scheduler polling together."""
+"""Exercise cluster launch, advertised endpoints and direct polling.
+
+Docker exec is stubbed; scheduler installation and execution are not covered.
+"""
 import json
 import os
 from pathlib import Path
@@ -74,8 +77,8 @@ a=sys.argv[1:]; port=a[a.index('-P')+1];sys.stdin.read()
                                     env=env, capture_output=True, text=True, check=True)
             expected = ','.join(f'proxysql:{6032+i*10}' for i in range(expected_peers+1)) if expected_peers else ''
             self.assertIn('ENDPOINTS='+expected+'\n', result.stdout)
-            # The scheduler runs inside the primary container, which receives
-            # the effective peer count even when SKIP_CLUSTER_START overrides it.
+            # Exercise the polling script directly with the effective peer
+            # count. This does not verify the launcher's scheduler installation.
             env['PROXYSQL_CLUSTER_NODES'] = str(expected_peers)
             subprocess.run(['bash', str(control/'check_all_nodes.bash')], env=env, check=True)
             deadline = time.monotonic()+3
