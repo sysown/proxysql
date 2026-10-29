@@ -10,10 +10,12 @@ local implementation. Also preserve relevant coverage from #5222 / issue #5218.
 
 ## Approach
 
-Use two independently reviewable changes. Rebasing the old branches would carry
-forward outdated lifecycle assumptions and, in #5217, an unconditional disabled
-statistics-refresh block. A single combined replacement would obscure which
-behavior is a bug fix and which is an optional startup feature.
+Use one combined replacement, #6559, against `v3.0`, as subsequently approved
+by the maintainer to reduce duplicate CI work. The original two-PR review plan
+is superseded: #6558 is closed and its lifecycle fixes are included in #6559.
+Keep the lifecycle fix and optional startup feature distinguishable in commits
+and verification. Rebasing the old branches would carry outdated lifecycle
+assumptions and, in #5217, an unconditional disabled statistics-refresh block.
 
 1. Reproduce STOP/START and stopped-state Admin failures on the exact current
    commit, then fix the proven lifecycle defects while retaining normal runtime
@@ -37,7 +39,8 @@ behavior is a bug fix and which is an optional startup feature.
   necessity. Reuse current Admin-client draining and TLS ownership mechanisms.
 - Run tests against private daemons with temporary datadirs and dynamically
   allocated loopback ports; never issue STOP against an existing service.
-- Keep the two production changes and their regression coverage separable in git.
+- Keep lifecycle and startup production changes and regression coverage
+  distinguishable in git within the single combined replacement PR.
 
 ## Decisions to confirm through reproduction
 
@@ -51,7 +54,10 @@ configuration operations; retain existing errors for operations that already
 require a running processor. Explicit SAVE QUERY RULES/FIREWALL FROM RUNTIME
 (and TO MEMORY aliases) must report unavailable runtime state instead of silently
 returning success; safe snapshot SELECTs still use the actual empty schemas.
-Do not introduce a blanket LOAD rejection.
+Digest maintenance is idempotent: absent processors retain no digest maps after
+teardown, so PURGE/TRUNCATE correctly acknowledge zero deletions. These commands
+do not purge persistent digest-history tables. Do not introduce a blanket LOAD
+rejection.
 
 STOP drains its queued response, including partial packets and TLS ciphertext,
 before setting shutdown. The drain is bounded to one second for an unresponsive
