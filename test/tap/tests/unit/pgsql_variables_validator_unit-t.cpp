@@ -6,6 +6,7 @@
 
 #include <cstring>
 #include <cstdlib>
+#include <string>
 
 // Helper: validate and check transformed value
 static void assert_validates(const pgsql_variable_validator& v, const char* input,
@@ -173,8 +174,45 @@ static void test_client_encoding_invalid() {
     ok(r == false, "encoding: nonexistent encoding rejected");
 }
 
+// ============================================================
+// TimeZone validation
+// ============================================================
+
+static void test_timezone_valid() {
+    const char* names[] = {
+        // zone names
+        "UTC", "utc", "EST", "Europe/Berlin", "America/Argentina/Buenos_Aires", "America/Port-au-Prince", "Etc/GMT+3",
+        // POSIX rules
+        "PST8PDT", "EST5EDT,M3.2.0,M11.1.0", "UTC+3", "<-03>3", "<+0330>-3:30",
+        // hours
+        "-7", "5.5", "1e1",
+        // intervals, as the SET parser passes them on; a quoted SET string keeps '' doubled
+        "INTERVAL '+02:30'", "INTERVAL '-08:00' HOUR TO MINUTE", "interval '1' hour", "INTERVAL ''+02:30''",
+        // well-formed but unknown to PostgreSQL: only the backend knows its zone list
+        "Invalid/Zone", "PST",
+    };
+    for (const char* name : names) {
+        assert_validates(pgsql_variable_validator_timezone, name, true, nullptr, "timezone");
+    }
+}
+
+static void test_timezone_invalid() {
+    const std::string too_long(256, 'A');
+    const char* values[] = {
+        "'UTC'", "America/New York", "UTC\t", "UTC;", "", too_long.c_str(),
+        "INTERVAL '1''2'", "INTERVAL '1'; x", "INTERVAL'1'", "INTERVAL '1",
+        // as a string value, PostgreSQL accepts nothing after the interval
+        "INTERVAL ''-08:00'' HOUR TO MINUTE", "INTERVAL ''1'",
+        // PostgreSQL accepts these two, but no real client sends them
+        " 5", "5 ",
+    };
+    for (const char* value : values) {
+        assert_validates(pgsql_variable_validator_timezone, value, false, nullptr, "timezone");
+    }
+}
+
 int main() {
-    plan(75);
+    plan(110);
     test_init_minimal();
 
     test_bool_true_values();                // 12 (6 inputs x 2 assertions each)
@@ -195,6 +233,8 @@ int main() {
     test_search_path_invalid();             // 1
     test_client_encoding_valid();           // 6 (3 inputs x 2)
     test_client_encoding_invalid();         // 1
+    test_timezone_valid();                  // 21 (validate only)
+    test_timezone_invalid();                // 14
 
     // Note: assert_validates calls ok() once for validate result,
     // and once more for transform comparison when expected_transformed != nullptr.
