@@ -17,11 +17,13 @@
  * already carry the same text, need no SET, and hide the bug.
  */
 
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 #include "libpq-fe.h"
 #include "mysql.h"
@@ -33,16 +35,38 @@ CommandLine cl;
 using PGConn = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 using PGResult = std::unique_ptr<PGresult, decltype(&PQclear)>;
 
-static PGConn connect_proxy(const std::string& extra) {
+static PGConn connect_to(const char* host, int port, const char* user, const char* pass, const std::string& extra) {
 	std::stringstream ss;
-	ss << "host=" << cl.pgsql_host << " port=" << cl.pgsql_port << " user=" << cl.pgsql_username
-	   << " password=" << cl.pgsql_password << " sslmode=disable connect_timeout=10 " << extra;
+	ss << "host=" << host << " port=" << port << " user=" << user << " password=" << pass
+	   << " sslmode=disable connect_timeout=10 " << extra;
 	PGConn conn(PQconnectdb(ss.str().c_str()), &PQfinish);
 	if (PQstatus(conn.get()) != CONNECTION_OK) {
-		diag("Connection with '%s' failed: %s", extra.c_str(), PQerrorMessage(conn.get()));
+		diag("Connection to %s:%d with '%s' failed: %s", host, port, extra.c_str(), PQerrorMessage(conn.get()));
 		conn.reset();
 	}
 	return conn;
+}
+
+static PGConn connect_proxy(const std::string& extra) {
+	return connect_to(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_password, extra);
+}
+
+static PGConn connect_backend(const std::string& extra) {
+	return connect_to(cl.pgsql_server_host, cl.pgsql_server_port, cl.pgsql_server_username,
+		cl.pgsql_server_password, "dbname=postgres " + extra);
+}
+
+// Every encoding the backend knows, so the list follows its PostgreSQL version.
+static std::vector<std::string> backend_encodings() {
+	std::vector<std::string> names;
+	PGConn conn = connect_backend("");
+	if (!conn) return names;
+	PGResult res(PQexec(conn.get(), "SELECT pg_encoding_to_char(i) FROM generate_series(0, 255) AS i "
+		"WHERE pg_encoding_to_char(i) <> '' ORDER BY i"), &PQclear);
+	if (PQresultStatus(res.get()) == PGRES_TUPLES_OK) {
+		for (int i = 0; i < PQntuples(res.get()); i++) names.emplace_back(PQgetvalue(res.get(), i, 0));
+	}
+	return names;
 }
 
 static bool exec_ok(PGconn* conn, const char* sql) {
@@ -172,6 +196,36 @@ static void check_unicode_kept() {
 		shown.c_str());
 }
 
+// Each encoding, lower-cased and quoted as asyncpg sends it, must work through ProxySQL as it
+// does on PostgreSQL and be reported under the same name. One that PostgreSQL itself refuses
+// with this database's encoding (MULE_INTERNAL with UTF8) is skipped.
+static void check_every_encoding(const std::vector<std::string>& names) {
+	for (const std::string& name : names) {
+		std::string lower = name;
+		std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+		const std::string login = "client_encoding='\\'" + lower + "\\''";
+		const std::string label = "client_encoding='" + lower + "'";
+
+		std::string expected;
+		{
+			PGConn direct = connect_backend(login);
+			expected = reported_encoding(direct.get());
+		}
+		if (expected.empty()) {
+			skip(1, "%s: refused by PostgreSQL itself", label.c_str());
+			continue;
+		}
+
+		leave_pooled_connection(name == "LATIN1" ? "UTF8" : "LATIN1");
+		PGConn conn = connect_proxy(login);
+		const bool query_ok = exec_ok(conn.get(), "SELECT 1");
+		const std::string reported = reported_encoding(conn.get());
+		ok(query_ok && reported == expected,
+			"%s: a query on a pooled connection succeeds, reported as '%s' like PostgreSQL (got '%s')",
+			label.c_str(), expected.c_str(), reported.c_str());
+	}
+}
+
 // A client that sends no client_encoding gets pgsql-default_client_encoding.
 static void check_quoted_default_variable(MYSQL* admin) {
 	const std::string original = admin_value(admin,
@@ -206,11 +260,16 @@ static void check_quoted_default_variable(MYSQL* admin) {
 int main() {
 	if (cl.getEnv()) return exit_status();
 
-	plan(15);
-	alarm(120);
-
 	// libpq would send this as client_encoding; every case chooses its own value.
 	unsetenv("PGCLIENTENCODING");
+
+	const std::vector<std::string> encodings = backend_encodings();
+	if (encodings.empty()) {
+		BAIL_OUT("Could not read the encoding list from PostgreSQL");
+	}
+
+	plan(15 + static_cast<int>(encodings.size()));
+	alarm(180);
 
 	MYSQL* admin = mysql_init(nullptr);
 	if (!admin || !mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password,
@@ -224,6 +283,7 @@ int main() {
 	check_set_alias();
 	check_default_after_quoted_login();
 	check_unicode_kept();
+	check_every_encoding(encodings);
 	check_quoted_default_variable(admin);
 
 	mysql_close(admin);
