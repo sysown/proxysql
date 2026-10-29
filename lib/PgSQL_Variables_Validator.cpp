@@ -442,16 +442,12 @@ bool pgsql_variable_validate_client_encoding(const char* value, const params_t* 
 	}
 
 	if (transformed_value) {
-		*transformed_value = strdup(value);
-
-		if (*transformed_value) { // Ensure strdup succeeded
-			char* tmp_val = *transformed_value;
-
-			while (*tmp_val) {
-				*tmp_val = toupper((unsigned char)*tmp_val);
-				tmp_val++;
-			}
-		}
+		// Store the standard name, as PostgreSQL does (check_client_encoding()). The lookup
+		// ignores punctuation, so a value like "'utf-8'" (asyncpg) is valid, and keeping that
+		// spelling put the quotes into the SET sent to the backend. PostgreSQL keeps exactly
+		// "UNICODE" as written, because pre-9.1 JDBC drivers expect to read it back.
+		*transformed_value = strdup(strcmp(value, "UNICODE") == 0 ? value :
+			PgSQL_Connection::encoding_to_char(charset_encoding));
 	}
 
 	return true;

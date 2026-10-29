@@ -165,6 +165,16 @@ static void test_client_encoding_valid() {
     assert_validates(pgsql_variable_validator_client_encoding, "UTF8", true, "UTF8", "encoding");
     assert_validates(pgsql_variable_validator_client_encoding, "utf8", true, "UTF8", "encoding");  // uppercased
     assert_validates(pgsql_variable_validator_client_encoding, "LATIN1", true, "LATIN1", "encoding");
+    // Any spelling PostgreSQL accepts is stored as its standard name. asyncpg sends the
+    // quotes as part of the value, and keeping them broke the SET sent to the backend.
+    assert_validates(pgsql_variable_validator_client_encoding, "'utf-8'", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "\"utf8\"", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "utf-8", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "iso88591", true, "LATIN1", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "unicode", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "'UNICODE'", true, "UTF8", "encoding");
+    // PostgreSQL keeps exactly "UNICODE" as written, for old JDBC drivers.
+    assert_validates(pgsql_variable_validator_client_encoding, "UNICODE", true, "UNICODE", "encoding");
 }
 
 static void test_client_encoding_invalid() {
@@ -174,7 +184,7 @@ static void test_client_encoding_invalid() {
 }
 
 int main() {
-    plan(75);
+    plan(89);
     test_init_minimal();
 
     test_bool_true_values();                // 12 (6 inputs x 2 assertions each)
@@ -193,7 +203,7 @@ int main() {
     test_search_path_valid();               // 4 (2 inputs x 2)
     test_search_path_quoted();              // 2
     test_search_path_invalid();             // 1
-    test_client_encoding_valid();           // 6 (3 inputs x 2)
+    test_client_encoding_valid();           // 20 (10 inputs x 2)
     test_client_encoding_invalid();         // 1
 
     // Note: assert_validates calls ok() once for validate result,
