@@ -287,6 +287,9 @@ sh-%:
 
  test_com_register_slave_enables_fast_forward-t: binlog_rpl.h
 
+# The lifecycle regression includes the real fixture implementation.
+kill_connection2_fixture-t: kill_connection2_fixture-t.cpp kill_connection2-t.cpp
+
 %-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(POSTGRESQL_STATIC_LIBS)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 

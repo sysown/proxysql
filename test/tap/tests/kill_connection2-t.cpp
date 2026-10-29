@@ -41,7 +41,9 @@ static void close_all_conns() {
 // those exits and partially created connection batches.
 class TimeoutFixture {
 	MYSQL* admin;
-	bool saved = false;
+	bool config_snapshot = false;
+	bool runtime_snapshot = false;
+	bool restore_pending = false;
 
 	bool query(const char* sql) {
 		if (!mysql_query(admin, sql)) return true;
@@ -54,36 +56,47 @@ public:
 	TimeoutFixture(const TimeoutFixture&) = delete;
 	TimeoutFixture& operator=(const TimeoutFixture&) = delete;
 	bool save() {
+		if (!restore()) return false;
 		// The admin SQLite handle is shared; temp tables outlive a disconnect.
 		if (!query("DROP TABLE IF EXISTS temp.kill_connection2_config") ||
 			!query("DROP TABLE IF EXISTS temp.kill_connection2_runtime")) return false;
 		if (!query("CREATE TEMPORARY TABLE kill_connection2_config AS SELECT * FROM global_variables "
 			"WHERE variable_name IN ('mysql-have_ssl','mysql-have_compress',"
 			"'mysql-auto_increment_delay_multiplex','mysql-wait_timeout','mysql-max_transaction_time')")) return false;
+		config_snapshot = true;
 		if (!query("CREATE TEMPORARY TABLE kill_connection2_runtime AS SELECT * FROM runtime_global_variables "
 			"WHERE variable_name IN ('mysql-have_ssl','mysql-have_compress',"
 			"'mysql-auto_increment_delay_multiplex','mysql-wait_timeout','mysql-max_transaction_time')")) return false;
-		saved = true;
+		runtime_snapshot = true;
+		restore_pending = true;
 		return true;
 	}
 	bool restore() {
-		if (!saved) return true;
-		bool good = true;
-		for (const char* sql : {
-			"UPDATE global_variables SET variable_value=(SELECT variable_value FROM kill_connection2_runtime v "
-			"WHERE v.variable_name=global_variables.variable_name) WHERE variable_name IN "
-			"(SELECT variable_name FROM kill_connection2_runtime)",
-			"LOAD MYSQL VARIABLES TO RUNTIME",
-			"UPDATE global_variables SET variable_value=(SELECT variable_value FROM kill_connection2_config v "
-			"WHERE v.variable_name=global_variables.variable_name) WHERE variable_name IN "
-			"(SELECT variable_name FROM kill_connection2_config)"
-		}) {
-			if (!query(sql)) good = false;
+		if (restore_pending) {
+			// Only load runtime values after staging them successfully. Restore
+			// configured values even if staging or loading runtime values failed.
+			const bool runtime_restored = query(
+				"UPDATE global_variables SET variable_value=(SELECT variable_value FROM kill_connection2_runtime v "
+				"WHERE v.variable_name=global_variables.variable_name) WHERE variable_name IN "
+				"(SELECT variable_name FROM kill_connection2_runtime)") && query("LOAD MYSQL VARIABLES TO RUNTIME");
+			const bool config_restored = query(
+				"UPDATE global_variables SET variable_value=(SELECT variable_value FROM kill_connection2_config v "
+				"WHERE v.variable_name=global_variables.variable_name) WHERE variable_name IN "
+				"(SELECT variable_name FROM kill_connection2_config)");
+			if (!runtime_restored || !config_restored) return false;
+			restore_pending = false;
 		}
-		if (good) {
-			saved = false;
-			if (!query("DROP TABLE temp.kill_connection2_config")) good = false;
-			if (!query("DROP TABLE temp.kill_connection2_runtime")) good = false;
+		// Snapshot ownership is independent of value restoration. A partial
+		// save still needs cleanup, and a failed DROP must remain retryable
+		// without replaying restoration after either snapshot has been removed.
+		bool good = true;
+		if (config_snapshot) {
+			if (query("DROP TABLE IF EXISTS temp.kill_connection2_config")) config_snapshot = false;
+			else good = false;
+		}
+		if (runtime_snapshot) {
+			if (query("DROP TABLE IF EXISTS temp.kill_connection2_runtime")) runtime_snapshot = false;
+			else good = false;
 		}
 		return good;
 	}
