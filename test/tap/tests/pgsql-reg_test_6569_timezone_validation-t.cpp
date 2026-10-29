@@ -121,7 +121,8 @@ static void check_every_zone_name() {
 		const bool set_ok = exec_ok(proxy.get(), set, &error);
 		const std::string got = set_ok ? shown_timezone(proxy.get()) : "";
 		checked++;
-		if (got != expected) {
+		// shown_timezone() gives "" when SHOW fails, so an empty value is a failure, never a match.
+		if (expected.empty() || got != expected) {
 			failed++;
 			diag("'%s': ProxySQL %s, PostgreSQL shows '%s'", name.c_str(),
 				set_ok ? ("shows '" + got + "'").c_str() : ("refused it: " + error).c_str(), expected.c_str());
@@ -141,11 +142,11 @@ static void check_samples() {
 		"UTC", "utc", "EST", "Europe/Berlin", "America/Argentina/Buenos_Aires", "America/Port-au-Prince", "Etc/GMT+3",
 		"PST8PDT", "EST5EDT,M3.2.0,M11.1.0", "UTC+3", "<-03>3", "<+0330>-3:30",
 		"-7", "5.5", "1e1",
-		"INTERVAL '+02:30'",
+		"INTERVAL '+02:30'", "INTERVAL '2 hours'", "INTERVAL'1'",
 	};
 	const std::vector<std::string> refused = {
 		"'UTC'", "America/New York", "UTC\t", "UTC;", std::string(256, 'A'),
-		"INTERVAL '-08:00' HOUR TO MINUTE", "INTERVAL '1''2'",
+		"INTERVAL '-08:00' HOUR TO MINUTE", "INTERVAL '1''2'", "INTERVAL+3",
 	};
 	// PostgreSQL reads these as a number of hours; ProxySQL refuses them.
 	const std::vector<std::string> refused_by_proxysql_only = { " 5", "5 " };
@@ -161,7 +162,7 @@ static void check_samples() {
 		const bool proxy_ok = exec_ok(proxy.get(), set, &error);
 		bool good = pg_ok == pg_accepts && proxy_ok == proxysql_accepts;
 		if (proxy_ok) {
-			good = good && shown_timezone(proxy.get()) == expected;
+			good = good && !expected.empty() && shown_timezone(proxy.get()) == expected;
 		} else {
 			good = good && error.find(REFUSED) != std::string::npos && exec_ok(proxy.get(), "SELECT 1");
 		}
@@ -196,11 +197,35 @@ static void check_login_refused() {
 		"Login with options -c TimeZone='UTC' (quoted) is refused at login, as by PostgreSQL (%s)", proxy_error.c_str());
 }
 
-// The statement form keeps working: ProxySQL accepts it without asking the backend.
-static void check_interval_statement() {
-	PGConn proxy = connect_proxy("");
-	ok(exec_ok(proxy.get(), "SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE"),
-		"SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE is still accepted");
+// The SET TIME ZONE INTERVAL statement form, on PostgreSQL and through ProxySQL: both must
+// accept or both must refuse. The grammar allows only HOUR, MINUTE or HOUR TO MINUTE after
+// the interval. After an accepted one the connection is closed without another query: with
+// the default SET parser the value cannot yet be applied to a backend connection.
+static void check_interval_statements() {
+	const std::vector<std::pair<std::string, bool>> statements = {
+		{ "SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE", true },
+		{ "SET TIME ZONE INTERVAL '+02:30' HOUR", true },
+		{ "SET TIME ZONE INTERVAL '+02:30' MINUTE", true },
+		{ "SET TIME ZONE INTERVAL '2 hours'", true },
+		{ "SET TIME ZONE INTERVAL(2) '+02:30'", true },
+		{ "SET TIME ZONE INTERVAL '+02:30' DAY", false },
+		{ "SET TIME ZONE INTERVAL '+02:30' FOO", false },
+		{ "SET TIME ZONE INTERVAL '1' HOUR TO SECOND", false },
+	};
+	for (const auto& [sql, pg_accepts] : statements) {
+		PGConn direct = connect_backend("");
+		const bool pg_ok = exec_ok(direct.get(), sql);
+		PGConn proxy = connect_proxy("");
+		std::string error;
+		const bool proxy_ok = exec_ok(proxy.get(), sql, &error);
+		bool good = proxy && pg_ok == pg_accepts && proxy_ok == pg_accepts;
+		if (!proxy_ok) good = good && exec_ok(proxy.get(), "SELECT 1");
+		if (!good) {
+			diag("%s: PostgreSQL %s, ProxySQL %s %s", sql.c_str(), pg_ok ? "accepted" : "refused",
+				proxy_ok ? "accepted" : "refused", error.c_str());
+		}
+		ok(good, "%s: PostgreSQL and ProxySQL both %s", sql.c_str(), pg_accepts ? "accept it" : "refuse it");
+	}
 }
 
 static MYSQL* admin = nullptr;
@@ -232,10 +257,14 @@ static void check_default_variable() {
 		BAIL_OUT("Could not read pgsql-default_timezone");
 	}
 
-	admin_exec(std::string("UPDATE global_variables SET variable_value='''UTC'''") + where);
-	admin_exec("LOAD PGSQL VARIABLES TO RUNTIME");
+	// If the UPDATE or the LOAD failed, an unchanged runtime value would prove nothing. The
+	// table is read before the LOAD, which writes the runtime value back into it.
+	const bool applied = admin_exec(std::string("UPDATE global_variables SET variable_value='''UTC'''") + where)
+		&& admin_value(std::string("SELECT variable_value FROM global_variables") + where) == "'UTC'"
+		&& admin_exec("LOAD PGSQL VARIABLES TO RUNTIME");
 	const std::string runtime = admin_value(std::string("SELECT variable_value FROM runtime_global_variables") + where);
-	ok(runtime == runtime_before, "pgsql-default_timezone='UTC' (quoted) is refused: runtime value stays '%s' (got '%s')",
+	ok(applied && runtime == runtime_before,
+		"pgsql-default_timezone='UTC' (quoted) is refused: runtime value stays '%s' (got '%s')",
 		runtime_before.c_str(), runtime.c_str());
 
 	std::string escaped(original.size() * 2 + 1, '\0');
@@ -252,7 +281,7 @@ int main() {
 	unsetenv("PGTZ");
 	unsetenv("PGOPTIONS");
 
-	plan(1 + 25 + 2 + 1 + 2);
+	plan(1 + 28 + 2 + 8 + 2);
 	alarm(180);
 
 	admin = mysql_init(nullptr);
@@ -264,7 +293,7 @@ int main() {
 	check_every_zone_name();
 	check_samples();
 	check_login_refused();
-	check_interval_statement();
+	check_interval_statements();
 	check_default_variable();
 
 	mysql_close(admin);
