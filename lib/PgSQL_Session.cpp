@@ -3281,7 +3281,11 @@ void PgSQL_Session::note_backend_release(unsigned int hostgroup) {
 }
 #endif
 
+#ifdef PROXYSQL31
 int PgSQL_Session::handler(bool io_only) try {
+#else
+int PgSQL_Session::handler() try {
+#endif
 #if ENABLE_TIMER
 	Timer timer(thread->Timers.Sessions_Handlers);
 #endif // ENABLE_TIMER
@@ -3289,6 +3293,7 @@ int PgSQL_Session::handler(bool io_only) try {
 	bool wrong_pass = false;
 	bool in_pending_state = false;
 	if (to_process == 0) return 0; // this should be redundant if the called does the same check
+#ifdef PROXYSQL31
 	// Preserve idle-backend error/notification handling before a frontend
 	// request can change the session state. Include pinned non-current backends.
 	if (mybes) {
@@ -3303,6 +3308,7 @@ int PgSQL_Session::handler(bool io_only) try {
 		thread->consume_data_stream_readiness(client_myds);
 	if (!healthy) return -1;
 	if (io_only) return 0;
+#endif
 	if (offline_fatal_pending) {
 		writeout();
 		// Include encrypted bytes retained after a short write. The normal poll
@@ -4339,7 +4345,9 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			client_myds->DSS = STATE_SSL_INIT;
 			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
+#ifdef PROXYSQL31
 			client_myds->tls13_handshake_complete = false;
+#endif
 			client_myds->ssl = GloVars.get_SSL_new();
 			SSL_set_fd(client_myds->ssl, client_myds->fd);
 			SSL_set_accept_state(client_myds->ssl);

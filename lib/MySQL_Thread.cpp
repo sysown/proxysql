@@ -5201,7 +5201,7 @@ void MySQL_Thread::process_all_sessions() {
 	}
 #ifdef PROXYSQL31
     Worker_Scheduler<MySQL_Thread, MySQL_Session, MySQL_Connection, MySQL_HostGroups_Manager> scheduler(*this, *MyHGM);
-    scheduler.run_early();
+    bool no_backend_loop_needed = false;
 #endif // PROXYSQL31
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
@@ -5275,8 +5275,11 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
 #ifdef PROXYSQL31
-                    if (sess->continuation_queued || !(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn))
+                    if (sess->continuation_queued) continue;
+                    if (!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
+                        no_backend_loop_needed = true;
                         continue;
+                    }
 #endif // PROXYSQL31
 #ifdef PROXYSQL31
                     rc = scheduler.run_session(sess) == Session_Run_Result::Close ? -1 : 0;
@@ -5295,6 +5298,11 @@ void MySQL_Thread::process_all_sessions() {
 						delete sess;
 					}
 				}
+#ifdef PROXYSQL31
+                else if (sess->killed) {
+                    no_backend_loop_needed = true;
+                }
+#endif
 			} else {
 				if (unlikely(sess->killed==true)) {
 					// this is a special cause, if killed the session needs to be executed no matter if paused
@@ -5315,7 +5323,7 @@ void MySQL_Thread::process_all_sessions() {
 #endif
     }
 #ifdef PROXYSQL31
-    scheduler.run_late();
+    scheduler.run_late(no_backend_loop_needed);
 #endif // PROXYSQL31
 	if (maintenance_loop) {
 		unsigned int total_active_transactions_tmp;
@@ -7522,6 +7530,28 @@ void MySQL_Thread::return_local_connections() {
 		cached_connections->remove_index_fast(0);
 	}
 }
+
+#ifdef PROXYSQL31
+void MySQL_Thread::return_local_connections(unsigned int hostgroup) {
+    // A fresh/incompatible checkout must publish its cached capacity, but a
+    // miss in one hostgroup must not flush compatible caches for all others.
+    unsigned retained = 0;
+    for (unsigned i = 0; i < cached_connections->len; ++i) {
+        auto *conn = static_cast<MySQL_Connection*>(cached_connections->index(i));
+        if (conn->parent->myhgc->hid != hostgroup) {
+            if (retained != i)
+                std::swap(cached_connections->pdata[retained], cached_connections->pdata[i]);
+            ++retained;
+        }
+    }
+    const unsigned published = cached_connections->len - retained;
+    if (!published) return;
+    MyHGM->push_MyConn_to_pool_array(
+        reinterpret_cast<MySQL_Connection**>(cached_connections->pdata + retained), published);
+    while (cached_connections->len > retained)
+        cached_connections->remove_index_fast(cached_connections->len - 1);
+}
+#endif // PROXYSQL31
 
 /**
  * @brief Scans sessions to kill based on connection and query IDs stored in the kill queue.

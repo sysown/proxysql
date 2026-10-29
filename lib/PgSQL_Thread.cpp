@@ -3610,10 +3610,14 @@ void PgSQL_Thread::run() {
 		}
 #endif // IDLE_THREADS
 
+#ifdef PROXYSQL31
 		{
 			ProcessAllMyDS_AfterPoll();
 			process_poll_housekeeping();
 		}
+#else
+		ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
+#endif
 #ifdef PROXYSQL31
 		if (last_b_rearm_us == pre_poll_time) {
 			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
@@ -3832,6 +3836,7 @@ void PgSQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 #endif // IDLE_THREADS
 
 
+#ifdef PROXYSQL31
 void PgSQL_Thread::ProcessAllMyDS_AfterPoll() {
 	// Do not accept, read, decrypt, frame packets or relay notifications here.
 	// Capture every stream's readiness before a handler can mutate the poll set.
@@ -3875,6 +3880,7 @@ void PgSQL_Thread::process_poll_housekeeping() {
 	}
 	ready_listeners.clear();
 }
+#endif
 
 bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigned int n) {
 	if (mypolls.fds[n].revents) {
@@ -3899,8 +3905,10 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 #endif // IDLE_THREADS
 		mypolls.last_recv[n] = curtime;
 		myds->revents = mypolls.fds[n].revents;
+#ifdef PROXYSQL31
 		myds->pending_poll_revents |= mypolls.fds[n].revents;
 		myds->pending_poll_events |= mypolls.fds[n].events;
+#endif
 		myds->sess->to_process = 1;
 		assert(myds->sess->status != session_status___NONE);
 	}
@@ -3922,6 +3930,7 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 			myds->sess->to_process = 1;
 		}
 	}
+#ifdef PROXYSQL31
 	return true;
 }
 
@@ -3933,8 +3942,13 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 	// detached/reused. A poll notification must never be consumed twice.
 	myds->pending_poll_revents = myds->pending_poll_events = 0;
 	myds->revents = ready;
+#endif
 	if (myds->myds_type == MYDS_BACKEND && myds->sess->status != FAST_FORWARD) {
+#ifdef PROXYSQL31
 		if (ready) {
+#else
+		if (mypolls.fds[n].revents) {
+#endif
 			// this part of the code fixes an important bug
 			// if a connection in use but idle (ex: running a transaction)
 			// get data, immediately destroy the session
@@ -3963,8 +3977,13 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 		}
 		return true;
 	}
+#ifdef PROXYSQL31
 	if (ready) {
 		if (myds->DSS < STATE_MARIADB_BEGIN || myds->DSS > STATE_MARIADB_END) {
+#else
+	if (mypolls.fds[n].revents) {
+		if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {
+#endif
 			// only if we aren't using MariaDB Client Library
 			int rb = 0;
 			do {
@@ -4003,7 +4022,11 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 						else { // we are in fast_forward mode and encrypted == false
 							struct pollfd _fds;
 							nfds_t _nfds = 1;
+#ifdef PROXYSQL31
 							_fds.fd = myds->fd;
+#else
+							_fds.fd = mypolls.fds[n].fd;
+#endif
 							_fds.events = POLLIN;
 							_fds.revents = 0;
 							int _rc = poll(&_fds, _nfds, 0);
@@ -4024,7 +4047,11 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 					bool set_rb_zero = true;
 					if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
 						if (myds->encrypted == true) {
+#ifdef PROXYSQL31
 							if (myds->ssl_handshake_is_complete()) {
+#else
+							if (SSL_is_init_finished(myds->ssl)) {
+#endif
 								if (myds->data_in_rbio()) {
 									set_rb_zero = false;
 								}
@@ -4038,13 +4065,24 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 
 		}
 		else {
+#ifdef PROXYSQL31
 			if (ready) {
 				myds->myconn->handler(ready);
+#else
+			if (mypolls.fds[n].revents) {
+				myds->myconn->handler(mypolls.fds[n].revents);
+#endif
 			}
 		}
+#ifdef PROXYSQL31
 		if ((requested & POLLOUT)
 			&&
 			((ready & POLLERR) || (ready & POLLHUP))
+#else
+		if ((mypolls.fds[n].events & POLLOUT)
+			&&
+			((mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP))
+#endif
 			) {
 			myds->set_net_failure();
 		}
@@ -4238,7 +4276,7 @@ void PgSQL_Thread::process_all_sessions() {
 	}
 #ifdef PROXYSQL31
     Worker_Scheduler<PgSQL_Thread, PgSQL_Session, PgSQL_Connection, PgSQL_HostGroups_Manager> scheduler(*this, *PgHGM);
-    scheduler.run_early();
+    bool no_backend_loop_needed = false;
 #endif
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4288,21 +4326,15 @@ void PgSQL_Thread::process_all_sessions() {
 			// removing this logic in 2.0.15
 			//sess->active_transactions = -1;
 		}
+#ifdef PROXYSQL31
 		// Pauses and pool starvation stop query execution, not socket I/O.
 		// POLLIN stays armed during a pause; drain it (including disconnects)
 		// here instead of repeatedly waking poll until the query delay expires.
 		if (sess->healthy && !sess->killed && sess->to_process &&
-			(sess->pause_until > curtime
-#ifdef PROXYSQL31
-			 || sess->waiter_node.session
-#endif
-			)) {
-			#ifdef PROXYSQL31
+			(sess->pause_until > curtime || sess->waiter_node.session)) {
 			if (scheduler.run_session(sess, PgSQL_Pool_Acquire_Mode::Normal, true) == PgSQL_Session_Run_Result::Close) sess->healthy = 0;
-#else
-			if (sess->handler(true) == -1) sess->healthy = 0;
-#endif
 		}
+#endif
 		if (sess->healthy == 0) {
 			char _buf[1024];
 			if (sess->client_myds) {
@@ -4346,6 +4378,7 @@ void PgSQL_Thread::process_all_sessions() {
 				if (sess->pause_until <= curtime) {
 #ifdef PROXYSQL31
 					if (sess->continuation_queued || !(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
+						if (!sess->continuation_queued) no_backend_loop_needed = true;
 						continue;
 					}
 #endif // PROXYSQL31
@@ -4367,6 +4400,11 @@ void PgSQL_Thread::process_all_sessions() {
 					}
 
 				}
+#ifdef PROXYSQL31
+				else if (sess->killed) {
+					no_backend_loop_needed = true;
+				}
+#endif
 			}
 			else {
 				if (sess->killed == true) {
@@ -4388,7 +4426,7 @@ void PgSQL_Thread::process_all_sessions() {
 #endif
 	}
 #ifdef PROXYSQL31
-	scheduler.run_late();
+		scheduler.run_late(no_backend_loop_needed);
 
 #endif // PROXYSQL31
 	if (maintenance_loop) {

@@ -10397,10 +10397,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #ifdef PROXYSQL31
             // Local-cache misses can still hide capacity from normal recovery:
             // cached connections count as used until published. A fresh or
-            // incompatible request must see that capacity in the global pool.
+            // incompatible request must see its hostgroup's capacity without
+            // flushing compatible cached connections for unrelated hostgroups.
             // Speculation remains read-only with respect to cache publication.
             if (acquire_mode == Pool_Acquire_Mode::Normal)
-                thread->return_local_connections();
+                thread->return_local_connections(mybe->hostgroup_id);
 #endif
 			if (trxid) {
 #ifdef PROXYSQL31
