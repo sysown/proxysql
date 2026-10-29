@@ -5,6 +5,7 @@ import json
 import os
 import pymysql
 import sys
+import select
 import subprocess
 import random
 import time
@@ -25,6 +26,7 @@ from structlog import get_logger, configure
 # import custom libs
 lib_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lib'))
 sys.path.append(lib_path)
+from group_reconciliation import reconcile_group_results
 import utils
 
 script = os.path.basename(__file__)
@@ -842,19 +844,42 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                         sys.exit(1)
                     continue
 
-                # Run test with timeout if specified
+                # Run test with timeout if specified.
+                #
+                # The read has to be non-blocking for tap_timeout to mean
+                # anything. readline() blocks until a full line arrives, so on
+                # a test that hangs while producing no output -- precisely the
+                # case this timeout exists to catch -- the deadline check below
+                # it was simply never reached, and the test ran until CI killed
+                # the job. select() bounds the wait so the check always runs,
+                # and reading raw chunks rather than lines means a test that
+                # stops mid-line cannot wedge us either.
                 try:
                     start_time = time.time()
+                    buf = b''
                     while True:
-                        line = fop.stdout.readline()
-                        if not line and fop.poll() is not None:
-                            break
-                        if line:
-                            log.debug(f"msg: {line.decode('utf-8').strip()}")
-                        
                         if tap_timeout > 0 and (time.time() - start_time) > tap_timeout:
                             raise subprocess.TimeoutExpired(fop.args, tap_timeout)
-                    
+
+                        wait = 1.0
+                        if tap_timeout > 0:
+                            wait = max(0.0, min(1.0, tap_timeout - (time.time() - start_time)))
+                        ready, _, _ = select.select([fop.stdout], [], [], wait)
+
+                        if ready:
+                            chunk = os.read(fop.stdout.fileno(), 65536)
+                            if not chunk:
+                                break                     # EOF: test finished
+                            buf += chunk
+                            while b'\n' in buf:
+                                line, buf = buf.split(b'\n', 1)
+                                log.debug(f"msg: {line.decode('utf-8', 'replace').strip()}")
+                        elif fop.poll() is not None:
+                            break
+
+                    if buf:                               # trailing partial line
+                        log.debug(f"msg: {buf.decode('utf-8', 'replace').strip()}")
+
                     fop.wait()
                 except subprocess.TimeoutExpired:
                     fop.kill()
@@ -862,7 +887,15 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' timed out after {tap_timeout} seconds'")
                     # Drain any remaining output
                     for line in fop.stdout:
-                        log.debug(f"msg: {line.decode('utf-8').strip()}")
+                        log.debug(f"msg: {line.decode('utf-8', 'replace').strip()}")
+                    # Reap the child. kill() signals but does not wait, so
+                    # returncode stays None until we do -- and the shared exit
+                    # path below evaluates abs(int(fop.returncode)), which
+                    # raises TypeError on None. That path was unreachable while
+                    # the timeout could never fire; now that it can, a timed-out
+                    # test would abort the whole group instead of failing one
+                    # test. wait() yields -SIGKILL, so the test scores non-zero.
+                    fop.wait()
                 except Exception as e:
                     log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!: {e}")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' - test threw an exception !!!'")
@@ -876,9 +909,6 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
                 self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' RC: {fop.returncode}'")
                 self.padmin_command(f"PROXYSQL FLUSH LOGS")
-                # Dump gcov counters for coverage collection
-                if self.coverage:
-                    self.padmin_command("PROXYSQL GCOV DUMP")
                 log.debug(f"{TAP} test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' RC: {fop.returncode}")
 
                 # if returncode print extra info
@@ -949,38 +979,6 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
             if rc and int(os.environ['TEST_PY_EXIT_ON_FAIL_TEST']):
                 sys.exit(1)
-
-        # Validate that all expected tests for this group passed
-        # If TAP_GROUP is set and group_has_tests, we expect ALL tests in groups.json to pass
-        # NOTE: Only validate tests that actually exist in the current workdir to avoid
-        # false positives when processing secondary workdirs (e.g., deprecate_eof_support)
-        if TAP_GROUP and group_has_tests and groups:
-            # Get tests that exist in the current workdir and belong to TAP_GROUP
-            available_tests = set(os.path.basename(t) for t in tap_tests)
-            expected_in_workdir = set(test_name for test_name, test_groups in groups.items()
-                                       if TAP_GROUP in test_groups and test_name in available_tests)
-
-            # Only validate if this workdir has tests for our group
-            if expected_in_workdir:
-                passed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val == 0)
-                failed_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val is not None and rc_val != 0)
-                skipped_tests = set(os.path.basename(cmd) for cmd, rc_val in summary if rc_val is None)
-
-                # Differentiate skipped tests from truly missing tests
-                # Skipped tests are intentionally excluded (version filter, group membership, etc.)
-                # Missing tests are expected but never encountered during execution
-                expected_runnable = expected_in_workdir - skipped_tests
-                missing_tests = expected_runnable - passed_tests - failed_tests
-
-                if missing_tests:
-                    log.critical(f"TAP_GROUP '{TAP_GROUP}': {len(missing_tests)} expected tests did not run: {sorted(missing_tests)}")
-                    rc = rc + len(missing_tests)
-
-                if len(passed_tests) != len(expected_runnable):
-                    log.critical(f"TAP_GROUP '{TAP_GROUP}': Expected {len(expected_runnable)} runnable tests to pass, but only {len(passed_tests)} passed. Failed: {len(failed_tests)}, Missing: {len(missing_tests)}, Skipped: {len(skipped_tests)}")
-                    # Ensure rc is non-zero to indicate failure
-                    if rc == 0:
-                        rc = len(expected_runnable) - len(passed_tests)
 
         return rc, logs, summary
 
@@ -1073,6 +1071,11 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
         ret_summary = []
 #        tap_workdirs = os.environ['TAP_WORKDIRS'].strip('() ').split()
         tap_workdirs = self.collect_tap_workdirs(os.environ['TAP_WORKDIRS'])
+        discovered_tests = [
+            os.path.basename(test_path)
+            for tap_dir in tap_workdirs
+            for test_path in sorted(glob.glob(tap_dir.rstrip('/') + '/*-t'))
+        ]
         log.info("Discovering workdirs ...")
         for tap_dir in tap_workdirs:
             log.info("TAP_WORKDIR: " + tap_dir.replace(WORKSPACE, '').rstrip('/') + '/')
@@ -1093,6 +1096,84 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                 display_test_summary(os.path.basename(tap_dir.rstrip('/')), rc, summary)
 #                log.info(f"ret_rc = {ret_rc}    rc = {rc}")
         self.execute_hooks('post-*')
+
+        tap_group = os.environ.get('TAP_GROUP', '')
+        if tap_group:
+            groups_json_path = f"{WORKSPACE}/test/tap/groups/groups.json"
+            try:
+                with open(groups_json_path) as groups_file:
+                    groups = json.load(groups_file)
+            except (OSError, ValueError) as error:
+                log.critical(
+                    f"TAP_GROUP '{tap_group}' reconciliation cannot read "
+                    f"'{groups_json_path}': {error}"
+                )
+                groups = {}
+                ret_rc = max(ret_rc, 1)
+
+            declared_tests = {
+                test_name
+                for test_name, test_groups in groups.items()
+                if tap_group in test_groups
+            }
+            declared_tests = {
+                test_name
+                for test_name in declared_tests
+                if not self.filtered_by_version(
+                    test_name, getattr(self, 'padmin_vers', '9999.0.0'), groups
+                )[0]
+                and self.filtered_by_regex(test_name, 'TEST_PY_TAP_INCL')[0]
+                and not self.filtered_by_regex(test_name, 'TEST_PY_TAP_EXCL')[0]
+            }
+
+            # A shuffle limit deliberately selects a random subset from the
+            # discovered programs. Reconcile only the names selected by that
+            # mode; an unfiltered group still reconciles every declaration.
+            if int(os.environ.get('TEST_PY_TAP_SHUFFLE_LIMIT', 0)) > 0:
+                selected_names = {
+                    os.path.basename(test_path)
+                    for test_path, _ in ret_summary
+                }
+                declared_tests &= selected_names
+
+            result_basenames = [
+                (os.path.basename(test_path), status)
+                for test_path, status in ret_summary
+            ]
+            reconciliation = reconcile_group_results(
+                declared_tests, discovered_tests, result_basenames
+            )
+            discovered_declared = {
+                name for name in discovered_tests if name in declared_tests
+            }
+            executed = reconciliation.passed | reconciliation.failed
+            log.info(
+                f"TAP_GROUP '{tap_group}' reconciliation: "
+                f"declared={len(declared_tests)}, "
+                f"discovered={len(discovered_declared)}, "
+                f"executed={len(executed)}, "
+                f"passed={len(reconciliation.passed)}"
+            )
+
+            error_sets = {
+                'missing': reconciliation.missing,
+                'duplicates': reconciliation.duplicates,
+                'skipped': reconciliation.skipped,
+                'failed': reconciliation.failed,
+            }
+            for category, names in error_sets.items():
+                message = (
+                    f"TAP_GROUP '{tap_group}' reconciliation {category}: "
+                    f"{sorted(names)}"
+                )
+                if names:
+                    log.critical(message)
+                else:
+                    log.info(message)
+
+            if not reconciliation.ok:
+                distinct_errors = set().union(*error_sets.values())
+                ret_rc += max(1, len(distinct_errors))
 
         # Restore the original environment config
         os.environ['TAP_WORKDIR'] = orig_workdir
@@ -1888,4 +1969,3 @@ def main(argv):
 
 if __name__ == '__main__':
     main(sys.argv[1:])
-

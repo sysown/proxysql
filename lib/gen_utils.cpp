@@ -1,16 +1,27 @@
 #include <vector>
 #include <memory>
+#include <limits>
 #include <sstream>
+#include <cstring>
 #include "gen_utils.h"
 
 
 using std::vector;
 using std::unique_ptr;
 
+static inline size_t util_strlen(const char* s) {
+	size_t len = 0;
+	if (s == NULL) return 0;
+	while (s[len]) {
+		++len;
+	}
+	return len;
+}
+
 char *escape_string_single_quotes(char *input, bool free_it) {
 	int i,j,l;
 	char *o=NULL;	// output string, if any
-	l=strlen(input);
+	l=util_strlen(input);
 	j=0;
 	for (i=0;i<l;i++) {
 		if (input[i]=='\'') {
@@ -63,7 +74,7 @@ int remove_spaces(const char *s) {
 		}
 	}
 	*outp = '\0';
-	return strlen(s);
+	return outp - s;
 }
 
 // This function returns a pointer to a substring of the original string. It also
@@ -87,7 +98,8 @@ char *trim_spaces_in_place(char *str)
 		return str;
 
 	// Trim trailing space
-	end = str + strlen(str) - 1;
+		const size_t str_len = util_strlen(str);
+		end = str + str_len - 1;
 	while(end > str && isspace(*end)) end--;
 
 	// Write new null terminator
@@ -105,7 +117,8 @@ char *trim_spaces_and_quotes_in_place(char *str) {
 	if(*str == 0)  // All spaces?
 		return str;
 	// Trim trailing space
-	end = str + strlen(str) - 1;
+		const size_t str_len = util_strlen(str);
+		end = str + str_len - 1;
 	while(end > str && (isspace(*end) || *end=='\"' || *end=='\'' || *end==';')) end--;
 	// Write new null terminator
 	*(end+1) = 0;
@@ -138,6 +151,228 @@ bool mywildcmp(const char *p, const char *str) {
 			} else {
 				return mywildcmp(p, str + 1);
 			}
+		}
+	}
+	return false;
+}
+
+/**
+ * Mask the host bits off @p raw (network byte order) so that a containment
+ * test can compare whole bytes. `bits` is the number of significant bits and
+ * must already have been range-checked against the address family, which is
+ * what makes the /0 case fall out as "compare nothing" instead of shifting a
+ * 32- or 128-bit value by its own width.
+ */
+static void cidr_mask_in_place(unsigned char *raw, int bytes, int bits) {
+	for (int i = 0; i < bytes; ++i) {
+		int bit_offset = i * 8;             // first bit covered by this byte
+		if (bit_offset >= bits) {
+			raw[i] = 0;                      // byte is entirely past the prefix
+		} else if (bit_offset + 8 > bits) {  // byte is partially covered
+			raw[i] &= (unsigned char)(0xFF << (8 - (bits - bit_offset)));
+		}
+	}
+}
+
+
+bool ip_cidr_parse(const char *token, IP_CIDR_t *out) {
+	if (out == NULL) {
+		return false;
+	}
+	memset(out, 0, sizeof(*out));
+	if (token == NULL) {
+		return false;
+	}
+
+	// Tolerate padding around the token, but nothing else: inet_pton() below
+	// rejects every non-canonical spelling we don't want to accept. The
+	// trimmed text is copied out because the prefix-length scan below has to
+	// stop at the end of the token, not at the end of the string.
+	const char *start = token;
+	while (*start == ' ' || *start == '\t') {
+		start++;
+	}
+	const char *end = start + strlen(start);
+	while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+		end--;
+	}
+	if (end == start) {
+		return false;
+	}
+	char token_buf[MAX_CIDR_TOKEN_LEN];
+	size_t token_len = (size_t)(end - start);
+	// The longest legal token is an IPv6 literal that embeds a dotted quad plus
+	// "/128"; anything beyond MAX_CIDR_TOKEN_LEN cannot be one.
+	if (token_len >= sizeof(token_buf)) {
+		return false;
+	}
+	memcpy(token_buf, start, token_len);
+	token_buf[token_len] = '\0';
+
+	// Exactly one '/': the prefix length is a decimal count, never a netmask,
+	// and a second '/' means the value is malformed rather than a longer list.
+	const char *slash = strchr(token_buf, '/');
+	if (slash == NULL || slash == token_buf || slash[1] == '\0') {
+		return false;
+	}
+	if (strchr(slash + 1, '/') != NULL) {
+		return false;
+	}
+
+	char addr_str[INET6_ADDRSTRLEN];
+	size_t addr_len = (size_t)(slash - token_buf);
+	// "255.255.255.255/128" and "ffff:...:ffff/128" both fit; anything longer
+	// is not a numeric address literal and inet_pton would reject it anyway.
+	if (addr_len >= sizeof(addr_str)) {
+		return false;
+	}
+	memcpy(addr_str, token_buf, addr_len);
+	addr_str[addr_len] = '\0';
+
+	// Prefix length: digits only, no sign, no whitespace, no trailing junk.
+	int prefix_len = 0;
+	for (const char *p = slash + 1; *p != '\0'; p++) {
+		if (*p < '0' || *p > '9') {
+			return false;
+		}
+		prefix_len = prefix_len * 10 + (*p - '0');
+		if (prefix_len > 128) {  // bail out early, also guards the multiply
+			return false;
+		}
+	}
+
+	// Family is decided by the address, and an IPv4 prefix length above 32 is
+	// out of range. (ProxyProtocolInfo::is_valid_subnet() accepts /33 for IPv4;
+	// we reject it so a typo fails loudly instead of matching nothing.)
+	int family = strchr(addr_str, ':') != NULL ? AF_INET6 : AF_INET;
+	if (family == AF_INET && prefix_len > 32) {
+		return false;
+	}
+
+	int bytes = family == AF_INET ? 4 : 16;
+	if (inet_pton(family, addr_str, out->addr) != 1) {
+		return false;
+	}
+	cidr_mask_in_place(out->addr, bytes, prefix_len);
+	out->family = family;
+	out->prefix_len = prefix_len;
+	return true;
+}
+
+bool ip_cidr_parse_list(const char *spec, IP_CIDR_t *out, int max, int *count) {
+	int parsed = 0;
+	if (count != NULL) {
+		*count = 0;
+	}
+	if (spec == NULL || out == NULL || max <= 0) {
+		return false;
+	}
+
+	const char *cursor = spec;
+	while (1) {
+		const char *comma = strchr(cursor, ',');
+		const char *stop = comma != NULL ? comma : cursor + strlen(cursor);
+
+		// ip_cidr_parse() trims surrounding spaces, so the limit has to be
+		// applied to the trimmed token. Measuring the raw slice instead would
+		// reject a maximum-length prefix that is merely padded, e.g. the 49-byte
+		// "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255/128 " with one trailing
+		// space.
+		while (cursor < stop && (*cursor == ' ' || *cursor == '\t')) {
+			cursor++;
+		}
+		while (stop > cursor && (stop[-1] == ' ' || stop[-1] == '\t')) {
+			stop--;
+		}
+		size_t token_len = (size_t)(stop - cursor);
+
+		// Reuse a bounded stack buffer: a token is at most MAX_CIDR_TOKEN_LEN-1
+		// bytes, so anything longer cannot be a valid prefix.
+		if (token_len == 0 || token_len >= MAX_CIDR_TOKEN_LEN) {
+			return false;
+		}
+		if (parsed >= max) {
+			return false;
+		}
+		char token[MAX_CIDR_TOKEN_LEN];
+		memcpy(token, cursor, token_len);
+		token[token_len] = '\0';
+
+		if (!ip_cidr_parse(token, &out[parsed])) {
+			return false;
+		}
+		parsed++;
+		if (comma == NULL) {
+			break;
+		}
+		cursor = comma + 1;
+	}
+
+	if (count != NULL) {
+		*count = parsed;
+	}
+	return parsed > 0;
+}
+
+bool ip_cidr_list_is_valid(const char *spec) {
+	// An oversized list is invalid rather than silently truncated, so the
+	// caller reports the rule as rejected instead of quietly narrowing it.
+	IP_CIDR_t scratch[MAX_CIDR_PREFIXES_PER_RULE];
+	return ip_cidr_parse_list(spec, scratch, MAX_CIDR_PREFIXES_PER_RULE, NULL);
+}
+
+bool ip_cidr_contains(const IP_CIDR_t *cidr, const struct sockaddr *sa) {
+	if (cidr == NULL || sa == NULL || cidr->family == 0) {
+		return false;
+	}
+
+	const unsigned char *client_addr = NULL;
+	// An IPv4 client can reach ProxySQL as an IPv4-mapped IPv6 address
+	// (::ffff:a.b.c.d), e.g. from a dual-stack load balancer through the PROXY
+	// protocol. It is still that IPv4 client, so an IPv4 prefix is matched
+	// against its embedded IPv4 address (issue #6316).
+	if (cidr->family == AF_INET && sa->sa_family == AF_INET6) {
+		const struct in6_addr *a6 = &((const struct sockaddr_in6 *)sa)->sin6_addr;
+		if (IN6_IS_ADDR_V4MAPPED(a6) == 0) {
+			return false;
+		}
+		client_addr = a6->s6_addr + 12;
+	} else if (sa->sa_family != cidr->family) {
+		// Otherwise an IPv4 prefix must not match an IPv6 client, or the reverse.
+		return false;
+	} else if (cidr->family == AF_INET) {
+		client_addr = (const unsigned char *)&((const struct sockaddr_in *)sa)->sin_addr;
+	} else if (cidr->family == AF_INET6) {
+		// s6_addr is a macro relative to struct in6_addr, so it is reached
+		// through sin6_addr rather than directly off sockaddr_in6.
+		client_addr = (const unsigned char *)((const struct sockaddr_in6 *)sa)->sin6_addr.s6_addr;
+	} else {
+		return false;
+	}
+
+	int full_bytes = cidr->prefix_len / 8;
+	int remaining_bits = cidr->prefix_len % 8;
+	// prefix_len is range-checked at parse time, so this cannot read past the
+	// address: a /32 stops at full_bytes == 4 with remaining_bits == 0.
+	if (full_bytes > 0 && memcmp(cidr->addr, client_addr, (size_t)full_bytes) != 0) {
+		return false;
+	}
+	if (remaining_bits > 0) {
+		unsigned char mask = (unsigned char)(0xFF << (8 - remaining_bits));
+		if ((cidr->addr[full_bytes] & mask) != (client_addr[full_bytes] & mask)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool ip_cidr_list_contains(const IP_CIDR_t *list, int count, const struct sockaddr *sa) {
+	if (list == NULL || count <= 0) {
+		return false;
+	}
+	for (int i = 0; i < count; ++i) {
+		if (ip_cidr_contains(&list[i], sa) == true) {
+			return true;
 		}
 	}
 	return false;
@@ -309,46 +544,78 @@ char* escape_string_single_quotes_and_backslashes(char* input, bool free_it) {
 	return output;
 }
 
+
+void pg_append_escaped_option_value(std::string& out, const char* input) {
+	// Scan for the first character that needs escaping. Values like "on", "GMT" or
+	// "postgres" have none, and are appended with a single copy: one pass over the input,
+	// no strlen(), no temporary and no allocation of its own.
+	const char* p = input;
+	while (*p != '\0' && *p != ' ' && *p != '\\') p++;
+	if (*p == '\0') {
+		out.append(input, static_cast<size_t>(p - input));
+		return;
+	}
+	// Something does need escaping. Size the destination once for the worst case, then
+	// copy the runs between escapes in bulk instead of a character at a time.
+	const size_t len = static_cast<size_t>(p - input) + strlen(p);
+	out.reserve(out.size() + len * 2);
+	const char* run = input;
+	for (const char* c = p; *c != '\0'; c++) {
+		if (*c == ' ' || *c == '\\') {
+			out.append(run, static_cast<size_t>(c - run));
+			out += '\\';
+			run = c;
+		}
+	}
+	out.append(run, static_cast<size_t>(input + len - run));
+}
+
 /**
- * Escapes spaces in the input string by prepending "\\".
- * If no spaces are present, the original input is returned.
- * If spaces are escaped, a new string is returned, and the caller
- * is responsible for freeing it.
+ * Converts monotonic clock time (in μs) to realtime clock time (in sec).
+ * This function assumes that during bootup initial value for the monotonic
+ * clock in the operation system will be set based on realtime clock value.
+ * This function should only be used in non-critical business logic, such as
+ * input and output conversion.
  *
- * @param input The input string to process.
- * @return A new string with spaces escaped, or the original input string if no escaping is needed.
+ * @param mt monotonic clock value in microseconds.
+ * @return realtime clock time in seconds.
  */
-const char* escape_string_backslash_spaces(const char* input) {
-	const char* c;
-	int input_len = 0;
-	int escape_count = 0;
+time_t monotonic_time_to_realtime(time_t mt) {
+	time_t mt_now = monotonic_time() / 1000000;
+	mt = mt / 1000000;
 
-	for (c = input; *c != '\0'; c++) {
-		if ((*c == ' ')) {
-			escape_count += 3;
-		} else if ((*c == '\\')) {
-			escape_count += 2;
-		}
-		input_len++;
+	time_t rt_now;
+	time(&rt_now);
+
+	return (rt_now - mt_now + mt);
+}
+
+/**
+ * Converts realtime clock time (in sec) to monotonic clock time (in μs).
+ * This function assumes that during bootup initial value for the monotonic
+ * clock in the operation system will be set based on realtime clock value.
+ * This function should only be used in non-critical business logic, such as
+ * input and output conversion.
+ *
+ * @param rt realtime clock time in seconds.
+ * @return monotonic clock value in microseconds.
+ */
+time_t realtime_to_monotonic_time(time_t rt) {
+	time_t mt_now = monotonic_time() / 1000000;
+
+	time_t rt_now;
+	time(&rt_now);
+
+	time_t mt = mt_now - rt_now + rt;
+	// a realtime value earlier than the monotonic clock epoch (i.e. system boot)
+	// has no monotonic representation: any monotonic timestamp is more recent
+	if (mt < 0) {
+		return 0;
 	}
-
-	if (escape_count == 0)
-		return input;
-
-	char* output = (char*)malloc(input_len + escape_count + 1);
-	char* p = output;
-
-	for (c = input; *c != '\0'; c++) {
-		if ((*c == ' ')) {
-			memcpy(p, "\\\\", 2);
-			p += 2;
-		} else if (*c == '\\') {
-			*(p++) = '\\';
-		}
-		*(p++) = *c;
+	if (mt > std::numeric_limits<time_t>::max() / 1000000) {
+		return std::numeric_limits<time_t>::max();
 	}
-	*(p++) = '\0';
-	return output;
+	return (mt * 1000000);
 }
 
 /**
@@ -363,13 +630,20 @@ const char* escape_string_backslash_spaces(const char* input) {
  */
 std::string strip_schema_from_query(const char* query, const char* schema,
                                     const std::vector<std::string>& tables, bool ansi_quotes) {
-	if (!query || strlen(query) == 0) {
+	if (!query) {
 		return "";
 	}
 
-	int query_len = strlen(query);
+	const int query_len = static_cast<int>(util_strlen(query));
+	if (query_len == 0) {
+		return "";
+	}
 
-	int schema_len = strlen(schema);
+	if (schema == NULL) {
+		return std::string(query, query_len);
+	}
+
+	int schema_len = static_cast<int>(util_strlen(schema));
 	if (schema_len == 0) {
 		return std::string(query, query_len);
 	}

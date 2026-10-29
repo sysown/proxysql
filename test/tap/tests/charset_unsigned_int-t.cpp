@@ -58,9 +58,20 @@ int main(int argc, char** argv) {
         return exit_status();
     }
 
-    // Get version early for version-specific charset checks
+    // Get version early for version-specific charset checks.
+    //
+    // Read it with `SHOW VARIABLES LIKE 'version'` rather than `SELECT @@version`: the
+    // charset checks below issue `SET NAMES ...` and `SHOW VARIABLES LIKE
+    // 'collation_connection'`, both of which route to the default (writer) hostgroup. A
+    // bare `SELECT @@version` matches the `^SELECT` query rules and is routed to the
+    // reader hostgroup instead. In multi-backend groups such as legacy-g1 the reader pool
+    // is a different server/engine than the writer (e.g. MariaDB 10 readers in front of a
+    // MySQL 5.7 writer), so a version sampled via @@version does not necessarily describe
+    // the backend that actually answers the charset queries, yielding a spurious
+    // expected-vs-actual collation mismatch (#5884). Sampling the version through the same
+    // `SHOW VARIABLES` path keeps version detection and the charset checks on one backend.
     std::string version;
-    get_server_version(mysql, version);
+    show_variable(mysql, std::string("version"), version);
     int major = 0, minor = 0;
     sscanf(version.c_str(), "%d.%d", &major, &minor);
     bool is_mysql_84_plus = (major > 8) || (major == 8 && minor >= 4);

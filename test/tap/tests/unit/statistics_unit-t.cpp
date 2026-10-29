@@ -26,11 +26,18 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "ProxySQL_Statistics.hpp"
+#include "MySQL_Thread.h"
+
+#include "prometheus/text_serializer.h"
 
 #include <cstring>
 #include <cstdlib>
+#include <array>
+#include <chrono>
 #include <string>
 #include <map>
+#include <memory>
+#include <thread>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -86,6 +93,71 @@ static void teardown_stats() {
 	if (GloVars.statsdb_disk != nullptr) {
 		free(GloVars.statsdb_disk);
 		GloVars.statsdb_disk = nullptr;
+	}
+}
+
+// ============================================================
+// MySQL user-variable tracking stats registration
+// ============================================================
+
+static unsigned int global_status_name_count(const SQLite3_result* result, const char* name) {
+	unsigned int count = 0;
+	for (unsigned long long i = 0; i < result->rows_count; ++i) {
+		if (strcmp(result->rows[i]->fields[0], name) == 0) {
+			++count;
+		}
+	}
+	return count;
+}
+
+static unsigned int text_count(const std::string& text, const std::string& needle) {
+	unsigned int count = 0;
+	for (size_t pos = text.find(needle); pos != std::string::npos; pos = text.find(needle, pos + needle.size())) {
+		++count;
+	}
+	return count;
+}
+
+static unsigned int prometheus_help_metric_count(
+	const std::string& text, const std::string& metric_name) {
+	return text_count(text, "# HELP " + metric_name + " ");
+}
+
+static void test_user_variable_metric_name_is_exact() {
+	const std::string metric_name = "proxysql_mysql_user_variable_assignments_tracked_total";
+	const std::string fixture = "# HELP " + metric_name + "_v2 unrelated metric\n";
+	ok(prometheus_help_metric_count(fixture, metric_name) == 0,
+		"Prometheus descriptor check rejects a longer prefix-sharing metric name");
+}
+
+static void test_user_variable_tracking_stats_registration() {
+	const std::array<const char*, 5> status_names {
+		"User_variable_assignments_tracked",
+		"User_variable_replay_commands",
+		"User_variable_replay_failures",
+		"User_variable_fallback_unsupported",
+		"User_variable_fallback_limits"
+	};
+	const std::array<const char*, 5> metric_names {
+		"proxysql_mysql_user_variable_assignments_tracked_total",
+		"proxysql_mysql_user_variable_replay_commands_total",
+		"proxysql_mysql_user_variable_replay_failures_total",
+		"proxysql_mysql_user_variable_fallback_unsupported_total",
+		"proxysql_mysql_user_variable_fallback_limits_total"
+	};
+
+	MySQL_Threads_Handler handler;
+	std::unique_ptr<SQLite3_result> status(handler.SQL3_GlobalStatus(false));
+	for (const char* name : status_names) {
+		ok(global_status_name_count(status.get(), name) == 1,
+			"global status registers %s exactly once", name);
+	}
+
+	prometheus::TextSerializer serializer;
+	const std::string metrics = serializer.Serialize(GloVars.prometheus_registry->Collect());
+	for (const char* name : metric_names) {
+		ok(prometheus_help_metric_count(metrics, name) == 1,
+			"Prometheus registers %s exactly once", name);
 	}
 }
 
@@ -544,6 +616,31 @@ static void test_insert_and_query_tsdb_metric() {
 	}
 }
 
+static void test_list_tsdb_metric_names() {
+	std::map<std::string, std::string> labels;
+	const time_t now = time(nullptr) + 50;
+	stats->insert_tsdb_metric("listed_metric_b", labels, 1.0, now);
+	stats->insert_tsdb_metric("listed_metric_a", labels, 2.0, now);
+	stats->insert_tsdb_metric("listed_metric_b", labels, 3.0, now + 1);
+
+	SQLite3_result* result = stats->list_tsdb_metric_names();
+	ok(result != nullptr, "list_tsdb_metric_names: returns a result");
+	if (result) {
+		bool found_a = false;
+		bool found_b = false;
+		for (int index = 0; index < result->rows_count; ++index) {
+			const char* name = result->rows[index]->fields[0];
+			found_a = found_a || (name != nullptr && strcmp(name, "listed_metric_a") == 0);
+			found_b = found_b || (name != nullptr && strcmp(name, "listed_metric_b") == 0);
+		}
+		ok(found_a && found_b,
+		   "list_tsdb_metric_names: returns both distinct inserted names");
+		delete result;
+	} else {
+		ok(false, "list_tsdb_metric_names: returns both distinct inserted names");
+	}
+}
+
 static void test_query_tsdb_metric_with_label_filter() {
 	time_t now = time(nullptr) + 100;  // offset to not collide with previous test
 
@@ -648,6 +745,47 @@ static void test_insert_and_query_backend_health() {
 	}
 }
 
+static void test_tsdb_query_does_not_wait_for_backend_probe() {
+	// TEST-NET-1 is deliberately non-routable on the public Internet. The
+	// monitor's nonblocking connect therefore remains in poll() until its
+	// one-second timeout, giving us a deterministic in-flight probe window.
+	srv_info_t info;
+	info.addr = "192.0.2.1";
+	info.port = 65000;
+	info.kind = "tsdb-unit-test";
+	srv_opts_t opts;
+	opts.weigth = 1;
+	opts.max_conns = 1;
+	opts.use_ssl = 0;
+
+	MyHGM->wrlock();
+	const int add_rc = MyHGM->create_new_server_in_hg(65000, info, opts);
+	MyHGM->wrunlock();
+	if (add_rc != 0) {
+		ok(false, "TSDB monitor probe fixture is created");
+		return;
+	}
+
+	stats->set_variable("enabled", "1");
+	stats->set_variable("monitor_enabled", "1");
+	std::thread monitor([]() { stats->tsdb_monitor_loop(); });
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+	const auto started = std::chrono::steady_clock::now();
+	(void)stats->get_tsdb_status();
+	const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - started).count();
+
+	monitor.join();
+	MyHGM->wrlock();
+	MyHGM->remove_server_in_hg(65000, info.addr, info.port);
+	MyHGM->wrunlock();
+
+	ok(elapsed < 500,
+	   "TSDB status query does not wait for backend probe completion (elapsed=%lldms)",
+	   static_cast<long long>(elapsed));
+}
+
 // ============================================================
 // TSDB status
 // ============================================================
@@ -748,6 +886,10 @@ int main() {
 	num_tests += 5;
 	// Timer tests: 15
 	num_tests += 15;
+	// MySQL user-variable tracking stats registration: 10
+	num_tests += 10;
+	// MySQL user-variable tracking exact metric-name matching: 1
+	num_tests += 1;
 
 #ifdef PROXYSQLTSDB
 	// TSDB table init: 3
@@ -756,10 +898,12 @@ int main() {
 	num_tests += 42;
 	// TSDB timers: 9
 	num_tests += 9;
-	// TSDB metric insert/query: 9
-	num_tests += 9;
+	// TSDB metric insert/query: 11
+	num_tests += 11;
 	// TSDB backend health: 4
 	num_tests += 4;
+	// TSDB monitor concurrency: 1
+	num_tests += 1;
 	// TSDB status: 3
 	num_tests += 3;
 	// TSDB downsampling/retention: 5
@@ -769,6 +913,7 @@ int main() {
 	plan(num_tests);
 
 	test_init_minimal();
+	test_init_hostgroups();
 	setup_stats();
 
 	// Constructor + init
@@ -791,6 +936,8 @@ int main() {
 	test_pgsql_eventslog_timer_triggers();
 	test_digest_to_disk_timer_disabled();
 	test_digest_to_disk_timer_triggers();
+	test_user_variable_metric_name_is_exact();
+	test_user_variable_tracking_stats_registration();
 
 #ifdef PROXYSQLTSDB
 	// TSDB table init
@@ -822,6 +969,7 @@ int main() {
 
 	// TSDB metric insert/query
 	test_insert_and_query_tsdb_metric();
+	test_list_tsdb_metric_names();
 	test_query_tsdb_metric_with_label_filter();
 	test_query_tsdb_metric_with_single_quote_in_name();
 	test_query_tsdb_metric_swapped_time_range();
@@ -829,6 +977,7 @@ int main() {
 
 	// TSDB backend health
 	test_insert_and_query_backend_health();
+	test_tsdb_query_does_not_wait_for_backend_probe();
 
 	// TSDB status
 	test_get_tsdb_status();
@@ -841,6 +990,7 @@ int main() {
 #endif
 
 	teardown_stats();
+	test_cleanup_hostgroups();
 	test_cleanup_minimal();
 
 	return exit_status();

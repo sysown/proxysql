@@ -8,6 +8,17 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
 
 source "${SCRIPT_DIR}/docker-fs-helper.bash"
+source "${SCRIPT_DIR}/asan-detection.bash"
+
+PROXYSQL_SANITIZER_ENV=()
+if proxysql_binary_uses_asan "${WORKSPACE}/src/proxysql"; then
+    export WITHASAN=1
+    export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
+    PROXYSQL_SANITIZER_ENV=(-e WITHASAN=1 -e ASAN_OPTIONS="${ASAN_OPTIONS}")
+    echo ">>> Detected ASAN-instrumented ProxySQL; LeakSanitizer disabled for daemon processes"
+else
+    export WITHASAN=0
+fi
 
 if [ -z "${INFRA_ID}" ]; then echo "Error: INFRA_ID is not set."; exit 1; fi
 
@@ -17,6 +28,11 @@ NETWORK_NAME="${INFRA_ID}_backend"
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
 INFRA_LOGS_PATH="${WORKSPACE}/ci_infra_logs"
 PROXY_DATA_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/proxysql"
+PGSQL_SOCKET_HOST_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/pgsql-sockets"
+
+# SUDO helper: empty when already root (the CI runner container runs as root).
+SUDO=""
+if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
 GENERIC_CONFIG="${SCRIPT_DIR}/proxysql-ci.cnf"
 
 # Per-group override: a TAP group may need a config that differs from
@@ -43,7 +59,10 @@ docker network inspect ${NETWORK_NAME} >/dev/null 2>&1 || docker network create 
 
 echo ">>> Preparing ProxySQL data directory: ${PROXY_DATA_DIR}"
 mkdir -p "${PROXY_DATA_DIR}"
-docker_fs_exec "chmod -R 777 ." "${INFRA_LOGS_PATH}/${INFRA_ID}"
+# Skip sockets (e.g. the shared PostgreSQL socket): Docker Desktop file sharing
+# rejects chmod on them with EINVAL, which aborts this script on a re-run.
+# Skip symlinks too: chmod follows them, while the former chmod -R did not.
+docker_fs_exec "find . ! -type s ! -type l -exec chmod 777 {} +" "${INFRA_LOGS_PATH}/${INFRA_ID}"
 docker_fs_exec "rm -f proxysql/proxysql.db proxysql/*.pem" "${INFRA_LOGS_PATH}/${INFRA_ID}"
 
 docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
@@ -151,6 +170,64 @@ if [ "${PROXYSQL_LOAD_GENAI_PLUGIN:-0}" = "1" ]; then
     echo ">>> Mounting genai plugin .so into ProxySQL container"
 fi
 
+MYSQL_ROUTER_PLUGIN_SRC="${WORKSPACE}/plugins/mysql_router/proxysql_mysql_router.so"
+MYSQL_ROUTER_PLUGIN_MOUNT=""
+if [ "${PROXYSQL_LOAD_MYSQL_ROUTER_PLUGIN:-0}" = "1" ]; then
+    if [ ! -f "${MYSQL_ROUTER_PLUGIN_SRC}" ]; then
+        echo "ERROR: PROXYSQL_LOAD_MYSQL_ROUTER_PLUGIN=1 but plugin .so missing at ${MYSQL_ROUTER_PLUGIN_SRC}" >&2
+        echo "       Build it first: make -C plugins/mysql_router PROXYSQL40=1" >&2
+        exit 1
+    fi
+    MYSQL_ROUTER_PLUGIN_MOUNT="-v ${MYSQL_ROUTER_PLUGIN_SRC}:/usr/lib/proxysql/plugins/proxysql_mysql_router.so:ro"
+    echo ">>> Mounting mysql_router plugin .so into ProxySQL container"
+fi
+
+# Same pattern for the duckdb plugin (an embedded-DuckDB SQL engine
+# reachable over the MySQL and PgSQL wire protocols; needs no backend
+# database of its own). Groups that need it (e.g. duckdb-e2e-g1) set
+# PROXYSQL_LOAD_DUCKDB_PLUGIN=1 in their env.sh and switch
+# PROXYSQL_CONFIG_OVERRIDE to a per-group cnf that contains
+# `plugins=("/usr/lib/proxysql/ProxySQL_DuckDB_Plugin.so")`.
+DUCKDB_PLUGIN_SRC="${WORKSPACE}/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"
+DUCKDB_PLUGIN_MOUNT=""
+if [ "${PROXYSQL_LOAD_DUCKDB_PLUGIN:-0}" = "1" ]; then
+    if [ ! -f "${DUCKDB_PLUGIN_SRC}" ]; then
+        echo "ERROR: PROXYSQL_LOAD_DUCKDB_PLUGIN=1 but plugin .so missing at ${DUCKDB_PLUGIN_SRC}" >&2
+        echo "       Build it first: PROXYSQL40=1 make (or cd plugins/duckdb && make with the right flags)" >&2
+        exit 1
+    fi
+    DUCKDB_PLUGIN_MOUNT="-v ${DUCKDB_PLUGIN_SRC}:/usr/lib/proxysql/ProxySQL_DuckDB_Plugin.so:ro"
+    echo ">>> Mounting duckdb plugin .so into ProxySQL container"
+fi
+
+# Mount .gcno files into the proxysql container at the compile-time path
+# so gcov's runtime (invoked via the `PROXYSQL GCOV DUMP` admin command
+# from the tester) can resolve the .gcda files it writes.
+#
+# The proxysql binary was compiled inside the build container with the
+# source tree bind-mounted at /opt/proxysql/ (docker-compose.yml line:
+# `- ./:/opt/proxysql/`), so .gcno paths embedded in the binary point to
+# /opt/proxysql/{lib,src}/obj/X.gcno. Without these mounts the runtime
+# .gcda files come out with an empty `current_working_directory` field
+# and fastcov reports `files: []` for every one of them -- the bug that
+# silently zeroed out daemon-side coverage for PR #5818 (only ~5,694
+# lines / 27 files from `tap-legacy-g2` were ever real; everything else
+# was missing).
+#
+# Always-on: harmless when the .gcno files aren't present (e.g.
+# non-coverage builds) -- the conditional below just doesn't add
+# anything to GCOV_MOUNTS.
+GCOV_MOUNTS=""
+if compgen -G "${WORKSPACE}/lib/obj/*.gcno" >/dev/null; then
+    GCOV_MOUNTS="${GCOV_MOUNTS} -v ${WORKSPACE}/lib/obj:/opt/proxysql/lib/obj:ro"
+fi
+if compgen -G "${WORKSPACE}/src/obj/*.gcno" >/dev/null; then
+    GCOV_MOUNTS="${GCOV_MOUNTS} -v ${WORKSPACE}/src/obj:/opt/proxysql/src/obj:ro"
+fi
+if [ -n "${GCOV_MOUNTS}" ]; then
+    echo ">>> Mounting .gcno files into ProxySQL container for gcov runtime resolution"
+fi
+
 # Simulator-backed TAP groups (aurora-sim, galera-sim, ...) export a
 # CLUSTER_SIM_HOST_FILE pointing at a plain "hostname ip" list. Inject each
 # entry as --add-host so ProxySQL's container /etc/hosts resolves the simulated
@@ -164,6 +241,30 @@ if [ -n "${CLUSTER_SIM_HOST_FILE:-}" ] && [ -f "${CLUSTER_SIM_HOST_FILE}" ]; the
     done < "${CLUSTER_SIM_HOST_FILE}"
 fi
 
+# Mount the host directory that holds the PostgreSQL Unix-domain socket
+# (created by docker-pgsql16-single's pgdb1 container) into ProxySQL at the
+# same path the PostgreSQL container exposes it, so a pgsql_servers row with
+# hostname='/var/run/postgresql-shared' and port=0 resolves correctly.
+PGSQL_SOCKET_MOUNT=""
+if [ "${PROXYSQL_NEEDS_PGSQL_SOCKET:-0}" = "1" ]; then
+    $SUDO mkdir -p "${PGSQL_SOCKET_HOST_DIR}"
+    $SUDO chmod 777 "${PGSQL_SOCKET_HOST_DIR}"
+    PGSQL_SOCKET_MOUNT="-v ${PGSQL_SOCKET_HOST_DIR}:/var/run/postgresql-shared:rw"
+    echo ">>> Mounting PostgreSQL Unix-socket directory: ${PGSQL_SOCKET_HOST_DIR} -> /var/run/postgresql-shared"
+fi
+
+# GCOV_PREFIX_STRIP=2 strips "opt/proxysql" from the absolute path the
+# .gcno embeds — the workspace is mounted at /opt/proxysql in the build
+# container (see docker-compose.yml), so .gcno files record paths like
+# /opt/proxysql/{lib,src}/obj/X.gcno. With STRIP=2 the daemon writes
+# .gcda files to /gcov/{lib,src}/obj/X.gcda, preserving the {lib,src}
+# directory that the collect_coverage trap in run-tests-isolated.bash
+# uses to find each matching .gcno under ${WORKSPACE} and copy it next
+# to its .gcda before fastcov runs. STRIP=3 (the prior value) over-
+# stripped one extra component and dropped .gcda files at
+# /gcov/obj/X.gcda with no {lib,src} directory; the .gcno copy loop
+# couldn't find matches, fastcov produced "files: []" for every entry,
+# and zero daemon-side coverage made it into Codecov.
 echo ">>> Starting ProxySQL container: ${PROXY_CONTAINER} (cluster nodes: ${NUM_NODES})"
 docker run -d \
     --name "${PROXY_CONTAINER}" \
@@ -177,8 +278,13 @@ docker run -d \
     -v "${COVERAGE_DATA_DIR}:/gcov" \
     ${MYSQLX_PLUGIN_MOUNT} \
     ${GENAI_PLUGIN_MOUNT} \
+    ${MYSQL_ROUTER_PLUGIN_MOUNT} \
+    ${DUCKDB_PLUGIN_MOUNT} \
+    ${GCOV_MOUNTS} \
+    ${PGSQL_SOCKET_MOUNT} \
     -e GCOV_PREFIX="/gcov" \
-    -e GCOV_PREFIX_STRIP="3" \
+    -e GCOV_PREFIX_STRIP="2" \
+    "${PROXYSQL_SANITIZER_ENV[@]}" \
     proxysql-ci-base:latest \
     /bin/bash -c "${STARTUP_CMD}"
 
@@ -207,7 +313,7 @@ done
 if [ $COUNT -ge $MAX_WAIT ]; then echo " TIMEOUT"; exit 1; fi
 
 # Wait for cluster nodes
-for i in $(seq 1 "${NUM_NODES}"); do
+for ((i = 1; i <= NUM_NODES; i++)); do
     ADMIN_PORT=$((6032 + i * 10))
     echo -n "Waiting for proxy-node${i} (port ${ADMIN_PORT}) "
     COUNT=0
@@ -237,7 +343,7 @@ if [ "${NUM_NODES}" -gt 0 ]; then
     # the primary must be in the list, otherwise the node drops its monitor thread
     # for the primary and never detects checksum changes again.
     PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',6032,0,'primary');"
-    for i in $(seq 1 "${CORE_NODES}"); do
+    for ((i = 1; i <= CORE_NODES; i++)); do
         PORT=$((6032 + i * 10))
         PROXYSQL_SERVERS_SQL="${PROXYSQL_SERVERS_SQL} INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('proxysql',${PORT},0,'core-node${i}');"
     done
@@ -259,7 +365,7 @@ SAVE PROXYSQL SERVERS TO DISK;
 SQL
 
     # Configure each node
-    for i in $(seq 1 "${NUM_NODES}"); do
+    for ((i = 1; i <= NUM_NODES; i++)); do
         ADMIN_PORT=$((6032 + i * 10))
         RESTAPI_PORT=$((7070 + i))
         echo ">>> Configuring proxy-node${i} (port ${ADMIN_PORT})"
@@ -293,7 +399,7 @@ SAVE SCHEDULER TO DISK;
 SQL
 
     # Install on core nodes
-    for i in $(seq 1 "${CORE_NODES}"); do
+    for ((i = 1; i <= CORE_NODES; i++)); do
         ADMIN_PORT=$((6032 + i * 10))
         ${MYSQL_CMD} -P${ADMIN_PORT} <<SQL
 INSERT OR REPLACE INTO scheduler (interval_ms, filename) VALUES (12000, '/tmp/check_all_nodes.bash');

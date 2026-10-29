@@ -1,0 +1,211 @@
+--- ../tmp/src/interfaces/libpq/libpq-int.h	2026-06-24 03:51:37.037786331 +0500
++++ ./src/interfaces/libpq/libpq-int.h	2026-06-24 03:03:14.441153729 +0500
+@@ -384,6 +384,9 @@
+ 	char	   *pgpassfile;		/* path to a file containing password(s) */
+ 	char	   *channel_binding;	/* channel binding mode
+ 									 * (require,prefer,disable) */
++	char	   *scram_client_key;	/* base64 32-byte ClientKey (ProxySQL SCRAM pass-through) */
++	char	   *scram_server_key;	/* base64 32-byte ServerKey (ProxySQL SCRAM pass-through) */
++	char	   *md5_secret;			/* stored "md5"+32hex to reuse for backend md5 auth */
+ 	char	   *keepalives;		/* use TCP keepalives? */
+ 	char	   *keepalives_idle;	/* time between TCP keepalives */
+ 	char	   *keepalives_interval;	/* time between TCP keepalive
+--- ../tmp/src/interfaces/libpq/fe-connect.c	2026-06-24 03:51:37.040811504 +0500
++++ ./src/interfaces/libpq/fe-connect.c	2026-06-24 03:04:47.178883449 +0500
+@@ -361,6 +361,18 @@
+ 		"Load-Balance-Hosts", "", 8,	/* sizeof("disable") = 8 */
+ 	offsetof(struct pg_conn, load_balance_hosts)},
+ 
++	{"scram_client_key", NULL, NULL, NULL,
++		"SCRAM-Client-Key", "*", 64,
++	offsetof(struct pg_conn, scram_client_key)},
++
++	{"scram_server_key", NULL, NULL, NULL,
++		"SCRAM-Server-Key", "*", 64,
++	offsetof(struct pg_conn, scram_server_key)},
++
++	{"md5_secret", NULL, NULL, NULL,
++		"MD5-Secret", "*", 64,
++	offsetof(struct pg_conn, md5_secret)},
++
+ 	/* Terminating entry --- MUST BE LAST */
+ 	{NULL, NULL, NULL, NULL,
+ 	NULL, NULL, 0}
+@@ -4436,6 +4436,22 @@
+ 	}
+ 	free(conn->pgpassfile);
+ 	free(conn->channel_binding);
++	/* ProxySQL SCRAM/md5 verifier pass-through: free + scrub the injected key material. */
++	if (conn->scram_client_key)
++	{
++		explicit_bzero(conn->scram_client_key, strlen(conn->scram_client_key));
++		free(conn->scram_client_key);
++	}
++	if (conn->scram_server_key)
++	{
++		explicit_bzero(conn->scram_server_key, strlen(conn->scram_server_key));
++		free(conn->scram_server_key);
++	}
++	if (conn->md5_secret)
++	{
++		explicit_bzero(conn->md5_secret, strlen(conn->md5_secret));
++		free(conn->md5_secret);
++	}
+ 	free(conn->keepalives);
+ 	free(conn->keepalives_idle);
+ 	free(conn->keepalives_interval);
+--- ../tmp/src/interfaces/libpq/fe-auth-scram.c	2026-06-24 03:51:37.041568997 +0500
++++ ./src/interfaces/libpq/fe-auth-scram.c	2026-06-24 03:08:23.927939654 +0500
+@@ -120,6 +120,29 @@
+ 		return NULL;
+ 	}
+ 
++	/*
++	 * ProxySQL SCRAM pass-through: when a ClientKey is injected the exchange
++	 * uses it instead of a password. Require BOTH ClientKey and ServerKey (or
++	 * neither), so mutual authentication can never be silently skipped.
++	 */
++	{
++		bool		has_ck = (conn->scram_client_key && conn->scram_client_key[0]);
++		bool		has_sk = (conn->scram_server_key && conn->scram_server_key[0]);
++
++		if (has_ck != has_sk)
++		{
++			free(state->sasl_mechanism);
++			free(state);
++			return NULL;
++		}
++		if (has_ck)
++		{
++			/* No password to normalize; keys are injected. */
++			state->password = NULL;
++			return state;
++		}
++	}
++
+ 	/* Normalize the password with SASLprep, if possible */
+ 	rc = pg_saslprep(password, &prep_password);
+ 	if (rc == SASLPREP_OOM)
+@@ -785,14 +808,37 @@
+ 	 * Calculate SaltedPassword, and store it in 'state' so that we can reuse
+ 	 * it later in verify_server_signature.
+ 	 */
+-	if (scram_SaltedPassword(state->password, state->hash_type,
+-							 state->key_length, state->salt, state->saltlen,
+-							 state->iterations, state->SaltedPassword,
+-							 errstr) < 0 ||
+-		scram_ClientKey(state->SaltedPassword, state->hash_type,
+-						state->key_length, ClientKey, errstr) < 0 ||
+-		scram_H(ClientKey, state->hash_type, state->key_length,
+-				StoredKey, errstr) < 0)
++	if (state->conn->scram_client_key && state->conn->scram_client_key[0])
++	{
++		/*
++		 * ProxySQL SCRAM pass-through: use the injected ClientKey directly and
++		 * derive StoredKey = SHA256(ClientKey). Skips SASLprep + PBKDF2.
++		 */
++		int			dec = pg_b64_decode(state->conn->scram_client_key,
++										strlen(state->conn->scram_client_key),
++										(char *) ClientKey, state->key_length);
++
++		if (dec != state->key_length)
++		{
++			*errstr = "invalid scram_client_key";
++			pg_hmac_free(ctx);
++			return false;
++		}
++		if (scram_H(ClientKey, state->hash_type, state->key_length,
++					StoredKey, errstr) < 0)
++		{
++			pg_hmac_free(ctx);
++			return false;
++		}
++	}
++	else if (scram_SaltedPassword(state->password, state->hash_type,
++								  state->key_length, state->salt, state->saltlen,
++								  state->iterations, state->SaltedPassword,
++								  errstr) < 0 ||
++			 scram_ClientKey(state->SaltedPassword, state->hash_type,
++							 state->key_length, ClientKey, errstr) < 0 ||
++			 scram_H(ClientKey, state->hash_type, state->key_length,
++					 StoredKey, errstr) < 0)
+ 	{
+ 		/* errstr is already filled here */
+ 		pg_hmac_free(ctx);
+@@ -847,8 +893,22 @@
+ 		return false;
+ 	}
+ 
+-	if (scram_ServerKey(state->SaltedPassword, state->hash_type,
+-						state->key_length, ServerKey, errstr) < 0)
++	if (state->conn->scram_server_key && state->conn->scram_server_key[0])
++	{
++		/* ProxySQL SCRAM pass-through: verify with the injected ServerKey. */
++		int			dec = pg_b64_decode(state->conn->scram_server_key,
++										strlen(state->conn->scram_server_key),
++										(char *) ServerKey, state->key_length);
++
++		if (dec != state->key_length)
++		{
++			*errstr = "invalid scram_server_key";
++			pg_hmac_free(ctx);
++			return false;
++		}
++	}
++	else if (scram_ServerKey(state->SaltedPassword, state->hash_type,
++							 state->key_length, ServerKey, errstr) < 0)
+ 	{
+ 		/* errstr is filled already */
+ 		pg_hmac_free(ctx);
+--- ../tmp/src/interfaces/libpq/fe-auth.c	2026-06-24 03:51:37.042103163 +0500
++++ ./src/interfaces/libpq/fe-auth.c	2026-06-24 03:08:34.430125390 +0500
+@@ -553,7 +553,8 @@
+ 	password = conn->connhost[conn->whichhost].password;
+ 	if (password == NULL)
+ 		password = conn->pgpass;
+-	if (password == NULL || password[0] == '\0')
++	if ((password == NULL || password[0] == '\0') &&
++		!(conn->scram_client_key && conn->scram_client_key[0]))
+ 	{
+ 		appendPQExpBufferStr(&conn->errorMessage,
+ 							 PQnoPasswordSupplied);
+@@ -731,9 +732,20 @@
+ 				}
+ 
+ 				crypt_pwd2 = crypt_pwd + MD5_PASSWD_LEN + 1;
+-				if (!pg_md5_encrypt(password, conn->pguser,
+-									strlen(conn->pguser), crypt_pwd2,
+-									&errstr))
++				if (conn->md5_secret && conn->md5_secret[0])
++				{
++					/* ProxySQL: reuse the stored md5 secret as the inner hash. */
++					if (strlen(conn->md5_secret) != MD5_PASSWD_LEN)
++					{
++						libpq_append_conn_error(conn, "invalid md5_secret");
++						free(crypt_pwd);
++						return STATUS_ERROR;
++					}
++					strcpy(crypt_pwd2, conn->md5_secret);
++				}
++				else if (!pg_md5_encrypt(password, conn->pguser,
++										 strlen(conn->pguser), crypt_pwd2,
++										 &errstr))
+ 				{
+ 					libpq_append_conn_error(conn, "could not encrypt password: %s", errstr);
+ 					free(crypt_pwd);
+@@ -1096,8 +1108,15 @@
+ 				password = conn->connhost[conn->whichhost].password;
+ 				if (password == NULL)
+ 					password = conn->pgpass;
+-				if (password == NULL || password[0] == '\0')
++				/*
++				 * ProxySQL: this guard is SHARED by `case AUTH_REQ_MD5:` and
++				 * `case AUTH_REQ_PASSWORD:`. Only the MD5 branch can consume
++				 * md5_secret; AUTH_REQ_PASSWORD sends `password` verbatim and
++				 * would strlen(NULL). Gate the exception on areq accordingly.
++				 */
++				if ((password == NULL || password[0] == '\0') &&
++					!(areq == AUTH_REQ_MD5 && conn->md5_secret && conn->md5_secret[0]))
+ 				{
+ 					appendPQExpBufferStr(&conn->errorMessage,
+ 										 PQnoPasswordSupplied);

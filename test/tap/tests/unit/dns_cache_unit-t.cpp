@@ -108,9 +108,25 @@ static void test_contains_ip_after_remove() {
 		"contains_ip: returns true after hostname removed (no longer tracked)");
 }
 
+/** @brief Test that a pinned hostname only matches its pinned IP. */
+static void test_contains_ip_pinned() {
+	DNS_Cache cache;
+
+	cache.add("blue.host.com", {"10.0.1.100"});
+	cache.pin("blue.host.com", "10.0.2.200");
+	ok(cache.contains_ip("blue.host.com", "10.0.2.200") == true,
+		"contains_ip: pinned IP matches while pin is active");
+	ok(cache.contains_ip("blue.host.com", "10.0.1.100") == false,
+		"contains_ip: resolved IP does not match while pin is active");
+
+	cache.unpin("blue.host.com");
+	ok(cache.contains_ip("blue.host.com", "10.0.1.100") == true,
+		"contains_ip: resolved IP matches again after unpin");
+}
+
 /** @brief Entry point for dns_cache unit tests. */
 int main() {
-	plan(18);
+	plan(21);
 
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
@@ -122,6 +138,7 @@ int main() {
 	test_contains_ip_empty_cache();     // 1
 	test_contains_ip_ipv6();            // 2
 	test_contains_ip_after_remove();    // 2
+	test_contains_ip_pinned();          // 3
 
 	test_cleanup_minimal();
 	return exit_status();

@@ -1,0 +1,6 @@
+{
+	global:
+		proxysql_plugin_descriptor_v1;
+	local:
+		*;
+};

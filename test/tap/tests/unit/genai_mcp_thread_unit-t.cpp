@@ -25,20 +25,27 @@
 #ifdef PROXYSQL40
 
 #include "MCP_Thread.h"
+#include "Discovery_Schema.h"
+#include "ProxySQL_MCP_Server.hpp"
 
+#include <cerrno>
 #include <cstring>
+#include <memory>
+#include <netinet/in.h>
 #include <string>
 #include <set>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
 /* ------------------------------------------------------------------ */
 /*  Helper: get a variable value as std::string                        */
 /* ------------------------------------------------------------------ */
 static std::string get_var(MCP_Threads_Handler& h, const char* name) {
-	char buf[4096] = {0};
-	int rc = h.get_variable(name, buf);
-	if (rc != 0) return "__ERROR__";
-	return std::string(buf);
+	std::string value;
+	if (!h.get_variable_string(name, value)) return "__ERROR__";
+	return value;
 }
 
 /* ================================================================== */
@@ -361,11 +368,13 @@ static void test_get_variables_list(MCP_Threads_Handler& h) {
 static void test_null_safety(MCP_Threads_Handler& h) {
 	char buf[256];
 
-	ok(h.get_variable(nullptr, buf) == -1,
+	ok(h.get_variable(nullptr, buf, sizeof(buf)) == -1,
 	   "get_variable(nullptr, buf) = -1");
-	ok(h.get_variable("enabled", nullptr) == -1,
+	ok(h.get_variable("enabled", nullptr, sizeof(buf)) == -1,
 	   "get_variable(enabled, nullptr) = -1");
-	ok(h.get_variable(nullptr, nullptr) == -1,
+	ok(h.get_variable("enabled", buf, 0) == -1,
+	   "get_variable(enabled, buf, 0) = -1");
+	ok(h.get_variable(nullptr, nullptr, 0) == -1,
 	   "get_variable(nullptr, nullptr) = -1");
 
 	ok(h.set_variable(nullptr, "true") == -1,
@@ -374,6 +383,23 @@ static void test_null_safety(MCP_Threads_Handler& h) {
 	   "set_variable(enabled, nullptr) = -1");
 	ok(h.set_variable(nullptr, nullptr) == -1,
 	   "set_variable(nullptr, nullptr) = -1");
+}
+
+/**
+ * @brief Bounded get_variable() rejects values that would be truncated.
+ */
+static void test_bounded_get_variable(MCP_Threads_Handler& h) {
+	const std::string long_value(4096, 'x');
+	ok(h.set_variable("config_endpoint_auth", long_value.c_str()) == 0,
+	   "set long config_endpoint_auth value");
+
+	char buf[16];
+	memset(buf, 'x', sizeof(buf));
+	ok(h.get_variable("config_endpoint_auth", buf, sizeof(buf)) == -1 && buf[0] == '\0',
+	   "get_variable rejects and clears a truncated value");
+
+	ok(h.set_variable("config_endpoint_auth", "") == 0,
+	   "reset config_endpoint_auth after bounded read test");
 }
 
 /**
@@ -392,9 +418,9 @@ static void test_get_variable_string_contract(MCP_Threads_Handler& h) {
  */
 static void test_get_unknown_variable(MCP_Threads_Handler& h) {
 	char buf[256];
-	ok(h.get_variable("nonexistent", buf) == -1,
+	ok(h.get_variable("nonexistent", buf, sizeof(buf)) == -1,
 	   "get_variable(nonexistent) = -1");
-	ok(h.get_variable("", buf) == -1,
+	ok(h.get_variable("", buf, sizeof(buf)) == -1,
 	   "get_variable(empty) = -1");
 }
 
@@ -437,6 +463,109 @@ static void test_wrlock_wrunlock(MCP_Threads_Handler& h) {
 	ok(true, "wrlock/wrunlock round-trip without deadlock");
 }
 
+/**
+ * @brief Replacing the runtime query-rule snapshot with an empty result must
+ *        clear rules that were previously active.
+ */
+static void test_empty_query_rules_clear_runtime() {
+	Discovery_Schema catalog(":memory:");
+	auto rules = std::make_unique<SQLite3_result>(18);
+	const char* blocking_rule[] = {
+		"7001", "1", nullptr, nullptr, nullptr, "run_sql_readonly",
+		"BLOCKME", "0", "CASELESS", "0", nullptr, nullptr, nullptr,
+		"blocked by rule 7001", nullptr, nullptr, "1", "unit test"
+	};
+	rules->add_row(blocking_rule);
+	catalog.load_mcp_query_rules(rules.release());
+
+	std::unique_ptr<MCP_Query_Processor_Output> before_clear(
+		catalog.evaluate_mcp_query_rules(
+			"run_sql_readonly", "", "", "", nlohmann::json::object(),
+			"SELECT 1 FROM BLOCKME"));
+	ok(before_clear->error_msg != nullptr &&
+	   std::string(before_clear->error_msg) == "blocked by rule 7001",
+	   "loaded MCP query rule is active before an empty reload");
+
+	auto empty_rules = std::make_unique<SQLite3_result>(18);
+	catalog.load_mcp_query_rules(empty_rules.release());
+	std::unique_ptr<MCP_Query_Processor_Output> after_clear(
+		catalog.evaluate_mcp_query_rules(
+			"run_sql_readonly", "", "", "", nlohmann::json::object(),
+			"SELECT 1 FROM BLOCKME"));
+	ok(after_clear->error_msg == nullptr,
+	   "empty MCP query-rule reload clears the previously active rule");
+}
+
+/**
+ * @brief A listener bind failure must be reported synchronously.
+ *
+ * Keep a wildcard listener open on an ephemeral port, then try to start the
+ * MCP server on the same port.  The child process isolates this regression
+ * from the historical behavior, where the bind exception escaped from a
+ * worker thread and terminated the process.
+ */
+static void test_server_start_reports_bind_failure() {
+	const int blocker = socket(AF_INET, SOCK_STREAM, 0);
+	if (blocker < 0) {
+		ok(false, "create blocker socket for MCP bind-failure test: %s", strerror(errno));
+		return;
+	}
+
+	sockaddr_in address {};
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = htonl(INADDR_ANY);
+	address.sin_port = htons(0);
+	socklen_t address_len = sizeof(address);
+	if (bind(blocker, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 ||
+	    getsockname(blocker, reinterpret_cast<sockaddr*>(&address), &address_len) != 0 ||
+	    listen(blocker, 1) != 0) {
+		const int saved_errno = errno;
+		close(blocker);
+		ok(false, "reserve port for MCP bind-failure test: %s", strerror(saved_errno));
+		return;
+	}
+
+	const pid_t child = fork();
+	if (child == 0) {
+		alarm(5);
+		bool unexpectedly_started = false;
+		{
+			MCP_Threads_Handler handler;
+			handler.variables.mcp_use_ssl = false;
+			ProxySQL_MCP_Server server(ntohs(address.sin_port), &handler);
+			unexpectedly_started = server.start();
+		}
+		close(blocker);
+		_exit(unexpectedly_started ? 2 : 0);
+	}
+
+	if (child < 0) {
+		const int saved_errno = errno;
+		close(blocker);
+		ok(false, "fork MCP bind-failure test child: %s", strerror(saved_errno));
+		return;
+	}
+
+	int status = 0;
+	pid_t waited = -1;
+	do {
+		waited = waitpid(child, &status, 0);
+	} while (waited < 0 && errno == EINTR);
+	close(blocker);
+
+	if (waited < 0) {
+		ok(false, "wait for MCP bind-failure test child: %s", strerror(errno));
+		return;
+	}
+	if (WIFSIGNALED(status)) {
+		diag("MCP bind-failure child terminated by signal %d", WTERMSIG(status));
+	} else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+		diag("MCP bind-failure child exited with status %d", WEXITSTATUS(status));
+	}
+	ok(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+	   "MCP server start reports an occupied port without terminating");
+}
+
 /* ================================================================== */
 /*  Test count                                                         */
 /* ================================================================== */
@@ -450,7 +579,8 @@ static void test_wrlock_wrunlock(MCP_Threads_Handler& h) {
  * String variables:      7 vars * 6 tests each = 42
  * has_variable:          13
  * get_variables_list:    2 + 14 = 16
- * Null safety:           6
+ * Null safety:           7
+ * Bounded get_variable:  3
  * get_variable_string:   2
  * Get unknown:           2
  * Set unknown:           2
@@ -458,13 +588,18 @@ static void test_wrlock_wrunlock(MCP_Threads_Handler& h) {
  * Load target auth null: 1
  * wrlock/wrunlock:       1
  * -------------------------------------------------
- * Total:                 199
+ * Empty query rules:      2
+ * Server bind failure:    1
+ * -------------------------------------------------
+ * Total:                 206
  */
-static const int TOTAL_TESTS = 199;
+static const int TOTAL_TESTS = 206;
 
 int main() {
 	plan(TOTAL_TESTS);
 	test_init_minimal();
+
+	test_server_start_reports_bind_failure();
 
 	MCP_Threads_Handler handler;
 
@@ -477,12 +612,14 @@ int main() {
 	test_has_variable(handler);
 	test_get_variables_list(handler);
 	test_null_safety(handler);
+	test_bounded_get_variable(handler);
 	test_get_variable_string_contract(handler);
 	test_get_unknown_variable(handler);
 	test_set_unknown_variable(handler);
 	test_target_auth_empty(handler);
 	test_load_target_auth_null(handler);
 	test_wrlock_wrunlock(handler);
+	test_empty_query_rules_clear_runtime();
 
 	test_cleanup_minimal();
 	return exit_status();

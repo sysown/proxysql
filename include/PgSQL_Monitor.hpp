@@ -13,17 +13,17 @@
 #include <mutex>
 #include <vector>
 
-#define MONITOR_SQLITE_TABLE_PGSQL_SERVER_CONNECT_LOG "CREATE TABLE pgsql_server_connect_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , connect_success_time_us INT DEFAULT 0 , connect_error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
+#define MONITOR_SQLITE_TABLE_PGSQL_SERVER_CONNECT_LOG "CREATE TABLE pgsql_server_connect_log (hostname VARCHAR NOT NULL , port INT NOT NULL , time_start_us INT NOT NULL DEFAULT 0 , connect_success_time_us INT DEFAULT 0 , connect_error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
-#define MONITOR_SQLITE_TABLE_PGSQL_SERVER_PING_LOG "CREATE TABLE pgsql_server_ping_log ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , ping_success_time_us INT DEFAULT 0 , ping_error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
+#define MONITOR_SQLITE_TABLE_PGSQL_SERVER_PING_LOG "CREATE TABLE pgsql_server_ping_log ( hostname VARCHAR NOT NULL , port INT NOT NULL , time_start_us INT NOT NULL DEFAULT 0 , ping_success_time_us INT DEFAULT 0 , ping_error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
-#define MONITOR_SQLITE_TABLE_PGSQL_SERVER_READ_ONLY_LOG "CREATE TABLE pgsql_server_read_only_log ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , read_only INT DEFAULT 1 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
+#define MONITOR_SQLITE_TABLE_PGSQL_SERVER_READ_ONLY_LOG "CREATE TABLE pgsql_server_read_only_log ( hostname VARCHAR NOT NULL , port INT NOT NULL , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , read_only INT DEFAULT 1 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
-#define MONITOR_SQLITE_TABLE_PGSQL_SERVER_REPLICATION_LAG_LOG "CREATE TABLE pgsql_server_replication_lag_log ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , repl_lag INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
+#define MONITOR_SQLITE_TABLE_PGSQL_SERVER_REPLICATION_LAG_LOG "CREATE TABLE pgsql_server_replication_lag_log ( hostname VARCHAR NOT NULL , port INT NOT NULL , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , repl_lag INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
-#define MONITOR_SQLITE_TABLE_PGSQL_SERVERS "CREATE TABLE pgsql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status INT CHECK (status IN (0, 1, 2, 3, 4)) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port) )"
+#define MONITOR_SQLITE_TABLE_PGSQL_SERVERS "CREATE TABLE pgsql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL , status INT CHECK (status IN (0, 1, 2, 3, 4)) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port) )"
 
-#define MONITOR_SQLITE_TABLE_PROXYSQL_SERVERS "CREATE TABLE proxysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port) )"
+#define MONITOR_SQLITE_TABLE_PROXYSQL_SERVERS "CREATE TABLE proxysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port) )"
 
 struct PgSQL_Monitor {
 	// @brief Flags if monitoring threads should be shutdown.  Atomic because
@@ -96,15 +96,22 @@ struct PgSQL_Monitor {
 
 	// DNS cache facade.  Mirrors MySQL_Monitor's surface so PgSQL_Connection
 	// can call PgSQL_Monitor::dns_lookup(hostname) and get a cached IP without
-	// blocking on getaddrinfo.
+	// blocking on getaddrinfo.  `all_ips`, if given, receives every cached IP
+	// starting at the returned one (see DNS_Cache::lookup()); empty unless the
+	// cache served the IP, so it stays empty for an IP literal or a miss.
 	static std::string dns_lookup(const std::string& hostname,
-		bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr);
+		bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr,
+		std::vector<std::string>* all_ips = nullptr);
 	static std::string dns_lookup(const char* hostname,
-		bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr);
+		bool return_hostname_if_lookup_fails = true, size_t* ip_count = nullptr,
+		std::vector<std::string>* all_ips = nullptr);
 	// Seed the cache from an already-connected PGconn.  Called on the
 	// SUCCESSFUL branch of PgSQL_Connection's handler so the next
 	// connect avoids getaddrinfo even before the resolver loop has run.
 	static bool update_dns_cache_from_pgsql_conn(PGconn* pgsql_conn);
+	// Same, for a connection whose socket we own (the native backend path): `sock` is
+	// connected to `hostname`. Only fills a name the cache has no entry for.
+	static bool update_dns_cache_from_socket(const std::string& hostname, int sock);
 	// Wake the resolver loop early (e.g. after a pgsql_servers update).
 	static void trigger_dns_cache_update();
 

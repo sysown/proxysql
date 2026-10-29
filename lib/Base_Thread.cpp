@@ -1,5 +1,7 @@
 #include "Base_Thread.h"
 
+#include <algorithm>
+
 #include "cpp.h"
 
 #include <unistd.h>
@@ -40,6 +42,9 @@ bool Base_Thread::update_partition_gate() {
 	const uint64_t nulls    = partition_pool_nulls;
 	partition_pool_attempts = 0;
 	partition_pool_nulls    = 0;
+#ifdef PROXYSQL31
+	partition_pool_nulls_prev = (unsigned int)nulls;
+#endif
 
 	// Low-volume ticks carry no signal; leave gate and streak unchanged.
 	if (attempts < PARTITION_GATE_MIN_ATTEMPTS) {
@@ -74,6 +79,14 @@ void Base_Thread::register_session(T thr, S _sess, bool up_start) {
 	if constexpr (std::is_same_v<T, PgSQL_Thread*>) {
 		_sess->copy_cmd_matcher = (static_cast<PgSQL_Thread*>(this))->copy_cmd_matcher;
 	}
+#ifdef PROXYSQL31
+	if constexpr (std::is_same_v<T, MySQL_Thread*>) {
+		// handled_in_pass is compared with this thread's own pass counter: a
+		// value left by the thread the session comes from (idle threads) could
+		// match it and make process_all_sessions() skip the session.
+		_sess->handled_in_pass = 0;
+	}
+#endif // PROXYSQL31
 
 	if (up_start)
 		_sess->start_time=curtime;
@@ -210,9 +223,11 @@ void Base_Thread::check_timing_out_session(unsigned int n) {
 	auto* _sess = _myds->sess;
 	if (!_sess) return;
 
-	// Generic timeout checks (wait_until or pause_until)
-	if ((_myds->wait_until && curtime > _myds->wait_until) ||
-		(_sess->pause_until && curtime > _sess->pause_until)) {
+	// A deadline is due at equality. BeforePoll only schedules future
+	// deadlines; skipping this boundary would fall back to the full poll
+	// interval and delay query cancellation (see #6385).
+	if ((_myds->wait_until && curtime >= _myds->wait_until) ||
+		(_sess->pause_until && curtime >= _sess->pause_until)) {
 		_sess->to_process = 1;
 	}
 
@@ -285,16 +300,22 @@ void Base_Thread::ProcessAllSessions_Partition() {
 	size_t running_end = 0;
 	size_t idle_begin = mysql_sessions->len;
 	size_t idx = 0;
+	size_t oldest_idx = SIZE_MAX;
+	unsigned long long oldest_mct = UINT64_MAX;
 
 	while (idx < idle_begin) {
 		S* s = static_cast<S*>(mysql_sessions->index(idx));
 
 		const bool has_be = (s->mybe && s->mybe->server_myds);
-		const bool is_B = has_be && (s->mybe->server_myds->max_connect_time != 0);
+		const unsigned long long mct = has_be ? s->mybe->server_myds->max_connect_time : 0ULL;
+		const bool is_B = (mct != 0);
 		const bool is_A = !is_B && has_be && (s->mybe->server_myds->myconn != nullptr) && (s->status != WAITING_CLIENT_DATA);
 
 		if (is_A) {
 			if (idx != running_end) {
+				// Keep the tracked oldest valid: the B session at running_end is
+				// about to be swapped to idx.
+				if (oldest_idx == running_end) oldest_idx = idx;
 				void* p = mysql_sessions->pdata[idx];
 				mysql_sessions->pdata[idx] = mysql_sessions->pdata[running_end];
 				mysql_sessions->pdata[running_end] = p;
@@ -302,6 +323,14 @@ void Base_Thread::ProcessAllSessions_Partition() {
 			++running_end;
 			++idx;
 		} else if (is_B) {
+			// Key on max_connect_time: it was already loaded for the is_B test
+			// above, so this is a register compare with no extra memory access.
+			// Smallest max_connect_time == earliest connect start == the session
+			// closest to the connect_timeout_server_max abort.
+			if (mct < oldest_mct) {
+				oldest_mct = mct;
+				oldest_idx = idx;
+			}
 			++idx;
 		} else {
 			--idle_begin;
@@ -312,6 +341,68 @@ void Base_Thread::ProcessAllSessions_Partition() {
 			}
 			// do NOT advance idx - re-examine the swapped-in element test
 		}
+	}
+
+#ifdef PROXYSQL31
+	// Order the B band oldest-first, occasionally.
+	//
+	// max_connect_time is stamped as curtime + connect_timeout_server_max when
+	// a session enters PROCESSING_QUERY, before it tries the pool -- so it is a
+	// fixed offset from when the session started waiting, and ascending order
+	// is FIFO by arrival. Band B is therefore not just "sessions connecting":
+	// with connect_timeout_server_max non-zero (default 10000) it holds every
+	// session with a pending query, including all the ones that failed a pool
+	// checkout.
+	//
+	// Promoting only the single oldest session, as the fallback below does,
+	// rescues one waiter per pass and leaves the rest in arbitrary order, which
+	// lets a subset lose the checkout race repeatedly. A full sort gives
+	// approximate FIFO across the whole band. It is rate-limited because doing
+	// it every iteration was measured at ~12% throughput loss.
+	const size_t b_len = (idle_begin > running_end) ? (idle_begin - running_end) : 0;
+	const bool sort_due = (curtime >= last_partition_sort_time + PARTITION_SORT_MIN_INTERVAL_US);
+	if (b_len > 1 && sort_due) {
+		last_partition_sort_time = curtime;
+		// Every element in [running_end, idle_begin) satisfied is_B, so
+		// mybe->server_myds is non-null and max_connect_time is non-zero.
+		auto cmp = [](void* a, void* b) {
+			return static_cast<S*>(a)->mybe->server_myds->max_connect_time
+			     < static_cast<S*>(b)->mybe->server_myds->max_connect_time;
+		};
+
+		// Only the front of the band can be served this pass -- the pool is
+		// far smaller than the client count, so most of the band is scrap we
+		// were never going to reach anyway. Fully sorting all of it (the
+		// std::sort this replaces) spends O(n log n) to order elements whose
+		// relative order will never be observed before the next sort.
+		//
+		// nth_element partitions the N smallest to the front in O(n) average,
+		// unordered among themselves; sorting just that front slice is
+		// O(N log N). N = 20% of the band: small enough to be cheap even at
+		// full band size, large enough that a session just past the cutoff
+		// this pass is very likely inside it on the next one.
+		void** begin = mysql_sessions->pdata + running_end;
+		void** end   = mysql_sessions->pdata + idle_begin;
+		size_t top_n = b_len / 5;
+		if (top_n < 1) top_n = 1;
+		if (top_n >= b_len) {
+			std::sort(begin, end, cmp);
+		} else {
+			void** nth = begin + top_n;
+			std::nth_element(begin, nth, end, cmp);
+			std::sort(begin, nth, cmp);
+		}
+	}
+	// Fallback when the band was not sorted this pass: promote the
+	// longest-waiting B session so the CONNECTING_SERVER pass serves it first.
+	// Gated by a minimum B-band size to avoid churn on tiny bands.
+	else
+#endif // PROXYSQL31
+	if (idle_begin > running_end + PARTITION_FAIRNESS_MIN_B
+	    && oldest_idx != SIZE_MAX && oldest_idx != running_end) {
+		void* p = mysql_sessions->pdata[running_end];
+		mysql_sessions->pdata[running_end] = mysql_sessions->pdata[oldest_idx];
+		mysql_sessions->pdata[oldest_idx] = p;
 	}
 }
 
@@ -335,7 +426,9 @@ void Base_Thread::ProcessAllMyDS_AfterPoll() {
 
 		auto * myds = thr->mypolls.myds[n];
 		if (myds==NULL) {
-			read_one_byte_from_pipe<T>(n);
+			if (thr->mypolls.fds[n].fd == thr->pipefd[0]) {
+				read_one_byte_from_pipe<T>(n);
+			}
 			continue;
 		}
 		if (thr->mypolls.fds[n].revents==0) {
@@ -412,13 +505,13 @@ void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
 	if (myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
 		myds->set_pollout();
 	} else {
-		if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END) {
+		if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END && myds->myconn) {
 			thr->mypolls.fds[n].events = POLLIN;
 			if constexpr (std::is_same_v<T, PgSQL_Thread>) {
-				if (thr->mypolls.myds[n]->myconn->async_exit_status & PG_EVENT_WRITE)
+				if (myds->myconn->needs_pollout())
 					thr->mypolls.fds[n].events |= POLLOUT;
 			} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
-				if (thr->mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
+				if (myds->myconn->async_exit_status & MYSQL_WAIT_WRITE)
 					thr->mypolls.fds[n].events |= POLLOUT;
 			}
 		} else {

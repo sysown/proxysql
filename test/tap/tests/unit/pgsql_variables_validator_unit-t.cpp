@@ -143,7 +143,7 @@ static void test_work_mem_invalid() {
 
 static void test_search_path_valid() {
     assert_validates(pgsql_variable_validator_search_path, "public", true, "public", "search_path");
-    assert_validates(pgsql_variable_validator_search_path, "public,pg_catalog", true, "public,pg_catalog", "search_path");
+    assert_validates(pgsql_variable_validator_search_path, "public,pg_catalog", true, "public, pg_catalog", "search_path");
 }
 
 static void test_search_path_quoted() {

@@ -51,6 +51,36 @@ int run_one_test(MYSQL *mysqladmin, const char *expected_checksum, const char *q
 	return 0;
 }
 
+int test_aws_iam_region_roundtrip(MYSQL *mysqladmin) {
+	const char* const settings = "{\"aws_iam_region\":\"us-east-1\"}";
+	const char* const insert =
+		"INSERT INTO mysql_hostgroup_attributes (hostgroup_id, hostgroup_settings) "
+		"VALUES (999901, '{\"aws_iam_region\":\"us-east-1\"}')";
+	MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_hostgroup_attributes");
+	MYSQL_QUERY(mysqladmin, insert);
+	MYSQL_QUERY(mysqladmin, "LOAD MYSQL SERVERS TO RUNTIME");
+	MYSQL_QUERY(mysqladmin,
+		"SELECT hostgroup_settings FROM runtime_mysql_hostgroup_attributes WHERE hostgroup_id=999901");
+	MYSQL_RES* result = mysql_store_result(mysqladmin);
+	MYSQL_ROW row = mysql_fetch_row(result);
+	ok(row != nullptr && strcmp(row[0], settings) == 0,
+		"LOAD MYSQL SERVERS TO RUNTIME preserves aws_iam_region hostgroup settings");
+	mysql_free_result(result);
+
+	MYSQL_QUERY(mysqladmin, "SAVE MYSQL SERVERS FROM RUNTIME");
+	MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_hostgroup_attributes");
+	MYSQL_QUERY(mysqladmin, "SAVE MYSQL SERVERS FROM RUNTIME");
+	MYSQL_QUERY(mysqladmin, "LOAD MYSQL SERVERS TO RUNTIME");
+	MYSQL_QUERY(mysqladmin,
+		"SELECT hostgroup_settings FROM runtime_mysql_hostgroup_attributes WHERE hostgroup_id=999901");
+	result = mysql_store_result(mysqladmin);
+	row = mysql_fetch_row(result);
+	ok(row != nullptr && strcmp(row[0], settings) == 0,
+		"SAVE and reload preserve aws_iam_region hostgroup settings");
+	mysql_free_result(result);
+	return 0;
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -88,7 +118,7 @@ int main(int argc, char** argv) {
 		}
 	};
 
-	plan(queries_and_checksums.size()*4);
+	plan(queries_and_checksums.size()*4 + 2);
 	diag("Testing the loading of mysql_hostgroup_attributes");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
@@ -111,8 +141,8 @@ int main(int argc, char** argv) {
 			sleep(10);
 		}
 	}
+	test_aws_iam_region_roundtrip(mysqladmin);
 	mysql_close(mysqladmin);
 
 	return exit_status();
 }
-

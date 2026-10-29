@@ -88,6 +88,20 @@ int listen_on_unix(char *path, int backlog) {
 	int sd;
 	int r;
 
+	if (path == nullptr) {
+		errno = EINVAL;
+		proxy_error("Cannot listen on a null Unix Socket path\n");
+		return -1;
+	}
+
+	const size_t path_len = strnlen(path, sizeof(serveraddr.sun_path));
+	if (path_len >= sizeof(serveraddr.sun_path)) {
+		errno = ENAMETOOLONG;
+		proxy_error("Unix Socket path is too long: %.*s\n",
+			static_cast<int>(path_len), path);
+		return -1;
+	}
+
 	// remove the socket
 	r=unlink(path);
 	if ( (r==-1) && (errno!=ENOENT) ) {
@@ -104,7 +118,7 @@ int listen_on_unix(char *path, int backlog) {
 
 	memset(&serveraddr, 0, sizeof(serveraddr));
 	serveraddr.sun_family = AF_UNIX;
-	strncpy(serveraddr.sun_path, path, sizeof(serveraddr.sun_path) - 1);
+	memcpy(serveraddr.sun_path, path, path_len + 1);
 
 	// call bind() to bind the socket on the specified file
 	if ( bind(sd, (struct sockaddr *)&serveraddr, sizeof(struct sockaddr_un)) != 0 ) {

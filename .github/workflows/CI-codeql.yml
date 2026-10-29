@@ -1,20 +1,17 @@
 name: CI-CodeQL
-run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
-
+run-name: v3.0 CI-CodeQL ${{ github.sha }} (${{ github.event_name }})
 on:
+  schedule:
+    - cron: '30 2 * * *'
   workflow_dispatch:
-  workflow_run:
-    workflows: [ CI-trigger ]
-    types: [ completed ]
-
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
-  cancel-in-progress: true
-
+  group: CI-CodeQL-nightly-v3.0
+  cancel-in-progress: false
+permissions:
+  actions: read
+  contents: read
+  security-events: write
 jobs:
   run:
-    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    if: ${{ github.repository == 'sysown/proxysql' && github.ref == 'refs/heads/v3.0' }}
     uses: sysown/proxysql/.github/workflows/ci-codeql.yml@GH-Actions
-    secrets: inherit
-    with:
-      trigger: ${{ toJson(github) }}

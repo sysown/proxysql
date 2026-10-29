@@ -18,6 +18,9 @@
 #include "prometheus_helpers.h"
 
 #include "PgSQL_Set_Stmt_Parser.h"
+#ifdef PROXYSQL31
+#include "PgSQL_Waiter_List.h"
+#endif // PROXYSQL31
 
 enum class AUTHENTICATION_METHOD {
 	NO_PASSWORD,
@@ -175,6 +178,7 @@ private:
 	void worker_thread_assigns_sessions_to_idle_thread(PgSQL_Thread * thr);
 	void worker_thread_gets_sessions_from_idle_thread();
 	void idle_thread_gets_sessions_from_worker_thread();
+	/// Hand resumed sessions from this idle thread to a worker.
 	void idle_thread_assigns_sessions_to_worker_thread(PgSQL_Thread * thr);
 	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(PgSQL_Thread * thr);
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
@@ -217,6 +221,10 @@ public:
 	void* gen_args;	// this is a generic pointer to create any sort of structure
 
 	ProxySQL_Poll<PgSQL_Data_Stream> mypolls;
+#ifdef PROXYSQL31
+	PgSQL_Waiter_Lists waiter_lists;
+	unsigned long long last_b_rearm_us = 0;
+#endif // PROXYSQL31
 	pthread_t thread_id;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
@@ -234,6 +242,55 @@ public:
 
 	int pipefd[2];
 	PgSQL_Session_Interrupt_Queue_t sess_intrpt_queue;
+#ifdef PROXYSQL31
+
+	/*
+	 * Adaptive poll timeout.
+	 *
+	 * A worker that has drained its own sessions blocks in poll() on its own
+	 * file descriptors. When it is waiting for a backend connection, the
+	 * connection that would unblock it is freed by a *different* worker into
+	 * the shared pool, and nothing in this worker's fd set ever fires. It
+	 * therefore sleeps for the whole poll timeout before retrying. Measured:
+	 * max_ms tracked pgsql-poll_timeout (~8s at 2000ms, ~1.3s at 500ms) and
+	 * collapsed to 74ms with threads=1, where no cross-worker handoff exists.
+	 *
+	 * Waking peers is not a fix: under starvation every worker wants a
+	 * connection, a returning connection carries no indication of which
+	 * worker can use it, and a wakeup may just be client traffic.
+	 *
+	 * So only the timeout is shortened, and only when both hold:
+	 *   - a session in this worker just failed to get a connection from the
+	 *     pool (partition_pool_nulls, already counted for the partition gate)
+	 *   - this worker has demonstrated recent throughput
+	 *
+	 * The second condition is what bounds the CPU cost. Throughput proves
+	 * connections are being returned at a high rate, so a short sleep is
+	 * near-certain to find one. With no recent throughput there is no
+	 * evidence any connection is coming, so the full timeout is kept and the
+	 * worker does not spin. A rolling window is used rather than an
+	 * instantaneous rate so that a single quiet iteration does not disengage
+	 * it mid-episode.
+	 */
+	static constexpr unsigned int      APT_BUCKETS      = 10;
+	static constexpr unsigned long long APT_BUCKET_US   = 200000;	// 200ms => 2s window
+	// Queries across the window before shortening is considered justified.
+	// At this rate a connection returns far more often than once per
+	// APT_SHORT_TTW_MS, so the shortened sleep is expected to be productive.
+	static constexpr unsigned long long APT_MIN_QUERIES = 2000;
+	static constexpr int               APT_SHORT_TTW_MS = 1;
+
+	unsigned long long apt_buckets[APT_BUCKETS] = {};
+	unsigned long long apt_window_total = 0;
+	unsigned long long apt_last_queries = 0;
+	unsigned long long apt_bucket_start = 0;
+	unsigned int       apt_idx = 0;
+
+	/// Roll the query-rate window forward to curtime. Called once per loop
+	/// iteration, not per query.
+	void apt_update_window();
+	int run_ComputePollTimeout();
+#endif // PROXYSQL31
 
 	//bool epoll_thread;
 	bool poll_timeout_bool;
@@ -412,6 +469,11 @@ public:
 	 *
 	 */
 	void unregister_session(int);
+#ifdef PROXYSQL31
+	void enter_waiter(PgSQL_Session *sess, unsigned hid);
+	void leave_waiter(PgSQL_Session *sess, bool restore_client = true);
+	void drop_from_poll(PgSQL_Data_Stream *ds);
+#endif // PROXYSQL31
 
 	/**
 	 * @brief Returns a pointer to the `pollfd` structure for a specific data stream.
@@ -847,6 +909,10 @@ class PgSQL_Threads_Handler
 {
 private:
 	int shutdown_;
+	/// @brief Number of worker + idle threads that registered before entering PgSQL_Thread::run().
+	std::atomic<unsigned int> threads_registered;
+	/// @brief Number of worker + idle threads that already left PgSQL_Thread::run().
+	std::atomic<unsigned int> threads_exited_run_loop;
 	size_t stacksize;
 	pthread_attr_t attr;
 	pthread_rwlock_t rwlock;
@@ -1075,6 +1141,7 @@ public:
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
 		bool kill_backend_connection_when_disconnect;
+		bool use_native_backend_protocol;
 		int data_packets_history_size;
 		char* server_version;
 		char* server_encoding;
@@ -1281,6 +1348,10 @@ public:
 	 *
 	 */
 	bool set_variable(char* name, const char* value);
+#ifdef PROXYSQL40
+	// Read existing metadata/validators without invoking runtime setters.
+	bool validate_variable(const char* name, const char* value) const;
+#endif
 
 	/**
 	 * @brief Returns a list of all available thread variables.
@@ -1434,6 +1505,57 @@ public:
 	 *
 	 */
 	void shutdown_threads();
+
+	/**
+	 * @brief Rendezvous for all worker and idle threads before they self-delete.
+	 *
+	 * Worker and idle threads dereference each other's PgSQL_Thread objects:
+	 * PgSQL_Thread::run_MoveSessionsBetweenThreads() reads
+	 * pgsql_threads_idles[rand()].worker, and the idle branch of
+	 * PgSQL_Thread::run() reads pgsql_threads[rand()].worker and then locks that
+	 * worker's myexchange mutex unconditionally. Because the peer is picked at
+	 * random and both directions exist, no pthread_join() ordering in
+	 * shutdown_threads() can make self-deletion safe -- each thread destroys its
+	 * own PgSQL_Thread from its own thread function, which pthread_join() only
+	 * observes after the fact.
+	 *
+	 * Destruction must nevertheless stay on the owning thread, because
+	 * ~PgSQL_Thread() frees __thread variables (pgsql_thread___*) and calls
+	 * GloPgQPro->end_thread().
+	 *
+	 * Every worker and idle thread therefore calls this right after
+	 * PgSQL_Thread::run() returns and before deleting its own PgSQL_Thread (and
+	 * before clearing its slot in pgsql_threads[], which another thread may still
+	 * be about to load). It returns only once all of them have left run(), so no
+	 * PgSQL_Thread is ever freed while another thread may still reach into it.
+	 *
+	 * The participant count comes from register_thread_before_run_loop(), not from
+	 * num_threads: every thread that registers is exactly a thread that will call
+	 * this, so the barrier is self-consistent and does not depend on every slot of
+	 * pgsql_threads[]/pgsql_threads_idles[] being populated. That matters because
+	 * the rest of this class deliberately tolerates a NULL worker slot (see
+	 * signal_all_threads() and the guards in shutdown_threads()).
+	 *
+	 * @note The wait is unbounded, but adds no new liveness requirement. A thread
+	 *   that never leaves run() still holds a non-NULL slot -- it registers right
+	 *   after storing that pointer -- so shutdown_threads() would block forever in
+	 *   the pthread_join() it performs under exactly that non-NULL guard. Leaving
+	 *   run() strictly precedes the thread exit that join waits for, so any hang
+	 *   this barrier can produce is a hang the pre-existing join already produced.
+	 *   The wait logs via proxy_error() every THREADS_EXIT_REPORT_INTERVAL_US so a
+	 *   stalled shutdown is diagnosable instead of silent; it never aborts.
+	 */
+	void wait_for_all_threads_to_exit_run_loop();
+
+	/**
+	 * @brief Register the calling thread as a participant of the shutdown barrier.
+	 *
+	 * Must be called by each worker/idle thread function before it releases the
+	 * start-up gate (`load_`), so that the count is complete before any thread can
+	 * enter PgSQL_Thread::run() and therefore before any thread can reach
+	 * wait_for_all_threads_to_exit_run_loop().
+	 */
+	void register_thread_before_run_loop();
 
 	/**
 	 * @brief Adds a new listener to the thread pool, based on an interface string.

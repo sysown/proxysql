@@ -10,6 +10,10 @@ services:
       - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/ssl/server.crt:/var/lib/postgresql/server.crt:ro
       - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/ssl/server.key:/var/lib/postgresql/server.key:ro
       - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/pgdb1:/var/log/postgresql
+      # Host path for the Unix-domain socket that ProxySQL reads.
+      # ProxySQL's container mounts the same path via start-proxysql-isolated.bash
+      # when the group sets PROXYSQL_NEEDS_PGSQL_SOCKET=1.
+      - ${INFRA_LOGS_PATH}/${INFRA_ID}/pgsql-sockets:/var/run/postgresql-shared
     networks:
       backend:
         aliases:

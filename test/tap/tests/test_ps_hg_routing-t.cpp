@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
 
 	MYSQL_QUERY(mysql, "create database if not exists test");
 	MYSQL_QUERY(mysql, "drop table if exists test.ps_hg_routing");
-	sprintf(buf, "create table if not exists test.ps_hg_routing (c1 varchar(%d) primary key, c2 varchar(%d))", STRING_SIZE, STRING_SIZE);
+	snprintf(buf, sizeof(buf), "create table if not exists test.ps_hg_routing (c1 varchar(%d) primary key, c2 varchar(%d))", STRING_SIZE, STRING_SIZE);
 	MYSQL_QUERY(mysql, buf);
 	MYSQL_QUERY(mysql, "insert into test.ps_hg_routing (c1,c2) values ('abcdef', 'abcdef')");
 
@@ -158,4 +158,3 @@ int main(int argc, char** argv) {
 	mysql_close(mysql);
 	mysql_close(mysqladmin);
 }
-

@@ -135,7 +135,9 @@ Simulator payload is a JSON object holding the following members:
   the initial configuration provided.
 
   Objects in the array are required to be JSON objects with the following members: `{hostgroup_id,
-  hostname, port, status}`.
+  hostname, port, status}`. They can also include `weight`, `max_connections`, `use_ssl`, and
+  `comment`. An omitted optional member is not compared; an explicitly supplied member, including
+  an empty `comment`, must match exactly.
 
   Status member should be an `string` of one of the following values:
   "SHUNNED|ONLINE|OFFLINE_SOFT|OFFLINE_HARD". NOTE: Since 'OFFLINE_HARD' status is a transitory

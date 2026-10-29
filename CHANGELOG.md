@@ -2,6 +2,111 @@
 
 ## Version 3.0.x Series - PostgreSQL Support Introduction
 
+### Unreleased
+
+#### Pass-Through Authentication (Phase 1 — opt-in, MySQL only)
+
+New authentication mode that lets a MySQL client authenticate through
+ProxySQL without a pre-provisioned password in `mysql_users`. ProxySQL
+intercepts the cleartext password during the `caching_sha2_password`
+*full-auth* exchange, probes the configured backend with it, and on
+success caches the credential for subsequent connects. See PR #5810 and
+`doc/internal/passthrough_authentication.md` for the design.
+
+Feature is **off by default**. Existing deployments see no behavioral
+change unless an operator explicitly enables it.
+
+To opt in (one of):
+
+- Provision a `mysql_users` row with `password=''` (empty) and set
+  `mysql-passthrough_auth_enabled=true`. The empty-password row now
+  semantically means "learn the password from the first successful
+  caching_sha2_password connect" (it no longer permits passwordless
+  login when the master gate is on — documented behavior change).
+- Set `mysql-passthrough_auth_unknown_users=true` to also pass-through
+  usernames that don't exist in `mysql_users` at all. Routing comes
+  from `mysql-passthrough_default_hg`. **SECURITY**: this combination
+  without `mysql-passthrough_auth_username_pattern` set is the most
+  dangerous pass-through configuration — ProxySQL will emit a WARNING
+  at `LOAD MYSQL VARIABLES TO RUNTIME` flagging the operator.
+
+New globals (13):
+- `mysql-passthrough_auth_enabled` (bool, default `false`)
+- `mysql-passthrough_auth_empty_password` (bool, default `true`)
+- `mysql-passthrough_auth_unknown_users` (bool, default `false`)
+- `mysql-passthrough_auth_require_tls` (bool, default `true`)
+- `mysql-passthrough_default_hg` (int, default `0`)
+- `mysql-passthrough_default_schema` (str, default `""`)
+- `mysql-passthrough_auth_cache_ttl_s` (int, default `0` = no expiry)
+- `mysql-passthrough_auth_max_inflight_probes` (int, default `100`)
+- `mysql-passthrough_auth_username_pattern` (str, default `""` = allow all; re2 regex allowlist)
+- `mysql-passthrough_auth_max_failures_per_user` (int, default `3`)
+- `mysql-passthrough_auth_max_failures_per_ip` (int, default `10`)
+- `mysql-passthrough_auth_failure_window_s` (int, default `60`)
+- `mysql-passthrough_auth_failure_map_cap` (int, default `100000`)
+
+New admin commands:
+- `PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE [FOR USER '<name>']`
+
+New stats virtual tables:
+- `stats_mysql_passthrough_auth_cache` (entries, no passwords)
+- `stats_mysql_passthrough_auth_metrics` (9 counters + 2 gauges)
+
+New audit events:
+- `MySQL_Client_Connect_Passthrough_OK`
+- `MySQL_Client_Connect_Passthrough_FAIL`
+
+Phase 1 limitations (documented in code + spec):
+- `caching_sha2_password` only (`mysql_clear_password` → Phase 2;
+  `mysql_native_password` → Phase 3)
+- Synchronous backend probe (matches MySQL_Monitor's pattern;
+  pinning a worker thread for the duration of one backend handshake)
+- One-shot probe connections do not go through the connection pool
+  (don't count against `mysql_servers.max_connections`; the effective
+  ceiling is `mysql-passthrough_auth_max_inflight_probes`)
+- No persistence; restart = cold cache
+- `COM_CHANGE_USER` targeting a pass-through user is rejected
+- Cluster sync of variables works via the standard `mysql_variables`
+  path; metric counters are per-node
+
+#### PostgreSQL digest fixes and v3.0 experimental ParserSQL compatibility
+
+- Fixed `pgsql-query_digests_keep_comment`: a kept comment is followed by a
+  separator space, and the digest buffer now accounts for it, so the last
+  character of a query is no longer dropped (#6451).
+- Fixed an unterminated `/*` comment leaking its last character into the
+  digest. An unterminated comment now contributes nothing; its partial text is
+  preserved when `pgsql-query_digests_keep_comment` is on (#6451).
+- v3.0 restores the established ParserSQL digest and backend-confirmed literal
+  user-variable tracking flows while retaining ParserSQL 1.1.1 (#6507).
+  ParserSQL-generated digests can differ from legacy mode, and first-comment
+  annotations remain unavailable with `*-query_processor_parser=1`.
+- Parser classification reuses the result obtained during digest parsing;
+  intercepted commands and isolated SET scope/completeness fixes are retained.
+  Unsupported/incomplete input, arena exhaustion and expressions hidden by the
+  AST digest retain a targeted legacy fallback, without exposing first-comment
+  hints in parser mode.
+- Mixed session/user-variable SET tracking, local acknowledgement/deferred
+  backend application and captured-context replay are gated to newer builds.
+  In v3.0, mixed assignments use the existing backend-bound fallback and
+  supported pure user-variable SETs update tracked state after backend success.
+  The v3.1 redesign is tracked independently in #6508.
+- The legacy-tokenizer-only digest model (#6454), including parser-mode first
+  comments and cross-mode digest parity, remains limited to `PROXYSQL31`
+  builds pending that redesign. Its tokenizer fixes remain in every build.
+
+#### New Features (3.1)
+
+- `hostgroup_settings.backup_weight_threshold` / `backup_availability`: servers with
+  `0 < weight < T` are selected only when no primary (`weight >= T`) is available
+  in the same hostgroup (MySQL and PostgreSQL). Default `T=0` is a no-op.
+  `weight=0` remains never selected. `backup_availability` selects when the backup
+  set opens: `selectable` (default) follows the normal candidate filters,
+  `status` requires no ONLINE primary, and `capacity` requires no ONLINE primary
+  with a free connection slot. PROXYSQL31 only.
+  Prometheus: `proxysql_mysql_hostgroup_backup_server_selected_total`,
+  `proxysql_pgsql_hostgroup_backup_server_selected_total`.
+
 ### v3.0.2 (2025-08-06)
 #### PostgreSQL Enhancements
 - Improved error processing and reporting format for backend connections using libpq (#4947)

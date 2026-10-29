@@ -46,16 +46,6 @@ const char kMysqlxEndpointsDdl[] =
 	" PRIMARY KEY (hostname, mysql_port)"
 	" )";
 
-// install_variables_from_admin queries mysqlx_variables. Without the table
-// fetch_result returns false and install short-circuits before swapping in
-// the newly-loaded routes/identities, silently breaking every scenario in
-// this file that depended on data actually being loaded.
-const char kMysqlxVariablesDdl[] =
-	"CREATE TABLE mysqlx_variables ("
-	" variable_name VARCHAR NOT NULL PRIMARY KEY,"
-	" variable_value VARCHAR NOT NULL DEFAULT ''"
-	" )";
-
 std::unique_ptr<SQLite3DB> create_test_db() {
 	auto db = std::make_unique<SQLite3DB>();
 	db->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -64,7 +54,8 @@ std::unique_ptr<SQLite3DB> create_test_db() {
 	db->execute(kMysqlxUsersDdl);
 	db->execute(kMysqlxRoutesDdl);
 	db->execute(kMysqlxEndpointsDdl);
-	db->execute(kMysqlxVariablesDdl);
+	db->execute(ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	db->execute(ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES);
 	return db;
 }
 

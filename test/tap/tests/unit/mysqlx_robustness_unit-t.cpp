@@ -724,6 +724,8 @@ static void test_server_ds_aliases_backend_conn_backend_ds() {
 	   "post-attach: server_ds() aliases backend_conn_->backend_ds() (TLS state preserved)");
 	ok(sess.server_ds().get_fd() == backend_fds[0],
 	   "post-attach: server_ds().get_fd() reflects the backend fd");
+	ok(sess.server_ds().get_status() == XDS_CONNECTED,
+	   "post-attach: raw init leaves backend stream connected but not poll-ready");
 
 	// return_backend_to_pool (via session close) must not tear down the
 	// TLS-aware stream on the cached connection. Driving this path via the
@@ -766,6 +768,8 @@ static void test_forward_empty_frame() {
 		reinterpret_cast<const uint8_t*>(stmt_s.data()), stmt_s.size());
 	sess.set_status(MysqlxSession::WAITING_CLIENT_XMSG);
 	sess.handler();
+	ok(sess.server_ds().get_status() == XDS_READY,
+	   "forward_to_backend marks attached backend stream poll-ready");
 
 	uint8_t buf[4096];
 	usleep(5000);
@@ -1501,7 +1505,7 @@ static void test_backend_user_falls_back_to_frontend_username() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(74);
+	plan(76);
 	diag("=== mysqlx_robustness_unit-t starting ===");
 
 	test_server_response_terminal_frame();

@@ -14,7 +14,8 @@ extern PgSQL_STMT_Manager *GloPgStmt;
 const int PS_GLOBAL_STATUS_FIELD_NUM = 8;
 
 static uint64_t stmt_compute_hash(const char *user,
-	const char *database, const char *query, unsigned int query_length, const Parse_Param_Types& param_types) {
+	const char *database, const char *query, unsigned int query_length, const Parse_Param_Types& param_types,
+	uint32_t search_path_hash) {
 	// two random seperators
 	static const char DELIM1[] = "-ZiODNjvcNHTFaARXoqqSPDqQe-";
 	static const char DELIM2[] = "-aSfpWDoswfuRsJXqZKfcelzCL-";
@@ -54,13 +55,9 @@ static uint64_t stmt_compute_hash(const char *user,
 		memcpy(buf + l, &size, sizeof(uint16_t)); l += sizeof(uint16_t); // write number of parameter types
 		memcpy(buf + l, param_types.data(), size * sizeof(uint32_t)); l += (size * sizeof(uint32_t)); // write each parameter type
 	}
-	uint64_t hash = SpookyHash::Hash64(buf, l, 0);
+	// The search_path goes in as the seed: it is already a hash, and this keeps it out of the buffer.
+	uint64_t hash = SpookyHash::Hash64(buf, l, search_path_hash);
 	return hash;
-}
-
-void PgSQL_STMT_Global_info::compute_hash() {
-	hash = stmt_compute_hash(username, dbname, query,
-		query_length, parse_param_types);
 }
 
 PgSQL_STMT_Global_info::PgSQL_STMT_Global_info(uint64_t id, const char *_user, const char *_database, const char *_query,
@@ -80,12 +77,7 @@ PgSQL_STMT_Global_info::PgSQL_STMT_Global_info(uint64_t id, const char *_user, c
 	first_comment = _first_comment ? strdup(_first_comment) : nullptr;
 	parse_param_types = std::move(_ppt);
 	PgQueryCmd = PGSQL_QUERY__UNINITIALIZED;
-	
-	if (_h) {
-		hash = _h;
-	} else {
-		compute_hash();
-	}
+	hash = _h;
 	calculate_mem_usage();
 }
 
@@ -161,6 +153,13 @@ const PgSQL_STMT_Global_info* PgSQL_STMT_Local::find_stmt_info_from_stmt_name(co
 	return ret;
 }
 
+std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_STMT_Local::find_shared_stmt_info_from_stmt_name(const std::string& client_stmt_name) const {
+	if (auto s = stmt_name_to_global_info.find(client_stmt_name); s != stmt_name_to_global_info.end()) {
+		return s->second;
+	}
+	return nullptr;
+}
+
 bool PgSQL_STMT_Local::client_close(const std::string& client_stmt_name) {
 	if (auto s = stmt_name_to_global_info.find(client_stmt_name); s != stmt_name_to_global_info.end()) {  // found
 		const PgSQL_STMT_Global_info* stmt_info = s->second.get();
@@ -176,6 +175,18 @@ void PgSQL_STMT_Local::client_close_all() {
 		GloPgStmt->ref_count_client(global_stmt_info.get(), -1);
 	}
 	stmt_name_to_global_info.clear();
+}
+
+void PgSQL_STMT_Local::backend_close_all() {
+	// Same server-refcount release as ~PgSQL_STMT_Local()'s backend branch: one
+	// ref_count_server(-1) per backend statement. Also clears global_stmt_to_backend_ids
+	// (the destructor skips it only because the object is about to be freed).
+	for (auto& [_, global_stmt_info] : backend_stmt_to_global_info) {
+		GloPgStmt->ref_count_server(global_stmt_info.get(), -1);
+	}
+	backend_stmt_to_global_info.clear();
+	global_stmt_to_backend_ids.clear();
+	stale_backend_stmts = 0; // DEALLOCATE ALL drops those too
 }
 
 uint32_t PgSQL_STMT_Local::generate_new_backend_stmt_id() {
@@ -194,6 +205,22 @@ void PgSQL_STMT_Local::backend_insert(std::shared_ptr<const PgSQL_STMT_Global_in
 	global_stmt_to_backend_ids.emplace(stmt_info->statement_id, backend_stmt_id);
 }
 
+void PgSQL_STMT_Local::backend_erase(uint64_t global_id, bool still_on_backend) {
+	const auto g = global_stmt_to_backend_ids.find(global_id);
+	if (g == global_stmt_to_backend_ids.end()) {
+		return;
+	}
+	const auto b = backend_stmt_to_global_info.find(g->second);
+	if (b != backend_stmt_to_global_info.end()) {
+		GloPgStmt->ref_count_server(b->second.get(), -1);
+		backend_stmt_to_global_info.erase(b);
+	}
+	global_stmt_to_backend_ids.erase(g);
+	if (still_on_backend) {
+		stale_backend_stmts++;
+	}
+}
+
 uint32_t PgSQL_STMT_Local::find_backend_stmt_id_from_global_id(uint64_t global_id) const {
 	if (auto s = global_stmt_to_backend_ids.find(global_id); s != global_stmt_to_backend_ids.end()) {
 		return s->second;
@@ -202,8 +229,9 @@ uint32_t PgSQL_STMT_Local::find_backend_stmt_id_from_global_id(uint64_t global_i
 }
 
 uint64_t PgSQL_STMT_Local::compute_hash(const char *user,
-	const char *database, const char *query, unsigned int query_length, const Parse_Param_Types& param_types) {
-	uint64_t hash = stmt_compute_hash(user, database, query, query_length, param_types);
+	const char *database, const char *query, unsigned int query_length, const Parse_Param_Types& param_types,
+	uint32_t search_path_hash) {
+	uint64_t hash = stmt_compute_hash(user, database, query, query_length, param_types, search_path_hash);
 	return hash;
 }
 
@@ -328,12 +356,10 @@ std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_STMT_Manager::find_prepared_
 	return ret;
 }
 
-std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_STMT_Manager::add_prepared_statement(const char* user, const char* database, const char* query,
+std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_STMT_Manager::add_prepared_statement(uint64_t hash, const char* user, const char* database, const char* query,
 	unsigned int query_len, Parse_Param_Types&& ppt, const char* first_comment, const char* digest_text, uint64_t digest, 
 	PGSQL_QUERY_command PgQueryCmd, bool lock) {
 	std::shared_ptr<const PgSQL_STMT_Global_info> ret = nullptr;
-
-	uint64_t hash = stmt_compute_hash(user, database, query, query_len, ppt);  // this identifies the prepared statement
 
 	if (lock) {
 		wrlock();

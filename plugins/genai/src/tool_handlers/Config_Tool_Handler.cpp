@@ -12,6 +12,7 @@ using json = nlohmann::json;
 #include "Config_Tool_Handler.h"
 #include "proxysql_debug.h"
 #include "proxysql_admin.h"
+#include "proxysql_admin_global_sql_lock.h"
 #include "proxysql_utils.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
@@ -420,8 +421,8 @@ json Config_Tool_Handler::handle_get_config(const std::string& var_name) {
 		return create_error_response("MCP handler not initialized");
 	}
 
-	char val[1024];
-	if (mcp_handler->get_variable(var_name.c_str(), val) == 0) {
+	std::string val;
+	if (mcp_handler->get_variable_string(var_name.c_str(), val)) {
 		json result;
 		result["variable_name"] = var_name;
 		result["value"] = val;
@@ -470,30 +471,15 @@ json Config_Tool_Handler::handle_query(const std::string& sql) {
 		return create_error_response(validation_error);
 	}
 
-	if (pthread_mutex_lock(&GloAdmin->sql_query_global_mutex) != 0) {
-		return create_error_response("Failed to lock sql_query_global_mutex");
-	}
-
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
 	SQLite3_result* resultset = NULL;
-	GloAdmin->admindb->execute_statement(sql.c_str(), &error, &cols, &affected_rows, &resultset);
-
-	int unlock_rc = pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
-	if (unlock_rc != 0) {
-		if (error) {
-			std::string err_msg = error;
-			free(error);
-			if (resultset) {
-				delete resultset;
-			}
-			return create_error_response(err_msg + "; also failed to unlock sql_query_global_mutex");
-		}
-		if (resultset) {
-			delete resultset;
-		}
-		return create_error_response("Failed to unlock sql_query_global_mutex");
+	{
+		// Shared re-entrancy protocol of Admin's SQL mutex; see
+		// include/proxysql_admin_global_sql_lock.h.
+		proxysql_admin_global_sql_guard admin_lock(GloAdmin->sql_query_global_mutex);
+		GloAdmin->admindb->execute_statement(sql.c_str(), &error, &cols, &affected_rows, &resultset);
 	}
 
 	if (error) {
@@ -547,8 +533,8 @@ json Config_Tool_Handler::handle_list_variables(const std::string& filter) {
 			}
 		}
 
-		char val[1024];
-		if (mcp_handler->get_variable(var_name.c_str(), val) == 0) {
+		std::string val;
+		if (mcp_handler->get_variable_string(var_name.c_str(), val)) {
 			json var;
 			var["name"] = var_name;
 			var["value"] = val;

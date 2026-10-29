@@ -62,6 +62,7 @@
  */
 
 #include <unistd.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <pthread.h>
@@ -111,6 +112,25 @@ const uint32_t R_PORT = 16062;
 // Use 127.0.0.1 to connect to it, not cl.host (which may point to a different container).
 const char* R_HOST = "127.0.0.1";
 
+void restore_task11_mysql_users(MYSQL* admin, int& backup_stage) {
+	if (admin == nullptr || backup_stage == 0) return;
+	const auto best_effort = [admin](const char* query) {
+		if (mysql_query(admin, query) != 0) {
+			diag("Task 11 mysql_users restore query failed: %s", mysql_error(admin));
+		}
+	};
+	best_effort("DELETE FROM mysql_users");
+	best_effort("INSERT INTO mysql_users SELECT * FROM mysql_users_sync_test_task11");
+	if (backup_stage >= 2) {
+		best_effort("DELETE FROM disk.mysql_users");
+		best_effort("INSERT INTO disk.mysql_users SELECT * FROM mysql_users_disk_sync_test_task11");
+	}
+	best_effort("DROP TABLE IF EXISTS mysql_users_sync_test_task11");
+	best_effort("DROP TABLE IF EXISTS mysql_users_disk_sync_test_task11");
+	best_effort("LOAD MYSQL USERS TO RUNTIME");
+	backup_stage = 0;
+}
+
 // Hostname visible to other containers on the Docker network.
 // Used when registering the replica in proxysql_servers on the primary so the
 // primary's cluster monitor can reach the replica.  Falls back to R_HOST when
@@ -121,7 +141,7 @@ const char* get_cluster_visible_host() {
 	static char buf[256] = {};
 	if (buf[0]) return buf;
 	if (gethostname(buf, sizeof(buf)) != 0) {
-		strncpy(buf, R_HOST, sizeof(buf) - 1);
+		snprintf(buf, sizeof(buf), "%s", R_HOST);
 	}
 	return buf;
 }
@@ -1181,6 +1201,7 @@ int main(int, char**) {
 	int res = 0;
 	CommandLine cl;
 	std::atomic<bool> save_proxy_stderr(false);
+	int task11_mysql_users_backup_stage = 0;
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -1213,7 +1234,7 @@ int main(int, char**) {
 
 	plan(
 		// Sync tests by values
-		16 +
+		19 +
 		// Module checkums tests; enabled and disabled checksums
 		check_modules_checksums_sync__tests +
 		(cl.use_noise ? 3 : 0)
@@ -1288,31 +1309,53 @@ int main(int, char**) {
 
 	// Launch proxysql with cluster config via fork/exec so we can track the PID
 	std::atomic<pid_t> replica_pid { 0 };
+	std::atomic<bool> replica_exited { false };
 
-	std::thread proxy_replica_th([&save_proxy_stderr, &replica_pid, &cl] () {
+	std::thread proxy_replica_th([&save_proxy_stderr, &replica_pid, &replica_exited, &cl] () {
 		const string replica_stderr { string(cl.workdir) + "test_cluster_sync_config/cluster_sync_node_stderr.txt" };
 		const std::string proxysql_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql.db";
 		const std::string stats_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql_stats.db";
 		const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
 
 		const string proxy_binary_path { string { cl.workdir } + "../../../src/proxysql" };
-		const string proxy_command {
-			proxy_binary_path + " -f -M -c " + fmt_config_file + " > " + replica_stderr + " 2>&1"
-		};
+		diag("Launching replica ProxySQL via fork/exec: `%s -f -M -c %s`", proxy_binary_path.c_str(), fmt_config_file.c_str());
 
-		diag("Launching replica ProxySQL via fork/exec with command: `%s`", proxy_command.c_str());
+		int stderr_fd = open(replica_stderr.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (stderr_fd == -1) {
+			diag("Failed to open replica stderr file '%s': %s", replica_stderr.c_str(), strerror(errno));
+			ok(false, "proxysql cluster node should execute and shutdown nicely. Failed to open stderr file");
+			replica_exited.store(true);
+			return;
+		}
 
 		pid_t pid = fork();
 		if (pid == 0) {
-			execl("/bin/sh", "sh", "-c", proxy_command.c_str(), nullptr);
-			_exit(127);
+			if (dup2(stderr_fd, STDOUT_FILENO) == -1 || dup2(stderr_fd, STDERR_FILENO) == -1) {
+				_exit(errno);
+			}
+			close_all_non_term_fd({});
+			execl(proxy_binary_path.c_str(), proxy_binary_path.c_str(), "-f", "-M", "-c", fmt_config_file.c_str(), nullptr);
+			_exit(errno);
+		}
+
+		close(stderr_fd);
+		if (pid == -1) {
+			diag("Failed to fork replica ProxySQL: %s", strerror(errno));
+			ok(false, "proxysql cluster node should execute and shutdown nicely. Failed to fork");
+			replica_exited.store(true);
+			return;
 		}
 
 		replica_pid.store(pid);
 
 		int status = 0;
-		waitpid(pid, &status, 0);
-		int exec_res = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+		pid_t wait_res = 0;
+		do {
+			wait_res = waitpid(pid, &status, 0);
+		} while (wait_res == -1 && errno == EINTR);
+
+		int exec_res = wait_res == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+		replica_exited.store(true);
 
 		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely. Exit status was: %d", exec_res);
 
@@ -1321,6 +1364,23 @@ int main(int, char**) {
 				diag("LOG: Proxysql cluster node execution failed, logging stderr into 'test_cluster_sync_config/cluster_sync_node_stderr.txt'");
 			} else {
 				diag("LOG: One of the tests failed to pass, logging stderr 'test_cluster_sync_config/cluster_sync_node_stderr.txt'");
+			}
+
+			std::ifstream stderr_stream { replica_stderr };
+			constexpr std::streamoff max_stderr_bytes = 64 * 1024;
+			stderr_stream.seekg(0, std::ios::end);
+			std::streamoff stderr_size = stderr_stream.tellg();
+			if (stderr_size > max_stderr_bytes) {
+				stderr_stream.seekg(stderr_size - max_stderr_bytes);
+				std::string partial_line {};
+				std::getline(stderr_stream, partial_line);
+				diag("REPLICA STDERR: [showing final 64 KiB]");
+			} else {
+				stderr_stream.seekg(0);
+			}
+			std::string stderr_line {};
+			while (std::getline(stderr_stream, stderr_line)) {
+				diag("REPLICA STDERR: %s", stderr_line.c_str());
 			}
 		}
 
@@ -1397,7 +1457,7 @@ int main(int, char**) {
 			std::make_tuple(18, 2, -1, 20, "SET sql_mode = \"\"", 0, 0, 100, "", "", ""),
 			std::make_tuple(19, 2, -1, 20, "SET sql_mode = \"\"", 0, 0, 100, "{}", "{}", "{}"),
 			std::make_tuple(20, 0,  0, 30, "SET long_query_time = 0", 1, 0, 123, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "", ""),
-			std::make_tuple(21, 2, -1, 50, "SET sql_mode = \"\"", 1, 0, 125, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "{\"handle_warnings\":1}", ""),
+			std::make_tuple(21, 2, -1, 50, "SET sql_mode = \"\"", 1, 0, 125, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "{\"handle_warnings\":1,\"aws_iam_region\":\"us-east-1\"}", ""),
 			std::make_tuple(22, 3, -1, 40, "SET sql_mode = \"\"", 1, 0, 124, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "", "{\"weight\": 100, \"max_connections\": 1000}")
 		};
 		std::vector<std::string> insert_mysql_hostgroup_attributes_queries{};
@@ -1497,6 +1557,53 @@ int main(int, char**) {
 		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
 		system(print_replica_hostgroup_attributes.c_str());
 		ok(not_synced_query == false, "'mysql_hostgroup_attributes' should be synced.");
+
+		// IAM policy is configuration state. Keep the hostgroup-region row live
+		// while exercising a user save/load and cluster round-trip so the replica
+		// must observe both halves of the effective IAM policy exactly.
+		const char* iam_username = "tap_aws_iam_cluster_sync";
+		const char* iam_attributes = "{\"backend_auth\":{\"type\":\"aws_iam\"}}";
+		MYSQL_QUERY__(proxy_admin, "DROP TABLE IF EXISTS mysql_users_sync_test_task11");
+		MYSQL_QUERY__(proxy_admin, "DROP TABLE IF EXISTS mysql_users_disk_sync_test_task11");
+		MYSQL_QUERY__(proxy_admin, "CREATE TABLE mysql_users_sync_test_task11 AS SELECT * FROM mysql_users");
+		task11_mysql_users_backup_stage = 1;
+		MYSQL_QUERY__(proxy_admin,
+			"CREATE TABLE mysql_users_disk_sync_test_task11 AS SELECT * FROM disk.mysql_users");
+		task11_mysql_users_backup_stage = 2;
+		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_users WHERE username='tap_aws_iam_cluster_sync'");
+		MYSQL_QUERY__(proxy_admin,
+			"INSERT INTO mysql_users (username,password,active,default_hostgroup,backend,frontend,attributes) "
+			"VALUES ('tap_aws_iam_cluster_sync','',1,21,1,0,'{\"backend_auth\":{\"type\":\"aws_iam\"}}')");
+		MYSQL_QUERY__(proxy_admin, "SAVE MYSQL USERS TO DISK");
+		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_users WHERE username='tap_aws_iam_cluster_sync'");
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS FROM DISK");
+
+		const std::string primary_iam_policy_query {
+			"SELECT COUNT(*) FROM mysql_users WHERE username='" + std::string(iam_username) +
+			"' AND password='' AND active=1 AND default_hostgroup=21 AND backend=1 AND frontend=0 "
+			"AND attributes='" + std::string(iam_attributes) + "'"
+		};
+		MYSQL_QUERY__(proxy_admin, primary_iam_policy_query.c_str());
+		MYSQL_RES* primary_iam_res = mysql_store_result(proxy_admin);
+		MYSQL_ROW primary_iam_row = mysql_fetch_row(primary_iam_res);
+		const bool primary_iam_policy_ok = primary_iam_row && primary_iam_row[0] &&
+			std::atoi(primary_iam_row[0]) == 1;
+		mysql_free_result(primary_iam_res);
+		ok(primary_iam_policy_ok, "IAM user policy survives save/load exactly");
+
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
+		const std::string replica_iam_policy_query {
+			"SELECT ((SELECT COUNT(*) FROM mysql_users WHERE username='" + std::string(iam_username) +
+			"' AND password='' AND active=1 AND default_hostgroup=21 AND backend=1 AND frontend=0 "
+			"AND attributes='" + std::string(iam_attributes) + "')=1 "
+			"AND (SELECT COUNT(*) FROM mysql_hostgroup_attributes WHERE hostgroup_id=21 "
+			"AND hostgroup_settings='{\"handle_warnings\":1,\"aws_iam_region\":\"us-east-1\"}')=1)"
+		};
+		const bool iam_cluster_not_synced =
+			wait_for_node_sync(r_proxy_admin, { replica_iam_policy_query }, SYNC_TIMEOUT) != 0;
+		ok(!iam_cluster_not_synced, "cluster sync carries exact IAM user policy and hostgroup region");
+
+		restore_task11_mysql_users(proxy_admin, task11_mysql_users_backup_stage);
 
 		// TEARDOWN CONFIG
 		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_hostgroup_attributes");
@@ -2382,6 +2489,27 @@ int main(int, char**) {
 
 	// Check 'mysql_variables' synchronization
 	{
+		bool has_server_version_by_interface = false;
+		MYSQL_QUERY__(proxy_admin,
+			"SELECT COUNT(*) FROM global_variables "
+			"WHERE variable_name='mysql-server_version_by_interface'");
+		MYSQL_RES* feature_res = mysql_store_result(proxy_admin);
+		MYSQL_ROW feature_row = mysql_fetch_row(feature_res);
+		has_server_version_by_interface = feature_row != nullptr && atoi(feature_row[0]) == 1;
+		mysql_free_result(feature_res);
+
+		std::string replica_interfaces_before {};
+		if (has_server_version_by_interface) {
+			MYSQL_QUERY__(r_proxy_admin,
+				"SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'");
+			MYSQL_RES* interfaces_res = mysql_store_result(r_proxy_admin);
+			MYSQL_ROW interfaces_row = mysql_fetch_row(interfaces_res);
+			if (interfaces_row != nullptr && interfaces_row[0] != nullptr) {
+				replica_interfaces_before = interfaces_row[0];
+			}
+			mysql_free_result(interfaces_res);
+		}
+
 		std::string print_master_mysql_variables = "";
 		string_format(t_debug_query, print_master_mysql_variables, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
 		std::string print_replica_mysql_variables = "";
@@ -2473,6 +2601,7 @@ int main(int, char**) {
 			std::make_tuple("mysql-keep_multiplexing_variables"                            , "tx_isolation,version"       ),
 			std::make_tuple("mysql-kill_backend_connection_when_disconnect"                , "true"                       ),
 			std::make_tuple("mysql-client_session_track_gtid"                              , "true"                       ),
+			std::make_tuple("mysql-update_gtid_from_ok"                                    , "true"                       ),
 			std::make_tuple("mysql-session_idle_show_processlist"                          , "true"                       ),
 			std::make_tuple("mysql-show_processlist_extended"                              , "0"                          ),
 			std::make_tuple("mysql-query_digests"                                          , "true"                       ),
@@ -2502,6 +2631,12 @@ int main(int, char**) {
 			std::make_tuple("mysql-max_connections"                                        , "2048"                       ),
 			// std::make_tuple("mysql-server_capabilities"                                 , "569866"                     ),
 		};
+		if (has_server_version_by_interface) {
+			update_mysql_variables_values.emplace_back(
+				"mysql-server_version_by_interface",
+				"{\"127.0.0.1:6033\":\"8.1.0-cluster-sync\",\"/tmp/proxysql.sock\":\"5.7.44-cluster-sync\"}"
+			);
+		}
 		std::vector<std::string> update_mysql_variables_queries {};
 
 		for (auto const& values : update_mysql_variables_values) {
@@ -2576,7 +2711,29 @@ int main(int, char**) {
 
 		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
 		system(print_replica_mysql_variables.c_str());
+
+		bool replica_interfaces_unchanged = true;
+		if (has_server_version_by_interface) {
+			MYSQL_QUERY__(r_proxy_admin,
+				"SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'");
+			MYSQL_RES* interfaces_res = mysql_store_result(r_proxy_admin);
+			MYSQL_ROW interfaces_row = mysql_fetch_row(interfaces_res);
+			const std::string replica_interfaces_after =
+				interfaces_row != nullptr && interfaces_row[0] != nullptr ? interfaces_row[0] : "";
+			mysql_free_result(interfaces_res);
+			replica_interfaces_unchanged = replica_interfaces_after == replica_interfaces_before;
+			if (!replica_interfaces_unchanged) {
+				diag(
+					"mysql-interfaces changed while syncing mysql-server_version_by_interface: before='%s', after='%s'",
+					replica_interfaces_before.c_str(), replica_interfaces_after.c_str()
+				);
+			}
+		}
 		ok(not_synced_query == false, "'mysql_variables' from global_variables should be synced.");
+		ok(
+			!has_server_version_by_interface || replica_interfaces_unchanged,
+			"mysql-server_version_by_interface sync preserves the replica's independent mysql-interfaces value."
+		);
 
 		MYSQL_QUERY__(proxy_admin, "INSERT OR REPLACE INTO global_variables SELECT * FROM global_variables_sync_test_2687 WHERE variable_name LIKE 'mysql-%'");
 		MYSQL_QUERY__(proxy_admin, "DROP TABLE global_variables_sync_test_2687");
@@ -2774,6 +2931,7 @@ int main(int, char**) {
 
 cleanup:
 	// Teardown config
+	restore_task11_mysql_users(proxy_admin, task11_mysql_users_backup_stage);
 
 	// In case of test failing, save the stderr output from the spawned proxysql instance
 	if (tests_failed() != 0) {
@@ -2786,27 +2944,29 @@ cleanup:
 		mysql_options(r_proxy_admin, MYSQL_OPT_CONNECT_TIMEOUT, &mysql_timeout);
 		mysql_options(r_proxy_admin, MYSQL_OPT_READ_TIMEOUT, &mysql_timeout);
 		mysql_options(r_proxy_admin, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
-		mysql_query(r_proxy_admin, "PROXYSQL SHUTDOWN");
+		int shutdown_rc = mysql_query(r_proxy_admin, "PROXYSQL SHUTDOWN");
+		if (shutdown_rc != 0) {
+			diag("PROXYSQL SHUTDOWN returned %d: %s", shutdown_rc, mysql_error(r_proxy_admin));
+		}
 		mysql_close(r_proxy_admin);
 	}
 
-	// Ensure the replica process is dead before joining the thread.
+	// Ensure the replica process is dead before joining the thread. The worker
+	// is the only thread that reaps it; polling waitpid() here would race with it.
 	// If PROXYSQL SHUTDOWN failed or r_proxy_admin was NULL, the process
 	// launched via fork() would block the thread forever.
 	{
 		pid_t pid = replica_pid.load();
 		if (pid > 0) {
-			int wait_secs = 5;
-			bool exited = false;
-			for (int i = 0; i < wait_secs; i++) {
-				if (waitpid(pid, nullptr, WNOHANG) != 0) {
-					exited = true;
-					break;
-				}
-				sleep(1);
+			const int wait_secs = get_env_int("WITHASAN", 0) ? 90 : 5;
+			const uint64_t wait_us = wait_secs * 1000 * 1000ULL;
+			const uint64_t wait_started = get_timestamp_us();
+			while (!replica_exited.load() && get_timestamp_us() - wait_started < wait_us) {
+				usleep(100 * 1000);
 			}
-			if (!exited) {
-				diag("Replica ProxySQL (pid=%d) did not exit after SHUTDOWN, sending SIGKILL", pid);
+			if (!replica_exited.load()) {
+				diag("Replica ProxySQL (pid=%d) did not exit within %d seconds after SHUTDOWN, sending SIGKILL", pid, wait_secs);
+				save_proxy_stderr.store(true);
 				kill(pid, SIGKILL);
 			}
 		}

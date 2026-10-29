@@ -8,11 +8,24 @@
 // abi_version values it doesn't understand.
 #ifdef PROXYSQL40
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
+
+#include "ProxySQL_PluginSecrets.h"
+#include "ProxySQL_PluginListenerGate.h"
+#include "ProxySQL_PluginConfig.h"
+
+#include "ProxySQL_ServerDiscovery.h"
+#include "ProxySQL_ManagedConfiguration.h"
+#include "ProxySQL_ManagedRuntime.h"
+#include "ProxySQL_ConfigurationAccess.h"
 
 class SQLite3DB;
 class SQLite3_result;
+class AwsIamTokenSource;
+class AwsMetadataProvider;
 namespace prometheus { class Registry; }
 
 // Descriptor ABI version the plugin was compiled for.  Plugins set
@@ -36,8 +49,175 @@ namespace prometheus { class Registry; }
 //          struct with {table_name, refresh, opaque} automatically get
 //          db_kind = admin_db (value 0) via zero-initialization of the
 //          trailing field — matching the pre-ABI-4 behaviour.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 4u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 4u;
+//   ABI 5: ProxySQL_PluginCommandContext appends optional Admin global-mutex
+//          handoff callbacks. Plugins use them only around work that can wait
+//          for another Admin consumer; older plugins continue to use the
+//          unchanged three DB-handle prefix.
+//   ABI 6: appends early CLI-option registration and early-action callbacks.
+//          The loader invokes option registration after discovery has loaded
+//          every requested module and before the one definitive core
+//          command-line parse. It invokes early actions after Admin is live
+//          and before plugin init/start.
+//   ABI 7: appends authenticated encrypted secret-store services.
+//   ABI 8: appends runtime readiness and listener-gate services, followed by
+//          the reserved scoped-MySQL-publication service slot.
+//   ABI 9: appends a V2 scoped-MySQL-publication service. Its plan carries
+//          query-rule attributes separately so every ABI-8 row and callback
+//          remains byte-for-byte compatible.
+//   ABI 10: appends with_admin_db_lock, which runs a plugin callback under
+//          Admin's global SQL mutex so plugin-owned threads can run
+//          transactions on the shared admindb/statsdb connections without
+//          interleaving with Admin sessions (issue #6354).
+//   ABI 11/12: reserved for incompatible pre-integration AWS branch layouts;
+//              the loader rejects these versions.
+//   ABI 13: ProxySQL_PluginServices appends the AWS integration services:
+//          IAM token-source install/uninstall and waiter sizing, the general
+//          AWS metadata-provider install used by locality discovery, and the
+//          MySQL-owned AWS-locality stats projection callback.
+//   ABI 14: ProxySQL_PluginServices appends provider-neutral server discovery
+//          module/controller registration and desired-set submission. Server
+//          modules were later removed: register_server_module is a reserved
+//          slot whose stub always fails.
+//
+//   ABI 15: appends the managed configuration service descriptor accessor
+//          and configuration-lock/runtime adapter service callbacks.
+//   ABI 16: changes server-discovery claims to select a native role monitor
+//          and removes plugin role-forcing metadata from desired server rows.
+//          Because ABI 14 already exposed the desired-set callback by value,
+//          ABI 14 and 15 binaries cannot be converted safely and are rejected
+//          by an ABI-16 core. Generic layouts 1-10 and 13 retain compatible
+//          prefixes and remain loadable; reserved layouts 11 and 12 do not.
+//
+// DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
+//
+// A handful of core headers add fields ONLY under `#ifdef DEBUG` --
+// notably MySQL_Protocol.h's `bool dump_pkt;` and PgSQL_Session.h's
+// `PgSQL_Connection* dbg_extended_query_backend_conn;`. MySQL_Data_Stream
+// holds a `MySQL_Protocol myprot;` member BY VALUE (not by pointer), so
+// `dump_pkt` changes `sizeof(MySQL_Protocol)`, which shifts the byte
+// offset of every MySQL_Data_Stream field declared after `myprot` --
+// including `DSS`, the wire-protocol send-state enum -- by
+// sizeof(bool) (padded) bytes between a `-DDEBUG` and a non-`-DDEBUG`
+// build. PgSQL_Session has the identical pattern around
+// `dbg_extended_query_backend_conn` shifting `handler_function` and
+// everything after it.
+//
+// A plugin built without -DDEBUG, loaded into a core built with
+// -DDEBUG (or vice versa), silently disagrees with the core about these
+// offsets while still reporting a numerically "compatible" abi_version
+// under the plain ABI 1..16 scheme above (e.g. a release plugin's
+// abi_version=14 is <= a debug core's max=16, so the ordinary
+// forward-compatibility range check does not catch it).
+//
+// What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
+// sizeof(MySQL_Protocol) is 80 bytes release / 88 bytes -DDEBUG, and
+// offsetof(MySQL_Data_Stream, DSS) is 768 / 776 respectively -- release
+// offset 768 is debug offset connect_retries_on_failure.
+//
+// What was OBSERVED when a mismatched plugin was deliberately loaded
+// into a mismatched core: an indefinite per-connection hang, not a
+// crash. Every connection through the mismatched plugin's MySQL
+// listener authenticated but then never received a response to any
+// query, and the process never aborted. A debugger breakpoint on the
+// plugin's own query-dispatch entry point was never hit -- confirming
+// only that the hang precedes any query, not by itself identifying which
+// write caused it.
+//
+// What is INFERRED (from the proven offsets plus that negative
+// debugging result, not from directly inspecting the corrupted memory):
+// the responsible write is duckdb_listener.cpp's fill_client_addr(),
+// which touches the same post-`myprot` field region as `DSS` on every
+// accepted connection, before any query is read -- consistent with a
+// hang that precedes query dispatch.
+//
+// What is PLAUSIBLE but NOT reproduced: that a corrupted DSS write
+// specifically (e.g. duckdb_send_mysql_error() setting
+// STATE_QUERY_SENT_DS landing on connect_retries_on_failure instead)
+// would leave the real DSS at its construction-time default
+// (STATE_SLEEP), driving generate_pkt_ERR()'s state-machine switch
+// (lib/MySQL_Protocol.cpp) into `default: assert(0)` and aborting the
+// entire process (Admin port included) the next time that plugin's
+// error path runs. This is a plausible consequence of the same
+// offset-shift mechanism, but reproduction produced the hang above, not
+// this abort -- see plugins/duckdb/README.md's Limitations section for
+// the full account, including why two real aborts recorded during that
+// plugin's development are not conclusively attributed to this
+// mechanism. The guard below does not depend on that question: it closes
+// the proven offset-shift hazard regardless of which symptom a given
+// mismatch happens to produce.
+//
+// PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
+// (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
+// in a numeric space (bit 30) the plain layout-version numbers (1..16,
+// and unlikely to reach 2^30 for a long time) never touch, so a
+// DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
+// "compatible" via ordinary integer range comparison -- the loader
+// checks this bit for an EXACT match, as a step separate from (and in
+// addition to) the ABI 1..16 forward-compatibility range check below.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
+
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 16u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 16u;
+
+#ifdef DEBUG
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#else
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
+#endif
+// Layout-only ceiling used for the ABI 1..16 range check. Callers must mask
+// off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
+// against this constant -- see lib/ProxySQL_PluginManager.cpp.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
+
+struct ProxySQL_PluginCLIOptionDef {
+	const char* short_name;
+	const char* long_name;
+	uint8_t value_count;
+	bool required;
+	const char* help;
+};
+
+struct ProxySQL_PluginCLIRegistry {
+	void* opaque;
+	bool (*add)(void* opaque, const ProxySQL_PluginCLIOptionDef& option,
+		const char** error);
+};
+
+using proxysql_plugin_register_cli_options_cb =
+	bool (*)(ProxySQL_PluginCLIRegistry*);
+
+struct ProxySQL_PluginServices;
+
+struct ProxySQL_PluginRuntimeContext {
+	ProxySQL_PluginServices* services;
+	uint64_t startup_monotonic_us;
+};
+
+using proxysql_plugin_runtime_ready_cb =
+	bool (*)(ProxySQL_PluginRuntimeContext*);
+
+enum class ProxySQL_PluginEarlyActionResult : uint8_t {
+	not_requested = 0,
+	continue_startup = 1,
+	exit_success = 2,
+	exit_failure = 3,
+};
+
+// The core owns option_context and it is valid only for the early_action
+// callback. Plugins may read only the options they registered through these
+// callbacks; they must not retain option_context or any pointer derived from
+// it. The underlying ezOptionParser is intentionally not part of this ABI.
+struct ProxySQL_PluginEarlyActionContext {
+	void* option_context;
+	bool (*is_set)(void*, const char* long_name);
+	bool (*get_string)(void*, const char* long_name, std::string& value);
+	const char* config_file;
+	const char* datadir;
+	ProxySQL_PluginServices* services;
+};
+
+using proxysql_plugin_early_action_cb =
+	ProxySQL_PluginEarlyActionResult (*)(const ProxySQL_PluginEarlyActionContext&);
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -59,6 +239,17 @@ struct ProxySQL_PluginCommandContext {
 	SQLite3DB *admindb;
 	SQLite3DB *configdb;
 	SQLite3DB *statsdb;
+
+	// Optional handoff for commands that must wait for work which can itself
+	// enter the Admin interface.  Admin_Handler holds its global query mutex
+	// while dispatching plugin commands; a callback that drains worker threads
+	// while retaining that mutex can deadlock with a worker already waiting for
+	// Admin.  Such callbacks may release the mutex for the blocking portion and
+	// must reacquire it before returning.  Direct/unit-test dispatchers leave
+	// these null, in which case the callback must not attempt a handoff.
+	void *admin_mutex_context { nullptr };
+	void (*release_admin_mutex)(void *) { nullptr };
+	void (*acquire_admin_mutex)(void *) { nullptr };
 };
 
 // NOTE: ProxySQL_PluginCommandResult contains std::string. Plugins MUST
@@ -229,9 +420,27 @@ struct ProxySQL_PluginRuntimeView {
 
 using proxysql_plugin_register_runtime_view_cb =
 	bool (*)(const ProxySQL_PluginRuntimeView &);
+
+// ABI-13 extension for optional external IAM database-authentication providers.
+// The source is owned by core after successful installation; `module_handle`
+// is a retained dlopen() reference released only after all session leases drain.
+using proxysql_plugin_install_aws_iam_token_source_cb =
+	bool (*)(AwsIamTokenSource *, void (*)(AwsIamTokenSource *), void *module_handle);
+
+using proxysql_plugin_uninstall_aws_iam_token_source_cb =
+	bool (*)(AwsIamTokenSource *expected_source);
+
+using proxysql_plugin_get_aws_iam_limits_cb =
+	void (*)(size_t *max_total_waiters, size_t *max_waiters_per_key);
+
+using proxysql_plugin_install_aws_metadata_provider_cb =
+	bool (*)(AwsMetadataProvider *, void (*)(AwsMetadataProvider *), void *module_handle);
+
+using proxysql_plugin_refresh_mysql_aws_locality_stats_cb =
+	void (*)(SQLite3DB *);
 #endif /* PROXYSQL40 */
 
-// Services provided to plugins across the four-phase lifecycle.
+// Services provided to plugins across the six-phase lifecycle.
 //
 // Availability by phase:
 //   * register_schemas (Phase B, optional, run between load() and init()):
@@ -244,21 +453,20 @@ using proxysql_plugin_register_runtime_view_cb =
 //         MUST NOT touch DB handles here; save that work for init().
 //       - register_query_hook:       RETURNS false (not yet wired).
 //       - snapshots:                 RETURN nullptr (see below).
-//   * init (Phase D): register_*, log_message, get_*db and
-//     get_prometheus_registry are LIVE.  Snapshot getters remain stubs —
-//     see the note below.
-//   * start (Phase E) and beyond: get_*db, log_message,
+//   * early_action (Phase D): gets full services through
+//     ProxySQL_PluginEarlyActionContext::services after Admin is live.
+//   * init (Phase E): register_*, log_message, get_*db and
+//     get_prometheus_registry are LIVE, except persistent config_db table
+//     registration is rejected because automatic disk restoration has
+//     already run. Snapshot getters remain stubs — see the note below.
+//   * start (Phase F) and beyond: get_*db, log_message,
 //     get_prometheus_registry remain valid; register_* are no-ops (ignored
 //     with a warning — schemas must be declared before start).
 //
 // NOTE ON SNAPSHOT GETTERS (`get_mysql_users_snapshot`, etc.):
-// These are currently wired to a stub that returns nullptr in every phase.
-// The plan is to surface read-only SQLite3_result snapshots of the core's
-// runtime config tables, but the backing plumbing (snapshot acquisition,
-// lifetime, invalidation on reload) isn't implemented yet.  Plugins MUST
-// treat a nullptr return as "snapshot not available"; do not assume
-// non-null just because you're in Phase D.  When the feature lands, only
-// the nullptr contract will change — the field signatures won't.
+// Phase B returns nullptr because runtime modules do not exist yet. From
+// Phase D onward, each callback returns a caller-owned SQLite3_result copied
+// while the corresponding runtime lock is held. The caller deletes it.
 struct ProxySQL_PluginServices {
 	proxysql_plugin_register_table_cb register_table;
 	proxysql_plugin_register_command_cb register_command;
@@ -292,6 +500,81 @@ struct ProxySQL_PluginServices {
 	// at the same point they register their tables, so the callback
 	// is wired in both phases.
 	proxysql_plugin_register_runtime_view_cb register_runtime_view;
+
+	// ABI-7 encrypted secret storage.  Phase B exposes rejecting stubs because
+	// configdb does not exist yet; early_action, init, start, and runtime use
+	// the core-owned live configdb store.
+	// These callbacks acquire the Admin SQL mutex. Callers already holding it
+	// use ProxySQL_PluginSecrets::*_locked on configdb_locked() instead.
+	ProxySQL_PluginSecretResult (*put_secret)(const char* owner, const char* name,
+		const uint8_t* bytes, size_t length);
+	ProxySQL_PluginSecretResult (*get_secret)(const char* owner, const char* name,
+		std::vector<uint8_t>& plaintext);
+	ProxySQL_PluginSecretResult (*erase_secret)(const char* owner, const char* name);
+
+	// ABI-8 listener readiness. Available after Admin is live; Phase B gets a
+	// rejecting stub. Gates are copied by core and remain in effect until their
+	// owner replaces/removes them or its manager tears down.
+	bool (*set_listener_gate)(const ProxySQL_PluginListenerGate& gate);
+
+	// ABI-8 reserved final tail: Task 6 replaces this rejecting stub with the
+	// generic scoped MySQL configuration publisher without another ABI bump.
+	ProxySQL_PluginMysqlConfigResult (*apply_mysql_config)(
+		const ProxySQL_PluginMysqlConfigPlan& plan);
+
+	// ABI-9 tail. ABI-8 plugins retain their original service-table
+	// prefix and continue publishing through apply_mysql_config.
+	ProxySQL_PluginMysqlConfigResult (*apply_mysql_config_v2)(
+		const ProxySQL_PluginMysqlConfigPlanV2& plan);
+
+	// ABI-10 tail. Runs `body(opaque)` while holding Admin's global SQL
+	// mutex -- the lock every Admin session holds while it executes statements
+	// on admindb/statsdb -- and returns body's result. admindb and statsdb are
+	// single SQLite connections shared with Admin, so transaction state is
+	// shared too: a plugin-owned thread that runs BEGIN...COMMIT on them must do
+	// so inside this callback, or its transaction can absorb or roll back an
+	// Admin session's statements (issue #6354). Returns false without calling
+	// body when Admin is unavailable (Phase B stub). body must not throw, and
+	// the caller must not already hold the mutex: Admin command handlers must
+	// first release it through ProxySQL_PluginCommandContext.
+	bool (*with_admin_db_lock)(bool (*body)(void* opaque), void* opaque);
+
+	// ABI-13 AWS integration tail. The IAM token-source and metadata-provider
+	// callbacks are null outside normal plugin init(); the locality stats
+	// callback is live in Phase B and normal init and performs no I/O.
+	// uninstall_aws_iam_token_source is intended only for rollback of the same
+	// plugin's partially installed IAM provider.
+	proxysql_plugin_install_aws_iam_token_source_cb install_aws_iam_token_source;
+	proxysql_plugin_get_aws_iam_limits_cb get_aws_iam_limits;
+	proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
+	proxysql_plugin_refresh_mysql_aws_locality_stats_cb refresh_mysql_aws_locality_stats;
+	proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
+	// ABI-14 extension. Discovery controllers install only during normal init.
+	// Uninstall is live during normal init and the owning plugin's stop()
+	// callback so its installed controller can synchronously drain and be
+	// destroyed before stop returns. A plugin cannot uninstall another
+	// plugin's controller. A plugin may retain post_server_desired_set and call
+	// it from start or steady-state workers. The callback pins the active
+	// manager through the synchronous acknowledgement and fails closed after
+	// manager unpublication.
+	//
+	// register_server_module is RESERVED: server modules (plugin-owned server
+	// tables) are no longer supported. The slot is kept so the offsets of every
+	// later field stay unchanged. It always points to a stub that logs a
+	// warning once and returns false without touching its arguments.
+	proxysql_plugin_register_server_module_cb register_server_module;
+	proxysql_plugin_install_server_discovery_controller_cb install_server_discovery_controller;
+	proxysql_plugin_uninstall_server_discovery_controller_cb uninstall_server_discovery_controller;
+	proxysql_plugin_post_server_desired_set_cb post_server_desired_set;
+	// ABI 15: caller-held Admin mutex and thin existing-runtime adapters.
+	// No network calls or plugin transactions inside these operations.
+	void (*lock_configuration)();
+	void (*unlock_configuration)() noexcept;
+	SQLite3DB* (*configdb_locked)();
+	bool (*prepare_managed_runtime_locked)(const ManagedRuntimePlan&,
+		ManagedPreparedRuntime**, std::string&);
+	ManagedRuntimeResult (*activate_managed_runtime_locked)(ManagedPreparedRuntime&, uint64_t);
+	void (*destroy_managed_prepared_runtime)(ManagedPreparedRuntime*) noexcept;
 #endif /* PROXYSQL40 */
 };
 
@@ -320,19 +603,20 @@ using proxysql_plugin_status_json_cb =
 #ifdef PROXYSQL40
 // Phase B entry point: "declare your schema before admin bootstrap."
 //
-// Four-phase plugin lifecycle:
-//   Phase A: load()             -- dlopen the .so, read the descriptor
-//   Phase B: register_schemas() -- NEW, optional; plugin returns its table defs
+// Six-phase plugin lifecycle:
+//   Phase A: discover/register CLI -- dlopen the .so and register options
+//   Phase B: register_schemas() -- optional; plugin returns its table defs
 //   Phase C: admin module init  -- core materializes SQLite schema from the
 //                                  plugin-registered defs (merge_plugin_tables
 //                                  code path -- first-boot == reload)
-//   Phase D: init()             -- plugin runs startup logic with full services
-//   Phase E: start()            -- plugin launches its threads / accept loops
+//   Phase D: early_action()     -- one-shot action with full services
+//   Phase E: init()             -- plugin runs startup logic with full services
+//   Phase F: start()            -- plugin launches its threads / accept loops
 //
-// This callback is optional (may be nullptr).  Plugins that leave it null
-// keep the pre-existing two-phase behavior: Phase B is skipped and the
-// plugin's init() is responsible for both schema registration and startup
-// work (the mysqlx plugin does this today).
+// This callback is optional (may be nullptr) for plugins without persistent
+// config_db tables. Plugins that own such tables must provide it and register an
+// identical same-name admin_db definition: after Phase C, config_db registration
+// from init() is rejected because Admin cannot restore it.
 using proxysql_plugin_register_schemas_cb =
 	bool (*)(ProxySQL_PluginServices *);
 #endif /* PROXYSQL40 */
@@ -352,6 +636,20 @@ struct ProxySQL_PluginDescriptor {
 	 * init() after admin module bootstrap materializes schema. Plugins that
 	 * leave this field null keep the pre-existing two-phase behavior. */
 	proxysql_plugin_register_schemas_cb register_schemas;
+	// ABI 6: optional early command-line option registration.  The core reads
+	// this tail field only for descriptors whose abi_version is at least 6.
+	proxysql_plugin_register_cli_options_cb register_cli_options;
+	// ABI 6: optional one-shot action after Admin is live and before init().
+	// The core reads this tail field only for descriptors whose abi_version is
+	// at least 6.
+	proxysql_plugin_early_action_cb early_action;
+	// ABI 8: invoked after core runtime dependencies exist and immediately
+	// before listener validation/start. Core reads this tail only for ABI >= 8.
+	proxysql_plugin_runtime_ready_cb runtime_ready;
+	// ABI 15: only the management provider supplies this accessor. Core reads
+	// this tail only for ABI >= 15, after successful init(). Required when
+	// aws_managed is enabled; service lifetime is the plugin lifetime.
+	const ProxySQL_ManagedConfigurationServiceV1* (*managed_configuration_service)();
 #endif /* PROXYSQL40 */
 };
 

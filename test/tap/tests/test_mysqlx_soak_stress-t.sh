@@ -13,9 +13,17 @@
 # #5677), invoke stress.py directly with --duration 24h.
 
 set -u
+# pipefail so the python3 ... | sed pipeline below propagates the
+# Python exit code rather than always returning the (always 0) sed
+# exit. Without it a missing harness file or a Python exception
+# silently produces ok TAP output.
+set -o pipefail
 
+# Walk up from THIS SCRIPT'S directory (not $PWD, which the test
+# runner sets to /var/lib/proxysql inside the test-runner container).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROXYSQL_PATH=$(
-    d="$PWD"
+    d="$SCRIPT_DIR"
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
         if [ -f "$d/src/proxysql_global.cpp" ]; then echo "$d"; exit 0; fi
         if [ "$d" = "/" ]; then break; fi
@@ -47,9 +55,11 @@ if ! python3 -c 'import mysqlx, mysql.connector' 2>/dev/null; then
     exit 1
 fi
 
-if python3 "${HARNESS}" \
+if python3 -u "${HARNESS}" \
     --proxysql-host "${PROXYSQL_HOST}" --proxysql-port "${PROXYSQL_PORT}" \
     --admin-host "${ADMIN_HOST}" --admin-port "${ADMIN_PORT}" \
+    --admin-user "${TAP_ADMINUSERNAME:-radmin}" \
+    --admin-pass "${TAP_ADMINPASSWORD:-radmin}" \
     --user "${TEST_USER}" --password "${TEST_PASS}" \
     --concurrent "${CONCURRENT}" --duration "${DURATION}" \
     --metrics-out "${METRICS_OUT}" \

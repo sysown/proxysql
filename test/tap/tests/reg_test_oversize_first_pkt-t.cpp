@@ -27,9 +27,12 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -44,38 +47,81 @@
 #include "utils.h"
 
 static int tcp_connect(const char* host, int port) {
-	int fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (fd < 0) return -1;
-	struct sockaddr_in sa;
-	memset(&sa, 0, sizeof(sa));
-	sa.sin_family = AF_INET;
-	sa.sin_port = htons(port);
-	if (inet_pton(AF_INET, host, &sa.sin_addr) != 1) {
-		close(fd);
+	// `host` is whatever cl.host / cl.pgsql_host resolves to. In CI it is
+	// the Docker DNS hostname ("proxysql") of the proxy container, not a
+	// numeric IP, so inet_pton(AF_INET, host, ...) returned 0 and made
+	// every probe in this test fail before any byte was sent. getaddrinfo
+	// handles both hostnames and numeric IPs, which is what we actually
+	// want.
+	char port_str[16];
+	snprintf(port_str, sizeof(port_str), "%d", port);
+	struct addrinfo hints;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	struct addrinfo* res = nullptr;
+	int rc = getaddrinfo(host, port_str, &hints, &res);
+	if (rc != 0 || res == nullptr) {
+		diag("tcp_connect: getaddrinfo(%s:%d) failed: %s",
+		     host, port, gai_strerror(rc));
 		return -1;
 	}
-	if (connect(fd, reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa)) != 0) {
-		close(fd);
+	int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+	if (fd < 0) {
+		freeaddrinfo(res);
 		return -1;
 	}
+	if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
+		close(fd);
+		freeaddrinfo(res);
+		return -1;
+	}
+	freeaddrinfo(res);
 	return fd;
 }
 
 // Returns 1 if the peer closed the socket within timeout_ms, 0 otherwise.
+//
+// The naive single-poll-then-recv version doesn't work for protocols where
+// the server sends bytes before the client does anything. MySQL is exactly
+// that case: the server emits its ~80-byte Initial Handshake Packet
+// immediately on accept, so by the time we poll the client socket those
+// bytes are already in the recv buffer. A single recv() returns the
+// handshake (n > 0) and a single-shot check would conclude "peer still
+// talking" -- a false negative -- even though ProxySQL is about to close
+// the connection in response to our oversized header.
+//
+// Loop instead: drain any bytes that arrive and keep polling until either
+// recv() returns 0 (EOF) / negative non-EAGAIN (RST) within the deadline,
+// or the deadline expires with the connection still up.
 static int peer_closed_within(int fd, int timeout_ms) {
-	struct pollfd p;
-	p.fd = fd;
-	p.events = POLLIN;
-	p.revents = 0;
-	int pr = poll(&p, 1, timeout_ms);
-	if (pr <= 0) return 0;
-	char buf[64];
-	ssize_t n = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
-	// EOF (n == 0) or RST (n < 0) both mean the peer is gone.
-	if (n == 0) return 1;
-	if (n < 0) return 1;
-	// Unexpectedly got bytes back; the peer is still talking. Treat as not-closed.
-	return 0;
+	using clock = std::chrono::steady_clock;
+	const auto deadline = clock::now() + std::chrono::milliseconds(timeout_ms);
+	for (;;) {
+		const auto now = clock::now();
+		if (now >= deadline) return 0;
+		const int remaining_ms = static_cast<int>(
+			std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+		struct pollfd p;
+		p.fd = fd;
+		p.events = POLLIN;
+		p.revents = 0;
+		int pr = poll(&p, 1, remaining_ms);
+		if (pr == 0) return 0;          // deadline elapsed
+		if (pr < 0) {
+			if (errno == EINTR) continue;
+			return 0;
+		}
+		char buf[1024];
+		ssize_t n = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+		if (n == 0) return 1;           // peer EOF
+		if (n < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
+			return 1;                   // RST or other terminal error
+		}
+		// n > 0: server chatter (e.g. MySQL Initial Handshake). Drain and
+		// keep polling for the actual close.
+	}
 }
 
 static int probe_mysql_oversize(const char* host, int port, uint32_t declared_pkt_len) {

@@ -1,0 +1,138 @@
+--- src/interfaces/libpq/fe-exec.c	2026-09-17 09:40:56.708269749 +0000
++++ src/interfaces/libpq/fe-exec.c	2026-09-17 09:41:22.229884656 +0000
+@@ -72,7 +72,9 @@
+ 							const char *const *paramValues,
+ 							const int *paramLengths,
+ 							const int *paramFormats,
+-							int resultFormat);
++							int resultFormat,
++							int nResultFormats,
++							const int *resultFormats);
+ static void parseInput(PGconn *conn);
+ static PGresult *getCopyResult(PGconn *conn, ExecStatusType copytype);
+ static bool PQexecStart(PGconn *conn);
+@@ -1530,7 +1532,9 @@
+ 						   paramValues,
+ 						   paramLengths,
+ 						   paramFormats,
+-						   resultFormat);
++						   resultFormat,
++						   -1,	/* single resultFormat for all columns */
++						   NULL);
+ }
+ 
+ /*
+@@ -1670,7 +1674,62 @@
+ 						   paramValues,
+ 						   paramLengths,
+ 						   paramFormats,
+-						   resultFormat);
++						   resultFormat,
++						   -1,	/* single resultFormat for all columns */
++						   NULL);
++}
++
++/*
++ * PQsendQueryPreparedWithResultFormats
++ *		ProxySQL: like PQsendQueryPrepared, but sends an arbitrary array of
++ *		result-column format codes in the Bind message, as allowed by the
++ *		protocol (0 codes, 1 code for all columns, or one code per column).
++ *		PQsendQueryPrepared can only express a single code for all columns.
++ */
++int
++PQsendQueryPreparedWithResultFormats(PGconn *conn,
++									 const char *stmtName,
++									 int nParams,
++									 const char *const *paramValues,
++									 const int *paramLengths,
++									 const int *paramFormats,
++									 int nResultFormats,
++									 const int *resultFormats)
++{
++	if (!PQsendQueryStart(conn, true))
++		return 0;
++
++	/* check the arguments */
++	if (!stmtName)
++	{
++		libpq_append_conn_error(conn, "statement name is a null pointer");
++		return 0;
++	}
++	if (nParams < 0 || nParams > PQ_QUERY_PARAM_MAX_LIMIT)
++	{
++		libpq_append_conn_error(conn, "number of parameters must be between 0 and %d",
++								PQ_QUERY_PARAM_MAX_LIMIT);
++		return 0;
++	}
++	if (nResultFormats < 0 || nResultFormats > PQ_QUERY_PARAM_MAX_LIMIT ||
++		(nResultFormats > 0 && !resultFormats))
++	{
++		libpq_append_conn_error(conn, "number of result formats must be between 0 and %d",
++								PQ_QUERY_PARAM_MAX_LIMIT);
++		return 0;
++	}
++
++	return PQsendQueryGuts(conn,
++						   NULL,	/* no command to parse */
++						   stmtName,
++						   nParams,
++						   NULL,	/* no param types */
++						   paramValues,
++						   paramLengths,
++						   paramFormats,
++						   0,
++						   nResultFormats,
++						   resultFormats);
+ }
+ 
+ /*
+@@ -1768,7 +1827,9 @@
+ 				const char *const *paramValues,
+ 				const int *paramLengths,
+ 				const int *paramFormats,
+-				int resultFormat)
++				int resultFormat,
++				int nResultFormats,
++				const int *resultFormats)
+ {
+ 	int			i;
+ 	PGcmdQueueEntry *entry;
+@@ -1876,8 +1937,19 @@
+ 				goto sendFailed;
+ 		}
+ 	}
+-	if (pqPutInt(1, 2, conn) < 0 ||
+-		pqPutInt(resultFormat, 2, conn))
++	if (nResultFormats >= 0)
++	{
++		/* ProxySQL: send the given array of result format codes (may be empty) */
++		if (pqPutInt(nResultFormats, 2, conn) < 0)
++			goto sendFailed;
++		for (i = 0; i < nResultFormats; i++)
++		{
++			if (pqPutInt(resultFormats[i], 2, conn) < 0)
++				goto sendFailed;
++		}
++	}
++	else if (pqPutInt(1, 2, conn) < 0 ||
++			 pqPutInt(resultFormat, 2, conn))
+ 		goto sendFailed;
+ 	if (pqPutMsgEnd(conn) < 0)
+ 		goto sendFailed;
+--- src/interfaces/libpq/libpq-fe.h	2026-09-17 09:40:56.708717166 +0000
++++ src/interfaces/libpq/libpq-fe.h	2026-09-17 09:41:14.654254968 +0000
+@@ -690,6 +690,14 @@
+ 
+ /* Send a pipeline sync message without flushing the send buffer */
+ extern int	PQsendPipelineSync(PGconn *conn);
++extern int	PQsendQueryPreparedWithResultFormats(PGconn *conn,
++												 const char *stmtName,
++												 int nParams,
++												 const char *const *paramValues,
++												 const int *paramLengths,
++												 const int *paramFormats,
++												 int nResultFormats,
++												 const int *resultFormats);
+ 
+ /* Support for SSL key log callback (TLS traffic decryption) */
+ typedef void (*PQsslKeyLogCallback_type)(const void *ssl, const char *line);

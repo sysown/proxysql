@@ -431,12 +431,66 @@ void test_query_rules_multiplex() {
     }
 }
 
+// 7. WITH HOLD cursor tracking (behaviour is in pgsql-hold_cursor_pinning-t). The cursor outlives
+// COMMIT on the backend connection, so the flag has to hold the connection until CLOSE ALL.
+void test_hold_cursor() {
+    PGConnPtr backend_conn = createNewConnection(ConnType::BACKEND, "", false);
+    if (!backend_conn || PQstatus(backend_conn.get()) != CONNECTION_OK) {
+        diag("Error: failed to connect for hold cursor test");
+        return;
+    }
+
+    try {
+        PGconn* conn = backend_conn.get();
+
+        ok(!get_proxysql_lock_status(conn, "hold_cursor"), "No 'hold_cursor' in ProxySQL before DECLARE");
+        executeQuery(conn, "BEGIN");
+        executeQuery(conn, "DECLARE hc CURSOR WITH HOLD FOR SELECT generate_series(1,3)");
+        executeQuery(conn, "COMMIT");
+        ok(get_proxysql_lock_status(conn, "hold_cursor"), "'hold_cursor' in ProxySQL after COMMIT of DECLARE ... WITH HOLD");
+        ok(get_proxysql_is_multiplex_disabled(conn), "The connection stays with the session after COMMIT");
+
+        executeQuery(conn, "CLOSE ALL");
+        ok(!get_proxysql_lock_status(conn, "hold_cursor"), "'hold_cursor' cleared after CLOSE ALL");
+
+        // DECLARE is not the first statement of this query
+        executeQuery(conn, "BEGIN; DECLARE hc2 CURSOR WITH HOLD FOR SELECT 1; COMMIT");
+        ok(get_proxysql_lock_status(conn, "hold_cursor"), "'hold_cursor' in ProxySQL after a multi-statement DECLARE ... WITH HOLD");
+        executeQuery(conn, "CLOSE ALL");
+
+        executeQuery(conn, "BEGIN");
+        executeQuery(conn, "DECLARE hc5 CURSOR WITH HOLD FOR SELECT 1");
+        executeQuery(conn, "COMMIT");
+        executeQuery(conn, "DISCARD ALL");
+        ok(!get_proxysql_lock_status(conn, "hold_cursor"), "'hold_cursor' cleared after DISCARD ALL");
+
+        executeQuery(conn, "BEGIN");
+        executeQuery(conn, "DECLARE hc3 CURSOR WITHOUT HOLD FOR SELECT 1");
+        executeQuery(conn, "COMMIT");
+        ok(!get_proxysql_lock_status(conn, "hold_cursor"), "No 'hold_cursor' after DECLARE ... WITHOUT HOLD");
+
+        // extended query protocol
+        executeQuery(conn, "BEGIN");
+        const char* param = "7";
+        PGresult* res = PQexecParams(conn, "DECLARE hc4 CURSOR WITH HOLD FOR SELECT $1::int", 1, nullptr, &param, nullptr, nullptr, 0);
+        check_result(res, conn);
+        PQclear(res);
+        executeQuery(conn, "COMMIT");
+        ok(get_proxysql_lock_status(conn, "hold_cursor"), "'hold_cursor' in ProxySQL after DECLARE ... WITH HOLD over the extended protocol");
+        executeQuery(conn, "CLOSE ALL");
+    }
+    catch (const std::exception& e) {
+        diag("Exception during hold cursor test: %s", e.what());
+        ok(false, "Hold cursor test failed");
+    }
+}
+
 int main(int argc, char** argv) {
 
     if (cl.getEnv())
         return exit_status();
 
-    plan(80);
+    plan(88);
     
     PGConnPtr conn = createNewConnection(ConnType::BACKEND, "", false);
     if (!conn || PQstatus(conn.get()) != CONNECTION_OK) {
@@ -458,6 +512,7 @@ int main(int argc, char** argv) {
 	test_temp_table();
 	test_sequence();
     test_query_rules_multiplex();
+    test_hold_cursor();
     executeQuery(conn.get(), "DROP TABLE test_table;");
     return exit_status();
 }

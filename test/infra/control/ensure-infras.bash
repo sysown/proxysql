@@ -6,6 +6,7 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
+source "${SCRIPT_DIR}/readiness.bash"
 
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"
@@ -101,6 +102,13 @@ for EXT in bash sql; do
     fi
 done
 
+PROXYSQL_READY_PORTS=(6032 6033 6132 6133)
+if [ -n "${PROXYSQL_READY_PORTS_EXTRA:-}" ]; then
+    read -r -a EXTRA_READY_PORTS <<< "${PROXYSQL_READY_PORTS_EXTRA}"
+    PROXYSQL_READY_PORTS+=("${EXTRA_READY_PORTS[@]}")
+fi
+wait_for_proxysql_ports "${PROXY_CONTAINER}" 30 "${PROXYSQL_READY_PORTS[@]}"
+
 # 4. Ensure Docker Compose helper is available
 COMPOSE_CMD="docker compose"
 if ! $COMPOSE_CMD version &>/dev/null; then COMPOSE_CMD="docker-compose"; fi
@@ -128,9 +136,21 @@ for INFRA_NAME in ${INFRAS}; do
         echo ">>> '${INFRA_NAME}' is already running."
         if [ -f "${INFRA_DIR}/bin/docker-proxy-post.bash" ]; then
             echo ">>> Ensuring ProxySQL configuration for '${INFRA_NAME}'..."
-            cd "${INFRA_DIR}"
-            ./bin/docker-proxy-post.bash
-            cd - >/dev/null
+            # docker-proxy-post.bash expects the environment that
+            # docker-compose-init.bash exports before calling it. Without
+            # INFRA/COMPOSE_PROJECT it addresses a container named '-pgdb1-1'
+            # and registers backends under an empty infra name.
+            (
+                cd "${INFRA_DIR}"
+                SAVED_INFRA_ID="${INFRA_ID}"
+                set -a; . ./.env; set +a
+                export INFRA_ID="${SAVED_INFRA_ID}"
+                export ROOT_PASSWORD=$(echo -n "${INFRA_ID}" | sha256sum | head -c 10)
+                export INFRA="${INFRA_NAME}"
+                export COMPOSE_PROJECT
+                export INFRA_LOGS_PATH="${INFRA_LOGS_PATH:-${WORKSPACE}/ci_infra_logs}"
+                ./bin/docker-proxy-post.bash
+            )
         fi
     fi
 done

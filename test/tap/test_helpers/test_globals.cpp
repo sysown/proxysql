@@ -61,6 +61,8 @@ using json = nlohmann::json;
 #include "MySQL_Authentication.hpp"
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
+#include "MySQL_Passthrough_Auth_Cache.h"
+#include "Aws_Iam_Provider.h"
 #include "MySQL_Query_Cache.h"
 #include "PgSQL_Query_Cache.h"
 #include "proxysql_restapi.h"
@@ -82,6 +84,7 @@ PgSQL_Query_Cache *GloPgQC = nullptr;
 MySQL_Authentication *GloMyAuth = nullptr;
 PgSQL_Authentication *GloPgAuth = nullptr;
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
+MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache = nullptr;
 
 #ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Authentication *GloClickHouseAuth = nullptr;
@@ -91,6 +94,9 @@ MySQL_Query_Processor *GloMyQPro = nullptr;
 PgSQL_Query_Processor *GloPgQPro = nullptr;
 ProxySQL_Admin *GloAdmin = nullptr;
 MySQL_Threads_Handler *GloMTH = nullptr;
+#ifdef PROXYSQL40
+AwsIamTokenSource *GloAwsIamTokenSource = nullptr;
+#endif // PROXYSQL40
 PgSQL_Threads_Handler *GloPTH = nullptr;
 
 // MCP_Threads_Handler *GloMCPH stub removed in Step 4.C; GloGATH and
@@ -256,8 +262,10 @@ int test_globals_init() {
 	GloVars.global.clickhouse_server = false;
 #endif
 	GloVars.global.ssl_keylog_enabled = false;
+	#ifndef PROXYSQL40
 	GloVars.global.gr_bootstrap_mode = 0;
 	GloVars.global.gr_bootstrap_uri = nullptr;
+	#endif /* !PROXYSQL40 */
 	GloVars.global.data_packets_history_size = 0;
 
 	// SSL pointers — nullptr means no SSL

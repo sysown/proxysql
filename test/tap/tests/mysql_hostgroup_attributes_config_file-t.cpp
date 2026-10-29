@@ -24,7 +24,7 @@ using std::fstream;
 
 int validate_mysql_hostgroup_attributes_from_config(MYSQL* admin) {
 	string hostgroup_attributes_values[5][12] = {
-			{"900000", "900000", "-1", "11", "ic1", "0", "1", "9001", "{\"isv\":100}", "{\"hs\":200}", "{\"weight\":100,\"max_connections\":500}", "attributes test hostgroup 900000"},
+			{"900000", "900000", "-1", "11", "ic1", "0", "1", "9001", "{\"isv\":100}", "{\"aws_iam_region\":\"us-east-1\"}", "{\"weight\":100,\"max_connections\":500}", "attributes test hostgroup 900000"},
 			{"900001", "900001", "0", "12", "ic2", "1", "0", "9002", "{\"isv\":101}", "{\"hs\":201}", "{\"weight\":101,\"max_connections\":501}", "attributes test hostgroup 900001"},
 			{"900002", "900002", "1", "13", "ic3", "0", "1", "9003", "{\"isv\":102}", "{\"hs\":202}", "{\"weight\":102,\"max_connections\":502}", "attributes test hostgroup 900002"},
 			{"900003", "900003", "-1", "14", "ic4", "1", "0", "9004", "{\"isv\":103}", "{\"hs\":203}", "{\"weight\":103,\"max_connections\":503}", "attributes test hostgroup 900003"},
@@ -97,7 +97,7 @@ void make_hostgroup_attributes_config_lines(std::vector<std::string>& config_lin
 		"		connection_warming=1",
 		"		throttle_connections_per_sec=9001",
 		"		ignore_session_variables=\"{\"isv\":100}\"",
-		"		hostgroup_settings=\"{\"hs\":200}\"",
+		"		hostgroup_settings=\"{\"aws_iam_region\":\"us-east-1\"}\"",
 		"		servers_defaults=\"{\"weight\":100,\"max_connections\":500}\"",
 		"		comment=\"attributes test hostgroup 900000\"",
 		"	},",

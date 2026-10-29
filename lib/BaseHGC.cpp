@@ -52,6 +52,10 @@ BaseHGC<HGC>::BaseHGC(int _hid) {
 	servers_defaults.max_connections = -1;
 	servers_defaults.use_ssl = -1;
 	num_online_servers.store(0, std::memory_order_relaxed);;
+#ifdef PROXYSQL31
+	backup_servers_selected.store(0, std::memory_order_relaxed);
+	last_log_time_backup_selection = 0;
+#endif
 	last_log_time_num_online_servers = 0;
 }
 
@@ -62,6 +66,9 @@ void BaseHGC<HGC>::reset_attributes() {
 		attributes.init_connect = NULL;
 		attributes.comment = NULL;
 		attributes.ignore_session_variables_text = NULL;
+#ifdef PROXYSQL40
+		attributes.aws_iam_region = NULL;
+#endif // PROXYSQL40
 	}
 	attributes.initialized = true;
 	attributes.configured = false;
@@ -71,19 +78,42 @@ void BaseHGC<HGC>::reset_attributes() {
 	attributes.free_connections_pct = 10;
 	attributes.handle_warnings = -1;
 	attributes.monitor_slave_lag_when_null = -1;
+	attributes.default_query_timeout = -1;
+#ifdef PROXYSQL31
+	attributes.backup_weight_threshold = 0;
+	attributes.backup_availability = 0; // selectable
+#endif
 	attributes.multiplex = true;
 	attributes.connection_warming = false;
-	free(attributes.init_connect);
-	attributes.init_connect = NULL;
+	set_attribute_init_connect(NULL);
 	free(attributes.comment);
 	attributes.comment = NULL;
 	free(attributes.ignore_session_variables_text);
 	attributes.ignore_session_variables_text = NULL;
+#ifdef PROXYSQL40
+	set_attribute_aws_iam_region(NULL);
+	attributes.aws_locality_policy = {};
+#endif
 	if (attributes.ignore_session_variables_json) {
 		delete attributes.ignore_session_variables_json;
 		attributes.ignore_session_variables_json = NULL;
 	}
 }
+
+
+template<typename HGC>
+void BaseHGC<HGC>::set_attribute_init_connect(const char* value) {
+	free(attributes.init_connect);
+	attributes.init_connect = value != NULL ? strdup(value) : NULL;
+}
+
+#ifdef PROXYSQL40
+template<typename HGC>
+void BaseHGC<HGC>::set_attribute_aws_iam_region(const char* value) {
+	free(attributes.aws_iam_region);
+	attributes.aws_iam_region = value != NULL ? strdup(value) : NULL;
+}
+#endif // PROXYSQL40
 
 template<typename HGC>
 BaseHGC<HGC>::~BaseHGC() {
@@ -122,3 +152,12 @@ void BaseHGC<HGC>::log_num_online_server_count_error() {
 			hid, num_online_servers.load(std::memory_order_relaxed), attributes.max_num_online_servers);
 	}
 }
+
+template void BaseHGC<MyHGC>::set_attribute_init_connect(const char*);
+#ifdef PROXYSQL40
+template void BaseHGC<MyHGC>::set_attribute_aws_iam_region(const char*);
+#endif // PROXYSQL40
+template void BaseHGC<PgSQL_HGC>::set_attribute_init_connect(const char*);
+#ifdef PROXYSQL40
+template void BaseHGC<PgSQL_HGC>::set_attribute_aws_iam_region(const char*);
+#endif // PROXYSQL40

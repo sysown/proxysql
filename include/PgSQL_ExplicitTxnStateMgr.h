@@ -104,6 +104,19 @@ public:
 	int get_savepoint_count() const { return savepoint.size(); }
     bool is_in_transaction() const { return !transaction_state.empty(); }
     void reset_state();
+    // Make the tracker agree with the backend's own transaction status, read at a
+    // cycle boundary: end the tracked transaction when it is idle, open one the keywords
+    // never showed ('SELECT 1; BEGIN', COMMIT AND CHAIN) when it is in one.
+    // 'ended_by' says how a tracked transaction the backend no longer has came to end:
+    // 'R' rolled back (the tracked SET variables go back to their values at BEGIN, as
+    // PostgreSQL put them back), 'C' committed (they are kept), 0 unknown (they are kept,
+    // and the ones changed since BEGIN are re-sent to the backend before its next use,
+    // since its own values cannot be known).
+    void sync_with_backend(bool backend_in_txn, char ended_by = 0);
+    // How the statements of `digest` last end a transaction: 'R' for ROLLBACK / ABORT,
+    // 'C' for COMMIT / END, 0 for neither or when the digest cannot be followed to its
+    // end. ROLLBACK TO SAVEPOINT and the PREPARED forms end no transaction block.
+    static char txn_end_in_digest(const char* digest);
     void fill_internal_session(nlohmann::json& j);
 
 private:

@@ -75,6 +75,10 @@ int main() {
 	}
 	int i;
 	stmt=(MYSQL_STMT **)malloc(sizeof(MYSQL_STMT*)*NUMPREP);
+	if (stmt == NULL) {
+		fprintf(stderr, "Unable to allocate statement handles\n");
+		exit(EXIT_FAILURE);
+	}
 	{
 	cpu_timer t;
 	for (i=0; i<NUMPREP; i++) {
@@ -83,20 +87,20 @@ int main() {
 			fprintf(stderr, " mysql_stmt_init(), out of memory\n");
 			exit(EXIT_FAILURE);
 		}
-		sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 		bl=strlen(buff);
 		uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 		MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
-		if (a==NULL) {
-			if (mysql_stmt_prepare(stmt[i], buff, bl)) {
-				fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt[i]));
-				exit(EXIT_FAILURE);
-			}
-			uint32_t stmid=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt[i]);
-			if (NUMPRO < 32)
-				fprintf(stdout, "SERVER_statement_id=%lu , PROXY_statement_id=%u\n", stmt[i]->stmt_id, stmid);
-			local_stmts->insert(stmid,stmt[i]);
-			}
+		if (a != NULL)
+			continue;
+		if (mysql_stmt_prepare(stmt[i], buff, bl)) {
+			fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt[i]));
+			exit(EXIT_FAILURE);
+		}
+		uint32_t stmid=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt[i]);
+		if (NUMPRO < 32)
+			fprintf(stdout, "SERVER_statement_id=%lu , PROXY_statement_id=%u\n", stmt[i]->stmt_id, stmid);
+		local_stmts->insert(stmid,stmt[i]);
 		}
 	fprintf(stdout, "Prepared statements: %u client, %u proxy/server. ", NUMPREP, GloMyStmt->total_prepared_statements());
 	fprintf(stdout, "Created in: ");
@@ -105,7 +109,7 @@ int main() {
 		unsigned int founds=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+			snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			//uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			//MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -117,7 +121,7 @@ int main() {
 		unsigned int founds=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			//MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -129,7 +133,7 @@ int main() {
 		unsigned int founds=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -141,7 +145,7 @@ int main() {
 		unsigned int founds=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+			snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -159,7 +163,7 @@ int main() {
 		// for comparison, we run also queries in TEXT protocol
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + %u",i,(uint32_t)mt_rand()%NUMPRO);
+			snprintf(buff,sizeof(buff),"SELECT %d + %u",i,(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			int rc=mysql_real_query(mysql,buff,bl);
 			if (rc) {

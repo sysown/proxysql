@@ -3,9 +3,12 @@
 
 Exercises two specific behaviours from issue #5678:
 
-1. SIGTERM mid-traffic: open N X-Protocol clients running steady
-   queries, send SIGTERM to proxysql, verify each client sees a clean
-   Mysqlx::Error frame with code 1053 instead of a TCP RST.
+1. PROXYSQL SHUTDOWN SLOW mid-traffic: open N X-Protocol clients
+   running steady queries, issue `PROXYSQL SHUTDOWN SLOW` through the
+   admin port, verify each client sees a clean Mysqlx::Error frame
+   with code 1053 instead of a TCP RST. In docker-isolated TAP runs the
+   shutdown command is sent by the wrapper so this observer cannot block
+   inside the admin command while clients are still active.
 
 2. LOAD MYSQLX ROUTES TO RUNTIME mid-traffic: open N clients on a
    route, drop the route from admin, reload, verify in-flight sessions
@@ -19,9 +22,6 @@ test/scripts/mysqlx/README.md for the full setup recipe.
 """
 
 import argparse
-import os
-import signal
-import subprocess
 import sys
 import threading
 import time
@@ -51,9 +51,14 @@ def parse_args():
     p.add_argument("--password", required=True)
     p.add_argument("--clients", type=int, default=5,
                    help="Concurrent client count")
-    p.add_argument("--proxysql-pid-file", default="/var/run/proxysql.pid",
-                   help="Where to find the proxysql pid (for kill -TERM)")
-    p.add_argument("--scenario", choices=["sigterm", "reload", "all"],
+    p.add_argument("--external-shutdown", action="store_true",
+                   help="Don't issue PROXYSQL SHUTDOWN SLOW from this "
+                        "process; expect an external actor to send it "
+                        "while this process observes client disconnects")
+    p.add_argument("--shutdown-wait-sec", type=float, default=5.0,
+                   help="How long to wait for externally triggered "
+                        "shutdown notifications")
+    p.add_argument("--scenario", choices=["shutdown", "reload", "all"],
                    default="all")
     p.add_argument("--route-name", default="r1",
                    help="Route name to drop in the reload scenario")
@@ -67,6 +72,7 @@ def open_session(args):
         "user": args.user,
         "password": args.password,
         "ssl-mode": "DISABLED",
+        "compression": "disabled",
     })
 
 
@@ -98,36 +104,76 @@ def steady_traffic_thread(args, stop_event, results: List[dict], idx: int):
     results.append(record)
 
 
-def find_proxysql_pid(args) -> int:
-    if os.path.isfile(args.proxysql_pid_file):
-        with open(args.proxysql_pid_file) as fh:
-            return int(fh.read().strip())
-    out = subprocess.check_output(["pidof", "proxysql"]).decode().strip()
-    if not out:
-        raise RuntimeError("proxysql process not found")
-    return int(out.split()[0])
+def issue_admin_shutdown(args):
+    print("Issuing `PROXYSQL SHUTDOWN SLOW` through the admin port ...")
+    try:
+        import mysql.connector  # admin port speaks classic protocol
+    except ImportError as e:
+        print(f"Admin shutdown unavailable: {type(e).__name__}: {e}")
+        return False
+
+    adm = None
+    try:
+        adm = mysql.connector.connect(
+            host=args.admin_host, port=args.admin_port,
+            user=args.admin_user, password=args.admin_pass,
+            ssl_disabled=True,
+        )
+        cur = adm.cursor()
+        try:
+            cur.execute("PROXYSQL SHUTDOWN SLOW")
+            print("Admin shutdown command accepted.")
+            return True
+        except Exception as e:
+            errno = getattr(e, "errno", None)
+            msg = str(e)
+            if errno in (2006, 2013) or "Lost connection" in msg or "gone away" in msg:
+                print(f"Admin shutdown disconnected as expected: {type(e).__name__}: {e}")
+                return True
+            print(f"Admin shutdown command failed: {type(e).__name__}: {e}")
+            return False
+    except Exception as e:
+        print(f"Admin shutdown connection failed: {type(e).__name__}: {e}")
+        return False
+    finally:
+        if adm is not None:
+            try:
+                adm.close()
+            except Exception:
+                pass
 
 
-def scenario_sigterm(args):
-    print("=== Scenario 1: SIGTERM mid-traffic ===")
+def scenario_shutdown(args):
+    print("=== Scenario 1: PROXYSQL SHUTDOWN SLOW mid-traffic ===")
     stop = threading.Event()
     results: List[dict] = []
     threads = [
         threading.Thread(target=steady_traffic_thread,
-                         args=(args, stop, results, i))
+                         args=(args, stop, results, i),
+                         daemon=True)
         for i in range(args.clients)
     ]
     for t in threads:
         t.start()
     time.sleep(2)  # let clients establish steady traffic
 
-    pid = find_proxysql_pid(args)
-    print(f"Sending SIGTERM to proxysql (pid {pid})...")
-    os.kill(pid, signal.SIGTERM)
+    if args.external_shutdown:
+        print("Waiting for an external actor to issue PROXYSQL SHUTDOWN SLOW ...")
+        time.sleep(args.shutdown_wait_sec)
+    else:
+        if not issue_admin_shutdown(args):
+            stop.set()
+            for t in threads:
+                t.join(timeout=5)
+            return 1
+        # Give the server a moment to close the listener and notify clients.
+        time.sleep(3)
 
     for t in threads:
         t.join(timeout=10)
     stop.set()
+    for t in threads:
+        t.join(timeout=1)
 
     print(f"Collected {len(results)} client outcomes:")
     clean_close = 0
@@ -160,7 +206,8 @@ def scenario_reload(args):
     results: List[dict] = []
     threads = [
         threading.Thread(target=steady_traffic_thread,
-                         args=(args, stop, results, i))
+                         args=(args, stop, results, i),
+                         daemon=True)
         for i in range(args.clients)
     ]
     for t in threads:
@@ -218,8 +265,8 @@ def scenario_reload(args):
 def main():
     args = parse_args()
     rc = 0
-    if args.scenario in ("sigterm", "all"):
-        rc |= scenario_sigterm(args)
+    if args.scenario in ("shutdown", "all"):
+        rc |= scenario_shutdown(args)
     if args.scenario in ("reload", "all"):
         rc |= scenario_reload(args)
     sys.exit(rc)

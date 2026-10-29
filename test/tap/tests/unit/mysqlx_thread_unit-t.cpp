@@ -188,9 +188,19 @@ static void test_connection_cache_tls_partition() {
 	delete got_tls;
 }
 
+static void test_timeout_elapsed_is_future_safe() {
+	diag(">>> %s", __func__);
+	ok(!Mysqlx_Thread::elapsed_exceeds_for_test(1000, 1001, 10),
+	   "timeout comparison does not underflow when last-active is newer than now");
+	ok(!Mysqlx_Thread::elapsed_exceeds_for_test(1000, 990, 10),
+	   "timeout comparison is strict at the timeout boundary");
+	ok(Mysqlx_Thread::elapsed_exceeds_for_test(1001, 990, 10),
+	   "timeout comparison fires after the timeout boundary");
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(25);
+	plan(28);
 	diag("=== mysqlx_thread_unit-t starting ===");
 
 	test_thread_init();
@@ -199,6 +209,7 @@ int main() {
 	test_thread_accept_connection();
 	test_connection_cache();
 	test_connection_cache_tls_partition();
+	test_timeout_elapsed_is_future_safe();
 
 	return exit_status();
 }

@@ -43,7 +43,8 @@ int AI_Features_Manager::init_vector_db() {
 	proxy_info("AI: Initializing vector storage at %s\n", GloGATH->variables.genai_vector_db_path);
 
 	// Ensure directory exists
-	std::string path_copy(GloGATH->variables.genai_vector_db_path);
+	std::string db_path(GloGATH->variables.genai_vector_db_path);
+	std::string path_copy = db_path;
 	char* dir = dirname(&path_copy[0]);
 	struct stat st;
 	if (stat(dir, &st) != 0) {
@@ -64,10 +65,7 @@ int AI_Features_Manager::init_vector_db() {
 	}
 
 	vector_db = new SQLite3DB();
-	char path_buf[512];
-	strncpy(path_buf, GloGATH->variables.genai_vector_db_path, sizeof(path_buf) - 1);
-	path_buf[sizeof(path_buf) - 1] = '\0';
-	int rc = vector_db->open(path_buf, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	int rc = vector_db->open(&db_path[0], SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	if (rc != SQLITE_OK) {
 		proxy_error("AI: Failed to open vector database: %s\n", GloGATH->variables.genai_vector_db_path);
 		delete vector_db;

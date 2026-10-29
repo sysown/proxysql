@@ -9,6 +9,7 @@ export CLUSTER_SIM_HOST_FILE="${WORKSPACE}/test/tap/groups/cluster_sim_aurora/ad
 # username/password match what enable_aurora_testing() inserts.
 export AURORA_HOSTNAME=proxysql
 export AURORA_PORT=3306
+export PROXYSQL_READY_PORTS_EXTRA="3306"
 
 # Skip the background cluster nodes: they are built without TEST_AURORA and
 # their empty mysql_users sync back to the primary, wiping aurora1/2/3.

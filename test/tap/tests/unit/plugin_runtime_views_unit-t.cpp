@@ -17,9 +17,11 @@
 #include "test_globals.h"
 #include "test_init.h"
 #include "ProxySQL_PluginManager.h"
+#include "sqlite3db.h"
 
 #include <atomic>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -37,13 +39,16 @@ void probe_refresh_cb(SQLite3DB* /*admindb*/, void* opaque) {
 
 void noop_cb(SQLite3DB*, void*) {}
 
-SQLite3DB* const any_db = reinterpret_cast<SQLite3DB*>(0xFF);
+// Never-opened handles: the chassis inspects a handle's transaction state
+// around each refresh, so even a placeholder must be a real SQLite3DB.
+SQLite3DB any_db_storage;
+SQLite3DB* const any_db = &any_db_storage;
 
 } // namespace
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(30);
+	plan(48);
 	diag("=== plugin_runtime_views_unit-t starting ===");
 
 	// ---- Registration validation ----
@@ -172,9 +177,10 @@ any_db, nullptr, nullptr);
 	{
 		diag(">>> refresh_runtime_views_for_query dispatches correct DB by db_kind");
 
-		SQLite3DB* admin_ptr = reinterpret_cast<SQLite3DB*>(0x1);
-		SQLite3DB* config_ptr = reinterpret_cast<SQLite3DB*>(0x2);
-		SQLite3DB* stats_ptr = reinterpret_cast<SQLite3DB*>(0x3);
+		SQLite3DB admin_db, config_db, stats_db;
+		SQLite3DB* admin_ptr = &admin_db;
+		SQLite3DB* config_ptr = &config_db;
+		SQLite3DB* stats_ptr = &stats_db;
 
 		SQLite3DB* received_db = nullptr;
 
@@ -227,6 +233,156 @@ any_db, nullptr, nullptr);
 		mgr.refresh_runtime_views_for_query("SELECT * FROM stats_notnull_test", admin_ptr, nullptr, stats_ptr);
 		ok(stats_fires.load() == 1,
 		   "stats_db view still fires when configdb is null (fires=%d)", stats_fires.load());
+	}
+
+	// ---- A throwing refresh callback is contained (issue #6467) ----
+	//
+	// refresh_runtime_views_for_query() runs inside an Admin statement that
+	// holds sql_query_global_mutex and the plugin-manager read lock. An
+	// exception escaping a plugin projection used to unwind through the Admin
+	// session; it must be contained like every other plugin hook, the view
+	// must keep its previous contents and the remaining views must refresh.
+	{
+		diag(">>> a throwing refresh callback is contained and other views still refresh");
+
+		SQLite3DB db;
+		char in_memory_db[] = ":memory:";
+		db.open(in_memory_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+		db.execute("CREATE TABLE runtime_throwing_std (v INTEGER)");
+		db.execute("INSERT INTO runtime_throwing_std VALUES (42)");
+
+		// Follows the documented projection pattern (BEGIN; DELETE; INSERT)
+		// and throws before COMMIT, so the chassis must roll the partial
+		// projection back for the previous contents to survive.
+		auto throw_std_cb = [](SQLite3DB* cb_db, void*) {
+			cb_db->execute("BEGIN");
+			cb_db->execute("DELETE FROM runtime_throwing_std");
+			cb_db->execute("INSERT INTO runtime_throwing_std VALUES (99)");
+			throw std::runtime_error("projection failed");
+		};
+		auto throw_other_cb = [](SQLite3DB*, void*) { throw 7; };
+
+		std::atomic<int> after_fires{0};
+		CallbackProbe after_probe{"after", &after_fires};
+
+		ProxySQL_PluginManager mgr;
+		ok(mgr.register_runtime_view({"runtime_throwing_std", throw_std_cb, nullptr, ProxySQL_PluginDBKind::admin_db}) &&
+		   mgr.register_runtime_view({"runtime_throwing_other", throw_other_cb, nullptr, ProxySQL_PluginDBKind::admin_db}) &&
+		   mgr.register_runtime_view({"runtime_after_throw", &probe_refresh_cb, &after_probe, ProxySQL_PluginDBKind::admin_db}),
+		   "registered two throwing views and one well-behaved view");
+
+		bool escaped = false;
+		try {
+			mgr.refresh_runtime_views_for_query(
+				"SELECT * FROM runtime_throwing_std, runtime_throwing_other, runtime_after_throw",
+				&db, nullptr, nullptr);
+		} catch (...) {
+			escaped = true;
+		}
+		ok(!escaped, "no exception escapes refresh_runtime_views_for_query");
+		ok(after_fires.load() == 1,
+		   "a view registered after the throwing ones still refreshes (fires=%d)", after_fires.load());
+		ok(db.return_one_int("SELECT COUNT(*) FROM runtime_throwing_std") == 1 &&
+		   db.return_one_int("SELECT v FROM runtime_throwing_std") == 42,
+		   "the partially projected throwing view is rolled back to its previous contents");
+		ok(proxy_sqlite3_get_autocommit(db.get_db()) != 0,
+		   "no transaction is left open on the view's DB after a contained throw");
+
+		escaped = false;
+		try {
+			mgr.refresh_runtime_views_for_query("SELECT * FROM runtime_after_throw", &db, nullptr, nullptr);
+		} catch (...) {
+			escaped = true;
+		}
+		ok(!escaped && after_fires.load() == 2,
+		   "the manager keeps dispatching after a contained throw (fires=%d)", after_fires.load());
+	}
+
+	// ---- Restore of plugin config_db tables from disk (issue #6167) ----
+	//
+	// Admin's disk->memory bootstrap is a hardcoded list of core tables, so
+	// plugin-registered config_db tables were written to disk by their
+	// "SAVE <X> TO DISK" verbs and never read back at startup: a plugin's
+	// variables survived a restart (they live in global_variables) while its
+	// own tables came back empty. proxysql_restore_plugin_config_tables_from_
+	// disk() is the seam Admin now calls to close that gap; drive it directly
+	// with an in-memory admindb + an ATTACHed `disk` so the behaviour is
+	// verified without standing up the whole Admin module.
+	{
+		diag(">>> plugin config_db tables are restored from disk into main");
+
+		SQLite3DB db;
+		char in_memory_db[] = ":memory:";
+		db.open(in_memory_db,
+		        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+		ok(db.execute("ATTACH DATABASE ':memory:' AS disk"),
+		   "attached an in-memory `disk` database");
+
+		// Two persisted tables (main+disk pair, as register_table_pair does)
+		// and one runtime projection that exists only in main -- the runtime
+		// one must not be touched, since it is not a config_db table.
+		ok(db.execute("CREATE TABLE main.plug_users (id INTEGER PRIMARY KEY, name TEXT)") &&
+		   db.execute("CREATE TABLE disk.plug_users (id INTEGER PRIMARY KEY, name TEXT)") &&
+		   db.execute("CREATE TABLE main.plug_routes (id INTEGER PRIMARY KEY, target TEXT)") &&
+		   db.execute("CREATE TABLE disk.plug_routes (id INTEGER PRIMARY KEY, target TEXT)") &&
+		   db.execute("CREATE TABLE main.runtime_plug_users (id INTEGER PRIMARY KEY, name TEXT)"),
+		   "created plugin table fixtures");
+
+		// State a restart would leave behind: rows on disk, main empty.
+		ok(db.execute("INSERT INTO disk.plug_users VALUES(1,'alice'),(2,'bob')") &&
+		   db.execute("INSERT INTO disk.plug_routes VALUES(7,'hg7')"),
+		   "seeded disk tables");
+		ok(db.return_one_int("SELECT COUNT(*) FROM main.plug_users") == 0,
+		   "main.plug_users starts empty, as after a restart");
+
+		std::vector<ProxySQL_PluginTableDef> config_tables {
+			{ProxySQL_PluginDBKind::config_db, "plug_users",  "unused"},
+			{ProxySQL_PluginDBKind::config_db, "plug_routes", "unused"},
+		};
+
+		proxysql_restore_plugin_config_tables_from_disk(&db, config_tables);
+
+		ok(db.return_one_int("SELECT COUNT(*) FROM main.plug_users") == 2,
+		   "main.plug_users restored from disk (got %d)",
+		   db.return_one_int("SELECT COUNT(*) FROM main.plug_users"));
+		ok(db.return_one_int("SELECT COUNT(*) FROM main.plug_routes WHERE target='hg7'") == 1,
+		   "main.plug_routes restored from disk with its column values intact");
+		ok(db.return_one_int("SELECT COUNT(*) FROM main.runtime_plug_users") == 0,
+		   "runtime projection table is left alone (not a config_db table)");
+
+		// INSERT OR REPLACE, not DELETE+INSERT: a row already present in main
+		// under the same key is overwritten by the disk copy, and a main-only
+		// row that disk does not know about is left in place. This matches how
+		// every core table is restored in
+		// __insert_or_replace_maintable_select_disktable().
+		ok(db.execute("INSERT INTO main.plug_users VALUES(3,'carol')") &&
+		   db.execute("UPDATE main.plug_users SET name='stomped' WHERE id=1"),
+		   "added a main-only row and stomped a restored one");
+		proxysql_restore_plugin_config_tables_from_disk(&db, config_tables);
+		ok(db.return_one_int(
+			"SELECT COUNT(*) FROM main.plug_users WHERE id=1 AND name='alice'") == 1,
+		   "re-running the restore overwrites a stomped row from disk");
+		ok(db.return_one_int(
+			"SELECT COUNT(*) FROM main.plug_users WHERE id=3") == 1,
+		   "re-running the restore leaves main-only rows in place");
+
+		// Robustness: a null handle, an empty name, and a config_db table with
+		// no admin_db twin must all be survivable -- startup must not abort.
+		proxysql_restore_plugin_config_tables_from_disk(nullptr, config_tables);
+		std::vector<ProxySQL_PluginTableDef> bad_tables {
+			{ProxySQL_PluginDBKind::config_db, nullptr,     "unused"},
+			{ProxySQL_PluginDBKind::config_db, "",          "unused"},
+			{ProxySQL_PluginDBKind::config_db, "no_such_t", "unused"},
+		};
+		proxysql_restore_plugin_config_tables_from_disk(&db, bad_tables);
+		ok(db.return_one_int("SELECT COUNT(*) FROM main.plug_users") == 3,
+		   "null handle / empty name / missing table are survived without damage");
+
+		// With no active plugin manager the ..._configured_... wrapper is a
+		// no-op rather than a crash (the unit harness never publishes one).
+		proxysql_restore_configured_plugin_config_tables(&db);
+		ok(db.return_one_int("SELECT COUNT(*) FROM main.plug_users") == 3,
+		   "restore via the active-manager wrapper is a no-op with no manager");
 	}
 
 	return exit_status();

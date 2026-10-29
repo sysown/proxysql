@@ -5,7 +5,10 @@
 #include "cpp.h"
 #include "Query_Cache.h"
 
-typedef struct _PgSQL_QC_entry : public QC_entry_t {} PgSQL_QC_entry_t;
+typedef struct _PgSQL_QC_entry : public QC_entry_t {
+	uint64_t rows_sent;
+	uint64_t affected_rows;
+} PgSQL_QC_entry_t;
 
 class PgSQL_Query_Cache : public Query_Cache<PgSQL_Query_Cache> {
 public:
@@ -13,7 +16,8 @@ public:
 	~PgSQL_Query_Cache() = default;
 
 	bool set(uint64_t user_hash, const unsigned char* kp, uint32_t kl, unsigned char* vp, uint32_t vl, 
-		uint64_t create_ms, uint64_t curtime_ms, uint64_t expire_ms);
+		uint64_t create_ms, uint64_t curtime_ms, uint64_t expire_ms,
+		uint64_t rows_sent = 0, uint64_t affected_rows = static_cast<uint64_t>(-1));
 	const std::shared_ptr<PgSQL_QC_entry_t> get(uint64_t user_hash, const unsigned char* kp, const uint32_t kl, 
 		uint64_t curtime_ms, uint64_t cache_ttl);
 	//void* purgeHash_thread(void*);

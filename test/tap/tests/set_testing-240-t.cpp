@@ -281,7 +281,13 @@ void * my_conn_thread(void *arg) {
 		usleep(sleepDelay * 1000);
 
 		char query[128];
-		sprintf(query, "SELECT /* %p %s */ %d;", mysql, paddress.c_str(), sleepDelay);
+		const int query_len = snprintf(query, sizeof(query), "SELECT /* %p %s */ %d;", mysql, paddress.c_str(), sleepDelay);
+		if (query_len < 0 || (size_t)query_len >= sizeof(query)) {
+			diag("Skipping truncated query for address of length %zu", paddress.size());
+			select_ERR++;
+			__sync_fetch_and_add(&g_select_ERR,1);
+			continue;
+		}
 		if (mysql_query(mysql,query)) {
 			select_ERR++;
 			__sync_fetch_and_add(&g_select_ERR,1);

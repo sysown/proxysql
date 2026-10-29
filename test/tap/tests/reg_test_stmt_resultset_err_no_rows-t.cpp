@@ -106,8 +106,13 @@ int main(int argc, char** argv) {
 			goto exit;
 		}
 
-		strncpy(str_data, param.c_str(), STRING_SIZE);
-		str_length = strlen(str_data);
+		size_t copy_len = param.size();
+		if (copy_len >= STRING_SIZE) {
+			copy_len = STRING_SIZE - 1;
+		}
+		memcpy(str_data, param.data(), copy_len);
+		str_data[copy_len] = 0;
+		str_length = copy_len;
 
 		int exec_res = mysql_stmt_execute(stmt);
 		if (exec_res) {

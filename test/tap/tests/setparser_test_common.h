@@ -6,16 +6,16 @@
 #include "command_line.h"
 #include "tap.h"
 
-#include <stdlib.h>
+#include <cstdlib>
 
 #include "re2/re2.h"
 #include "re2/regexp.h"
-#include "util/test.h"
 #include "MySQL_Set_Stmt_Parser.h"
 #include <string>
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <iterator>
 #include <iostream>
 
 #include "openssl/ssl.h"
@@ -28,6 +28,20 @@ using namespace std;
 
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
 // ******************************************************************************************
+
+[[noreturn]] static void check_failed(const char* description, const char* file, int line) {
+	std::cerr << file << ':' << line << ": check failed: " << description << std::endl;
+	std::abort();
+}
+
+static void check(bool expression, const char* description, const char* file, int line) {
+	if (!expression) check_failed(description, file, line);
+}
+
+template <typename Left, typename Right>
+static void check_equal(const Left& left, const Right& right, const char* file, int line) {
+	check(left == right, "values are equal", file, line);
+}
 
 bool iequals(const std::string& a, const std::string& b)
 {
@@ -65,6 +79,14 @@ struct Test {
 };
 
 static Test sql_mode[] = {
+  // MySQL LOCAL is a SESSION synonym, including after a comma (#6397).
+  { "SET LOCAL innodb_lock_wait_timeout=5", { Expected("innodb_lock_wait_timeout", {"5"}) } },
+  { "set local innodb_lock_wait_timeout = 5;", { Expected("innodb_lock_wait_timeout", {"5"}) } },
+  { "SET LOCAL `innodb_lock_wait_timeout`=5", { Expected("innodb_lock_wait_timeout", {"5"}) } },
+  { "SET LOCAL innodb_lock_wait_timeout=5, LOCAL sql_safe_updates=1", {
+      Expected("innodb_lock_wait_timeout", {"5"}), Expected("sql_safe_updates", {"1"}) } },
+  { "SET SESSION innodb_lock_wait_timeout=5, LOCAL sql_safe_updates=1", {
+      Expected("innodb_lock_wait_timeout", {"5"}), Expected("sql_safe_updates", {"1"}) } },
   { "SET @@sql_mode = 'TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
   { "SET SESSION sql_mode = 'TRADITIONAL'", { Expected("sql_mode", {"TRADITIONAL"}) } },
   { "SET @@session.sql_mode = 'TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
@@ -282,4 +304,3 @@ static Test multiple[] = {
     }
   },
 };
-

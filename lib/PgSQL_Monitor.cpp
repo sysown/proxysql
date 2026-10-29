@@ -1,6 +1,8 @@
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Monitor.hpp"
 #include "PgSQL_Thread.h"
+#include "PgSQLMonitorDecision.h"
+#include "ProxySQL_ServerDiscovery.h"
 
 #include "gen_utils.h"
 
@@ -317,9 +319,9 @@ struct mon_user_t {
 };
 
 struct ping_params_t {
-	int32_t interval;
+	uint64_t interval;
 	double interval_window;
-	int32_t timeout;
+	uint64_t timeout;
 	int32_t max_failures;
 };
 
@@ -337,11 +339,11 @@ struct ping_conf_t {
 };
 
 struct connect_params_t {
-	int32_t interval;
+	uint64_t interval;
 	double interval_window;
-	int32_t timeout;
+	uint64_t timeout;
 	int32_t ping_max_failures;
-	int32_t ping_interval;
+	uint64_t ping_interval;
 };
 
 struct connect_conf_t {
@@ -350,12 +352,12 @@ struct connect_conf_t {
 };
 
 struct readonly_params_t {
-	int32_t interval;
+	uint64_t interval;
 	double interval_window;
-	int32_t timeout;
+	uint64_t timeout;
 	int32_t max_timeout_count;
 	int32_t ping_max_failures;
-	int32_t ping_interval;
+	uint64_t ping_interval;
 	bool writer_is_also_reader;
 };
 
@@ -365,19 +367,19 @@ struct readonly_conf_t {
 };
 
 struct repl_lag_params_t {
-	int32_t interval;
+	uint64_t interval;
 	double interval_window;
-	int32_t timeout;
+	uint64_t timeout;
 	int32_t ping_max_failures;
-	int32_t ping_interval;
+	uint64_t ping_interval;
 	mf_unique_ptr<char> pt_heartbeat {};
 
 	repl_lag_params_t(
-		int32_t _interval,
+		uint64_t _interval,
 		double _interval_window,
-		int32_t _timeout,
+		uint64_t _timeout,
 		int32_t _ping_max_failures,
-		int32_t _ping_interval,
+		uint64_t _ping_interval,
 		char* _pt_heartbeat
 	) :
 		interval(_interval),
@@ -510,12 +512,7 @@ tasks_conf_t fetch_updated_conf(PgSQL_Monitor* mon, PgSQL_HostGroups_Manager* hg
 			" GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
-	unique_ptr<SQLite3_result> readonly_srvs { fetch_hgm_srvs_conf(hgm,
-		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
-			" FROM pgsql_servers JOIN pgsql_replication_hostgroups"
-				" ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
-			" WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()"
-	)};
+	unique_ptr<SQLite3_result> readonly_srvs { hgm->get_read_only_servers() };
 
 	unique_ptr<SQLite3_result> repl_srvs { fetch_hgm_srvs_conf(hgm,
 		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM pgsql_servers"
@@ -528,45 +525,45 @@ tasks_conf_t fetch_updated_conf(PgSQL_Monitor* mon, PgSQL_HostGroups_Manager* hg
 		ping_conf_t {
 			std::move(ping_srvrs),
 			ping_params_t {
-				pgsql_thread___monitor_ping_interval * 1000,
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_ping_interval),
 				pgsql_thread___monitor_ping_interval_window / 100.0,
-				pgsql_thread___monitor_ping_timeout * 1000,
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_ping_timeout),
 				pgsql_thread___monitor_ping_max_failures
 			}
 		},
 		connect_conf_t {
 			std::move(connect_srvrs),
 			connect_params_t {
-				pgsql_thread___monitor_connect_interval * 1000,
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_connect_interval),
 				pgsql_thread___monitor_connect_interval_window / 100.0,
-				pgsql_thread___monitor_connect_timeout * 1000,
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_connect_timeout),
 				// TODO: Revisit this logic; For now identical to previous
 				//  - Used for server responsiveness
 				pgsql_thread___monitor_ping_max_failures,
 				//  - Used for connection cleanup
-				pgsql_thread___monitor_ping_interval * 1000
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_ping_interval)
 			}
 		},
 		readonly_conf_t {
 			std::move(readonly_srvs),
 			readonly_params_t {
-				pgsql_thread___monitor_read_only_interval * 1000,
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_read_only_interval),
 				pgsql_thread___monitor_read_only_interval_window / 100.0,
-				pgsql_thread___monitor_read_only_timeout * 1000,
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_read_only_timeout),
 				pgsql_thread___monitor_read_only_max_timeout_count,
 				pgsql_thread___monitor_ping_max_failures,
-				pgsql_thread___monitor_ping_interval * 1000,
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_ping_interval),
 				pgsql_thread___monitor_writer_is_also_reader
 			}
 		},
 		repl_lag_conf_t {
 			std::move(repl_srvs),
 			repl_lag_params_t {
-				pgsql_thread___monitor_replication_lag_interval * 1000,
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_replication_lag_interval),
 				pgsql_thread___monitor_replication_lag_interval_window / 100.0,
-				pgsql_thread___monitor_replication_lag_timeout * 1000,
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_replication_lag_timeout),
 				pgsql_thread___monitor_ping_max_failures,
-				pgsql_thread___monitor_ping_interval * 1000,
+				pgsql_mon_ms_to_us(pgsql_thread___monitor_ping_interval),
 				pgsql_thread___monitor_replication_lag_use_percona_heartbeat
 			}
 		},
@@ -664,8 +661,11 @@ void set_finish_st(state_t& st, ASYNC_ST new_st, op_result_t res = {}) {
 short handle_async_check_cont(state_t& st, short _) {
 	pgsql_conn_t& pgconn { st.conn };
 
-	// Single command queries; 'PQisBusy' and 'PQconsumeInput' not required
+	// PQgetResult can block on an incomplete response; worker teardown retains
+	// a cancellation fallback for an unresponsive backend.
 	PGresult* res { PQgetResult(pgconn.conn) };
+	// Draining the trailing result can block; release this result on worker cancellation too.
+	unique_ptr<PGresult, decltype(&PQclear)> result_guard { res, &PQclear };
 
 	// Wait for the result asynchronously
 	if (res == NULL) {
@@ -751,9 +751,6 @@ short handle_async_check_cont(state_t& st, short _) {
 			}
 		}
 	}
-
-	// Clear always; we assume no resultset on ping
-	PQclear(res);
 
 	return POLLIN;
 }
@@ -1104,7 +1101,11 @@ string build_conn_str(const task_st_t& task_st) {
 	append_conninfo_param(conninfo, "password", user_info.pass); // password
 	append_conninfo_param(conninfo, "dbname", user_info.dbname); // dbname
 	append_conninfo_param(conninfo, "host", srv_info.addr); // backend address
-	conninfo << "port=" << srv_info.port << " "; // backend port
+	// port=0 means address is a Unix-domain socket path; libpq rejects
+	// "port=0" with "invalid port number: \"0\"".
+	if (srv_info.port != 0) {
+		conninfo << "port=" << srv_info.port << " ";
+	}
 	conninfo << "application_name=ProxySQL-Monitor "; // application name
 	if (srv_info.ssl) {
 		conninfo << "sslmode='require' "; // SSL required
@@ -1285,6 +1286,11 @@ struct task_queue_t {
 		int rc = pipe(comm_fd);
 		assert(rc == 0 && "Failed to create pipe for Monitor worker thread");
 	}
+
+	~task_queue_t() {
+		close(comm_fd[0]);
+		close(comm_fd[1]);
+	}
 };
 
 struct task_res_t {
@@ -1453,7 +1459,7 @@ struct task_batch_t {
 	// :: info
 	task_type_t type;
 	uint64_t batch_sz;
-	int32_t intv_us;
+	uint64_t intv_us;
 	double intv_window;
 	// :: state
 	uint64_t next_sched;
@@ -2042,6 +2048,18 @@ void add_scheduler_comm_task(const task_queue_t& tasks_queue, task_poll_t& task_
 
 const uint64_t MAX_CHECK_DELAY_US { 500000 };
 
+// Run on both cooperative exit and cancellation while libpq is waiting for a
+// backend response. Only [1, size) owns connections; slot 0 is the signal pipe
+// and removed slots may still contain aliases after rm_task_fast().
+static void cleanup_worker_connections(void* arg) {
+	// This is the worker's final cleanup. Do not interrupt PQfinish midway.
+	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, nullptr);
+	auto& task_poll = *static_cast<task_poll_t*>(arg);
+	for (size_t i = 1; i < task_poll.size; ++i) {
+		PQfinish(task_poll.tasks[i].conn.conn);
+	}
+}
+
 void* worker_thread(void* args) {
 	pair<task_queue_t, result_queue_t>* queues {
 		static_cast<pair<task_queue_t, result_queue_t>*>(args)
@@ -2070,6 +2088,7 @@ void* worker_thread(void* args) {
 
 	// Insert dummy task for scheduler comms
 	add_scheduler_comm_task(tasks_queue, task_poll);
+	pthread_cleanup_push(cleanup_worker_connections, &task_poll);
 
 	while (recv_stop_signal == false) {
 		// Process wakeup signal from scheduler
@@ -2138,6 +2157,7 @@ void* worker_thread(void* args) {
 			// Acquire new conn, update task on failure
 			uint64_t t1 { monotonic_time() };
 			pgsql_conn_t conn { create_conn(task) };
+			unique_ptr<PGconn, decltype(&PQfinish)> conn_guard { conn.conn, &PQfinish };
 			task.op_st.exec_time += monotonic_time() - t1;
 
 			state_t init_st { std::move(conn), std::move(task) };
@@ -2151,6 +2171,7 @@ void* worker_thread(void* args) {
 #endif
 
 			add_task(task_poll, POLLOUT, std::move(init_st));
+			conn_guard.release(); // The active poll slot now owns the connection.
 		}
 
 		uint64_t next_timeout_at = ULLONG_MAX;
@@ -2207,13 +2228,14 @@ void* worker_thread(void* args) {
 					task_poll.tasks[i].conn.last_used = task_poll.tasks[i].task.start;
 
 					put_conn(mon_conn_pool, srv, std::move(task_poll.tasks[i].conn));
+					task_poll.tasks[i].conn.conn = nullptr; // Ownership passed to the pool.
 
 					proxy_debug(PROXY_DEBUG_MONITOR, 5,
 						"Succeed task conn returned to pool   fd=%d conn_st=%d\n",
 						conn.fd, conn.state
 					);
 				} else {
-					PQfinish(task_poll.tasks[i].conn.conn);
+					PQfinish(std::exchange(task_poll.tasks[i].conn.conn, nullptr));
 					proxy_debug(PROXY_DEBUG_MONITOR, 5,
 						"Failed task conn killed   fd=%d conn_st=%d\n", conn.fd, conn.state
 					);
@@ -2265,6 +2287,7 @@ void* worker_thread(void* args) {
 
 	CHECK_HOST_ERR_LIMIT_STMT.reset();
 	FETCH_HOST_LATENCY_STMT.reset();
+	pthread_cleanup_pop(1);
 
 	return NULL;
 }
@@ -2274,11 +2297,9 @@ void maint_monitor_table(SQLite3DB* db, const char query[], const ping_params_t&
 	ASSERT_SQLITE_OK(rc, db);
 	sqlite3_stmt* stmt = stmt_unique.get();
 
-	if (pgsql_thread___monitor_history < (params.interval * (params.max_failures + 1)) / 1000) {
-		if (static_cast<uint64_t>(params.interval) < uint64_t(3600000) * 1000) {
-			pgsql_thread___monitor_history = (params.interval * (params.max_failures + 1)) / 1000;
-		}
-	}
+	pgsql_thread___monitor_history = pgsql_mon_min_history_ms(
+		pgsql_thread___monitor_history, params.interval, params.max_failures
+	);
 
 	uint64_t max_history_age { realtime_time() - uint64_t(pgsql_thread___monitor_history)*1000 };
 	sqlite_bind_int64(stmt, 1, max_history_age);
@@ -2446,56 +2467,29 @@ tasks_intvs_t compute_next_intvs(
 ) {
 	tasks_intvs_t upd_intvs { next_intvs };
 
-	if (next_intvs.next_ping_at <= intv_start && conf.ping.params.interval != 0) {
-		if (conf.ping.params.interval != 0) {
-			upd_intvs.next_ping_at = intv_start + conf.ping.params.interval;
-		} else {
-			upd_intvs.next_ping_at = ULONG_MAX;
-		}
-	}
-	if (next_intvs.next_connect_at <= intv_start && conf.connect.params.interval != 0) {
-		if (conf.connect.params.interval != 0) {
-			upd_intvs.next_connect_at = intv_start + conf.connect.params.interval;
-		} else {
-			upd_intvs.next_connect_at = ULONG_MAX;
-		}
-	}
-	if (next_intvs.next_readonly_at <= intv_start && conf.readonly.params.interval != 0) {
-		if (conf.readonly.params.interval != 0) {
-			upd_intvs.next_readonly_at = intv_start + conf.readonly.params.interval;
-		} else {
-			upd_intvs.next_readonly_at = ULONG_MAX;
-		}
-	}
-	if (next_intvs.next_repl_lag_at <= intv_start && conf.repl_lag.params.interval != 0) {
-		if (conf.repl_lag.params.interval != 0) {
-			upd_intvs.next_repl_lag_at = intv_start + conf.repl_lag.params.interval;
-		} else {
-			upd_intvs.next_repl_lag_at = ULONG_MAX;
-		}
-	}
+	upd_intvs.next_ping_at = pgsql_mon_next_check_at(
+		next_intvs.next_ping_at, conf.ping.params.interval, intv_start
+	);
+	upd_intvs.next_connect_at = pgsql_mon_next_check_at(
+		next_intvs.next_connect_at, conf.connect.params.interval, intv_start
+	);
+	upd_intvs.next_readonly_at = pgsql_mon_next_check_at(
+		next_intvs.next_readonly_at, conf.readonly.params.interval, intv_start
+	);
+	upd_intvs.next_repl_lag_at = pgsql_mon_next_check_at(
+		next_intvs.next_repl_lag_at, conf.repl_lag.params.interval, intv_start
+	);
 
 	return upd_intvs;
 }
 
-void* PgSQL_monitor_scheduler_thread() {
-	proxy_info("Started Monitor scheduler thread for PgSQL servers\n");
-
-	// Quick exit during shutdown/restart
-	if (!GloPTH) { return NULL; }
-
-	// Initial Monitor thread variables version
-	unsigned int PgSQL_Thread__variables_version = GloPTH->get_global_version();
-	// PgSQL thread structure used for variable refreshing
-	unique_ptr<PgSQL_Thread> pgsql_thread { init_pgsql_thread_struct() };
-
-	task_queue_t conn_tasks {};
-	result_queue_t conn_results {};
-
+// One enabled period. All workers, queued tasks and pooled connections are
+// released before returning to the controller's disabled/configuration loop.
+static void run_pgsql_monitor(PgSQL_Thread* pgsql_thread, unsigned int& variables_version) {
 	uint32_t worker_threads_count = pgsql_thread___monitor_threads;
 	vector<worker_thread_t> workers {};
 
-	// TODO: Threads are right now fixed on startup.
+	// Worker-count changes take effect on the next enable.
 	for (uint32_t i = 0; i < worker_threads_count; i++) {
 		unique_ptr<worker_queue_t> worker_queue { new worker_queue_t {} };
 		auto [err, th] { create_thread(2048 * 1024, worker_thread, worker_queue.get()) };
@@ -2508,7 +2502,18 @@ void* PgSQL_monitor_scheduler_thread() {
 	tasks_intvs_t next_intvs {};
 	vector<task_batch_t> tasks_batches {};
 
-	while (GloPgMon->shutdown.load(std::memory_order_acquire) == false && pgsql_thread___monitor_enabled == true) {
+	while (GloPgMon->shutdown.load(std::memory_order_acquire) == false) {
+		if (!GloPTH) { break; }
+		// Observe disable/configuration changes even when the next check is far
+		// in the future. Do not dispatch another batch after observing disable.
+		const unsigned int glover = GloPTH->get_global_version();
+		const bool vars_refreshed = variables_version < glover;
+		if (vars_refreshed) {
+			variables_version = glover;
+			pgsql_thread->refresh_variables();
+		}
+		if (!pgsql_thread___monitor_enabled) { break; }
+
 		cur_intv_start = monotonic_time();
 
 		uint64_t closest_intv {
@@ -2520,28 +2525,16 @@ void* PgSQL_monitor_scheduler_thread() {
 			})
 		};
 
-		if (cur_intv_start >= closest_intv)	 {
+		if (vars_refreshed || cur_intv_start >= closest_intv) {
 			proxy_debug(PROXY_DEBUG_MONITOR, 5,
 				"Scheduling interval   time=%lu delta=%lu ping=%lu connect=%lu readonly=%lu repl_lag=%lu\n",
 				cur_intv_start,
-				cur_intv_start - closest_intv,
+				cur_intv_start >= closest_intv ? cur_intv_start - closest_intv : 0,
 				next_intvs.next_ping_at,
 				next_intvs.next_connect_at,
 				next_intvs.next_readonly_at,
 				next_intvs.next_repl_lag_at
 			);
-
-			// Quick exit during shutdown/restart
-			if (!GloPTH) { return NULL; }
-
-			// Check variable version changes; refresh if needed
-			unsigned int glover = GloPTH->get_global_version();
-			bool vars_refreshed = false;
-			if (PgSQL_Thread__variables_version < glover) {
-				PgSQL_Thread__variables_version = glover;
-				pgsql_thread->refresh_variables();
-				vars_refreshed = true;
-			}
 
 			// Fetch config for next task scheduling
 			tasks_conf_t tasks_conf { fetch_updated_conf(GloPgMon, PgHGM) };
@@ -2579,7 +2572,7 @@ void* PgSQL_monitor_scheduler_thread() {
 					const uint64_t clamped = cur_intv_start + tasks_conf.ping.params.interval;
 					if (next_intvs.next_ping_at > clamped) {
 						proxy_debug(PROXY_DEBUG_MONITOR, 5,
-							"Clamped next_ping_at   old=%lu new=%lu interval=%d\n",
+							"Clamped next_ping_at   old=%lu new=%lu interval=%lu\n",
 							next_intvs.next_ping_at, clamped, tasks_conf.ping.params.interval);
 						next_intvs.next_ping_at = clamped;
 					}
@@ -2588,7 +2581,7 @@ void* PgSQL_monitor_scheduler_thread() {
 					const uint64_t clamped = cur_intv_start + tasks_conf.connect.params.interval;
 					if (next_intvs.next_connect_at > clamped) {
 						proxy_debug(PROXY_DEBUG_MONITOR, 5,
-							"Clamped next_connect_at   old=%lu new=%lu interval=%d\n",
+							"Clamped next_connect_at   old=%lu new=%lu interval=%lu\n",
 							next_intvs.next_connect_at, clamped, tasks_conf.connect.params.interval);
 						next_intvs.next_connect_at = clamped;
 					}
@@ -2597,7 +2590,7 @@ void* PgSQL_monitor_scheduler_thread() {
 					const uint64_t clamped = cur_intv_start + tasks_conf.readonly.params.interval;
 					if (next_intvs.next_readonly_at > clamped) {
 						proxy_debug(PROXY_DEBUG_MONITOR, 5,
-							"Clamped next_readonly_at   old=%lu new=%lu interval=%d\n",
+							"Clamped next_readonly_at   old=%lu new=%lu interval=%lu\n",
 							next_intvs.next_readonly_at, clamped, tasks_conf.readonly.params.interval);
 						next_intvs.next_readonly_at = clamped;
 					}
@@ -2606,7 +2599,7 @@ void* PgSQL_monitor_scheduler_thread() {
 					const uint64_t clamped = cur_intv_start + tasks_conf.repl_lag.params.interval;
 					if (next_intvs.next_repl_lag_at > clamped) {
 						proxy_debug(PROXY_DEBUG_MONITOR, 5,
-							"Clamped next_repl_lag_at   old=%lu new=%lu interval=%d\n",
+							"Clamped next_repl_lag_at   old=%lu new=%lu interval=%lu\n",
 							next_intvs.next_repl_lag_at, clamped, tasks_conf.repl_lag.params.interval);
 						next_intvs.next_repl_lag_at = clamped;
 					}
@@ -2689,7 +2682,7 @@ void* PgSQL_monitor_scheduler_thread() {
 		}
 	}
 
-	proxy_info("Exiting PgSQL_Monitor scheduling thread\n");
+	proxy_info("Stopping PgSQL Monitor workers\n");
 
 	// Wakeup workers for shutdown
 	{
@@ -2697,10 +2690,9 @@ void* PgSQL_monitor_scheduler_thread() {
 			write_signal(worker.second->first.comm_fd[1], 1);
 		}
 
-		// Give some time for a clean exit
+		// Allow a cooperative exit, then interrupt workers stuck in libpq (for
+		// example, a backend withholding ReadyForQuery). Both paths run cleanup.
 		usleep(500 * 1000);
-
-		// Force the exit on the remaining threads
 		for (worker_thread_t& worker : workers) {
 			pthread_cancel(worker.first);
 		}
@@ -2718,7 +2710,28 @@ void* PgSQL_monitor_scheduler_thread() {
 		}
 		mon_conn_pool.conn_map.clear();
 	}
+}
 
+void* PgSQL_monitor_scheduler_thread() {
+	proxy_info("Started Monitor scheduler thread for PgSQL servers\n");
+	if (!GloPTH) { return nullptr; }
+
+	unsigned int variables_version = GloPTH->get_global_version();
+	unique_ptr<PgSQL_Thread> pgsql_thread { init_pgsql_thread_struct() };
+	while (!GloPgMon->shutdown.load(std::memory_order_acquire)) {
+		if (!GloPTH) { break; }
+		variables_version = GloPTH->get_global_version();
+		pgsql_thread->refresh_variables();
+		if (pgsql_thread___monitor_enabled) {
+			run_pgsql_monitor(pgsql_thread.get(), variables_version);
+		} else {
+			// Stay alive when initially disabled as well as after a runtime
+			// disable. Refresh on wakeup and exit promptly during shutdown.
+			usleep(MAX_CHECK_DELAY_US);
+		}
+	}
+
+	proxy_info("Exiting PgSQL_Monitor scheduling thread\n");
 	return nullptr;
 }
 
@@ -2738,9 +2751,12 @@ void* PgSQL_monitor_scheduler_thread() {
 // ============================================================================
 
 std::string PgSQL_Monitor::dns_lookup(const std::string& hostname,
-	bool return_hostname_if_lookup_fails, size_t* ip_count) {
+	bool return_hostname_if_lookup_fails, size_t* ip_count, std::vector<std::string>* all_ips) {
 
 	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
+
+	if (all_ips)
+		all_ips->clear();
 
 	// If hostname is already an IP, return as-is (cache miss avoided).
 	if (hostname.empty() || validate_ip(hostname))
@@ -2752,7 +2768,7 @@ std::string PgSQL_Monitor::dns_lookup(const std::string& hostname,
 	std::string ip;
 
 	if (dns_cache_thread) {
-		ip = dns_cache_thread->lookup(trim(hostname), ip_count);
+		ip = dns_cache_thread->lookup(trim(hostname), ip_count, all_ips);
 	}
 
 	// Apply the hostname fallback even when the cache facade is unavailable
@@ -2768,9 +2784,9 @@ std::string PgSQL_Monitor::dns_lookup(const std::string& hostname,
 }
 
 std::string PgSQL_Monitor::dns_lookup(const char* hostname,
-	bool return_hostname_if_lookup_fails, size_t* ip_count) {
+	bool return_hostname_if_lookup_fails, size_t* ip_count, std::vector<std::string>* all_ips) {
 	return PgSQL_Monitor::dns_lookup(std::string(hostname),
-		return_hostname_if_lookup_fails, ip_count);
+		return_hostname_if_lookup_fails, ip_count, all_ips);
 }
 
 bool PgSQL_Monitor::update_dns_cache_from_pgsql_conn(PGconn* pgsql_conn) {
@@ -2782,14 +2798,12 @@ bool PgSQL_Monitor::update_dns_cache_from_pgsql_conn(PGconn* pgsql_conn) {
 	if (!host_param || !host_param[0])
 		return false;
 
-	const std::string hostname { host_param };
+	return update_dns_cache_from_socket(std::string(host_param), PQsocket(pgsql_conn));
+}
 
+bool PgSQL_Monitor::update_dns_cache_from_socket(const std::string& hostname, int sock) {
 	// If user configured an IP directly, no cache update needed.
-	if (validate_ip(hostname))
-		return false;
-
-	const int sock = PQsocket(pgsql_conn);
-	if (sock < 0)
+	if (sock < 0 || hostname.empty() || validate_ip(hostname))
 		return false;
 
 	const std::string& ip_addr = get_connected_peer_ip_from_socket(sock);
@@ -2953,7 +2967,7 @@ void* PgSQL_Monitor::monitor_dns_cache() {
 					delay_us *= 40;
 					if (delay_us > 1000000 || delay_us <= 0)
 						delay_us = 10000;
-					delay_us = delay_us + rand() % delay_us; // NOSONAR cpp:S2245 — non-crypto jitter to spread DNS refresh load; no security boundary.
+					delay_us = delay_us + rand_fast() % delay_us;
 				}
 
 				// Walk the bookkeeper: drop orphans, requeue expired ones, keep

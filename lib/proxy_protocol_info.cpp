@@ -259,22 +259,20 @@ bool ProxyProtocolInfo::is_in_network(const struct sockaddr* client_addr, const 
 
 bool ProxyProtocolInfo::is_client_in_any_subnet(const struct sockaddr* client_addr, const char* subnet_list) {
 	// Create a copy of the subnet list to avoid modifying the original string
-	char* subnet_list_copy = new char[strlen(subnet_list) + 1];
-	strcpy(subnet_list_copy, subnet_list);
+	std::string subnet_list_copy(subnet_list);
 
-	char* token = strtok(subnet_list_copy, ","); // Get the first subnet
+	char* saveptr = nullptr;
+	char* token = strtok_r(&subnet_list_copy[0], ",", &saveptr); // Get the first subnet
 	while (token != NULL) {
 		if (DEBUG_ProxyProtocolInfo==true)
 			std::cout << "Checking subnet: " << token << std::endl;
 		if (is_in_network(client_addr, token)) {
 			if (DEBUG_ProxyProtocolInfo==true)
 				std::cout << "Client is in subnet: " << token << std::endl;
-			delete[] subnet_list_copy; // Deallocate the copy
 			return true; // Client is in at least one subnet
 		}
-		token = strtok(NULL, ","); // Get the next subnet
+		token = strtok_r(nullptr, ",", &saveptr); // Get the next subnet
 	}
-	delete[] subnet_list_copy; // Deallocate the copy
 	return false; // Client is not in any of the subnets
 }
 
@@ -368,21 +366,19 @@ bool ProxyProtocolInfo::is_valid_subnet_list(const char* subnet_list) {
 	}
 
 	// Create a copy of the string to avoid modifying the original
-	char* subnet_list_copy = new char[strlen(subnet_list) + 1];
-	strcpy(subnet_list_copy, subnet_list);
+	std::string subnet_list_copy(subnet_list);
 
 	// Tokenize the string using ',' as the delimiter
-	char* token = strtok(subnet_list_copy, ",");
+	char* saveptr = nullptr;
+	char* token = strtok_r(&subnet_list_copy[0], ",", &saveptr);
 	while (token != NULL) {
 		// Check if the token is a valid subnet
 		if (!is_valid_subnet(token)) {
-			delete[] subnet_list_copy; // Deallocate the copy
 			return false; // Invalid subnet found
 		}
-		token = strtok(NULL, ","); // Get the next token
+		token = strtok_r(nullptr, ",", &saveptr); // Get the next token
 	}
 
-	delete[] subnet_list_copy; // Deallocate the copy
 	return true; // All subnets are valid
 }
 

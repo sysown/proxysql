@@ -174,6 +174,30 @@ CREATE TABLE stats_mysql_connection_pool (
 
 **stats_mysql_connection_pool_reset** - Identical schema to `stats_mysql_connection_pool` but allows resetting stats.
 
+#### 1.5.1 stats_mysql_hostgroup_connection_pool (`PROXYSQL31`)
+
+Backend connection acquisition metrics per MySQL hostgroup. This table and its
+reset variant are available only in builds compiled with `PROXYSQL31=1`.
+
+```sql
+CREATE TABLE stats_mysql_hostgroup_connection_pool (
+    hostgroup INT PRIMARY KEY,
+    acquisitions_total INT NOT NULL,
+    waits_total INT NOT NULL,
+    wait_time_us_total INT NOT NULL,
+    waiters INT NOT NULL
+)
+```
+
+- `acquisitions_total` - Successful backend connection acquisitions, including thread-local cache hits
+- `waits_total` - Logical acquisition requests that encountered at least one unsuccessful attempt
+- `wait_time_us_total` - Cumulative duration of completed or abandoned wait episodes
+- `waiters` - Sessions currently waiting for an eligible backend connection
+
+`stats_mysql_hostgroup_connection_pool_reset` has the same schema. Reading the
+reset table starts a new counter window but does not reset the live `waiters`
+gauge or the lifetime counters exported to Prometheus.
+
 ### 1.6 stats_mysql_free_connections
 
 Details about idle connections available in the pool.
@@ -855,6 +879,23 @@ CREATE TABLE stats_pgsql_connection_pool (
     Latency_us INT
 )
 ```
+
+#### 2.6.1 stats_pgsql_hostgroup_connection_pool (`PROXYSQL31`)
+
+Backend connection acquisition metrics per PostgreSQL hostgroup. It has the
+same columns and reset semantics as `stats_mysql_hostgroup_connection_pool` and
+is available only in builds compiled with `PROXYSQL31=1`.
+
+The four Prometheus metric families shared by both protocols are:
+
+- `proxysql_connpool_acquisitions_total`
+- `proxysql_connpool_waits_total`
+- `proxysql_connpool_wait_time_seconds_total`
+- `proxysql_connpool_waiters`
+
+Each series is labeled with `protocol` (`mysql` or `pgsql`) and `hostgroup`.
+Unlike the Admin table, Prometheus reports cumulative wait time in seconds and
+its counters remain monotonic when a reset table is read.
 
 ### 2.7 stats_pgsql_free_connections
 

@@ -8,6 +8,20 @@ SAVE PGSQL SERVERS TO DISK;
 DELETE FROM pgsql_users;
 INSERT INTO pgsql_users (username,password,active) values ('postgres','postgres',1);
 INSERT INTO pgsql_users (username,password,active) values ('testuser','testuser',1);
+-- Per-auth-method users, paired with the PostgreSQL roles created in
+-- bin/docker-pgsql-post.bash and the username-scoped pg_hba.conf rules that bind
+-- each one to a single method (trust / password / reject / scram-sha-256 / md5).
+-- Seeded here so tests can simply USE them: a PostgreSQL role alone is not enough
+-- to reach a backend, the client must also authenticate to ProxySQL, which needs
+-- a pgsql_users row. Password == username throughout, matching every other role.
+-- 'authtrust' is the exception: pg_hba grants it `trust`, so the backend never
+-- checks the password and a deliberately wrong one still connects -- which is how
+-- a test proves no credential was exchanged.
+INSERT INTO pgsql_users (username,password,active) values ('authtrust','authtrust',1);
+INSERT INTO pgsql_users (username,password,active) values ('authpw','authpw',1);
+INSERT INTO pgsql_users (username,password,active) values ('authreject','authreject',1);
+INSERT INTO pgsql_users (username,password,active) values ('authscram','authscram',1);
+INSERT INTO pgsql_users (username,password,active) values ('md5user','md5user',1);
 
 LOAD PGSQL USERS TO RUNTIME;
 SAVE PGSQL USERS TO DISK; 
@@ -19,3 +33,22 @@ SET pgsql-auditlog_filesize=104857600;
 SET pgsql-auditlog_filename="pgaudit.log";
 LOAD PGSQL VARIABLES TO RUNTIME;
 SAVE PGSQL VARIABLES TO DISK;
+
+-- Debug provisioning (DEBUG builds only; no-ops/errors are harmless on release
+-- builds since these statements are piped without ON_ERROR_STOP). Mirrors the
+-- MySQL infras' conf/proxysql/infra-config.sql. Required because proxy_debug()
+-- is gated on the admin-debug master switch (GloVars.global.gdbg): unless
+-- admin-debug='true', every proxy_debug() is a runtime no-op and no MOD# line
+-- is ever emitted. Tests that scrape debug-level markers from proxysql.log
+-- (e.g. pgsql-native_prepared-t P25/P26 "Describe served from metadata cache")
+-- raise admin-debug_output to 3 for their phase; they rely on admin-debug
+-- already being enabled here. debug_output stays 2 (debug DB only) so ordinary
+-- tests are not flooded on stderr/the scraped log.
+SET admin-debug='true';
+UPDATE global_variables SET variable_value='2' WHERE variable_name='admin-debug_output';
+LOAD ADMIN VARIABLES TO RUNTIME;
+SAVE ADMIN VARIABLES TO DISK;
+UPDATE debug_levels SET verbosity=7;
+UPDATE debug_levels SET verbosity=0 WHERE module IN ('debug_pkt_array','debug_net');
+LOAD DEBUG TO RUNTIME;
+SAVE DEBUG TO DISK;

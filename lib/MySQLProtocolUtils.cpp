@@ -78,3 +78,30 @@ bool mysql_parse_err_packet(
     }
     return true;
 }
+
+bool mysql_is_eof_payload(const unsigned char* p, size_t n) {
+	return p && n >= 1 && n < 9 && p[0] == 0xFE;
+}
+
+bool mysql_is_ok_header(const unsigned char* p, size_t n) {
+	return p && n >= 1 && p[0] == 0x00;
+}
+
+bool mysql_parse_ok_payload(const unsigned char* p, size_t n, MySQLOkFields* out) {
+	if (!p || !out || n < 1 || p[0] != 0x00) return false;
+	const unsigned char* cur = p + 1;
+	size_t rem = n - 1;
+	out->affected_rows = mysql_read_lenenc_int(cur, rem);
+	out->last_insert_id = mysql_read_lenenc_int(cur, rem);
+	if (rem < 4) return false;
+	out->status_flags = (uint16_t)(cur[0] | (cur[1] << 8));
+	out->warnings = (uint16_t)(cur[2] | (cur[3] << 8));
+	return true;
+}
+
+bool mysql_parse_eof_payload(const unsigned char* p, size_t n, uint16_t* warnings, uint16_t* status_flags) {
+	if (!mysql_is_eof_payload(p, n) || n < 5) return false;
+	if (warnings) *warnings = (uint16_t)(p[1] | (p[2] << 8));
+	if (status_flags) *status_flags = (uint16_t)(p[3] | (p[4] << 8));
+	return true;
+}

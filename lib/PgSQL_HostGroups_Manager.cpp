@@ -3,6 +3,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "PgSQL_HostGroups_Manager.h"
+#include "ProxySQL_ServerDiscovery.h"
 #include "ConnectionPoolDecision.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -30,10 +31,48 @@ using json = nlohmann::json;
 #include "ev.h"
 
 #include <functional>
+#include <algorithm>
 #include <mutex>
 #include <type_traits>
 
+#ifdef PROXYSQL40
+namespace {
+
+std::unique_ptr<SQLite3_result> pgsql_desired_rows(
+	const std::vector<ProxySQL_ServerRow>& rows) {
+	auto result = std::make_unique<SQLite3_result>(11);
+	for (const auto& row : rows) {
+		std::array<std::string, 11> values {{
+			std::to_string(row.hostgroup_id), row.hostname, std::to_string(row.port),
+			row.status, std::to_string(row.weight), std::to_string(row.compression),
+			std::to_string(row.max_connections), std::to_string(row.max_replication_lag),
+			std::to_string(row.use_ssl), std::to_string(row.max_latency_ms), row.comment
+		}};
+		char* fields[11];
+		for (size_t index = 0; index < values.size(); ++index) fields[index] = values[index].data();
+		result->add_row(fields);
+	}
+	return result;
+}
+
+class ScopedPgSQLHostgroupLock {
+public:
+	explicit ScopedPgSQLHostgroupLock(PgSQL_HostGroups_Manager* manager) : manager_(manager) {
+		manager_->wrlock();
+	}
+	~ScopedPgSQLHostgroupLock() { manager_->wrunlock(); }
+	ScopedPgSQLHostgroupLock(const ScopedPgSQLHostgroupLock&) = delete;
+	ScopedPgSQLHostgroupLock& operator=(const ScopedPgSQLHostgroupLock&) = delete;
+
+private:
+	PgSQL_HostGroups_Manager* manager_;
+};
+
+} // namespace
+#endif
+
 using std::function;
+
 
 #ifdef TEST_AURORA
 static unsigned long long array_mysrvc_total = 0;
@@ -53,6 +92,95 @@ static unsigned long long array_mysrvc_cands = 0;
 extern ProxySQL_Admin *GloAdmin;
 extern PgSQL_Threads_Handler *GloPTH;
 extern MySQL_Monitor *GloMyMon;
+
+#ifdef PROXYSQL31
+namespace {
+
+bool pgsql_weight_is_primary(int64_t weight, int64_t T) {
+	return weight > 0 && weight >= T;
+}
+
+bool pgsql_primary_present(PgSQL_HGC *hgc, int64_t T, int8_t mode) {
+	const unsigned int n = hgc->mysrvs->cnt();
+	for (unsigned int i = 0; i < n; i++) {
+		PgSQL_SrvC *s = hgc->mysrvs->idx(i);
+		if (!pgsql_weight_is_primary(s->weight, T)) {
+			continue;
+		}
+		if (mode == 0) { // selectable: handled via candidate list
+			continue;
+		} else if (mode == 1) { // status
+			if (s->status == MYSQL_SERVER_STATUS_ONLINE) {
+				return true;
+			}
+		} else if (mode == 2) { // capacity
+			if (s->status == MYSQL_SERVER_STATUS_ONLINE &&
+				s->ConnectionsUsed->conns_length() < s->max_connections) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool pgsql_recovered_candidate_eligible(PgSQL_SrvC *server) {
+	return server->ConnectionsUsed->conns_length() < server->max_connections;
+}
+
+void pgsql_compact_candidates(
+	PgSQL_SrvC **cands, unsigned int &num, uint64_t &sum, uint64_t &used,
+	int64_t T, bool backups)
+{
+	uint64_t w = 0, u = 0;
+	unsigned int n = 0;
+	for (unsigned int i = 0; i < num; i++) {
+		PgSQL_SrvC *s = cands[i];
+		const bool keep = backups
+			? (s->weight > 0 && s->weight < T)
+			: pgsql_weight_is_primary(s->weight, T);
+		if (keep) {
+			cands[n++] = s;
+			w += static_cast<uint64_t>(s->weight);
+			u += s->ConnectionsUsed->conns_length();
+		}
+	}
+	num = n;
+	sum = w;
+	used = u;
+}
+
+void pgsql_apply_backup_weight_threshold(
+	PgSQL_HGC *hgc, PgSQL_SrvC **cands, unsigned int &num, uint64_t &sum, uint64_t &used,
+	bool &used_backup)
+{
+	used_backup = false;
+	const int64_t T = hgc->attributes.backup_weight_threshold;
+	if (T <= 0) {
+		return;
+	}
+	bool primary_candidate_present = false;
+	for (unsigned int i = 0; i < num; i++) {
+		if (pgsql_weight_is_primary(cands[i]->weight, T)) {
+			primary_candidate_present = true;
+			break;
+		}
+	}
+	if (primary_candidate_present) {
+		pgsql_compact_candidates(cands, num, sum, used, T, false);
+		return;
+	}
+	const int8_t mode = hgc->attributes.backup_availability;
+	const bool present = (mode == 0) ? false : pgsql_primary_present(hgc, T, mode);
+	if (!present) {
+		pgsql_compact_candidates(cands, num, sum, used, T, true);
+		used_backup = (num > 0);
+		return;
+	}
+	pgsql_compact_candidates(cands, num, sum, used, T, false);
+}
+
+}
+#endif
 
 class PgSQL_SrvConnList;
 class PgSQL_SrvC;
@@ -74,7 +202,8 @@ const int PgSQL_ERRORS_STATS_FIELD_NUM = 11;
  */
 template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
 T PgSQL_j_get_srv_default_int_val(
-	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
+	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check,
+	const char *section = "servers_defaults"
 ) {
 	if (j.find(key) != j.end()) {
 		const json::value_t val_type = j[key].type();
@@ -87,16 +216,16 @@ T PgSQL_j_get_srv_default_int_val(
 				return val;
 			} else {
 				proxy_error(
-					"Invalid value %ld supplied for 'pgsql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+					"Invalid value %ld supplied for 'pgsql_hostgroup_attributes.%s.%s' for hostgroup %d."
 						" Value NOT UPDATED.\n",
-					static_cast<int64_t>(val), key.c_str(), hid
+					static_cast<int64_t>(val), section, key.c_str(), hid
 				);
 			}
 		} else {
 			proxy_error(
-				"Invalid type '%s'(%hhu) supplied for 'pgsql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+				"Invalid type '%s'(%hhu) supplied for 'pgsql_hostgroup_attributes.%s.%s' for hostgroup %d."
 					" Value NOT UPDATED.\n",
-				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
+				type_name, static_cast<std::uint8_t>(val_type), section, key.c_str(), hid
 			);
 		}
 	}
@@ -129,8 +258,9 @@ PgSQL_Errors_stats::PgSQL_Errors_stats(int _hostgroup, const char* _hostname, in
 		dbname = strdup((char*)"");
 	}
 	if (_sqlstate) {
-		strncpy(sqlstate, _sqlstate, 5);
-		sqlstate[5] = '\0';
+		size_t sqlstate_len = strnlen(_sqlstate, 5);
+		memcpy(sqlstate, _sqlstate, sqlstate_len);
+		sqlstate[sqlstate_len] = '\0';
 	} else {
 		sqlstate[0] = '\0';
 	}
@@ -170,11 +300,11 @@ PgSQL_Errors_stats::~PgSQL_Errors_stats() {
 char** PgSQL_Errors_stats::get_row() {
 	char buf[128];
 	char** pta = (char**)malloc(sizeof(char*) * PgSQL_ERRORS_STATS_FIELD_NUM);
-	sprintf(buf, "%d", hostgroup);
+	snprintf(buf, sizeof(buf), "%d", hostgroup);
 	pta[0] = strdup(buf);
 	assert(hostname);
 	pta[1] = strdup(hostname);
-	sprintf(buf, "%d", port);
+	snprintf(buf, sizeof(buf), "%d", port);
 	pta[2] = strdup(buf);
 	assert(username);
 	pta[3] = strdup(username);
@@ -183,11 +313,11 @@ char** PgSQL_Errors_stats::get_row() {
 	assert(dbname);
 	pta[5] = strdup(dbname);
 	pta[6] = strdup(sqlstate);
-	sprintf(buf, "%llu", count_star);
+	snprintf(buf, sizeof(buf), "%llu", count_star);
 	pta[7] = strdup(buf);
-	sprintf(buf, "%ld", first_seen);
+	snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(first_seen));
 	pta[8] = strdup(buf);
-	sprintf(buf, "%ld", last_seen);
+	snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(last_seen));
 	pta[9] = strdup(buf);
 	assert(errmsg);
 	pta[10] = strdup(errmsg);
@@ -746,6 +876,33 @@ hg_metrics_map = std::make_tuple(
 			"Tracks the pgsql errors encountered.",
 			metric_tags {}
 		)
+#ifdef PROXYSQL31
+		,
+		std::make_tuple (
+			PgSQL_p_hg_dyn_counter::hostgroup_pool_acquisitions,
+			"proxysql_connpool_acquisitions_total",
+			"Successful backend connection acquisitions by hostgroup.",
+			metric_tags {{ "protocol", "pgsql" }}
+		),
+		std::make_tuple (
+			PgSQL_p_hg_dyn_counter::hostgroup_pool_waits,
+			"proxysql_connpool_waits_total",
+			"Backend connection acquisition wait episodes by hostgroup.",
+			metric_tags {{ "protocol", "pgsql" }}
+		),
+		std::make_tuple (
+			PgSQL_p_hg_dyn_counter::hostgroup_pool_wait_time,
+			"proxysql_connpool_wait_time_seconds_total",
+			"Cumulative duration of completed backend connection acquisition waits.",
+			metric_tags {{ "protocol", "pgsql" }}
+		),
+		std::make_tuple (
+			PgSQL_p_hg_dyn_counter::hostgroup_backup_server_selected,
+			"proxysql_pgsql_hostgroup_backup_server_selected_total",
+			"Times a backup-weight server was selected because no primary was available.",
+			metric_tags {{ "protocol", "pgsql" }}
+		)
+#endif
 	},
 	// prometheus dynamic gauges
 	hg_dyn_gauge_vector {
@@ -783,6 +940,15 @@ hg_metrics_map = std::make_tuple(
 				{ "protocol", "pgsql" }
 			}
 		)
+#ifdef PROXYSQL31
+		,
+		std::make_tuple (
+			PgSQL_p_hg_dyn_gauge::hostgroup_pool_waiters,
+			"proxysql_connpool_waiters",
+			"Sessions currently waiting to acquire a backend connection.",
+			metric_tags {{ "protocol", "pgsql" }}
+		)
+#endif
 	}
 );
 
@@ -939,6 +1105,27 @@ unsigned int PgSQL_HostGroups_Manager::get_servers_table_version() {
 	return __sync_fetch_and_add(&status.servers_table_version,0);
 }
 
+unsigned int PgSQL_HostGroups_Manager::copy_hostgroup_strings(HostgroupStringsMap& out) {
+	out.clear();
+	wrlock();
+	for (unsigned int i = 0; i < MyHostGroups->len; i++) {
+		const PgSQL_HGC *myhgc = (const PgSQL_HGC *)MyHostGroups->index(i);
+		HostgroupStrings strings;
+		if (myhgc->attributes.init_connect != NULL) {
+			strings.init_connect = myhgc->attributes.init_connect;
+		}
+		bool any = !strings.init_connect.empty();
+		if (any) {
+			out.emplace(myhgc->hid, std::move(strings));
+		}
+	}
+	// commit() bumps the version under this same lock, after it applied the
+	// attributes: the copy and the version are consistent.
+	const unsigned int version = status.servers_table_version;
+	wrunlock();
+	return version;
+}
+
 // we always assume that the calling thread has acquired a rdlock()
 int PgSQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	if (resultset==NULL) {
@@ -1060,10 +1247,12 @@ void PgSQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
  * IMPORTANT: Make sure wrlock() is called before calling this method.
  * 
 */
-void PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
+bool PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings(bool commit_context) {
 
-	if (hgsm_pgsql_servers_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS] ||
-		hgsm_pgsql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS])
+	const bool config_changed = commit_context && (
+		hgsm_pgsql_servers_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS] ||
+		hgsm_pgsql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS]);
+	if (config_changed)
 	{
 		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - pgsql_servers { old: 0x%lX, new: 0x%lX }, pgsql_replication_hostgroups { old:0x%lX, new:0x%lX }\n",
 			hgsm_pgsql_servers_checksum, table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS],
@@ -1074,14 +1263,24 @@ void PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 		int affected_rows = 0;
 		SQLite3_result* resultset = NULL;
 
+		std::string query = "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
+			"pgsql_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 "
+			"UNION "
+			"SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
+			"pgsql_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 "
+			"ORDER BY hostname, port";
+
+		const bool query_ok = mydb->execute_statement(
+			query.c_str(), &error, &cols, &affected_rows, &resultset);
+		if (!query_ok || error != nullptr || resultset == nullptr) {
+			proxy_error("Unable to rebuild PostgreSQL hostgroup server mapping: %s\n",
+				error != nullptr ? error : "query returned no result");
+			if (error != nullptr) free(error);
+			delete resultset;
+			return false;
+		}
+
 		hostgroup_server_mapping.clear();
-
-		const char* query = "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM pgsql_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 \
-							 UNION \
-							 SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM pgsql_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 \
-							 ORDER BY hostname, port";
-
-		mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 
 		if (resultset && resultset->rows_count) {
 			std::string fetched_server_id;
@@ -1121,9 +1320,39 @@ void PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 		}
 		delete resultset;
 
-		hgsm_pgsql_servers_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS];
-		hgsm_pgsql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS];
+		if (commit_context) {
+			hgsm_pgsql_servers_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS];
+			hgsm_pgsql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS];
+		}
 	}
+	return true;
+}
+
+SQLite3_result* PgSQL_HostGroups_Manager::get_read_only_servers(char** error) {
+	char* local_error = nullptr;
+	char** error_target = error == nullptr ? &local_error : error;
+#ifdef PROXYSQL40
+	ScopedPgSQLHostgroupLock hostgroup_lock(this);
+#endif
+	std::string query =
+		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup "
+		"FROM pgsql_servers JOIN pgsql_replication_hostgroups "
+		"ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup "
+		"WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
+#ifdef PROXYSQL40
+	int columns = 0;
+	int affected_rows = 0;
+	SQLite3_result* result = nullptr;
+	mydb->execute_statement(query.c_str(), error_target, &columns, &affected_rows, &result);
+#else
+	SQLite3_result* result = execute_query(const_cast<char*>(query.c_str()), error_target);
+#endif
+	if (result == nullptr) result = new SQLite3_result(6);
+	if (error == nullptr && local_error != nullptr) {
+		proxy_error("Error enumerating read-only monitor servers: %s\n", local_error);
+		free(local_error);
+	}
+	return result;
 }
 
 /**
@@ -1239,7 +1468,8 @@ static void update_glovars_pgsql_servers_checksum(
 static void update_glovars_pgsql_servers_v2_checksum(
 	const string& new_checksum,
 	const pgsql_servers_v2_checksum_t& peer_checksum = {},
-	bool update_version = false
+	bool update_version = false,
+	bool publish_global = false
 ) {
 	time_t new_epoch = time(NULL);
 
@@ -1251,6 +1481,11 @@ static void update_glovars_pgsql_servers_v2_checksum(
 		peer_checksum.epoch,
 		update_version
 	);
+	if (publish_global) {
+		GloVars.checksums_values.updates_cnt++;
+		GloVars.generate_global_checksum();
+		GloVars.epoch_version = new_epoch;
+	}
 }
 
 uint64_t PgSQL_HostGroups_Manager::commit_update_checksum_from_pgsql_servers(SQLite3_result* runtime_pgsql_servers) {
@@ -1308,11 +1543,30 @@ std::string PgSQL_HostGroups_Manager::gen_global_pgsql_servers_v2_checksum(uint6
 	return mysrvs_checksum;
 }
 
+void PgSQL_HostGroups_Manager::refresh_pgsql_servers_v2_checksum() {
+	wrlock();
+	struct WriteUnlockGuard {
+		PgSQL_HostGroups_Manager& manager;
+		~WriteUnlockGuard() { manager.wrunlock(); }
+	} write_unlock_guard {*this};
+	if (proxysql_servers_v2_refresh_exception_for_test != nullptr)
+		proxysql_servers_v2_refresh_exception_for_test(1, 1);
+	const uint64_t new_hash = commit_update_checksum_from_pgsql_servers_v2();
+	const string global_checksum_v2 = gen_global_pgsql_servers_v2_checksum(new_hash);
+	pthread_mutex_lock(&GloVars.checksum_mutex);
+	struct MutexUnlockGuard {
+		pthread_mutex_t& mutex;
+		~MutexUnlockGuard() { pthread_mutex_unlock(&mutex); }
+	} checksum_unlock_guard {GloVars.checksum_mutex};
+	if (proxysql_servers_v2_refresh_exception_for_test != nullptr)
+		proxysql_servers_v2_refresh_exception_for_test(1, 2);
+	update_glovars_pgsql_servers_v2_checksum(global_checksum_v2, {}, true, true);
+}
+
 bool PgSQL_HostGroups_Manager::commit(
-	const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
-	const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
-	bool only_commit_runtime_pgsql_servers,
-	bool update_version
+ const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
+ const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
+ bool only_commit_runtime_pgsql_servers, bool update_version
 ) {
 	// if only_commit_runtime_pgsql_servers is true, pgsql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_pgsql_servers) {
@@ -1323,6 +1577,18 @@ bool PgSQL_HostGroups_Manager::commit(
 
 	unsigned long long curtime1=monotonic_time();
 	wrlock();
+	const bool result = commit_locked(peer_runtime_pgsql_servers, peer_pgsql_servers_v2,
+		only_commit_runtime_pgsql_servers, update_version);
+	wrunlock();
+	finish_commit(curtime1);
+	return result;
+}
+
+bool PgSQL_HostGroups_Manager::commit_locked(
+ const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
+ const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
+ bool only_commit_runtime_pgsql_servers, bool update_version
+) {
 	// purge table
 	purge_pgsql_servers_table();
 
@@ -1364,8 +1630,9 @@ bool PgSQL_HostGroups_Manager::commit(
 			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
 			mysrvc->ConnectionsFree->drop_all_connections();
 			char *q1=(char *)"DELETE FROM pgsql_servers WHERE mem_pointer=%lld";
-			char *q2=(char *)malloc(strlen(q1)+32);
-			sprintf(q2,q1,ptr);
+			const size_t q2_size = static_cast<size_t>(snprintf(NULL, 0, q1, ptr)) + 1;
+			char *q2=(char *)malloc(q2_size);
+			snprintf(q2, q2_size, q1, ptr);
 			mydb->execute(q2);
 			free(q2);
 		}
@@ -1563,6 +1830,7 @@ bool PgSQL_HostGroups_Manager::commit(
 	read_only_set2.erase(read_only_set2.begin(), read_only_set2.end());
 
 	this->status.p_counter_array[PgSQL_p_hg_counter::servers_table_version]->Increment();
+	pthread_mutex_lock(&status.servers_table_version_lock);
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
 
@@ -1570,7 +1838,10 @@ bool PgSQL_HostGroups_Manager::commit(
 	// calls to 'generate_pgsql_servers'.
 	update_table_pgsql_servers_for_monitor(false);
 
-	wrunlock();
+	return true;
+}
+
+void PgSQL_HostGroups_Manager::finish_commit(unsigned long long curtime1) {
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
 	curtime2 = curtime2/1000;
@@ -1580,7 +1851,6 @@ bool PgSQL_HostGroups_Manager::commit(
 		GloPTH->signal_all_threads(1);
 	}
 
-	return true;
 }
 
 /** 
@@ -1750,8 +2020,10 @@ void PgSQL_HostGroups_Manager::generate_pgsql_servers_table(int *_onlyhg) {
 			mydb->execute_statement((char *)"SELECT hostgroup_id hid, hostname, port, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM pgsql_servers", &error , &cols , &affected_rows , &resultset);
 		} else {
 			int hidonly=*_onlyhg;
-			char *q1 = (char *)malloc(256);
-			sprintf(q1,"SELECT hostgroup_id hid, hostname, port, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM pgsql_servers WHERE hostgroup_id=%d" , hidonly);
+			const char *query_format = "SELECT hostgroup_id hid, hostname, port, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM pgsql_servers WHERE hostgroup_id=%d";
+			const size_t q1_size = static_cast<size_t>(snprintf(NULL, 0, query_format, hidonly)) + 1;
+			char *q1 = (char *)malloc(q1_size);
+			snprintf(q1, q1_size, query_format, hidonly);
 			mydb->execute_statement(q1, &error , &cols , &affected_rows , &resultset);
 			free(q1);
 		}
@@ -1779,28 +2051,37 @@ void PgSQL_HostGroups_Manager::generate_pgsql_replication_hostgroups_table() {
 	if (pgsql_thread___hostgroup_manager_verbose) {
 		proxy_info("New pgsql_replication_hostgroups table\n");
 	}
+	int cols=0;
+	int affected_rows=0;
+	auto execute = [&](const char *sql, auto bind) {
+		auto [rc, statement_unique] = mydb->prepare_v2(sql);
+		ASSERT_SQLITE_OK(rc, mydb);
+		bind(statement_unique.get());
+		char *error = NULL;
+		SQLite3_result *resultset = mydb->execute_prepared(statement_unique.get(), &error, &cols, &affected_rows);
+		if (error) {
+			proxy_error("SQLITE error: %s --- %s\n", error, sql);
+			free(error);
+		}
+		return resultset;
+	};
 	for (std::vector<SQLite3_row *>::iterator it = incoming_replication_hostgroups->rows.begin() ; it != incoming_replication_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		char *o=NULL;
-		int comment_length=0;	// #issue #643
-		//if (r->fields[3]) { // comment is not null
-			o=escape_string_single_quotes(r->fields[3],false);
-			comment_length=strlen(o);
-		//}
-		char *query=(char *)malloc(256+comment_length);
-		//if (r->fields[3]) { // comment is not null
-			sprintf(query,"INSERT INTO pgsql_replication_hostgroups VALUES(%s,%s,'%s','%s')",r->fields[0], r->fields[1], r->fields[2], o);
-			if (o!=r->fields[3]) { // there was a copy
-				free(o);
+		// NOTE: 'comment' is bound as-is now that we no longer concatenate it into a statement.
+		// A SQL NULL would reach us as a NULL pointer and, because the column is NOT NULL, would
+		// abort the INSERT instead of storing the empty default; map it back explicitly.
+		execute(
+			"INSERT INTO pgsql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (?1,?2,?3,?4)",
+			[&](sqlite3_stmt *statement) {
+				int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_text)(statement, 3, r->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+				rc = (*proxy_sqlite3_bind_text)(statement, 4, r->fields[3] ? r->fields[3] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 			}
-		//} else {
-			//sprintf(query,"INSERT INTO pgsql_replication_hostgroups VALUES(%s,%s,NULL)",r->fields[0],r->fields[1]);
-		//}
-		mydb->execute(query);
+		);
 		if (pgsql_thread___hostgroup_manager_verbose) {
 			fprintf(stderr,"writer_hostgroup: %s , reader_hostgroup: %s, check_type %s, comment: %s\n", r->fields[0],r->fields[1], r->fields[2], r->fields[3]);
 		}
-		free(query);
 	}
 	incoming_replication_hostgroups=NULL;
 }
@@ -1842,6 +2123,13 @@ void PgSQL_HostGroups_Manager::update_table_pgsql_servers_for_monitor(bool lock)
 }
 
 SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) {
+	wrlock();
+	SQLite3_result *resultset = dump_table_pgsql_locked(name);
+	wrunlock();
+	return resultset;
+}
+
+SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql_locked(const string& name) {
 	char * query = (char *)"";
 	if (name == "pgsql_replication_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM pgsql_replication_hostgroups";
@@ -1856,7 +2144,6 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 	} else {
 		assert(0);
 	}
-	wrlock();
 	if (name == "pgsql_servers") {
 		purge_pgsql_servers_table();
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_servers\n");
@@ -1869,7 +2156,6 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 	SQLite3_result *resultset=NULL;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
 	return resultset;
 }
 
@@ -1935,8 +2221,8 @@ void PgSQL_HostGroups_Manager::push_MyConn_to_pool_array(PgSQL_Connection **ca, 
 PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, PgSQL_Session *sess) {
 	PgSQL_SrvC *mysrvc=NULL;
 	unsigned int j;
-	unsigned int sum=0;
-	unsigned int TotalUsedConn=0;
+	uint64_t sum=0;
+	uint64_t TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
 	static time_t last_hg_log = 0;
 #ifdef TEST_AURORA
@@ -1950,6 +2236,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 	PgSQL_SrvC *mysrvcCandidates_static[32];
 	PgSQL_SrvC **mysrvcCandidates = mysrvcCandidates_static;
 	unsigned int num_candidates = 0;
+	bool used_backup = false;
 	bool max_connections_reached = false;
 	if (l>32) {
 		mysrvcCandidates = (PgSQL_SrvC **)malloc(sizeof(PgSQL_SrvC *)*l);
@@ -2030,7 +2317,11 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 									PgHGM->unshun_server_all_hostgroups(mysrvc->address, mysrvc->port, t, max_wait_sec, &mysrvc->myhgc->hid);
 								}
 								// if a server is taken back online, consider it immediately
+#ifdef PROXYSQL31
+								if ( pgsql_recovered_candidate_eligible(mysrvc) && mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
+#else
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
+#endif
 									if (gtid_trxid) {
 #if 0
 										if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
@@ -2088,6 +2379,9 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 				}
 			}
 		}
+#ifdef PROXYSQL31
+		pgsql_apply_backup_weight_threshold(this, mysrvcCandidates, num_candidates, sum, TotalUsedConn, used_backup);
+#endif
 		if (sum==0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
@@ -2117,7 +2411,11 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 						mysrvc->connect_ERR_at_time_last_detected_error=0;
 						mysrvc->time_last_detected_error=0;
 						// if a server is taken back online, consider it immediately
+#ifdef PROXYSQL31
+						if ( pgsql_recovered_candidate_eligible(mysrvc) && mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
+#else
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : pgsql_thread___default_max_latency_ms *1000 ) ) { // consider the host only if not too far
+#endif
 							if (gtid_trxid) {
 #if 0
 								if (PgHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
@@ -2147,6 +2445,9 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 				}
 			}
 		}
+#ifdef PROXYSQL31
+		pgsql_apply_backup_weight_threshold(this, mysrvcCandidates, num_candidates, sum, TotalUsedConn, used_backup);
+#endif
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PgSQL_SrvC NULL because no backend ONLINE or with weight\n");
 			if (l>32) {
@@ -2180,7 +2481,7 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 		}
 */
 
-		unsigned int New_sum=sum;
+		uint64_t New_sum=sum;
 
 		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PgSQL_SrvC NULL because no backend ONLINE or with weight\n");
@@ -2235,13 +2536,17 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 		}
 
 
-		unsigned int k;
+		uint64_t k;
 		//if (New_sum > 32768) {
 		//	k=rand()%New_sum;
 		//} else {
 		//	k=fastrand()%New_sum;
 		//}
-		k = rand_fast() % New_sum;
+		// rand_fast() yields 32 bits only: combine two draws so the lottery covers
+		// the whole 64-bit weight range. With a single 32-bit draw a candidate whose
+		// weight alone reaches 2^32 would always win, because the draw can never
+		// reach past the first cumulative interval.
+		k = ((static_cast<uint64_t>(rand_fast()) << 32) | rand_fast()) % New_sum;
 		k++;
 		New_sum=0;
 
@@ -2250,6 +2555,17 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 			New_sum+=mysrvc->weight;
 			if (k<=New_sum) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning PgSQL_SrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+#ifdef PROXYSQL31
+				if (used_backup) {
+					backup_servers_selected.fetch_add(1, std::memory_order_relaxed);
+					time_t now = time(NULL);
+					if (now - last_log_time_backup_selection > 1) {
+						last_log_time_backup_selection = now;
+						proxy_warning("Hostgroup %u: selecting backup-weight server %s:%d\n",
+							hid, mysrvc->address, mysrvc->port);
+					}
+				}
+#endif
 				if (l>32) {
 					free(mysrvcCandidates);
 				}
@@ -2480,11 +2796,11 @@ void PgSQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	if (GloPTH->variables.hostgroup_manager_verbose >= 3) {
 		char buf[64];
 		if (skip_hid == NULL) {
-			sprintf(buf,"NULL");
+			snprintf(buf, sizeof(buf), "NULL");
 		} else {
-			sprintf(buf,"%u", *skip_hid);
+			snprintf(buf, sizeof(buf), "%u", *skip_hid);
 		}
-		proxy_info("Calling unshun_server_all_hostgroups() for server %s:%d . Arguments: %lu , %d , %s\n" , address, port, t, max_wait_sec, buf);
+		proxy_info("Calling unshun_server_all_hostgroups() for server %s:%d . Arguments: %lld , %d , %s\n" , address, port, static_cast<long long>(t), max_wait_sec, buf);
 	}
 	int i, j;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -2564,10 +2880,18 @@ void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, boo
 					const PgSQL_Connection_userinfo* ui = c->userinfo;
 
 					std::unique_ptr<PgSQL_Backend_Kill_Args> backend_kill_args = std::make_unique<PgSQL_Backend_Kill_Args>(
-						(PGconn*)c->get_pg_connection(), ui->username, ui->password, ui->dbname, c->parent->address,
+						(PGconn*)c->get_pg_connection(), ui, c->parent->address,
 						c->parent->port, c->parent->myhgc->hid, c->parent->use_ssl,
 						PgSQL_Backend_Kill_Args::TYPE::TERMINATE_CONNECTION, nullptr
 					);
+					// For native connections PQbackendPID(NULL)==0 in the ctor; use
+					// the real backend PID captured from BackendKeyData so the libpq
+					// pg_terminate_backend() path targets the correct backend.
+					if (c->native_mode) {
+						backend_kill_args->native_mode = true;
+						backend_kill_args->backend_pid = c->native_backend_pid;
+						backend_kill_args->native_secret_key = c->native_backend_secret;
+					}
 
 					pthread_attr_t attr;
 					pthread_attr_init(&attr);
@@ -2675,11 +2999,9 @@ void PgSQL_HostGroups_Manager::replication_lag_action_inner(PgSQL_HGC *myhgc, co
 				if (
 //					(current_replication_lag==-1 )
 //					||
-					(
 						current_replication_lag>=0 &&
 						mysrvc->max_replication_lag > 0 && // see issue #4018
 						((unsigned int)current_replication_lag > mysrvc->max_replication_lag)
-					)
 				) {
 					// always increase the counter
 					mysrvc->cur_replication_lag_count += 1;
@@ -2793,9 +3115,7 @@ void PgSQL_HostGroups_Manager::drop_all_idle_connections() {
 				int i=0;
 				for (i=0; i<(int)mscl->conns_length() ; i++) {
 					PgSQL_Connection *mc=mscl->index(i);
-					unsigned long long intv = pgsql_thread___connection_max_age_ms;
-					intv *= 1000;
-					if (curtime > mc->creation_time + intv) {
+					if (mc->is_expired(curtime)) {
 						mc=mscl->remove(i);
 						delete mc;
 						i--;
@@ -3016,12 +3336,12 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 			for (l=0; l < (int) mysrvc->ConnectionsFree->conns_length(); l++) {
 				char **pta=(char **)malloc(sizeof(char *)*colnum);
 				PgSQL_Connection *conn = mysrvc->ConnectionsFree->index(l);
-				sprintf(buf,"%d", conn->fd);
+				snprintf(buf, sizeof(buf), "%d", conn->fd);
 				pta[0]=strdup(buf);
-				sprintf(buf,"%d", (int)myhgc->hid);
+				snprintf(buf, sizeof(buf), "%d", (int)myhgc->hid);
 				pta[1]=strdup(buf);
 				pta[2]=strdup(mysrvc->address);
-				sprintf(buf,"%d", mysrvc->port);
+				snprintf(buf, sizeof(buf), "%d", mysrvc->port);
 				pta[3]=strdup(buf);
 				pta[4] = strdup(conn->userinfo->username);
 				pta[5] = strdup(conn->userinfo->dbname);
@@ -3039,12 +3359,12 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 				}*/
 				//sprintf(buf,"%d", conn->options.autocommit);
 				//pta[9]=strdup(buf);
-				sprintf(buf,"%llu", (curtime-conn->last_time_used)/1000);
+				snprintf(buf, sizeof(buf), "%llu", (curtime-conn->last_time_used)/1000);
 				pta[9]=strdup(buf);
 				{
 					json j;
 					char buff[32];
-					sprintf(buff,"%p",conn);
+					snprintf(buff, sizeof(buff), "%p", static_cast<void*>(conn));
 					j["address"] = buff;
 					uint64_t age_ms = (curtime - conn->creation_time)/1000;
 					j["age_ms"] = age_ms;
@@ -3059,24 +3379,40 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 				{
 					json j;
 					char buff[32];
-					sprintf(buff, "%p", conn->get_pg_connection());
+					snprintf(buff, sizeof(buff), "%p", static_cast<const void*>(conn->get_pg_connection()));
 					j["address"] = buff;
-					j["host"] = conn->get_pg_host();
-					j["host_addr"] = conn->get_pg_hostaddr();
-					j["port"] = conn->get_pg_port();
-					j["user"] = conn->get_pg_user();
-					j["database"] = conn->get_pg_dbname();
-					j["backend_pid"] = conn->get_pg_backend_pid();
-					j["using_ssl"] = conn->get_pg_ssl_in_use() ? "YES" : "NO";
-					j["error_msg"] = conn->get_pg_error_message();
-					j["options"] = conn->get_pg_options();
-					j["fd"] = conn->get_pg_socket_fd();
-					j["protocol_version"] = conn->get_pg_protocol_version();
-					j["server_version"] = conn->get_pg_server_version_str(buff, sizeof(buff));
-					j["transaction_status"] = conn->get_pg_transaction_status_str();
-					j["connection_status"] = conn->get_pg_connection_status_str();
-					j["client_encoding"] = conn->get_pg_client_encoding();
-					j["is_nonblocking"] = conn->get_pg_is_nonblocking() ? "YES" : "NO";
+					// Native connections have pgsql_conn==NULL; the libpq
+					// accessors (get_pg_user, get_pg_host, ...) call PQxxx
+					// on the null pointer and crash the stats thread. Emit a
+					// minimal "native" record instead of crashing.
+					if (conn->pgsql_conn == NULL) {
+						j["native_mode"] = true;
+						j["host"] = conn->parent ? conn->parent->address : "";
+						j["port"] = conn->parent ? conn->parent->port : 0;
+						j["user"] = (conn->userinfo && conn->userinfo->username) ? conn->userinfo->username : "";
+						j["database"] = (conn->userinfo && conn->userinfo->dbname) ? conn->userinfo->dbname : "";
+						j["backend_pid"] = conn->get_pg_backend_pid();
+						j["using_ssl"] = conn->get_pg_ssl_in_use() ? "YES" : "NO";
+						j["transaction_status"] = string(1, conn->last_ready_for_query_status());
+					} else {
+						j["native_mode"] = false;
+						j["host"] = conn->get_pg_host();
+						j["host_addr"] = conn->get_pg_hostaddr();
+						j["port"] = conn->get_pg_port();
+						j["user"] = conn->get_pg_user();
+						j["database"] = conn->get_pg_dbname();
+						j["backend_pid"] = conn->get_pg_backend_pid();
+						j["using_ssl"] = conn->get_pg_ssl_in_use() ? "YES" : "NO";
+						j["error_msg"] = conn->get_pg_error_message();
+						j["options"] = conn->get_pg_options();
+						j["fd"] = conn->get_pg_socket_fd();
+						j["protocol_version"] = conn->get_pg_protocol_version();
+						j["server_version"] = conn->get_pg_server_version_str(buff, sizeof(buff));
+						j["transaction_status"] = conn->get_pg_transaction_status_str();
+						j["connection_status"] = conn->get_pg_connection_status_str();
+						j["client_encoding"] = conn->get_pg_client_encoding();
+						j["is_nonblocking"] = conn->get_pg_is_nonblocking() ? "YES" : "NO";
+					}
 					const string s = j.dump();
 					pta[11] = strdup(s.c_str());
 				}
@@ -3196,6 +3532,29 @@ void PgSQL_HostGroups_Manager::p_update_connection_pool() {
 			p_update_connection_pool_update_gauge(endpoint_id, common_labels,
 				status.p_connection_pool_status_map, mysrvc->status + 1, PgSQL_p_hg_dyn_gauge::connection_pool_status);
 		}
+#ifdef PROXYSQL31
+		const std::string hostgroup_id = std::to_string(myhgc->hid);
+		const std::map<std::string, std::string> labels {
+			{"hostgroup", hostgroup_id},
+			{"protocol", "pgsql"}
+		};
+		const HostgroupPoolStatsSnapshot snapshot = myhgc->pool_stats.lifetime_snapshot();
+		p_update_map_counter(status.p_hostgroup_pool_acquisitions_map,
+			status.p_dyn_counter_array[PgSQL_p_hg_dyn_counter::hostgroup_pool_acquisitions],
+			hostgroup_id, labels, snapshot.acquisitions_total);
+		p_update_map_counter(status.p_hostgroup_pool_waits_map,
+			status.p_dyn_counter_array[PgSQL_p_hg_dyn_counter::hostgroup_pool_waits],
+			hostgroup_id, labels, snapshot.waits_total);
+		p_update_map_counter(status.p_hostgroup_pool_wait_time_map,
+			status.p_dyn_counter_array[PgSQL_p_hg_dyn_counter::hostgroup_pool_wait_time],
+			hostgroup_id, labels, snapshot.wait_time_us_total / 1000000.0);
+		p_update_map_counter(status.p_hostgroup_backup_server_selected_map,
+			status.p_dyn_counter_array[PgSQL_p_hg_dyn_counter::hostgroup_backup_server_selected],
+			hostgroup_id, labels, myhgc->backup_servers_selected.load(std::memory_order_relaxed));
+		p_update_map_gauge(status.p_hostgroup_pool_waiters_map,
+			status.p_dyn_gauge_array[PgSQL_p_hg_dyn_gauge::hostgroup_pool_waiters],
+			hostgroup_id, labels, snapshot.waiters);
+#endif
 	}
 
 	// Remove the non-present servers for the gauge metrics
@@ -3271,10 +3630,10 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 			}
 			char buf[1024];
 			char **pta=(char **)malloc(sizeof(char *)*colnum);
-			sprintf(buf,"%d", (int)myhgc->hid);
+			snprintf(buf, sizeof(buf), "%d", (int)myhgc->hid);
 			pta[0]=strdup(buf);
 			pta[1]=strdup(mysrvc->address);
-			sprintf(buf,"%d", mysrvc->port);
+			snprintf(buf, sizeof(buf), "%d", mysrvc->port);
 			pta[2]=strdup(buf);
 			switch (mysrvc->status) {
 				case 0:
@@ -3298,41 +3657,41 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 					break;
 					// LCOV_EXCL_STOP
 			}
-			sprintf(buf,"%u", mysrvc->ConnectionsUsed->conns_length());
+			snprintf(buf, sizeof(buf), "%u", mysrvc->ConnectionsUsed->conns_length());
 			pta[4]=strdup(buf);
-			sprintf(buf,"%u", mysrvc->ConnectionsFree->conns_length());
+			snprintf(buf, sizeof(buf), "%u", mysrvc->ConnectionsFree->conns_length());
 			pta[5]=strdup(buf);
-			sprintf(buf,"%u", mysrvc->connect_OK);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->connect_OK);
 			pta[6]=strdup(buf);
 			if (_reset) {
 				mysrvc->connect_OK=0;
 			}
-			sprintf(buf,"%u", mysrvc->connect_ERR);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->connect_ERR);
 			pta[7]=strdup(buf);
 			if (_reset) {
 				mysrvc->connect_ERR=0;
 			}
-			sprintf(buf,"%u", mysrvc->max_connections_used);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->max_connections_used);
 			pta[8]=strdup(buf);
 			if (_reset) {
 				mysrvc->max_connections_used=0;
 			}
-			sprintf(buf,"%llu", mysrvc->queries_sent);
+			snprintf(buf, sizeof(buf), "%llu", mysrvc->queries_sent);
 			pta[9]=strdup(buf);
 			if (_reset) {
 				mysrvc->queries_sent=0;
 			}
-			sprintf(buf,"%llu", mysrvc->bytes_sent);
+			snprintf(buf, sizeof(buf), "%llu", mysrvc->bytes_sent);
 			pta[10]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_sent=0;
 			}
-			sprintf(buf,"%llu", mysrvc->bytes_recv);
+			snprintf(buf, sizeof(buf), "%llu", mysrvc->bytes_recv);
 			pta[11]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_recv=0;
 			}
-			sprintf(buf,"%u", mysrvc->current_latency_us);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->current_latency_us);
 			pta[12]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
@@ -3361,7 +3720,14 @@ void PgSQL_HostGroups_Manager::read_only_action_v2(
 	bool update_pgsql_servers_table = false;
 
 	unsigned long long curtime1 = monotonic_time();
+#ifdef PROXYSQL40
+	ScopedServerDiscoveryProtocolLock protocol_lock(ProxySQL_ServerProtocol::pgsql);
+#endif
 	wrlock();
+	if (!update_hostgroup_manager_mappings(false)) {
+		wrunlock();
+		return;
+	}
 	for (const auto& server : pgsql_servers) {
 		bool is_writer = false;
 		const std::string& hostname = std::get<PgSQL_READ_ONLY_SERVER_T::PG_ROS_HOSTNAME>(server);
@@ -3640,31 +4006,31 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_get";
-		sprintf(buf,"%lu",status.pgconnpoll_get);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_get);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_get_ok";
-		sprintf(buf,"%lu",status.pgconnpoll_get_ok);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_get_ok);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_push";
-		sprintf(buf,"%lu",status.pgconnpoll_push);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_push);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_destroy";
-		sprintf(buf,"%lu",status.pgconnpoll_destroy);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_destroy);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
     {
 		pta[0]=(char *)"PgHGM_pgconnpoll_reset";
-		sprintf(buf,"%lu",status.pgconnpoll_reset);
+		snprintf(buf,sizeof(buf),"%lu",status.pgconnpoll_reset);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -3785,6 +4151,11 @@ std::unique_ptr<SQLite3_result> PgSQL_HostGroups_Manager::get_pgsql_errors(bool 
  * @details Input verification is performed in the supplied 'hostgroup_settings'. It's expected to be a valid
  *  JSON that may contain the following fields:
  *   - handle_warnings: Value must be >= 0.
+ *   - default_query_timeout: Value must be in [1000, 20*24*3600*1000]; takes precedence over
+ *     'pgsql-default_query_timeout' for queries that resolve to this hostgroup. Range mirrors
+ *     the global 'pgsql-default_query_timeout' bounds.
+ *   - backup_weight_threshold: Value must be in [0, 10000000].
+ *   - backup_availability: One of "selectable", "status", or "capacity".
  *
  *  In case input verification fails for a field, supplied 'PgSQL_HGC' is NOT updated for that field. An error
  *  message is logged specifying the source of the error.
@@ -3795,13 +4166,64 @@ std::unique_ptr<SQLite3_result> PgSQL_HostGroups_Manager::get_pgsql_errors(bool 
 void init_myhgc_hostgroup_settings(const char* hostgroup_settings, PgSQL_HGC* myhgc) {
 	const uint32_t hid = myhgc->hid;
 
+#ifdef PROXYSQL31
+	if (hostgroup_settings[0] == '\0') {
+		myhgc->attributes.backup_weight_threshold = 0;
+		myhgc->attributes.backup_availability = 0;
+		return;
+	}
+#endif
+
 	if (hostgroup_settings[0] != '\0') {
 		try {
 			nlohmann::json j = nlohmann::json::parse(hostgroup_settings);
 
 			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
-			int8_t handle_warnings = PgSQL_j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
+			int8_t handle_warnings = PgSQL_j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check, "hostgroup_settings");
 			myhgc->attributes.handle_warnings = handle_warnings;
+
+			const auto default_query_timeout_check = [](int32_t default_query_timeout) -> bool
+				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
+			const int32_t default_query_timeout = PgSQL_j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check, "hostgroup_settings");
+			myhgc->attributes.default_query_timeout = default_query_timeout;
+
+#ifdef PROXYSQL31
+			const auto backup_weight_threshold_check = [](int64_t v) -> bool {
+				return v >= 0 && v <= 10000000;
+			};
+			const auto backup_weight_threshold_it = j.find("backup_weight_threshold");
+			if (backup_weight_threshold_it == j.end()) {
+				myhgc->attributes.backup_weight_threshold = 0;
+			} else {
+				const int64_t backup_weight_threshold = PgSQL_j_get_srv_default_int_val<int64_t>(
+					j, hid, "backup_weight_threshold", backup_weight_threshold_check, "hostgroup_settings");
+				if (backup_weight_threshold != static_cast<int64_t>(-1)) {
+					myhgc->attributes.backup_weight_threshold = backup_weight_threshold;
+				}
+			}
+
+			const auto backup_availability_it = j.find("backup_availability");
+			if (backup_availability_it == j.end()) {
+				myhgc->attributes.backup_availability = 0;
+			} else if (backup_availability_it->type() == json::value_t::string) {
+				const std::string mode = backup_availability_it->get<std::string>();
+				if (mode == "selectable") {
+					myhgc->attributes.backup_availability = 0;
+				} else if (mode == "status") {
+					myhgc->attributes.backup_availability = 1;
+				} else if (mode == "capacity") {
+					myhgc->attributes.backup_availability = 2;
+				} else {
+					proxy_error(
+						"Invalid value '%s' supplied for 'pgsql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
+						mode.c_str(), hid);
+				}
+			} else {
+				proxy_error(
+					"Invalid type supplied for 'pgsql_hostgroup_attributes.hostgroup_settings.backup_availability' for hostgroup %d. Value NOT UPDATED.\n",
+					hid);
+			}
+#endif
 		}
 		catch (const json::exception& e) {
 			proxy_error(
@@ -3931,9 +4353,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 		myhgc->attributes.multiplex                    = multiplex;
 		myhgc->attributes.connection_warming           = connection_warming;
 		myhgc->attributes.throttle_connections_per_sec = throttle_connections_per_sec;
-		if (myhgc->attributes.init_connect != NULL)
-			free(myhgc->attributes.init_connect);
-		myhgc->attributes.init_connect = strdup(init_connect);
+		myhgc->set_attribute_init_connect(init_connect);
 		if (myhgc->attributes.comment != NULL)
 			free(myhgc->attributes.comment);
 		myhgc->attributes.comment = strdup(comment);
@@ -4299,3 +4719,51 @@ void PgSQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(PgSQL_SrvC* 
 	srv->status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
 	srv->ConnectionsFree->drop_all_connections();
 }
+
+#ifdef PROXYSQL40
+
+bool PgSQL_HostGroups_Manager::reconcile_server_desired_set(
+	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
+	if (desired_set.protocol != ProxySQL_ServerProtocol::pgsql) {
+		error = "invalid protocol for PostgreSQL Hostgroup Manager";
+		return false;
+	}
+	const unsigned long long started_at = monotonic_time();
+	proxy_info("Generating runtime pgsql servers records only.\n");
+	wrlock();
+	bool result = false;
+	try {
+		std::unique_ptr<SQLite3_result> current_rows(dump_table_pgsql_locked("pgsql_servers"));
+		if (!current_rows || current_rows->columns != 11) {
+			error = "malformed PostgreSQL runtime server snapshot";
+		} else {
+			if (proxysql_server_reconcile_after_hgm_snapshot_for_test != nullptr)
+				proxysql_server_reconcile_after_hgm_snapshot_for_test(desired_set.protocol);
+			ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
+				ProxySQL_ServerProtocol::pgsql, desired_set.generation, *current_rows);
+			std::vector<ProxySQL_ServerRow> merged;
+			if (proxysql_merge_server_desired_set(current, desired_set, merged, error)) {
+				std::unique_ptr<SQLite3_result> incoming = pgsql_desired_rows(merged);
+				servers_add(incoming.get());
+				result = commit_locked({}, {}, true, false);
+				if (!result) error = "PostgreSQL Hostgroup Manager rejected desired servers";
+			}
+		}
+	} catch (...) {
+		wrunlock();
+		throw;
+	}
+	wrunlock();
+	if (result) finish_commit(started_at);
+	return result;
+}
+
+bool proxysql_reconcile_pgsql_server_desired_set(
+	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
+	if (PgHGM == nullptr || desired_set.protocol != ProxySQL_ServerProtocol::pgsql) {
+		error = "PostgreSQL Hostgroup Manager is unavailable";
+		return false;
+	}
+	return PgHGM->reconcile_server_desired_set(desired_set, error);
+}
+#endif

@@ -21,11 +21,88 @@
 #include "ProxySQL_Plugin.h"
 
 #include <atomic>
+#include <cassert>
+#include <mutex>
+#include <shared_mutex>
+#include <pthread.h>
 
 namespace prometheus { class Counter; }
 class Anomaly_Detector;
 class MCP_Threads_Handler;
 class GenAI_Threads_Handler;
+
+/** BasicLockable wrapper backed by the project's pthread mutex primitive. */
+class GenAIMutex {
+public:
+	GenAIMutex() = default;
+	~GenAIMutex() { pthread_mutex_destroy(&mutex_); }
+
+	void lock() noexcept {
+		const int rc = pthread_mutex_lock(&mutex_);
+		assert(rc == 0);
+		(void)rc;
+	}
+	void unlock() noexcept {
+		const int rc = pthread_mutex_unlock(&mutex_);
+		assert(rc == 0);
+		(void)rc;
+	}
+
+	GenAIMutex(const GenAIMutex&) = delete;
+	GenAIMutex& operator=(const GenAIMutex&) = delete;
+
+private:
+	pthread_mutex_t mutex_ = PTHREAD_MUTEX_INITIALIZER;
+};
+
+/** SharedMutex wrapper backed by the project's pthread rwlock primitive. */
+class GenAIRWLock {
+public:
+	GenAIRWLock() noexcept {
+		pthread_rwlockattr_t attr;
+		int rc = pthread_rwlockattr_init(&attr);
+		assert(rc == 0);
+		(void)rc;
+#if defined(__GLIBC__)
+		// The query hook is a continuous stream of readers. Prefer a queued
+		// writer so reload and shutdown cannot starve behind that hot path.
+		rc = pthread_rwlockattr_setkind_np(
+			&attr, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+		assert(rc == 0);
+		(void)rc;
+#endif
+		rc = pthread_rwlock_init(&rwlock_, &attr);
+		assert(rc == 0);
+		(void)rc;
+		rc = pthread_rwlockattr_destroy(&attr);
+		assert(rc == 0);
+		(void)rc;
+	}
+	~GenAIRWLock() { pthread_rwlock_destroy(&rwlock_); }
+
+	void lock() noexcept {
+		const int rc = pthread_rwlock_wrlock(&rwlock_);
+		assert(rc == 0);
+		(void)rc;
+	}
+	void unlock() noexcept {
+		const int rc = pthread_rwlock_unlock(&rwlock_);
+		assert(rc == 0);
+		(void)rc;
+	}
+	void lock_shared() noexcept {
+		const int rc = pthread_rwlock_rdlock(&rwlock_);
+		assert(rc == 0);
+		(void)rc;
+	}
+	void unlock_shared() noexcept { unlock(); }
+
+	GenAIRWLock(const GenAIRWLock&) = delete;
+	GenAIRWLock& operator=(const GenAIRWLock&) = delete;
+
+private:
+	pthread_rwlock_t rwlock_;
+};
 
 /**
  * @brief Process-wide state shared across the plugin's translation units.
@@ -63,6 +140,20 @@ struct GenAIPluginContext {
 	/// See plugins/genai/src/MCP_Thread.cpp for the listener
 	/// implementation.
 	MCP_Threads_Handler* mcp { nullptr };
+
+	/// Serializes every GenAI plugin Admin command. Commands normally enter
+	/// with Admin's global query mutex held, but runtime reloads must yield that
+	/// mutex while draining MCP work. A second plugin command releases Admin
+	/// before waiting here, so it cannot mutate plugin runtime state during the
+	/// yielded interval and cannot form a command-mutex/Admin lock inversion.
+	GenAIMutex admin_command_mutex;
+
+	/// Protects MCP AI/RAG calls while their borrowed GloGATH/GloAI
+	/// dependencies are replaced.  Runtime reloads and MCP listener
+	/// construction take the exclusive side; endpoint calls take the shared
+	/// side.  Admin command callbacks release the Admin global mutex before
+	/// waiting for this lock, preventing an Admin/MCP lock inversion.
+	GenAIRWLock runtime_dependencies_mutex;
 };
 
 /**
@@ -75,25 +166,22 @@ struct GenAIPluginContext {
  * provider configuration.
  *
  * @par Concurrency contract
- * Caller MUST guarantee no other thread is dereferencing `GloGATH` or
- * `GloAI` while this runs.  The teardown calls `delete`-equivalent
- * `shutdown()` methods on both globals; concurrent reads from MCP
- * listener threads, tool-handler workers, or the anomaly-detector hot
- * path would observe a half-destroyed handler.  Today the function is
- * called from:
+ * MCP AI/RAG calls share `runtime_dependencies_mutex`; this function takes
+ * its exclusive side while replacing runtime resources, then rebinds the
+ * persistent endpoint handlers before allowing another call through.  The
+ * listener remains alive, so an in-flight Config/Stats handler waiting for
+ * the Admin mutex cannot be trapped behind a synchronous listener join.
+ * The anomaly-detector query hook, stats runtime view, and MCP AI/RAG calls
+ * all hold the shared side while using replaceable runtime objects. Today the
+ * function is called from:
  *
  *   1. `genai_start()` — single-threaded plugin lifecycle, no traffic
  *      yet, always safe.
  *   2. `LOAD GENAI VARIABLES TO RUNTIME` admin command — runs on the
- *      admin SQL thread while MCP listener / tool handlers may be
- *      actively serving requests.  Currently this is racy; the
- *      practical mitigation is operator-side: quiesce traffic before
- *      issuing the LOAD command, or accept the brief reload window.
+ *      admin SQL thread.  The callback releases the Admin mutex before
+ *      entering this function so an active MCP request can finish first.
  *   3. `LOAD GENAI VARIABLES FROM CONFIG` — same constraint as (2).
  *
- * Adding a proper rwlock-around-GloGATH/GloAI is a follow-up tracked
- * separately; it touches every consumer of those globals (not just
- * the reload path) and is too large for this carve-out PR.
  */
 bool genai_refresh_runtime_components(GenAIPluginContext& ctx);
 
@@ -120,16 +208,19 @@ GenAIPluginContext& genai_context();
 void genai_log(int level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 
 /**
- * @brief Push admin DB's `mcp-*` global_variables values into the
- *        running MCP_Threads_Handler.
+ * @brief Validate and push the complete admin DB `mcp-*` configuration into
+ *        the running MCP_Threads_Handler, then atomically publish the
+ *        normalized active snapshot to `runtime_global_variables`.
  *
  * Defined in plugin_main.cpp.  Called from `genai_start()` (initial
  * read at plugin start) and from the `LOAD MCP VARIABLES TO RUNTIME`
  * admin command (in plugin_commands.cpp) — both go through this one
  * helper to keep behavior consistent.
  *
- * @return true on success; false if admindb is unavailable or the
- *         lookup query errored out.
+ * @return true on success; false if the configuration is incomplete/invalid,
+ *         admindb access or publication fails, or the previous handler state
+ *         cannot be retained.  A failed load leaves the prior committed
+ *         runtime snapshot visible and restores the prior handler values.
  */
 bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx);
 

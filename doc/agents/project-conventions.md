@@ -111,13 +111,28 @@ git checkout -b v3.0-<issue_number> v3.0-5473
 ```
 
 ### Incorporating upstream changes
-Use `git rebase`, NOT `git merge`:
+
+Both merge and rebase are acceptable. Prefer a merge for an already-published
+feature branch when preserving its history and avoiding a force-push is useful:
+
+```bash
+git fetch origin v3.0-5473
+git merge --no-ff origin/v3.0-5473
+git push
+```
+
+Use a rebase when the PR owner explicitly wants linear history or the branch is
+still private:
+
 ```bash
 git fetch origin v3.0-5473
 git rebase origin/v3.0-5473
 # Resolve conflicts if any
 git push --force-with-lease
 ```
+
+Whichever strategy is selected, resolve conflicts semantically and verify that
+the resulting PR diff contains only the feature and intended upstream history.
 
 ### Commit messages
 - Descriptive subject line (what changed and why)

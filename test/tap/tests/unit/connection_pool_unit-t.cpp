@@ -96,6 +96,8 @@ static void test_pool_quality_1_reuse() {
 	auto d = evaluate_pool_state(10, 5, 100, 1, false, 0);
 	ok(d.create_new_connection == false,
 		"pool q=1: reuses when free >= used");
+	ok(d.evict_connections == false,
+		"pool q=1: ordinary CHANGE_USER candidate keeps legacy reuse behavior");
 }
 
 static void test_pool_quality_2_3() {
@@ -124,7 +126,7 @@ static void test_pool_empty() {
 // ============================================================================
 
 int main() {
-	plan(23);
+	plan(24);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -138,7 +140,7 @@ int main() {
 	test_pool_quality_0();             // 1
 	test_pool_quality_0_evict();       // 3
 	test_pool_quality_1_create();      // 1
-	test_pool_quality_1_reuse();       // 1
+	test_pool_quality_1_reuse();       // 2
 	test_pool_quality_2_3();           // 2
 	test_pool_warming();               // 3
 	test_pool_empty();                 // 1

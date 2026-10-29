@@ -48,9 +48,12 @@ class ProxySQL_Checksum_Value {
 		epoch = 0;
 		in_shutdown = false;
 	}
-	void set_checksum(char *c) {
+	void set_checksum(const char *c) {
 		memset(checksum,0,ProxySQL_Checksum_Value_LENGTH);
-		strncpy(checksum,c,ProxySQL_Checksum_Value_LENGTH);
+		if (c) {
+			const size_t length = strnlen(c, ProxySQL_Checksum_Value_LENGTH);
+			memcpy(checksum, c, length);
+		}
 		replace_checksum_zeros(checksum);
 	}
 	~ProxySQL_Checksum_Value() {
@@ -147,6 +150,7 @@ class ProxySQL_GlobalVariables {
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */
 
+	#ifndef PROXYSQL40
 		int gr_bootstrap_mode;
 		char* gr_bootstrap_uri;
 		char* gr_bootstrap_account;
@@ -165,6 +169,7 @@ class ProxySQL_GlobalVariables {
 		char* gr_bootstrap_ssl_crlpath;
 		char* gr_bootstrap_ssl_key;
 		char* gr_bootstrap_ssl_mode;
+	#endif /* !PROXYSQL40 */
 		pthread_mutex_t ext_glomth_mutex;
 		pthread_mutex_t ext_glopth_mutex;
 		bool ssl_keylog_enabled;
@@ -212,6 +217,11 @@ class ProxySQL_GlobalVariables {
 	void process_opts_post();
 	void parse(int argc, const char * argv[]);
 	void install_signal_handler();
+#ifdef PROXYSQL40
+	// Append managed startup fields to preserve the older public data prefix.
+	// The profile only selects startup configuration/lifecycle.
+	bool aws_managed{false};
+#endif
 };
 
 #ifdef PROXYSQL40

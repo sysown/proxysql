@@ -93,8 +93,9 @@ static Test parsersql_syntax_errors[] = {
     { Expected("sql_mode", { "(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))" } ) } },
   { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
     { Expected("sql_mode", { "(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
-  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
-    { Expected("sql_mode", { "SELCT" } ) } },
+  // "SET sql_mode=(SELCT ...)" must be unparsed: it is in
+  // parsersql_parse_fail_strict, because TestParse accepts any non-empty
+  // result for an empty expectation.
 };
 
 // Byte-exact regression tests for the walker's function-call source preservation
@@ -157,6 +158,14 @@ static Test parsersql_mysql_filtered_set[] = {
   { "SET max_join_size=18446744073709551615",  { Expected("max_join_size",         {"18446744073709551615"}) } },
 };
 
+// Regression net for AstNode::source(): the legacy lossy SET adapter must keep
+// producing the same maps after literal nodes gain exact source spans.
+static Test parsersql_mysql_source_span_legacy[] = {
+  { "SET sql_mode='A\\\\B'", { Expected("sql_mode", {"A\\\\B"}) } },
+  { "SET wait_timeout=+001", { Expected("wait_timeout", {"+001"}) } },
+  { "SET character_set_results=NULL", { Expected("character_set_results", {"NULL"}) } },
+};
+
 // MySQL multi-variable SET cases sampled from set_testing-240.csv (the fixture
 // driving set_testing-t). Exercises comma-separated multi-variable parsing.
 static Test parsersql_mysql_set_testing[] = {
@@ -178,6 +187,207 @@ static Test parsersql_mysql_set_testing[] = {
       Expected("foreign_key_checks",                 {"OFF"}),
       Expected("optimizer_switch",                   {"index_merge_union=off"}),
       Expected("session_track_gtids",                {"OWN_GTID"}) } },
+};
+
+// MySQL SET parser cases ported from PR #5088's obsolete Bison parser tests.
+// These exercise ParserSQL through ProxySQL's public adapter instead of the
+// removed PR-specific AST helpers.
+static Test parsersql_pr5088_mysql_set_syntax[] = {
+  { "SET @my_user_var = 'hello world';",
+    { Expected("@my_user_var", {"hello world"}) } },
+  { "SET @anotherVar = 12345;",
+    { Expected("@anothervar", {"12345"}) } },
+  { "SET @thirdVar = `ident_value`;",
+    { Expected("@thirdvar", {"ident_value"}) } },
+  { "SET @complex_var = @@global.max_connections;",
+    { Expected("@complex_var", {"@@global.max_connections"}) } },
+  { "SET global max_connections = 1000;",
+    { Expected("max_connections", {"1000"}) } },
+  { "SET session sort_buffer_size = 200000;",
+    { Expected("sort_buffer_size", {"200000"}) } },
+  { "SET GLOBAL sort_buffer_size = 400000;",
+    { Expected("sort_buffer_size", {"400000"}) } },
+  { "SET @@global.tmp_table_size = 32000000;",
+    { Expected("tmp_table_size", {"32000000"}) } },
+  { "SET @@session.net_write_timeout = 120;",
+    { Expected("net_write_timeout", {"120"}) } },
+  { "SET @@net_read_timeout = 60;",
+    { Expected("net_read_timeout", {"60"}) } },
+  { "SET max_allowed_packet = 64000000;",
+    { Expected("max_allowed_packet", {"64000000"}) } },
+  { "SET NAMES `latin1`;",
+    { Expected("names", {"latin1"}) } },
+  { "SET NAMES DEFAULT;",
+    { Expected("names", {"DEFAULT"}) } },
+  { "SET CHARACTER SET 'utf8';",
+    { Expected("character_set_results", {"utf8"}) } },
+  { "SET CHARACTER SET DEFAULT;",
+    { Expected("character_set_results", {"DEFAULT"}) } },
+  { "SET @a = 1, @b = 'two', @c = @@session.time_zone;",
+    { Expected("@a", {"1"}),
+      Expected("@b", {"two"}),
+      Expected("@c", {"@@session.time_zone"}) } },
+  { "SET @no_semicolon = 'works'",
+    { Expected("@no_semicolon", {"works"}) } },
+  { "SET @@SESSION.wait_timeout := 42;",
+    { Expected("wait_timeout", {"42"}) } },
+  { "SET @'quoted-user' := 1;",
+    { Expected("@quoted-user", {"1"}) } },
+  { "SET @\"quoted.user\" := 2;",
+    { Expected("@quoted.user", {"2"}) } },
+  { "SET @`quoted var` := 3;",
+    { Expected("@quoted var", {"3"}) } },
+};
+
+static Test parsersql_pr5088_mysql_dataset_syntax[] = {
+  { "SET @my_user := 1;",
+    { Expected("@my_user", {"1"}) } },
+  { "SET @my_user_variable = 123;",
+    { Expected("@my_user_variable", {"123"}) } },
+  { "SET @my_user_variable = 123, @@GLOBAL.max_connections = 200;",
+    { Expected("@my_user_variable", {"123"}),
+      Expected("max_connections", {"200"}) } },
+  { "SET @my_custom_var = 'Test Value';",
+    { Expected("@my_custom_var", {"Test Value"}) } },
+  { "SET P_param_name = 100;",
+    { Expected("p_param_name", {"100"}) } },
+  { "SET my_local_variable = NOW();",
+    { Expected("my_local_variable", {"NOW()"}) } },
+  { "SET GLOBAL sort_buffer_size = 512000;",
+    { Expected("sort_buffer_size", {"512000"}) } },
+  { "SET @@GLOBAL.sort_buffer_size = 512000;",
+    { Expected("sort_buffer_size", {"512000"}) } },
+  { "SET SESSION wait_timeout = 180;",
+    { Expected("wait_timeout", {"180"}) } },
+  { "SET SESSION sql_select_limit = 100;",
+    { Expected("sql_select_limit", {"100"}) } },
+  { "SET @@SESSION.sql_select_limit = 100;",
+    { Expected("sql_select_limit", {"100"}) } },
+  { "SET @@sql_select_limit = 100;",
+    { Expected("sql_select_limit", {"100"}) } },
+  { "SET sql_select_limit = 100;",
+    { Expected("sql_select_limit", {"100"}) } },
+  { "SET autocommit = 0;",
+    { Expected("autocommit", {"0"}) } },
+  { "SET @mix := 1, @@SESSION.wait_timeout := 42;",
+    { Expected("@mix", {"1"}),
+      Expected("wait_timeout", {"42"}) } },
+  { "SET sql_mode = '   ';",
+    { Expected("sql_mode", {"   "}) } },
+  { "SET sql_mode = 'TRADITIONAL', sql_mode = @@sql_mode;",
+    { Expected("sql_mode", {"@@sql_mode"}) } },
+  { "SET CHARACTER SET utf8mb4;",
+    { Expected("character_set_results", {"utf8mb4"}) } },
+  { "SET NAMES 'utf8mb4';",
+    { Expected("names", {"utf8mb4"}) } },
+  { "SET NAMES 'gbk' COLLATE 'gbk_chinese_ci';",
+    { Expected("names", {"gbk", "gbk_chinese_ci"}) } },
+  { "SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci;",
+    { Expected("names", {"utf8mb4", "utf8mb4_0900_ai_ci"}) } },
+  { "SET sql_mode = 'STRICT_TRANS_TABLES', character_set_client = 'utf8mb4';",
+    { Expected("character_set_client", {"utf8mb4"}),
+      Expected("sql_mode", {"STRICT_TRANS_TABLES"}) } },
+};
+
+static Test parsersql_pr5088_mysql_sql_mode_expr[] = {
+  { "SET sql_mode=@@sql_mode",
+    { Expected("sql_mode", {"@@sql_mode"}) } },
+  { "SET sql_mode=  @@sql_mode",
+    { Expected("sql_mode", {"@@sql_mode"}) } },
+  { "SET sql_mode=\"NO_AUTO_VALUE_ON_ZERO\"",
+    { Expected("sql_mode", {"NO_AUTO_VALUE_ON_ZERO"}) } },
+  { "SET sql_mode = \"NO_AUTO_VALUE_ON_ZERO\"",
+    { Expected("sql_mode", {"NO_AUTO_VALUE_ON_ZERO"}) } },
+  { "SET sql_mode=\"CONCAT(@@sql_mode, 'STRICT_ALL_TABLES')\"",
+    { Expected("sql_mode", {"CONCAT(@@sql_mode, 'STRICT_ALL_TABLES')"}) } },
+  { "SET sql_mode=\"REPLACE(@@sql_mode, 'STRICT_ALL_TABLES', 'STRICT_TRANS_TABLES')\"",
+    { Expected("sql_mode", {"REPLACE(@@sql_mode, 'STRICT_ALL_TABLES', 'STRICT_TRANS_TABLES')"}) } },
+  { "SET sql_mode=\"(SELECT 'STRICT_ALL_TABLES')\"",
+    { Expected("sql_mode", {"(SELECT 'STRICT_ALL_TABLES')"}) } },
+  { "SET sql_mode=(SELECT 'foo')",
+    { Expected("sql_mode", {"(SELECT 'foo')"}) } },
+  { "SET sql_mode=(SELECT \"foo\")",
+    { Expected("sql_mode", {"(SELECT \"foo\")"}) } },
+  { "SET sql_mode=(SELECT 5)",
+    { Expected("sql_mode", {"(SELECT 5)"}) } },
+  { "SET sql_mode=(SELECT NULL)",
+    { Expected("sql_mode", {"(SELECT NULL)"}) } },
+  { "SET sql_mode=(SELECT @user_var)",
+    { Expected("sql_mode", {"(SELECT @user_var)"}) } },
+  { "SET sql_mode=(SELECT CONCAT(@@sql_mode, NULL))",
+    { Expected("sql_mode", {"(SELECT CONCAT(@@sql_mode, NULL))"}) } },
+  { "SET sql_mode=(SELECT CONCAT(@@sql_mode, 'foo'))",
+    { Expected("sql_mode", {"(SELECT CONCAT(@@sql_mode, 'foo'))"}) } },
+  { "SET sql_mode=(SELECT REPLACE(CONCAT(@@sql_mode, ''), '', '5'))",
+    { Expected("sql_mode", {"(SELECT REPLACE(CONCAT(@@sql_mode, ''), '', '5'))"}) } },
+  { "SET sql_mode=(SELECT REPLACE(CONCAT(@@sql_mode, ''), '', 5))",
+    { Expected("sql_mode", {"(SELECT REPLACE(CONCAT(@@sql_mode, ''), '', 5))"}) } },
+};
+
+static Test parsersql_pr5088_mysql_expr_syntax[] = {
+  { "SET @generic_var = TRUE OR FALSE;",
+    { Expected("@generic_var", {"TRUE OR FALSE"}) } },
+  { "SET @generic_var = 1 AND 0;",
+    { Expected("@generic_var", {"1 AND 0"}) } },
+  { "SET @generic_var = NOT TRUE;",
+    { Expected("@generic_var", {"NOT TRUE"}) } },
+  { "SET @generic_var = 'hello' IS NOT NULL;",
+    { Expected("@generic_var", {"'hello' IS NOT NULL"}) } },
+  { "SET @generic_var = 5 IN (5);",
+    { Expected("@generic_var", {"5 IN (5)"}) } },
+  { "SET @generic_var = 'apple' IN ('orange', 'apple', 'banana');",
+    { Expected("@generic_var", {"'apple' IN ('orange', 'apple', 'banana')"}) } },
+  { "SET @generic_var = 'banana' LIKE 'ba%';",
+    { Expected("@generic_var", {"'banana' LIKE 'ba%'"}) } },
+  { "SET @generic_var = 10.5 + 2;",
+    { Expected("@generic_var", {"10.5 + 2"}) } },
+  { "SET @generic_var = 100 - 33;",
+    { Expected("@generic_var", {"100 - 33"}) } },
+  { "SET @generic_var = 7 * 6;",
+    { Expected("@generic_var", {"7 * 6"}) } },
+  { "SET @generic_var = 100 / 4;",
+    { Expected("@generic_var", {"100 / 4"}) } },
+  { "SET @generic_var = 10 % 3;",
+    { Expected("@generic_var", {"10 % 3"}) } },
+};
+
+static Test parsersql_pr5088_mysql_raw_rhs_syntax[] = {
+  { "SET @generic_var = TRUE XOR FALSE;",
+    { Expected("@generic_var", {"TRUE XOR FALSE"}) } },
+  { "SET @generic_var = 5 | 2;",
+    { Expected("@generic_var", {"5 | 2"}) } },
+  { "SET @generic_var = 5 & 2;",
+    { Expected("@generic_var", {"5 & 2"}) } },
+  { "SET @generic_var = 5 << 1;",
+    { Expected("@generic_var", {"5 << 1"}) } },
+  { "SET @generic_var = 10 >> 1;",
+    { Expected("@generic_var", {"10 >> 1"}) } },
+  { "SET @generic_var = 5 ^ 2;",
+    { Expected("@generic_var", {"5 ^ 2"}) } },
+  { "SET @generic_var = 10 DIV 3;",
+    { Expected("@generic_var", {"10 DIV 3"}) } },
+  { "SET @generic_var = 10 MOD 3;",
+    { Expected("@generic_var", {"10 MOD 3"}) } },
+  { "SET @generic_var = 'abcde' REGEXP '^a.c';",
+    { Expected("@generic_var", {"'abcde' REGEXP '^a.c'"}) } },
+  { "SET @generic_var = 'xyz123' NOT REGEXP '[0-9]$';",
+    { Expected("@generic_var", {"'xyz123' NOT REGEXP '[0-9]$'"}) } },
+  { "SET @generic_var = 'b' MEMBER OF ('[\"a\", \"b\", \"c\"]');",
+    { Expected("@generic_var", {"'b' MEMBER OF ('[\"a\", \"b\", \"c\"]')"}) } },
+  { "SET @generic_var = 'knight' SOUNDS LIKE 'night';",
+    { Expected("@generic_var", {"'knight' SOUNDS LIKE 'night'"}) } },
+  { "SET @generic_var = NOW() + INTERVAL 1 DAY;",
+    { Expected("@generic_var", {"NOW() + INTERVAL 1 DAY"}) } },
+  { "SET @generic_var = '2025-12-25' - INTERVAL 2 MONTH;",
+    { Expected("@generic_var", {"'2025-12-25' - INTERVAL 2 MONTH"}) } },
+  { "SET @generic_var = current_user_id IN (SELECT user_id FROM course_enrollments WHERE course_id = 789);",
+    { Expected("@generic_var", {"current_user_id IN (SELECT user_id FROM course_enrollments WHERE course_id = 789)"}) } },
+  { "SET @generic_var = my_value > ALL (SELECT limit_value FROM active_limits WHERE group_id = 'A');",
+    { Expected("@generic_var", {"my_value > ALL (SELECT limit_value FROM active_limits WHERE group_id = 'A')"}) } },
+  { "SET @generic_var = 'PROD123' NOT IN (SELECT product_sku FROM discontinued_products WHERE reason_code = 'OBSOLETE');",
+    { Expected("@generic_var", {"'PROD123' NOT IN (SELECT product_sku FROM discontinued_products WHERE reason_code = 'OBSOLETE')"}) } },
+  { "SET @generic_var = (SELECT SUM(amount) FROM sales WHERE sale_date = CURDATE());",
+    { Expected("@generic_var", {"(SELECT SUM(amount) FROM sales WHERE sale_date = CURDATE())"}) } },
 };
 
 // ----------------------------------------------------------------------------
@@ -420,6 +630,10 @@ struct EmptyOnParseFailCase {
 static EmptyOnParseFailCase parsersql_parse_fail_strict[] = {
   { "SET search_path = \"unclosed_quote, public",  EmptyOnParseFailCase::PGSQL },
   { "SET `unclosed_ident = 1",                      EmptyOnParseFailCase::MYSQL },
+  // Not a subquery: ParserSQL parses only `sql_mode=(SELCT` (full_input false),
+  // so the statement is unparsed, as with set_parser_algorithm=1/2.
+  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
+    EmptyOnParseFailCase::MYSQL },
 };
 
 // Direct invocation of the search_path validator with values the walker would
@@ -475,7 +689,7 @@ static PartialAstCase parsersql_partial_ast_strict[] = {
 };
 
 void TestPartialAstGate() {
-	for (size_t i = 0; i < arraysize(parsersql_partial_ast_strict); i++) {
+	for (size_t i = 0; i < std::size(parsersql_partial_ast_strict); i++) {
 		const auto& c = parsersql_partial_ast_strict[i];
 		auto m = parsersql_parse_set_pgsql(c.query);
 		bool got_nonempty = !m.empty();
@@ -486,6 +700,49 @@ void TestPartialAstGate() {
 			got_nonempty ? "nonempty" : "empty",
 			c.query);
 	}
+}
+
+// Simple-query protocol payloads include one terminating NUL in QueryLength.
+// The adapter must preserve the same SET value with and without that byte,
+// without treating an embedded NUL as permission to ignore subsequent SQL.
+void TestPgsqlProtocolTerminator() {
+	const std::map<std::string, std::vector<std::string>> expected = {
+		{"search_path", {"\"$user\""}}
+	};
+	for (const char* sql : {
+		"SET search_path TO \"$user\"",
+		"SET search_path TO \"$user\" ,",
+		"SET search_path TO \"$user\" ,;",
+		"SET search_path TO \"$user\" ,; \t\n"
+	}) {
+		std::string query(sql);
+		ok(parsersql_parse_set_pgsql(query) == expected,
+			"PG SET preserves exact quoted value without protocol terminator: %s", sql);
+		query.push_back('\0');
+		ok(parsersql_parse_set_pgsql(query) == expected,
+			"PG SET preserves exact quoted value with protocol terminator: %s", sql);
+	}
+	for (const char* sql : {
+		"SET search_path TO public,,schema1",
+		"SET search_path TO public || schema1"
+	}) {
+		std::string query(sql);
+		query.push_back('\0');
+		ok(parsersql_parse_set_pgsql(query).empty(),
+			"PG SET still rejects malformed values with protocol terminator: %s", sql);
+	}
+	std::string embedded("SET search_path TO public");
+	embedded.push_back('\0');
+	embedded += "; SET search_path TO private";
+	ok(parsersql_parse_set_pgsql(embedded).empty(),
+		"PG SET rejects embedded NUL followed by SQL");
+	embedded.push_back('\0');
+	ok(parsersql_parse_set_pgsql(embedded).empty(),
+		"PG SET rejects embedded NUL even with a protocol terminator");
+	std::string double_nul("SET search_path TO public");
+	double_nul.append(2, '\0');
+	ok(parsersql_parse_set_pgsql(double_nul).empty(),
+		"PG SET rejects multiple NUL terminators");
 }
 
 void TestWalkerToValidatorChain184() {
@@ -517,7 +774,7 @@ void TestWalkerToValidatorChain184() {
 }
 
 void TestSearchPathValidator() {
-	for (size_t i = 0; i < arraysize(parsersql_search_path_validator_cases); i++) {
+	for (size_t i = 0; i < std::size(parsersql_search_path_validator_cases); i++) {
 		const auto& c = parsersql_search_path_validator_cases[i];
 		char* xform = nullptr;
 		bool got_ok = inline_validate_search_path(c.value, &xform);
@@ -563,46 +820,60 @@ void TestEmptyOnParseFail(const EmptyOnParseFailCase* cases, int n) {
 
 int main(int argc, char** argv) {
 	unsigned int p = 0;
-	p += arraysize(sql_mode);
-	p += arraysize(time_zone);
-	p += arraysize(session_track_gtids);
-	p += arraysize(character_set_results);
-	p += arraysize(names);
-	p += arraysize(various);
-	p += arraysize(multiple);
-	p += arraysize(Set1_v2);
-	p += arraysize(parsersql_syntax_errors);
-	p += arraysize(parsersql_mysql_filtered_set);
-	p += arraysize(parsersql_mysql_set_testing);
-	p += arraysize(parsersql_pgsql_search_path);
-	p += arraysize(parsersql_pgsql_time_zone);
+	p += std::size(sql_mode);
+	p += std::size(time_zone);
+	p += std::size(session_track_gtids);
+	p += std::size(character_set_results);
+	p += std::size(names);
+	p += std::size(various);
+	p += std::size(multiple);
+	p += std::size(Set1_v2);
+	p += std::size(parsersql_syntax_errors);
+	p += std::size(parsersql_mysql_filtered_set);
+	p += std::size(parsersql_mysql_source_span_legacy);
+	p += std::size(parsersql_mysql_set_testing);
+	p += std::size(parsersql_pr5088_mysql_set_syntax);
+	p += std::size(parsersql_pr5088_mysql_dataset_syntax);
+	p += std::size(parsersql_pr5088_mysql_sql_mode_expr);
+	p += std::size(parsersql_pr5088_mysql_expr_syntax);
+	p += std::size(parsersql_pr5088_mysql_raw_rhs_syntax);
+	p += std::size(parsersql_pgsql_search_path);
+	p += std::size(parsersql_pgsql_time_zone);
 	p *= 2;
-	p += arraysize(parsersql_function_call_strict) * 2;
-	p += arraysize(parsersql_pgsql_ident_strict) * 2;
-	p += arraysize(parsersql_parse_fail_strict);
-	p += arraysize(parsersql_search_path_validator_cases) * 2;
+	p += std::size(parsersql_function_call_strict) * 2;
+	p += std::size(parsersql_pgsql_ident_strict) * 2;
+	p += std::size(parsersql_parse_fail_strict);
+	p += std::size(parsersql_search_path_validator_cases) * 2;
 	p += 2;  // TestWalkerToValidatorChain184
-	p += arraysize(parsersql_partial_ast_strict);  // TestPartialAstGate
+	p += std::size(parsersql_partial_ast_strict);  // TestPartialAstGate
+	p += 13;  // TestPgsqlProtocolTerminator
 	plan(p);
-	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
-	TestParse(time_zone, arraysize(time_zone), "time_zone");
-	TestParse(session_track_gtids, arraysize(session_track_gtids), "session_track_gtids");
-	TestParse(character_set_results, arraysize(character_set_results), "character_set_results");
-	TestParse(names, arraysize(names), "names");
-	TestParse(various, arraysize(various), "various");
-	TestParse(multiple, arraysize(multiple), "multiple");
-	TestParse(Set1_v2, arraysize(Set1_v2), "Set1_v2");
-	TestParse(parsersql_syntax_errors, arraysize(parsersql_syntax_errors), "parsersql_syntax_errors");
-	TestParse(parsersql_mysql_filtered_set, arraysize(parsersql_mysql_filtered_set), "mysql_filtered_set");
-	TestParse(parsersql_mysql_set_testing, arraysize(parsersql_mysql_set_testing), "mysql_set_testing");
-	TestParsePgsql(parsersql_pgsql_search_path, arraysize(parsersql_pgsql_search_path), "pgsql_search_path");
-	TestParsePgsql(parsersql_pgsql_time_zone, arraysize(parsersql_pgsql_time_zone), "pgsql_time_zone");
-	TestStrictFunctionCall(parsersql_function_call_strict, arraysize(parsersql_function_call_strict));
-	TestStrictPgsqlIdent(parsersql_pgsql_ident_strict, arraysize(parsersql_pgsql_ident_strict));
-	TestEmptyOnParseFail(parsersql_parse_fail_strict, arraysize(parsersql_parse_fail_strict));
+	TestParse(sql_mode, std::size(sql_mode), "sql_mode");
+	TestParse(time_zone, std::size(time_zone), "time_zone");
+	TestParse(session_track_gtids, std::size(session_track_gtids), "session_track_gtids");
+	TestParse(character_set_results, std::size(character_set_results), "character_set_results");
+	TestParse(names, std::size(names), "names");
+	TestParse(various, std::size(various), "various");
+	TestParse(multiple, std::size(multiple), "multiple");
+	TestParse(Set1_v2, std::size(Set1_v2), "Set1_v2");
+	TestParse(parsersql_syntax_errors, std::size(parsersql_syntax_errors), "parsersql_syntax_errors");
+	TestParse(parsersql_mysql_filtered_set, std::size(parsersql_mysql_filtered_set), "mysql_filtered_set");
+	TestParse(parsersql_mysql_source_span_legacy, std::size(parsersql_mysql_source_span_legacy), "mysql_source_span_legacy");
+	TestParse(parsersql_mysql_set_testing, std::size(parsersql_mysql_set_testing), "mysql_set_testing");
+	TestParse(parsersql_pr5088_mysql_set_syntax, std::size(parsersql_pr5088_mysql_set_syntax), "pr5088_mysql_set_syntax");
+	TestParse(parsersql_pr5088_mysql_dataset_syntax, std::size(parsersql_pr5088_mysql_dataset_syntax), "pr5088_mysql_dataset_syntax");
+	TestParse(parsersql_pr5088_mysql_sql_mode_expr, std::size(parsersql_pr5088_mysql_sql_mode_expr), "pr5088_mysql_sql_mode_expr");
+	TestParse(parsersql_pr5088_mysql_expr_syntax, std::size(parsersql_pr5088_mysql_expr_syntax), "pr5088_mysql_expr_syntax");
+	TestParse(parsersql_pr5088_mysql_raw_rhs_syntax, std::size(parsersql_pr5088_mysql_raw_rhs_syntax), "pr5088_mysql_raw_rhs_syntax");
+	TestParsePgsql(parsersql_pgsql_search_path, std::size(parsersql_pgsql_search_path), "pgsql_search_path");
+	TestParsePgsql(parsersql_pgsql_time_zone, std::size(parsersql_pgsql_time_zone), "pgsql_time_zone");
+	TestStrictFunctionCall(parsersql_function_call_strict, std::size(parsersql_function_call_strict));
+	TestStrictPgsqlIdent(parsersql_pgsql_ident_strict, std::size(parsersql_pgsql_ident_strict));
+	TestEmptyOnParseFail(parsersql_parse_fail_strict, std::size(parsersql_parse_fail_strict));
 	TestSearchPathValidator();
 	TestWalkerToValidatorChain184();
 	TestPartialAstGate();
+	TestPgsqlProtocolTerminator();
 
 	return exit_status();
 }

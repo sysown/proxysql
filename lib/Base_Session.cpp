@@ -28,6 +28,7 @@ template Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread
 template MySQL_Backend * Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::find_backend(int);
 template PgSQL_Backend * Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::find_backend(int);
 
+template MySQL_Backend * Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::create_backend(int, MySQL_Data_Stream *);
 template MySQL_Backend * Base_Session<MySQL_Session,MySQL_Data_Stream,MySQL_Backend,MySQL_Thread>::find_or_create_backend(int, MySQL_Data_Stream *);
 template PgSQL_Backend * Base_Session<PgSQL_Session,PgSQL_Data_Stream,PgSQL_Backend,PgSQL_Thread>::find_or_create_backend(int, PgSQL_Data_Stream *);
 
@@ -74,6 +75,9 @@ Base_Session<S,DS,B,T>::Base_Session() {
 
 template<typename S, typename DS, typename B, typename T>
 Base_Session<S,DS,B,T>::~Base_Session() {
+#ifdef PROXYSQL31
+	hostgroup_pool_wait.finish(monotonic_time());
+#endif
 };
 
 template<typename S, typename DS, typename B, typename T>
@@ -511,7 +515,7 @@ void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
 				DS * myds = mybe->server_myds;
 				if constexpr (std::is_same_v<S, MySQL_Session>) {
 					if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit() == false) {
-						if (mysql_thread___reset_connection_algorithm == 2) {
+						if (mysql_thread___reset_connection_algorithm == 2 && myds->myconn->healthy) {
 							create_new_session_and_reset_connection(myds);
 						} else {
 							myds->destroy_MySQL_Connection_From_Pool(true);

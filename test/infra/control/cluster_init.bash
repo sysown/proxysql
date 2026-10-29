@@ -71,7 +71,7 @@ SAVE PROXYSQL SERVERS TO DISK;
 SQL
 
 # 2. Configure the nodes
-for i in $(seq 1 "${NUM_NODES}"); do
+for ((i = 1; i <= NUM_NODES; i++)); do
     NODE="proxy-node${i}"
     echo ">>> Configuring Node: ${NODE}"
     

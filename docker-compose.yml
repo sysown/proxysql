@@ -9,6 +9,7 @@ services:
     environment:
       - MAKE
       - MAKEOPT
+      - DEPS_MODE
       - CURVER
       - PKG_RELEASE
       - PROXYSQL_BUILD_TYPE
@@ -21,6 +22,7 @@ services:
       - PROXYSQL31
       - PROXYSQLFFTO
       - PROXYSQLTSDB
+      - SKIP_GENAI_UNIT_TESTS
       - GIT_VERSION
     command: bash -l -c /opt/entrypoint/entrypoint.bash
 
@@ -278,33 +280,33 @@ services:
 
 ####################################################################################################
 ####################################################################################################
-  opensuse15_build:
+  ubuntu26_build:
     extends:
       service: _build
-    image: proxysql/packaging:build-opensuse15-v4.0.0
+    image: proxysql/packaging:build-ubuntu26-v4.0.0
     volumes:
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/suse-compliant/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
-      - PKG_RELEASE=opensuse15
+      - PKG_RELEASE=ubuntu26
       - PROXYSQL_BUILD_TYPE=clickhouse
 
-  opensuse15_clang_build:
+  ubuntu26_clang_build:
     extends:
-      service: opensuse15_build
-    image: proxysql/packaging:build-clang-opensuse15-v4.0.0
+      service: ubuntu26_build
+    image: proxysql/packaging:build-clang-ubuntu26-v4.0.0
     environment:
-      - PKG_RELEASE=opensuse15-clang
+      - PKG_RELEASE=ubuntu26-clang
 
-  opensuse15_dbg_build:
+  ubuntu26_dbg_build:
     extends:
-      service: opensuse15_build
+      service: ubuntu26_build
     environment:
-      - PKG_RELEASE=dbg-opensuse15
+      - PKG_RELEASE=dbg-ubuntu26
       - PROXYSQL_BUILD_TYPE=debug
 
+####################################################################################################
 ####################################################################################################
   opensuse16_build:
     extends:
@@ -419,4 +421,17 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  tarball_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-almalinux9-v4.0.0
+    volumes:
+      - ./docker/images/proxysql/tarball-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=tarball
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
 ####################################################################################################
+####################################################################################################
+

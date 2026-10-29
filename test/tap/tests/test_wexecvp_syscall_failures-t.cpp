@@ -8,7 +8,9 @@
 #include <utility>
 #include <vector>
 
+#include <dirent.h>
 #include <poll.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include "proxysql_utils.h"
@@ -18,6 +20,40 @@
 using std::string;
 using std::vector;
 using std::pair;
+
+bool g_reject_child_unsafe_calls = false;
+volatile sig_atomic_t g_in_fork_child = 0;
+
+extern "C" pid_t __real_fork(void);
+extern "C" pid_t __wrap_fork(void);
+
+pid_t __wrap_fork(void) {
+	pid_t pid = __real_fork();
+	if (pid == 0) {
+		g_in_fork_child = 1;
+	}
+	return pid;
+}
+
+extern "C" void* __real__Znwm(size_t size);
+extern "C" void* __wrap__Znwm(size_t size);
+
+void* __wrap__Znwm(size_t size) {
+	if (g_reject_child_unsafe_calls && g_in_fork_child) {
+		_exit(ECANCELED);
+	}
+	return __real__Znwm(size);
+}
+
+extern "C" DIR* __real_opendir(const char* name);
+extern "C" DIR* __wrap_opendir(const char* name);
+
+DIR* __wrap_opendir(const char* name) {
+	if (g_reject_child_unsafe_calls && g_in_fork_child) {
+		_exit(ECANCELED);
+	}
+	return __real_opendir(name);
+}
 
 bool g_read_use_real = false;
 int g_read_ret = -1;
@@ -173,7 +209,7 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	plan(planned_tests);
+	plan(planned_tests + 1);
 
 	for (const test_pl_t& pl : test_pls) {
 		enable_reals(test_pls);
@@ -183,6 +219,19 @@ int main(int argc, char** argv) {
 		check_read_failure(base_path, pl, "stdout");
 		check_read_failure(base_path, pl, "stderr");
 		check_read_failure(base_path, pl, "");
+	}
+
+	{
+		string child_stdout {};
+		string child_stderr {};
+		to_opts_t opts {};
+		opts.timeout_us = 1000 * 1000;
+
+		g_reject_child_unsafe_calls = true;
+		int err = wexecvp("/bin/true", {}, opts, child_stdout, child_stderr);
+		g_reject_child_unsafe_calls = false;
+
+		ok(err == 0, "wexecvp should not allocate or open directories between fork and exec");
 	}
 
 	return exit_status();

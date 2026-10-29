@@ -12,10 +12,8 @@
  *   - Active/inactive rule filtering
  *   - PgSQL rule parity
  *
- * @note Full process_query() testing requires a MySQL_Session with
- *       populated connection data (username, schema, client address),
- *       which is beyond the scope of isolated unit tests. Those
- *       scenarios are covered by the existing E2E TAP tests.
+ * @note Matcher coverage creates a MySQL_Session with populated connection
+ *       data (username, schema, and client address) without a running proxy.
  *
  * @see Phase 2.4 of the Unit Testing Framework (GitHub issue #5476)
  */
@@ -25,10 +23,15 @@
 #include "test_init.h"
 
 #include "proxysql.h"
+#include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
+#include "MySQL_Session.h"
 #include "PgSQL_Query_Processor.h"
 
 #include <cstring>
+#include <unistd.h>
+#include <string>
+#include <thread>
 
 // Extern declarations for Glo* pointers (defined in test_globals.cpp)
 extern MySQL_Query_Processor *GloMyQPro;
@@ -50,7 +53,8 @@ static MySQL_Query_Processor_Rule_t *mysql_simple_rule(
 	int destination_hostgroup = -1,
 	bool apply = false,
 	const char *username = nullptr,
-	int flagIN = 0, int flagOUT = -1)
+	int flagIN = 0, int flagOUT = -1,
+	const char* attributes = nullptr)
 {
 	return MySQL_Query_Processor::new_query_rule(
 		rule_id, active,
@@ -85,9 +89,36 @@ static MySQL_Query_Processor_Rule_t *mysql_simple_rule(
 		-1,                     // gtid_from_hostgroup
 		-1,                     // log
 		apply,                  // apply
-		nullptr,                // attributes
+		attributes,             // attributes
 		nullptr                 // comment
 	);
+}
+
+static void free_mysql_rule_fixture(MySQL_Query_Processor_Rule_t* rule) {
+	free(rule->username);
+	free(rule->schemaname);
+	free(rule->client_addr);
+	free(rule->proxy_addr);
+	free(rule->match_digest);
+	free(rule->match_pattern);
+	free(rule->replace_pattern);
+	free(rule->error_msg);
+	free(rule->OK_msg);
+	free(rule->attributes);
+	free(rule->comment);
+	delete rule->flagOUT_ids;
+	delete rule->flagOUT_weights;
+	free(rule);
+}
+
+static void free_mysql_rules_mem_sts(rules_mem_sts_t* rules_mem_sts) {
+	if (rules_mem_sts->rules_fast_routing) {
+		kh_destroy(khStrInt, rules_mem_sts->rules_fast_routing);
+	}
+	if (rules_mem_sts->rules_fast_routing___keys_values) {
+		free(rules_mem_sts->rules_fast_routing___keys_values);
+	}
+	__reset_rules(&rules_mem_sts->query_rules);
 }
 
 /**
@@ -126,6 +157,202 @@ static PgSQL_Query_Processor_Rule_t *pgsql_simple_rule(
 // ============================================================================
 // 1. Rule creation via new_query_rule()
 // ============================================================================
+
+static void test_mysql_switch_to_fast_forward_attributes() {
+	auto* absent = mysql_simple_rule(6100, true, nullptr, -1, false,
+		nullptr, 0, -1, R"({})");
+	auto* enabled = mysql_simple_rule(6101, true, nullptr, -1, false,
+		nullptr, 0, -1, R"({"switch_to_fast_forward":true})");
+	auto* disabled = mysql_simple_rule(6102, true, nullptr, -1, false,
+		nullptr, 0, -1, R"({"switch_to_fast_forward":false})");
+
+	ok(!absent->switch_to_fast_forward, "absent action stays disabled");
+	ok(enabled->switch_to_fast_forward, "JSON true enables the action");
+	ok(!disabled->switch_to_fast_forward, "JSON false does not request the action");
+
+	const char* invalid[] = {
+		R"({"switch_to_fast_forward":"true"})",
+		R"({"switch_to_fast_forward":1})",
+		R"({"switch_to_fast_forward":-1})",
+		R"({"switch_to_fast_forward":{}})",
+		R"({"switch_to_fast_forward":[]})",
+		R"({"switch_to_fast_forward":null})"
+	};
+	for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+		auto* rule = mysql_simple_rule(6110 + i, true, nullptr, -1,
+			false, nullptr, 0, -1, invalid[i]);
+		ok(!rule->switch_to_fast_forward,
+			"non-Boolean action value %zu does not enable conversion", i);
+		free_mysql_rule_fixture(rule);
+	}
+
+	auto* combined = mysql_simple_rule(6120, true, nullptr, -1, false,
+		nullptr, 0, -1,
+		R"({"flagOUTs":[{"id":7,"weight":1}],"switch_to_fast_forward":true})");
+	ok(combined->switch_to_fast_forward && combined->flagOUT_ids &&
+		combined->flagOUT_ids->size() == 1 && combined->flagOUT_ids->at(0) == 7,
+		"the action coexists with flagOUTs");
+
+	MySQL_Query_Processor_Output output;
+	output.switch_to_fast_forward = true;
+	output.init();
+	ok(!output.switch_to_fast_forward,
+		"output init clears a previous command's action");
+
+	free_mysql_rule_fixture(absent);
+	free_mysql_rule_fixture(enabled);
+	free_mysql_rule_fixture(disabled);
+	free_mysql_rule_fixture(combined);
+}
+
+static void test_mysql_switch_to_fast_forward_matcher() {
+	rules_mem_sts_t previous_rules = GloMyQPro->reset_all(true);
+	free_mysql_rules_mem_sts(&previous_rules);
+
+	auto* first = mysql_simple_rule(6130, true, "^SELECT 6146$", -1, false,
+		nullptr, 0, 7, R"({"switch_to_fast_forward":true})");
+	auto* second = mysql_simple_rule(6131, true, "^SELECT 6146$", 610, false,
+		nullptr, 7);
+	GloMyQPro->insert(first);
+	GloMyQPro->insert(second);
+	GloMyQPro->sort();
+	GloMyQPro->commit();
+
+	SQLite3_result* fast_routing = new SQLite3_result(4);
+	fast_routing->add_column_definition(SQLITE_TEXT, "username");
+	fast_routing->add_column_definition(SQLITE_TEXT, "schemaname");
+	fast_routing->add_column_definition(SQLITE_TEXT, "flagIN");
+	fast_routing->add_column_definition(SQLITE_TEXT, "destination_hostgroup");
+	char* fast_route[] = { (char*)"ff_qp", (char*)"test", (char*)"7", (char*)"611" };
+	fast_routing->add_row(fast_route);
+	fast_routing_hashmap_t hashmap = GloMyQPro->create_fast_routing_hashmap(fast_routing);
+	GloMyQPro->wrlock();
+	SQLite3_result* old_fast_routing = GloMyQPro->load_fast_routing(hashmap);
+	GloMyQPro->wrunlock();
+	if (old_fast_routing) {
+		delete old_fast_routing;
+	}
+
+	MySQL_Session* session = new MySQL_Session();
+	__sync_fetch_and_add(&MyHGM->status.client_connections, 1);
+	session->client_myds = new MySQL_Data_Stream();
+	session->client_myds->fd = 0;
+	session->client_myds->init(MYDS_FRONTEND, session, 0);
+	MySQL_Connection* connection = new MySQL_Connection();
+	session->client_myds->attach_connection(connection);
+	connection->set_is_client();
+	connection->userinfo->set((char*)"ff_qp", (char*)"", (char*)"test", (char*)"");
+	session->client_myds->addr.addr = strdup("127.0.0.1");
+	session->client_myds->addr.port = 3306;
+	session->client_myds->proxy_addr.addr = strdup("127.0.0.1");
+	session->client_myds->proxy_addr.port = 6033;
+
+	GloMyQPro->init_thread();
+	unsigned char query[] = { 12, 0, 0, 0, PROXYSQL_COM_QUERY,
+		'S', 'E', 'L', 'E', 'C', 'T', ' ', '6', '1', '4', '6' };
+	auto* output = GloMyQPro->process_query(session, query, sizeof(query), nullptr);
+	ok(output->switch_to_fast_forward,
+		"MySQL QP: matching rule makes the action sticky");
+	ok(output->destination_hostgroup == 611,
+		"MySQL QP: fast routing wins after a non-terminal matching rule");
+	output->init();
+	ok(!output->switch_to_fast_forward,
+		"MySQL QP: output init clears the action after matching");
+	GloMyQPro->update_query_processor_stats();
+
+	second->apply = true;
+	GloMyQPro->commit();
+	output = GloMyQPro->process_query(session, query, sizeof(query), nullptr);
+	GloMyQPro->update_query_processor_stats();
+	ok(output->switch_to_fast_forward,
+		"MySQL QP: terminal rule preserves an earlier requested action");
+	ok(output->destination_hostgroup == 610,
+		"MySQL QP: terminal rule prevents fast-routing override");
+	ok(first->hits == 2 && second->hits == 2,
+		"MySQL QP: both matching rules increment their hit counters");
+
+	GloMyQPro->end_thread();
+	delete session;
+	rules_mem_sts_t fixture_rules = GloMyQPro->reset_all(true);
+	free_mysql_rules_mem_sts(&fixture_rules);
+}
+
+/** @brief Runs @p action with stderr redirected and returns what it wrote. */
+template <typename F>
+static std::string capture_stderr_of(F action) {
+	FILE* captured = tmpfile();
+	fflush(stderr);
+	const int saved = dup(STDERR_FILENO);
+	dup2(fileno(captured), STDERR_FILENO);
+	action();
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+	std::string log;
+	char buffer[512];
+	rewind(captured);
+	while (fgets(buffer, sizeof(buffer), captured) != nullptr) log += buffer;
+	fclose(captured);
+	return log;
+}
+
+static size_t count_occurrences(const std::string& text, const std::string& needle) {
+	size_t count = 0;
+	for (size_t pos = text.find(needle); pos != std::string::npos; pos = text.find(needle, pos + 1)) ++count;
+	return count;
+}
+
+/**
+ * @brief A broken rule regex is reported once per rules load, not once per
+ *   worker: only the first worker that installs a rules version logs (#6411).
+ */
+static void test_regex_compile_error_reported_once_per_load() {
+	rules_mem_sts_t previous_rules = GloMyQPro->reset_all(true);
+	free_mysql_rules_mem_sts(&previous_rules);
+	GloMyQPro->insert(mysql_simple_rule(6411, true, "("));
+	GloMyQPro->sort();
+	GloMyQPro->commit();
+
+	MySQL_Session* session = new MySQL_Session();
+	__sync_fetch_and_add(&MyHGM->status.client_connections, 1);
+	session->client_myds = new MySQL_Data_Stream();
+	session->client_myds->fd = 0;
+	session->client_myds->init(MYDS_FRONTEND, session, 0);
+	MySQL_Connection* connection = new MySQL_Connection();
+	session->client_myds->attach_connection(connection);
+	connection->set_is_client();
+	connection->userinfo->set((char*)"re_qp", (char*)"", (char*)"test", (char*)"");
+	session->client_myds->addr.addr = strdup("127.0.0.1");
+	session->client_myds->addr.port = 3306;
+	session->client_myds->proxy_addr.addr = strdup("127.0.0.1");
+	session->client_myds->proxy_addr.port = 6033;
+
+	unsigned char query[] = { 9, 0, 0, 0, PROXYSQL_COM_QUERY, 'S', 'E', 'L', 'E', 'C', 'T', ' ', '1' };
+	// Each "worker" is a thread with its own private rule copy.
+	auto worker_run = [&]() {
+		return capture_stderr_of([&]() {
+			std::thread worker([&]() {
+				GloMyQPro->init_thread();
+				GloMyQPro->process_query(session, query, sizeof(query), nullptr);
+				GloMyQPro->end_thread();
+			});
+			worker.join();
+		});
+	};
+	const std::string marker = "Query rule 6411: match_pattern '(' cannot be compiled";
+	const std::string first = worker_run();
+	const std::string second = worker_run();
+	ok(count_occurrences(first, marker) == 1 && count_occurrences(second, marker) == 0,
+		"MySQL QP: a broken rule regex is logged by the first worker only");
+	GloMyQPro->commit();
+	const std::string after_reload = worker_run();
+	ok(count_occurrences(after_reload, marker) == 1,
+		"MySQL QP: the broken rule is reported again after the next rules load");
+
+	delete session;
+	rules_mem_sts_t fixture_rules = GloMyQPro->reset_all(true);
+	free_mysql_rules_mem_sts(&fixture_rules);
+}
 
 /**
  * @brief Test that new_query_rule() allocates and populates a rule.
@@ -567,8 +794,8 @@ static void test_pgsql_rule_creation_all_fields() {
 	ok(rule->flagIN == 0, "PgSQL QP: flagIN stored correctly");
 	ok(rule->client_addr != nullptr && strcmp(rule->client_addr, "10.0.0.%") == 0,
 		"PgSQL QP: client_addr stored correctly");
-	ok(rule->client_addr_wildcard_position == 7,
-		"PgSQL QP: client_addr wildcard position computed correctly");
+	ok(rule->client_addr_pred.match == QP_ADDR_MATCH_WILDCARD,
+		"PgSQL QP: client_addr '10.0.0.%' selects wildcard matching");
 	ok(rule->proxy_addr != nullptr && strcmp(rule->proxy_addr, "127.0.0.1") == 0,
 		"PgSQL QP: proxy_addr stored correctly");
 	ok(rule->proxy_port == 6432, "PgSQL QP: proxy_port stored correctly");
@@ -619,11 +846,11 @@ static void test_pgsql_rule_creation_all_fields() {
 }
 
 // ============================================================================
-// 11. PgSQL: client_addr wildcard at position 0 (catch-all '%')
+// 11. PgSQL: client_addr address-form selection
 // ============================================================================
 
 /**
- * @brief Test client_addr wildcard position computation edge cases.
+ * @brief Test that each client_addr form selects the right matching mode.
  */
 static void test_pgsql_client_addr_wildcard() {
 	// Catch-all: client_addr = "%"
@@ -633,8 +860,8 @@ static void test_pgsql_client_addr_wildcard() {
 		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
 		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
-	ok(r1->client_addr_wildcard_position == 0,
-		"PgSQL QP: client_addr catch-all sets wildcard position to 0");
+	ok(r1->client_addr_pred.match == QP_ADDR_MATCH_WILDCARD,
+		"PgSQL QP: client_addr catch-all '%' selects wildcard matching");
 	free(r1->client_addr);
 	free(r1);
 
@@ -645,8 +872,8 @@ static void test_pgsql_client_addr_wildcard() {
 		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
 		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
 		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
-	ok(r2->client_addr_wildcard_position == -1,
-		"PgSQL QP: client_addr without wildcard has position -1");
+	ok(r2->client_addr_pred.match == QP_ADDR_MATCH_EXACT,
+		"PgSQL QP: client_addr without a wildcard is matched exactly");
 	free(r2->client_addr);
 	free(r2);
 
@@ -659,9 +886,68 @@ static void test_pgsql_client_addr_wildcard() {
 		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
 	ok(r3->client_addr == nullptr,
 		"PgSQL QP: null client_addr is stored as null");
-	ok(r3->client_addr_wildcard_position == -1,
-		"PgSQL QP: null client_addr has wildcard position -1");
+	ok(r3->client_addr_pred.match == QP_ADDR_MATCH_NONE,
+		"PgSQL QP: null client_addr sets no address criterion");
 	free(r3);
+
+	// CIDR prefix
+	auto *r4 = PgSQL_Query_Processor::new_query_rule(
+		4, true, nullptr, nullptr, 0,
+		"10.0.128.0/20",        // client_addr = CIDR
+		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
+		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+	ok(r4->client_addr_pred.match == QP_ADDR_MATCH_CIDR,
+		"PgSQL QP: client_addr with a CIDR prefix selects CIDR matching");
+	ok(r4->client_addr_pred.cidr_count == 1,
+		"PgSQL QP: one CIDR prefix parsed");
+	ok(r4->client_addr_pred.cidrs[0].prefix_len == 20,
+		"PgSQL QP: CIDR prefix length parsed");
+	free(r4->client_addr);
+	free(r4);
+
+	// A malformed CIDR must not be installed in a state where it could match.
+	auto *r5 = PgSQL_Query_Processor::new_query_rule(
+		5, true, nullptr, nullptr, 0,
+		"10.0.0.0/33",          // prefix length out of range for IPv4
+		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
+		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+	ok(r5->client_addr_pred.match == QP_ADDR_MATCH_NONE,
+		"PgSQL QP: malformed CIDR leaves the address criterion inert");
+	ok(r5->client_addr_pred.cidr_count == 0,
+		"PgSQL QP: malformed CIDR parses no prefixes");
+	free(r5->client_addr);
+	free(r5);
+
+	// A bare '_' used to be compared literally and so never matched anything.
+	// It has to select wildcard matching, otherwise the path this change fixes
+	// silently regresses.
+	auto *r6 = PgSQL_Query_Processor::new_query_rule(
+		6, true, nullptr, nullptr, 0,
+		"10.0.1_.5",            // bare '_', no '%'
+		nullptr, -1, nullptr, nullptr, nullptr, false, nullptr,
+		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+	ok(r6->client_addr_pred.match == QP_ADDR_MATCH_WILDCARD,
+		"PgSQL QP: bare '_' selects wildcard matching");
+	free(r6->client_addr);
+	free(r6);
+
+	// A Unix socket path is how a socket listener spells itself in proxy_addr.
+	// It must stay on the exact-match path rather than being mistaken for a
+	// malformed prefix merely because it contains '/'.
+	auto *r7 = PgSQL_Query_Processor::new_query_rule(
+		7, true, nullptr, nullptr, 0,
+		nullptr,                // no client_addr
+		"/tmp/proxysql.sock",   // Unix listener path
+		0, nullptr, nullptr, nullptr, false, nullptr,
+		-1, nullptr, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+		nullptr, nullptr, -1, -1, -1, false, nullptr, nullptr);
+	ok(r7->proxy_addr_pred.match == QP_ADDR_MATCH_EXACT,
+		"PgSQL QP: Unix socket path in proxy_addr stays exact, not CIDR");
+	free(r7->proxy_addr);
+	free(r7);
 }
 
 // ============================================================================
@@ -1443,8 +1729,7 @@ static void test_pgsql_query_digests() {
 		"PgSQL QP: digest total size is 0 on empty state");
 
 	// Test purge on empty state
-	char *msg = nullptr;
-	unsigned long long purged = GloPgQPro->purge_query_digests(false, false, &msg);
+	unsigned long long purged = GloPgQPro->purge_query_digests(false, false);
 	ok(purged == 0, "PgSQL QP: purge_query_digests returns 0 on empty state");
 }
 
@@ -1478,12 +1763,16 @@ static void test_pgsql_memory_tracking() {
 // ============================================================================
 
 int main() {
-	plan(259);
+	plan(285);
 
 	test_init_minimal();
 	test_init_query_processor();
+	test_init_hostgroups();
 
 	// MySQL tests
+	test_mysql_switch_to_fast_forward_attributes(); // 11 tests
+	test_mysql_switch_to_fast_forward_matcher();    // 6 tests
+	test_regex_compile_error_reported_once_per_load(); // 2 tests
 	test_mysql_rule_creation();              // 18 tests
 	test_mysql_insert_and_retrieve();        // 2 tests
 	test_mysql_rule_sorting();               // 4 tests
@@ -1500,7 +1789,7 @@ int main() {
 
 	// PgSQL tests — new
 	test_pgsql_rule_creation_all_fields();   // 36 tests
-	test_pgsql_client_addr_wildcard();       // 4 tests
+	test_pgsql_client_addr_wildcard();       // 11 tests
 	test_pgsql_rule_attributes_flagouts();   // 7 tests
 	test_pgsql_stats_commands_counters();    // 4 tests
 	test_pgsql_stats_query_rules();          // 3 tests
@@ -1514,6 +1803,7 @@ int main() {
 	test_pgsql_memory_tracking();            // 1 test
 
 	test_cleanup_query_processor();
+	test_cleanup_hostgroups();
 	test_cleanup_minimal();
 
 	return exit_status();

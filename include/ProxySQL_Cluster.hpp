@@ -4,13 +4,30 @@
 #include "cpp.h"
 #include "thread.h"
 #include "wqueue.h"
+#include "ProxySQL_ServerDiscovery.h"
 #include <vector>
 #include <atomic>
+#include <functional>
 
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
 #define PROXYSQL_NODE_METRICS_LEN	5
+
+class SQLite3_result;
+
+#ifdef PROXYSQL40
+// Shared final step of the v1 runtime-server pulls. `commit_core_rows` takes
+// ownership of `core_rows`. Never fails: the core rows are always installed,
+// then published to the local discovery controller.
+void proxysql_cluster_install_v1_runtime_post_fetch(
+	ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
+	const std::function<void(SQLite3_result*)>& stage_core_rows,
+	const std::function<void(SQLite3_result*)>& commit_core_rows);
+bool proxysql_snapshot_installed_builtin_server_topology(
+	ProxySQL_ServerProtocol protocol, std::vector<uint32_t>& hostgroups,
+	std::string& error);
+#endif
 
 /**
  * @file ProxySQL_Cluster.hpp
@@ -55,7 +72,7 @@
 #define CLUSTER_QUERY_MYSQL_SERVERS_V2 "PROXY_SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_v2 WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_replication_hostgroups'. See top comment for details. */
-#define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups ORDER BY writer_hostgroup"
+#define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM runtime_mysql_replication_hostgroups ORDER BY writer_hostgroup"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_group_replication_hostgroups'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment FROM runtime_mysql_group_replication_hostgroups ORDER BY writer_hostgroup"
@@ -71,6 +88,9 @@
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_aws_aurora_hostgroups'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_AWS_AURORA "PROXY_SELECT writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment FROM runtime_mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_aws_rds_bgd_hostgroups'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_AWS_RDS_BGD "PROXY_SELECT writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, comment, auto_generated, status FROM runtime_mysql_aws_rds_bgd_hostgroups WHERE auto_generated=0 ORDER BY writer_hostgroup"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_galera_hostgroups'. See top comment for details. */
 #define	CLUSTER_QUERY_MYSQL_GALERA "PROXY_SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment FROM runtime_mysql_galera_hostgroups ORDER BY writer_hostgroup"
@@ -446,6 +466,8 @@ struct p_cluster_counter {
 		pulled_mysql_servers_hostgroup_attributes_failure,
 		pulled_mysql_servers_ssl_params_success,
 		pulled_mysql_servers_ssl_params_failure,
+		pulled_mysql_servers_aws_rds_bgd_hostgroups_success,
+		pulled_mysql_servers_aws_rds_bgd_hostgroups_failure,
 		pulled_mysql_servers_runtime_checks_success,
 		pulled_mysql_servers_runtime_checks_failure,
 
