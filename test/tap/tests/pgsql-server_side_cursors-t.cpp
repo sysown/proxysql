@@ -110,7 +110,7 @@ static bool portal_suspends_at_2() {
 
 int main(int argc, char** argv) {
     if (cl.getEnv()) return exit_status();
-    plan(5);
+    plan(6);
 
     PGConnPtr c = backend_conn();
     ok(c && PQstatus(c.get()) == CONNECTION_OK, "connected for cursor test");
@@ -161,8 +161,9 @@ int main(int argc, char** argv) {
 
     ok(set_native(admin.get(), true) && portal_suspends_at_2(), "native: extended-protocol portal suspends at maxRows=2");
 
-    if (!set_native(admin.get(), false))
-        diag("could not switch to the libpq protocol with an empty pool: the libpq run below may use native");
+    // Outside the todo: if the pool kept a native connection, the libpq run below would use it and
+    // pass, as if the libpq gap were fixed.
+    ok(set_native(admin.get(), false), "switched to the libpq protocol with an empty pool");
     todo_start("libpq backend protocol: a row limit cannot be passed through libpq, every row is returned (by design)");
     ok(portal_suspends_at_2(), "libpq: extended-protocol portal suspends at maxRows=2");
     todo_end();

@@ -89,12 +89,17 @@ static void reset_pool(PGconn* admin) {
 		|| !exec(admin, "LOAD PGSQL SERVERS TO RUNTIME"))
 		BAIL_OUT("could not take hostgroup %s down", hg.c_str());
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	std::string n;
 	while (std::chrono::steady_clock::now() < deadline) {
-		const std::string n = scalar(admin,
+		n = scalar(admin,
 			"SELECT COALESCE(SUM(ConnUsed+ConnFree),0) FROM stats_pgsql_connection_pool WHERE hostgroup=" + hg);
 		if (!n.empty() && atoi(n.c_str()) == 0) break;
 		usleep(100000);
 	}
+	// A connection left in the pool keeps the previous mode, and the cases that count on an empty
+	// pool would run on it.
+	if (n.empty() || atoi(n.c_str()) != 0)
+		BAIL_OUT("hostgroup %s pool did not empty in 10s (%s connections left)", hg.c_str(), n.c_str());
 	if (!exec(admin, "UPDATE pgsql_servers SET status='ONLINE' WHERE hostgroup_id=" + hg)
 		|| !exec(admin, "LOAD PGSQL SERVERS TO RUNTIME"))
 		BAIL_OUT("could not bring hostgroup %s back", hg.c_str());
