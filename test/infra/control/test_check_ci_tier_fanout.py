@@ -19,6 +19,37 @@ class RouteTests(unittest.TestCase):
    rows[0].update(group_axis='tap_group',axes={'tap_group':values})
    errors=validate_routes(rows,callers,engines,{'g1','g10'},{'g1'})
    self.assertTrue(any('group axis' in error for error in errors),errors)
+ def test_group_axis_rejects_nonmapping_axes_without_crashing(self):
+  for axes in (None,[],['tap_group'],'tap_group',1,False):
+   with self.subTest(axes=axes):
+    rows,callers,engines=self.fixture()
+    rows[0].update(group_axis='tap_group',axes=axes)
+    errors=validate_routes(rows,callers,engines,{'g1'},{'g1'})
+    self.assertTrue(any('invalid product group axis' in error for error in errors),errors)
+    self.assertIn('lower-tier coverage lost: v30/g1',errors)
+    self.assertIn('lower-tier coverage lost: v31/g1',errors)
+ def test_tap_groups_inherit_job_environment(self):
+  for value in ['g1','${{ matrix.tap_group }}']:
+   with self.subTest(value=value):
+    rows,callers,engines=self.fixture()
+    known={'g1'}
+    if value!='g1':
+     rows[0].update(group_axis='tap_group',axes={'tap_group':['g1','g10']})
+     known.add('g10')
+    job=engines['ci-g1.yml']['jobs']['tests']
+    job['env']={'TAP_GROUP':value}
+    job['steps'][-1]['run']='test/infra/control/run-tests-isolated.bash'
+    self.assertEqual(validate_routes(rows,callers,engines,known,{'g1'}),[])
+ def test_step_tap_group_overrides_inherited_job_group(self):
+  for value,missing in [('g1','g10'),('','g1, g10')]:
+   with self.subTest(value=value):
+    rows,callers,engines=self.fixture()
+    rows[0].update(group_axis='tap_group',axes={'tap_group':['g1','g10']})
+    job=engines['ci-g1.yml']['jobs']['tests']
+    job['env']={'TAP_GROUP':'${{ matrix.tap_group }}'}
+    job['steps'][-1].update(env={'TAP_GROUP':value},run='test/infra/control/run-tests-isolated.bash')
+    errors=validate_routes(rows,callers,engines,{'g1','g10'},{'g1'})
+    self.assertIn("group not executed by ('CI-g1', 'run', 'tests') on v30/normal: "+missing,errors)
  def test_native_completion_route_preserves_automatic_coverage(self):
   rows,callers,engines=self.fixture()
   callers['CI-g1']['on']['workflow_run']['workflows']=['CI-trigger','CI-builds']

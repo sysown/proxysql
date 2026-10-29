@@ -149,7 +149,8 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
         group_axis=row.get('group_axis')
         axis_groups=set()
         if group_axis is not None:
-            values=row.get('axes',{}).get(group_axis) if isinstance(group_axis,str) else None
+            axes=row.get('axes',{})
+            values=axes.get(group_axis) if isinstance(axes,dict) and isinstance(group_axis,str) else None
             if (not isinstance(values,list) or not values
                 or any(not isinstance(value,str) or not value for value in values)
                 or not required_groups.issubset(values)):
@@ -210,7 +211,7 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
                             execution_ran=True
                         executed=('run-tests-isolated.bash' in run or 'run-unit-tests-asan-coverage.bash' in run or 'unit-tests' in run)
                         if not executed or not allowed(step.get('if'),tier,mode,inputs,row['job']):continue
-                        value=resolve(step.get('env',{}).get('TAP_GROUP',''),inputs)
+                        value=resolve(step.get('env',{}).get('TAP_GROUP',job.get('env',{}).get('TAP_GROUP','')),inputs)
                         if value:wired.add(value)
                         wired.update(re.findall(r"TAP_GROUP=[\"']?([a-zA-Z0-9_-]+)",run))
                         if group_axis:
