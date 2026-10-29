@@ -96,6 +96,15 @@ class IdentityTests(unittest.TestCase):
         self.assertIn('-DENABLE_THREAD_SANITIZER=ON', tsan['settings'])
         self.assertIn('-DSKIP_EXTENSIONS=jemalloc', tsan['settings'])
 
+    def test_tsan_duckdb_identity_preserves_the_effective_final_overrides(self):
+        self.env['WITHTSAN'] = '1'
+        self.env['DUCKDB_CMAKE_FLAGS'] = (
+            '-DENABLE_THREAD_SANITIZER=ON -DENABLE_THREAD_SANITIZER=OFF '
+            '-DSKIP_EXTENSIONS=jemalloc -DSKIP_EXTENSIONS=other')
+        options = self.identity()['settings']
+        self.assertEqual(options[-2:], ['-DENABLE_THREAD_SANITIZER=ON',
+                                       '-DSKIP_EXTENSIONS=jemalloc'])
+
     def test_actual_source_digest_is_checked(self):
         (self.root / 'deps/duckdb/duckdb-1.4.5.tar.gz').write_bytes(b'corrupted')
         with self.assertRaisesRegex(ValueError, 'SHA-256'):

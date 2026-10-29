@@ -90,6 +90,15 @@ class PreparationTests(unittest.TestCase):
                               env=env or self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               universal_newlines=True, timeout=30)
 
+    def test_tsan_rejects_invalid_prepare_mode_before_source_override(self):
+        result = subprocess.run(
+            ['bash', str(self.root / 'deps/artifacts/prepare.bash'), 'openssl',
+             str(self.root), 'typo'], env=dict(self.env, WITHTSAN='1'),
+            text=True, capture_output=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('DEPS_MODE must be auto, source, or prebuilt', result.stderr)
+        self.assertEqual(self.count(), 0)
+
     def test_empty_registry_source_fallback_and_noop(self):
         with patch.object(self.api, 'download_artifact', side_effect=AssertionError('network used')):
             self.assertEqual('source', self.prepare()['origin'])

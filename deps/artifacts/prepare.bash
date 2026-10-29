@@ -4,9 +4,10 @@ set -euo pipefail
 dependency=${1:?dependency required}
 repo_root=${2:?repository root required}
 mode=${3:-auto}
-# TSAN never restores dependency archives, including the no-Python fallback.
-if [[ "${WITHTSAN:-0}" == 1 ]]; then mode=source; fi
 case "$mode" in auto|source|prebuilt) ;; *) echo 'ERROR: DEPS_MODE must be auto, source, or prebuilt' >&2; exit 1;; esac
+# TSAN never restores dependency archives, including the no-Python fallback.
+# Reject a caller typo before replacing an otherwise valid mode.
+if [[ "${WITHTSAN:-0}" == 1 ]]; then mode=source; fi
 make_flags=${MAKEFLAGS:-}
 make_short_flags=${make_flags%% *}
 if [[ "$make_short_flags" != --* && "$make_short_flags" == *n* ]]; then

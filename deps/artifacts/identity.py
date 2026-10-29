@@ -171,12 +171,12 @@ def build_identity(dependency, root, environ):
     if environ.get('WITHTSAN') == '1' and policy.exists():
         helper[policy.name] = digest_file(policy)
     setting = environ.get(conf['setting'], assignment(conf['recipe'], conf['setting']))
-    if (dependency == 'duckdb' and environ.get('WITHTSAN') == '1' and
-            '-DENABLE_THREAD_SANITIZER=ON' not in shlex.split(setting)):
-        setting += ' -DENABLE_THREAD_SANITIZER=ON'
-    if (dependency == 'duckdb' and environ.get('WITHTSAN') == '1' and
-            '-DSKIP_EXTENSIONS=jemalloc' not in shlex.split(setting)):
-        setting += ' -DSKIP_EXTENSIONS=jemalloc'
+    if dependency == 'duckdb' and environ.get('WITHTSAN') == '1':
+        required = ['-DENABLE_THREAD_SANITIZER=ON', '-DSKIP_EXTENSIONS=jemalloc']
+        # Match the source Make recipe's final overrides. Checking membership
+        # alone misses an earlier ON followed by a later conflicting OFF.
+        if shlex.split(setting)[-2:] != required:
+            setting += ' ' + ' '.join(required)
     flags = {key: environ.get(key, '') for key in FLAGS}
     # Custom toolchain files can include arbitrary other files. Source fallback
     # is safer than claiming that hashing the top-level file captures all inputs.
