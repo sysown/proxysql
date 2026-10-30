@@ -3695,6 +3695,14 @@ void MySQL_Monitor::process_aws_rds_topology(MySQL_Monitor_State_Data* mmsd) {
 
 	if (topology.blue_green) {
 		if (mysql_thread___aws_blue_green_deployment_auto_discovery) {
+#ifdef PROXYSQL40
+			// A plugin can manage the server inventory for this hostgroup pair.
+			// It creates a mysql_aws_rds_bgd_hostgroups row when it finds a
+			// deployment, so skip native row creation for managed hostgroups.
+			if (proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql, mmsd->writer_hostgroup, mmsd->reader_hostgroup)) {
+				return;
+			}
+#endif
 			MyHGM->add_aws_rds_bgd_hostgroup_entry(mmsd->hostname, mmsd->port);
 		}
 	} else {
@@ -6763,6 +6771,11 @@ static void aws_rds_bgd_set_status(AWS_RDS_BGD_State& st, AWS_RDS_BGD_Status sta
 
 	st.bgd_status = status;
 	MyHGM->aws_rds_bgd_set_runtime_status(st.writer_hg, static_cast<int>(status));
+#ifdef PROXYSQL40
+	if (st.worker_bgd_status != nullptr) {
+		st.worker_bgd_status->store(status);
+	}
+#endif
 
 	if (status == AWS_RDS_BGD_Status::NONE) {
 		aws_rds_bgd_clear_bgd_in_progress(st);
@@ -6880,6 +6893,9 @@ void* monitor_RDS_BGD_thread_HG(void* arg) {
 
 	AWS_RDS_BGD_State st;
 	st.writer_hg = wHG;
+#ifdef PROXYSQL40
+	st.worker_bgd_status = &worker->bgd_status;
+#endif
 
 	MyHGM->aws_rds_bgd_set_runtime_status(wHG, static_cast<int>(AWS_RDS_BGD_Status::NONE));
 
@@ -7225,6 +7241,80 @@ void MySQL_Monitor::aws_rds_bgd_build_map(AWS_RDS_BGD_State& st, AWS_RDS_Topolog
 	}
 
 	std::string green_writer_host = target->endpoint;
+
+#ifdef PROXYSQL40
+	// A plugin may manage hostgroups and supply exact blue/green pairs,
+	// including replicas. Use those pairs to build the BG map.
+	const auto managed = proxysql_active_managed_blue_green(st.writer_hg);
+	if (managed) {
+		if (managed->reader_hostgroup != st.reader_hg ||
+			managed->green_writer_hostgroup != (uint32_t)st.green_writer_hg ||
+			managed->green_reader_hostgroup != (uint32_t)st.green_reader_hg) {
+			return;
+		}
+
+		const auto writer = std::find_if(managed->pairs.begin(), managed->pairs.end(),
+			[](const auto& pair) { return pair.writer; });
+		if (writer == managed->pairs.end() ||
+			strcasecmp(writer->green_hostname.c_str(), green_writer_host.c_str()) != 0) {
+			proxy_warning("AWS RDS BGD [wHG=%u]: topology TARGET does not match the managed green writer\n",
+				st.writer_hg);
+			return;
+		}
+
+		std::vector<AWS_RDS_BlueGreenPair> pairs;
+
+		MyHGM->wrlock();
+		auto find_server = [&](uint32_t hg, const std::string& host, uint16_t port) -> MySrvC* {
+			MyHGC* hgc = MyHGM->MyHGC_find(hg);
+			if (!hgc || !hgc->mysrvs) {
+				return nullptr;
+			}
+			for (unsigned int i = 0; i < hgc->mysrvs->cnt(); ++i) {
+				MySrvC* server = hgc->mysrvs->idx(i);
+				if (server->port == port && strcasecmp(server->address, host.c_str()) == 0) {
+					return server;
+				}
+			}
+			return nullptr;
+		};
+
+		for (const auto& pair : managed->pairs) {
+			MySrvC* blue = find_server(pair.writer ? st.writer_hg : st.reader_hg,
+				pair.blue_hostname, pair.port);
+			MySrvC* green = find_server(pair.writer ? (uint32_t)st.green_writer_hg :
+				(uint32_t)st.green_reader_hg, pair.green_hostname, pair.port);
+			if (!blue || !green ||
+				blue->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD ||
+				blue->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT) {
+				pairs.clear();
+				break;
+			}
+
+			AWS_RDS_BlueGreenPair mapped;
+			mapped.blue_host = blue->address;
+			mapped.green_host = green->address;
+			mapped.port = pair.port;
+			mapped.blue_weight = blue->weight;
+			mapped.blue_max_conns = blue->max_connections;
+			mapped.blue_use_ssl = blue->use_ssl;
+			mapped.green_offline = green->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD ||
+				green->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT;
+			if (!mapped.green_offline) {
+				mapped.green_use_ssl = green->use_ssl;
+			}
+			mapped.is_writer = pair.writer;
+			pairs.push_back(std::move(mapped));
+		}
+		MyHGM->wrunlock();
+
+		if (pairs.size() == managed->pairs.size()) {
+			st.bg_map = std::move(pairs);
+		}
+
+		return;
+	}
+#endif
 
 	MyHGM->wrlock();
 
@@ -7641,9 +7731,17 @@ void MySQL_Monitor::handle_aws_rds_bgd(AWS_RDS_BGD_State& st, AWS_RDS_Topology_R
 	}
 
 	if (topology_status == st.bgd_status) {
-		// Refresh or retry green IP resolution on every eligible same-phase observation.
 		if (topology_status >= AWS_RDS_BGD_Status::AVAILABLE
 			&& topology_status <= AWS_RDS_BGD_Status::WRITER_SWITCHOVER_POST_PROCESSING) {
+			// The bg_map should already be built for this phase.
+			// Retry if it is still empty.
+			if (st.bg_map.empty()) {
+				aws_rds_bgd_build_map(st, topology);
+				if (!st.bg_map.empty())
+					aws_rds_bgd_add_green_writer_in_hg(st);
+			}
+
+			// Refresh or retry green IP resolution on every eligible same-phase observation.
 			aws_rds_bgd_resolve_green_ips(st);
 		}
 
@@ -8018,6 +8116,17 @@ void MySQL_Monitor::aws_rds_bgd_handle_topology_absent(AWS_RDS_BGD_State& st) {
 	} else if (st.bgd_status != AWS_RDS_BGD_Status::NONE) {
 		handle_aws_rds_bgd_post_switchover(st, true);
 	}
+#ifdef PROXYSQL40
+	const auto active = proxysql_active_managed_blue_green(st.writer_hg);
+	if (active) {
+		std::string error;
+		if (!proxysql_complete_managed_blue_green(
+			st.writer_hg, active->deployment_id, error)) {
+			proxy_warning("AWS RDS BGD [wHG=%u]: plugin managed blue/green cleanup failed: %s\n",
+				st.writer_hg, error.c_str());
+		}
+	}
+#endif
 }
 
 
@@ -8152,6 +8261,18 @@ void * MySQL_Monitor::monitor_aws_rds_bgd() {
 			for (auto& [writer_hg, worker] : workers) {
 				auto cluster_it = active_cluster_checksums.find(writer_hg);
 				if (cluster_it == active_cluster_checksums.end()) {
+#ifdef PROXYSQL40
+					// An inventory update for another target can expose this managed
+					// worker's temporary writer move. Keep its switchover and current
+					// checksum while the managed BGD handoff remains active.
+					const auto status = worker->bgd_status.load();
+					if (status >= AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS &&
+						status <= AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS &&
+						cluster_checksums.find(writer_hg) != cluster_checksums.end() &&
+						proxysql_active_managed_blue_green(writer_hg)) {
+						continue;
+					}
+#endif
 					worker->worker_stop.store(true);
 					stopped_workers.push_back(writer_hg);
 					proxy_info(

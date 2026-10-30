@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -135,6 +136,12 @@ public:
 	bool install_managed_discovery(ProxySQL_ServerProtocol protocol, uint64_t desired_revision,
 		const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
 		uint64_t& runtime_generation_out, std::string& error);
+	bool activate_managed_blue_green(
+		const ProxySQL_ManagedBlueGreenHandoff& handoff, std::string& error);
+	bool complete_managed_blue_green(uint32_t writer_hostgroup,
+		const std::string& deployment_id, std::string& error);
+	std::optional<ProxySQL_ManagedBlueGreenHandoff> active_managed_blue_green(
+		uint32_t writer_hostgroup) const;
 	bool install_server_discovery_controller(ProxySQL_ServerProtocol protocol,
 		ProxySQL_ServerDiscoveryController *controller,
 		void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle,
@@ -249,6 +256,7 @@ private:
 	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
 	std::vector<uint32_t> server_delegated_hostgroups_[2] {};
 	std::vector<ProxySQL_ServerHostgroupClaim> managed_server_hostgroup_claims_[2] {};
+	std::map<uint32_t, ProxySQL_ManagedBlueGreenHandoff> managed_blue_green_handoffs_;
 	const ProxySQL_PluginDescriptor *managed_server_claim_owner_[2] {nullptr, nullptr};
 	uint64_t managed_server_revisions_[2] {0, 0};
 	bool release_managed_discovery(ProxySQL_ServerProtocol protocol,

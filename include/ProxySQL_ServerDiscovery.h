@@ -105,6 +105,29 @@ struct ProxySQL_ServerHostgroupClaim {
 	ProxySQL_ServerRoleMonitorConfig role_monitor {};
 };
 
+// Separate from the ABI-16 by-value claim and desired-set structures. AWS
+// supplies exact physical pairs after all four server groups are installed.
+struct ProxySQL_ManagedBlueGreenPair {
+	std::string blue_arn;
+	std::string green_arn;
+	std::string blue_resource_id;
+	std::string green_resource_id;
+	std::string blue_hostname;
+	std::string green_hostname;
+	uint16_t port {0};
+	bool writer {false};
+};
+
+struct ProxySQL_ManagedBlueGreenHandoff {
+	uint64_t generation {0};
+	uint32_t writer_hostgroup {0};
+	uint32_t reader_hostgroup {0};
+	uint32_t green_writer_hostgroup {0};
+	uint32_t green_reader_hostgroup {0};
+	std::string deployment_id;
+	std::vector<ProxySQL_ManagedBlueGreenPair> pairs;
+};
+
 #ifdef PROXYSQL40
 // Internal, lifetime-safe snapshots used by core monitor/HGM consumers. These
 // are not plugin service-table callbacks.
@@ -138,6 +161,12 @@ bool proxysql_install_managed_discovery_locked(ProxySQL_ServerProtocol protocol,
  uint64_t& runtime_generation_out, std::string& error);
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgroup_claims(
  ProxySQL_ServerProtocol protocol);
+bool proxysql_activate_managed_blue_green(
+	const ProxySQL_ManagedBlueGreenHandoff& handoff, std::string& error);
+bool proxysql_complete_managed_blue_green(uint32_t writer_hostgroup,
+	const std::string& deployment_id, std::string& error);
+std::optional<ProxySQL_ManagedBlueGreenHandoff>
+proxysql_active_managed_blue_green(uint32_t writer_hostgroup);
 // Returns true for an active exact-pair claim. The optional output is reset to
 // zero before lookup and receives the claim's writer placement value on match.
 bool proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol protocol,

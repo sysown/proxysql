@@ -1706,6 +1706,17 @@ bool valid_managed_claim(ProxySQL_ServerProtocol protocol,
 				error = "invalid MySQL replication monitor claim";
 				return false;
 			}
+			if (monitor.green_writer_hostgroup != 0 ||
+				monitor.green_reader_hostgroup != 0) {
+				if (!valid_hostgroup(monitor.green_writer_hostgroup) ||
+					!valid_hostgroup(monitor.green_reader_hostgroup) ||
+					std::set<uint32_t>{claim.writer_hostgroup, claim.reader_hostgroup,
+						monitor.green_writer_hostgroup,
+						monitor.green_reader_hostgroup}.size() != 4) {
+					error = "RDS blue/green reservation needs four distinct hostgroups";
+					return false;
+				}
+			}
 			return true;
 		case ProxySQL_ServerRoleMonitor::pgsql_replication:
 			if (protocol != ProxySQL_ServerProtocol::pgsql || monitor.check_type != "read_only") {
@@ -1759,11 +1770,28 @@ bool valid_managed_claim(ProxySQL_ServerProtocol protocol,
 
 std::vector<uint32_t> managed_claim_hostgroups(const ProxySQL_ServerHostgroupClaim& claim) {
 	std::vector<uint32_t> result {claim.writer_hostgroup, claim.reader_hostgroup};
-	if (claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green) {
+	if (claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green ||
+		(claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_replication &&
+		 (claim.role_monitor.green_writer_hostgroup != 0 ||
+		  claim.role_monitor.green_reader_hostgroup != 0))) {
 		result.push_back(claim.role_monitor.green_writer_hostgroup);
 		result.push_back(claim.role_monitor.green_reader_hostgroup);
 	}
 	return result;
+}
+
+bool overlaps_active_blue_green(const ProxySQL_ServerDesiredSet& desired,
+	const std::map<uint32_t, ProxySQL_ManagedBlueGreenHandoff>& active) {
+	if (desired.protocol != ProxySQL_ServerProtocol::mysql) return false;
+	for (const auto& entry : active) {
+		const auto& bgd = entry.second;
+		for (uint32_t hostgroup : desired.delegated_hostgroups) {
+			if (hostgroup == bgd.writer_hostgroup || hostgroup == bgd.reader_hostgroup ||
+				hostgroup == bgd.green_writer_hostgroup ||
+				hostgroup == bgd.green_reader_hostgroup) return true;
+		}
+	}
+	return false;
 }
 
 bool execute_managed_topology_sql(SQLite3DB& db, const std::string& sql, std::string& error) {
@@ -2157,6 +2185,7 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 	ProxySQL_ServerRuntimeInstallLock install_lock(protocol);
 	ProxySQL_ServerRuntimeSnapshot snapshot {};
 	std::vector<ProxySQL_ServerHostgroupClaim> previous;
+	std::map<uint32_t, ProxySQL_ManagedBlueGreenHandoff> active_blue_green;
 	const ProxySQL_PluginDescriptor *claim_owner = nullptr;
 	{
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
@@ -2180,6 +2209,68 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 		snapshot = server_snapshots_present_[index] ? server_snapshots_[index] :
 			ProxySQL_ServerRuntimeSnapshot {protocol, 0, {}, {}};
 		previous = managed_server_hostgroup_claims_[index];
+		if (protocol == ProxySQL_ServerProtocol::mysql)
+			active_blue_green = managed_blue_green_handoffs_;
+	}
+	std::vector<ProxySQL_ServerHostgroupClaim> topology_claims = claims;
+	for (const auto& entry : active_blue_green) {
+		const auto& bgd = entry.second;
+		const auto match = std::find_if(claims.begin(), claims.end(), [&](const auto& claim) {
+			return claim.writer_hostgroup == bgd.writer_hostgroup &&
+				claim.reader_hostgroup == bgd.reader_hostgroup &&
+				claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_replication &&
+				claim.role_monitor.green_writer_hostgroup == bgd.green_writer_hostgroup &&
+				claim.role_monitor.green_reader_hostgroup == bgd.green_reader_hostgroup;
+		});
+		if (match == claims.end()) {
+			error = "active managed Blue/Green hostgroups cannot change during switchover";
+			return false;
+		}
+		auto native_row = *match;
+		native_row.role_monitor.kind = ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green;
+		topology_claims.push_back(std::move(native_row));
+	}
+	std::unique_ptr<SQLite3_result> preserved_servers;
+	if (!active_blue_green.empty()) {
+		// Managed discovery normally installs runtime-only endpoints. A policy
+		// reload reads mysql_servers from Admin, so retain the live rows in the
+		// four BGD groups while taking all other groups from the new Admin view.
+		char* sqlite_error = nullptr;
+		int columns = 0, affected = 0;
+		SQLite3_result* configured_raw = nullptr;
+		const char* query = "SELECT hostgroup_id,hostname,port,gtid_port,status,weight,"
+			"compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment "
+			"FROM main.mysql_servers ORDER BY hostgroup_id,hostname,port";
+		const bool loaded = GloAdmin->admindb->execute_statement(query,
+			&sqlite_error, &columns, &affected, &configured_raw);
+		std::unique_ptr<SQLite3_result> configured(configured_raw);
+		std::unique_ptr<SQLite3_result> live(MyHGM->dump_table_mysql("mysql_servers"));
+		if (!loaded || sqlite_error != nullptr || !configured || !live ||
+			configured->columns != 12 || live->columns != 12) {
+			error = sqlite_error ? sqlite_error :
+				"active managed Blue/Green servers are unavailable during reload";
+			if (sqlite_error) free(sqlite_error);
+			return false;
+		}
+		std::set<uint32_t> reserved;
+		for (const auto& entry : active_blue_green) {
+			const auto& bgd = entry.second;
+			reserved.insert({bgd.writer_hostgroup, bgd.reader_hostgroup,
+				bgd.green_writer_hostgroup, bgd.green_reader_hostgroup});
+		}
+		preserved_servers.reset(new SQLite3_result(configured->columns));
+		for (const auto* column : configured->column_definition)
+			preserved_servers->add_column_definition(column->datatype, column->name);
+		for (auto* row : configured->rows) {
+			if (row && row->fields && row->fields[0] &&
+				reserved.count((uint32_t)strtoul(row->fields[0], nullptr, 10)) == 0)
+				preserved_servers->add_row(row);
+		}
+		for (auto* row : live->rows) {
+			if (row && row->fields && row->fields[0] &&
+				reserved.count((uint32_t)strtoul(row->fields[0], nullptr, 10)) != 0)
+				preserved_servers->add_row(row);
+		}
 	}
 
 	std::set<uint32_t> occupied(snapshot.topology_hostgroups.begin(),
@@ -2203,9 +2294,13 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 
 	std::vector<uint32_t> installed_topology;
 	if (!replace_managed_topology_rows(*GloAdmin->admindb, protocol,
-		previous, claims, installed_topology, error)) return false;
-	if (protocol == ProxySQL_ServerProtocol::mysql)
-		GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, false);
+		previous, topology_claims, installed_topology, error)) return false;
+	if (protocol == ProxySQL_ServerProtocol::mysql) {
+		incoming_servers_t incoming;
+		// HGM's commit takes ownership of a supplied runtime resultset.
+		incoming.runtime_mysql_servers = preserved_servers.release();
+		GloAdmin->load_mysql_servers_to_runtime(incoming, {}, {}, true, false);
+	}
 	else
 		GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, false);
 
@@ -2225,6 +2320,217 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 	return true;
 }
 
+std::optional<ProxySQL_ManagedBlueGreenHandoff>
+ProxySQL_PluginManager::active_managed_blue_green(uint32_t writer_hostgroup) const {
+	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+	const auto found = managed_blue_green_handoffs_.find(writer_hostgroup);
+	if (found == managed_blue_green_handoffs_.end()) return std::nullopt;
+	return found->second;
+}
+
+bool ProxySQL_PluginManager::activate_managed_blue_green(
+	const ProxySQL_ManagedBlueGreenHandoff& handoff, std::string& error) {
+	ConfigurationLock configuration_lock;
+	if (GloAdmin == nullptr || GloAdmin->admindb == nullptr || MyHGM == nullptr) {
+		error = "managed Blue/Green runtime is unavailable";
+		return false;
+	}
+	ScopedAdminServerLock admin_lock(ProxySQL_ServerProtocol::mysql);
+	ProxySQL_ServerRuntimeInstallLock install_lock(ProxySQL_ServerProtocol::mysql);
+	if (!admin_lock.locked() || handoff.deployment_id.empty() || handoff.pairs.empty()) {
+		error = "invalid managed Blue/Green handoff";
+		return false;
+	}
+	uint8_t writer_is_also_reader = 0;
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		const auto claim = std::find_if(managed_server_hostgroup_claims_[0].begin(),
+			managed_server_hostgroup_claims_[0].end(), [&](const auto& candidate) {
+				return candidate.writer_hostgroup == handoff.writer_hostgroup &&
+					candidate.reader_hostgroup == handoff.reader_hostgroup &&
+					candidate.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_replication &&
+					candidate.role_monitor.green_writer_hostgroup == handoff.green_writer_hostgroup &&
+					candidate.role_monitor.green_reader_hostgroup == handoff.green_reader_hostgroup;
+			});
+		if (server_controllers_[0].controller == nullptr ||
+			server_controller_retiring_[0] ||
+			!server_snapshots_present_[0] ||
+			server_snapshots_[0].generation != handoff.generation ||
+			claim == managed_server_hostgroup_claims_[0].end()) {
+			error = "managed Blue/Green claim or generation is stale";
+			return false;
+		}
+		writer_is_also_reader = claim->role_monitor.writer_is_also_reader;
+		const auto prior = managed_blue_green_handoffs_.find(handoff.writer_hostgroup);
+		if (prior != managed_blue_green_handoffs_.end()) {
+			const auto& accepted = prior->second;
+			bool same = accepted.deployment_id == handoff.deployment_id &&
+				accepted.pairs.size() == handoff.pairs.size();
+			for (size_t i = 0; same && i < handoff.pairs.size(); ++i) {
+				const auto& a = accepted.pairs[i];
+				const auto& b = handoff.pairs[i];
+				same = a.blue_arn == b.blue_arn && a.green_arn == b.green_arn &&
+					a.blue_resource_id == b.blue_resource_id &&
+					a.green_resource_id == b.green_resource_id &&
+					a.blue_hostname == b.blue_hostname &&
+					a.green_hostname == b.green_hostname &&
+					a.port == b.port && a.writer == b.writer;
+			}
+			if (same) { error.clear(); return true; }
+			error = "a different managed Blue/Green handoff is active";
+			return false;
+		}
+	}
+	const auto current = proxysql_current_server_runtime_rows(
+		ProxySQL_ServerProtocol::mysql);
+	if (!current) {
+		error = "managed Blue/Green server inventory is unavailable";
+		return false;
+	}
+	auto present = [&](uint32_t hostgroup, const std::string& hostname, uint16_t port) {
+		return std::any_of(current->begin(), current->end(), [&](const auto& row) {
+			return row.hostgroup_id == hostgroup && row.hostname == hostname &&
+				row.port == port;
+		});
+	};
+	std::set<std::string> blue_arns, green_arns, resource_ids;
+	std::set<std::pair<std::string, uint16_t>> blue_endpoints, green_endpoints;
+	size_t writers = 0;
+	for (const auto& pair : handoff.pairs) {
+		if (pair.blue_arn.empty() || pair.green_arn.empty() ||
+			pair.blue_resource_id.empty() || pair.green_resource_id.empty() ||
+			pair.blue_hostname.empty() || pair.green_hostname.empty() || pair.port == 0 ||
+			!blue_arns.insert(pair.blue_arn).second ||
+			!green_arns.insert(pair.green_arn).second ||
+			!resource_ids.insert(pair.blue_resource_id).second ||
+			!resource_ids.insert(pair.green_resource_id).second ||
+			!blue_endpoints.emplace(pair.blue_hostname, pair.port).second ||
+			!green_endpoints.emplace(pair.green_hostname, pair.port).second ||
+			!present(pair.writer ? handoff.writer_hostgroup : handoff.reader_hostgroup,
+				pair.blue_hostname, pair.port) ||
+			!present(pair.writer ? handoff.green_writer_hostgroup : handoff.green_reader_hostgroup,
+				pair.green_hostname, pair.port)) {
+			error = "managed Blue/Green pairs do not match installed inventory";
+			return false;
+		}
+		if (pair.writer) ++writers;
+	}
+	if (writers != 1) {
+		error = "managed Blue/Green handoff needs one writer pair";
+		return false;
+	}
+	const std::string sql =
+		"INSERT INTO mysql_aws_rds_bgd_hostgroups"
+		"(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,"
+		"active,writer_is_also_reader,check_interval_ms,check_timeout_ms,comment) VALUES(" +
+		std::to_string(handoff.writer_hostgroup) + "," +
+		std::to_string(handoff.reader_hostgroup) + "," +
+		std::to_string(handoff.green_writer_hostgroup) + "," +
+		std::to_string(handoff.green_reader_hostgroup) +
+		",1," + std::to_string(writer_is_also_reader) +
+		",1000,800,'" + MANAGED_TOPOLOGY_COMMENT + "')";
+	if (!execute_managed_topology_sql(*GloAdmin->admindb, sql, error)) return false;
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		// Publish the exact pairs before exposing the monitor resultset: the
+		// first worker probe must never see a BGD row without its pair map.
+		managed_blue_green_handoffs_[handoff.writer_hostgroup] = handoff;
+	}
+	MyHGM->wrlock();
+	char* runtime_error = nullptr;
+	std::unique_ptr<SQLite3_result> ignored(
+		MyHGM->execute_query_under_lock(sql.c_str(), &runtime_error));
+	const bool runtime_installed = runtime_error == nullptr;
+	if (runtime_error != nullptr) {
+		error = runtime_error;
+		free(runtime_error);
+	}
+	if (runtime_installed) MyHGM->update_aws_rds_bgd_hosts_monitor_resultset();
+	MyHGM->wrunlock();
+	if (!runtime_installed) {
+		{
+			std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+			managed_blue_green_handoffs_.erase(handoff.writer_hostgroup);
+		}
+		std::string ignored;
+		(void)execute_managed_topology_sql(*GloAdmin->admindb,
+			"DELETE FROM mysql_aws_rds_bgd_hostgroups WHERE writer_hostgroup=" +
+			std::to_string(handoff.writer_hostgroup) + " AND comment='" +
+			MANAGED_TOPOLOGY_COMMENT + "'", ignored);
+		return false;
+	}
+	error.clear();
+	return true;
+}
+
+bool ProxySQL_PluginManager::complete_managed_blue_green(uint32_t writer_hostgroup,
+	const std::string& deployment_id, std::string& error) {
+	if (GloAdmin == nullptr || GloAdmin->admindb == nullptr || MyHGM == nullptr) {
+		error = "managed Blue/Green runtime is unavailable";
+		return false;
+	}
+	ConfigurationLock configuration_lock;
+	ScopedAdminServerLock admin_lock(ProxySQL_ServerProtocol::mysql);
+	ProxySQL_ServerRuntimeInstallLock install_lock(ProxySQL_ServerProtocol::mysql);
+	if (!admin_lock.locked()) {
+		error = "Admin server lock is unavailable";
+		return false;
+	}
+	std::string restore_sql;
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		const auto found = managed_blue_green_handoffs_.find(writer_hostgroup);
+		if (found == managed_blue_green_handoffs_.end()) {
+			error.clear();
+			return true;
+		}
+		if (deployment_id.empty() || found->second.deployment_id != deployment_id) {
+			error = "managed Blue/Green deployment ID does not match";
+			return false;
+		}
+		for (const auto& claim : managed_server_hostgroup_claims_[0]) {
+			if (claim.writer_hostgroup == writer_hostgroup &&
+				claim.reader_hostgroup == found->second.reader_hostgroup) {
+				auto native_row = claim;
+				native_row.role_monitor.kind =
+					ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green;
+				restore_sql = insert_managed_topology_sql(native_row);
+				break;
+			}
+		}
+	}
+	const std::string sql =
+		"DELETE FROM mysql_aws_rds_bgd_hostgroups WHERE writer_hostgroup=" +
+		std::to_string(writer_hostgroup) + " AND comment='" +
+		MANAGED_TOPOLOGY_COMMENT + "'";
+	if (!execute_managed_topology_sql(*GloAdmin->admindb, sql, error)) return false;
+	MyHGM->wrlock();
+	char* runtime_error = nullptr;
+	std::unique_ptr<SQLite3_result> ignored(
+		MyHGM->execute_query_under_lock(sql.c_str(), &runtime_error));
+	const bool runtime_removed = runtime_error == nullptr;
+	if (runtime_error != nullptr) {
+		error = runtime_error;
+		free(runtime_error);
+	}
+	if (runtime_removed) MyHGM->update_aws_rds_bgd_hosts_monitor_resultset();
+	MyHGM->wrunlock();
+	if (!runtime_removed) {
+		if (!restore_sql.empty()) {
+			std::string restore_error;
+			(void)execute_managed_topology_sql(*GloAdmin->admindb,
+				std::string("INSERT OR IGNORE") + restore_sql.substr(6), restore_error);
+		}
+		return false;
+	}
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		managed_blue_green_handoffs_.erase(writer_hostgroup);
+	}
+	error.clear();
+	return true;
+}
+
 bool ProxySQL_PluginManager::release_managed_discovery(
 	ProxySQL_ServerProtocol protocol, const ProxySQL_PluginDescriptor *owner,
 	std::string& error) {
@@ -2237,6 +2543,8 @@ bool ProxySQL_PluginManager::release_managed_discovery(
 	if (GloAdmin == nullptr || GloAdmin->admindb == nullptr) {
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 		managed_server_hostgroup_claims_[index].clear();
+		if (protocol == ProxySQL_ServerProtocol::mysql)
+			managed_blue_green_handoffs_.clear();
 		managed_server_claim_owner_[index] = nullptr;
 		managed_server_revisions_[index] = 0;
 		rebuild_server_delegated_hostgroups(index);
@@ -2278,6 +2586,8 @@ bool ProxySQL_PluginManager::release_managed_discovery(
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 		snapshot.generation = proxysql_advance_server_runtime_generation(protocol);
 		managed_server_hostgroup_claims_[index].clear();
+		if (protocol == ProxySQL_ServerProtocol::mysql)
+			managed_blue_green_handoffs_.clear();
 		managed_server_claim_owner_[index] = nullptr;
 		managed_server_revisions_[index] = 0;
 		rebuild_server_delegated_hostgroups(index);
@@ -2445,6 +2755,7 @@ bool ProxySQL_PluginManager::revalidate_server_desired_set(
 		!server_controller_retiring_[index] &&
 		server_snapshots_present_[index] &&
 		server_snapshots_[index].generation == desired_set.generation &&
+		!overlaps_active_blue_green(desired_set, managed_blue_green_handoffs_) &&
 		is_complete_managed_claim_scope(managed_server_hostgroup_claims_[index],
 			desired_set.delegated_hostgroups);
 }
@@ -2459,6 +2770,7 @@ bool ProxySQL_PluginManager::begin_server_desired_set_apply(
 		server_controller_retiring_[index] ||
 		!server_snapshots_present_[index] ||
 		server_snapshots_[index].generation != desired_set.generation ||
+		overlaps_active_blue_green(desired_set, managed_blue_green_handoffs_) ||
 		!is_complete_managed_claim_scope(managed_server_hostgroup_claims_[index],
 			desired_set.delegated_hostgroups)) return false;
 	++server_desired_applies_inflight_[index];
@@ -2959,6 +3271,34 @@ std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgr
 	ScopedActiveManagerPin pin;
 	return pin.manager() == nullptr ? std::vector<ProxySQL_ServerHostgroupClaim>{} :
 		pin.manager()->managed_server_hostgroup_claims(protocol);
+}
+
+bool proxysql_activate_managed_blue_green(
+	const ProxySQL_ManagedBlueGreenHandoff& handoff, std::string& error) {
+	ScopedActiveManagerPin pin;
+	if (pin.manager() == nullptr) {
+		error = "managed Blue/Green requires the initialized plugin manager";
+		return false;
+	}
+	return pin.manager()->activate_managed_blue_green(handoff, error);
+}
+
+bool proxysql_complete_managed_blue_green(uint32_t writer_hostgroup,
+	const std::string& deployment_id, std::string& error) {
+	ScopedActiveManagerPin pin;
+	if (pin.manager() == nullptr) {
+		error = "managed Blue/Green requires the initialized plugin manager";
+		return false;
+	}
+	return pin.manager()->complete_managed_blue_green(
+		writer_hostgroup, deployment_id, error);
+}
+
+std::optional<ProxySQL_ManagedBlueGreenHandoff>
+proxysql_active_managed_blue_green(uint32_t writer_hostgroup) {
+	ScopedActiveManagerPin pin;
+	return pin.manager() == nullptr ? std::nullopt :
+		pin.manager()->active_managed_blue_green(writer_hostgroup);
 }
 
 bool proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
