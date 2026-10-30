@@ -6771,9 +6771,11 @@ static void aws_rds_bgd_set_status(AWS_RDS_BGD_State& st, AWS_RDS_BGD_Status sta
 
 	st.bgd_status = status;
 	MyHGM->aws_rds_bgd_set_runtime_status(st.writer_hg, static_cast<int>(status));
+#ifdef PROXYSQL40
 	if (st.worker_bgd_status != nullptr) {
 		st.worker_bgd_status->store(status);
 	}
+#endif
 
 	if (status == AWS_RDS_BGD_Status::NONE) {
 		aws_rds_bgd_clear_bgd_in_progress(st);
@@ -6891,7 +6893,9 @@ void* monitor_RDS_BGD_thread_HG(void* arg) {
 
 	AWS_RDS_BGD_State st;
 	st.writer_hg = wHG;
+#ifdef PROXYSQL40
 	st.worker_bgd_status = &worker->bgd_status;
+#endif
 
 	MyHGM->aws_rds_bgd_set_runtime_status(wHG, static_cast<int>(AWS_RDS_BGD_Status::NONE));
 
@@ -8258,13 +8262,14 @@ void * MySQL_Monitor::monitor_aws_rds_bgd() {
 				auto cluster_it = active_cluster_checksums.find(writer_hg);
 				if (cluster_it == active_cluster_checksums.end()) {
 #ifdef PROXYSQL40
-					// An inventory update for another plugin-managed target can expose
-					// this worker's temporary writer move. Keep its switchover and
-					// current checksum until the writer placement is visible again.
+					// An inventory update for another target can expose this managed
+					// worker's temporary writer move. Keep its switchover and current
+					// checksum while the managed BGD handoff remains active.
 					const auto status = worker->bgd_status.load();
-					if (cluster_checksums.find(writer_hg) != cluster_checksums.end() &&
-						status >= AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS &&
-						status <= AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS) {
+					if (status >= AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS &&
+						status <= AWS_RDS_BGD_Status::READER_SWITCHOVER_IN_PROGRESS &&
+						cluster_checksums.find(writer_hg) != cluster_checksums.end() &&
+						proxysql_active_managed_blue_green(writer_hg)) {
 						continue;
 					}
 #endif
