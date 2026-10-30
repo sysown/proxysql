@@ -800,20 +800,29 @@ static LockedResetProbe runLockedResetScenario(PGconn* admin, PGconn* be_db,
 	const std::string hg = std::to_string(HG);
 	const std::string saved_max = execScalar(admin,
 		"SELECT max_connections FROM pgsql_servers WHERE hostgroup_id=" + hg + " LIMIT 1");
-	if (saved_max.empty()) { r.detail = "could not read max_connections"; return r; }
-	if (!exec(admin, "UPDATE pgsql_servers SET max_connections=1 WHERE hostgroup_id=" + hg)
-	    || !exec(admin, "LOAD PGSQL SERVERS TO RUNTIME")) {
-		r.detail = "could not pin the pool to one backend connection";
+	const std::string saved_free = execScalar(admin,
+		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-free_connections_pct'");
+	if (saved_max.empty() || saved_free.empty()) {
+		r.detail = "could not read pool configuration";
 		return r;
 	}
 	// Put the pool back however this case ends, including the throwing paths below.
 	struct Restore {
-		PGconn* a; std::string hg, mx;
+		PGconn* a; std::string hg, mx, free;
 		~Restore() {
 			exec(a, "UPDATE pgsql_servers SET max_connections=" + mx + " WHERE hostgroup_id=" + hg);
 			exec(a, "LOAD PGSQL SERVERS TO RUNTIME");
+			exec(a, "SET pgsql-free_connections_pct=" + free);
+			exec(a, "LOAD PGSQL VARIABLES TO RUNTIME");
 		}
-	} restore{admin, hg, saved_max};
+	} restore{admin, hg, saved_max, saved_free};
+	if (!exec(admin, "SET pgsql-free_connections_pct=100")
+	    || !exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME")
+	    || !exec(admin, "UPDATE pgsql_servers SET max_connections=1 WHERE hostgroup_id=" + hg)
+	    || !exec(admin, "LOAD PGSQL SERVERS TO RUNTIME")) {
+		r.detail = "could not configure the pool";
+		return r;
+	}
 
 	{
 		std::stringstream ss;
