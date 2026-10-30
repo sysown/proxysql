@@ -551,3 +551,12 @@ cleanall:
 	cd zstd && rm -rf zstd-*/ || true
 	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 .PHONY: cleanall
+
+# Probe and prepare inside the same Make environment as the real dependency
+# targets. The CI cache action persists only the verified compressed bundles.
+.PHONY: dependency-artifact-keys dependency-artifact-prepare
+dependency-artifact-keys:
+	@python3 "$(PROXYSQL_PATH)/deps/artifacts/ci.py" keys --root "$(PROXYSQL_PATH)"
+
+dependency-artifact-prepare:
+	+@python3 "$(PROXYSQL_PATH)/deps/artifacts/ci.py" prepare --root "$(PROXYSQL_PATH)"

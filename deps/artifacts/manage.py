@@ -3,13 +3,17 @@
 import argparse
 import fcntl
 import json
+from http.client import HTTPException
 import os
 from pathlib import Path
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
+
+import store
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
@@ -19,8 +23,7 @@ from identity import (DEPENDENCIES, FORMAT_VERSION, build_identity, configuratio
                       fingerprint, load_json, load_registry, validate_entry, ToolchainUnavailable)
 
 
-class Unavailable(ValueError):
-    """Artifact availability failure, eligible for auto's source fallback."""
+Unavailable = store.Unavailable
 
 
 def report(dependency, message):
@@ -53,7 +56,8 @@ def download_artifact(entry, cache):
                         output.write(data)
                     if received < entry['size']:
                         raise Unavailable('artifact download ended before registered size')
-            except (HTTPError, URLError, TimeoutError, socket.timeout, ConnectionError) as exc:
+            except (HTTPError, URLError, TimeoutError, socket.timeout, ConnectionError,
+                    ssl.SSLError, HTTPException) as exc:
                 raise Unavailable('artifact download unavailable: ' + str(exc)) from exc
         verify_archive(temporary, entry)
         os.replace(temporary, target)
@@ -64,7 +68,7 @@ def download_artifact(entry, cache):
 
 
 def write_metadata(dependency, tree, metadata):
-    metadata['outputs'] = collect_payload(dependency, tree)
+    metadata['outputs'] = collect_payload(dependency, tree, metadata.get('version'))
     target = tree / '.proxysql-dependency.json'
     temporary = target.with_suffix('.tmp')
     temporary.write_text(json.dumps(metadata, sort_keys=True) + '\n')
@@ -97,11 +101,19 @@ def prepare_dependency(dependency, root, mode, environ):
             return dict(origin='source', fingerprint=None,
                         changed=previous != before.stat().st_mtime_ns)
         key = fingerprint(identity)
-        entry = None
-        if mode != 'source':
-            registry = load_registry(root / 'deps/artifacts/lock.json')
-            entry = next((item for item in registry['artifacts']
-                          if item['dependency'] == dependency and item['fingerprint'] == key), None)
+        entry, archive = None, None
+        if mode != 'source' and identity['eligible']:
+            local = store.local_entry(cache, dependency, identity)
+            if local is not None:
+                entry, archive = local
+            else:
+                # Migration only: an old registry may supply an already published
+                # bundle. New entries are discovered and saved without editing it.
+                registry_path = root / 'deps/artifacts/lock.json'
+                if registry_path.is_file():
+                    registry = load_registry(registry_path)
+                    entry = next((item for item in registry['artifacts']
+                                  if item['dependency'] == dependency and item['fingerprint'] == key), None)
         tree = conf['tree']
         old = None
         if (tree / '.proxysql-dependency.json').is_file():
@@ -116,6 +128,17 @@ def prepare_dependency(dependency, root, mode, environ):
                         raise ValueError('missing prepared dependency output: ' + relative)
             except (ValueError, OSError):
                 old = None
+        accepted_source = (isinstance(old, dict) and old.get('fingerprint') == key and
+                           old.get('origin') == 'source' and mode != 'prebuilt' and
+                           (tree / '.proxysql-build-complete').is_file())
+        if (mode != 'source' and identity['eligible'] and entry is None and
+                not accepted_source and environ.get('DEPS_ARTIFACT_REMOTE', '1') != '0'):
+            try:
+                entry = store.remote_entry(dependency, identity, environ)
+            except Unavailable as exc:
+                if mode == 'prebuilt':
+                    raise
+                report(dependency, 'auto: ' + str(exc) + '; building source')
         if (isinstance(old, dict) and old.get('fingerprint') == key and
                 old.get('origin') in ('source', 'prebuilt') and
                 (tree / '.proxysql-build-complete').is_file()):
@@ -123,27 +146,30 @@ def prepare_dependency(dependency, root, mode, environ):
             if ((origin == 'source' and mode != 'prebuilt') or
                     (origin == 'prebuilt' and mode != 'source' and entry is not None and
                      old.get('archive_sha256') == entry['sha256'])):
+                if identity['eligible']:
+                    store.save_local(cache, dependency, identity, tree=tree, root=root, environ=environ,
+                                     repair=(mode == 'source'))
                 report(dependency, mode + ': already prepared from ' + origin + ' (' + key[:12] + ')')
                 return dict(origin=origin, fingerprint=key, changed=False)
         if entry is not None and identity['eligible']:
             try:
-                archive = download_artifact(entry, cache)
+                archive = archive or download_artifact(entry, cache)
             except Unavailable as exc:
                 if mode == 'prebuilt':
                     raise
                 report(dependency, 'auto: ' + str(exc) + '; building source')
             else:
                 restore_bundle(archive, entry, tree)
+                store.save_local(cache, dependency, identity, archive=archive, entry=entry)
                 write_metadata(dependency, tree, dict(origin='prebuilt', fingerprint=key,
-                                          archive_sha256=entry['sha256']))
+                               version=conf['version'], archive_sha256=entry['sha256']))
                 report(dependency, mode + ': restored verified artifact ' + key[:12])
                 return dict(origin='prebuilt', fingerprint=key, changed=True)
         elif mode == 'prebuilt':
-            raise Unavailable(dependency + ': no compatible registered artifact (' + key[:12] + ')')
+            raise Unavailable(dependency + ': no compatible artifact (' + key[:12] + ')')
         else:
             report(dependency, mode + ': no compatible artifact; building vendored source ' + key[:12])
-        # The internal source target never calls preparation again. Keep Make's
-        # jobserver descriptors, and the lock, open until its children finish.
+        # Keep Make's jobserver descriptors and dependency lock through compilation.
         if tree.exists():
             shutil.rmtree(str(tree))
         environment = dict(environ)
@@ -155,7 +181,13 @@ def prepare_dependency(dependency, root, mode, environ):
         if result.returncode:
             raise ValueError(dependency + ' source build failed')
         validate_tree(dependency, tree, conf['version'])
-        write_metadata(dependency, tree, dict(origin='source', fingerprint=key))
+        if build_identity(dependency, root, environ) != identity:
+            raise ValueError('dependency inputs changed during compilation')
+        write_metadata(dependency, tree, dict(origin='source', fingerprint=key, version=conf['version']))
+        if identity['eligible']:
+            store.save_local(cache, dependency, identity, tree=tree, root=root, environ=environ,
+                             repair=(mode == 'source'))
+            report(dependency, 'saved reusable bundle ' + key[:12])
         report(dependency, mode + ': source build complete ' + key[:12])
         return dict(origin='source', fingerprint=key, changed=True)
 

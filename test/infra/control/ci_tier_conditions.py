@@ -56,8 +56,8 @@ def evaluate(node, functions=FUNCTIONS):
     raise ValueError('unsupported condition syntax')
 
 
-def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_results=None, event_context=None):
-    """Check a gate for one selected tier/mode, failing closed on unknown context."""
+def condition_value(condition, tier, mode, inputs=None, job='tests', needs_results=None, event_context=None):
+    """Evaluate a typed value, failing closed on unknown context."""
     if condition is None:
         condition = True
     if isinstance(condition, bool):
@@ -71,6 +71,7 @@ def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_resu
         'github.event.workflow_run': True,
         'github.event.workflow_run.conclusion': 'success',
         'github.event.workflow_run.display_title': 'feature/ci-validation CI-trigger abc123',
+        'github.event.workflow_run.event': 'pull_request',
         'github.event.workflow_run.head_branch': 'feature/ci-validation',
         'github.ref_name': 'feature/ci-validation',
         'github.event.workflow_run.head_repository.full_name': 'sysown/proxysql',
@@ -126,6 +127,11 @@ def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_resu
                              for node in ast.walk(tree))
             if not has_status and not successful:
                 return False
-        return bool(evaluate(tree, functions))
+        return evaluate(tree, functions)
     except (SyntaxError, TypeError, KeyError, AttributeError) as error:
         raise ValueError('unsupported condition expression') from error
+
+
+def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_results=None, event_context=None):
+    """Check a gate for one selected tier/mode, failing closed on unknown context."""
+    return bool(condition_value(condition, tier, mode, inputs, job, needs_results, event_context))
