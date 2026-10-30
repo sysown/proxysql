@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[3]
 GROUPS = ROOT / "test/tap/groups/groups.json"
 # Membership before splitting the two 90-minute jobs. Keep a readable baseline
 # so accidentally dropping a test cannot make the partition assertion pass.
+# These are historical members, not an exhaustive list of future additions.
 ORIGINAL_G1 = {
     "admin-listen_on_unix-t",
     "admin_show_create_table-t",
@@ -154,10 +155,10 @@ class Mysql84ShardTests(unittest.TestCase):
             ("mysql84-g4", "mysql84-g11", ORIGINAL_G4, EOF),
         ):
             with self.subTest(original=original):
-                self.assertEqual(self.members(added), moved)
-                self.assertEqual(self.members(original), expected - moved)
+                self.assertLessEqual(moved, self.members(added))
+                self.assertLessEqual(expected - moved, self.members(original))
                 self.assertFalse(self.members(original) & self.members(added))
-                self.assertEqual(self.members(original) | self.members(added), expected)
+                self.assertLessEqual(expected, self.members(original) | self.members(added))
 
     def test_eof_sources_stay_in_the_same_partition(self):
         directory = ROOT / "test/tap/tests_with_deps/deprecate_eof_support"
