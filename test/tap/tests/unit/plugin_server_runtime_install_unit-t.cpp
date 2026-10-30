@@ -268,9 +268,13 @@ int main() {
 		return select_rows("SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM pgsql_servers");
 	};
 	auto mysql_stage = [](SQLite3_result* rows) { MyHGM->servers_add(rows); };
-	auto mysql_commit = [](SQLite3_result* rows) { MyHGM->commit({rows, {}}, {nullptr, {}}, true, true); };
+	auto mysql_commit = [](SQLite3_result* rows, const std::vector<uint32_t>& retained) {
+		MyHGM->commit({rows, {}}, {nullptr, {}}, true, true, true, retained, "peer");
+	};
 	auto pgsql_stage = [](SQLite3_result* rows) { PgHGM->servers_add(rows); };
-	auto pgsql_commit = [](SQLite3_result* rows) { PgHGM->commit({rows, {}}, {nullptr, {}}, true, true); };
+	auto pgsql_commit = [](SQLite3_result* rows, const std::vector<uint32_t>& retained) {
+		PgHGM->commit({rows, {}}, {nullptr, {}}, true, true, retained, "peer");
+	};
 	const size_t before_topology_snapshot = occurrences(
 		read_log(), "runtime_controller_topology_count=2");
 	proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::mysql, mysql_core_rows(),

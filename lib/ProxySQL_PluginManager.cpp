@@ -2204,10 +2204,14 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 	std::vector<uint32_t> installed_topology;
 	if (!replace_managed_topology_rows(*GloAdmin->admindb, protocol,
 		previous, claims, installed_topology, error)) return false;
+	// This reload runs before the claims are swapped below: keep only the live
+	// rows of claims that survive this install unchanged.
+	const std::vector<uint32_t> retained =
+		proxysql_server_reload_retained_hostgroups(previous, claims);
 	if (protocol == ProxySQL_ServerProtocol::mysql)
-		GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, false);
+		GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, false, &retained);
 	else
-		GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, false);
+		GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, false, &retained);
 
 	snapshot.topology_hostgroups = std::move(installed_topology);
 	{
@@ -2268,10 +2272,12 @@ bool ProxySQL_PluginManager::release_managed_discovery(
 	std::vector<uint32_t> installed_topology;
 	if (!replace_managed_topology_rows(*GloAdmin->admindb, protocol,
 		previous, {}, installed_topology, error)) return false;
+	// Every claim is released: this reload keeps no live claimed rows.
+	const std::vector<uint32_t> retained {};
 	if (protocol == ProxySQL_ServerProtocol::mysql)
-		GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, false);
+		GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, false, &retained);
 	else
-		GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, false);
+		GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, false, &retained);
 
 	snapshot.topology_hostgroups = std::move(installed_topology);
 	{
@@ -2980,6 +2986,174 @@ bool proxysql_is_server_inventory_managed_locked(ProxySQL_ServerProtocol protoco
 		manager = g_retiring_plugin_manager.load(std::memory_order_acquire);
 	return manager != nullptr && manager->is_server_inventory_managed(
 		protocol, writer_hostgroup, reader_hostgroup, writer_is_also_reader);
+}
+
+namespace {
+
+// The claim fields that decide which servers a claimed pair holds and where
+// they are placed. Monitor tuning (intervals, lag limits, check type) is not
+// part of it: tuning a claim must not interrupt its servers.
+bool same_claim_identity(const ProxySQL_ServerHostgroupClaim& lhs,
+	const ProxySQL_ServerHostgroupClaim& rhs) {
+	const auto& l = lhs.role_monitor;
+	const auto& r = rhs.role_monitor;
+	return managed_claim_hostgroups(lhs) == managed_claim_hostgroups(rhs) &&
+		l.kind == r.kind && l.writer_is_also_reader == r.writer_is_also_reader &&
+		l.domain_name == r.domain_name && l.aurora_port == r.aurora_port &&
+		l.green_writer_hostgroup == r.green_writer_hostgroup &&
+		l.green_reader_hostgroup == r.green_reader_hostgroup;
+}
+
+std::string hostgroup_list(const std::vector<uint32_t>& hostgroups) {
+	std::string list;
+	for (uint32_t hostgroup : hostgroups) {
+		if (!list.empty()) list += ",";
+		list += std::to_string(hostgroup);
+	}
+	return list;
+}
+
+// Runs one statement; on failure returns false with the SQLite error.
+bool run_reload_statement(SQLite3DB& db, const std::string& sql, std::string& error,
+	SQLite3_result** rows = nullptr) {
+	char* sqlite_error = nullptr;
+	int columns = 0;
+	int affected_rows = 0;
+	SQLite3_result* raw = nullptr;
+	const bool ok = db.execute_statement(sql.c_str(), &sqlite_error, &columns, &affected_rows, &raw);
+	if (sqlite_error != nullptr || !ok) {
+		error = sqlite_error != nullptr ? sqlite_error : "statement failed";
+		if (sqlite_error != nullptr) free(sqlite_error);
+		delete raw;
+		return false;
+	}
+	if (rows != nullptr) *rows = raw;
+	else delete raw;
+	return true;
+}
+
+} // namespace
+
+std::vector<uint32_t> proxysql_server_reload_retained_hostgroups(
+	const std::vector<ProxySQL_ServerHostgroupClaim>& current,
+	const std::vector<ProxySQL_ServerHostgroupClaim>& next) {
+	// A claim is kept only when it is unchanged: a moved claim may give a kept
+	// hostgroup another role (reader rows as writers), and another monitor,
+	// placement or Aurora domain may describe other servers.
+	std::set<uint32_t> retained;
+	for (const auto& claim : current) {
+		const bool unchanged = std::any_of(next.begin(), next.end(),
+			[&](const ProxySQL_ServerHostgroupClaim& candidate) {
+				return same_claim_identity(claim, candidate);
+			});
+		if (!unchanged) continue;
+		const auto scope = managed_claim_hostgroups(claim);
+		retained.insert(scope.begin(), scope.end());
+	}
+	return {retained.begin(), retained.end()};
+}
+
+std::vector<uint32_t> proxysql_server_reload_retained_hostgroups(ProxySQL_ServerProtocol protocol) {
+	const auto claims = proxysql_active_server_hostgroup_claims(protocol);
+	return proxysql_server_reload_retained_hostgroups(claims, claims);
+}
+
+bool proxysql_collect_server_reload_overrides(SQLite3DB& db, ProxySQL_ServerProtocol protocol,
+	const std::vector<uint32_t>& hostgroups, std::vector<ProxySQL_ServerReloadOverride>& overrides,
+	std::string& error) {
+	overrides.clear();
+	error.clear();
+	if (hostgroups.empty()) return true;
+	const bool mysql = protocol == ProxySQL_ServerProtocol::mysql;
+	if (!mysql && protocol != ProxySQL_ServerProtocol::pgsql) {
+		error = "invalid server protocol";
+		return false;
+	}
+	const std::string live = mysql ? "mysql_servers" : "pgsql_servers";
+	const std::string offline_soft = std::to_string(static_cast<int>(MYSQL_SERVER_STATUS_OFFLINE_SOFT));
+	const std::string offline_hard = std::to_string(static_cast<int>(MYSQL_SERVER_STATUS_OFFLINE_HARD));
+	const std::string operator_states = "(" + offline_soft + "," + offline_hard + ")";
+	const std::string edited = "t1.weight<>t2.weight OR t1.compression<>t2.compression"
+		" OR t1.max_connections<>t2.max_connections OR t1.max_replication_lag<>t2.max_replication_lag"
+		" OR t1.use_ssl<>t2.use_ssl OR t1.max_latency_ms<>t2.max_latency_ms OR t1.comment<>t2.comment"
+		" OR (t1.status<>t2.status AND (t1.status IN " + operator_states +
+		" OR t2.status IN " + operator_states + "))";
+	const std::string query = "SELECT t2.hostgroup_id,"
+		" SUM(CASE WHEN t1.hostname IS NULL THEN 1 ELSE 0 END),"
+		" SUM(CASE WHEN t1.hostname IS NOT NULL AND (" + edited + ") THEN 1 ELSE 0 END)"
+		" FROM " + live + "_incoming t2 LEFT JOIN " + live + " t1 ON (t1.hostgroup_id=t2.hostgroup_id"
+		" AND t1.hostname=t2.hostname AND t1.port=t2.port AND t1.status<>" + offline_hard + ")"
+		" WHERE t2.hostgroup_id IN (" + hostgroup_list(hostgroups) + ")"
+		" GROUP BY t2.hostgroup_id ORDER BY t2.hostgroup_id";
+	SQLite3_result* raw = nullptr;
+	if (!run_reload_statement(db, query, error, &raw)) return false;
+	std::unique_ptr<SQLite3_result> rows(raw);
+	if (rows) for (const auto* row : rows->rows) {
+		ProxySQL_ServerReloadOverride entry {};
+		entry.hostgroup_id = static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10));
+		entry.ignored = row->fields[1] ? strtoull(row->fields[1], nullptr, 10) : 0;
+		entry.changed = row->fields[2] ? strtoull(row->fields[2], nullptr, 10) : 0;
+		if (entry.ignored != 0 || entry.changed != 0) overrides.push_back(entry);
+	}
+	return true;
+}
+
+bool proxysql_retain_server_reload_rows(SQLite3DB& db, ProxySQL_ServerProtocol protocol,
+	const std::vector<uint32_t>& hostgroups, const char* source) {
+	if (hostgroups.empty()) return true;
+	const bool mysql = protocol == ProxySQL_ServerProtocol::mysql;
+	if (!mysql && protocol != ProxySQL_ServerProtocol::pgsql) {
+		proxy_error("Unable to keep the live servers of managed discovery hostgroups: invalid protocol\n");
+		return false;
+	}
+	if (source == nullptr) source = "configured";
+	const char* engine = mysql ? "MySQL" : "PostgreSQL";
+	const std::string scope = hostgroup_list(hostgroups);
+
+	// Never reject a reload (#6448): log once per hostgroup what it ignores.
+	std::vector<ProxySQL_ServerReloadOverride> overrides;
+	std::string error;
+	if (!proxysql_collect_server_reload_overrides(db, protocol, hostgroups, overrides, error)) {
+		proxy_error("Unable to list the %s %s servers ignored in managed discovery hostgroups %s: %s\n",
+			source, engine, scope.c_str(), error.c_str());
+	}
+	for (const auto& entry : overrides) {
+		proxy_warning("Server reload kept the live %s servers of hostgroup %u, owned by a managed"
+			" discovery claim: ignored %llu %s server(s) that are not live and %llu %s change(s)"
+			" to live servers\n", engine, entry.hostgroup_id,
+			static_cast<unsigned long long>(entry.ignored), source,
+			static_cast<unsigned long long>(entry.changed), source);
+	}
+
+	const std::string live = mysql ? "mysql_servers" : "pgsql_servers";
+	const std::string incoming = live + "_incoming";
+	const std::string columns = std::string("hostgroup_id, hostname, port, ") +
+		(mysql ? "gtid_port, " : "") + "weight, status, compression, max_connections, "
+		"max_replication_lag, use_ssl, max_latency_ms, comment";
+	const std::string offline_hard = std::to_string(static_cast<int>(MYSQL_SERVER_STATUS_OFFLINE_HARD));
+	const std::string savepoint = "proxysql_reload_retention";
+	// All or nothing: a failure must leave the staged rows untouched, so the
+	// commit is a plain replace and never empties a claimed hostgroup.
+	if (!run_reload_statement(db, "SAVEPOINT " + savepoint, error)) {
+		proxy_error("Unable to keep the live %s servers of managed discovery hostgroups %s: %s."
+			" This reload replaces them\n", engine, scope.c_str(), error.c_str());
+		return false;
+	}
+	if (run_reload_statement(db, "DELETE FROM " + incoming + " WHERE hostgroup_id IN (" + scope + ")", error) &&
+		run_reload_statement(db, "INSERT INTO " + incoming + " (" + columns + ") SELECT " + columns +
+			" FROM " + live + " WHERE hostgroup_id IN (" + scope + ") AND status<>" + offline_hard, error) &&
+		run_reload_statement(db, "RELEASE " + savepoint, error)) {
+		return true;
+	}
+	std::string rollback_error;
+	if (!run_reload_statement(db, "ROLLBACK TO " + savepoint, rollback_error) ||
+		!run_reload_statement(db, "RELEASE " + savepoint, rollback_error)) {
+		proxy_error("Unable to roll back the retention of managed discovery hostgroups %s: %s\n",
+			scope.c_str(), rollback_error.c_str());
+	}
+	proxy_error("Unable to keep the live %s servers of managed discovery hostgroups %s: %s."
+		" This reload replaces them\n", engine, scope.c_str(), error.c_str());
+	return false;
 }
 
 #endif /* PROXYSQL40 */

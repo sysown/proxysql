@@ -938,12 +938,20 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	std::string gen_global_mysql_servers_v2_checksum(uint64_t servers_v2_hash);
 	void refresh_mysql_servers_v2_checksum();
 	bool commit();
+	/**
+	 * @param retained_hostgroups With PROXYSQL40, hostgroups whose live rows (OFFLINE_HARD excluded)
+	 *  replace the staged rows, so their servers survive the commit unchanged. Used by server
+	 *  reloads for the hostgroups of managed discovery claims.
+	 * @param reload_source Names the staged rows in the reload warnings: "configured" or "peer".
+	 */
 	bool commit(
 		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 		bool only_commit_runtime_mysql_servers = true,
 		bool update_version = false,
-		bool acquire_lock = true
+		bool acquire_lock = true,
+		const std::vector<uint32_t>& retained_hostgroups = {},
+		const char* reload_source = "configured"
 	);
 	/**
 	 * @brief Extracted from 'commit'. Performs the following actions:
@@ -1318,7 +1326,9 @@ private:
 	bool commit_locked(
 		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
-		bool only_commit_runtime_mysql_servers, bool update_version);
+		bool only_commit_runtime_mysql_servers, bool update_version,
+		const std::vector<uint32_t>& retained_hostgroups = {},
+		const char* reload_source = "configured");
 	void finish_commit(unsigned long long started_at, bool acquire_lock = true);
 	GTID_Server_Data* get_or_create_gtid_server_data(MySrvC* server, const std::string& endpoint);
 	void start_gtid_reader_if_needed(MySrvC* server, GTID_Server_Data* gtid_data);

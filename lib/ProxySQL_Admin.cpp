@@ -9123,7 +9123,7 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
 	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
 	const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock,
-	bool emit_runtime_install) {
+	bool emit_runtime_install, const std::vector<uint32_t>* retained_hostgroups) {
 	// make sure that the caller has called mysql_servers_wrlock()
 #ifdef PROXYSQL40
 	// Lock order: Admin servers lock -> runtime install -> HGM. Taken before the
@@ -9131,8 +9131,13 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	std::optional<ProxySQL_ServerRuntimeInstallLock> install_lock;
 	if (emit_runtime_install) install_lock.emplace(ProxySQL_ServerProtocol::mysql);
 	std::optional<ProxySQL_ServerRuntimeSnapshot> publication;
+	// Managed discovery claims own their hostgroups: the commit keeps their live rows.
+	const std::vector<uint32_t> retained = retained_hostgroups != nullptr ? *retained_hostgroups :
+		proxysql_server_reload_retained_hostgroups(ProxySQL_ServerProtocol::mysql);
 #else
 	(void)emit_runtime_install;
+	(void)retained_hostgroups;
+	const std::vector<uint32_t> retained {};
 #endif
 	char *error=NULL;
 	int cols=0;
@@ -9361,7 +9366,8 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	MyHGM->commit(
 		{ runtime_mysql_servers, peer_runtime_mysql_server },
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
-		false, true, hgm_acquire_lock
+		false, true, hgm_acquire_lock, retained,
+		peer_runtime_mysql_server.value.empty() && peer_mysql_server_v2.value.empty() ? "configured" : "peer"
 	);
 #ifdef PROXYSQL40
 	if (publication) publish_server_runtime(std::move(*publication));
@@ -9403,7 +9409,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 
 void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
 	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
-	bool emit_runtime_install) {
+	bool emit_runtime_install, const std::vector<uint32_t>* retained_hostgroups) {
 	// make sure that the caller has called pgsql_servers_wrlock()
 #ifdef PROXYSQL40
 	// Lock order: Admin servers lock -> runtime install -> HGM. Taken before the
@@ -9411,8 +9417,13 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	std::optional<ProxySQL_ServerRuntimeInstallLock> install_lock;
 	if (emit_runtime_install) install_lock.emplace(ProxySQL_ServerProtocol::pgsql);
 	std::optional<ProxySQL_ServerRuntimeSnapshot> publication;
+	// Managed discovery claims own their hostgroups: the commit keeps their live rows.
+	const std::vector<uint32_t> retained = retained_hostgroups != nullptr ? *retained_hostgroups :
+		proxysql_server_reload_retained_hostgroups(ProxySQL_ServerProtocol::pgsql);
 #else
 	(void)emit_runtime_install;
+	(void)retained_hostgroups;
+	const std::vector<uint32_t> retained {};
 #endif
 	char* error = NULL;
 	int cols = 0;
@@ -9531,7 +9542,8 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	PgHGM->commit(
 		{ runtime_pgsql_servers, peer_runtime_pgsql_server },
 		{ incoming_pgsql_servers_v2, peer_pgsql_server_v2 },
-		false, true
+		false, true, retained,
+		peer_runtime_pgsql_server.value.empty() && peer_pgsql_server_v2.value.empty() ? "configured" : "peer"
 	);
 #ifdef PROXYSQL40
 	if (publication) publish_server_runtime(std::move(*publication));

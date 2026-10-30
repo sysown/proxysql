@@ -1566,7 +1566,9 @@ void PgSQL_HostGroups_Manager::refresh_pgsql_servers_v2_checksum() {
 bool PgSQL_HostGroups_Manager::commit(
  const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
  const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
- bool only_commit_runtime_pgsql_servers, bool update_version
+ bool only_commit_runtime_pgsql_servers, bool update_version,
+ const std::vector<uint32_t>& retained_hostgroups,
+ const char* reload_source
 ) {
 	// if only_commit_runtime_pgsql_servers is true, pgsql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_pgsql_servers) {
@@ -1578,7 +1580,7 @@ bool PgSQL_HostGroups_Manager::commit(
 	unsigned long long curtime1=monotonic_time();
 	wrlock();
 	const bool result = commit_locked(peer_runtime_pgsql_servers, peer_pgsql_servers_v2,
-		only_commit_runtime_pgsql_servers, update_version);
+		only_commit_runtime_pgsql_servers, update_version, retained_hostgroups, reload_source);
 	wrunlock();
 	finish_commit(curtime1);
 	return result;
@@ -1587,7 +1589,9 @@ bool PgSQL_HostGroups_Manager::commit(
 bool PgSQL_HostGroups_Manager::commit_locked(
  const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
  const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
- bool only_commit_runtime_pgsql_servers, bool update_version
+ bool only_commit_runtime_pgsql_servers, bool update_version,
+ const std::vector<uint32_t>& retained_hostgroups,
+ const char* reload_source
 ) {
 	// purge table
 	purge_pgsql_servers_table();
@@ -1595,6 +1599,20 @@ bool PgSQL_HostGroups_Manager::commit_locked(
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_servers\n");
 	mydb->execute("DELETE FROM pgsql_servers");
 	generate_pgsql_servers_table();
+#ifdef PROXYSQL40
+	// Under the same lock as the comparison below, so the kept rows are exactly
+	// the live ones: no kept server is removed, re-created or changes status.
+	if (!proxysql_retain_server_reload_rows(*mydb, ProxySQL_ServerProtocol::pgsql,
+		retained_hostgroups, reload_source)) {
+		// The helper rolled back and logged the SQLite error: the staged rows
+		// are untouched and this commit replaces the claimed hostgroups.
+		proxy_warning("PostgreSQL servers commit replaces managed discovery hostgroups: their discovered"
+			" servers return when discovery publishes them again\n");
+	}
+#else
+	(void)retained_hostgroups;
+	(void)reload_source;
+#endif
 
 	char *error=NULL;
 	int cols=0;

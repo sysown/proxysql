@@ -108,6 +108,7 @@
   "managed_configuration_contract_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "managed_configuration_database_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "managed_configuration_lifecycle_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
+  "managed_discovery_reload_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "managed_discovery_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "managed_engine_projection_txn_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "managed_runtime_mysql_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
