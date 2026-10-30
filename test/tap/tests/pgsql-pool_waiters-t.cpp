@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
@@ -22,6 +23,14 @@ using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 
 static std::mutex diagnostic_mutex;
 static std::atomic<unsigned> pg_errors{0};
+
+// Keep client-side SCRAM derivation from consuming the connection deadline
+// while hundreds of ASAN clients compete for CPU time. This limits
+// authentication work, not the number of connected clients or pool waiters.
+static std::mutex connect_mutex;
+static std::condition_variable connect_cv;
+static unsigned connecting = 0;
+static constexpr unsigned max_connecting = 32;
 
 static void pg_error(PGconn* c, const char* phase, int client, const char* operation,
                      double elapsed_ms, const char* result_error = nullptr) {
@@ -47,11 +56,20 @@ static PGConnPtr mk(const char* phase, int client) {
 	   << " user=" << cl.pgsql_username << " password=" << cl.pgsql_password
 	   << " dbname=" << cl.pgsql_username
 	   << " sslmode=disable connect_timeout=5";
+	std::unique_lock<std::mutex> lock(connect_mutex);
+	connect_cv.wait(lock, [] { return connecting < max_connecting; });
+	++connecting;
+	lock.unlock();
 	const auto start = std::chrono::steady_clock::now();
 	PGConnPtr c(PQconnectdb(ss.str().c_str()), &PQfinish);
+	const double elapsed_ms = std::chrono::duration<double, std::milli>(
+		std::chrono::steady_clock::now() - start).count();
+	lock.lock();
+	--connecting;
+	lock.unlock();
+	connect_cv.notify_one();
 	if (!c || PQstatus(c.get()) != CONNECTION_OK) {
-		pg_error(c.get(), phase, client, "connect",
-			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+		pg_error(c.get(), phase, client, "connect", elapsed_ms);
 	}
 	return c;
 }
@@ -286,9 +304,20 @@ int main(int argc, char** argv) {
 		});
 		std::vector<std::thread> ts;
 		ts.reserve(nthreads);
+		std::mutex ready_mutex;
+		std::condition_variable ready_cv;
+		int ready = 0;
 		for (int i = 0; i < nthreads; i++) {
-			ts.emplace_back([&errs, &connect_errs, &query_errs, &oks, &per, i] {
+			ts.emplace_back([&](int i) {
 				PGConnPtr c = mk("contention", i);
+				// Start the pool workload with all 400 frontends present. Previously
+				// early clients could finish before later clients authenticated.
+				{
+					std::unique_lock<std::mutex> lock(ready_mutex);
+					++ready;
+					if (ready == nthreads) ready_cv.notify_all();
+					ready_cv.wait(lock, [&] { return ready == nthreads; });
+				}
 				if (!c || PQstatus(c.get()) != CONNECTION_OK) {
 					connect_errs++;
 					errs++;
@@ -303,13 +332,13 @@ int main(int argc, char** argv) {
 						errs++;
 					}
 				}
-			});
+			}, i);
 		}
 		for (auto& t : ts) t.join();
 		hammer.store(false);
 		admin_thr.join();
-		diag("contention failures: connect=%d query=%d (400 clients, connect_timeout=5s)",
-			connect_errs.load(), query_errs.load());
+		diag("contention failures: connect=%d query=%d (400 clients, max_connecting=%u, connect_timeout=5s)",
+			connect_errs.load(), query_errs.load(), max_connecting);
 		if (errs.load()) dump_pool_state(admin);
 		ok(errs.load() == 0 && oks.load() == nthreads * nqueries,
 			"contention: %d clients x %d SELECT 1 max_connections=20 (ok=%d err=%d)",
