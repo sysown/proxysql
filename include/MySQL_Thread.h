@@ -403,6 +403,10 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 #endif
     );
 	void return_local_connections();
+#ifdef PROXYSQL31
+    /** @brief Publish only one hostgroup's cached connections for normal checkout recovery. */
+    void return_local_connections(unsigned int hostgroup);
+#endif
 	void Scan_Sessions_to_Kill(PtrArray *mysess);
 	void Scan_Sessions_to_Kill_All();
 };

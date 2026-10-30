@@ -405,11 +405,13 @@ public:
 	void run___cleanup_mirror_queue();
 
 	//void ProcessAllMyDS_BeforePoll();
+#ifdef PROXYSQL31
 	// PostgreSQL's scan records readiness only; session handlers perform I/O.
 	void ProcessAllMyDS_AfterPoll();
 	void process_poll_housekeeping();
 	std::vector<PgSQL_Data_Stream*> ready_listeners;
 	bool notification_pipe_ready = false;
+#endif
 
 	/**
 	 * @brief The main loop for the PgSQL_Thread object.
@@ -509,13 +511,14 @@ public:
 	struct pollfd* get_pollfd(unsigned int i);
 
 	/**
-	 * Record poll readiness and mark the owning session runnable. No socket
-	 * I/O is performed here. Returns false only when idle-thread migration
-	 * removed this poll slot, so the scan must revisit the swapped-in slot.
-	 * consume_data_stream_readiness() performs the deferred work in handler().
+	 * Process readiness in the poll scan on Stable. With PROXYSQL31, record it
+	 * for deferred consumption in the session handler. Returns false when the
+	 * scan must revisit a poll slot removed by migration or connection cleanup.
 	 */
 	bool process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigned int n);
+#ifdef PROXYSQL31
 	bool consume_data_stream_readiness(PgSQL_Data_Stream *myds);
+#endif
 
 	//void ProcessAllSessions_SortingSessions();
 

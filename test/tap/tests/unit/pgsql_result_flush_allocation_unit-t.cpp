@@ -174,6 +174,7 @@ static void test_ready_failure() {
 		"ReadyForQuery failure keeps complete buffered response owned until teardown");
 }
 
+#ifdef PROXYSQL31
 // Drive the actual session -> deferred readiness -> connection-handler path.
 // Isolate the partial worker fixture just as the cache-allocation test does:
 // it has no running worker or authentication globals for session destruction.
@@ -255,6 +256,7 @@ static void test_session_failure() {
 	if (!passed) diag("child=%ld wait=%ld status=%d (2: containment, 3: health, 4: ownership/unread bytes, 5: disposal)",
 		static_cast<long>(child), static_cast<long>(waited), status);
 }
+#endif
 
 #ifdef __linux__
 // Observe frees from the real vendored libpq; do not replace its parser or
@@ -485,7 +487,11 @@ int main() {
 	test_flush_failure(PGSQL_RESULTSET_BUFLEN);
 	test_reserve_failure();
 	test_ready_failure();
+#ifdef PROXYSQL31
 	test_session_failure();
+#else
+	skip(1, "native deferred-I/O allocation containment requires PROXYSQL31");
+#endif
 #ifdef __linux__
 	test_libpq_failure(LibpqFailure::CALLBACK, "notice failure returns through libpq cleanup before C++ rethrow");
 	test_libpq_failure(LibpqFailure::FETCH, "libpq fetch surfaces notice failure before response serialization");

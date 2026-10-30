@@ -53,9 +53,12 @@ void test_deadlines(const char *protocol) {
 		session.pause_until = c.pause_until;
 		session.to_process = 0;
 		worker.mypolls.fds[stream.poll_fds_idx].revents = 0;
+#ifdef PROXYSQL31
 		if constexpr (std::is_same<Worker, PgSQL_Thread>::value) {
 			worker.ProcessAllMyDS_AfterPoll();
-		} else {
+		} else
+#endif
+		{
 			worker.template ProcessAllMyDS_AfterPoll<Worker>();
 		}
 		ok(session.to_process == c.expected, "%s: %s", protocol, c.label);

@@ -189,9 +189,11 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 				return PGSQL_SSLSTATUS_FAIL;
 			}
 		}
+#ifdef PROXYSQL31
 		// Publish the fast path only after the certificate checks above.
 		tls13_handshake_complete = myds_type == MYDS_FRONTEND &&
 			SSL_version(ssl) == TLS1_3_VERSION;
+#endif
 	}
 	status = get_sslstatus(ssl, n);
 	//proxy_info("SSL status = %d\n", status);
@@ -614,14 +616,22 @@ int PgSQL_Data_Stream::read_from_net() {
 				}
 				src += n2;
 				len -= n2;
+#ifdef PROXYSQL31
 				if (!ssl_handshake_is_complete()) {
+#else
+				if (!SSL_is_init_finished(ssl)) {
+#endif
 					//proxy_info("SSL_is_init_finished NOT completed\n");
 					if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 						//proxy_info("SSL_is_init_finished failed!!\n");
 						shut_soft();
 						return -1;
 					}
+#ifdef PROXYSQL31
 					if (!ssl_handshake_is_complete()) {
+#else
+					if (!SSL_is_init_finished(ssl)) {
+#endif
 						//proxy_info("SSL_is_init_finished yet NOT completed\n");
 						return 0;
 					}
@@ -732,6 +742,7 @@ int PgSQL_Data_Stream::read_from_net() {
 
 int PgSQL_Data_Stream::write_to_net() {
 	int bytes_io = 0;
+	int send_error = 0;
 	int s = queue_data(queueOUT);
 	int n;
 	if (encrypted) {
@@ -812,6 +823,7 @@ int PgSQL_Data_Stream::write_to_net() {
 #else
 		bytes_io = send(fd, queue_r_ptr(queueOUT), s, MSG_NOSIGNAL);
 #endif
+		if (bytes_io < 0) send_error = errno;
 		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p, Datastream=%p: send() wrote %d bytes in FD %d\n", sess, this, bytes_io, fd);
 	}
 	if (encrypted) {
@@ -820,17 +832,11 @@ int PgSQL_Data_Stream::write_to_net() {
 	//VALGRIND_ENABLE_ERROR_REPORTING;
 	if (bytes_io < 0) {
 		if (encrypted == false) {
-#ifdef PROXYSQL31
 			// Readiness is a snapshot, not a reservation of socket capacity.
 			// A previous send in this pass can consume it; retain queued bytes
 			// and let POLLOUT retry instead of closing a healthy slow client.
-			if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
+			if (send_error != EINTR && send_error != EAGAIN && send_error != EWOULDBLOCK)
 				shut_soft();
-#else
-			if (poll_fds_idx < 0 || !mypolls || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
-				shut_soft();
-			}
-#endif
 		}
 		else {
 			int ssl_ret = SSL_get_error(ssl, bytes_io);
@@ -906,14 +912,22 @@ void PgSQL_Data_Stream::set_pollout() {
 				_pollfd->events |= POLLOUT;
 			}
 			else {
+#ifdef PROXYSQL31
 				if (!ssl_handshake_is_complete()) {
+#else
+				if (!SSL_is_init_finished(ssl)) {
+#endif
 					//proxy_info("SSL_is_init_finished NOT completed\n");
 					if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 						//proxy_info("SSL_is_init_finished failed!!\n");
 						shut_soft();
 						return;
 					}
+#ifdef PROXYSQL31
 					if (!ssl_handshake_is_complete()) {
+#else
+					if (!SSL_is_init_finished(ssl)) {
+#endif
 						//proxy_info("SSL_is_init_finished yet NOT completed\n");
 						return;
 					}
@@ -944,7 +958,11 @@ int PgSQL_Data_Stream::write_to_net_poll() {
 		}
 	*/
 	if (encrypted) {
+#ifdef PROXYSQL31
 		if (!ssl_handshake_is_complete()) {
+#else
+		if (!SSL_is_init_finished(ssl)) {
+#endif
 			//proxy_info("SSL_is_init_finished completed: NO!\n");
 			if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 				//proxy_info("SSL_is_init_finished failed!!\n");
@@ -1228,7 +1246,9 @@ bool PgSQL_Data_Stream::adopt_backend_tls() {
 		myconn->reusable = false;
 		return false;
 	}
+#ifdef PROXYSQL31
 	tls13_handshake_complete = false;
+#endif
 	encrypted = true;
 	ssl = ssl_obj;
 	if (myconn->native_mode) {
@@ -1301,7 +1321,9 @@ void PgSQL_Data_Stream::refuse_reuse_on_stranded_tls() {
 // libpq keeps writing into our buffers and the next query never reaches the
 // backend, in this session or in whichever one gets the connection next.
 void PgSQL_Data_Stream::release_backend_tls() {
+#ifdef PROXYSQL31
 	tls13_handshake_complete = false;
+#endif
 	if (backend_tls_adopted == false) {
 		if (myconn != NULL && myconn->native_mode && ssl != NULL) {
 			// A native borrow shares the connection's own BIOs, so there is nothing to

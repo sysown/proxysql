@@ -13,18 +13,10 @@
 template<class Worker, class Session, class Connection, class Pool>
 class Worker_Scheduler {
     Worker &worker;
-    Pool &pool;
-
-    template<class Server>
-    static bool server_online(const Server *server) {
-        if constexpr (std::is_same_v<Session, PgSQL_Session>)
-            return server->status == MYSQL_SERVER_STATUS_ONLINE;
-        else
-            return server->get_status() == MYSQL_SERVER_STATUS_ONLINE;
-    }
+    bool cleanup_needed = false;
 
 public:
-    Worker_Scheduler(Worker &w, Pool &p) : worker(w), pool(p) {
+    Worker_Scheduler(Worker &w, Pool &) : worker(w) {
         worker.released_hostgroups.clear();
         worker.collecting_releases = std::is_same_v<Session, PgSQL_Session>;
     }
@@ -57,6 +49,7 @@ public:
                 // Defer deletion to the main scan, whose array indices must
                 // remain stable while it is interleaving a different session.
                 waiting->healthy = 0;
+                cleanup_needed = true;
                 worker.leave_waiter(waiting, false);
                 node = next;
                 continue;
@@ -90,6 +83,7 @@ public:
                 ? Pool_Acquire_Mode::Normal : Pool_Acquire_Mode::EstablishedOnly);
             if (waiting_result == Session_Run_Result::Close) {
                 waiting->healthy = 0;
+                cleanup_needed = true;
                 worker.leave_waiter(waiting, false);
                 node = next;
                 continue;
@@ -128,56 +122,10 @@ public:
         worker.released_hostgroups.clear();
     }
 
-    // These phases were part of process_all_sessions() before extraction.
-    // Keep that call boundary unchanged in release builds: inline alone is
-    // only a hint and -O2 otherwise outlines these larger template methods.
-    __attribute__((always_inline)) inline void run_early() {
-    // Reuse connections already available before doing more response work,
-    // including connections published by another worker.
-    // If waiters consume all known capacity, avoid another frontend scan.
-    // This is deliberately a global gate; hostgroup scheduling comes later.
-    bool early_capacity_available = worker.waiter_lists.empty();
-    worker.waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node*, size_t count) {
-        size_t available = 0;
-        for (unsigned i = 0; i < worker.cached_connections->len; ++i) {
-            auto *conn = static_cast<Connection*>(worker.cached_connections->index(i));
-            if (conn->parent->myhgc->hid == hid) ++available;
-        }
-        pool.wrlock();
-        auto *hg = pool.MyHGC_find(hid);
-        if (hg) for (unsigned i = 0; i < hg->mysrvs->cnt(); ++i) {
-            auto *server = hg->mysrvs->idx(i);
-            if (server_online(server))
-                available += server->ConnectionsFree->conns_length();
-        }
-        pool.wrunlock();
-        // An empty-pool retry would pause the oldest waiter just before the
-        // response scan releases a connection. Only attempt real availability.
-        if (available) {
-            const size_t served = serve_waiters(hid, std::min(count, available));
-            if (available > served) early_capacity_available = true;
-        }
-    });
-    dispatch_released();
-    // Try new frontend work before response processing, stopping globally on
-    // the first established-connection miss. Hostgroup scheduling is deferred.
-    for (unsigned i = 0; early_capacity_available && i < worker.mysql_sessions->len; ++i) {
-        auto *sess = static_cast<Session*>(worker.mysql_sessions->index(i));
-        if (sess->healthy == 0 || sess->killed || sess->mirror || sess->waiter_node.session || sess->continuation_queued)
-            continue;
-        if (sess->to_process != 1 || sess->pause_until > worker.curtime) continue;
-        if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
-        // Authentication and connection maintenance retain their normal order.
-        if (sess->status != WAITING_CLIENT_DATA && sess->status != CONNECTING_SERVER) continue;
-        const auto early_result = run_session(sess, Pool_Acquire_Mode::EstablishedOnly);
-        if (early_result == Session_Run_Result::Close)
-            worker.leave_waiter(sess, false);
-        dispatch_released();
-        if (early_result == Session_Run_Result::EstablishedUnavailable) break;
-    }
-    }
-
-    __attribute__((always_inline)) inline void run_late() {
+    // Backend responses run first. Released capacity goes to existing waiters;
+    // new frontend work needs only an ordinary checkout in this late phase.
+    // Keep the phase inline in release builds, as it was before extraction.
+    __attribute__((always_inline)) inline void run_late(bool no_backend_loop_needed = false) {
         dispatch_released();
         // Recovery and expired deadlines still use ordinary pool acquisition.
         if constexpr (std::is_same_v<Session, MySQL_Session>) {
@@ -190,19 +138,23 @@ public:
         });
         if constexpr (std::is_same_v<Session, MySQL_Session>) worker.refreshing_waiter_deadlines = false;
         dispatch_released();
-        for (unsigned n = 0; n < worker.mysql_sessions->len; ++n) {
-            auto *sess = static_cast<Session*>(worker.mysql_sessions->index(n));
-            if (!sess->healthy || sess->killed) {
-                worker.close_scheduled_session(n--);
-                continue;
+        if (no_backend_loop_needed || cleanup_needed) {
+            cleanup_needed = false;
+            for (unsigned n = 0; n < worker.mysql_sessions->len; ++n) {
+                auto *sess = static_cast<Session*>(worker.mysql_sessions->index(n));
+                if (!sess->healthy || sess->killed) {
+                    worker.close_scheduled_session(n--);
+                    continue;
+                }
+                if (sess->waiter_node.session || sess->continuation_queued) continue;
+                if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
+                if (sess->to_process == 1 && sess->pause_until <= worker.curtime) {
+                    const auto result = run_session(sess);
+                    if (result == Session_Run_Result::Close) worker.close_scheduled_session(n--);
+                    dispatch_released();
+                }
             }
-            if (sess->waiter_node.session || sess->continuation_queued) continue;
-            if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
-            if (sess->to_process == 1 && sess->pause_until <= worker.curtime) {
-                const auto result = run_session(sess);
-                if (result == Session_Run_Result::Close) worker.close_scheduled_session(n--);
-                dispatch_released();
-            }
+            dispatch_released();
         }
         // Only the starting snapshot is drained. Paused or newly queued work
         // remains durable, without extending this worker pass indefinitely.
@@ -217,12 +169,20 @@ public:
             }
             const auto result = (!sess->healthy || sess->killed) ? Session_Run_Result::Close : run_session(sess);
             if (result == Session_Run_Result::Close) {
-                for (unsigned i = 0; i < worker.mysql_sessions->len; ++i) {
-                    if (worker.mysql_sessions->index(i) == sess) {
-                        worker.close_scheduled_session(i);
-                        break;
-                    }
-                }
+                sess->healthy = 0;
+                cleanup_needed = true;
+            }
+            dispatch_released();
+        }
+        // A disconnect burst needs one cleanup traversal, rather than one
+        // index search per closing continuation. Deletion may release capacity;
+        // drain it and reap any waiters that terminate during that handoff too.
+        while (cleanup_needed) {
+            cleanup_needed = false;
+            for (unsigned n = 0; n < worker.mysql_sessions->len; ++n) {
+                auto *sess = static_cast<Session*>(worker.mysql_sessions->index(n));
+                if (!sess->healthy || sess->killed)
+                    worker.close_scheduled_session(n--);
             }
             dispatch_released();
         }

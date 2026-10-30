@@ -754,13 +754,15 @@ public:
 	//void set_unhealthy();
 
 	void set_status(enum session_status e);
+#ifdef PROXYSQL31
 	// io_only drains deferred readiness for a parked connection waiter without
 	// retrying pool checkout or advancing its query state machine.
 	int handler(bool io_only = false);
-#ifdef PROXYSQL31
 	PgSQL_Session_Run_Result run_step(PgSQL_Pool_Acquire_Mode mode = PgSQL_Pool_Acquire_Mode::Normal,
 		bool io_only = false);
 	void note_backend_release(unsigned int hostgroup);
+#else
+	int handler();
 #endif
 
 	void (*handler_function) (PgSQL_Session* sess, void*, PtrSize_t* pkt);
