@@ -237,6 +237,10 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	global.foreground=false;
 	global.my_monitor=true;
 	global.pg_monitor=true;
+	mysql_workers=true;
+	pgsql_workers=true;
+	mysql_admin=true;
+	pgsql_admin=true;
 #ifdef IDLE_THREADS
 	global.idle_threads=false;
 #endif /* IDLE_THREADS */
@@ -312,6 +316,12 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 #endif /* DEBUG */
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Do not start Monitor Module",(const char *)"-M",(const char *)"--no-monitor");
+	opt->add("",0,1,0,"Enable component at startup (true/false or 1/0)","--mysql-workers");
+	opt->add("",0,1,0,"Enable component at startup (true/false or 1/0)","--pgsql-workers");
+	opt->add("",0,1,0,"Enable component at startup (true/false or 1/0)","--mysql-admin");
+	opt->add("",0,1,0,"Enable component at startup (true/false or 1/0)","--pgsql-admin");
+	opt->add("",0,1,0,"Enable component at startup (true/false or 1/0)","--mysql-monitor");
+	opt->add("",0,1,0,"Enable component at startup (true/false or 1/0)","--pgsql-monitor");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
 #ifdef SO_REUSEPORT
 	opt->add((const char *)"",0,0,0,(const char *)"Use SO_REUSEPORT",(const char *)"-r",(const char *)"--reuseport");
@@ -383,7 +393,30 @@ void ProxySQL_GlobalVariables::install_signal_handler() {
 }
 
 void ProxySQL_GlobalVariables::parse(int argc, const char * argv[]) {
-	opt->parse(argc, argv);
+	// ezOptionParser only recognizes separate option/value arguments. Accept
+	// --component=value too, so an explicit disable is never silently ignored.
+	std::vector<std::string> normalized;
+	for (int i = 0; i < argc; ++i) {
+		const std::string argument(argv[i]);
+		const auto separator = argument.find('=');
+		bool component_option = false;
+		if (separator != std::string::npos) {
+			const std::string option = argument.substr(0, separator);
+			for (const char* name : { "--mysql-workers", "--pgsql-workers",
+				"--mysql-admin", "--pgsql-admin", "--mysql-monitor", "--pgsql-monitor" }) {
+				if (option == name) component_option = true;
+			}
+		}
+		if (component_option) {
+			normalized.push_back(argument.substr(0, separator));
+			normalized.push_back(argument.substr(separator + 1));
+		} else {
+			normalized.push_back(argument);
+		}
+	}
+	std::vector<const char*> arguments;
+	for (const auto& argument : normalized) arguments.push_back(argument.c_str());
+	opt->parse(static_cast<int>(arguments.size()), arguments.data());
 };
 
 void update_string_var_if_set(char** cur_val, ez::ezOptionParser* opt, const char* cmd_opt) {
@@ -566,6 +599,38 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 		global.my_monitor=false;
 		global.pg_monitor=false;
 	}
+
+	// Config was read first. Explicit component switches override it and -M.
+	auto startup_permission = [this](const char* option, bool& enabled) {
+		if (!opt->isSet(option)) return;
+		auto invalid_value = [option]() {
+			proxy_error("Invalid value for %s: expected true, false, 1 or 0\n", option);
+			exit(EXIT_FAILURE);
+		};
+		auto* group = opt->get(option);
+		std::vector<std::vector<std::string>> occurrences;
+		group->getMultiStrings(occurrences);
+		// parseIndex also records a final switch with no argument, which
+		// ezOptionParser otherwise omits from its parsed value collection.
+		if (occurrences.size() != group->parseIndex.size()) invalid_value();
+		for (const auto& values : occurrences) {
+			if (values.size() != 1) invalid_value();
+			const std::string& value = values.front();
+			if (value == "true" || value == "1") {
+				enabled = true;
+			} else if (value == "false" || value == "0") {
+				enabled = false;
+			} else {
+				invalid_value();
+			}
+		}
+	};
+	startup_permission("--mysql-workers", mysql_workers);
+	startup_permission("--pgsql-workers", pgsql_workers);
+	startup_permission("--mysql-admin", mysql_admin);
+	startup_permission("--pgsql-admin", pgsql_admin);
+	startup_permission("--mysql-monitor", global.my_monitor);
+	startup_permission("--pgsql-monitor", global.pg_monitor);
 
 #ifdef SO_REUSEPORT
 	{

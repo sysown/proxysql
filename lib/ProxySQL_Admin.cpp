@@ -2856,7 +2856,7 @@ __end_while_pool:
 			nfds++;
 			unsigned int j;
 			i=0; j=0;
-			for (j=0; j<S_amll.ifaces_mysql->ifaces->len; j++) {
+			for (j=0; j < S_amll.ifaces_mysql->ifaces->len && GloVars.mysql_admin; j++) {
 				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_mysql->ifaces->index(j);
 				bool is_ipv6 = false;
 				char *h = NULL;
@@ -2896,7 +2896,7 @@ __end_while_pool:
 			}
 
 			i = 0; j = 0;
-			for (; j < S_amll.ifaces_pgsql->ifaces->len; j++) {
+			for (; j < S_amll.ifaces_pgsql->ifaces->len && GloVars.pgsql_admin; j++) {
 				char* add = NULL; char* port = NULL; char* sn = (char*)S_amll.ifaces_pgsql->ifaces->index(j);
 				bool is_ipv6 = false;
 				char* h = NULL;
@@ -5443,6 +5443,9 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 }
 
 void ProxySQL_Admin::save_mysql_query_rules_fast_routing_from_runtime(bool _runtime) {
+	// The query processor is absent in --no-start, including after STOP.
+	if (!GloMyQPro) return;
+
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_mysql_query_rules_fast_routing");
 	} else {
@@ -5505,6 +5508,9 @@ void ProxySQL_Admin::save_mysql_query_rules_fast_routing_from_runtime(bool _runt
 }
 
 void ProxySQL_Admin::save_pgsql_query_rules_fast_routing_from_runtime(bool _runtime) {
+	// The query processor is absent in --no-start, including after STOP.
+	if (!GloPgQPro) return;
+
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_pgsql_query_rules_fast_routing");
 	}
@@ -5569,6 +5575,9 @@ void ProxySQL_Admin::save_pgsql_query_rules_fast_routing_from_runtime(bool _runt
 }
 
 void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
+	// The query processor is absent in --no-start, including after STOP.
+	if (!GloMyQPro) return;
+
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_mysql_query_rules");
 	} else {
@@ -5654,6 +5663,9 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 }
 
 void ProxySQL_Admin::save_pgsql_query_rules_from_runtime(bool _runtime) {
+	// The query processor is absent in --no-start, including after STOP.
+	if (!GloPgQPro) return;
+
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_pgsql_query_rules");
 	}
@@ -6067,6 +6079,9 @@ void ProxySQL_Admin::save_pgsql_firewall_whitelist_rules_from_runtime(bool _runt
 }
 
 void ProxySQL_Admin::save_mysql_firewall_from_runtime(bool _runtime) {
+	// The query processor is absent in --no-start, including after STOP.
+	if (!GloMyQPro) return;
+
 	unsigned long long curtime1=monotonic_time();
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_mysql_firewall_whitelist_rules");
@@ -6104,6 +6119,9 @@ void ProxySQL_Admin::save_mysql_firewall_from_runtime(bool _runtime) {
 }
 
 void ProxySQL_Admin::save_pgsql_firewall_from_runtime(bool _runtime) {
+	// The query processor is absent in --no-start, including after STOP.
+	if (!GloPgQPro) return;
+
 	unsigned long long curtime1 = monotonic_time();
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_pgsql_firewall_whitelist_rules");
