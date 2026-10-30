@@ -4,6 +4,8 @@
 
 ### Unreleased
 
+- Prevent replaying a MySQL multi-statement batch on another backend when its backend goes offline after an earlier result was returned to the client.
+
 #### Pass-Through Authentication (Phase 1 — opt-in, MySQL only)
 
 New authentication mode that lets a MySQL client authenticate through
