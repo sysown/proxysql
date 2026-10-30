@@ -135,7 +135,7 @@ void create_server_load_schema(SQLite3DB& db) {
 
 } // namespace
 int main() {
-    plan(80);
+    plan(83);
     test_init_minimal();
     test_init_query_processor();
     test_init_hostgroups();
@@ -490,6 +490,8 @@ int main() {
 	managed_state.reader_hg = 902;
 	managed_state.green_writer_hg = 903;
 	managed_state.green_reader_hg = 904;
+	std::atomic<AWS_RDS_BGD_Status> worker_bgd_status {AWS_RDS_BGD_Status::NONE};
+	managed_state.worker_bgd_status = &worker_bgd_status;
 	AWS_RDS_Topology_Result managed_topology;
 	managed_topology.blue_green = true;
 	managed_topology.nodes.push_back({"green-writer", "green-writer.example", 3306,
@@ -507,6 +509,20 @@ int main() {
 		managed_state.bg_map[2].blue_host == "blue-reader-two.example" &&
 		managed_state.bg_map[2].green_host == "green-other.example",
 		"native BGD worker uses two exact replica pairs without a name suffix");
+	ok(worker_bgd_status.load() == AWS_RDS_BGD_Status::AVAILABLE,
+		"worker publishes AVAILABLE before writer switchover");
+	managed_topology.nodes[0].status = "SWITCHOVER_IN_PROGRESS";
+	GloMyMon->handle_aws_rds_bgd(managed_state, managed_topology);
+	std::unique_ptr<SQLite3_result> demoted_servers(MyHGM->dump_table_mysql("mysql_servers"));
+	ok(worker_bgd_status.load() == AWS_RDS_BGD_Status::WRITER_SWITCHOVER_IN_PROGRESS &&
+		demoted_servers &&
+		find_row(*demoted_servers, 901, "blue-writer.example", 3306) == nullptr &&
+		find_row(*demoted_servers, 902, "blue-writer.example", 3306) != nullptr,
+		"worker publishes IN_PROGRESS when it moves the blue writer to readers");
+	GloMyMon->handle_aws_rds_bgd_post_switchover(managed_state, true);
+	ok(worker_bgd_status.load() == AWS_RDS_BGD_Status::NONE,
+		"worker publishes NONE after rollback");
+	managed_topology.nodes[0].status = "AVAILABLE";
 	managed_state.bg_map.clear();
 	managed_topology.nodes[0].endpoint = "other-green.example";
 	GloMyMon->handle_aws_rds_bgd(managed_state, managed_topology);

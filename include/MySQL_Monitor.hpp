@@ -482,6 +482,7 @@ struct AWS_RDS_BGD_Worker {
 	pthread_t thread {};
 	std::atomic_bool worker_stop {false};
 	std::atomic<uint64_t> current_checksum {0};
+	std::atomic<AWS_RDS_BGD_Status> bgd_status {AWS_RDS_BGD_Status::NONE};
 };
 
 /**
@@ -577,6 +578,7 @@ struct AWS_RDS_BGD_State {
 	std::vector<srv_addr_t> shunned_readers;                  ///< readers we shunned
 	std::vector<std::string> read_only_check_disabled;        ///< servers whose read_only checks this worker disabled
 	AWS_RDS_BGD_Status bgd_status = AWS_RDS_BGD_Status::NONE; ///< drives the FSM and the deferred cleanup
+	std::atomic<AWS_RDS_BGD_Status>* worker_bgd_status = nullptr; ///< publishes worker status to the parent
 
 	bool bgd_in_progress_set = false;             ///< deployment's servers flagged in aws_rds_bgd_server_status
 	bool config_refresh_pending = false;          ///< bg_map must be rebuilt from the next topology result
