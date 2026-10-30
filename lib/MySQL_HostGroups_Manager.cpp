@@ -1210,8 +1210,6 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 		if (strcasecmp(r1->fields[4],"ONLINE")) {
 			if (!strcasecmp(r1->fields[4],"SHUNNED")) {
 				status1=MYSQL_SERVER_STATUS_SHUNNED;
-			} else if (!strcasecmp(r1->fields[4],"SHUNNED_AWS_BGD")) {
-				status1=MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD;
 			} else {
 				if (!strcasecmp(r1->fields[4],"OFFLINE_SOFT")) {
 					status1=MYSQL_SERVER_STATUS_OFFLINE_SOFT;

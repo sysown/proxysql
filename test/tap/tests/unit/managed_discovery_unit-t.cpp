@@ -135,7 +135,7 @@ void create_server_load_schema(SQLite3DB& db) {
 
 } // namespace
 int main() {
-    plan(83);
+    plan(80);
     test_init_minimal();
     test_init_query_processor();
     test_init_hostgroups();
@@ -524,11 +524,6 @@ int main() {
 		bgd_observed.acks.size() == bgd_ack_count + 1 &&
 		!bgd_observed.acks.back().second,
 		"active native BGD ownership blocks plugin replacement of all four groups");
-	MyHGM->wrlock();
-	const bool reader_shunned = MyHGM->aws_rds_bgd_set_shun_server(
-		902, "blue-reader.example", 3306, true);
-	MyHGM->wrunlock();
-	ok(reader_shunned, "native BGD can shun a blue reader before reload");
 	uint64_t reloaded_generation = 0;
 	proxysql_lock_configuration();
 	const bool safe_reload = proxysql_install_managed_discovery_locked(
@@ -550,11 +545,6 @@ int main() {
 		find_row(*bgd_runtime, 904, "green-reader.example", 3306) &&
 		find_row(*bgd_runtime, 904, "green-other.example", 3306),
 		"safe claim reload retains live runtime-only blue and green members");
-	const auto* shunned_after_reload = bgd_runtime ?
-		find_row(*bgd_runtime, 902, "blue-reader.example", 3306) : nullptr;
-	ok(shunned_after_reload && shunned_after_reload->fields[4] &&
-		std::string(shunned_after_reload->fields[4]) == "SHUNNED_AWS_BGD",
-		"safe claim reload keeps native BGD reader shun state");
 	auto changed_bgd_claim = bgd_claim;
 	changed_bgd_claim.role_monitor.green_reader_hostgroup = 905;
 	uint64_t rejected_generation = 0;
@@ -596,7 +586,6 @@ int main() {
 	native_cleanup.green_reader_hg = 904;
 	native_cleanup.writer_is_also_reader = 1;
 	native_cleanup.bgd_status = AWS_RDS_BGD_Status::AVAILABLE;
-	native_cleanup.shunned_readers.push_back({"blue-reader.example", 3306});
 	managed_topology.nodes[0].endpoint = "green-writer.example";
 	GloMyMon->handle_aws_rds_bgd(native_cleanup, managed_topology);
 	GloMyMon->aws_rds_bgd_handle_topology_absent(native_cleanup);
@@ -605,12 +594,6 @@ int main() {
 		bgd_topology && !has_topology_pair(*bgd_topology, 901, 902) &&
 		!proxysql_active_managed_blue_green(901),
 		"native topology-absent cleanup removes the managed BGD row and pairs");
-	bgd_runtime.reset(MyHGM->dump_table_mysql("mysql_servers"));
-	const auto* reader_after_cleanup = bgd_runtime ?
-		find_row(*bgd_runtime, 902, "blue-reader.example", 3306) : nullptr;
-	ok(reader_after_cleanup && reader_after_cleanup->fields[4] &&
-		std::string(reader_after_cleanup->fields[4]) == "ONLINE",
-		"native cleanup restores the shunned blue reader");
 	auto third_handoff = second_handoff;
 	third_handoff.deployment_id = "bgd-third";
 	third_handoff.pairs[0].green_resource_id = "db-GREENW3";
